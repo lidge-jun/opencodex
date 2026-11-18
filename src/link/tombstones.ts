@@ -147,12 +147,19 @@ function writeTombstones(path: string, store: LinkTombstoneStore): void {
   if (process.platform !== "win32") chmodSync(path, 0o600);
 }
 
-/** Add or replace the tombstone for tombstone.linkId. Callers hold the config mutation lock. */
-export function recordTombstone(tombstone: LinkTombstone, path: string = tombstonesPath()): void {
+/**
+ * Add the tombstone for tombstone.linkId, or keep the one already there: "kept" means another revoke attempt (a forced
+ * revoke still in flight in another runtime, or one that died) wrote it, so this attempt owns nothing it may drop.
+ * Replacing it would let a failed attempt drop the only tombstone of a revoke that then commits. Callers hold the
+ * config mutation lock.
+ */
+export function recordTombstone(tombstone: LinkTombstone, path: string = tombstonesPath()): "recorded" | "kept" {
   const current = readTombstones(path);
+  if (current.tombstones.some(t => t.linkId === tombstone.linkId)) return "kept";
   const others = current.tombstones.filter(t => t.linkId !== tombstone.linkId);
   if (others.length >= MAX_TOMBSTONES) throw new LinkTombstoneLimitError();
   writeTombstones(path, { version: 1, tombstones: [...others, tombstone] });
+  return "recorded";
 }
 
 /** Remove the tombstone for linkId; true when one was removed. Callers hold the config mutation lock. */

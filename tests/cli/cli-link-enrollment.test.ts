@@ -6,6 +6,11 @@ const fingerprint = "SHA256:abcdefghijklmnop";
 const probe = { alias: "child-a", fingerprint, keyType: "ED25519", ocxVersion: "2.83.0" };
 const confirm = { alias: probe.alias, fingerprint, ocxVersion: probe.ocxVersion };
 const linkId = "lnk_0123456789abcdef";
+// Written out here, not imported: the test pins the sentences an operator reads. The Child's step is bound to the attempt's link
+// id the answer names, so it never removes a link the machine joined since (#8691 final review).
+const FULL_STEP = "Run ocx disconnect --expect-link " + linkId + " on the Child and, if it disconnected, ocx restart, before retrying: it disconnects only while the Child is connected to this attempt's link (" + linkId + ").";
+const LIGHT_STEP = "Run ~/.cache/opencodex/bin/ocx-child detach --expect-link " + linkId + " on the Child before retrying (on Windows, in Command Prompt, \"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe\" detach --expect-link " + linkId;
+const NO_LINK = "This answer does not name the attempt's link id, so no step on the Child can be bound to it: leave the Child as it is.";
 function harness(bodies: unknown[] = [probe, confirm, { linkId }], status = 200) {
   const calls: { url: string; init?: RequestInit }[] = [], out: string[] = [], err: string[] = [];
   const log = console.log, error = console.error;
@@ -89,16 +94,20 @@ describe("CLI Remote Link enrollment", () => {
       h.deps.fetchImpl = async () => ++i < 3 ? Response.json(i === 1 ? probe : confirm) : Response.json({ error: { code: "remote_platform_unsupported" }, residual: true }, { status: 409 });
       expect(await runLinkCommand(["add", "child-a", "--expect-fingerprint", fingerprint], h.deps)).toBe(1);
       const message = h.err.join("\n");
-      expect(message).toContain("Run ocx disconnect and ocx restart on the Child before retrying.");
+      // No link id in the answer: nothing can be bound, so the Child is left.
+      expect(message).toContain(NO_LINK);
+      expect(message).not.toContain("Run ocx disconnect");
       expect(message).not.toContain("no link key was issued");
     } finally { h.restore(); }
   });
   test("residual failures retain fixed Child recovery without remote error text", async () => {
     const h = harness(); try {
       let i = 0;
-      h.deps.fetchImpl = async () => ++i < 3 ? Response.json(i === 1 ? probe : confirm) : Response.json({ error: { code: "child_restart_failed", message: "ocx_data_secret", hint: "ocx_data_secret" }, residual: true, recovery: "ocx_data_secret" }, { status: 502 });
+      h.deps.fetchImpl = async () => ++i < 3 ? Response.json(i === 1 ? probe : confirm) : Response.json({ error: { code: "child_restart_failed", message: "ocx_data_secret", hint: "ocx_data_secret" }, residual: true, residualKind: "enrollment", residualInstall: "full", linkId, recovery: "ocx_data_secret" }, { status: 502 });
       expect(await runLinkCommand(["add", "child-a", "--expect-fingerprint", fingerprint], h.deps)).toBe(1);
-      expect(h.err.join("\n")).toContain("Run ocx disconnect and ocx restart on the Child before retrying.");
+      // The step can be read long after the attempt, when the Child may belong to another link: it is bound to this attempt's link.
+      expect(h.err.join("\n")).toContain(FULL_STEP);
+      expect(h.err.join("\n")).not.toContain("Before the next step");
       expect(h.err.join("\n")).not.toContain("ocx_data_secret"); expect(h.out).toEqual([]);
     } finally { h.restore(); }
   });
@@ -173,20 +182,23 @@ describe("CLI Remote Link enrollment", () => {
     for (const [code, snippets, residual, bare] of [
       ["key_cleanup_failed", ["Enrollment did not complete", "revoke the leftover link key under API keys"], false, false],
       ["link_cleanup_uncertain", ["whether the link is stored is unknown", "ocx link status", "ocx link revoke", "revoke the leftover link key under API keys"], false, false],
-      ["link_cleanup_uncertain", ["whether the link is stored is unknown", "The Child may still be connected.", "Run ocx disconnect and ocx restart on the Child before retrying."], true, false],
-      ["link_cleanup_uncertain", ["whether the link is stored is unknown", "The Child may still be connected.", "ocx-child detach on the Child before retrying."], true, true],
+      ["link_cleanup_uncertain", ["whether the link is stored is unknown", "The Child may still be connected.", FULL_STEP], true, false],
+      ["link_cleanup_uncertain", ["whether the link is stored is unknown", "The Child may still be connected.", LIGHT_STEP], true, true],
     ] as const) {
       let step = 0;
       const h = harness();
       try {
         const [first, second] = bare ? [bareProbe, bareConfirm] : [probe, confirm];
-        h.deps.fetchImpl = async () => ++step < 3 ? Response.json(step === 1 ? first : second) : Response.json({ error: { code, message: "ocx_data_secret server prose" }, ...(residual ? { residual: true } : {}) }, { status: 500 });
+        h.deps.fetchImpl = async () => ++step < 3 ? Response.json(step === 1 ? first : second) : Response.json({ error: { code, message: "ocx_data_secret server prose" }, ...(residual ? { residual: true, linkId } : {}) }, { status: 500 });
         expect(await runLinkCommand(["add", "child-a", ...(bare ? ["--plant"] : []), "--expect-fingerprint", fingerprint], h.deps)).toBe(1);
         const message = h.err.join("\n");
         for (const snippet of snippets) expect(message).toContain(snippet);
         // A Child that may still be connected was not shown as unlinked.
         expect(message).not.toContain("was not linked");
         if (!residual) expect(message).not.toContain("may still be connected");
+        if (residual) expect(message).toContain("--expect-link " + linkId);
+        else expect(message).not.toContain("--expect-link");
+        expect(message).not.toContain("Before the next step");
         expect(message).toContain("(code " + code + ")");
         expect(message).not.toContain("ocx_data_secret");
         expect(message).not.toContain("Link management request failed");

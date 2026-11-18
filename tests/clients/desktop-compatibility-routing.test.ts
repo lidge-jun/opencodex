@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,7 +8,21 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 const owner: NativeCompatibilityOwner = { hostname: "127.0.0.1", port: 12001, loopbackPort: 12002, config: { port: 10100, providers: {} } };
 const text = 'model_provider = "openai"\nopenai_base_url = "http://127.0.0.1:12001/v1"\n';
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) removeTreeWithRetry(root); });
+const desktopOverrides = ["CODEX_API_BASE_URL", "CODEX_APP_SERVER_WS_URL", "CODEX_ELECTRON_USER_DATA_PATH", "ELECTRON_RUN_AS_NODE"];
+const savedOverrides = new Map<string, string>();
+beforeEach(() => {
+  for (const name of desktopOverrides) {
+    const value = process.env[name];
+    if (value !== undefined) savedOverrides.set(name, value);
+    delete process.env[name];
+  }
+});
+afterEach(() => {
+  for (const name of desktopOverrides) delete process.env[name];
+  for (const [name, value] of savedOverrides) process.env[name] = value;
+  savedOverrides.clear();
+  for (const root of roots.splice(0)) removeTreeWithRetry(root);
+});
 
 test("address family matches the bound listener instead of any loopback alias", () => {
   const ipv6 = text.replace("127.0.0.1", "[::1]");

@@ -24,12 +24,12 @@ export interface LinkActionErrorView {
 export interface LinkChildStep {
   readonly key: TKey;
   readonly cmd?: string;
-  readonly more?: readonly { readonly key: TKey; readonly cmd: string }[];
+  readonly more?: readonly { readonly key: TKey; readonly cmd?: string; readonly vars?: Readonly<Record<string, string>> }[];
 }
 
 export function LinkErrorNotice({ error }: { error: LinkActionErrorView }): ReactElement {
   const t = useT();
-  return <Banner tone="err"><span className="remote-link-error">{t(error.key)}</span>{error.childStep && <span className="remote-link-child-step mt-1 block">{error.childStep.cmd === undefined ? t(error.childStep.key) : <Trans k={error.childStep.key} cmd={error.childStep.cmd} />}{error.childStep.more?.map(line => <span key={line.key} className="mt-1 block"><Trans k={line.key} cmd={line.cmd} /></span>)}</span>}{error.hint && <span className="remote-link-hint mt-1 block text-[12px] text-fg-muted [overflow-wrap:anywhere]">{t("remoteLink.reason.generic")} <code className="font-mono">{error.hint}</code></span>}</Banner>;
+  return <Banner tone="err"><span className="remote-link-error">{t(error.key)}</span>{error.childStep && <span className="remote-link-child-step mt-1 block">{error.childStep.cmd === undefined ? t(error.childStep.key) : <Trans k={error.childStep.key} cmd={error.childStep.cmd} />}{error.childStep.more?.map(line => <span key={line.key} className="mt-1 block">{line.cmd === undefined ? t(line.key, line.vars) : <Trans k={line.key} cmd={line.cmd} vars={line.vars} />}</span>)}</span>}{error.hint && <span className="remote-link-hint mt-1 block text-[12px] text-fg-muted [overflow-wrap:anywhere]">{t("remoteLink.reason.generic")} <code className="font-mono">{error.hint}</code></span>}</Banner>;
 }
 
 export interface RemoteLinkSheetProps {

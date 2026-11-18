@@ -10,6 +10,7 @@ import {
 } from "./native-main-lock-file";
 import type { NativeProfileContext } from "./native-profile-store";
 import { NativeProfileError } from "./native-profile-types";
+import { invalidateRetainedNativeMainLogin } from "./native-main-credentials";
 
 export const NATIVE_MAIN_OWNER_RETRY_MS = 250;
 export const NATIVE_MAIN_OWNER_DB = ".opencodex-native-main.owner.sqlite";
@@ -92,6 +93,8 @@ export function nativeMainOwnerFilesystemSupported(
 }
 
 function publish(entry: OwnerEntry, snapshot: NativeMainOwnerSnapshot): void {
+  // Losing the cross-process owner lock ends a retained native-main login (#7345).
+  if (entry.snapshot.status === "held" && snapshot.status !== "held") invalidateRetainedNativeMainLogin("ownership-loss");
   entry.snapshot = snapshot;
   for (const listener of entry.listeners) {
     try { listener({ ...snapshot }); } catch { /* an observer cannot forfeit process ownership */ }

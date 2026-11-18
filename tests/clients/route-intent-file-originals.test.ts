@@ -14,6 +14,7 @@ function scenario(before: string, body: string, homePi: boolean) {
   const home = join(root, "home"); mkdirSync(home);
   try {
     const result = spawnSync(process.execPath, ["--eval", `
+      import './tests/helpers/windows-acl-process-stubs';
       import { expect } from 'bun:test';
       import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
       import { join, dirname } from 'node:path';

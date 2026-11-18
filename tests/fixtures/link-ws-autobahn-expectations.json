@@ -1,0 +1,80 @@
+{
+  "note": "Expectations for the Autobahn fuzzingserver client run of the Child's Home-facing link WebSocket leg (design T4 3.3, R2-06; tests/clients/link-ws-autobahn.test.ts). Rules, not results: the first rule whose case pattern matches decides what a case must show. The Child never offers an extension, refuses a Home message over 4 MiB + 64 KiB or over 4,096 data frames (1009) before it looks at the payload, refuses binary messages within those limits (1003), and must pass every other case. Frame counts are the fuzzingserver's own (its case reports, txFrameStats). Changes only through review.",
+  "caseCount": 517,
+  "limits": {
+    "homeMessageBytes": 4259840,
+    "maxFragments": 4096
+  },
+  "rules": [
+    {
+      "cases": [
+        "12.*",
+        "13.*"
+      ],
+      "expect": "unimplemented",
+      "why": "permessage-deflate: the Child offers no extension, so the server cannot run these cases"
+    },
+    {
+      "cases": [
+        "9.1.5",
+        "9.1.6"
+      ],
+      "expect": {
+        "closeCode": 1009
+      },
+      "why": "one text message of 8 MiB / 16 MiB is over the 4 MiB + 64 KiB Home message limit"
+    },
+    {
+      "cases": [
+        "9.2.5",
+        "9.2.6"
+      ],
+      "expect": {
+        "closeCode": 1009
+      },
+      "why": "one binary message of 8 MiB / 16 MiB: the size limit refuses it before its type is acted on"
+    },
+    {
+      "cases": [
+        "9.3.1",
+        "9.3.2",
+        "9.3.3"
+      ],
+      "expect": {
+        "closeCode": 1009
+      },
+      "why": "a 4 MiB text message in 64-byte, 256-byte and 1 KiB fragments is 65,537, 16,385 and 4,097 data frames (a first frame plus the fragments): over 4,096"
+    },
+    {
+      "cases": [
+        "9.4.1",
+        "9.4.2",
+        "9.4.3"
+      ],
+      "expect": {
+        "closeCode": 1009
+      },
+      "why": "the same fragmentation of a 4 MiB binary message: over 4,096 data frames, refused before its type is acted on"
+    },
+    {
+      "cases": [
+        "1.2.*",
+        "9.2.*",
+        "9.4.*",
+        "9.6.*",
+        "9.8.*"
+      ],
+      "expect": {
+        "closeCode": 1003
+      },
+      "why": "binary messages from the Home within the limits are refused with 1003 (src/client/link-websocket.ts), never echoed"
+    },
+    {
+      "cases": [
+        "*"
+      ],
+      "expect": "pass",
+      "why": "behavior OK, NON-STRICT or INFORMATIONAL, and behaviorClose OK or INFORMATIONAL"
+    }
+  ]
+}

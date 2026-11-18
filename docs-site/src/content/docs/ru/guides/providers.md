@@ -122,7 +122,7 @@ ocx logout <provider>
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth использует отдельный шлюз подписки Grok CLI. Переопределение с API-ключом использует `https://api.x.ai/v1` и может добавлять Priority Processing. Каталог Grok загружается в реальном времени; фолбэк по умолчанию — `grok-4.5`. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Модели Claude; актуальный список моделей загружается из `/v1/models`. |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Модели Kimi Code. Алиас `kimi-for-coding` теперь указывает на K2.8 Preview: контекст до 1 млн токенов, уровни рассуждения `low`/`high`/`max`, текстовый и графический ввод. У `k3-256k` фиксированный предел 256K. |
-| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | Использует тот же вход OAuth и список моделей, что и `kimi`, но через протокол Responses. Содержимое рассуждений остаётся зашифрованным на сервере; вызовы инструментов и их результаты видны. |
+| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | Использует тот же вход OAuth и список моделей, что и `kimi`, но через протокол Responses. Содержимое рассуждений остаётся зашифрованным на сервере; вызовы инструментов и их результаты видны. Добавьте его через окно **Add provider** на панели (**Kimi (Responses)**) или командой `ocx provider add kimi-responses --live`. Собственного входа у него нет: если вход в Kimi уже выполнен, повторный вход не нужен, а вход из его пункта в окне выбора создаёт только эту строку и не трогает строку `kimi`. Выход из любой из двух строк (`ocx logout kimi` или `ocx logout kimi-responses`, локально или с `--live`, либо **Logout** в любой строке панели) удаляет активный аккаунт Kimi для обеих строк и сообщает об этом; если сохранён другой аккаунт Kimi, он становится активным для обеих строк; пока он приостановлен, ни одна строка его не использует, а если он требует повторного входа, войдите в него снова. Удаление одной строки на панели (или с `--live`) сохраняет вход, пока его использует другая, а удаление последней удаляет его; локальная команда `ocx provider remove`, как и для других провайдеров, оставляет сохранённые входы на месте. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Шлюз подписки Nous Research (тот же бэкенд, что использует Hermes Agent). Вход по device grant против `portal.nousresearch.com`; access-токен — это JWT для каждого запроса к inference. Смешанный каталог платных + `:free` моделей (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, …) обнаруживается вживую по авторизованному аккаунту. Refresh-токены одноразовые и ротируются при каждом обновлении. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Первый вход импортирует существующую сессию после установки Kiro CLI (в Unix: `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`; в Windows PowerShell: `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`; затем выполните `kiro-cli login`). **Добавить аккаунт** выполняет выход из `kiro-cli`, запускает новый вход через браузер, переключает аккаунт самого `kiro-cli` и сохраняет метаданные профиля отдельно для каждого аккаунта. Существующие аккаунты OpenCodex сохраняются; при отмене или сбое восстанавливается предыдущая сессия `kiro-cli`. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth поверх протокола Cloud Code Assist. Живое обнаружение использует аутентифицированный CCA-эндпоинт `v1internal:fetchAvailableModels` и публикует только agent-модели, доступные текущему аккаунту; поддерживаемый каталог остаётся резервным вариантом. |
@@ -222,7 +222,7 @@ Inline JSON и лишние позиционные аргументы откло
 
 ## 3. Каталог API-ключей
 
-opencodex поставляется с 107 встроенными пресетами: 86 на основе ключей, 17 OAuth, три локальных и
+opencodex поставляется с 108 встроенными пресетами: 87 на основе ключей, 17 OAuth, три локальных и
 один пресет ChatGPT-форварда по умолчанию. Селектор **Add provider** в дашборде открывает страницу
 выдачи ключей провайдера, проверяет ключ и сохраняет его; проверка зависит от провайдера.
 Наиболее заметные записи:
@@ -277,7 +277,7 @@ opencodex поставляется с 107 встроенными пресета�
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
-| [BigModel Coding Plan — Responses (статический список)](/guides/providers/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
+| [BigModel Coding Plan — Responses (статический список)](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
 | Qwen Cloud | Token plan (по умолчанию): `https://token-plan.maas.qwencloudapi.com/compatible-mode/v1` · Pay as you go: `https://dashscope.aliyuncs.com/compatible-mode/v1` · или Custom |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
@@ -518,7 +518,7 @@ Copilot предоставляет каталог со смешанными пр
 `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`)
 отклоняют `/chat/completions` для агентного трафика, поэтому opencodex по умолчанию
 маршрутизирует эти модели через Responses API, а все остальные модели Copilot остаются на
-chat completions. Приоритет: жёсткий wire-пин → явная запись
+chat completions. `gpt-6-sol`, `gpt-6-luna`, `gpt-6.2-sol`, `gpt-6.2-astra` тоже по умолчанию используют Responses как упреждающий встроенный default; отклонение для них не наблюдалось, а наличие моделей GPT-6.2 в Copilot не подтверждено. Приоритет: жёсткий wire-пин → явная запись
 [`modelAdapters`](/ru/reference/configuration/providers/) → дефолт реестра → adapter всего
 провайдера. Чтобы перевести модель без встроенного дефолта (например, `gpt-5.4-nano`) на
 Responses, задайте `"modelAdapters": { "gpt-5.4-nano": "openai-responses" }`.

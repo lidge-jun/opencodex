@@ -4,11 +4,12 @@ import type { Capability } from "./capability-types";
 export const ACCESS_REMOTE_CAPABILITIES: readonly Capability[] = [
   {
     command: ["disconnect"], summary: "Disconnect a client or preserve orphaned token files for recovery.",
-    usage: "ocx disconnect [--keep-catalog] [--recover-config --yes] [--json] | ocx disconnect --orphaned-token --yes [--json]",
+    usage: "ocx disconnect [--keep-catalog] [--recover-config --yes] [--json] [--expect-link <linkId>] | ocx disconnect --orphaned-token --yes [--json]",
     routes: [],
     flags: [
       { name: "--keep-catalog", value: "boolean", summary: "Keep the connected client's catalog during ordinary disconnect." },
       { name: "--recover-config", value: "boolean", summary: "With --yes, snapshot current Codex artifacts and recover only evidenced owned keys; unknown ownership still refuses." },
+      { name: "--expect-link", value: "string", summary: "Disconnect only when this machine is the connected Child of that link, or finish its unfinished disconnect once the connection is cleared; otherwise exit 5 with child_link_mismatch and change nothing." },
       { name: "--orphaned-token", value: "boolean", summary: "Preserve unowned service-token files in a private backup when disconnected." },
       { name: "--yes", value: "boolean", summary: "Explicitly confirm --recover-config or --orphaned-token recovery." },
       { name: "--json", value: "boolean", summary: "Emit the local result and backup location as JSON." },
@@ -256,7 +257,7 @@ export const ACCESS_REMOTE_CAPABILITIES: readonly Capability[] = [
     flags: [{ name: "--link-id", value: "string", required: true, summary: "Home-initiated link id." }, { name: "--route", value: "string", required: true, summary: "SSH host alias or destination of the new route." },
       { name: "--position", value: "number", summary: "Index in the list; by default just before the alias, so direct routes come first and the alias stays last." }, { name: "--json", value: "boolean", summary: "Emit {linkId, pin, routes} as JSON." }],
     mutates: true, json: "payload",
-    details: ["The Home first checks that its link known_hosts file trusts only the link's recorded key for the alias (every entry for it, in any case or hashed by an older release, carries that key), then connects over the new route with strict checking against that one key and stores the route only if the same machine answers. Refusals: route_unproven with a cause (hostkey, auth, forward, transient), pin_mismatch, trust_file_unexpected, link_changed, pin_changed, route_exists, route_limit (8 routes), link_operation_in_progress (removal or a Child job holds the link). Exit 5 on a refusal, 4 for an unknown link, 1 when the routes were stored but the running proxy did not apply them (routes_stored_reload_failed; ocx link routes --link-id <id> reads what was stored).", "Adding a route does not move a running tunnel; the Home tries the list in order from the next connection on (ocx link reconnect starts one now). Requires loopback admin authority on the Home."],
+    details: ["The Home first checks that its link known_hosts file trusts only the link's recorded key for the alias (every entry for it, in any case or hashed by an older release, carries that key), then connects over the new route with strict checking against that one key and stores the route only if the same machine answers. Refusals: route_unproven with a cause (hostkey, auth, forward, transient), pin_mismatch, trust_file_unexpected, link_changed, pin_changed, route_exists, route_limit (8 routes), link_operation_in_progress (removal or a Child job holds the link), link_retirement_pending (an unfinished removal of the link holds it; finish that revoke first). Exit 5 on a refusal, 4 for an unknown link, 1 when the routes were stored but the running proxy did not apply them (routes_stored_reload_failed; ocx link routes --link-id <id> reads what was stored).", "Adding a route does not move a running tunnel; the Home tries the list in order from the next connection on (ocx link reconnect starts one now). Requires loopback admin authority on the Home."],
   },
   {
     command: ["link", "routes", "remove"], summary: "Remove an SSH route from a Home-initiated link.",
@@ -264,7 +265,7 @@ export const ACCESS_REMOTE_CAPABILITIES: readonly Capability[] = [
     routes: [{ method: "POST", path: "/api/link/{id}/routes" }],
     flags: [{ name: "--link-id", value: "string", required: true, summary: "Home-initiated link id." }, { name: "--route", value: "string", required: true, summary: "Route to remove." }, { name: "--json", value: "boolean", summary: "Emit {linkId, pin, routes} as JSON." }],
     mutates: true, json: "payload",
-    details: ["The alias is the link's pin and cannot be removed (route_is_pin). Removing the route the tunnel uses restarts the tunnel on the remaining list; removing the last extra route returns the link to one route. Exit 4 for an unknown link or route (link_not_found, route_not_found), 5 on a refusal (route_is_pin, link_operation_in_progress), 1 when the routes were stored but the running proxy did not apply them (routes_stored_reload_failed). Requires loopback admin authority on the Home."],
+    details: ["The alias is the link's pin and cannot be removed (route_is_pin). Removing the route the tunnel uses restarts the tunnel on the remaining list; removing the last extra route returns the link to one route. Exit 4 for an unknown link or route (link_not_found, route_not_found), 5 on a refusal (route_is_pin, link_operation_in_progress, link_retirement_pending: an unfinished removal of the link holds it), 1 when the routes were stored but the running proxy did not apply them (routes_stored_reload_failed). Requires loopback admin authority on the Home."],
   },
   {
     command: ["link", "routes", "order"], summary: "Reorder a Home-initiated link's SSH routes.",
@@ -272,7 +273,7 @@ export const ACCESS_REMOTE_CAPABILITIES: readonly Capability[] = [
     routes: [{ method: "POST", path: "/api/link/{id}/routes" }],
     flags: [{ name: "--link-id", value: "string", required: true, summary: "Home-initiated link id." }, { name: "--routes", value: "string", required: true, summary: "The current routes, comma separated, in the new order." }, { name: "--json", value: "boolean", summary: "Emit {linkId, pin, routes} as JSON." }],
     mutates: true, json: "payload",
-    details: ["The list must name exactly the current routes (route_order_mismatch otherwise), so no route enters unproven. A reorder does not move a running tunnel. Requires loopback admin authority on the Home."],
+    details: ["The list must name exactly the current routes (route_order_mismatch otherwise), so no route enters unproven. While an unfinished removal of the link holds it, the reorder is refused (link_retirement_pending); finish that revoke first. A reorder does not move a running tunnel. Requires loopback admin authority on the Home."],
   },
   {
     command: ["link", "operations"], summary: "List or read the enrollments and revokes journalled under an operation id.",

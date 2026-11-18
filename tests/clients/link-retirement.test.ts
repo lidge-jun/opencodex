@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { claimLinkRetirement, clearLinkRetirement, disownLinkRetirement, LinkRetirementError, readLinkRetirement, reownLinkRetirement } from "../../src/link/retirement";
 import { linkStorePath } from "../../src/link/paths";
 import { writeLinkStore, type LinkRecord, type LinkStore } from "../../src/link/store";
@@ -22,7 +23,7 @@ function receiptPath(dir: string): string { return join(dir, "link", `retirement
 test("receipt survives a fresh process and is private", async () => {
   const dir = setup();
   const receipt = claimLinkRetirement(link, dir);
-  const modulePath = new URL("../../src/link/retirement.ts", import.meta.url).pathname;
+  const modulePath = fileURLToPath(new URL("../../src/link/retirement.ts", import.meta.url));
   const child = Bun.spawn([process.execPath, "-e", `import {readLinkRetirement} from ${JSON.stringify(modulePath)}; console.log(JSON.stringify(readLinkRetirement(${JSON.stringify(link.id)}, ${JSON.stringify(dir)})))`], { stdout: "pipe", stderr: "pipe" });
   expect(JSON.parse(await new Response(child.stdout).text())).toEqual(receipt);
   expect(await child.exited).toBe(0);
@@ -33,7 +34,7 @@ test("receipt survives a fresh process and is private", async () => {
 
 test("competing processes cannot both claim the same link", async () => {
   const dir = setup();
-  const modulePath = new URL("../../src/link/retirement.ts", import.meta.url).pathname;
+  const modulePath = fileURLToPath(new URL("../../src/link/retirement.ts", import.meta.url));
   const code = `import {claimLinkRetirement} from ${JSON.stringify(modulePath)}; try { claimLinkRetirement(${JSON.stringify(link)}, ${JSON.stringify(dir)}); process.exit(0); } catch { process.exit(1); }`;
   const children = [0, 1].map(() => Bun.spawn([process.execPath, "-e", code], { stdout: "pipe", stderr: "pipe" }));
   expect((await Promise.all(children.map(child => child.exited))).sort()).toEqual([0, 1]);

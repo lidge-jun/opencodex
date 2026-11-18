@@ -19,6 +19,14 @@ import * as fsModule from "node:fs";
 // Lane O2: an updated Home of version V fills ocx-child-builds/V/ from the GitHub release of V, trusting
 // only the digests inside its own installed package, so a packaged Home can plant ocx-child after an update.
 
+// A Windows Home never fills: fillChildBinaryCacheForVersion answers unsupported_platform right after the version check, before it
+// reads the digest file or touches the Home, because the fill proves its directories private by POSIX owner ids and mode bits, and
+// those checks read process.platform. A test that needs the fill to run is skipped on Windows; passing platform "linux" there would
+// run the fill with its POSIX checks switched off, a combination no Home runs. The gates that answer before the platform check, the
+// reader parity and the Windows answer itself run on every platform.
+const fillRuns = process.platform !== "win32";
+
+
 const VERSION = "2.100.0";
 const linuxBuild = new TextEncoder().encode("linux build bytes");
 const macBuild = new TextEncoder().encode("mac build bytes");
@@ -77,7 +85,7 @@ const resolve = (triple: "linux-x64" | "darwin-arm64") => resolveChildBinarySour
 });
 
 describe("filling the ocx-child cache for the running version", () => {
-  test("after an update, probe answers plantable for every build the package digests vouch for", async () => {
+  test.skipIf(!fillRuns)("after an update, probe answers plantable for every build the package digests vouch for", async () => {
     expect(resolve("linux-x64")).toEqual({ ok: false, reason: "artifact_not_found" });
     bothDigests();
     ranBefore();
@@ -100,7 +108,7 @@ describe("filling the ocx-child cache for the running version", () => {
     expect(readdirSync(cacheDir()).filter(name => name.endsWith(".tmp"))).toEqual([]);
   });
 
-  test("a build whose bytes do not match the package digest is never cached, and the next start retries", async () => {
+  test.skipIf(!fillRuns)("a build whose bytes do not match the package digest is never cached, and the next start retries", async () => {
     bothDigests();
     ranBefore();
     const { fetchImpl } = release({ "ocx-child-linux-x64": new TextEncoder().encode("tampered"), "ocx-child-darwin-arm64": 404 });
@@ -114,7 +122,7 @@ describe("filling the ocx-child cache for the running version", () => {
     expect(recorded()).toBe(VERSION);
   });
 
-  test("one good build is cached and listed alone when another fails", async () => {
+  test.skipIf(!fillRuns)("one good build is cached and listed alone when another fails", async () => {
     bothDigests();
     ranBefore();
     const { fetchImpl } = release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": 500 });
@@ -124,7 +132,7 @@ describe("filling the ocx-child cache for the running version", () => {
     expect(resolve("darwin-arm64")).toEqual({ ok: false, reason: "artifact_not_found" });
   });
 
-  test("a build the package no longer vouches for loses its manifest line when its refetch fails, and the fill deletes no build file", async () => {
+  test.skipIf(!fillRuns)("a build the package no longer vouches for loses its manifest line when its refetch fails, and the fill deletes no build file", async () => {
     ranBefore();
     const oldBuild = new TextEncoder().encode("earlier build");
     mkdirSync(cacheDir(), { recursive: true, mode: 0o700 });
@@ -141,7 +149,7 @@ describe("filling the ocx-child cache for the running version", () => {
     expect(resolve("linux-x64")).toEqual({ ok: false, reason: "checksum_mismatch" });
   });
 
-  test("a stale manifest is removed when no listed build is left", async () => {
+  test.skipIf(!fillRuns)("a stale manifest is removed when no listed build is left", async () => {
     ranBefore();
     const oldBuild = new TextEncoder().encode("older build");
     mkdirSync(cacheDir(), { recursive: true, mode: 0o700 });
@@ -153,7 +161,7 @@ describe("filling the ocx-child cache for the running version", () => {
     expect(resolve("linux-x64")).toEqual({ ok: false, reason: "checksum_mismatch" });
   });
 
-  test("a downgraded Home fetches nothing: a newer version's cache exists", async () => {
+  test.skipIf(!fillRuns)("a downgraded Home fetches nothing: a newer version's cache exists", async () => {
     bothDigests();
     mkdirSync(join(home, "ocx-child-builds", "2.101.0"), { recursive: true });
     const { fetchImpl, requested } = release({ "ocx-child-linux-x64": linuxBuild });
@@ -162,7 +170,7 @@ describe("filling the ocx-child cache for the running version", () => {
     expect(existsSync(cacheDir())).toBe(false);
   });
 
-  test.each([
+  test.skipIf(!fillRuns).each([
     ["a fresh install (no record) records its version as a baseline", null, "first_start", VERSION + " baseline"],
     ["a restart of the same version after a first start", VERSION + " baseline", "not_an_upgrade", VERSION + " baseline"],
     ["a downgrade from a version that never made a cache directory", "2.101.0", "downgrade", "2.101.0"],
@@ -184,7 +192,7 @@ describe("filling the ocx-child cache for the running version", () => {
     expect(requested).toEqual([]);
   });
 
-  test("a package without the digest file fetches nothing and only records its version", async () => {
+  test.skipIf(!fillRuns)("a package without the digest file fetches nothing and only records its version", async () => {
     const { fetchImpl, requested } = release({ "ocx-child-linux-x64": linuxBuild });
     expect(await fill(fetchImpl)).toEqual({ kind: "skipped", reason: "no_digests" });
     expect(requested).toEqual([]);
@@ -193,7 +201,7 @@ describe("filling the ocx-child cache for the running version", () => {
     expect(resolve("linux-x64")).toEqual({ ok: false, reason: "artifact_not_found" });
   });
 
-  test("a completed fill whose manifest lost lines (overlapping fills) is repaired from the verified files, without downloading", async () => {
+  test.skipIf(!fillRuns)("a completed fill whose manifest lost lines (overlapping fills) is repaired from the verified files, without downloading", async () => {
     bothDigests();
     ranBefore();
     await fill(release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild }).fetchImpl);
@@ -204,7 +212,7 @@ describe("filling the ocx-child cache for the running version", () => {
     expect([again.requested, resolve("darwin-arm64").ok, recorded()]).toEqual([[], true, VERSION]);
   });
 
-  test("a same-version start never downloads: a lost manifest only re-lists the builds still verified on disk", async () => {
+  test.skipIf(!fillRuns)("a same-version start never downloads: a lost manifest only re-lists the builds still verified on disk", async () => {
     bothDigests();
     ranBefore();
     await fill(release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild }).fetchImpl);
@@ -216,7 +224,7 @@ describe("filling the ocx-child cache for the running version", () => {
     expect([again.requested, resolve("linux-x64").ok, resolve("darwin-arm64").ok, recorded()]).toEqual([[], true, false, VERSION]);
   });
 
-  test("an older fill that finishes after a newer version was recorded never lowers the record", async () => {
+  test.skipIf(!fillRuns)("an older fill that finishes after a newer version was recorded never lowers the record", async () => {
     bothDigests();
     ranBefore();
     // While this 2.100.0 fill downloads, a 2.101.0 Home records its completed fill.
@@ -230,7 +238,7 @@ describe("filling the ocx-child cache for the running version", () => {
     expect(restart.requested).toEqual([]);
   });
 
-  test("a completed fill whose manifest still covers the package fetches nothing, even with a build deleted", async () => {
+  test.skipIf(!fillRuns)("a completed fill whose manifest still covers the package fetches nothing, even with a build deleted", async () => {
     bothDigests();
     ranBefore();
     await fill(release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild }).fetchImpl);
@@ -240,7 +248,7 @@ describe("filling the ocx-child cache for the running version", () => {
     expect(again.requested).toEqual([]);
   });
 
-  test("the manifest is rebuilt from the disk when written: a build another fill placed meanwhile stays listed", async () => {
+  test.skipIf(!fillRuns)("the manifest is rebuilt from the disk when written: a build another fill placed meanwhile stays listed", async () => {
     bothDigests();
     ranBefore();
     // This fill's darwin download fails, but an overlapping fill publishes the verified build meanwhile.
@@ -251,7 +259,7 @@ describe("filling the ocx-child cache for the running version", () => {
     expect([resolve("darwin-arm64").ok, resolve("linux-x64").ok, recorded()]).toEqual([true, true, VERSION]);
   });
 
-  test.each([
+  test.skipIf(!fillRuns).each([
     ["names no ocx-child build", sha(linuxBuild) + "  ocx-linux-x64\n"],
     ["has a malformed digest", "abc  ocx-child-linux-x64\n"],
     ["is empty", ""],
@@ -266,7 +274,7 @@ describe("filling the ocx-child cache for the running version", () => {
     expect(recorded()).toBe(VERSION);
   });
 
-  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unreadable digest file is not an absent one", async () => {
+  test.skipIf(!fillRuns || process.getuid?.() === 0)("an unreadable digest file is not an absent one", async () => {
     ranBefore();
     shipDigests(sha(linuxBuild) + "  ocx-child-linux-x64\n");
     chmodSync(join(packageRoot, CHILD_RELEASE_DIGESTS_PATH), 0o000);
@@ -277,7 +285,7 @@ describe("filling the ocx-child cache for the running version", () => {
     expect(await fill(fetchImpl)).toMatchObject({ kind: "filled", failed: [] });
   });
 
-  test("the first release that ships digests fills: the release before it recorded the baseline", async () => {
+  test.skipIf(!fillRuns)("the first release that ships digests fills: the release before it recorded the baseline", async () => {
     const { fetchImpl, requested } = release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild });
     expect(await fill(fetchImpl, "2.99.0")).toEqual({ kind: "skipped", reason: "no_digests" });
     expect(recorded()).toBe("2.99.0 baseline");
@@ -287,7 +295,7 @@ describe("filling the ocx-child cache for the running version", () => {
     expect(resolve("linux-x64").ok).toBe(true);
   });
 
-  test("a package without digests never lowers the record and never fails on an unsafe home", async () => {
+  test.skipIf(!fillRuns)("a package without digests never lowers the record and never fails on an unsafe home", async () => {
     ranBefore("2.101.0");
     expect(await fill(release({}).fetchImpl)).toEqual({ kind: "skipped", reason: "no_digests" });
     expect(recorded()).toBe("2.101.0");
@@ -307,7 +315,7 @@ describe("filling the ocx-child cache for the running version", () => {
     expect([requested, existsSync(cacheDir()), recorded()]).toEqual([[], false, "2.99.0"]);
   });
 
-  test("an oversized download is refused", async () => {
+  test.skipIf(!fillRuns)("an oversized download is refused", async () => {
     shipDigests(sha(linuxBuild) + "  ocx-child-linux-x64\n");
     ranBefore();
     const fetchImpl = (async () => new Response(linuxBuild, { status: 200, headers: { "content-length": String(64 * 1024 * 1024) } })) as unknown as typeof fetch;
@@ -315,8 +323,8 @@ describe("filling the ocx-child cache for the running version", () => {
   });
 });
 
-describe.skipIf(process.platform === "win32")("nobody else can substitute a build", () => {
-  test("a matching cached build the reader would refuse (writable by others) is fetched again", async () => {
+describe.skipIf(!fillRuns)("nobody else can substitute a build", () => {
+  test.skipIf(!fillRuns)("a matching cached build the reader would refuse (writable by others) is fetched again", async () => {
     shipDigests(sha(linuxBuild) + "  ocx-child-linux-x64\n");
     ranBefore();
     mkdirSync(cacheDir(), { recursive: true, mode: 0o700 });
@@ -345,7 +353,7 @@ describe.skipIf(process.platform === "win32")("nobody else can substitute a buil
     expect(existsSync(join(cacheDir(), "SHA256SUMS"))).toBe(false);
   });
 
-  test("a directory above the cache that others can write is refused; a sticky one (like /tmp) is not", async () => {
+  test.skipIf(!fillRuns)("a directory above the cache that others can write is refused; a sticky one (like /tmp) is not", async () => {
     bothDigests();
     ranBefore();
     const { fetchImpl, requested } = release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild });
@@ -361,10 +369,10 @@ describe.skipIf(process.platform === "win32")("nobody else can substitute a buil
   });
 });
 
-describe.skipIf(process.platform === "win32")("one fill at a time per OPENCODEX_HOME", () => {
+describe.skipIf(!fillRuns)("one fill at a time per OPENCODEX_HOME", () => {
   const lockPath = () => join(home, "ocx-child-builds", ".fill.lock");
 
-  test("an overlapping fill whose download would fail skips, and cannot undo the one that succeeds", async () => {
+  test.skipIf(!fillRuns)("an overlapping fill whose download would fail skips, and cannot undo the one that succeeds", async () => {
     bothDigests();
     ranBefore();
     let releaseDownload!: () => void;
@@ -385,7 +393,7 @@ describe.skipIf(process.platform === "win32")("one fill at a time per OPENCODEX_
     expect(existsSync(lockPath())).toBe(false);
   });
 
-  test("a lock left by a process that is gone is reclaimed", async () => {
+  test.skipIf(!fillRuns)("a lock left by a process that is gone is reclaimed", async () => {
     bothDigests();
     ranBefore();
     writeFileSync(lockPath(), "99999999.deadbeef\n", { mode: 0o600 });
@@ -393,7 +401,7 @@ describe.skipIf(process.platform === "win32")("one fill at a time per OPENCODEX_
     expect(existsSync(lockPath())).toBe(false);
   });
 
-  test("a live process's lock older than an hour is reclaimed; a fresh one is respected", async () => {
+  test.skipIf(!fillRuns)("a live process's lock older than an hour is reclaimed; a fresh one is respected", async () => {
     bothDigests();
     ranBefore();
     writeFileSync(lockPath(), process.pid + ".feedface\n", { mode: 0o600 });
@@ -403,7 +411,7 @@ describe.skipIf(process.platform === "win32")("one fill at a time per OPENCODEX_
     expect(await fillChildBinaryCacheForVersion({ packageRoot, version: VERSION, opencodexHome: home, fetchImpl, now: later })).toMatchObject({ kind: "filled", failed: [] });
   });
 
-  test("a fill that lost its lock during a download publishes no manifest and no record", async () => {
+  test.skipIf(!fillRuns)("a fill that lost its lock during a download publishes no manifest and no record", async () => {
     shipDigests(sha(linuxBuild) + "  ocx-child-linux-x64\n");
     ranBefore();
     const { fetchImpl } = release({ "ocx-child-linux-x64": linuxBuild }, () => writeFileSync(lockPath(), "1.otherfill\n"));
@@ -412,7 +420,7 @@ describe.skipIf(process.platform === "win32")("one fill at a time per OPENCODEX_
   });
 });
 
-describe.skipIf(process.platform === "win32")("the cache is never written through a symlink", () => {
+describe.skipIf(!fillRuns)("the cache is never written through a symlink", () => {
   test.each([
     ["the version directory", () => join(home, "ocx-child-builds", VERSION), true],
     ["ocx-child-builds", () => join(home, "ocx-child-builds"), false],
@@ -428,7 +436,7 @@ describe.skipIf(process.platform === "win32")("the cache is never written throug
     expect(readdirSync(elsewhere)).toEqual([]);
   });
 
-  test("a version directory swapped for a symlink during a download receives nothing", async () => {
+  test.skipIf(!fillRuns)("a version directory swapped for a symlink during a download receives nothing", async () => {
     shipDigests(sha(linuxBuild) + "  ocx-child-linux-x64\n");
     ranBefore();
     const elsewhere = join(root, "elsewhere");
@@ -447,7 +455,7 @@ describe.skipIf(process.platform === "win32")("the cache is never written throug
 });
 
 describe("startup", () => {
-  test("reads the running package version, retries an incomplete fill, reports in one line, and never throws", async () => {
+  test.skipIf(!fillRuns)("reads the running package version, retries an incomplete fill, reports in one line, and never throws", async () => {
     bothDigests();
     ranBefore();
     const logs: string[] = [], warns: string[] = [];
@@ -483,7 +491,7 @@ describe("startup", () => {
     expect([requested, logs, existsSync(cacheDir()), recorded()]).toEqual([[], [], false, "2.99.0"]);
   });
 
-  test("a digest file that cannot be used is reported in one line", async () => {
+  test.skipIf(!fillRuns)("a digest file that cannot be used is reported in one line", async () => {
     ranBefore();
     shipDigests("abc  ocx-child-linux-x64\n");
     const warns: string[] = [];
@@ -492,7 +500,7 @@ describe("startup", () => {
     expect(warns).toEqual(["[link] this package's ocx-child digest file could not be read; no ocx-child build was cached."]);
   });
 
-  test("a package without digests says nothing and only records its version", async () => {
+  test.skipIf(!fillRuns)("a package without digests says nothing and only records its version", async () => {
     const logs: string[] = [];
     const out = { log: (line: string) => { logs.push(line); }, warn: (line: string) => { logs.push(line); } };
     expect(await fillChildBinaryCacheOnStart({ packageRoot, opencodexHome: home }, out)).toEqual({ kind: "skipped", reason: "no_digests" });
@@ -529,7 +537,7 @@ describe("final review: uninstall, startup gates and download edges", () => {
     writeFileSync(manifestPath, JSON.stringify({ ...manifest, paths: manifest.paths.filter(path => path !== "ocx-child-builds") }, null, 2) + "\n", { mode: 0o600 });
   }
 
-  test("a new Home lists ocx-child-builds only once the fill has created it, and uninstall removes it", async () => {
+  test.skipIf(!fillRuns)("a new Home lists ocx-child-builds only once the fill has created it, and uninstall removes it", async () => {
     expect(recordOwnedConfigPath(home, join(home, "config.json"))).toBe(true);
     expect(ownedPaths()).not.toContain("ocx-child-builds");
     expect(await start()).toEqual({ kind: "skipped", reason: "no_digests" });
@@ -540,12 +548,12 @@ describe("final review: uninstall, startup gates and download edges", () => {
     expect(existsSync(fillDir())).toBe(false);
   });
 
-  test("an empty Home gets its ownership metadata before the fill creates its directory", async () => {
+  test.skipIf(!fillRuns)("an empty Home gets its ownership metadata before the fill creates its directory", async () => {
     expect(await start()).toEqual({ kind: "skipped", reason: "no_digests" });
     expect(ownedPaths()).toContain("ocx-child-builds");
   });
 
-  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an existing empty directory others can write is not claimed", async () => {
+  test.skipIf(!fillRuns || process.getuid?.() === 0)("an existing empty directory others can write is not claimed", async () => {
     olderOwnedHome();
     mkdirSync(fillDir(), { mode: 0o700 });
     chmodSync(fillDir(), 0o775);
@@ -554,7 +562,7 @@ describe("final review: uninstall, startup gates and download edges", () => {
     expect([ownedPaths().includes("ocx-child-builds"), readdirSync(fillDir())]).toEqual([false, []]);
   });
 
-  test("a registration the manifest has no room for removes the directory it just created", async () => {
+  test.skipIf(!fillRuns)("a registration the manifest has no room for removes the directory it just created", async () => {
     olderOwnedHome();
     const manifestPath = join(home, CONFIG_UNINSTALL_MANIFEST);
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { paths: string[] };
@@ -567,7 +575,7 @@ describe("final review: uninstall, startup gates and download edges", () => {
     expect([ownedPaths().includes("ocx-child-builds"), existsSync(fillDir())]).toEqual([false, false]);
   });
 
-  test("a failed registration keeps an empty private directory it adopted rather than created", async () => {
+  test.skipIf(!fillRuns)("a failed registration keeps an empty private directory it adopted rather than created", async () => {
     olderOwnedHome();
     mkdirSync(fillDir(), { mode: 0o700 });
     const manifestPath = join(home, CONFIG_UNINSTALL_MANIFEST);
@@ -581,7 +589,7 @@ describe("final review: uninstall, startup gates and download edges", () => {
     expect([ownedPaths().includes("ocx-child-builds"), existsSync(fillDir())]).toEqual([false, true]);
   });
 
-  test("an uninstall that finishes between creating the directory and registering it stops the fill", async () => {
+  test.skipIf(!fillRuns)("an uninstall that finishes between creating the directory and registering it stops the fill", async () => {
     olderOwnedHome();
     bothDigests();
     const register = ownershipModule.registerOwnedConfigPath;
@@ -595,7 +603,7 @@ describe("final review: uninstall, startup gates and download edges", () => {
     expect(existsSync(fillDir())).toBe(false);
   });
 
-  test.each([["absent", false], ["empty", true]])("an older Home registers an %s ocx-child-builds before the fill writes it", async (_name, precreate) => {
+  test.skipIf(!fillRuns).each([["absent", false], ["empty", true]])("an older Home registers an %s ocx-child-builds before the fill writes it", async (_name, precreate) => {
     olderOwnedHome();
     if (precreate) mkdirSync(fillDir(), { mode: 0o700 });
     expect(await start()).toEqual({ kind: "skipped", reason: "no_digests" });
@@ -603,7 +611,7 @@ describe("final review: uninstall, startup gates and download edges", () => {
     expect(removeOwnedConfigState(home).status).toBe("removed");
   });
 
-  test("the operator's cache/ is never claimed or written, and its files survive uninstall, also those added after a fill", async () => {
+  test.skipIf(!fillRuns)("the operator's cache/ is never claimed or written, and its files survive uninstall, also those added after a fill", async () => {
     olderOwnedHome();
     const handPlaced = join(home, "cache", "ocx-child", "2.99.0", "ocx-child-linux-x64");
     mkdirSync(join(home, "cache", "ocx-child", "2.99.0"), { recursive: true, mode: 0o700 });
@@ -623,7 +631,7 @@ describe("final review: uninstall, startup gates and download edges", () => {
       .toEqual(["linux build bytes", "mine", "added after the fill", false]);
   });
 
-  test("the reader takes an operator's build in cache/ocx-child before the one the Home filled", async () => {
+  test.skipIf(!fillRuns)("the reader takes an operator's build in cache/ocx-child before the one the Home filled", async () => {
     const operatorBuild = new TextEncoder().encode("operator linux build");
     const operatorDir = join(home, "cache", "ocx-child", VERSION);
     mkdirSync(operatorDir, { recursive: true, mode: 0o700 });
@@ -638,7 +646,7 @@ describe("final review: uninstall, startup gates and download edges", () => {
     expect(mac.ok && Buffer.from(mac.artifact.bytes).toString()).toBe("mac build bytes");
   });
 
-  test("an unlisted ocx-child-builds that already holds entries is not adopted or written", async () => {
+  test.skipIf(!fillRuns)("an unlisted ocx-child-builds that already holds entries is not adopted or written", async () => {
     olderOwnedHome();
     mkdirSync(join(fillDir(), "2.99.0"), { recursive: true, mode: 0o700 });
     writeFileSync(join(fillDir(), "2.99.0", "notes.txt"), "not OpenCodex's");
@@ -649,7 +657,7 @@ describe("final review: uninstall, startup gates and download edges", () => {
     expect(readFileSync(join(fillDir(), "2.99.0", "notes.txt"), "utf8")).toBe("not OpenCodex's");
   });
 
-  test("a start during an uninstall stops and creates nothing", async () => {
+  test.skipIf(!fillRuns)("a start during an uninstall stops and creates nothing", async () => {
     olderOwnedHome();
     const manifestPath = join(home, CONFIG_UNINSTALL_MANIFEST);
     writeFileSync(manifestPath, JSON.stringify({ ...JSON.parse(readFileSync(manifestPath, "utf8")), uninstallStartedAt: Date.now() }, null, 2) + "\n", { mode: 0o600 });
@@ -658,7 +666,7 @@ describe("final review: uninstall, startup gates and download edges", () => {
     expect(existsSync(fillDir())).toBe(false);
   });
 
-  test("a Home without ownership metadata fills as before (its uninstall removes nothing)", async () => {
+  test.skipIf(!fillRuns)("a Home without ownership metadata fills as before (its uninstall removes nothing)", async () => {
     writeFileSync(join(home, "config.json"), "{}");
     expect(await start()).toEqual({ kind: "skipped", reason: "no_digests" });
     expect(readdirSync(versionsDir())).toEqual([VERSION + ".baseline"]);
@@ -670,7 +678,7 @@ describe("final review: uninstall, startup gates and download edges", () => {
     expect(ownedPaths().includes("ocx-child-builds")).toBe(false);
   });
 
-  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a Home directory others can write is refused before anything is claimed", async () => {
+  test.skipIf(!fillRuns || process.getuid?.() === 0)("a Home directory others can write is refused before anything is claimed", async () => {
     olderOwnedHome();
     bothDigests();
     chmodSync(home, 0o775);
@@ -679,6 +687,27 @@ describe("final review: uninstall, startup gates and download edges", () => {
     } finally { chmodSync(home, 0o700); }
     expect([ownedPaths().includes("ocx-child-builds"), existsSync(fillDir())]).toEqual([false, false]);
   });
+
+  // A Windows Home: the startup step stops at the platform gate, before the claim and before any read of the Home's fill state.
+  test("a Windows Home's startup step answers unsupported_platform, claims nothing and writes nothing", async () => {
+    olderOwnedHome();
+    bothDigests();
+    ranBefore();
+    const markers = readdirSync(versionsDir());
+    const { fetchImpl, requested } = release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild });
+    expect(await startChildBinaryCacheFill("standalone", { configDir: home, packageRoot, bundledVersion: VERSION, fetchImpl, platform: "win32" }, quiet)).toEqual({ kind: "skipped", reason: "unsupported_platform" });
+    expect([requested, ownedPaths().includes("ocx-child-builds"), existsSync(cacheDir()), readdirSync(versionsDir())]).toEqual([[], false, false, markers]);
+  });
+
+  // The same on a real Windows runner with nothing injected: the platform the code reads by default is the one that skips.
+  test.skipIf(fillRuns)("on Windows the startup step skips by itself, claims nothing and writes nothing", async () => {
+    olderOwnedHome();
+    bothDigests();
+    const { fetchImpl, requested } = release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild });
+    expect(await start(fetchImpl)).toEqual({ kind: "skipped", reason: "unsupported_platform" });
+    expect([requested, ownedPaths().includes("ocx-child-builds"), existsSync(fillDir())]).toEqual([[], false, false]);
+  });
+
 
   test("a client runtime records and writes nothing", async () => {
     expect(await startChildBinaryCacheFill("client", { configDir: home, packageRoot, bundledVersion: VERSION }, quiet)).toBeNull();
@@ -704,7 +733,7 @@ describe("final review: uninstall, startup gates and download edges", () => {
     expect(existsSync(join(home, "ocx-child-builds"))).toBe(false);
   });
 
-  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a same-version restart takes no lock and writes nothing", async () => {
+  test.skipIf(!fillRuns || process.getuid?.() === 0)("a same-version restart takes no lock and writes nothing", async () => {
     bothDigests();
     ranBefore();
     await fill(release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild }).fetchImpl);
@@ -715,7 +744,7 @@ describe("final review: uninstall, startup gates and download edges", () => {
     } finally { chmodSync(root, 0o700); }
   });
 
-  test("a version directory removed by hand after a completed fill stays removed and nothing is reported failed", async () => {
+  test.skipIf(!fillRuns)("a version directory removed by hand after a completed fill stays removed and nothing is reported failed", async () => {
     bothDigests();
     ranBefore();
     await fill(release({ "ocx-child-linux-x64": linuxBuild, "ocx-child-darwin-arm64": macBuild }).fetchImpl);
@@ -724,7 +753,7 @@ describe("final review: uninstall, startup gates and download edges", () => {
     expect(existsSync(cacheDir())).toBe(false);
   });
 
-  test("a publish that cannot reach its final name leaves no temp file behind", async () => {
+  test.skipIf(!fillRuns)("a publish that cannot reach its final name leaves no temp file behind", async () => {
     shipDigests(sha(linuxBuild) + "  ocx-child-linux-x64\n");
     ranBefore();
     mkdirSync(join(cacheDir(), "ocx-child-linux-x64"), { recursive: true, mode: 0o700 });
@@ -741,7 +770,7 @@ describe("final review: uninstall, startup gates and download edges", () => {
     },
   });
 
-  test.each([
+  test.skipIf(!fillRuns).each([
     ["a body larger than the cap without a content-length", () => new Response(streamOf(Array.from({ length: 33 }, () => new Uint8Array(1024 * 1024))))],
     ["a body stream that errors part way", () => new Response(streamOf([linuxBuild.slice(0, 4), linuxBuild.slice(4)], 1))],
   ])("%s is refused", async (_name, answer) => {
@@ -751,7 +780,7 @@ describe("final review: uninstall, startup gates and download edges", () => {
     expect(await fill(fetchImpl)).toEqual({ kind: "filled", cached: [], fetched: [], failed: ["ocx-child-linux-x64"] });
   });
 
-  test("a download that hangs is abandoned at its deadline", async () => {
+  test.skipIf(!fillRuns)("a download that hangs is abandoned at its deadline", async () => {
     shipDigests(sha(linuxBuild) + "  ocx-child-linux-x64\n");
     ranBefore();
     const hang = ((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
@@ -761,7 +790,7 @@ describe("final review: uninstall, startup gates and download edges", () => {
       .toEqual({ kind: "filled", cached: [], fetched: [], failed: ["ocx-child-linux-x64"] });
   });
 
-  test.skipIf(process.platform === "win32")("cache directories owned by another user are refused", async () => {
+  test.skipIf(!fillRuns)("cache directories owned by another user are refused", async () => {
     bothDigests();
     ranBefore();
     const uid = spyOn(process, "getuid").mockReturnValue((process.getuid?.() ?? 0) + 1);
@@ -771,8 +800,8 @@ describe("final review: uninstall, startup gates and download edges", () => {
   });
 });
 
-describe("the reader and the fill resolve the same Home", () => {
-  test("with no Home passed, the reader finds what the startup step filled for a ~ spelling of OPENCODEX_HOME", async () => {
+describe.skipIf(!fillRuns)("the reader and the fill resolve the same Home", () => {
+  test.skipIf(!fillRuns)("with no Home passed, the reader finds what the startup step filled for a ~ spelling of OPENCODEX_HOME", async () => {
     const previous = process.env.OPENCODEX_HOME;
     process.env.OPENCODEX_HOME = "~/ocx-child-reader-home-" + Date.now();
     const configDir = spyOn(pathsModule, "getConfigDir").mockReturnValue(home);
@@ -793,8 +822,8 @@ describe("the reader and the fill resolve the same Home", () => {
   });
 });
 
-describe("the fill lock's temp file", () => {
-  test("a lock write that fails leaves no .lock.tmp behind", async () => {
+describe.skipIf(!fillRuns)("the fill lock's temp file", () => {
+  test.skipIf(!fillRuns)("a lock write that fails leaves no .lock.tmp behind", async () => {
     bothDigests();
     ranBefore();
     const fsync = spyOn(fsModule, "fsyncSync").mockImplementationOnce(() => { throw Object.assign(new Error("no space"), { code: "ENOSPC" }); });
@@ -805,8 +834,8 @@ describe("the fill lock's temp file", () => {
   });
 });
 
-describe("uninstall after a full fill", () => {
-  test("builds, manifest, markers, a stale lock and leftover temps all go, and uninstall ends removed", async () => {
+describe.skipIf(!fillRuns)("uninstall after a full fill", () => {
+  test.skipIf(!fillRuns)("builds, manifest, markers, a stale lock and leftover temps all go, and uninstall ends removed", async () => {
     expect(recordOwnedConfigPath(home, join(home, "config.json"))).toBe(true);
     bothDigests();
     const quiet = { log: () => {}, warn: () => {} };

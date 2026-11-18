@@ -943,7 +943,7 @@ describe("link management routes", () => {
     h.deps.writeLinkStore!({ ...h.store, links: [existing] });
     const runner: SshRunner = {
       async run(argv) {
-        if (argv.at(-1) !== remoteOcx(["disconnect"])) return BARE_OCX;
+        if (argv.at(-1) !== remoteOcx(["disconnect", "--expect-link", "lnk_0123456789abcdef"])) return BARE_OCX;
         h.deps.writeLinkStore!({ ...h.store, links: [existing, other] });
         return { code: 0, stdout: "", stderr: "" };
       },
@@ -1385,7 +1385,7 @@ for (const remotePlatform of [undefined, "windows", "posix"] as const) {
       async run(argv) {
         expect(argv).toContain("StrictHostKeyChecking=yes");
         if (argv.at(-1) === "cmd /c echo %OS%") return { code: 0, stdout: "Windows_NT\r\n", stderr: "" };
-        expect(argv.at(-1)).toBe(quoteRemote(remoteOcxArgv(["disconnect"], selected)));
+        expect(argv.at(-1)).toBe(quoteRemote(remoteOcxArgv(["disconnect", "--expect-link", id], selected)));
         return { code: 0, stdout: "", stderr: "" };
       },
       spawnTunnel() { throw new Error("ordinary remove must not spawn a tunnel"); },

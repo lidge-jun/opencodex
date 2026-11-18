@@ -27,6 +27,8 @@ export interface RelayStandin {
    * "home-close:<code>" when the Home closes a link socket, and "http:<status>" for each relayed HTTP request.
    */
   events: string[];
+  /** The Origin header of every WebSocket upgrade Codex sent, in order (null when absent), recorded before any forwarding (U11). */
+  upgradeOrigins: Array<string | null>;
   stop(): Promise<void>;
 }
 
@@ -40,6 +42,7 @@ export function startRelayStandin(options: {
   advertiseLimit?: boolean;
 }): RelayStandin {
   const events: string[] = [];
+  const upgradeOrigins: Array<string | null> = [];
   const homes = new Set<LinkWireClient>();
   const forward = (req: Request): Record<string, string> => {
     const out: Record<string, string> = {};
@@ -60,6 +63,7 @@ export function startRelayStandin(options: {
       const url = new URL(req.url);
       if (url.pathname !== "/v1/responses") return new Response(null, { status: 404 });
       if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        upgradeOrigins.push(req.headers.get("origin"));
         const { home, nonce } = await session();
         const head = await home.upgrade({ nonce, bearer: options.bearer, headers: forward(req) });
         if (head.status !== 101) {
@@ -110,6 +114,7 @@ export function startRelayStandin(options: {
   return {
     port: server.port!,
     events,
+    upgradeOrigins,
     async stop() {
       for (const home of homes) home.destroy();
       await server.stop(true);

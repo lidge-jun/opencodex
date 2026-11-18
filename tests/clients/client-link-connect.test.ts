@@ -185,6 +185,7 @@ describe("client link connection contracts", () => {
           managementUrl: "http://127.0.0.1:34567",
         }, { status: 503 }),
         lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+        catalogCompatibility: { supportedEfforts: () => new Set() },
       })).rejects.toThrow("hub is not ready");
       expect(readServiceApiTokenState()).toEqual({ kind: "absent" });
       expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
@@ -211,6 +212,7 @@ describe("client link connection contracts", () => {
           return Response.json({ models: [] });
         },
         lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+        catalogCompatibility: { supportedEfforts: () => new Set() },
       })).rejects.toThrow("fixture enrollment cancelled");
       expect(cancelledFetch).toBe(true);
       expect(readFileSync(DEFAULT_CATALOG_PATH, "utf8")).toBe(prior);
@@ -277,6 +279,7 @@ describe("client link connection contracts", () => {
           })
           : new Response("catalog failed", { status: 503 }),
         lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+        catalogCompatibility: { supportedEfforts: () => new Set() },
       })).rejects.toThrow("Hub catalog request failed");
       expect(readServiceApiTokenState()).toEqual({ kind: "absent" });
       expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
@@ -295,6 +298,7 @@ describe("client link connection contracts", () => {
           })
           : Response.json({ models: [] }),
         lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+        catalogCompatibility: { supportedEfforts: () => new Set() },
       });
       expect(connection.transport).toBe("link");
       const logs = spyOn(console, "log").mockImplementation(() => {});
@@ -308,6 +312,76 @@ describe("client link connection contracts", () => {
       expect(readServiceApiTokenState()).toEqual({ kind: "absent" });
       expect(existsSync(join(home, "service-api-token"))).toBe(false);
       expect(logs.mock.calls.flat().join(" ")).not.toContain(key);
+    });
+  });
+
+  test("disconnect --expect-link for another link changes nothing and exits 5 with the child_link_mismatch line", async () => {
+    await withLinkHome(async home => {
+      await connectClient(linkOptions(), {
+        fetchImpl: async input => String(input).endsWith("/readyz")
+          ? Response.json({ service: "opencodex", version: "0.0.0", uptime: 1, pid: 1, port: 34567, status: "ready", protocol: 1, minimumClientProtocol: 1, managementUrl: "http://127.0.0.1:34567" })
+          : Response.json({ models: [] }),
+        lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+        // No real Codex probe for its supported efforts (it can take seconds): the catalog here has no models.
+        catalogCompatibility: { supportedEfforts: () => new Set() },
+      });
+      const lines: string[] = [];
+      const errors = spyOn(console, "error").mockImplementation((...args: unknown[]) => { lines.push(String(args[0])); });
+      let exit: number;
+      try {
+        exit = await handleDisconnectCommand(["--expect-link", "lnk_ffffffffffffffff"], { lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") } });
+      } finally { errors.mockRestore(); }
+      expect(exit).toBe(5);
+      expect(JSON.parse(lines.at(-1) ?? "null")).toEqual({ phase: "child_link_mismatch", reason: "other_link" });
+      expect(readClientConnectionState()).toMatchObject({ kind: "connected", value: { link: { linkId } } });
+      expect(readServiceApiTokenState()).toMatchObject({ kind: "present" });
+    });
+  });
+
+  test("disconnect --expect-link for its own link disconnects as a plain disconnect does", async () => {
+    await withLinkHome(async home => {
+      await connectClient(linkOptions(), {
+        fetchImpl: async input => String(input).endsWith("/readyz")
+          ? Response.json({ service: "opencodex", version: "0.0.0", uptime: 1, pid: 1, port: 34567, status: "ready", protocol: 1, minimumClientProtocol: 1, managementUrl: "http://127.0.0.1:34567" })
+          : Response.json({ models: [] }),
+        lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+        // No real Codex probe for its supported efforts (it can take seconds): the catalog here has no models.
+        catalogCompatibility: { supportedEfforts: () => new Set() },
+      });
+      const logs = spyOn(console, "log").mockImplementation(() => {});
+      let exit: number;
+      try {
+        exit = await handleDisconnectCommand(["--expect-link", linkId, "--json"], { lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") } });
+      } finally { logs.mockRestore(); }
+      expect(exit).toBe(0);
+      expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
+    });
+  });
+
+  test("disconnect --expect-link on a disconnected machine exits 5 (reason disconnected) before any teardown", async () => {
+    await withLinkHome(async home => {
+      const lines: string[] = [];
+      const errors = spyOn(console, "error").mockImplementation((...args: unknown[]) => { lines.push(String(args[0])); });
+      let exit: number;
+      try {
+        exit = await handleDisconnectCommand(["--expect-link", linkId], {
+          lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+          linkTeardownDeps: { reapOrphanTunnel: async () => { throw new Error("teardown must not run"); } } as never,
+        });
+      } finally { errors.mockRestore(); }
+      expect(exit).toBe(5);
+      expect(JSON.parse(lines.at(-1) ?? "null")).toEqual({ phase: "child_link_mismatch", reason: "disconnected" });
+      expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
+    });
+  });
+
+  test("disconnect --expect-link without a valid link id is a usage error and changes nothing", async () => {
+    await withLinkHome(async () => {
+      const errors = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        expect(await handleDisconnectCommand(["--expect-link", "not-a-link"])).toBe(2);
+        expect(await handleDisconnectCommand(["--expect-link", linkId, "--orphaned-token", "--yes"])).toBe(2);
+      } finally { errors.mockRestore(); }
     });
   });
 
@@ -598,6 +672,12 @@ describe("client link connection contracts", () => {
     expect(skipsCodexShimAutoRestore("disconnect", ["disconnect", "--orphaned-token"])).toBe(true);
   });
 
+  test("a Home's link-bound disconnect bypasses automatic shim repair, so a refusal changes nothing", () => {
+    expect(skipsCodexShimAutoRestore("disconnect", ["disconnect", "--expect-link", linkId])).toBe(true);
+    expect(skipsCodexShimAutoRestore("disconnect", ["disconnect", "--expect-link=" + linkId])).toBe(true);
+    expect(skipsCodexShimAutoRestore("disconnect", ["disconnect"])).toBe(false);
+  });
+
   test("orphan token refusal and link enrollment name the explicit recovery command", async () => {
     await withLinkHome(async home => {
       writeFileSync(join(home, "service-api-token"), `${key}\n`, { mode: 0o600 });
@@ -632,6 +712,7 @@ describe("client link connection contracts", () => {
         const newKey = `ocx_data_${"b".repeat(40)}`;
         const connection = await connectClient({ ...linkOptions(), credential: { kind: "link", apiKeyId: "new-key", key: newKey } }, {
           lifecycleLockDeps: { lockPath },
+          catalogCompatibility: { supportedEfforts: () => new Set() },
           fetchImpl: async input => String(input).endsWith("/readyz")
             ? Response.json({ service: "opencodex", version: "0.0.0", uptime: 1, pid: 1, port: 34567, status: "ready", protocol: 1, minimumClientProtocol: 1, managementUrl: "http://127.0.0.1:34567" })
             : Response.json({ models: [] }),

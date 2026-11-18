@@ -114,7 +114,7 @@ ocx logout <provider>
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth は独立した Grok CLI サブスクリプションゲートウェイを使用します。API キーのオーバーライドは `https://api.x.ai/v1` を使用し、Priority Processing を注入する場合があります。ライブ一覧を優先し、フォールバックのデフォルトモデルは `grok-4.5`。 |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude モデル; ライブモデル一覧は `/v1/models` から取得。 |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code のモデル。`kimi-for-coding` は現在 K2.8 Preview を指し、100 万トークンのコンテキスト、`low`/`high`/`max` の推論、テキストと画像入力に対応します。`k3-256k` の上限は固定で 256K です。 |
-| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | `kimi` と同じ OAuth ログインとモデル一覧を Responses 方式で使用します。推論内容はサーバー側で暗号化されたままですが、ツール呼び出しと結果は確認できます。 |
+| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | `kimi` と同じ OAuth ログインとモデル一覧を Responses 方式で使用します。推論内容はサーバー側で暗号化されたままですが、ツール呼び出しと結果は確認できます。 ダッシュボードの **Add provider** ピッカー（**Kimi (Responses)**）または `ocx provider add kimi-responses --live` で追加できます。独自のログインは持たないため、Kimi にログイン済みなら追加時に再ログインは不要です。ピッカーのこの項目からログインした場合も作成されるのはこの行だけで、`kimi` 行には触れません。どちらの行からログアウトしても（`ocx logout kimi` または `ocx logout kimi-responses`、ローカルでも `--live` でも、ダッシュボードのどちらの行の **Logout** でも）、両方の行で有効な Kimi アカウントが削除され、そのことが表示されます。別の Kimi アカウントが保存されていれば、両方の行でそれがアクティブになります。一時停止中はどちらの行でも使われず、再ログインが必要な場合はそのアカウントに再ログインしてください。ダッシュボード（または `--live`）で一方の行を削除しても、もう一方が使っている間はログインが残り、最後の行を削除するとログインも削除されます。ローカルの `ocx provider remove` は、他のプロバイダーと同様に保存済みのログインを残します。 |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research サブスクリプションゲートウェイ（Hermes Agent と同じバックエンド）。`portal.nousresearch.com` へのデバイスグラントログイン; access トークンはリクエストごとの inference JWT。有料 + `:free` モデルの混在カタログ（`tencent/hy3:free`、`stepfun/step-3.7-flash:free` など）はサインイン中のアカウントからライブ探索されます。Refresh トークンは単回使用で、更新のたびにローテーションされます。 |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初回ログインは、インストール済みでサインインした `kiro-cli` セッションを取り込みます（Unix では `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`、Windows PowerShell では `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex` でインストールしてから `kiro-cli login` を実行）。**アカウントを追加**は `kiro-cli` をログアウトして新しいブラウザログインを開始し、`kiro-cli` 自体のアカウントを切り替えてアカウント別プロファイルメタデータを保存します。既存の OpenCodex アカウントは保持され、キャンセルまたは失敗時には以前の `kiro-cli` セッションが復元されます。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth を Cloud Code Assist wire で使用。ライブ探索は認証済みの CCA `v1internal:fetchAvailableModels` エンドポイントを使用し、ログイン中のアカウントで利用可能な agent モデルのみを公開します。管理されたカタログはフォールバックとして残ります。 |
@@ -210,7 +210,7 @@ Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL ht
 
 ## 3. API キーカタログ
 
-opencodex には組み込みプリセットが 107 個含まれています。キー方式 86、OAuth 17、ローカル 3、
+opencodex には組み込みプリセットが 108 個含まれています。キー方式 87、OAuth 17、ローカル 3、
 デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
 入力したキーを検証した後保存します(検証はプロバイダー固有です)。主な項目は以下のとおりです:
 
@@ -263,7 +263,7 @@ Cline IDE/CLI のみで API からは使えません。`minimax/minimax-m2.5` �
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
-| [BigModel Coding Plan — Responses (静的モデル一覧)](/guides/providers/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
+| [BigModel Coding Plan — Responses (静的モデル一覧)](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
 | Qwen Cloud | トークンプラン(デフォルト): `https://token-plan.maas.qwencloudapi.com/compatible-mode/v1` · 従量課金: `https://dashscope.aliyuncs.com/compatible-mode/v1` · またはカスタム |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |

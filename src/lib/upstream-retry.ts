@@ -166,7 +166,7 @@ export function carryReplayRefusal<T extends Response>(source: Response, rewrapp
 }
 
 // 1 initial + 2 retries: the pool may hold more than one stale socket.
-const RESET_RETRY_MAX_ATTEMPTS = 3;
+export const RESET_RETRY_MAX_ATTEMPTS = 3;
 const RESET_RETRY_BASE_DELAY_MS = 150;
 const RESET_RETRY_MAX_DELAY_MS = 1_000;
 
@@ -408,7 +408,7 @@ export function isConnectionResetError(err: unknown): boolean {
     || msg.includes("connection reset by peer");
 }
 
-function retryAfterDelayMs(headers: Headers): number | undefined {
+export function retryAfterDelayMs(headers: Headers): number | undefined {
   const raw = headers.get("retry-after")?.trim();
   if (!raw) return undefined;
   const seconds = Number(raw);
@@ -552,6 +552,12 @@ export interface ResetRetryOptions {
    * `attempts`, exactly like every other send this leg makes.
    */
   claimAmbiguousResend?: () => boolean;
+  /**
+   * Opt-in offline wait (#7958): asked once a send failed before reaching the origin; true means
+   * the destination is reachable again and one resend may follow inside `attempts`. See
+   * `createOfflineResendWait` in offline-resend.ts, which owns the single-use and pre-connect rules.
+   */
+  offlineWait?: (error: unknown, signal?: AbortSignal) => Promise<boolean>;
 }
 
 export interface TransientRetryOptions extends ResetRetryOptions {
@@ -568,7 +574,8 @@ export interface TransientRetryOptions extends ResetRetryOptions {
   retryAfterCeilingMs?: number;
 }
 
-export type UpstreamSendRecovery = "connection-reset" | "transient-5xx";
+/** `offline-resend` is the single send after an offline wait (#7958), never a reset retry. */
+export type UpstreamSendRecovery = "connection-reset" | "transient-5xx" | "offline-resend";
 type ReplayableFetch = (recovery?: UpstreamSendRecovery) => Promise<Response>;
 
 /**
@@ -604,20 +611,25 @@ export class UpstreamRetryEvidenceError extends Error {
 }
 
 /**
- * Opt out of Bun's keep-alive pool after a connection-reset retry.
+ * Opt out of Bun's keep-alive pool after a connection-reset retry or an offline resend.
  *
  * Prefer the Bun fetch extension `keepalive: false` (transport-level) over
  * relying on the hop-by-hop `Connection: close` header alone — Bun has ignored
  * that header in past releases (oven-sh/bun#20492), so a header-only retry can
  * still reuse the same half-closed pooled socket. Still set Connection: close
  * as a belt-and-suspenders signal for intermediaries that honor it.
+ *
+ * An offline resend (#7958) follows a DNS outage, typically a sleep or a network change, so any
+ * socket still pooled for that origin or proxy was opened on the network that went away. Reusing
+ * one fails after the body may have left, which turns a provably unsent request into an ambiguous
+ * reset; a fresh connection is what the resend needs anyway.
  */
 export function applyUpstreamRecoveryInit<T extends RequestInit>(
   init: T,
   recovery?: UpstreamSendRecovery,
 ): T & { headers: Headers } {
   const headers = new Headers(init.headers);
-  if (recovery !== "connection-reset") {
+  if (recovery !== "connection-reset" && recovery !== "offline-resend") {
     return { ...init, headers };
   }
   headers.set("connection", "close");
@@ -664,6 +676,8 @@ export async function fetchWithResetRetry(
   // settles as the refusal or an unambiguous answer: a second send of a possibly-executed turn
   // is already out, and handing the client anything it would retry compounds it.
   let spentOperatorReplacement = false;
+  // The recovery the next send reports: the caller's for the first, then whichever path resent it.
+  let recovery = firstRecovery;
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (opts.abortSignal?.aborted) throw abortError(opts.abortSignal);
     // Reported before the await, one physical send at a time: a send that rejects has still
@@ -673,7 +687,7 @@ export async function fetchWithResetRetry(
     if (!opts.onSendsConsumed?.beforeSend) opts.onSendsConsumed?.(1);
     try {
       let response: Response;
-      try { const run = () => doFetch(attempt === 0 ? firstRecovery : "connection-reset");
+      try { const sendRecovery = recovery; const run = () => doFetch(sendRecovery);
         response = await (opts.onSendsConsumed?.execute ? opts.onSendsConsumed.execute(run) : run()); }
       finally { if (opts.onSendsConsumed?.beforeSend) opts.onSendsConsumed(1); }
       return spentOperatorReplacement ? settleOperatorReplacement(response) : response;
@@ -688,6 +702,13 @@ export async function fetchWithResetRetry(
         // evidence: keep it attached so the terminal rejection cannot be
         // downgraded to the pre-connection neutral class (#914 review).
         if (sawReset) throw new UpstreamRetryEvidenceError([], err, true);
+        // Nothing reached the origin, so one resend after reachability returns cannot repeat an effect.
+        // A client that left during the wait gets this failure back, never the abort reason.
+        if (attempt + 1 < attempts && opts.offlineWait && await opts.offlineWait(err, opts.abortSignal)
+          && !opts.abortSignal?.aborted) {
+          recovery = "offline-resend";
+          continue;
+        }
         throw err;
       }
       if (opts.replaySafe === true) {
@@ -707,6 +728,7 @@ export async function fetchWithResetRetry(
       }
       sawReset = true;
       lastError = err;
+      recovery = "connection-reset";
       console.warn(
         `[upstream-retry] connection reset${opts.label ? ` (${opts.label})` : ""} — ${
           spentOperatorReplacement ? "replacing" : "retrying"
@@ -844,6 +866,8 @@ export async function fetchWithTransientRetry(
     ...opts,
     attempts: remaining(),
     onSendsConsumed: undefined,
+    // The offline wait belongs to the request's first send only (see below); later legs never wait.
+    offlineWait: undefined,
   });
   // Reported in `finally` rather than at each exit: this function returns from five places
   // and throws from one, and a caller sharing the budget across request legs must be told the
@@ -851,7 +875,16 @@ export async function fetchWithTransientRetry(
   try {
   if (budget === 0) throw new SendBudgetExhaustedError(opts.destination ?? (opts.label ? errorDestinationLabel(opts.label) : undefined));
   let attemptStart = Date.now();
-  let res = await fetchWithResetRetry(countedFetch, innerResetOptions());
+  // Time spent waiting for the network to return is not part of the resend's own attempt.
+  const offlineWait = opts.offlineWait;
+  let res = await fetchWithResetRetry(countedFetch, {
+    ...innerResetOptions(),
+    ...(offlineWait ? { offlineWait: async (error: unknown, signal?: AbortSignal) => {
+      const resumed = await offlineWait(error, signal);
+      if (resumed) attemptStart = Date.now();
+      return resumed;
+    } } : {}),
+  });
   for (let attempt = 0; sent < budget; attempt++) {
     // A non-replayable gateway status was settled after the request body had already left
     // for the origin; retrying it here is the automatic resend the marker exists to forbid.

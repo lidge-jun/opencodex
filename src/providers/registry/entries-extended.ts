@@ -120,6 +120,11 @@ import {
   STEPFUN_MODEL_INPUT_MODALITIES,
   STEPFUN_NO_VISION_MODELS,
   STEPFUN_REASONING_EFFORTS,
+  MORPH_ULTRA_MODELS,
+  MORPH_ULTRA_MODEL_CONTEXT_WINDOWS,
+  MORPH_ULTRA_MODEL_INPUT_MODALITIES,
+  MORPH_ULTRA_REASONING_EFFORTS,
+  MORPH_ULTRA_REASONING_EFFORT_MAPS,
   ANTHROPIC_MODELS,
   ANTHROPIC_MODEL_CONTEXT_WINDOWS,
   ANTHROPIC_MODEL_INPUT_MODALITIES,
@@ -497,6 +502,33 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // /v1/chat/completions passthrough only folds on an explicit record, so record it here.
     foldDeveloperRoleToSystem: true,
     note: "International default (api.moonshot.ai). China accounts: choose China (.cn) or Custom for api.moonshot.cn.",
+  },
+  {
+    // Morph Ultra plan (https://www.morphllm.com/products/ultra, verified 2026-11-13): one
+    // subscription with no token meter on Kimi K3.1 and DeepSeek V4.1 Flash. Only the covered rows
+    // are seeded — every other Morph model bills per token, and the abliterated variant needs
+    // privileged-access approval. Discovery stays off for the same reason: GET /v1/models lists
+    // per-token rows too, and a live roster would re-add models this plan does not include.
+    id: "morph", label: "Morph (Ultra plan)", baseUrl: "https://api.morphllm.com/v1",
+    adapter: "openai-chat", authKind: "key",
+    // A user who already configured a custom provider named "morph" keeps that destination: the
+    // registry only claims rows that still point at Morph's own endpoint.
+    preserveCustomDestination: true,
+    dashboardUrl: "https://www.morphllm.com/dashboard/api-keys",
+    defaultModel: "morph-dsv41flash-1017",
+    models: MORPH_ULTRA_MODELS,
+    liveModels: false,
+    modelContextWindows: MORPH_ULTRA_MODEL_CONTEXT_WINDOWS,
+    modelInputModalities: MORPH_ULTRA_MODEL_INPUT_MODALITIES,
+    modelReasoningEfforts: MORPH_ULTRA_REASONING_EFFORTS,
+    modelReasoningEffortMap: MORPH_ULTRA_REASONING_EFFORT_MAPS,
+    // Both families require the complete assistant message to be replayed, reasoning_content
+    // included (https://www.morphllm.com/kimi-k3-1-api, "The Thinking-Replay Gotcha", read
+    // 2026-11-13): a harness that keeps only `content` erases earlier turns' reasoning and the
+    // model degrades after a few turns. Neither seeded id matches the DeepSeek/Reflection name
+    // fallback, so the preservation has to be declared here.
+    preserveReasoningContentModels: MORPH_ULTRA_MODELS,
+    note: "Morph Ultra plan ($200/month, no token meter) on the OpenAI-compatible endpoint https://api.morphllm.com/v1. Seeded models are the Ultra-covered ones: morph-kimik31 (Kimi K3.1) and morph-dsv41flash-1017 (DeepSeek V4.1 Flash, Oct 17 snapshot). morph-dsv41flash is the same Flash pool under its undated id, and morph-dsv41flash-abliterated needs privileged-access approval, so neither is seeded. Every other Morph model (GLM-5.3, Fast Apply, WarpGrep, Router) bills per token and is not part of the plan. Ultra removes the token meter but not the per-minute rate limits, and a 429 means retry after Retry-After.",
   },
   { id: "huggingface", label: "Hugging Face", baseUrl: "https://router.huggingface.co/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://huggingface.co/settings/tokens" },
   // 260715 NIM hardening (issue #126, devlog/_plan/260715_issue126_nim_kimi):
@@ -931,6 +963,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     noVisionModels: ALIBABA_TOKEN_PLAN_NO_VISION,
     // The gateway accepts prompt_cache_key on every Token Plan chat model (probed 260902).
     promptCacheKey: true,
+    // DashScope compatible-mode answers `400 developer is not one of ['system','assistant','user','tool','function']`
+    // (#5664, #8864). The native /v1/chat/completions passthrough folds only on an explicit record.
+    foldDeveloperRoleToSystem: true,
   },
   {
     id: "alibaba-token-plan-intl",
@@ -978,6 +1013,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     noReasoningModels: ["kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5", "glm-5.1", "glm-5", "MiniMax-M2.5"],
     modelDefaultReasoningEfforts: { ...Object.fromEntries(QWEN38_FAMILY.map(id => [id, "xhigh"])), "deepseek-v4.1-flash-1017": "high" },
     promptCacheKey: true,
+    // DashScope compatible-mode answers `400 developer is not one of ['system','assistant','user','tool','function']`
+    // (#5664, #8864). The native /v1/chat/completions passthrough folds only on an explicit record.
+    foldDeveloperRoleToSystem: true,
   },
   // NEEDS_HUMAN 2026-07-10: kept for config compatibility, but this is a dashboard URL,
   // no /models endpoint is documented, and tools are silently ignored upstream per docs.parallel.ai.
@@ -1272,10 +1310,11 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     preserveCustomDestination: true,
     defaultModel: "gpt-5.6-terra",
     // 261027 preemptive: GPT-6.1 Terra (OpenAI API limits; TokenLab listing unverified).
-    models: ["gpt-5.6-terra", "gpt-6.1-terra"],
-    modelContextWindows: { "gpt-5.6-terra": 1_050_000, "gpt-6.1-terra": 1_050_000 },
-    modelMaxOutputTokens: { "gpt-5.6-terra": 128_000, "gpt-6.1-terra": 128_000 },
-    modelInputModalities: { "gpt-5.6-terra": ["text", "image"], "gpt-6.1-terra": ["text", "image"] },
+    // 261118 preemptive: GPT-6.2 Sol and Astra, same basis.
+    models: ["gpt-5.6-terra", "gpt-6.1-terra", "gpt-6.2-sol", "gpt-6.2-astra"],
+    modelContextWindows: { "gpt-5.6-terra": 1_050_000, "gpt-6.1-terra": 1_050_000, "gpt-6.2-sol": 1_050_000, "gpt-6.2-astra": 1_050_000 },
+    modelMaxOutputTokens: { "gpt-5.6-terra": 128_000, "gpt-6.1-terra": 128_000, "gpt-6.2-sol": 128_000, "gpt-6.2-astra": 128_000 },
+    modelInputModalities: { "gpt-5.6-terra": ["text", "image"], "gpt-6.1-terra": ["text", "image"], "gpt-6.2-sol": ["text", "image"], "gpt-6.2-astra": ["text", "image"] },
     // Per-model wires from `tokenlab.accepted_request_formats` (GET /v1/models/{id}, 2026-09-30).
     // The provider stays on Chat, the released and end-to-end verified path, and every model
     // accepts it. Models that also declare Responses use it for Codex (Responses inbound) only,
@@ -1284,8 +1323,8 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // gemini-3.8-flash declares Chat + Gemini native and stays on Chat. No delivery-policy
     // header is sent: the API key's own policy stays authoritative.
     modelWireDefaults: Object.fromEntries([
-      // 261027 preemptive: GPT-6.1 Terra (mirrors TokenLab's GPT-6.1 Sol wire).
-      "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna", "grok-4.7",
+      // 261027 preemptive: GPT-6.1 Terra (mirrors TokenLab's GPT-6.1 Sol wire); 261118: GPT-6.2 likewise.
+      "gpt-6-astra", "gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna", "grok-4.7",
       "deepseek-v4.1-flash", "deepseek-v4-pro", "kimi-k3", "glm-5.3",
     ].map(id => [id, { wire: "openai-responses", inbound: ["responses"] }])),
     modelDiscovery: {
@@ -1317,8 +1356,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     preserveCustomDestination: true,
     defaultModel: "glm-5.3-flash",
     // 261027 preemptive: GPT-6.1 Terra (mirrors Modelflare's GPT-6.1 Sol seed; provider listing unverified).
-    models: ["glm-5.3-flash", "claude-sonnet-5-5", "gpt-6.1-sol", "gpt-6.1-terra", "deepseek-v4-flash"],
-    note: "OpenAI-compatible relay for Claude, GPT, GLM and DeepSeek chat models. The original four seeded models were verified with chat, streaming and tool calls; GPT-6.1 Terra is a preemptive seed pending provider verification. deepseek-v4.1-flash is listed upstream but currently answers 503 and is left out. An ordinary key only reaches its own routing group's models; a Smart key reaches the verified seeded models. Image and video models are not served through this Chat preset. Upstream latency varies widely (a few seconds to about 30 s) with occasional transient 503s.",
+    // 261118 preemptive: GPT-6.2 Sol and Astra, same basis.
+    models: ["glm-5.3-flash", "claude-sonnet-5-5", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6.2-sol", "gpt-6.2-astra", "deepseek-v4-flash"],
+    note: "OpenAI-compatible relay for Claude, GPT, GLM and DeepSeek chat models. The original four seeded models were verified with chat, streaming and tool calls; GPT-6.1 Terra, GPT-6.2 Sol and GPT-6.2 Astra are preemptive seeds pending provider verification. deepseek-v4.1-flash is listed upstream but currently answers 503 and is left out. An ordinary key only reaches its own routing group's models; a Smart key reaches the verified seeded models. Image and video models are not served through this Chat preset. Upstream latency varies widely (a few seconds to about 30 s) with occasional transient 503s.",
   },
   {
     // AI Stupid Level Smart Router, operated by S.C. Studio Platforms S.R.L. Contract checked
@@ -1516,7 +1556,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     featured: false,
     dashboardUrl: "https://github.com/settings/copilot",
     liveModels: true,
-    models: ["gpt-4o", "gpt-4.1", "gpt-4.1-mini", "claude-sonnet-4", "gemini-2.5-pro", "gpt-5-mini", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"],
+    models: ["gpt-4o", "gpt-4.1", "gpt-4.1-mini", "claude-sonnet-4", "gemini-2.5-pro", "gpt-5-mini", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"],
     defaultModel: "gpt-4o",
     // Copilot fronts a mixed-wire catalog: these models reject /chat/completions for
     // real Codex-agent traffic (function tools + reasoning), so every inbound wire
@@ -1540,6 +1580,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
       "gpt-6.1-sol": "openai-responses",
       // GPT-6.1 Terra: GA in Copilot 2026-10-26; rides Responses like GPT-6.1 Sol.
       "gpt-6.1-terra": "openai-responses",
+      // 261118 preemptive: GPT-6.2 Sol and Astra ride Responses like GPT-6.1 Sol (Copilot listing unverified).
+      "gpt-6.2-sol": "openai-responses",
+      "gpt-6.2-astra": "openai-responses",
       "grok-4.5": "openai-responses",
       "grok-4.6": "openai-responses",
       "mai-code-1.1-flash": "openai-responses",

@@ -31,7 +31,7 @@ import { clientLinkStatePath, isChildInitiatedLink, recordChildInitiatedLink } f
 import { startMachineListener, type MachineListenerDeps } from "./machine-listener";
 import { isLinkConnection, readClientConnectionState, readClientConnectionStateWithEvidence } from "./state";
 import { withClientLifecycleSync } from "./lifecycle-lock";
-import { clientConnectionEnded, clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, restartOwnerEvidence, type ClientRestartController, type RestartOwner } from "./runtime-restart";
+import { clientConnectionEnded, clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, LEGACY_FLAG_RESTART_OWNER, restartOwnerEvidence, type ClientRestartController, type RecordedRestartOwner, type RestartOwner } from "./runtime-restart";
 import { createLinkParityReporter, type LinkParityReporter } from "./link-parity-reporter";
 import { restoreLinkClientRouting } from "./stop-routing";
 import { SUPERVISOR_MARKER_ENVS } from "../lib/supervisor-markers";
@@ -45,6 +45,9 @@ let activeSupervisor: ClientLinkSupervisor | null = null;
 let activeReporter: LinkParityReporter | null = null;
 let activeRouteWatch: RouteIntentRuntimeWatch | null = null;
 let activeRouteSync: RouteIntentTick | null = null;
+// The local-credential observer lives exactly while this process serves (status attestation).
+// Every path that stops serving stops it, including a recycle back to standalone.
+let activeCredentialObservation: { stop(): void } | null = null;
 let recycleScheduled = false;
 let recycleTimer: ReturnType<typeof setTimeout> | undefined;
 let recycleFlight: Promise<void> | null = null;
@@ -107,7 +110,7 @@ export function clientRuntimeRecord(
   pid: number,
   port: number,
   attestationSecret: string = createLocalAttestationSecret(),
-  owner: RestartOwner | null = classifiedOwner(),
+  owner: RecordedRestartOwner | null = recordedOwner(),
 ): RuntimePortState {
   let command: string[] | undefined;
   try { command = currentServingCommand(); } catch { /* no reliable relaunch identity; update admission fails closed */ }
@@ -121,6 +124,8 @@ function classifiedOwner(): RestartOwner | null {
   return ownerMemo.value;
 }
 const ownerProven = (): boolean => classifiedOwner() !== null;
+/** The record's owner: the proven one, or legacy-flag for a bare OCX_SERVICE=1 (#8545; recordedRestartOwner). */
+const recordedOwner = (): RecordedRestartOwner => classifiedOwner() ?? LEGACY_FLAG_RESTART_OWNER;
 
 export function standaloneRecycleEnv(
   env: NodeJS.ProcessEnv,
@@ -187,6 +192,7 @@ export async function recycleStandalone(
   const replacementEnv = port && !serviceSupervised
     ? withSiblingMarker(standaloneRecycleEnv(process.env, disconnectedTokenFingerprint), issueSiblingHandoff)
     : null;
+  activeCredentialObservation?.stop(); activeCredentialObservation = null;
   activeReporter?.stop(); activeReporter = null;
   activeRouteWatch?.stop(); activeRouteWatch = null;
   activeRouteSync?.stop(); activeRouteSync = null;
@@ -349,8 +355,6 @@ export async function startClientRuntime(
     && !isChildInitiatedLink(state.value.link.linkId);
   // One secret for the life of this process: a rollback republishes the same identity.
   const attestationSecret = createLocalAttestationSecret();
-  // The local-credential observer lives exactly while this process serves (status attestation).
-  let credentialObservation: { stop(): void } | null = null;
 
   // Bind, start a fresh tunnel supervisor and publish. Runs once at start and again when a failed
   // restart rolls back (OCX-6); the stopped supervisor cannot be started twice, so each call builds one.
@@ -394,7 +398,7 @@ export async function startClientRuntime(
       servedPort = boundPort;
       activeSupervisor = supervisor;
       supervisor?.start();
-      credentialObservation ??= observeLocalCredentials();
+      activeCredentialObservation ??= observeLocalCredentials();
       writePid(process.pid);
       // A new generation per publication: syncs admitted before a failed restart refuse to commit
       // into the runtime that serves again, while syncs admitted from here on proceed.
@@ -432,8 +436,8 @@ export async function startClientRuntime(
 
   // Stop everything this process serves, giving in-flight requests up to `drainMs`.
   const stopServing = async (drainMs: number): Promise<void> => {
-    credentialObservation?.stop();
-    credentialObservation = null;
+    activeCredentialObservation?.stop();
+    activeCredentialObservation = null;
     activeReporter?.stop();
     activeReporter = null;
     activeRouteWatch?.stop(); activeRouteWatch = null;
@@ -525,8 +529,8 @@ export async function startClientRuntime(
       if (recycleFlight) await recycleFlight.catch(() => {});
       // A rollback may have republished its runtime record while shutdown joined it.
       syncFenced = !linkMode || await markClientRuntimeStoppingWithRetry({ pid: process.pid, port: servedPort, attestationSecret });
-      credentialObservation?.stop();
-      credentialObservation = null;
+      activeCredentialObservation?.stop();
+      activeCredentialObservation = null;
       activeReporter?.stop();
       activeReporter = null;
       activeRouteWatch?.stop(); activeRouteWatch = null;

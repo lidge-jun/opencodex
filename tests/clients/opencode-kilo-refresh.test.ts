@@ -16,7 +16,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 const clients = ["opencode", "kilo"] as const;
 const config: OcxConfig = {
   port: 10100, hostname: "127.0.0.1", defaultProvider: "mock",
-  providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:10100/v1" } },
+  providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:10100/v1", allowPrivateNetwork: true } },
 };
 const models: ExportModel[] = [{
   namespaced: "mock/reasoner", provider: "mock", id: "reasoner", contextWindow: 100_000,
@@ -76,6 +76,23 @@ describe("OpenCode and Kilo owned model configuration convergence", () => {
         expect(readPath(document(client), fragment.path)).toEqual(fragment.value);
       }
     }
+  });
+
+  test("an upstream wire change refreshes OpenCode without changing the model roster", async () => {
+    expect(applyIntegration(input("opencode")).ok).toBe(true);
+    expect(document("opencode").providers.opencodex.models["mock/reasoner"].package)
+      .toBe("@opencode/ai/providers/openai-compatible");
+    const next = { ...input("opencode"), config: {
+      ...config, providers: { mock: { ...config.providers.mock!, adapter: "openai-responses" } },
+    } };
+    expect(readIntegrationState(next).state).toBe("stale");
+    expect(await refreshOwnedCatalogIntegrations(next, ["opencode"]))
+      .toEqual([{ client: "opencode", ok: true, changed: true }]);
+    const doc = document("opencode");
+    expect(Object.keys(doc.providers.opencodex.models)).toEqual(["mock/reasoner"]);
+    expect(doc.providers.opencodex.models["mock/reasoner"].package).toBeUndefined();
+    expect(doc.provider.opencodex.models["mock/reasoner"].provider).toBeUndefined();
+    expect(readIntegrationState(next).state).toBe("current");
   });
 
   test.each(clients)("an unchanged legacy %s block upgrades as stale, snapshots first and remains reversible", async client => {

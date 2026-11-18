@@ -4,8 +4,9 @@
  * probe binds them to the pending host; confirm-host and apply must name the same values (absent is
  * none), so a probe made by another caller with another route can never be confirmed or applied here.
  */
-import { checkExplicitRoute, sameExplicitRoute, type ExplicitRoute } from "../../link/explicit-route";
-import { fail, isRecord } from "./link-route-state";
+import { checkExplicitRoute, IDENTITY_FILE_GUIDANCE, identityFileProblem, sameExplicitRoute, type ExplicitRoute } from "../../link/explicit-route";
+import type { ManagementContext } from "./context";
+import { adminLoopback, fail, isRecord, pairedSession } from "./link-route-state";
 
 export interface RouteRequest {
   explicitRoute: ExplicitRoute | null;
@@ -14,19 +15,38 @@ export interface RouteRequest {
 
 export const NO_ROUTE_REQUEST: RouteRequest = { explicitRoute: null, exclusive: false };
 
-/** The body without the route keys, and the route it asked for; a refusal is a 400 before any SSH. */
-export function splitRouteRequest(value: unknown): { body: unknown; route: RouteRequest } | { error: Response } {
+/**
+ * The body without the route keys, and the route it asked for. Invalid forms receive a 400 before any SSH; a supplied
+ * command then requires owner-backed authority. The identity file itself is checked by
+ * identityFileRefusal where a request is about to run SSH, so an authorized repeat of a journalled apply replays its
+ * recorded outcome (or answers operation_mismatch) whatever its key file looks like now.
+ */
+export function splitRouteRequest(value: unknown, ctx: ManagementContext): { body: unknown; route: RouteRequest } | { error: Response } {
   if (!isRecord(value) || (!("explicitRoute" in value) && !("exclusive" in value))) return { body: value, route: NO_ROUTE_REQUEST };
   const { explicitRoute, exclusive, ...body } = value;
   if (exclusive !== undefined && exclusive !== true) return { error: fail("invalid_body", "exclusive must be true when present.", 400) };
   let route: ExplicitRoute | null = null;
   if (explicitRoute !== undefined) {
     const checked = checkExplicitRoute(explicitRoute);
-    if (!checked.ok) return { error: fail("invalid_explicit_route", "explicitRoute must be {proxyCommand, user, port} in the accepted form.", 400, checked.reason) };
+    if (!checked.ok) return { error: fail("invalid_explicit_route", "explicitRoute must be {proxyCommand, user, port} with an optional identityFile, in the accepted form.", 400, checked.reason) };
     route = checked.route;
     if (exclusive !== true) return { error: fail("explicit_route_requires_exclusive", "A link with an explicit route must be exclusive.", 400) };
+    // A loopback bootstrap proves no ownership of the executable supplied in ProxyCommand.
+    if (!pairedSession(ctx) && !adminLoopback(ctx)) {
+      return { error: fail("forbidden", "An explicit SSH route requires an operator-paired dashboard session or a trusted loopback admin token.", 403) };
+    }
   }
   return { body, route: { explicitRoute: route, exclusive: exclusive === true } };
+}
+
+/**
+ * The 400 for a route whose identity file this Home cannot use, from its metadata only (the hint is a fixed code); null
+ * without one. probe and confirm-host check it before their SSH, apply after its replay and before its journal entry.
+ */
+export function identityFileRefusal(route: ExplicitRoute | null, platform: NodeJS.Platform = process.platform): Response | null {
+  const problem = route?.identityFile === undefined ? null : identityFileProblem(route.identityFile, platform);
+  if (!problem) return null;
+  return fail("invalid_identity_file", IDENTITY_FILE_GUIDANCE[problem], 400, problem);
 }
 
 /** The route a pending or confirmed host was probed with. */

@@ -619,7 +619,10 @@ export interface OcxProviderConfig {
    * `apiKey` seeds a one-entry pool on first management touch.
    */
   apiKeyPool?: Array<{ id: string; key: string; label?: string; addedAt?: number; disabled?: boolean; pauseDetails?: AccountPauseDetails; pauseRevision?: string }>;
-  /** Explicit opt-in permanent account refusal policy; default off. */
+  /**
+   * Permanent account refusal policy. Explicit opt-in; with no key at all, a Cloud Code Assist
+   * provider still pauses on the first Terms of Service account ban (see `effectiveAccountAutoPause`).
+   */
   accountAutoPause?: AccountAutoPausePolicy;
   /**
    * Optional proactive ordering for `apiKeyPool` when the committed key is already
@@ -965,6 +968,11 @@ export interface OcxProviderConfig {
    */
   messagePhaseInference?: boolean;
   /**
+   * Opt-in (#7427): on a native Responses route, add estimated `usage` to a completed response the
+   * provider sent without one, marked by `x-opencodex-usage-estimated`. Never used for cost, spend or quota.
+   */
+  estimateMissingUsage?: boolean;
+  /**
    * Opt-in hosted-web-search bridge for this KEY-auth Responses passthrough provider (#3761).
    * Absent or disabled leaves the passthrough byte-identical to today.
    */
@@ -1213,6 +1221,14 @@ export interface OcxProviderConfig {
    * the `advisor-tool-2026-03-01` beta too. `false`: never forwarded, even first-party.
    */
   forwardAdvisorTool?: boolean;
+  /**
+   * Experimental, default off (#6895). On an `anthropic`-adapter provider that sends to
+   * `api.anthropic.com` with an API key, a Codex conversation that changes reasoning effort keeps
+   * the top-level `output_config.effort` at its first turn's value and sends each change as an
+   * effort-only system message (beta `mid-conversation-output-config-2026-07-01`), so the prompt
+   * cache survives the change. Any turn the history cannot prove is sent exactly as without it.
+   */
+  perMessageEffort?: boolean;
   /**
    * Model ids that do NOT accept image inputs. The proxy gives them "eyes" via the vision sidecar:
    * attached images are described by a gpt vision model and replaced with text before the call.

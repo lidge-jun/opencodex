@@ -86,9 +86,9 @@ Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a publ
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior. Use slugs for local pages, including Platform Support and OS Keychain, so navigation preserves the selected locale. `tests/ci-workflows/docs-spanish-localization.test.ts` guards canonical Spanish coverage, literal provider-key references, protected remote examples, foreground quickstart alternatives, separate-terminal and Bash/stdin pairing recipes, Pi reasoning metadata, and the data/management credential and admission-header distinctions across shipped locale copies, including empty-header bearer fallback. `tests/ci-workflows/docs-remote-hub-claims.test.ts` validates Docker initialization against the image seed and configuration schema; `tests/ci-workflows/docs-bun-source-requirement.test.ts` checks current bundle claims against the package pin.
 
 Provider preset totals are recounted from the current registry when a preset lands. The
-documented split is 107 total: 86 key-based, 17 OAuth, three local, and one default
-ChatGPT-forward preset. The English provider guide, every translated copy, and every locale's
-quickstart carry the same counts.
+documented split is 108 total: 87 key-based, 17 OAuth, three local, and one default
+ChatGPT-forward preset. The English and Spanish API-key catalog pages, every other locale's provider guide, and every locale's
+quickstart carry the same counts. Section 3 of the provider guide lives on its own page, `docs-site/src/content/docs/guides/api-key-catalog.md` (with its Spanish copy), so the guide stays under the file-size ratchet's 2,000-line default; the guide keeps a section 3 stub that links every moved heading anchor, and other locales keep section 3 in their provider guide until they add a translated catalog page.
 
 That recount is no longer a manual obligation. These numbers are repeated across the guides and
 quickstarts and drifted once already — the English guide reached 95 while every translation and every
@@ -118,7 +118,7 @@ sharing a model-name fragment remain distinct from current Codex-native support.
 The Remote Hub guide distinguishes selected-runtime readiness from general runtime diagnostics;
 `tests/cli/cli-connect-readiness.test.ts` exercises that boundary and general status's single discovery pass with isolated executable fixtures.
 
-The provider guide's OrcaRouter login section in English and every translated source follows
+The OrcaRouter login section (on the API-key catalog page in English and Spanish, in the provider guide elsewhere) follows
 the [bounded ingestion contract](../transports/inventory.md#bounded-response-ingestion-and-orcarouter-login):
 64 KiB of valid UTF-8 JSON and one 30-second deadline covering headers and body. These are login
 limits, so the public guide does not apply them to inference payloads.
@@ -476,10 +476,9 @@ publication by hand.
 
 ### Release notes
 
-The release workflow invokes `scripts/build-release-changelog.ts`, which builds notes from
-the actual Git range and uses generated PR notes as enrichment. Its categorized summaries
-contain one bullet per PR or direct commit, followed by `## Changelog` entries retaining PR
-titles and authors or sanitized direct-commit text. A comparison baseline adds a compare link.
+The release workflow invokes `scripts/build-release-changelog.ts`, which builds notes from the actual Git range and uses generated PR notes as enrichment. Its categorized summaries
+contain one bullet per PR or direct commit, followed by `## Changelog` entries retaining PR titles and authors or sanitized direct-commit text. A comparison baseline adds a compare link.
+The closing code signing section states whether the release's Windows files were signed; [Windows code signing](windows-code-signing.md) owns that contract.
 Preview notes are incremental; stable notes cover the range since the previous stable tag.
 The standalone `scripts/release-notes.ts render` command retains its separate scope-grouped
 summary and carried-preview rendering behavior.

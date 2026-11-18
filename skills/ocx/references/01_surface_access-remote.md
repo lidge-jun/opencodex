@@ -12,7 +12,7 @@ Declared capabilities: 51.
 
 ### `ocx link probe`
 
-Usage: `ocx link probe <alias> [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]`
+Usage: `ocx link probe <alias> [--proxy-command <cmd> --ssh-user <user> --ssh-port <port> [--ssh-identity-file <path>]] [--exclusive] [--json]`
 
 Probe an SSH host fingerprint and OpenCodex version without trusting it.
 
@@ -24,9 +24,10 @@ State-changing: yes. JSON mode: `payload`.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. The link then reads no ssh_config (-F none): the Home offers its SSH agent's keys or a default ~/.ssh/id_* key. |
+| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. The link then reads no ssh_config (-F none): the Home offers its SSH agent's keys or a default ~/.ssh/id_* key, or only the --ssh-identity-file key when one is given. |
 | `--ssh-user` | string | SSH user of the explicit route: a letter or _ then up to 31 letters, digits, ., _ or -. |
 | `--ssh-port` | number | SSH port of the explicit route, 1 to 65535. |
+| `--ssh-identity-file` | string | The private key the link authenticates with (link.route/2): an absolute path of letters, digits and . _ + - /. Needs the explicit route. ssh then offers that key alone (IdentitiesOnly=yes, IdentityAgent=none) for every command and tunnel of the link. The Home refuses a missing, symlinked, unreadable or group- or other-accessible file, and a Windows Home refuses the flag; it never reads the key. The key's directory and every directory above it must be owned by this user or root and not writable by group or others (a sticky directory above the key, such as /tmp, excepted), and every symlink on the path must be owned by this user or root; a folder created under umask 002 is group-writable and is refused. Use a path that passes, or run chmod go-w on a private folder this user owns (its own, or one a tool made for it); never change a shared or system directory such as /tmp or another user's symlink, even as root (hints identity_file_directory, identity_file_ancestor). |
 | `--exclusive` | boolean | The link keeps exactly its alias as its one route and refuses route edits. |
 | `--json` | boolean | Emit alias, fingerprint, key type and version as JSON. |
 
@@ -34,7 +35,7 @@ State-changing: yes. JSON mode: `payload`.
 
 ### `ocx link add`
 
-Usage: `ocx link add <alias> [--expect-fingerprint SHA256:…] [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--operation-id <id>] [--require-ephemeral] [--json]`
+Usage: `ocx link add <alias> [--expect-fingerprint SHA256:…] [--proxy-command <cmd> --ssh-user <user> --ssh-port <port> [--ssh-identity-file <path>]] [--exclusive] [--operation-id <id>] [--require-ephemeral] [--json]`
 
 Connect an SSH Child to this Home after confirming its fingerprint.
 
@@ -49,16 +50,17 @@ State-changing: yes. JSON mode: `payload`.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--expect-fingerprint` | string | Exact SHA256 host fingerprint; required without an interactive TTY. |
-| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. The link then reads no ssh_config (-F none): the Home offers its SSH agent's keys or a default ~/.ssh/id_* key. |
+| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. The link then reads no ssh_config (-F none): the Home offers its SSH agent's keys or a default ~/.ssh/id_* key, or only the --ssh-identity-file key when one is given. |
 | `--ssh-user` | string | SSH user of the explicit route: a letter or _ then up to 31 letters, digits, ., _ or -. |
 | `--ssh-port` | number | SSH port of the explicit route, 1 to 65535. |
+| `--ssh-identity-file` | string | The private key the link authenticates with (link.route/2): an absolute path of letters, digits and . _ + - /. Needs the explicit route. ssh then offers that key alone (IdentitiesOnly=yes, IdentityAgent=none) for every command and tunnel of the link. The Home refuses a missing, symlinked, unreadable or group- or other-accessible file, and a Windows Home refuses the flag; it never reads the key. The key's directory and every directory above it must be owned by this user or root and not writable by group or others (a sticky directory above the key, such as /tmp, excepted), and every symlink on the path must be owned by this user or root; a folder created under umask 002 is group-writable and is refused. Use a path that passes, or run chmod go-w on a private folder this user owns (its own, or one a tool made for it); never change a shared or system directory such as /tmp or another user's symlink, even as root (hints identity_file_directory, identity_file_ancestor). |
 | `--exclusive` | boolean | The link keeps exactly its alias as its one route and refuses route edits. |
 | `--operation-id` | string | Journal the enrollment under this id (1-128 letters, digits, . _ : -): reserved ids, a mark per Home effect and the outcome; a repeat with the same id and parameters replays it. Needs --expect-fingerprint. |
 | `--require-ephemeral` | boolean | Refuse (409 full_install_present) a Child where any runnable full ocx exists, before any plant, key or Child change. |
 | `--json` | boolean | Emit the verified link result as JSON. |
 
 - Requires loopback admin authority on the Home. Without a fingerprint, requires a TTY and explicit yes after showing the offered fingerprint. Never prints the link key.
-- Preflights bound Child restart support and curl, connects, restarts once and verifies a fresh authenticated catalog relay before success. Post-connect failures can leave Child config; run ocx disconnect and ocx restart there before retrying.
+- Preflights bound Child restart support and curl, connects, restarts once and verifies a fresh authenticated catalog relay before success. Post-connect failures can leave Child config; the failure names the attempt's link id. Before retrying, on a full install run ocx disconnect --expect-link <id> and, if it disconnected, ocx restart. A lightweight Child has no ocx: run its planted ocx-child's detach --expect-link <id> instead (~/.cache/opencodex/bin/ocx-child; in Command Prompt on Windows %LOCALAPPDATA%\opencodex\bin\ocx-child.exe, or %USERPROFILE%\.cache\opencodex\bin\ocx-child.exe where LOCALAPPDATA is not set; a copy placed by hand in ~/.local/bin, or %USERPROFILE%\.local\bin on Windows; none need be on PATH). Either acts only while the Child belongs to that link. A build older than --expect-link refuses it before it acts: then leave a lightweight Child as it is, and on a full install run ocx disconnect and ocx restart only if ocx connect status --json shows that id, right after that check, and otherwise leave it as it is.
 
 ### `ocx link port`
 
@@ -159,7 +161,7 @@ State-changing: yes. JSON mode: `envelope`.
 - Requires a valid link ID and loopback admin authority. Explicit force additionally requires --yes.
 - Ordinary revoke always emits {linkId} JSON; forced revoke has human output or a JSON cleanup receipt. Already-revoked link_not_found is idempotent success.
 - Ordinary revoke retains its no-body and idempotent behavior. Forced success reports remoteCleanup:skipped from invocation intent; already-missing link reports unverified. Neither proves the remote client disconnected.
-- If forced cleanup was needed, run ocx disconnect on the remote client. No new enrollment, SSH trust or credential action is implied.
+- After a forced revoke of a full install, run ocx disconnect --expect-link <id> on the machine, which acts only while it is connected to this link; an OpenCodex older than that flag refuses it as a usage error before it acts on the link, and then run ocx disconnect only if ocx connect status --json there shows this link's id or no connection, right after that check (an enrollment that lands between the two commands would be removed); if it shows another link, a hub or another Home, or its state cannot be read, leave it. For a lightweight (ocx-child) Child, use ocx link recover --link-id <id>, which acts only when the machine's records name this link or nothing at all, and refuses a machine another link owns. No new enrollment, SSH trust or credential action is implied.
 
 ### `ocx link recover`
 
@@ -184,7 +186,7 @@ State-changing: yes. JSON mode: `envelope`.
 | `--json` | boolean | Emit the {linkId, outcome, purged} receipt, the {tombstones} list or the {linkId, outcome} forget answer as JSON. |
 
 - Runs the managed planted ocx-child's disconnect --purge --expect-link <id> over the link's alias with its pinned host key, never a sibling route. The Child restores only when its state and its CODEX_HOME ownership record both name that link.
-- Succeeds only on the Child's receipt naming that link with purged:true, or purged:false when the binary stays for another home's running relay; then the tombstone (or journal entry) is settled. residual and conflict answers (409) change nothing on the Child; a residual one needs ocx-child detach on that machine.
+- Succeeds only on the Child's receipt naming that link with purged:true, or purged:false when the binary stays for another home's running relay; then the tombstone (or journal entry) is settled. residual and conflict answers (409) change nothing on the Child; do not answer a residual one with a plain ocx-child detach on the machine, which would also restore and remove a link an interrupted attach left; a person on the Home can forget the tombstone of a machine that is gone or whose cleanup cannot be proven.
 - A forced revoke of a Home-initiated ephemeral link writes the tombstone; a link that still exists answers link_present, and any other Home-initiated link naming the same alias (case-insensitive) answers alias_linked before the machine is contacted. Without a link operation journal, --operation-id answers operation_journal_unavailable.
 
 ### `ocx link reconnect`
@@ -387,7 +389,7 @@ State-changing: yes. JSON mode: `payload`.
 
 ### `ocx disconnect`
 
-Usage: `ocx disconnect [--keep-catalog] [--recover-config --yes] [--json] | ocx disconnect --orphaned-token --yes [--json]`
+Usage: `ocx disconnect [--keep-catalog] [--recover-config --yes] [--json] [--expect-link <linkId>] | ocx disconnect --orphaned-token --yes [--json]`
 
 Disconnect a client or preserve orphaned token files for recovery.
 
@@ -399,6 +401,7 @@ Drives no management route.
 |---|---|---|
 | `--keep-catalog` | boolean | Keep the connected client's catalog during ordinary disconnect. |
 | `--recover-config` | boolean | With --yes, snapshot current Codex artifacts and recover only evidenced owned keys; unknown ownership still refuses. |
+| `--expect-link` | string | Disconnect only when this machine is the connected Child of that link, or finish its unfinished disconnect once the connection is cleared; otherwise exit 5 with child_link_mismatch and change nothing. |
 | `--orphaned-token` | boolean | Preserve unowned service-token files in a private backup when disconnected. |
 | `--yes` | boolean | Explicitly confirm --recover-config or --orphaned-token recovery. |
 | `--json` | boolean | Emit the local result and backup location as JSON. |
@@ -952,7 +955,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--position` | number | Index in the list; by default just before the alias, so direct routes come first and the alias stays last. |
 | `--json` | boolean | Emit {linkId, pin, routes} as JSON. |
 
-- The Home first checks that its link known_hosts file trusts only the link's recorded key for the alias (every entry for it, in any case or hashed by an older release, carries that key), then connects over the new route with strict checking against that one key and stores the route only if the same machine answers. Refusals: route_unproven with a cause (hostkey, auth, forward, transient), pin_mismatch, trust_file_unexpected, link_changed, pin_changed, route_exists, route_limit (8 routes), link_operation_in_progress (removal or a Child job holds the link). Exit 5 on a refusal, 4 for an unknown link, 1 when the routes were stored but the running proxy did not apply them (routes_stored_reload_failed; ocx link routes --link-id <id> reads what was stored).
+- The Home first checks that its link known_hosts file trusts only the link's recorded key for the alias (every entry for it, in any case or hashed by an older release, carries that key), then connects over the new route with strict checking against that one key and stores the route only if the same machine answers. Refusals: route_unproven with a cause (hostkey, auth, forward, transient), pin_mismatch, trust_file_unexpected, link_changed, pin_changed, route_exists, route_limit (8 routes), link_operation_in_progress (removal or a Child job holds the link), link_retirement_pending (an unfinished removal of the link holds it; finish that revoke first). Exit 5 on a refusal, 4 for an unknown link, 1 when the routes were stored but the running proxy did not apply them (routes_stored_reload_failed; ocx link routes --link-id <id> reads what was stored).
 - Adding a route does not move a running tunnel; the Home tries the list in order from the next connection on (ocx link reconnect starts one now). Requires loopback admin authority on the Home.
 
 ### `ocx link routes remove`
@@ -973,7 +976,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--route` | string | Route to remove. |
 | `--json` | boolean | Emit {linkId, pin, routes} as JSON. |
 
-- The alias is the link's pin and cannot be removed (route_is_pin). Removing the route the tunnel uses restarts the tunnel on the remaining list; removing the last extra route returns the link to one route. Exit 4 for an unknown link or route (link_not_found, route_not_found), 5 on a refusal (route_is_pin, link_operation_in_progress), 1 when the routes were stored but the running proxy did not apply them (routes_stored_reload_failed). Requires loopback admin authority on the Home.
+- The alias is the link's pin and cannot be removed (route_is_pin). Removing the route the tunnel uses restarts the tunnel on the remaining list; removing the last extra route returns the link to one route. Exit 4 for an unknown link or route (link_not_found, route_not_found), 5 on a refusal (route_is_pin, link_operation_in_progress, link_retirement_pending: an unfinished removal of the link holds it), 1 when the routes were stored but the running proxy did not apply them (routes_stored_reload_failed). Requires loopback admin authority on the Home.
 
 ### `ocx link routes order`
 
@@ -993,7 +996,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--routes` | string | The current routes, comma separated, in the new order. |
 | `--json` | boolean | Emit {linkId, pin, routes} as JSON. |
 
-- The list must name exactly the current routes (route_order_mismatch otherwise), so no route enters unproven. A reorder does not move a running tunnel. Requires loopback admin authority on the Home.
+- The list must name exactly the current routes (route_order_mismatch otherwise), so no route enters unproven. While an unfinished removal of the link holds it, the reorder is refused (link_retirement_pending); finish that revoke first. A reorder does not move a running tunnel. Requires loopback admin authority on the Home.
 
 ### `ocx link operations`
 

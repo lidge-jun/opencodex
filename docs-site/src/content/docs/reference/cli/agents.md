@@ -1191,10 +1191,11 @@ ocx system settings --stream-mode eager-relay
 ```
 
 Additional system booleans take on/off: `--show-codex-credits`, `--account-picker`,
-`--main-account-hard-lock`, `--ultra-fast-tier`, and `--fast-rows`. They write only
+`--main-account-hard-lock`, `--ultra-fast-tier`, `--fast-rows`, and `--reserve`. They write only
 explicit fields and may combine with existing system options. Showing credits is
 a display preference, not paid-credit opt-in; system Ultra Fast is separate from
-provider Fast.
+provider Fast. `--reserve` controls Luna Reserve compatibility independently of
+`--desktop-authless` and grants no upstream entitlement.
 
 Ultra Fast is an opt-in setting, default off. With `--ultra-fast-tier on`, the
 generated catalog adds the Ultrafast speed choice to native `gpt-6-astra` and

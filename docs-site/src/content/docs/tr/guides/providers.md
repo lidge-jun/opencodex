@@ -137,7 +137,7 @@ ocx logout <saglayici>
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth ayrı Grok CLI abonelik ağ geçidini kullanır. API anahtarı geçersiz kılması `https://api.x.ai/v1` kullanır ve Priority Processing ekleyebilir. Canlı öncelikli Grok kataloğu; `grok-4.5` geri dönüş varsayılanıdır. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude modelleri; canlı model listesi `/v1/models` üzerinden getirilir. |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code modelleri. `kimi-for-coding` artık K2.8 Preview modelini gösterir; 1 milyon token bağlam, `low`/`high`/`max` akıl yürütme ve metin ile görsel girdisi sunar. `k3-256k` için bağlam sınırı sabit 256K'dır. |
-| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | `kimi` ile aynı OAuth oturumunu ve model listesini Responses üzerinden kullanır. Akıl yürütme içeriği sunucuda şifreli kalır; araç çağrıları ve sonuçları görünürdür. |
+| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | `kimi` ile aynı OAuth oturumunu ve model listesini Responses üzerinden kullanır. Akıl yürütme içeriği sunucuda şifreli kalır; araç çağrıları ve sonuçları görünürdür. Panodaki **Add provider** seçicisinden (**Kimi (Responses)**) veya `ocx provider add kimi-responses --live` ile ekleyin. Kendi oturumu yoktur: Kimi'de oturum açıkken eklemek ikinci bir giriş istemez, seçicideki bu girişten oturum açmak da yalnızca bu satırı oluşturur ve `kimi` satırına dokunmaz. Hangi satırdan çıkış yapılırsa yapılsın (`ocx logout kimi` veya `ocx logout kimi-responses`, yerelde ya da `--live` ile, veya panodaki iki satırdan birinde **Logout**), iki satır için de etkin Kimi hesabı kaldırılır ve bu bildirilir; kayıtlı başka bir Kimi hesabı varsa iki satır için de o etkin olur; duraklatılmışken iki satır da onu kullanmaz, yeniden giriş gerektiriyorsa o hesapla yeniden giriş yapın. Bir satırı panelden (veya `--live` ile) silmek, diğer satır kullandığı sürece oturumu korur, sonuncuyu silmek oturumu da siler; yerel `ocx provider remove`, diğer sağlayıcılarda olduğu gibi kayıtlı oturumları yerinde bırakır. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research abonelik ağ geçidi (Hermes Agent'ın kullandığı aynı arka uç). `portal.nousresearch.com`'a karşı cihaz yetkilendirmesi girişi; erişim belirteci istek başına çıkarım JWT'sidir. Oturum açmış hesaptan canlı olarak keşfedilen karışık ücretli + `:free` model kataloğu (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...). Yenileme belirteçleri tek kullanımlıktır ve her yenilemede döndürülür. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | İlk oturum açma, kurulu ve oturum açılmış `kiro-cli` oturumunu içe aktarır (Unix'te `curl -fsSL https://cli.kiro.dev/install` &#124; `bash` ile kurun; Windows PowerShell'de `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex` kullanın; ardından `kiro-cli login` çalıştırın). **Hesap ekle**, `kiro-cli` oturumunu kapatır, `kiro-cli` tarafından kullanılan hesabı değiştiren yeni bir tarayıcı girişi başlatır ve hesap kapsamlı profil meta verilerini saklar. Mevcut OpenCodex hesapları korunur ve iptal veya başarısızlık önceki `kiro-cli` oturumunu geri yükler. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Cloud Code Assist hattı üzerinden Google OAuth. Canlı keşif CCA'nın kimlik doğrulamalı `v1internal:fetchAvailableModels` uç noktasını kullanır ve oturum açmış hesap için kullanılabilir olan ajan modellerini yayınlar; sürdürülen katalog geri dönüş olarak kalır. |
@@ -342,7 +342,7 @@ olmayan bir makineden oturum açmak bundan etkilenmez.
 
 ## 3. API anahtarı kataloğu
 
-opencodex 107 yerleşik önayar ile birlikte gelir: 86 anahtar tabanlı, 17
+opencodex 108 yerleşik önayar ile birlikte gelir: 87 anahtar tabanlı, 17
 OAuth, üç yerel ve bir varsayılan ChatGPT iletme önayarı. Kontrol panelinin
 **Sağlayıcı ekle** seçicisi bir anahtar sağlayıcısının kontrol panelini açar,
 anahtarı doğrular ve saklar; doğrulama sağlayıcıya özgüdür. Dikkate değer
@@ -403,7 +403,7 @@ yalnızca Cline IDE/CLI içinde mevcuttur; `minimax/minimax-m2.5` belgelenmiş A
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Kodlama) | `https://api.z.ai/api/coding/paas/v4` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
-| [BigModel Coding Plan — Responses (statik model listesi)](/guides/providers/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
+| [BigModel Coding Plan — Responses (statik model listesi)](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
 | Qwen Cloud | Token planı (varsayılan): `https://token-plan.maas.qwencloudapi.com/compatible-mode/v1` · Kullandıkça öde: `https://dashscope.aliyuncs.com/compatible-mode/v1` · veya Özel |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
@@ -695,7 +695,7 @@ Copilot karma hatlı bir katalog sunar: modeller (`gpt-5.3-codex`, `gpt-5.4`,
 `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) ajan
 trafiği için `/chat/completions`'ı reddeder, bu nedenle opencodex yerleşik
 varsayılan olarak bu modelleri Responses API üzerinden yönlendirirken diğer tüm
-Copilot modelleri sohbet tamamlamalarında kalır. Öncelik sırası: sabit hat
+Copilot modelleri sohbet tamamlamalarında kalır. `gpt-6-sol`, `gpt-6-luna`, `gpt-6.2-sol`, `gpt-6.2-astra` da önleyici yerleşik varsayılan olarak Responses kullanır; bunlar için ret gözlemlenmedi ve GPT-6.2 modellerinin Copilot'ta listelenmesi doğrulanmadı. Öncelik sırası: sabit hat
 sabitlemesi → açık [`modelAdapters`](/tr/reference/configuration/providers/)
 girdiniz → kayıt defteri varsayılanı → sağlayıcı genelinde adaptör. Yerleşik
 varsayılanı olmayan bir modeli (örneğin `gpt-5.4-nano`) Responses'a dahil etmek

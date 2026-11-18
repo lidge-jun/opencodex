@@ -306,6 +306,10 @@ describe("claude-cli child environment carries no credential and no proxy destin
     expect(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe("1");
   });
 
+  test("labels the turn as opencodex rather than the default sdk-cli entrypoint", () => {
+    expect(buildChildEnv(CLAUDE_CLI_PROFILE, "").CLAUDE_CODE_ENTRYPOINT).toBe("opencodex");
+  });
+
   test("a key configured on the row is never handed to the harness", () => {
     // `keyOptional` makes the row keyless without making it key-*blind*: an operator who saved an
     // API key in the dashboard or with `ocx provider add --api-key` must not silently believe it
@@ -328,9 +332,10 @@ describe("claude-cli child environment carries no credential and no proxy destin
       const env = buildChildEnv(CLAUDE_CLI_PROFILE, "");
       expect(env.USER).toBe("ocx-probe-user");
       // Derived from the two owners rather than restated, so a new quiet flag cannot silently
-      // become the third thing this environment carries.
+      // become the third thing this environment carries. CLAUDE_CODE_ENTRYPOINT is the one
+      // deliberate addition: it labels the turn as opencodex (anthropics/claude-code#97074).
       expect(Object.keys(env).sort()).toEqual(
-        [...new Set([...Object.keys(baseScopedEnv()), ...Object.keys(CLAUDE_CLI_QUIET_ENV), "USER"])].sort(),
+        [...new Set([...Object.keys(baseScopedEnv()), ...Object.keys(CLAUDE_CLI_QUIET_ENV), "CLAUDE_CODE_ENTRYPOINT", "USER"])].sort(),
       );
     } finally {
       if (previous === undefined) delete process.env.USER;
