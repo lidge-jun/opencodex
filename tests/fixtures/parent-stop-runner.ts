@@ -23,6 +23,7 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   managerBound?: boolean;
   discoveryMiss?: boolean;
   standaloneRecord?: "legacy" | "current" | "stale" | "wrong-home" | "wrong-port" | "client-role";
+  legacyWindowsEvidence?: "match" | "foreign-sid" | "wrong-argv" | "wrong-pid" | "wrong-bind" | "client-role" | "serving-generation";
   guarded?: boolean;
   /** #7771: the guarded path on a simulated win32, with a bound scheduler manager (separate child stop). */
   windowsGuarded?: boolean;
@@ -70,6 +71,43 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   windowsWinswStopped?: boolean;
   windowsPartAReject?: boolean;
 };
+if (options.legacyWindowsEvidence) {
+  // Fake Windows command output at the OS boundary. The production SID, argv
+  // and listener readers and the standalone proof all run in this subprocess.
+  const evidence = options.legacyWindowsEvidence;
+  const record = { pid: 4242, port: 10100, hostname: "127.0.0.1",
+    ...(evidence === "client-role" ? { role: "client" as const } : {}),
+    ...(evidence === "serving-generation" ? { servingGeneration: "a".repeat(32) } : {}),
+  };
+  const { proveStandaloneStopRecord } = await import("../../src/cli/stop-restore");
+  const { setProcessCommandLinePlatformForTests } = await import("../../src/config/process-state");
+  setProcessCommandLinePlatformForTests("win32");
+  const windows = await import("../../src/lib/windows-elevation");
+  mock.module("../../src/lib/windows-elevation", () => ({ ...windows,
+    resolveTrustedWindowsSystemDirectory: () => "system",
+    resolveTrustedWindowsPowerShellExe: () => "powershell.exe",
+  }));
+  mock.module("node:child_process", () => ({ ...childProcess,
+    execFileSync(file: string, args: string[]) {
+      if (file.endsWith("netstat.exe")) {
+        const host = evidence === "wrong-bind" ? "0.0.0.0" : record.hostname;
+        const pid = evidence === "wrong-pid" ? 4243 : record.pid;
+        return `TCP ${host}:${record.port} 0.0.0.0:0 LISTENING ${pid}\r\n`;
+      }
+      if (args.at(-1)?.includes("GetOwnerSid")) {
+        return evidence === "foreign-sid" ? "" : "639000000000000000\r\n";
+      }
+      if (file.endsWith("WMIC.exe")) {
+        const verb = evidence === "wrong-argv" ? 'status "start"' : "start";
+        return `CommandLine="C:\\Program Files\\Bun\\bun.exe" run "C:\\work tree\\src\\cli\\index.ts" ${verb}\r\n`;
+      }
+      throw new Error(`Unexpected Windows evidence command: ${file}`);
+    },
+  }));
+  Object.defineProperty(process, "platform", { value: "win32" });
+  console.log(JSON.stringify({ proved: Boolean(await proveStandaloneStopRecord(record, record.pid, [])) }));
+  process.exit(0);
+}
 if (options.proxyProbePort) {
   // Deliberately bypass every fixture mock for the real proxy-environment regression.
   const origin = `http://127.0.0.1:${options.proxyProbePort}`;
@@ -298,6 +336,7 @@ mock.module("../../src/server/system-env", () => ({ ...systemEnv, revertSystemEn
 const portReclaim = await import("../../src/server/port-reclaim");
 mock.module("../../src/server/port-reclaim", () => ({ ...portReclaim,
   inspectIpv4LoopbackListener: async () => ({ kind: options.standaloneRecord === "wrong-port" ? "mismatch" : "match", elapsedMs: 0 }),
+  ownsLegacyStopBind: async () => options.standaloneRecord !== "wrong-port",
   reclaimListenPort: async (_port: number, _host: string, options?: { timeoutMs?: number }) => {
     calls.reclaim += 1;
     reclaimTimeouts.push(options?.timeoutMs ?? 0);

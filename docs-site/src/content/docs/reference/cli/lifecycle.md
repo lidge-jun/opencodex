@@ -99,8 +99,11 @@ Stop the running proxy (by PID), remove the PID file, and restore native Codex f
 background service is installed, `ocx stop` also stops it first so it cannot respawn the proxy.
 If the listener cannot prove its role, a standalone runtime record can still authorize the ordinary stop
 when its recorded process creation identity matches the live PID and there is no Link evidence.
-An older record without a creation identity requires a matching listener port, OpenCodex start command,
-and process home. The CLI leaves the process running if it cannot establish that match or verify a supervisor.
+An older record without a creation identity requires a same-user OpenCodex start process that owns
+the recorded listener. A wildcard record requires a wildcard listener, and an IPv4 loopback record
+requires an exact loopback listener. Linux and macOS also check the process home. Windows uses the
+owner SID, start arguments, and exact listener ownership because CIM does not expose the process environment.
+The CLI leaves the process running if it cannot establish that match or verify a supervisor.
 If a live tracked PID could still be a Link Child, `ocx stop` leaves it running until it can verify
 its role or tie the PID to a matching service registration. Run `ocx service status` to identify
 its supervisor, or check the foreground terminal. Repair the runtime or saved Link records and retry.

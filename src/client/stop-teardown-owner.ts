@@ -18,19 +18,31 @@ export function isClientStopCommandLine(commandLine: string): boolean {
 }
 
 export function isClientStopArgv(argv: readonly string[]): boolean {
+  const command = ocxCommandIndex(argv);
+  return command !== undefined && argv[command] === "stop" && parseStopApproval(argv.slice(command + 1)).ok;
+}
+
+export function isLegacyWindowsStartCommandLine(commandLine: string): boolean {
+  if (commandLine.length > 64 * 1024) return false;
+  const argv = tokenizeCommandLine(commandLine);
+  const command = ocxCommandIndex(argv);
+  return command !== undefined && argv[command] === "start";
+}
+
+function ocxCommandIndex(argv: readonly string[]): number | undefined {
   let next = 1;
   if (/^bun(?:\.exe)?$/.test(basename(argv[0] ?? ""))) {
     if (argv[next] === "run") next++;
     const script = argv[next++]?.replace(/\\/g, "/");
-    if (!script || !/(?:^|\/)src\/cli(?:\/index)?\.ts$/i.test(script)) return false;
-  } else if (!/^(?:ocx|opencodex)(?:\.exe)?$/.test(basename(argv[0] ?? ""))) return false;
+    if (!script || !/(?:^|\/)src\/cli(?:\/index)?\.ts$/i.test(script)) return;
+  } else if (!/^(?:ocx|opencodex)(?:\.exe)?$/.test(basename(argv[0] ?? ""))) return;
   // npm inserts this one token before the command. Its spelling is not proof of
   // launcher trust; the current runtime fence and same-user live owner are separate.
   if (argv[next]?.startsWith(NODE_LAUNCH_PROOF_PREFIX)) {
-    if (!/^[A-Za-z0-9_-]{43}$/.test(argv[next]!.slice(NODE_LAUNCH_PROOF_PREFIX.length))) return false;
+    if (!/^[A-Za-z0-9_-]{43}$/.test(argv[next]!.slice(NODE_LAUNCH_PROOF_PREFIX.length))) return;
     next++;
   }
-  return argv[next] === "stop" && parseStopApproval(argv.slice(next + 1)).ok;
+  return next;
 }
 
 /** Creation identity and same-user ownership, sampled freshly for each destructive boundary. */

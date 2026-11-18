@@ -127,17 +127,28 @@ export async function proveStandaloneStopRecord(
     try { return readRouteIntentReceiptStrict()?.linkId === undefined; } catch { return false; }
   };
   if (!hasNoLinkReceipt()) return;
-  const { readClientStopProcessStart, readLegacyStopProcessHome } = await import("../client/stop-teardown-owner");
+  const { isLegacyWindowsStartCommandLine, readClientStopProcessStart, readLegacyStopProcessHome } = await import("../client/stop-teardown-owner");
   const start = readClientStopProcessStart(pid);
   if (!start) return;
   if (runtime.startTime !== undefined) {
     if (runtime.startTime !== start) return;
   } else {
     const command = readProcessCommandLine(pid);
-    if (!command || !isOcxStartCommandLine(command) || readLegacyStopProcessHome(pid) !== getConfigDir()) return;
-    const { inspectIpv4LoopbackListener, scanListenPidsForAddress } = await import("../server/port-reclaim");
-    const address = gracefulStopHost(runtime.hostname).replace(/^\[(.*)\]$/, "$1");
-    if (address === "127.0.0.1") {
+    if (!command) return;
+    const windows = process.platform === "win32";
+    // CIM does not expose the environment. Windows uses the SID-checked creation
+    // identity above, exact start argv and ownership of the recorded bind instead.
+    if (windows ? !isLegacyWindowsStartCommandLine(command)
+      : !isOcxStartCommandLine(command) || readLegacyStopProcessHome(pid) !== getConfigDir()) return;
+    const { inspectIpv4LoopbackListener, ownsLegacyStopBind, scanListenPidsForAddress } = await import("../server/port-reclaim");
+    const bind = runtime.hostname?.trim().replace(/^\[(.*)\]$/, "$1");
+    const wildcard = bind === "0.0.0.0" || bind === "::";
+    const address = windows || wildcard
+      ? (bind && bind.toLowerCase() !== "localhost" ? bind : "127.0.0.1")
+      : gracefulStopHost(runtime.hostname).replace(/^\[(.*)\]$/, "$1");
+    if (windows || wildcard) {
+      if (!await ownsLegacyStopBind(runtime.port, pid, address)) return;
+    } else if (address === "127.0.0.1") {
       if ((await inspectIpv4LoopbackListener(runtime.port, pid)).kind !== "match") return;
     } else {
       const listeners = scanListenPidsForAddress(runtime.port, address);

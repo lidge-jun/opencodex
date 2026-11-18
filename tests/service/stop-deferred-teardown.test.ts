@@ -152,6 +152,50 @@ describe("API stop through process exit cleanup", () => {
 });
 
 describe("parent CLI shared teardown completion", () => {
+  test.each([
+    ["match", true], ["foreign-sid", false], ["wrong-argv", false], ["wrong-pid", false],
+    ["wrong-bind", false], ["client-role", false], ["serving-generation", false],
+  ] as const)("legacy Windows foreground evidence (%s)", (legacyWindowsEvidence, proved) => {
+    const child = spawnSync(process.execPath, [fixturePath("parent-stop-runner.ts")], {
+      cwd: repoPath(), env: { ...process.env, OPENCODEX_HOME: home },
+      input: JSON.stringify({ legacyWindowsEvidence }), encoding: "utf8", timeout: 10_000,
+    });
+    expect(child.error, child.stderr).toBeUndefined();
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({ proved });
+  });
+
+  test.skipIf(!["linux", "darwin", "win32"].includes(process.platform))(
+    "legacy standalone proof checks a live foreground process and its recorded listener scope",
+    async () => {
+      const { proveStandaloneStopRecord } = await import("../../src/cli/stop-restore");
+      const hostname = process.platform === "win32" ? "127.0.0.1" : "0.0.0.0";
+      const scriptDir = join(home, "src", "cli");
+      mkdirSync(scriptDir, { recursive: true });
+      const script = join(scriptDir, "index.ts");
+      writeFileSync(script, `
+        const listener = Bun.listen({ hostname: ${JSON.stringify(hostname)}, port: 0, socket: { data() {} } });
+        console.log(listener.port);
+      `);
+      const proxy = Bun.spawn([process.execPath, script, "start"], {
+        env: { ...process.env, OPENCODEX_HOME: home },
+        stdout: "pipe", stderr: "inherit", signal: AbortSignal.timeout(15_000),
+      });
+      try {
+        const { value } = await proxy.stdout.getReader().read();
+        const port = Number(new TextDecoder().decode(value).trim());
+        expect(port).toBeGreaterThan(0);
+        const record = { pid: proxy.pid, port, hostname };
+        expect(await proveStandaloneStopRecord(record, proxy.pid, [])).toBeFunction();
+        const wrongBind = hostname === "0.0.0.0" ? "127.0.0.1" : "0.0.0.0";
+        expect(await proveStandaloneStopRecord({ ...record, hostname: wrongBind }, proxy.pid, [])).toBeUndefined();
+      } finally {
+        proxy.kill();
+        await proxy.exited;
+      }
+    }, 17_000,
+  );
+
   test("an already-down standalone stop restores even when the user manager is unreadable", async () => {
     const outcome = await runParentStop({ receipt: true, alreadyStopped: true, managerState: "unknown",
       json: true, response: null, restore: restoreResult(true) });
@@ -181,6 +225,7 @@ describe("parent CLI shared teardown completion", () => {
     expect(outcome.signals).toEqual(standaloneRecord === "legacy" ? [] : [process.platform === "win32" ? "taskkill /F" : "SIGTERM"]);
     expect(JSON.parse(outcome.stdout)).toMatchObject({ runtimeDown: true, proxy: "stopped", sharedTeardown: "restored" });
     for (const mismatch of mismatches) {
+      if (mismatch === "wrong-home" && process.platform === "win32") continue;
       const refusal = await runParentStop({ receipt: true, standaloneRecord: mismatch, discoveryMiss: true, managerCascades: true,
         json: true, response: null, restore: restoreResult(true) });
       expect(refusal.exitCode, `${mismatch}: ${refusal.stderr}`).toBe(1);
