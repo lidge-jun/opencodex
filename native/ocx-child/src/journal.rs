@@ -14,7 +14,7 @@ use crate::platform::{
 };
 use crate::state::{CATALOG_FILENAME, ChildPaths};
 use crate::toml_surgeon::{
-    ChildInjectedLedger, apply_design_b_config, config_references_catalog,
+    CatalogPathMatch, ChildInjectedLedger, apply_design_b_config, config_catalog_reference,
     detect_unowned_root_routing_conflict, surgical_detach_config,
 };
 
@@ -835,14 +835,23 @@ fn offline_detach_inner(
                     .map_err(step_err)?;
             }
         } else {
+            // Preserve the catalog whenever a retained binding may still reference it.
+            // This is best effort against external writers such as Codex or an editor:
+            // they can change config.toml between this check and the unlink.
             guard
                 .restore_step(|| {
                     reject_symlink(&config_path)?;
                     match fs::read_to_string(&config_path) {
-                        Ok(config) if config_references_catalog(&config, catalog_path)? => {
-                            return Ok(());
-                        }
-                        Ok(_) => {}
+                        Ok(config) => match config_catalog_reference(&config, catalog_path)? {
+                            Some(CatalogPathMatch::Same) => return Ok(()),
+                            Some(CatalogPathMatch::Unresolved) => {
+                                eprintln!(
+                                    "detach kept {CATALOG_FILENAME}: could not resolve the retained model_catalog_json binding"
+                                );
+                                return Ok(());
+                            }
+                            Some(CatalogPathMatch::Different) | None => {}
+                        },
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                         Err(e) => return Err(format!("failed reading remaining config.toml: {e}")),
                     }

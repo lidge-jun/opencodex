@@ -681,10 +681,20 @@ fn resolve_catalog_binding(binding: &str, target: &Path) -> Option<PathBuf> {
         .then(|| normalize_absolute_path(&binding))
 }
 
-fn canonical_paths_match(left: &Path, right: &Path) -> bool {
-    fs::canonicalize(left).is_ok_and(|left| {
-        fs::canonicalize(right).is_ok_and(|right| same_catalog_path_spelling(&left, &right))
-    })
+#[derive(PartialEq, Eq)]
+pub(crate) enum CatalogPathMatch {
+    Same,
+    Different,
+    Unresolved,
+}
+
+fn compare_canonical_paths(left: &Path, right: &Path) -> CatalogPathMatch {
+    match fs::canonicalize(left).and_then(|left| fs::canonicalize(right).map(|right| (left, right)))
+    {
+        Ok((left, right)) if same_catalog_path_spelling(&left, &right) => CatalogPathMatch::Same,
+        Ok(_) => CatalogPathMatch::Different,
+        Err(_) => CatalogPathMatch::Unresolved,
+    }
 }
 
 fn owns_catalog_binding(binding: &str, target: &Path) -> bool {
@@ -700,7 +710,9 @@ fn owns_catalog_binding(binding: &str, target: &Path) -> bool {
         && binding
             .parent()
             .zip(target.parent())
-            .is_some_and(|(left, right)| canonical_paths_match(left, right))
+            .is_some_and(|(left, right)| {
+                compare_canonical_paths(left, right) == CatalogPathMatch::Same
+            })
 }
 
 fn parse_config(content: &str) -> Result<Document<&str>, String> {
@@ -708,15 +720,23 @@ fn parse_config(content: &str) -> Result<Document<&str>, String> {
     Document::parse(content).map_err(|_| "config.toml contains invalid TOML".to_owned())
 }
 
-pub(crate) fn config_references_catalog(content: &str, target: &Path) -> Result<bool, String> {
+pub(crate) fn config_catalog_reference(
+    content: &str,
+    target: &Path,
+) -> Result<Option<CatalogPathMatch>, String> {
     let document = parse_config(content.strip_prefix('\u{feff}').unwrap_or(content))?;
-    let binding = document
-        .get("model_catalog_json")
-        .and_then(|item| item.as_str())
+    let Some(item) = document.get("model_catalog_json") else {
+        return Ok(None);
+    };
+    let binding = item
+        .as_str()
         .and_then(|value| resolve_catalog_binding(value, target));
     // Follow the file as well as its directory here. A preserved user symlink
-    // must remain readable after detach even though it was never ours to strip.
-    Ok(binding.is_some_and(|binding| canonical_paths_match(&binding, target)))
+    // must keep its target. Failed resolution supplies no proof that unlink is safe.
+    Ok(Some(match binding {
+        Some(binding) => compare_canonical_paths(&binding, target),
+        None => CatalogPathMatch::Unresolved,
+    }))
 }
 
 fn catalog_assignment(

@@ -1168,6 +1168,85 @@ fn surgical_detach_keeps_catalog_referenced_by_a_user_file_symlink() {
     assert_eq!(fs::read(user_catalog).unwrap(), catalog);
 }
 
+fn assert_surgical_detach_keeps_unresolved_catalog(
+    paths: &ChildPaths,
+    settings: &HomeCodexSettings,
+    binding: &str,
+    expected_error: std::io::ErrorKind,
+) {
+    let catalog = br#"{"models":[{"slug":"home"}]}"#;
+    apply_attach_or_sync(
+        &owned(paths),
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        catalog,
+        settings,
+    )
+    .unwrap();
+    let config_path = paths.codex_config_path();
+    let edited = format!(
+        "model_catalog_json = {}\n",
+        toml_escape_basic_string(binding)
+    );
+    fs::write(&config_path, &edited).unwrap();
+    assert_eq!(
+        fs::canonicalize(paths.codex_home.join(binding))
+            .unwrap_err()
+            .kind(),
+        expected_error
+    );
+
+    let detached = std::process::Command::new(env!("CARGO_BIN_EXE_ocx-child"))
+        .args(["detach", "--json"])
+        .env("OPENCODEX_HOME", &paths.opencodex_home)
+        .env("CODEX_HOME", &paths.codex_home)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&detached.stderr);
+    assert!(detached.status.success(), "detach failed: {stderr}");
+    let outcome: serde_json::Value = serde_json::from_slice(&detached.stdout).unwrap();
+    assert_eq!(outcome["outcome"], "SurgicalRestore");
+    assert_eq!(fs::read_to_string(config_path).unwrap(), edited);
+    assert_eq!(
+        fs::read(paths.codex_catalog_path()).expect("detach removed the managed catalog"),
+        catalog
+    );
+    assert!(stderr.contains("kept opencodex-catalog.json"), "{stderr}");
+}
+
+#[test]
+fn surgical_detach_keeps_catalog_when_binding_is_not_found() {
+    let (_guard, paths, _, settings) = homes_fixture();
+    assert_surgical_detach_keeps_unresolved_catalog(
+        &paths,
+        &settings,
+        "missing-catalog.json",
+        std::io::ErrorKind::NotFound,
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn surgical_detach_keeps_catalog_when_binding_permission_is_denied() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let (_guard, paths, _, settings) = homes_fixture();
+    let restricted = paths.codex_home.join("restricted");
+    fs::create_dir(&restricted).unwrap();
+    let binding = "restricted/user-catalog.json";
+    symlink(paths.codex_catalog_path(), paths.codex_home.join(binding)).unwrap();
+    let _restore_mode = RestoreMode(restricted.clone());
+    fs::set_permissions(&restricted, fs::Permissions::from_mode(0o600)).unwrap();
+
+    assert_surgical_detach_keeps_unresolved_catalog(
+        &paths,
+        &settings,
+        binding,
+        std::io::ErrorKind::PermissionDenied,
+    );
+}
+
 #[test]
 fn legacy_absolute_catalog_binding_migrates_on_sync_and_detaches_surgically() {
     for sync in [true, false] {
@@ -1598,16 +1677,20 @@ fn detach_preserves_orphaned_key_when_the_journal_is_missing() {
 }
 
 #[cfg(unix)]
+struct RestoreMode(PathBuf);
+
+#[cfg(unix)]
+impl Drop for RestoreMode {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o700));
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn detach_keeps_recovery_journal_when_required_file_removal_fails() {
     use std::os::unix::fs::PermissionsExt;
-
-    struct RestoreMode(PathBuf);
-    impl Drop for RestoreMode {
-        fn drop(&mut self) {
-            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o700));
-        }
-    }
 
     let (_guard, paths, _other, settings) = homes_fixture();
     apply_attach_or_sync(

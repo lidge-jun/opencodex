@@ -365,7 +365,10 @@ journal publication.
 `native/ocx-child/src/toml_surgeon.rs` validates each edited config before publication and uses the
 same ownership comparison during surgical detach, where a foreign binding survives.
 `native/ocx-child/src/journal.rs` checks the remaining root binding before removing a generated
-catalog. That check follows file symlinks too, so a preserved binding keeps its target readable.
+catalog. It follows file symlinks and unlinks only when the binding is absent or resolves to a
+different target. If the binding may still reference the catalog, detach keeps it and reports
+unresolved bindings on stderr. The check is best effort against concurrent external writers such
+as Codex or editors, which can change `config.toml` between the check and unlink.
 
 `native/ocx-child/Cargo.toml` and `native/ocx-child/src/lib.rs` build a standalone lightweight Rust binary (`ocx-child`) for disposable SSH devboxes, containers and VMs that do not run a persistent Bun OpenCodex install. Remote candidate discovery in `src/link/ssh-argv.ts` and `src/link/remote-windows.ts` tries `ocx-child` first when `$OPENCODEX_HOME/child/state.json` is present (preserving an active `ocx-child` enrollment even if full `ocx` is installed later), and otherwise tries every full `ocx` path before falling back to `ocx-child` in `~/.local/bin`, `~/.cache/opencodex/bin` (plus `%LOCALAPPDATA%\opencodex\bin` on Windows) and `PATH`, keeping Windows encoded PowerShell below `POWERSHELL_ENCODED_MAX` (`8000`).
 
