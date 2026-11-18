@@ -48,13 +48,16 @@ function underCanonicalHome(ctx: GatewayClientContext, path: string): string {
   return join(realpathSync(ctx.home), subpath);
 }
 
-/** The connector supplies a fixed settings/profile path. Only its own directory may hold the target. */
-function clientDestination(ctx: GatewayClientContext, path: string): string {
+/** Compare the resolved file against the fixed names under the canonical home. */
+function clientDestination(ctx: GatewayClientContext, path: string, allowedPaths: readonly string[]): string {
   const parent = dirname(path);
-  const allowed = underCanonicalHome(ctx, parent);
-  const target = resolveClientPath(path);
-  if (relative(allowed, dirname(target)) !== "" || relative(allowed, resolveClientPath(parent)) !== "") {
+  if (relative(underCanonicalHome(ctx, parent), resolveClientPath(parent)) !== "") {
     throw new Error(`Gateway client file resolves outside the allowed client directory: ${path}`);
+  }
+  const target = resolveClientPath(path);
+  // Following links in the allowlist would let a redirected profile authorize its own destination.
+  if (!allowedPaths.some(allowed => relative(underCanonicalHome(ctx, allowed), target) === "")) {
+    throw new Error(`Gateway client file resolves outside the allowed client paths: ${path}`);
   }
   return target;
 }
@@ -69,21 +72,21 @@ function readClientDestination(target: string, ignoreUnreadable: boolean = false
   }
 }
 
-export function readClientFile(ctx: GatewayClientContext, path: string, ignoreUnreadable = false): ClientFile | null {
-  return readClientDestination(clientDestination(ctx, path), ignoreUnreadable);
+export function readClientFile(ctx: GatewayClientContext, path: string, allowedPaths: readonly string[] = [path], ignoreUnreadable = false): ClientFile | null {
+  return readClientDestination(clientDestination(ctx, path, allowedPaths), ignoreUnreadable);
 }
 
 /** Status can still report the client when a file exists but cannot be read. */
-export function inspectClientFile(ctx: GatewayClientContext, path: string): ClientFile | null | undefined {
-  try { return readClientFile(ctx, path); } catch { return undefined; }
+export function inspectClientFile(ctx: GatewayClientContext, path: string, allowedPaths: readonly string[] = [path]): ClientFile | null | undefined {
+  try { return readClientFile(ctx, path, allowedPaths); } catch { return undefined; }
 }
 
 export function assertClientSize(bytes: Uint8Array): void {
   if (bytes.length > MAX_CLIENT_BYTES) throw new Error("Gateway client file would exceed the 4 MiB limit");
 }
 
-export function checkedClientDestination(ctx: GatewayClientContext, path: string, original: ClientFile | null, destination = original?.target): string {
-  const target = clientDestination(ctx, path);
+export function checkedClientDestination(ctx: GatewayClientContext, path: string, original: ClientFile | null, allowedPaths: readonly string[] = [path], destination = original?.target): string {
+  const target = clientDestination(ctx, path, allowedPaths);
   const current = readClientDestination(target);
   if (original?.hash !== current?.hash || (destination !== undefined && destination !== target)) {
     throw new Error(`Gateway client file changed before update: ${path}`);
@@ -92,9 +95,9 @@ export function checkedClientDestination(ctx: GatewayClientContext, path: string
 }
 
 /** Replace the resolved client file using the directory's inherited Windows ACL. */
-export function writeClientFile(ctx: GatewayClientContext, path: string, original: ClientFile | null, bytes: Uint8Array): void {
+export function writeClientFile(ctx: GatewayClientContext, path: string, original: ClientFile | null, bytes: Uint8Array, allowedPaths: readonly string[] = [path]): void {
   assertClientSize(bytes);
-  const target = checkedClientDestination(ctx, path, original);
+  const target = checkedClientDestination(ctx, path, original, allowedPaths);
   const dir = dirname(target);
   assertNotRealHomeUnderTest(dir);
   assertNotRealCodexHomeUnderTest(dir);
@@ -108,7 +111,7 @@ export function writeClientFile(ctx: GatewayClientContext, path: string, origina
       fsyncSync(fd);
     } finally { closeSync(fd); }
     renameAtomicFile(temp, target, undefined, "config", {
-      validateBeforeRename: destination => { checkedClientDestination(ctx, path, original, destination); },
+      validateBeforeRename: destination => { checkedClientDestination(ctx, path, original, allowedPaths, destination); },
     });
   } catch (error) {
     try { unlinkSync(temp); } catch (cleanup) {
@@ -119,9 +122,9 @@ export function writeClientFile(ctx: GatewayClientContext, path: string, origina
   syncParentDirectory(target);
 }
 
-export function removeCreatedClientFile(ctx: GatewayClientContext, path: string, original: ClientFile): void {
+export function removeCreatedClientFile(ctx: GatewayClientContext, path: string, original: ClientFile, allowedPaths: readonly string[] = [path]): void {
   if (lstatSync(path).isSymbolicLink()) throw new Error(`Refusing to remove a symlinked gateway client file: ${path}`);
-  checkedClientDestination(ctx, path, original);
+  checkedClientDestination(ctx, path, original, allowedPaths);
   assertNotRealHomeUnderTest(dirname(original.target));
   assertNotRealCodexHomeUnderTest(dirname(original.target));
   unlinkSync(original.target);

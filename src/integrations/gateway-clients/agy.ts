@@ -66,8 +66,7 @@ function candidates(ctx: GatewayClientContext): Profile[] {
 }
 
 /** Existing profiles, plus the active shell's profile when it needs to be created. */
-function targets(ctx: GatewayClientContext): Profile[] {
-  const available = candidates(ctx);
+function targets(ctx: GatewayClientContext, available: Profile[]): Profile[] {
   const posix = available.filter(({ kind, path }) => kind === "posix" && existsSync(path));
   const ps = available.filter(({ kind, path }) => kind === "powershell" && existsSync(path));
   if (ctx.platform === "win32") {
@@ -78,6 +77,10 @@ function targets(ctx: GatewayClientContext): Profile[] {
     if ((posix.length === 0 || shell === "zsh" || shell === "bash") && !posix.includes(selected)) posix.push(selected);
   }
   return [...posix, ...ps];
+}
+
+function allowedProfilePaths(available: Profile[], kind: Kind): string[] {
+  return available.filter(profile => profile.kind === kind).map(profile => profile.path);
 }
 
 function checkedStash(ctx: GatewayClientContext): Stash | null {
@@ -145,13 +148,14 @@ const blockIn = (text: string): string | null => { const s = blockSpan(text); re
 
 function status(ctx: GatewayClientContext, target?: GatewayTarget): GatewayClientStatus {
   const hasRecord = inspectStashPresence(ctx, ID);
-  const files = targets(ctx);
+  const available = candidates(ctx);
+  const files = targets(ctx, available);
   let withBlocks = 0;
   let current = 0;
   let unreadable = false;
   const rows: GatewayClientStatus["files"] = [];
   for (const { path, kind } of files) {
-    const file = inspectClientFile(ctx, path);
+    const file = inspectClientFile(ctx, path, allowedProfilePaths(available, kind));
     const decoded = file ? decode(file.bytes) : null;
     unreadable ||= file === undefined || (file !== null && decoded === null);
     const block = decoded ? blockIn(decoded.text) : null;
@@ -173,13 +177,19 @@ function status(ctx: GatewayClientContext, target?: GatewayTarget): GatewayClien
 function connect(ctx: GatewayClientContext, target: GatewayTarget): GatewayClientResult {
   const old = checkedStash(ctx);
   const entries = new Map(old?.files.map(entry => [entry.path, entry]));
+  const available = candidates(ctx);
+  const profiles = targets(ctx, available).sort((a, b) => Number(entries.has(b.path)) - Number(entries.has(a.path)));
+  const seen = new Set<string>();
   const changedFiles: string[] = [];
-  const staged: { entry: Entry; file: ClientFile | null; out: Buffer }[] = [];
-  for (const profile of targets(ctx)) {
+  const staged: { entry: Entry; file: ClientFile | null; out: Buffer; allowedPaths: string[] }[] = [];
+  for (const profile of profiles) {
     const { path, kind } = profile;
-    const file = readClientFile(ctx, path);
+    const allowedPaths = allowedProfilePaths(available, kind);
+    const file = readClientFile(ctx, path, allowedPaths);
     const prev = entries.get(path);
     assertSameTarget(prev, file?.target);
+    if (file && seen.has(file.target)) continue;
+    if (file) seen.add(file.target);
     const decoded = file ? decode(file.bytes) : { text: "", encoding: "utf8" as const };
     if (!decoded) return clientRefusal(`${path} is not UTF-8 or BOM-prefixed UTF-16LE text.`, "unsupported-file");
     const out = encode(withBlock(decoded.text, agyBlock(kind, target)), decoded.encoding);
@@ -193,20 +203,20 @@ function connect(ctx: GatewayClientContext, target: GatewayTarget): GatewayClien
         pendingSha256: sha256(out),
         ...(drifted ? { pathWiseOnly: true } : {}),
       },
-      file, out,
+      file, out, allowedPaths,
     });
   }
   try {
-    for (const { entry, file } of staged) {
-      entry.resolvedPath = checkedClientDestination(ctx, entry.path, file);
+    for (const { entry, file, allowedPaths } of staged) {
+      entry.resolvedPath = checkedClientDestination(ctx, entry.path, file, allowedPaths);
       assertSameTarget(entries.get(entry.path), entry.resolvedPath);
       entry.createdDirs = [...entry.createdDirs, ...mkdirTracked(dirname(entry.path))];
       entries.set(entry.path, entry);
     }
     writeStash(ctx, ID, { version: 1, files: [...entries.values()] } satisfies Stash);
-    for (const { entry, file, out } of staged) {
+    for (const { entry, file, out, allowedPaths } of staged) {
       if (file?.hash === entry.pendingSha256) continue;
-      writeClientFile(ctx, entry.path, file, out);
+      writeClientFile(ctx, entry.path, file, out, allowedPaths);
       changedFiles.push(entry.path);
     }
   } catch (error) {
@@ -224,34 +234,40 @@ function connect(ctx: GatewayClientContext, target: GatewayTarget): GatewayClien
 
 function disconnect(ctx: GatewayClientContext): GatewayClientResult {
   const stash = checkedStash(ctx);
-  const paths = new Map<string, Entry | undefined>();
-  for (const t of targets(ctx)) paths.set(t.path, undefined);
-  for (const e of stash?.files ?? []) paths.set(e.path, e);
+  const available = candidates(ctx);
+  const entries = new Map(stash?.files.map(entry => [entry.path, entry]));
+  // Prefer journaled entries so an untracked alias cannot turn an exact restore into a block removal.
+  const profiles = [...entries.values(), ...targets(ctx, available).filter(({ path }) => !entries.has(path))];
+  const seen = new Set<string>();
   const changes: { path: string; apply: () => void }[] = [];
   const createdDirs: string[] = [];
   let pathWise = false;
-  for (const [path, entry] of paths) {
-    const file = readClientFile(ctx, path, entry === undefined);
+  for (const { path, kind } of profiles) {
+    const entry = entries.get(path);
+    const allowedPaths = allowedProfilePaths(available, kind);
+    const file = readClientFile(ctx, path, allowedPaths, entry === undefined);
     assertSameTarget(entry, file?.target);
     if (!file) {
       if (entry) createdDirs.push(...entry.createdDirs);
       continue;
     }
+    if (seen.has(file.target)) continue;
+    seen.add(file.target);
     if (entry && !entry.pathWiseOnly && recordedHash(entry, file.hash)) {
       if (entry.originalBytes === null) {
-        changes.push({ path, apply: () => removeCreatedClientFile(ctx, path, file) });
+        changes.push({ path, apply: () => removeCreatedClientFile(ctx, path, file, allowedPaths) });
         createdDirs.push(...entry.createdDirs);
       } else {
         const bytes = Buffer.from(entry.originalBytes, "base64");
         assertClientSize(bytes);
-        if (!bytes.equals(file.bytes)) changes.push({ path, apply: () => writeClientFile(ctx, path, file, bytes) });
+        if (!bytes.equals(file.bytes)) changes.push({ path, apply: () => writeClientFile(ctx, path, file, bytes, allowedPaths) });
       }
       continue;
     }
     const decoded = decode(file.bytes);
     if (!decoded && entry) return clientRefusal(`${path} uses an unsupported encoding. The restore record was kept.`, "unsupported-file");
     if (!decoded || blockIn(decoded.text) === null) continue;
-    changes.push({ path, apply: () => writeClientFile(ctx, path, file, encode(withoutBlock(decoded.text), decoded.encoding)) });
+    changes.push({ path, apply: () => writeClientFile(ctx, path, file, encode(withoutBlock(decoded.text), decoded.encoding), allowedPaths) });
     pathWise = true;
   }
 

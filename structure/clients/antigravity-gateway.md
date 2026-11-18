@@ -37,9 +37,10 @@ replacement with inherited ACLs on Windows and retain their existing mode on POS
 
 The named restore destination must match the Antigravity settings path or a fixed agy profile
 candidate under the user's home. Connectors explicitly resolve client symlinks and read regular files
-up to 4 MiB. The resolved file and its parent must stay in the fixed directory for that settings file or
-profile, measured from the canonical home directory. The check runs before staging and again before
-replacement or removal. New restore records also pin the resolved destination. If the file or its
+up to 4 MiB. The named file's parent must resolve to its expected directory. The resolved file must
+match the exact settings path or a fixed agy path for the same shell family under the canonical home.
+Multiple agy profiles resolving to one file are updated once. The check runs before staging and again
+before replacement or removal. New restore records also pin the resolved destination. If the file or its
 resolved destination changes before replacement, the write is refused. Connect and disconnect use the
 config-mutation lock, with the client lifecycle lock outside it on the CLI and management paths.
 

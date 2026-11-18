@@ -1245,9 +1245,10 @@ Use `--model` only with `ocx connect antigravity` to set the desktop app's defau
 
 Connect records what it replaced. Disconnect puts the original bytes back when the file is unchanged, and
 otherwise reverts only OpenCodex's own entries and keeps your other edits. The marked `agy` block in a
-shell profile is removed whole, including any edit made inside it. Symlinks are supported when they
-resolve to a regular file in the expected settings or profile directory under your home. Restart Antigravity, or open a new
-terminal for `agy`, to apply a change. `ocx uninstall` disconnects clients with saved restore records
+shell profile is removed whole, including any edit made inside it. An `agy` profile symlink must resolve
+to another supported profile for the same shell family under your home. Antigravity settings must resolve
+to the exact `~/.antigravity/settings.json` path. Restart Antigravity, or open a new terminal for `agy`,
+to apply a change. `ocx uninstall` disconnects clients with saved restore records
 before removing configuration. If a client cannot be restored, uninstall stops and keeps its record.
 
 OpenCodex writes a placeholder key, never a real credential, so it refuses to connect when the proxy bind

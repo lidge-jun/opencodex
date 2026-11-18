@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import {
-  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync,
+  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync,
   truncateSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -85,37 +85,46 @@ test.skipIf(process.platform === "win32")("agy refuses a symlinked profile outsi
   writeFileSync(actual, originals.agy);
   symlinkSync(actual, profile());
   expect(GATEWAY_CLIENTS.agy.connect(ctx, target)).toMatchObject({
-    ok: false, changed: false, message: expect.stringContaining("outside the allowed client directory"),
+    ok: false, changed: false, message: expect.stringContaining("outside the allowed client paths"),
   });
   expect(read(actual)).toBe(originals.agy);
   expect(lstatSync(profile()).isSymbolicLink()).toBe(true);
   expect(existsSync(recordPath("agy"))).toBe(false);
 });
 
-test.skipIf(process.platform === "win32")("an in-home profile symlink is written and restored without replacing the link", () => {
+test.skipIf(process.platform === "win32")("agy refuses a profile symlink to an unlisted in-home file", () => {
   const actual = join(ctx.home, "dotfiles-zshrc");
   writeFileSync(actual, originals.agy);
   symlinkSync(actual, profile());
-  expect(GATEWAY_CLIENTS.agy.connect(ctx, target).ok).toBe(true);
-  expect(read(actual)).toContain("opencodex agy");
-  expect(lstatSync(profile()).isSymbolicLink()).toBe(true);
-  expect(GATEWAY_CLIENTS.agy.disconnect(ctx).restore).toBe("exact");
-  expect(lstatSync(profile()).isSymbolicLink()).toBe(true);
+  expect(GATEWAY_CLIENTS.agy.connect(ctx, target)).toMatchObject({ ok: false, code: "io-error", changed: false });
   expect(read(actual)).toBe(originals.agy);
+  expect(readlinkSync(profile())).toBe(actual);
+  expect(existsSync(recordPath("agy"))).toBe(false);
 });
 
-test.skipIf(process.platform === "win32")("restore refuses a profile symlink retargeted after connect", () => {
-  const first = join(ctx.home, "dotfiles-zshrc");
-  const second = join(ctx.home, "other-zshrc");
-  writeFileSync(first, originals.agy);
-  symlinkSync(first, profile());
+test.skipIf(process.platform === "win32")("agy updates a symlinked profile resolving to an allowed profile once", () => {
+  const actual = join(ctx.home, ".bashrc");
+  writeFileSync(actual, originals.agy);
+  symlinkSync(actual, profile());
+  expect(GATEWAY_CLIENTS.agy.connect(ctx, target)).toMatchObject({ ok: true, changedFiles: [actual] });
+  expect(read(profile())).toContain("opencodex agy");
+  expect(GATEWAY_CLIENTS.agy.connect(ctx, target)).toMatchObject({ ok: true, changed: false });
+  expect(GATEWAY_CLIENTS.agy.disconnect(ctx)).toMatchObject({ ok: true, restore: "exact", changedFiles: [actual] });
+  expect(readlinkSync(profile())).toBe(actual);
+  expect(read(actual)).toBe(originals.agy);
+  expect(existsSync(recordPath("agy"))).toBe(false);
+});
+
+test.skipIf(process.platform === "win32")("restore refuses a recorded profile redirected to a different allowed file", () => {
+  writeFileSync(profile(), originals.agy);
   expect(GATEWAY_CLIENTS.agy.connect(ctx, target).ok).toBe(true);
-  const connected = read(first);
+  const connected = read(profile());
+  const second = join(ctx.home, ".bashrc");
   writeFileSync(second, connected);
   rmSync(profile());
   symlinkSync(second, profile());
   expect(GATEWAY_CLIENTS.agy.disconnect(ctx)).toMatchObject({ ok: false, changed: false });
-  expect(read(first)).toBe(connected);
+  expect(readlinkSync(profile())).toBe(second);
   expect(read(second)).toBe(connected);
   expect(existsSync(recordPath("agy"))).toBe(true);
 });
@@ -125,7 +134,7 @@ test.skipIf(process.platform === "win32")("Antigravity refuses settings outside 
   writeFileSync(actual, originals.antigravity);
   symlinkSync(actual, settings());
   expect(GATEWAY_CLIENTS.antigravity.connect(ctx, target)).toMatchObject({
-    ok: false, changed: false, message: expect.stringContaining("outside the allowed client directory"),
+    ok: false, changed: false, message: expect.stringContaining("outside the allowed client paths"),
   });
   expect(read(actual)).toBe(originals.antigravity);
   expect(existsSync(recordPath("antigravity"))).toBe(false);
