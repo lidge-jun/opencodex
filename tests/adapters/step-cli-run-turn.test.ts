@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 
-import { createStepCliAdapter } from "../../src/adapters/step-cli/adapter";
+import { clearStepCliSessions, createStepCliAdapter } from "../../src/adapters/step-cli/adapter";
 import { withConversationLock } from "../../src/adapters/step-cli/conversation";
 import { handleReverseRequest, handleRuntimeEvent } from "../../src/adapters/step-cli/events";
 import { classifyStepChildError } from "../../src/adapters/step-cli/errors";
@@ -12,8 +15,11 @@ import type {
   StepHeldTool,
 } from "../../src/adapters/step-cli/session-pool";
 import {
+  encodeStepFrame,
   STEP_PROTOCOL_NAME,
   STEP_PROTOCOL_VERSION,
+  StepFrameDecoder,
+  stepResponse,
   type StepFrame,
 } from "../../src/adapters/step-cli/stdio-frames";
 import {
@@ -598,28 +604,50 @@ describe("StepCode tool-catalog ceiling", () => {
 
 describe("StepCode session teardown on proxy shutdown", () => {
   test("a stopped proxy closes the StepCode processes it still owns", async () => {
-    // The sibling CLI routes kill their child in a per-request `finally` and cannot outlive a turn.
-    // This route keeps a process for a whole conversation, so without a shutdown hook a stopped proxy
-    // leaves an orphaned `step` holding the user's subscription session — measured on this machine
-    // before the hook existed.
     resetOptionalShutdownHooksForTests();
-    const session = new FakeSession();
-    const adapter = createStepCliAdapter(provider(), {
-      openSession: undefined,
-      spawn: () => ({ ...session, kill: () => true, exitCode: null, signalCode: null }) as never,
-      which: () => "/bin/true",
+    const child = Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+      exitCode: null as number | null, signalCode: null,
+      kill() {
+        this.exitCode = 0;
+        this.emit("close", 0, null);
+        return true;
+      },
     });
-    session.stream = [TURN_COMPLETE];
-    // No injected pool this time, so the real pool factory runs and registers the hook.
-    await adapter.runTurn!(
-      parsed([{ role: "user", content: "hello", timestamp: 0 }]),
-      THREAD_META,
-      () => {},
-    );
-    expect(didRunOptionalShutdownHooks()).toBe(false);
-    runOptionalShutdownHooks();
-    expect(didRunOptionalShutdownHooks()).toBe(true);
-    resetOptionalShutdownHooksForTests();
+    const responses: Record<string, unknown> = {
+      initialize: { runtimeVersion: "step", selectedProtocol: 1, capabilities: ["streaming-input", "sdk-tools"] },
+      "query.start": { queryId: "q_1", sessionId: "sess_1" },
+      "query.input": { accepted: true },
+      "query.input_end": {},
+    };
+    const decoder = new StepFrameDecoder();
+    child.stdin.on("data", (chunk: Buffer) => {
+      for (const frame of decoder.push(chunk)) {
+        child.stdout.write(encodeStepFrame(stepResponse(frame.id, responses[frame.method ?? ""])));
+        if (frame.method === "query.input") {
+          child.stdout.write(encodeStepFrame({
+            ...TURN_COMPLETE, payload: { queryId: "q_1", message: TURN_COMPLETE.payload },
+          }));
+        }
+      }
+    });
+    const adapter = createStepCliAdapter(provider(), {
+      spawn: () => child as unknown as ChildProcess,
+      which: () => process.execPath,
+    });
+    try {
+      const events: AdapterEvent[] = [];
+      await adapter.runTurn!(parsed(USER_ASK), THREAD_META, event => events.push(event));
+      expect(events.some(event => event.type === "done")).toBe(true);
+      expect(child.exitCode).toBeNull();
+      expect(didRunOptionalShutdownHooks()).toBe(false);
+      expect(await runOptionalShutdownHooks()).toBe(true);
+      expect(child.exitCode).toBe(0);
+      expect(didRunOptionalShutdownHooks()).toBe(true);
+    } finally {
+      try { await clearStepCliSessions(); }
+      finally { resetOptionalShutdownHooksForTests(); }
+    }
   });
 });
 

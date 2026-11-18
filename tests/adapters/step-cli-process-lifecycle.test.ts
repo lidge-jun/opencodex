@@ -79,9 +79,11 @@ test("production drain waits for the StepCode cleanup receipt before listener st
     child.exitCode = 0;
     child.emit("close", 0, null);
     await draining;
-    await clearStepCliSessions();
-    resetOptionalShutdownHooksForTests();
-    resetLifecycleDrainStateForTests();
+    try { await clearStepCliSessions(); }
+    finally {
+      resetOptionalShutdownHooksForTests();
+      resetLifecycleDrainStateForTests();
+    }
   }
   expect(cleanedAtListenerStop).toBe(true);
 });
@@ -104,7 +106,7 @@ test.skipIf(process.platform === "win32").each([450, 180, 0])("an exhausted turn
     if (signal === "SIGKILL") group.gone = true;
     return true;
   });
-  const realNow = Date.now.bind(Date);
+  const realNow = () => new Date().getTime();
   let offset = 0;
   const clock = spyOn(Date, "now").mockImplementation(() => realNow() + offset);
   const timeoutMs = 5_000;
@@ -115,7 +117,7 @@ test.skipIf(process.platform === "win32").each([450, 180, 0])("an exhausted turn
     which: () => process.execPath,
     spawn: () => Object.assign(new EventEmitter(), {
       pid: pids.shift()!, stdin: new PassThrough(), stdout: new PassThrough(),
-      stderr: new PassThrough(), exitCode: 0, signalCode: null,
+      stderr: new PassThrough(), exitCode: null, signalCode: null,
     }) as unknown as ChildProcess,
   }, { onEvent: () => {} });
   const lease = tryAdmitTurn();
@@ -214,12 +216,92 @@ test("a deadline-aware close prevents an in-flight workspace setup from spawning
   expect(spawns).toBe(0);
 });
 
+test("emergency cleanup skips a reused PGID and still kills an owned group", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "ocx-step-group-reuse-"));
+  const children = [1_900_003_001, 1_900_003_002].map(pid => Object.assign(new EventEmitter(), {
+    pid, exitCode: null as number | null, signalCode: null,
+    stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+  }));
+  const [stale, owned] = children;
+  const groups = new Set(children.map(child => -child.pid));
+  const signals: number[] = [];
+  let probesFail = false;
+  const kill = spyOn(process, "kill").mockImplementation((target, signal) => {
+    if (!groups.has(target)) throw new Error("unexpected target outside the process table fixture");
+    if (signal === 0 && probesFail) {
+      throw Object.assign(new Error("fixture cannot verify group"), { code: "EPERM" });
+    }
+    if (signal === "SIGKILL") signals.push(target);
+    return true;
+  });
+  let next = 0;
+  const pool = new StepSessionPool(
+    { openCodexHome: cwd, idleTimeoutMs: 60_000, buildOptions: () => options(cwd) },
+    { onEvent: () => {} },
+    { platform: "linux", spawn: () => children[next++] as unknown as ChildProcess },
+  );
+  try {
+    const first = await pool.open({ handle: "stale", sessionId: "" });
+    const second = await pool.open({ handle: "owned", sessionId: "" });
+    stale!.exitCode = 0;
+    stale!.emit("exit", 0, null);
+    probesFail = true;
+    await expect(first.close()).rejects.toMatchObject({ code: "step_cli_cleanup_failed" });
+    await expect(second.close()).rejects.toMatchObject({ code: "step_cli_cleanup_failed" });
+    await expect(pool.closeAll()).rejects.toMatchObject({ code: "step_cli_cleanup_failed" });
+    // The old leader is reaped. The table can now resolve that number to an unrelated group.
+    probesFail = false;
+    let emergencyError: unknown;
+    try { pool.forceShutdown(); }
+    catch (error) { emergencyError = error; }
+    expect(signals).toEqual([-owned!.pid]);
+    expect(emergencyError).toMatchObject({ code: "step_cli_cleanup_failed" });
+    expect(pool.size).toBe(2);
+  } finally {
+    await pool.closeAll().catch(() => {});
+    kill.mockRestore();
+  }
+});
+
+test("an ESRCH from a group signal prevents later probes or signals to that PGID", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "ocx-step-group-gone-"));
+  const child = Object.assign(new EventEmitter(), {
+    pid: 1_900_003_003, exitCode: null as number | null, signalCode: null,
+  });
+  const afterEsrch: Array<number | NodeJS.Signals | undefined> = [];
+  let disappeared = false;
+  const kill = spyOn(process, "kill").mockImplementation((target, signal) => {
+    if (target !== -child.pid) throw new Error("unexpected target outside the process table fixture");
+    if (disappeared) {
+      afterEsrch.push(signal);
+      // The fixture models a reused PGID that cannot be probed by this process.
+      if (signal === 0) throw Object.assign(new Error("fixture now belongs to another user"), { code: "EPERM" });
+    }
+    if (signal === "SIGTERM") {
+      disappeared = true;
+      throw Object.assign(new Error("fixture group is gone"), { code: "ESRCH" });
+    }
+    return true;
+  });
+  try {
+    const session = await StepCliSession.open(options(cwd), { onEvent: () => {} },
+      { platform: "linux", spawn: () => child as unknown as ChildProcess });
+    const receipt = await Promise.allSettled([session.close()]);
+    session.forceShutdown();
+    expect(disappeared).toBe(true);
+    expect(afterEsrch).toEqual([]);
+    expect(receipt[0]?.status).toBe("fulfilled");
+  } finally {
+    kill.mockRestore();
+  }
+});
+
 test.skipIf(process.platform === "win32")("an exited wrapper retains ownership until its POSIX group returns ESRCH", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "ocx-step-group-"));
   const pid = 1_900_000_000;
   const child = Object.assign(new EventEmitter(), {
     stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
-    pid, exitCode: 0, signalCode: null,
+    pid, exitCode: null as number | null, signalCode: null,
   });
   const signals: Array<number | NodeJS.Signals | undefined> = [];
   let verifiedGone = false;
@@ -236,6 +318,8 @@ test.skipIf(process.platform === "win32")("an exited wrapper retains ownership u
   try {
     const session = await StepCliSession.open(options(cwd), { onEvent: () => {} },
       { spawn: () => child as unknown as ChildProcess });
+    child.exitCode = 0;
+    child.emit("exit", 0, null);
     let verifiedAtRelease = false;
     session.onExit(() => { verifiedAtRelease = verifiedGone; });
     await session.close();

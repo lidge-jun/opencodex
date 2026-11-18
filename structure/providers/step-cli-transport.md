@@ -47,9 +47,11 @@ pool and preserves both errors as the cleanup failure's cause. Repeated closes r
 without restarting the retry budget. Windows teardown awaits the asynchronous helper in
 `src/adapters/coding-agent/process-tree.ts` (`taskkill /T /F`, up to five seconds per attempt)
 before releasing the wrapper. The normal cleanup queue runs up to four sessions concurrently
-across pools, including idle and late-opening sessions. POSIX cleanup sends TERM to the detached process group, escalates
-to KILL if the group survives the grace period, and retains ownership until a bounded group probe
-returns ESRCH, including when the wrapper has already exited. On Windows the OS PID check also
+across pools, including idle and late-opening sessions. POSIX cleanup verifies the detached group
+while its original leader is unreaped, sends TERM, and escalates to KILL if the group survives
+the grace period. Cleanup can continue past leader exit with the last successful group check.
+ESRCH from a probe or a signal permanently ends use of that PGID for the session. A failed
+verification invalidates the last check. On Windows the OS PID check also
 handles Bun retaining null child exit fields after an external tree kill.
 Explicit registry clears await every pool and retain failed pools, so clearing state cannot bypass
 quarantine. Graceful proxy shutdown passes the absolute [proxy stop deadline](../runtime.md#lifecycle)
@@ -58,7 +60,10 @@ at two seconds and ends at least 250 ms before the deadline when that time is av
 margin, queued sessions bypass the four slots and proceed directly to group KILL or Windows
 tree kill. The hook reports incomplete confirmation as a shutdown failure. Before returning
 an incomplete receipt, it runs a final synchronous KILL sweep of still-owned POSIX groups
-and starts any Windows tree kills still in the queue.
+and starts any Windows tree kills still in the queue. A quarantined POSIX session must
+reestablish ownership from its unreaped leader before that sweep can signal the group.
+If the group operation fails, the sweep can still signal the leader through its child handle
+and reports the tree cleanup as incomplete.
 
 ## Tools arrive as inline SDK tools, not an MCP catalog
 
