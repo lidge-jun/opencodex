@@ -22,6 +22,10 @@ import {
   rememberReasoningReplayOpaqueBlobRejection,
 } from "../../src/responses/reasoning-replay-cache";
 import type { AdapterEvent, OcxReasoningReplayScopeRef } from "../../src/types";
+import {
+  conversationIdFromResponsesRequest,
+  reasoningReplayConversationIdFromResponsesRequest,
+} from "../../src/server/request-log-conversation";
 
 const THREAD = "thread-identity";
 const CALL_ID = "call_identity_collision";
@@ -206,6 +210,61 @@ describe("reasoning replay provider and credential identity", () => {
       providerDestinationDurableIdentity: "destination:other-backend",
     }))).toMatchObject({ destinationChanged: true, modelChanged: false, credentialChanged: false });
     expect(reasoningReplayServingIdentityChange({ clientThreadId: "unknown-thread" })).toBeUndefined();
+  });
+
+  test("a child turn leaves the parent's serving identity and replay policy unchanged (#8632)", () => {
+    const parentThread = reasoningReplayConversationIdFromResponsesRequest({
+      threadIdHeader: "parent-thread",
+    });
+    const childThread = reasoningReplayConversationIdFromResponsesRequest({
+      clientThreadId: "parent-thread",
+      threadIdHeader: "child-thread",
+    });
+    expect(parentThread).toBe("parent-thread");
+    expect(childThread).toBe("child-thread");
+    // A caller that only carries the parent header still shares one record.
+    expect(reasoningReplayConversationIdFromResponsesRequest({
+      clientThreadId: "parent-thread",
+    })).toBe("parent-thread");
+    // The request-log conversation id keeps preferring the parent header for both turns.
+    expect(conversationIdFromResponsesRequest({
+      clientThreadId: "parent-thread",
+      threadIdHeader: "child-thread",
+    })).toBe(conversationIdFromResponsesRequest({ clientThreadId: "parent-thread" }));
+
+    const claude = scope({
+      providerName: "anthropic",
+      providerDestinationIdentity: "destination:anthropic",
+      providerDestinationDurableIdentity: "destination:durable-anthropic",
+      adapterName: "anthropic",
+      modelId: "claude-opus-5-5",
+      credentialIdentity: "credential:anthropic",
+      credentialDurableIdentity: "credential:durable-anthropic",
+    });
+    const parent: OcxReasoningReplayScopeRef = { ...claude, clientThreadId: parentThread!, clientPrincipalId: "principal-a" };
+    const child: OcxReasoningReplayScopeRef = {
+      clientThreadId: childThread!,
+      clientPrincipalId: "principal-a",
+      current: {
+        providerName: "openai",
+        providerDestinationIdentity: "destination:chat",
+        providerDestinationDurableIdentity: "destination:durable-chat",
+        adapterName: "openai-responses",
+        modelId: "gpt-6-astra",
+        credentialIdentity: "credential:chat",
+        credentialDurableIdentity: "credential:durable-chat",
+      },
+    };
+
+    // Parent A serves, child B serves, then parent A comes back.
+    commitReasoningReplayServingIdentity(parent);
+    commitReasoningReplayServingIdentity(child);
+
+    expect(reasoningReplayServingIdentityChange(parent)).toBeUndefined();
+    expect(reasoningReplayOpaqueBlobRejectionMemoized(parent)).toBe(false);
+    rememberReasoningReplayOpaqueBlobRejection(child);
+    expect(reasoningReplayOpaqueBlobRejectionMemoized(child)).toBe(true);
+    expect(reasoningReplayOpaqueBlobRejectionMemoized(parent)).toBe(false);
   });
 
   test("opaque-blob rejection memos use the durable serving identity and refuse incomplete scopes", () => {

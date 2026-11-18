@@ -97,6 +97,39 @@ export function captureJournalConfigFields(content: string, ownership: Ownership
   return captured;
 }
 
+/** Root routing URLs OpenCodex writes. `model_catalog_json` is excluded: injection keeps and records a user catalog path. */
+export type InjectedRootKey = "openai_base_url" | "experimental_realtime_ws_base_url";
+export type InjectedRootHistory = Partial<Record<InjectedRootKey, string[]>>;
+const INJECTED_ROOT_KEYS: readonly InjectedRootKey[] = ["openai_base_url", "experimental_realtime_ws_base_url"];
+export const INJECTED_ROOT_HISTORY_LIMIT = 8;
+
+/** Only string arrays for the known keys count; the journal is read from disk. */
+export function parseInjectedRootHistory(recorded: unknown): InjectedRootHistory {
+  const history: InjectedRootHistory = {};
+  if (typeof recorded !== "object" || recorded === null) return history;
+  for (const key of INJECTED_ROOT_KEYS) {
+    const values = (recorded as Record<string, unknown>)[key];
+    if (!Array.isArray(values)) continue;
+    const strings = values.filter((value): value is string => typeof value === "string" && value.length > 0);
+    if (strings.length) history[key] = strings.slice(-INJECTED_ROOT_HISTORY_LIMIT);
+  }
+  return history;
+}
+
+/** Append the values an injection wrote, newest last, deduplicated, bounded per key. */
+export function appendInjectedRootHistory(
+  recorded: unknown,
+  written: Partial<Record<InjectedRootKey, string | null | undefined>>,
+): InjectedRootHistory {
+  const history = parseInjectedRootHistory(recorded);
+  for (const key of INJECTED_ROOT_KEYS) {
+    const value = written[key];
+    if (typeof value !== "string" || !value) continue;
+    history[key] = [...(history[key] ?? []).filter(entry => entry !== value), value].slice(-INJECTED_ROOT_HISTORY_LIMIT);
+  }
+  return history;
+}
+
 interface Ownership {
   injectedConfigFields?: JournalConfigFields;
   injectedOpenaiBaseUrl?: string | null;
@@ -105,6 +138,7 @@ interface Ownership {
   injectedRootWebSearch?: string | null;
   replacedRootWebSearch?: string | null;
   injectedSubagentDefaults?: WrittenSubagentDefaults | null;
+  injectedRootHistory?: unknown;
 }
 
 function recordedValues(journal: Ownership): Map<string, unknown> {
@@ -144,6 +178,14 @@ export function restoreJournalConfigFields(current: string, original: string, jo
       // authorizes removal; a whole-file hash alone never authorizes a guessed URL.
       for (const [key, value] of recordedValues(journal)) expected.set(key, value);
       if (now.get("model_provider")?.value === "opencodex") expected.set("model_provider", "opencodex");
+    }
+    // A present root URL an injection under this journal wrote is ours even when the Codex app
+    // rewrote it back to an earlier injection's value. Only the current file is reinterpreted;
+    // a snapshot value that coincides with one may be the user's and is restored as it was.
+    const history = parseInjectedRootHistory(journal.injectedRootHistory);
+    for (const key of INJECTED_ROOT_KEYS) {
+      const present = now.get(key)?.value;
+      if (typeof present === "string" && history[key]?.includes(present)) expected.set(key, present);
     }
     const { bom, lines } = rootSourceLines(current);
     if (recoverOwnedEdits) {
