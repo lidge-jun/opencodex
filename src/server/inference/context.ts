@@ -3,6 +3,7 @@ import { TRANSIENT_RETRY_MAX_ATTEMPTS, type TransientSendBudget } from "../../li
 import { GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST } from "../../oauth/generic-account-failover";
 import type { RequestLogContext } from "../request-log";
 import { attachRequestSpendTracker } from "../responses/request-spend";
+import type { SpendAdmissionPolicy } from "../../lib/spend-reservation-ledger";
 
 // Only ingress owns an expandable policy. Exact caller budgets and combo-derived scopes
 // never enter this map, even when their policy happens to equal the default profile.
@@ -19,9 +20,10 @@ const ingressPolicies = new WeakMap<TransientSendBudget, {
 export function createInferenceSendBudget(
   req: Pick<Request, "headers">,
   logCtx: RequestLogContext,
+  capturedPolicy?: SpendAdmissionPolicy,
 ): RequestExecutionBudget {
   const policy = { ...CODEX_TEXT_GUARDED_BUDGET_POLICY };
-  const budget = createRequestExecutionBudget(policy, undefined, attachRequestSpendTracker(req, logCtx));
+  const budget = createRequestExecutionBudget(policy, undefined, attachRequestSpendTracker(req, logCtx, undefined, capturedPolicy));
   ingressPolicies.set(budget, policy);
   return budget;
 }
