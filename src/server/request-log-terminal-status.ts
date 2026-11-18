@@ -8,6 +8,7 @@ import {
   isCyberPolicyMessage,
   isRateLimitOrQuotaFailureMessage,
   recognizedUpstreamError,
+  responsesCompletionError,
   upstreamErrorMessageFromPayload,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
@@ -233,11 +234,11 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
     // hide that ownership from it and leave the stale status on the row.
     captureTerminalHttpStatus(logCtx, json);
     noteBoundedDiagnostic(logCtx, "upstreamErrorCode",
-      json.error?.code ?? json.last_error?.code ?? json.response?.error?.code
+      json.error?.code ?? json.last_error?.code ?? json.response?.error?.code ?? json.response?.last_error?.code
         // A bare top-level code (new in 2.83.0) has no envelope contract, so only a known class is kept.
         ?? (typeof json.code === "string" && KNOWN_BARE_ERROR_CODES.has(json.code) ? json.code : undefined));
     noteBoundedDiagnostic(logCtx, "upstreamErrorType",
-      json.error?.type ?? json.last_error?.type ?? json.response?.error?.type);
+      json.error?.type ?? json.last_error?.type ?? json.response?.error?.type ?? json.response?.last_error?.type);
     return true;
   }
   // A buffered JSON body is not a stream in which a later frame could supersede an earlier one,
@@ -370,12 +371,12 @@ function captureTerminalHttpStatus(
     logCtx.terminalHttpStatus = status;
     if (type === "error") provisionalStatuses.set(logCtx, status);
   };
-  // A completed terminal only retires provisional bare-error evidence; it records no status.
-  if (type === "response.completed") return;
-  const responseError = json.response?.error;
+  // Clean completions only retire provisional bare-error evidence.
+  const completionError = responsesCompletionError(json) as UpstreamErrorPayload["error"];
+  if (type === "response.completed" && completionError == null) return;
   const responseDetails = json.response?.incomplete_details;
   const candidates: Array<{ type?: unknown; code?: unknown; message?: unknown } | undefined> = [
-    json.error, json.last_error, responseError, responseDetails, json,
+    json.error, json.last_error, json.response?.error, json.response?.last_error, responseDetails, json,
   ];
   const policy = candidates.some(candidate => (
     candidate?.code === null || typeof candidate?.code === "string"
@@ -429,13 +430,15 @@ function captureTerminalHttpStatus(
     if (wrapped !== undefined) noteStatus(wrapped);
     return;
   }
-  if (type !== "response.failed" || !responseError || typeof responseError !== "object") return;
-  const responseCode = responseError.code === null || typeof responseError.code === "string"
-    ? responseError.code
+  const terminalError = type === "response.completed" ? completionError
+    : type === "response.failed" ? json.response?.error : undefined;
+  if (!terminalError || typeof terminalError !== "object") return;
+  const responseCode = terminalError.code === null || typeof terminalError.code === "string"
+    ? terminalError.code
     : undefined;
   noteStatus(httpStatusFromTerminalError({
-    type: typeof responseError.type === "string" ? responseError.type : undefined,
+    type: typeof terminalError.type === "string" ? terminalError.type : undefined,
     code: responseCode,
-    message: typeof responseError.message === "string" ? responseError.message : undefined,
+    message: typeof terminalError.message === "string" ? terminalError.message : undefined,
   }));
 }

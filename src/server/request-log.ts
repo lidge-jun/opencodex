@@ -20,6 +20,7 @@ import {
   isClientClosedMessage,
   isCyberPolicyCode,
   isUpstreamResetReplayRefusedMessage,
+  responsesCompletionError,
   upstreamErrorMessageFromPayload,
 } from "../lib/errors";
 import { CODEX_CONFIG_PATH, readRootTomlString } from "../codex/paths";
@@ -1042,7 +1043,7 @@ export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unk
       ? (response as { status?: unknown }).status
       : (payload as { status?: unknown }).status;
     if (eventType === "response.completed") {
-      logCtx.observedTerminalStatus = "completed";
+      logCtx.observedTerminalStatus = responsesCompletionError(payload) == null ? "completed" : "failed";
     } else if (eventType === "response.failed") {
       logCtx.observedTerminalStatus = "failed";
     } else if (eventType === "response.incomplete") {

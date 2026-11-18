@@ -115,6 +115,9 @@ Completed item events and terminal snapshots can satisfy it; a call start alone 
 A missing call in a clean `response.completed` becomes `response.failed` with
 `required_tool_contract_unsatisfied`, retaining response identity, output and usage. An error or
 refusal content on either terminal carrier preserves the upstream verdict and commits the stream.
+When either carrier has a non-null `error` or `last_error`, HTTP/SSE and WebSocket delivery retain
+the provider's completion frame while terminal accounting reports failure. The completion cannot
+publish local continuation state, update success affinity, or clear a combo reprobe cooldown.
 The client rewrite judges restored calls before continuation observers and hosted-image display.
 The raw inspector and client guard resolve selectors and observed calls through the same authorized
 Muse/namespace alias maps, authorized self-named scrub and catalog-aware default-namespace normalization.

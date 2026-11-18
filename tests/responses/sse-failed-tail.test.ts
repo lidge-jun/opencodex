@@ -1765,6 +1765,18 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
     return { frames: sent.map(frame => JSON.parse(frame) as { type?: string; response?: { error?: { code?: string } }; error?: { code?: string } }), terminals };
   };
 
+  test("WS forwards an error-bearing completion and reports quota failure", async () => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    const event = {
+      type: "response.completed",
+      response: { id: "r1", status: "completed", output: [], last_error: { code: "rate_limit_exceeded" } },
+    };
+    const src = sourceStream([`event: response.completed\ndata: ${JSON.stringify(event)}\n\n`]);
+    const result = await wsPump(relaySseWithFailedTail(src, new AbortController()), log);
+    expect(result).toEqual({ frames: [event], terminals: [["failed", 429]] });
+    expect(log.observedTerminalStatus).toBe("failed");
+  });
+
   test.each(["tee", "eager"] as const)("%s WS row keeps the bare verdict behind the relay's own tail", async mode => {
     for (const copy of ["unauthorized request", "rate limit hit, slow down"]) {
       const log: RequestLogContext = { model: "fixture-model", provider: "openai" };

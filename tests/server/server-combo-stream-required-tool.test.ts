@@ -7,7 +7,7 @@ import { comboProviderFactory } from "../helpers/combo-provider";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
+import { clearComboSelectionState, clearComboTargetCooldowns, coolComboTarget, isComboTargetInCooldown } from "../../src/combos";
 import { clearComboRecallForTests } from "../../src/server/responses/combo-session-recall";
 import { clearResponseStateForTests, expandPreviousResponseInput, flushResponseState } from "../../src/responses/state";
 import { setRelayPlatformForTests } from "../../src/server/responses/passthrough-delivery";
@@ -213,6 +213,67 @@ describe("native streaming combo mandatory tools (#7456)", () => {
     const text = await (await request(config, "required")).text();
     expect(sent.map(body => [body.model, body.tool_choice])).toEqual([["m1", "required"]]);
     expect(terminal(text)).toMatchObject([event]);
+  });
+  for (const platform of ["win32", "linux"] as const) {
+    for (const carrier of ["event", "response"] as const) {
+      for (const field of ["error", "last_error"] as const) {
+        test(`${platform}: required-tool completion with ${carrier}.${field} has no success effects`, async () => {
+          setRelayPlatformForTests(platform);
+          const sent: Array<Record<string, unknown>> = [];
+          const error = { [field]: { code: "rate_limit_exceeded", message: "Fixture quota failure" } };
+          const event = {
+            type: "response.completed",
+            ...(carrier === "event" ? error : {}),
+            response: { ...completed("m1"), ...(carrier === "response" ? error : {}) },
+          };
+          const config = configFor(() => sse(event), sent);
+          const combo = config.combos!.fixture!;
+          combo.cooldownReprobe = { enabled: true };
+          for (const target of combo.targets) coolComboTarget("fixture", target, { cooldownMs: 60_000 });
+          const log: RequestLogContext = { model: "", provider: "" };
+          const completedModels: string[] = [];
+          const statuses: string[] = [];
+          const text = await (await request(config, "required", log, { store: true }, {
+            onResponseComplete: (model: string) => completedModels.push(model),
+            onNativePassthroughTerminal: (status: string) => statuses.push(status),
+          })).text();
+          const followUp = { previous_response_id: "resp_m1", input: "Follow up" };
+          expect(terminal(text)).toEqual([event]);
+          expect(sent.map(body => [body.model, body.store])).toEqual([["m1", true]]);
+          expect({
+            completedModels, statuses, replay: expandPreviousResponseInput(followUp),
+            terminalStatus: log.observedTerminalStatus, logStatus: log.terminalHttpStatus,
+            stillCooled: isComboTargetInCooldown("fixture", combo.targets[0]!),
+          }).toEqual({ completedModels: [], statuses: ["failed"], replay: followUp,
+            terminalStatus: "failed", logStatus: 429, stillCooled: true });
+        });
+      }
+    }
+  }
+  test.each([false, true])("settles a cooldown reprobe only after a clean native terminal (error: %s)", async hasError => {
+    const sent: Array<Record<string, unknown>> = [];
+    const encoder = new TextEncoder();
+    let stream!: ReadableStreamDefaultController<Uint8Array>;
+    const config = configFor(() => new Response(new ReadableStream<Uint8Array>({ start(controller) {
+      stream = controller;
+      stream.enqueue(encoder.encode(frame({ type: "response.output_text.delta", delta: "visible text" })));
+    } }), { headers: { "content-type": "text/event-stream" } }), sent);
+    const combo = config.combos!.fixture!;
+    combo.cooldownReprobe = { enabled: true };
+    for (const target of combo.targets) coolComboTarget("fixture", target, { cooldownMs: 60_000 });
+    const response = await request(config, "required");
+    expect(isComboTargetInCooldown("fixture", combo.targets[0]!)).toBe(true);
+
+    const payload = completed("m1", true);
+    const event = {
+      type: "response.completed",
+      response: { ...payload, error: hasError ? { code: "rate_limit_exceeded" } : null },
+    };
+    stream.enqueue(encoder.encode(frame(event)));
+    stream.close();
+    expect(terminal(await response.text())).toEqual([event]);
+    expect(sent.map(body => body.model)).toEqual(["m1"]);
+    expect(isComboTargetInCooldown("fixture", combo.targets[0]!)).toBe(hasError);
   });
   for (const prefix of [
     { type: "response.output_text.delta", delta: "visible text" },

@@ -21,7 +21,7 @@ import { responsesFrameIsReplayUnsafe } from "./codex-ws-wire";
 import { createSseInspector, isNativePassthroughSseResponse } from "../relay";
 import { sseDataPayload } from "../sse-payload-rewrite";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
-import { COMBO_DEGENERATE_COMPLETION_CODE, REQUIRED_TOOL_CONTRACT_CODE } from "../../lib/errors";
+import { COMBO_DEGENERATE_COMPLETION_CODE, REQUIRED_TOOL_CONTRACT_CODE, responsesCompletionError } from "../../lib/errors";
 import { attachComboFailureEvidence, isPausedTurn } from "../../lib/client-error-body";
 import { requiredToolReasoningPrelude } from "./combo-required-tool-stream";
 import { ProtocolPreOutputEof } from "../../lib/upstream-retry";
@@ -744,6 +744,11 @@ export async function preflightComboStreamResponse(
     onOpaquePayload: () => { outputCommitted = true; },
     onParsedPayload: payload => {
       if (terminalStatus !== undefined || outputCommitted || retryableTerminalPayload) return;
+      // A provider verdict commits even when it resembles a retryable zero-output failure.
+      if (responsesCompletionError(payload) != null) {
+        outputCommitted = true;
+        return;
+      }
       try {
         const event = payload !== null && typeof payload === "object" && !Array.isArray(payload)
           ? payload as Record<string, unknown> : undefined;

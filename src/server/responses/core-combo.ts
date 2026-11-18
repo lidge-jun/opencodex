@@ -1274,10 +1274,13 @@ export async function executeComboResponses(
     };
     const completedTarget = { provider: pick.target.provider, model: pick.target.model };
     const writerGeneration = pick.writerGeneration;
-    const completedPick = pick;
-    const settleSuccess = () => {
-      noteComboSuccess(comboId, combo, completedPick.target, writerGeneration);
-      settleComboReprobeSuccess(completedPick);
+    const servingPick = pick;
+    let comboSuccessSettled = false;
+    const settleServingSuccess = (): void => {
+      if (comboSuccessSettled) return;
+      comboSuccessSettled = true;
+      noteComboSuccess(comboId, combo, servingPick.target, writerGeneration);
+      settleComboReprobeSuccess(servingPick);
     };
     let hostedWebSearchStream = false;
     let consumedChildFailure: ConsumedComboFailure | undefined;
@@ -1286,7 +1289,7 @@ export async function executeComboResponses(
       ...options,
       onResponseComplete: model => {
         if (isPausedTurn(childLog)) rememberPausedTurn(logCtx);
-        if (hostedWebSearchStream) settleSuccess();
+        if (hostedWebSearchStream) settleServingSuccess();
         // The live config can change while the child is streaming. Never retain credentials.
         const currentCombo = getCombo(config, comboId);
         const provider = config.providers[completedTarget.provider];
@@ -1312,6 +1315,7 @@ export async function executeComboResponses(
         if (childLog.terminalIncompleteReason !== undefined) logCtx.terminalIncompleteReason = childLog.terminalIncompleteReason;
         if (childLog.committedIncompleteReason !== undefined) logCtx.committedIncompleteReason = childLog.committedIncompleteReason;
         if (childLog.terminalErrorCode !== undefined) logCtx.terminalErrorCode = childLog.terminalErrorCode;
+        if (childLog.observedTerminalStatus !== undefined) logCtx.observedTerminalStatus = childLog.observedTerminalStatus;
         if (childLog.upstreamError !== undefined) logCtx.upstreamError = childLog.upstreamError;
         // Raw usage may arrive after the commit copy. Publish it before spend is finalized.
         if (childLog.usage !== undefined) {
@@ -1321,6 +1325,7 @@ export async function executeComboResponses(
         if (isPausedTurn(childLog)) rememberPausedTurn(logCtx);
         // A committed stream that ends failed is a target failure too; incomplete is an answer.
         if (status === "failed") jevPin?.forget();
+        else settleServingSuccess();
         options.onNativePassthroughTerminal?.(status);
       },
     });
@@ -1464,7 +1469,9 @@ export async function executeComboResponses(
         childLog.accountLogLabel,
       );
       attemptRetained = true;
-      if (!hostedWebSearchStream) settleSuccess();
+      // Native SSE can carry a failed verdict after HTTP acceptance, including after preflight.
+      // A hosted web-search stream settles only when the loop reports a completed response.
+      if (!isNativePassthroughSseResponse(response) && !hostedWebSearchStream) settleServingSuccess();
       carryProxyErrorContext(childLog, logCtx);
       Object.assign(logCtx, childLog, {
         client: logCtx.client,
@@ -1485,6 +1492,7 @@ export async function executeComboResponses(
       options.onCodexAuthContextResolved?.(resolvedAuth);
       options.setTerminalOutcomeRecorder?.((status, httpStatusOverride) => {
         if (isPausedTurn(childLog)) rememberPausedTurn(logCtx);
+        if (status !== "failed" && !hostedWebSearchStream) settleServingSuccess();
         terminalRecorder?.(status, httpStatusOverride);
       });
       callbackGate.commit();

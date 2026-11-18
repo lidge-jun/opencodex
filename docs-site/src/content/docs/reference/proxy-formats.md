@@ -56,7 +56,10 @@ preserving any pending upstream read. Text, tool events, unknown/opaque output a
 commit the current target. Namespace selectors and call echoes share the authorized alias restoration.
 After that boundary, missing calls produce `response.failed` without another target request; already delivered
 output and usage remain intact. Hosted execution evidence also prevents replay, even when the final
-snapshot omits it. Auto/none, incomplete results and unknown contracts retain their existing rules.
+snapshot omits it. If a `response.completed` event or its nested response carries `error` or
+`last_error`, the client receives the provider's original verdict, the combo keeps that target,
+and OpenCodex records a failure without saving the response for `previous_response_id` replay.
+Auto/none, incomplete results and unknown contracts retain their existing rules.
 
 ## Required tools on translated Chat routes
 

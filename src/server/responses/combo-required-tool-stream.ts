@@ -1,4 +1,4 @@
-import { REQUIRED_TOOL_CONTRACT_CODE } from "../../lib/errors";
+import { REQUIRED_TOOL_CONTRACT_CODE, responsesCompletionError } from "../../lib/errors";
 import { createSseInspector, type SseInspectorHandlers } from "../relay";
 import { inspectResponseLogSsePayloadParsed } from "../request-log";
 import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "../sse-payload-rewrite";
@@ -54,7 +54,8 @@ function terminalGuard(fulfills: (item: RecordValue, clientCall: boolean) => boo
       const event = record(payload);
       if (!event) { evidence.replayUnsafe = true; return false; }
       if (event.type !== "response.completed" && event.type !== "response.failed" && event.type !== "response.incomplete"
-        && !controlEvents.has(String(event.type)) && !requiredToolReasoningPrelude(event)) evidence.replayUnsafe = true;
+        && !(typeof event.type === "string" && controlEvents.has(event.type))
+        && !requiredToolReasoningPrelude(event)) evidence.replayUnsafe = true;
       if (event.type === "response.output_item.added" || event.type === "response.output_item.done") {
         observe(event.item, event.type === "response.output_item.done");
       }
@@ -65,7 +66,7 @@ function terminalGuard(fulfills: (item: RecordValue, clientCall: boolean) => boo
       if (response?.output !== undefined && !Array.isArray(response.output)) evidence.replayUnsafe = true;
       if (event.type !== "response.completed" || !response || !Array.isArray(response.output) || fulfilled) return false;
       // An upstream verdict owns the terminal even when the requested call is missing.
-      if (event.error != null || event.last_error != null || response.error != null || response.last_error != null
+      if (responsesCompletionError(event) != null
         || hasRefusalContent(event.output) || hasRefusalContent(response.output)) return false;
       event.type = "response.failed";
       response.status = "failed";
@@ -91,7 +92,8 @@ export function createComboRequiredToolStreamGuard(
   const clientGuard = terminalGuard(fulfills, ownership, evidence, normalizeItem);
   return {
     rememberCompleted(response: RecordValue, remember: (response: RecordValue) => void) {
-      if (!clientGuard.project({ type: "response.completed", response })) remember(response);
+      const event = { type: "response.completed", response };
+      if (responsesCompletionError(event) == null && !clientGuard.project(event)) remember(response);
     },
     inspectorFactory(handlers: SseInspectorHandlers) {
       const guard = terminalGuard(fulfills, ownership, evidence, normalizeItem);

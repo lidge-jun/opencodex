@@ -91,6 +91,19 @@ export function namesModelNotInPlanCode(code: string | null | undefined): boolea
   return typeof code === "string" && code.trim().toLowerCase().replaceAll("-", "_") === MODEL_NOT_IN_PLAN_CODE;
 }
 
+/** An error on either carrier overrides an SSE completion for internal outcome accounting. */
+export function responsesCompletionError(payload: unknown): unknown {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const event = payload as {
+    type?: unknown;
+    error?: unknown;
+    last_error?: unknown;
+    response?: { error?: unknown; last_error?: unknown };
+  };
+  if (event.type !== "response.completed") return undefined;
+  return event.error ?? event.last_error ?? event.response?.error ?? event.response?.last_error;
+}
+
 /** First nonblank string across the canonical upstream error paths, in priority order. */
 export function upstreamErrorMessageFromPayload(payload: unknown): string | undefined {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
@@ -101,12 +114,14 @@ export function upstreamErrorMessageFromPayload(payload: unknown): string | unde
     last_error?: { message?: unknown };
     response?: {
       error?: { message?: unknown };
+      last_error?: { message?: unknown };
       incomplete_details?: { message?: unknown };
     };
   };
   const messages = [json.error?.message,
     json.last_error?.message,
     json.response?.error?.message,
+    json.response?.last_error?.message,
     json.response?.incomplete_details?.message,
     // The Responses stream error event carries a flat message (type/code/message),
     // unlike the response.failed envelope the branches above already cover.
