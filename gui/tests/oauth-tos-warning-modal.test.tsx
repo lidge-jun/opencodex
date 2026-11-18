@@ -129,12 +129,104 @@ describe("Anthropic subscription dialog", () => {
   });
 });
 
-test("other high-risk providers keep the shared title and acknowledgement", () => {
-  render("google-antigravity", []);
+const BAN_MESSAGE = "This service has been disabled in this account for violation of Terms of Service.";
+
+describe("Google Antigravity danger dialog", () => {
+  test("renders as a danger dialog with the ban consequences and an unchecked acknowledgement", () => {
+    render("google-antigravity", []);
+    expect(showModalCalls).toBe(1);
+    const dialog = q<HTMLDialogElement>("dialog")!;
+    expect(q(".modal-card")?.className).toContain("oauth-tos-card--danger");
+    expect(q("h3")?.className).toContain("oauth-tos-danger-title");
+    expect(q("h3 svg")).not.toBeNull();
+    expect(q("h3")?.textContent).toBe("Google may permanently disable Gemini and Antigravity on this Google account");
+    expect(q(".notice-err")).not.toBeNull();
+    expect(q(".notice-warn")).toBeNull();
+
+    const text = dialog.textContent ?? "";
+    expect(text).toContain(BAN_MESSAGE);
+    expect(text).toContain("Never use your main, personal, school, or work account.");
+    expect(text).toContain("Gemini API key");
+    expect(text).not.toContain(DICTS.en["oauthTos.acknowledge"]);
+
+    // The conditions are a checklist, and the list is part of the dialog's description.
+    const items = container.querySelectorAll(".oauth-tos-conditions li");
+    expect(items.length).toBe(4);
+    const described = (dialog.getAttribute("aria-describedby") ?? "").split(" ");
+    expect(described).toHaveLength(2);
+    expect(testWindow.document.getElementById(described[1]!)?.tagName).toBe("UL");
+
+    expect(checkbox().checked).toBe(false);
+    expect(primary().disabled).toBe(true);
+    expect(primary().className).toContain("oauth-tos-continue--danger");
+    expect(primary().textContent).toBe("Accept the risk and continue");
+  });
+
+  test("Continue stays disabled until the box is ticked, unticking disables it again, and it submits once", () => {
+    const calls: string[] = [];
+    render("google-antigravity", calls);
+    act(() => primary().click());
+    expect(calls).toEqual([]);
+    act(() => checkbox().click());
+    expect(primary().disabled).toBe(false);
+    act(() => checkbox().click());
+    expect(primary().disabled).toBe(true);
+    act(() => primary().click());
+    expect(calls).toEqual([]);
+    act(() => checkbox().click());
+    act(() => { primary().click(); primary().click(); });
+    expect(calls).toEqual(["continue"]);
+  });
+
+  test("reopening starts unchecked again", () => {
+    const calls: string[] = [];
+    render("google-antigravity", calls);
+    act(() => checkbox().click());
+    const cancel = Array.from(container.querySelectorAll<HTMLButtonElement>(".modal-actions button"))
+      .find(button => !button.className.includes("btn-primary"))!;
+    act(() => cancel.click());
+    render("google-antigravity", calls);
+    expect(checkbox().checked).toBe(false);
+    expect(primary().disabled).toBe(true);
+  });
+});
+
+test("other high-risk providers keep the shared warning copy and styling", () => {
+  render("meta-muse", []);
+  // The helper labels every non-Claude provider "Antigravity"; the shared title shape is what matters.
   expect(q("h3")?.textContent).toBe("Antigravity: subscription OAuth risk");
+  expect(q(".notice-warn")).not.toBeNull();
+  expect(q(".oauth-tos-card--danger")).toBeNull();
+  expect(primary().className).not.toContain("oauth-tos-continue--danger");
   expect(container.textContent).toContain(DICTS.en["oauthTos.acknowledge"]);
-  expect(container.textContent).toContain(DICTS.en["oauthTos.saferPath"]);
   expect(container.textContent).not.toContain(DICTS.en["oauthTos.anthropicConditions"]);
+});
+
+test("every locale carries the Antigravity dialog copy with the same anchors", () => {
+  const keys = [
+    "oauthTos.antigravityTitle",
+    "oauthTos.antigravityBody",
+    "oauthTos.antigravityConditions",
+    "oauthTos.antigravitySaferPath",
+    "oauthTos.antigravityAcknowledge",
+    "oauthTos.antigravityContinue",
+  ] as const;
+  for (const { code } of LOCALES) {
+    const dict = DICTS[code];
+    for (const key of keys) {
+      expect(typeof dict[key], code + " " + key).toBe("string");
+      expect(dict[key], code + " " + key).not.toBe(key);
+      expect(dict[key], code + " " + key).not.toBe(code === "en" ? "" : DICTS.en[key]);
+    }
+    expect(dict["oauthTos.antigravityTitle"], code).toContain("Google");
+    expect(dict["oauthTos.antigravityBody"], code).toContain("{provider}");
+    expect(dict["oauthTos.antigravityBody"], code).toContain("OpenCodex");
+    expect(dict["oauthTos.antigravityBody"], code).toContain(BAN_MESSAGE);
+    expect(dict["oauthTos.antigravityConditions"].split("\n"), code).toHaveLength(4);
+    expect(dict["oauthTos.antigravitySaferPath"], code).toContain("API");
+  }
+  expect(DICTS.ko["oauthTos.antigravityTitle"]).toBe("Google이 이 Google 계정의 Gemini·Antigravity 이용을 영구 정지할 수 있습니다");
+  expect(DICTS.ko["oauthTos.antigravityContinue"]).toBe("위험을 감수하고 계속");
 });
 
 test("every locale carries the Anthropic dialog copy with the same anchors", () => {

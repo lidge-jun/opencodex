@@ -1,6 +1,6 @@
 import {
   ANTIGRAVITY_ACCESS_DENIED_PREFIX, ANTIGRAVITY_AUTH_FAILED_PREFIX, ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX,
-  safeAntigravityHttpErrorMessage,
+  GOOGLE_PERMISSION_DENIED_SUFFIX, safeAntigravityHttpErrorMessage,
 } from "../../adapters/google-errors";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { classifyAntigravityRefusal, hasAntigravityModelNotFoundProvenance } from "../../adapters/antigravity-refusal";
@@ -12,22 +12,23 @@ export function hasAntigravityValidationRefusalMarker(text: string): boolean {
 
 /**
  * A normalized 403 that Google itself attributed to this account: a structured `PERMISSION_DENIED`
- * envelope (`classifyGoogle` keeps the "(PERMISSION_DENIED)" suffix only when it parsed that enum) or
- * the "authentication failed" wording Google sometimes puts under PERMISSION_DENIED. Not a validation
+ * envelope, worded either as a plain denial or as invalid/expired credentials. `classifyGoogle` keeps
+ * the "(PERMISSION_DENIED)" suffix on both prefixes only when it parsed that enum. Not a validation
  * demand and not a "verify your account" conviction (the dedicated quarantine path owns that one). The
  * caller cools the account and tries a sibling; nothing here marks the account durably.
  *
  * `classifyGoogle` writes the bare "Antigravity access denied" prefix for every 403, including an empty
- * body, a proxy or WAF HTML page, or an envelope without the enum. That bare prefix says nothing about
- * this account, so it does not qualify: accepting it would walk the whole pool and cool every account
- * on a failure that is wrong for all of them.
+ * body, a proxy or WAF HTML page, or an envelope without the enum, and the bare "Antigravity
+ * authentication failed" prefix for any 403 whose text says "expired" or "unauthenticated". Neither
+ * bare prefix says anything about this account, so neither qualifies: accepting one would walk the
+ * whole pool and cool every account on a failure that is wrong for all of them.
  *
  * Text that carries the validation marker is never an access denial: that wording belongs to the
  * validation path, and an upstream message imitating it must not earn a different recovery.
  */
 export function hasAntigravityAccessDeniedMarker(text: string): boolean {
-  return (text.startsWith(`${ANTIGRAVITY_ACCESS_DENIED_PREFIX} (PERMISSION_DENIED)`)
-    || text.startsWith(ANTIGRAVITY_AUTH_FAILED_PREFIX))
+  return (text.startsWith(`${ANTIGRAVITY_ACCESS_DENIED_PREFIX}${GOOGLE_PERMISSION_DENIED_SUFFIX}`)
+    || text.startsWith(`${ANTIGRAVITY_AUTH_FAILED_PREFIX}${GOOGLE_PERMISSION_DENIED_SUFFIX}`))
     && !text.includes(ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX)
     && classifyAntigravityRefusal(403, text).kind === "other";
 }

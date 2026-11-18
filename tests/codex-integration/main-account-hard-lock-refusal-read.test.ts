@@ -42,11 +42,12 @@ function config(): OcxConfig {
   } }, codexMainAccountHardLock: true, activeCodexAccountId: MAIN, codexAccounts: [] };
 }
 
-/** Synthetic unsigned claims for the fixture identity; not a real credential. */
-function bearer(account = accountId): string {
+/** Synthetic unsigned claims for the fixture identity; not a real credential. `holder` keeps two logins of one account distinct. */
+function bearer(account = accountId, holder = "stored"): string {
   const payload = Buffer.from(JSON.stringify({
     exp: Math.floor(Date.now() / 1000) + 86_400,
     "https://api.openai.com/auth": { chatgpt_account_id: account },
+    fixture_holder: holder,
   })).toString("base64url");
   return `header.${payload}.signature`;
 }
@@ -73,14 +74,18 @@ function usage(percent: number): Response {
   } });
 }
 
-/** Stub WHAM. An owned read runs under the native-main claim; a caller-owned read takes none. */
-function wham(respond: () => Response, gate?: Promise<void>, claimed = true): string[] & { claims: number[] } {
-  const calls = Object.assign([] as string[], { claims: [] as number[] });
-  globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+/**
+ * Stub WHAM. An owned read runs under the native-main claim; a caller-owned read takes none.
+ * `authorizations` records the bearer each read sent, so a test can name whose credential it was.
+ */
+function wham(respond: () => Response, gate?: Promise<void>, claimed = true): string[] & { claims: number[]; authorizations: (string | null)[] } {
+  const calls = Object.assign([] as string[], { claims: [] as number[], authorizations: [] as (string | null)[] });
+  globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
     const url = String(input);
     calls.push(url);
     // Recorded as well as asserted: a failed assertion here becomes a handled refusal upstream.
     calls.claims.push(getNativeMainProfileRequestCount());
+    calls.authorizations.push(new Headers(init?.headers).get("authorization"));
     expect(url).toBe(whamUrl);
     expect(getNativeMainProfileRequestCount()).toBe(claimed ? 1 : 0);
     await gate;
@@ -157,6 +162,8 @@ test("a stale reading is re-read once before refusing, and a reset redeemed else
   await expect(resolveCodexAuthContext(new Headers(), config(), "pool"))
     .resolves.toMatchObject({ kind: "main-pool", accountId: MAIN });
   expect(calls).toEqual([whamUrl]);
+  // The owned read authenticates as the stored main login.
+  expect(calls.authorizations).toEqual([`Bearer ${mainToken}`]);
   expect(getMainAccountHardLockStatus(config()).state).toBe("ready");
 });
 
@@ -203,9 +210,12 @@ test("a caller-owned main bearer refusal gets the same fresh read", async () => 
   const calls = wham(() => usage(0), undefined, false);
   // A caller-owned request may never read the physical main credential, so the read uses its bearer.
   const physicalReads = spyOn(authCollision, "readCodexTokensResult");
-  // The caller presents the main login itself, so the observed-main lock applies to it.
-  observeMainQuotaCredential(mainToken, accountId);
-  const headers = new Headers({ authorization: `Bearer ${mainToken}`, "chatgpt-account-id": accountId });
+  // The caller presents its own login of the main account, so the observed-main lock applies to it;
+  // a token distinct from the stored one shows whose bearer the read sends.
+  const callerToken = bearer(accountId, "caller");
+  expect(callerToken).not.toBe(mainToken);
+  observeMainQuotaCredential(callerToken, accountId);
+  const headers = new Headers({ authorization: `Bearer ${callerToken}`, "chatgpt-account-id": accountId });
   await expect(resolveCodexAuthContext(headers, config(), "pool", { requestScopedMainCredential: true }))
     .rejects.toBeInstanceOf(CodexMainAccountHardLockError);
   expect(calls).toEqual([]);
@@ -213,6 +223,7 @@ test("a caller-owned main bearer refusal gets the same fresh read", async () => 
   await expect(resolveCodexAuthContext(headers, config(), "pool", { requestScopedMainCredential: true }))
     .resolves.toMatchObject({ kind: "main" });
   expect(calls).toEqual([whamUrl]);
+  expect(calls.authorizations).toEqual([`Bearer ${callerToken}`]);
   expect(physicalReads).not.toHaveBeenCalled();
   physicalReads.mockRestore();
 });
@@ -294,6 +305,8 @@ test("an explicit stored-main selection reads through the owned probe whatever b
   expect(calls).toEqual([whamUrl]);
   // Only the owned probe holds the native-main claim while it reads.
   expect(calls.claims).toEqual([1]);
+  // The owned probe sends the stored main bearer, never the unrelated one the request carried.
+  expect(calls.authorizations).toEqual([`Bearer ${mainToken}`]);
 });
 test.each([
   ["reset metadata alone", { shortResetAt: 1_900_000_000 }],

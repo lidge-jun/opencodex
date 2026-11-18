@@ -47,6 +47,8 @@ export const LINK_PACED_SLICE_BYTES = 256 * 1024;
 
 const byToken = new Map<string, LinkTurnObserver>();
 const byLog = new WeakMap<object, LinkTurnObserver>();
+/** Contexts that pace for a link turn bound elsewhere (a combo child's); never notified of the terminal. */
+const pacingByLog = new WeakMap<object, LinkTurnObserver>();
 
 /** Registers an observer for one relayed request; the caller sets the returned token as LINK_TURN_HEADER. */
 export function registerLinkTurnToken(observer: LinkTurnObserver): string {
@@ -124,7 +126,16 @@ export function markLinkTurnMissing(logCtx: object): void {
 
 /** Whether a link turn bound to this context reads its upstream only as its client drains; false for every other request. */
 export function linkTurnPacesReads(logCtx: object): boolean {
-  return byLog.get(logCtx)?.pacedReads === true;
+  return (byLog.get(logCtx) ?? pacingByLog.get(logCtx))?.pacedReads === true;
+}
+
+/**
+ * A combo child runs the pipeline on a log context of its own, after the combo observed the turn on its parent's. The child
+ * reads its upstream as the parent's link turn does; the terminal notice stays with the parent's final log, so it fires once.
+ */
+export function bindLinkTurnChild(parentLogCtx: object, childLogCtx: object): void {
+  const observer = byLog.get(parentLogCtx) ?? pacingByLog.get(parentLogCtx);
+  if (observer) pacingByLog.set(childLogCtx, observer);
 }
 
 /** Called by the final request log of every turn; a no-op unless a link turn bound this context. */

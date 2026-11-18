@@ -1,5 +1,5 @@
 import type { OcxConfig } from "../../types";
-import { isEffectiveCodexDesktopAuthless } from "../loopback-target";
+import { isEffectiveCodexReserve } from "../loopback-target";
 import { NATIVE_RESERVE_MODEL } from "./native-models";
 
 /**
@@ -14,9 +14,9 @@ import { NATIVE_RESERVE_MODEL } from "./native-models";
  * inputs that produced the omission are still in scope.
  *
  * Deliberately scoped to an operator who asked for the feature. A default install has
- * `codexDesktopAuthless` unset, wants no Reserve row, and must not be told about one. An install
- * that stores the flag on a bind where it cannot take effect is a different silence, already
- * reported as `inertReason` by `describeCodexDesktopSwitches`, and is not repeated here.
+ * `codexReserveEnabled` off, wants no Reserve row, and must not be told about one. An install
+ * that enables Reserve on a bind where it cannot take effect is a different silence and is not
+ * repeated here.
  */
 export type ReserveCatalogSuppressionReason =
   | "no-canonical-openai-provider"
@@ -30,6 +30,8 @@ type ReserveSuppressionConfig = Pick<
   | "hostname"
   | "unauthenticatedLoopbackListener"
   | "codexDesktopAuthless"
+  | "codexReserveEnabled"
+  | "codexReserveMigration"
   | "codexAccountNamespaces"
   | "codexAccountPickerEnabled"
 >;
@@ -45,7 +47,7 @@ export function reserveCatalogSuppressionReason(
   config: ReserveSuppressionConfig,
   input: ReserveSuppressionInput,
 ): ReserveCatalogSuppressionReason | undefined {
-  if (!isEffectiveCodexDesktopAuthless(config) || input.mainSelectors.length > 0) return undefined;
+  if (!isEffectiveCodexReserve(config) || input.mainSelectors.length > 0) return undefined;
   if (!input.includeAccountBoundNativeOpenAi) return "no-canonical-openai-provider";
   // Checked before the empty-map case: when an operator has explicitly turned the picker off,
   // naming the empty map would send them to hand-author selectors that the opt-in generates.

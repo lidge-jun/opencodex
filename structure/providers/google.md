@@ -1,6 +1,6 @@
 # Google Provider
 
-Created: 2026-10-16 | Updated: 2026-11-13 | Version: 1.3 (Vertex model discovery)
+Created: 2026-10-16 | Updated: 2026-11-16 | Version: 1.4 (Vertex discovery destination authority)
 
 ## Streaming input accounting
 
@@ -54,7 +54,14 @@ project. ADC rejects `"auto"`.
 ## Vertex model discovery
 
 `src/providers/google-vertex-model-discovery.ts` lists a non-OAuth Vertex row's models from
-`GET /v1beta1/publishers/google/models?pageSize=300` (300 is the server maximum). It selects the
+`GET /v1beta1/publishers/google/models?pageSize=300` (300 is the server maximum). Before reading a
+key reference or resolving ADC it admits only HTTPS `aiplatform.googleapis.com` or
+`<location>-aiplatform.googleapis.com`, using inference's location-label validator and refusing
+userinfo, nondefault ports and fragments. Request construction attaches credentials only to that
+origin, and every page's send-time guard checks its actual URL against the admitted origin.
+Ambient keys and ADC retain that origin in their credential-authority record. An unapproved
+destination resolves no credential: catalog discovery degrades and the management probe remains
+unverified. It selects the
 discovery credential the way inference does: a `gcp-sa:` marker uses that service account; an
 explicit `keychain:` or `$ENV` reference uses that key alone, and when it cannot be read
 discovery sends nothing and the catalog degrades, matching the routed-config rejection of the same
@@ -87,7 +94,7 @@ row's own `modelReasoningEfforts` / `noReasoningModels` still win in the catalog
 
 ## Vertex ADC verification state
 
-`src/lib/gcp-adc.ts` records, per credential scope (host ADC or one `gcp-sa:` marker account), the source key and observed generation of the last token exchange that succeeded in this process. `vertexAdcCredentialVerified` returns true only while the source the next resolve would use still matches that record, so replacing the ADC file or switching `GOOGLE_APPLICATION_CREDENTIALS` lapses the proof without a network call; with no record it returns false before reading any credential source. A failed exchange clears only its own record, never a newer exchange's. `safeConfigDTO` in `src/server/auth-cors.ts` exposes this as the boolean `vertexCredentialVerified` on ambient and marker rows only; no credential material, source path or account reaches the DTO. The static-catalog branch of `POST /api/providers/test` calls `src/server/management/static-catalog-probe.ts`, which mints one Vertex ADC token through the existing discovery auth for keyless or marker Vertex rows and returns only ok/latency; every other static catalog, including Antigravity, answers `static_catalog` before any credential resolution, and so does an API-key Vertex row, whether the key is literal or a `keychain:`/`${ENV}` reference: `vertexConfiguredCredentialKind` (the rule behind the DTO's `vertexCredentialKind`) classifies the configured text before anything is resolved, so the probe never reads the credential store for a row it cannot test. A token response without a non-empty `access_token` fails the exchange and records no proof. A minted token proves the credential, not Vertex IAM permissions. `tests/adapters/google/vertex-adc-verified.test.ts` covers the lapse on source change, the exchange race, the probe branches and the dashboard labels.
+`src/lib/gcp-adc.ts` records, per credential scope (host ADC or one `gcp-sa:` marker account), the source key and observed generation of the last token exchange that succeeded in this process. `vertexAdcCredentialVerified` returns true only while the source the next resolve would use still matches that record, so replacing the ADC file or switching `GOOGLE_APPLICATION_CREDENTIALS` lapses the proof without a network call; with no record it returns false before reading any credential source. A failed exchange clears only its own record, never a newer exchange's. `safeConfigDTO` in `src/server/auth-cors.ts` exposes this as the boolean `vertexCredentialVerified` on ambient and marker rows only, and only when `selectVertexDiscoveryCredential` selects ADC for the row, read in that selection's marker scope: an ambient row with `GOOGLE_CLOUD_API_KEY` set sends that key, so it carries no field and an ADC token cannot mark it Ready. No credential material, source path or account reaches the DTO. The static-catalog branch of `POST /api/providers/test` calls `src/server/management/static-catalog-probe.ts`, which mints one Vertex ADC token through the existing discovery auth for keyless or marker Vertex rows and returns only ok/latency. The probe passes `forceExchange` to `getVertexAccessTokenWithAuthority`, which skips the completed-token cache (it still joins an exchange already in flight and refreshes the cache on success), so a revoked refresh credential fails the probe and clears the proof at once instead of passing on a cached token for up to an hour; inference and discovery keep the cache; every other static catalog, including Antigravity, answers `static_catalog` before any credential resolution, and so does an API-key Vertex row, whether the key is literal or a `keychain:`/`${ENV}` reference: `vertexConfiguredCredentialKind` (the rule behind the DTO's `vertexCredentialKind`) classifies the configured text before anything is resolved, so the probe never reads the credential store for a row it cannot test. A token response without a non-empty `access_token` fails the exchange and records no proof. A minted token proves the credential, not Vertex IAM permissions. `tests/adapters/google/vertex-adc-verified.test.ts` covers the lapse on source change, a refused refresh after the cached token expires, the exchange race, the ambient-key selection, the probe's forced exchange, the probe branches and the dashboard labels.
 
 ## Vertex credential markers
 

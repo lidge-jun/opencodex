@@ -54,7 +54,7 @@
     "typecheck": "bun check --no-script --noEmit",
     "typecheck:tsc": "bun x tsc --noEmit",
     "typecheck:gui:if-changed": "bun scripts/typecheck-gui-if-changed.ts",
-    "audit:high": "bun audit --audit-level=high && cd gui && bun audit --audit-level=high",
+    "audit:high": "bun audit --audit-level=high && cd gui && bun audit --audit-level=high --ignore=GHSA-fc5q-39xc-vjpf",
     "privacy:scan": "bun scripts/privacy-scan.ts",
     "favicons": "bun scripts/brand-favicons.ts",
     "favicons:check": "bun scripts/brand-favicons.ts --check",

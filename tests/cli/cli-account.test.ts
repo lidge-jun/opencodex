@@ -377,7 +377,7 @@ async function mockManagementApi(req: Request): Promise<Response> {
 }
 
 function defaultDeps(): AccountDeps {
-  return { baseUrl, loadConfigImpl: fixtureConfig };
+  return { baseUrl, loadConfigImpl: fixtureConfig, antigravityRisk: { agentDriven: () => false, promptVisible: () => true } };
 }
 
 function stdinFrom(value: string, isTTY = false): AccountStdin {
@@ -1940,7 +1940,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
 
     const beforeInline = requests.length;
     const inline = await run([
-      "import", "google-antigravity", "--format", "cockpit-tools", document,
+      "import", "google-antigravity", "--accept-antigravity-risk", "--format", "cockpit-tools", document,
     ]);
     expect(inline.code).toBe(1);
     expect(requests).toHaveLength(beforeInline);
@@ -1954,7 +1954,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     expect(unsupported.stderr).not.toContain("source_read_failed");
 
     const stdin = await run([
-      "import", "google-antigravity", "--format", "cockpit-tools", "--stdin", "--json",
+      "import", "google-antigravity", "--accept-antigravity-risk", "--format", "cockpit-tools", "--stdin", "--json",
     ], { ...defaultDeps(), stdinImpl: stdinFrom(document) });
     expect(stdin.code).toBe(0);
     expect(JSON.parse(stdin.stdout)).toEqual({
@@ -1972,7 +1972,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
       body: {
         provider: "google-antigravity",
         format: "cockpit-tools",
-        document: [{ email: "user@example.com", refresh_token: canary }],
+        document: [{ email: "user@example.com", refresh_token: canary }], acknowledgeAntigravityRisk: true,
       },
     });
 
@@ -1981,7 +1981,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     writeFileSync(path, document);
     try {
       const file = await run([
-        "import", "google-antigravity", "--format", "cockpit-tools", "--file", path,
+        "import", "google-antigravity", "--accept-antigravity-risk", "--format", "cockpit-tools", "--file", path,
       ]);
       expect(file.code).toBe(0);
       expect(file.stdout).toContain("1 imported, 0 updated, 0 failed");
@@ -1992,7 +1992,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
 
     const beforeOversized = requests.length;
     const oversized = await run([
-      "import", "google-antigravity", "--format", "cockpit-tools", "--stdin",
+      "import", "google-antigravity", "--accept-antigravity-risk", "--format", "cockpit-tools", "--stdin",
     ], { ...defaultDeps(), stdinImpl: stdinFrom("x".repeat(ACCOUNT_IMPORT_MAX_BYTES + 1)) });
     expect(oversized.code).toBe(1);
     expect(oversized.stderr).toContain("invalid_document");
@@ -2003,7 +2003,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     const canary = "options-before-provider-canary-DO-NOT-LEAK";
     const document = '[{"email":"user@example.com","refresh_token":"safe-fixture-token"}]';
     const ordered = await run([
-      "import", "--json", "--format", "cockpit-tools", "--stdin", "google-antigravity",
+      "import", "--json", "--accept-antigravity-risk", "--format", "cockpit-tools", "--stdin", "google-antigravity",
     ], { ...defaultDeps(), stdinImpl: stdinFrom(document) });
     expect(ordered.code).toBe(0);
     expect(JSON.parse(ordered.stdout).importedCount).toBe(1);
@@ -2014,7 +2014,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
 
     const beforeExtra = requests.length;
     const extra = await run([
-      "import", "--format", "cockpit-tools", "--stdin", "google-antigravity", canary,
+      "import", "--accept-antigravity-risk", "--format", "cockpit-tools", "--stdin", "google-antigravity", canary,
     ], { ...defaultDeps(), stdinImpl: stdinFrom(document) });
     expect(extra.code).toBe(1);
     expect(requests).toHaveLength(beforeExtra);
@@ -2026,19 +2026,19 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     const document = '[{"email":"user@example.com","refresh_token":"safe-fixture-token"}]';
     const sourceCases: Array<{ args: string[]; deps?: AccountDeps; expected?: string }> = [
       {
-        args: ["import", "google-antigravity", "--format", "cockpit-tools", "--stdin", "--file", `/not-read-${canary}.json`],
+        args: ["import", "google-antigravity", "--accept-antigravity-risk", "--format", "cockpit-tools", "--stdin", "--file", `/not-read-${canary}.json`],
         deps: { ...defaultDeps(), stdinImpl: stdinFrom(document) },
       },
-      { args: ["import", "google-antigravity", "--format", "cockpit-tools"] },
-      { args: ["import", "google-antigravity", "--format", "cockpit-tools", "--file"] },
-      { args: ["import", "google-antigravity", "--format", "cockpit-tools", "--file", ""] },
+      { args: ["import", "google-antigravity", "--accept-antigravity-risk", "--format", "cockpit-tools"] },
+      { args: ["import", "google-antigravity", "--accept-antigravity-risk", "--format", "cockpit-tools", "--file"] },
+      { args: ["import", "google-antigravity", "--accept-antigravity-risk", "--format", "cockpit-tools", "--file", ""] },
       {
-        args: ["import", "google-antigravity", "--format", "cockpit-tools", "--stdin"],
+        args: ["import", "google-antigravity", "--accept-antigravity-risk", "--format", "cockpit-tools", "--stdin"],
         deps: { ...defaultDeps(), stdinImpl: stdinFrom(document, true) },
         expected: "stdin_required",
       },
       {
-        args: ["import", "google-antigravity", "--format", "cockpit-tools", "--stdin"],
+        args: ["import", "google-antigravity", "--accept-antigravity-risk", "--format", "cockpit-tools", "--stdin"],
         deps: { ...defaultDeps(), stdinImpl: stdinFrom("x".repeat(ACCOUNT_IMPORT_MAX_BYTES + 1)) },
         expected: "invalid_document",
       },
@@ -2057,7 +2057,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     silent.isTTY = false;
     const beforeSilent = requests.length;
     const timedOut = await run([
-      "import", "google-antigravity", "--format", "cockpit-tools", "--stdin",
+      "import", "google-antigravity", "--accept-antigravity-risk", "--format", "cockpit-tools", "--stdin",
     ], { ...defaultDeps(), stdinImpl: silent, stdinTimeoutMs: 5 });
     expect(timedOut.code).toBe(1);
     expect(timedOut.stderr).toContain("stdin_timeout");
@@ -2079,7 +2079,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     }) as typeof fetch;
 
     const result = await run([
-      "import", "google-antigravity", "--format", "cockpit-tools", "--stdin",
+      "import", "google-antigravity", "--accept-antigravity-risk", "--format", "cockpit-tools", "--stdin",
     ], {
       ...defaultDeps(),
       fetchImpl,
@@ -2106,7 +2106,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     }) as typeof fetch;
 
     const result = await run([
-      "import", "google-antigravity", "--format", "cockpit-tools", "--stdin", "--json",
+      "import", "google-antigravity", "--accept-antigravity-risk", "--format", "cockpit-tools", "--stdin", "--json",
     ], {
       ...defaultDeps(),
       fetchImpl,
@@ -2150,7 +2150,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     for (const malformed of malformedResults) {
       importResultOverride = malformed;
       const result = await run([
-        "import", "google-antigravity", "--format", "cockpit-tools", "--stdin", "--json",
+        "import", "google-antigravity", "--accept-antigravity-risk", "--format", "cockpit-tools", "--stdin", "--json",
       ], {
         ...defaultDeps(),
         stdinImpl: stdinFrom('[{"email":"user@example.com","refresh_token":"safe-fixture-token"}]'),
@@ -2158,7 +2158,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
 
       expect(result.code).toBe(1);
       expect(result.stdout).toBe("");
-      expect(result.stderr).toBe("Error: invalid_response");
+      expect(result.stderr).toBe((await import("../../src/oauth/antigravity-risk")).ANTIGRAVITY_RISK_WARNING + "\nError: invalid_response");
       expect(result.output).not.toContain(canary);
     }
   });
@@ -2177,14 +2177,14 @@ describe("ocx account CLI (issue #180 matrix)", () => {
       ],
     };
     const result = await run([
-      "import", "google-antigravity", "--format", "cockpit-tools", "--stdin",
+      "import", "google-antigravity", "--accept-antigravity-risk", "--format", "cockpit-tools", "--stdin",
     ], {
       ...defaultDeps(),
       stdinImpl: stdinFrom('[{"email":"user@example.com","refresh_token":"safe-fixture-token"}]'),
     });
 
     expect(result.code).toBe(1);
-    expect(result.stderr).toBe("");
+    expect(result.stderr).toBe((await import("../../src/oauth/antigravity-risk")).ANTIGRAVITY_RISK_WARNING);
     expect(result.stdout).toContain("1 imported, 0 updated, 1 failed, 1 unsupported");
     expect(result.stdout).toContain("#2 failed (credential_rejected)");
     expect(result.stdout).toContain("#3 unsupported (unsupported_format)");
