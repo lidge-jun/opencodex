@@ -857,8 +857,9 @@ once per turn and talks to it over the Agent Client Protocol on stdin and stdout
 ```
 
 - **Prerequisites:** Antigravity CLI 1.5.3 or newer on `PATH` (or `OPENCODEX_AGY_BIN` set to its absolute path),
-  signed in once on the proxy host with `agy acp --login` or an interactive `agy` session. A CLI that is not signed in fails the turn
-  with HTTP 401 `agy_login_required`.
+  signed in once on the proxy host with `agy acp --login` or an interactive `agy` session. A sign-in failure returns
+  HTTP 401 with code `agy_login_required` before the response starts. If the response is already streaming,
+  it carries `agy_login_required` in the event stream.
 - **No credential stored:** the CLI owns its Google sign-in. OpenCodex never reads, stores or forwards it, and the row
   refuses an API key, a key pool, account failover or an OAuth setting. There is one account, the CLI's, and no rotation.
   Selecting this preset in `ocx init` skips the API key prompt. Running `ocx login antigravity-acp` prints the host sign-in command.
@@ -889,8 +890,9 @@ once per turn and talks to it over the Agent Client Protocol on stdin and stdout
   has no effect where that sandbox is unavailable (for example Windows 10 or some Linux containers), so it is extra
   hardening, not a guarantee. Allow rules you set in your own agy settings still apply without asking.
   On Windows, OpenCodex requires a private directory ACL before launching the CLI. The version probe and each
-  turn use separate workspaces under the system temporary directory. OpenCodex removes a workspace only after
-  confirming the CLI process tree has exited. If cleanup cannot be confirmed, OpenCodex logs a warning, retains
+  turn use separate workspaces under the system temporary directory. After the CLI starts, OpenCodex waits
+  for its leader and process group on POSIX, or for tree termination and leader closure on Windows, before
+  removing the workspace. If cleanup cannot be confirmed, OpenCodex logs a warning, retains
   the workspace and fails any affected turn. Retained workspaces can accumulate after repeated failures.
 - **Text only:** ACP prompts carry text, so client function tools and images are not offered to the model, and the
   CLI's own tool use stays inside the CLI.

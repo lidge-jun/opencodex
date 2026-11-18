@@ -119,7 +119,8 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   A completed Windows version probe can supply its version when the exited leader prevents taskkill from confirming
   cleanup. A POSIX probe requires group cleanup confirmation before supplying a version.
   The terminal event is published after cleanup settles. Coverage:
-  `tests/adapters/agy-acp-{adapter,protocol,policy}.test.ts`, `tests/config/agy-acp-config.test.ts`,
+  `tests/adapters/agy-acp-adapter.test.ts`, `tests/adapters/agy-acp-protocol.test.ts`,
+  `tests/adapters/agy-acp-policy.test.ts`, `tests/config/agy-acp-config.test.ts`,
   `tests/server/server-agy-acp.test.ts` covers all three HTTP surfaces and frame-local automatic compaction.
 - `devin` is direct for a related reason. It streams Cognition's
   `ApiServerService/GetChatMessage` over Connect-RPC from `runTurn` with hand-written protobuf
