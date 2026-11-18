@@ -9,6 +9,7 @@ import { fetchProviderQuotaReports } from "../../src/providers/quota";
 import { saveConfig } from "../../src/config";
 import { XAI_OAUTH_DISCOVERY_URL } from "../../src/oauth/xai";
 import { getAccountSet, saveCredential } from "../../src/oauth/store";
+import { clearModelCache, getProviderDiscoveryStatus, markModelsFetchFailure, MODELS_FETCH_FAILURE_COOLDOWN_MS } from "../../src/codex/model-cache";
 import { XAI_GROK_CLI_BASE_URL } from "../../src/providers/xai-transport";
 import { readUsageEntries, usageLogPath } from "../../src/usage/log";
 import { startServer } from "../../src/server";
@@ -453,11 +454,11 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
         }
         if (path === "/v1/models") return Response.json({ data: [{ id: "grok-4.5" }] });
       }
-      if (url.protocol === "http:" && url.hostname === "127.0.0.1") return originalFetch(input, init);
       if (url.href === "https://fixture.invalid/v1/chat/completions" && fallback) {
         sends.push(url.href);
         return fallback(init);
       }
+      if (url.protocol === "http:" && url.hostname === "127.0.0.1") return originalFetch(input, init);
       throw new Error("unexpected outbound request in xAI privacy settings fixture");
     }) as typeof fetch;
     return sends;
@@ -591,21 +592,30 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
     }
   });
 
-  test("catalog discovery logs fixed guidance and retains its configured fallback", async () => {
+  test("catalog discovery logs a new privacy refusal after a generic 403 and deduplicates repeated guidance", async () => {
     await seedOAuth();
     const config = withStubbedProviderFetch(xaiConfig());
     saveConfig(config);
-    const sends = refuseAt("/v1/models");
+    clearModelCache("xai");
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const models = await fetchProviderModels("xai", config.providers.xai!, 0);
-      expect(sends).toEqual(["/v1/models"]);
-      expect(models.map(model => model.id)).toContain("grok-4.5");
-      const printed = warn.mock.calls.flat().join("\n");
-      expect(printed).toContain(guidance);
-      expect(printed).not.toContain(privateDetail);
+      for (const [error, expectedWarnings] of [
+        ["generic permission refusal", 0], [privacyError, 1], [privacyError, 1],
+      ] as const) {
+        markModelsFetchFailure("xai", Date.now() - MODELS_FETCH_FAILURE_COOLDOWN_MS);
+        const sends = refuseAt("/v1/models", error);
+        const models = await fetchProviderModels("xai", config.providers.xai!, 0);
+        expect(sends).toEqual(["/v1/models"]);
+        expect(models.map(model => model.id)).toContain("grok-4.5");
+        expect(getProviderDiscoveryStatus("xai")).toEqual({ status: "failed", reason: "http", httpStatus: 403 });
+        const warnings = warn.mock.calls.flat();
+        expect(warnings.join("\n")).toContain("failed with HTTP 403");
+        expect(warnings.join("\n")).not.toContain(privateDetail);
+        expect(warnings.filter(line => String(line).includes(guidance))).toHaveLength(expectedWarnings);
+      }
     } finally {
       warn.mockRestore();
+      clearModelCache("xai");
     }
   });
 
@@ -626,7 +636,6 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
       warn.mockRestore();
     }
   });
-});
 
   test("native Responses replaces a 17 KiB Legacy privacy error with fixed guidance", async () => {
     await seedOAuth();
@@ -645,3 +654,4 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
       await server.stop(true);
     }
   });
+});

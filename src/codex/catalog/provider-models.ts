@@ -31,6 +31,7 @@ import {
   shouldLogDiscoveryFailure,
   setCached,
   type ProviderModelDiscoveryFailure,
+  type ProviderModelDiscoveryWarningCondition,
 } from "../model-cache";
 import {
   buildModelsRequest,
@@ -729,6 +730,7 @@ export async function fetchProviderModelsWithAuth(
     : "provider-models";
   const failedDiscoveryFallback = (
     failure: ProviderModelDiscoveryFailure,
+    warningCondition?: ProviderModelDiscoveryWarningCondition,
   ): { models: CatalogModel[]; fallback: "stale" | "configured"; shouldLog: boolean } => {
     if (!isCurrentCacheGeneration() || !maySendAnthropicDiscovery()) {
       return {
@@ -740,9 +742,9 @@ export async function fetchProviderModelsWithAuth(
     // Decide logging BEFORE recording the new status, so we can compare against the prior one and
     // suppress an identical repeated failure (#395 log flood). The failure stays observable via the
     // discovery-status API regardless.
-    const shouldLog = shouldLogDiscoveryFailure(name, failure);
+    const shouldLog = shouldLogDiscoveryFailure(name, failure, warningCondition);
     markModelsFetchFailure(name, undefined, catalogAuthority);
-    markProviderDiscoveryFailed(name, failure);
+    markProviderDiscoveryFailed(name, failure, warningCondition);
     const stale = getStaleCached(name, catalogAuthority);
     return {
       models: withConfiguredRetention(
@@ -788,8 +790,11 @@ export async function fetchProviderModelsWithAuth(
       return observed(models, "degraded");
     }
     if (!res.ok) {
-      const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "http", httpStatus: res.status });
       const privacyRefusal = isXaiGrokOAuth(name, prov) && await readXaiLegacyPrivacyError(res);
+      const { models, fallback, shouldLog } = failedDiscoveryFallback(
+        { reason: "http", httpStatus: res.status },
+        privacyRefusal ? "xai-legacy-privacy-mode" : undefined,
+      );
       if (shouldLog) {
         const guidance = privacyRefusal ? ` ${XAI_LEGACY_PRIVACY_MESSAGE}` : "";
         console.warn(
