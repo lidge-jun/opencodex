@@ -29,6 +29,7 @@ import {
   resolveBunTestPlan,
   runTestLane,
   selectChangedComparisonRef,
+  serialFullSuiteBatchManifest,
   SERIAL_FULL_SUITE_FILES,
 } from "../../scripts/test";
 import {
@@ -719,10 +720,19 @@ describe("bun test argv", () => {
       ]);
     }
     expect(plan.find(lane => lane.label === "release-helper.test.ts")?.timeoutMs).toBe(5 * 60 * 1000);
+    expect(plan.find(lane => lane.label === "client-link-stop.test.ts")?.timeoutMs).toBe(5 * 60 * 1000);
     expect(plan.find(lane => lane.label === "codex-shim.test.ts")?.timeoutMs).toBe(3 * 60 * 1000);
     // The conformance lane outlasts a build that uses its whole bound followed by the whole run bound.
     expect(plan.find(lane => lane.label === "link-ocx-child-conformance.test.ts")?.timeoutMs)
       .toBeGreaterThan(OCX_CHILD_CONFORMANCE_BUILD_MS + OCX_CHILD_CONFORMANCE_RUN_MS);
+  });
+
+  test("the hosted manifest carries explicit serial deadlines in seconds", () => {
+    const rows = serialFullSuiteBatchManifest().split("\n");
+    expect(rows.map(row => row.split("\t")[0])).toEqual([...SERIAL_FULL_SUITE_FILES]);
+    expect(rows).toContain("clients/client-link-stop.test.ts\t300");
+    expect(rows).toContain("clients/link-ocx-child-conformance.test.ts\t300");
+    expect(rows).toContain("codex-integration/codex-shim.test.ts");
   });
 
   test("a control budget is bounded and changes only the main lane", () => {
