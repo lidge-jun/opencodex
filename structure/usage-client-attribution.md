@@ -211,6 +211,11 @@ only the replacement. `src/server/credential-recovery-attempt.ts` seals the obse
 before a credential replay. If pacing or final admission refuses the replacement, finalization
 keeps the physical status and separately records the logical request outcome. Responses
 recovery publishes the rebuilt tier, reasoning, account and input estimate at physical dispatch.
+A combo preserves a sealed child refusal through success, failure and cancellation finalization.
+`src/server/responses/run-turn-execution.ts` uses the selected provider executor's guarded
+receipt for the first replacement send, including when the adapter owns send accounting.
+`src/server/responses/compact.ts` creates its native attempt on the first dispatch receipt and
+seals a 401 before starting credential refresh.
 A Responses-to-Chat handoff carries this pending replay into the translated dispatch. The
 active segment keeps its passive Lab subject on the same route. A changed route resolves a new
 subject through `src/server/passive-route-linker.ts` using the effective destination and wire.
