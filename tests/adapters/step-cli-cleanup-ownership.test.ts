@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { beforeAll, expect, test } from "bun:test";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { StepSessionPool } from "../../src/adapters/step-cli/session-pool";
 import type { StepSessionDeps, StepSessionOptions } from "../../src/adapters/step-cli/session";
 import { fixturePath } from "../helpers/repo-root";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 function options(cwd: string): StepSessionOptions {
@@ -23,12 +24,33 @@ function alive(pid: number): boolean {
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return false; throw error; }
 }
 
-function reap(pid: number): void {
+function terminateNativeFixture(pid: number): void {
   if (!alive(pid)) return;
   if (process.platform === "win32") {
     execFileSync(`${process.env.SystemRoot}\\System32\\taskkill.exe`, ["/PID", String(pid), "/T", "/F"],
       { windowsHide: true, timeout: 5_000, stdio: "pipe" });
-  } else process.kill(pid, "SIGKILL");
+  } else process.kill(pid, "SIGTERM");
+}
+
+async function waitForNativeTreeExit(pids: number[], exits: Promise<void>[]): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  // On POSIX, the direct child's exit event is the reaping receipt. Windows taskkill can
+  // remove the tree while Bun still retains the handle and has not delivered the event.
+  if (process.platform !== "win32") {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([Promise.all(exits), new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("native fixture child did not exit")), 5_000);
+      })]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  const remaining = () => pids.filter(alive);
+  for (let live = remaining(); live.length; live = remaining()) {
+    if (Date.now() >= deadline) throw new Error(`native fixture PIDs still present: ${live.join(", ")}`);
+    await Bun.sleep(10);
+  }
 }
 
 async function nativePool(recover: boolean) {
@@ -36,10 +58,26 @@ async function nativePool(recover: boolean) {
   const worker = join(cwd, "worker.ts"), parent = join(cwd, "parent.ts");
   const pidFile = join(cwd, "pids.json"), dispatcher = join(cwd, "step.cmd");
   await writeFile(worker, "setInterval(() => {}, 1000);\n");
-  await writeFile(parent, 'import {spawn} from "node:child_process"; import {writeFileSync,renameSync} from "node:fs"; const p=spawn(process.execPath,[process.argv[2]],{stdio:"ignore",windowsHide:true}); writeFileSync(process.argv[3]+".tmp",JSON.stringify({parent:process.pid,worker:p.pid})); renameSync(process.argv[3]+".tmp",process.argv[3]); setInterval(()=>{},1000);\n');
+  await writeFile(parent, `
+    import { spawn } from "node:child_process";
+    import { writeFileSync, renameSync } from "node:fs";
+    const worker = spawn(process.execPath, [process.argv[2]], { stdio: "ignore", windowsHide: true });
+    if (process.platform !== "win32") {
+      // Reap the grandchild before the parent exits, even where PID 1 never reaps orphans.
+      const keepAlive = setInterval(() => {}, 1000);
+      process.on("SIGTERM", () => worker.kill("SIGKILL"));
+      worker.once("exit", () => { clearInterval(keepAlive); process.removeAllListeners("SIGTERM"); });
+    } else {
+      setInterval(() => {}, 1000);
+    }
+    const pidFile = process.argv[3];
+    writeFileSync(pidFile + ".tmp", JSON.stringify({ parent: process.pid, worker: worker.pid }));
+    renameSync(pidFile + ".tmp", pidFile);
+  `);
   await writeFile(dispatcher, `@echo off\r\n"${process.execPath}" "${parent}" "${worker}" "${pidFile}"\r\n`);
   const roots: number[] = [];
   const children: ChildProcess[] = [];
+  const exits: Promise<void>[] = [];
   let pids: { parent: number; worker: number } | undefined;
   let attempts = 0;
   const pool = new StepSessionPool({ openCodexHome: cwd, idleTimeoutMs: 60_000,
@@ -47,27 +85,34 @@ async function nativePool(recover: boolean) {
       args: process.platform === "win32" ? [] : [parent, worker, pidFile] }) }, { onEvent: () => {} }, {
     platform: "win32",
     spawn: (file, args, opts) => {
-      const child = spawn(file, args, opts); children.push(child); roots.push(child.pid!); return child;
+      const child = spawn(file, args, opts);
+      children.push(child);
+      roots.push(child.pid!);
+      exits.push(new Promise<void>(resolve => { child.once("exit", () => resolve()); }));
+      return child;
     },
     killWindowsProcessTree: pid => {
       attempts++;
       if (!recover || attempts === 1) throw Object.assign(new Error("injected tree termination ETIMEDOUT"), { code: "ETIMEDOUT" });
-      if (process.platform !== "win32" && pids) { reap(pids.worker); reap(pids.parent); }
-      reap(pid);
+      terminateNativeFixture(pid);
     },
   });
   const ref = { handle: "same-owned-caller", sessionId: "" };
   const session = await pool.open(ref);
+  const waitForTreeExit = () => waitForNativeTreeExit([...new Set([
+    ...roots, ...(pids ? [pids.parent, pids.worker] : []),
+  ])], exits);
   const dispose = async () => {
-    for (const pid of [...roots, ...(pids ? [pids.parent, pids.worker] : [])]) reap(pid);
-    // A failed cleanup intentionally retains its child. The fixture's independent OS reap must
-    // also release Bun's retained stdio handles before the sandbox teardown removes its files.
-    for (const child of children) {
-      child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy(); child.unref();
+    try {
+      for (const pid of roots) terminateNativeFixture(pid);
+      await waitForTreeExit();
+    } finally {
+      // Failed adapter cleanup intentionally retains the child and its stdio handles.
+      for (const child of children) {
+        child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy(); child.unref();
+      }
+      await pool.closeAll().catch(() => {});
     }
-    await new Promise<void>(resolve => setImmediate(resolve));
-    await pool.closeAll().catch(() => {});
-    for (const pid of [...roots, ...(pids ? [pids.parent, pids.worker] : [])]) expect(alive(pid)).toBe(false);
   };
   try {
     const deadline = Date.now() + 10_000;
@@ -79,7 +124,7 @@ async function nativePool(recover: boolean) {
     if (!pids) throw new Error("native fixture did not publish its descendant PIDs");
     expect(alive(pids.parent)).toBe(true);
     expect(alive(pids.worker)).toBe(true);
-    return { pool, session, ref, roots, pids, attempts: () => attempts, dispose };
+    return { pool, session, ref, roots, pids, attempts: () => attempts, waitForTreeExit, dispose };
   } catch (error) { await dispose(); throw error; }
 }
 
@@ -106,6 +151,7 @@ test("a transient native tree timeout recovers before releasing the handle", asy
     await fixture.session.close();
     expect(fixture.attempts()).toBe(2);
     expect(fixture.pool.size).toBe(0);
+    await fixture.waitForTreeExit();
     for (const pid of [fixture.roots[0]!, fixture.pids.parent, fixture.pids.worker]) expect(alive(pid)).toBe(false);
   } finally { await fixture.dispose(); }
 }, 30_000);
@@ -171,9 +217,14 @@ test("a closing handle refuses replacement until cleanup is confirmed", async ()
   expect(released).toBe(true);
 });
 
+const registryFixture = fixturePath("step-cli-cleanup-registry.ts");
+beforeAll(async () => {
+  await warmModuleGraph({ graph: "step-cli-cleanup-registry", entry: registryFixture });
+}, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
 test("clearing the registry preserves quarantined pool ownership", async () => {
   // The process isolates a deliberately retained registry; its deadline must precede the test's.
-  const { stdout } = await promisify(execFile)(process.execPath, [fixturePath("step-cli-cleanup-registry.ts")],
+  const { stdout } = await promisify(execFile)(process.execPath, [registryFixture],
     { env: process.env, encoding: "utf8", windowsHide: true, timeout: INTERNAL_DEADLINE_MS });
   expect(JSON.parse(stdout)).toEqual({ clearRejected: true, samePool: true, replacementRejected: true });
 }, SPAWN_BUDGET_MS);
