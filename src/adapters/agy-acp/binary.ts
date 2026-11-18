@@ -2,8 +2,8 @@
  * Locating the official Antigravity CLI and checking that it is new enough to serve ACP.
  *
  * The version probe runs `agy --version` with no shell, a scoped environment, a private working
- * directory, bounded output and a timeout, and is cached by the resolved executable's real path and
- * modification time so an upgrade or a different override is probed again. It never runs for a turn
+ * directory, bounded output and a timeout. A verdict is cached against the real path and file
+ * identity, so a replaced or modified binary must be probed again. It never runs for a turn
  * the policy gate already refused.
  */
 import { realpathSync, statSync } from "node:fs";
@@ -43,12 +43,16 @@ export type AgyVersionProbe =
 
 export type RunVersion = (binary: string) => Promise<string | undefined>;
 
-const cache = new Map<string, AgyVersionProbe>();
+export interface AgyExecutable { path: string; identity: string }
 
-function cacheKey(binary: string): string | undefined {
+const cache = new Map<string, { identity: string; verdict: AgyVersionProbe }>();
+
+export function readAgyExecutable(binary: string): AgyExecutable | undefined {
   try {
-    const real = realpathSync(binary);
-    return `${real}\0${statSync(real).mtimeMs}`;
+    const path = realpathSync(binary);
+    const stat = statSync(path, { bigint: true });
+    if (!stat.isFile()) return undefined;
+    return { path, identity: [path, stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join("\0") };
   } catch {
     return undefined;
   }
@@ -56,15 +60,17 @@ function cacheKey(binary: string): string | undefined {
 
 /** Probe once per executable identity; an unreadable probe is not cached so a fixed install recovers. */
 export async function probeAgyVersion(binary: string, run: RunVersion): Promise<AgyVersionProbe> {
-  const key = cacheKey(binary);
-  const cached = key ? cache.get(key) : undefined;
-  if (cached) return cached;
-  const output = await run(binary);
+  const executable = readAgyExecutable(binary);
+  if (!executable) return { ok: false, reason: "unreadable" };
+  const cached = cache.get(executable.path);
+  if (cached?.identity === executable.identity) return cached.verdict;
+  const output = await run(executable.path);
+  if (readAgyExecutable(binary)?.identity !== executable.identity) return { ok: false, reason: "unreadable" };
   const version = output === undefined ? undefined : parseAgyVersion(output);
   if (!version) return { ok: false, reason: "unreadable" };
   const text = version.join(".");
   const result: AgyVersionProbe = versionAtLeast(version, AGY_ACP_MIN_VERSION) ? { ok: true, version: text } : { ok: false, reason: "too_old", version: text };
-  if (key) cache.set(key, result);
+  cache.set(executable.path, { identity: executable.identity, verdict: result });
   return result;
 }
 

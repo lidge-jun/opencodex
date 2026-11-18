@@ -3,12 +3,13 @@
  */
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, writeFileSync, renameSync, statSync, utimesSync } from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { createAgyAcpAdapter, AGY_ACP_ARGS, type AgyAcpDeps } from "../../src/adapters/agy-acp/adapter";
+import { clearAgyVersionCacheForTests } from "../../src/adapters/agy-acp/binary";
 import { MAX_ACP_LINE_BYTES } from "../../src/adapters/agy-acp/acp";
 import { AgyAcpTreeCleanupError, createTurnWorkspace, reapProcessTree, type AgyAcpChild } from "../../src/adapters/agy-acp/process";
 import * as windowsAcl from "../../src/lib/windows-secret-acl";
@@ -106,7 +107,7 @@ async function run(agent: ReturnType<typeof script>, opts: {
 } = {}): Promise<Harness> {
   const h: Harness = { events: [], sent: [], spawned: 0, probed: 0, args: [], env: {}, cwd: "", removed: false };
   const adapter = createAgyAcpAdapter(provider, {
-    resolveBinary: () => "/fake/agy",
+    resolveBinary: () => process.execPath,
     probeVersion: async () => { h.probed++; return { ok: true, version: "1.5.3" }; },
     createWorkspace: async () => ({ dir: "/tmp/ocx-agy-acp-test", tmp: "/tmp/ocx-agy-acp-test/.tmp", remove: async () => { h.removed = true; } }),
     reap: async () => {},
@@ -142,7 +143,7 @@ const dataKeyShape = "ocx_data_" + "c".repeat(40);
 const workspaceTokenShape = "ocxrw_" + "w".repeat(43);
 const catalogShape = "ocx_catalog_" + "k".repeat(43);
 
-afterEach(() => { delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN; });
+afterEach(clearAgyVersionCacheForTests);
 
 describe("agy acp turn", () => {
   test.each(["success", "failure"])("Windows requires a private workspace ACL before spawning (%s)", async outcome => {
@@ -204,6 +205,62 @@ describe("agy acp turn", () => {
       await workspace.remove();
       removeTreeWithRetry(root);
     }
+  });
+
+  test.each([false, true])("checks the executable again after workspace setup (replacement %s)", async replace => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-agy-turn-identity-"));
+    const bin = join(root, "agy");
+    const replacement = join(root, "replacement");
+    const stamp = new Date("2025-01-01T00:00:00Z");
+    for (const file of [bin, replacement]) {
+      writeFileSync(file, "fixture");
+      utimesSync(file, stamp, stamp);
+    }
+    const original = statSync(bin);
+    let workspaces = 0;
+    let removed = 0;
+    const spawns: string[] = [];
+    try {
+      const h = await run(script(), { deps: {
+        resolveBinary: () => bin, probeVersion: undefined,
+        createWorkspace: async () => {
+          if (++workspaces === 2 && replace) renameSync(replacement, bin);
+          return { dir: root, tmp: root, remove: async () => { removed++; } };
+        },
+        spawn: (target, args) => {
+          spawns.push(args[0]!);
+          const child = new FakeChild();
+          if (args[0] === "--version") {
+            queueMicrotask(() => {
+              child.stdout.end(statSync(target).ino === original.ino ? "1.5.3" : "1.5.2");
+              child.emit("close", 0);
+            });
+          } else script()(child, []);
+          return child;
+        },
+      } });
+      expect(spawns).toEqual(replace ? ["--version", "--version"] : ["--version", "acp"]);
+      expect(removed).toBe(workspaces);
+      expect(terminal(h)).toEqual(replace
+        ? [expect.objectContaining({ code: "agy_acp_unavailable", message: expect.stringContaining("1.5.2") })]
+        : [{ type: "done" }]);
+    } finally {
+      removeTreeWithRetry(root);
+    }
+  });
+
+  test("abort during workspace creation removes it without starting the turn", async () => {
+    const abort = new AbortController();
+    let removed = false;
+    const h = await run(script(), { abort, deps: {
+      createWorkspace: async () => {
+        abort.abort();
+        return { dir: tmpdir(), tmp: tmpdir(), remove: async () => { removed = true; } };
+      },
+    } });
+    expect(h.spawned).toBe(0);
+    expect(h.events).toEqual([]);
+    expect(removed).toBe(true);
   });
 
   test.each([true, false])("nonzero version probe exit uses tree confirmation before workspace removal (%s)", async confirmed => {
@@ -601,8 +658,15 @@ describe("agy acp turn", () => {
   });
 
   test("a local interactive turn: initialize, session/new in the private workspace, prompt, one done", async () => {
-    process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "admin-secret-should-not-leak";
-    const h = await run(script());
+    const original = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+    let h: Harness;
+    try {
+      process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "admin-secret-should-not-leak";
+      h = await run(script());
+    } finally {
+      if (original === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+      else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = original;
+    }
     expect(methods(h)).toEqual(["initialize", "session/new", "session/prompt"]);
     expect(h.sent[0]!.params).toMatchObject({ protocolVersion: 1, clientCapabilities: {} });
     expect(h.sent[1]!.params).toEqual({ cwd: "/tmp/ocx-agy-acp-test", mcpServers: [] });

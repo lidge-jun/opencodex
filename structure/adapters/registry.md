@@ -56,7 +56,9 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
 - `agy-acp` is direct and `runTurn`-only: it starts the official Antigravity CLI (`agy acp --sandbox`) as a local
   child per turn and drives one Agent Client Protocol session with CLI 1.5.3 or later (`src/adapters/agy-acp/`; #8480, plan 080 of the
   Google protocol parity unit in lidge-jun/opencodex#8771). Before launching ACP, `agy --version` must exit zero
-  and print a single numeric version at or above the minimum. The CLI owns its Google sign-in,
+  and print a single numeric version at or above the minimum. The verdict binds to the executable’s
+  real path, device, inode, size, modification time and change time. The adapter checks this identity
+  after workspace setup, re-probes a replacement and launches the verified real path. The CLI owns its Google sign-in,
   so the `antigravity-acp` row is keyless (`authKind: "key"`, `keyOptional`). The init wizard skips the key question
   and omits the key field for ACP. The login command prints the host sign-in command, and API-key validation
   refuses ACP before any request. Key-optional LiteLLM still accepts a key or an environment reference. Structural config validation

@@ -29,7 +29,7 @@ import {
   currentSelection, effortLabels, findSelector, matchValue, parseConfigOptions, proveModel,
   type AcpConfigOption, type AcpSelectValue,
 } from "./options";
-import { AGY_ACP_MIN_VERSION, AGY_INSTALL_HINT, MAX_AGY_VERSION_OUTPUT_LENGTH, probeAgyVersion, resolveAgyBinary, type AgyVersionProbe } from "./binary";
+import { AGY_ACP_MIN_VERSION, AGY_INSTALL_HINT, MAX_AGY_VERSION_OUTPUT_LENGTH, probeAgyVersion, readAgyExecutable, resolveAgyBinary, type AgyVersionProbe } from "./binary";
 import { AgyAcpCleanupError, AgyAcpTreeCleanupError, agyExecutableMissing, createTurnWorkspace, defaultAgyAcpSpawn, reapProcessTree, type AgyAcpChild, type AgyAcpSpawn, type TurnWorkspace } from "./process";
 import { AcpTurnOutput } from "./output-redaction";
 import { agyAcpPolicyRefusal } from "./policy";
@@ -63,6 +63,12 @@ function failure(code: AcpFailureCode, detail?: string): ErrorEvent {
   return { type: "error", status, errorType: status === 503 ? "api_error" : "upstream_error", code, message };
 }
 
+function emitVersionFailure(version: Exclude<AgyVersionProbe, { ok: true }>, emit: (event: AdapterEvent) => void): void {
+  emit(failure("agy_acp_unavailable", version.reason === "too_old"
+    ? `Antigravity CLI ${AGY_ACP_MIN_VERSION.join(".")} or newer is required for ACP; found ${version.version}`
+    : "the Antigravity CLI version could not be read"));
+}
+
 function invalidRequest(code: string, message: string): ErrorEvent {
   return { type: "error", status: 400, errorType: "invalid_request_error", code, message };
 }
@@ -84,13 +90,21 @@ async function runVersion(
   spawnChild: AgyAcpSpawn,
   cleanup: (workspace: TurnWorkspace, child?: AgyAcpChild) => Promise<void>,
 ): Promise<string | undefined> {
+  const executable = readAgyExecutable(binary);
+  if (!executable) return undefined;
   let workspace: TurnWorkspace | undefined;
   let child: AgyAcpChild | undefined;
   let spawnFailed = false;
   let version: string | undefined;
   try {
     workspace = await makeWorkspace();
-    const probe = spawnChild(binary, ["--version"], { cwd: workspace.dir, env: childEnv(workspace) });
+    if (readAgyExecutable(binary)?.identity !== executable.identity) {
+      const unused = workspace;
+      workspace = undefined;
+      await cleanup(unused);
+      return undefined;
+    }
+    const probe = spawnChild(executable.path, ["--version"], { cwd: workspace.dir, env: childEnv(workspace) });
     child = probe;
     let out: string | undefined = "";
     probe.stdout.setEncoding("utf8");
@@ -182,13 +196,11 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
 
       const binary = resolveBinary();
       if (!binary) { emit(failure("agy_acp_unavailable", AGY_INSTALL_HINT)); return; }
-      const version = await probeVersion(binary);
-      if (!version.ok) {
-        emit(failure("agy_acp_unavailable", version.reason === "too_old"
-          ? `Antigravity CLI ${AGY_ACP_MIN_VERSION.join(".")} or newer is required for ACP; found ${version.version}`
-          : "the Antigravity CLI version could not be read"));
-        return;
-      }
+      const initial = readAgyExecutable(binary);
+      if (!initial) { emit(failure("agy_acp_unavailable", AGY_INSTALL_HINT)); return; }
+      const version = await probeVersion(initial.path);
+      if (!version.ok) { emitVersionFailure(version, emit); return; }
+      if (incoming.abortSignal?.aborted) return;
       let workspace: TurnWorkspace;
       try { workspace = await makeWorkspace(); } catch {
         emit(failure("agy_acp_unavailable", "no private workspace could be created outside the OpenCodex home"));
@@ -196,7 +208,24 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       }
 
       try {
-        await driveTurn({ binary, workspace, parsed, incoming, emit, requested, thoughtWanted });
+        const executable = readAgyExecutable(binary);
+        if (incoming.abortSignal?.aborted || !executable) {
+          await cleanup(workspace);
+          if (!incoming.abortSignal?.aborted) emit(failure("agy_acp_unavailable", AGY_INSTALL_HINT));
+          return;
+        }
+        if (executable.identity !== initial.identity) {
+          const refreshed = await probeVersion(executable.path);
+          if (incoming.abortSignal?.aborted || !refreshed.ok || readAgyExecutable(binary)?.identity !== executable.identity) {
+            await cleanup(workspace);
+            if (!incoming.abortSignal?.aborted) {
+              if (!refreshed.ok) emitVersionFailure(refreshed, emit);
+              else emit(failure("agy_acp_unavailable", "the Antigravity CLI changed during startup"));
+            }
+            return;
+          }
+        }
+        await driveTurn({ binary: executable.path, workspace, parsed, incoming, emit, requested, thoughtWanted });
       } catch (error) {
         if (!(error instanceof AgyAcpCleanupError)) throw error;
         emit({ type: "error", status: 502, errorType: "upstream_error", code: "agy_acp_protocol", message: error.message });

@@ -1,7 +1,7 @@
 /** Pure ACP framing, option matching, the Gemini proof and process/workspace lifetime (plan 080). */
 import { afterEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, mkdirSync, realpathSync, statSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, statSync, writeFileSync, chmodSync, renameSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acpTerminal, buildAcpPrompt, classifyFrame, permissionCancelledFrame } from "../../src/adapters/agy-acp/acp";
@@ -115,6 +115,25 @@ describe("binary and version", () => {
     clearAgyVersionCacheForTests();
     expect(await probeAgyVersion(bin, async () => "1.5.3")).toEqual({ ok: true, version: "1.5.3" });
   });
+  test("replacing a file at the same path with the same mtime invalidates a passing version", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-agy-bin-replace-"));
+    roots.push(root);
+    const bin = join(root, "agy");
+    const replacement = join(root, "replacement");
+    const stamp = new Date("2025-01-01T00:00:00Z");
+    for (const file of [bin, replacement]) {
+      writeFileSync(file, "fixture");
+      utimesSync(file, stamp, stamp);
+    }
+    const original = statSync(bin);
+    const probe = async () => statSync(bin).ino === original.ino ? "1.5.3" : "1.5.2";
+    expect(await probeAgyVersion(bin, probe)).toEqual({ ok: true, version: "1.5.3" });
+    renameSync(replacement, bin);
+    expect(statSync(bin).mtimeMs).toBe(original.mtimeMs);
+    expect(statSync(bin).ino).not.toBe(original.ino);
+    expect(await probeAgyVersion(bin, probe)).toEqual({ ok: false, reason: "too_old", version: "1.5.2" });
+  });
+
 });
 
 describe("workspace and reaping", () => {
