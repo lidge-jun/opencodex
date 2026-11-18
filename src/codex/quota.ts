@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
 import { withConfigDirHardeningSettled } from "../config/paths";
 import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
-import { isThirtyDayOnlyCodexPlan } from "./plan";
+import { codexPlanKey, isThirtyDayOnlyCodexPlan } from "./plan";
 import { stampCodexQuotaUsageObservation } from "./quota-observation-freshness";
 import { observeCodexLowQuota } from "./low-quota-observer";
 import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
@@ -1097,8 +1097,10 @@ function filterMainPolicyMonthlyQuota(
  * Null supplies no usable evidence.
  */
 export function parseMainPolicyUsageQuota(data: WhamUsageResponse): MainPolicyQuotaObservation | null {
+  const individualLimit = !data.rate_limit ? extractGroupBasedSpendControlLimit(data.plan_type, data.spend_control) : null;
   const windows = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
-  if (windows.some(window => isInvalidPolicyUsagePercent(window?.used_percent))) return null;
+  if (windows.some(window => isInvalidPolicyUsagePercent(window?.used_percent))
+    || isInvalidPolicyUsagePercent(individualLimit?.used_percent)) return null;
   const quota = filterMainPolicyMonthlyQuota(parseUsageQuota(data), isThirtyDayOnlyCodexPlan(data.plan_type));
   // #8596: a complete, allowed main read retires a carried monthly tuple under the pool proof (#8067).
   return quota ? withWhamMonthlyWindowAbsence(data, withWhamShortWindowAbsence(data, quota)) : null;
@@ -1177,6 +1179,19 @@ function spendControlAllowsCredits(control: unknown): boolean | undefined {
     && "reached" in control && control.reached === false;
 }
 
+/** Extract group-based individual spend limit for Business/Enterprise plans when rate_limit is absent. */
+function extractGroupBasedSpendControlLimit(
+  planType: unknown,
+  control: unknown,
+): Record<string, unknown> | null {
+  if (codexPlanKey(planType) !== "business") return null;
+  if (!control || typeof control !== "object" || Array.isArray(control)) return null;
+  const individualLimit = (control as Record<string, unknown>).individual_limit;
+  if (!individualLimit || typeof individualLimit !== "object" || Array.isArray(individualLimit)) return null;
+  const limitRecord = individualLimit as Record<string, unknown>;
+  return limitRecord.source === "group_based_spend_controls" ? limitRecord : null;
+}
+
 /**
  * Normalize WHAM windows into the display snapshot, preserving declared short-window shape.
  * Finite percentages are clamped for compatibility; policy callers must validate raw readings
@@ -1210,7 +1225,41 @@ export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuot
   // A missing/malformed summary retracts spending authority, but is re-observable.
   // Explicit spending vetoes and legacy unmarked null retain conservative retry advice.
   if (quota.credits === null && creditsAllowed !== false) quota.creditObservationUnavailable = true;
-  if (!data.rate_limit) return snapshotHasCredits(quota) ? quota : null;
+  if (!data.rate_limit) {
+    const individualLimit = extractGroupBasedSpendControlLimit(data.plan_type, data.spend_control);
+    if (individualLimit) {
+      const usedPercent = normalizeUsagePercent(individualLimit.used_percent);
+      const resetAt = normalizeResetAt(individualLimit.reset_at);
+      if (usedPercent !== undefined) {
+        quota.monthlyPercent = usedPercent;
+        if (resetAt !== undefined) quota.monthlyResetAt = resetAt;
+        quota.monthlyIsPrimaryWindow = true;
+      } else if ((data.spend_control as Record<string, unknown>).reached === true) {
+        quota.monthlyPercent = CODEX_EXHAUSTED_USAGE_PERCENT;
+        if (resetAt !== undefined) quota.monthlyResetAt = resetAt;
+        quota.monthlyIsPrimaryWindow = true;
+      }
+      if (quota.credits && quota.credits.balance === undefined) {
+        const remaining = typeof individualLimit.remaining === "number"
+          ? individualLimit.remaining
+          : typeof individualLimit.remaining === "string" && individualLimit.remaining.trim() !== ""
+            ? Number(individualLimit.remaining)
+            : undefined;
+        if (typeof remaining === "number" && Number.isFinite(remaining) && remaining >= 0) {
+          quota.credits.balance = remaining;
+        }
+      }
+      if (decisionQuotaSinkActive() && quota.monthlyPercent !== undefined) {
+        bindRawCodexDecisionResets(quota, {
+          short: undefined,
+          weekly: undefined,
+          monthly: individualLimit.reset_at,
+        }, Date.now());
+      }
+      return hasKnownQuotaValue(quota) || snapshotHasCredits(quota) ? quota : null;
+    }
+    return snapshotHasCredits(quota) ? quota : null;
+  }
   const thirtyDayOnly = codexQuotaWindowForPlan(data.plan_type) === "monthly";
   const primaryWindow = data.rate_limit.primary_window;
   const secondaryWindow = data.rate_limit.secondary_window;
@@ -1289,6 +1338,8 @@ export interface QuotaObservationEvidence {
 
 /** Reject raw invalid readings before the compatibility parser clamps them into valid-looking bars. */
 export function isValidWhamHistoryObservation(data: WhamUsageResponse): boolean {
+  const individualLimit = !data.rate_limit ? extractGroupBasedSpendControlLimit(data.plan_type, data.spend_control) : null;
+  if (isInvalidPolicyUsagePercent(individualLimit?.used_percent)) return false;
   const windows = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
   for (const limit of Array.isArray(data.additional_rate_limits) ? data.additional_rate_limits : []) {
     if (limit && typeof limit === "object") windows.push(limit.rate_limit?.primary_window, limit.rate_limit?.secondary_window);

@@ -5,6 +5,8 @@ import {
   getAccountQuota,
   isCodexQuotaExhausted,
   isCompleteCodexQuotaRecoverySnapshot,
+  isValidWhamHistoryObservation,
+  parseMainPolicyUsageQuota,
   parseUpstreamQuotaHeaders,
   parseUsageQuota,
   setAccountQuotaFromParsed,
@@ -494,5 +496,101 @@ describe("routing headroom accounts for the burst window", () => {
     setAccountQuotaFromParsed("weekly-bound", { shortPercent: 3, weeklyPercent: 96 });
     const evidence = codexPoolQuotaEvidence([{ accountId: "weekly-bound", plan: "plus" }]);
     expect(evidence.headroom).toBeLessThanOrEqual(0.05);
+  });
+});
+
+describe("business/enterprise group-based spend control quota", () => {
+  const baseEnterprisePayload = (overrides: Partial<WhamUsageResponse> = {}): WhamUsageResponse => ({
+    plan_type: "business",
+    rate_limit: undefined,
+    credits: { has_credits: true, unlimited: false, overage_limit_reached: false, balance: null },
+    spend_control: {
+      reached: false,
+      individual_limit: {
+        source: "group_based_spend_controls",
+        unit: "credit",
+        limit: "5000",
+        used: "125",
+        remaining: "4875.5",
+        used_percent: 2.5,
+        remaining_percent: 97.5,
+        reset_at: 1_796_083_200,
+      },
+    },
+    ...overrides,
+  });
+
+  it("extracts monthly primary quota and remaining credit balance when rate_limit is absent", () => {
+    const payload = baseEnterprisePayload();
+    const quota = parseUsageQuota(payload);
+    expect(quota).toMatchObject({
+      monthlyPercent: 2.5,
+      monthlyResetAt: 1_796_083_200,
+      monthlyIsPrimaryWindow: true,
+      credits: {
+        hasCredits: true,
+        unlimited: false,
+        overageLimitReached: false,
+        allowed: true,
+        balance: 4875.5,
+      },
+    });
+    expect(parseMainPolicyUsageQuota(payload)).toMatchObject({
+      monthlyPercent: 2.5,
+      monthlyResetAt: 1_796_083_200,
+      monthlyIsPrimaryWindow: true,
+    });
+    expect(isValidWhamHistoryObservation(payload)).toBe(true);
+  });
+
+  it("marks monthlyPercent exhausted when spend_control.reached is true and used_percent is omitted", () => {
+    const payload = baseEnterprisePayload({
+      spend_control: {
+        reached: true,
+        individual_limit: {
+          source: "group_based_spend_controls",
+          remaining: 0,
+          reset_at: 1_796_083_200,
+        },
+      },
+    });
+    const quota = parseUsageQuota(payload);
+    expect(quota).toMatchObject({
+      monthlyPercent: 100,
+      monthlyResetAt: 1_796_083_200,
+      monthlyIsPrimaryWindow: true,
+    });
+  });
+
+  it("rejects out-of-range individual_limit.used_percent in policy and history validators", () => {
+    const invalidPayload = baseEnterprisePayload({
+      spend_control: {
+        reached: false,
+        individual_limit: {
+          source: "group_based_spend_controls",
+          used_percent: 101,
+          reset_at: 1_796_083_200,
+        },
+      },
+    });
+    expect(parseMainPolicyUsageQuota(invalidPayload)).toBeNull();
+    expect(isValidWhamHistoryObservation(invalidPayload)).toBe(false);
+  });
+
+  it("ignores spend_control.individual_limit for non-business plans or unrelated sources", () => {
+    const plusPayload = baseEnterprisePayload({ plan_type: "plus" });
+    expect(parseUsageQuota(plusPayload)?.monthlyPercent).toBeUndefined();
+
+    const otherSourcePayload = baseEnterprisePayload({
+      spend_control: {
+        reached: false,
+        individual_limit: {
+          source: "other_source",
+          used_percent: 50,
+          reset_at: 1_796_083_200,
+        },
+      },
+    });
+    expect(parseUsageQuota(otherSourcePayload)?.monthlyPercent).toBeUndefined();
   });
 });
