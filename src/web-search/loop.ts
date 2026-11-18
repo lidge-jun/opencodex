@@ -27,7 +27,7 @@ import { pacingHeaderDeadline } from "./header-deadline";
 import { redactSecretString } from "../lib/redact";
 import { recordLocalFailureDetail, type FailureDetail } from "../server/request-log-failure-detail";
 import { readBoundedResponseBody } from "../lib/bounded-body";
-import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, isSameTargetRetryHold, SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, isSameTargetRetryHold, RESET_RETRY_MAX_ATTEMPTS, SendBudgetExhaustedError } from "../lib/upstream-retry";
 import { unwrapUpstreamRetryEvidenceError } from "../codex/auth-context";
 import { HostedAdvisorSpendRefusal } from "../server/responses/policy-request-scope";
 import { rateLimitRetryDelayMs } from "../providers/key-failover";
@@ -421,8 +421,8 @@ export interface WebSearchLoopDeps {
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
   onUsage?: (usage: OcxUsage | undefined) => void;
   proxyErrorContext?: object;
-  /** Adds model-send capacity for a later loop iteration when ingress owns the budget. */
-  allowNextSearchRound?: () => void;
+  /** Sizes the ingress-owned model-send allowance before the first dispatch. */
+  configureModelSendAllowance?: (baseSends: number) => void;
   /**
    * After an `on429` rotation, offered the usage of the hidden iterations the left credential
    * served. Returning true means it was billed to that credential's attempt, so `onUsage` will not
@@ -533,7 +533,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   // An authorized Chat empty-completion retry adds its own iteration (see completionRetries in the
   // loop bound), so ordinary iterations, including repeat placeholders for a failed query that never
   // advance searchesExecuted, cannot use up the slot the retry needs.
-  const HARD_CAP = maxSearches + 3 + (deps.advisor ? MAX_ADVISOR_CONTINUATIONS_PER_REQUEST : 0);
+  const forcedAnswerRetries = 1;
+  const HARD_CAP = maxSearches + 2 + forcedAnswerRetries + (deps.advisor ? MAX_ADVISOR_CONTINUATIONS_PER_REQUEST : 0);
   let emptyAnswerRetries = 0;
   let completionRetries = 0;
   // Every iteration re-sends the full context, but only the last one's terminal reaches the bridge.
@@ -568,6 +569,12 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   // configured replay count in total (a per-round reset would multiply it by maxSearches).
   const rateLimitRetryPolicy = deps.retryOn429Policy ?? null;
   let rateLimitRetries = 0;
+  // The 429 ladder and thinking-signature recovery are request-scoped. Each
+  // generic HTTP dispatch can use the transport's full reset ladder.
+  deps.configureModelSendAllowance?.(RESET_RETRY_MAX_ATTEMPTS * (
+    HARD_CAP + Number(Boolean(deps.emptyCompletionRetry))
+    + (rateLimitRetryPolicy?.attempts ?? 0) + Number(Boolean(deps.thinkingRecovery))
+  ));
 
   const requireSuccessfulHeaders = async (prepared: IterationResponse): Promise<void> => {
     if (!prepared.response.ok) {
@@ -1203,7 +1210,6 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           // First loop turn reuses the eager HEADERS. Subsequent header acquisitions run here.
           if (i > 0) {
             yield { type: "heartbeat" };
-            deps.allowNextSearchRound?.();
             prepared = yield* prepareIterationEvents(forceAnswer);
           }
           // Raw-byte progress heartbeats reach the bridge; semantic events remain buffered.
@@ -1264,7 +1270,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                   eventTypes: [...new Set(split.passthrough.map(event => event.type))],
                 }));
                 hiddenUsage = mergeUsage(hiddenUsage, terminalEvent.usage);
-                if (!split.hasMalformedToolCall && !split.hasRealToolCall && emptyAnswerRetries === 0) {
+                if (!split.hasMalformedToolCall && !split.hasRealToolCall && emptyAnswerRetries < forcedAnswerRetries) {
                   emptyAnswerRetries++;
                   console.warn("[web-search-loop] empty forced answer — retrying once with tool calls disabled");
                   yield { type: "heartbeat" };

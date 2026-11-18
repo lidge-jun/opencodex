@@ -61,11 +61,10 @@ function expandIngressSendBudget(budget: TransientSendBudget | undefined, sends:
 }
 
 
-// Each later ordinary search round adds one model send to the ingress-owned allowance.
-// In-iteration retries draw from the existing headroom, as do any pending reservations.
-export function allowInferenceSearchRound(budget: TransientSendBudget | undefined): void {
+/** Fund the loop's bounded generic HTTP sends before its first dispatch. */
+export function expandInferenceSearchSendBudget(budget: TransientSendBudget | undefined, baseSends: number): void {
   const policy = budget && ingressPolicies.get(budget);
-  if (!policy) return;
-  policy.baseSendAllowance += 1;
-  policy.maxTotalModelSends += 1;
+  if (!policy || baseSends <= policy.baseSendAllowance) return;
+  policy.maxTotalModelSends += baseSends - policy.baseSendAllowance;
+  policy.baseSendAllowance = baseSends;
 }

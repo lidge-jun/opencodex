@@ -341,6 +341,13 @@ control local del ritmo rechaza el reintento,
 la solicitud puede terminar con estado 429 mientras que su único intento ante el proveedor conserva el estado
 401. La misma regla de envío se aplica a los miembros de un combo, a los adaptadores runTurn y a la
 compactación nativa de Responses.
+Cada envío al modelo en estos turnos usa el presupuesto compartido de la solicitud, incluidos los
+reintentos y las rondas posteriores de herramientas. Si se rechaza un envío al alcanzar el límite,
+`sendCount` no aumenta. En la búsqueda web alojada que usa HTTP genérico directo, el presupuesto
+predeterminado cubre las rondas acotadas del modelo, incluido el reintento de respuesta forzada y los
+reintentos habilitados de recuperación, por límite de frecuencia o por reinicio de la conexión.
+Los límites explícitos de envíos siguen vigentes.
+
 Cada intento conserva el uso que el proxy registra para ese envío. El reintento de Responses con OAuth de xAI
 descarta el cuerpo de la respuesta 401, por lo que el uso de ese cuerpo queda sin registrar. Si el proveedor
 no informa totales, el intento de reemplazo puede incluir una estimación basada en la solicitud reconstruida.

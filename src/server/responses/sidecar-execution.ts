@@ -1,4 +1,4 @@
-import { allowInferenceSearchRound } from "../inference/context";
+import { expandInferenceSearchSendBudget } from "../inference/context";
 import { clientFacingModelText } from "../../lib/error-destination";
 import { createAnthropicThinkingRecovery } from "./anthropic-thinking-recovery";
 import { anthropicRefusalCredentialChanged, rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
@@ -833,7 +833,7 @@ export async function executeResponsesSidecars(
     const loopResponse = await runWithWebSearch({
       ...(!options.comboAttempt && !options.comboInitialSend && !routedCompaction
         && !transportState.adapter.fetchResponse && !transportState.adapter.runTurn
-        ? { allowNextSearchRound: () => allowInferenceSearchRound(options.sendBudget) } : {}),
+        ? { configureModelSendAllowance: baseSends => expandInferenceSearchSendBudget(options.sendBudget, baseSends) } : {}),
       emptyCompletionRetry: emptyCompletionRetryEnabled(config) && !options.comboAttempt && !routedCompaction,
       dispatchSidecarSend: sendBudgetState.dispatchSidecarSend,
       parsed, adapter: transportState.adapter,

@@ -188,3 +188,54 @@ describe("direct generic HTTP sidecar send accounting", () => {
     }
   }
 });
+
+for (const attempts of [4, 20]) {
+  test(`direct hosted search retries ${attempts} upstream 429s through Responses ingress`, async () => {
+    const searchRounds = attempts === 20 ? 2 : 0;
+    let sends = 0;
+    let searches = 0;
+    globalThis.fetch = (async input => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === "https://api.exa.ai/search") {
+        searches++;
+        return Response.json({ results: [{ title: "Fixture", url: "https://example.invalid/", text: "Result" }] });
+      }
+      if (url !== "https://relay.example.com/v1/chat/completions") {
+        throw new Error("Unexpected network target blocked by sidecar usage fixture");
+      }
+      if (++sends <= attempts) return new Response("rate limited", { status: 429 });
+      const search = sends <= attempts + searchRounds;
+      const delta = search
+        ? { tool_calls: [{ index: 0, id: `search-${sends}`, type: "function", function: {
+          name: "web_search", arguments: JSON.stringify({ query: `fixture ${sends}` }),
+        } }] }
+        : { content: "Completed HTTP fixture." };
+      const chunk = { id: "fixture", object: "chat.completion.chunk", model: "kimi-k3",
+        choices: [{ index: 0, delta, finish_reason: search ? "tool_calls" : "stop" }] };
+      return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as typeof fetch;
+    const config = {
+      defaultProvider: "relay",
+      webSearchSidecar: { backend: "exa", exaApiKey: "fixture-search-key" },
+      providers: {
+        relay: { adapter: "openai-chat", baseUrl: "https://relay.example.com/v1",
+          authMode: "key", apiKey: "fixture-relay-key", models: ["kimi-k3"], retryOn429: { attempts, intervalMs: 1, maxIntervalMs: 1 } },
+      },
+    } as OcxConfig;
+    const request = new Request("http://127.0.0.1/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "relay/kimi-k3", stream: true, store: false,
+        input: "Continue.", tools: [{ type: "web_search" }] }),
+    });
+    const log: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(request, config, log);
+    const body = await response.text();
+    expect(sends).toBe(attempts + searchRounds + 1);
+    expect(searches).toBe(searchRounds);
+    expect(response.status).toBe(200);
+    expect(body).toContain("Completed HTTP fixture.");
+    expect(log.activeAttempt?.sendCount).toBe(sends);
+  });
+}
