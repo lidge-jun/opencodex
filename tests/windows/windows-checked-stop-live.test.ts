@@ -4,11 +4,12 @@
  * Part B port sampler and listener identity, and the stopper-ancestry check. Hermetic: no
  * command is spawned and no FFI is loaded.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   classifyScStop,
-  classifyTaskEnd,
   identifyWindowsStopListener,
   liveWindowsStopCommandRunner,
   parseScQueryState,
@@ -20,19 +21,18 @@ import {
   windowsStopTerminate,
   winswStatusFromScState,
   windowsCheckedStopLiveDeps,
-  WINDOWS_ARM64_BOUNDED_TERMINATE_ENABLED,
 } from "../../src/service/windows-checked-stop-live";
 import type { WindowsProcessNativeApi } from "../../src/service/windows-process-native";
+import { windowsLauncherVbsPath } from "../../src/service/state";
+import { WINDOWS_TASK_INSTANCE_STOP_SCRIPT } from "../../src/service/windows-task-instance-stop";
+import { buildWindowsTaskXml, windowsTaskRegistrationHealthy } from "../../src/service/windows-taskxml";
+import { resolveTrustedWindowsPowerShellExe } from "../../src/lib/windows-elevation";
 import { winswExePath } from "../../src/lib/winsw";
 import { PATHS, entry, launcher, loop, proxy, supervisedTree } from "../helpers/windows-checked-stop-fixtures";
 
 const result = (status: number | null, stdout = "", stderr = "", timedOut = false) => ({ status, stdout, stderr, timedOut });
 
 describe("ARM64 strict variant (050, 060 'ARM64 decision for PR2')", () => {
-  test("ships strict: the bounded PowerShell fallback is disabled", () => {
-    expect(WINDOWS_ARM64_BOUNDED_TERMINATE_ENABLED).toBe(false);
-  });
-
   test("without the native primitive the terminate is unavailable and the fallback is never called", async () => {
     let fallbackCalls = 0;
     const terminate = async () => { fallbackCalls++; return { status: "terminated" as const, exited: true }; };
@@ -65,15 +65,95 @@ describe("whole-millisecond timeouts (execFile reads 0 as unlimited)", () => {
     // The snapshot reads nothing (unreadable) rather than running with no timeout.
     expect(await windowsStopSnapshot(0.7)).toBeNull();
   });
+
+  test("the test-home guard refuses the mutating PowerShell exchange before starting it", async () => {
+    const result = await liveWindowsStopCommandRunner("powershell", [], 2_000, () => {
+      throw new Error("the helper must never be started");
+    });
+    expect(result.stderr).toContain("refusing a machine-global service mutation");
+  });
 });
 
 describe("capped command answers", () => {
-  test("schtasks /end", () => {
-    expect(classifyTaskEnd(result(0))).toBe("ended");
-    expect(classifyTaskEnd(result(1, "", "ERROR: There is no running instance of the task."))).toBe("not-running");
-    expect(classifyTaskEnd(result(1, "", "ERROR: Access is denied."))).toBe("denied");
-    expect(classifyTaskEnd(result(1, "", "ERROR: something else"))).toBe("failed");
-    expect(classifyTaskEnd(result(null, "", "", true))).toBe("failed");
+  test("an owned disabled task can prove it is idle without qualifying as a healthy installation", async () => {
+    const sid = "S-1-5-21-100-200-300-1001";
+    const launcher = windowsLauncherVbsPath();
+    const xml = buildWindowsTaskXml(undefined, launcher, undefined, sid)
+      .replace('<Principal id="Author">', '<Principal id="Author"><UserId>' + sid + '</UserId>');
+    const disabled = xml.replace("    <Enabled>true</Enabled>\n    <Hidden>", "    <Enabled>false</Enabled>\n    <Hidden>");
+    expect(windowsTaskRegistrationHealthy(xml, undefined, launcher, sid)).toBe(true);
+    expect(windowsTaskRegistrationHealthy(disabled, undefined, launcher, sid)).toBe(false);
+
+    const endTaskFor = (taskXml: string) => windowsCheckedStopLiveDeps({ run: async (_program, _args, _timeout, authorizeProof) => {
+      const proof = Buffer.from(JSON.stringify({ xml: taskXml, sid })).toString("base64");
+      const approved = await authorizeProof?.(proof);
+      return result(0, proof + "\n" + (approved ? "not-running" : "unverified-registration"));
+    } }).endTask(2_000);
+
+    expect(await endTaskFor(disabled)).toBe("not-running");
+    expect(await endTaskFor(disabled.replace(`<Principal id="Author"><UserId>${sid}</UserId>`,
+      '<Principal id="Author"><UserId>S-1-5-21-100-200-300-1002</UserId>'))).toBe("unverified-registration");
+    expect(await endTaskFor(disabled.replace(/(<Arguments>.*?)<\/Arguments>/, "$1 extra</Arguments>")))
+      .toBe("unverified-registration");
+  });
+
+  test.each(["Queued", "已排队", "PowerShell"])("final task state is active when a replacement is queued (%s)", async status => {
+    const programs: string[] = [];
+    const deps = windowsCheckedStopLiveDeps({ run: async program => {
+      programs.push(program);
+      if (program === "powershell") return result(0, "Queued\r\n");
+      const word = status === "PowerShell" ? "Wird ausgeführt" : status;
+      return result(0, `"\\opencodex-proxy","N/A","${word}"\r\n`);
+    } });
+    expect(await deps.taskState(1_000)).toBe("running");
+    expect(programs).toEqual(status === "PowerShell" ? ["schtasks", "powershell"] : ["schtasks"]);
+  });
+
+  test("the #3064 launcher survives the task stop proof round trip", async () => {
+    const previousHome = process.env.OPENCODEX_HOME;
+    const sid = "S-1-5-21-100-200-300-1001";
+    try {
+      process.env.OPENCODEX_HOME = join(previousHome ?? tmpdir(), "김병준");
+      const launcher = windowsLauncherVbsPath();
+      const xml = buildWindowsTaskXml(undefined, launcher, undefined, sid)
+        .replace('<Principal id="Author">', '<Principal id="Author"><UserId>' + sid + '</UserId>');
+      // The console export loses information before the decoder sees it (#3064).
+      const lossyXml = xml.replaceAll("김병준", "???");
+      let reportedXml = xml;
+      const programs: string[] = [];
+      const deps = windowsCheckedStopLiveDeps({
+        run: async (program, args, _timeout, authorizeProof) => {
+          programs.push(program);
+          if (args.includes("/xml")) return result(0, lossyXml);
+          const proof = Buffer.from(JSON.stringify({ xml: reportedXml, sid }), "utf8").toString("base64");
+          return await authorizeProof?.(proof) ? result(0, proof + "\nended") : result(0, "unverified-registration");
+        },
+      });
+      expect(await deps.endTask(2_000)).toBe("ended");
+      expect(programs).toEqual(["powershell"]);
+      reportedXml = lossyXml;
+      expect(await deps.endTask(2_000)).toBe("unverified-registration");
+    } finally {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+    }
+  });
+
+  test("a task stop never falls back to a name-based end when instance proof fails", async () => {
+    const sid = "S-1-5-21-100-200-300-1001";
+    const xml = buildWindowsTaskXml(undefined, windowsLauncherVbsPath(), undefined, sid)
+      .replace('<Principal id="Author">', '<Principal id="Author"><UserId>' + sid + '</UserId>');
+    const programs: string[] = [];
+    const deps = windowsCheckedStopLiveDeps({
+      run: async (program, args) => {
+        programs.push(program + " " + args[0]);
+        if (args.includes("/xml")) return result(0, xml);
+        if (args[0] === "/end") return result(0);
+        return result(0, "unverified-registration");
+      },
+    });
+    expect(await deps.endTask(2_000)).toBe("unverified-registration");
+    expect(programs).toEqual(["powershell -NoProfile"]);
   });
 
   test("schtasks CSV state reads English values and leaves a localized word unknown", () => {
@@ -88,7 +168,6 @@ describe("capped command answers", () => {
     expect(parseTaskCsvState('"\\opencodex-proxy","N/A","正在运行"')).toBe("running");
     expect(parseTaskCsvState('"\\opencodex-proxy","2026/11/17 9:00:00","就绪"')).toBe("not-running");
     expect(parseTaskCsvState('"\\opencodex-proxy","N/A","已禁用"')).toBe("not-running");
-    expect(parseTaskCsvState('"\\opencodex-proxy","N/A","已排队"')).toBe("not-running");
     // ko-KR, observed on two machines: Running, Ready.
     expect(parseTaskCsvState('"\\opencodex-proxy","N/A","실행 중"')).toBe("running");
     expect(parseTaskCsvState('"\\opencodex-proxy","N/A","준비"')).toBe("not-running");
@@ -109,42 +188,51 @@ describe("capped command answers", () => {
     expect(programs).toEqual(["schtasks /query"]);
   });
 
-  test("a localized /end failure on an idle task is not-running only when the CSV says so (#8863)", async () => {
-    const idleEnd = (csv: string | null, endResult = result(1, "", "错误: 任务没有正在运行的实例。")) => {
-      const programs: string[] = [];
-      const deps = windowsCheckedStopLiveDeps({
-        run: async (program, args) => {
-          programs.push(program + " " + args[0]);
-          if (args[0] === "/end") return endResult;
-          return csv === null ? result(1, "", "query failed") : result(0, csv);
-        },
+  test("the helper must finish successfully and receive proof approval before reporting success", async () => {
+    const sid = "S-1-5-21-100-200-300-1001";
+    const xml = buildWindowsTaskXml(undefined, windowsLauncherVbsPath(), undefined, sid)
+      .replace('<Principal id="Author">', '<Principal id="Author"><UserId>' + sid + '</UserId>');
+    const proof = Buffer.from(JSON.stringify({ xml, sid }), "utf8").toString("base64");
+    let open = true;
+    let approved = false;
+    const deps = (answer: ReturnType<typeof result>, line = proof, closeGate = false) => windowsCheckedStopLiveDeps({
+      gate: () => open,
+      run: async (_program, _args, _timeout, authorizeProof) => {
+        if (closeGate) open = false;
+        approved = (await authorizeProof?.(line)) ?? false;
+        return answer;
+      },
+    });
+    expect(await deps(result(0, proof + "\nnot-running")).endTask(2_000)).toBe("not-running");
+    expect(approved).toBe(true);
+    expect(await deps(result(0, "ended"), "invalid").endTask(2_000)).toBe("failed");
+    expect(approved).toBe(false);
+    expect(await deps(result(0, "ended", "", true)).endTask(2_000)).toBe("failed");
+    expect(await deps(result(0, "denied")).endTask(2_000)).toBe("denied");
+    expect(await deps(result(0, "unverified-registration"), proof, true).endTask(2_000)).toBe("unverified-registration");
+    expect(approved).toBe(false);
+  });
+
+  test("an authorizer that spends the helper deadline cannot approve dispatch", async () => {
+    const sid = "S-1-5-21-100-200-300-1001";
+    const xml = buildWindowsTaskXml(undefined, windowsLauncherVbsPath(), undefined, sid)
+      .replace('<Principal id="Author">', '<Principal id="Author"><UserId>' + sid + '</UserId>');
+    const proof = Buffer.from(JSON.stringify({ xml, sid })).toString("base64");
+    let elapsed = 0;
+    const now = spyOn(performance, "now").mockImplementation(() => elapsed);
+    try {
+      const deps = windowsCheckedStopLiveDeps({ run: async (_program, _args, _timeout, authorizeProof) => {
+        const approved = await authorizeProof?.(proof);
+        return result(0, proof + "\n" + (approved ? "ended" : "unverified-registration"));
+      } });
+      const verdict = await deps.endTask(2_000, async () => {
+        await Promise.resolve();
+        elapsed = 2_000;
       });
-      return { programs, ended: deps.endTask(2_000) };
-    };
-    const ready = idleEnd('"\\opencodex-proxy","N/A","就绪"');
-    expect(await ready.ended).toBe("not-running");
-    expect(ready.programs).toEqual(["schtasks /end", "schtasks /query"]);
-    expect(await idleEnd('"\\opencodex-proxy","N/A","준비"', result(1, "", "오류: 작업의 실행 중인 인스턴스가 없습니다.")).ended).toBe("not-running");
-    // A task that is still running, or a state that cannot be read, keeps the failure.
-    expect(await idleEnd('"\\opencodex-proxy","N/A","正在运行"').ended).toBe("failed");
-    expect(await idleEnd(null).ended).toBe("failed");
-    expect(await idleEnd('"\\opencodex-proxy","N/A","Wird ausgeführt"').ended).toBe("failed");
-    // A timed-out, refused or unspawned /end never reaches a second query.
-    const timedOut = idleEnd('"\\opencodex-proxy","N/A","就绪"', result(null, "", "", true));
-    expect(await timedOut.ended).toBe("failed");
-    expect(timedOut.programs).toEqual(["schtasks /end"]);
-    const refused = idleEnd('"\\opencodex-proxy","N/A","就绪"', result(null, "", "refusing a machine-global service mutation from an armed test process"));
-    expect(await refused.ended).toBe("failed");
-    expect(refused.programs).toEqual(["schtasks /end"]);
-    // The English answer keeps its direct classification.
-    const english = idleEnd(null, result(1, "", "ERROR: There is no running instance of the task."));
-    expect(await english.ended).toBe("not-running");
-    expect(english.programs).toEqual(["schtasks /end"]);
-    // A localized denial stays denied even when the task reads idle, and never queries again.
-    for (const denial of ["错误: 拒绝访问。", "오류: 액세스가 거부되었습니다."]) {
-      const denied = idleEnd('"\\opencodex-proxy","N/A","就绪"', result(1, "", denial));
-      expect(await denied.ended).toBe("denied");
-      expect(denied.programs).toEqual(["schtasks /end"]);
+      expect(verdict).toBe("unverified-registration");
+      expect(elapsed).toBe(2_000);
+    } finally {
+      now.mockRestore();
     }
   });
 
@@ -162,6 +250,100 @@ describe("capped command answers", () => {
     expect(classifyScStop(result(null, "", "", true))).toBe("failed");
   });
 });
+
+const portablePowerShell = Bun.which("pwsh");
+
+test.skipIf(process.platform !== "win32" && !portablePowerShell)("the PowerShell helper stops captured instances only after every proof succeeds", async () => {
+  const powershell = process.platform === "win32" ? resolveTrustedWindowsPowerShellExe() : portablePowerShell!;
+  const fixture = String.raw`
+$script:scenario = $args[0]
+$script:sid = 'S-1-5-21-100-200-300-1001'
+$script:taskReads = 0
+$script:stopped = [Collections.Generic.List[int]]::new()
+function New-Instance($enginePid) {
+  $obj = [pscustomobject]@{ EnginePID = $enginePid; State = 4; InstanceGuid = [Guid]::NewGuid(); Reads = 0 }
+  $obj | Add-Member ScriptMethod Refresh {
+    $this.Reads++
+    if ($script:scenario -eq 'engine-changed' -and $this.Reads -eq 2) { $this.EnginePID++ }
+  }
+  $obj | Add-Member ScriptMethod Stop { $script:stopped.Add($this.EnginePID) }
+  return $obj
+}
+$instances = [pscustomobject]@{ Rows = @((New-Instance 42), (New-Instance 43)) }
+$instances | Add-Member ScriptProperty Count { $this.Rows.Count }
+$instances | Add-Member ScriptMethod Item { param($index) $this.Rows[$index - 1] }
+$script:task = [pscustomobject]@{ Xml = 'original'; State = 4; Instances = $instances }
+if ($script:scenario -in @('hidden', 'idle')) { $instances.Rows = @() }
+if ($script:scenario -eq 'idle') { $script:task.State = 3 }
+$script:task | Add-Member ScriptMethod GetInstances { param($flags) $this.Instances }
+$script:folder = [pscustomobject]@{}
+$script:folder | Add-Member ScriptMethod GetTask {
+  param($taskName)
+  if ($taskName -cne 'opencodex-proxy') { throw 'wrong task' }
+  $script:taskReads++
+  if ($script:scenario -eq 'replaced' -and $script:taskReads -eq 2) {
+    return [pscustomobject]@{ Xml = 'replacement'; State = 4 }
+  }
+  $script:task
+}
+function New-Object {
+  param($ComObject)
+  if ($ComObject -ne 'FixtureScheduler') { throw 'wrong COM service' }
+  $obj = [pscustomobject]@{}
+  $obj | Add-Member ScriptMethod Connect {}
+  $obj | Add-Member ScriptMethod GetFolder { param($path) if ($path -cne '\') { throw 'wrong folder' }; $script:folder }
+  $obj
+}
+function Get-CimInstance {
+  param($ClassName, $Filter, $InputObject, $OperationTimeoutSec)
+  if ($InputObject) {
+    if ($script:scenario -eq 'pid-reused') { return @{ CreationDate = 2 } }
+    return $InputObject
+  }
+  return @{ CreationDate = 1; Pid = [int]($Filter -replace '^ProcessId = ', '') }
+}
+function Invoke-CimMethod {
+  param($InputObject, $MethodName, $OperationTimeoutSec)
+  if ($MethodName -ne 'GetOwnerSid') { throw 'wrong method' }
+  $owner = if ($script:scenario -eq 'foreign' -and $InputObject.Pid -eq 43) { $script:sid + '1' } else { $script:sid }
+  @{ ReturnValue = 0; Sid = $owner }
+}
+`;
+  const helper = WINDOWS_TASK_INSTANCE_STOP_SCRIPT
+    .replace(/^\s*Import-Module .*'CimCmdlets\.psd1'.*$/m, "")
+    .replaceAll("CimCmdlets\\", "")
+    .replace("Microsoft.PowerShell.Utility\\New-Object -ComObject Schedule.Service", "New-Object -ComObject FixtureScheduler")
+    .replace("[Security.Principal.WindowsIdentity]::GetCurrent()",
+      "([pscustomobject]@{ User = @{ Value = $script:sid }; Name = 'HOST\\test' })");
+  expect(helper).toContain("$service = New-Object -ComObject FixtureScheduler");
+  expect(helper).not.toContain("Schedule.Service");
+  for (const [scenario, status, stopped] of [
+    ["verified", "ended", "42,43"],
+    ["replaced", "unverified-registration", ""],
+    ["foreign", "unverified-registration", ""],
+    ["pid-reused", "unverified-registration", ""],
+    ["engine-changed", "unverified-registration", ""],
+    ["rejected", "unverified-registration", ""],
+    ["hidden", "unverified-registration", ""],
+    ["idle", "not-running", ""],
+  ]) {
+    // Production runs the helper alone, which silences progress before its first module use. The fixture
+    // runs first here and its Add-Member/[pscustomobject] calls autoload Microsoft.PowerShell.Utility, which
+    // writes a "Preparing modules for first use" CLIXML progress record to stderr on a cold runner.
+    const script = "$ProgressPreference = 'SilentlyContinue'; $args = @('" + scenario + "'); " + fixture + "\n& {\n" + helper + "\n}\n'Stopped=' + ($script:stopped -join ',')";
+    const child = Bun.spawn([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand",
+      Buffer.from(script, "utf16le").toString("base64")], {
+      stdio: ["pipe", "pipe", "pipe"], windowsHide: true, timeout: 5_000,
+    });
+    child.stdin.write(scenario === "rejected" ? "\n" : "stop\n");
+    child.stdin.end();
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+    ]);
+    expect({ scenario, stderr, code, output: stdout.trim().split(/\r?\n/).slice(-2) })
+      .toEqual({ scenario, stderr: "", code: 0, output: [status, "Stopped=" + stopped] });
+  }
+}, 20_000);
 
 describe("Part B port sampler and listener identity", () => {
   test("free, listening, unreadable, and an exited owner's row is cleared", async () => {

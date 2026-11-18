@@ -1198,7 +1198,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         else if (tc === "none") body.tool_choice = { type: "none" };
         else if (tc === "required") body.tool_choice = { type: "any" };
         else if (isAllowedToolChoice(tc)) body.tool_choice = { type: tc.mode === "required" ? "any" : "auto" };
-        else if (typeof tc === "object" && "name" in tc) body.tool_choice = { type: "tool", name: toolNames.toWire(resolveToolChoiceWireName(parsed.context.tools, tc.name)) };
+        else if (typeof tc === "object" && "name" in tc) body.tool_choice = { type: "tool", name: toolNames.toWire(resolveToolChoiceWireName(parsed.context.tools, tc.name, tc)) };
       } else if (tools && parsed.options.parallelToolCalls === false) {
         // The caller asked for one tool call at a time but sent no explicit choice.
         // Anthropic carries that intent INSIDE tool_choice, so the implicit default
