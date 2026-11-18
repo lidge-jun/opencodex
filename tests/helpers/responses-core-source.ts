@@ -41,6 +41,7 @@ export const RESPONSES_CORE_MODULES = [
   // Reached from core.ts: the keepalive head a slow streaming combo selection commits (#8326).
   "combo-selection-keepalive.ts",
   "deferred-send-reporter.ts",
+  "combo-admission-snapshot.ts",
   "combo-requested-effort.ts",
   "core-combo-native.ts",
   // Reached from core-combo.ts: tool-loop continuations stay on the lane's previous target (#7298).
