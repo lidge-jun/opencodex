@@ -15,7 +15,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
  * sends plus one alternate -- by funding the alternate from a reserve that a validated
  * sanitized repair can spend instead, but never both.
  */
-import type { SpendSeed, SpendScopes, SpendReservationProof, SpendAdmissionPolicy } from "./spend-reservation-ledger";
+import { sharedSpendPolicy, type SpendSeed, type SpendScopes, type SpendReservationProof, type SpendAdmissionPolicy } from "./spend-reservation-ledger";
 import type { TransientSendBudget } from "./upstream-retry";
 
 export type SendClass =
@@ -168,6 +168,8 @@ export interface RequestSendObserver {
   readonly enforced?: boolean;
   readonly policyStarted?: boolean;
   readonly spendAdmissionPolicy?: SpendAdmissionPolicy;
+  /** Capture/query original ceilings for a selected target without starting accounting. */
+  hasCapturedSpendCeiling?(target?: SpendScopes): boolean;
   /** Capture request policy at its first admission or actual physical start. */
   startRequest?(target?: SpendScopes & { targetKey?: string }): void;
   ensureSeed?(target: SpendScopes & { targetKey?: string; auxiliary?: boolean; estimate?: { inputTokens: number; outputCeilingTokens: number }; explicitEstimate?: boolean }, proof?: SpendReservationProof): SpendSeed | undefined;
@@ -192,6 +194,8 @@ export interface RequestExecutionBudget extends TransientSendBudget {
   readonly workflowCountObserved?: boolean;
   readonly spendPolicyStarted?: boolean;
   readonly spendAdmissionPolicy?: SpendAdmissionPolicy;
+  /** Optional hosted work checks the original ceilings even before an account was selected. */
+  hasCapturedSpendCeiling?(target?: SpendScopes): boolean;
   startRequest?(target?: SpendScopes & { targetKey?: string }): void;
   claimPhysicalSend?(auxiliary?: boolean): number | undefined;
   /** A validated explicit successor still pays root/spend admission, not the recovery allowance. */
@@ -289,6 +293,29 @@ interface SharedSendLedger {
 }
 
 const sharedSendLedgers = new WeakMap<RequestExecutionBudget, SharedSendLedger>();
+// Only optional-work queries capture this fallback. Factory scopes key it by their shared
+// ledger; legacy/foreign holders key it by their public owner. No accounting observer is added.
+const fallbackSpendPolicies = new WeakMap<object, SpendAdmissionPolicy>();
+function fallbackHasCapturedSpendCeiling(owner: object, target: SpendScopes = {}, published?: SpendAdmissionPolicy): boolean {
+  let policy = published ?? fallbackSpendPolicies.get(owner);
+  if (!policy) {
+    const current = sharedSpendPolicy();
+    policy = Object.freeze({ root: Object.freeze({ ...current.root }), identity: Object.freeze({ ...current.identity }), pool: Object.freeze({ ...current.pool }) });
+    fallbackSpendPolicies.set(owner, policy);
+  }
+  return (Boolean(target.rootId) && policy.root.maxTokens !== undefined)
+    || (Boolean(target.identityId) && policy.identity.maxTokens !== undefined)
+    || (Boolean(target.poolId) && policy.pool.maxTokens !== undefined);
+}
+
+/** An authoritative query's false is final; only absent query authority uses the fallback. */
+export function requestHasCapturedSpendCeiling(budget: TransientSendBudget, target?: SpendScopes): boolean {
+  const execution = budget as Partial<RequestExecutionBudget>;
+  if (execution.hasCapturedSpendCeiling) return execution.hasCapturedSpendCeiling(target);
+  if (execution.spendEnforced === true) return true;
+  return fallbackHasCapturedSpendCeiling(budget, target, execution.spendAdmissionPolicy);
+}
+
 interface SameTargetRecoveryScope {
   targetKey: string;
   maxAdditionalSends: number;
@@ -491,6 +518,13 @@ function createRequestExecutionBudgetWithLedger(
     get workflowCountObserved(): boolean { return observer?.beforePhysicalSend !== undefined; },
     get spendPolicyStarted(): boolean { return observer?.policyStarted === true; },
     get spendAdmissionPolicy(): SpendAdmissionPolicy | undefined { return observer?.spendAdmissionPolicy; },
+    hasCapturedSpendCeiling(target) {
+      if (observer?.hasCapturedSpendCeiling) return observer.hasCapturedSpendCeiling(target);
+      if (observer?.enforced === true) return true;
+      return counter.recoveryOwner
+        ? requestHasCapturedSpendCeiling(counter.recoveryOwner, target)
+        : fallbackHasCapturedSpendCeiling(counter, target, observer?.spendAdmissionPolicy);
+    },
     startRequest(target) {
       observer?.startRequest?.(target);
       if (observer?.enforced && counter.physicalLimit === undefined) {

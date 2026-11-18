@@ -4,6 +4,7 @@ import type { Server } from "bun";
 import { ADAPTER_REGISTRY } from "../../../src/adapters/registry";
 import { createRequestExecutionBudget } from "../../../src/lib/request-execution-budget";
 import { setOfflineResendDependenciesForTests } from "../../../src/lib/offline-resend";
+import { markEgressTransparentExecutor } from "../../../src/lib/provider-egress";
 import * as inference from "../../../src/server/inference/context";
 import { createAnthropicInstanceFixture, type AnthropicInstanceFixture } from "../../helpers/anthropic-instance-fixture";
 import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
@@ -242,16 +243,18 @@ for (const replacementSends of [false, true]) test(`continuation refusal stays o
 
 test("counting Anthropic sends keeps the opted-in offline resend on the first send", async () => {
   await seed(1);
-  // The built-in transport keeps the offline wait; a caller-supplied executor would not get one.
-  delete (fixture.config.providers.anthropic as { fetch?: unknown }).fetch;
-  fixture.config.offlineResendWaitSec = 30; fixture.publishConfig();
+  // A transparent fixture keeps the offline wait while owning every send, including with a
+  // SOCKS proxy in the test runner's environment. Its direct route keeps the DNS probe on the host.
+  fixture.config.offlineResendWaitSec = 30;
   setOfflineResendDependenciesForTests({ resolveHost: async () => {}, delay: async () => {} });
   let upstreamSends = 0;
-  globalThis.fetch = (async () => {
+  const fetch = markEgressTransparentExecutor((async () => {
     upstreamSends += 1;
     if (upstreamSends === 1) throw Object.assign(new TypeError("getaddrinfo ENOTFOUND api.anthropic.com"), { code: "ENOTFOUND" });
     return answer();
-  }) as unknown as typeof fetch;
+  }) as unknown as typeof globalThis.fetch);
+  Object.assign(fixture.config.providers.anthropic!, { proxy: "direct", fetch });
+  fixture.publishConfig();
   const { response, text } = await post(false);
   expect(response.status).toBe(200);
   expect(text).toContain("The answer is complete.");
