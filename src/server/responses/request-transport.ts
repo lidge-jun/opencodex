@@ -14,7 +14,7 @@ import { rebindPhysicalSend } from "../../lib/request-execution-budget";
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
 import { anthropicRatePolicyFor } from "../../oauth/anthropic-rate-limit-policy";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
-import { resolveAnthropicMessagesUrl } from "../../adapters/anthropic";
+import { anthropicApiKeyForRequest, resolveAnthropicMessagesUrl } from "../../adapters/anthropic";
 import { bindAnthropicRefusalCredentialForSend } from "../../oauth/anthropic-account-refusal";
 import { captureAnthropicPhysicalSendOwnership, anthropicPhysicalSendOwnershipIsCurrent, type AnthropicPhysicalSendOwnership } from "../../oauth/anthropic-send-ownership";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
@@ -236,12 +236,16 @@ export async function prepareResponsesTransport(
   }));
   // Hosted-Advisor identity follows admitted credentials without changing main-model accounting.
   // Anthropic's log uses a provider tag; its snapshot keeps same-ID instances distinct here.
-  if (usesApiKeyAccount(route.provider) || anthropicInstance) bindResponsesHostedAdvisorSpendTarget(logCtx, () => ({
-    poolId: logCtx.spendPoolId ?? route.providerName,
-    identityId: usesApiKeyAccount(route.provider) ? apiKeyAccountLogLabel(route.providerName, route.provider._apiKeyAttempt)
-      : anthropicInstance && servingOAuthSnapshot ? oauthAccountLogLabel(servingOAuthSnapshot.accountId, servingOAuthSnapshot.provider)
-      : logCtx.accountLogLabel,
-  }));
+  bindResponsesHostedAdvisorSpendTarget(logCtx, (provider = route.provider) => {
+    const apiKey = provider.adapter === "anthropic" ? anthropicApiKeyForRequest(provider) : undefined;
+    return {
+      poolId: logCtx.spendPoolId ?? route.providerName,
+      identityId: apiKey !== undefined
+        ? apiKeyAccountLogLabel(route.providerName, provider._apiKeyAttempt?.reference ? provider._apiKeyAttempt : { reference: apiKey })
+        : anthropicInstance && servingOAuthSnapshot ? oauthAccountLogLabel(servingOAuthSnapshot.accountId, servingOAuthSnapshot.provider)
+        : logCtx.accountLogLabel,
+    };
+  });
   // These owners also serve early passthrough and sidecar sends. A dispatch-time
   // rebuild must update every later builder, without entering a later block's TDZ.
   let adapter: ProviderAdapter;

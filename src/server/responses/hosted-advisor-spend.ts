@@ -27,7 +27,7 @@ export function initialHostedAdvisorSpendRefusal(
   const { options, req, logCtx } = context;
   if (options.anthropicHostedAdvisorSelection !== "selected" || !options.sendBudget
     || !advisorServerToolDestination(initialAdapterProvider) || !hasAdvisorServerTools(parsed)
-    || !responsesHasCapturedSpendCeiling(options.sendBudget, req, logCtx, responsesHostedAdvisorSpendTarget(logCtx, route.providerName))) {
+    || !responsesHasCapturedSpendCeiling(options.sendBudget, req, logCtx, responsesHostedAdvisorSpendTarget(logCtx, route.providerName, initialAdapterProvider))) {
     return undefined;
   }
   addProtocolEntryReason(logCtx, "advisor-tool-withheld-by-spend-policy");

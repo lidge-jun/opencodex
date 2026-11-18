@@ -110,7 +110,7 @@ for (const limited of [false, true]) test(`an early optional-tool query captures
   for (const budget of [parent, child]) {
     expect(budget.hasCapturedSpendCeiling?.(target)).toBe(limited);
     expect(budget.spendPolicyStarted).toBe(false);
-    expect(budget.spendAdmissionPolicy).toBeUndefined();
+    expect(budget.spendAdmissionPolicy).toEqual({ root: {}, identity: identityPolicy(limited).identity, pool: {} });
     expect(budget.physicalStarted).toBe(0);
     expect(budget.used).toBe(0);
     expect(ledger.snapshot("identity", target.identityId)).toBeUndefined();

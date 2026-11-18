@@ -176,6 +176,7 @@ operator policy.
 
 If a spend ceiling withholds optional hosted Advisor, the declaration, replay and beta stay withheld
 throughout the translated turn, including when a fallback candidate uses a different credential.
+Identity ceilings cover the API key sent to an Anthropic-compatible gateway, including with `authMode: "local"`.
 
 Automatic preflight keeps the fixed runtime transport instruction in a developer message and
 puts the quoted JSON advice in a separate **user-role advisory message**. Advisor-generated text

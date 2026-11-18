@@ -201,7 +201,7 @@ export async function executeResponsesSidecars(
   const withholdHostedAdvisorBySpend = (request: OcxParsedRequest, provider: OcxProviderConfig) => {
     if (!hostedAdvisorSpendScope.optionalWithheld && !hostedAdvisorSpendRefused && advisorServerToolDestination(provider)
       && (hasAdvisorServerTools(parsed) || hasAdvisorServerTools(request))
-      && sendBudgetState.hasCapturedSpendCeiling(responsesHostedAdvisorSpendTarget(logCtx, route.providerName))) {
+      && sendBudgetState.hasCapturedSpendCeiling(responsesHostedAdvisorSpendTarget(logCtx, route.providerName, provider))) {
       if (explicitlySelectedHostedAdvisor) hostedAdvisorSpendRefused = true;
       else hostedAdvisorSpendScope.optionalWithheld = true;
       addProtocolEntryReason(logCtx, "advisor-tool-withheld-by-spend-policy");

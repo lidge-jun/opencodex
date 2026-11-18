@@ -264,7 +264,7 @@ export function createRequestSpendTracker(
     hasCapturedSpendCeiling(target) { return policyApplies(capturePolicy(), selectedScopes(target)); },
     get enforced(): boolean { return applicable(selectedScopes()); },
     get policyStarted(): boolean { return admissionPolicy !== undefined; },
-    get spendAdmissionPolicy(): SpendAdmissionPolicy | undefined { return admissionPolicy; },
+    get spendAdmissionPolicy(): SpendAdmissionPolicy | undefined { return admissionPolicy ?? capturedPolicy; },
     ensureSeed(target, prepaidProof) {
       tracker.startRequest?.(target);
       if (resolved || finalRequested && reporters === 0) return undefined;

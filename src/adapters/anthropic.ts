@@ -566,11 +566,17 @@ export function anthropicBaseRequestHeaders(stream: boolean | undefined): Record
   };
 }
 
+/** The configured credential used by the non-OAuth Messages serializer. */
+export function anthropicApiKeyForRequest(provider: OcxProviderConfig): string | undefined {
+  return provider.authMode !== "oauth" && typeof provider.apiKey === "string" ? provider.apiKey : undefined;
+}
+
 /** Key-auth credential placement: `x-api-key`, or a bearer when the provider asks for one. */
 export function applyAnthropicKeyAuth(headers: Record<string, string>, provider: OcxProviderConfig): void {
-  if (typeof provider.apiKey !== "string") return;
-  if (anthropicKeyUsesBearer(provider)) headers["Authorization"] = `Bearer ${provider.apiKey}`;
-  else headers["x-api-key"] = provider.apiKey;
+  const apiKey = anthropicApiKeyForRequest(provider);
+  if (apiKey === undefined) return;
+  if (anthropicKeyUsesBearer(provider)) headers["Authorization"] = `Bearer ${apiKey}`;
+  else headers["x-api-key"] = apiKey;
 }
 
 export function resolveTranslatedAnthropicSessionKey(parsed: OcxParsedRequest, incoming?: IncomingMeta): string | undefined {

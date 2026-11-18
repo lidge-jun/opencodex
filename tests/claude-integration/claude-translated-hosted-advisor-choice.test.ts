@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import { declaredAnthropicServerTools, hostedAdvisorSelection } from "../../src/claude/inbound-content-options";
 import { clearComboTargetCooldowns } from "../../src/combos";
+import { apiKeyAccountLogLabel } from "../../src/codex/account-label";
+import { validateConfigCandidate } from "../../src/config/diagnostics";
 import { messagesToResponsesTranslation } from "../../src/protocols/codecs/messages";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { protocolTraceForRequest } from "../../src/protocols/trace";
@@ -10,7 +12,7 @@ import { createAdvisorGuard } from "../../src/server/responses/advisor-slot";
 import { handleResponses as runResponsesCore } from "../../src/server/responses/core";
 import { handleResponsesWithPolicyFallback } from "../../src/server/responses/policy-fallback";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
-import { configureSharedSpendLedger, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
+import { configureSharedSpendLedger, sharedSpendLedger, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { createTempHome } from "../helpers/temp-home";
@@ -65,6 +67,9 @@ async function verifyHostedAdvisorChoice(scenario: string, route: "direct" | "co
   }) as typeof fetch;
   const worker = { adapter: "anthropic" as const, authMode: "key" as const, apiKey: "fixture",
     baseUrl: "https://api.anthropic.com", models: [MODEL], liveModels: false, fetch: capture("worker") };
+  const blockedApiKey = "fixture-first-candidate-key";
+  const blockedIdentity = apiKeyAccountLogLabel("blocked", { reference: blockedApiKey });
+  const workerIdentity = apiKeyAccountLogLabel("worker", { reference: worker.apiKey });
   const config: OcxConfig = {
     defaultProvider: "worker",
     cacheRetention: "none",
@@ -74,8 +79,9 @@ async function verifyHostedAdvisorChoice(scenario: string, route: "direct" | "co
       createdAt: "2026-01-01T00:00:00.000Z", allowedModels: [MODEL] }] } : {}),
     webSearchSidecar: { enabled: false },
     providers: {
-      worker: { ...worker, ...(optedOut ? { forwardAdvisorTool: false } : {}) },
-      ...(route !== "direct" ? { blocked: { ...worker, forwardAdvisorTool: capped, fetch: capture("blocked") } } : {}),
+      worker: { ...worker, ...(optedOut ? { forwardAdvisorTool: false } : {}),
+        ...(capped ? { authMode: "local" as const, forwardAdvisorTool: true } : {}) },
+      ...(route !== "direct" ? { blocked: { ...worker, apiKey: blockedApiKey, forwardAdvisorTool: capped, fetch: capture("blocked") } } : {}),
     },
     ...(route === "combo" ? { combos: { waterfall: { strategy: "failover", targets } } } : {}),
     ...(route === "policy" ? { routingProfiles: { waterfall: { candidates: targets } } } : {}),
@@ -111,7 +117,8 @@ async function verifyHostedAdvisorChoice(scenario: string, route: "direct" | "co
         anthropicServerTools: declaredAnthropicServerTools(requestBody),
         anthropicHostedAdvisorSelection: hostedAdvisorSelection(requestBody),
         ...(capped ? { sendBudget: createRequestExecutionBudget(undefined, undefined, {
-          hasCapturedSpendCeiling: target => allCapped || target?.poolId === "blocked",
+          hasCapturedSpendCeiling: target => target?.identityId === blockedIdentity
+            || (allCapped && target?.identityId === workerIdentity),
           charge: () => true, refund: () => {},
         }) } : {}),
       };
@@ -215,6 +222,82 @@ async function withHostedAdvisorSpendHome(run: () => Promise<void>): Promise<voi
   } finally { home.remove(); }
 }
 
+test.each(["explicit", "optional"] as const)("a capped key on a local-mode Anthropic gateway blocks %s hosted Advisor", mode =>
+  withHostedAdvisorSpendHome(async () => {
+    const apiKey = "fixture-local-gateway-key";
+    const sends: { body: Record<string, unknown>; headers: Headers }[] = [];
+    const config: OcxConfig = {
+      port: 0, defaultProvider: "gateway", spend: { identity: { maxTokens: 1 } },
+      claudeCode: { nativePassthrough: false }, protocols: { rollout: { managedMessagesNative: false } },
+      providers: { gateway: { adapter: "anthropic", authMode: "local", apiKey, baseUrl: "https://gateway.invalid",
+        forwardAdvisorTool: true, models: [MODEL], liveModels: false,
+        fetch: (async (_url: unknown, init?: RequestInit) => {
+          sends.push({ body: JSON.parse(String(init?.body)), headers: new Headers(init?.headers) });
+          return workerStream([{ type: "text", text: "Done." }], "end_turn");
+        }) as typeof fetch,
+      } },
+    };
+    expect(validateConfigCandidate(config).ok).toBe(true);
+    configureSharedSpendLedger(spendPolicyFromConfig(config.spend));
+    const log: RequestLogContext = { model: "", provider: "" };
+    const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
+      method: "POST", headers: { "content-type": "application/json", "anthropic-beta": BETA },
+      body: JSON.stringify({ model: `gateway/${MODEL}`, max_tokens: 64, tools: [HOSTED_ADVISOR],
+        tool_choice: mode === "explicit" ? CHOICE : undefined, messages: [{ role: "user", content: "Fixture." }] }),
+    }), config, log, { requestId: crypto.randomUUID(), start: Date.now() });
+    const body = await response.text();
+    if (mode === "explicit") {
+      expect(response.status, body).toBe(400);
+      expect(body).toContain("token spend ceiling");
+      expect(sends).toHaveLength(0);
+    } else {
+      expect(response.status, body).toBe(200);
+      expect(sends).toHaveLength(1);
+      expect(sends[0]!.headers.get("x-api-key")).toBe(apiKey);
+      expect(sends[0]!.body.tools ?? []).not.toContainEqual(expect.objectContaining(HOSTED_ADVISOR));
+      expect(sends[0]!.headers.get("anthropic-beta") ?? "").not.toContain(BETA);
+      expect(log.accountLogLabel).toBeUndefined();
+    }
+  }));
+
+test.each(["default", "inherited"] as const)("translated preflight honors the %s budget's captured pool policy", budget =>
+  withHostedAdvisorSpendHome(async () => {
+    const unlimited = spendPolicyFromConfig({}, undefined, ["worker"]);
+    const limited = spendPolicyFromConfig({ pool: { maxTokens: 1 } }, undefined, ["worker"]);
+    configureSharedSpendLedger(unlimited);
+    const ledger = sharedSpendLedger();
+    expect(ledger.reserve({ sendId: "fixture-prior-send", scopes: { poolId: "worker" },
+      inputTokens: 2, outputCeilingTokens: 0, alreadySent: true }).reserved).toBe(true);
+    expect(ledger.settle("fixture-prior-send", { inputTokens: 2, outputTokens: 0 })).toBe(true);
+    const requestBody = { model: `worker/${MODEL}`, max_tokens: 64, tools: [HOSTED_ADVISOR],
+      tool_choice: CHOICE, messages: [{ role: "user", content: "Fixture." }] };
+    const toolsAtWire: unknown[] = [];
+    const config: OcxConfig = { port: 0, defaultProvider: "worker", cacheRetention: "none", providers: { worker: {
+      adapter: "anthropic", authMode: "key", apiKey: "fixture-worker-key", baseUrl: "https://api.anthropic.com",
+      models: [MODEL], liveModels: false, fetch: (async (_url: unknown, init?: RequestInit) => {
+        toolsAtWire.push(JSON.parse(String(init?.body)).tools);
+        return workerStream([{ type: "text", text: "Done." }], "end_turn");
+      }) as typeof fetch,
+    } } };
+    const response = await runResponsesCore(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json", "anthropic-beta": BETA },
+      body: JSON.stringify({ ...messagesToResponsesTranslation(requestBody).body, stream: true }),
+    }), config, { model: "", provider: "" }, {
+      inboundWire: "anthropic", anthropicServerTools: declaredAnthropicServerTools(requestBody),
+      anthropicHostedAdvisorSelection: hostedAdvisorSelection(requestBody),
+      ...(budget === "inherited" ? { sendBudget: createRequestExecutionBudget(undefined, undefined, {
+        spendAdmissionPolicy: limited, hasCapturedSpendCeiling: () => false,
+        charge: () => true, refund: () => {},
+      }) } : {}),
+      onRequestBodyParsed: () => {
+        if (budget === "default") configureSharedSpendLedger(limited);
+        expect(ledger.exhausted("pool", "worker")).toBe(budget === "default");
+      },
+    });
+    expect(response.status, await response.text()).toBe(budget === "default" ? 200 : 429);
+    expect(toolsAtWire).toEqual(budget === "default" ? [[HOSTED_ADVISOR]] : []);
+  }));
+
 test.each([
   ["policy", "key", "optional"], ["policy", "local", "optional"], ["policy", "local", "explicit"],
   ["policy", "key", "snapshot only"], ["combo", "local", "optional"], ["combo", "local", "explicit"],
@@ -224,7 +307,7 @@ test.each([
     const explicit = mode === "explicit";
     const sends: { provider: string; body: Record<string, unknown>; headers: Headers }[] = [];
     const provider = (name: string, authMode: "key" | "local") => ({
-      adapter: "anthropic" as const, authMode, apiKey: "sk-ant-fixture",
+      adapter: "anthropic" as const, authMode, apiKey: `fixture-${name}-key`,
       baseUrl: `https://${name}.invalid`, models: [MODEL], liveModels: false,
       forwardAdvisorTool: name === "worker" || mode !== "snapshot only",
       fetch: (async (_url: unknown, init?: RequestInit) => {
@@ -261,18 +344,15 @@ test.each([
       body: JSON.stringify({ model: `${route}/waterfall`, max_tokens: 64, stream: false, tools: [{ name: "Read", input_schema: { type: "object" } }, HOSTED_ADVISOR],
         tool_choice: explicit ? CHOICE : undefined, messages }),
     }), config, logCtx, { requestId: crypto.randomUUID(), start: Date.now() });
-    expect(response.status, await response.text()).toBe(200);
+    const body = await response.text();
+    expect(response.status, body).toBe(explicit ? 400 : 200);
     expect(logCtx.attempts?.map(attempt => attempt.provider)).toEqual(["capped", "worker"]);
-    expect(sends.map(send => send.provider)).toEqual(explicit ? ["worker"] : ["capped", "worker"]);
+    if (explicit) expect(body).toContain("token spend ceiling");
+    expect(sends.map(send => send.provider)).toEqual(explicit ? [] : ["capped", "worker"]);
     for (const wire of sends) {
       const tools = wire.body.tools as { type?: string }[];
-      if (explicit) {
-        expect(tools).toContainEqual(expect.objectContaining(HOSTED_ADVISOR));
-        expect(wire.body.tool_choice).toMatchObject(CHOICE);
-      } else {
-        expect(tools.map(tool => tool.type ?? "function"), wire.provider).toEqual(["function"]);
-      }
-      expect(wire.headers.get("anthropic-beta")?.split(",").map(beta => beta.trim()).includes(BETA) ?? false).toBe(explicit);
-      expect(JSON.stringify(wire.body).includes(ciphertext)).toBe(explicit);
+      expect(tools.map(tool => tool.type ?? "function"), wire.provider).toEqual(["function"]);
+      expect(wire.headers.get("anthropic-beta") ?? "").not.toContain(BETA);
+      expect(JSON.stringify(wire.body)).not.toContain(ciphertext);
     }
   }));

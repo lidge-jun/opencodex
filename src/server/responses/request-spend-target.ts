@@ -1,9 +1,11 @@
 import type { SpendScopes } from "../../lib/spend-reservation-ledger";
+import type { OcxProviderConfig } from "../../types";
 import type { RequestLogContext } from "../request-log";
 
 type PhysicalSpendTarget = SpendScopes & { targetKey?: string };
 const targets = new WeakMap<RequestLogContext, () => PhysicalSpendTarget>();
-const hostedAdvisorTargets = new WeakMap<RequestLogContext, () => PhysicalSpendTarget>();
+type HostedAdvisorTarget = (provider?: OcxProviderConfig) => PhysicalSpendTarget;
+const hostedAdvisorTargets = new WeakMap<RequestLogContext, HostedAdvisorTarget>();
 
 /** A prepared candidate can own admission without overwriting the last physical send's log. */
 export function bindResponsesSpendTarget(context: RequestLogContext, target?: () => PhysicalSpendTarget): void {
@@ -12,12 +14,12 @@ export function bindResponsesSpendTarget(context: RequestLogContext, target?: ()
 }
 
 /** Optional hosted work checks an admitted identity without changing main-model accounting. */
-export function bindResponsesHostedAdvisorSpendTarget(context: RequestLogContext, target: () => PhysicalSpendTarget): void {
+export function bindResponsesHostedAdvisorSpendTarget(context: RequestLogContext, target: HostedAdvisorTarget): void {
   hostedAdvisorTargets.set(context, target);
 }
 
-export function responsesHostedAdvisorSpendTarget(context: RequestLogContext, fallbackPool?: string): PhysicalSpendTarget {
-  return hostedAdvisorTargets.get(context)?.() ?? responsesSpendTarget(context, fallbackPool);
+export function responsesHostedAdvisorSpendTarget(context: RequestLogContext, fallbackPool?: string, provider?: OcxProviderConfig): PhysicalSpendTarget {
+  return hostedAdvisorTargets.get(context)?.(provider) ?? responsesSpendTarget(context, fallbackPool);
 }
 
 /** Resolve late, after queued negotiation; ordinary callers retain their original pool fallback. */

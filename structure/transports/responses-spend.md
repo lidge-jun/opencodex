@@ -140,9 +140,9 @@ override the selected wire's eligibility. It reuses the same captured policy. Ex
 Messages selections refuse capped targets before dispatch. Optional turns can normalize a newly
 unmatched named choice and rebuild the outer delivery maps once. Both paths preserve main-model
 accounting. The hosted-only target binding in `src/server/responses/request-transport.ts`
-resolves a selected API key's existing account label before physical log attribution, so policy
-checks do not record an unsent attempt as served. `request-spend-target.ts` keeps that read-only
-binding separate from ordinary main-model accounting and preserves the latter's existing scopes.
+uses the effective Anthropic wire's key serializer to identify the admitted key, including on
+local-mode gateways. It resolves the key's account label before physical log attribution.
+`request-spend-target.ts` keeps that binding separate from ordinary main-model accounting.
 For Anthropic OAuth it hashes the admitted serving snapshot's provider and account ID with the
 existing OAuth label function. Same-ID accounts in the two instances stay separate; an ambient
 selection change cannot replace the request's identity until the normal credential admission
@@ -326,8 +326,9 @@ query. Configuration changes leave captured ceilings and the physical-send allow
 A request that starts observe-only stays observe-only for that tracker. Constructing a budget or
 reading its ordinary enforcement preview does not capture policy. Hosted-Advisor capture fixes only
 the numeric ceilings; accounting mode, reservations and L are decided at admission/start. Generic Responses paths that
-omit retry reporters still invoke that same capture before the wire. Re-entry's token-ceiling
-preflight and exact seed admission use the same frozen numeric policy and prepaid proof;
+omit retry reporters still invoke that same capture before the wire. Root and pool preflight read
+an already captured numeric policy before accounting starts. Later preflight and exact seed
+admission use the effective accounting policy and the same prepaid proof;
 pool continuity validation and shared tracking-capacity safeguards remain active.
 
 Provider-pool accounting uses the canonical routed provider identity, not the mutable display label
