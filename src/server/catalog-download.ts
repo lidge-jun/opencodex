@@ -14,6 +14,13 @@ import { catalogEtag } from "../lib/catalog-etag";
 import type { OcxConfig } from "../types";
 import type { RawCatalog } from "../codex/catalog/parsing";
 
+import { discoveredNativeOpenAiModels } from "../codex/catalog/native-models";
+import { applyFullModelPickerOrder, buildCatalogEntriesFromObservedState } from "../codex/catalog/build-entries";
+import { applyNativeVisibility, desktopAllowlistSuppressedNativeSlugs, nativeContextLimits,
+    shouldIncludeNativeOpenAi, upstreamNativeEntry } from "../codex/catalog/metadata";
+import { websocketsEnabled } from "../config/feature-flags";
+import { resolveMultiAgentMode } from "../config/multi-agent-surface";
+
 export { catalogEtag };
 
 /**
@@ -44,7 +51,7 @@ export interface SerializedCatalog {
 /**
  * Read the persisted catalog and overlay server-owned hub discoveries.
  *
- * Without hub discoveries, returns `{ body: null }` for every unreadable case — absent file, unreadable
+ * Returns `{ body: null }` for every unreadable case — absent file, unreadable
  * file, malformed JSON — because `readCatalog` already collapses those into
  * `null` and the routes render them identically as a 404. Distinguishing them
  * here would invite one route to leak a filesystem path in an error message.
@@ -55,7 +62,7 @@ export interface SerializedCatalog {
 export async function serializePersistedCatalog(config?: OcxConfig): Promise<SerializedCatalog> {
   const { readCatalog, readCodexCatalogPath } = await import("../codex/catalog");
   const persisted = readCatalog(readCodexCatalogPath());
-  const catalog = config?.runtimeRole === "hub" ? await projectHubDiscoveries(persisted, config) : persisted;
+  const catalog = config?.runtimeRole === "hub" ? projectHubDiscoveries(persisted, config) : persisted;
   if (!catalog) return { body: null };
   const body = JSON.stringify(catalog);
   const bytes = Buffer.byteLength(body, "utf8");
@@ -63,33 +70,28 @@ export async function serializePersistedCatalog(config?: OcxConfig): Promise<Ser
 }
 
 /** Project server-owned discovery without materializing or rewriting the host's Codex files. */
-async function projectHubDiscoveries(catalog: RawCatalog | null, config: OcxConfig): Promise<RawCatalog | null> {
-  const { discoveredNativeOpenAiModels } = await import("../codex/catalog/native-models");
-  const discovered = new Set(discoveredNativeOpenAiModels());
-  if (discovered.size === 0) return catalog;
-  const { applyFullModelPickerOrder, buildCatalogEntriesFromObservedState } = await import("../codex/catalog/build-entries");
-  const { applyNativeVisibility, desktopAllowlistSuppressedNativeSlugs, nativeContextLimits,
-    shouldIncludeNativeOpenAi } = await import("../codex/catalog/metadata");
-  const { websocketsEnabled } = await import("../config/feature-flags");
-  const existing = catalog?.models ?? [];
-  // A configured alias/custom row owns its slug; discovery cannot turn it into a native route.
-  const occupied = new Set(existing.filter(entry => entry.opencodex_catalog_kind || entry.owned_by === "combo")
-    .map(entry => String(entry.slug)));
+export function projectHubDiscoveries(catalog: RawCatalog | null, config: OcxConfig): RawCatalog | null {
+  if (!catalog) return null;
+  const existing = catalog.models ?? [];
+  // Converged rows already carry runtime clamps, account policy and user presentation.
+  // Fill gaps only: discovery must never replace those finalized rows.
+  const occupied = new Set(existing.map(entry => String(entry.slug)));
   const suppressed = desktopAllowlistSuppressedNativeSlugs(config);
   const slugs = shouldIncludeNativeOpenAi(config)
-    ? [...discovered].filter(slug => !occupied.has(slug) && !suppressed.has(slug)) : [];
+    ? discoveredNativeOpenAiModels().filter(slug => !occupied.has(slug) && !suppressed.has(slug)
+      && upstreamNativeEntry(slug) !== null).sort() : [];
+  if (slugs.length === 0) return catalog;
   const entries = buildCatalogEntriesFromObservedState({
-    template: null, gptSlugs: slugs, goModels: [], featured: config.subagentModels, modelPickerOrder: config.modelPickerOrder,
-    wsEnabled: websocketsEnabled(config), multiAgentMode: config.multiAgentMode ?? "default",
+    template: null, gptSlugs: slugs, goModels: [], featured: config.subagentModels,
+    wsEnabled: websocketsEnabled(config), multiAgentMode: resolveMultiAgentMode(config),
+    keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
     exactComboSlugs: new Set(), accountSelectors: [], suppressedBareNativeSlugs: suppressed,
     disabledNativeAccountSlugs: new Set(), multiAgentV2Enabled: false,
     openaiContextCap: nativeContextLimits(config),
   }).filter(entry => typeof entry.slug === "string" && slugs.includes(entry.slug));
   applyNativeVisibility(entries, new Set(config.disabledModels ?? []));
   applyFullModelPickerOrder(entries, config.modelPickerOrder ?? []);
-  const retained = existing.filter(entry => !discovered.has(String(entry.slug)) || occupied.has(String(entry.slug)));
-  if (!catalog && entries.length === 0) return null;
-  return { ...catalog, models: [...retained, ...entries] };
+  return { ...catalog, models: [...existing, ...entries] };
 }
 
 /**

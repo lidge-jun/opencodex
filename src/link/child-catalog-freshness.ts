@@ -92,6 +92,8 @@ export function createCatalogRevisionMonitor(deps: {
   catalogPath: () => string; read: (path: string) => string | null; load: () => CatalogRevision | null;
   persist: (revision: CatalogRevision) => void; now?: () => number;
   stat?: (path: string) => { size: number; mtimeMs: number };
+  /** Dynamic overlays can change without a file stat change. */
+  alwaysRead?: () => boolean;
 }): CatalogRevisionMonitor {
   const now = deps.now ?? Date.now;
   const stat = deps.stat ?? ((path: string) => statSync(path));
@@ -115,7 +117,7 @@ export function createCatalogRevisionMonitor(deps: {
         path = deps.catalogPath();
         info = stat(path);
       } catch { cache = null; return null; }
-      if (cache && cache.path === path && cache.size === info.size && cache.mtimeMs === info.mtimeMs) {
+      if (!deps.alwaysRead?.() && cache && cache.path === path && cache.size === info.size && cache.mtimeMs === info.mtimeMs) {
         persistPending();
         return cache.revision;
       }

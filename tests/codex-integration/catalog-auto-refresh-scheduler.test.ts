@@ -926,17 +926,19 @@ describe("hub native roster discovery without a local Codex client", () => {
   test("hub opt-in convergence rechecks a concurrent disable at commit", async () => {
     writeHubConfig({ enabled: true });
     let beforeCommit: (() => boolean) | undefined;
+    const decisions: Array<boolean | undefined> = [];
     spyOn(managementConvergence, "createManagementConvergeCodex").mockImplementation((_config, options) => {
       beforeCommit = options?.beforeCommit;
       return async () => {
-        expect(beforeCommit?.()).toBe(true);
+        decisions.push(beforeCommit?.());
         writeHubConfig({ enabled: false });
-        expect(beforeCommit?.()).toBe(false);
+        decisions.push(beforeCommit?.());
         return COMMITTED_CATALOG_ONLY;
       };
     });
     await runCatalogAutoRefreshTickForTests();
     expect(beforeCommit).toBeDefined();
+    expect(decisions).toEqual([true, false]);
   });
 
   test("stopping a hub tick revokes a late discovery publication", async () => {

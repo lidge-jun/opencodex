@@ -845,6 +845,7 @@ export async function discoverCodexNativeRoster(
     const credentials: CodexModelEntitlementCredentialSnapshot[] = (options.credentials ?? [])
       .filter(credential => !options.poolOnly || credential.accountId !== MAIN_CODEX_ACCOUNT_ID);
     for (const accountId of options.credentials ? [] : normalizedCandidateAccountIds(config)) {
+      if (options.signal?.aborted || options.isCurrent?.() === false) break;
       if (excluded.has(accountId) || (options.poolOnly && accountId === MAIN_CODEX_ACCOUNT_ID)) continue;
       const credential = await accountCredentialSnapshot(accountId, {
         nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,

@@ -301,6 +301,8 @@ describe("discovery-only roster", () => {
     try {
       expect(await discoverCodexNativeRoster({}, { poolOnly: true, fetcher })).toBe("unavailable");
       expect(poolRead).not.toHaveBeenCalled();
+      expect(await discoverCodexNativeRoster({ codexAccounts: [{ id: "pool-fixture", isMain: false }] } as Pick<OcxConfig, "codexAccounts">, { poolOnly: true, fetcher, signal: AbortSignal.abort() })).toBe("unavailable");
+      expect(poolRead).not.toHaveBeenCalled();
       expect(await discoverCodexNativeRoster({ codexAccounts: [
         { id: "pool-fixture", isMain: false }, { id: "__main__", isMain: true },
       ] } as Pick<OcxConfig, "codexAccounts">, { poolOnly: true, fetcher })).toBe("recorded");

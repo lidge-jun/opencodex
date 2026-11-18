@@ -423,7 +423,7 @@ test("hub catalog downloads project discovered natives without writing the persi
       available_access_programs: { cyber: ["private-fixture"] }, availability_nux: { message: "private" },
     }], "99.0.0");
     const missing = await serializePersistedCatalog(config);
-    expect(JSON.parse(missing.body!).models.some((row: { slug: string }) => row.slug === future)).toBe(true);
+    expect(missing.body).toBeNull();
     expect(existsSync(file)).toBe(false);
     writeFileSync(file, CATALOG_FIXTURE_BYTES);
     const projected = await serializePersistedCatalog(config);
@@ -432,6 +432,8 @@ test("hub catalog downloads project discovered natives without writing the persi
     expect(models.find((row: { slug: string }) => row.slug === future)).toMatchObject({ display_name: "Future download model", context_window: 123000 });
     expect(projected.body).not.toContain("private-fixture");
     expect(projected.body).not.toContain("availability_nux");
+    const nativeV1 = await serializePersistedCatalog({ ...config, multiAgentMode: "v2", keepNativeChatGptOnV1: true });
+    expect(JSON.parse(nativeV1.body!).models.find((model: { slug: string }) => model.slug === future).multi_agent_version).toBe("v1");
     expect(readFileSync(file, "utf8")).toBe(CATALOG_FIXTURE_BYTES);
     expect((await serializePersistedCatalog(config)).etag).toBe(projected.etag);
     const url = new URL("http://localhost/api/catalog");
@@ -439,6 +441,10 @@ test("hub catalog downloads project discovered natives without writing the persi
     expect(response?.status).toBe(200);
     expect(await response!.text()).toBe(projected.body);
     expect(response!.headers.get("etag")).toBe(projected.etag);
+    saveConfig(config);
+    const { catalogRevisionForRoutes } = await import("../../src/server/management/link-child-ops-routes");
+    const revision = catalogRevisionForRoutes();
+    expect(revision.current()?.etag).toBe(projected.etag);
     saveConfig({ ...config, port: 0, hostname: "127.0.0.1",
       apiKeys: [{ id: "hub-reader", name: "hub reader", key: "ocx_data_hubfixture", createdAt: "2026-08-30T00:00:00.000Z" }] });
     const { startServer } = await import("../../src/server");
@@ -446,15 +452,21 @@ test("hub catalog downloads project discovered natives without writing the persi
     try {
       const remote = await fetch(new URL("/v1/catalog", server.url), { headers: { "x-opencodex-api-key": "ocx_data_hubfixture" } });
       expect(remote.status).toBe(200);
-      const remoteModels = (await remote.json()).models;
-      expect(remoteModels.some((model: { slug: string }) => model.slug === future)).toBe(true);
+      const management = await handleManagementAPI(new ManagementRequest(url, { headers: managementHeaders() }), url, loadConfig());
+      expect(await remote.text()).toBe(await management!.text());
       expect(readFileSync(file, "utf8")).toBe(CATALOG_FIXTURE_BYTES);
     } finally { await server.stop(true); }
     const hidden = await serializePersistedCatalog({ ...config, disabledModels: [future] });
     expect(JSON.parse(hidden.body!).models.find((row: { slug: string }) => row.slug === future).visibility).toBe("hide");
     expect(hidden.etag).not.toBe(projected.etag);
+    saveConfig({ ...config, disabledModels: [future] });
+    expect(revision.current()?.etag).toBe(hidden.etag);
     const omitted = await serializePersistedCatalog({ ...config, disabledModels: [future], omitDisabledNativeModels: true });
     expect(JSON.parse(omitted.body!).models.map((row: { slug: string }) => row.slug)).toEqual(["mock/test-model"]);
     expect((await serializePersistedCatalog({ ...config, runtimeRole: "standalone" })).body).toBe(CATALOG_FIXTURE_BYTES);
+    const converged = { models: [{ ...models.find((row: { slug: string }) => row.slug === future),
+      display_name: "User name", supported_reasoning_levels: [{ effort: "low", description: "Clamped" }] }] };
+    writeFileSync(file, JSON.stringify(converged));
+    expect((await serializePersistedCatalog(config)).body).toBe(JSON.stringify(converged));
   } finally { resetDiscoveredNativeModelsForTests(); }
 });
