@@ -13,7 +13,7 @@ diagnostic fields. Windows service-wrapper messages retain their wrapper format.
 position in configuration and targets by position plus the validated provider-id label from
 `src/lib/error-destination.ts`. Failure, cooldown-wait, reprobe and JEV debug lines omit raw
 combo aliases, model ids and URLs. JEV effort decision lines retain failed gates and decision usage
-if the pinned target becomes unavailable before dispatch. After a paid decision, selection follows the [live snapshot and consent rule](../providers/jev-decision.md#session-pin). The parent log captures completed decision usage before readmission can throw. After refresh, the same parent decision field reflects the final selection and pin reason.
+if the pinned target becomes unavailable before dispatch. After a paid decision, selection follows the [live snapshot and consent rule](../providers/jev-decision.md#session-pin). The parent log captures completed decision usage before readmission. If it throws, Responses, Chat and Messages finalize their usage row through the terminal HTTP response. After refresh, the same parent decision field reflects the final selection and pin reason.
 `src/combos/request.ts` effort diagnostics retain the
 validated provider and closed effort/capability fields, with no model field. The `capabilityPolicy: "union"`
 effort clamp in `src/combos/request-capability.ts` logs a debug line on bridge and native Chat children with the same validated provider

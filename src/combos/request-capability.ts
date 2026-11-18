@@ -29,21 +29,11 @@ export interface ComboTargetRoute {
 /** Resolves a combo target to its concrete route; `undefined` when it does not resolve. */
 export type ComboTargetRouter = (target: Pick<OcxComboTarget, "provider" | "model">) => ComboTargetRoute | undefined;
 
+type ComboCapabilityConfig = Pick<OcxConfig, "providers" | "customModels" | "providerContextCaps" | "visionSidecar">;
+
 type ComboVisionProbe = (route: ComboTargetRoute, parsed: OcxParsedRequest) => Promise<boolean>;
 
-/** Unknown image capability keeps the child's native pass-through behavior. */
-async function comboTargetImageService(
-  config: OcxConfig,
-  route: ComboTargetRoute | undefined,
-  parsed: OcxParsedRequest | undefined,
-  canDescribe: ComboVisionProbe | undefined,
-): Promise<ComboTargetService> {
-  if (!route || !requiresVisionPreprocessing(config, route.provider, route.modelId, route.providerName)) return "native";
-  return parsed && config.visionSidecar?.enabled !== false && await canDescribe?.(route, parsed)
-    ? "degraded" : "unable";
-}
-
-function comboTargetAcceptsAudio(config: OcxConfig, route: ComboTargetRoute | undefined): boolean {
+function comboTargetAcceptsAudio(config: ComboCapabilityConfig, route: ComboTargetRoute | undefined): boolean {
   if (!route) return false;
   const { provider, providerName, modelId } = route;
   const wire = effectiveAdapterContract(provider.adapter).wire;
@@ -91,7 +81,7 @@ interface ContextFit {
  * matching the child's fail-open.
  */
 function comboTargetContextFit(
-  config: OcxConfig,
+  config: ComboCapabilityConfig,
   parsed: OcxParsedRequest | undefined,
   route: ComboTargetRoute | undefined,
 ): ContextFit {
@@ -129,7 +119,7 @@ function parseComboInput(body: unknown): OcxParsedRequest | undefined {
  *   eligible and the child strips the image, or the caller refuses.
  */
 export async function comboCapabilityGate(
-  config: OcxConfig,
+  config: ComboCapabilityConfig,
   combo: Pick<NormalizedComboConfig, "capabilityPolicy" | "targets">,
   body: unknown,
   route: ComboTargetRouter,
@@ -143,6 +133,7 @@ export async function comboCapabilityGate(
   const contextInput = parsed?._compactionRequest ? undefined : parsed;
   if (!hasImage && !hasAudio && !contextInput) return OPEN_GATE;
   let hasAdmittedTarget = false;
+  const visionChecks = new Map<string, ComboTargetRoute>();
   const judged = new Map<string, { image: ComboTargetService; context: ContextFit }>();
   for (const target of combo.targets) {
     if (config.providers[target.provider]?.disabled === true) continue;
@@ -153,10 +144,17 @@ export async function comboCapabilityGate(
     if (judged.has(key)) continue;
     if (hasAudio && !comboTargetAcceptsAudio(config, resolved)) continue;
     const context = comboTargetContextFit(config, contextInput, resolved);
-    judged.set(key, {
-      image: hasImage && context.fits ? await comboTargetImageService(config, resolved, parsed, canDescribe) : "native",
-      context,
-    });
+    const needsDescription = hasImage && context.fits && resolved
+      && requiresVisionPreprocessing(config, resolved.provider, resolved.modelId, resolved.providerName);
+    judged.set(key, { image: needsDescription ? "unable" : "native", context });
+    if (needsDescription && parsed && config.visionSidecar?.enabled !== false) visionChecks.set(key, resolved);
+  }
+  // Finish evaluating admission metadata for all members before any asynchronous
+  // sidecar planning can observe or trigger a configuration change.
+  if (parsed && canDescribe) {
+    for (const [key, resolved] of visionChecks) {
+      if (await canDescribe(resolved, parsed)) judged.get(key)!.image = "degraded";
+    }
   }
   if (!hasAdmittedTarget) return OPEN_GATE;
   const verdicts = [...judged.values()];

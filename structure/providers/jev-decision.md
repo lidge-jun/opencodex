@@ -250,7 +250,8 @@ or an opencodex model route, with the timeout and a Test probe; there is no sepa
 ## Session pin
 
 After awaiting a paid decision, the combo reruns ingress admission with the current combo,
-live metered consent, and the original caller's model scope. It compares the allowlisted
+live metered consent, and the intersection of the ingress and current configured-key
+model scopes. It compares the allowlisted
 routing and policy metadata in `src/server/responses/combo-admission-snapshot.ts` across the
 async capability check. It includes resolved protocol policy, mandatory-tool and reasoning-replay
 capability flags, and account namespace and sidecar admission settings. A stable refresh where
@@ -258,11 +259,13 @@ every enabled target is protocol-ineligible returns the ingress protocol refusal
 A change to mandatory-tool support recomputes image eligibility before applying the combo's
 omission or refusal policy. Credential selection revisions and pool entry identities are
 metadata. The snapshot copies own data descriptors at every level and skips accessors without
-invoking them. Credential resolution stays in the routing and sidecar paths. A changed snapshot
-restarts local admission up to twice. Persistent churn returns `503 combo_unavailable`.
+invoking them. The gate computes every member’s route and capability verdict before it
+awaits image planning. Credential resolution stays in the routing and sidecar paths. A change
+in the snapshot or the persisted configuration generation restarts local admission up to twice. Persistent churn returns `503 combo_unavailable`.
 The parent records completed decision usage before taking the snapshot or awaiting readmission.
 A stable refresh updates selection attribution on that same record. Refusal, cancellation, and
-readmission exceptions retain the usage without dispatching a child or repeating the decision. A pin reused without a paid decision still passes the [dispatch-time consent check](../runtime.md#request-local-target-compatibility).
+readmission exceptions retain the usage without dispatching a child or repeating the decision.
+Readmission exceptions return a sanitized terminal response through the ingress request logger. A pin reused without a paid decision still passes the [dispatch-time consent check](../runtime.md#request-local-target-compatibility).
 Dispatch uses the admitted combo policy, including the refusal or omission rule if a required
 image description fails. The turn captures JEV effort ownership at ingress so the
 wire effort and its request log label follow the same mode.

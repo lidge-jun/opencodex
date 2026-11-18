@@ -1,3 +1,4 @@
+import { linkAdvisorPlanConfig } from "../../src/server/responses/advisor-plan-slot";
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { afterCapabilityGate, LUNA, SOL, modelProvider, perTurnConfig, resetState, turn } from "../helpers/jev-session-pin";
@@ -68,9 +69,35 @@ test.each([true, false])("first dispatch rechecks metered consent with unmetered
   combo.capabilityPolicy = "union";
   combo.allowMeteredTargets = true;
   combo.targets = [{ ...SOL, metered: true }, ...(sibling ? [LUNA] : [])];
-  afterCapabilityGate(() => { combo.allowMeteredTargets = false; });
+  afterCapabilityGate(() => { config.combos = { auto: { ...combo, allowMeteredTargets: false } }; });
+  const replay = linkAdvisorPlanConfig(config, { ...config });
   const models: string[] = [];
-  const response = await turn(config, { models });
+  const response = await turn(replay, { models });
   expect(models).toEqual(sibling ? [`${LUNA.provider}/${LUNA.model}`] : []);
   expect(response.status).toBe(sibling ? 200 : 503);
+});
+
+test("readmission applies a narrower configured-key scope after the decision", async () => {
+  const payloads: Record<string, unknown>[] = [];
+  const config = perTurnConfig(["sol/gpt-5.6-sol:high"], payloads);
+  const key = {
+    id: "scoped", name: "Scope fixture", key: "fixture",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    allowedModels: ["jev/jev-latest", SOL.model, LUNA.model] as string[],
+  };
+  config.apiKeys = [key];
+  const decide = config.providers.jev!.fetch!;
+  config.providers.jev!.fetch = (async (input, init) => {
+    const result = await decide(input, init);
+    key.allowedModels = ["jev/jev-latest", LUNA.model];
+    return result;
+  }) as typeof fetch;
+  const models: string[] = [];
+  const response = await turn(config, {
+    models,
+    admission: { kind: "configured", source: "bearer", keyId: key.id, contextPrincipalId: "scope-fixture" },
+  });
+  expect(response.status).toBe(200);
+  expect(payloads).toHaveLength(1);
+  expect(models).toEqual([`${LUNA.provider}/${LUNA.model}`]);
 });

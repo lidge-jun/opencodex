@@ -1,3 +1,5 @@
+import { saveConfig } from "../../src/config";
+import { createTempHome } from "../helpers/temp-home";
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import * as sidecarAuth from "../../src/server/responses/request-sidecar-auth";
 import type { RequestLogContext } from "../../src/server/request-log";
@@ -86,13 +88,72 @@ test.each(["snapshot", "vision"] as const)("retains decision usage when %s readm
   const log: RequestLogContext = { model: "", provider: "" };
   const models: string[] = [];
   try {
-    await expect(turn(config, { log, models, ...(failure === "vision" ? {
+    const response = await turn(config, { log, models, ...(failure === "vision" ? {
       input: [{ role: "user", content: [{ type: "input_image", image_url: "https://example.test/image.png" }] }],
-    } : {}) })).rejects.toThrow();
+    } : {}) });
+    expect(response.status).toBe(503);
+    expect(await response.text()).not.toContain(error.message);
     expect(payloads).toHaveLength(1);
     expect(models).toEqual([]);
     expect(log.jevDecision?.usage).toMatchObject({ inputTokens: 8, outputTokens: 2, totalTokens: 10 });
   } finally {
     probe.mockRestore();
+  }
+});
+
+test("reads every member's capability metadata before awaiting image planning", async () => {
+  const payloads: Record<string, unknown>[] = [];
+  const config = perTurnConfig(["sol/gpt-5.6-sol:high"], payloads);
+  config.combos!.auto!.capabilityPolicy = "union";
+  for (const provider of [config.providers.sol!, config.providers.luna!]) provider.inputModalities = ["text"];
+  const probes: string[] = [];
+  const probe = spyOn(sidecarAuth, "canDescribeComboImages").mockImplementation(async (_context, route) => {
+    if (payloads.length) {
+      probes.push(route.providerName);
+      if (route.providerName === LUNA.provider) config.providers.sol!.inputModalities = ["text", "image"];
+    }
+    return false;
+  });
+  afterCapabilityGate(() => { config.providers.sol!.inputModalities = ["text"]; });
+  try {
+    const response = await turn(config, {
+      input: [{ role: "user", content: [{ type: "input_image", image_url: "https://example.test/image.png" }] }],
+    });
+    expect(response.status).toBe(200);
+    expect(probes).toEqual([LUNA.provider, SOL.provider]);
+  } finally {
+    probe.mockRestore();
+  }
+});
+
+test("retries readmission when saved metadata changes and returns to its original value", async () => {
+  const home = createTempHome("ocx-jev-config-generation-");
+  try {
+    const payloads: Record<string, unknown>[] = [];
+    const config = perTurnConfig(["sol/gpt-5.6-sol:high"], payloads);
+    config.combos!.auto!.capabilityPolicy = "union";
+    const decisionFetch = config.providers.jev!.fetch;
+    delete config.providers.jev!.fetch;
+    saveConfig(config);
+    let refreshes = 0;
+    afterCapabilityGate(() => {
+      if (!payloads.length || ++refreshes !== 1) return;
+      const original = config.combos;
+      config.combos = { auto: { ...original!.auto!, imageInput: "disabled" } };
+      delete config.providers.jev!.fetch;
+      try {
+        saveConfig(config);
+        config.combos = original;
+        saveConfig(config);
+      } finally {
+        config.providers.jev!.fetch = decisionFetch;
+      }
+    });
+    config.providers.jev!.fetch = decisionFetch;
+    expect((await turn(config)).status).toBe(200);
+    expect(payloads).toHaveLength(1);
+    expect(refreshes).toBe(2);
+  } finally {
+    home.remove();
   }
 });

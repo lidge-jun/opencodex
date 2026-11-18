@@ -70,3 +70,6 @@ Right after continuation expansion, and only for a request that carries a Remote
 When the selected route targets canonical ChatGPT and its continuation cannot be expanded, request preparation logs the selected provider and model with `previous_response_not_found` and synthetic provenance. If preparation made no inference send, the row has `local-refusal` and no physical attempt. Opt-in encrypted-task recovery can send before a reroute to native fallback. In that case the row preserves the recovery attempts with their own model, status, and any reported usage. A client resend carrying the full history is a separate request.
 
 Translated union Combo admission and final child preparation share the hosted Advisor destination check. This operates on scoped tool declarations independently of response-turn membership.
+
+A combo bridge child inherits the intersection of the ingress scope and the current
+configured-key scope at dispatch.
