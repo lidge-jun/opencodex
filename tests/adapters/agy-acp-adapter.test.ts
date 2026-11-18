@@ -457,7 +457,7 @@ describe("agy acp turn", () => {
           if (frame.method !== "session/new") return;
           child.stdout.write([
             JSON.stringify({ jsonrpc: "2.0", id: frame.id, result: { sessionId: "s1", configOptions: [modelOption("gemini-3.8-flash", OFFERED)] } }),
-            JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "config_option_update", configOptions: [] } } }),
+            JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "config_option_update", configOptions: [] } } }),
             "",
           ].join("\n"));
         });
