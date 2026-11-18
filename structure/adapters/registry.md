@@ -264,6 +264,18 @@ Connected CLI usage follows the [client-scoped hub usage contract](../dashboard-
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](../remote-workspace.md) owns that integration.
 
 Listener startup diagnostics follow [the runtime lifecycle contract](../runtime.md#lifecycle); malformed optional listener blocks follow [config loading](../config.md#config-surface).
+## Translated Anthropic OAuth instructions
+
+Translated Anthropic OAuth requests preserve caller instructions in top-level `system` by default.
+Only operator configuration `providers.<name>.anthropicOAuthUserInstructions: true` moves the
+instructions into the first user turn and gives them user-role priority. The adapter adds an
+initial user turn for assistant-leading histories and preserves tool call and result adjacency.
+`src/adapters/anthropic.ts` retains the compatibility identity and proxy-owned tool contract in
+`system`. With prompt caching enabled, the relocated caller prefix receives an explicit
+breakpoint. The option applies only to translated OAuth requests.
+`tests/adapters/anthropic/anthropic-oauth-caller-system-shape.test.ts` covers default and opt-in
+request shapes.
+
 ## Truncated tool finalization
 
 The bridge keeps an open function, custom, or tool-search call incomplete when an adapter ends with a recognized truncated stop reason. Streaming emits no argument/input completion frame for that open call, and buffered JSON applies the same status. A call already closed by its own tool-call end retains its completed state. The response remains incomplete, partial output is preserved, and truncated compaction never replaces history.
