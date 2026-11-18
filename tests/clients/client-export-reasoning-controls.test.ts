@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { buildClientConfig, type ExportModel, type KiloGeneratedConfig, type OpencodeGeneratedConfig } from "../../src/clients/config-export";
 import { deriveEntry } from "../../src/codex/catalog/derive-entry";
 import { applyProviderConfigHints } from "../../src/codex/catalog/model-hints";
+import type { OcxConfig } from "../../src/types";
 
 const model: ExportModel = {
   namespaced: "mock/reasoner", provider: "mock", id: "reasoner", contextWindow: 100_000,
@@ -11,7 +12,9 @@ const model: ExportModel = {
 };
 const kiloSuppression = Object.fromEntries(["none", "minimal", "low", "medium", "high", "xhigh", "max"].map(id => [id, { disabled: true }]));
 function configs(row: ExportModel = model) {
-  const ctx = { baseUrl: "http://127.0.0.1:10100/v1", models: [row] };
+  const config: OcxConfig = { port: 10100, defaultProvider: "mock",
+    providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1", allowPrivateNetwork: true } } };
+  const ctx = { baseUrl: "http://127.0.0.1:10100/v1", models: [row], config };
   const oc = buildClientConfig("opencode", ctx) as OpencodeGeneratedConfig;
   const kilo = buildClientConfig("kilo", ctx) as KiloGeneratedConfig;
   return {
@@ -210,8 +213,9 @@ describe("OpenCode and Kilo export real per-model controls", () => {
     const bare: ExportModel = { namespaced: "mock/bare", provider: "mock", id: "bare" };
     for (const row of [bare, { ...bare, reasoningEfforts: ["turbo"], defaultReasoningEffort: "turbo" }]) {
       const { v1, v2, kilo } = configs(row);
-      expect(v2).toEqual({ name: "bare (mock)", variants: [] });
-      for (const entry of [v1, kilo]) expect(entry).toEqual({ name: "bare (mock)" });
+      expect(v2).toEqual({ name: "bare (mock)", variants: [], package: "@opencode/ai/providers/openai-compatible" });
+      expect(v1).toEqual({ name: "bare (mock)", provider: { npm: "@ai-sdk/openai-compatible" } });
+      expect(kilo).toEqual({ name: "bare (mock)" });
     }
   });
 

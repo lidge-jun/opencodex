@@ -1,5 +1,6 @@
 import { parseUpstreamJsonPayload, safeUpstreamErrorString, sanitizeUpstreamErrorText } from "./upstream-http-error";
 import { isLocationUnsupportedMessage } from "../lib/errors";
+import { retryAfterDelayMs } from "../lib/upstream-retry";
 
 export const ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX = "Antigravity account validation required (VALIDATION_REQUIRED)";
 /** Leading words of every normalized Antigravity 403 that is not a validation demand (see `classifyGoogle`). */
@@ -73,10 +74,173 @@ const GOOGLE_TRANSIENT_RATE_LIMIT_PATTERNS = [
   "concurrent request limit",
 ];
 
+/** Whether the text names a transient rate limit rather than hard quota exhaustion. */
+export function isGoogleTransientRateLimitText(text: string): boolean {
+  const lower = text.toLowerCase();
+  return GOOGLE_TRANSIENT_RATE_LIMIT_PATTERNS.some(needle => lower.includes(needle));
+}
+
 export function isGoogleQuotaExhaustedText(text: string): boolean {
   const lower = text.toLowerCase();
   if (GOOGLE_TRANSIENT_RATE_LIMIT_PATTERNS.some(needle => lower.includes(needle))) return false;
   return GOOGLE_QUOTA_EXHAUSTED_NEEDLES.some(needle => lower.includes(needle));
+}
+
+/**
+ * `ErrorInfo.reason` values that make a 429 a rate/quota signal the retry ladder may wait out.
+ * Google writes these into `error.details[]`; Cloud Code Assist answers a genuine capacity 429
+ * with `reason: "RATE_LIMIT_EXCEEDED"` and answers a request-shape/policy rejection with no
+ * `details` at all.
+ */
+const GOOGLE_RETRYABLE_429_ERROR_REASONS: Record<string, true> = {
+  RATE_LIMIT_EXCEEDED: true,
+  QUOTA_EXCEEDED: true,
+  RATE_LIMIT_EXCEEDED_MODEL: true,
+};
+
+/** Narrow a JSON value to a plain object without asserting a shape it may not have. */
+function jsonRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** ProtoJSON type of a detail whose `reason` field carries an `ErrorInfo` verdict. */
+const GOOGLE_ERROR_INFO_TYPE = "google.rpc.ErrorInfo";
+/** ProtoJSON type of a detail whose `retryDelay` field states when to retry. */
+const GOOGLE_RETRY_INFO_TYPE = "google.rpc.RetryInfo";
+
+/**
+ * Whether a detail's declared `@type` admits `expected`.
+ *
+ * ProtoJSON spells a type either fully qualified (`type.googleapis.com/google.rpc.ErrorInfo`) or as
+ * the bare message name; both name the same message, and only the last path segment carries the
+ * identity. Suffix matching alone would accept a foreign `type.example.com/relay.google.rpc.ErrorInfo`,
+ * so the segment is compared whole. A detail with no `@type` asserts nothing and admits both.
+ */
+function detailTypeMatches(record: Record<string, unknown>, expected: string): boolean {
+  if (!Object.hasOwn(record, "@type")) return true;
+  const declared = record["@type"];
+  if (typeof declared !== "string") return false;
+  const segment = declared.slice(declared.lastIndexOf("/") + 1);
+  return segment === expected;
+}
+
+/**
+ * The `error` envelope of a Google error payload, or `undefined` when the text is not JSON.
+ *
+ * `error` is normally an object, but both the retry-delay extractor and Google's own fixtures
+ * accept the array spelling, so every reader here unwraps `error[0]` the same way rather than
+ * disagreeing about which payloads count as evidence.
+ */
+function googleErrorEnvelope(payloadText: string): Record<string, unknown> | undefined {
+  const trimmed = payloadText.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return undefined;
+  const parsed = jsonRecord(parseUpstreamJsonPayload(trimmed));
+  if (!parsed) return undefined;
+  const error = parsed.error;
+  if (Array.isArray(error)) return jsonRecord(error[0]) ?? parsed;
+  return jsonRecord(error) ?? parsed;
+}
+
+/** Every `error.details[].reason` in a Google error envelope, in payload order. */
+function googleErrorReasons(payloadText: string): string[] {
+  const details = googleErrorEnvelope(payloadText)?.details;
+  if (!Array.isArray(details)) return [];
+  const reasons: string[] = [];
+  for (const detail of details) {
+    const record = jsonRecord(detail);
+    if (!record) continue;
+    // `@type` names which protobuf message owns this object. A detail that declares a different
+    // message may carry an unrelated field spelled `reason`, so only an `ErrorInfo` detail (or one
+    // with no `@type` to contradict it) speaks for the rate-limit verdict.
+    if (!detailTypeMatches(record, GOOGLE_ERROR_INFO_TYPE)) continue;
+    const reason = safeUpstreamErrorString(record.reason);
+    if (reason) reasons.push(reason);
+  }
+  return reasons;
+}
+
+function isGoogleRetryDuration(value: unknown): boolean {
+  return typeof value === "string" && /^\s*\d+(?:\.\d+)?\s*s\s*$/i.test(value);
+}
+
+/**
+ * Whether a detail states a wait, including an explicit `0s`.
+ *
+ * `extractGoogleRetryAfterSeconds` drops `0s` because it answers "how long should the caller
+ * wait", and a zero there is no instruction. For eligibility the question is different: the
+ * provider named a wait at all, which says the refusal is a rate signal rather than a verdict on
+ * the request's shape. Local backoff still supplies the actual delay.
+ */
+function hasGoogleRetryDelayDetail(payloadText: string): boolean {
+  const details = googleErrorEnvelope(payloadText)?.details;
+  if (!Array.isArray(details)) return false;
+  for (const detail of details) {
+    const record = jsonRecord(detail);
+    if (!record) continue;
+    if (detailTypeMatches(record, GOOGLE_RETRY_INFO_TYPE) && isGoogleRetryDuration(record.retryDelay)) return true;
+    const metadata = jsonRecord(record.metadata);
+    if (detailTypeMatches(record, GOOGLE_ERROR_INFO_TYPE) && isGoogleRetryDuration(metadata?.quotaResetDelay)) return true;
+  }
+  return false;
+}
+
+/**
+ * The text a message-level needle may match: the decoded `error.message` and enum status for
+ * JSON, the whole payload for non-JSON.
+ *
+ * Reading the raw JSON would let any string inside it authorize a replay — a `BadRequest` field
+ * violation whose description quotes "rate limit" is part of a request-shape verdict, not a rate
+ * signal, and matching it re-enables exactly the futile replay this gate exists to stop.
+ */
+function googleMessageText(payloadText: string): string {
+  const trimmed = payloadText.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return trimmed;
+  const envelope = googleErrorEnvelope(trimmed);
+  if (!envelope) return "";
+  return [safeUpstreamErrorString(envelope.message), safeUpstreamErrorString(envelope.status)]
+    .filter((part): part is string => typeof part === "string")
+    .join(" ");
+}
+
+/**
+ * Message wording that is evidence for a replay but must not change quota classification.
+ *
+ * Google's documented 429 for pay-as-you-go capacity is "Resource exhausted. Please try again
+ * later." — no header, no details, no rate-limit wording. Treating it as a general transient
+ * pattern would also veto hard-quota classification for every body that says it, so it is scoped
+ * to the evidence predicate instead.
+ */
+const GOOGLE_RETRYABLE_429_MESSAGE_NEEDLES = [
+  "try again later",
+];
+
+/**
+ * Whether a 429 says anything a replay can act on.
+ *
+ * The ladder replays a byte-identical body after 250 ms, doubling to 2 s. That is a sensible
+ * probe for a burst limit that clears, and meaningless for a refusal Google already made on the
+ * request's shape: the same bytes are refused again. Only evidence in the response separates
+ * the two, so this reports whether any exists — a parseable `Retry-After` header, a `RetryInfo.retryDelay`
+ * / `quotaResetDelay` detail, a transient-rate-limit phrase, or a structured
+ * `ErrorInfo.reason`. A 429 with none of them is reported as-is instead of being replayed.
+ *
+ * Observed Cloud Code Assist shapes behind this split (same account, minutes apart):
+ * - capacity: `RESOURCE_EXHAUSTED` / "You have exhausted your capacity on this model. Resets in
+ *   0s." with `details[].reason: "RATE_LIMIT_EXCEEDED"` — already hard-quota classified, and
+ *   evidence-bearing if it ever is not;
+ * - request-shape rejection: `RESOURCE_EXHAUSTED` / "Resource has been exhausted (e.g. check
+ *   quota)." with no `details`, no `Retry-After` — replayed three times per turn, refused three
+ *   times per turn.
+ */
+export function hasGoogle429RetryEvidence(headers: Headers, payloadText: string): boolean {
+  if (retryAfterDelayMs(headers) !== undefined) return true;
+  if (hasGoogleRetryDelayDetail(payloadText)) return true;
+  const messageText = googleMessageText(payloadText).toLowerCase();
+  if (isGoogleTransientRateLimitText(messageText)) return true;
+  if (GOOGLE_RETRYABLE_429_MESSAGE_NEEDLES.some(needle => messageText.includes(needle))) return true;
+  return googleErrorReasons(payloadText).some(reason => GOOGLE_RETRYABLE_429_ERROR_REASONS[reason] === true);
 }
 
 
