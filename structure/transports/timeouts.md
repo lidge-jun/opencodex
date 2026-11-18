@@ -28,11 +28,20 @@ through `resolveConnectTimeoutMs` / `resolveStallTimeoutMs`, so the local/public
 only when both are unset. The override is read on routed adapter sends (`adapter-dispatch.ts`,
 `adapter-delivery.ts`, `adapter-continuation.ts`, `request-transport.ts`), `runTurn` delivery,
 the image and web-search sidecars in `sidecar-execution.ts`, and `planWebSearch`, whose bridge
-stall covers the provider's budgets. Responses passthrough, native Chat/Messages and compact keep
-the global budgets. Load degrades a malformed value to "inherit" (`leaf-validators.ts`); management
-writes reject it through `providerTimeoutOverrideConfigError`.
+stall covers the provider's budgets. The shared OAuth dispatch also reads the provider header
+budget for passthrough. Other Responses passthrough paths, native Chat/Messages and compact use
+the global budgets. Buffered `runTurn` has no provider stall watchdog. The image/video bridge
+uses its default timers for zero values, and the outer web-search watchdog retains a positive
+budget. Load degrades malformed values to "inherit" (`leaf-validators.ts`).
+
+Both fields are editor-owned in `src/server/auth-cors.ts`. The shared provider management
+validator requires integers from 0 through 2147483647 ms or 2147483 seconds respectively.
+`src/server/management/provider-overwrite-carry.ts` retains an omitted POST override from
+the latest live same-name row. Its PATCH mask deletes either override on explicit `null` and
+refuses invalid values before persistence. See [Durable provider PATCH](../gui-and-management-api.md#durable-provider-patch).
 `tests/responses/provider-upstream-deadlines.test.ts` covers override, inherit and per-provider
 disable for the header clock, the stall watchdog, the web-search plan and write validation.
+`tests/server/management-provider-compat-carry.test.ts` covers POST carry and PATCH validation.
 
 `src/lib/local-upstream.ts` classifies HTTP(S) destinations without DNS: exact case-insensitive
 `localhost` (optional trailing dot), unspecified IPv4 `0.0.0.0`, IPv4 loopback/private/link-local,

@@ -4,8 +4,11 @@ import {
   retryOnResetPolicyConfigError,
   transientRetryOn5xxPolicyConfigError,
 } from "../../config/load-degrade";
+import { providerTimeoutOverrideConfigError } from "../../config/schema/leaf-validators";
 import type { OcxProviderConfig } from "../../types";
 import { providerModelDiscoveryConfigError } from "../../providers/model-discovery-config";
+
+const TIMEOUT_OVERRIDE_FIELDS = ["connectTimeoutMs", "stallTimeoutSec"] as const;
 
 /**
  * The retry policies. They are the one carried group the PATCH field mask did not know, and they
@@ -78,6 +81,8 @@ export const PROVIDER_DISPLAY_CARRY_FIELDS = [
   // The experimental Anthropic per-message effort switch (#6895) is operator configuration the form
   // cannot send; an unrelated save must not silently turn it off.
   "perMessageEffort",
+  // The dashboard form omits these operator-configured transport budgets.
+  ...TIMEOUT_OVERRIDE_FIELDS,
 ] as const satisfies readonly (keyof OcxProviderConfig)[];
 
 export type ProviderCompatCarryField = typeof PROVIDER_COMPAT_CARRY_FIELDS[number];
@@ -145,7 +150,7 @@ export function providerOverwriteKeepsDestination(
 }
 
 /**
- * Carry the stored display policy on every overwrite, then the omitted compatibility settings
+ * Carry omitted operator settings on every overwrite, then the omitted compatibility settings
  * only when the destination is unchanged. `live` must be the row read after
  * the route's DNS await, so a PATCH that saved one of them during the wait is kept.
  */
@@ -305,6 +310,19 @@ export function applyProviderCompatPatchFields(
       const error = RETRY_POLICY_VALIDATORS[field](value);
       if (error) return { error };
       next[field] = structuredClone(value) as OcxProviderConfig[typeof field];
+    }
+    touched = true;
+  }
+  for (const field of TIMEOUT_OVERRIDE_FIELDS) {
+    if (!Object.hasOwn(rawBody, field)) continue;
+    const value = rawBody[field];
+    if (value === null) {
+      delete next[field];
+    } else {
+      const error = providerTimeoutOverrideConfigError({ [field]: value });
+      if (error) return { error };
+      // A named, non-null JSON field can only pass validation with an integer.
+      next[field] = value as number;
     }
     touched = true;
   }

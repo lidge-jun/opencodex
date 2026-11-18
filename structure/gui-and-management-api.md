@@ -578,7 +578,7 @@ Provider editor snapshots and management writes validate provider-wide `inputMod
 `src/server/management/provider-patch-transaction.ts`, including standalone default-provider
 and account-mode changes. The synchronous mutation lock encloses snapshot, mutation, save,
 and pre-publication failure restoration. Field masks are replayed against the latest provider under that same
-lock after asynchronous destination validation; rollback retains previously committed siblings.
+lock after asynchronous destination validation; rollback retains previously committed siblings. The mask sets or clears [provider timeouts](transports/timeouts.md#provider-scoped-budgets), and POST retains omitted timeout overrides.
 
 Persistence can rebase the whole live configuration before a write. Rollback therefore restores
 the original plain-object/array graph in place, including property descriptors, symbols, absent

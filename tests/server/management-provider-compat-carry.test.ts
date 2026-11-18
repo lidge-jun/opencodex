@@ -334,6 +334,64 @@ describe("an overwrite that moves the provider carries none of it", () => {
 });
 
 describe("PATCH and POST validate the settings they name", () => {
+  test("POST retains omitted provider timeout overrides and honors an explicit replacement", async () => {
+    const provider = { adapter: "openai-chat", baseUrl: BASE_URL, apiKey: "sk-relay" } as const;
+    await withServer({ relay: { ...provider, connectTimeoutMs: 0, stallTimeoutSec: 600 } }, async url => {
+      const save = await send(url, "/api/providers", "POST", {
+        name: "relay",
+        provider: { ...provider, defaultModel: MODEL },
+      });
+      expect(save.status).toBe(200);
+      expect(loadConfig().providers.relay).toMatchObject({ defaultModel: MODEL, connectTimeoutMs: 0, stallTimeoutSec: 600 });
+
+      const replace = await send(url, "/api/providers", "POST", {
+        name: "relay",
+        provider: { ...provider, connectTimeoutMs: 420_000 },
+      });
+      expect(replace.status).toBe(200);
+      expect(loadConfig().providers.relay).toMatchObject({ connectTimeoutMs: 420_000, stallTimeoutSec: 600 });
+    });
+  });
+
+  for (const [field, positive, max, otherField] of [
+    ["connectTimeoutMs", 420_000, 2_147_483_647, "stallTimeoutSec"],
+    ["stallTimeoutSec", 600, 2_147_483, "connectTimeoutMs"],
+  ] as const) {
+    test(`PATCH sets provider timeout override ${field} independently`, async () => {
+      await withServer({ relay: { adapter: "openai-chat", baseUrl: BASE_URL, [otherField]: 123 } }, async url => {
+        for (const value of [positive, max, 0]) {
+          const set = await send(url, "/api/providers?name=relay", "PATCH", { [field]: value });
+          expect(set.status).toBe(200);
+          expect(loadConfig().providers.relay).toMatchObject({ [field]: value, [otherField]: 123 });
+        }
+      });
+    });
+
+    test(`PATCH clears provider timeout override ${field} independently`, async () => {
+      await withServer({ relay: { adapter: "openai-chat", baseUrl: BASE_URL, [field]: positive, [otherField]: 123 } }, async url => {
+        const clear = await send(url, "/api/providers?name=relay", "PATCH", { [field]: null });
+        expect(clear.status).toBe(200);
+        expect(loadConfig().providers.relay).not.toHaveProperty(field);
+        expect(loadConfig().providers.relay?.[otherField]).toBe(123);
+      });
+    });
+
+    test(`PATCH rejects invalid provider timeout override ${field} without saving other edits`, async () => {
+      await withServer({ relay: { adapter: "openai-chat", baseUrl: BASE_URL, [field]: positive } }, async url => {
+        for (const value of [-1, 1.5, String(positive), max + 1]) {
+          const bad = await send(url, "/api/providers?name=relay", "PATCH", {
+            [field]: value,
+            defaultModel: MODEL,
+          });
+          expect(bad.status).toBe(400);
+          expect(await bad.json()).toEqual({ error: `${field} must be an integer from 0 to ${max}` });
+          expect(loadConfig().providers.relay?.[field]).toBe(positive);
+          expect(loadConfig().providers.relay?.defaultModel).toBeUndefined();
+        }
+      });
+    });
+  }
+
   test("PATCH writes and clears promoteAdditionalTools", async () => {
     await withServer({ relay: { adapter: "openai-responses", baseUrl: BASE_URL } }, async url => {
       const set = await send(url, "/api/providers?name=relay", "PATCH", { promoteAdditionalTools: true });
