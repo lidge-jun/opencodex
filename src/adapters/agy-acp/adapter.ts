@@ -31,7 +31,7 @@ import {
 } from "./options";
 import { AGY_ACP_MIN_VERSION, AGY_INSTALL_HINT, MAX_AGY_VERSION_OUTPUT_LENGTH, probeAgyVersion, resolveAgyBinary, type AgyVersionProbe } from "./binary";
 import { AgyAcpCleanupError, AgyAcpTreeCleanupError, agyExecutableMissing, createTurnWorkspace, defaultAgyAcpSpawn, reapProcessTree, type AgyAcpChild, type AgyAcpSpawn, type TurnWorkspace } from "./process";
-import { AcpOutputRedactor } from "./output-redaction";
+import { AcpTurnOutput } from "./output-redaction";
 import { agyAcpPolicyRefusal } from "./policy";
 
 /** Identity only: the transport is stdio. Never fetched. */
@@ -234,7 +234,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
     let sawFrame = false;
     let buffer = "";
     let totalBytes = 0;
-    const outputRedactors = new Map<"text_delta" | "thinking_delta", AcpOutputRedactor>();
+    const output = new AcpTurnOutput(emitOutput);
     let resolveTurn!: () => void;
     let rejectTurn!: (error: unknown) => void;
     const finished = new Promise<void>((resolve, reject) => { resolveTurn = resolve; rejectTurn = reject; });
@@ -267,7 +267,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       try { child.stdout.destroy(); } catch { /* already closed */ }
       void reaped.finally(() => {
         if (!aborted && !incoming.abortSignal?.aborted && terminal) {
-          for (const [type, redactor] of outputRedactors) emitOutput(type, redactor.flush());
+          output.flush();
         }
       }).then(() => {
         if (!aborted && !incoming.abortSignal?.aborted && terminal) emit(terminal);
@@ -438,14 +438,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
           emit(event);
           continue;
         }
-        let redactor = outputRedactors.get(event.type);
-        if (!redactor) {
-          redactor = new AcpOutputRedactor();
-          outputRedactors.set(event.type, redactor);
-        }
-        const output = redactor.push(event.type === "text_delta" ? event.text : event.thinking);
-        if (output) emitOutput(event.type, output);
-        else emit({ type: "heartbeat" });
+        if (!output.push(event.type, event.type === "text_delta" ? event.text : event.thinking)) emit({ type: "heartbeat" });
       }
     }
 

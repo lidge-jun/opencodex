@@ -32,7 +32,14 @@ process.stdin.on("data", (chunk: string) => {
       config = config.map(option => option.id === frame.params.configId ? { ...option, currentValue: frame.params.value } : option);
       write({ jsonrpc: "2.0", id: frame.id, result: { configOptions: config } });
     } else if (frame.method === "session/prompt") {
-      write({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fake-1", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "fake acp answer" } } } });
+      const update = (sessionUpdate: string, text: string) =>
+        write({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fake-1", update: { sessionUpdate, content: { type: "text", text } } } });
+      if (frame.params.prompt[0].text.includes("fixture reasoning first")) {
+        update("agent_thought_chunk", "short thought");
+        update("agent_message_chunk", "answer ".repeat(200));
+      } else {
+        update("agent_message_chunk", "fake acp answer");
+      }
       write({ jsonrpc: "2.0", id: frame.id, result: { stopReason: "end_turn" } });
     }
   }

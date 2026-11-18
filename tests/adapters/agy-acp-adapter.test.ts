@@ -366,20 +366,34 @@ describe("agy acp turn", () => {
     expect(h.events.flatMap(event => event.type === "text_delta" ? [event.text] : []).join("")).toBe(example + "\nordinary prose");
   });
 
-  test("masks long JWT and Bearer values across batches without losing surrounding text", async () => {
+  test.each([100, 7_000])("masks long JWT and Bearer values across batches with ACP chunks of %d characters", async chunkSize => {
     const jwtShape = "eyJ" + "h".repeat(12) + "." + "p".repeat(2500) + "." + "s".repeat(20);
     const bearerShape = "Authorization: Bearer " + "z".repeat(2500) + "==";
     const input = jwtShape + "\n" + bearerShape + "\nfinished.";
     const h = await run(script((frame, api) => {
       if (frame.method !== "session/prompt") return;
-      for (let offset = 0; offset < input.length; offset += 100) {
-        api.notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: input.slice(offset, offset + 100) } });
+      for (let offset = 0; offset < input.length; offset += chunkSize) {
+        api.notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: input.slice(offset, offset + chunkSize) } });
       }
       api.reply(frame.id, { stopReason: "end_turn" });
       return true;
     }));
     const output = h.events.flatMap(event => event.type === "text_delta" ? [event.text] : []).join("");
     expect(output === "[REDACTED]\nAuthorization: Bearer [REDACTED]\nfinished.").toBe(true);
+  });
+
+  test.each(["embedded", "standalone"])("redaction retains lexical context at the drain boundary (%s)", async mode => {
+    const prefix = "x".repeat(511) + (mode === "embedded" ? "_" : " ");
+    const key = "sk-" + "m".repeat(20);
+    const suffix = " " + "z".repeat(1024 - 512 - key.length - 1);
+    const h = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      api.notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: prefix + key + suffix } });
+      api.reply(frame.id, { stopReason: "end_turn" });
+      return true;
+    }));
+    const text = h.events.flatMap(event => event.type === "text_delta" ? [event.text] : []).join("");
+    expect(text === prefix + (mode === "embedded" ? key : "[REDACTED]") + suffix).toBe(true);
   });
 
   test("selection errors never interpolate credential-shaped option identifiers", async () => {
@@ -588,9 +602,8 @@ describe("agy acp turn", () => {
     expect(methods(h)).toEqual(["initialize", "session/new", "session/prompt"]);
     expect(h.sent[0]!.params).toMatchObject({ protocolVersion: 1, clientCapabilities: {} });
     expect(h.sent[1]!.params).toEqual({ cwd: "/tmp/ocx-agy-acp-test", mcpServers: [] });
-    // Both buffered deltas report activity before the terminal flush.
+    // The buffered thought reports activity, then its safe text precedes the answer.
     expect(h.events).toEqual([
-      { type: "heartbeat" },
       { type: "heartbeat" },
       { type: "thinking_delta", thinking: "thinking" },
       { type: "text_delta", text: "hello" },

@@ -104,6 +104,24 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
     }
   });
 
+  test("buffered reasoning arrives before a long answer in the final output items", async () => {
+    saveConfig(config());
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...JSON.parse(body.replace("hello", "fixture reasoning first")), reasoning: { summary: "auto" },
+        }),
+      });
+      const completed = (await response.text()).split("\n").filter(line => line.startsWith("data: {"))
+        .map(line => JSON.parse(line.slice("data: ".length))).find(event => event.type === "response.completed");
+      expect(completed?.response.output.map((item: { type: string }) => item.type)).toEqual(["reasoning", "message"]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test.each(["ordinary", "spawned", "ordinary after spawned handshake"])("a local WebSocket frame is classified by its turn metadata (%s)", async scenario => {
     const spawned = scenario === "spawned";
     const stale = scenario === "ordinary after spawned handshake";

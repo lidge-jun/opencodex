@@ -90,8 +90,9 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   Selection errors use fixed text. Answer and reasoning
   deltas each pass through a bounded streaming redactor for minted OpenCodex credentials, Bearer values, and
   token-shaped JWT and API-key strings. Long values stay masked across frames, and buffered chunks still report
-  activity to the streaming watchdog. Header names and their surrounding
-  prose remain intact. Protocol errors may include a numeric code. Probe and turn workspaces are created under the
+  activity to the streaming watchdog. Safe text is published in ACP arrival order even when answer and reasoning
+  chunks interleave. Header names and their surrounding prose remain intact. Protocol errors may include a numeric
+  code. Probe and turn workspaces are created under the
   system temporary directory outside the OpenCodex home. Windows requires a private NTFS ACL before either
   child can start. Retained workspaces can accumulate when cleanup repeatedly cannot be confirmed.
   A missing executable that fails to spawn without an assigned PID leaves no process to reap.
