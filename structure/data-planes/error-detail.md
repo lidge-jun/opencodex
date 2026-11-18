@@ -510,9 +510,10 @@ uses the shared byte delimiter scanner for CR, LF, CRLF and mixed blank lines. A
 ending in CR completes the frame immediately. A subsequent LF belongs to that delimiter and
 is relayed only when the frame is untouched. It scans each incoming chunk once and grows incomplete frame storage geometrically.
 It reads through fragments until a frame is ready, the scan window ends, or EOF arrives. The
-64 KiB cutoff is checked after scanning each chunk, so a complete `message_start` in the
-chunk that crosses the cutoff can still be rewritten. If the frame is incomplete at the end
-of that chunk, the echo relays the pending bytes and stops scanning. The native Messages tap
+64 KiB cutoff counts raw bytes, including a standalone LF continuation. A complete
+`message_start` in the chunk that crosses the cutoff can still be rewritten. If the echo
+finds no match in that chunk, it relays the pending bytes and stops scanning. It joins
+multiple SSE data fields with LF before parsing the frame's JSON. The native Messages tap
 refreshes its pending-read stall deadline on each nonempty raw chunk before frame buffering.
 The single pre-echo flag authorizes owned data under the
 existing message_start name; guard replacements retire that flag. Local guard and tap products

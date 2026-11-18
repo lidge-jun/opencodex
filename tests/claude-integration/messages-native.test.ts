@@ -241,19 +241,31 @@ describe("managed native Messages", () => {
     }
   });
 
-  test("preserves the LF continuation of an untouched frame", async () => {
-    const prefix = ": keep this comment\n\r";
+  test.each([
+    ["joined to the next frame", ": keep this comment\n\r", true, true],
+    ["joined to the next frame across the scan limit", ":" + "a".repeat(65_536 - 3) + "\n\r", true, true],
+    ["alone at the scan limit", ":" + "a".repeat(65_535 - 3) + "\n\r", false, true],
+    ["alone past the scan limit", ":" + "a".repeat(65_536 - 3) + "\n\r", false, false],
+  ] as const)("preserves the LF continuation of an untouched frame %s", async (_label, prefix, joined, rewrite) => {
     const start = sseText(SSE_FRAMES.slice(0, 1));
     const encoder = new TextEncoder();
+    const chunks = joined ? [prefix, "\n" + start] : [prefix, "\n", start];
     const body = new ReadableStream<Uint8Array>({ start(controller) {
-      controller.enqueue(encoder.encode(prefix));
-      controller.enqueue(encoder.encode("\n" + start));
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
       controller.close();
     } });
-    const reader = echoRequestedModel(body, "anth/claude-x", new MessagesSseFrameContext()).getReader();
-    const first = await reader.read();
-    expect(new TextDecoder().decode(first.value)).toBe(prefix);
-    expect(await drain(reader)).toBe("\n" + ECHOED_SSE_TEXT.split("\n\n")[0] + "\n\n");
+    const echoed = echoRequestedModel(body, "anth/claude-x", new MessagesSseFrameContext());
+    const expected = rewrite ? ECHOED_SSE_TEXT.split("\n\n")[0] + "\n\n" : start;
+    expect(new Uint8Array(await new Response(echoed).arrayBuffer())).toEqual(encoder.encode(prefix + "\n" + expected));
+  });
+
+  test("joins bare-CR SSE data lines before parsing message_start", async () => {
+    const malformed = 'event: message_start\rdata: {"type":"message_start","message":{"id":"a\rdata: b","model":"provider"}}\r\r';
+    const valid = 'event: message_start\rdata: {"type":"message_start",\rdata: "message":{"id":"good","model":"provider"}}\r\r';
+    const rewritten = 'event: message_start\ndata: {"type":"message_start","message":{"id":"good","model":"anth/claude-x"}}\n\n';
+    const body = new Response(malformed + valid).body!;
+    const echoed = echoRequestedModel(body, "anth/claude-x", new MessagesSseFrameContext());
+    expect(new Uint8Array(await new Response(echoed).arrayBuffer())).toEqual(new TextEncoder().encode(malformed + rewritten));
   });
 
   for (const stream of [false, true]) {
@@ -669,6 +681,9 @@ describe("managed native Messages", () => {
         fetch: async () => new Response(upstreamBody, { headers: { "content-type": "text/event-stream" } }),
       });
       const bytes = new TextEncoder().encode(SSE_TEXT);
+      const watchdog = Promise.withResolvers<"watchdog">();
+      // Schedule the watchdog on the real clock before installing fake timers.
+      const deadline = setTimeout(() => watchdog.resolve("watchdog"), 1_500);
       jest.useFakeTimers();
       const pending = send(config, { ...SOURCE_BODY, stream: true });
       try {
@@ -688,7 +703,11 @@ describe("managed native Messages", () => {
         } else {
           jest.advanceTimersByTime(1_000);
         }
-        const { requestId, response, text } = await pending;
+        const result = await Promise.race([pending, watchdog.promise]);
+        if (result === "watchdog") {
+          throw new Error(keepSending ? "Messages stream did not finish after the final fragment" : "Expected body_stall after the idle deadline");
+        }
+        const { requestId, response, text } = result;
         expect(response.status).toBe(200);
         if (keepSending) {
           expect(text).toBe(ECHOED_SSE_TEXT);
@@ -701,8 +720,9 @@ describe("managed native Messages", () => {
         }
       } finally {
         jest.useRealTimers();
+        clearTimeout(deadline);
         if (!finished && !cancelled) controller.close();
-        await pending;
+        await pending.catch(() => {});
       }
     });
   }

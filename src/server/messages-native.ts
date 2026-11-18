@@ -281,7 +281,7 @@ function messageStartWithModel(frame: string, model: string): string | undefined
     .split(/\r\n|\r|\n/)
     .map(line => sseFieldValue(line, "data"))
     .filter((value): value is string => value !== null)
-    .join("");
+    .join("\n");
   if (!data) return undefined;
   let parsed: unknown;
   try { parsed = JSON.parse(data); } catch { return undefined; }
@@ -334,6 +334,7 @@ export function echoRequestedModel(body: ReadableStream<Uint8Array>, model: stri
           return;
         }
         if (chunk.byteLength === 0) continue;
+        if (scanning) scanned += chunk.byteLength;
         let value = chunk;
         let relayedLf = false;
         if (pendingLf && chunk[0] === 10) {
@@ -343,6 +344,7 @@ export function echoRequestedModel(body: ReadableStream<Uint8Array>, model: stri
         }
         pendingLf = undefined;
         if (value.byteLength === 0) {
+          if (scanned > MODEL_ECHO_SCAN_BYTES) scanning = false;
           if (relayedLf) return;
           continue;
         }
@@ -350,7 +352,6 @@ export function echoRequestedModel(body: ReadableStream<Uint8Array>, model: stri
           controller.enqueue(value);
           return;
         }
-        scanned += chunk.byteLength;
         const carried = carryLength;
         const length = carried + value.byteLength;
         const byteAt = (index: number): number => index < carried ? carry[index]! : value[index - carried]!;
