@@ -244,7 +244,11 @@ export class StepCliSession {
 
   async #start(): Promise<void> {
     const invocation = commandInvocation(this.#options.binary, this.#options.args, this.#platform);
-    await mkdir(this.#options.cwd, { recursive: true }).catch(() => undefined);
+    try {
+      await mkdir(this.#options.cwd, { recursive: true });
+    } catch {
+      throw new StepSessionError("StepCode could not create its workspace.", "step_cli_workspace_unavailable");
+    }
     const spawn = this.#deps.spawn ?? nodeSpawn;
     const child = spawn(invocation.file, invocation.args, {
       ...invocation.options,

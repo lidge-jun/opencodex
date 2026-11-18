@@ -71,6 +71,10 @@ believes was denied.
 
 ## No credential, and a fail-closed capability check
 
+Executable discovery resolves PATH hits against the proxy's working directory before spawning.
+The session creates its isolated working directory before starting StepCode and reports a
+workspace error if creation fails.
+
 The CLI resolves its own `step login`, so the child environment adds only `USER` (StepCode resolves its
 sign-in by account name) and a redirected `STEP_CODING_AGENT_SESSION_DIR`. The operator's config
 directory stays where StepCode put it: copying `auth.json` into `~/.opencodex` would put a second copy

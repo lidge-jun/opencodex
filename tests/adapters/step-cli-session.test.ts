@@ -1,4 +1,7 @@
 import { EventEmitter } from "node:events";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "bun:test";
 
@@ -133,6 +136,27 @@ async function openSession(fake: FakeStep, deps: StepSessionDeps = {}) {
 }
 
 describe("StepCode session", () => {
+  test("refuses to spawn when the workspace cannot be created", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ocx-step-workspace-"));
+    const file = join(root, "file");
+    const fake = new FakeStep();
+    let spawned = false;
+    let session: StepCliSession | undefined;
+    try {
+      await writeFile(file, "");
+      const opening = StepCliSession.open(options({ cwd: join(file, "cwd") }), { onEvent: () => {} }, {
+        spawn: () => { spawned = true; return fake.child; },
+      }).then(opened => { session = opened; });
+      await expect(opening).rejects.toThrow(/create its workspace/);
+      expect(spawned).toBe(false);
+    } finally {
+      const closing = session?.close();
+      fake.child.emit("close", 0, null);
+      await closing;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test.each([
     ["CONFIG_INVALID", "please run /login: synthetic child diagnostic", "step_cli_not_logged_in", /Run `step login`/],
     ["CONFIG_INVALID", "429 rate limit: synthetic child diagnostic", "step_cli_subscription_cooldown", /subscription temporarily/],

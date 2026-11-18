@@ -8,6 +8,7 @@ type StepSessionErrorCode =
   | "step_cli_capability_missing"
   | "step_cli_protocol_violation"
   | "step_cli_cleanup_failed"
+  | "step_cli_workspace_unavailable"
   | "step_cli_not_logged_in"
   | "step_cli_subscription_cooldown"
   | "timeout";

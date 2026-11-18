@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import {
   clearCodingAgentBinaryCache,
@@ -68,7 +68,8 @@ export function findStepCliBinary(
   platform: NodeJS.Platform = process.platform,
 ): string | undefined {
   const onPath = pathLookup(candidate);
-  if (onPath || candidate !== "step") return onPath;
+  if (onPath) return resolve(onPath);
+  if (candidate !== "step") return undefined;
   const installed = join(userHome, ".stepcode", "bin", platform === "win32" ? "step.exe" : "step");
   return existsSync(installed) ? installed : undefined;
 }

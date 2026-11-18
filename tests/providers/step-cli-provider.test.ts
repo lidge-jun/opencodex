@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { join, resolve } from "node:path";
 
 import { createStepCliAdapter } from "../../src/adapters/step-cli/adapter";
 import { buildStepCliArgs, findStepCliBinary, resolveStepCliProfile, STEP_CLI_PROFILE } from "../../src/adapters/step-cli/profiles";
@@ -141,6 +142,12 @@ describe("StepCode provider", () => {
     const absent = findStepCliBinary("step", () => undefined, "/nonexistent-home");
     expect(absent).toBeUndefined();
     // A PATH hit always wins, so an operator who installed it elsewhere keeps their own binary.
-    expect(findStepCliBinary("step", () => "/opt/homebrew/bin/step", "/nonexistent-home")).toBe("/opt/homebrew/bin/step");
+    const absolute = resolve("opt", "bin", "step");
+    expect(findStepCliBinary("step", () => absolute, "/nonexistent-home")).toBe(absolute);
+  });
+
+  test("resolves a relative PATH hit before the child changes directory", () => {
+    const relative = join("relative-cli", "step");
+    expect(findStepCliBinary("step", () => relative)).toBe(resolve(relative));
   });
 });
