@@ -217,8 +217,12 @@ export function sanitizeAgyAcpUnattendedTargetsForLoad(
     } else if (section === "subagentModelFallback" && Array.isArray(root.subagentModelFallback) && typeof field === "number") {
       root.subagentModelFallback.splice(field, 1);
     } else if (section === "subagentModelFallbackByModel" && typeof field === "string" && typeof index === "number") {
-      const fallback = rawConfigRecord(root.subagentModelFallbackByModel)?.[field];
-      if (Array.isArray(fallback)) fallback.splice(index, 1);
+      const byModel = rawConfigRecord(root.subagentModelFallbackByModel);
+      const fallback = byModel?.[field];
+      if (byModel && Array.isArray(fallback)) {
+        fallback.splice(index, 1);
+        if (fallback.length === 0) delete byModel[field];
+      }
     }
     const path = issue.path.map(segment => typeof segment === "string" ? redactSecretString(segment) : segment).join(".");
     warn(`${path}: ${issue.message} Ignoring this target on load.`);

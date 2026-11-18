@@ -74,6 +74,7 @@ describe("antigravity-acp configuration", () => {
         subagentModelFallbackByModel: {
           "model-one": ["gemini-3.8-flash", "google/gemini-3.8-flash"],
           "model-two": ["google/gemini-4-argon"],
+          "model-three": ["gemini-3.8-flash", "antigravity-acp/gemini-3.8-flash"],
         },
       });
       expect(validateConfigCandidate(raw).ok).toBe(false);
@@ -100,6 +101,8 @@ describe("antigravity-acp configuration", () => {
         expect.stringContaining("shadowCallIntercept.model"),
         expect.stringContaining("subagentModelFallback.0"),
         expect.stringContaining("subagentModelFallbackByModel.model-one.0"),
+        expect.stringContaining("subagentModelFallbackByModel.model-three.0"),
+        expect.stringContaining("subagentModelFallbackByModel.model-three.1"),
       ]));
       expect(warn).toHaveBeenCalled();
       expect(readFileSync(path, "utf8")).toBe(bytes);

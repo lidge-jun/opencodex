@@ -64,7 +64,8 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   non-Gemini models and any use as a combo target, a combo's `decisionModel`, a subagent fallback, a `memoryModels` phase or the
   `shadowCallIntercept` target. Validation masks credential-shaped diagnostic path segments. A disk
   read drops an ACP memory phase and ACP subagent fallback entries or disables an ACP shadow-call target while
-  retaining other settings. File diagnostics report the repairs. Candidate writes reject those selectors, including
+  retaining other settings. Per-model fallback chains emptied by the repair are removed individually. File diagnostics
+  report the repairs. Candidate writes reject those selectors, including
   matches from an ACP provider's model alias template. The use policy
   (`src/adapters/agy-acp/policy.ts`) refuses subagent turns (`x-codex-parent-thread-id`), turns Codex labels as spawned threads (`isThreadSpawnRequest`) or as
   its memory pipeline (`detectMemoryModelPhase`, `x-openai-subagent: memory_consolidation`, `x-openai-memgen-request`).
