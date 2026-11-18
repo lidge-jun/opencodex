@@ -300,7 +300,7 @@ including when the caller also cancelled. A save refused after a successful
 exchange serves the new access token to that request only: auth.json stays as
 the other writer left it, the rotated grant is kept nowhere, and the old grant
 is not marked rejected (#2999). Same-identity device reauth obtains a new login
-grant rather than rotating the existing grant and keeps its pre-publication fence.
+grant rather than rotating the existing grant and keeps its pre-publication fence. Pool-login policy (#8082): `codexAuthMethod` (`"auto"` default or `"device-only"`, read at proxy start) applies only to ChatGPT/Codex pool logins through `POST /api/codex-auth/login`. With `"device-only"`, `src/codex/auth-api/login-flow.ts` forces the device grant before `startLoginFlow("chatgpt")` (a body `device: false` cannot opt out) and answers `authMethod: "device-only"`; `src/cli/account-auth.ts` then refuses `--code` (decided before stdin is read) and a JSON wait without `--no-wait`, cancelling the started flow. Other providers and the native main-account login are unaffected.
 
 ## Native-main refresh ownership
 

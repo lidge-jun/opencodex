@@ -251,6 +251,16 @@ describe("ocx account login against a device-only proxy", () => {
     expect(paths()).toEqual(["/api/codex-auth/login", "/api/codex-auth/login/cancel"]);
   });
 
+  test("an open stdin with no data does not delay the device-only refusal of --code -", async () => {
+    // A stream that never ends: reading it before the start answer would hang this test.
+    const silent = Object.assign(new Readable({ read() {} }), { isTTY: false }) as AccountStdin;
+    const code = await cmdAccount(["login", "openai", "--code", "-"], { ...deps(), stdinImpl: silent });
+    expect(code).toBe(2);
+    expect(errors.join("\n")).toContain("--code cannot be used");
+    expect(paths()).toEqual(["/api/codex-auth/login", "/api/codex-auth/login/cancel"]);
+    silent.destroy();
+  }, 5_000);
+
   test("a failed cancel is reported instead of hidden", async () => {
     cancelStatus = 500;
     const code = await cmdAccount(["login", "openai", "--json"], deps());

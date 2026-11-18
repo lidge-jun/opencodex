@@ -283,7 +283,9 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
   }
   // Only resolve when --code was actually given: a plain `ocx account login`
   // opens the browser flow and polls, and must not block on stdin.
-  const code = await resolveCode(suppliedCode, deps, false);
+  // Codex resolves a stdin code only after the start answer: under `codexAuthMethod: "device-only"`
+  // a pasted code is refused, and an open stdin with no data must not hold that refusal back (#8082).
+  let code = CODEX_NAMES.has(provider) ? undefined : await resolveCode(suppliedCode, deps, false);
   const pinned = { ...deps, baseUrl: await runtimeBaseUrl(deps) };
 
   if (method) {
@@ -323,7 +325,7 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
     // `codexAuthMethod: "device-only"` (#8082) imposes the device grant after the request is sent.
     // A JSON wait prints nothing until the end and a pasted code has no flow to complete, so either
     // would leave the person without the URL and code: cancel the flow and say what works instead.
-    if (start.authMethod === "device-only" && (code || (wantsJson && !noWait))) {
+    if (start.authMethod === "device-only" && (suppliedCode !== undefined || (wantsJson && !noWait))) {
       let cleanupFailed = false;
       try {
         if (!start.flowId) throw new Error("no flow id");
@@ -331,11 +333,12 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
           method: "POST", redirect: "error", body: JSON.stringify({ flowId: start.flowId }),
         }, pinned);
       } catch { cleanupFailed = true; }
-      const advice = code
+      const advice = suppliedCode !== undefined
         ? "--code cannot be used; run the login without --code and enter the device code at the returned URL"
         : "with --json, add --no-wait and complete the login with the returned url and deviceCode";
       throw new CliUsageError(`This proxy requires device code login (codexAuthMethod: device-only), so ${advice}.${cleanupFailed ? " Could not cancel the started login flow." : ""}`, USAGE);
     }
+    code = await resolveCode(suppliedCode, deps, false);
     if (!wantsJson) {
       // One atomic pre-poll block, flushed synchronously so a piped parent
       // reads the URL before the polling window starts (#1007).
