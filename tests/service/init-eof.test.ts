@@ -139,6 +139,7 @@ describe("ocx init piped stdin (#754)", () => {
       await proc.stdin.flush();
 
       const prompt = await waitForOutput(proc.stdout, /API key \(|Default model \(/);
+      expect(prompt).toContain("Get your key: https://docs.litellm.ai/docs/proxy/quick_start");
       expect(prompt).toContain("API key (paste, or env var $LITELLM_API_KEY):");
       proc.stdin.write(answer + "\n");
       await proc.stdin.flush();

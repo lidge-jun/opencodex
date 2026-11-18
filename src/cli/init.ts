@@ -166,7 +166,7 @@ export async function runInit(): Promise<void> {
         if (isAgyAcp) {
           console.log("   Sign in on the proxy host with: agy acp --login");
           if (p.dashboardUrl) console.log(`   CLI setup: ${p.dashboardUrl}`);
-        } else if (!p.keyOptional && p.dashboardUrl) {
+        } else if (p.dashboardUrl) {
           console.log(`   🔑 Get your key: ${p.dashboardUrl}`);
         }
         // Template URL with placeholders (e.g. Cloudflare's {account_id}) needs a resolved value.
