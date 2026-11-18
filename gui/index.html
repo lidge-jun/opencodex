@@ -2,6 +2,8 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- the vector mark recolours itself for dark browser chrome; the PNG is the generated fallback -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
@@ -34,6 +36,17 @@
           }
         }
         document.documentElement.lang = langMap[locale];
+        // Someone who switched to the classic dashboard keeps landing there (src/lib/dashboard-edition.ts).
+        // The tray popover is not a dashboard page and stays on this build.
+        var edition = null;
+        try {
+          edition = localStorage.getItem("ocx-ui");
+        } catch (e) {
+          edition = null; // storage blocked: stay on this dashboard
+        }
+        if (edition === "classic" && location.hash.indexOf("#/tray") !== 0) {
+          location.replace("/classic/" + location.search + location.hash);
+        }
       })();
     </script>
   </head>

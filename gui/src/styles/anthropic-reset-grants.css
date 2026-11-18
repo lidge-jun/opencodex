@@ -11,3 +11,20 @@
   color: var(--muted);
 }
 .anthropic-grant-note { margin-top: 4px; }
+
+/* Grant picker: each grant is a radio option (role="radio"). */
+.anthropic-grant-option { cursor: pointer; }
+.anthropic-grant-option:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.anthropic-grant-option[aria-disabled="true"] { cursor: default; opacity: 0.6; }
+.anthropic-grant-radio {
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+.anthropic-grant-option[aria-checked="true"] .anthropic-grant-radio {
+  border: 4px solid var(--amber);
+  background: var(--raised);
+}

@@ -1,3 +1,4 @@
+import { isXaiGrokOAuth, readXaiLegacyPrivacyError, XAI_LEGACY_PRIVACY_MESSAGE } from "../../providers/xai-privacy-mode";
 import { fetchCopilotAutoModels, copilotPickerModels, copilotRequiresAuto } from "../../providers/github-copilot-auto";
 import { resolveGithubCopilotTransport } from "../../providers/github-copilot-transport";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
@@ -9,6 +10,7 @@ import { createHash, createHmac, randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { atomicWriteFile, expandUserPath, getConfigDir, websocketsEnabled } from "../../config";
+import { isProviderApiKeyPaused } from "../../providers/api-key-pause";
 import { resolveProviderApiKey } from "../../providers/key-store";
 import { captureOAuthAccountSelection, credentialGeneration, getAccountCredentialWithStatus, getAccountSet } from "../../oauth/store";
 import { readKiroAccountModels, kiroObservedContextWindow } from "../../providers/kiro-model-catalog";
@@ -17,18 +19,21 @@ import {
   clearModelCache,
   clearProviderDiscoveryStatus,
   captureModelCacheGeneration,
+  captureProviderDiscoveryObservation,
   observeModelCacheRevision,
   DEFAULT_MODEL_CACHE_TTL_MS,
   getFreshCached,
   getStaleCached,
   isModelsFetchCoolingDown,
   isModelCacheGenerationCurrent,
+  isProviderDiscoveryObservationCurrent,
   markModelsFetchFailure,
   markProviderDiscoveryFailed,
   markProviderDiscoveryOk,
   shouldLogDiscoveryFailure,
   setCached,
   type ProviderModelDiscoveryFailure,
+  type ProviderModelDiscoveryWarningCondition,
 } from "../model-cache";
 import {
   buildModelsRequest,
@@ -52,7 +57,7 @@ import {
 } from "../../providers/service-tier";
 import type { FastPolicyAuthority } from "../../providers/fastwire";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../../providers/registry";
-import { parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels } from "../../providers/antigravity-models";
+import { discoveredAntigravityDefaultEffort, parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels } from "../../providers/antigravity-models";
 import { captureAntigravityModelObservation, recordAntigravityAccountRoster } from "../../providers/antigravity-account-roster";
 import { antigravityActiveAccountCurrent, discoverAntigravitySiblings } from "./antigravity-discovery";
 import { applyProviderContextCap, providerContextCap, resolveUnknownRoutedContextWindow } from "../../providers/context-cap";
@@ -89,7 +94,7 @@ import {
   providerRedirectError,
 } from "../../lib/provider-outbound";
 import { redactSecretString } from "../../lib/redact";
-import { invalidModelDiscoveryHint } from "../../providers/model-discovery-diagnostic";
+import { invalidModelDiscoveryHint, shouldWarnSkippedModelRows } from "../../providers/model-discovery-diagnostic";
 import {
   extractProviderModelItems,
   isRegistryModelDiscoveryUrl,
@@ -99,7 +104,16 @@ import {
   type ProviderModelsApiItem,
   type ResolvedProviderModelDiscovery,
 } from "../../providers/model-discovery";
-import { extractGoogleAiStudioModelItems } from "../../providers/google-ai-studio-model-discovery";
+import {
+  collectVertexPublisherModelPages,
+  countDiscoveryResponseBytes,
+  extractGoogleNativeModelItems,
+  resolveObservedVertexDiscoveryAuth,
+  resolveVertexDiscoveryAuth,
+  vertexDiscoveryAuthIsCurrent,
+  vertexDiscoveryDeadline,
+  type VertexDiscoveryAuth,
+} from "../../providers/google-vertex-model-discovery";
 import { applyConfiguredHeadersLast, fetchOllamaShowEnrichment, ollamaShowEnrichable } from "../../providers/ollama-show";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } from "../../lib/admission";
@@ -144,6 +158,7 @@ export interface ProviderModelsResult {
 }
 export const refreshingModelsAuthResolver: ModelsAuthResolver = { kind: "refreshing" };
 
+/** Build a synchronous non-refreshing credential resolver from a captured auth-store buffer. */
 export function observedModelsAuthResolver(
   authStoreBuffer: Uint8Array | null,
   outcomes: CatalogGatherProviderAuthOutcome[],
@@ -153,7 +168,9 @@ export function observedModelsAuthResolver(
     resolve(name, provider) {
       if (provider.authMode === "forward") return { apiKey: undefined, observed: true };
       if (provider.authMode !== "oauth") {
-        return { apiKey: resolveProviderApiKey(provider.apiKey), observed: true };
+        if (effectiveGoogleMode(name, provider) !== "vertex") return { apiKey: resolveProviderApiKey(provider.apiKey), observed: true };
+        const vertexAuth = resolveObservedVertexDiscoveryAuth(provider);
+        return { apiKey: vertexAuth?.token, observed: true, ...(vertexAuth ? { vertexAuth } : {}) };
       }
 
       const observation: OAuthActiveTokenObservation = mayResolveModelsOAuth(name, provider)
@@ -275,6 +292,9 @@ export async function fetchProviderModelsWithAuth(
     }
     return observed(configured, "authoritative");
   }
+  // One Vertex deadline covers ADC, the first request and every follow-up page.
+  const vertexDeadline = effectiveGoogleMode(name, prov) === "vertex" ? vertexDiscoveryDeadline() : undefined;
+  let vertexAuth: VertexDiscoveryAuth | undefined;
   const auth: ModelsAuthResolution = prov.authMode === "oauth" && !mayResolveModelsOAuth(name, prov)
     ? { apiKey: undefined, observed: resolveAuth.kind === "observed" }
     : captured.observedAuth ?? (resolveAuth.kind === "refreshing"
@@ -292,12 +312,23 @@ export async function fetchProviderModelsWithAuth(
           ...(snapshot.projectId ? { oauthProjectId: snapshot.projectId } : {}),
         }))
         .catch(() => ({ apiKey: undefined, observed: false }))
-      : { apiKey: await resolveModelsAuthToken(name, prov), observed: false }
+      : {
+        apiKey: effectiveGoogleMode(name, prov) === "vertex"
+          ? (vertexAuth = await resolveVertexDiscoveryAuth(prov, vertexDeadline))?.token
+          : await resolveModelsAuthToken(name, prov),
+        observed: false,
+      }
     : resolveAuth.resolve(name, prov));
   const apiKey = auth.apiKey;
   if (prov.adapter === "m365-copilot") {
     const result = await fetchM365CopilotCatalog(captured, auth, ttlMs, contextCap, isCurrentCacheGeneration);
     return observed(result.models, result.state);
+  }
+  // A passive gather's Vertex credential (always an API key) arrives already bound to its authority.
+  vertexAuth ??= auth.vertexAuth;
+  const vertexSendGuard = vertexDeadline !== undefined && prov.authMode !== "oauth";
+  if ((prov.authMode === "oauth" && !apiKey) || isProviderApiKeyPaused(prov)) {
+    return observed(configured, "degraded");
   }
   if (name === "github-copilot" && apiKey) {
     const transport = resolveGithubCopilotTransport({ ...prov, apiKey }, prov.authMode === "oauth"
@@ -656,12 +687,6 @@ export async function fetchProviderModelsWithAuth(
       "degraded",
     );
   }
-  if (prov.authMode === "oauth" && !apiKey) {
-    // No usable token (logged out, or account marked needsReauth). Still surface the
-    // configured static catalog so the GUI Models tab / rail counts are not empty —
-    // matching Cursor's !apiKey → configured degradation and fetch-failure fallback.
-    return observed(configured, "degraded");
-  }
   const cloudCodeAssist = effectiveGoogleMode(name, prov) === "cloud-code-assist";
   const project = prov.project ?? auth.oauthProjectId;
   if (cloudCodeAssist && !project) return observed(configured, "degraded");
@@ -690,6 +715,9 @@ export async function fetchProviderModelsWithAuth(
       "degraded",
     );
   }
+  if (effectiveGoogleMode(name, prov) === "vertex" && !apiKey) {
+    return observed(withConfiguredRetention(withVertexDefaultSeed(configured)), "degraded");
+  }
   // The captured request predates any refresh, so a refreshing gather rebuilds it
   // from the auth it resolved: the token and its origin, together.
   const request = resolveAuth.kind === "refreshing" && name !== "anthropic2"
@@ -709,8 +737,23 @@ export async function fetchProviderModelsWithAuth(
   const urlClass = new URL(url).hostname.endsWith("aiplatform.googleapis.com")
     ? "vertex-aiplatform"
     : "provider-models";
+  const xaiOAuth = isXaiGrokOAuth(name, prov);
+  let discoveryObservation: number | undefined;
+  const canPublishDiscovery = () => isProviderDiscoveryObservationCurrent(name, discoveryObservation);
+  const discoveryFallbackRows = (): { models: CatalogModel[]; fallback: "stale" | "configured" } => {
+    const stale = getStaleCached(name, catalogAuthority);
+    return {
+      models: withConfiguredRetention(
+        stale
+          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false))
+          : failedDiscoveryConfigured,
+      ),
+      fallback: stale ? "stale" : "configured",
+    };
+  };
   const failedDiscoveryFallback = (
     failure: ProviderModelDiscoveryFailure,
+    warningCondition?: ProviderModelDiscoveryWarningCondition,
   ): { models: CatalogModel[]; fallback: "stale" | "configured"; shouldLog: boolean } => {
     if (!isCurrentCacheGeneration() || !maySendAnthropicDiscovery()) {
       return {
@@ -722,19 +765,11 @@ export async function fetchProviderModelsWithAuth(
     // Decide logging BEFORE recording the new status, so we can compare against the prior one and
     // suppress an identical repeated failure (#395 log flood). The failure stays observable via the
     // discovery-status API regardless.
-    const shouldLog = shouldLogDiscoveryFailure(name, failure);
+    if (!canPublishDiscovery()) return { ...discoveryFallbackRows(), shouldLog: false };
+    const shouldLog = shouldLogDiscoveryFailure(name, failure, warningCondition);
     markModelsFetchFailure(name, undefined, catalogAuthority);
-    markProviderDiscoveryFailed(name, failure);
-    const stale = getStaleCached(name, catalogAuthority);
-    return {
-      models: withConfiguredRetention(
-        stale
-          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false))
-          : failedDiscoveryConfigured,
-      ),
-      fallback: stale ? "stale" : "configured",
-      shouldLog,
-    };
+    markProviderDiscoveryFailed(name, failure, warningCondition, discoveryObservation);
+    return { ...discoveryFallbackRows(), shouldLog };
   };
   try {
     // Canonical-URL TUN transparency for Clash/Surge/Mihomo fake-IP DNS:
@@ -745,18 +780,21 @@ export async function fetchProviderModelsWithAuth(
     // name matches any baseUrl by design. Retargeted or renamed custom rows
     // fetch a different URL and keep the rejection.
     if (!maySendAnthropicDiscovery()) return observed(withConfiguredRetention(failedDiscoveryConfigured), "degraded");
-    const outboundDependencies = { isCanonicalUrl: isRegistryModelDiscoveryUrl, beforeSend: maySendAnthropicDiscovery };
+    const outboundDependencies = (requestUrl: string) => ({ isCanonicalUrl: isRegistryModelDiscoveryUrl,
+      beforeSend: () => maySendAnthropicDiscovery()
+        && (!vertexSendGuard || (vertexAuth !== undefined && vertexDiscoveryAuthIsCurrent(prov, vertexAuth, headers, requestUrl))) });
     const antigravityObservation = cloudCodeAssist ? captureAntigravityModelObservation() : undefined;
     const res = request.method === "POST"
       ? await providerOutboundPost(name, prov, url, {
         headers,
         body: JSON.stringify({ project }),
         signal: AbortSignal.timeout(8000),
-      }, outboundDependencies)
+      }, outboundDependencies(url))
       : await providerOutboundGet(name, prov, url, {
         headers,
-        signal: AbortSignal.timeout(8000),
-      }, outboundDependencies);
+        signal: vertexDeadline ?? AbortSignal.timeout(8000),
+      }, outboundDependencies(url));
+    if (xaiOAuth) discoveryObservation = captureProviderDiscoveryObservation();
     const redirectError = await providerRedirectError(res, url);
     if (redirectError) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "http", httpStatus: res.status });
@@ -768,10 +806,15 @@ export async function fetchProviderModelsWithAuth(
       return observed(models, "degraded");
     }
     if (!res.ok) {
-      const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "http", httpStatus: res.status });
+      const privacyRefusal = xaiOAuth && await readXaiLegacyPrivacyError(res);
+      const { models, fallback, shouldLog } = failedDiscoveryFallback(
+        { reason: "http", httpStatus: res.status },
+        privacyRefusal ? "xai-legacy-privacy-mode" : undefined,
+      );
       if (shouldLog) {
+        const guidance = privacyRefusal ? ` ${XAI_LEGACY_PRIVACY_MESSAGE}` : "";
         console.warn(
-          `[opencodex] Provider model discovery for "${name}" failed with HTTP ${res.status} [urlClass=${urlClass}, fallback=${fallback}].`,
+          `[opencodex] Provider model discovery for "${name}" failed with HTTP ${res.status} [urlClass=${urlClass}, fallback=${fallback}].${guidance}`,
         );
       }
       return observed(models, "degraded");
@@ -780,7 +823,8 @@ export async function fetchProviderModelsWithAuth(
     const contentType = (
       res.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() || "missing"
     ).slice(0, 80);
-    const bounded = await readBoundedDiscoveryJson(res, discovery.maxResponseBytes);
+    const vertexFirstPage = vertexDeadline ? countDiscoveryResponseBytes(res) : undefined;
+    const bounded = await readBoundedDiscoveryJson(vertexFirstPage?.response ?? res, discovery.maxResponseBytes);
     if (!bounded.ok) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "invalid_response" });
       const diagnostic = bounded.reason === "response_too_large"
@@ -828,7 +872,7 @@ export async function fetchProviderModelsWithAuth(
         ...(model.effortWireModelIds ? {
           antigravityEffortWireModelIds: model.effortWireModelIds,
           suppressSyntheticMax: true,
-          defaultReasoningEffort: model.effortWireModelIds.medium ? "medium" : "high",
+          defaultReasoningEffort: discoveredAntigravityDefaultEffort(model.id, !!model.effortWireModelIds.medium),
         } : {}),
         ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
         ...(model.inputModalities ? { inputModalities: model.inputModalities } : {}),
@@ -853,14 +897,24 @@ export async function fetchProviderModelsWithAuth(
       markProviderDiscoveryOk(name, live.length);
       return observed(withConfiguredRetention(azureMetadata ? live : forCache, { warnDrops: true }), "authoritative");
     }
-    const googleAiStudio = effectiveGoogleMode(name, prov) === "ai-studio"
-      ? extractGoogleAiStudioModelItems(bounded.value, discovery.maxModels)
-      : undefined;
-    // Native /v1beta/models wins; a google row served by an OpenAI-compatible
+    const listing = effectiveGoogleMode(name, prov) === "vertex"
+      ? await collectVertexPublisherModelPages(url, bounded.value,
+        { ...discovery, firstPageBytes: vertexFirstPage?.bytes(), signal: vertexDeadline },
+        (pageUrl, signal) => providerOutboundGet(name, prov, pageUrl, { headers, signal }, outboundDependencies(pageUrl)))
+      : { ok: true as const, value: bounded.value };
+    if (!listing.ok) {
+      const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "invalid_response" });
+      if (shouldLog) {
+        console.warn(
+          `[opencodex] Provider model discovery for "${name}" returned an incomplete paginated listing (${listing.diagnostic}) [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
+        );
+      }
+      return observed(models, "degraded");
+    }
+    const googleNative = extractGoogleNativeModelItems(name, prov, listing.value, discovery.maxModels);
+    // Native Google discovery wins; a google row served by an OpenAI-compatible
     // gateway keeps the generic data[] / top-level-array contract.
-    const extracted = googleAiStudio?.ok
-      ? googleAiStudio
-      : extractProviderModelItems(bounded.value, discovery);
+    const extracted = googleNative ?? extractProviderModelItems(listing.value, discovery);
     if (!extracted.ok) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "invalid_response" });
       const diagnostic: Record<ModelDiscoveryResponseFailure, string> = {
@@ -871,10 +925,17 @@ export async function fetchProviderModelsWithAuth(
       };
       if (shouldLog) {
         console.warn(
-          `[opencodex] Provider model discovery for "${name}" ${diagnostic[extracted.reason]} [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}]${extracted.reason === "invalid_shape" ? invalidModelDiscoveryHint("diagnostic" in extracted ? extracted.diagnostic : undefined) : "."}`,
+          `[opencodex] Provider model discovery for "${name}" ${diagnostic[extracted.reason]} [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}]${extracted.reason === "invalid_shape" ? invalidModelDiscoveryHint("diagnostic" in extracted ? extracted.diagnostic : undefined, discovery.skipInvalidRows === true) : "."}`,
         );
       }
       return observed(models, "degraded");
+    }
+    // The operator opted into skipping invalid rows (#7910): say how many, once, never which.
+    const skippedInvalidRows = "skippedInvalidRows" in extracted ? extracted.skippedInvalidRows ?? 0 : 0;
+    if (shouldWarnSkippedModelRows(name, skippedInvalidRows, extracted.rawCount)) {
+      console.warn(
+        `[opencodex] Provider model discovery for "${name}" skipped ${skippedInvalidRows} invalid of ${extracted.rawCount} rows (modelDiscovery.skipInvalidRows) [status=${res.status}, urlClass=${urlClass}].`,
+      );
     }
     const items = extracted.items;
     // Ollama Cloud enrichment: /v1/models carries no per-model context or capability metadata,
@@ -933,15 +994,20 @@ export async function fetchProviderModelsWithAuth(
         `[opencodex] Provider model discovery for "${name}" returned an authoritative empty catalog; ${droppedConfiguredIds.length > 0 ? `dropping configured model ids: ${droppedConfiguredIds.join(", ")}` : "no models will be exposed"}.`,
       );
     }
-    if (!maySendAnthropicDiscovery() || !setCached(name, forCache, Date.now(), cacheGeneration, catalogAuthority)) {
+    if (!maySendAnthropicDiscovery() || !isCurrentCacheGeneration()) {
       return observed(withConfiguredRetention(configured), "degraded");
     }
-    markProviderDiscoveryOk(name, liveModelCount);
+    if (!canPublishDiscovery()) return observed(discoveryFallbackRows().models, "degraded");
+    if (!setCached(name, forCache, Date.now(), cacheGeneration, catalogAuthority)) {
+      return observed(withConfiguredRetention(configured), "degraded");
+    }
+    markProviderDiscoveryOk(name, liveModelCount, discoveryObservation);
     return observed(returned, "authoritative");
   } catch (error) {
     if (error instanceof ProviderOutboundSendCancelledError) {
       return observed(withConfiguredRetention(failedDiscoveryConfigured), "degraded");
     }
+    if (xaiOAuth) discoveryObservation ??= captureProviderDiscoveryObservation();
     if (error instanceof ProviderOutboundPolicyError) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "blocked" });
       if (shouldLog) {

@@ -37,6 +37,7 @@ type Workflow = { on?: Record<string, unknown>; permissions?: unknown; env?: Rec
 const SIGNPATH_ACTION = "signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092";
 const releaseText = readFileSync(repoPath(".github", "workflows", "release.yml"), "utf8");
 const release = Bun.YAML.parse(releaseText) as Workflow;
+const headSigning = JSON.parse(readFileSync(repoPath("tests", "fixtures", "release-signing-head.json"), "utf8")) as Record<string, Step[]>;
 const signingTestText = readFileSync(repoPath(".github", "workflows", "windows-signing-test.yml"), "utf8");
 const signingTest = Bun.YAML.parse(signingTestText) as Workflow;
 
@@ -50,6 +51,15 @@ const indexOf = (steps: Step[], name: string) => {
   expect(index, name).toBeGreaterThanOrEqual(0);
   return index;
 };
+
+test("desktop and standalone signing steps preserve the HEAD release contract", () => {
+  for (const [job, expectedSteps] of Object.entries(headSigning)) {
+    const actualSteps = stepsOf(release, job);
+    for (const expected of expectedSteps) {
+      expect(actualSteps.find(step => step.name === expected.name), `${job}/${expected.name}`).toEqual(expected);
+    }
+  }
+});
 
 describe("Windows signing decision (scripts/ci/windows-signing-plan.sh)", () => {
   const bash = process.platform === "win32" ? null : Bun.which("bash");

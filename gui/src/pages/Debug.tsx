@@ -215,15 +215,8 @@ export default function Debug({ apiBase, embedded, active = true }: { apiBase: s
   };
 
   return (
-    <>
-      <DebugPageHeader
-        embedded={embedded}
-        refreshing={refreshing}
-        streamEnabled={streamEnabled}
-        follow={follow}
-        onRefresh={() => void fetchLogs(true)}
-        onFollowChange={setFollow}
-      />
+    <div className="debug-v2 flex min-w-0 flex-col gap-4 font-sans text-fg">
+      <DebugPageHeader embedded={embedded} />
 
       {/* A failed settings read is not a slow one. Both used to land in this single branch, so a
           500 looked like an endless load with no way to retry. */}
@@ -244,10 +237,8 @@ export default function Debug({ apiBase, embedded, active = true }: { apiBase: s
         <DebugSettingsPanel
           debug={debug}
           debugBusy={debugBusy}
-          stream={stream}
           onSetFlag={(flag, enabled) => { void setDebugFlag(flag, enabled); }}
           onReset={() => { void resetDebug(); }}
-          onStreamChange={setStream}
         />
       )}
 
@@ -256,13 +247,18 @@ export default function Debug({ apiBase, embedded, active = true }: { apiBase: s
       {debug?.claude && <DebugClaudeInboundPanel entries={claudeEntries} />}
 
       <DebugLogViewer
-        debug={!!debug}
+        debug={debug}
         stream={stream}
         streamEnabled={streamEnabled}
         entries={entries}
+        refreshing={refreshing}
+        follow={follow}
         scrollContainerRef={scrollContainerRef}
         lineVirtualizer={lineVirtualizer}
+        onStreamChange={setStream}
+        onRefresh={() => void fetchLogs(true)}
+        onFollowChange={setFollow}
       />
-    </>
+    </div>
   );
 }

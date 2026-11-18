@@ -45,6 +45,11 @@ Every other `/api/*` path stays part of the opencodex management API.
 - `options`: `temperature`, `top_p`, `num_predict` and `stop`.
 - `format`: `"json"` only.
 
+Each `/api/chat` request accepts at most **1,024 tool calls in total** across all assistant messages,
+including calls that already have tool results. Above this limit, the request returns HTTP 400
+before reaching a provider. Shorten the conversation history and resend it, keeping each retained
+tool result together with its corresponding assistant tool call.
+
 Anything else is rejected with HTTP 400 instead of being ignored. That includes `think`,
 `keep_alive`, `suffix`, `raw`, `template`, `context`, other `options`, JSON-schema `format` and image
 URLs. Ollama's model-management and embedding endpoints are not provided.

@@ -3,6 +3,7 @@ import { isLocalAttestationSecret } from "./local-management-attestation";
 
 export const GUI_PAIR_METHOD = "POST";
 export const GUI_PAIR_PATH = "/api/gui/pairing-grants";
+export const DESKTOP_GUI_PAIR_PATH = "/api/gui/desktop-pairing-grants";
 export const GUI_PAIR_CAPABILITY_VERSION = "v2";
 export const GUI_PAIR_EXPECTED_PID_HEADER = "x-opencodex-gui-pair-expected-pid";
 export const GUI_PAIR_NONCE_HEADER = "x-opencodex-gui-pair-nonce";
@@ -92,7 +93,7 @@ function capabilityPayload(
   expiresAt: number,
 ): string | null {
   if (!BASE64URL_256.test(nonce)) return null;
-  if (method !== GUI_PAIR_METHOD || path !== GUI_PAIR_PATH) return null;
+  if (method !== GUI_PAIR_METHOD || (path !== GUI_PAIR_PATH && path !== DESKTOP_GUI_PAIR_PATH)) return null;
   const canonicalOrigin = canonicalGuiBrowserOrigin(browserOrigin);
   if (!canonicalOrigin || canonicalOrigin !== browserOrigin) return null;
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;

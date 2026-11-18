@@ -6,7 +6,7 @@ import { resolveMatchedPrice, type MatchedPrice } from "../usage/cost";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { syncModelsToCodex } from "../codex/sync";
-import { configuredContextWindow } from "../codex/catalog/provider-fetch";
+import { applyRegistryCapabilitySeedFill, configuredContextWindow } from "../codex/catalog/provider-fetch";
 import { hasOwnProvider, isValidProviderName, loadConfig, saveConfig } from "../config";
 import { readCliConfigForMutation } from "./config-mutation";
 import {
@@ -16,6 +16,20 @@ import {
 import { encodedModelIdCollides, resolveSlugSelection, routedSlug } from "../providers/slug-codec";
 import { isModelsRuntimeSubcommand } from "./models-runtime-subcommands";
 import { knownModelIdsForProvider } from "../router";
+import { azureVendorModelMetadata, enrichProviderFromRegistry, registryInputModalitiesForDestination } from "../providers/derive";
+import { getProviderRegistryEntry } from "../providers/registry";
+import { providerMatchesRegistryTransportWithStaticGuards } from "../providers/static-model-discovery";
+import { resolveModelPolicy } from "../providers/resolved-model-policy";
+import { customRowInputModalities } from "../vision/eligibility";
+import { applyProviderContextCap, providerContextCap, resolveUnknownRoutedContextWindow } from "../providers/context-cap";
+import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
+import { reasoningCapabilitiesFromConfig } from "../providers/reasoning-capabilities";
+import { dropLearnedUnsupportedReasoningEfforts, providerUsesReasoningMetadata } from "../providers/reasoning-metadata";
+import { isKeychainReference } from "../providers/api-key-resolve";
+import { hasNativeOpenAiCapabilityMetadata, nativeContextLimits, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiContextWindow, nativeReasoningEfforts } from "../codex/catalog/metadata";
+import { canInferVendorContext, vendorContextInference } from "../codex/catalog/vendor-context";
+import { terminalSafeText } from "./runtime-api";
+import { runPassiveRead } from "../lib/passive-read";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { modelInList, type OcxConfig, type OcxCustomModel } from "../types";
 import type { RuntimeApiDeps } from "./runtime-api";
@@ -27,6 +41,13 @@ const ADD_USAGE = "Usage: ocx models add <provider> <modelId> [--display-name <n
 const REMOVE_USAGE = "Usage: ocx models remove <customId|provider/modelId> [--yes] [--live] [--json]";
 const LIST_CUSTOM_USAGE = "Usage: ocx models list-custom [--json]";
 const ALLOWED_MODALITIES = new Set(["text", "image", "audio"]);
+
+function printJson(value: unknown): void {
+  const encoded = JSON.stringify(value, null, 2);
+  if (encoded === undefined) throw new TypeError("Cannot serialize model output");
+  console.log(encoded.replace(/[\u007f-\u009f\u2028\u2029]/g, character =>
+    `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`));
+}
 
 import { parseReasoningArgs } from "./models-custom-input";
 import { redactSecretArgs } from "./secret-args";
@@ -56,35 +77,91 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
   for (const [provName, prov] of Object.entries(providers)) {
     if (!prov) continue;
     const seen = new Set<string>();
-    const inputModalities = prov.modelInputModalities ?? {};
+    // Model listing is read-only: derive effective registry policy on a private copy.
+    const effective = structuredClone(prov);
+    const registryMatches = providerMatchesRegistryTransportWithStaticGuards(provName, prov);
+    if (registryMatches) applyRegistryCapabilitySeedFill(provName, effective);
+    enrichProviderFromRegistry(provName, effective);
+    if (registryMatches) {
+      const policy = resolveModelPolicy({
+        providerName: provName, modelId: effective.defaultModel ?? "__catalog_capture__", provider: effective,
+        registryEntry: getProviderRegistryEntry(provName), transportMatchedRegistry: true,
+        ...(effective.authMode ? { effectiveAuth: { authMode: effective.authMode } } : {}),
+      }).provider;
+      Object.assign(effective, policy);
+    }
+    effective.inputModalities ??= registryInputModalitiesForDestination(provName, prov);
+    const routerKnown = new Set(knownModelIdsForProvider(provName, prov));
 
     /** Append one model with resolved metadata, ignoring duplicates within this provider. */
     const addModel = (model: string, isDefault: boolean) => {
       if (seen.has(model)) return;
       seen.add(model);
 
-      // Resolve exactly as the runtime does, or this command reports capabilities the
-      // proxy will not honour: `isModelTextOnly` matches noVisionModels with modelInList
-      // and reads modelInputModalities with modelRecordValue, so a `gpt-oss` entry covers
-      // `gpt-oss:120b`. A bare lookup reported that model as unclassified on every field.
-      // noVisionModels is checked first because `isModelTextOnly` returns true on that
-      // match before it ever reads modelInputModalities: a `gpt-oss` noVision entry beats
-      // an exact `gpt-oss:120b` entry that lists "image", and the proxy rejects the image.
-      const noVision = modelInList(prov.noVisionModels, model);
-      const modalities = noVision ? ["text"] : (modelRecordValue(inputModalities, model) ?? null);
+      const custom = config.customModels?.find(row => row.provider === provName && row.modelId === model);
+      const nativeMetadata = custom && hasNativeOpenAiCapabilityMetadata(model);
+      const canonicalProvider = provName === OPENAI_CODEX_PROVIDER_ID && prov.authMode === undefined
+        ? { ...prov, authMode: "forward" as const } : prov;
+      const canonicalNativeCustom = nativeMetadata && provName === OPENAI_CODEX_PROVIDER_ID
+        && isCanonicalOpenAiForwardProvider(canonicalProvider);
+      const canInfer = canInferVendorContext(provName, effective);
+      const modelListEmpty = (effective.models?.length ?? 0) === 0;
+      const seededDefault = effective.defaultModel === model && modelListEmpty
+        && (effective.liveModels === false || (effective.adapter === "google" && effective.googleMode === "vertex"));
+      const hintEligible = !custom || canInfer || routerKnown.has(model) || (effective.models ?? []).includes(model)
+        || (effective.retainModels ?? []).includes(model) || seededDefault;
+      const azureMetadata = hintEligible ? azureVendorModelMetadata(effective.baseUrl, model, getConfigDir()) : undefined;
+      const capability = Object.hasOwn(effective.modelCapabilities ?? {}, model)
+        ? effective.modelCapabilities?.[model]?.inputModalities : undefined;
+      const customModalities = customRowInputModalities(config, provName, model);
+      const modalities = capability ?? customModalities ?? (modelInList(effective.noVisionModels, model)
+        ? ["text"] : modelRecordValue(effective.modelInputModalities, model) ?? effective.inputModalities
+          ?? azureMetadata?.input ?? (canonicalNativeCustom ? nativeInputModalities(model) : null));
       // Same reason, for the ladder: `configuredReasoningEfforts` is what the catalog
       // (`provider-fetch`) and the effort cap (`effort-policy`) resolve through, and it
       // does three things this expression did not — it returns [] for a noReasoningModels
       // match, drops levels Codex does not declare, and re-adds tiers the wire map proves
       // the model emits. Restating two of its five lines here reported a ladder the proxy
       // strips, and unsanitized junk as a supported level.
-      const efforts = configuredReasoningEfforts(prov, model) ?? null;
+      const declaredEfforts = custom?.reasoningEfforts ?? modelRecordValue(effective.modelReasoningEfforts, model) ?? effective.reasoningEfforts;
+      // A passive CLI cannot resolve an OS-keychain reference to select account-scoped refusals.
+      // Report unknown rather than opening the keychain or claiming an unverifiable ladder.
+      const unobservedCredential = providerUsesReasoningMetadata(effective) && isKeychainReference(effective.apiKey);
+      let efforts = reasoningCapabilitiesFromConfig(effective, model).supportsReasoningEffort === false || declaredEfforts?.length === 0
+        ? [] : unobservedCredential ? null : custom?.reasoningEfforts ?? configuredReasoningEfforts(effective, model, { refreshMetadata: false })
+          ?? (canonicalNativeCustom ? nativeReasoningEfforts(model) : null);
+      if (nativeMetadata && efforts && efforts.length > 0) {
+        const allowed = nativeReasoningEfforts(model);
+        if (allowed.length > 0) {
+          const declared = new Set(efforts);
+          const surviving = [...new Set(allowed)].filter(effort => declared.has(effort));
+          const defaultEffort = nativeDefaultReasoningEffort(model);
+          efforts = surviving.length > 0 ? surviving : [defaultEffort && allowed.includes(defaultEffort) ? defaultEffort : allowed[0]!];
+        }
+      }
+      if (efforts) efforts = dropLearnedUnsupportedReasoningEfforts(effective, model, efforts);
+      const nativeCustomContext = canonicalNativeCustom
+        ? nativeOpenAiContextWindow(model, {
+          ...nativeContextLimits(config),
+          ...(custom.contextWindow ? { modelWindows: { ...nativeContextLimits(config).modelWindows, [model]: custom.contextWindow } } : {}),
+        }) : undefined;
+      const cap = providerContextCap(config, provName);
+      const explicitContext = nativeCustomContext ?? custom?.contextWindow;
+      const configuredContext = hintEligible ? configuredContextWindow(effective, model) : undefined;
+      const azureWindow = explicitContext === undefined && configuredContext === undefined
+        ? azureMetadata?.contextWindow : undefined;
+      const azureContext = Number.isSafeInteger(azureWindow) && azureWindow! > 0 ? azureWindow : undefined;
+      const inferredContext = explicitContext === undefined && configuredContext === undefined && azureContext === undefined && canInfer
+        ? vendorContextInference(model)?.contextWindow : undefined;
+      const fallbackContext = hintEligible && cap !== undefined ? resolveUnknownRoutedContextWindow(cap) : undefined;
+      const contextWindow = explicitContext
+        ?? applyProviderContextCap(configuredContext ?? azureContext ?? inferredContext ?? fallbackContext, cap);
 
       entries.push({
         provider: provName,
         model,
         isDefault,
-        contextWindow: configuredContextWindow(prov, model) ?? null,
+        contextWindow: contextWindow ?? null,
         inputModalities: modalities,
         reasoningEfforts: efforts,
         price: resolveMatchedPrice(provName, model),
@@ -94,9 +171,17 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
     // defaultModel first
     if (prov.defaultModel) addModel(prov.defaultModel, true);
 
-    // models array
-    if (prov.models) {
-      for (const m of prov.models) addModel(m, m === prov.defaultModel);
+    // Keep the CLI list current when this config predates a provider's registry seed.
+    // knownModelIdsForProvider is the router's own derivation: config models first, then
+    // registry seeds, hint-map keys, and live-discovered cache ids (registry-derived
+    // sources only enter when the router's registry transport guard matches), then customModels.
+    // Some legacy key presets retain registry ownership even after a destination change. Because hint-map keys
+    // are included, wire-only ids a provider's collapsed picker hides still appear here;
+    // that is router parity. A model the user pruned from `models` reappears if the
+    // registry still seeds it -- the list is a union, not the user's curation. The
+    // user's saved models remain first and are never discarded.
+    for (const m of [...(prov.models ?? []), ...knownModelIdsForProvider(provName, prov, config)]) {
+      addModel(m, m === prov.defaultModel);
     }
   }
 
@@ -119,8 +204,8 @@ function consumeFlagValue(args: string[], flag: string): string | undefined {
 }
 
 function fail(message: string, usage?: string): never {
-  console.error(`Error: ${message}`);
-  if (usage) console.error(usage);
+  console.error(`Error: ${terminalSafeText(message)}`);
+  if (usage) console.error(terminalSafeText(usage));
   process.exit(1);
 }
 
@@ -150,13 +235,13 @@ function printCustomMutation(action: "added" | "removed", model: OcxCustomModel,
   const complete = sync.configApplied === true && sync.ok;
   if (sync.status !== "not-attempted" && (!sync.ok || sync.status === "refused")) process.exitCode = 1;
   if (wantsJson) {
-    console.log(JSON.stringify({ action,
+    printJson({ action,
       model: action === "added" ? model : { id: model.id, provider: model.provider, modelId: model.modelId },
-      needsSync: !complete, sync }, null, 2));
+      needsSync: !complete, sync });
     return;
   }
-  if (sync.warning) console.log(`Warning: ${sync.warning}`);
-  console.log(`${action === "added" ? "Added" : "Removed"} custom model ${routedSlug(model.provider, model.modelId)}${action === "added" ? ` (${model.id})` : ""}.`);
+  if (sync.warning) console.log(`Warning: ${terminalSafeText(sync.warning)}`);
+  console.log(`${action === "added" ? "Added" : "Removed"} custom model ${terminalSafeText(routedSlug(model.provider, model.modelId))}${action === "added" ? ` (${terminalSafeText(model.id)})` : ""}.`);
   if (sync.status === "skipped") console.log("Custom model saved; client sync was skipped by the integration policy.");
   else if (!complete && sync.status !== "not-attempted") console.log("Custom model saved; client/catalog sync remains incomplete. Inspect the target before retrying.");
 }
@@ -241,7 +326,7 @@ async function confirmCustomRemoval(model: OcxCustomModel): Promise<boolean> {
   }
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    const answer = (await rl.question(`Remove custom model ${routedSlug(model.provider, model.modelId)}? [y/N] `)).trim().toLowerCase();
+    const answer = (await rl.question(`Remove custom model ${terminalSafeText(routedSlug(model.provider, model.modelId))}? [y/N] `)).trim().toLowerCase();
     return answer === "y" || answer === "yes";
   } finally {
     rl.close();
@@ -331,11 +416,11 @@ function customModelCells(model: OcxCustomModel): string[] {
 }
 
 function printCustomModelGroup(provider: string, models: OcxCustomModel[]): void {
-  const rows = models.map(customModelCells);
+  const rows = models.map(model => customModelCells(model).map(terminalSafeText));
   const headers = ["ID", "MODEL", "DISPLAY NAME", "CONTEXT", "MODALITIES", "EFFORTS", "DEFAULT EFFORT"];
   const widths = headers.map((header, column) => Math.max(header.length, ...rows.map(row => row[column].length)));
   const line = (cells: string[]) => cells.map((cell, column) => cell.padEnd(widths[column])).join("  ");
-  console.log(`${provider}:`);
+  console.log(`${terminalSafeText(provider)}:`);
   console.log(`  ${line(headers)}`);
   for (const row of rows) console.log(`  ${line(row)}`);
   console.log();
@@ -347,7 +432,7 @@ function handleCustomList(args: string[]): void {
   rejectUnexpectedArgs(rest, LIST_CUSTOM_USAGE);
   const models = loadConfig().customModels ?? [];
   if (wantsJson) {
-    console.log(JSON.stringify(models, null, 2));
+    printJson(models);
     return;
   }
   if (models.length === 0) {
@@ -372,9 +457,9 @@ function handleConfiguredModels(args: string[]): void {
     const shown = redactSecretArgs(restArgs);
     const unknown = shown.filter(a => a.startsWith("-"));
     if (unknown.length > 0) {
-      console.error(`Unknown flag(s): ${unknown.join(", ")}`);
+      console.error(`Unknown flag(s): ${terminalSafeText(unknown.join(", "))}`);
     } else {
-      console.error(`Unexpected argument(s): ${shown.join(", ")}`);
+      console.error(`Unexpected argument(s): ${terminalSafeText(shown.join(", "))}`);
     }
     console.error("Usage: ocx models [--provider <name>] [--json]");
     process.exit(1);
@@ -383,23 +468,24 @@ function handleConfiguredModels(args: string[]): void {
   const config = loadConfig();
 
   if (providerFilter && !hasOwnProvider(config.providers, providerFilter)) {
-    console.error(`Provider "${providerFilter}" is not configured. See: ocx provider list`);
+    console.error(`Provider "${terminalSafeText(providerFilter)}" is not configured. See: ocx provider list`);
     process.exit(1);
   }
 
   const models = collectModels(config, providerFilter ?? undefined);
+  const note = "Local saved and router-known IDs include registry seeds, custom models and this process's discovery cache. Reasoning may be unknown for keychain credentials. Use ocx models live for the running catalog.";
 
   if (wantsJson) {
-    console.log(JSON.stringify({
+    printJson({
       models,
-      note: "Static config models only. Providers with liveModels=true may have additional models at runtime.",
-    }, null, 2));
+      note,
+    });
     return;
   }
 
   if (models.length === 0) {
     console.log("No models found in configured providers.");
-    if (!providerFilter) console.log("Providers may discover models dynamically at runtime (liveModels).");
+    console.log(`Note: ${note}`);
     return;
   }
 
@@ -413,19 +499,19 @@ function handleConfiguredModels(args: string[]): void {
 
   for (const [provName, provModels] of byProvider) {
     const isDefaultProv = provName === config.defaultProvider ? " (default provider)" : "";
-    console.log(`${provName}${isDefaultProv}:`);
+    console.log(`${terminalSafeText(provName)}${isDefaultProv}:`);
     for (const m of provModels) {
       const marker = m.isDefault ? " *" : "";
       const ctx = m.contextWindow ? ` (${Math.round(m.contextWindow / 1000)}k)` : "";
       const rates = m.price?.cost4;
       const pricing = rates ? ` ~$${rates.input}/$${rates.output} input/output per 1M tokens` : " price unknown";
-      console.log(`  ${m.model}${marker}${ctx}${pricing}`);
+      console.log(`  ${terminalSafeText(m.model)}${marker}${ctx}${pricing}`);
     }
     console.log();
   }
 
   console.log("* = default model for provider");
-  console.log("Note: providers with liveModels may have additional models at runtime.");
+  console.log(`Note: ${note}`);
 }
 
 export async function handleModels(args: string[], deps: ModelsCommandDeps = {}): Promise<void> {
@@ -451,7 +537,7 @@ export async function handleModels(args: string[], deps: ModelsCommandDeps = {})
     return;
   }
   if (subcommand === "list-custom") {
-    handleCustomList(rest);
+    await runPassiveRead(async () => { handleCustomList(rest); }, { onDiagnostic: message => console.error(message) });
     return;
   }
   if (isModelsRuntimeSubcommand(subcommand)) {
@@ -460,5 +546,5 @@ export async function handleModels(args: string[], deps: ModelsCommandDeps = {})
     if (code !== null) process.exitCode = code;
     return;
   }
-  handleConfiguredModels(subcommand === "list" ? rest : args);
+  await runPassiveRead(async () => { handleConfiguredModels(subcommand === "list" ? rest : args); }, { onDiagnostic: message => console.error(message) });
 }

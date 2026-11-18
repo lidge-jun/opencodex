@@ -327,30 +327,32 @@ describe("managed native Messages over Anthropic OAuth", () => {
     expect(serialized).not.toContain(SIGNATURE);
   });
 
-  test("genuine client identity survives credential refresh and selected account switch", async () => {
+  test.each(["cli", "local_projects"])("%s identity survives credential refresh and selected account switch", async (entrypoint) => {
     const ids = await seed(2);
     await markAccountNeedsReauth("anthropic", ids[1]!, true);
     const uuidA = "11111111-1111-4111-8111-111111111111";
     const uuidB = "22222222-2222-4222-8222-222222222222";
     await saveAccountCredential("anthropic", ids[0]!, { ...credential(0), accountId: uuidA });
     const headers = {
-      "User-Agent": "claude-cli/2.1.282 (external, cli)", "X-App": "cli",
+      "User-Agent": `claude-cli/2.1.327 (external, ${entrypoint})`, "X-App": "cli",
       "X-Claude-Code-Session-Id": "33333333-3333-4333-8333-333333333333",
       "X-Stainless-Lang": "js", "X-Stainless-Runtime": "node", "X-Stainless-Package-Version": "9.9.9",
     };
+    const perTurnBeta = "per-turn-control-2026-07-01";
+    const requestHeaders = { ...headers, "anthropic-beta": perTurnBeta };
     const metadata = { user_id: JSON.stringify({ account_uuid: uuidA, device_id: "fixture-device", session_id: "fixture-session" }) };
     const cfg = fixtureConfig();
     forgetAnthropicFailoverQuorum();
-    expect((await send(cfg, { ...BODY, stream: false, metadata }, headers)).response.status).toBe(200);
+    expect((await send(cfg, { ...BODY, stream: false, metadata }, requestHeaders)).response.status).toBe(200);
     const refreshed = "fixture-refreshed-access";
     await saveAccountCredential("anthropic", ids[0]!, { ...credential(0), accountId: uuidA, access: refreshed });
-    expect((await send(cfg, { ...BODY, stream: false, metadata }, headers)).response.status).toBe(200);
+    expect((await send(cfg, { ...BODY, stream: false, metadata }, requestHeaders)).response.status).toBe(200);
     await markAccountNeedsReauth("anthropic", ids[0]!, true);
     await saveAccountCredential("anthropic", ids[1]!, { ...credential(1), accountId: uuidB });
     await markAccountNeedsReauth("anthropic", ids[1]!, false);
     await setActiveAccount("anthropic", ids[1]!);
     forgetAnthropicFailoverQuorum();
-    expect((await send(cfg, { ...BODY, stream: false, metadata }, headers)).response.status).toBe(200);
+    expect((await send(cfg, { ...BODY, stream: false, metadata }, requestHeaders)).response.status).toBe(200);
     expect(sent.map(entry => entry.headers.get("authorization"))).toEqual([
       `Bearer ${credential(0).access}`, `Bearer ${refreshed}`, `Bearer ${credential(1).access}`,
     ]);
@@ -363,6 +365,7 @@ describe("managed native Messages over Anthropic OAuth", () => {
     for (const entry of sent) {
       for (const [name, value] of Object.entries(headers)) expect(entry.headers.get(name)).toBe(value);
       expect(entry.headers.has("x-api-key")).toBe(false);
+      expect(entry.headers.get("anthropic-beta")?.split(",")).toContain(perTurnBeta);
       expect(entry.headers.get("anthropic-beta")).not.toContain(UNKNOWN_BETA);
       expect(entry.body).not.toHaveProperty("clientIdentity");
     }
@@ -389,6 +392,55 @@ describe("managed native Messages over Anthropic OAuth", () => {
     const { response, text } = await send(fixtureConfig(), { ...BODY, stream: false });
     expect(response.status).toBe(200);
     expect(JSON.parse(text).content[0]).toMatchObject({ type: "tool_use", name: "lookup" });
+  });
+
+  test("Claude Code auto mode: an observed client keeps its tool names, safeguards and review verdicts", async () => {
+    await seed(1);
+    const REVIEW = "dangerous-tool-use-2026-09-03";
+    const safeguards = [{ type: "dangerous_tool_use", classifier_context: { v: 1, permission_mode: "auto" } }];
+    const verdicts = [{ type: "dangerous_tool_use", status: { type: "available", tool_uses: {
+      toolu_fixture: { type: "evaluated", outcome: "not_flagged" },
+    } } }];
+    const frames = [
+      { type: "message_start", message: { ...MESSAGE, content: [], stop_reason: null } },
+      { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_fixture", name: "lookup", input: {} } },
+      { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "{}" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "tool_use", stop_sequence: null, safeguard_results: verdicts }, usage: { output_tokens: 4 } },
+      { type: "message_stop" },
+    ];
+    const cfg = fixtureConfig();
+    cfg.providers.anthropic = { ...cfg.providers.anthropic!, fetch: (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      sent.push({ url: String(input), headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
+      return new Response(frames.map(frame => `event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`).join(""),
+        { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch } as OcxProviderConfig;
+    const identity = {
+      "User-Agent": "claude-cli/2.1.322 (external, cli)", "X-App": "cli",
+      "X-Claude-Code-Session-Id": "44444444-4444-4444-8444-444444444444",
+      "X-Stainless-Lang": "js", "X-Stainless-Runtime": "node",
+      "anthropic-beta": `${ALLOWED_BETA},${REVIEW}`,
+    };
+    const { response, text } = await send(cfg, { ...BODY, stream: true, safeguards }, identity);
+    expect(response.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    const wire = sent[0]!;
+    expect(wire.headers.get("anthropic-beta")?.split(",")).toEqual(expect.arrayContaining([ALLOWED_BETA, REVIEW]));
+    expect(wire.body.safeguards).toEqual(safeguards);
+    expect((wire.body.tools as { name: string }[])[0]!.name).toBe("lookup");
+    expect(JSON.stringify(wire.body.messages)).not.toContain("custom_lookup");
+    // The verdicts reach the client unchanged, keyed by the tool_use id the client knows.
+    const delta = text.split("\n").find(line => line.startsWith("data:") && line.includes("message_delta"));
+    expect(JSON.parse(delta!.slice(5)).delta.safeguard_results).toEqual(verdicts);
+    expect(text).toContain("\"name\":\"lookup\"");
+
+    // Without the observed identity the same request keeps the OAuth prefix and loses the review.
+    sent = [];
+    const generic = await send(cfg, { ...BODY, stream: true, safeguards }, { "anthropic-beta": `${ALLOWED_BETA},${REVIEW}` });
+    expect(generic.response.status).toBe(200);
+    expect((sent[0]!.body.tools as { name: string }[])[0]!.name).toBe("custom_lookup");
+    expect(sent[0]!.body).not.toHaveProperty("safeguards");
+    expect(sent[0]!.headers.get("anthropic-beta")).not.toContain(REVIEW);
   });
 
   test("the account is the one the selection holds, not merely the first stored", async () => {
@@ -821,7 +873,7 @@ test("shared quota exhaustion is bounded and never resends an already-tried alte
   }) as typeof fetch;
   const { response } = await send(config, { ...BODY, stream: false });
   expect(response.status).toBe(429);
-  expect(sent.length).toBeLessThanOrEqual(4);
+  expect(sent).toHaveLength(5);
   expect(new Set(sent.map(entry => entry.headers.get("authorization"))).size).toBe(sent.length);
 });
 
@@ -845,10 +897,11 @@ test("a pool whose every account refuses on spent quota answers the usage limit 
   expect(sent).toHaveLength(2);
   expect(JSON.parse(text).error).toMatchObject({
     type: "rate_limit_error",
-    message: `All Anthropic OAuth accounts have reached their usage limit; the first one resets at ${new Date(resetSeconds * 1000).toISOString()}`,
+    message: "The configured account usage limit was reached. Wait for its reset or adjust the usage limits before retrying.",
   });
+  expect(text.length).toBeGreaterThan(0); expect(text).not.toContain(new Date(resetSeconds * 1000).toISOString().replace(".000Z", "Z"));
   expect(Number(response.headers.get("retry-after"))).toBeGreaterThan(7_000);
-  expect(response.headers.get("request-id")).toBe("req_fixture_spent");
+  expect(response.headers.get("request-id")).toBeNull();
   expect(row.protocolTrace?.mode).toBe("native");
 });
 

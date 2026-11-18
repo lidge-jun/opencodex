@@ -18,7 +18,22 @@ export const SUBAGENT_SURFACE_GUIDE_URL = "https://opencodex.me/guides/subagent-
  * What changed in this release is the written default, not this resolution.
  */
 export function resolveMultiAgentMode(config: Pick<OcxConfig, "multiAgentMode">): MultiAgentMode {
-  return config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
+  return config.multiAgentMode === "v1" || config.multiAgentMode === "v2" || config.multiAgentMode === "v2-plaintext"
+    ? config.multiAgentMode
+    : "default";
+}
+
+/**
+ * Whether v2 collaboration messages are compiled to plaintext on the canonical
+ * ChatGPT forward route. Two independent opt-ins activate it: the standalone
+ * experimental `plaintextV2AgentMessages` flag, and mode `"v2-plaintext"`, which is
+ * itself the operator's explicit consent. Mode transitions never rewrite the flag,
+ * and the flag alone never changes the resolved mode.
+ */
+export function isPlaintextV2AgentMessagesEnabled(
+  config: Pick<OcxConfig, "multiAgentMode" | "plaintextV2AgentMessages">,
+): boolean {
+  return config.plaintextV2AgentMessages === true || resolveMultiAgentMode(config) === "v2-plaintext";
 }
 
 type AdvisoryConfig = Pick<OcxConfig, "multiAgentMode" | "multiAgentSurfaceAdvisoryVersion">;
@@ -27,12 +42,20 @@ type AdvisoryConfig = Pick<OcxConfig, "multiAgentMode" | "multiAgentSurfaceAdvis
  * True when this install should be told once that v1 is now the default surface.
  *
  * A v1 install is silent because it has nothing to decide. A fresh install is silent
- * because `getDefaultConfig()` writes the current version alongside the v1 default. What
- * is left is the case this exists for: an install that predates the change and is running
- * base or v2, where a ChatGPT-native parent cannot hand a task to a routed child.
+ * because `getDefaultConfig()` writes the current version alongside the v1 default.
+ *
+ * A "v2-plaintext" install is silent too: the mode explicitly opts into a different
+ * native-to-routed delivery mechanism, and entering it required the
+ * dedicated plaintext acknowledgement, so re-raising the generic "v1 recommended" notice
+ * would repeat a decision the operator just made. The stored advisory version is left
+ * alone, so leaving the mode for base or v2 still raises an unanswered advisory.
+ *
+ * What is left is the case this exists for: an install that predates the change and is
+ * running base or v2, where a ChatGPT-native parent cannot hand a task to a routed child.
  */
 export function multiAgentSurfaceAdvisoryRequired(config: AdvisoryConfig): boolean {
-  if (resolveMultiAgentMode(config) === "v1") return false;
+  const mode = resolveMultiAgentMode(config);
+  if (mode === "v1" || mode === "v2-plaintext") return false;
   return (config.multiAgentSurfaceAdvisoryVersion ?? 0) < MULTI_AGENT_SURFACE_ADVISORY_VERSION;
 }
 

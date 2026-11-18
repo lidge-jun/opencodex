@@ -3,10 +3,11 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../../src/config";
-import { startServer } from "../../src/server";
+import { createServerTracker } from "../helpers/leftover-servers";
+import { guardWebSocketDials } from "../helpers/websocket-dial-guard";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
-import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { OPENAI_PROVIDER_TIER_VERSION, type OcxConfig, type OcxProviderConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { chatCompletionsToResponsesBody, ChatCompletionsRequestError } from "../../src/chat/inbound";
@@ -60,6 +61,8 @@ let testDir = "";
 let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 const originalFetch = globalThis.fetch;
+const { startServer, stopLeftoverServers } = createServerTracker();
+let webSocketGuard: ReturnType<typeof guardWebSocketDials> | undefined;
 
 // A case that calls a handler directly never takes the writer lease startServer takes, so its
 // dispatch is refused. Never file-wide: most cases here start a real server that takes it too.
@@ -67,6 +70,7 @@ let releaseSpendHome: (() => void) | undefined;
 const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
 
 beforeEach(() => {
+  webSocketGuard = guardWebSocketDials();
   previousHome = process.env.OPENCODEX_HOME;
   isolatedCodexHome = installIsolatedCodexHome("ocx-chat-completions-");
   testDir = mkdtempSync(join(tmpdir(), "ocx-chat-completions-"));
@@ -74,16 +78,26 @@ beforeEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-afterEach(() => {
-  releaseSpendHome?.();
-  releaseSpendHome = undefined;
-  resetProviderRequestPacingForTest();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  isolatedCodexHome?.restore();
-  isolatedCodexHome = null;
-  globalThis.fetch = originalFetch;
-  if (testDir) removeTreeWithRetry(testDir);
+afterEach(async () => {
+  const refusedDials = webSocketGuard?.restore() ?? [];
+  try {
+    // A timed-out case never reaches its finally; its live server would fail every later start.
+    await stopLeftoverServers();
+  } finally {
+    try {
+      releaseSpendHome?.();
+      releaseSpendHome = undefined;
+      resetProviderRequestPacingForTest();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      isolatedCodexHome?.restore();
+      isolatedCodexHome = null;
+      globalThis.fetch = originalFetch;
+      if (testDir) removeTreeWithRetry(testDir);
+    } finally {
+      expect(refusedDials).toEqual([]);
+    }
+  }
 });
 
 function mockChatUpstream() {
@@ -2047,12 +2061,12 @@ test("POST /v1/chat/completions direct mode forwards caller Authorization", asyn
   }) as typeof fetch;
   saveConfig({
     port: 0,
-    defaultProvider: "openai",
+    defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        authMode: "forward",
+        authMode: "forward", upstreamWebsocket: false,
         codexAccountMode: "direct",
       },
     },
@@ -2164,13 +2178,12 @@ test("chat-native skips optional main enrichment while routed work survives drai
     await server.stop(true);
     saveConfig({
       port: 0,
-      openaiProviderTierVersion: 2,
-      defaultProvider: "openai",
+      defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
       providers: {
         openai: {
           adapter: "openai-responses",
           baseUrl: "https://chatgpt.com/backend-api/codex",
-          authMode: "forward",
+          authMode: "forward", upstreamWebsocket: false,
           codexAccountMode: "pool",
         },
       },
@@ -2228,12 +2241,12 @@ test("POST /v1/chat/completions finalizes native passthrough request logs", asyn
   }) as typeof fetch;
   saveConfig({
     port: 0,
-    defaultProvider: "openai",
+    defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        authMode: "forward",
+        authMode: "forward", upstreamWebsocket: false,
         codexAccountMode: "direct",
       },
     },
@@ -2301,12 +2314,12 @@ test("POST /v1/chat/completions logs native cyber terminals as 400 cyber_policy"
   }) as typeof fetch;
   saveConfig({
     port: 0,
-    defaultProvider: "openai",
+    defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        authMode: "forward",
+        authMode: "forward", upstreamWebsocket: false,
         codexAccountMode: "direct",
       },
     },
@@ -2661,12 +2674,12 @@ test("non-streaming /v1/chat/completions returns error status on upstream failur
   }) as typeof fetch;
   saveConfig({
     port: 0,
-    defaultProvider: "openai",
+    defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        authMode: "forward",
+        authMode: "forward", upstreamWebsocket: false,
         codexAccountMode: "direct",
       },
     },
@@ -2719,12 +2732,12 @@ test("streaming /v1/chat/completions does not clean-DONE after response.failed",
   }) as typeof fetch;
   saveConfig({
     port: 0,
-    defaultProvider: "openai",
+    defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        authMode: "forward",
+        authMode: "forward", upstreamWebsocket: false,
         codexAccountMode: "direct",
       },
     },
@@ -3292,12 +3305,12 @@ test("/v1/chat/completions non-OK upstream preserves top-level structured cyber_
   }) as typeof fetch;
   saveConfig({
     port: 0,
-    defaultProvider: "openai",
+    defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        authMode: "forward",
+        authMode: "forward", upstreamWebsocket: false,
         codexAccountMode: "direct",
       },
     },
@@ -3353,12 +3366,12 @@ test("/v1/chat/completions non-OK upstream preserves structured model_not_found"
   }) as typeof fetch;
   saveConfig({
     port: 0,
-    defaultProvider: "openai",
+    defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        authMode: "forward",
+        authMode: "forward", upstreamWebsocket: false,
         codexAccountMode: "direct",
       },
     },
@@ -3418,12 +3431,12 @@ test("/v1/chat/completions status:failed replay normalizes translation_buffer_li
   }) as typeof fetch;
   saveConfig({
     port: 0,
-    defaultProvider: "openai",
+    defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        authMode: "forward",
+        authMode: "forward", upstreamWebsocket: false,
         codexAccountMode: "direct",
       },
     },
@@ -3482,12 +3495,12 @@ test("/v1/chat/completions status:failed replay preserves structured cyber_polic
   }) as typeof fetch;
   saveConfig({
     port: 0,
-    defaultProvider: "openai",
+    defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        authMode: "forward",
+        authMode: "forward", upstreamWebsocket: false,
         codexAccountMode: "direct",
       },
     },
@@ -3544,12 +3557,12 @@ test("/v1/chat/completions status:failed replay preserves structured model_not_f
   }) as typeof fetch;
   saveConfig({
     port: 0,
-    defaultProvider: "openai",
+    defaultProvider: "openai", openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     providers: {
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
-        authMode: "forward",
+        authMode: "forward", upstreamWebsocket: false,
         codexAccountMode: "direct",
       },
     },

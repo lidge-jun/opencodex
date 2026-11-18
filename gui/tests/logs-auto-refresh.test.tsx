@@ -5,6 +5,7 @@ import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import Logs from "../src/pages/Logs";
+import { chooseOption, selectOptionValues, selectTrigger, selectValue } from "./helpers/custom-select";
 
 const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "IS_REACT_ACT_ENVIRONMENT", "ResizeObserver"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
@@ -163,7 +164,7 @@ function expectTableLoaded(container: HTMLElement, model: string): void {
   expect(container.textContent).toContain(model);
 }
 
-test("Logs: renders the ordered ten-column layout schema", async () => {
+test("Logs: renders the ordered column layout schema (client, time, status, provider · model, metrics, details)", async () => {
   globalThis.fetch = (async (input) => {
     if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
     return jsonResponse([sampleLog]);
@@ -174,18 +175,24 @@ test("Logs: renders the ordered ten-column layout schema", async () => {
 
   const colgroup = container.querySelector(".logs-table > colgroup");
   expect(colgroup).not.toBeNull();
-  expect([...colgroup!.children].map(column => column.className)).toEqual([
+  // Provider and request id now live in the provider · model cell; every column stays visible by default.
+  expect([...colgroup!.children].map(column => column.className.split(" ")[0])).toEqual([
+    "logs-col-client",
     "logs-col-time",
+    "logs-col-status",
+    "logs-col-model",
+    "logs-col-effort",
     "logs-col-tokens",
     "logs-col-rate",
     "logs-col-cost",
-    "logs-col-model",
-    "logs-col-effort",
-    "logs-col-provider",
-    "logs-col-status",
-    "logs-col-request",
     "logs-col-duration",
+    "logs-col-actions",
   ]);
+  const headers = [...container.querySelectorAll(".logs-table thead th")];
+  expect(headers).toHaveLength(10);
+  expect(headers[0]?.querySelector(".sr-only")?.textContent).toBe("Client");
+  const firstRow = container.querySelector<HTMLTableRowElement>(".logs-table tbody tr[data-index]");
+  expect(firstRow?.children).toHaveLength(10);
 
   await act(async () => { root.unmount(); });
 });
@@ -579,12 +586,7 @@ function visibleRequestIds(container: HTMLElement): string[] {
 }
 
 async function changeLogSelect(container: HTMLElement, label: string, value: string): Promise<void> {
-  const select = container.querySelector<HTMLSelectElement>(`.logs-filter-container select[aria-label="${label}"]`);
-  expect(select).not.toBeNull();
-  await act(async () => {
-    select!.value = value;
-    select!.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
-  });
+  await chooseOption(selectTrigger(container, `.logs-filter-container [role="combobox"][aria-label="${label}"]`), value);
   await flushMicrotasks();
 }
 
@@ -661,17 +663,16 @@ test("Logs: rich controls intersect rows while options retain the unfiltered rin
     expect(visibleRequestIds(container)).toEqual([
       "match", "other-surface", "not-intercepted", "other-status", "other-model", "other-provider",
     ]);
-    await act(async () => { container.querySelector<HTMLButtonElement>("#logs-surface-codex")!.click(); });
     await changeLogSelect(container, "Provider", "openai");
     await changeLogSelect(container, "Model", "model-a");
     await changeLogSelect(container, "Status", "errors");
     const intercepted = container.querySelector<HTMLInputElement>('.logs-filter-container input[type="checkbox"]')!;
     await act(async () => { intercepted.click(); });
-    expect(visibleRequestIds(container)).toEqual(["match"]);
-    expect(container.querySelector(".logs-filter-status")?.textContent).toContain("Showing 1 of 6");
-    expect([...container.querySelectorAll<HTMLOptionElement>('select[aria-label="Model"] option')].map(option => option.value))
+    expect(visibleRequestIds(container)).toEqual(["match", "other-surface"]);
+    expect(container.querySelector(".logs-filter-status")?.textContent).toContain("Showing 2 of 6");
+    expect(await selectOptionValues(selectTrigger(container, '[role="combobox"][aria-label="Model"]')))
       .toEqual(["", "model-a", "model-a-plus"]);
-    expect([...container.querySelectorAll<HTMLOptionElement>('select[aria-label="Provider"] option')].map(option => option.value))
+    expect(await selectOptionValues(selectTrigger(container, '[role="combobox"][aria-label="Provider"]')))
       .toEqual(["", "openai", "xai"]);
   } finally {
     await act(async () => { root.unmount(); });
@@ -771,19 +772,19 @@ test("Logs: ring rollover clears only vanished model and provider selections", a
     await changeLogSelect(container, "Status", "errors");
     await changeLogSelect(container, "Time", "1h");
     await enterConversation(container, "conversation-a");
-    const select = (label: string) => container.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
+    const select = (label: string) => selectTrigger(container, `[role="combobox"][aria-label="${label}"]`);
     rows = [{ ...rows[0]!, model: "model-b" }];
     await advanceSilentRefresh();
-    expect(select("Model").value).toBe("");
-    expect(select("Provider").value).toBe("openai");
+    expect(selectValue(select("Model"))).toBe("");
+    expect(selectValue(select("Provider"))).toBe("openai");
     expect(visibleRequestIds(container)).toEqual(["req-1"]);
     await changeLogSelect(container, "Model", "model-b");
     rows = [{ ...rows[0]!, provider: "xai" }];
     await advanceSilentRefresh();
-    expect(select("Provider").value).toBe("");
-    expect(select("Model").value).toBe("model-b");
-    expect(select("Status").value).toBe("errors");
-    expect(select("Time").value).toBe("1h");
+    expect(selectValue(select("Provider"))).toBe("");
+    expect(selectValue(select("Model"))).toBe("model-b");
+    expect(selectValue(select("Status"))).toBe("errors");
+    expect(selectValue(select("Time"))).toBe("1h");
     expect(container.querySelector<HTMLInputElement>('.logs-filter-container input[type="search"]')!.value).toBe("conversation-a");
     expect(visibleRequestIds(container)).toEqual(["req-1"]);
   } finally {
@@ -804,24 +805,25 @@ test("Logs: casing-only rollover retains model and provider selection with curre
     await changeLogSelect(container, "Model", "GPT-5");
     await changeLogSelect(container, "Provider", "OpenAI");
     await changeLogSelect(container, "Status", "success");
-    const select = (label: string) => container.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
-    expect(select("Model").value).toBe("GPT-5");
-    expect(select("Provider").value).toBe("OpenAI");
+    const select = (label: string) => selectTrigger(container, `[role="combobox"][aria-label="${label}"]`);
+    expect(selectValue(select("Model"))).toBe("GPT-5");
+    expect(selectValue(select("Provider"))).toBe("OpenAI");
     expect(visibleRequestIds(container)).toEqual(["selected"]);
 
     rows = rows.map(row => ({ ...row, model: row.model === "GPT-5" ? "gpt-5" : row.model }));
     await advanceSilentRefresh();
-    expect(select("Model").value).toBe("gpt-5");
-    expect(select("Model").selectedOptions[0]?.value).toBe("gpt-5");
-    expect(select("Provider").value).toBe("OpenAI");
+    expect(selectValue(select("Model"))).toBe("gpt-5");
+    // The kept value is one of the current options (the listed spelling), not an orphan.
+    expect(await selectOptionValues(select("Model"))).toContain("gpt-5");
+    expect(selectValue(select("Provider"))).toBe("OpenAI");
     expect(visibleRequestIds(container)).toEqual(["selected"]);
 
     rows = rows.map(row => ({ ...row, provider: row.provider === "OpenAI" ? "openai" : row.provider }));
     await advanceSilentRefresh();
-    expect(select("Provider").value).toBe("openai");
-    expect(select("Provider").selectedOptions[0]?.value).toBe("openai");
-    expect(select("Model").value).toBe("gpt-5");
-    expect(select("Status").value).toBe("success");
+    expect(selectValue(select("Provider"))).toBe("openai");
+    expect(await selectOptionValues(select("Provider"))).toContain("openai");
+    expect(selectValue(select("Model"))).toBe("gpt-5");
+    expect(selectValue(select("Status"))).toBe("success");
     expect(visibleRequestIds(container)).toEqual(["selected"]);
     expect(container.querySelector(".logs-filter-status")?.textContent).toContain("Showing 1 of 3");
   } finally {
@@ -850,8 +852,7 @@ test("Logs: detail conversation action and reset use the same filter state", asy
     await act(async () => { container.querySelector<HTMLButtonElement>(".logs-filter-status button")!.click(); });
     expect(visibleRequestIds(container)).toEqual(["other", "hashed"]);
     expect(container.querySelector(".logs-filter-status")).toBeNull();
-    expect(document.activeElement).toBe(container.querySelector("#logs-surface-all"));
-    expect(container.querySelector("#logs-surface-all")?.getAttribute("aria-checked")).toBe("true");
+    expect(document.activeElement === container.querySelector('.logs-filter-container input[type="search"]')).toBe(true);
     const detail = container.querySelector<HTMLButtonElement>('.log-detail-btn[aria-label="Details: other"]')!;
     expect(detail).not.toBeNull();
     await act(async () => { detail.click(); });
@@ -989,7 +990,7 @@ test("Logs: append, empty delta, mutation reset and legacy fallback keep the com
     await changeLogSelect(container, "Model", "gpt-test");
     step = 3;
     await advanceSilentRefresh();
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!.value).toBe("gpt-test");
+    expect(selectValue(selectTrigger(container, '[role="combobox"][aria-label="Model"]'))).toBe("gpt-test");
     expect(visibleRequestIds(container)).toEqual(["req-1"]);
     step = 4;
     await advanceSilentRefresh();
@@ -997,7 +998,7 @@ test("Logs: append, empty delta, mutation reset and legacy fallback keep the com
     expect(visibleRequestIds(container)).toEqual(["req-1"]);
     expectTableLoaded(container, "gpt-mutated");
     expect(container.textContent).toContain("987");
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!.value).toBe("");
+    expect(selectValue(selectTrigger(container, '[role="combobox"][aria-label="Model"]'))).toBe("");
     step = 5;
     await advanceSilentRefresh();
     expect(visibleRequestIds(container)).toEqual(["req-2"]);
@@ -1231,7 +1232,7 @@ test("Logs: switching apiBase clears the old proxy anchor for a legacy envelope"
     await changeLogSelect(container, "Time", "15m");
     expect(visibleRequestIds(container)).toEqual(["proxy-a"]);
     await renderLogsAt(root, "http://proxy-b");
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Time"]')!.value).toBe("15m");
+    expect(selectValue(selectTrigger(container, '[role="combobox"][aria-label="Time"]'))).toBe("15m");
     expect(visibleRequestIds(container)).toEqual(["legacy-fresh"]);
   } finally {
     try {
@@ -1296,8 +1297,8 @@ test("Logs: a late body from an aborted old apiBase cannot poison the new proxy 
     await act(async () => { container.querySelector<HTMLInputElement>(".logs-auto-refresh input")!.click(); });
     await advanceSilentRefresh();
     expect(urls.at(-1)).toContain("cursor=cursor-b");
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!.value).toBe("gpt-test");
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Provider"]')!.value).toBe("openai");
+    expect(selectValue(selectTrigger(container, '[role="combobox"][aria-label="Model"]'))).toBe("gpt-test");
+    expect(selectValue(selectTrigger(container, '[role="combobox"][aria-label="Provider"]'))).toBe("openai");
     monotonic += 30_000;
     await act(async () => { jest.advanceTimersByTime(30_000); });
     await flushMicrotasks();
@@ -1381,15 +1382,15 @@ test("Logs: reappearing options do not resurrect selections cleared by a success
     await changeLogSelect(container, "Status", "success");
     rows = [replacement];
     await advanceSilentRefresh();
-    const select = (label: string) => container.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
-    expect(select("Model").value).toBe("");
-    expect(select("Provider").value).toBe("");
+    const select = (label: string) => selectTrigger(container, `[role="combobox"][aria-label="${label}"]`);
+    expect(selectValue(select("Model"))).toBe("");
+    expect(selectValue(select("Provider"))).toBe("");
     expect(visibleRequestIds(container)).toEqual(["replacement"]);
     rows = [original, replacement];
     await advanceSilentRefresh();
-    expect(select("Model").value).toBe("");
-    expect(select("Provider").value).toBe("");
-    expect(select("Status").value).toBe("success");
+    expect(selectValue(select("Model"))).toBe("");
+    expect(selectValue(select("Provider"))).toBe("");
+    expect(selectValue(select("Status"))).toBe("success");
     expect(visibleRequestIds(container)).toEqual(["replacement", "original"]);
   } finally {
     await act(async () => { root.unmount(); });
@@ -1426,10 +1427,94 @@ test("Logs: a pending refresh reconciles the user's latest selection rather than
       ], "replaced", true));
     });
     await flushMicrotasks();
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!.value).toBe("MODEL-B");
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Provider"]')!.value).toBe("XAI");
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Status"]')!.value).toBe("errors");
+    expect(selectValue(selectTrigger(container, '[role="combobox"][aria-label="Model"]'))).toBe("MODEL-B");
+    expect(selectValue(selectTrigger(container, '[role="combobox"][aria-label="Provider"]'))).toBe("XAI");
+    expect(selectValue(selectTrigger(container, '[role="combobox"][aria-label="Status"]'))).toBe("errors");
     expect(visibleRequestIds(container)).toEqual(["current"]);
+  } finally {
+    await act(async () => { root.unmount(); });
+  }
+});
+
+
+test.each([
+  ["codex_cli", "Codex", "openai.svg", false], ["codex_desktop", "Codex", "openai.svg", false], ["codex_ide", "Codex", "openai.svg", false],
+  ["claude_code", "Claude Code", "claude-color.svg", false], ["claude_desktop", "Claude Desktop", "claude-color.svg", false],
+  ["grok", "Grok", "grok.svg", true], ["opencode", "OpenCode", "opencode.svg", true], ["aside", "Aside", "aside.svg", true],
+  ["other", "Other", null, false], ["unknown", "Unknown", null, false],
+])("Logs: classified client %s has an icon-only far-left chip", async (client, label, icon, mono) => {
+  // Intentionally conflicting legacy surface: it must not supply the chip label.
+  serveLogSnapshot(() => [{ ...sampleLog, client, surface: "grok" }]);
+  const { root, container } = await mountLogs();
+  try {
+    await flushMicrotasks();
+    const row = container.querySelector(".logs-table tbody tr[data-index]")!;
+    const chip = row.querySelector("td:first-child [data-log-client]")!;
+    expect(chip).not.toBeNull();
+    expect(chip.textContent).toBe("");
+    expect(chip.getAttribute("aria-label")).toBe(label);
+    expect(chip.getAttribute("role")).toBe("img");
+    if (icon) {
+      expect(chip.querySelector("img")?.getAttribute("src")).toBe(`/provider-icons/${icon}`);
+      expect(chip.querySelector("img")?.classList.contains("usage-source-mark--mono")).toBe(mono);
+    }
+    else expect(chip.querySelector("svg")).not.toBeNull();
+    expect(chip.getAttribute("data-log-client")).toBe(client);
+    expect(chip.classList.contains("rounded-full")).toBe(true);
+    expect(chip.querySelector('[aria-hidden="true"]')).not.toBeNull();
+    expect(container.querySelector(".logs-table th:first-child")?.textContent).toBe("Client");
+    expect(container.querySelector('[role="radiogroup"]') === null).toBe(true);
+  } finally {
+    await act(async () => { root.unmount(); });
+  }
+});
+
+test.each([
+  undefined, null, 42, true, {}, [], { client: "codex_cli" },
+  "Codex", "CODEX_CLI", " codex_cli ", "__proto__", "constructor", "toString",
+  "raw-private-agent-value", "<script>agent</script>", "x".repeat(2048),
+].map(client => [client]))("Logs: invalid or absent client %# stays neutral unknown", async client => {
+  serveLogSnapshot(() => [{ ...sampleLog, client }]);
+  const { root, container } = await mountLogs();
+  try {
+    await flushMicrotasks();
+    const chip = container.querySelector(".logs-table tbody td:first-child [data-log-client]")!;
+    expect(chip).not.toBeNull();
+    expect(chip.textContent).toBe("");
+    expect(chip.getAttribute("aria-label")).toBe("Unknown");
+    expect(chip.querySelector("svg")).not.toBeNull();
+    expect(chip.getAttribute("data-log-client")).toBe("unknown");
+    expect(chip.classList.contains("bg-surface-2")).toBe(true);
+    expect(chip.outerHTML).not.toContain("raw-private-agent-value");
+    expect(chip.outerHTML).not.toContain("<script>");
+    expect(visibleRequestIds(container)).toEqual(["req-1"]);
+  } finally {
+    await act(async () => { root.unmount(); });
+  }
+});
+
+test("Logs: client chip coexists with rerouting, interception and protocol diagnostics", async () => {
+  serveLogSnapshot(() => [{
+    ...sampleLog, client: "opencode", model: "requested-model", servedModel: "served-model",
+    shadowCallRewrittenFrom: "helper-model",
+    routeDecision: { routeKind: "policy", selected: { provider: "openai", model: "served-model", reason: "configured" } },
+    protocolTrace: {
+      v: 1, inbound: "chat", upstream: "chat", mode: "native",
+      requestPath: ["chat", "chat"], responsePath: ["chat", "chat"],
+      reasonCodes: ["same-wire-native"], contractVersion: "2026-09-24.1",
+    },
+  }]);
+  const { root, container } = await mountLogs();
+  try {
+    await flushMicrotasks();
+    const row = container.querySelector(".logs-table tbody tr[data-index]")!;
+    expect(row.querySelector('td:first-child [data-log-client="opencode"] img')?.getAttribute("src")).toBe("/provider-icons/opencode.svg");
+    expect(row.textContent).toContain("requested-model → served-model");
+    expect(row.textContent).toContain("helper-model");
+    expect(row.querySelector('[data-protocol-mode="native"]')?.textContent).toContain("Native");
+    await act(async () => { row.querySelector<HTMLButtonElement>(".log-detail-btn")!.click(); });
+    expect(container.querySelector('[aria-labelledby="log-detail-route"]')?.textContent).toContain("openai/served-model — configured");
+    expect(container.querySelector("dialog")?.textContent).toContain("Chat → Chat");
   } finally {
     await act(async () => { root.unmount(); });
   }

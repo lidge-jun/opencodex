@@ -1,6 +1,71 @@
 import { promptForAdminToken, type AdminTokenVerifier } from "./admin-token-dialog";
 import { createBoundedFetch, withFetchDeadline } from "./bounded-fetch";
-import { adminTokenPromptAllowed, standaloneApiTargets, type ApiPlane, type ApiTarget, type ApiTargets } from "./api-targets";
+import { adminTokenPromptAllowed, apiTargetIdentity, standaloneApiTargets, type ApiPlane, type ApiTarget, type ApiTargets } from "./api-targets";
+
+const EXPECTED_TARGET_HEADER = "x-opencodex-expected-target";
+export const TARGET_CHANGED_EVENT = "opencodex:target-changed";
+export const TARGET_PREFLIGHT_LEGACY_EVENT = "opencodex:target-preflight-legacy";
+let apiTargetGeneration = 0;
+let lastTargetIdentity: string | null = null;
+
+export interface ApiTargetCapture {
+  apiBase: string;
+  targetKey: string;
+  origin: string;
+  requestGeneration: number;
+  transport: ApiTarget["transport"];
+  relayTargetCheck?: "expected-target-v1";
+  /**
+   * An embedded component supplied its own base while this dashboard had no discovered
+   * topology. Such a capture is authoritative only until discovery configures a machine
+   * or shared plane; after that the live target wins and the capture is stale.
+   */
+  standalone?: true;
+}
+
+/** Non-secret generation fencing every Usage report and inventory. */
+export const USAGE_SESSION_CHANGED = "opencodex:usage-session-changed";
+type UsageSessionSnapshot = { generation: number; blocked: boolean };
+let usageSession: UsageSessionSnapshot = { generation: 0, blocked: false };
+export function usageSessionSnapshot(): UsageSessionSnapshot { return usageSession; }
+export function purgeLegacyUsageCache(): void {
+  try {
+    for (let i = sessionStorage.length - 1; i >= 0; i--) {
+      const key = sessionStorage.key(i);
+      if (key?.startsWith("ocx.usage.v2:")) sessionStorage.removeItem(key);
+    }
+  } catch { /* Storage may be unavailable. */ }
+}
+function changeUsageSession(blocked: boolean): void {
+  usageSession = { generation: usageSession.generation + 1, blocked };
+  purgeLegacyUsageCache();
+  if (typeof window !== "undefined") {
+    try { window.dispatchEvent(new window.Event(USAGE_SESSION_CHANGED)); } catch { /* Non-browser event environments. */ }
+  }
+}
+/** An old request cannot revoke a newer session. */
+export function denyUsageSession(generation: number): void {
+  if (usageSession.generation === generation && !usageSession.blocked) changeUsageSession(true);
+}
+
+/** A successful management mutation may change the source-facet inventory. */
+export const USAGE_SOURCE_INVENTORY_CHANGED = "opencodex:usage-source-inventory-changed";
+
+function sourceInventoryMutation(path: string | null, method: string): boolean {
+  if (!path) return false;
+  if (path === "/api/keys") return ["POST", "PATCH", "DELETE"].includes(method);
+  if (path === "/api/keys/rotate") return method === "POST" || method === "DELETE";
+  if (path === "/api/keys/rotate/commit") return method === "POST";
+  if (["/api/link/apply", "/api/link/issue", "/api/link/join"].includes(path)) return method === "POST";
+  if (/^\/api\/link\/[^/]+$/.test(path)) return method === "DELETE";
+  return /^\/api\/link\/[^/]+\/reconnect$/.test(path) && method === "POST";
+}
+
+export function sourceInventoryEventMatches(event: Event, apiBase: string): boolean {
+  const detail = (event as CustomEvent<{ apiBase?: string }>).detail;
+  try { return typeof detail?.apiBase === "string" && new URL(detail.apiBase || "/", window.location.href).href.replace(/\/+$/, "") === new URL(apiBase || "/", window.location.href).href.replace(/\/+$/, ""); }
+  catch { return false; }
+}
 
 /**
  * Fired after an unauthorized request cannot recover a session. The shell synchronizes
@@ -60,6 +125,7 @@ const sessionHandoffOwners = new WeakMap<ApiSessionState, object>();
 
 function reportSessionEvent(plane: ApiPlane, event: string): void {
   if (typeof window === "undefined") return;
+  if (plane === "shared" && event === SESSION_UNAVAILABLE_EVENT && !usageSession.blocked) changeUsageSession(true);
   // Take the constructor off the same window we dispatch on: a test harness (and a
   // sandboxed embed) can supply a document without installing CustomEvent globally.
   const Ctor = (window as unknown as { CustomEvent?: typeof CustomEvent }).CustomEvent
@@ -70,9 +136,10 @@ function reportSessionEvent(plane: ApiPlane, event: string): void {
   } catch { /* a shell that cannot receive the notice must not break the fetch path */ }
 }
 
-function advanceSessionGeneration(state: TargetRuntime): void {
+function advanceSessionGeneration(state: TargetRuntime, notifyUsage = true): void {
   state.generation = {};
   state.resolutionInFlight = null;
+  if (notifyUsage && state.target.id === "shared") changeUsageSession(!!state.logoutBarrier || !state.session.token);
 }
 
 function sessionSnapshot(state: TargetRuntime): SessionSnapshot {
@@ -90,10 +157,11 @@ function isCurrentRecovery(recovery: RecoveryAttempt): boolean {
 function updateSession(state: TargetRuntime, session: ApiSessionState, recovery?: RecoveryAttempt): void {
   if (recovery && !isCurrentRecovery(recovery)) return;
   const changed = state.session.token !== session.token;
-  advanceSessionGeneration(state);
+  advanceSessionGeneration(state, false);
   state.session = session;
   // Advance our own recovery before synchronous session-event listeners can supersede it.
   if (recovery) recovery.generation = state.generation;
+  if (state.target.id === "shared") changeUsageSession(!session.token);
   if (changed) reportSessionEvent(state.target.id, SESSION_CHANGED_EVENT);
 }
 
@@ -119,6 +187,11 @@ function sameTarget(left: ApiTarget, right: ApiTarget): boolean {
 }
 
 export function configureApiTargets(targets: ApiTargets): void {
+  const identity = apiTargetIdentity(targets);
+  if (lastTargetIdentity !== identity.key) {
+    lastTargetIdentity = identity.key;
+    apiTargetGeneration += 1;
+  }
   configuredTargets = targets;
   for (const plane of ["machine", "shared"] as const) {
     const current = runtimes.get(plane);
@@ -139,6 +212,135 @@ export function configureApiTargets(targets: ApiTargets): void {
 function runtime(plane: ApiPlane): TargetRuntime {
   ensureTargets();
   return runtimes.get(plane)!;
+}
+
+/**
+ * Capture the logical target at the user action boundary, before any await.
+ *
+ * A component may be mounted with its own `apiBase` (the dashboard's public embedding
+ * contract). While this page has no discovered topology that base is the target: the
+ * dashboard is standalone and the prop names the server the component manages. Once
+ * discovery configures a machine/shared plane the live target is authoritative, so a
+ * caller cannot retarget a configured dashboard by passing a different base.
+ */
+export function captureApiTarget(plane: ApiPlane = "shared", explicitBase?: string): ApiTargetCapture {
+  const targets = ensureTargets();
+  const state = runtime(plane);
+  const supplied = typeof explicitBase === "string" ? explicitBase.replace(/\/+$/, "") : "";
+  if (!targets.connected && supplied !== "") {
+    const resolved = new URL(supplied || "/", window.location.href);
+    return {
+      apiBase: supplied,
+      targetKey: resolved.origin,
+      origin: resolved.origin,
+      requestGeneration: apiTargetGeneration,
+      transport: "same-origin",
+      standalone: true,
+    };
+  }
+  return {
+    apiBase: state.target.baseUrl,
+    targetKey: apiTargetIdentity(targets).key,
+    origin: plane === "shared" ? targets.shared.serverOrigin : state.target.serverOrigin,
+    requestGeneration: apiTargetGeneration,
+    transport: state.target.transport,
+    ...(targets.relayTargetCheck === "expected-target-v1" ? { relayTargetCheck: "expected-target-v1" as const } : {}),
+  };
+}
+
+function targetChangedResponse(): Response {
+  return Response.json({ error: "target_changed" }, { status: 409, headers: { "Cache-Control": "no-store" } });
+}
+
+function targetCaptureMatches(capture: ApiTargetCapture): boolean {
+  const targets = ensureTargets();
+  if (capture.standalone) {
+    // Discovery invalidates an embedded base: the connected plane, not the prop, owns
+    // the target from then on.
+    return !targets.connected && apiTargetGeneration === capture.requestGeneration;
+  }
+  const state = runtime("shared");
+  return apiTargetGeneration === capture.requestGeneration
+    && apiTargetIdentity(targets).key === capture.targetKey
+    && state.target.baseUrl === capture.apiBase
+    && targets.shared.serverOrigin === capture.origin
+    && state.target.transport === capture.transport;
+}
+
+/** A completion may apply only while the action's captured target is still current. */
+export function isApiTargetCaptureCurrent(capture: ApiTargetCapture): boolean {
+  return targetCaptureMatches(capture);
+}
+
+async function legacyRelayPreflight(capture: ApiTargetCapture): Promise<Response | null> {
+  try {
+    const machineBase = runtime("machine").target.baseUrl;
+    const response = await globalThis.fetch(`${machineBase}/api/machine/status`, { cache: "no-store" });
+    if (!response.ok) return Response.json({ error: "target_check_unavailable" }, { status: 503 });
+    const status = await response.json().catch(() => null) as { sharedServerOrigin?: unknown } | null;
+    if (typeof status?.sharedServerOrigin !== "string" || status.sharedServerOrigin !== capture.origin) {
+      try { window.dispatchEvent(new window.Event(TARGET_CHANGED_EVENT)); } catch { /* non-browser */ }
+      return targetChangedResponse();
+    }
+    try {
+      window.dispatchEvent(new window.CustomEvent(TARGET_PREFLIGHT_LEGACY_EVENT, { detail: { targetKey: capture.targetKey } }));
+    } catch { /* non-browser */ }
+    return null;
+  } catch {
+    return Response.json({ error: "target_check_unavailable" }, { status: 503 });
+  }
+}
+
+/**
+ * Send a mutation through the target captured when the user acted. Authentication is read
+ * only after the captured target is verified. The expected-target header carries the
+ * capture's origin; whether that header is negotiated comes from the live target, so a
+ * same-identity downgrade uses the fresh legacy preflight.
+ */
+export async function targetFetch(
+  capture: ApiTargetCapture,
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  // Every stale capture is refused before authentication or fetch, regardless of who
+  // created it. A render-owned capture changes only the capture point, not the fence.
+  if (!targetCaptureMatches(capture)) return targetChangedResponse();
+  let requestUrl: URL;
+  try {
+    requestUrl = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+  } catch {
+    return targetChangedResponse();
+  }
+  const capturedBase = new URL(capture.apiBase || "/", window.location.href);
+  const capturedPath = capturedBase.pathname.replace(/\/$/, "");
+  if (requestUrl.origin !== capturedBase.origin
+    || (capturedPath !== "" && requestUrl.pathname !== capturedPath && !requestUrl.pathname.startsWith(`${capturedPath}/`))) {
+    return targetChangedResponse();
+  }
+  const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+  const mutation = method !== "GET" && method !== "HEAD";
+  const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+  if (capture.transport === "relay") {
+    // The capture names the target; the live target names the negotiated capability. A
+    // relay that downgraded on the same identity must not be trusted to check a header
+    // it no longer advertises: fall back to the fresh legacy preflight.
+    const negotiated = ensureTargets().relayTargetCheck;
+    if (negotiated === "expected-target-v1") {
+      headers.set(EXPECTED_TARGET_HEADER, capture.origin);
+    } else if (mutation) {
+      const refusal = await legacyRelayPreflight(capture);
+      if (refusal) return refusal;
+      if (!targetCaptureMatches(capture)) return targetChangedResponse();
+    }
+  }
+  const response = await globalThis.fetch(input, { ...init, headers });
+  if (capture.transport === "relay" && response.status === 409) {
+    const body = await response.clone().json().catch(() => null) as { error?: unknown } | null;
+    if (body?.error === "target_changed") {
+      try { window.dispatchEvent(new window.Event(TARGET_CHANGED_EVENT)); } catch { /* non-browser */ }
+    }
+  }
+  return response;
 }
 
 function clearSessionIfCurrent(plane: ApiPlane, expected: string | null): void {
@@ -209,7 +411,10 @@ export async function logoutApiSession(plane: ApiPlane): Promise<boolean> {
   } finally {
     bounded.clear();
     barrier.pending--;
-    if (!barrier.pending && !barrier.completed && state.logoutBarrier === barrier) state.logoutBarrier = null;
+    if (!barrier.pending && !barrier.completed && state.logoutBarrier === barrier) {
+      state.logoutBarrier = null;
+      if (plane === "shared") changeUsageSession(!state.session.token);
+    }
   }
 }
 
@@ -321,6 +526,14 @@ export function hasRememberedDashboardDevice(plane: ApiPlane): boolean {
   catch { return false; }
 }
 
+/** Sensitive Desktop operations never enter renewal, admin fallback or POST replay. */
+export function fetchDesktopSession(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
+  if (!installed) return globalThis.fetch(input, init);
+  const state = runtime("machine"), url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+  if (!targetMatchesUrl(state.target, url)) return Promise.reject(new Error("desktop_target_changed"));
+  return fetchApiSessionValidation("machine", input, init);
+}
+
 function targetAbsoluteBase(target: ApiTarget): URL {
   return new URL(target.baseUrl || "/", window.location.href);
 }
@@ -429,6 +642,12 @@ async function verifyAdminToken(recovery: RecoveryAttempt, token: string, rememb
       const response = await rawFetch!(input, init);
       if (signal.aborted || !isCurrentRecovery(recovery)) return "unavailable";
       if (response.status === 401) return "rejected";
+      // The token was accepted, but this dashboard address cannot hold a remembered device (#8338).
+      if (remember && response.status === 403) {
+        const body = await response.json().catch(() => null) as { code?: unknown } | null;
+        if (signal.aborted || !isCurrentRecovery(recovery)) return "unavailable";
+        return body?.code === "remember_requires_direct_origin" ? "remember-unsupported" : "unavailable";
+      }
       if (!response.ok) return "unavailable";
       if (remember) {
         const body = await response.json();
@@ -522,41 +741,79 @@ export function installApiAuthFetch(): void {
     if (!classified) return originalFetch(input, init);
     const state = runtime(classified.plane);
     const generation = state.generation;
+    const usageGeneration = usageSession.generation;
     const token = state.session.token;
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+    let mutation = false;
+    let usageRequest = false;
+    try {
+      const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+      const path = relativeTargetPath(state.target, url);
+      mutation = classified.plane === "shared" && sourceInventoryMutation(path, method);
+      usageRequest = path === "/api/usage" || path === "/api/usage/devices" || path === "/api/usage/source-facets";
+    } catch { /* A malformed URL cannot name an inventory mutation. */ }
+    const mutationBase = state.target.baseUrl;
+    const finish = (result: Response) => {
+      if (mutation && result.ok) {
+        try { window.dispatchEvent(new window.CustomEvent(USAGE_SOURCE_INVENTORY_CHANGED, { detail: { apiBase: mutationBase } })); }
+        catch { /* A notification failure must not turn a successful mutation into an error. */ }
+      }
+      return result;
+    };
     // Pairing exchanges must not carry the old shared-plane credential. The relay's
     // separate machine-session headers are still attached by sessionHeaders().
     const pairingExchange = classified.bootstrap && method === "POST";
     const [firstInput, firstInit] = withAuth(classified.plane, input, init, pairingExchange ? null : undefined);
+    const callerSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
     const response = await originalFetch(firstInput, firstInit);
-    if (classified.bootstrap || response.status !== 401) return response;
+    if (callerSignal?.aborted && (response.status === 401 || response.status === 403)) return response;
+    const recoverUsage = usageRequest && !callerSignal?.aborted;
+    if (!classified.bootstrap && classified.plane === "shared" && state.generation === generation
+      && response.status === 401) denyUsageSession(usageGeneration);
+    if (classified.bootstrap || response.status !== 401) return finish(response);
     if (runtimes.get(classified.plane) !== state || state.logoutBarrier) return response;
     const refreshed = state.session.token;
     if (refreshed && (refreshed !== token || state.generation !== generation)) {
       const revision = sessionSnapshot(state);
       const [retryInput, retryInit] = withAuth(classified.plane, input, init);
       const retry = await originalFetch(retryInput, retryInit);
-      if (!isCurrentRevision(classified.plane, revision)) return retry;
-      if (retry.status !== 401) return retry;
+      if (!isCurrentRevision(classified.plane, revision)) return finish(retry);
+      if (retry.status !== 401) return finish(retry);
       clearSessionIfCurrent(classified.plane, refreshed);
     } else {
       if (state.generation !== generation && !state.resolutionInFlight) return response;
       clearSessionIfCurrent(classified.plane, token);
     }
-    const callerSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
-    const next = await resolveTokenAfter401(classified.plane, token, callerSignal ?? undefined);
-    if (!next || !isCurrentRevision(classified.plane, next) || callerSignal?.aborted) return response;
-    if (!next.token) {
-      if (!callerSignal?.aborted && !hasApiSession(classified.plane)) reportSessionEvent(classified.plane, SESSION_UNAVAILABLE_EVENT);
+    // Usage invalidation unsubscribes its loader and aborts its signal. Once an actual 401
+    // arrived, let the existing single-flight recovery finish independently; a request
+    // already cancelled before the 401 must not start recovery.
+    const recoverySignal = recoverUsage ? undefined : callerSignal ?? undefined;
+    const recoveryRevision = sessionSnapshot(state);
+    let next: SessionSnapshot | null;
+    try {
+      next = await resolveTokenAfter401(classified.plane, token, recoverySignal);
+    } catch (error) {
+      if (!recoverUsage) throw error;
+      if (isCurrentRevision(classified.plane, recoveryRevision) && !state.logoutBarrier && !state.session.token) {
+        reportSessionEvent(classified.plane, SESSION_UNAVAILABLE_EVENT);
+      }
       return response;
     }
+    if (!next || !isCurrentRevision(classified.plane, next) || state.logoutBarrier) return response;
+    if (!next.token) {
+      // Usage recovery is deliberately detached after an observed 401: its loader was
+      // aborted by session invalidation, but the still-current recovery owns this notice.
+      if ((recoverUsage || !callerSignal?.aborted) && !hasApiSession(classified.plane)) reportSessionEvent(classified.plane, SESSION_UNAVAILABLE_EVENT);
+      return response;
+    }
+    if (callerSignal?.aborted) return response;
     const [retryInput, retryInit] = withAuth(classified.plane, input, init, next.token);
     const retry = await originalFetch(retryInput, retryInit);
     if (retry.status === 401 && isCurrentRevision(classified.plane, next)) {
       clearSessionIfCurrent(classified.plane, next.token);
       if (!callerSignal?.aborted && !hasApiSession(classified.plane)) reportSessionEvent(classified.plane, SESSION_UNAVAILABLE_EVENT);
     }
-    return retry;
+    return finish(retry);
   };
 }
 
@@ -571,6 +828,7 @@ export function fetchAudioUpload(endpoint: string, init: RequestInit): Promise<R
 }
 
 export function resetApiAuthFetchForTests(adminTokenPrompt: AdminTokenPrompt = defaultAdminTokenPrompt): void {
+  changeUsageSession(false);
   installed = false;
   rawFetch = null;
   configuredTargets = null;

@@ -12,6 +12,7 @@ import { tryAdmitTurn } from "../lifecycle";
 import type { RequestLogContext } from "../request-log";
 import { createSseInspector } from "../relay";
 import type { HandleResponsesOptions } from "./core-options";
+import { ESTIMATED_USAGE_HEADER } from "./estimated-usage";
 
 type HandleResponses = (
   req: Request,
@@ -56,22 +57,28 @@ function responseUsage(response: Record<string, unknown>): Record<string, number
   return Object.keys(usage).length > 0 ? usage : undefined;
 }
 
-function terminalResult(response: Record<string, unknown>, deltaText: string): JevModelInvokeResult {
-  if (response.error !== undefined && response.error !== null) throw new JevModelInvokeError("http", "decision model failed");
-  if (response.status !== "completed") throw new JevModelInvokeError("malformed", "decision model did not complete");
+function terminalResult(response: Record<string, unknown>, deltaText: string, includeUsage: boolean): JevModelInvokeResult {
+  const usage = includeUsage ? responseUsage(response) : undefined;
+  if (response.error !== undefined && response.error !== null) throw new JevModelInvokeError("http", "decision model failed", usage);
+  if (response.status !== "completed") throw new JevModelInvokeError("malformed", "decision model did not complete", usage);
   const text = messageOutputText(response.output) ?? deltaText;
-  const usage = responseUsage(response);
   return { text, ...(usage ? { usage } : {}) };
 }
 
-function decodeSse(bytes: Uint8Array): JevModelInvokeResult {
+function decodeSse(bytes: Uint8Array, includeUsage: boolean): JevModelInvokeResult {
   let completed: Record<string, unknown> | undefined;
   let terminal: string | undefined;
+  let terminalResponse: Record<string, unknown> | undefined;
   let deltaText = "";
   const inspector = createSseInspector({
     onTerminal: status => { terminal ??= status; },
     onCompletedResponse: value => { if (isRecord(value)) completed = value; },
     onParsedPayload: payload => {
+      // The payload callback runs before onTerminal. Keep the first terminal's raw response
+      // even when the inspector cannot reconstruct its output.
+      if (!terminal && includeUsage) {
+        terminalResponse = isRecord(payload) && isRecord(payload.response) ? payload.response : undefined;
+      }
       if (isRecord(payload) && payload.type === "response.output_text.delta" && typeof payload.delta === "string") {
         deltaText += payload.delta;
       }
@@ -84,9 +91,10 @@ function decodeSse(bytes: Uint8Array): JevModelInvokeResult {
     inspector.dispose();
   }
   if (terminal !== "completed" || !completed) {
-    throw new JevModelInvokeError(terminal === "failed" ? "http" : "malformed", "decision model did not complete");
+    const usage = terminal && terminalResponse ? responseUsage(terminalResponse) : undefined;
+    throw new JevModelInvokeError(terminal === "failed" ? "http" : "malformed", "decision model did not complete", usage);
   }
-  return terminalResult({ ...completed, status: completed.status ?? "completed" }, deltaText);
+  return terminalResult({ ...completed, status: completed.status ?? "completed" }, deltaText, includeUsage);
 }
 
 /**
@@ -171,8 +179,10 @@ export function createJevModelInvoker(context: JevModelInvokerContext): JevModel
       }
       const bounded = await readBoundedResponseBytes(response, { maxBytes: JEV_MAX_RESPONSE_BYTES, signal });
       if (bounded.oversized) throw new JevModelInvokeError("malformed", "decision response too large");
+      // A marked response carries an estimate for a client's display, never spend evidence.
+      const includeUsage = !response.headers.has(ESTIMATED_USAGE_HEADER);
       const result = hasResponseMediaType(response.headers, "text/event-stream")
-        ? decodeSse(bounded.bytes)
+        ? decodeSse(bounded.bytes, includeUsage)
         : (() => {
           let parsed: unknown;
           try {
@@ -181,10 +191,13 @@ export function createJevModelInvoker(context: JevModelInvokerContext): JevModel
             throw new JevModelInvokeError("malformed", "decision response is not JSON");
           }
           if (!isRecord(parsed)) throw new JevModelInvokeError("malformed", "decision response is not an object");
-          return terminalResult(parsed, "");
+          return terminalResult(parsed, "", includeUsage);
         })();
       usage = result.usage;
       return quotaOmitted ? { ...result, quotaOmitted: true } : result;
+    } catch (error) {
+      if (error instanceof JevModelInvokeError) usage = error.usage;
+      throw error;
     } finally {
       // No final log row is written for this detached context, so settle its spend here.
       childLog.spendTracker?.settle(childLog.usage ?? (usage

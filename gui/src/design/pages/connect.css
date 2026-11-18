@@ -1,0 +1,329 @@
+/* v2 styles for the Connect (integrations, Claude, API keys) and the Set up hub pages. Imported by design/theme.css into the `bridge`
+   layer, after bridge.css: above every v1 sheet, below Tailwind utilities. Prefer
+   Tailwind classes in the components; keep this file for what utilities cannot say.
+
+   Connect markup keeps the v1 class names its tests and v1 layout rules rely on
+   (stretched card link, overflow-safe card grid, workspace container queries), so this
+   file repaints those classes in the React Bits application-UI language: 12px surface
+   cards with a hairline, an 8px inset for code, ruled rows, quiet ghost actions and the
+   inverse primary only for what is on or selected. */
+
+/* ---- one width for every Connect tab ------------------------------------------
+   The API keys and Claude panels stay mounted (hidden) after a visit and each asked
+   .main-inner for its own width, so the page head jumped when switching tabs. */
+.main-inner:has(.integrations-page) { max-width: 1120px; }
+
+/* ---- tab strip: one recessed track that wraps, the current tab raised ---------- */
+.integrations-page > .page-sub { max-width: 68ch; margin-top: 6px; }
+.connect-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  margin: 20px 0 24px;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.connect-tabs > .page-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 9px;
+  color: var(--ocx-fg-muted);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  box-shadow: none;
+}
+.connect-tabs > .page-tab:hover { background: transparent; color: var(--ocx-fg); }
+.connect-tabs > .page-tab--active,
+.connect-tabs > .page-tab--active:hover {
+  background: light-dark(var(--ocx-raised), var(--ocx-surface-2));
+  color: var(--ocx-fg);
+  box-shadow: 0 1px 2px rgb(16 24 40 / 0.08), 0 0 0 1px var(--ocx-line);
+}
+.connect-tabs > .page-tab:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 1px; }
+.connect-tabs > .page-tab > .client-mark { margin-right: 0; }
+/* inactive marks sit back a little, so the strip reads as words first */
+.connect-tabs > .page-tab:not(.page-tab--active) > .client-mark { opacity: 0.8; }
+.connect-tabs-divider { width: 1px; height: 18px; margin: 0 6px; background: var(--ocx-line-strong); }
+
+/* ---- overview: stat tiles ------------------------------------------------------- */
+.integrations-overview .integration-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
+  gap: 12px;
+  padding: 0;
+  margin: 0 0 32px;
+  border: 0;
+  background: none;
+}
+.integrations-overview .integration-summary-cell {
+  gap: 4px;
+  min-width: 0;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+}
+.integrations-overview .integration-summary-label { color: var(--ocx-fg-subtle); font-size: 12px; font-weight: 500; }
+.integrations-overview .integration-summary-cell > strong {
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ocx-fg);
+}
+.integrations-overview .integration-summary-cell[data-tone="ok"] > strong { color: var(--ocx-success); }
+.integrations-overview .integration-summary-cell[data-tone="warn"] > strong { color: var(--ocx-warning); }
+.integrations-overview .integration-summary-cell > strong.integration-summary-when {
+  font-size: 14px;
+  line-height: 28px;
+  font-weight: 500;
+  letter-spacing: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- overview: catalog head with "?" and the bulk action -------------------------- */
+.connect-catalog-head { display: flex; align-items: center; gap: 4px; margin: 0 0 12px; }
+.connect-catalog-head > h3,
+.integrations-overview > h3 { margin: 0; font-size: 15px; line-height: 24px; font-weight: 600; letter-spacing: -0.01em; }
+.connect-catalog-head > .connect-disable-all { margin-left: auto; color: var(--ocx-fg-muted); }
+.connect-catalog-head > .connect-disable-all:hover:not(:disabled) { color: var(--ocx-danger); background: var(--ocx-danger-soft); }
+.connect-help-panel { margin: 0 0 12px; max-width: 72ch; }
+.integrations-overview > h3 { margin: 40px 0 12px; }
+
+/* ---- overview: the API keys row, one quiet line -------------------------------- */
+.integrations-overview .integration-api-keys-row {
+  margin: 0 0 12px;
+  padding: 10px 12px 10px 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+}
+.integrations-overview .integration-api-keys-copy { flex-direction: row; align-items: baseline; flex-wrap: wrap; column-gap: 10px; }
+.integrations-overview .integration-api-keys-copy h4 { font-size: 14px; font-weight: 600; }
+.integrations-overview .integration-api-keys-row .integration-meta { font-size: 13px; color: var(--ocx-fg-muted); }
+
+/* ---- overview: app cards --------------------------------------------------------- */
+.integrations-overview .integration-cards {
+  grid-template-columns: repeat(auto-fill, minmax(min(250px, 100%), 1fr));
+  gap: 12px;
+  margin: 0;
+}
+.integrations-overview .integration-card {
+  gap: 10px;
+  padding: 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px transparent;
+  transition: background-color 0.2s, box-shadow 0.2s;
+}
+.integrations-overview .integration-card:hover { border-color: transparent; background: var(--ocx-raised); box-shadow: inset 0 0 0 1px var(--ocx-line), var(--ocx-shadow-sm); }
+.integrations-overview .integration-card[data-tone="attention"] { box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ocx-warning) 35%, transparent); }
+.integrations-overview .integration-card-link::after { border-radius: 12px; }
+.integrations-overview .integration-card-link:focus-visible::after { outline-color: var(--ocx-highlight); }
+.integrations-overview .integration-card-head { gap: 10px; }
+.integrations-overview .integration-card-head h4 { font-size: 14px; line-height: 20px; font-weight: 600; letter-spacing: -0.005em; }
+.integrations-overview .integration-card .integration-path,
+.integrations-overview .integration-card .integration-meta { font-size: 12px; line-height: 18px; color: var(--ocx-fg-muted); min-height: 36px; }
+.integrations-overview .integration-card .integration-path { color: var(--ocx-fg-subtle); }
+.integrations-overview .integration-card-actions { padding-top: 2px; }
+.integrations-overview .integration-card-actions > .btn {
+  min-height: var(--ocx-control-h-sm);
+  padding: 0 10px;
+  font-size: 13px;
+  color: var(--ocx-fg-muted);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+.integrations-overview .integration-card-actions > .btn:hover:not(:disabled) { color: var(--ocx-fg); background: var(--ocx-surface-2); }
+.integrations-overview .integration-card-actions > .btn-danger { color: var(--ocx-danger); }
+
+/* state pill: a dot and a word, so the colour is never the only signal */
+.integrations-overview .integration-card .badge,
+.integration-client-page .integration-client-head .badge {
+  gap: 6px;
+  padding: 1px 8px 1px 7px;
+  border: 0;
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: var(--ocx-surface-2);
+  color: var(--ocx-fg-muted);
+}
+.integrations-overview .integration-card .badge::before,
+.integration-client-page .integration-client-head .badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.85;
+}
+:is(.integrations-overview .integration-card, .integration-client-page .integration-client-head) .badge[data-integration-state="current"] { background: var(--ocx-success-soft); color: var(--ocx-success); }
+:is(.integrations-overview .integration-card, .integration-client-page .integration-client-head) .badge[data-integration-state="stale"] { background: var(--ocx-warning-soft); color: var(--ocx-warning); }
+:is(.integrations-overview .integration-card, .integration-client-page .integration-client-head) .badge:is([data-integration-state="conflict"], [data-integration-state="unsafe"]) { background: var(--ocx-danger-soft); color: var(--ocx-danger); }
+:is(.integrations-overview .integration-card, .integration-client-page .integration-client-head) .badge:is([data-integration-state="not-installed"], [data-integration-state="unknown"]) { background: transparent; color: var(--ocx-fg-subtle); padding-left: 0; }
+
+/* ---- overview: apps not on this computer, folded ----------------------------- */
+.connect-elsewhere { margin: 16px 0 0; border-radius: 12px; }
+.connect-elsewhere > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  color: var(--ocx-fg);
+  list-style: none;
+}
+.connect-elsewhere > summary::-webkit-details-marker { display: none; }
+.connect-elsewhere > summary::before {
+  content: "";
+  align-self: center;
+  width: 6px;
+  height: 6px;
+  margin: 0 4px 0 2px;
+  border-right: 1.5px solid var(--ocx-fg-subtle);
+  border-bottom: 1.5px solid var(--ocx-fg-subtle);
+  transform: rotate(-45deg);
+  transition: transform 0.2s;
+}
+.connect-elsewhere[open] > summary::before { transform: rotate(45deg); }
+@media (prefers-reduced-motion: reduce) { .connect-elsewhere > summary::before { transition: none; } }
+.connect-elsewhere > summary:hover { background: var(--ocx-surface); }
+.connect-elsewhere > summary:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 1px; }
+.connect-elsewhere-title { font-size: 14px; font-weight: 500; }
+.connect-elsewhere-hint { font-size: 13px; color: var(--ocx-fg-subtle); }
+.integrations-overview .integration-cards--elsewhere {
+  grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr));
+  gap: 8px;
+  margin: 8px 0 0;
+}
+.integrations-overview .integration-cards--elsewhere .integration-card { padding: 10px 12px; gap: 0; background: transparent; box-shadow: inset 0 0 0 1px var(--ocx-line); }
+.integrations-overview .integration-cards--elsewhere .integration-card:hover { background: var(--ocx-surface); box-shadow: inset 0 0 0 1px var(--ocx-line); }
+.integrations-overview .integration-cards--elsewhere .integration-card-head h4 { font-weight: 500; color: var(--ocx-fg-muted); }
+.integrations-overview .integration-cards--elsewhere .integration-card :is(.integration-path, .integration-meta, .integration-card-actions) { display: none; }
+.integrations-overview .integration-cards--elsewhere .badge { display: none; }
+
+/* ---- overview: empty file-client panel and the rollback list --------------------- */
+.integrations-overview .integration-empty { margin-top: 16px; border: 0; border-radius: 12px; background: var(--ocx-surface); color: var(--ocx-fg-muted); }
+.integrations-overview .integration-empty h4 { margin: 0 0 4px; color: var(--ocx-fg); font-size: 14px; font-weight: 600; }
+.integrations-overview .integration-empty p { margin: 0; }
+.integration-history { border: 0; border-radius: 12px; background: var(--ocx-surface); box-shadow: inset 0 0 0 1px var(--ocx-line); }
+.integration-history-list .integration-history-row + .integration-history-row,
+.integration-history-older,
+.integration-history-older .integration-history-row:first-child { border-color: var(--ocx-line); }
+.integration-history-row { padding: 10px 14px; }
+.integration-history-kind { font-size: 12px; }
+
+/* ---- Claude tab: settings as quiet framed rows, sections with air between ---------- */
+.claude-page--embedded > .page-sub { margin: 0 0 20px; max-width: 68ch; }
+.claudecode-doc { gap: 28px; }
+.claudecode-doc .ccw-section { gap: 10px; }
+.claudecode-doc .ccw-section-title { font-size: 15px; line-height: 24px; letter-spacing: -0.01em; }
+.claudecode-doc .ccw-section-title .count {
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--ocx-accent-soft);
+  color: var(--ocx-fg-muted);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  line-height: 18px;
+}
+.claudecode-doc .card,
+.claude-page .claude-desktop-roles {
+  border: 0;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.claudecode-doc .setting-row { padding: 14px 18px; }
+.claudecode-doc .setting-row + .setting-row,
+.claudecode-doc .card > * + .setting-row { border-top: 1px solid var(--ocx-line); }
+.claudecode-doc .setting-label .title { font-size: 14px; font-weight: 500; letter-spacing: -0.005em; }
+.claudecode-doc .setting-label .desc { font-size: 13px; line-height: 1.5; color: var(--ocx-fg-muted); }
+.claudecode-doc .claudecode-master-card { box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ocx-danger) 30%, transparent); }
+.claude-quickstart-hint { margin: 0 0 10px; color: var(--ocx-fg-muted); }
+.claude-quickstart-manual { margin: 12px 0 0; }
+.claude-quickstart-manual > summary { cursor: pointer; padding: 2px; color: var(--ocx-fg-muted); }
+.claude-quickstart-manual > summary:hover { color: var(--ocx-fg); }
+.claude-quickstart-manual[open] > summary { margin-bottom: 8px; }
+.claudecode-doc .ccw-savebar { padding: 10px 0 12px; border-top-color: var(--ocx-line); background: var(--ocx-bg); }
+.claudecode-doc .ccw-savebar-state.dirty { color: var(--ocx-warning); }
+
+/* ---- API keys tab: the embedded page head steps down a level under "Connect" --------- */
+.integrations-page .api-page > .page-head > h2 { font-size: 20px; line-height: 28px; letter-spacing: -0.02em; }
+.integrations-page .api-page > .page-sub { max-width: 72ch; color: var(--ocx-fg-muted); }
+.integrations-page .api-page :is(.api-panel, .panel) {
+  border: 0;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.integrations-page .api-page .panel-title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+/* key list: a framed table of ruled rows (React Bits settings-form-5) */
+.integrations-page .awi-keylist-table { border-collapse: separate; border-spacing: 0; }
+.integrations-page .awi-keylist-table th {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--ocx-line);
+  background: transparent;
+  color: var(--ocx-fg-subtle);
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.integrations-page .awi-keylist-table td { padding: 10px 12px; border-bottom: 1px solid var(--ocx-line); vertical-align: middle; }
+.integrations-page .awi-keylist-table tbody tr:last-child td { border-bottom: 0; }
+.integrations-page .awi-keylist-table tbody tr:hover td { background: color-mix(in oklab, var(--ocx-fg) 3%, transparent); }
+.integrations-page .awi-keylist-name { font-weight: 500; color: var(--ocx-fg); }
+.integrations-page .awi-keylist-key {
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--ocx-bg);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.integrations-page .awi-keylist-key:hover { box-shadow: inset 0 0 0 1px var(--ocx-line-strong); }
+.integrations-page .awi-keylist-key:focus-visible,
+.integrations-page .awi-keylist-name:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 2px; }
+.integrations-page .awi-keylist-delete { border-radius: 8px; color: var(--ocx-fg-subtle); background: transparent; }
+.integrations-page .awi-keylist-delete:hover:not(:disabled) { color: var(--ocx-danger); background: var(--ocx-danger-soft); }
+.integrations-page .api-key-reveal {
+  border-radius: 10px;
+  background: var(--ocx-success-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ocx-success) 30%, transparent);
+}
+.integrations-page .api-key-reveal code { font-family: var(--font-code); overflow-wrap: anywhere; }
+
+/* client config: one framed list of ruled rows; copy stays the row's main action, but quiet */
+.integrations-page .awi-clientconfig-rows {
+  gap: 0;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--ocx-bg);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.integrations-page .awi-clientconfig-row { border: 0; border-radius: 0; background: transparent; padding: 10px 12px; }
+.integrations-page .awi-clientconfig-row + .awi-clientconfig-row { border-top: 1px solid var(--ocx-line); }
+.integrations-page .awi-clientconfig-row:hover { background: color-mix(in oklab, var(--ocx-fg) 3%, transparent); }
+.integrations-page .awi-clientconfig-name { font-weight: 500; }
+.integrations-page .awi-clientconfig-meta { color: var(--ocx-fg-subtle); }
+.integrations-page .awi-clientconfig-row-actions .btn-primary {
+  background: var(--ocx-raised);
+  color: var(--ocx-fg);
+  box-shadow: inset 0 0 0 1px var(--ocx-line-strong), var(--ocx-shadow-sm);
+}
+.integrations-page .awi-clientconfig-row-actions .btn-primary:hover:not(:disabled) { background: var(--ocx-surface); filter: none; }
+.integrations-page .awi-clientconfig-row-actions .btn:not(.btn-primary) { background: transparent; border-color: transparent; box-shadow: none; color: var(--ocx-fg-muted); }
+.integrations-page .awi-clientconfig-row-actions .btn:not(.btn-primary):hover:not(:disabled) { background: var(--ocx-surface-2); color: var(--ocx-fg); }

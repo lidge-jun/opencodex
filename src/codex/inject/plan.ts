@@ -12,17 +12,18 @@
 import { existsSync, readFileSync } from "node:fs";
 import { websocketsEnabled } from "../../config";
 import {
+  hasPaginatedOpenaiThreads,
+  HISTORY_PAGINATED_OPENAI_NEEDS_ROOT_OVERRIDE,
   HISTORY_RELABEL_STANDS_DOWN,
   preflightCodexHistoryInjection,
 } from "../history-provider";
 import {
-  journaledInjectedOpenaiBaseUrl,
-  journaledInjectedRealtimeWsBaseUrl,
+  journaledInjectedRootValues,
   journaledInjectedRootWebSearch,
   journaledInjectedSubagentDefaults,
   journaledReplacedRootWebSearch,
 } from "../journal";
-import { stripJournaledOpenaiBaseUrl } from "../injected-marker";
+import { REALTIME_WS_BASE_URL_KEY, stripJournaledOpenaiBaseUrl } from "../injected-marker";
 import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, resolveCodexStateDbPath } from "../paths";
 import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "../subagent-defaults";
 import type { OcxConfig } from "../../types";
@@ -52,7 +53,7 @@ import {
   usesProviderTable,
   type CodexRoutingTarget,
 } from "./routing-target";
-import { applyPaginatedOpenaiCompat } from "./paginated-openai-compat";
+import { applyPaginatedOpenaiCompat, codexLocksResumeProvider } from "./paginated-openai-compat";
 
 /** Everything the plan needs that is not the config.toml input text. */
 export interface CodexInjectionPlanContext {
@@ -62,6 +63,12 @@ export interface CodexInjectionPlanContext {
   readonly catalogPathOption: string | null | undefined;
   /** Journal reads stay read-only while a client guard owns the write channel. */
   readonly journalReadOnly: boolean;
+  /**
+   * The resolved Codex version from a passive read, or null when unknown. From 0.166 a paginated
+   * openai-tagged row can no longer resume under opencodex, so the table transition is refused
+   * instead of retaining the root override (#8191).
+   */
+  readonly codexVersion?: string | null;
 }
 
 /** The ok-variant of the plan: every derived artifact and reportable warning. */
@@ -185,11 +192,14 @@ export function deriveCodexInjectionPlan(
   // Design B -> provider-table transition (hostname change, authless opt-in) cannot leave our
   // own root URLs behind as if they were the user's, and so re-inject never journals them as
   // not-ours (which would make them unrestorable).
-  content = stripJournaledOpenaiBaseUrl(
-    content,
-    journaledInjectedOpenaiBaseUrl({ readOnly: ctx.journalReadOnly }),
-    journaledInjectedRealtimeWsBaseUrl({ readOnly: ctx.journalReadOnly }),
-  );
+  // Every URL an injection under this journal wrote counts, not only the latest: the Codex app can
+  // write back an earlier one from its own copy of the file.
+  for (const url of journaledInjectedRootValues("openai_base_url", { readOnly: ctx.journalReadOnly })) {
+    content = stripJournaledOpenaiBaseUrl(content, url, null);
+  }
+  for (const url of journaledInjectedRootValues(REALTIME_WS_BASE_URL_KEY, { readOnly: ctx.journalReadOnly })) {
+    content = stripJournaledOpenaiBaseUrl(content, null, url);
+  }
   // Whether this home already published the provider id that its thread rows may reference.
   // Design B strips the table below; it may only stay stripped if those rows can be relabeled.
   const hadOcxProviderTableOnDisk = hasOcxProviderTable(content);
@@ -375,7 +385,17 @@ export function deriveCodexInjectionPlan(
    * existing provider references resolvable. Existing provider definitions are retained
    * before the witness; no post-commit compensation may overwrite a newer native write.
    */
-  const compat = applyPaginatedOpenaiCompat(historyPreflight(), routingTarget, content, eol);
+  // Client compaction relabels nothing, so its preflight scans no rows, yet it still makes
+  // `opencodex` the default provider. On a Codex that locks resume to the creating provider
+  // (#8191), probe the store read-only so the same refusal applies; older or unknown versions
+  // keep the retained override and add no read.
+  let preflight = historyPreflight();
+  if (preflight === null && compactionOnly && preflightTableMode && config?.syncResumeHistory !== false
+    && codexLocksResumeProvider(ctx.codexVersion)
+    && hasPaginatedOpenaiThreads(resolveCodexStateDbPath({ readConfig: () => content })) === true) {
+    preflight = HISTORY_PAGINATED_OPENAI_NEEDS_ROOT_OVERRIDE;
+  }
+  const compat = applyPaginatedOpenaiCompat(preflight, routingTarget, content, eol, ctx.codexVersion);
   content = compat.content;
   keepRootOverrideAlongsideTable ||= compat.retainedRootOverride;
   const observedHistoryRefusal = compat.refusal;

@@ -1,13 +1,15 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getAccountSet, saveCredential } from "../../../src/oauth/store";
+import { getAccountSet, replaceProviderAccountSet, saveCredential } from "../../../src/oauth/store";
+import { oauthAccountLogLabel } from "../../../src/codex/account-label";
 import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../../src/providers/quota";
 import { cachedKiroQuotaMetricRows } from "../../../src/providers/kiro-quota-metrics";
 import { sanitizeKiroQuota } from "../../../src/providers/kiro-account-state-disk";
 import { createRequestMetricsOwner } from "../../../src/server/request-metrics";
-import { removeTreeWithRetry } from "../../helpers/remove-tree";
+import { BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS, removeTreeAfterBackgroundWork } from "../../helpers/remove-tree";
 
 const previousHome = process.env.OPENCODEX_HOME;
 const realFetch = globalThis.fetch;
@@ -17,13 +19,13 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = home;
   clearAccountQuotaCache();
 });
-afterEach(() => {
+afterEach(async () => {
   globalThis.fetch = realFetch;
   clearAccountQuotaCache();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  removeTreeWithRetry(home);
-});
+  await removeTreeAfterBackgroundWork(home);
+}, BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
 
 async function account(id: string) {
   await saveCredential("kiro", { access: `access-${id}`, refresh: `refresh-${id}`,
@@ -73,13 +75,22 @@ test("future, stale, reset-passed, and identity-mismatched rows are omitted", as
 
 test("stale leading accounts do not hide 32 later valid distinct gauges", async () => {
   const now = Date.now();
-  for (let i = 0; i < 35; i++) {
-    const a = await account(String(i).padStart(3, "0"));
-    seed(a.id, i < 3 ? now - 31 * 60_000 : now);
-  }
+  const accounts = Array.from({ length: 35 }, (_, i) => {
+    const identity = String(i).padStart(3, "0");
+    return { id: createHash("sha256").update(identity).digest("hex").slice(0, 32),
+      credential: { access: `access-${identity}`, refresh: `refresh-${identity}`, expires: now + 3_600_000, accountId: identity },
+      addedAt: now, loginId: randomUUID() };
+  }).sort((a, b) => a.id.localeCompare(b.id));
+  // Exercise the real store once; this regression covers projection order, not repeated logins.
+  await replaceProviderAccountSet("kiro", { activeAccountId: accounts[34]!.id, accounts });
+  const stored = getAccountSet("kiro")!.accounts;
+  expect(stored.map(row => row.id)).toEqual(accounts.map(row => row.id));
+  expect(new Set(stored.map(row => row.credential.accountId)).size).toBe(35);
+  for (let i = 0; i < stored.length; i++) seed(stored[i]!.id, i < 3 ? now - 31 * 60_000 : now);
   const rows = cachedKiroQuotaMetricRows(now);
   expect(rows).toHaveLength(32);
   expect(new Set(rows.map(row => row.account)).size).toBe(32);
+  expect(rows.map(row => row.account)).toEqual(stored.slice(3).map(row => oauthAccountLogLabel(row.id, "kiro")));
 });
 
 test("duplicate or malformed labels never produce a second Prometheus series", () => {

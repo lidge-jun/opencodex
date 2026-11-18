@@ -8,18 +8,17 @@
  * takes it from `desktop/src-tauri/tauri.conf.json`, the Rust crate from
  * `desktop/src-tauri/Cargo.toml` (mirrored in the `opencodex-desktop` entry of
  * `desktop/src-tauri/Cargo.lock`), and `desktop/scripts/build-widget.sh` stamps the
- * widget plist from `tauri.conf.json`. The release workflow injects no version into the
- * desktop build, while the updater manifest is derived from the dispatch input.
+ * widget plist from `tauri.conf.json`. The release workflow stamps and checks the
+ * selected version in the build checkouts before packaging.
  *
  * So when only `package.json` moves, a release ships an app that reports the previous version
  * under a manifest naming the new one. The desktop updater then keeps offering the same release,
  * because the installed app never reports that it caught up. `dev` reached exactly that state
  * when `package.json` moved to 2.62.0 and the three desktop sources stayed at 2.61.0.
  *
- * Every path that moves the version goes through here: `scripts/bump-dev-version.ts` for the
- * `dev` pre-move, `scripts/release.ts` for the release commit on `main`/`preview`, and
- * `.github/workflows/release.yml` / `.github/workflows/dev-version-bump.yml`, which run
- * `check` before they build or open a pull request.
+ * Release builds use this helper to sync and check their four version sources.
+ * The maintainer-controlled `dev-version-bump.yml` workflow also uses it when
+ * preparing an optional version adjustment pull request.
  *
  * Usage:
  *   bun scripts/release-version-sources.ts check [<version>] [--root <dir>]

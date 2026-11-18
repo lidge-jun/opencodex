@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   hasValidApiAuth,
   isDataPlaneAdmissionSecret,
+  isContextPrincipalCurrent,
   isProxyAdmissionSecret,
   requireResponsesApiAuth,
   resolveApiAuth,
@@ -18,6 +19,8 @@ import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { buildResponsesWsData } from "../../src/server/ws-bridge";
 import type { OcxConfig } from "../../src/types";
+import { OPENAI_PROVIDER_TIER_VERSION } from "../../src/types";
+import { DEFAULT_SUBAGENT_MODELS, SUBAGENT_MODELS_VERSION } from "../../src/config/subagent-models";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 // The admission path already knew WHICH key matched and threw it away. These
@@ -132,6 +135,72 @@ describe("resolveDataPlaneAdmissionSecret", () => {
 
   test("a key that only shares a prefix does not match", () => {
     expect(resolveDataPlaneAdmissionSecret("ocx_data_first", remoteConfig())).toBeNull();
+  });
+});
+
+describe("retained loopback replay principal revalidation", () => {
+  const principalFor = (config: OcxConfig, key: string) => resolveContextPrincipal(
+    request({ "x-opencodex-api-key": key }), config, { kind: "loopback", source: "loopback" },
+  );
+
+  test("key replacement, key-id replacement and deletion revoke the captured identity", () => {
+    const config = loopbackConfig();
+    const key = config.apiKeys![0]!;
+    const original = principalFor(config, key.key);
+    expect(isContextPrincipalCurrent(original, config)).toBe(true);
+    key.name = "changed label";
+    expect(isContextPrincipalCurrent(original, config)).toBe(true);
+    key.key = "ocx_data_replacement";
+    expect(isContextPrincipalCurrent(original, config)).toBe(false);
+    const replacement = principalFor(config, key.key);
+    expect(isContextPrincipalCurrent(replacement, config)).toBe(true);
+    key.id = "replacement-key-id";
+    expect(isContextPrincipalCurrent(replacement, config)).toBe(false);
+    const renamed = principalFor(config, key.key);
+    config.apiKeys = [];
+    expect(isContextPrincipalCurrent(renamed, config)).toBe(false);
+    expect(isContextPrincipalCurrent(undefined, config)).toBe(false);
+  });
+
+  test("pending rotation expires, while promotion preserves only the promoted secret", () => {
+    const config = loopbackConfig();
+    const key = config.apiKeys![0]!;
+    const original = principalFor(config, key.key);
+    key.pendingRotation = { id: "rotation", key: "ocx_data_pending",
+      createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() };
+    const pending = principalFor(config, key.pendingRotation.key);
+    expect(isContextPrincipalCurrent(pending, config)).toBe(true);
+    key.pendingRotation.expiresAt = new Date(Date.now() - 1).toISOString();
+    expect(isContextPrincipalCurrent(pending, config)).toBe(false);
+    key.key = key.pendingRotation.key;
+    delete key.pendingRotation;
+    expect(isContextPrincipalCurrent(pending, config)).toBe(true);
+    expect(isContextPrincipalCurrent(original, config)).toBe(false);
+  });
+
+  test("environment replacement and credential-shadowing follow the admission resolver", () => {
+    const config = loopbackConfig();
+    const secret = config.apiKeys![0]!.key;
+    const configured = principalFor(config, secret);
+    process.env.OPENCODEX_API_AUTH_TOKEN = secret;
+    const environment = principalFor(config, secret);
+    expect(environment).not.toBe(configured);
+    expect(isContextPrincipalCurrent(environment, config)).toBe(true);
+    expect(isContextPrincipalCurrent(configured, config)).toBe(false);
+    process.env.OPENCODEX_API_AUTH_TOKEN = "replacement-env-secret";
+    expect(isContextPrincipalCurrent(environment, config)).toBe(false);
+    expect(isContextPrincipalCurrent(configured, config)).toBe(true);
+    delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    expect(isContextPrincipalCurrent(environment, config)).toBe(false);
+  });
+
+  test("an earlier configured duplicate cannot inherit the later key's identity", () => {
+    const config = loopbackConfig();
+    const second = config.apiKeys![1]!;
+    const original = principalFor(config, second.key);
+    config.apiKeys![0]!.key = second.key;
+    expect(isContextPrincipalCurrent(original, config)).toBe(false);
+    expect(isContextPrincipalCurrent(principalFor(config, second.key), config)).toBe(true);
   });
 });
 
@@ -275,6 +344,11 @@ describe("the Responses WebSocket handshake", () => {
     process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "admin-secret-for-ws";
     const config = remoteConfig();
     config.websockets = true;
+    // Keep this real handshake out of unrelated first-upgrade writes and native sync.
+    config.clientIntegrations = { codex: false };
+    config.openaiProviderTierVersion = OPENAI_PROVIDER_TIER_VERSION;
+    config.subagentModelsVersion = SUBAGENT_MODELS_VERSION;
+    config.subagentModels = [...DEFAULT_SUBAGENT_MODELS];
     saveConfig(config);
     const server = startServer(0);
     try {
@@ -332,9 +406,14 @@ describe("the Responses WebSocket handshake", () => {
     // dropping `admission` from the payload fails here rather than passing a
     // socket-opened assertion that never looked at it.
     const headers = new Headers({ "x-forwarded-for": "ignored" });
-    const payload = buildResponsesWsData(headers, { kind: "configured", keyId: "second-key", source: "dedicated" });
+    const principal = { clientPrincipalId: "admitted-replay-owner" };
+    const payload = buildResponsesWsData(headers, { kind: "configured", keyId: "second-key", source: "dedicated" },
+      undefined, "lane", "codex_cli", principal);
     expect(payload.admission).toEqual({ kind: "configured", keyId: "second-key", source: "dedicated" });
     expect(payload.headers).toBe(headers);
+    expect(payload.client).toBe("codex_cli");
+    expect(payload.replayPrincipal).toBe(principal);
+    expect(payload.sessionLaneId).toBe("lane");
   });
 
   // The phase-2 guard that asserted no telemetry symbols existed yet has served

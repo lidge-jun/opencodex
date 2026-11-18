@@ -1,5 +1,8 @@
 import { isPlainObject } from "./internal";
-import { normalizeResponsesToolResultAdjacency } from "./tool-output-recovery";
+import {
+  mergeRepeatedResponsesToolOutputs,
+  normalizeResponsesToolResultAdjacency,
+} from "./tool-output-recovery";
 
 export class OpenGatewayInputCompatibilityError extends Error {
   constructor() {
@@ -128,11 +131,20 @@ export function normalizeOpenGatewayResponsesInput(body: unknown, url: string): 
   // Same exact-URL boundary as completion recovery; a query-routed variant is a different destination.
   if (url !== "https://apis.opengateway.ai/v1/responses" || !isPlainObject(body) || !Array.isArray(body.input)) return body;
 
-  const direct = projectOpenGatewayInput(body.input);
-  if (!direct.changed) return body;
-  const aligned = normalizeResponsesToolResultAdjacency(body);
-  if (!isPlainObject(aligned) || !Array.isArray(aligned.input) || aligned === body) {
-    return { ...body, input: direct.input };
+  // Codex records several outputs for one code-mode call (the yield marker, then late cell
+  // output). This gateway's parser answers the repeat with "Messages with role 'tool' must be a
+  // response to a preceding message with 'tool_calls'", which blocks every later turn of the
+  // thread, so repeated outputs are joined even when every part is already a plain string and
+  // no projection below has anything to change.
+  const merged = mergeRepeatedResponsesToolOutputs(body);
+  const source = (isPlainObject(merged) && Array.isArray(merged.input)
+    ? { ...merged, input: merged.input }
+    : { ...body, input: body.input }) as Record<string, unknown> & { input: unknown[] };
+  const direct = projectOpenGatewayInput(source.input);
+  if (!direct.changed) return source;
+  const aligned = normalizeResponsesToolResultAdjacency(source);
+  if (!isPlainObject(aligned) || !Array.isArray(aligned.input) || aligned === source) {
+    return { ...source, input: direct.input };
   }
   const paired = projectOpenGatewayInput(aligned.input);
   return { ...aligned, input: paired.changed ? paired.input : direct.input };

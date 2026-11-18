@@ -316,7 +316,7 @@ for (const lane of ["native", "translated"] as const) describe(`${lane} Anthropi
       ? { Authorization: "Bearer fixture-key-C" } : { "x-api-key": "fixture-key-C" };
     const response = await send(lane, config);
     expect(response.status).toBe(400);
-    expect(await response.text()).toContain(creditMessage);
+    expect(await response.text()).toContain(lane === "native" ? "The provider account has no remaining quota or credits." : creditMessage);
     expect(seen).toHaveLength(1);
     expect(seen[0]!.authorization).toBe(kind === "override" ? "Bearer fixture-key-C" : "Bearer fixture-key-0");
     expect(seen[0]!.apiKey).toBe(kind === "conflict" ? "fixture-key-C" : null);
@@ -344,7 +344,7 @@ for (const lane of ["native", "translated"] as const) describe(`${lane} Anthropi
     config.providers.anth!.headers = { "x-api-key": "fixture-key-C" };
     const response = await send(lane, config);
     expect(response.status).toBe(400);
-    expect(await response.text()).toContain(creditMessage);
+    expect(await response.text()).toContain(lane === "native" ? "The provider account has no remaining quota or credits." : creditMessage);
     expect(seen.map(entry => entry.key)).toEqual(["fixture-key-C"]);
     expect(loadConfig().providers.anth!.apiKey).toBe("fixture-key-0");
     expect(getKeyCooldownUntil("anth", "k0")).toBeNull();
@@ -374,11 +374,11 @@ for (const lane of ["native", "translated"] as const) describe(`${lane} Anthropi
     expect(loadConfig().providers.anth!.apiKey).toBe("fixture-key-0");
   });
 
-  test("exhaustion preserves the last upstream billing body", async () => {
+  test("exhaustion preserves the last billing refusal", async () => {
     const config = fixture(() => refusal());
     const response = await send(lane, config);
     expect(response.status).toBe(400);
-    expect(await response.text()).toContain(creditMessage);
+    expect(await response.text()).toContain(lane === "native" ? "The provider account has no remaining quota or credits." : creditMessage);
     expect(seen.map(entry => entry.key)).toEqual(["fixture-key-0", "fixture-key-1"]);
     expect(getKeyCooldownUntil("anth", "k0")).not.toBeNull();
     expect(getKeyCooldownUntil("anth", "k1")).not.toBeNull();
@@ -388,7 +388,7 @@ for (const lane of ["native", "translated"] as const) describe(`${lane} Anthropi
     const config = fixture(() => refusal(), keys);
     const response = await send(lane, config);
     expect(response.status).toBe(400);
-    expect(await response.text()).toContain(creditMessage);
+    expect(await response.text()).toContain(lane === "native" ? "The provider account has no remaining quota or credits." : creditMessage);
     expect(seen).toHaveLength(1);
     expect(seen[0]!.key).toBe("fixture-key-0");
     expect(loadConfig().providers.anth!.apiKey).toBe("fixture-key-0");
@@ -401,7 +401,7 @@ for (const lane of ["native", "translated"] as const) describe(`${lane} Anthropi
       maxTotalModelSends: 2, baseSendAllowance: 2, finalRecoveryAllowance: 0 }) : undefined;
     const response = await send(lane, config, undefined, budget);
     expect(response.status).toBe(400);
-    expect(await response.text()).toContain(creditMessage);
+    expect(await response.text()).toContain(lane === "native" ? "The provider account has no remaining quota or credits." : creditMessage);
     expect(seen).toHaveLength(lane === "native" ? 4 : 2);
   });
 

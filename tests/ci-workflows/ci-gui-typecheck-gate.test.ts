@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { fixtureGitEnv } from "../helpers/git-fixture";
 import { repoPath } from "../helpers/repo-root";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -89,14 +90,7 @@ describe("gui typecheck if-changed gate", () => {
     const fixtures: string[] = [];
     afterEach(() => { for (const dir of fixtures.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
-    const gitEnv = (): Record<string, string> => {
-      const env: Record<string, string> = {};
-      for (const [key, value] of Object.entries(process.env)) {
-        if (value !== undefined && !key.startsWith("GIT_")) env[key] = value;
-      }
-      return { ...env, GIT_AUTHOR_NAME: "fixture", GIT_AUTHOR_EMAIL: "fixture@example.test",
-        GIT_COMMITTER_NAME: "fixture", GIT_COMMITTER_EMAIL: "fixture@example.test", GIT_CONFIG_NOSYSTEM: "1" };
-    };
+    const gitEnv = (): Record<string, string> => fixtureGitEnv();
     const repo = (): { dir: string; git: (...args: string[]) => void; commit: (path: string) => void; decide: () => string } => {
       const dir = mkdtempSync(join(tmpdir(), "ocx-gui-typecheck-"));
       fixtures.push(dir);

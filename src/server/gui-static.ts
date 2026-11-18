@@ -205,7 +205,10 @@ export function serveGuiFile(
 
   if (!isFile(filePath)) {
     if (!extname(pathname)) {
-      const indexPath = join(guiDist, "index.html");
+      // A directory with its own index.html is a separate app (the classic dashboard at
+      // /classic/); every other extensionless path is the main dashboard's SPA fallback.
+      const nestedIndex = join(filePath, "index.html");
+      const indexPath = isFile(nestedIndex) ? nestedIndex : join(guiDist, "index.html");
       if (isFile(indexPath)) {
         return htmlResponse(indexPath, session, runtimeRole, managementAuthRequired);
       }

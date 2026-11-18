@@ -33,6 +33,7 @@ import {
 } from "../../oauth";
 import { getAccountSet } from "../../oauth/store";
 import { mayResolveModelsOAuth } from "../../oauth/model-discovery-auth";
+import { buildVertexProviderModelsRequest } from "../../providers/google-vertex-model-discovery";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
@@ -130,6 +131,8 @@ export interface ModelsAuthResolution {
   readonly oauthGeneration?: string;
   readonly oauthApiBaseUrl?: string;
   readonly oauthProjectId?: string;
+  /** Vertex discovery credential bound to its authority (passive gathers). */
+  readonly vertexAuth?: import("../../providers/google-vertex-model-discovery").VertexDiscoveryAuth;
 }
 
 export type ModelsAuthResolver =
@@ -333,6 +336,7 @@ export function captureTrustedOpenAiApiPolicy(
   });
 }
 
+/** Capture credential-free and sentinel-bearing model discovery requests for flight deduplication. */
 export function captureModelsRequest(
   name: string,
   provider: OcxProviderConfig,
@@ -340,8 +344,10 @@ export function captureModelsRequest(
   workbuddy?: import("../../oauth/types").WorkBuddyOAuthMetadata,
 ): CapturedModelsRequest {
   const observed = { oauthApiBaseUrl, workbuddy };
-  const withoutCredential = buildModelsRequest(provider, undefined, name, observed);
-  const withCredential = buildModelsRequest(provider, REQUEST_CREDENTIAL_SENTINEL, name, observed);
+  const withoutCredential = buildVertexProviderModelsRequest(name, provider, undefined)
+    ?? buildModelsRequest(provider, undefined, name, observed);
+  const withCredential = buildVertexProviderModelsRequest(name, provider, REQUEST_CREDENTIAL_SENTINEL)
+    ?? buildModelsRequest(provider, REQUEST_CREDENTIAL_SENTINEL, name, observed);
   const method = withoutCredential.method ?? "GET";
   if (withoutCredential.url !== withCredential.url || method !== (withCredential.method ?? "GET")) {
     throw new TypeError(`Provider model discovery URL for ${name} depends on credential bytes.`);
@@ -415,6 +421,7 @@ export function captureProviderGather(
     ...(resolved.spec ? { spec: resolved.spec } : {}),
     maxResponseBytes: resolved.maxResponseBytes,
     maxModels: resolved.maxModels,
+    ...(resolved.skipInvalidRows ? { skipInvalidRows: true as const } : {}),
   });
   const trustedOpenAiApi = captureTrustedOpenAiApiPolicy(name, registryTransportMatch);
   const policy = detachedFrozen({
@@ -432,6 +439,7 @@ export function captureProviderGather(
     preferFirst: capturedField(discovery.spec, "preferFirst"),
     maxResponseBytes: discovery.maxResponseBytes,
     maxModels: discovery.maxModels,
+    skipInvalidRows: discovery.skipInvalidRows === true,
     trustedOpenAiApi,
   });
   const effectiveAlias = effectiveProviderAliasDecision(name, configured, config);

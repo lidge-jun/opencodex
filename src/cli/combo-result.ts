@@ -6,7 +6,7 @@ import { printCatalogResult } from "./catalog-command-result";
 const ENUMS: Readonly<Record<string, readonly (string | null)[]>> = {
   strategy: ["failover", "round-robin", "random", "least-used", "reset-window", "jev"],
   defaultEffort: [null, "low", "medium", "high", "xhigh", "max", "ultra"],
-  defaultEffortMode: ["fallback", "force"], reasoningEffortMode: ["strict", "adaptive"],
+  defaultEffortMode: ["fallback", "force"], reasoningEffortMode: ["strict", "adaptive"], jevEffortMode: ["decide", "client"],
   imageInput: ["auto", "disabled"], cooldownWaitPolicy: ["before-last-resort"],
 };
 const STRINGS = new Set(["alias", "displayName", "description", "decisionProvider", "decisionModel"]);

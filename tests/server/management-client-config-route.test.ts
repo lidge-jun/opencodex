@@ -178,7 +178,7 @@ describe("native Anthropic image input reaches client documents", () => {
     const expectedInputs = models
       .map(model => ({ id: model.namespaced, input: ["text", "image"] }))
       .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-    const expectedFastInputs = ["claude-opus-4-8", "claude-opus-5", "claude-opus-5-5"]
+    const expectedFastInputs = ["claude-fable-5-2", "claude-opus-4-8", "claude-opus-5", "claude-opus-5-5"]
       .map(model => ({ id: `${provider}/${model}--fast`, input: ["text", "image"] }))
       .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
     const expectImageInputs = (rows: Array<{ id: string; input: string[] }>) => {
@@ -374,7 +374,9 @@ describe("GET /api/client-config", () => {
     // m2 declares text-only in `modelInputModalities`, which is exactly what routes it through
     // the vision sidecar: the catalog advertises image so the attachment can reach the proxy.
     expect(models["a/m2"]!.modalities).toEqual({ input: ["text", "image"], output: ["text"] });
-    expect(models["b/no-context"]).toEqual({ name: "no-context (b)", tool_call: true });
+    // b/no-context sits on a direct openai-chat route, so it opts into Chat per model (#8856);
+    // the provider default stays Responses for every other model.
+    expect(models["b/no-context"]).toEqual({ name: "no-context (b)", tool_call: true, provider: { npm: "@ai-sdk/openai-compatible" } });
   }, 15_000);
 
   test("pi returns a models ARRAY under the same provider id", async () => {

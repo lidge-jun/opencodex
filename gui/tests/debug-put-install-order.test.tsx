@@ -172,7 +172,7 @@ test("the PUT response is installed before controls re-enable", async () => {
   await waitFor(() => container.querySelector('button.switch[aria-label="Usage extraction"]') != null);
 
   const usageSwitch = () => container.querySelector<HTMLButtonElement>('button.switch[aria-label="Usage extraction"]');
-  expect(usageSwitch()?.getAttribute("aria-pressed")).toBe("false");
+  expect(usageSwitch()?.getAttribute("aria-checked")).toBe("false");
 
   await act(async () => { usageSwitch()?.click(); });
   await waitFor(() => usageSwitch()?.disabled === true);
@@ -185,7 +185,7 @@ test("the PUT response is installed before controls re-enable", async () => {
 
   // Decisive: enabled again AND already showing the mutated value, even though every GET
   // still returns usage=false.
-  expect(usageSwitch()?.getAttribute("aria-pressed")).toBe("true");
+  expect(usageSwitch()?.getAttribute("aria-checked")).toBe("true");
   expect(pollCount).toBeGreaterThan(0);
 
   await act(async () => { root.unmount(); });

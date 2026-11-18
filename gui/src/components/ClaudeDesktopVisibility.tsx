@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useI18n } from "../i18n/shared";
-import { Notice } from "../ui";
+import { Notice, Select } from "../ui";
 import { LANE_PAGE } from "../pages/claude-desktop-lane";
 import {
   applyPreview,
@@ -100,15 +100,16 @@ export default function ClaudeDesktopVisibility<T extends VisibilityModel>({
           value={query}
           onChange={event => { setQuery(event.target.value); setLimit(LANE_PAGE); }}
         />
-        <select
-          className="input"
-          aria-label={t("claudeDesktop.visibility.provider")}
+        <Select
+          label={t("claudeDesktop.visibility.provider")}
+          triggerClassName="min-w-[10rem] justify-between"
           value={provider}
-          onChange={event => { setProvider(event.target.value); setLimit(LANE_PAGE); }}
-        >
-          <option value="">{t("claudeDesktop.visibility.allProviders")}</option>
-          {providers.map(name => <option key={name} value={name}>{name}</option>)}
-        </select>
+          onChange={next => { setProvider(next); setLimit(LANE_PAGE); }}
+          options={[
+            { value: "", label: t("claudeDesktop.visibility.allProviders") },
+            ...providers.map(name => ({ value: name, label: name })),
+          ]}
+        />
         <button type="button" className="btn btn-ghost btn-sm" disabled={disabled || shown.length === 0}
           onClick={() => onChange(setRoutesVisible(visibility, shownRoutes, true))}>
           {t("claudeDesktop.visibility.selectShown")}

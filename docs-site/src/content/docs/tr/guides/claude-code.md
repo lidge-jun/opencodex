@@ -70,7 +70,7 @@ bağlanmış olarak Claude Code'u başlatır:
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`; abonelikle başlatmada ayarlanmamışsa yerel `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]` |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | OpenCodex'in yönlendirilmiş bir takma ada ayarladığı katman yuvasının `/model` etiketi (örneğin `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`). Aynı çift launchd sistem ortamına ve kabuk kancasına da yazılır. Model kimliği takma ad olarak kalır. Kendi ayarladığınız yuva veya etiket değiştirilmez |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort` açık olduğunda `1` (koşullu) |
-| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` ayarlandığında (koşullu; varsayılan olarak kapalı) |
+| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` ayarlandığında (koşullu; varsayılan olarak eklenmez, Claude Code'un kendi varsayılanı geçerlidir) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `maxContextTokens` ayarlandığında eski bağlam geçersiz kılma (koşullu) |
 
 Kendi dışa aktardığınız değişkenler her zaman önceliklidir. Ekstra argümanlar
@@ -367,8 +367,21 @@ veya `tool_result.tool_use_id` (`a-zA-Z0-9_-` dışında karakter içeren ya da 
 bir kimlikle yeniden yazılır. Uygun kimlikler değiştirilmeden gönderilir, boş bir kimliğe yerel olarak
 400 döner.
 
-`claudeCode.nativePassthrough: false` ile devre dışı bırakın;
-`claudeCode.anthropicBaseUrl` ile başka bir yeri işaret edin.
+`claudeCode.nativePassthrough: false`, `ocx claude config set --native-passthrough off` veya
+panodaki Providers → Anthropic Claude → Accounts bölümünde Claude hesap havuzunun altında bulunan
+**Yerel Claude geçişi** anahtarıyla devre dışı bırakın;
+`claudeCode.anthropicBaseUrl` ile başka bir yeri işaret edin. Claude model seçicisinden ve Claude Desktop'tan gelen takma adlar `modelMap` öncesinde
+çözümlenir. Anahtarı ham model kimliği olan bir `modelMap` girdisi, geçiş açıkken de kapalıyken de
+isteği diğer sağlayıcıdaki hedef modele gönderir. Geçiş kapalıyken eşlemesi olmayan ham bir Claude
+model kimliği yönlendiriciye gider. Yönlendirici önce yönlendirme politikası takma adlarına,
+sonra kombo takma adlarına bakar. Eşleşme yoksa sırasıyla `defaultModel` değeri bu kimlik olan
+etkin bir sağlayıcıya, etkin bir `anthropic` veya `anthropic-*` sağlayıcısına, model listesinde bu
+kimliği içeren bir sağlayıcıya, sağlayıcı tarafındaki model takma adına ve son olarak varsayılan
+sağlayıcıya bakar. Rota bir Anthropic OAuth sağlayıcısıysa isteği OpenCodex'te kayıtlı Anthropic
+hesapları karşılar; kayıtlı ikinci bir hesap 429 durumunda yedeğe geçiş ekler ve proaktif
+[Claude OAuth hesap havuzu](#claude-oauth-hesap-havuzu-deneysel) `anthropicAccountPool.enabled` açık olduğunda uygulanır. Yönlendirme
+bir sonraki istekten itibaren ayarı izler; model yuvalarının ve bağlam pencerelerinin eşleşmesi için
+zaten çalışan Claude Code oturumlarını yeniden başlatın.
 
 ## Uzak hub'a bağlı Claude Desktop
 
@@ -549,9 +562,7 @@ Sıkıştırma değeri Claude sayfasında ayarlanabilir. **Uyarı:** bir modelin
 penceresinin üzerine çıkarmak o modeli bozar — sohbet özetleme tetiklenmeden
 önce hata verir.
 
-Bağlam taşması hataları normalleştirilirken sağlayıcının hata mesajının yalnızca ilk 65.536 UTF-16 kod birimi kullanılır.
-Bu sınırdan sonraki tanılama ayrıntıları veya token sayıları, kesilme işareti eklenmeden kaybolabilir.
-Kesin sınırlar ve token sayılarının aktarılma koşulları için [İngilizce kılavuza](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling) bakın.
+Messages hata yanıtı normalleştirmesi sabit metin kullanır; sağlayıcının metnini veya token sayılarını korumaz. Tanınan bağlam taşması `prompt is too long: The request exceeds the model's context window.` olarak döndürülür. Akışta ilk alanı error olayı olan bir blok en fazla 1 MiB tutulur; aşılırsa sıkıştırma ifadesi içermeyen sabit bir hata döndürülür. Kapsam ve iki istisna için [İngilizce kılavuza](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling) bakın.
 
 1M altı yerel Anthropic modelleri hiçbir zaman otomatik olarak işaretlenmez.
 Kendi dışa aktardığınız sıkıştırma penceresi, başlatma yuvası işaretlemesinde her zaman kazanır (proxy hangi modellerin
@@ -779,10 +790,10 @@ bir önceki kullanıcı mesajı için önbellek kesme noktalarını ve ayrıca �
 otomatik `cache_control` yönetimini sağlar. Kararlı turlar normalde yaklaşık
 %99,9 önbellek isabet oranı üretir.
 
-**Yerel OpenAI/ChatGPT yönlendirmesi:** önbellek bağlılığı için oturum kapsamlı
-bir `prompt_cache_key` (varsa `metadata.user_id`'den türetilir, bir sistem
-içeriği karmasına geri döner) ve `session_id` başlığı türetir. Önbellek anahtarı
-modeli ve tam araç şemalarını içerir.
+**Yerel OpenAI/ChatGPT yönlendirmesi:** önbellek bağlılığı için
+bir `prompt_cache_key` (dize olarak varsa `metadata.user_id`'den türetilir, bir sistem
+içeriği karmasına geri döner) ve yalnızca bir oturum kimliğinden (paylaşılan yedek anahtardan asla) `session_id` başlığı türetir. Sistem içeriği
+karmasından türetilen yedek anahtar (yalnızca sistem içeriği varsa kullanılır) ayrıca modeli ve tam araç şemalarını içerir.
 
 **Token matematiği:** Anthropic çıktısı `cached_tokens` ve `cache_write_tokens`
 değerlerini `input_tokens`'tan çıkararak bunları `cache_read_input_tokens` ve

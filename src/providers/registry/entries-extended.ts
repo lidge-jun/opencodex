@@ -120,6 +120,11 @@ import {
   STEPFUN_MODEL_INPUT_MODALITIES,
   STEPFUN_NO_VISION_MODELS,
   STEPFUN_REASONING_EFFORTS,
+  MORPH_ULTRA_MODELS,
+  MORPH_ULTRA_MODEL_CONTEXT_WINDOWS,
+  MORPH_ULTRA_MODEL_INPUT_MODALITIES,
+  MORPH_ULTRA_REASONING_EFFORTS,
+  MORPH_ULTRA_REASONING_EFFORT_MAPS,
   ANTHROPIC_MODELS,
   ANTHROPIC_MODEL_CONTEXT_WINDOWS,
   ANTHROPIC_MODEL_INPUT_MODALITIES,
@@ -498,6 +503,33 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     foldDeveloperRoleToSystem: true,
     note: "International default (api.moonshot.ai). China accounts: choose China (.cn) or Custom for api.moonshot.cn.",
   },
+  {
+    // Morph Ultra plan (https://www.morphllm.com/products/ultra, verified 2026-11-13): one
+    // subscription with no token meter on Kimi K3.1 and DeepSeek V4.1 Flash. Only the covered rows
+    // are seeded — every other Morph model bills per token, and the abliterated variant needs
+    // privileged-access approval. Discovery stays off for the same reason: GET /v1/models lists
+    // per-token rows too, and a live roster would re-add models this plan does not include.
+    id: "morph", label: "Morph (Ultra plan)", baseUrl: "https://api.morphllm.com/v1",
+    adapter: "openai-chat", authKind: "key",
+    // A user who already configured a custom provider named "morph" keeps that destination: the
+    // registry only claims rows that still point at Morph's own endpoint.
+    preserveCustomDestination: true,
+    dashboardUrl: "https://www.morphllm.com/dashboard/api-keys",
+    defaultModel: "morph-dsv41flash-1017",
+    models: MORPH_ULTRA_MODELS,
+    liveModels: false,
+    modelContextWindows: MORPH_ULTRA_MODEL_CONTEXT_WINDOWS,
+    modelInputModalities: MORPH_ULTRA_MODEL_INPUT_MODALITIES,
+    modelReasoningEfforts: MORPH_ULTRA_REASONING_EFFORTS,
+    modelReasoningEffortMap: MORPH_ULTRA_REASONING_EFFORT_MAPS,
+    // Both families require the complete assistant message to be replayed, reasoning_content
+    // included (https://www.morphllm.com/kimi-k3-1-api, "The Thinking-Replay Gotcha", read
+    // 2026-11-13): a harness that keeps only `content` erases earlier turns' reasoning and the
+    // model degrades after a few turns. Neither seeded id matches the DeepSeek/Reflection name
+    // fallback, so the preservation has to be declared here.
+    preserveReasoningContentModels: MORPH_ULTRA_MODELS,
+    note: "Morph Ultra plan ($200/month, no token meter) on the OpenAI-compatible endpoint https://api.morphllm.com/v1. Seeded models are the Ultra-covered ones: morph-kimik31 (Kimi K3.1) and morph-dsv41flash-1017 (DeepSeek V4.1 Flash, Oct 17 snapshot). morph-dsv41flash is the same Flash pool under its undated id, and morph-dsv41flash-abliterated needs privileged-access approval, so neither is seeded. Every other Morph model (GLM-5.3, Fast Apply, WarpGrep, Router) bills per token and is not part of the plan. Ultra removes the token meter but not the per-minute rate limits, and a 429 means retry after Retry-After.",
+  },
   { id: "huggingface", label: "Hugging Face", baseUrl: "https://router.huggingface.co/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://huggingface.co/settings/tokens" },
   // 260715 NIM hardening (issue #126, devlog/_plan/260715_issue126_nim_kimi):
   // - NIM kimi rejects `parallel_tool_calls: true` with 400 "This model only supports single
@@ -522,7 +554,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     preserveReasoningContentModels: NVIDIA_NIM_KIMI_THINKING_MODELS,
     note: "Free tier on NVIDIA NIM — API key still required (get a free key at build.nvidia.com).",
   },
-  { id: "venice", label: "Venice", baseUrl: "https://api.venice.ai/api/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://venice.ai/settings/api" },
+  // Venice returns 400 for any image under 64x64, which a wide screenshot hits after
+  // the shared normalizer floors older images to a 320px long edge (320x25).
+  { id: "venice", label: "Venice", baseUrl: "https://api.venice.ai/api/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://venice.ai/settings/api", minImageEdge: 64 },
   // 260710 GLM-5.2 context and path-specific ids: Tier-2 evidence in
   // devlog/_plan/260710_provider_hardening/002_research_cn.md.
   // 260814: glm-5.3 / glm-5.3[1m] added per docs.z.ai/devpack/latest-model, which lists them as
@@ -929,6 +963,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     noVisionModels: ALIBABA_TOKEN_PLAN_NO_VISION,
     // The gateway accepts prompt_cache_key on every Token Plan chat model (probed 260902).
     promptCacheKey: true,
+    // DashScope compatible-mode answers `400 developer is not one of ['system','assistant','user','tool','function']`
+    // (#5664, #8864). The native /v1/chat/completions passthrough folds only on an explicit record.
+    foldDeveloperRoleToSystem: true,
   },
   {
     id: "alibaba-token-plan-intl",
@@ -976,6 +1013,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     noReasoningModels: ["kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5", "glm-5.1", "glm-5", "MiniMax-M2.5"],
     modelDefaultReasoningEfforts: { ...Object.fromEntries(QWEN38_FAMILY.map(id => [id, "xhigh"])), "deepseek-v4.1-flash-1017": "high" },
     promptCacheKey: true,
+    // DashScope compatible-mode answers `400 developer is not one of ['system','assistant','user','tool','function']`
+    // (#5664, #8864). The native /v1/chat/completions passthrough folds only on an explicit record.
+    foldDeveloperRoleToSystem: true,
   },
   // NEEDS_HUMAN 2026-07-10: kept for config compatibility, but this is a dashboard URL,
   // no /models endpoint is documented, and tools are silently ignored upstream per docs.parallel.ai.
@@ -1044,8 +1084,31 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
   {
     id: "mistral", label: "Mistral", baseUrl: "https://api.mistral.ai/v1", adapter: "openai-chat", authKind: "key",
     dashboardUrl: "https://console.mistral.ai/api-keys", defaultModel: "codestral-latest", promptCacheKey: true,
+    foldDeveloperRoleToSystem: true,
     // Native text-only input enrolls this model in the existing vision sidecar.
     modelInputModalities: { "zai-glm-5-3": ["text"] },
+    // Images per request above the documented 8, measured on api.mistral.ai on 2026-11-04 as the
+    // largest count accepted before a refusal (Flash answers HTTP 503, code 3800, at 21; Large 4
+    // answers HTTP 400 at 101). GLM 5.3 Flash accepted every count tried, up to 256.
+    modelCapabilities: {
+      "deepseek-v4-1-flash-1017": { mistralMaxImages: 20 },
+      "mistral-large-4": { mistralMaxImages: 100 },
+      "mistral-large-4-0": { mistralMaxImages: 100 },
+      "zai-glm-5-3-flash": { mistralMaxImages: 256 },
+    },
+    // Effort rungs Mistral accepts per model (#8254); without them exports offer the whole
+    // low..ultra ladder and Mistral refuses medium/xhigh with 400 and ultra with 422. GLM 5.3,
+    // GLM 5.3 Flash and Large 4 follow docs.mistral.ai/capabilities/reasoning. DeepSeek V4.1
+    // Flash 1017 has no documented values: its rungs are the reporter's measured HTTP 200 set
+    // (2026-11), every one inside Mistral's OpenAPI ReasoningEffort enum; medium and ultra were
+    // measured refusals. An operator modelReasoningEfforts entry still replaces any row here.
+    modelReasoningEfforts: {
+      "zai-glm-5-3": ["low", "high", "max"],
+      "zai-glm-5-3-flash": ["low", "high", "max"],
+      "mistral-large-4": ["low", "medium", "high"],
+      "mistral-large-4-0": ["low", "medium", "high"],
+      "deepseek-v4-1-flash-1017": ["low", "high", "xhigh", "max"],
+    },
   },
   {
     id: "minimax", label: "MiniMax — Coding Plan", baseUrl: "https://api.minimax.io/v1", adapter: "openai-chat", authKind: "key",
@@ -1247,10 +1310,11 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     preserveCustomDestination: true,
     defaultModel: "gpt-5.6-terra",
     // 261027 preemptive: GPT-6.1 Terra (OpenAI API limits; TokenLab listing unverified).
-    models: ["gpt-5.6-terra", "gpt-6.1-terra"],
-    modelContextWindows: { "gpt-5.6-terra": 1_050_000, "gpt-6.1-terra": 1_050_000 },
-    modelMaxOutputTokens: { "gpt-5.6-terra": 128_000, "gpt-6.1-terra": 128_000 },
-    modelInputModalities: { "gpt-5.6-terra": ["text", "image"], "gpt-6.1-terra": ["text", "image"] },
+    // 261118 preemptive: GPT-6.2 Sol and Astra, same basis.
+    models: ["gpt-5.6-terra", "gpt-6.1-terra", "gpt-6.2-sol", "gpt-6.2-astra"],
+    modelContextWindows: { "gpt-5.6-terra": 1_050_000, "gpt-6.1-terra": 1_050_000, "gpt-6.2-sol": 1_050_000, "gpt-6.2-astra": 1_050_000 },
+    modelMaxOutputTokens: { "gpt-5.6-terra": 128_000, "gpt-6.1-terra": 128_000, "gpt-6.2-sol": 128_000, "gpt-6.2-astra": 128_000 },
+    modelInputModalities: { "gpt-5.6-terra": ["text", "image"], "gpt-6.1-terra": ["text", "image"], "gpt-6.2-sol": ["text", "image"], "gpt-6.2-astra": ["text", "image"] },
     // Per-model wires from `tokenlab.accepted_request_formats` (GET /v1/models/{id}, 2026-09-30).
     // The provider stays on Chat, the released and end-to-end verified path, and every model
     // accepts it. Models that also declare Responses use it for Codex (Responses inbound) only,
@@ -1259,8 +1323,8 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // gemini-3.8-flash declares Chat + Gemini native and stays on Chat. No delivery-policy
     // header is sent: the API key's own policy stays authoritative.
     modelWireDefaults: Object.fromEntries([
-      // 261027 preemptive: GPT-6.1 Terra (mirrors TokenLab's GPT-6.1 Sol wire).
-      "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna", "grok-4.7",
+      // 261027 preemptive: GPT-6.1 Terra (mirrors TokenLab's GPT-6.1 Sol wire); 261118: GPT-6.2 likewise.
+      "gpt-6-astra", "gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna", "grok-4.7",
       "deepseek-v4.1-flash", "deepseek-v4-pro", "kimi-k3", "glm-5.3",
     ].map(id => [id, { wire: "openai-responses", inbound: ["responses"] }])),
     modelDiscovery: {
@@ -1292,8 +1356,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     preserveCustomDestination: true,
     defaultModel: "glm-5.3-flash",
     // 261027 preemptive: GPT-6.1 Terra (mirrors Modelflare's GPT-6.1 Sol seed; provider listing unverified).
-    models: ["glm-5.3-flash", "claude-sonnet-5-5", "gpt-6.1-sol", "gpt-6.1-terra", "deepseek-v4-flash"],
-    note: "OpenAI-compatible relay for Claude, GPT, GLM and DeepSeek chat models. The original four seeded models were verified with chat, streaming and tool calls; GPT-6.1 Terra is a preemptive seed pending provider verification. deepseek-v4.1-flash is listed upstream but currently answers 503 and is left out. An ordinary key only reaches its own routing group's models; a Smart key reaches the verified seeded models. Image and video models are not served through this Chat preset. Upstream latency varies widely (a few seconds to about 30 s) with occasional transient 503s.",
+    // 261118 preemptive: GPT-6.2 Sol and Astra, same basis.
+    models: ["glm-5.3-flash", "claude-sonnet-5-5", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6.2-sol", "gpt-6.2-astra", "deepseek-v4-flash"],
+    note: "OpenAI-compatible relay for Claude, GPT, GLM and DeepSeek chat models. The original four seeded models were verified with chat, streaming and tool calls; GPT-6.1 Terra, GPT-6.2 Sol and GPT-6.2 Astra are preemptive seeds pending provider verification. deepseek-v4.1-flash is listed upstream but currently answers 503 and is left out. An ordinary key only reaches its own routing group's models; a Smart key reaches the verified seeded models. Image and video models are not served through this Chat preset. Upstream latency varies widely (a few seconds to about 30 s) with occasional transient 503s.",
   },
   {
     // AI Stupid Level Smart Router, operated by S.C. Studio Platforms S.R.L. Contract checked
@@ -1321,6 +1386,42 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // answers an image, audio or file part with 400 `unsupported_content`.
     inputModalities: ["text"],
     note: "Smart Router that sends each request to a model chosen from AI Stupid Level's benchmarks, using the provider keys saved on your AI Stupid Level account (OpenAI, Anthropic, Google, DeepSeek, Kimi, GLM), so each provider bills you directly with no markup. Routing modes: auto-coding (the default), auto-tooling, auto-reasoning, auto-best, plus value and speed modes. A real model id from the live list, such as claude-opus-5-5, pins one model. The X-AISM-Model response header names the model that answered. Text only.",
+  },
+  {
+    // cheapaimodel, operated by LINKOVA PTE. LTD. (Singapore). Contract checked 2026-10-28:
+    // https://cheapaimodel.ai/docs/api/create-chat-completion and
+    // https://cheapaimodel.ai/docs/api/list-models. GET /v1/models answers 401 without a valid key,
+    // so the default discovery URL doubles as key validation. Chat Completions is the one interface
+    // every catalog model supports, so every inbound stays on Chat and the preset does not use the
+    // gateway's Responses or Anthropic Messages endpoints. Context windows and
+    // input modalities are from the live catalog at https://cheapaimodel.ai/models. kimi-k3 rejects
+    // any temperature other than 0.6 or 1 and rejects top_p 0.9 and 1.0, so both are dropped for it.
+    // deepseek-v4-1-flash takes reasoning_effort none, low, high and max, and an omitted effort runs
+    // at high (https://cheapaimodel.ai/blog/deepseek-v4-1-flash-reasoning-effort), so it keeps the
+    // DeepSeek Flash ladder and sends an explicit none instead of dropping it.
+    // The env reference derived from the id is ${CHEAPAIMODEL_API_KEY}.
+    id: "cheapaimodel",
+    label: "cheapaimodel",
+    adapter: "openai-chat",
+    baseUrl: "https://api.cheapaimodel.ai/v1",
+    authKind: "key",
+    dashboardUrl: "https://console.cheapaimodel.ai/keys",
+    liveModels: true,
+    preserveCustomDestination: true,
+    defaultModel: "deepseek-v4-1-flash",
+    models: ["deepseek-v4-1-flash", "glm-5.3", "glm-5.3-flash", "kimi-k3", "grok-4.7"],
+    modelContextWindows: {
+      "deepseek-v4-1-flash": 1_000_000, "glm-5.3": 1_000_000, "glm-5.3-flash": 1_000_000, "kimi-k3": 1_000_000, "grok-4.7": 500_000,
+    },
+    modelInputModalities: {
+      "deepseek-v4-1-flash": ["text", "image"], "glm-5.3": ["text"], "glm-5.3-flash": ["text", "image"],
+      "kimi-k3": ["text", "image"], "grok-4.7": ["text", "image"],
+    },
+    noTemperatureModels: ["kimi-k3"],
+    noTopPModels: ["kimi-k3"],
+    modelReasoningEfforts: { "deepseek-v4-1-flash": deepseekThinkingEffortsFor("deepseek-v4-1-flash") },
+    modelReasoningEffortMap: { "deepseek-v4-1-flash": { ...deepseekReasoningMapFor("deepseek-v4-1-flash"), none: "none" } },
+    note: "Pay-per-token API gateway for open-weight models (DeepSeek, GLM, Kimi) and Grok, billed from a prepaid USD balance. Create an API key at console.cheapaimodel.ai. Live discovery lists the models your key can call; deepseek-v4-1-flash is the default. Chat Completions only.",
   },
   // Xiaomi retires mimo-v2.5 and mimo-v2.5-pro on 2026-10-21 with no redirect
   // (https://mimo.mi.com/docs/en-US/updates/deprecate), so the first-party presets default to V2.6.
@@ -1455,7 +1556,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     featured: false,
     dashboardUrl: "https://github.com/settings/copilot",
     liveModels: true,
-    models: ["gpt-4o", "gpt-4.1", "gpt-4.1-mini", "claude-sonnet-4", "gemini-2.5-pro", "gpt-5-mini", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"],
+    models: ["gpt-4o", "gpt-4.1", "gpt-4.1-mini", "claude-sonnet-4", "gemini-2.5-pro", "gpt-5-mini", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"],
     defaultModel: "gpt-4o",
     // Copilot fronts a mixed-wire catalog: these models reject /chat/completions for
     // real Codex-agent traffic (function tools + reasoning), so every inbound wire
@@ -1479,6 +1580,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
       "gpt-6.1-sol": "openai-responses",
       // GPT-6.1 Terra: GA in Copilot 2026-10-26; rides Responses like GPT-6.1 Sol.
       "gpt-6.1-terra": "openai-responses",
+      // 261118 preemptive: GPT-6.2 Sol and Astra ride Responses like GPT-6.1 Sol (Copilot listing unverified).
+      "gpt-6.2-sol": "openai-responses",
+      "gpt-6.2-astra": "openai-responses",
       "grok-4.5": "openai-responses",
       "grok-4.6": "openai-responses",
       "mai-code-1.1-flash": "openai-responses",
@@ -1641,15 +1745,11 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // request entirely (src/codex/catalog/provider-models.ts).
     liveModels: false,
     modelContextWindows: { ...ANTHROPIC_MODEL_CONTEXT_WINDOWS },
-    // Text-only for v1, not the image modality the Messages API rows publish. The CLI parses an
-    // image frame (verified against 2.1.270), but a headless turn has no verified contract that the
-    // harness hands those bytes to the model, and advertising a modality the route cannot honour
-    // makes a route selection pick this row for a picture it then answers blind. The adapter refuses
-    // direct image input for the same reason; the vision sidecar still captions images into text.
-    noVisionModels: [...ANTHROPIC_MODELS],
+    // The CLI receives native image blocks through Claude's stable conversation replay.
+    modelInputModalities: { ...ANTHROPIC_MODEL_INPUT_MODALITIES },
     reasoningEfforts: ANTHROPIC_REASONING_EFFORTS,
     modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
-    note: "Runs Claude subscription traffic through Anthropic's own harness: the official Claude Code CLI headlessly (`claude -p`), one turn per request. OpenCodex stores no Claude token, reads none and injects none — the CLI signs in and bills the account itself, which is why this row is keyless and an API key saved here never reaches the harness (use `anthropic-apikey` for key billing). The sign-in is the one of the user this proxy runs as, so every request served through this row — by any client of this proxy — spends that same account; OpenCodex neither pools nor multiplexes Claude sign-ins. Requires the CLI (`npm i -g @anthropic-ai/claude-code`) and a signed-in session (`claude` -> /login). v1 disables CLI tools (--tools \"\", --strict-mcp-config) so the client retains tool ownership: text/reasoning only for now. Subscription routing authorization flagged for maintainer review.",
+    note: "Runs Claude subscription traffic through Anthropic's own harness: the official Claude Code CLI headlessly (`claude -p`), one turn per request. OpenCodex stores no Claude token and injects none into CLI requests (quota admission only reads it in memory) — the CLI signs in and bills the account itself, which is why this row is keyless and an API key saved here never reaches the harness (use `anthropic-apikey` for key billing). The sign-in is the one of the user this proxy runs as, so every request served through this row — by any client of this proxy — spends that same account; OpenCodex neither pools nor multiplexes Claude sign-ins. Requires the CLI (`npm i -g @anthropic-ai/claude-code`) and a signed-in session (`claude` -> /login). v1 disables CLI tools (--tools \"\", --strict-mcp-config) so the client retains tool ownership; text, reasoning and native image input are supported. Subscription routing authorization flagged for maintainer review.",
   },
 ];

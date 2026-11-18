@@ -8,7 +8,9 @@ import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../../src/codex
 import * as routing from "../../src/codex/routing";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
-import { createDictationFrameValidator } from "../../src/server/audio-dictation";
+import { createDictationFrameValidator, DICTATION_SESSION_MAX_MS, DICTATION_FINALIZATION_MAX_MS } from "../../src/server/audio-dictation";
+import { attachLiveSidebandUpstream, beginAudioFinalization } from "../../src/server/index/live-sideband";
+import type { WsData } from "../../src/server/ws-bridge";
 import { abortAndReleaseAllTurns, resetLifecycleDrainStateForTests } from "../../src/server/lifecycle";
 import { LiveCallBindings } from "../../src/server/live-call-bindings";
 import type { OcxConfig } from "../../src/types";
@@ -32,8 +34,18 @@ const startEvent = { type: "session.start", config: {
   provider_mode: "streaming_sse", transcript_delivery_mode: "segment",
   vad: { type: "server_vad", threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500 },
 } };
+// Matches ScribeTray src/openai_streaming.rs::start_message (UUIDs fixed for repeatability).
+const scribeStart = {
+  type: "session.start", dictation_session_id: "78d201cb-1b49-40e1-a5b5-e06a8f8489a1",
+  attempt_id: "8b3c2e4f-d501-4a66-b123-456789abcdef", config: {
+    input_audio_format: "pcm16", sample_rate_hz: 16000, num_channels: 1,
+    max_buffer_size_bytes: 4194304, max_utterance_duration_ms: 30000, session_ttl_ms: 300000,
+    provider_mode: "streaming_sse", transcript_delivery_mode: "final_only", session_asset_mode: "none",
+    vad: { type: "server_vad" },
+  }, client_capabilities: ["server_stop_requested"],
+};
 
-function createFixture(options: { failDictation?: boolean; answer?: "invalid" | "ok200" } = {}) {
+function createFixture(options: { failDictation?: boolean; finalOnClose?: boolean; answer?: "invalid" | "ok200" } = {}) {
   const creates: Headers[] = [];
   const handshakes: Array<{ url: string; headers: Headers; protocols?: string[] }> = [];
   const frames: string[] = [];
@@ -59,8 +71,9 @@ function createFixture(options: { failDictation?: boolean; answer?: "invalid" | 
           return;
         }
         if (event.type === "session.start") ws.send(JSON.stringify({ type: "session.started", sequence_no: 1, session: { session_id: "fixture", status: "active", config: { provider_mode: "streaming_sse", transcript_delivery_mode: "segment" } } }));
-        else if (event.type === "audio.append") ws.send(JSON.stringify({ type: "transcript.final", sequence_no: 2, utterance_id: "u1", revision: 1, text: "fixture transcript" }));
+        else if (event.type === "audio.append") ws.send(JSON.stringify({ type: options.finalOnClose ? "speech.started" : "transcript.final", sequence_no: 2, utterance_id: "u1", revision: 1, text: "fixture transcript" }));
         else if (event.type === "session.close") {
+          if (options.finalOnClose) ws.send(JSON.stringify({ type: "transcript.final", utterance_id: "u1", revision: 1, text: "the last synthetic words" }));
           ws.send(JSON.stringify({ type: "session.updated", sequence_no: 3, session: { session_id: "fixture", status: "closed", config: { provider_mode: "streaming_sse", transcript_delivery_mode: "segment" } } }));
           ws.close(1000);
         } else ws.send(message);
@@ -160,6 +173,53 @@ async function createCall(): Promise<string> {
 }
 
 describe("dictation protocol validation", () => {
+  test("exact ScribeTray start with and without language preserves flush/close sequencing", () => {
+    for (const language of [undefined, "it", "en-US"]) {
+      const validate = createDictationFrameValidator();
+      const accepts = (value: unknown) => validate(JSON.stringify(value));
+      expect(accepts({ type: "audio.flush" })).toBe(false);
+      expect(accepts({ type: "session.close" })).toBe(false);
+      expect(accepts({ ...scribeStart, config: { ...scribeStart.config, ...(language ? { language } : {}) } })).toBe(true);
+      expect(accepts({ type: "audio.append", audio: "AAA=" })).toBe(true);
+      expect(accepts({ type: "audio.flush" })).toBe(true);
+      // Flush is nonterminal: more audio is legal until close.
+      expect(accepts({ type: "audio.append", audio: "AgA=" })).toBe(true);
+      expect(accepts({ type: "audio.flush" })).toBe(true);
+      expect(accepts({ type: "session.close" })).toBe(true);
+      for (const type of ["audio.append", "audio.flush", "session.close", "session.start"]) expect(accepts({ type, audio: "AAA=" })).toBe(false);
+    }
+  });
+  test("optional VAD settings remain validated when present", () => {
+    for (const vad of [
+      { threshold: -0.1 }, { threshold: 1.1 }, { threshold: "0.5" }, { threshold: null },
+      { prefix_padding_ms: -1 }, { prefix_padding_ms: 1001 }, { prefix_padding_ms: 0.5 },
+      { silence_duration_ms: -1 }, { silence_duration_ms: 5001 }, { silence_duration_ms: "500" },
+      { type: "client_vad" }, { unexpected: true },
+    ]) expect(createDictationFrameValidator()(JSON.stringify({ ...scribeStart, config: { ...scribeStart.config, vad: { type: "server_vad", ...vad } } }))).toBe(false);
+    for (const vad of [{ threshold: 0 }, { threshold: 1, prefix_padding_ms: 1000, silence_duration_ms: 5000 }]) {
+      expect(createDictationFrameValidator()(JSON.stringify({ ...scribeStart, config: { ...scribeStart.config, vad: { type: "server_vad", ...vad } } }))).toBe(true);
+    }
+  });
+  test("compatibility additions do not admit arbitrary fields or unbounded data", () => {
+    for (const change of [
+      { dictation_session_id: "x".repeat(129) }, { attempt_id: null }, { attempt_id: "" },
+      { dictation_session_id: "bad\nvalue" }, { client_capabilities: "server_stop_requested" },
+      { client_capabilities: ["unknown"] }, { client_capabilities: ["server_stop_requested", "server_stop_requested"] },
+      { arbitrary: true },
+    ]) expect(createDictationFrameValidator()(JSON.stringify({ ...scribeStart, ...change }))).toBe(false);
+    for (const change of [{ language: "" }, { language: "x".repeat(65) }, { language: 3 }, { session_asset_mode: "all" }, { arbitrary: true }, { provider_mode: ["streaming_sse"] }, { transcript_delivery_mode: ["final_only"] }]) {
+      expect(createDictationFrameValidator()(JSON.stringify({ ...scribeStart, config: { ...scribeStart.config, ...change } }))).toBe(false);
+    }
+    const validate = createDictationFrameValidator();
+    expect(validate(Buffer.from(JSON.stringify(scribeStart)))).toBe(false);
+    expect(validate("{" )).toBe(false);
+    expect(validate(JSON.stringify(scribeStart))).toBe(true);
+    for (const event of [
+      { type: "audio.append", audio: "A".repeat(65536) }, { type: "audio.append", audio: "not base64!" },
+      { type: "audio.append", audio: "AA==" }, { type: "audio.append", audio: "" },
+      { type: "audio.flush", extra: true }, { type: "session.close", extra: true },
+    ]) expect(validate(JSON.stringify(event))).toBe(false);
+  });
   test("PCM frames require a valid start, canonical base64 and an open session", () => {
     const validate = createDictationFrameValidator();
     expect(validate(JSON.stringify({ type: "audio.append", audio: "AAA=" }))).toBe(false);
@@ -171,8 +231,89 @@ describe("dictation protocol validation", () => {
     expect(validate(JSON.stringify({ type: "audio.append", audio: "AAA=" }))).toBe(false);
   });
   test("bad formats and oversized configurations do not start sessions", () => {
-    for (const change of [{ num_channels: 2 }, { sample_rate_hz: 0 }, { session_ttl_ms: 300001 }, { max_buffer_size_bytes: 4194305 }]) {
+    for (const change of [{ num_channels: 2 }, { sample_rate_hz: 0 }, { session_ttl_ms: 600001 }, { max_buffer_size_bytes: 4194305 }]) {
       expect(createDictationFrameValidator()(JSON.stringify({ ...startEvent, config: { ...startEvent.config, ...change } }))).toBe(false);
+    }
+  });
+  test("ten-minute application ceiling accepts the old TTL and rejects larger TTLs", () => {
+    expect(DICTATION_SESSION_MAX_MS).toBe(600_000);
+    for (const ttl of [300_000, 600_000]) {
+      expect(createDictationFrameValidator()(JSON.stringify({ ...startEvent, config: { ...startEvent.config, session_ttl_ms: ttl } }))).toBe(true);
+    }
+  });
+  test("relay recording and finalization clocks are bounded and cleaned on expiry or cancel", () => {
+    for (const mode of ["recording", "finalizing", "cancel", "complete", "other-transport", "connect-timeout"] as const) {
+      let now = 0;
+      let id = 0;
+      const timers = new Map<number, { at: number; run: () => void }>();
+      const set = spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, ms: number) => {
+        timers.set(++id, { at: now + ms, run }); return id;
+      }) as typeof setTimeout);
+      const clear = spyOn(globalThis, "clearTimeout").mockImplementation(((key: number) => { timers.delete(key); }) as typeof clearTimeout);
+      const advance = (ms: number) => {
+        now += ms;
+        for (const [key, timer] of [...timers]) if (timer.at <= now) { timers.delete(key); timer.run(); }
+      };
+      const upstream = new EventTarget() as EventTarget & { readyState: number; close: () => void };
+      upstream.readyState = WebSocket.OPEN;
+      upstream.close = () => { upstream.readyState = WebSocket.CLOSED; upstream.dispatchEvent(new CloseEvent("close", { code: 1000 })); };
+      let releases = 0;
+      const outcomes: unknown[] = [];
+      const data: WsData = {
+        liveUpstream: upstream as unknown as WebSocket,
+        liveUpstreamHandoff: { failure: () => undefined, take: () => ({ ok: true, frames: [] }) },
+        liveMaxSessionMs: DICTATION_SESSION_MAX_MS, liveFinalizationMs: DICTATION_FINALIZATION_MAX_MS,
+        liveFinish: outcome => { outcomes.push(outcome); },
+        liveTurnAdmissionLease: { release: () => { releases++; } } as never,
+      };
+      const ws = { data, readyState: WebSocket.OPEN, close() {} };
+      if (mode === "other-transport") data.liveFinalizationMs = undefined;
+      if (mode === "connect-timeout") {
+        data.liveUpstream = undefined;
+        data.liveUpstreamUrl = "ws://fixture.invalid";
+        upstream.readyState = WebSocket.CONNECTING;
+      }
+      try {
+        attachLiveSidebandUpstream(ws as never, () => upstream as unknown as WebSocket);
+        if (mode === "connect-timeout") {
+          expect(data.liveConnectTimer).toBeDefined();
+          advance(9_999);
+          expect(releases).toBe(0);
+          advance(1);
+          expect(releases).toBe(1);
+          expect(outcomes).toEqual(["timeout"]);
+          expect(timers.size).toBe(0);
+          expect(data.liveConnectTimer).toBeUndefined();
+          expect(data.liveSessionTimer).toBeUndefined();
+          continue;
+        }
+        expect(data.liveConnectTimer).toBeUndefined();
+        advance(599_999);
+        expect(releases).toBe(0);
+        if (mode === "recording") advance(1);
+        else {
+          beginAudioFinalization(ws as never, '{"type":"session.close"}');
+          if (mode === "other-transport") {
+            expect(data.liveFinalizing).toBeUndefined();
+            advance(1);
+          } else {
+            advance(1);
+            expect(releases).toBe(0);
+            if (mode === "cancel") data.cancel!();
+            else if (mode === "complete") upstream.close();
+            else {
+              advance(59_998);
+              expect(releases).toBe(0);
+              advance(1);
+            }
+          }
+        }
+        expect(releases).toBe(1);
+        expect(outcomes).toEqual([undefined]);
+        expect(timers.size).toBe(0);
+        expect(data.liveSessionTimer).toBeUndefined();
+        expect(data.liveAbortListener).toBeUndefined();
+      } finally { set.mockRestore(); clear.mockRestore(); }
     }
   });
 });
@@ -209,6 +350,26 @@ describe("external audio sockets", () => {
     expect(fixture.handshakes[0]!.protocols?.[0]).toBe("chatgpt-dictation");
     expect(fixture.handshakes[0]!.protocols?.[1]).toStartWith("openai-bearer.");
     expect(fixture.handshakes[0]!.protocols?.join(",")).not.toContain(KEY);
+  });
+  test("ScribeTray frames reach upstream unchanged and ordered, with finals after close", async () => {
+    fixture = createFixture({ finalOnClose: true });
+    const ws = socket("/v1/audio/transcriptions/stream", true);
+    const start = { ...scribeStart, config: { ...scribeStart.config, language: "it" } };
+    await receive(ws, start, "session.started");
+    const append = { type: "audio.append", audio: "AAA=" };
+    await receive(ws, append, "speech.started");
+    const flush = { type: "audio.flush" };
+    const close = { type: "session.close" };
+    const finals: string[] = [];
+    ws.addEventListener("message", event => {
+      const value = JSON.parse(String(event.data));
+      if (value.type === "transcript.final") finals.push(value.text);
+    });
+    const closed = receive(ws, flush, "session.updated");
+    ws.send(JSON.stringify(close));
+    await closed;
+    expect(finals).toEqual(["the last synthetic words"]);
+    expect(fixture.frames).toEqual([start, append, flush, close].map(value => JSON.stringify(value)));
   });
   test("standalone live defaults model and negotiation only for external clients", async () => {
     fixture = createFixture();

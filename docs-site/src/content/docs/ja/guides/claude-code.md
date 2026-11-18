@@ -53,7 +53,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（サブスクリプション起動で未設定の場合はネイティブの `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`） |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | OpenCodex がルーティングエイリアスを設定した Tier スロットの `/model` ラベル（例: `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`）。launchd のシステム環境とシェルフックにも同じ組で書き込みます。モデル ID はエイリアスのままです。自分で設定したスロットやラベルは変更しません |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort` がオンなら `1` (条件付き) |
-| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` が設定されている場合 (条件付き、既定はオフ) |
+| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` が設定されている場合 (条件付き、既定では注入せず Claude Code 自身の既定値に従う) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `maxContextTokens` が設定された場合の従来コンテキスト上書き値 (条件付き) |
 直接 export した変数が常に優先します。追加引数はそのまま渡されます: `ocx claude -p "hello"`。
 
@@ -124,8 +124,21 @@ hook を削除します。Claude Desktop は独立した profile を使用し、
 
 プロキシが保存済み OAuth 認証情報を使う管理対象のネイティブリクエストでは、宣言されたカスタムツール名も遅延参照とインライン追加・削除で揃えます。引数、スキーマ、キャッシュマーカーは保持します。システムメッセージ内のインライン変更には `inline-tools-2026-09-15` を指定してください。対応する型付きブロックがある場合、ファーストパーティ宛てのビルダーはこのヘッダーを保持します。
 
-`claudeCode.nativePassthrough: false` でオフにでき、`claudeCode.anthropicBaseUrl` で別のアドレスを
-指定できます。
+`claudeCode.nativePassthrough: false`、`ocx claude config set --native-passthrough off`、または
+ダッシュボードの Providers → Anthropic Claude → Accounts にある Claude アカウントプールの下の
+**Claude ネイティブパススルー** トグルでオフにでき、
+`claudeCode.anthropicBaseUrl` で別のアドレスを指定できます。Claude のモデル選択画面と Claude Desktop の受信時エイリアスは、`modelMap` より先に解決されます。
+エイリアスではないモデル ID をキーにした `modelMap` エントリは、パススルーのオン・オフにかかわらず、
+指定された別のプロバイダーのモデルへリクエストを送ります。パススルーをオフにすると、マッピングのない
+Claude のモデル ID はルーターに渡されます。ルーターはまずルーティングポリシーのエイリアスを確認し、次にコンボのエイリアスを確認します。
+どちらにも一致しない場合は、その ID を `defaultModel` にした有効なプロバイダー、
+有効な `anthropic` または `anthropic-*` プロバイダー、その ID をモデル一覧に含むプロバイダー、
+プロバイダー側のモデルエイリアス、最後に既定のプロバイダーの順に確認します。
+ルートが Anthropic OAuth プロバイダーの場合は OpenCodex に保存した Anthropic アカウントが処理し、2 つ目の
+アカウントを保存していれば 429 時のフェイルオーバーが加わります。能動的な
+Claude OAuth アカウントプールは `anthropicAccountPool.enabled` を有効にすると適用されます。
+ルーティングは次のリクエストから切り替わります。実行中の Claude Code セッションは、モデルスロットと
+コンテキストウィンドウを合わせるために再起動してください。
 
 ## Claude Desktop のモード: ゲートウェイ（デフォルト）と 1P
 
@@ -362,9 +375,7 @@ Claude Code は未知モデルのコンテキストを 200k トークンとし�
 **接続 → Claude** で圧縮値を調整できます。**警告:** モデルの実際のコンテキストウィンドウより大きく上げると
 要約を開始する前にチャットエラーが発生します。
 
-コンテキスト超過エラーの正規化では、プロバイダーのエラーメッセージの先頭 65,536 UTF-16 コード単位だけを使います。
-末尾の診断情報やトークン数は、省略を示す印なしで失われることがあります。
-詳しい制限とトークン数の扱いは[英語ガイド](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)を参照してください。
+Messages のエラー応答の正規化では、プロバイダーの文章やトークン数ではなく固定文を使います。認識したコンテキスト超過は `prompt is too long: The request exceeds the model's context window.` として返します。最初のフィールドが error イベントのストリームブロックは 1 MiB まで保持し、超過時は圧縮を促さない固定エラーにします。対象範囲と二つの例外は[英語ガイド](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)を参照してください。
 
 1M 未満のネイティブ Anthropic モデルには自動で標識を付けません。自分で export した圧縮値は起動スロットの標識に優先し、プロキシは**ユーザーが指定した**値を基準にどのモデルに安全に標識を付けるか決定します。ディスカバリー行はその export を無視し、固定の下限を保ちます。
 直接編集した設定値が不正な場合は 829,800 に戻ります。
@@ -576,9 +587,9 @@ role、`tool_use_id` のない `tool_result`、id/name のない `tool_use`、na
 分岐点と最上位自動 `cache_control` を管理します。安定した会話では通常キャッシュヒット率が約
 99.9% です。
 
-**ネイティブ OpenAI/ChatGPT ルーティング:** セッションスコープ `prompt_cache_key`(`metadata.user_id` があれば
-使用、なければシステム内容ハッシュ使用)とキャッシュ選好のための `session_id` ヘッダーを作ります。
-キャッシュキーにはモデルと全体ツールスキーマが含まれます。
+**ネイティブ OpenAI/ChatGPT ルーティング:** `prompt_cache_key`(`metadata.user_id` が文字列であれば
+使用、なければシステム内容ハッシュ使用)と、セッション識別子がある場合のみキャッシュ選好のための `session_id` ヘッダーを作ります(共有フォールバックキーからは作りません)。
+システム内容ハッシュから作るフォールバックキー(システム内容がある場合のみ)には、モデルと全体ツールスキーマも含まれます。
 
 **トークン計算:** Anthropic 出力は `input_tokens` から `cached_tokens` と `cache_write_tokens` を引き、
 それぞれ `cache_read_input_tokens` と `cache_creation_input_tokens` として公開します。リクエストログはこれを再び

@@ -63,6 +63,7 @@ const systemMessageItemSchema = z.object({
 });
 const assistantMessageItemSchema = z.object({
   type: z.literal("message").optional(),
+  id: z.string().optional(),
   role: z.literal("assistant"),
   content: z.union([z.string(), z.array(outputContentBlockSchema)]).optional(),
   phase: z.enum(["commentary", "final_answer"]).optional(),
@@ -169,15 +170,14 @@ const hostedToolType = z.enum(HOSTED_TOOL_TYPES);
 
 const allowedToolEntrySchema = z.union([
   z.object({ type: z.literal("mcp"), server_label: z.string().min(1), name: z.string().nullable().optional() }),
-  z.object({ type: z.string(), name: z.string().optional() }),
+  z.object({ type: z.string(), name: z.string().optional(), namespace: z.string().optional() }),
 ]);
 
 export const toolChoiceSchema = z.union([
   z.literal("auto"),
   z.literal("none"),
   z.literal("required"),
-  z.object({ type: z.literal("function"), name: z.string().min(1) }),
-  z.object({ type: z.literal("custom"), name: z.string().min(1) }),
+  z.object({ type: z.enum(["function", "custom"]), name: z.string().min(1), namespace: z.string().optional() }),
   z.object({ type: hostedToolType }),
   z.object({ type: z.literal("allowed_tools"), mode: z.enum(["auto", "required"]), tools: z.array(allowedToolEntrySchema) }),
 ]);

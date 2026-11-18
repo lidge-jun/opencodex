@@ -11,6 +11,7 @@ import {
   __resetAntigravityReplayCache,
   applyAntigravityReplay,
   observeAntigravityReplay,
+  THOUGHT_SIGNATURE_BYPASS,
 } from "../../../src/adapters/google-antigravity-replay";
 import { parseRequest } from "../../../src/responses/parser";
 import {
@@ -614,6 +615,70 @@ describe("#1735 thought signature survives history replay", () => {
     // Unrelated call from another turn is preserved
     expect(lookupReplayThoughtSignature("call_unrelated_3", scope)).toBe(SIG_C);
   });
+
+  // #8054: the 200-body tests above never reach the transport. A real upstream rejection is an
+  // HTTP 400 that the dispatcher reports without calling parseResponse, so the clear has to run
+  // in the adapter's own fetch path — exercised here through fetchResponse with a non-200 send.
+  // The second case carries no "invalid argument" or "signature" wording: Google's normalized 400
+  // text keeps only the message, so the HTTP 400 status itself has to trigger the clear.
+  const rejections = [
+    { label: "INVALID_ARGUMENT text", message: "Request contains an invalid argument." },
+    { label: "status-only", message: "bad model" },
+  ] as const;
+  for (const mode of ["cloud-code-assist", "vertex"] as const) for (const rejection of rejections) {
+    test(`${mode}: a real HTTP 400 (${rejection.label}) drops the cached signature so the next turn uses the sentinel`, async () => {
+      const modeProvider = mode === "cloud-code-assist"
+        ? { ...provider, googleMode: mode, baseUrl: "https://daily-cloudcode-pa.googleapis.com", project: "test-proj", apiKey: "test-token" } as OcxProviderConfig
+        : provider;
+      const user = { role: "user", content: [{ type: "input_text", text: "issue-8054 session" }] };
+      const tools = [{ type: "function", name: "shell_command", description: "run", parameters: { type: "object" } }];
+      // Unscoped, so the durable store stays empty and only the session replay cache can sign.
+      const replayTurn = () => parseRequest({
+        model: MODEL,
+        stream: false,
+        input: [
+          user,
+          { type: "function_call", call_id: "call_8054", name: "shell_command", arguments: "{\"cmd\":\"pwd\"}" },
+          { type: "function_call_output", call_id: "call_8054", output: "/tmp" },
+        ],
+        tools,
+      });
+      const firstCallSignature = (body: string) => {
+        const envelope = JSON.parse(body) as { request?: { contents: unknown[] } };
+        const wire = mode === "cloud-code-assist" ? JSON.stringify(envelope.request) : body;
+        return modelParts(wire).find(part => "functionCall" in part)?.thoughtSignature;
+      };
+
+      // Turn 1: upstream mints a signature, which the replay cache observes.
+      const first = createGoogleAdapter(modeProvider);
+      await first.buildRequest(parseRequest({ model: MODEL, stream: false, input: [user], tools }));
+      const minted = googleBody([fcPart("shell_command", { cmd: "pwd" }, SIGNATURE)]);
+      await first.parseResponse!(new Response(JSON.stringify(mode === "cloud-code-assist" ? { response: minted } : minted)));
+
+      // Turn 2 replays it and upstream rejects the request with a real 400.
+      const second = createGoogleAdapter(modeProvider);
+      const built = await second.buildRequest(replayTurn());
+      expect(firstCallSignature(built.body as string)).toBe(SIGNATURE);
+      let sends = 0;
+      const executor = (async () => {
+        sends++;
+        return new Response(JSON.stringify({
+          error: { code: 400, status: "INVALID_ARGUMENT", message: rejection.message },
+        }), { status: 400, headers: { "content-type": "application/json" } });
+      }) as unknown as typeof fetch;
+      const res = await second.fetchResponse!(built, { executor, timeoutMs: 5_000 });
+      expect(res.status).toBe(400);
+      // No resend: payload rejection stays resend-is-futile.
+      expect(sends).toBe(1);
+      // The dispatcher still owns an unread body.
+      expect(await res.text()).toContain(rejection.message);
+
+      // Turn 3 must not replay the rejected signature; the first call falls back to the sentinel.
+      const third = createGoogleAdapter(modeProvider);
+      const retried = await third.buildRequest(replayTurn());
+      expect(firstCallSignature(retried.body as string)).toBe(THOUGHT_SIGNATURE_BYPASS);
+    });
+  }
 });
 
 describe("Antigravity Multi-Signature History Stability (Mechanism ②)", () => {

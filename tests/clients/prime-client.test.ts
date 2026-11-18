@@ -38,12 +38,15 @@ function context(): ExportContext {
 }
 
 describe("Prime Agent client config", () => {
-  test("shares Pi's model contract without opting Prime into session headers", () => {
+  test("shares Pi's model contract and developer-role statement without Pi's session headers", () => {
     const prime = buildClientConfig("prime", context()) as PiGeneratedConfig;
     const pi = buildClientConfig("pi", context()) as PiGeneratedConfig;
     expect(pi.providers[OPENCODE_PROVIDER_ID]!.compat).toEqual({ sendSessionAffinityHeaders: true, supportsDeveloperRole: false });
-    delete pi.providers[OPENCODE_PROVIDER_ID]!.compat;
-    expect(prime).toEqual(pi);
+    // Prime runs Pi's runtime, which sends `developer` unless told otherwise (#8864).
+    expect(prime.providers[OPENCODE_PROVIDER_ID]!.compat).toEqual({ supportsDeveloperRole: false });
+    const { compat: _primeCompat, ...primeBlock } = prime.providers[OPENCODE_PROVIDER_ID]!;
+    const { compat: _piCompat, ...piBlock } = pi.providers[OPENCODE_PROVIDER_ID]!;
+    expect(primeBlock).toEqual(piBlock);
     expect(buildClientContribution("prime", context()).fragments[0]!.value)
       .toEqual(prime.providers[OPENCODE_PROVIDER_ID]);
   });

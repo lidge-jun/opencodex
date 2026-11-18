@@ -1,6 +1,7 @@
 import { REQUIRED_TOOL_CONTRACT_CODE } from "../../lib/errors";
 import { mapToolChoice } from "../../responses/parser-tools";
-import { modelInList, type OcxProviderConfig } from "../../types";
+import { extractHostedWebSearch } from "../../web-search/synthetic-tool";
+import { modelInList, type OcxProviderConfig, type OcxTool } from "../../types";
 import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import { applyReplayRefusalClientHeaders, isNonReplayableResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
 import { clientWireOf } from "../inference/client-wire";
@@ -42,10 +43,28 @@ export function hasMandatoryToolChoice(rawBody: unknown): boolean {
 }
 
 /** A translated Chat target must not turn a mandatory selector into auto or none. */
-export function chatCanPreserveMandatoryToolChoice(rawBody: unknown, provider: OcxProviderConfig, modelId: string): boolean {
+export function chatCanPreserveMandatoryToolChoice(rawBody: unknown, provider: OcxProviderConfig, modelId: string, effectiveTools?: readonly OcxTool[]): boolean {
   if (!hasMandatoryToolChoice(rawBody)) return true;
   if (modelInList(provider.autoToolChoiceOnlyModels, modelId)) return false;
-  const mapped = mapToolChoice((rawBody as Record<string, unknown>).tool_choice);
+  const body = rawBody as Record<string, unknown>;
+  const choice = body.tool_choice;
+  const tools = body.tools;
+  const hasDeclaredTools = Array.isArray(tools) && tools.length > 0
+    || Array.isArray(body.input) && body.input.some(item => item && typeof item === "object"
+      && (item.type === "additional_tools" || item.type === "tool_search_output")
+      && Array.isArray(item.tools) && item.tools.length > 0);
+  // The parsed catalog includes additional_tools and tool_search_output. A static
+  // candidate check without it defers this decision to final request preparation.
+  // Hosted search belongs to the later sidecar injection owner.
+  if (choice === "required" && hasDeclaredTools && effectiveTools !== undefined && effectiveTools.length === 0
+    && !extractHostedWebSearch(Array.isArray(tools) ? tools : undefined)) return false;
+  if (choice && typeof choice === "object" && !Array.isArray(choice)) {
+    const selector = choice as Record<string, unknown>;
+    // Chat function names cannot preserve the selected MCP server's ownership.
+    if (selector.type === "allowed_tools" && Array.isArray(selector.tools)
+      && selector.tools.some(tool => tool && typeof tool === "object" && tool.type === "mcp")) return false;
+  }
+  const mapped = mapToolChoice(choice);
   return mapped === "required" || (!!mapped && typeof mapped === "object");
 }
 

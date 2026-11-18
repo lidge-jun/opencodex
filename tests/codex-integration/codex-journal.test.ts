@@ -1,6 +1,6 @@
 import { describe, expect, test, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -17,9 +17,11 @@ const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta
 setDefaultTimeout(SPAWN_BUDGET_MS);
 
 function runScript(codexHome: string, script: string): { stdout: string; stderr: string; status: number } {
+  mkdirSync(join(codexHome, "ocx-home"), { recursive: true });
   const result = spawnSync(process.execPath, ["--eval", script], {
     cwd: repoRoot,
-    env: { ...process.env, CODEX_HOME: codexHome },
+    // OPENCODEX_HOME too: adoption and injection take the config mutation lock in that home.
+    env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: join(codexHome, "ocx-home") },
     encoding: "utf8",
     timeout: SPAWN_BUDGET_MS - 5_000,
   });
@@ -385,6 +387,157 @@ describe("codex-journal", () => {
     expect(JSON.parse(restored.stdout).restored).toBe(true);
     expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(original);
     expect(existsSync(journalPath)).toBe(false);
+  });
+
+  // A Remote Link Child linked while a standalone proxy had routing injected: `ocx connect --link`
+  // re-injects for the client, but the journal stayed the standalone process's. Once that process
+  // exited into its supervisor (desktop exit 75, service exit 1), the supervisor's fresh start saw a
+  // dead process owner and restored native Codex and the old catalog under the new link.
+  // A Remote Link Child linked while a standalone proxy had routing injected: `ocx connect --link`
+  // re-injects for the client. The journal must stay the live standalone's until the connection
+  // commits (a runtime starting mid-connect then skips it), and become the client's right after, or
+  // the supervisor's relaunch reads a dead process owner and restores native Codex under the link.
+  test("a client injection leaves the journal to its owner until connect commits and adopts it", () => {
+    const original = '# original config\nmodel_provider = "openai"\n';
+    writeFileSync(join(testDir, "config.toml"), original, "utf8");
+    const linked = runScript(testDir, `
+      const { injectCodexConfig } = require("./src/codex/inject");
+      const { adoptJournalForClient } = require("./src/codex/journal");
+      const fs = require("fs"), path = require("path");
+      const owner = () => JSON.parse(fs.readFileSync(path.join(process.env.CODEX_HOME, "opencodex-journal.json"), "utf8")).owner;
+      (async () => {
+        const config = { port: 10100, providers: {}, defaultProvider: "openai" };
+        await injectCodexConfig(10100, config, { catalogPath: null });
+        await injectCodexConfig(10100, config, { catalogPath: null, journalOwner: { kind: "client", apiKeyId: "link-key" } });
+        const beforeCommit = owner();
+        const adopted = adoptJournalForClient("link-key");
+        const again = adoptJournalForClient("link-key");
+        console.log(JSON.stringify({ beforeCommit: beforeCommit.kind, adopted, again, pid: process.pid }));
+      })();
+    `);
+    expect(linked.status).toBe(0);
+    expect(JSON.parse(linked.stdout)).toMatchObject({ beforeCommit: "process", adopted: "adopted", again: "owned" });
+    const journal = JSON.parse(readFileSync(join(testDir, "opencodex-journal.json"), "utf8"));
+    expect(journal.owner).toEqual({ kind: "client", apiKeyId: "link-key" });
+    expect(Buffer.from(journal.originalConfig, "base64").toString("utf8")).toBe(original);
+    const routed = readFileSync(join(testDir, "config.toml"), "utf8");
+
+    // The supervisor's start: the injecting process is gone, the link is the committed client.
+    const restarted = runScript(testDir, `
+      const { reconcileJournal } = require("./src/codex/journal");
+      console.log(JSON.stringify({ restored: reconcileJournal({ activeClientApiKeyId: "link-key" }) }));
+    `);
+    expect(restarted.status).toBe(0);
+    expect(JSON.parse(restarted.stdout).restored).toBe(false);
+    expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(routed);
+  });
+
+  // Review round 2: a stale sync must never hand a later connection's journal to its own key, so
+  // adoption never takes another client's journal and re-runs the caller's connection guard
+  // under the Codex config lock.
+  test("adoption never takes another client's journal and honors the caller's guard", () => {
+    writeFileSync(join(testDir, "config.toml"), '# original config\nmodel_provider = "openai"\n', "utf8");
+    const r = runScript(testDir, `
+      const { injectCodexConfig } = require("./src/codex/inject");
+      const { adoptJournalForClient } = require("./src/codex/journal");
+      const fs = require("fs"), path = require("path");
+      const owner = () => JSON.parse(fs.readFileSync(path.join(process.env.CODEX_HOME, "opencodex-journal.json"), "utf8")).owner;
+      (async () => {
+        const config = { port: 10100, providers: {}, defaultProvider: "openai" };
+        await injectCodexConfig(10100, config, { catalogPath: null, journalOwner: { kind: "client", apiKeyId: "newer-key" } });
+        const foreign = adoptJournalForClient("stale-key");
+        const afterForeign = owner();
+        let refused = null;
+        await injectCodexConfig(10100, config, { catalogPath: null });
+        fs.writeFileSync(path.join(process.env.CODEX_HOME, "opencodex-journal.json"), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(process.env.CODEX_HOME, "opencodex-journal.json"), "utf8")), owner: { kind: "process", pid: process.pid } }));
+        try { adoptJournalForClient("link-key", () => { throw new Error("client_connection_changed"); }); } catch (error) { refused = error.message; }
+        console.log(JSON.stringify({ foreign, afterForeign, refused, afterGuard: owner() }));
+      })();
+    `);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.foreign).toBe("foreign");
+    expect(out.afterForeign).toEqual({ kind: "client", apiKeyId: "newer-key" });
+    expect(out.refused).toBe("client_connection_changed");
+    expect(out.afterGuard.kind).toBe("process");
+  });
+
+  // Review round 3: the connection guard and the journal write share the config mutation lock
+  // (taken inside the Codex config lock), so no connection or runtime change can land between them;
+  // and a missing journal is reported as such, never as a completed handover.
+  test("adoption holds the config mutation lock through its guard and reports a missing journal", () => {
+    writeFileSync(join(testDir, "config.toml"), '# original config\nmodel_provider = "openai"\n', "utf8");
+    const ocxHome = join(testDir, "ocx-home");
+    require("node:fs").mkdirSync(ocxHome, { recursive: true });
+    const r = spawnSync(process.execPath, ["--eval", `
+      const { injectCodexConfig } = require("./src/codex/inject");
+      const { adoptJournalForClient } = require("./src/codex/journal");
+      const { prepareConfigMutationDatabasePathForWrite } = require("./src/config/mutation-lock");
+      const { Database } = require("bun:sqlite");
+      const fs = require("fs"), path = require("path");
+      (async () => {
+        const missing = adoptJournalForClient("link-key");
+        await injectCodexConfig(10100, { port: 10100, providers: {}, defaultProvider: "openai" }, { catalogPath: null });
+        let competingWriter = "not-run";
+        const mutationDb = prepareConfigMutationDatabasePathForWrite();
+        const adopted = adoptJournalForClient("link-key", () => {
+          let db;
+          try { db = new Database(mutationDb); db.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE"); competingWriter = "admitted"; db.exec("ROLLBACK"); }
+          catch (error) { competingWriter = /locked|busy/i.test(String(error)) ? "refused" : String(error); }
+          finally { db?.close(); }
+        });
+        console.log(JSON.stringify({ missing, adopted, competingWriter }));
+      })();
+    `], { cwd: repoRoot, env: { ...process.env, CODEX_HOME: testDir, OPENCODEX_HOME: ocxHome }, encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000 });
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout.trim())).toEqual({ missing: "missing", adopted: "adopted", competingWriter: "refused" });
+  });
+
+  // Review round 4: external Codex providers (approved or not) leave no standard journal, and no
+  // journal means startup recovery has nothing to restore. Only another client's journal leaves the
+  // routing at risk, so only that counts as an incomplete handover.
+  test("an external provider leaves no journal to hand over, and only a foreign journal is incomplete", () => {
+    writeFileSync(join(testDir, "config.toml"), 'model_provider = "acme"\n\n[model_providers.acme]\nname = "Acme"\nbase_url = "https://acme.example.test/v1"\n', "utf8");
+    const r = runScript(testDir, `
+      const { injectCodexConfig } = require("./src/codex/inject");
+      const { adoptJournalForClient, journalHandoverIncomplete } = require("./src/codex/journal");
+      (async () => {
+        const injected = await injectCodexConfig(10100, { port: 10100, providers: {}, defaultProvider: "openai" }, { catalogPath: null, journalOwner: { kind: "client", apiKeyId: "link-key" } });
+        const adoption = adoptJournalForClient("link-key");
+        const verdicts = ["adopted", "owned", "missing", "foreign"].map(journalHandoverIncomplete);
+        console.log(JSON.stringify({ success: injected.success, adoption, verdicts }));
+      })();
+    `);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ success: true, adoption: "missing", verdicts: [false, false, false, true] });
+  });
+
+  // Review round 5: only a confirmed absence is safe. A journal that passes the ownership check but
+  // cannot be read on the handover's own read must fail the handover, never read as "missing".
+  test("an unreadable journal on the handover read fails instead of reading as missing", () => {
+    writeFileSync(join(testDir, "config.toml"), '# original config\nmodel_provider = "openai"\n', "utf8");
+    const r = runScript(testDir, `
+      const { spyOn } = require("bun:test");
+      const { injectCodexConfig } = require("./src/codex/inject");
+      const owner = require("./src/codex/codex-home-owner");
+      const { adoptJournalForClient } = require("./src/codex/journal");
+      (async () => {
+        await injectCodexConfig(10100, { port: 10100, providers: {}, defaultProvider: "openai" }, { catalogPath: null });
+        const real = owner.readCodexHomeJournal;
+        let calls = 0;
+        spyOn(owner, "readCodexHomeJournal").mockImplementation(path => (++calls === 2 ? { kind: "unknown" } : real(path)));
+        let outcome;
+        try { outcome = adoptJournalForClient("link-key"); } catch (error) { outcome = "threw"; }
+        const fs = require("fs"), path = require("path");
+        const kind = JSON.parse(fs.readFileSync(path.join(process.env.CODEX_HOME, "opencodex-journal.json"), "utf8")).owner.kind;
+        console.log(JSON.stringify({ outcome, calls, kind }));
+      })();
+    `);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.calls).toBeGreaterThanOrEqual(2);
+    expect(out.outcome).toBe("threw");
+    expect(out.kind).toBe("process");
   });
 
   test("removeJournal refuses unknown journal evidence", () => {

@@ -1,6 +1,8 @@
 import type { OcxConfig } from "../types";
 
-export const LIVE_TOPOLOGY_KEYS = new Set(["hostname", "port", "runtimeRole", "hub", "client", "unauthenticatedLoopbackListener"]);
+export const LIVE_TOPOLOGY_KEYS = new Set([
+  "hostname", "port", "runtimeRole", "hub", "client", "unauthenticatedLoopbackListener", "codexAuthMethod",
+]);
 const baselines = new WeakMap<OcxConfig, Record<string, unknown>>();
 
 function snapshot(config: OcxConfig): Record<string, unknown> {
@@ -14,7 +16,7 @@ export function captureLiveTopologyBaseline(config: OcxConfig): void {
   baselines.set(config, snapshot(config));
 }
 
-/** Merge desired next-start topology without mutating the active listener/role objects. */
+/** Merge desired next-start settings without mutating active values. */
 export function projectLiveTopology(
   config: OcxConfig, persisted: OcxConfig,
   mergeRecord: (live: Record<string, unknown>, baseline: Record<string, unknown>, disk: Record<string, unknown>, skipped: ReadonlySet<string>) => void,

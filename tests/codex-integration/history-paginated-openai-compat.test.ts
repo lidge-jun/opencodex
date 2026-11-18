@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { applyPaginatedOpenaiCompat } from "../../src/codex/inject/paginated-openai-compat";
 import {
   HISTORY_PAGINATED_OPENAI_NEEDS_ROOT_OVERRIDE,
+  HISTORY_PAGINATED_OPENAI_PROVIDER_LOCKED,
   HISTORY_RELABEL_STANDS_DOWN,
 } from "../../src/codex/history-provider";
 import { OCX_ROUTING_MARKER_LINE } from "../../src/codex/injected-marker";
@@ -115,5 +116,56 @@ describe("paginated openai compatibility (#5321)", () => {
     expect(occurrences).toBe(1);
     expect(readFileSync(repoPath("src", "codex", "inject", "paginated-openai-compat.ts"), "utf8"))
       .not.toContain(`"${HISTORY_PAGINATED_OPENAI_NEEDS_ROOT_OVERRIDE}"`);
+  });
+});
+
+describe("Codex 0.166 provider lock (#8191)", () => {
+  // codex-cli 0.166 refuses to resume or list a thread whose provider differs from the active
+  // model_provider ("This chat uses openai, but your current provider is opencodex"). The retained
+  // root override only kept paginated openai rows reachable while Codex ignored that tag, so on
+  // 0.166 and later the transition would strand them; it is refused instead and nothing changes.
+  const LOCKED_VERSIONS = ["0.166.0-alpha.6", "0.166.0", "0.170.2"];
+
+  test("a loopback table transition on Codex >= 0.166 is refused and names the ways out", () => {
+    for (const version of LOCKED_VERSIONS) {
+      const decision = applyPaginatedOpenaiCompat(
+        HISTORY_PAGINATED_OPENAI_NEEDS_ROOT_OVERRIDE, loopback, TABLE_CANDIDATE, "\n", version,
+      );
+      expect(decision.refusal).toBe(HISTORY_PAGINATED_OPENAI_PROVIDER_LOCKED);
+      expect(decision.retainedRootOverride).toBe(false);
+      expect(decision.content).toBe(TABLE_CANDIDATE);
+      expect(decision.message).toContain("0.166");
+      const configSource = readFileSync(repoPath("src", "types", "config.ts"), "utf8");
+      for (const key of ["codexDesktopAuthless", "codexClientCompaction", "syncResumeHistory"]) {
+        expect(decision.message).toContain(key);
+        expect(configSource).toContain(`${key}?:`);
+      }
+    }
+  });
+
+  test("the lock wins over the admission-token refusal and over a user-owned root line", () => {
+    expect(applyPaginatedOpenaiCompat(HISTORY_PAGINATED_OPENAI_NEEDS_ROOT_OVERRIDE, admissionToken, TABLE_CANDIDATE, "\n", "0.166.0").refusal)
+      .toBe(HISTORY_PAGINATED_OPENAI_PROVIDER_LOCKED);
+    const userOwned = `openai_base_url = "https://my-gateway.example/v1"\n${TABLE_CANDIDATE}`;
+    const decision = applyPaginatedOpenaiCompat(HISTORY_PAGINATED_OPENAI_NEEDS_ROOT_OVERRIDE, loopback, userOwned, "\n", "0.166.0");
+    expect(decision.refusal).toBe(HISTORY_PAGINATED_OPENAI_PROVIDER_LOCKED);
+    expect(decision.content).toBe(userOwned);
+  });
+
+  test("an older or unknown Codex keeps the retained override", () => {
+    for (const version of ["0.165.9", "0.159.2", null, undefined]) {
+      const decision = applyPaginatedOpenaiCompat(
+        HISTORY_PAGINATED_OPENAI_NEEDS_ROOT_OVERRIDE, loopback, TABLE_CANDIDATE, "\n", version,
+      );
+      expect(decision.refusal).toBe(HISTORY_RELABEL_STANDS_DOWN);
+      expect(decision.retainedRootOverride).toBe(true);
+    }
+  });
+
+  test("other reasons are untouched by the version", () => {
+    expect(applyPaginatedOpenaiCompat(HISTORY_RELABEL_STANDS_DOWN, loopback, TABLE_CANDIDATE, "\n", "0.166.0"))
+      .toMatchObject({ refusal: HISTORY_RELABEL_STANDS_DOWN, retainedRootOverride: false, content: TABLE_CANDIDATE });
+    expect(applyPaginatedOpenaiCompat(null, loopback, TABLE_CANDIDATE, "\n", "0.166.0"))
+      .toMatchObject({ refusal: null, content: TABLE_CANDIDATE });
   });
 });

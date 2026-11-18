@@ -1,16 +1,14 @@
 name: Close stale needs-info issues
 
-# Scheduled workflows only run from the repository DEFAULT branch
-# (currently `main`), not from `dev`. Landing here on `dev` alone does not
-# change live issue-stale behavior until the change is also on that default
-# branch.
+# Scheduled workflows only run from the repository DEFAULT branch, which is
+# `dev`. A change lands on the live schedule as soon as it is on `dev`.
 on:
   schedule:
     # Daily at 06:15 UTC (offset from the hour to reduce Action load spikes).
     - cron: "15 6 * * *"
   # No workflow_dispatch: a branch-selected manual run would execute that
   # branch's workflow body with issues:write / pull-requests:write, bypassing
-  # default-branch review. Schedule-only keeps the trusted revision on main.
+  # default-branch review. Schedule-only keeps the trusted revision on `dev`.
 
 permissions:
   issues: write

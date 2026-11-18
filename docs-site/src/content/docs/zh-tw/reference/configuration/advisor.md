@@ -7,6 +7,16 @@ description: 獨立專家諮詢，支援 manual、preflight 與依據證據的 a
 
 這與子代理面（見[代理設定](/zh-tw/reference/configuration/agents/)）不同：子代理是透過 Codex 協作工具由 Worker 發起的委託。顧問是客户端完全不可見的代理側 sidecar —— 即使從不 spawn 的 Worker 也能獲得建議。
 
+## 僅傳送問題
+
+要減少重複輸入，請在顧問頁面啟用 **僅傳送主模型的問題**，或執行：
+
+```sh
+ocx advisor set --context-mode question-only
+```
+
+此選項只傳送固定顧問指令和主模型的問題。問題最多保留 2,000 字元，超長時附加截斷提示。OpenCodex 不自動附加任務、對話歷史、工具結果、工具目錄、主模型身分或修復證據。主模型必須補充必要背景。空問題不會送往顧問模型。此模式暫停 preflight 和 adaptive 自動諮詢；主動諮詢、共享確認與現有次數限制仍然生效。預設值 `context` 保留下述上下文共享行為。使用 `--context-mode context` 可恢復。
+
 ## 設定
 
 在儀表板 **Advisor** 頁面從目錄選擇專家模型。選擇器原樣儲存原生、供應商、指定帳戶、自訂和組合模型的識別碼。已停用和等待初始選擇的模型不會作為新選項。已儲存但不在可選目錄中的識別碼會保留並顯示警告，直到您選擇其他模型或清除。目錄載入失敗時保留目前選擇並提供重試。請選擇能回傳文字建議的模型；目錄不保證諮詢相容性。CLI 和 API 仍接受路由器支援的模型字串。
@@ -29,13 +39,14 @@ description: 獨立專家諮詢，支援 manual、preflight 與依據證據的 a
 | `model?` | `string` | — | 專家模型。任何路由權威接受的模型字串：裸原生模型（`gpt-6-astra`）、明確 `provider/model`（`anthropic/claude-sonnet-4-6`、`xai/grok-...`）或帳戶限定的原生模型。完整支援跨 provider：Worker 與 Advisor 無需同屬一個 provider。 |
 | `effort?` | `string` | `"max"` | Advisor 呼叫的推理強度（`low` 至 `ultra`）。 |
 | `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | 何時諮詢顧問。 |
+| `contextMode?` | `"context" \| "question-only"` | `"context"` | 上下文共享方式。`question-only` 要求主模型主動提問，並暫停自動諮詢。 |
 | `maxConsultationsPerTask?` | `integer` | `3` | 自適應任務諮詢上限（1–3 次嘗試），包含手動呼叫。 |
 | `timeoutMs?` | `number` | `120000` | 回環諮詢逾時。 |
 | `contextSharingConsent?` | `"v1"` | 缺省 | 操作者同意把任務上下文傳送給所設定的顧問 provider。只有 `"v1"` 是目前版本。缺省、過期或其他值都表示不傳送任務內容。`enabled: true` 本身不是同意。 |
 
 透過儀表板的 **Advisor** 頁面或 `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>` 管理。
 
-沒有目前同意時，`ocx advisor on` 不會開啟跨 provider 傳送：它會印出揭露並停止。`ocx advisor on --ack-context-sharing` 與 `ocx advisor consent` 記錄 `v1`。`ocx advisor consent --revoke` 會移除同意並立即停止傳送。`ocx advisor set` 不授予同意。儀表板上的同意核取方塊預設不勾選。
+沒有目前同意時，`ocx advisor on` 不會開啟跨 provider 傳送：它會印出揭露並停止。`ocx advisor on --ack-context-sharing` 與 `ocx advisor consent` 記錄 `v1`。`ocx advisor consent --revoke` 會移除同意。尚未發出的諮詢會被阻擋，但已經發出的諮詢無法取消，已經離開代理的上下文也無法收回。`ocx advisor set` 不授予同意。儀表板上的同意核取方塊預設不勾選。
 
 ## 策略
 
@@ -87,6 +98,7 @@ Advisor 失敗是 fail-open 的：已經發出的諮詢若失敗（模型不可�
 ## PR1 限制
 
 - 原生 OpenAI passthrough 回合（ChatGPT 池 Worker）不會獲得合成工具；advisor 支援覆蓋路由（translated）provider。preflight 諮詢適用於 run-turn 介面卡；工具不適用。
+- 翻譯後的 `/v1/messages` 請求（例如將 Claude Code 路由至翻譯 provider）與 `/v1/responses`、`/v1/chat/completions` 一樣取得合成工具與 preflight 諮詢。`policy` 與上下文共享同意遵循相同規則，設定從目前組態讀取，因此撤銷同意會阻止進行中的請求發起尚未送出的諮詢；它不會取消已送出的諮詢，也無法收回已離開代理的上下文。
 - 不提供語義卡住偵測、任務完成複核、升級分層、多專家或投票；自適應觸發只使用已觀察到的工具證據。
 - preflight 去重帳本是行程內的；代理重啟後，進行中的任務可能再收到一次 preflight 諮詢。
 

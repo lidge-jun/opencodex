@@ -1,12 +1,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repoPath } from "../helpers/repo-root";
 
 const script = repoPath("scripts", "ci", "bun-install-frozen.sh");
 const UBUNTU_INSTALL_JOBS = ["test", "test-changed", "storage-policy", "api-usage", "gates"];
+// Trusted runs of the heavy jobs take the lidge self-hosted Ubuntu pool; everything else stays hosted.
+const LIDGE_JOBS = new Set(["test", "test-changed", "gates"]);
+const LIDGE_RUNS_ON = "${{ vars.LIDGE_RUNNERS == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.pull_request.author_association)) && fromJSON('[\"self-hosted\",\"linux\",\"x64\",\"lidge\"]') || 'ubuntu-latest' }}";
+const isUbuntu = (runsOn: string | null) => runsOn === "ubuntu-latest" || runsOn === LIDGE_RUNS_ON;
 
 /** Map each job id in ci.yml to its runs-on value and the run lines it contains. */
 function ciJobs(): Map<string, { runsOn: string | null; text: string }> {
@@ -28,11 +32,11 @@ describe("CI frozen installs are bounded", () => {
     const jobs = ciJobs();
     for (const name of UBUNTU_INSTALL_JOBS) {
       const job = jobs.get(name);
-      expect(job?.runsOn, name).toBe("ubuntu-latest");
+      expect(job?.runsOn, name).toBe(LIDGE_JOBS.has(name) ? LIDGE_RUNS_ON : "ubuntu-latest");
       expect(job!.text, name).toContain("bash scripts/ci/bun-install-frozen.sh . gui");
     }
     for (const [name, job] of jobs) {
-      if (job.runsOn !== "ubuntu-latest") continue;
+      if (!isUbuntu(job.runsOn)) continue;
       // A bare two-step root+gui install, in block or one-line form, is unbounded again.
       expect(/bun install --frozen-lockfile(?:\s*&&\s*|\s*\n\s*)cd gui(?:\s*&&\s*|\s*\n\s*)bun install/.test(job.text), name).toBe(false);
     }
@@ -293,12 +297,21 @@ describe.skipIf(process.platform === "win32")("bun-install-frozen.sh retry polic
   test("retry completes a trusted postinstall interrupted after package extraction", () => {
     const root = mkdtempSync(join(tmpdir(), "ocx-bun-postinstall-"));
     roots.push(root);
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    symlinkSync(process.execPath, join(bin, "bun"));
+    for (const name of ["timeout", "gtimeout"]) {
+      const timeout = Bun.which(name);
+      if (timeout) symlinkSync(timeout, join(bin, name));
+    }
+    const env = { HOME: root, TMPDIR: root, PATH: `${bin}:/usr/bin:/bin` };
     mkdirSync(join(root, "dep"));
     writeFileSync(join(root, "package.json"), JSON.stringify({
       name: "install-retry-fixture", dependencies: { fixture: "file:./dep" }, trustedDependencies: ["fixture"],
     }));
     writeFileSync(join(root, "dep", "package.json"), JSON.stringify({
-      name: "fixture", version: "1.0.0", scripts: { postinstall: "node postinstall.cjs" },
+      // Run the fixture with the same Bun binary as install, independent of PATH's Node shims.
+      name: "fixture", version: "1.0.0", scripts: { postinstall: "bun postinstall.cjs" },
     }));
     // The first postinstall records extraction, then stalls before producing its binary.
     // A plain install retry skips this already-extracted package and exits zero.
@@ -312,13 +325,13 @@ describe.skipIf(process.platform === "win32")("bun-install-frozen.sh retry polic
       "fs.writeFileSync('binary-ready', 'ready');",
     ].join("\n"));
     const lock = spawnSync(process.execPath, ["install", "--lockfile-only", "--ignore-scripts"], {
-      cwd: root, encoding: "utf8", timeout: 10_000,
+      cwd: root, encoding: "utf8", timeout: 10_000, env,
     });
     expect(lock.status, lock.stdout + lock.stderr).toBe(0);
     const lockBefore = readFileSync(join(root, "bun.lock"), "utf8");
     const result = spawnSync("bash", [script, root], {
       encoding: "utf8", timeout: 20_000,
-      env: { ...process.env, BUN_INSTALL_BIN: process.execPath, BUN_INSTALL_ATTEMPT_SECONDS: "2",
+      env: { ...env, BUN_INSTALL_BIN: process.execPath, BUN_INSTALL_ATTEMPT_SECONDS: "2",
         BUN_INSTALL_KILL_GRACE_SECONDS: "1", BUN_INSTALL_MIN_ATTEMPT_SECONDS: "1" },
     });
     const out = result.stdout + result.stderr;

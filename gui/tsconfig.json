@@ -1,4 +1,6 @@
 {
+  // Bun resolves the `@/` alias for tests from this file; Vite and tsc -b use tsconfig.app.json.
+  "compilerOptions": { "paths": { "@/*": ["./src/*"] } },
   "files": [],
   "references": [
     { "path": "./tsconfig.app.json" },

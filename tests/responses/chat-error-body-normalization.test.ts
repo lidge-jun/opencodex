@@ -1067,7 +1067,8 @@ for (const selector of ["directive", "picker"] as const) test(`Messages model la
   const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: original, max_tokens: 16, ...(selector === "directive" ? { system: `<!-- ocx-route: fixture/${KEY} -->` } : {}), messages: [{ role: "user", content: "hi" }] }) }), config, { model: "", provider: "" }, { requestId, start: Date.now(), admission: { kind: "configured", keyId: "scope", source: "bearer" } });
   expect(response.status).toBe(403); const text = await response.text(); const payload = JSON.parse(text);
   expect(payload.error.type).toBe("model_not_allowed_for_key"); expect(payload.error.code).toBeUndefined();
-  expect(payload.error.model).toBe(selector === "picker" ? "the requested model" : "client-model");
+  expect(payload.error.model).toBeUndefined();
+  expect(text.length).toBeGreaterThan(0); expect(text).not.toContain(KEY); expect(text).not.toContain("client-model");
   expect(text).not.toContain(`fixture/${KEY}`);
   expect(text).not.toContain(KEY);
   const row = getRequestLogEntries().find(row => row.requestId === requestId);

@@ -1,11 +1,13 @@
 #!/usr/bin/env bun
 /**
- * Render the favicons the dashboard and the documentation site serve from the app icon vector.
+ * Render the favicons the dashboard and the documentation site serve from the brand mark vector.
  *
  * They used to be hand-made bitmaps with no source, and one of them was wrong in a way the file
  * itself does not show: docs-site/public/favicon.png was the dark variant of the mark, white on
- * transparency, 98.3% covered. A browser tab strip is light by default, so the documentation
- * site's favicon was white on white. The .ico beside it carried the same artwork at 16, 32 and 48.
+ * transparency, so on a light browser tab strip the documentation site's favicon was white on
+ * white. The source is now the brand mark itself (scripts/brand/opencodex-mark.svg): a near-black
+ * cloud with a white prompt, drawn on transparency with no backdrop tile. Dark tab strips get the
+ * self-recolouring SVG favicon each site links first; these PNG/ICO files are the fallback.
  *
  * Sizes and names here are the ones gui/index.html and docs-site/astro.config.mjs already
  * reference, so nothing on either site has to change to pick these up.
@@ -20,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { buildIco, render } from "./lib/icon-render";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const source = join(repoRoot, "desktop", "src-tauri", "icons", "icon.svg");
+const source = join(repoRoot, "scripts", "brand", "opencodex-mark.svg");
 
 /** Favicon PNGs the two sites reference, by path relative to the repository root. */
 const FAVICON_SIZES: Record<string, number> = {

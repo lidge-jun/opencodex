@@ -7,6 +7,7 @@ import { resolveJevComboDecision } from "../../src/combos/jev-dispatch";
 import { jevQuotaCandidates } from "../../src/combos/jev-quota-route";
 import { JEV_QUOTA_INSTRUCTION } from "../../src/combos/jev-quota";
 import { createJevModelInvoker } from "../../src/server/responses/jev-model-invoke";
+import { ESTIMATED_USAGE_HEADER } from "../../src/server/responses/estimated-usage";
 import { resetLifecycleDrainStateForTests } from "../../src/server/lifecycle";
 import { invalidateDecisionKeyQuotas, publishDecisionKeyQuota } from "../../src/providers/quota-decision-snapshot";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
@@ -136,3 +137,24 @@ test("arbitrary malformed output is never retried without quota", async () => {
   expect(result.gate).toBe("malformed");
   expect(calls).toBe(1);
 });
+
+// #7427: a response marked as carrying estimated usage is display data. The decision call settles
+// spend from what the invoker reports, so an estimate must never reach settlement or the result.
+for (const [label, headers, expected] of [
+  ["estimated", { [ESTIMATED_USAGE_HEADER]: "true" }, undefined],
+  ["provider-reported", {}, { inputTokens: 7, outputTokens: 2 }],
+] as const) {
+  test(`decision call spend settlement ignores body usage when the response is ${label}`, async () => {
+    const settled: unknown[] = [];
+    const invoker = createJevModelInvoker({ req: new Request("http://localhost/v1/responses"), config: config(), options: {},
+      handleResponses: async (_request, _config, log) => {
+        log.spendTracker = { settle: (usage?: unknown) => { settled.push(usage); } } as unknown as NonNullable<typeof log.spendTracker>;
+        return Response.json({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: '{"choice":"p/0:low"}' }] }],
+          usage: { input_tokens: 7, output_tokens: 2 } }, { headers });
+      } });
+    const result = await invoker({ model: "p/judge", instructions: JEV_MODEL_INSTRUCTIONS, input: "{}", signal: new AbortController().signal });
+    expect(settled).toEqual([expected]);
+    expect(result.usage).toEqual(expected ? { input_tokens: 7, output_tokens: 2 } : undefined);
+  });
+}
+

@@ -14,7 +14,14 @@ export function parseAnthropicFamilyHeaders(headers: Headers, now: number, statu
     ...(resetAt !== undefined && resetAt > 0 && Number.isFinite(new Date(resetAt).getTime()) ? { resetAt } : {}) }];
 }
 export function mergeAnthropicFamilyWindows(previous: ProviderQuotaWindow[] = [], observed: ProviderQuotaWindow[] = []): ProviderQuotaWindow[] {
-  return [...previous.filter(window => !observed.some(update => update.label === window.label && update.scope === window.scope)), ...observed];
+  const same = (a: ProviderQuotaWindow, b: ProviderQuotaWindow) => a.label === b.label && a.scope === b.scope;
+  // Headers carry no allowance; the share is a seat policy the last usage probe already read.
+  // A probe window (no passiveObservedAt) is itself that reading, so a missing share stays missing.
+  return [...previous.filter(window => !observed.some(update => same(update, window))), ...observed.map(update => {
+    const allowance = update.weeklyAllowancePercent === undefined && update.passiveObservedAt !== undefined
+      ? previous.find(window => same(window, update))?.weeklyAllowancePercent : undefined;
+    return allowance === undefined ? update : { ...update, weeklyAllowancePercent: allowance };
+  })];
 }
 
 const enumerated = new WeakSet<object>();

@@ -57,61 +57,10 @@ Bun-тесты лежат в доменных каталогах, повторя
 cd docs-site && bun install && bun dev
 ```
 
-## Публикация документации
+## CI / Release / Pages
 
-Публичная документация публикуется на GitHub Pages по адресу <https://opencodex.me/ru/>.
-Воркфлоу `.github/workflows/deploy-docs.yml` запускается на push в `main`, затрагивающих
-`docs-site/**` или сам воркфлоу, собирает `docs-site` и разворачивает сгенерированный сайт. Перед
-push изменений документации выполните:
+Публикация, CI, релизы и ветки описаны в [канонической английской версии](/contributing/).
 
-```bash
-cd docs-site
-bun install --frozen-lockfile
-bun run build
-```
-
-## CI и релизы
-
-GitHub Actions намеренно остаются компактными:
-
-- **Cross-platform CI** (`.github/workflows/ci.yml`) запускается на pull request и push в `main`,
-  затрагивающих файлы рантайма, тестов, пакета, скриптов, TypeScript или воркфлоу. Его Bun-матрица
-  покрывает Linux, Windows и macOS: install, typecheck, тесты, privacy scan, smoke-сборка
-  release-helper, сборка GUI и `ocx help`. Отдельная линия на тех же трёх ОС подтверждает, что
-  npm global install работает без отдельно установленного Bun — за счёт runtime, входящего в
-  состав пакета.
-- **Release** (`.github/workflows/release.yml`) запускается вручную. Он не служит вторым полным
-  CI-пайплайном; перед dry-run или publish он требует, чтобы для точного релизного коммита
-  (`GITHUB_SHA`) уже был успешный запуск Cross-platform CI.
-
-Для релизов используйте helper:
-
-
-Перед запуском helper выберите версию релиза и запустите
-`.github/workflows/dev-version-bump.yml` из ветки по умолчанию с параметрами
-`intended-version=<version>` и `mode=pre-move`. Проверьте и влейте созданный PR
-в `dev`, затем перенесите изменения в `main` или `preview` и запустите helper.
-Если версия `dev` уже выше целевой, workflow вернёт `changed=false` и PR для
-смены версии не потребуется. Публикация по-прежнему требует успешного CI
-для точного коммита релиза.
-
-```bash
-bun run release <version>           # коммитит/пушит bump версии; publish workflow по умолчанию dry-run
-bun run release --bump minor        # вычисляет следующую patch, minor или major версию по тегам и каналам npm
-bun run release <version> --publish # publish после осознанного CI-gated dry-run
-bun run release:watch               # наблюдение за последним запуском Release workflow
-```
-
-`--bump patch|minor|major` можно использовать вместо явной версии. После появления preview-тега
-для более высокого core команда `--bump patch` откажется продолжать старую stable patch-линию;
-включите исправление в уже открытую preview-версию.
-
-## Ветки
-
-- `dev` — единственная цель интеграции. Открывайте все PR сюда.
-- `main` — только релизы. Двигается лишь при продвижении из `dev` мейнтейнером; не
-  открывайте сюда PR с функциональностью.
-- `preview` — ветка предрелизов.
 
 Ветка `dev2-go`, которая несла нативный порт на Go, закрыта, и вместе с ней закончилась
 политика двух линий интеграции. Её история опубликована только для чтения в

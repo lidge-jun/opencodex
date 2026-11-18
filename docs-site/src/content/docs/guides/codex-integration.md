@@ -47,6 +47,13 @@ account-qualified model when a request must remain on one account. Pausing the o
 main blocks fallback for its matching caller credential; it does not identify or pause unrelated
 caller-owned logins.
 
+To keep automatic Pool routing off the native main login entirely, set `"codexPool": {"poolOnly": true}`.
+Pool then serves only registered, eligible added accounts: it never orders or keeps main as the
+selection, never uses the caller-main fallback above, and treats a manual pin on main as no pin.
+When every allowed account is cooling down or unavailable, the request is refused instead of
+spending main. Account-qualified models, including a `__main__`-qualified one, and Direct mode are
+explicit choices and still reach main. The setting is off by default.
+
 Adding or reauthenticating a pool account rejects a duplicate of the native main login with
 `Account is already configured as the native Codex main account.` The check compares ChatGPT
 account ID, personal/workspace subscription bucket, and email; a missing email does not prove
@@ -445,7 +452,7 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-On macOS, opencodex checks the Codex app’s bundled CLI in `/Applications/ChatGPT.app` and then `~/Applications/ChatGPT.app` after explicit selections, shims, PATH, established installs, and the runnable bare `codex` fallback, requires the bundle’s XML `Info.plist` identity to be `com.openai.codex`, and never automatically replaces a runnable persisted selection with an app candidate.
+On macOS, opencodex checks the Codex app’s bundled CLI in `/Applications/ChatGPT.app` and then `~/Applications/ChatGPT.app` after explicit selections, shims, PATH, established installs, and the runnable bare `codex` fallback, requires the bundle’s XML `Info.plist` identity to be `com.openai.codex`, and never automatically replaces a runnable persisted selection with an app candidate. When no Codex CLI is found at all, the catalog probe behind `ocx connect status` readiness also tries those bundled locations, so a Child whose only Codex is the app’s bundled CLI reports its reasoning levels instead of `unverified`; every execution still passes the checks below.
 
 Execution checks also recognize `Codex.app` and `ChatGPT.app` at any location, including relocated
 bundles, explicit `CODEX_CLI_PATH` or configured runtime commands, and symlink aliases. A recognized
@@ -508,8 +515,13 @@ Retrying only the same ID cannot recover missing state.
 The same refusal applies when the referenced state belongs to a different client task scope,
 including when the new request appears to carry complete input. The proxy cannot prove that input
 is complete, so it does not silently remove `previous_response_id` or reveal whether matching state
-exists. Retry with the complete conversation and omit `previous_response_id`; matching scopes and
-legacy continuations where both scopes are absent or blank continue to replay normally.
+exists. When `v2-plaintext` mode or the `plaintextV2AgentMessages` flag is enabled, local replay requires the same admitted OpenCodex caller and the request's own nonblank
+`thread-id`; a parent thread, loopback address, upstream credential, or placeholder key is not
+that identity. Clients without an admitted caller principal and requests without their own thread must resend the complete
+conversation without `previous_response_id`. The default loopback Codex and DSH configurations
+do not establish that caller identity. State retained while either setting is enabled remains bound after disabling it.
+Default `v1` keeps the existing parent-thread-scoped continuation behavior for unbound state,
+including default loopback callers. This is separate from native upstream-owned Responses IDs.
 
 The same recovery signal applies to every routed destination, because only the native Responses
 passthrough can answer a turn whose history this proxy lost — it forwards `previous_response_id`
@@ -977,13 +989,41 @@ or remove it to disable capture. The file is owner-only (`0600`) in the hardened
 and rolls after 200 lines, retaining the newest 100.
 
 Each JSONL record contains the protocol, routed provider/model, cache-counter presence and
-provenance, process-local equality tags for the account, prompt-cache key, and allowlisted session
-headers, plus ordered fingerprints for instructions, tools, and message/input blocks. Prefix
-sections retain at most 128 tags and identify only the first divergent section/index. The
-diagnostic never stores prompt or message text, tool names, raw headers, raw cache/session/account
-identifiers, or a durable tag derived from them. Its random HMAC key is created at process start,
-separate from other debug keys, and is never persisted; tags therefore compare values only within
-one proxy process.
+provenance, and process-local equality tags for the account, prompt-cache key, session headers,
+and ordered instruction/tool/message blocks. It never stores prompt or message text, tool names,
+raw headers, or raw cache/session/account identifiers. The random HMAC key is separate from other
+debug keys, created at process start and never persisted, so tags compare only within one process.
+
+- `session.inboundHeaders` and `outboundHeaders` record `session_id`, `session-id`, `thread-id`,
+  and `x-session-id` independently. Identical values have identical tags across these names and
+  directions. An unobserved side is omitted, distinct from observed absent headers. These headers
+  are diagnostic correlation inputs, not proof of account affinity.
+- `accountAffinity` records a separately tagged key from the shared Codex conversation-identity
+  derivation for each observed header set. `derived-key-not-binding` means exactly that: a key
+  is not evidence that a binding was stored, selected, or reused. Reported route labels are separate.
+- `prefix.comparison` compares the observed inbound and outbound projections. `continuation`
+  compares each side with the previous finalized request having the same complete nonempty inbound
+  session-header identity, authenticated caller scope, protocol, model, and config directory. The
+  caller scope comes from the authenticated admission captured before Chat/Messages bridging, not
+  from rewritten upstream headers. It is used only in private in-memory lookup keys, never serialized.
+  The same admitted key has the same scope across supported authentication headers; different keys
+  remain isolated. Without an authenticated admission identity (including unauthenticated loopback),
+  continuation comparisons are `uncomparable`; per-request inbound/outbound comparisons remain available.
+  Provider changes do not reset this
+  comparison; prompt-key and explicit account-label changes are reported separately. Outbound-only
+  session identifiers and prompt-cache keys never supply a missing correlation identity.
+- Comparisons report `first`, `equal`, `append-only`, `different`, `truncated`, or `uncomparable`.
+  Only message-tail growth is append-only. Top-level instructions and system content precede tools;
+  input/message rows, including system/developer updates, stay in their original order. Missing
+  observations and unsupported shapes are uncomparable, never assumed equal to an empty prefix.
+- Each section retains at most 128 tags. An unobserved common tail reports `truncated`, not equality
+  or an exact first divergence. At most 512 recent correlation histories are retained in memory;
+  an evicted history is `first` on its next observation.
+
+These are parsed-body observations at existing request hooks, not captured network bytes or proof
+of upstream cache reuse. Concurrent requests compare in finalization order, not send order. The
+switch changes diagnostics only, not affinity selection or cache behavior; the existing debug-mode
+bridge requirement for otherwise eligible direct Chat/Messages lanes still applies.
 
 ### Catalog troubleshooting
 
@@ -1102,6 +1142,26 @@ script wrappers; uninstall restores the saved launcher. See the
 **Codex Set → Desktop compatibility** provides local controls for a bounded compatibility
 trial while retaining the native Codex login. This is an experimental relay, not a guarantee
 that every Codex build or exhausted-account state can recover its composer.
+
+On a standalone local dashboard, first run the command shown in the panel, for example
+`ocx gui pair --desktop --origin http://127.0.0.1:10100`, on the proxy computer and paste
+its secret one-use code. Install the CLI first if `ocx` is unavailable. A private-home
+permission refusal must be resolved before a code can be issued. An ordinary pairing code or
+an already paired dashboard alone does not authorize Desktop actions. The panel exchanges the
+Desktop code for scope on the existing session, then reads `/authorization` to verify it;
+it does not create or replace the browser session. This authorizes Desktop actions for at most
+five minutes in that session; it does not change Remote Link or key-disclosure permissions.
+See [Desktop authorization](/reference/management-api/#desktop-authorization) for the API contract.
+Hub and connected-client Desktop writes are unsupported.
+If authorization is unavailable, use the standalone dashboard directly over HTTP on the proxy
+computer at the configured loopback address and port. If the configured `hostname` is
+`localhost` or a non-loopback address such as `0.0.0.0`, set it to `127.0.0.1` or `::1` in [config.json](/reference/configuration/), restart the proxy, and reopen the corresponding
+address and port. Other conditions, including forwarding and mismatched ports or sessions, can
+also make authorization unavailable; changing the hostname alone does not resolve those cases.
+A remembered dashboard session cannot redeem a Desktop grant. On the proxy computer, open the same local address and port in a private browser window, return to this panel, and request a new code there. After expiry or logout, reload the local dashboard and authorize again. The panel refreshes
+status, fingerprint and settings revision; select the desired action and consent again.
+It never replays an earlier POST. Certificate expiry or unknown trust does not prevent this
+local HTTP authorization; cleanup, renewal, stopping and turning off startup still require it.
 
 1. Inspect status, prepare the encrypted certificate and review its fingerprint before
    registering trust. Windows may ask for confirmation. Trust applies to the current Windows
@@ -1274,18 +1334,20 @@ snapshot:
 Normal picker behavior returns when the 5-hour window resets.
 
 **What the proxy answers while that state holds.** Once the app has collapsed the picker it sends
-`gpt-reserve`, and without the [authless Desktop opt-in](#authless-codex-desktop-opt-in) opencodex
-holds no Reserve entitlement to send with it. That request used to be forwarded as an ordinary
+`gpt-reserve`, and with the [Reserve setting](/reference/cli/providers-accounts/#luna-reserve-alongside-routed-models)
+off opencodex holds no Reserve entitlement to send with it. That request used to be forwarded as an ordinary
 native model and come back as the upstream's own `The usage limit has been reached`, which names
 neither the real cause nor the setting that would change it. It is now refused locally with an HTTP
-400 that says `codexDesktopAuthless` is off and gives the command that turns it on
-(`ocx system settings --desktop-authless on`). Nothing is sent upstream and no quota is spent.
+400 that says the Reserve setting (`codexReserveEnabled`) is off and gives the command that turns it on
+(`ocx system settings --reserve on`). Nothing is sent upstream and no quota is spent.
 
 The refusal is deliberately narrow. It applies only to `gpt-reserve` on a loopback-admitted request
 that would reach the canonical ChatGPT forward route. A `gpt-reserve` selector an operator has
 aliased or routed onto another provider keeps working, a request admitted on a non-loopback listener
-still forwards, and a proxy running in the `client` runtime role is unchanged. Enabling the opt-in
-restores the normal Reserve path rather than the refusal.
+still forwards, and a proxy running in the `client` runtime role is unchanged. Enabling the setting
+restores the normal Reserve path rather than the refusal. The authless Desktop switch no longer
+affects this; see [Luna Reserve alongside routed models](/reference/cli/providers-accounts/#luna-reserve-alongside-routed-models)
+for how an existing install's value carries over.
 
 ## The subagent picker
 
@@ -1301,9 +1363,11 @@ If the new OAuth credential's authenticated usage lookup confirms an exhausted 5
 
 `ocx account refresh openai` and `ocx account list openai --quota --refresh` only read usage. Model validation spends quota and requires a human dashboard session: open `ocx gui` and click **Refresh quotas** after recovery. For a headless host, access its dashboard from your browser; an admin token alone does not authorize validation. Validation can complete while an account is paused without resuming or selecting it. Model authorization failures remain visible until successful validation or reauthentication clears them.
 
-In **Codex Set → Multi-auth**, enable the **Codex credits** switch in the **Codex Auth** header to display each main and pool account’s latest observed credits directly below Week. It is off by default and persists as `showCodexCredits`. The balance is a locale-formatted number, with Unlimited or an overage warning when reported; the bar indicates availability, not a percentage, because no total credit limit is supplied. Hiding credits changes display only, and a new login waits for its own observation.
+In **Codex Set → Multi-auth**, enable the **Codex credits** switch in the **Codex Auth** header to display each main and pool account’s latest observed credits. It is off by default and persists as `showCodexCredits`. The balance is a locale-formatted number, with Unlimited or an overage warning when reported. The bar indicates availability. Hiding credits changes display only, and a new login waits for its own observation.
 
-When an account reaches 100% on a usage window and still holds credits, upstream keeps serving it and draws the balance. OpenCodex does not let that happen by default: an account at 100% is switched out while its weekly or monthly window (only monthly on 30-day plans) or its 5-hour window is full, and used again once that window resets. The order of the other accounts does not change, and when no other account is available, selection finds none rather than spending credits. A request for the main account is refused like a hard-lock refusal until the reset. A full 5-hour window without a reset time holds an account only while that reading is fresh. Allowing the main account does not lift its hard lock (on by default at 98%), which still stops it first; turn the lock off if the main account should spend credits (a lock at 100% still stops it at 100%). To let accounts keep working from their credits, turn on **Use credits** next to the **Codex credits** switch in the Codex Auth header. The switch allows every account. To choose accounts one by one, open an account card's **⋯** menu and use **Use credits after limit** there; the header switch shows a middle position when only some accounts are on. An account allowed to spend carries a **Uses credits** badge on its card. New accounts start off. The choice is stored in `creditCodexAccountIds` and never redeems reset credits; the **Codex credits** display switch only shows balances and never changes routing.
+For Business and Enterprise workspaces reported as `business`, the usage service can return a group-based individual spending limit in place of ordinary rate-limit windows. OpenCodex uses that limit for the primary monthly quota. If the credit summary has no usable balance, the credits row uses a valid remaining amount from that individual limit. A reached limit with an omitted or null usage percentage shows 100%. An invalid percentage supplies no new monthly reading.
+
+When an account reaches 100% on a usage window and still holds credits, upstream keeps serving it and draws the balance. OpenCodex does not let that happen by default: an account at 100% is switched out while its primary weekly or monthly window or its 5-hour window is full, and used again once that window resets. The order of the other accounts does not change, and when no other account is available, selection finds none rather than spending credits. A request for the main account is refused like a hard-lock refusal until the reset. A full 5-hour window without a reset time holds an account only while that reading is fresh. Allowing the main account does not lift its hard lock (on by default at 98%), which still stops it first; turn the lock off if the main account should spend credits (a lock at 100% still stops it at 100%). To let accounts keep working from their credits, turn on **Use credits** next to the **Codex credits** switch in the Codex Auth header. The switch allows every account. To choose accounts one by one, open an account card's **⋯** menu and use **Use credits after limit** there; the header switch shows a middle position when only some accounts are on. An account allowed to spend carries a **Uses credits** badge on its card. New accounts start off. The choice is stored in `creditCodexAccountIds` and never redeems reset credits; the **Codex credits** display switch only shows balances and never changes routing.
 
 For an opted-in, unpaused main account with a full usage window, the background recovery cycle renews spendable credit observations from three minutes of age, even while the dashboard is closed. It prepares a valid token before the authenticated usage lookup so the balance can be observed again before its five-minute freshness limit. Missing, zero, restricted or retracted credits keep the account eligible for recovery lookups under the existing retry backoff. Requests remain refused until a fresh positive balance or unlimited credits are observed; `has_credits` alone or approximate message counts do not prove a spendable balance. With consent on, this credit-evidence refusal's `Retry-After` is at most five minutes, or a sooner included-quota reset; without consent it still follows the included-quota reset. A failed or incomplete lookup does not refresh old balance evidence. The separate main-account hard lock, needs-reauth quarantine and upstream retry delays still apply. This metadata lookup does not send a model validation request or set or clear the account's needs-reauth state.
 
@@ -1434,6 +1498,8 @@ When returning to the root-override form, OpenCodex retains an existing `[model_
 `ocx restore`, `ocx stop` and `ocx uninstall` no longer refuse on `history_paginated_requires_native_writer`. They take every OpenCodex root routing key out and keep the `[model_providers.opencodex]` definition on disk, so conversations whose rows still name that provider keep resolving while plain `codex` stops pointing at the proxy. The result is reported as a partial restore that names the retained lines, and `ocx restore --remove-codex-provider-table` removes them too, after which those conversations stop opening.
 
 Enabling the integration in its provider-table form on a home whose `openai`-tagged conversations Codex has already paginated used to be refused outright with `history_paginated_openai_requires_native_writer`: nothing was written and the integration stayed disabled. OpenCodex now completes that transition by keeping the managed root `openai_base_url` override beside the `[model_providers.opencodex]` table. Codex merges the override onto its built-in `openai` provider, so those conversations keep reaching the proxy without being relabeled and no rollout byte or thread row is touched. Only a routing form that requires the `x-opencodex-api-key` admission header still refuses, because Codex's built-in provider cannot carry that header; its message names the two settings that resolve it — route Codex through the loopback listener so the override can be retained, or set `syncResumeHistory` to `false` to accept that those conversations resume against Codex's own OpenAI endpoint.
+
+Codex 0.166 and later resume or list a conversation only under the provider it was created with (`This chat uses openai, but your current provider is opencodex`), so the retained override no longer keeps those conversations reachable once the default provider changes. When OpenCodex knows the selected Codex is 0.166 or later (from its runtime check or the saved selection) and finds such conversations, it refuses the provider-table transition with `history_paginated_openai_provider_locked` and writes nothing. The message names the ways out: leave `codexDesktopAuthless` and `codexClientCompaction` off to keep those conversations resumable, or set `syncResumeHistory` to `false` to switch anyway and accept that they stay with the `openai` provider. OpenCodex does not relabel them. When the Codex version is unknown, the transition keeps the retained override as before.
 
 ### Remote thread-list provider filters
 

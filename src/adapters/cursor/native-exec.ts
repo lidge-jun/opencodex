@@ -57,7 +57,7 @@ import { OCX_RESPONSES_TOOL_PROVIDER } from "./tool-definitions";
 import { CODEX_UNIFIED_EXEC_TOOL, cursorRequestHasExecutionPath, cursorRequestHasShellAlias, cursorRequestUsesCodeMode, cursorToolWireName } from "./tool-naming";
 import { CODE_MODE_RESULT_ECHO_SENTENCE } from "../exec-tool-result-normalize";
 import type { OcxTool } from "../../types";
-import { cursorPlainNativeExecFallback, cursorPlainNativeExecRedirectHint, cursorUsesPlainToolWording } from "./tool-wording";
+import { CURSOR_DEFERRED_TOOL_FALLBACK, cursorPlainNativeExecFallback, cursorPlainNativeExecRedirectHint, cursorUsesPlainToolWording } from "./tool-wording";
 
 export type CursorNativeExecDeps = CursorNativeNetworkDeps & CursorNativeToolDeps;
 
@@ -135,7 +135,8 @@ export function cursorNativeExecRedirectHint(
 function cursorCodeModeExecRedirectHint(): string {
   return (
     `Re-issue this operation NOW through the \`${CODEX_UNIFIED_EXEC_TOOL}\` tool: this turn uses Codex code mode, so \`${CODEX_UNIFIED_EXEC_TOOL}\` takes a JavaScript body and shell, file, search, and fetch are nested helpers called INSIDE that body as \`await tools.<name>(...)\`, for example \`text(await tools.exec_command({cmd: "ls"}))\`. `
-    + "Cursor-native Read/Glob/Grep/LS/Shell/Write/Fetch are not part of this request's catalog; do not retry them, and do not call `shell_command` or `exec_command` at the top level here — code mode exposes no bare shell bridge, only the nested helpers. Every other tool this turn lists remains callable at the top level as usual. "
+    + "Cursor-native Read/Glob/Grep/LS/Shell/Write/Fetch are not part of this request's catalog; do not retry them, and do not call `shell_command` or `exec_command` at the top level here — code mode exposes no bare shell bridge, only the nested helpers. Every other tool this turn lists is called directly, outside `exec`, as usual. "
+    + CURSOR_DEFERRED_TOOL_FALLBACK + " "
     + CODE_MODE_RESULT_ECHO_SENTENCE + " "
     + `Do NOT narrate this redirect, do NOT comment on tool availability, and do NOT re-announce the task — just make the \`${CODEX_UNIFIED_EXEC_TOOL}\` call.`
   );

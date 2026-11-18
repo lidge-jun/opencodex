@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
-import { Notice, Switch } from "../../ui";
+import { Notice, Select, Switch } from "../../ui";
 import { readJsonOrThrow } from "../../fetch-json";
+import { Frame, FrameBody } from "../v2-subagents/frame";
+import { useHelpDisclosure } from "../v2-subagents/use-help-disclosure";
 
 interface ForceState {
   force: string | null;
@@ -21,8 +23,15 @@ function forceModelOptions(roster: readonly string[], exposed: readonly string[]
 }
 
 /** Endpoint-keyed by the page so a late reply cannot update a different server's controls. */
-export default function SubagentForceControl({ apiBase, roster }: { apiBase: string; roster: string[] }) {
+export default function SubagentForceControl({ apiBase, roster, id, onForceChange }: {
+  apiBase: string;
+  roster: string[];
+  id?: string;
+  /** The committed pin (`null` = off, `undefined` = not loaded), for the page's summary. */
+  onForceChange?: (force: string | null | undefined) => void;
+}) {
   const t = useT();
+  const help = useHelpDisclosure(t("sub.forceTitle"));
   const [state, setState] = useState<ForceState | null>(null);
   const [selection, setSelection] = useState("");
   const [busy, setBusy] = useState(false);
@@ -85,34 +94,46 @@ export default function SubagentForceControl({ apiBase, roster }: { apiBase: str
   const selected = state?.force ?? selection;
   const valid = options.includes(selected);
   const status = state?.forceStatus;
+  const committedForce = state ? state.force : undefined;
+  useEffect(() => { onForceChange?.(committedForce); }, [committedForce, onForceChange]);
+  const notices = [
+    state?.force && (!valid || status?.targetValid === false) && <Notice key="invalid" tone="warn">{t("sub.forceInvalid")}</Notice>,
+    state?.force && status?.support === "unsupported" && <Notice key="old" tone="warn">{t("sub.forceOld")}</Notice>,
+    state?.force && (!status || status.support === "unknown") && <Notice key="unknown" tone="warn">{t("sub.forceUnknown")}</Notice>,
+    state?.force && status?.settingsOverride && <Notice key="override" tone="warn">{t("sub.forceOverride")}</Notice>,
+    state?.force && status?.settingsReadable === false && <Notice key="settings" tone="warn">{t("sub.forceSettingsUnknown")}</Notice>,
+    saved && <Notice key="saved" tone="ok">{t("sub.forceSaved")}</Notice>,
+    error && <Notice key="error" tone="err">{error}<button type="button" className="btn btn-ghost btn-sm" disabled={pending}
+      onClick={() => setRetry(value => value + 1)}>{t("common.retry")}</button></Notice>,
+  ].filter(Boolean);
   return (
-    <section className="panel">
-      <h3>{t("sub.forceTitle")}</h3>
-      <Switch on={!!state?.force} disabled={!state || pending || (!state.force && !valid)}
-        label={t("sub.forceTitle")} onClick={() => { void save(state?.force ? null : selection); }} />
-      <label className="field-label">
-        {t("sub.forceModel")}
-        <select className="input" value={selected} disabled={!state || pending}
-          onChange={event => {
-            const value = event.target.value;
-            if (state?.force) void save(value);
-            else setSelection(value);
-          }}>
-          <option value="" disabled>{t("sub.forceChoose")}</option>
-          {selected && !valid && <option value={selected} disabled>{selected}</option>}
-          {options.map(model => <option key={model} value={model}>{model}</option>)}
-        </select>
-      </label>
-      <p className="muted">{t("sub.forceHelp")}</p>
-      <p className="muted">{t("sub.forceScope")}</p>
-      {state?.force && (!valid || status?.targetValid === false) && <Notice tone="warn">{t("sub.forceInvalid")}</Notice>}
-      {state?.force && status?.support === "unsupported" && <Notice tone="warn">{t("sub.forceOld")}</Notice>}
-      {state?.force && (!status || status.support === "unknown") && <Notice tone="warn">{t("sub.forceUnknown")}</Notice>}
-      {state?.force && status?.settingsOverride && <Notice tone="warn">{t("sub.forceOverride")}</Notice>}
-      {state?.force && status?.settingsReadable === false && <Notice tone="warn">{t("sub.forceSettingsUnknown")}</Notice>}
-      {saved && <Notice tone="ok">{t("sub.forceSaved")}</Notice>}
-      {error && <Notice tone="err">{error}<button type="button" className="btn btn-ghost btn-sm" disabled={pending}
-        onClick={() => setRetry(value => value + 1)}>{t("common.retry")}</button></Notice>}
-    </section>
+    <Frame
+      id={id}
+      title={t("sub.forceTitle")}
+      lede={t("subagentsV2.forceLede")}
+      meta={help.button}
+      actions={<Switch on={!!state?.force} disabled={!state || pending || (!state.force && !valid)}
+        label={t("sub.forceTitle")} onClick={() => { void save(state?.force ? null : selection); }} />}
+      below={help.panel(<><p>{t("sub.forceHelp")}</p><p>{t("sub.forceScope")}</p></>)}
+    >
+      <FrameBody>
+        <label className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
+          <span className="min-w-[min(100%,12rem)] flex-1 text-[14px] leading-5 font-medium text-fg">{t("sub.forceModel")}</span>
+          <Select fullWidth className="max-w-[22rem] sm:w-auto sm:min-w-[16rem]" triggerClassName="text-[13px]"
+            label={t("sub.forceModel")} value={selected} disabled={!state || pending}
+            onChange={value => {
+              // Re-picking the pinned model is not a change; only a different model saves.
+              if (state?.force) { if (value !== state.force) void save(value); }
+              else setSelection(value);
+            }}
+            options={[
+              { value: "", label: t("sub.forceChoose"), disabled: true },
+              ...(selected && !valid ? [{ value: selected, label: selected, disabled: true }] : []),
+              ...options.map(model => ({ value: model, label: model })),
+            ]} />
+        </label>
+      </FrameBody>
+      {notices.length > 0 && <div className="flex flex-col gap-2 px-4 py-3">{notices}</div>}
+    </Frame>
   );
 }

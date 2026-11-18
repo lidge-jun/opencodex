@@ -1,0 +1,9 @@
+{
+  "api_budget": { "usage_percentage": 12.5, "initial_budget": 20, "currency": "EUR", "reset_at": "2026-12-01T00:00:00Z", "payg_enabled": false },
+  "vibe_budget": { "usage_percentage": 2, "initial_budget": 10, "currency": "EUR", "reset_at": "2026-12-01T00:00:00Z", "payg_enabled": false },
+  "usage_percentage": 12.5,
+  "initial_budget": 20,
+  "currency": "EUR",
+  "reset_at": "2026-12-01T00:00:00Z",
+  "payg_enabled": false
+}

@@ -37,6 +37,16 @@ describe("observed Claude Code identity", () => {
     expect(hasObservedAnthropicClientIdentity(undefined)).toBe(false);
     expect(hasObservedAnthropicClientIdentity({} as AnthropicClientIdentity)).toBe(false);
   });
+  test("a background Claude Code session (X-App: cli-bg) is observed and forwards its own X-App", () => {
+    const identity = captureAnthropicClientIdentity(new Headers({ ...observed, "User-Agent": "claude-cli/2.1.322 (external, cli)", "X-App": "cli-bg" }));
+    expect(hasObservedAnthropicClientIdentity(identity)).toBe(true);
+    const built = new Headers(build(identity).headers);
+    expect(built.get("x-app")).toBe("cli-bg");
+    expect(built.get("x-claude-code-session-id")).toBe(SESSION);
+    for (const app of ["cli-fg", "bg", "CLI-BG", "cli,cli-bg"]) {
+      expect(captureAnthropicClientIdentity(new Headers({ ...observed, "X-App": app }))).toBeUndefined();
+    }
+  });
   test("TypeScript Agent SDK identity retains native feature betas and output_config", () => {
     const userAgent = "claude-cli/2.1.296 (external, sdk-ts)";
     const clientIdentity = captureAnthropicClientIdentity(new Headers({ ...observed, "User-Agent": userAgent }));
@@ -97,7 +107,8 @@ describe("observed Claude Code identity", () => {
   });
   test("UA alone, unknown clients, malformed, oversized and duplicate required values fall back", () => {
     expect(captureAnthropicClientIdentity(new Headers({ "User-Agent": UA }))).toBeUndefined();
-    for (const [name, value] of [["User-Agent", "third-party/1.0"], ["User-Agent", "claude-cli/2.1.288 (external, arbitrary-token)"], ["User-Agent", "claude-cli/2.1.282 (external, claude desktop)"],
+    for (const [name, value] of [["User-Agent", "third-party/1.0"], ["User-Agent", "claude-cli/2.1.288 (external, arbitrary-token)"], ["User-Agent", "claude-cli/2.1.327 (external, t3-code)"],
+      ["User-Agent", "claude-cli/2.1.327 (external, local_projects-other)"], ["User-Agent", "claude-cli/2.1.282 (external, claude desktop)"],
       ["User-Agent", "x".repeat(513)], ["X-App", "web"], ["X-Claude-Code-Session-Id", "fixture-not-uuid"], ["X-Stainless-Runtime", "python"]]) {
       expect(captureAnthropicClientIdentity(new Headers({ ...observed, [name!]: value! }))).toBeUndefined();
     }

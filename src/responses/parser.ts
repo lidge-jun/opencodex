@@ -12,7 +12,7 @@ import type {
   OcxToolCall,
   OcxReasoningReplayScopeRef,
 } from "../types";
-import { createToolChoiceResolver, namespacedToolName } from "../types";
+import { namespacedToolName } from "../types";
 import { responsesRequestSchema } from "./schema";
 import { providerMetadataFromResponsesFunctionCall } from "./provider-opaque-metadata";
 import { lookupReplayThoughtSignature } from "./thought-signature-replay";
@@ -27,7 +27,7 @@ import { buildImageTool, extractHostedImageGeneration, IMAGE_GEN_TOOL_NAME } fro
 import { toolSearchDescription, toolSearchParameters } from "./tool-search-compat";
 
 import { isObj, inputContentParts, outputTextOf, outputToToolResultContent, toolOutputContainsEncryptedContent } from "./parser-content";
-import { mapToolChoice, buildTools, customToolNamespaces } from "./parser-tools";
+import { mapToolChoice, buildTools, customToolNamespaces, explicitToolChoices } from "./parser-tools";
 import { parseTextFormat } from "./parser-text-format";
 import { externalTaskInputContent } from "./task-input";
 import { normalizeVisualizationContext } from "./visualization-directives";
@@ -217,6 +217,12 @@ function nameDestinationContent(
   return changed ? parts : content;
 }
 
+/**
+ * Validate a Responses body and normalize its tools, options and conversation.
+ * Restores signed or opaque reasoning from replayed items; late signatures require
+ * adjacent output ownership and retain thinking/signature ordering.
+ * @throws Error when the body fails Responses schema validation.
+ */
 export function parseRequest(
   body: unknown,
   parseOptions?: { replayCacheScope?: OcxReasoningReplayScopeRef },
@@ -460,6 +466,27 @@ export function parseRequest(
           continue;
         }
 
+        // Late turn signatures follow the closed output on the wire. Bind only to the
+        // immediately preceding item named by the carrier, never the following turn.
+        if (envelope?.aft) {
+          const previousItem = inputItems[itemIndex - 1] as { id?: string; type?: string; role?: string; execution?: string } | undefined;
+          const previous = messages[messages.length - 1];
+          const properOutput = previousItem?.type === "function_call" || previousItem?.type === "custom_tool_call"
+            || (previousItem?.type === "tool_search_call" && previousItem.execution === "client")
+            || ((previousItem?.type === "message" || previousItem?.type === undefined) && previousItem?.role === "assistant");
+          if (envelope.sig && properOutput && previous?.role === "assistant"
+            && (previousItem?.id === undefined || previousItem.id === envelope.aft)) {
+            // Preserve thinking/signature adjacency even after prefatory text or earlier calls.
+            const afterThinking = previous.content.findLastIndex(part => part.type === "thinking") + 1;
+            previous.content.splice(afterThinking, 0, {
+              type: "thinking", thinking: thinkingText, signature: envelope.sig,
+              ...(envelope.red ? { redacted: envelope.red } : {}),
+              ...(reasoning.id ? { itemId: reasoning.id } : {}),
+            });
+          }
+          continue;
+        }
+
         // Native/non-ocxr1 encrypted-only reasoning is opaque here. Do not create a detached
         // assistant turn or invent replayable plaintext/signatures from the encrypted payload.
         if (thinkingText.length > 0 || envelope?.sig || envelope?.red?.length) {
@@ -672,23 +699,14 @@ export function parseRequest(
     ...(mergedTools.length > 0 ? { tools: mergedTools } : {}),
   };
 
-  const options: OcxRequestOptions = {};
+  const options: OcxRequestOptions = explicitToolChoices(data.tool_choice, mergedTools);
   if (data.max_output_tokens !== undefined) options.maxOutputTokens = data.max_output_tokens;
   if (data.temperature !== undefined) options.temperature = data.temperature;
   if (data.top_p !== undefined) options.topP = data.top_p;
   if (data.stop !== undefined && data.stop !== null) {
     options.stopSequences = typeof data.stop === "string" ? [data.stop] : data.stop;
   }
-  const tc = mapToolChoice(data.tool_choice);
-  if (tc && typeof tc === "object") {
-    const selectors = "allowedTools" in tc ? tc.allowedTools : [tc.name];
-    const resolver = createToolChoiceResolver(mergedTools);
-    for (const selector of selectors) {
-      if (resolver.candidateCount(selector) > 1) {
-        throw new Error(`ambiguous tool_choice name: ${selector}`);
-      }
-    }
-  }
+  const tc = mapToolChoice(data.tool_choice, mergedTools);
   if (tc !== undefined) options.toolChoice = tc;
   if (data.parallel_tool_calls !== undefined) options.parallelToolCalls = data.parallel_tool_calls;
   // Upstream codex-rs converts "ultra" to "max" at the inference boundary (core/src/client.rs

@@ -7,6 +7,7 @@ import type { ProviderUpdatePatch } from "../src/components/provider-workspace/t
 import { LanguageProvider } from "../src/i18n/provider";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 import { acceptActionDialog, actionDialogOpen, dismissActionDialog } from "./helpers/action-dialog";
+import { chooseOption, selectValue } from "./helpers/custom-select";
 
 const globals = ["document", "window", "navigator", "localStorage", "HTMLElement", "IS_REACT_ACT_ENVIRONMENT",
   "confirm", "alert", "prompt"] as const;
@@ -58,6 +59,7 @@ function openAiItem(mode: "pool" | "direct" = "pool"): WorkspaceItem {
 async function mountSettings(
   item: WorkspaceItem,
   onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<{ ok: boolean; error?: string }>,
+  accountModeFocusToken = 0,
 ): Promise<{
   root: Root;
   container: HTMLElement;
@@ -73,6 +75,7 @@ async function mountSettings(
     <LanguageProvider>
       <ProviderSettings
         item={it}
+        accountModeFocusToken={accountModeFocusToken}
         onUpdateProvider={async (name, patch) => {
           patches.push(patch);
           return onUpdateProvider ? onUpdateProvider(name, patch) : { ok: true };
@@ -92,9 +95,10 @@ async function mountSettings(
   };
 }
 
-function modeSelect(container: HTMLElement): HTMLSelectElement {
-  const select = [...container.querySelectorAll<HTMLSelectElement>("select")]
-    .find(s => s.value === "pool" || s.value === "direct");
+/** The account-mode picker: the app's Select trigger whose value is a mode. */
+function modeSelect(container: HTMLElement): HTMLButtonElement {
+  const select = [...container.querySelectorAll<HTMLButtonElement>("[role=combobox]")]
+    .find(s => selectValue(s) === "pool" || selectValue(s) === "direct");
   expect(select).toBeTruthy();
   return select!;
 }
@@ -104,12 +108,8 @@ function modeSelect(container: HTMLElement): HTMLSelectElement {
  * which this file stubbed — and which the desktop webview answers false without drawing,
  * so the control could not be used there at all.
  */
-async function chooseMode(select: HTMLSelectElement, value: string, answer: "accept" | "dismiss" = "accept"): Promise<void> {
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(testWindow.HTMLSelectElement.prototype, "value")!
-      .set!.call(select, value);
-    select.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
-  });
+async function chooseMode(select: HTMLButtonElement, value: string, answer: "accept" | "dismiss" = "accept"): Promise<void> {
+  await chooseOption(select, value);
   expect(actionDialogOpen(dialogDocument())).toBe(true);
   await act(async () => {
     if (answer === "accept") acceptActionDialog(dialogDocument());
@@ -125,7 +125,7 @@ test("a confirmed mode change sends the exact standalone codexAccountMode patch"
   await chooseMode(select, "direct");
 
   expect(patches).toEqual([{ codexAccountMode: "direct" }]);
-  expect(select.value).toBe("direct");
+  expect(selectValue(select)).toBe("direct");
   expect(container.querySelector('[role="status"]')?.textContent).toContain("Account mode saved.");
   await act(async () => { root.unmount(); });
 });
@@ -137,7 +137,7 @@ test("a dismissed consent dialog sends no patch and snaps the select back", asyn
   await chooseMode(select, "direct", "dismiss");
 
   expect(patches).toHaveLength(0);
-  expect(select.value).toBe("pool");
+  expect(selectValue(select)).toBe("pool");
   await act(async () => { root.unmount(); });
 });
 
@@ -147,7 +147,7 @@ test("a failed mode patch keeps the applied mode and announces the error", async
 
   await chooseMode(select, "direct");
 
-  expect(select.value).toBe("pool");
+  expect(selectValue(select)).toBe("pool");
   const alert = container.querySelector('[role="alert"]');
   expect(alert?.textContent).toContain("mode rejected");
   await act(async () => { root.unmount(); });
@@ -217,6 +217,20 @@ test("a mode-change config refresh does not wipe an unsaved draft", async () => 
 
   expect(container.querySelector<HTMLTextAreaElement>(".pwi-settings-textarea")!.value).toBe("draft");
   expect(container.querySelector(".pwi-settings-sticky-bar")).toBeTruthy();
-  expect(modeSelect(container).value).toBe("direct");
+  expect(selectValue(modeSelect(container))).toBe("direct");
+  await act(async () => { root.unmount(); });
+});
+
+test("an account-mode deep link focuses the mode control when Settings mounts (#8501)", async () => {
+  const { root, container } = await mountSettings(openAiItem("direct"), undefined, 1);
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(document.activeElement).toBe(modeSelect(container));
+  await act(async () => { root.unmount(); });
+});
+
+test("without a deep link the mode control does not steal focus", async () => {
+  const { root, container } = await mountSettings(openAiItem("direct"));
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(document.activeElement).not.toBe(modeSelect(container));
   await act(async () => { root.unmount(); });
 });

@@ -114,7 +114,7 @@ export function NativeMainProfilesView({
         <form onSubmit={event => { event.preventDefault(); onRegister(); }}>
           <label htmlFor={`${id}-label`}>{t("nativeMain.label")}</label>
           <div className="row" style={{ flexWrap: "wrap" }}>
-            <input id={`${id}-label`} value={label} onChange={event => onLabel(event.target.value)}
+            <input id={`${id}-label`} className="input min-w-0 flex-[1_1_14rem]" value={label} onChange={event => onLabel(event.target.value)}
               disabled={mutationDisabled || !!action || !canRegisterNativeMain(s)} maxLength={80} autoComplete="off" />
             <button type="submit" className="btn btn-sm" disabled={mutationDisabled || !!action || !label.trim() || !canRegisterNativeMain(s)}>
               {t("nativeMain.save")}

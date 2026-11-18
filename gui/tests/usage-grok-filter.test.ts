@@ -6,12 +6,9 @@ async function read(path: string): Promise<string> {
   return Bun.file(new URL(path, import.meta.url)).text();
 }
 
-// D3: the usage page exposes the grok surface next to all/codex/claude, with its icon.
-test("the Usage filter includes grok with its icon", async () => {
-  const page = await read("../src/pages/Usage.tsx");
-  expect(page).toContain('"grok"');
-  expect(page).toContain('(["all", "codex", "claude", "grok"]');
-  expect(page).toContain("/provider-icons/grok.svg");
+test("Grok is an available source choice", async () => {
+  const source = await read("../src/components/v2-usage/usage-source.ts");
+  expect(source).toContain('"grok"');
 });
 
 test("every locale carries the grok surface label", async () => {

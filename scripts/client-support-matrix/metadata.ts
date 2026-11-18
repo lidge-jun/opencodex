@@ -24,6 +24,8 @@ export interface ProtocolField {
   /** Exact value -> protocol, or (match: "suffix") a value suffix -> protocol. */
   values: Readonly<Record<string, MatrixProtocol>>;
   match?: "exact" | "suffix";
+  /** Model-level override: entries may omit the field, but at least one must carry it. */
+  perModel?: true;
 }
 
 export interface TestReference {
@@ -95,8 +97,13 @@ export const EXPORT_CLIENT_METADATA: Readonly<Record<string, ExportClientMetadat
   },
   opencode: {
     label: "OpenCode",
-    protocolFields: [{ path: "provider.opencodex.npm", values: AI_SDK }],
-    test: { file: "tests/config/client-config-export.test.ts", title: "carries the V1 schema and only the opencodex provider key", mentions: ["opencode"] },
+    protocolFields: [
+      { path: "provider.opencodex.npm", values: { "@ai-sdk/openai": "responses" } },
+      { path: "providers.opencodex.package", values: { "@opencode/ai/providers/openai-compatible-responses": "responses" } },
+      { path: "provider.opencodex.models.*.provider.npm", values: AI_SDK, perModel: true },
+      { path: "providers.opencodex.models.*.package", values: { "@opencode/ai/providers/openai-compatible": "chat-completions" }, perModel: true },
+    ],
+    test: { file: "tests/config/client-config-export.test.ts", title: "OpenCode selects the protocol for each concrete model in both config generations", mentions: ["opencode"] },
     guide: "guides/opencode",
   },
   pi: {

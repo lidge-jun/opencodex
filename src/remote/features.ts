@@ -14,6 +14,8 @@
  * - `relay-auth/<n>` with the connection-bound link relay auth version.
  * - `link-peer-report/<n>` with the version of the report a Child sends on the relay challenge and a
  *   Home records for `ocx link status` (`src/link/peer-report.ts`).
+ * - `link-request-zstd/<n>` when this build decodes zstd request bodies a Child sends over the link
+ *   and compresses its own as a Child (`src/link/request-compression.ts`).
  *
  * The ids are static strings. They carry no account, credential or configuration data, which is
  * what keeps the unauthenticated `/readyz` body safe. `parseRemoteReadyMetadata` accepts at most
@@ -23,6 +25,7 @@
 import { LINK_MANAGEMENT_READ_PATHS } from "../link/management-routes";
 import { LINK_PEER_REPORT_VERSION } from "../link/peer-report";
 import { LINK_RELAY_AUTH_VERSION } from "../link/relay-auth";
+import { LINK_REQUEST_ZSTD_FEATURE, LINK_REQUEST_ZSTD_VERSION } from "../link/request-compression";
 import { MANAGEMENT_ROUTES, type ManagementRoute } from "../server/management/route-registry";
 import { SERVED_BY_HEADER_EMITTED } from "./served-by";
 
@@ -36,6 +39,8 @@ export interface PeerFeatureSources {
   readonly servedByHeaderEmitted: boolean;
   readonly relayAuthVersion: string;
   readonly linkPeerReportVersion: string;
+  /** Empty when the build does not speak per-body zstd over a link. */
+  readonly linkRequestZstdVersion: string;
 }
 
 /** One feature: its id when the sources say it is served, otherwise null. */
@@ -49,6 +54,7 @@ export const PEER_FEATURES: readonly PeerFeature[] = [
   s => s.servedByHeaderEmitted ? "served-by-header" : null,
   s => `relay-auth/${s.relayAuthVersion}`,
   s => `link-peer-report/${s.linkPeerReportVersion}`,
+  s => s.linkRequestZstdVersion ? `link-request-zstd/${s.linkRequestZstdVersion}` : null,
 ];
 
 export function currentPeerFeatureSources(): PeerFeatureSources {
@@ -58,6 +64,7 @@ export function currentPeerFeatureSources(): PeerFeatureSources {
     servedByHeaderEmitted: SERVED_BY_HEADER_EMITTED,
     relayAuthVersion: LINK_RELAY_AUTH_VERSION,
     linkPeerReportVersion: LINK_PEER_REPORT_VERSION,
+    linkRequestZstdVersion: LINK_REQUEST_ZSTD_VERSION,
   };
 }
 
@@ -71,4 +78,14 @@ let buildFeatures: readonly string[] | undefined;
 export function buildPeerFeatures(): string[] {
   buildFeatures ??= Object.freeze(servedPeerFeatures());
   return [...buildFeatures];
+}
+
+/**
+ * The features a Home names to its Children on every relay-auth answer. `linkRequestCompression:
+ * false` leaves out per-body zstd, so Children send identity bodies exactly as before it existed;
+ * the Home still decodes a zstd body any client sends, and `GET /readyz` still lists what the build can do.
+ */
+export function linkHomeFeatures(config: { linkRequestCompression?: boolean } | undefined): string[] {
+  const features = buildPeerFeatures();
+  return config?.linkRequestCompression === false ? features.filter(id => id !== LINK_REQUEST_ZSTD_FEATURE) : features;
 }

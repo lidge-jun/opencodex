@@ -64,7 +64,7 @@ end up in the same place.
 | Field | Value |
 |---|---|
 | Base URL | `http://127.0.0.1:10100/v1` (include `/v1`; plain `http://` loopback is accepted) |
-| API Key | the value of `OPENCODEX_API_AUTH_TOKEN` if your service uses API auth, otherwise any placeholder such as `opencodex-loopback` |
+| API Key | an accepted OpenCodex key when API-key admission is enabled: `OPENCODEX_API_AUTH_TOKEN` or a configured client API key; use `opencodex-loopback` only when the configuration accepts that placeholder |
 
 Click **Refresh model list**. The picker fills with opencodex's `/v1/models`; switch on the
 rows you want.
@@ -207,7 +207,7 @@ itself.
 
 | Symptom | Check |
 |---|---|
-| 401 from the gateway | the API Key does not match `OPENCODEX_API_AUTH_TOKEN`; for a loopback bind without API auth any value works |
+| 401 from the gateway | the credential does not match an accepted data token or client API key; use an authorized key. The placeholder applies only to loopback configurations that accept unauthenticated model requests |
 | picker is empty | opencodex is not running, or the Base URL is missing `/v1`; press Refresh model list after fixing |
 | models listed but no Reasoning control | opencodex older than v2.41, or the id is not in Cursor's table (the dashboard marks it —); turn on `cursorEffortRows` or set a provider default |
 | a schema change is not picked up | Cursor caches `/models` per Base URL string with no expiry; Refresh model list re-reads it, otherwise restart the app or temporarily save a different spelling of the URL (`localhost` vs `127.0.0.1`) |

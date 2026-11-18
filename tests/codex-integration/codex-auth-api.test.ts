@@ -1,5 +1,5 @@
 import { registerMainCollisionCases } from "../helpers/codex-main-collision";
-import { registerWarmupRateLimitCases } from "../helpers/codex-warmup-rate-limit";
+import { registerReloginPauseCases, registerWarmupRateLimitCases } from "../helpers/codex-warmup-rate-limit";
 import { registerResetCreditConsumeValidationTests } from "../helpers/reset-credit-consume-validation";
 import { registerPoolReauthCauseCases } from "../helpers/pool-reauth-cause";
 import * as usageHistoryModule from "../../src/usage/log";
@@ -161,27 +161,28 @@ async function completeMockCodexOAuth(options: {
   const oauth = await import("../../src/oauth");
   const oauthStore = await import("../../src/oauth/store");
   const openUrlMod = await import("../../src/lib/open-url");
-  await oauthStore.saveCredential("chatgpt", {
+  const credential = {
     access: options.accessToken ?? `access-${options.requestBody.id}`,
     refresh: `refresh-${options.requestBody.id}`,
     expires: Date.now() + 5 * 60_000,
     email: options.email,
     accountId: options.oauthAccountId,
+  };
+  await oauthStore.saveCredential("chatgpt", credential);
+  const startSpy = spyOn(oauth, "startLoginFlow").mockImplementation(async (_provider, _opts, lifecycle) => {
+    lifecycle?.onCredentialPersisted?.(credential);
+    return { url: "https://example.test/oauth" };
   });
-  const startSpy = spyOn(oauth, "startLoginFlow").mockResolvedValue({ url: "https://example.test/oauth" });
   const statusSpy = spyOn(oauth, "getLoginStatus").mockReturnValue({
-    done: true,
-    loggedIn: true,
-  } as ReturnType<typeof oauth.getLoginStatus>);
+    status: "complete", done: true, loggedIn: true,
+  });
   const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(async () => ({ status: "started" as const }));
-  // Mirrors the login-status poll delay in login-flow.ts; other timers are intentionally dropped.
-  const CODEX_OAUTH_LOGIN_POLL_INTERVAL_MS = 2_000;
   const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
     callback: (...args: unknown[]) => void,
     delay?: number,
     ...args: unknown[]
   ) => {
-    if (delay === CODEX_OAUTH_LOGIN_POLL_INTERVAL_MS) queueMicrotask(() => callback(...args));
+    if (delay === 2_000) queueMicrotask(() => callback(...args));
     return 0 as unknown as ReturnType<typeof setTimeout>;
   }) as typeof setTimeout);
   globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -230,8 +231,7 @@ async function completeMockCodexOAuth(options: {
       if (state.status !== "pending") return { startStatus: resp!.status, state };
       // A microtask only yields to work already queued. The login flow awaits real
       // I/O -- credential reads, the WHAM fetch -- so under load its continuation can
-      // land on the macrotask queue instead, and 500 microtask turns burn through
-      // without it ever running. The flow then hits its own 150-poll ceiling and
+      // land on the macrotask queue instead. The flow then hits its own 150-poll ceiling and
       // reports "Login timed out" where the test asserts a specific error, which reads
       // as a behavioural regression rather than a starved poller.
       await new Promise<void>(resolve => setImmediate(resolve));
@@ -4858,7 +4858,7 @@ describe("codex-auth API", () => {
       });
       const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
       const data = await resp!.json() as { flowId: string };
-      expect(startSpy).toHaveBeenCalledWith("chatgpt", expect.any(Object), { flowId: data.flowId });
+      expect(startSpy).toHaveBeenCalledWith("chatgpt", expect.any(Object), expect.objectContaining({ flowId: data.flowId }));
       return {
         flowId: data.flowId,
         oauth,
@@ -5547,7 +5547,7 @@ describe("codex-auth API", () => {
   });
 
   registerMainCollisionCases(makeConfig, completeMockCodexOAuth);
-  registerWarmupRateLimitCases(makeConfig, completeMockCodexOAuth);
+  for (const register of [registerWarmupRateLimitCases, registerReloginPauseCases]) register(makeConfig, completeMockCodexOAuth);
 
   test("OAuth creation reports a durable add when catalog convergence is pending", async () => {
     const accountId = "oauth-picker-pending";
@@ -5878,7 +5878,7 @@ describe("codex-auth API", () => {
 
   test("OAuth pool login waits for the current flow to finish, not stale credentials", async () => {
     const source = await Bun.file("src/codex/auth-api/login-flow.ts").text();
-    expect(source).toContain("st.done && st.loggedIn");
+    expect(source).toContain('getLoginStatus("chatgpt", true, flowId)');
     expect(source).toContain("Login timed out before OAuth completed.");
   });
 

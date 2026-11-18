@@ -95,7 +95,11 @@ draft agreement.
   request reaches.
 - No relaxation of the [security review](./MAINTAINERS.md) that applies to authentication,
   credentials, or workflow changes.
-- No access to user data, request logs, or telemetry; opencodex does not collect any.
+- No access to user data, request logs, or individual telemetry reports. The only telemetry opencodex
+  collects is the anonymous daily usage summary described in the
+  [privacy statement](./README.md#code-signing-policy), which users can turn off; its project-wide
+  aggregates are public, as are the leaderboard profiles that users choose to connect, and sponsors
+  see nothing beyond them.
 - No say over unrelated issues, pull requests, or the release schedule.
 
 ## Current sponsors

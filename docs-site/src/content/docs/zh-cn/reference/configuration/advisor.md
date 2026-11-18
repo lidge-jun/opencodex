@@ -7,6 +7,16 @@ description: 独立专家咨询，支持 manual、preflight 与基于证据的 a
 
 这与子代理面（见[代理配置](/zh-cn/reference/configuration/agents/)）不同：子代理是通过 Codex 协作工具由 Worker 发起的委托。顾问是客户端完全不可见的代理侧 sidecar —— 即使从不 spawn 的 Worker 也能获得建议。
 
+## 仅发送问题
+
+要减少重复输入，请在顾问页面启用 **仅发送主模型的问题**，或运行：
+
+```sh
+ocx advisor set --context-mode question-only
+```
+
+这个可选设置只发送固定顾问指令和主模型的问题。问题最多保留 2,000 字符，超长时附加截断提示。OpenCodex 不自动附带任务、对话历史、工具结果、工具目录、主模型身份或修复证据。主模型需要自行补充必要背景。系统会拒绝空问题，不请求顾问模型。此模式暂停 preflight 和 adaptive 自动咨询；主动咨询、共享确认和现有次数限制仍然生效。默认值 `context` 保留本文下述上下文共享行为。使用 `--context-mode context` 可以恢复。
+
 ## 配置
 
 在仪表板 **Advisor** 页面从目录选择专家模型。选择器原样保存原生、提供商、指定账户、自定义和组合模型的标识符。已禁用和等待初始选择的模型不会作为新选项。已保存但不在可选目录中的标识符会保留并显示警告，直到您选择其他模型或清除。目录加载失败时保留当前选择并提供重试。请选择能返回文本建议的模型；目录不保证咨询兼容性。CLI 和 API 仍接受路由器支持的模型字符串。
@@ -29,13 +39,14 @@ description: 独立专家咨询，支持 manual、preflight 与基于证据的 a
 | `model?` | `string` | — | 专家模型。任何路由权威接受的模型字符串：裸原生模型（`gpt-6-astra`）、显式 `provider/model`（`anthropic/claude-sonnet-4-6`、`xai/grok-...`）或账户限定的原生模型。完整支持跨 provider：Worker 与 Advisor 无需同属一个 provider。 |
 | `effort?` | `string` | `"max"` | Advisor 调用的推理强度（`low` 至 `ultra`）。 |
 | `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | 何时咨询顾问。 |
+| `contextMode?` | `"context" \| "question-only"` | `"context"` | 上下文共享方式。`question-only` 要求主模型主动提问，并暂停自动咨询。 |
 | `maxConsultationsPerTask?` | `integer` | `3` | 自适应任务咨询上限（1–3 次尝试），包含手动调用。 |
 | `timeoutMs?` | `number` | `120000` | 回环咨询超时。 |
 | `contextSharingConsent?` | `"v1"` | 缺省 | 操作者同意把任务上下文发给所配置的顾问 provider。只有 `"v1"` 是当前版本。缺省、过期或其他值都表示不发送任务内容。`enabled: true` 本身不是同意。 |
 
 通过仪表盘的 **Advisor** 页面或 `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>` 管理。
 
-`ocx advisor on` 在没有当前同意时不会开启跨 provider 发送：它会打印披露并停止。`ocx advisor on --ack-context-sharing` 与 `ocx advisor consent` 记录 `v1`。`ocx advisor consent --revoke` 会移除同意并立即停止发送。`ocx advisor set` 不授予同意。仪表盘上的同意复选框默认不勾选。
+`ocx advisor on` 在没有当前同意时不会开启跨 provider 发送：它会打印披露并停止。`ocx advisor on --ack-context-sharing` 与 `ocx advisor consent` 记录 `v1`。`ocx advisor consent --revoke` 会移除同意。尚未发出的咨询会被阻断，但已经发出的咨询无法取消，已经离开代理的上下文也无法收回。`ocx advisor set` 不授予同意。仪表盘上的同意复选框默认不勾选。
 
 ## 策略
 
@@ -70,6 +81,10 @@ OpenCodex 不会把 provider API key、Authorization 头、OAuth token、仅后�
 
 手动建议是 Worker 自己发出的 `advisor` 调用所对应的工具结果。结果是一个 JSON 对象。`advice` 是顾问模型的文本。`status` 由运行时写入。
 
+在常规的 Responses、Messages 转换请求和 Web 搜索中，只有当前 `tool_choice` 允许 `advisor` 时才能手动咨询。显式指定工具或使用允许列表时，必须选中根级的 `advisor` 函数。保留的 `functions` 命名空间也会按根级处理。如果客户端未声明根级 `advisor`，符合条件的 sidecar 可以提供该工具。如果存在匹配的函数声明，通过 `functions` 选择时会使用客户端工具。强制使用托管 Web 搜索，或选中同名的自定义工具或托管工具，都不会授权手动咨询。未经允许的调用会以 `undeclared_tool_call` 拒绝，且不会触发咨询、向 Worker 重新发送请求或返回调用 ID 和参数。
+
+翻译后的 Messages 请求如果按名称显式选择 Anthropic 托管的 `advisor`，OpenCodex 会在兼容路由上原样转发工具声明和选择。选择有歧义或尝试过的候选路由均不兼容时，OpenCodex 会在本地返回 HTTP 400。两种情况下都不会发起代理咨询。
+
 基于 fetch 的 Web 搜索轮次中，只有实际生效的 `tool_choice` 允许合成 `advisor` 工具时，搜索循环才会提供该工具并拦截手动咨询调用。将 `allowed_tools` 限制为 `web_search` 不允许手动咨询顾问。启用托管搜索不会扩大此工具权限范围。
 
 自动建议的 JSON 内容放在独立的 user-role 建议消息中。developer 消息只保留固定的运行时传输说明，顾问生成的文本不会进入 developer/system 内容；OpenAI Chat 和 Anthropic 均可传递它，无需伪造工具调用。JSON 转义能防止结构突破和字段伪造，但不能保证模型忽略自然语言中的恶意指令。专门的咨询结果协议可进一步区分建议与用户请求。每个请求最多进行 3 次咨询和 4 次 Advisor worker 续写。咨询额度耗尽后移除 advisor 工具，重复调用只允许一次携带上限结果的最终续写；再次调用会以 502 advisor_continuation_limit 结束，不再发送隐藏的 worker 请求。空完成重试共享此上限。
@@ -87,6 +102,7 @@ Advisor 失败是 fail-open 的：已经发出的咨询若失败（模型不可�
 ## PR1 限制
 
 - 原生 OpenAI passthrough 回合（ChatGPT 池 Worker）不会获得合成工具；advisor 支持覆盖路由（translated）provider。preflight 咨询适用于 run-turn 适配器；工具不适用。
+- 翻译后的 `/v1/messages` 请求（例如将 Claude Code 路由到翻译 provider）在 `tool_choice` 允许时可使用合成工具，并按配置的策略运行 preflight 咨询。按名称显式选择托管 Advisor 时，按「权威」一节的规则跳过这两项。`policy` 与上下文共享同意遵循相同规则，设置从当前配置读取，因此撤销同意会阻止进行中的请求发起尚未发出的咨询；它不会取消已经发出的咨询，也无法收回已经离开代理的上下文。
 - 不提供语义卡住检测、任务完成复核、升级分层、多专家或投票；自适应触发只使用已观察到的工具证据。
 - preflight 去重账本是进程内的；代理重启后，进行中的任务可能再收到一次 preflight 咨询。
 

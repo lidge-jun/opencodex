@@ -159,6 +159,7 @@ function mapOAuthContentBlocks(blocks: unknown[], mapBlock: (block: Rec) => Rec)
  * The Claude OAuth request shape the adapter produces, applied to a Messages body: the Claude
  * Code identity as the first system block, and declared client tool names under the OAuth
  * prefix — in declarations, choices, uses and typed references, including tool-result content.
+ * An observed Claude Code client keeps its own tool names (no rename, an empty reverse map).
  * Copy-on-write; arguments, schemas, unknown containers and cache markers stay opaque.
  * Ambiguous original or wire names are refused before any history is rewritten.
  */
@@ -166,8 +167,13 @@ export function anthropicOAuthWireBody(body: Rec, clientIdentity?: AnthropicClie
   const out: Rec = { ...body };
   const toolNames = new Map<string, string>();
   const owners = new Map<string, string>();
+  // An observed Claude Code client already sends the tool names its own OAuth login uses. The
+  // prefix would only hide them from first-party features keyed by tool name, such as auto
+  // mode's server-side review (`safeguards`), which then reviews none of the client's calls.
+  const keepClientToolNames = hasObservedAnthropicClientIdentity(clientIdentity);
+  const prefixed = (name: string): string => keepClientToolNames ? name : applyClaudeToolPrefix(name);
   const wireName = (name: string): string => {
-    const wire = applyClaudeToolPrefix(name);
+    const wire = prefixed(name);
     const owner = owners.get(wire);
     if (owner !== undefined && owner !== name) throw new Error("tool names collide under the Claude OAuth tool prefix");
     owners.set(wire, name);
@@ -213,10 +219,10 @@ export function anthropicOAuthWireBody(body: Rec, clientIdentity?: AnthropicClie
   for (const name of declared) {
     if (typedNames.has(name)) throw new Error(inlineTypedNames.has(name)
       ? "inline typed and client tool names collide" : "typed and client tool names collide");
-    if (typedNames.has(applyClaudeToolPrefix(name))) throw new Error("typed and client wire tool names collide");
+    if (typedNames.has(prefixed(name))) throw new Error("typed and client wire tool names collide");
     wireName(name);
   }
-  const renames = (name: unknown): name is string => typeof name === "string" && declared.has(name) && applyClaudeToolPrefix(name) !== name;
+  const renames = (name: unknown): name is string => typeof name === "string" && declared.has(name) && prefixed(name) !== name;
   const mapDeclaration = (tool: unknown): unknown => isClientTool(tool) && renames(tool.name)
     ? { ...tool, name: wireName(tool.name) } : tool;
   if (Array.isArray(body.tools)) {

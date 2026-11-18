@@ -187,7 +187,7 @@ describe("Kiro structured output through public server endpoints", () => {
       const response = await post(url, "/v1/messages", t3TitleRequest(false));
       const wire = await response.text();
       expect(response.status).toBeGreaterThanOrEqual(400);
-      expect(wire).toContain("structured output");
+      expect(JSON.parse(wire)).toMatchObject({ type: "error", error: { type: "overloaded_error", message: "The provider failed to complete the request." } });
       expect(wire).not.toContain("Here is a title");
       expect(requests).toHaveLength(2);
     });
@@ -226,7 +226,7 @@ describe("Kiro holds a Messages schema to full conformance", () => {
       const response = await post(url, "/v1/messages", optionalTitleRequest());
       const wire = await response.text();
       expect(response.status).toBeGreaterThanOrEqual(400);
-      expect(wire).toContain("structured output");
+      expect(JSON.parse(wire)).toMatchObject({ type: "error", error: { type: "overloaded_error", message: "The provider failed to complete the request." } });
       expect(wire).not.toContain("42");
       expect(wire).not.toContain("43");
       expect(requests).toHaveLength(2);
@@ -250,6 +250,47 @@ describe("Kiro holds a Messages schema to full conformance", () => {
       expect(response.status).toBe(200);
       const json = await response.json() as { content: Array<{ type: string; text?: string }> };
       expect(JSON.parse(json.content[0]!.text!)).toEqual({});
+    });
+  });
+});
+
+describe("Kiro tool-catalog nudge by inbound surface", () => {
+  const completionFrames = (answer: string): Uint8Array[] => [
+    eventFrame("toolUseEvent", { name: KIRO_COMPLETION_TOOL_NAME, toolUseId: "done-1" }),
+    eventFrame("toolUseEvent", { name: KIRO_COMPLETION_TOOL_NAME, toolUseId: "done-1", input: JSON.stringify({ answer }) }),
+    eventFrame("toolUseEvent", { name: KIRO_COMPLETION_TOOL_NAME, toolUseId: "done-1", stop: true }),
+  ];
+  const sentContent = (request: Record<string, any>): string =>
+    request.conversationState.currentMessage.userInputMessage.content as string;
+  const lookupTool = { name: "lookup", description: "Look something up", input_schema: { type: "object", properties: { q: { type: "string" } } } };
+
+  test("/v1/messages reaches Kiro without the nudge but with the completion contract", async () => {
+    await withProxy([completionFrames("Ready.")], async (url, requests) => {
+      const response = await post(url, "/v1/messages", {
+        model: "kiro-test/claude-opus-5.5",
+        max_tokens: 1024,
+        tools: [lookupTool],
+        messages: [{ role: "user", content: "Say ready." }],
+      });
+      expect(response.status, await response.text()).toBe(200);
+      expect(requests).toHaveLength(1);
+      expect(advertisedTools(requests[0]!)).toEqual(["lookup", KIRO_COMPLETION_TOOL_NAME]);
+      expect(sentContent(requests[0]!)).not.toContain("Tool contract:");
+      expect(sentContent(requests[0]!)).toContain(`call ${KIRO_COMPLETION_TOOL_NAME} exactly once`);
+    });
+  });
+
+  test("/v1/responses keeps the nudge for Codex", async () => {
+    await withProxy([completionFrames("Ready.")], async (url, requests) => {
+      const response = await post(url, "/v1/responses", {
+        model: "kiro-test/claude-opus-5.5",
+        stream: false,
+        tools: [{ type: "function", name: "lookup", description: "Look something up", parameters: { type: "object", properties: { q: { type: "string" } } } }],
+        input: [{ role: "user", content: "Say ready." }],
+      });
+      expect(response.status, await response.text()).toBe(200);
+      expect(requests).toHaveLength(1);
+      expect(sentContent(requests[0]!)).toContain("Tool contract: use the current tool catalog as ground truth.");
     });
   });
 });

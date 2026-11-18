@@ -1,0 +1,118 @@
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import type { ApiTarget } from "./api-targets";
+import { useT } from "./i18n/shared";
+import { PairingError, submitConnectPairing } from "./connect-pairing-transport";
+import { useCopyFeedback } from "./components/use-copy-feedback";
+
+export function ConnectPairingForm({
+  target,
+  onConnected,
+  onCommitted,
+  onPairingStart,
+  local = false,
+  focusOnMount = false,
+}: {
+  target: ApiTarget;
+  onConnected: (signal: AbortSignal) => void | Promise<void>;
+  /** Update a surface that may unmount this form only after its handoff commits. */
+  onCommitted?: () => void;
+  /** Let a secret-bearing surface expire its previous disclosure lifetime. */
+  onPairingStart?: () => void;
+  /** Explicit local pairing for standalone operator actions; never an automatic bootstrap. */
+  local?: boolean;
+  focusOnMount?: boolean;
+}) {
+  const t = useT();
+  const [grant, setGrant] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<PairingError["kind"] | null>(null);
+  const [validationPending, setValidationPending] = useState(false);
+  const pendingHandoff = useRef<Awaited<ReturnType<typeof submitConnectPairing>> | null>(null);
+  const codeInput = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (focusOnMount) codeInput.current?.focus(); }, [focusOnMount]);
+  const activeRequest = useRef<AbortController | null>(null);
+  useEffect(() => () => {
+    activeRequest.current?.abort();
+    pendingHandoff.current?.rollback();
+  }, []);
+  const copyFeedback = useCopyFeedback<string>();
+  const command = `ocx gui pair --origin "${window.location.origin}"`;
+  const copied = copyFeedback.outcomeFor(command);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (activeRequest.current) return;
+    if (!pendingHandoff.current) onPairingStart?.();
+    setBusy(true);
+    setError(null);
+    const controller = new AbortController();
+    activeRequest.current = controller;
+    try {
+      if (!pendingHandoff.current) {
+        pendingHandoff.current = await submitConnectPairing(target, grant, undefined, controller.signal);
+        if (controller.signal.aborted) {
+          pendingHandoff.current.rollback();
+          pendingHandoff.current = null;
+          controller.signal.throwIfAborted();
+        }
+        setGrant("");
+        setValidationPending(true);
+      }
+      if (!controller.signal.aborted) {
+        await onConnected(controller.signal);
+        controller.signal.throwIfAborted();
+        pendingHandoff.current?.commit();
+        pendingHandoff.current = null;
+        setValidationPending(false);
+        onCommitted?.();
+      }
+    } catch (failure) {
+      if (!controller.signal.aborted) {
+        const kind = failure instanceof PairingError ? failure.kind : "unreachable";
+        if (kind === "refused" || kind === "remote-link-unauthorized" || kind === "remote-link-forbidden") {
+          pendingHandoff.current?.rollback();
+          pendingHandoff.current = null;
+          setValidationPending(false);
+        }
+        setError(kind);
+      }
+    } finally {
+      if (!controller.signal.aborted) setBusy(false);
+      if (activeRequest.current === controller) activeRequest.current = null;
+    }
+  };
+
+  return <section className="card connect-pairing" aria-labelledby="connect-pairing-title">
+    <h2 id="connect-pairing-title">{t(local ? "connection.pairing.code" : "connection.pairing.title")}</h2>
+    <p>{!local && <>{t("connection.pairing.hub")}: </>}<code>{target.serverOrigin}</code></p>
+    {!local && <p>{t("connection.pairing.getCode")}</p>}
+    <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}><code>{command}</code></pre>
+    <button type="button" className="btn btn-ghost" onClick={() => copyFeedback.copy(command, command)}>
+      {t(copied === "copied" ? "startup.copied" : "startup.copy")}
+    </button>
+    {copied === "unavailable" && <p role="status">{t("prov.linkCopyUnavailable")}</p>}
+    {!local && <p>{t("connection.pairing.askOperator")}</p>}
+    <p>{t("connection.pairing.notApiKey")}</p>
+    <form onSubmit={submit} className="api-form-row">
+      <label htmlFor="connect-pairing-code" className="field-label">{t("connection.pairing.code")}</label>
+      <input ref={codeInput} id="connect-pairing-code" name="pairingCode" value={grant}
+        onChange={(event: ChangeEvent<HTMLInputElement>) => setGrant(event.currentTarget.value)}
+        autoComplete="off" spellCheck={false} disabled={busy || validationPending} className="input mono"
+        aria-invalid={Boolean(error) || undefined} aria-describedby={error ? "connect-pairing-error" : undefined} />
+      <button type="submit" className="btn btn-primary" disabled={busy || (!validationPending && !grant.trim())}>
+        {t(busy ? "connection.pairing.submitting" : validationPending ? "connection.pairing.retryValidation" : "connection.pairing.submit")}
+      </button>
+      {error && <p id="connect-pairing-error" className="alert alert-err" role="alert">
+        {t(validationPending ? "connection.pairing.validationPending"
+          : error === "invalid-code" ? "connection.pairing.notApiKey"
+          : error === "unreachable" ? "connection.pairing.networkError"
+          : error === "request-failed" ? "connection.pairing.requestError"
+          : error === "origin-denied" ? "connection.pairing.originDenied"
+          : error === "cloudflare-challenge" ? "connection.pairing.cloudflareChallenge"
+          : error === "remote-link-unauthorized" || error === "remote-link-forbidden" ? "connection.pairing.sessionNotAuthorized"
+          : error === "invalid-response" ? "connection.pairing.responseError" : "connection.pairing.error")}
+      </p>}
+    </form>
+    {target.transport === "relay" && <p className="text-muted">{t("connection.pairing.relayWarning")}</p>}
+  </section>;
+}

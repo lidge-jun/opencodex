@@ -1,5 +1,18 @@
+import { recordUpstreamProviderErrorDetail, recordUpstreamValidationDetail, type FailureDetail } from "../request-log-failure-detail";
+import { carryProxyErrorPresentation } from "../../lib/client-error-body";
+import { carryPolicyCandidateRefusal } from "./policy-request-scope";
 import { comboFailureEvidence, carryProxyError } from "../../lib/client-error-body";
-import { codexAccountModelRefusal, codexAccountModelRefusalHardStopCode, type CodexAccountModelRefusal } from "../../combos/failover";
+import { carryWorkflowRefusal } from "../workflow-refusal";
+import {
+  codexAccountModelRefusal,
+  codexAccountModelRefusalHardStopCode,
+  isMalformedResponseFormatRequest,
+  isOpenRouterOpaque400Envelope,
+  isUnofferedToolCallRefusal,
+  isProviderModerationRefusal,
+  upstreamEnvelopeRootCode,
+  type CodexAccountModelRefusal,
+} from "../../combos/failover";
 import { parseRetryAfterMs } from "../../combos";
 import type { ConsumedComboFailure, HandleResponsesOptions } from "./core-options";
 import type { OcxUsage } from "../../types";
@@ -26,6 +39,9 @@ import { carryReplayRefusal, isNonReplayableResponse, isReplayRefusalResponse, m
 import { MODEL_NOT_ALLOWED_FOR_KEY } from "../admission-model-scope";
 import { usageFromResponsesPayload } from "../request-log";
 import type { ResponsesTerminalStatus } from "../../bridge";
+import { isXaiLegacyPrivacyError, isXaiPrivacyModeRefusal, xaiPrivacyModeRefusal, XAI_LEGACY_PRIVACY_MESSAGE } from "../../providers/xai-privacy-mode";
+import { stampMetaMusePlanRefusal } from "../../providers/meta-muse-plan-refusal";
+import type { RequestFailureCause } from "../../usage/telemetry-contract";
 
 export function sanitizedRetryAfter(value: string | null, now: number): string | undefined {
   const trimmed = value?.trim();
@@ -40,6 +56,10 @@ export async function consumeComboFailure(
   response: Response,
   signal?: AbortSignal,
   now = Date.now(),
+  logCtx?: { failureDetail?: FailureDetail; causeHint?: RequestFailureCause },
+  /** True only when `response` is the provider's own HTTP answer, so its closed error class is evidence. */
+  rawUpstream = false,
+  grokOAuth = false,
 ): Promise<ConsumedComboFailure> {
   // Read before the body: the marker lives on this Response object, and the failure below is
   // rebuilt as a new one that would otherwise lose it.
@@ -48,8 +68,13 @@ export async function consumeComboFailure(
   const fallback = `Provider error ${response.status}`;
   let classificationText = fallback;
   let codexModelRefusal: CodexAccountModelRefusal | undefined;
+  let malformedResponseFormat: boolean | undefined;
+  let openRouterOpaque400: boolean | undefined;
+  let unofferedToolCallRefusal: boolean | undefined;
+  let providerModerationRefusal: boolean | undefined;
   let usage: OcxUsage | undefined;
   let upstreamCode: string | undefined;
+  let upstreamRootCode: string | undefined;
   let upstreamMessage: string | undefined;
   let upstreamType: string | undefined;
   // Whether the body itself confirms a quota/rate-limit refusal, computed on the SAME read as
@@ -78,7 +103,40 @@ export async function consumeComboFailure(
         && isRateLimitOrQuotaFailureMessage(quotaMessage);
     }
     if (body.displaySafe && !body.truncated) {
-      if (response.status === 400) codexModelRefusal = codexAccountModelRefusal(response.status, body.text);
+      if (isXaiPrivacyModeRefusal(response) || (grokOAuth && isXaiLegacyPrivacyError(response.status, body.text))) {
+        const refusal = xaiPrivacyModeRefusal(logCtx);
+        if (response.headers.get("x-should-retry") === "false") refusal.headers.set("x-should-retry", "false");
+        if (nonReplayable) markResponseNonReplayable(refusal);
+        return {
+          response: refusal,
+          ...(nonReplayable ? { nonReplayable: true } : {}),
+          classificationText: XAI_LEGACY_PRIVACY_MESSAGE,
+          upstreamMessage: XAI_LEGACY_PRIVACY_MESSAGE,
+          upstreamType: "permission_error",
+          upstreamCode: "permission_denied",
+        };
+      }
+      if (logCtx && rawUpstream) recordUpstreamProviderErrorDetail(logCtx, response.status, body.text, response);
+      else if (logCtx) recordUpstreamValidationDetail(logCtx, response.status, body.text);
+      // A combo child's row is attributed from the same evidence the parent uses: Meta's Muse
+      // Code refusal is a plan restriction, not a rejected credential (#8352).
+      if (logCtx) stampMetaMusePlanRefusal(logCtx, response.status, body.text);
+      if (response.status === 400) {
+        codexModelRefusal = codexAccountModelRefusal(response.status, body.text);
+        malformedResponseFormat = isMalformedResponseFormatRequest(response.status, body.text);
+        openRouterOpaque400 = isOpenRouterOpaque400Envelope(body.text);
+        // The intact bounded body, not the 500-char display prefix: a long refusal envelope
+        // would fail the classifier's JSON parse on truncated text and stop the combo.
+        unofferedToolCallRefusal = isUnofferedToolCallRefusal(response.status, body.text);
+      }
+      // Judged on the whole body: the classification text below is cut at 500 characters, and a
+      // hard refusal after the cut must still veto a moderation hop.
+      if (response.status === 400 || response.status === 422) {
+        providerModerationRefusal = isProviderModerationRefusal(response.status, body.text, undefined, true);
+      }
+      // Status-independent: the nested record is what normalization selects, so a root verdict
+      // beside it has to be captured here or the conflict rule never sees it.
+      upstreamRootCode = upstreamEnvelopeRootCode(body.text);
       const normalized = normalizeUpstreamErrorText(body.text, fallback);
       if (utf8Trusted || isCyberPolicyCode(normalized.code) || isCyberPolicyMessage(normalized.safeText)) {
         classificationText = normalized.safeText;
@@ -143,7 +201,10 @@ export async function consumeComboFailure(
   );
   if (nonReplayable) markResponseNonReplayable(failureResponse);
   carryProxyError(response, failureResponse);
+  carryWorkflowRefusal(response, failureResponse);
   carryReplayRefusal(response, failureResponse);
+  carryProxyErrorPresentation(response, failureResponse);
+  carryPolicyCandidateRefusal(response, failureResponse);
   if (verifiedPlanRefusal) markVerifiedModelNotInPlanResponse(failureResponse);
   carryAnthropicRefusalCredential(response, failureResponse);
   carryCodexAccountCooldownResponse(response, failureResponse);
@@ -153,7 +214,14 @@ export async function consumeComboFailure(
     ...(verifiedPlanRefusal ? { verifiedPlanRefusal: true } : {}),
     classificationText,
     ...(codexModelRefusal !== undefined ? { codexModelRefusal } : {}),
+    ...(malformedResponseFormat !== undefined ? { malformedResponseFormat } : {}),
+    ...(openRouterOpaque400 !== undefined ? { openRouterOpaque400 } : {}),
+    ...(unofferedToolCallRefusal !== undefined ? { unofferedToolCallRefusal } : {}),
+    ...(providerModerationRefusal !== undefined ? { providerModerationRefusal } : {}),
     ...(normalizedUpstreamCode !== undefined ? { upstreamCode: normalizedUpstreamCode } : {}),
+    // A rewritten identity (policy, replay refusal) is the whole verdict; the root's own code
+    // would only re-open a decision that rewrite already settled.
+    ...(!cyberFailure && !replayRefusal && upstreamRootCode !== undefined ? { upstreamRootCode } : {}),
     ...(upstreamMessage !== undefined ? { upstreamMessage } : {}),
     ...(upstreamType !== undefined ? { upstreamType } : {}),
     ...(!cyberFailure && cooldownRetryAfter !== undefined ? { retryAfter: cooldownRetryAfter } : {}),

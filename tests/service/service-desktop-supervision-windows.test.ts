@@ -253,7 +253,7 @@ const healthBase = {
 test("an unowned Windows Desktop supervisor is named, never credited as login protection, and drops service advice", () => {
   const f = startupFixture({ kind: "none", revision: 0 });
   const desktop = diagnoseDesktopStartup(f.deps);
-  expect(desktop).toEqual({ owned: false, loginEnabled: false, running: true, viable: false,
+  expect(desktop).toEqual({ owned: false, loginEnabled: false, loginState: "unknown", running: true, viable: false,
     supervisor: { supervisorPid: 200, runtimePid: 100, app: APP } });
   const health = deriveStartupHealth({ ...healthBase, desktop });
   expect(health.protection).not.toBe("desktop");
@@ -264,9 +264,9 @@ test("an unowned Windows Desktop supervisor is named, never credited as login pr
 });
 
 test("a durable Windows Desktop claim reports running and its supervisor only for its own install and a stable live chain", () => {
-  expect(diagnoseWindowsDesktopStartup(startupFixture(OWNED).deps)).toEqual({ owned: true, loginEnabled: false, running: true,
+  expect(diagnoseWindowsDesktopStartup(startupFixture(OWNED).deps)).toEqual({ owned: true, loginEnabled: false, loginState: "unknown", running: true,
     viable: false, supervisor: { supervisorPid: 200, runtimePid: 100, app: APP } });
-  const claimOnly = { owned: true, loginEnabled: false, running: false, viable: false };
+  const claimOnly = { owned: true, loginEnabled: false, loginState: "unknown", running: false, viable: false };
   const otherInstall = startupFixture(OWNED, "installation-b");
   expect(diagnoseWindowsDesktopStartup(otherInstall.deps)).toEqual(claimOnly);
   expect(otherInstall.state.reads).toBe(0);
@@ -297,7 +297,7 @@ test("the Windows install id is read from the roaming app config directory", () 
 
 test("the ownership-only Windows projection runs no process probe", () => {
   const f = startupFixture(OWNED);
-  expect(desktopStartupOwnership(f.deps)).toEqual({ owned: true, loginEnabled: false, running: false, viable: false });
+  expect(desktopStartupOwnership(f.deps)).toEqual({ owned: true, loginEnabled: false, loginState: "unknown", running: false, viable: false });
   expect(f.state.reads).toBe(0);
 });
 

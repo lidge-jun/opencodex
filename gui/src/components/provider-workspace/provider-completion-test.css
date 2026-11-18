@@ -1,3 +1,6 @@
+/* Imported by its component, so it sits in the `legacy` cascade layer itself:
+   unlayered CSS would outrank design/bridge.css and every Tailwind utility. */
+@layer legacy {
 .pws-detail-id {
   font-size: var(--text-caption);
   font-weight: 500;
@@ -65,4 +68,5 @@
   .pws-completion-test {
     grid-template-columns: minmax(0, 1fr);
   }
+}
 }

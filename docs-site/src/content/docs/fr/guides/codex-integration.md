@@ -194,6 +194,8 @@ fournisseur dédié n'annonce `supports_websockets = true` que lorsque `"websock
 bouclage, le fournisseur intégré de Codex peut tenter WebSocket en premier ; si cette fonction est désactivée,
 le proxy renvoie `426` et Codex se rabat sur HTTP/SSE.
 
+Lorsque le mode `v2-plaintext` ou l’option `plaintextV2AgentMessages` est activé, la relecture locale exige le même appelant OpenCodex admis et le `thread-id` non vide propre à la requête. Un fil parent, une adresse de bouclage, des identifiants amont ou une clé de substitution ne constituent pas cette identité. Les clients sans principal d’appelant admis et les requêtes sans fil propre doivent renvoyer la conversation complète sans `previous_response_id`. Les configurations Codex et DSH de bouclage par défaut n’établissent pas cette identité. L’état conservé pendant l’activation de l’un ou l’autre réglage reste lié après sa désactivation. Dans le mode `v1` par défaut, l’état non lié conserve le comportement de continuation existant, limité au fil parent, y compris pour les appelants de bouclage par défaut. Cela reste distinct des ID Responses natifs appartenant au service amont.
+
 ## Identité et historique du fil de discussion
 
 La configuration de bouclage par défaut conserve l'étiquette du fournisseur natif `openai` de Codex sur les

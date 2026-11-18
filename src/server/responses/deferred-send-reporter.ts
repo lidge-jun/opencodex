@@ -1,4 +1,6 @@
-import type { PhysicalSendReporter } from "../../lib/request-execution-budget";
+import type { PhysicalSendReporter, SingleUseDispatchPermit } from "../../lib/request-execution-budget";
+import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import type { ErrorDestinationLabel } from "../../lib/error-destination";
 
 /** Retry thunks can fail in pacing; settle only starts admitted at the physical executor. */
 export function deferPhysicalSendReporter(physical: PhysicalSendReporter) {
@@ -22,4 +24,19 @@ export function deferPhysicalSendReporter(physical: PhysicalSendReporter) {
       return true;
     },
   };
+}
+
+/** Keep legacy reporting unless a negotiated leg confirms its reservation at the physical send. */
+export function physicalSendAccounting(reporter: PhysicalSendReporter, deferred?: {
+  destination: () => ErrorDestinationLabel; permit?: SingleUseDispatchPermit;
+}) {
+  const pending = deferred ? deferPhysicalSendReporter(reporter) : undefined;
+  let permitDispatched = false;
+  return { report: pending?.report ?? reporter, onPhysicalDispatch: pending ? () => {
+    if (permitDispatched) throw new SendBudgetExhaustedError(deferred!.destination());
+    if (!pending.beforeDispatch() || deferred?.permit && !deferred.permit.use()) {
+      throw new SendBudgetExhaustedError(deferred!.destination());
+    }
+    permitDispatched = Boolean(deferred?.permit);
+  } : undefined };
 }

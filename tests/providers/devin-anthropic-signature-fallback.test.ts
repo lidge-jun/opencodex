@@ -183,7 +183,7 @@ describe("Devin Anthropic signature fallback", () => {
     expect(requests).toHaveLength(1);
     const kinds = events.map(e => e.type);
     expect(kinds).toContain("thinking_delta");
-    expect(events).toContainEqual({ type: "thinking_signature", signature: encodeDevinSignature("EpcBNew", "anthropic") });
+    expect(events).toContainEqual({ type: "thinking_signature", signature: encodeDevinSignature("EpcBNew", "anthropic"), afterOutput: true });
     expect(kinds.indexOf("thinking_delta")).toBeLessThan(kinds.indexOf("text_delta"));
   });
 

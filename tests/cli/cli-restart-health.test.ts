@@ -401,8 +401,8 @@ const NON_DESKTOP: SupervisionEvidence[] = [{ kind: "none" },
   { kind: "unknown", reason: "probe-timeout", desktopSeen: false }, { kind: "unsupported" }];
 const RESTART_TARGET: ProxyRestartLive = { pid: 4242, port: 19999, source: "runtime" };
 const UPDATE_CANDIDATE: UpdateRestartCandidate = {
-  home: { config: { path: "/test/ocx", dev: 1, ino: 2 }, codex: { path: "/test/codex", dev: 1, ino: 3 }, revision: 0 },
-  target: { ...RESTART_TARGET, pid: 4242, version: "2.76.0" },
+  home: { config: { path: "/test/ocx", dev: 1, ino: 2, fileId: "1:2" }, codex: { path: "/test/codex", dev: 1, ino: 3, fileId: "1:3" }, revision: 0, serviceRecord: { schema: 1, digest: "a".repeat(64) }, diagnosedHostname: null },
+  target: { ...RESTART_TARGET, pid: 4242, hostname: "127.0.0.1", version: "2.76.0" },
   runtime: { pid: 4242, port: 19999, attestationSecret: "a".repeat(43) }, cliVersion: "2.77.0",
 };
 function desktopRestartFixture() {
@@ -424,7 +424,7 @@ describe("Desktop CLI start and restart guidance", () => {
   test("duplicate start guidance names the verified Desktop target", () => {
     const probes: Array<number | undefined> = [];
     expect(duplicateRuntimeMessage(4242, 19999, deps => { probes.push(deps?.targetPid); return DESKTOP; }))
-      .toBe(`OpenCodex Desktop supervises the running proxy (pid 4242, ${DESKTOP.app}, port 19999). Use the running proxy, or quit OpenCodex before starting it from this CLI.`);
+      .toBe(`OpenCodex Desktop supervises the running proxy (pid 4242, ${DESKTOP.app}, port 19999). Use the running proxy (restart it with 'ocx restart', re-point Codex with 'ocx sync'), or quit OpenCodex before starting it from this CLI.`);
     expect(probes).toEqual([4242]);
     for (const evidence of [...NON_DESKTOP, { ...DESKTOP, runtimePid: 9999 }]) {
       expect(duplicateRuntimeMessage(4242, 19999, () => evidence))

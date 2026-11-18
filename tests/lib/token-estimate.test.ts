@@ -6,6 +6,42 @@ import {
   estimateTokensFromCharacterCounts,
 } from "../../src/lib/token-estimate";
 
+describe("supplementary Han token estimates", () => {
+  for (const point of [0x20000, 0x2ebf0, 0x2f800, 0x30000, 0x31350]) {
+    test(`counts U+${point.toString(16).toUpperCase()} in the dense CJK bucket`, () => {
+      const text = String.fromCodePoint(point).repeat(100);
+      expect(text.length).toBe(200);
+      expect(estimateTokens(text)).toBe(Math.ceil(200 / 1.5));
+    });
+  }
+
+  test("mixed supplementary Han, Hangul and Latin keep the existing model ratios", () => {
+    const text = "abc".repeat(30) + "한".repeat(20) + String.fromCodePoint(0x20000).repeat(10);
+    for (const model of [undefined, "gpt-5", "claude-sonnet-5", "kiro/kiro-auto"]) {
+      expect(estimateTokens(text, model)).toBe(estimateTokensFromCharacterCounts(90, 40, model));
+    }
+  });
+
+  test("emoji, mathematical symbols and lone surrogates keep their previous weights", () => {
+    for (const text of ["😀".repeat(30), String.fromCodePoint(0x1d400).repeat(30),
+      "\uD840".repeat(30), "\uDC00".repeat(30)]) {
+      expect(estimateTokens(text)).toBe(Math.ceil(text.length / 4));
+    }
+  });
+
+  test("repeated calls cannot carry Unicode matching state between strings", () => {
+    for (let index = 0; index < 20; index++) {
+      expect(estimateTokens("a" + String.fromCodePoint(0x20000))).toBe(2);
+      expect(estimateTokens("abcd")).toBe(1);
+    }
+  });
+
+  test("supplementary Han estimates still respect an explicit context-window cap", () => {
+    const text = String.fromCodePoint(0x20000).repeat(100);
+    expect(estimateTokens(text, "kiro/kiro-auto", 100)).toBe(100);
+  });
+});
+
 describe("script-segmented ratio", () => {
   const korean = "한국어 텍스트는 토큰 밀도가 높아서 영어 기준 추정이 과소계산됩니다 ".repeat(10);
   const english = "English text estimates fine at the default four chars per token ratio ".repeat(10);

@@ -8,6 +8,7 @@ import { baseScopedEnv, runCodingAgentTurn, type CodingAgentDeps, type CodingAge
 import { QODER_PROFILES, resolveQoderProfile, type QoderProfile } from "./profiles";
 import { QoderScaffoldFilter, QODER_SCAFFOLD_ERROR_CODE, qoderScaffoldErrorMessage } from "./scaffold-guard";
 import { ToolEnvelopeEchoFilter } from "../../lib/tool-envelope-echo-filter";
+import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { buildQoderConversationInput, qoderCnImageInputSupported } from "./image-input";
 
 export type QoderAdapterDeps = CodingAgentDeps;
@@ -63,7 +64,14 @@ export function buildQoderChildEnv(profile: QoderProfile, apiKey: string, system
     ...(systemPrompt ? { [promptEnv]: systemPrompt } : {}) };
 }
 
-/** Disable Qoder's built-in tools; only a request-scoped MCP catalog can be exposed. */
+/**
+ * Disable Qoder's built-in tools; only a request-scoped MCP catalog can be exposed.
+ *
+ * MCP lazy loading is switched off inline (#8704). Qoder defaults it on when no setting names it,
+ * and then calls its own `mcp_get`/`mcp_call`/`mcp_list` wrappers instead of the catalog tools,
+ * which the undeclared-tool guard rightly refuses. `--settings` is an explicit flag, so it
+ * still applies while `--setting-sources ""` keeps every settings file out.
+ */
 export function buildQoderArgs(parsed: OcxParsedRequest, provider: OcxProviderConfig): string[] {
   const args = [
     "-p",
@@ -74,6 +82,7 @@ export function buildQoderArgs(parsed: OcxParsedRequest, provider: OcxProviderCo
     "--setting-sources", "",
     "--max-turns", "1",
     "--no-session-persistence",
+    "--settings", JSON.stringify({ mcp: { lazyLoad: false } }),
     "--model", parsed.modelId,
   ];
   const effort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
@@ -123,8 +132,18 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
     });
   };
 
+  const filterReplay = (filter: () => string): string | undefined => {
+    try {
+      return filter();
+    } catch (error) {
+      if (!isTranslatorBudgetExceededError(error)) throw error;
+      refuse("an unresolved tool envelope exceeding its buffer limit");
+    }
+  };
+
   const forwardText = (text: string, refuseOnMatch = true): void => {
-    const safe = replayFilter.feed(text);
+    const safe = filterReplay(() => replayFilter.feed(text));
+    if (safe === undefined) return;
     // An overflowing fenced hold can release an unverified marker. Refuse it
     // before publication rather than leaking the envelope under a memory cap.
     if (replayFilter.unverifiedMarker) {
@@ -143,7 +162,8 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
    * envelope opening it is recognized even when the previous block ended mid-line.
    */
   const settleText = (refuseOnMatch = true): boolean => {
-    const tail = replayFilter.finish();
+    const tail = filterReplay(() => replayFilter.finish());
+    if (tail === undefined) return false;
     if (replayFilter.matched || replayFilter.unverifiedMarker) {
       if (refuseOnMatch) refuse("replayed tool envelope");
       return false;
@@ -244,7 +264,8 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
       const reasoning = thinkingFilter.flush();
       drainBoundaries(tail.text, false);
       if (closed) return;
-      const replayTail = replayFilter.finish();
+      const replayTail = filterReplay(() => replayFilter.finish());
+      if (replayTail === undefined) return;
       if (replayTail && !replayFilter.unverifiedMarker) emit({ type: "text_delta", text: replayTail });
       if (reasoning.text && !replayFilter.matched && !replayFilter.unverifiedMarker) {
         emit({ type: "thinking_delta", thinking: reasoning.text });
@@ -266,6 +287,7 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
   };
 }
 
+/** Build the regional Qoder adapter with a request-scoped capture-only tool catalog. */
 export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapterDeps = {}): ProviderAdapter {
   return {
     name: "qoder",
@@ -287,6 +309,12 @@ export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapt
       let catalog: ReturnType<typeof buildCodingAgentToolCatalog>;
       try {
         catalog = buildCodingAgentToolCatalog(parsed, QODER_MCP_SERVER_NAME);
+        for (const wireName of catalog.emittedNameMap.values()) {
+          const restored = catalog.emittedNameMap.get(wireName);
+          if (restored !== undefined && restored !== wireName) {
+            throw new CodingAgentToolCatalogError("ambiguous selected tool identity");
+          }
+        }
       } catch (error) {
         if (!(error instanceof CodingAgentToolCatalogError)) throw error;
         emit({
@@ -305,6 +333,8 @@ export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapt
             serverModulePath: QODER_MCP_SERVER_PATH,
             tools: catalog.tools,
             emittedNameMap: catalog.emittedNameMap,
+            // Qoder can mix exact client wire names with MCP names in one reply.
+            acceptWireToolNames: true,
             maxTurnToolCalls: MAX_TOOL_BLOCK_STARTS,
             projectHistoryToolNames: true,
             completeAssistantToolUse: true,

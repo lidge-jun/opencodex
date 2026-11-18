@@ -237,8 +237,13 @@ describe("desktop icon set", () => {
     const iconMask = block(icon, '<mask id="prompt"', "</mask>");
     const trayMask = block(tray, '<mask id="prompt"', "</mask>");
     expect(trayMask, "the tray mask is not the app icon's mask").toBe(iconMask);
-    expect(trayMask).toContain('stroke-width="22"');
     expect(trayMask).toContain("<rect ");
+    // The cut-outs are the brand mark's own prompt (chevron and underscore), not a redrawing.
+    const brand = readFileSync(repoPath("scripts/brand/opencodex-mark.svg"), "utf8");
+    const brandPrompt = [...brand.matchAll(/class="cls-1" d="([^"]+)"/g)].map(m => m[1]!);
+    const maskPaths = [...trayMask.matchAll(/ d="([^"]+)"/g)].map(m => m[1]!);
+    expect(brandPrompt.length, "the brand mark no longer carries a two-part prompt").toBe(2);
+    expect(maskPaths, "the prompt mask is not the brand mark's prompt").toEqual(brandPrompt);
 
     // A mark that does not reference the mask renders as a filled blob with no prompt in it.
     const iconMark = block(icon, '<g id="mark"', "</g>");
@@ -255,11 +260,16 @@ describe("desktop icon set", () => {
     expect(iconPaths.length).toBeGreaterThan(trayPaths.length);
     const foreign = trayPaths.filter(d => !iconPaths.includes(d));
     expect(foreign, "tray/icon.svg draws curves icon.svg does not have").toEqual([]);
+    // And the app icon is the brand mark itself: every curve of it, nothing redrawn.
+    const brandBody = [...brand.matchAll(/<path (?!class="cls-1")d="([^"]+)"/g)].map(m => m[1]!);
+    expect([...iconPaths].sort(), "icon.svg is not the brand mark").toEqual([...brandBody].sort());
 
     // A status item is tinted from its alpha, so anything but black-and-clear is a mistake, and a
-    // backdrop would paint the whole menu bar slot.
+    // backdrop would paint the whole menu bar slot. White appears only as the mask's ground.
     expect(tray).not.toContain('id="backdrop"');
     const fills = new Set([...tray.matchAll(/fill="([^"]+)"/g)].map(m => m[1]!));
-    expect([...fills].sort()).toEqual(["#000000", "#ffffff", "none"]);
+    expect([...fills].filter(fill => !["#000000", "#ffffff", "none"].includes(fill))).toEqual([]);
+    expect(fills.has("#000000")).toBe(true);
+    expect(fills.has("#ffffff")).toBe(true);
   });
 });

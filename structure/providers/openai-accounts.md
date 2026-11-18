@@ -68,7 +68,7 @@ Native Spark membership and its model-specific request/tool exceptions are remov
   a request goes upstream as `gpt-6-astra-minor`.
 
 - The flagship roster that lists unconditionally is `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`,
-  `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol` and `gpt-6.1-terra` (Sol and Luna added 2026-09-23 from a
+  `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6.2-sol` and `gpt-6.2-astra` (Sol and Luna added 2026-09-23 from a
   live roster probe; https://openai.com/index/introducing-gpt-6-sol-and-luna/; 6.1 Sol added
   2026-09-30 and 6.1 Terra on 2026-10-27 from openai/codex models.json). None is gated, and all are native-main
   drain sentinels. The confirmed-denial ordering below is still scoped to the first four
@@ -290,17 +290,17 @@ per-grant refresh file lock. Caller cancellation can stop either wait and is
 checked before the token exchange starts. Once started, the exchange observes
 only the refresh's own 30-second timeout: success rotates and retires the old
 refresh token, so cancellation cannot discard the only live grant. Both locks
-await the callback through completion, including publication; aborting their
-wait signal does not release an acquired lock while the exchange runs.
-Successful refresh publishes access and refresh tokens and advances the
-credential mutation epoch before clearing grant rejection and applicable
-reauth quarantine, then throws the caller's abort reason if cancelled.
-Snapshot and identity checks still refuse to overwrite an external auth writer,
-including when the caller also cancelled. A save refused after a successful
-exchange serves the new access token to that request only: auth.json stays as
-the other writer left it, the rotated grant is kept nowhere, and the old grant
-is not marked rejected (#2999). Same-identity device reauth obtains a new login
-grant rather than rotating the existing grant and keeps its pre-publication fence.
+await the callback through completion, including publication; aborting their wait signal does not release the acquired locks.
+Successful refresh publishes access and refresh tokens and advances the credential mutation epoch before clearing
+grant rejection and applicable reauth quarantine, then throws the caller's abort reason if cancelled.
+Snapshot and identity checks still refuse to overwrite an external auth writer, including when the caller also cancelled.
+If publication is refused after an exchange, the active request alone receives the new access token, or throws its abort reason if the caller cancelled. The other writer's auth.json stays intact, the exchanged grant is not stored, and the old grant keeps its rejection status (#2999).
+Same-identity device reauth obtains a new login grant and keeps its pre-publication fence.
+
+## Pool login policy and cancellation
+
+For ChatGPT/Codex pool logins, `codexAuthMethod` applies at proxy startup. With `"device-only"`, `src/codex/auth-api/login-flow.ts` forces a device grant and returns `authMethod: "device-only"`. `src/cli/account-auth.ts` attempts to cancel that flow when the caller supplies `--code` or requests a JSON wait without `--no-wait`. The policy covers only pool login.
+The pool poller requires success for its exact flow id and receives that flow's persisted credential through the OAuth lifecycle callback. Automatic OAuth cleanup retains that exact outcome while the pool login is starting or pending. It rechecks ownership immediately before writing. Pool cancellation remains available through identity and eligibility checks, including after OAuth settles. After publication starts, cancellation is refused while the catalog result settles.
 
 ## Native-main refresh ownership
 
@@ -317,7 +317,7 @@ Only file-backed refresh has a local grant fingerprint lock; keyring claim deadl
 
 Fileless Pool and stored-Direct requests discover the current identity before selection or quota policy, even when prior expiry metadata is usable or the previous account is hard-locked; the selected token is revalidated before dispatch.
 A discovery failure is retained as the request's own classified cause for an empty candidacy and for the exact `__main__` selector alike, rather than degrading to a blanket unavailability refusal. It stays evidence only while the credential remains unverifiable: a credential recovered while model-entitlement resolution is in flight is re-checked live, so an already-healthy login answers with the current selection outcome instead of the stale probe error. `src/codex/account-lifecycle.ts` applies the same identity transition to a validated owned RPC as to an owned file read: a changed account purges prior runtime/quota state and retires its writers, while unchanged or ambiguous identity preserves its quota policy and ambiguous identity cannot clear reauth quarantine. On the first owned observation after restart, `src/codex/quota.ts` discards legacy main quota only when a valid retained policy tag proves a different account; matching, missing or invalid tags retain their restrictions, and other accounts remain untouched. Startup, drain, caller-owned credential and Pool manual-pause fences remain; async stored-Direct materialization, including audio, uses the same resolver, while synchronous readers remain file-only.
-Account-card metadata, initial Pool quota priming and idle main-quota recovery also use the owned keyring login. `src/codex/auth-api/main-account-probe.ts` obtains an absent-file credential under the runtime lease before taking WHAM's shared claim; recovery reuses its exact prepared result. The handoff must still match the current home, identity writer, bearer HMAC and credential generation, and auth.json must remain absent. Copies, credential ABA, a changed home, a later file credential and stale responses cannot publish quota or reset-recovery proof; an invalid handoff cannot overwrite current credential presence. Verified RPC identity is retained instead of erased by a missing-file reconciliation. A confirmed current-home logout/refusal reports credential absence, while transport uncertainty preserves the prior observation; request error classification is unchanged. Passive preparation and WHAM reads preserve traffic quarantine and manual pause; explicit refresh retains its existing recovery meaning. `tests/codex-integration/main-account-credit-renewal.test.ts` and `tests/codex-integration/native-main-refresh-mode.test.ts` cover these boundaries. Armed test-home guards prevent auto-spawn; `ocx doctor` prints the active mode and reason.
+Account-card metadata, initial Pool quota priming and idle main-quota recovery also use the owned keyring login. `src/codex/auth-api/main-account-probe.ts` obtains an absent-file credential under the runtime lease before taking WHAM's shared claim; recovery reuses its exact prepared result. The handoff must still match the current home, identity writer, bearer HMAC and credential generation, and auth.json must remain absent. Copies, credential ABA, a changed home, a later file credential and stale responses cannot publish quota or reset-recovery proof; an invalid handoff cannot overwrite current credential presence. Verified RPC identity is retained instead of erased by a missing-file reconciliation. A confirmed current-home logout/refusal reports credential absence, while transport uncertainty preserves the prior observation; request error classification is unchanged. Passive preparation and WHAM reads preserve traffic quarantine and manual pause; explicit refresh retains its existing recovery meaning. `tests/codex-integration/main-account-credit-renewal.test.ts` and `tests/codex-integration/native-main-refresh-mode.test.ts` cover these boundaries. Armed test-home guards prevent auto-spawn; `ocx doctor` prints the active mode and reason. Retaining the last complete login while Codex rewrites the file is [native-main login retention](native-main-login-retention.md).
 
 ## Preserve signed-in quota
 
@@ -390,7 +390,7 @@ materialized headers pass the proxy-credential exclusion check before owner matc
 
 The credits module beside `src/codex/quota-types.ts` retains validated WHAM credits only in process memory. Main publication uses the current credential and physical ChatGPT account identity; pool publication uses the captured writer's `quotaHistoryIdentity` and a live credential generation, including credits-only responses. Omitted credits retain the observation; null or unusable credits clear it. Identity mismatch or removal retires it, without a TTL or disk hydration.
 
-`src/codex/auth-api/account-list.ts` exposes optional `credits` only when `showCodexCredits === true` and the current identity has an observation. Decimal balances remain strings; boolean flags and approximate local/cloud message ranges are allowlisted. Credits never enter persisted quota, routing, reset-credit recovery, or `/api/provider-quotas`, and are never logged. The [config surface](../config.md#config-surface) owns the display switch.
+`src/codex/auth-api/account-list.ts` exposes optional `credits` only when `showCodexCredits === true` and the current identity has an observation. Decimal balances remain strings. Boolean flags and approximate local/cloud message ranges are allowlisted. The main and pool probes share the [WHAM group balance fallback](openai-tiers.md#spendable-codex-credits) with quota parsing. The display cache stays in process memory and serves the account DTO. The [config surface](../config.md#config-surface) owns the display switch.
 
 ## Quota history publication identity
 
@@ -408,7 +408,7 @@ The credits module beside `src/codex/quota-types.ts` retains validated WHAM cred
 
 WHAM and response-header producers pass the exact captured pool writer, including refreshed replay and compact outcomes. Admission rechecks credential generation and publication UUID. Same-account refresh preserves prior history; replacement/removal invalidates it. Raw invalid percentages discard the entire trusted observation before display clamping; carried windows, reset credits alone, native main and staged-login probes never become durable pool history.
 
-`GET /api/codex-auth/quota/history` and `ocx account history openai <pool-account-id>` read only cached, identity-checked observations. The optional limit is 1–200. Public results omit the internal publication UUID and credential generation. These observations are inputs for capacity estimation; percentages alone do not establish absolute token capacity.
+`GET /api/codex-auth/quota/history` and `ocx account history openai <pool-account-id>` read only cached, identity-checked observations. The optional limit is 1–200. Public results omit the internal publication UUID and credential generation. These observations are inputs for capacity estimation; percentages alone do not establish absolute token capacity. `src/codex/quota-window-conflict.ts` (#8574) reads the same cached history for the current credential generation and reports `weeklyQuotaConflicts` on the pool account row when an earlier-reset weekly window is observed again after a later one (reset times within one hour are one window) while the earlier reset is still ahead; a true rollover or an early reset never repeats the old window. It picks no winner and never feeds admission, routing or credit consent; the dashboard card and the CLI QUOTA column only name it. The reader peeks the history (no prune, no clear, so a passive `/api/quota-pool` read changes nothing) and takes each row's credential record from the listing's one store snapshot.
 
 ## Observed effective token capacity
 

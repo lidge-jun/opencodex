@@ -1,5 +1,7 @@
 import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE, KEY_ACCOUNT_LOG_LABEL_RE, apiKeyAccountLogLabel, oauthAccountLogLabel } from "../codex/account-label";
 import type { OcxProviderConfig } from "../types";
+import { captureCacheAffinityIdentity } from "./cache-affinity-identity";
+import { isAnthropicInstanceId } from "./anthropic-instance-id";
 
 export function canonicalUsageProviderLabel(provider: string): string {
   return provider === "chatgpt" || provider === "openai-multi" ? "openai" : provider;
@@ -14,14 +16,19 @@ export function usesApiKeyAccount(provider: Pick<OcxProviderConfig, "authMode" |
 
 /** Key identity comes from the captured selection, before env/keychain resolution. */
 export function stampApiKeyAccountLabel(
-  logCtx: { accountLogLabel?: string },
+  logCtx: { accountLogLabel?: string; affinityKeyEntryId?: string; affinityProviderName?: string },
   providerName: string,
-  provider: Pick<OcxProviderConfig, "authMode" | "_apiKeyAttempt">,
+  provider: OcxProviderConfig,
 ): void {
+  captureCacheAffinityIdentity(logCtx, providerName, provider);
   if (usesApiKeyAccount(provider)) {
     logCtx.accountLogLabel = apiKeyAccountLogLabel(providerName, provider._apiKeyAttempt);
-  } else if (KEY_ACCOUNT_LOG_LABEL_RE.test(logCtx.accountLogLabel ?? "")) {
-    delete logCtx.accountLogLabel;
+    logCtx.affinityKeyEntryId = provider._apiKeyAttempt?.entryId;
+    logCtx.affinityProviderName = providerName;
+  } else {
+    if (KEY_ACCOUNT_LOG_LABEL_RE.test(logCtx.accountLogLabel ?? "")) delete logCtx.accountLogLabel;
+    delete logCtx.affinityKeyEntryId;
+    delete logCtx.affinityProviderName;
   }
 }
 
@@ -62,6 +69,24 @@ export function baseProviderLabel(provider: string): string {
 }
 
 /**
+ * The opaque Anthropic pool account tag (#8383): the `p<hex6>` label `formatAnthropicProviderForLog`
+ * already folded into an account-qualified provider such as `anthropic-p2e22d0`. It reuses that
+ * label instead of minting a new identifier, and lives in its own `accountTag` field so the
+ * `accountLogLabel`-keyed per-account summaries (#2699) do not change. Any other provider has none.
+ */
+export function anthropicAccountTag(provider: string | undefined): `p${string}` | undefined {
+  const cut = provider?.lastIndexOf("-") ?? -1;
+  if (!provider || cut <= 0 || !isAnthropicInstanceId(provider.slice(0, cut))) return undefined;
+  const tag = provider.slice(cut + 1);
+  return CODEX_ACCOUNT_LOG_LABEL_RE.test(tag) ? tag as `p${string}` : undefined;
+}
+
+export function anthropicAccountTagField(provider: string | undefined): { accountTag?: `p${string}` } {
+  const accountTag = anthropicAccountTag(provider);
+  return accountTag ? { accountTag } : {};
+}
+
+/**
  * Stamp the per-account usage label for a non-Codex OAuth provider (#2699).
  *
  * Call this where the resolved credential is known and NOT inside a failover gate. The obvious
@@ -73,7 +98,8 @@ export function baseProviderLabel(provider: string): string {
  *
  * Two providers are skipped because they already have attribution:
  * - `openai` produces its own `p`-labels through `codexAuthContextLogLabel`.
- * - `anthropic` folds the account into the provider label (`formatAnthropicProviderForLog`).
+ * - `anthropic` folds the account into the provider label (`formatAnthropicProviderForLog`);
+ *   `anthropicAccountTag` exposes that same label as the separate `accountTag` field.
  *
  * It lives here rather than in `account-label.ts` because it needs `baseProviderLabel`, and this
  * module already imports from that one -- the reverse direction would be an import cycle. This

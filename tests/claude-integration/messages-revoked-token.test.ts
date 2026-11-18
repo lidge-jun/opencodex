@@ -169,7 +169,7 @@ for (const instance of INSTANCES) for (const enabled of [true, false]) {
     f.config.providers[instance]!.fetch = transport(instance, () => revoked());
     const { response, text } = await send(instance + "/" + f.model);
     expect(response.status, text).toBe(401);
-    expect(text).toContain("OAuth access token has been revoked.");
+    expect(JSON.parse(text).error).toEqual({ type: "authentication_error", message: "The provider rejected the configured credentials." });
     expect(sent).toHaveLength(2);
     for (const id of f.ids) expect(f.store.getAccountCredentialWithStatus(instance, id)?.needsReauth).toBe(true);
     await send(instance + "/" + f.model);

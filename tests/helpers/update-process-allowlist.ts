@@ -3,13 +3,15 @@
 // Exact existing terminal/probe lifecycle sites. No arbitrary process API is admitted.
 import { orchestratedChildReview } from "./update-review-orchestrated-child";
 import { orchestratedEntryReview } from "./update-review-orchestrated-entry";
+import { signedSupplyReview } from "./update-review-signed-supply";
 
 const baseProcessAllowlist: readonly (readonly [string, string, number])[] = [
+  ["src/update/transactional-install.mjs:verifyPnpmInstallTree:process.execArgv","read-only: detect --preserve-symlinks so the lookup roots Node would then consult are confined to the store",1],
   ["bin/ocx.mjs:runPackageManagerSelfUpdate:process.on(signal, () => {})","pre-mutation: keep the update session owner alive during installer supervision",1],
   ["bin/ocx.mjs:runPackageManagerSelfUpdate:process.once(\"exit\", () => { try { if (enteredMutation) session.finish(childOutcome); else session.finishPreflight(); } catch (error) { console.error(`Orchestrated outcome write failed: ${error?.message ?? error}`); process.exitCode = 1; } })","pre-mutation: register session outcome cleanup at exit",1],
   ["bin/ocx.mjs:runPackageManagerSelfUpdate:process.once(\"exit\", () => { try { if (enteredMutation) session.finish(childOutcome); else session.finishPreflight(); } catch (error) { console.error(`Update outcome write failed: ${error?.message ?? error}`); process.exitCode = 1; } })","pre-mutation: register legacy session outcome cleanup at exit",1],
   ["bin/ocx.mjs:<module>:process.exit(result.status ?? 1)","read-only: return identity probe status",1],
-  ["bin/ocx.mjs:<module>:process.exit(64)","pre-mutation: reject invalid orchestrated arguments",1],
+  ["bin/ocx.mjs:<module>:process.exit(64)","pre-mutation: reject invalid orchestrated arguments, or refuse ocx update --desktop from a package installation (#8795) before any Desktop handoff",2],
   ["bin/ocx.mjs:<module>:process.exit(result.exitCode)","read-only: return independently admitted orchestrated result status",1],
   ["bin/ocx.mjs:<module>:process.exit(syncLease.exit)","pre-mutation: return sync admission refusal",1],
   ["bin/ocx.mjs:<module>:process.once(\"exit\", releaseSyncLease)","pre-mutation: release the sync admission lease on exit",1],
@@ -35,4 +37,4 @@ const baseProcessAllowlist: readonly (readonly [string, string, number])[] = [
   ["src/update/notify.ts:maybeShowUpdatePrompt:process.exit(0)","ordinary launcher/help/probe or terminal prompt outcome; update success remains guarded",1],
   ["src/update/service-home-probe-entry.ts:<module>:process.exit(1)","terminal failure only; cannot publish successful update",1],
 ];
-export const updateProcessAllowlist: readonly (readonly [string, string, number])[] = [...baseProcessAllowlist, ...orchestratedEntryReview.process, ...orchestratedChildReview.process];
+export const updateProcessAllowlist: readonly (readonly [string, string, number])[] = [...baseProcessAllowlist, ...orchestratedEntryReview.process, ...orchestratedChildReview.process, ...signedSupplyReview.process];

@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { samePath } from "../helpers/same-path";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +29,24 @@ function tempRoot(): string {
 }
 
 describe("CL-10 private-file durability", () => {
+  test("published-stage cleanup preserves an adjacent NTFS-sized replacement", () => {
+    const root = tempRoot(), finalPath = join(root, "bundle.json");
+    const stagePath = join(root, `.bundle.json.${process.pid}.00000000-0000-4000-8000-000000000000.tmp`);
+    fs.writeFileSync(finalPath, "final");
+    fs.writeFileSync(stagePath, "replacement");
+    const original = fs.lstatSync;
+    const spy = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
+      const stats = options?.bigint ? original(path, { bigint: true }) : original(path);
+      if (!samePath(path, finalPath) && !samePath(path, stagePath)) return stats;
+      const ino = 9_007_199_254_740_992n + (samePath(path, stagePath) ? 1n : 0n);
+      return Object.assign(Object.create(Object.getPrototypeOf(stats)), stats,
+        { ino: options?.bigint ? ino : Number(ino) });
+    }) as typeof fs.lstatSync);
+    try {
+      expect(publishPrivateFileExclusive(finalPath, Buffer.from("candidate"))).toEqual({ created: false });
+      expect(existsSync(stagePath)).toBe(true);
+    } finally { spy.mockRestore(); }
+  });
   test("POSIX parent-directory sync failure preserves the published stage until retry", () => {
     if (process.platform === "win32") return;
     const root = tempRoot();

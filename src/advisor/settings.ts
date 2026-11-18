@@ -11,6 +11,11 @@ import { ADVISOR_CONTEXT_SHARING_CONSENT_VERSION } from "./disclosure";
 export { ADVISOR_CONTEXT_SHARING_CONSENT_VERSION };
 
 export type AdvisorPolicy = "manual" | "preflight" | "adaptive";
+export type AdvisorContextMode = "context" | "question-only";
+
+export function isValidAdvisorContextMode(value: unknown): value is AdvisorContextMode {
+  return value === "context" || value === "question-only";
+}
 
 export const ADVISOR_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"] as const;
 export type AdvisorEffort = (typeof ADVISOR_EFFORTS)[number];
@@ -22,6 +27,7 @@ export interface AdvisorSettings {
   model: string;
   effort: AdvisorEffort;
   policy: AdvisorPolicy;
+  contextMode: AdvisorContextMode;
   timeoutMs: number;
   /** Adaptive task budget, including manual calls. Stable task identity is required. */
   maxConsultationsPerTask: number;
@@ -45,6 +51,7 @@ export const DEFAULT_ADVISOR_SETTINGS: Readonly<AdvisorSettings> = Object.freeze
   model: "",
   effort: "max",
   policy: "manual",
+  contextMode: "context",
   timeoutMs: 120_000,
   maxConsultationsPerTask: 3,
   contextSharingConsent: null,
@@ -108,6 +115,7 @@ export function resolveAdvisorSettings(config: Pick<OcxConfig, "advisor">): Advi
     model,
     effort,
     policy,
+    contextMode: isValidAdvisorContextMode(raw.contextMode) ? raw.contextMode : DEFAULT_ADVISOR_SETTINGS.contextMode,
     timeoutMs,
     maxConsultationsPerTask: isValidAdvisorTaskLimit(raw.maxConsultationsPerTask)
       ? raw.maxConsultationsPerTask : DEFAULT_ADVISOR_SETTINGS.maxConsultationsPerTask,

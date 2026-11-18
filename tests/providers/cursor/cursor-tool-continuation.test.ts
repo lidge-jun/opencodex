@@ -57,10 +57,12 @@ describe("363-B: tool result reaches the model via rootPromptMessagesJson", () =
     expect(serialized).toContain("read a file");
   });
 
+  // The Auto router replays the result as root text since #8538 (cursor-auto-tool-result-replay.test.ts);
+  // other native resume models still rely on turns[] alone.
   test("native resume models keep tool results on turns[], not as assistant-role root text", () => {
     const bytes = encodeCursorRunRequest({
-      modelId: "auto-intelligence",
-      conversationId: "c-auto",
+      modelId: "composer-2",
+      conversationId: "c-composer-2",
       system: ["You are helpful."],
       messages: [{ role: "tool", content: "[tool_result]\ncall_id: call_1\nname: mcp__fs__read_file\nis_error: false\noutput:\nFILE CONTENTS HERE" }],
       rawMessages,

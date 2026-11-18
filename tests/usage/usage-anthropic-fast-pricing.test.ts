@@ -12,9 +12,11 @@ const usage = {
 };
 
 const opusPrices = [
-  { model: "claude-opus-5-5", standard: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 }, fastTotal: 1.068 },
-  { model: "claude-opus-5", standard: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }, fastTotal: 1.345 },
-  { model: "claude-opus-4-8", standard: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }, fastTotal: 1.345 },
+  { model: "claude-opus-5-5", standard: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 }, fastTotal: 1.068, verifiedAt: "2026-09-23" },
+  { model: "claude-opus-5", standard: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }, fastTotal: 1.345, verifiedAt: "2026-09-23" },
+  { model: "claude-opus-4-8", standard: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }, fastTotal: 1.345, verifiedAt: "2026-09-23" },
+  // Fable 5.2 is the first Fable on the fast lane: 16 / 80 is exactly 2x its 8 / 40 list price.
+  { model: "claude-fable-5-2", standard: { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 }, fastTotal: 2.128, verifiedAt: "2026-11-10" },
 ] as const;
 
 function tierOutcome(responseSpeed?: string): AttemptTierOutcome {
@@ -50,9 +52,9 @@ function estimate(provider: string, model: string, outcome: AttemptTierOutcome) 
 }
 
 describe("Anthropic fast pricing", () => {
-  test("all six first-party pairs resolve the published standard tuple and require a confirmed fast echo", () => {
+  test("all eight first-party pairs resolve the published standard tuple and require a confirmed fast echo", () => {
     for (const provider of ["anthropic", "anthropic-apikey"]) {
-      for (const { model, standard } of opusPrices) {
+      for (const { model, standard, verifiedAt } of opusPrices) {
         expect(resolveMatchedPrice(provider, model)?.cost4).toEqual(standard);
         expect(findPriorityPricingRule(provider, model)).toMatchObject({
           provider,
@@ -60,10 +62,12 @@ describe("Anthropic fast pricing", () => {
           multiplier: 2,
           requiresResponseConfirmation: true,
           source: "https://platform.claude.com/docs/en/about-claude/pricing",
-          verifiedAt: "2026-09-23",
+          verifiedAt,
         });
       }
     }
+    // Fable 5 and 5.1 have no fast lane, so they never inherit the Fable 5.2 rule.
+    expect(findPriorityPricingRule("anthropic", "claude-fable-5-1")).toBeUndefined();
   });
 
   test("confirmed fast doubles input, output, cache read, and 5-minute cache write on both providers and a pooled OAuth label", () => {

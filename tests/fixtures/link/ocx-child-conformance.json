@@ -1,0 +1,1101 @@
+{
+  "schema": "ocx.child.conformance/1",
+  "routeCases": [
+    {
+      "id": "post_data_1",
+      "method": "POST",
+      "path": "/v1/responses",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "post_data_2",
+      "method": "POST",
+      "path": "/v1/responses/compact",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "post_data_3",
+      "method": "POST",
+      "path": "/v1/messages",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "post_data_4",
+      "method": "POST",
+      "path": "/v1/messages/count_tokens",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "post_data_5",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "post_data_6",
+      "method": "POST",
+      "path": "/v1/audio/transcriptions",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "post_data_7",
+      "method": "POST",
+      "path": "/v1/alpha/search",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "post_data_8",
+      "method": "POST",
+      "path": "/v1/images/generations",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "post_data_9",
+      "method": "POST",
+      "path": "/v1/images/edits",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "post_data_10",
+      "method": "POST",
+      "path": "/v1/live",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "post_data_11",
+      "method": "POST",
+      "path": "/v1/realtime/calls",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "post_data_12",
+      "method": "POST",
+      "path": "/v1/alpha/history/v2/list_windows",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "post_data_13",
+      "method": "POST",
+      "path": "/v1/alpha/history/v2/list_items",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "post_data_14",
+      "method": "POST",
+      "path": "/v1/alpha/history/v2/read_item",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "post_data_15",
+      "method": "POST",
+      "path": "/v1/alpha/history/v2/search_contents",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "post_data_16",
+      "method": "POST",
+      "path": "/v1/alpha/notes/v2/thread_hint",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "post_data_17",
+      "method": "POST",
+      "path": "/v1/alpha/notes/v2/list_files_by_prefix",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "post_data_18",
+      "method": "POST",
+      "path": "/v1/alpha/notes/v2/read_file",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "post_data_19",
+      "method": "POST",
+      "path": "/v1/alpha/notes/v2/search_contents",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "post_data_20",
+      "method": "POST",
+      "path": "/v1/alpha/notes/v2/append_to_file",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "post_data_21",
+      "method": "POST",
+      "path": "/v1/alpha/notes/v2/write_file",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "get_catalog",
+      "method": "GET",
+      "path": "/v1/catalog",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "head_catalog",
+      "method": "HEAD",
+      "path": "/v1/catalog",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "get_hub_state",
+      "method": "GET",
+      "path": "/v1/hub-state",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "head_hub_state",
+      "method": "HEAD",
+      "path": "/v1/hub-state",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "get_models",
+      "method": "GET",
+      "path": "/v1/models",
+      "query": "",
+      "hostHeader": "localhost:10100",
+      "originHeader": "http://localhost:3000",
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "get_artifact",
+      "method": "GET",
+      "path": "/v1/opencodex/artifacts/art-42",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "get_usage_apikey",
+      "method": "GET",
+      "path": "/v1/usage",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_data",
+      "expectedAuthHeader": "x-opencodex-api-key"
+    },
+    {
+      "id": "get_mgmt_codex_settings",
+      "method": "GET",
+      "path": "/v1/link-management/codex-settings",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_management",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "reject_mgmt_codex_settings_query",
+      "method": "GET",
+      "path": "/v1/link-management/codex-settings",
+      "query": "?extra=1",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "reject_404",
+      "expectedAuthHeader": "none"
+    },
+    {
+      "id": "get_mgmt_api_settings",
+      "method": "GET",
+      "path": "/v1/link-management/api/settings",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_management",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "head_mgmt_api_providers",
+      "method": "HEAD",
+      "path": "/v1/link-management/api/providers",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "relay_management",
+      "expectedAuthHeader": "bearer"
+    },
+    {
+      "id": "reject_mgmt_forbidden_refresh_query",
+      "method": "GET",
+      "path": "/v1/link-management/api/provider-quotas",
+      "query": "?refresh=1",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "reject_404",
+      "expectedAuthHeader": "none"
+    },
+    {
+      "id": "local_healthz",
+      "method": "GET",
+      "path": "/healthz",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "local_healthz",
+      "expectedAuthHeader": "none"
+    },
+    {
+      "id": "local_readyz",
+      "method": "GET",
+      "path": "/readyz",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "local_readyz",
+      "expectedAuthHeader": "none"
+    },
+    {
+      "id": "reject_head_readyz",
+      "method": "HEAD",
+      "path": "/readyz",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "reject_404",
+      "expectedAuthHeader": "none"
+    },
+    {
+      "id": "ws_upgrade_responses_426",
+      "method": "GET",
+      "path": "/v1/responses",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": "http://127.0.0.1:5173",
+      "upgradeHeader": "websocket",
+      "expectedAction": "reject_426_websocket",
+      "expectedAuthHeader": "none"
+    },
+    {
+      "id": "ws_upgrade_cross_origin_403",
+      "method": "GET",
+      "path": "/v1/responses",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": "https://evil.example",
+      "upgradeHeader": "websocket",
+      "expectedAction": "reject_403_origin",
+      "expectedAuthHeader": "none"
+    },
+    {
+      "id": "dns_rebind_host_403",
+      "method": "POST",
+      "path": "/v1/responses",
+      "query": "",
+      "hostHeader": "evil.example:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "reject_403_origin",
+      "expectedAuthHeader": "none"
+    },
+    {
+      "id": "cross_origin_post_403",
+      "method": "POST",
+      "path": "/v1/responses",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": "https://evil.example",
+      "upgradeHeader": null,
+      "expectedAction": "reject_403_origin",
+      "expectedAuthHeader": "none"
+    },
+    {
+      "id": "h2c_upgrade_catalog_404",
+      "method": "GET",
+      "path": "/v1/catalog",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": "h2c",
+      "expectedAction": "reject_404",
+      "expectedAuthHeader": "none"
+    },
+    {
+      "id": "reject_admin_api_config",
+      "method": "GET",
+      "path": "/api/config",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "reject_404",
+      "expectedAuthHeader": "none"
+    },
+    {
+      "id": "reject_delete_responses",
+      "method": "DELETE",
+      "path": "/v1/responses",
+      "query": "",
+      "hostHeader": "127.0.0.1:10100",
+      "originHeader": null,
+      "upgradeHeader": null,
+      "expectedAction": "reject_404",
+      "expectedAuthHeader": "none"
+    }
+  ],
+  "framingCases": [
+    {
+      "id": "strip_caller_credentials_and_connection_nominated",
+      "rawHeaders": [
+        [
+          "Host",
+          "127.0.0.1:10100"
+        ],
+        [
+          "Content-Length",
+          "42"
+        ],
+        [
+          "Authorization",
+          "Bearer caller-tok-1"
+        ],
+        [
+          "api-key",
+          "az-caller-1"
+        ],
+        [
+          "x-api-key",
+          "ant-caller-1"
+        ],
+        [
+          "x-goog-api-key",
+          "goog-caller-1"
+        ],
+        [
+          "x-opencodex-api-key",
+          "ocx-caller-1"
+        ],
+        [
+          "chatgpt-account-id",
+          "acct-local-1"
+        ],
+        [
+          "cookie",
+          "sid=local1"
+        ],
+        [
+          "Connection",
+          "keep-alive, x-drop-hop"
+        ],
+        [
+          "Keep-Alive",
+          "timeout=5"
+        ],
+        [
+          "x-drop-hop",
+          "secret-hop"
+        ],
+        [
+          "x-trace-id",
+          "trace-keep-1"
+        ],
+        [
+          "Content-Type",
+          "application/json"
+        ]
+      ],
+      "expectedOutcome": "allow",
+      "expectedSurvivedHeaders": [
+        "content-type",
+        "x-trace-id"
+      ]
+    },
+    {
+      "id": "allow_lone_transfer_encoding_chunked",
+      "rawHeaders": [
+        [
+          "Host",
+          "127.0.0.1:10100"
+        ],
+        [
+          "Transfer-Encoding",
+          "chunked"
+        ],
+        [
+          "Content-Type",
+          "application/json"
+        ]
+      ],
+      "expectedOutcome": "allow",
+      "expectedSurvivedHeaders": [
+        "content-type"
+      ]
+    },
+    {
+      "id": "reject_cl_and_te_smuggling",
+      "rawHeaders": [
+        [
+          "Content-Length",
+          "10"
+        ],
+        [
+          "Transfer-Encoding",
+          "chunked"
+        ]
+      ],
+      "expectedOutcome": "reject_400_smuggling",
+      "expectedSurvivedHeaders": []
+    },
+    {
+      "id": "reject_duplicate_content_length",
+      "rawHeaders": [
+        [
+          "Content-Length",
+          "10"
+        ],
+        [
+          "Content-Length",
+          "10"
+        ]
+      ],
+      "expectedOutcome": "reject_400_smuggling",
+      "expectedSurvivedHeaders": []
+    },
+    {
+      "id": "reject_conflicting_content_length",
+      "rawHeaders": [
+        [
+          "Content-Length",
+          "10"
+        ],
+        [
+          "Content-Length",
+          "20"
+        ]
+      ],
+      "expectedOutcome": "reject_400_smuggling",
+      "expectedSurvivedHeaders": []
+    },
+    {
+      "id": "reject_signed_content_length",
+      "rawHeaders": [
+        [
+          "Content-Length",
+          "+10"
+        ]
+      ],
+      "expectedOutcome": "reject_400_smuggling",
+      "expectedSurvivedHeaders": []
+    },
+    {
+      "id": "reject_non_digit_content_length",
+      "rawHeaders": [
+        [
+          "Content-Length",
+          "10abc"
+        ]
+      ],
+      "expectedOutcome": "reject_400_smuggling",
+      "expectedSurvivedHeaders": []
+    },
+    {
+      "id": "reject_non_chunked_transfer_encoding",
+      "rawHeaders": [
+        [
+          "Transfer-Encoding",
+          "gzip, chunked"
+        ]
+      ],
+      "expectedOutcome": "reject_400_smuggling",
+      "expectedSurvivedHeaders": []
+    },
+    {
+      "id": "reject_upgrade_in_relay_headers",
+      "rawHeaders": [
+        [
+          "Upgrade",
+          "websocket"
+        ]
+      ],
+      "expectedOutcome": "reject_400_smuggling",
+      "expectedSurvivedHeaders": []
+    },
+    {
+      "id": "reject_crlf_in_header_value",
+      "rawHeaders": [
+        [
+          "x-bad",
+          "line1\r\nInjected: 1"
+        ]
+      ],
+      "expectedOutcome": "reject_400_invalid",
+      "expectedSurvivedHeaders": []
+    }
+  ],
+  "relayAuthCases": [
+    {
+      "id": "relay_v2_vector_1",
+      "rawToken": "ocx_data_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "keyId": "link:devbox-alpha",
+      "linkId": "lnk_0123456789abcdef",
+      "nonce": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "generation": "550e8400-e29b-41d4-a716-446655440000:1",
+      "tokenSha256Hex": "90612638dc4cc370fcf5224aeae4c1954fb177e8a91452af9b5670280e7a05d0",
+      "expectedCallerProof": "e715bbfd7169a7219ba0e154b75f9d080d61fe21f8b37839e0adfb9638e14b04",
+      "expectedListenerProof": "769575b4755f64c75e76858519251c9e29ed7aa930b8cd1bd9fa772106aedfb6",
+      "expectedConnectionProof": "89399fa6986dbeb4c00707d6461bc565782a6fa0ee79332570d06681c1c812c3"
+    },
+    {
+      "id": "relay_v2_vector_2",
+      "rawToken": "ocx_data_0101010101010101010101010101010101010101",
+      "keyId": "link_key_beta.2",
+      "linkId": "lnk_fedcba9876543210",
+      "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "generation": "11111111-2222-3333-4444-555555555555:42",
+      "tokenSha256Hex": "a334ba709ddce0a8d87d24dc0d76ad8d159c0e2196068da656a7c159f3bb3c77",
+      "expectedCallerProof": "fa55dee78a5f49afcbead306a0b5132776ff967a88765ddca82488524c0e31c7",
+      "expectedListenerProof": "1740abe2719550f4fbb31b6122c5b23c3b1500f793a6de1905678a6449258437",
+      "expectedConnectionProof": "a4cd6208cb5503399059ee368f9d892b834ee28b5c5c675f8383a81acda2ef6d"
+    },
+    {
+      "id": "relay_v2_vector_3",
+      "rawToken": "ocx_data_f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0",
+      "keyId": "k9:ssh-vm",
+      "linkId": "lnk_0011223344556677",
+      "nonce": "ffffffffffffffffffffffffffffffff00000000000000001234567890abcdef",
+      "generation": "inst-abc:7",
+      "tokenSha256Hex": "8562ae8aa27c82c019f7c4424c13f545dea70395b48c88077079a63f7e40b8bb",
+      "expectedCallerProof": "aa5853fbd0c3bce1456acebb4b9a91b8a7d8dd5eec127b985fcb80a895f9676d",
+      "expectedListenerProof": "191ebb722270c590f5e5b05cf0fdbb2e93104c124fe4661f0edd51d5830eb271",
+      "expectedConnectionProof": "6372865c64d3066454cc10d6857c4b345434887a87d836f8cad1f25b436b2b1e"
+    }
+  ],
+  "settingsDigestCases": [
+    {
+      "id": "all_null_defaults",
+      "settings": {
+        "fastMode": null,
+        "multiAgentMode": null,
+        "webSearchSidecarEnabled": true,
+        "subagentDefaults": null
+      },
+      "expectedCanonicalJson": "{\"version\":1,\"settings\":{\"fastMode\":null,\"multiAgentMode\":null,\"webSearchSidecarEnabled\":true,\"subagentDefaults\":null}}",
+      "expectedDigestHex": "63f95e6f2b493fce3a38d244d8af53579ef1b90539fa01babdec3f9782fa69e5"
+    },
+    {
+      "id": "full_v1_sidecar_off",
+      "settings": {
+        "fastMode": true,
+        "multiAgentMode": "v1",
+        "webSearchSidecarEnabled": false,
+        "subagentDefaults": {
+          "model": "gpt-5.6-sol",
+          "reasoningEffort": "high"
+        }
+      },
+      "expectedCanonicalJson": "{\"version\":1,\"settings\":{\"fastMode\":true,\"multiAgentMode\":\"v1\",\"webSearchSidecarEnabled\":false,\"subagentDefaults\":{\"model\":\"gpt-5.6-sol\",\"reasoningEffort\":\"high\"}}}",
+      "expectedDigestHex": "d2105d1753e9a54d9abba4e3f9cd9863fb79aa3455cfbaec161bb212cae46ce8"
+    },
+    {
+      "id": "v2_null_effort",
+      "settings": {
+        "fastMode": false,
+        "multiAgentMode": "v2",
+        "webSearchSidecarEnabled": true,
+        "subagentDefaults": {
+          "model": "anthropic/claude-sonnet-4-5",
+          "reasoningEffort": null
+        }
+      },
+      "expectedCanonicalJson": "{\"version\":1,\"settings\":{\"fastMode\":false,\"multiAgentMode\":\"v2\",\"webSearchSidecarEnabled\":true,\"subagentDefaults\":{\"model\":\"anthropic/claude-sonnet-4-5\",\"reasoningEffort\":null}}}",
+      "expectedDigestHex": "9aa4434019e0e0e524defe6d89fad38b32f1a0fc828ba96ac428677abfa747ed"
+    },
+    {
+      "id": "default_mode_no_subagent",
+      "settings": {
+        "fastMode": true,
+        "multiAgentMode": "default",
+        "webSearchSidecarEnabled": true,
+        "subagentDefaults": null
+      },
+      "expectedCanonicalJson": "{\"version\":1,\"settings\":{\"fastMode\":true,\"multiAgentMode\":\"default\",\"webSearchSidecarEnabled\":true,\"subagentDefaults\":null}}",
+      "expectedDigestHex": "15516a1f107ce987a280776c2adc768543a54ac361a38f1d0c7f00fc9fdb92f3"
+    }
+  ],
+  "childParityCases": [
+    {
+      "id": "valid_pre_apply_nulls",
+      "rawJson": "{\"linkId\":\"lnk_0123456789abcdef\",\"lastApplyAt\":null,\"runtimeStartedAt\":1760000005000,\"appliedCodexSettingsDigest\":null,\"sequence\":0}",
+      "expectedValid": true
+    },
+    {
+      "id": "valid_post_apply",
+      "rawJson": "{\"linkId\":\"lnk_0123456789abcdef\",\"lastApplyAt\":1760000001000,\"runtimeStartedAt\":1760000005000,\"appliedCodexSettingsDigest\":\"d2105d1753e9a54d9abba4e3f9cd9863fb79aa3455cfbaec161bb212cae46ce8\",\"sequence\":3}",
+      "expectedValid": true
+    },
+    {
+      "id": "reject_mismatched_null_digest",
+      "rawJson": "{\"linkId\":\"lnk_0123456789abcdef\",\"lastApplyAt\":null,\"runtimeStartedAt\":1760000005000,\"appliedCodexSettingsDigest\":\"d2105d1753e9a54d9abba4e3f9cd9863fb79aa3455cfbaec161bb212cae46ce8\",\"sequence\":1}",
+      "expectedValid": false
+    },
+    {
+      "id": "reject_extra_property",
+      "rawJson": "{\"linkId\":\"lnk_0123456789abcdef\",\"lastApplyAt\":1760000001000,\"runtimeStartedAt\":1760000005000,\"appliedCodexSettingsDigest\":\"d2105d1753e9a54d9abba4e3f9cd9863fb79aa3455cfbaec161bb212cae46ce8\",\"sequence\":1,\"extra\":true}",
+      "expectedValid": false
+    },
+    {
+      "id": "reject_out_of_range_timestamp",
+      "rawJson": "{\"linkId\":\"lnk_0123456789abcdef\",\"lastApplyAt\":999,\"runtimeStartedAt\":1760000005000,\"appliedCodexSettingsDigest\":\"d2105d1753e9a54d9abba4e3f9cd9863fb79aa3455cfbaec161bb212cae46ce8\",\"sequence\":1}",
+      "expectedValid": false
+    },
+    {
+      "id": "reject_negative_sequence",
+      "rawJson": "{\"linkId\":\"lnk_0123456789abcdef\",\"lastApplyAt\":1760000001000,\"runtimeStartedAt\":1760000005000,\"appliedCodexSettingsDigest\":\"d2105d1753e9a54d9abba4e3f9cd9863fb79aa3455cfbaec161bb212cae46ce8\",\"sequence\":-1}",
+      "expectedValid": false
+    },
+    {
+      "id": "valid_integral_decimal_and_exponent",
+      "rawJson": "{\"linkId\":\"lnk_0123456789abcdef\",\"lastApplyAt\":1760000001000.0,\"runtimeStartedAt\":1.760000005e12,\"appliedCodexSettingsDigest\":\"d2105d1753e9a54d9abba4e3f9cd9863fb79aa3455cfbaec161bb212cae46ce8\",\"sequence\":3.0}",
+      "expectedValid": true
+    },
+    {
+      "id": "reject_fractional_sequence",
+      "rawJson": "{\"linkId\":\"lnk_0123456789abcdef\",\"lastApplyAt\":1760000001000,\"runtimeStartedAt\":1760000005000,\"appliedCodexSettingsDigest\":\"d2105d1753e9a54d9abba4e3f9cd9863fb79aa3455cfbaec161bb212cae46ce8\",\"sequence\":3.5}",
+      "expectedValid": false
+    }
+  ],
+  "journalRoundtripCases": [
+    {
+      "id": "clean_absent_config_and_catalog",
+      "preAttachToml": null,
+      "preAttachCatalog": null,
+      "listenPort": 10100,
+      "catalogPath": "/tmp/codex-home/opencodex-catalog.json",
+      "initialSettings": {
+        "fastMode": null,
+        "multiAgentMode": null,
+        "webSearchSidecarEnabled": true,
+        "subagentDefaults": null
+      },
+      "syncSettings": null,
+      "midSessionMutation": {
+        "kind": "none"
+      },
+      "expectedAttachOk": true,
+      "expectedDetachOutcome": "exact_restore",
+      "expectedFinalToml": null,
+      "expectedFinalCatalog": null
+    },
+    {
+      "id": "preserve_comments_crlf_across_sync",
+      "preAttachToml": "# User header comment\r\nmodel = \"gpt-5.6\"\r\n\r\n[mcp_servers.git]\r\ncommand = \"git-mcp\"\r\n",
+      "preAttachCatalog": "{\"models\":[{\"slug\":\"prior-local\"}]}\n",
+      "listenPort": 10100,
+      "catalogPath": "/tmp/codex-home/opencodex-catalog.json",
+      "initialSettings": {
+        "fastMode": null,
+        "multiAgentMode": null,
+        "webSearchSidecarEnabled": true,
+        "subagentDefaults": null
+      },
+      "syncSettings": {
+        "fastMode": true,
+        "multiAgentMode": "v1",
+        "webSearchSidecarEnabled": false,
+        "subagentDefaults": {
+          "model": "gpt-5.6-sol",
+          "reasoningEffort": "high"
+        }
+      },
+      "midSessionMutation": {
+        "kind": "none"
+      },
+      "expectedAttachOk": true,
+      "expectedDetachOutcome": "exact_restore",
+      "expectedFinalToml": "# User header comment\r\nmodel = \"gpt-5.6\"\r\n\r\n[mcp_servers.git]\r\ncommand = \"git-mcp\"\r\n",
+      "expectedFinalCatalog": "{\"models\":[{\"slug\":\"prior-local\"}]}\n"
+    },
+    {
+      "id": "app_rewrite_1798_comment_strip",
+      "preAttachToml": "approval_policy = \"on-request\"\n",
+      "preAttachCatalog": null,
+      "listenPort": 10100,
+      "catalogPath": "/tmp/codex-home/opencodex-catalog.json",
+      "initialSettings": {
+        "fastMode": true,
+        "multiAgentMode": "v2",
+        "webSearchSidecarEnabled": true,
+        "subagentDefaults": {
+          "model": "gpt-5.6-sol",
+          "reasoningEffort": "high"
+        }
+      },
+      "syncSettings": null,
+      "midSessionMutation": {
+        "kind": "strip_comments_and_append_table",
+        "appendedToml": "\n[projects.\"/work/app\"]\ntrust_level = \"trusted\"\n"
+      },
+      "expectedAttachOk": true,
+      "expectedDetachOutcome": "surgical_restore",
+      "expectedFinalToml": "approval_policy = \"on-request\"\n\n[projects.\"/work/app\"]\ntrust_level = \"trusted\"\n",
+      "expectedFinalCatalog": null
+    },
+    {
+      "id": "web_search_disabled_and_restored_after_1798",
+      "preAttachToml": "web_search = \"live\"\n",
+      "preAttachCatalog": null,
+      "listenPort": 10100,
+      "catalogPath": "/tmp/codex-home/opencodex-catalog.json",
+      "initialSettings": {
+        "fastMode": null,
+        "multiAgentMode": null,
+        "webSearchSidecarEnabled": false,
+        "subagentDefaults": null
+      },
+      "syncSettings": null,
+      "midSessionMutation": {
+        "kind": "strip_comments_and_prepend_root",
+        "prependedRootLine": "approval_policy = \"never\"\n"
+      },
+      "expectedAttachOk": true,
+      "expectedDetachOutcome": "surgical_restore",
+      "expectedFinalToml": "approval_policy = \"never\"\nweb_search = \"live\"\n",
+      "expectedFinalCatalog": null
+    },
+    {
+      "id": "user_modified_base_url_preserved_on_detach",
+      "preAttachToml": "approval_policy = \"on-request\"\n",
+      "preAttachCatalog": null,
+      "listenPort": 10100,
+      "catalogPath": "/tmp/codex-home/opencodex-catalog.json",
+      "initialSettings": {
+        "fastMode": null,
+        "multiAgentMode": null,
+        "webSearchSidecarEnabled": true,
+        "subagentDefaults": null
+      },
+      "syncSettings": null,
+      "midSessionMutation": {
+        "kind": "replace_root_base_url",
+        "newBaseUrl": "https://gateway.example.com/v1"
+      },
+      "expectedAttachOk": true,
+      "expectedDetachOutcome": "surgical_restore",
+      "expectedFinalToml": "approval_policy = \"on-request\"\nopenai_base_url = \"https://gateway.example.com/v1\"\n",
+      "expectedFinalCatalog": null
+    },
+    {
+      "id": "corrupt_managed_span_refused",
+      "preAttachToml": "approval_policy = \"on-request\"\n",
+      "preAttachCatalog": null,
+      "listenPort": 10100,
+      "catalogPath": "/tmp/codex-home/opencodex-catalog.json",
+      "initialSettings": {
+        "fastMode": null,
+        "multiAgentMode": null,
+        "webSearchSidecarEnabled": true,
+        "subagentDefaults": null
+      },
+      "syncSettings": null,
+      "midSessionMutation": {
+        "kind": "corrupt_managed_span",
+        "rawOverrideToml": "approval_policy = \"on-request\"\nopenai_base_url = \"http://127.0.0.1:10100/v1\n"
+      },
+      "expectedAttachOk": true,
+      "expectedDetachOutcome": "refuse_conflict",
+      "expectedFinalToml": "approval_policy = \"on-request\"\nopenai_base_url = \"http://127.0.0.1:10100/v1\n",
+      "expectedFinalCatalog": "{\"models\":[{\"slug\":\"home-m1\"}]}\n"
+    },
+    {
+      "id": "tampered_catalog_refused",
+      "preAttachToml": "approval_policy = \"on-request\"\n",
+      "preAttachCatalog": null,
+      "listenPort": 10100,
+      "catalogPath": "/tmp/codex-home/opencodex-catalog.json",
+      "initialSettings": {
+        "fastMode": null,
+        "multiAgentMode": null,
+        "webSearchSidecarEnabled": true,
+        "subagentDefaults": null
+      },
+      "syncSettings": null,
+      "midSessionMutation": {
+        "kind": "tamper_catalog",
+        "tamperedCatalog": "{\"models\":[{\"slug\":\"hand-edited\"}]}\n"
+      },
+      "expectedAttachOk": true,
+      "expectedDetachOutcome": "refuse_conflict",
+      "expectedFinalToml": null,
+      "expectedFinalCatalog": "{\"models\":[{\"slug\":\"hand-edited\"}]}\n"
+    },
+    {
+      "id": "refuse_external_model_provider_on_attach",
+      "preAttachToml": "model_provider = \"openrouter\"\n\n[model_providers.openrouter]\nname = \"OpenRouter\"\nbase_url = \"https://openrouter.ai/api/v1\"\n",
+      "preAttachCatalog": null,
+      "listenPort": 10100,
+      "catalogPath": "/tmp/codex-home/opencodex-catalog.json",
+      "initialSettings": {
+        "fastMode": null,
+        "multiAgentMode": null,
+        "webSearchSidecarEnabled": true,
+        "subagentDefaults": null
+      },
+      "syncSettings": null,
+      "midSessionMutation": {
+        "kind": "none"
+      },
+      "expectedAttachOk": false,
+      "expectedDetachOutcome": "not_attached",
+      "expectedFinalToml": "model_provider = \"openrouter\"\n\n[model_providers.openrouter]\nname = \"OpenRouter\"\nbase_url = \"https://openrouter.ai/api/v1\"\n",
+      "expectedFinalCatalog": null
+    },
+    {
+      "id": "multiline_developer_instructions_bracket_line",
+      "preAttachToml": "developer_instructions = \"\"\"\n[Important]\nKeep literal\n\"\"\"\n",
+      "preAttachCatalog": null,
+      "listenPort": 10100,
+      "catalogPath": "/tmp/codex-home/opencodex-catalog.json",
+      "initialSettings": {
+        "fastMode": null,
+        "multiAgentMode": null,
+        "webSearchSidecarEnabled": true,
+        "subagentDefaults": null
+      },
+      "syncSettings": null,
+      "midSessionMutation": {
+        "kind": "strip_comments_and_append_table",
+        "appendedToml": "\n[projects.\"/work/app\"]\ntrust_level = \"trusted\"\n"
+      },
+      "expectedAttachOk": true,
+      "expectedDetachOutcome": "surgical_restore",
+      "expectedFinalToml": "developer_instructions = \"\"\"\n[Important]\nKeep literal\n\"\"\"\n\n[projects.\"/work/app\"]\ntrust_level = \"trusted\"\n",
+      "expectedFinalCatalog": null
+    },
+    {
+      "id": "restore_overwritten_user_features_on_surgical_detach",
+      "preAttachToml": "[features]\nfast_mode = false\nmulti_agent_v2 = true\n",
+      "preAttachCatalog": null,
+      "listenPort": 10100,
+      "catalogPath": "/tmp/codex-home/opencodex-catalog.json",
+      "initialSettings": {
+        "fastMode": true,
+        "multiAgentMode": "v1",
+        "webSearchSidecarEnabled": true,
+        "subagentDefaults": null
+      },
+      "syncSettings": null,
+      "midSessionMutation": {
+        "kind": "strip_comments_and_append_table",
+        "appendedToml": "\n[extra]\nk = 1\n"
+      },
+      "expectedAttachOk": true,
+      "expectedDetachOutcome": "surgical_restore",
+      "expectedFinalToml": "[features]\nfast_mode = false\nmulti_agent_v2 = true\n\n[extra]\nk = 1\n",
+      "expectedFinalCatalog": null
+    },
+    {
+      "id": "multiline_features_agents_and_blank_lines_surgical",
+      "preAttachToml": "developer_instructions = \"\"\"\n[features]\nfast_mode = true\n\n\n[agents]\ndefault_subagent_model = \"keep-inside-string\"\n\"\"\"\n",
+      "preAttachCatalog": null,
+      "listenPort": 10100,
+      "catalogPath": "/tmp/codex-home/opencodex-catalog.json",
+      "initialSettings": {
+        "fastMode": false,
+        "multiAgentMode": "v2",
+        "webSearchSidecarEnabled": true,
+        "subagentDefaults": {
+          "model": "gpt-5.6-mini",
+          "reasoningEffort": "low"
+        }
+      },
+      "syncSettings": null,
+      "midSessionMutation": {
+        "kind": "strip_comments_and_append_table",
+        "appendedToml": "\n[projects.\"/work/app\"]\ntrust_level = \"trusted\"\n"
+      },
+      "expectedAttachOk": true,
+      "expectedDetachOutcome": "surgical_restore",
+      "expectedFinalToml": "developer_instructions = \"\"\"\n[features]\nfast_mode = true\n\n\n[agents]\ndefault_subagent_model = \"keep-inside-string\"\n\"\"\"\n\n[projects.\"/work/app\"]\ntrust_level = \"trusted\"\n",
+      "expectedFinalCatalog": null
+    },
+    {
+      "id": "preserve_comment_only_agents_table_on_surgical_detach",
+      "preAttachToml": "[agents]\n# keep\n",
+      "preAttachCatalog": null,
+      "listenPort": 10100,
+      "catalogPath": "/tmp/codex-home/opencodex-catalog.json",
+      "initialSettings": {
+        "fastMode": null,
+        "multiAgentMode": null,
+        "webSearchSidecarEnabled": true,
+        "subagentDefaults": {
+          "model": "gpt-5.6-mini",
+          "reasoningEffort": null
+        }
+      },
+      "syncSettings": null,
+      "midSessionMutation": {
+        "kind": "replace_root_base_url",
+        "newBaseUrl": "https://custom.gateway.example/v1"
+      },
+      "expectedAttachOk": true,
+      "expectedDetachOutcome": "surgical_restore",
+      "expectedFinalToml": "openai_base_url = \"https://custom.gateway.example/v1\"\n[agents]\n# keep\n",
+      "expectedFinalCatalog": null
+    },
+    {
+      "id": "preserve_comment_only_features_table_on_surgical_detach",
+      "preAttachToml": "[features]\n# keep\n",
+      "preAttachCatalog": null,
+      "listenPort": 10100,
+      "catalogPath": "/tmp/codex-home/opencodex-catalog.json",
+      "initialSettings": {
+        "fastMode": true,
+        "multiAgentMode": null,
+        "webSearchSidecarEnabled": true,
+        "subagentDefaults": null
+      },
+      "syncSettings": null,
+      "midSessionMutation": {
+        "kind": "replace_root_base_url",
+        "newBaseUrl": "https://custom.gateway.example/v1"
+      },
+      "expectedAttachOk": true,
+      "expectedDetachOutcome": "surgical_restore",
+      "expectedFinalToml": "openai_base_url = \"https://custom.gateway.example/v1\"\n[features]\n# keep\n",
+      "expectedFinalCatalog": null
+    }
+  ]
+}

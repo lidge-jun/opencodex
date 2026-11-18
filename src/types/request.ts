@@ -38,9 +38,10 @@ export interface OcxReasoningReplayScopeRef {
    */
   readonly clientPrincipalId?: string;
   /**
-   * Conversation namespace for replay state. Historically this was always the Codex parent-thread
-   * id; headerless Responses callers use a raw sanitized thread/Cursor/session fallback, never the
-   * hashed request-log conversation id.
+   * Conversation namespace for replay state. The request's own thread-id wins so a child agent
+   * cannot write its route into the parent's record (#8632); otherwise this is the Codex
+   * parent-thread id, and headerless Responses callers use a raw sanitized thread/Cursor/session
+   * fallback, never the hashed request-log conversation id.
    */
   readonly clientThreadId: string;
   current?: Readonly<OcxReasoningReplayIdentity>;
@@ -67,6 +68,8 @@ export interface OcxParsedRequest {
   stream: boolean;
   options: OcxRequestOptions;
   _rawBody?: unknown;
+  /** Trusted ingress provenance: preserve Chat's tool defaults only on the final Responses wire. */
+  _chatCompletionsInput?: boolean;
   /** Claude replay tags, retained only until each route binding verifies them. */
   _nativeReasoningReplay?: ReadonlyMap<string, string>;
   _nativeReasoningBoundOwner?: NativeReasoningOwner;
@@ -86,6 +89,13 @@ export interface OcxParsedRequest {
    * followed them (`call:<tool_use id>` / `text:<text>`). Same audience as `_anthropicServerTools`.
    */
   _anthropicServerReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>;
+  /**
+   * The caller's `instructions` prefix through its last cache-marked system block. The anthropic
+   * adapter ends a system block there so the breakpoint stays off the per-turn tail.
+   */
+  _anthropicSystemCachePrefix?: string;
+  /** The request arrived on the Anthropic Messages surface (Claude Code, Claude Desktop). */
+  _anthropicInbound?: boolean;
   /**
    * Boundary between replayed history and this turn's newly appended input. Usually the
    * items the proxy restored from local previous_response_id state; also set when the
@@ -139,6 +149,8 @@ export interface OcxParsedRequest {
   _dropForeignReasoningItemIds?: boolean;
   /** Final-route opt-in: emit v2 collaboration message arguments as plaintext on ChatGPT. */
   _plaintextV2AgentMessages?: boolean;
+  _plaintextV2Decision?: boolean;
+  _plaintextV2EverPrepared?: boolean;
   /**
    * Optional authenticated tenant/operator namespace for Cursor thread→conversation derivation.
    * When absent (single-operator local proxy), derivation stays local-scoped.
@@ -210,6 +222,14 @@ export interface OcxParsedRequest {
    * provider-private continuation caches again on every later turn.
    */
   _contextCompactionBoundary?: boolean;
+  /**
+   * Codex's own per-turn metadata for this request says `history_initialization: "New"` (HTTP header,
+   * or a WebSocket frame's own `client_metadata`). Read once in request preparation; the experimental
+   * Anthropic `perMessageEffort` option takes it as the new-transcript receipt (#6895).
+   */
+  _codexNewHistory?: boolean;
+  /** This turn's per-message effort bookkeeping (src/adapters/anthropic/per-message-effort.ts). */
+  _perMessageEffort?: PerMessageEffortTurn;
   /**
    * Core-owned registration slot for the optional advisor subsystem (src/advisor). Set per request
    * by the sidecar planner, never at module load: the core Responses path only sees this
@@ -397,6 +417,10 @@ export interface OcxRequestOptions {
   topP?: number;
   stopSequences?: string[];
   toolChoice?: OcxToolChoice;
+  /** Root functions explicitly selected by the caller. An empty list permits no synthetic root function. */
+  explicitRootFunctionChoices?: readonly string[];
+  /** Caller-owned function and custom selectors before hosted tools are lowered for the provider. */
+  explicitClientToolChoices?: readonly { type: "function" | "custom"; name: string; namespace?: string }[];
   parallelToolCalls?: boolean;
   reasoning?: string;
   /**
@@ -477,7 +501,8 @@ export type AdapterEvent =
   | { type: "thinking_delta"; thinking: string }
   // Anthropic extended-thinking round-trip: signature_delta for the current thinking block, and
   // opaque redacted_thinking blocks. Both must be replayed verbatim or tool-use turns 400.
-  | { type: "thinking_signature"; signature: string }
+  // afterOutput marks a turn-level attestation emitted after text/tools, not a new thinking block.
+  | { type: "thinking_signature"; signature: string; afterOutput?: true }
   | { type: "redacted_thinking"; data: string }
   // Kiro reasoning round-trip: the encrypted reasoning blob for the CURRENT assistant turn, tagged
   // with the wire field it arrived on. Never rendered — it only rides the reasoning item's envelope
@@ -549,6 +574,17 @@ export type AdapterEvent =
 export interface OcxUrlCitation {
   url: string;
   title?: string;
+}
+
+/**
+ * One turn's per-message effort state (#6895). Spread copies of the parsed request share it, so a
+ * rebuild of the same turn is seen as a second build.
+ */
+export interface PerMessageEffortTurn {
+  /** The pending decision this turn owns, until it commits or is abandoned. */
+  token?: string;
+  generation: string;
+  builds: number;
 }
 
 /**

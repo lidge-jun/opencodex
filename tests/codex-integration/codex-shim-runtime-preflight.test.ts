@@ -61,7 +61,8 @@ describe("Windows shim selected-runtime preflight", () => {
       expect(maybeAutoRestoreCodexShim("start", ["start"], { env: {}, warn: message => warnings.push(message), restore: () => result,
         readConfig: () => ({ config: getDefaultConfig(), source: "default", error: null }),
       })).toBeUndefined();
-      expect(warnings).toEqual([expect.stringContaining("npm install -g @bitkyc08/opencodex")]);
+      // #8361: the repair hint must approve bun's postinstall; npm 12 skips it by default.
+      expect(warnings).toEqual([expect.stringContaining("npm install -g --allow-scripts=bun @bitkyc08/opencodex")]);
     }));
   }
 

@@ -94,7 +94,7 @@ import { CatalogGatherBusyError } from "../codex/catalog/provider-fetch";
 import type { CatalogDisposition, ConvergeCodex } from "../codex/convergence-types";
 import { normalizeCatalogDisposition } from "../codex/catalog-refresh-status";
 import { managementBodyTooLargeResponse } from "./management/body";
-import { handleSessionRoutes } from "./management/session-routes";
+import { handleSessionRoutes, SESSION_REMEMBER_PATH } from "./management/session-routes";
 import { siblingRefusesManagementRequest } from "./management/sibling-guard";
 import { siblingOfLivePort, siblingSkipMessage } from "../codex/sibling-start";
 import { packageVersion } from "../lib/package-version";
@@ -176,6 +176,12 @@ async function handleFallbackRoutesOnDemand(ctx: ManagementContext): Promise<Res
   return handleFallbackRoutes(ctx);
 }
 
+async function handleRouteToRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/route-to")) return null;
+  const { handleRouteToRoutes } = await import("./management/route-to-routes");
+  return handleRouteToRoutes(ctx);
+}
+
 /**
  * Lazy like the Lab and routing-profile handlers, and for the same recorded reason: this file is
  * mounted for every dashboard request, so a static import would put the workflow-budget ledger
@@ -238,6 +244,12 @@ async function handleLinkRoutesOnDemand(ctx: ManagementContext): Promise<Respons
   return handleLinkRoutes(ctx);
 }
 
+async function handleTelemetryRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/telemetry")) return null;
+  const { handleTelemetryRoutes } = await import("./management/telemetry-routes");
+  return handleTelemetryRoutes(ctx);
+}
+
 export async function handleManagementAPI(
   req: Request,
   url: URL,
@@ -248,7 +260,9 @@ export async function handleManagementAPI(
   requestIngress: ManagementRequestIngress = { trustedLoopback: false },
 ): Promise<Response | null> {
   if (!isAllowedManagementOrigin(req, config)) {
-    return jsonResponse({ error: "cross-origin request blocked" }, 403, req, config);
+    // A proxied dashboard reaches Remember through this gate first; name the reason (#8338).
+    const remember = url.pathname === SESSION_REMEMBER_PATH ? { code: "remember_requires_direct_origin" } : {};
+    return jsonResponse({ error: "cross-origin request blocked", ...remember }, 403, req, config);
   }
   if (principal === "local-account-switch-capability") {
     if (req.method !== "PUT" || !isLocalAccountSwitchPath(url.pathname) || url.search !== "") {
@@ -368,6 +382,7 @@ export async function handleManagementAPI(
     ??     (await handleLowQuotaRoutesOnDemand(ctx))
     ??     (await handleQuotaPoolRoutesOnDemand(ctx))
     ??     (await handleFallbackRoutesOnDemand(ctx))
+    ??     (await handleRouteToRoutesOnDemand(ctx))
     ??     (await handleWorkflowBudgetRoutesOnDemand(ctx))
     ??     (await handleCodexAgentRoleRoutesOnDemand(ctx))
     ??     (await handleProtocolRoutesOnDemand(ctx))
@@ -393,6 +408,7 @@ export async function handleManagementAPI(
     ??     (await handleComboRoutes(ctx))
     ??     (await handleSystemRoutes(ctx))
     ??     (await handleLabRoutesOnDemand(ctx))
+      ?? (await handleTelemetryRoutesOnDemand(ctx))
       ?? (await handleUsageTimelineRoutes(ctx))
       ?? (await handleCompanionRoutes(ctx))
       ?? (await handleSidebarRoutes(ctx));
@@ -441,7 +457,12 @@ export async function handleManagementAPI(
     // touched and point at its tray, whose Stop it honours (#3008 refuses an undone stop the same way).
     const desktopRefusal = desktopSupervisedStopRefusal(principal);
     if (desktopRefusal) return jsonResponse(desktopRefusal, 409, req, config);
-    const holdsReceipt = deferralHonored(url, deferralMatchesReceipt);
+    // Only a receipt for the port this listener is actually bound to defers its teardown (#8416);
+    // before it serves there is no such port, and no receipt is honoured.
+    const { boundServerPort } = await import("./lifecycle");
+    const servedPort = boundServerPort();
+    const ownsThisReceipt = (nonce: string | null) => deferralMatchesReceipt(nonce, servedPort);
+    const holdsReceipt = deferralHonored(url, ownsThisReceipt);
     // A sibling never runs under a service manager, and the installed service is the live
     // owner's: asking the manager to stop from here would refuse, or boot the owner's job out.
     const sibling = siblingOfLivePort() !== null;
@@ -486,7 +507,9 @@ export async function handleManagementAPI(
       }
       let serviceStop: import("../service").ServiceStopOutcome;
       try {
-        serviceStop = sibling ? "absent" : stopServiceIfInstalledDetailed();
+        // #7771: on Windows the route skips Part A for a receipt that records it, caps it at
+        // 6 s for one that does not, and sweeps a deleted task's stray wrapper in 4 s.
+        serviceStop = sibling ? "absent" : await (await import("./stop-service-route")).routeServiceStop(url, holdsReceipt);
       } catch (err) {
         if (isServiceOwnershipError(err)) {
           // The installed service belongs to another CODEX_HOME/OPENCODEX_HOME: it would respawn
@@ -519,7 +542,7 @@ export async function handleManagementAPI(
       // syncCleanup skips this when OCX_SERVICE is set (so a crash/respawn keeps the fence),
       // which is exactly why an intentional stop has to do it here — unless the caller is
       // `ocx stop`, which does it itself once the proxy is proven down.
-      const teardown = await performStopTeardown(url, { ownsReceipt: deferralMatchesReceipt });
+      const teardown = await performStopTeardown(url, { ownsReceipt: ownsThisReceipt });
       if (teardown.sharedTeardown === "refused") return jsonResponse(teardown, 409, req, config);
       noteExplicitShutdownRequested(); // Accepted stops and signals remain irreversible.
       setTimeout(async () => {

@@ -10,7 +10,10 @@ import {
   getCodexUpstreamHealth,
   recordCodexUpstreamOutcome,
 } from "../../src/codex/routing";
-import { saveConfig } from "../../src/config";
+import { loadConfig, saveConfig } from "../../src/config";
+import { saveCredential } from "../../src/oauth/store";
+import { setProviderApiKeyPausedWithResult } from "../../src/providers/api-key-pause";
+import { OPENAI_API_PROVIDER_ID } from "../../src/providers/openai-tiers";
 import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import { handleImages } from "../../src/server/images";
 import type { RequestLogContext } from "../../src/server/request-log";
@@ -299,3 +302,108 @@ test("client cancel during a Pool Images send releases the recovery probe lease"
   expect(sent).toHaveLength(1);
   expect(getCodexUpstreamHealth("pool-img")?.probeLeaseId).toBeUndefined();
 });
+
+interface CcaFetchRequest {
+  url: string;
+  headers: Headers;
+  body: unknown;
+}
+
+const CCA_TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg==";
+
+const CCA_CREDENTIAL = {
+  access: "cca-access-token",
+  refresh: "cca-refresh-token",
+  expires: Date.now() + 3_600_000,
+  projectId: "cca-project-123",
+} as const;
+
+const disabledOpenAiProvider = {
+  adapter: "openai-responses",
+  baseUrl: "https://chatgpt.com/backend-api/codex",
+  authMode: "forward",
+  disabled: true,
+} as const;
+
+function ccaConfig(): OcxConfig {
+  return {
+    port: 0,
+    defaultProvider: "google-antigravity",
+    openaiProviderTierVersion: 2,
+    providers: {
+      openai: disabledOpenAiProvider,
+      "google-antigravity": {
+        adapter: "google",
+        baseUrl: "https://attacker.example.com",
+        googleMode: "cloud-code-assist",
+      } as OcxConfig["providers"][string],
+    },
+  } as OcxConfig;
+}
+
+for (const pauseTiming of ["before selection", "after selection"] as const) {
+test(`default Images falls back to CCA when its API-key pool is all paused ${pauseTiming}`, async () => {
+  const registryHits: CcaFetchRequest[] = [];
+  const apiKeyHits: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    const headers = new Headers(init?.headers);
+    if (url.hostname === "daily-cloudcode-pa.googleapis.com") {
+      expect(init?.redirect).toBe("manual");
+      registryHits.push({ url: requestUrl, headers, body: init?.body });
+      return Response.json({
+        response: {
+          candidates: [{
+            content: { parts: [{ inlineData: { mimeType: "image/png", data: CCA_TINY_PNG } }] },
+          }],
+        },
+      });
+    }
+    apiKeyHits.push(headers.get("authorization") ?? "");
+    return Response.json({ data: [{ b64_json: CCA_TINY_PNG }] });
+  }) as typeof fetch;
+
+  const config = ccaConfig();
+  config.providers[OPENAI_API_PROVIDER_ID] = {
+    adapter: "openai-responses",
+    authMode: "key",
+    baseUrl: "https://api.openai.com/v1",
+    apiKey: pauseTiming === "before selection" ? undefined : "key-a",
+    apiKeyPool: [{ id: "A", key: "key-a", ...(pauseTiming === "before selection" ? { disabled: true } : {}) }],
+  };
+  saveConfig(config);
+  await saveCredential("google-antigravity", { ...CCA_CREDENTIAL });
+
+  const req = new Request("http://localhost/v1/images/generations", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ prompt: "a cat" }),
+  });
+  let pausedAfterSelection = false;
+  if (pauseTiming === "after selection") {
+    const originalGet = req.headers.get.bind(req.headers);
+    req.headers.get = ((name: string) => {
+      if (!pausedAfterSelection && name.toLowerCase() === "authorization") {
+        pausedAfterSelection = true;
+        expect(setProviderApiKeyPausedWithResult(config, OPENAI_API_PROVIDER_ID, "A", true)).toEqual({
+          ok: true,
+          activeAccountId: null,
+          activeAccountChanged: true,
+        });
+      }
+      return originalGet(name);
+    }) as typeof req.headers.get;
+  }
+
+  const response = await handleImages(req, config, "generations", { model: "", provider: "" });
+  expect(pausedAfterSelection).toBe(pauseTiming === "after selection");
+  expect(response.status, await response.clone().text()).toBe(200);
+  const json = await response.json() as { data: { b64_json: string }[] };
+  expect(json.data[0]?.b64_json).toBe(CCA_TINY_PNG);
+  expect(apiKeyHits).toEqual([]);
+  expect(registryHits).toHaveLength(1);
+  expect(registryHits[0]?.headers.get("authorization")).toBe("Bearer cca-access-token");
+  expect(loadConfig().providers[OPENAI_API_PROVIDER_ID]?.apiKeyPool?.[0]?.disabled).toBe(true);
+});
+}

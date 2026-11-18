@@ -94,8 +94,8 @@ export interface WorkflowBudgetPolicy {
    */
   readonly interactiveReserve: number;
   /**
-   * Roots tracked at once, as a hard bound rather than a hint. At the ceiling one idle,
-   * under-limit root is evicted to make room; when no root may be forgotten safely the new
+   * Roots tracked at once, as a hard bound rather than a hint. At the ceiling one idle root
+   * with no unexpired count history or exhausted spend is evicted; when none is safe the new
    * root is REFUSED with `workflow-tracking-exhausted`. Admitting it anyway is what made a
    * caller minting new ids able to grow this map past the number written here.
    */
@@ -192,8 +192,8 @@ export type WorkflowDenial =
   | "workflow-children-exhausted"
   | "workflow-spend-exhausted"
   /**
-   * The root table is full and every entry is active or exhausted, so admitting this root
-   * would mean evicting one whose ceiling has already fired. Refusing is the honest answer:
+   * The root table is full and every entry retains activity, unexpired counts or exhausted
+   * spend, so admitting this root would discard accounting. Refusing is the honest answer:
    * `maxTrackedRoots` is a bound, and inserting anyway made it a suggestion.
    */
   | "workflow-tracking-exhausted"
@@ -245,7 +245,9 @@ export function workflowDenialSummary(
         // because the alternative is an operator who can see that something refused and has
         // no way to find out what. Without one -- a caller that knows only the reason -- the
         // original sentence is kept unchanged.
-        message: spend
+        message: spend && Object.hasOwn(SPEND_SCOPE_LABEL, spend.scope)
+          && Number.isSafeInteger(spend.limit) && spend.limit >= 0
+          && (spend.projected === undefined || (Number.isSafeInteger(spend.projected) && spend.projected >= 0))
           ? "This proxy refused the request locally: the configured " + SPEND_SCOPE_LABEL[spend.scope]
             + " token ceiling of " + formatTokenCount(spend.limit) + " is spent"
             + (spend.projected !== undefined
@@ -264,7 +266,7 @@ export function workflowDenialSummary(
       return {
         code: "workflow_tracking_exhausted",
         message: "This proxy refused the request locally: it is already tracking as many tasks as"
-          + " it may, and every one of them is busy or over its own ceiling, so no provider was"
+          + " it may, and every one retains activity, unexpired counts or exhausted spend, so no provider was"
           + " contacted.",
       };
     case "workflow-send-replayed":
@@ -290,8 +292,8 @@ export function workflowDenialSummary(
  * It exists because the body cannot carry it: `classifyError` rewrites every 429 to
  * `rate_limit_error` / `rate_limit_exceeded`, so a local refusal and a provider rate limit are
  * byte-identical in shape. Changing that classification would change how every client retries,
- * so the name goes beside the body instead. No upstream sets this header, which is precisely
- * what makes its presence conclusive.
+ * so the name goes beside the body instead. Response projections require the in-process proxy
+ * marker before carrying this header, so an upstream response cannot forge local provenance.
  */
 export const WORKFLOW_LOCAL_REFUSAL_HEADER = "x-opencodex-local-refusal";
 
@@ -455,19 +457,16 @@ const roots = new Map<string, WorkflowState>();
  * was active or exhausted -- which is precisely the fan-out this file exists to bound.
  */
 function evictOneRoot(
-  policy: WorkflowBudgetPolicy,
   spendLedger?: SpendReservationLedger,
   now: number = Date.now(),
 ): boolean {
   let oldestKey: string | undefined;
   let oldestAt = Number.POSITIVE_INFINITY;
   for (const [key, state] of roots) {
-    // An active root is never evicted: dropping it would hand its fan-out a fresh allowance,
-    // which is the exact laundering this ledger exists to prevent. The same holds for an
-    // EXHAUSTED-but-idle root -- count-exhausted or spend-exhausted -- because recreating it
-    // fresh under the same id resets the very ceiling that already fired.
+    // Dropping active or unexpired count state would hand the same root fresh allowances,
+    // even when it used only part of a ceiling. Durable spend remains independently protected.
     if (state.active > 0) continue;
-    if (windowedSends(state, now) >= policy.maxPhysicalSends) continue;
+    if (windowedSends(state, now) > 0 || windowedChildren(state, now) > 0) continue;
     if (spendLedger?.exhausted("root", key) === true) continue;
     if (state.lastSeenMs < oldestAt) { oldestAt = state.lastSeenMs; oldestKey = key; }
   }
@@ -538,10 +537,10 @@ export function admitWorkflowTurn(
     };
   };
   if (!state) {
-    if (roots.size >= policy.maxTrackedRoots && !evictOneRoot(policy, ledger, now)) {
+    if (roots.size >= policy.maxTrackedRoots && !evictOneRoot(ledger, now)) {
       // Nothing may be forgotten, so the new root is refused instead of admitted over the
-      // bound. The alternative -- evicting an exhausted root -- resets the ceiling that
-      // already fired, and a caller minting fresh ids would get unlimited budget from it.
+      // bound. Evicting unexpired history would reset an existing allowance, and a caller
+      // minting fresh ids could repeatedly recover budget from the forgotten counts.
       return refuse("workflow-tracking-exhausted");
     }
     state = newWorkflowState(now, policy);
@@ -669,6 +668,28 @@ export function chargeWorkflowSends(
   // compare, and the only thing a policy could have supplied here was that scale.
   recordWindowedSends(state, now, sends);
   state.lastSeenMs = now;
+}
+
+/**
+ * Atomically reserve one physical send under a root's live count ceiling.
+ *
+ * JavaScript runs this read-and-increment without an await, so concurrent request and retry
+ * ladders cannot all observe the same remaining slot. Call only at physical admission, after
+ * unused dispatch permits can be released; a claimed physical start remains counted.
+ */
+export function reserveWorkflowSend(
+  rootId: string | undefined,
+  policy: WorkflowBudgetPolicy = DEFAULT_WORKFLOW_BUDGET_POLICY,
+  now: number = Date.now(),
+): boolean {
+  if (!rootId) return true;
+  const state = roots.get(rootId);
+  if (!state) return true;
+  if (windowedSends(state, now) >= policy.maxPhysicalSends) return false;
+  state.sends += 1;
+  recordWindowedSends(state, now, 1);
+  state.lastSeenMs = now;
+  return true;
 }
 
 /**

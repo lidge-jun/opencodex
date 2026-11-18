@@ -19,7 +19,7 @@ instance with `driver: "claudeAgent"`. Its `environment` carries the proxy origi
 `ANTHROPIC_API_KEY`, and `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1`. That is the proxy-mode
 `ocx claude` environment on a loopback bind. Every variable is written `sensitive: false`,
 because T3 Code moves sensitive values into its secret store and blanks them in the file. None of
-these values is a credential. `config.customModels` holds one `{ slug, name }` entry per
+these values is a credential. `accentColor` tints the instance's badge, because T3 Code picks the icon from the driver and takes no custom one. `config.customModels` holds one `{ slug, name, capabilities? }` entry per
 normalized export model, Fast rows included. The slug is the proxy selector, which T3 Code passes
 verbatim as the Claude model id and the Messages surface resolves like any other selector.
 

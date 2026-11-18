@@ -6,6 +6,12 @@ import { mirrorDesiredEnabledOntoSnapshot } from "./claude-desktop-config-writer
 import { ensureManagementClaudeIntercept, interceptStartRefusal } from "./claude-intercept-routes";
 import { persistCommittedDesktopGateway } from "../../claude/desktop-gateway-state";
 import { commitClaudeCodeBlock } from "../../claude/claude-code-block";
+import { HomeAsideIntentDerivationError, initializeHomeRouteIntentDefaults } from "../../routing/home-route-intent";
+import { homeHasLinks } from "../../routing/home-route-capture";
+import { recordHomeNativeDecision, RouteIntentStateUnreadableError } from "../../routing/route-intent-state";
+import { withDurableRouteNativeSettings } from "../../routing/route-to-live-settings";
+import { withLinkApply, LinkApplyBusyError } from "../../client/link-home";
+import { ConfigMutationLockError, withConfigMutationLockSync } from "../../config/mutation-lock";
 /**
  * Toggle routes for the integrations that are NOT file-merged clients.
  *
@@ -62,6 +68,8 @@ import { managementInferencePort, type ManagementContext } from "./context";
 
 export type NativeIntegrationClientId = "claude" | "grok" | "codex" | "claude-desktop";
 
+type NativeDecisionContext = ManagementContext & { decisionProgress?: { desiredEnabled?: boolean } };
+
 /** Every reason this module can decline, in one place (audit r3 #6). */
 export type NativeRefusalReason =
   | "not_installed"
@@ -115,7 +123,12 @@ export interface NativeRefusalEnvelope {
   /** Present on every post-commit refusal; absent only for pre-commit refusals. */
   desiredEnabled?: boolean;
   residualPaths?: string[];
-  diagnostic?: InterceptSecretDiagnostic;
+  diagnostic?: InterceptSecretDiagnostic | NativeConfigDiagnostic;
+}
+
+interface NativeConfigDiagnostic {
+  stage: "config";
+  cause: "SQLITE_NOTADB" | "SQLITE_CORRUPT" | "SQLITE_CANTOPEN" | "SQLITE_IOERR" | "EACCES" | "EPERM" | "ENOENT" | "EIO" | "unknown";
 }
 
 export type NativePostCommitRefusalEnvelope = Omit<NativeRefusalEnvelope, "desiredEnabled"> & {
@@ -127,7 +140,7 @@ function refusal(
   clientId: NativeIntegrationClientId,
   reason: NativeRefusalReason,
   message: string,
-  extra: Pick<NativeRefusalEnvelope, "desiredEnabled" | "residualPaths"> = {},
+  extra: Pick<NativeRefusalEnvelope, "desiredEnabled" | "residualPaths" | "diagnostic"> = {},
 ): Response {
   return jsonResponse({
     error: status >= 500 ? "native integration change failed" : "native integration change refused",
@@ -274,10 +287,64 @@ function grokStatus(config: ManagementContext["config"]): NativeStatus {
  * whole class to a retryable 409 would tell the user to retry a lock file they
  * cannot open, which fails identically forever (audit r8 #2).
  */
-function isLockContention(error: unknown): boolean {
+function isConfigMutationContention(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const cause = (error as { cause?: { code?: unknown } }).cause;
   return cause?.code === "SQLITE_BUSY";
+}
+
+function configFailureDiagnostic(error: unknown): NativeConfigDiagnostic {
+  const cause = error instanceof ConfigMutationLockError || error instanceof ConfigWritePublishedError ? error.cause : error;
+  const code = cause && typeof cause === "object" && "code" in cause ? cause.code : undefined;
+  const allowed: readonly NativeConfigDiagnostic["cause"][] = ["SQLITE_NOTADB", "SQLITE_CORRUPT", "SQLITE_CANTOPEN", "SQLITE_IOERR", "EACCES", "EPERM", "ENOENT", "EIO"];
+  return { stage: "config", cause: allowed.find(value => value === code) ?? "unknown" };
+}
+
+/** ACL admission and Home apply exclusion precede this synchronous C section. */
+async function commitNativeDecision(
+  ctx: NativeDecisionContext, clientId: NativeIntegrationClientId, enabled: boolean,
+  persist: () => boolean | Response,
+): Promise<Response | null> {
+  let published = false;
+  try {
+    return await settleConfigRoot(configRoot(), () => withConfigMutationLockSync(() => {
+      // Capture the Children's defaults from the durable switches before this one changes, under
+      // the rule every Home-only switch writer follows: only once the Home has a link. Another
+      // process may have changed the switches since this server loaded its snapshot. A Home with
+      // no link has no Child to protect, so the toggle changes only the switch.
+      const linked = homeHasLinks();
+      if (linked) initializeHomeRouteIntentDefaults(withDurableRouteNativeSettings(ctx.config), ctx.version);
+      const result = persist();
+      if (result instanceof Response) return result;
+      published = result;
+      if (published && ctx.decisionProgress) ctx.decisionProgress.desiredEnabled = enabled;
+      // The switch just written is the Home's decision; route intent keeps no Home entry for it.
+      if (linked) recordHomeNativeDecision(clientId);
+      if (ctx.decisionProgress) ctx.decisionProgress.desiredEnabled = enabled;
+      return null;
+    }));
+  } catch (error) {
+    if (error instanceof WindowsSecretAclSettleTimeoutError && !published) {
+      const firstParty = clientId === "claude-desktop" && resolveClaudeDesktopApplyMode(ctx.config, observeClaudeDesktopMode(ctx.config)) === "first-party";
+      return refusal(500, clientId, "write_failed", "Config ACL settlement timed out. Nothing was written; retry after it settles.",
+        firstParty ? { diagnostic: { stage: "ca", cause: "ETIMEDOUT" } } : {});
+    }
+    if (error instanceof HomeAsideIntentDerivationError) return refusal(409, clientId, "metadata_unreadable",
+      "Existing Aside ownership could not be resolved. Repair the Aside accounts.json manifest and stable userId selection, or choose an explicit Home Aside intent with ocx route to aside on or ocx route to aside off, then retry. Existing policy was preserved.");
+    if (error instanceof RouteIntentStateUnreadableError && !published) return refusal(500, clientId, "metadata_unreadable", error.message);
+    if (published || error instanceof ConfigWritePublishedError) {
+      if (clientId === "claude-desktop" && error instanceof ConfigWritePublishedError) mirrorDesiredEnabledOntoSnapshot(ctx.config, clientId, enabled);
+      const busy = isConfigLockError(error) && isConfigMutationContention(error);
+      return postCommitRefusal(busy ? 409 : 500, clientId, busy ? "config_busy" : "write_failed",
+        "The native switch was saved, but Home route intent or configuration bookkeeping did not complete. Repair configuration storage if needed, then retry the same switch to reconcile Home intent and apply it.",
+        { desiredEnabled: enabled, diagnostic: configFailureDiagnostic(error) });
+    }
+    const busy = isConfigLockError(error) && isConfigMutationContention(error);
+    return refusal(busy ? 409 : 500, clientId, busy ? "config_busy" : "write_failed",
+      busy ? "Another process is saving the configuration right now. Nothing was written; retry in a moment."
+        : "The native decision could not be saved. Inspect and repair configuration storage, then retry.",
+      busy ? {} : { diagnostic: configFailureDiagnostic(error) });
+  }
 }
 
 function isConfigLockError(error: unknown): boolean {
@@ -334,7 +401,7 @@ let codexToggleFlight: Promise<Response> | null = null;
  * reads the persisted intent and converges — whereas converging first and dying
  * would leave artifacts the next start silently undoes.
  */
-async function handleCodexToggle(ctx: ManagementContext): Promise<Response> {
+async function handleCodexToggle(ctx: NativeDecisionContext): Promise<Response> {
   const { req } = ctx;
   if (codexToggleFlight) {
     return refusal(409, "codex", "config_busy",
@@ -354,21 +421,27 @@ async function handleCodexToggle(ctx: ManagementContext): Promise<Response> {
     const enabled = body.enabled;
 
     const { setCodexIntegrationEnabled } = await import("../../codex/desired-state");
-    const persisted = setCodexIntegrationEnabled(enabled);
+    let decisionResult!: ReturnType<typeof setCodexIntegrationEnabled>;
     /*
      * `missing` does not block the switch — see the Grok route for the reasoning.
      * A user with no config file yet still gets the artifact change; what they
      * lose is durability across a restart, and the envelope says so rather than
      * implying the switch failed.
      */
-    if (!persisted.ok && persisted.reason !== "missing") {
-      return refusal(
-        persisted.retryable ? 409 : 500,
-        "codex",
-        persisted.retryable ? "config_busy" : "write_failed",
-        persisted.message,
-      );
-    }
+    const decisionRefusal = await commitNativeDecision(ctx, "codex", enabled, () => {
+      decisionResult = setCodexIntegrationEnabled(enabled);
+      if (!decisionResult.ok && decisionResult.reason !== "missing") {
+        return refusal(
+          decisionResult.retryable ? 409 : 500,
+          "codex",
+          decisionResult.retryable ? "config_busy" : "write_failed",
+          decisionResult.message,
+        );
+      }
+      return decisionResult.ok;
+    });
+    if (decisionRefusal) return decisionRefusal;
+    const persisted = decisionResult;
     const durable = persisted.ok;
 
     if (enabled) {
@@ -435,7 +508,7 @@ async function handleCodexToggle(ctx: ManagementContext): Promise<Response> {
   }
 }
 
-async function handleGrokToggle(ctx: ManagementContext): Promise<Response> {
+async function handleGrokToggle(ctx: NativeDecisionContext): Promise<Response> {
   const { req, config, deps } = ctx;
   /*
    * The guard stands BEFORE the first await, or two concurrent PUTs could both
@@ -482,7 +555,7 @@ async function handleGrokToggle(ctx: ManagementContext): Promise<Response> {
      * on, where the other order leaves artifacts the next start undoes.
      */
     const { setGrokIntegrationEnabled } = await import("../../codex/desired-state");
-    const persisted = setGrokIntegrationEnabled(enabled);
+    let decisionResult!: ReturnType<typeof setGrokIntegrationEnabled>;
     /*
      * `missing` does NOT block the toggle here.
      *
@@ -494,14 +567,20 @@ async function handleGrokToggle(ctx: ManagementContext): Promise<Response> {
      * on the envelope says. `conflict` and `invalid` are different: another
      * writer won, or the file is malformed and must not be overwritten.
      */
-    if (!persisted.ok && persisted.reason !== "missing") {
-      return refusal(
-        persisted.retryable ? 409 : 500,
-        "grok",
-        persisted.retryable ? "config_busy" : "write_failed",
-        persisted.message,
-      );
-    }
+    const decisionRefusal = await commitNativeDecision(ctx, "grok", enabled, () => {
+      decisionResult = setGrokIntegrationEnabled(enabled);
+      if (!decisionResult.ok && decisionResult.reason !== "missing") {
+        return refusal(
+          decisionResult.retryable ? 409 : 500,
+          "grok",
+          decisionResult.retryable ? "config_busy" : "write_failed",
+          decisionResult.message,
+        );
+      }
+      return decisionResult.ok;
+    });
+    if (decisionRefusal) return decisionRefusal;
+    const persisted = decisionResult;
     const durable = persisted.ok;
     const desiredEnabled = durable ? loadConfig().clientIntegrations?.grok !== false : enabled;
 
@@ -701,7 +780,7 @@ async function persistDesktopModeMarker(config: ManagementContext["config"], des
 
 let claudeDesktopToggleFlight: Promise<Response> | null = null;
 
-async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Response> {
+async function handleClaudeDesktopToggle(ctx: NativeDecisionContext): Promise<Response> {
   if (claudeDesktopToggleFlight) {
     return refusal(409, "claude-desktop", "config_busy",
       "Another Claude Desktop change is already in flight. Nothing was written — try again in a moment.");
@@ -719,17 +798,15 @@ async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Respon
 
     const { setIntegrationEnabled } = await import("../../codex/desired-state");
     const enabled = body.enabled;
-    const persisted = await settleConfigRoot(configRoot(), () => {
+    const decisionRefusal = await commitNativeDecision(ctx, "claude-desktop", enabled, () => {
       const result = setIntegrationEnabled("claude-desktop", enabled);
       if (result.ok) {
         committedDesiredEnabled = enabled;
         mirrorDesiredEnabledOntoSnapshot(ctx.config, "claude-desktop", enabled);
       }
-      return result;
+      return result.ok ? true : refusal(result.retryable ? 409 : 500, "claude-desktop", result.retryable ? "config_busy" : "write_failed", result.message);
     });
-    if (!persisted.ok) {
-      return refusal(persisted.retryable ? 409 : 500, "claude-desktop", persisted.retryable ? "config_busy" : "write_failed", persisted.message);
-    }
+    if (decisionRefusal) return decisionRefusal;
     const desiredEnabled = loadConfig().clientIntegrations?.["claude-desktop"] !== false;
     committedDesiredEnabled = desiredEnabled;
     const current = loadConfig();
@@ -922,7 +999,7 @@ function persistedIntentConfig(snapshot: ManagementContext["config"]): Managemen
   }
 }
 
-export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Promise<Response | null> {
+async function handleNativeIntegrationRoutesUnlocked(ctx: NativeDecisionContext): Promise<Response | null> {
   const { req, url, config, deps } = ctx;
 
   if (url.pathname === "/api/native-integrations" && req.method === "GET") {
@@ -949,51 +1026,49 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
     }
 
     const enabled = body.enabled;
-    if (claudeCodeEnabled(config) === enabled) {
-      // Re-run the same reconcile on a repeated OFF: definitions left behind by an older
-      // version that never pruned on disable are removed the next time the user says off.
+    let changed = false;
+    const decisionRefusal = await commitNativeDecision(ctx, "claude", enabled, () => {
+      changed = claudeCodeEnabled(config) !== enabled;
+      if (!changed) return true;
+
+      /*
+       * Same block writer as PUT /api/claude-code: it stamps the migration sentinel.
+       * Toggling Claude ON is one of the two ways a block gets CREATED, so without the
+       * sentinel the next startServer would silently convert a user's Auto auth mode into
+       * a sticky manual subscription — a failure that surfaces nowhere near this route.
+       */
+      // Kept so a failed save leaves the shared in-memory config matching disk: otherwise a
+      // retry on the same object would read the unsaved value, take the repeated-OFF branch
+      // and prune agents while the persisted integration is still on.
+      const previousBlock = config.claudeCode === undefined ? undefined : structuredClone(config.claudeCode);
+      commitClaudeCodeBlock(config, { ...(config.claudeCode ?? {}), enabled });
+
+      /*
+       * `deps.` first: ManagementApiDeps carries this seam so route tests with an
+       * in-memory fixture cannot overwrite the developer's real OPENCODEX_HOME.
+       */
+      const persist = deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode;
+      try {
+        persist(config);
+      } catch (error) {
+        // A published write already put the new value on disk; only an unpublished one rolls back.
+        if (!(error instanceof ConfigWritePublishedError)) {
+          if (previousBlock === undefined) delete config.claudeCode;
+          else config.claudeCode = previousBlock;
+        }
+        throw error;
+      }
+      return true;
+    });
+    if (decisionRefusal) return decisionRefusal;
+    if (!changed) {
+      // Repeated OFF also prunes definitions left by older versions.
       if (!enabled) await ctx.syncClaudeAgentDefsBestEffort?.();
       return jsonResponse({
         ok: true, clientId: "claude", changed: false,
-        state: enabled ? "current" : "absent",
-        desiredEnabled: enabled,
+        state: enabled ? "current" : "absent", desiredEnabled: enabled,
         message: enabled ? "Claude inbound is already on" : "Claude inbound is already off",
       } satisfies NativeToggleEnvelope);
-    }
-
-    /*
-     * Same block writer as PUT /api/claude-code: it stamps the migration sentinel.
-     * Toggling Claude ON is one of the two ways a block gets CREATED, so without the
-     * sentinel the next startServer would silently convert a user's Auto auth mode into
-     * a sticky manual subscription — a failure that surfaces nowhere near this route.
-     */
-    // Kept so a failed save leaves the shared in-memory config matching disk: otherwise a
-    // retry on the same object would read the unsaved value, take the repeated-OFF branch
-    // and prune agents while the persisted integration is still on.
-    const previousBlock = config.claudeCode === undefined ? undefined : structuredClone(config.claudeCode);
-    commitClaudeCodeBlock(config, { ...(config.claudeCode ?? {}), enabled });
-
-    /*
-     * `deps.` first: ManagementApiDeps carries this seam so route tests with an
-     * in-memory fixture cannot overwrite the developer's real OPENCODEX_HOME.
-     */
-    const persist = deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode;
-    try {
-      persist(config);
-    } catch (error) {
-      // A published write already put the new value on disk; only an unpublished one rolls back.
-      if (!(error instanceof ConfigWritePublishedError)) {
-        if (previousBlock === undefined) delete config.claudeCode;
-        else config.claudeCode = previousBlock;
-      }
-      if (isConfigLockError(error)) {
-        return isLockContention(error)
-          ? refusal(409, "claude", "config_busy",
-              "Another process is saving the configuration right now. Try again in a moment.")
-          : refusal(500, "claude", "write_failed",
-              `The configuration lock could not be acquired: ${error instanceof Error ? error.message : String(error)}`);
-      }
-      throw error;
     }
 
     /*
@@ -1033,4 +1108,35 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
   }
 
   return null;
+}
+
+export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Promise<Response | null> {
+  if (ctx.req.method !== "PUT" || !/^\/api\/native-integrations\/(claude|claude-desktop|codex|grok)$/.test(ctx.url.pathname)) {
+    return handleNativeIntegrationRoutesUnlocked(ctx);
+  }
+  if (ctx.config.runtimeRole === "client") return jsonResponse({ error: "Route decisions are owned by the Home", code: "link_child_read_only" }, 403);
+  const decisionProgress: { desiredEnabled?: boolean } = {};
+  try { return await settleConfigRoot(configRoot(), () => withLinkApply(() => handleNativeIntegrationRoutesUnlocked({ ...ctx, decisionProgress }))); }
+  catch (error) {
+    const clientId = ctx.url.pathname.split("/").at(-1) as NativeIntegrationClientId;
+    if (decisionProgress.desiredEnabled !== undefined) {
+      const busy = error instanceof LinkApplyBusyError || (isConfigLockError(error) && isConfigMutationContention(error));
+      const firstPartyTimeout = error instanceof WindowsSecretAclSettleTimeoutError && clientId === "claude-desktop"
+        && resolveClaudeDesktopApplyMode(ctx.config, observeClaudeDesktopMode(ctx.config)) === "first-party";
+      return postCommitRefusal(busy ? 409 : 500, clientId, busy ? "config_busy" : "write_failed",
+        "The native decision was saved, but applying it did not complete. Repair configuration storage if needed, then retry the same switch to reconcile and apply it.",
+        { desiredEnabled: decisionProgress.desiredEnabled,
+          diagnostic: firstPartyTimeout ? { stage: "ca", cause: "ETIMEDOUT" } : configFailureDiagnostic(error) });
+    }
+    if (error instanceof LinkApplyBusyError || (isConfigLockError(error) && isConfigMutationContention(error))) return refusal(409, clientId, "config_busy", "Another Home apply or config mutation is running. Nothing was written; retry in a moment.");
+    if (isConfigLockError(error)) return refusal(500, clientId, "write_failed",
+      "Configuration storage is unavailable. Inspect and repair it before retrying.", { diagnostic: configFailureDiagnostic(error) });
+    if (error instanceof WindowsSecretAclSettleTimeoutError) {
+      const clientId = ctx.url.pathname.split("/").at(-1) as NativeIntegrationClientId;
+      const firstParty = clientId === "claude-desktop" && resolveClaudeDesktopApplyMode(ctx.config, observeClaudeDesktopMode(ctx.config)) === "first-party";
+      return refusal(500, clientId, "write_failed", "Config ACL settlement timed out. Nothing was written; retry after it settles.",
+        firstParty ? { diagnostic: { stage: "ca", cause: "ETIMEDOUT" } } : {});
+    }
+    throw error;
+  }
 }

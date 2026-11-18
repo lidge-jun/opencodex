@@ -3,6 +3,7 @@ import type { ProviderAdapter } from "../../src/adapters/base";
 import {
   parseStreamWithProgress,
   RoutedModelInactivityError,
+  WebSearchConsumerInactivityError,
   WebSearchStreamProtocolError,
 } from "../../src/web-search/progress-stream";
 import {
@@ -11,6 +12,8 @@ import {
   WEB_SEARCH_BRIDGE_ERROR_CODE,
 } from "../../src/web-search/passthrough-bridge";
 import type { AdapterEvent } from "../../src/types";
+import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { repoPath } from "../helpers/repo-root";
 
 type ParseStream = ProviderAdapter["parseStream"];
 
@@ -50,6 +53,213 @@ const drainThenDone: ParseStream = async function* (response) {
 };
 
 describe("web-search streamed-body progress collector", () => {
+  test("a permanently paused consumer is bounded separately and cancels upstream", async () => {
+    let cancelled: unknown;
+    const response = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(bytes("x")); },
+      cancel(reason) { cancelled = reason; },
+    }, { highWaterMark: 0 }));
+    const parser: ParseStream = async function* (tapped) {
+      await tapped.body!.getReader().read();
+      yield { type: "text_delta", text: "first" };
+      yield { type: "text_delta", text: "second" };
+      yield { type: "done" };
+    };
+    const iterator = parseStreamWithProgress(response, parser, {
+      inactivityTimeoutMs: 500,
+      consumerTimeoutMs: 50,
+      translatorBudget: createTestTranslatorBudget(),
+    });
+    try {
+      while ((await iterator.next()).value?.type !== "text_delta") { /* skip progress */ }
+      await sleep(150);
+      expect(cancelled).toBeInstanceOf(WebSearchConsumerInactivityError);
+      await expect(iterator.next()).rejects.toBeInstanceOf(WebSearchConsumerInactivityError);
+    } finally { await iterator.return(undefined); }
+  });
+
+  test("repeated empty upstream chunks do not reset the raw inactivity budget", async () => {
+    let cancelled = false;
+    const response = new Response(new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        await sleep(10);
+        if (!cancelled) controller.enqueue(new Uint8Array(0));
+      },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 }));
+    const error = await collect(parseStreamWithProgress(response, drainThenDone, {
+      inactivityTimeoutMs: 120,
+      translatorBudget: createTestTranslatorBudget(),
+    })).then(() => undefined, reason => reason);
+    expect(error).toBeInstanceOf(RoutedModelInactivityError);
+    expect(cancelled).toBe(true);
+  });
+
+  test("synchronous empty chunks cannot starve the inactivity deadline", async () => {
+    const script = `
+      import { parseStreamWithProgress } from ${JSON.stringify(repoPath("src/web-search/progress-stream.ts"))};
+      import { createTranslatorBudget } from ${JSON.stringify(repoPath("src/lib/translator-budget.ts"))};
+      const body = new ReadableStream({ pull(c) { c.enqueue(new Uint8Array(0)); } }, { highWaterMark: 0 });
+      const parse = async function* (response) {
+        const reader = response.body.getReader();
+        try { while (!(await reader.read()).done) {} } finally { reader.releaseLock(); }
+        yield { type: "done" };
+      };
+      const budget = createTranslatorBudget();
+      try {
+        for await (const _event of parseStreamWithProgress(new Response(body), parse, { inactivityTimeoutMs: 100, translatorBudget: budget })) {}
+        process.exitCode = 1;
+      } catch (error) {
+        process.stdout.write(error.name);
+      } finally { budget.dispose(); }
+    `;
+    const child = Bun.spawn([process.execPath, "--eval", script], { stdout: "pipe", stderr: "pipe" });
+    let timedOut = false;
+    const watchdog = setTimeout(() => { timedOut = true; child.kill(); }, 5_000);
+    try {
+      const [status, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      expect({ timedOut, status, stdout, stderr }).toEqual({
+        timedOut: false,
+        status: 0,
+        stdout: "RoutedModelInactivityError",
+        stderr: "",
+      });
+    } finally { clearTimeout(watchdog); }
+  }, 10_000);
+
+  test("a parent abort interrupts a blocked semantic handoff", async () => {
+    const parent = new AbortController();
+    const reason = { kind: "parent-cancelled" };
+    let cancelled: unknown;
+    let secondYielded = false;
+    const response = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(bytes("x")); },
+      cancel(value) { cancelled = value; },
+    }, { highWaterMark: 0 }));
+    const parser: ParseStream = async function* (tapped) {
+      await tapped.body!.getReader().read();
+      yield { type: "text_delta", text: "first" };
+      secondYielded = true;
+      yield { type: "text_delta", text: "second" };
+    };
+    const iterator = parseStreamWithProgress(response, parser, {
+      inactivityTimeoutMs: 500,
+      consumerTimeoutMs: 2_000,
+      signal: parent.signal,
+      translatorBudget: createTestTranslatorBudget(),
+    });
+    try {
+      while ((await iterator.next()).value?.type !== "text_delta") { /* skip progress */ }
+      await waitFor(() => secondYielded, 1_000);
+      expect(secondYielded).toBe(true);
+      parent.abort(reason);
+      expect(await iterator.next().then(() => undefined, error => error)).toBe(reason);
+      expect(cancelled).toBe(reason);
+    } finally { await iterator.return(undefined); }
+  });
+
+  test("a terminal held for an abandoned consumer also has a downstream deadline", async () => {
+    let cancelled: unknown;
+    const response = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(bytes("x")); },
+      cancel(value) { cancelled = value; },
+    }, { highWaterMark: 0 }));
+    const parser: ParseStream = async function* (tapped) {
+      await tapped.body!.getReader().read();
+      yield { type: "text_delta", text: "first" };
+      yield { type: "done" };
+    };
+    const iterator = parseStreamWithProgress(response, parser, {
+      inactivityTimeoutMs: 500,
+      consumerTimeoutMs: 50,
+      translatorBudget: createTestTranslatorBudget(),
+    });
+    try {
+      while ((await iterator.next()).value?.type !== "text_delta") { /* skip progress */ }
+      await sleep(150);
+      expect(cancelled).toBeInstanceOf(WebSearchConsumerInactivityError);
+      await expect(iterator.next()).rejects.toBeInstanceOf(WebSearchConsumerInactivityError);
+    } finally { await iterator.return(undefined); }
+  });
+
+  test("semantic handoffs do not renew the upstream byte budget", async () => {
+    const response = new Response(chunkStream([{ value: "once" }]));
+    const parser: ParseStream = async function* (tapped) {
+      await tapped.body!.getReader().read();
+      for (let index = 0; index < 10; index++) {
+        await sleep(75);
+        yield { type: "text_delta", text: String(index) };
+      }
+      yield { type: "done" };
+    };
+    const error = await collect(parseStreamWithProgress(response, parser, {
+      inactivityTimeoutMs: 300,
+      translatorBudget: createTestTranslatorBudget(),
+    })).then(() => undefined, reason => reason);
+    expect(error).toBeInstanceOf(RoutedModelInactivityError);
+  });
+
+  test("bytes read while draining a terminal do not restart upstream inactivity", async () => {
+    const response = new Response(chunkStream([{ value: "late bytes" }]));
+    const parser: ParseStream = async function* (tapped) {
+      yield { type: "done" };
+      await tapped.body!.getReader().read();
+      await sleep(80);
+    };
+    const events = await collect(parseStreamWithProgress(response, parser, {
+      inactivityTimeoutMs: 30,
+      postTerminalDrainTimeoutMs: 1_000,
+      translatorBudget: createTestTranslatorBudget(),
+    }));
+    expect(events.at(-1)).toEqual({ type: "done" });
+  });
+
+
+  test("a paused consumer does not count as upstream byte inactivity", async () => {
+    const payload = [
+      { type: "text_delta", text: "first" },
+      { type: "text_delta", text: "second" },
+      { type: "done" },
+    ].map(value => JSON.stringify(value) + "\n").join("");
+    const response = new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(bytes(payload)); controller.close(); },
+    }, { highWaterMark: 0 }));
+    const parser: ParseStream = async function* (tapped) {
+      const reader = tapped.body!.getReader();
+      let pending = "";
+      try {
+        for (;;) {
+          const result = await reader.read();
+          if (result.done) break;
+          pending += new TextDecoder().decode(result.value);
+          let index: number;
+          while ((index = pending.indexOf("\n")) >= 0) {
+            const line = pending.slice(0, index);
+            pending = pending.slice(index + 1);
+            if (line) yield JSON.parse(line) as AdapterEvent;
+          }
+        }
+      } finally { reader.releaseLock(); }
+    };
+    const iterator = parseStreamWithProgress(response, parser, {
+      inactivityTimeoutMs: 500,
+      translatorBudget: createTestTranslatorBudget(),
+    });
+    try {
+      let first: IteratorResult<AdapterEvent>;
+      do { first = await iterator.next(); } while (!first.done && first.value.type !== "text_delta");
+      expect(first.value).toEqual({ type: "text_delta", text: "first" });
+      await sleep(1300);
+      const remaining = await collect({ [Symbol.asyncIterator]: () => iterator });
+      expect(remaining.filter(event => event.type === "text_delta")).toEqual([{ type: "text_delta", text: "second" }]);
+      expect(remaining.at(-1)).toEqual({ type: "done" });
+    } finally { await iterator.return(undefined); }
+  });
+
   test("an already-aborted parent does not arm a lingering inactivity timer", async () => {
     const parent = new AbortController();
     const reason = new DOMException("already gone", "AbortError");

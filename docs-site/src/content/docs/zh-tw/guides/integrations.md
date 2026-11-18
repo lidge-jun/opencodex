@@ -25,7 +25,7 @@ description: 從儀表板把 opencodex 連接到 OpenCode、Pi、OMP、Hermes、
 | omo | `~/.omo/agent/models.json` | JSON | 新工作階段 | loopback 佔位符 |
 | Cline CLI | `~/.cline/data/settings/providers.json` + `models.json` | JSON | 結束並重新啟動後 | 僅限 loopback |
 | Kilo | `~/.config/kilo` 下最先存在的 `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json` 或 `config.json`（`XDG_CONFIG_HOME` 會移動該目錄；若都不存在則建立 `kilo.jsonc`） | JSONC | 新工作階段 | `OPENCODEX_KILO_API_KEY` |
-| Command Code | `~/.commandcode/providers.json` (Windows 使用預設家目錄時：僅當 `HOME ?? USERPROFILE` 的值非空、非純空白且為 Windows 絕對路徑時使用，否則使用 `homedir()`；另行傳入的家目錄保持不變；檔案位於其下的 `.commandcode\providers.json`) | JSON | 下次啟動 Command Code 時 | 無 — 無金鑰迴環 (`apiKey: false`) |
+| Command Code | `~/.commandcode/providers.json` (Windows 使用預設家目錄時：僅當 `HOME ?? USERPROFILE` 的值非空、非純空白且為 Windows 絕對路徑時使用，否則使用 `homedir()`；另行傳入的家目錄保持不變；檔案位於其下的 `.commandcode\providers.json`) | JSON | 下次啟動 Command Code 時 | 無 — 無金鑰迴環 (`apiKey: false`)；桌面應用程式需要自行登入，opencodex 絕不寫入 `auth.json` |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` Windows 上) | JSON | 檔案變更時立即生效 | 無金鑰迴環 |
 
 具有受支援推理強度階梯的 GJC 模型會匯出 `reasoning: true`、`thinking.levels` 與 `compat.supportsReasoningEffort`，讓 GJC 提供強度選擇。原生 Codex 模型即使未在目錄中列出階梯，也會取得標準階梯。沒有已知階梯的模型會省略這些欄位；`none` 不傳送強度，`ultra` 在傳輸時會折疊成 `max`，因此不會列為選項。重新整理整合即可更新模型選項。
@@ -104,11 +104,12 @@ Hermes 的會話標識升級是上述衝突規則的特例：既有受管設定�
 即使受管理的文件沒有變更，確認後仍可能儲存該設定檔的同步偏好。
 
 如果檔案在你檢視後又有變更，寫入會因計畫過期而被拒絕。對話框會用更新後的計畫取代舊
-計畫，並要求你再次明確確認；它絕不會自動重試寫入。如果預覽暫時無法使用，請正常重新
-載入頁面，再重新開始該操作。
+計畫，並要求你再次明確確認；它絕不會自動重試寫入。如果預覽表示尚未載入模型目錄，對話框會保持開啟並
+提供 **載入目錄並重試**：它會重新讀取整合清單，再重新要求計畫。
 
 Aside 會對一次選取的單一設定檔使用相同的預覽與確認流程。**同步所有設定檔**仍是獨立的
-批次操作，不會綁定到單一合併預覽。
+批次操作，不會綁定到單一合併預覽。一份計畫只描述一個設定檔的檔案，
+因此處於衝突狀態的 Aside 概覽卡片會提供 **選擇設定檔**，請在該設定檔頁面取代設定區塊。
 
 ## 誠實的預期
 

@@ -9,12 +9,18 @@ import {
 } from "../../src/advisor/settings";
 
 describe("resolveAdvisorSettings", () => {
+  test("question-only is opt-in and resolves independently from the policy", () => {
+    expect(resolveAdvisorSettings({ advisor: { contextMode: "question-only", policy: "adaptive" } }).contextMode).toBe("question-only");
+    expect(resolveAdvisorSettings({ advisor: { contextMode: "context" } }).contextMode).toBe("context");
+  });
+
   test("absent config resolves to fully disabled defaults", () => {
     const settings = resolveAdvisorSettings({});
     expect(settings.enabled).toBe(false);
     expect(settings.model).toBe("");
     expect(settings.effort).toBe("max");
     expect(settings.policy).toBe("manual");
+    expect(settings.contextMode).toBe("context");
     expect(settings.sources.enabled).toBe("default");
     expect(settings.contextSharingConsent).toBeNull();
     expect(advisorRunnable(settings)).toBe(false);
@@ -179,6 +185,36 @@ describe("ocx advisor consent", () => {
       { model: "expert/m" },
     ]);
   });
+
+  // The human line is the operator's only confirmation. An unconditional "stops transfer" claim
+  // would promise cancellation the runtime cannot perform: consent is re-read before dispatch, so
+  // a revocation reaches pending consultations and nothing already sent.
+  test("the human revoke line names the undispatched-only boundary", async () => {
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (line?: unknown) => { lines.push(String(line)); };
+    try {
+      expect(await handleAdvisorCommand(["consent", "--revoke"], depsWith([]))).toBe(0);
+    } finally {
+      console.log = original;
+    }
+    const output = lines.join("\n");
+    expect(output).toContain("not yet dispatched");
+    expect(output).toContain("cannot be cancelled");
+    expect(output).toContain("cannot be retracted");
+  });
+
+  test("revoke JSON remains the settings payload without the human line", async () => {
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (line?: unknown) => { lines.push(String(line)); };
+    try {
+      expect(await handleAdvisorCommand(["consent", "--revoke", "--json"], depsWith([]))).toBe(0);
+    } finally {
+      console.log = original;
+    }
+    expect(JSON.parse(lines.join("\n"))).toEqual({ settings: { contextSharingConsent: null }, runnable: false });
+  });
 });
 
 describe("ocx advisor set — clearing the model", () => {
@@ -217,10 +253,10 @@ test("Advisor CLI exposes activity and adaptive task allowance without granting 
     return Response.json({ entries: [] });
   }) as typeof fetch };
   expect(await handleAdvisorCommand(["activity", "--json"], deps)).toBe(0);
-  expect(await handleAdvisorCommand(["set", "--policy", "adaptive", "--max-consultations", "2", "--json"], deps)).toBe(0);
+  expect(await handleAdvisorCommand(["set", "--policy", "adaptive", "--context-mode", "question-only", "--max-consultations", "2", "--json"], deps)).toBe(0);
   expect(requests).toEqual([
     { path: "/api/advisor/activity", body: null },
-    { path: "/api/advisor/settings", body: { policy: "adaptive", maxConsultationsPerTask: 2 } },
+    { path: "/api/advisor/settings", body: { policy: "adaptive", contextMode: "question-only", maxConsultationsPerTask: 2 } },
   ]);
   expect(await handleAdvisorCommand(["set", "--max-consultations", "4"], deps)).toBe(2);
   expect(requests).toHaveLength(2);

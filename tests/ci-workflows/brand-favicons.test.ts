@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { repoPath } from "../helpers/repo-root";
 
 /**
- * The favicons the dashboard and the documentation site serve are generated from the app icon
+ * The favicons the dashboard and the documentation site serve are generated from the brand mark
  * vector by scripts/brand-favicons.ts. That script's --check compares byte for byte and needs
  * rsvg-convert, which CI does not have, so what is asserted here is the shape of the committed
  * set: the sizes the sites reference, the alpha channel, and the one property the old artwork
@@ -143,31 +143,30 @@ describe("brand favicons", () => {
   });
 
   /**
-   * The regression the generator exists for. Both favicons are now drawn on the opaque backdrop
-   * the app icon uses, so they composite against a light tab strip instead of disappearing into
-   * it. The documentation artwork this replaces was white on transparency with a corner alpha of
-   * 3 and no fully opaque pixel anywhere.
+   * The regression the generator exists for. The documentation artwork this replaced was white on
+   * transparency, so a light tab strip swallowed it. The favicons are now the near-black brand mark
+   * on transparency with no backdrop tile, so the check composites each one onto a white tab strip
+   * and requires the mark itself to read there.
    */
   test("both favicons show on a light tab instead of vanishing into it", () => {
     const failures: string[] = [];
     for (const output of pngs.keys()) {
       const { width, height, pixels } = decode(readFileSync(repoPath(output)));
-
-      // An opaque light corner is the backdrop rather than transparency.
-      const corner = luminance(pixels, 0);
-      if (pixels[3] !== 255) failures.push(output + ": corner alpha " + pixels[3]);
-      if (corner < 200) failures.push(output + ": corner luminance " + corner.toFixed(0));
-
-      // A backdrop alone is not a favicon. An opaque white square passes the check above and is
-      // still invisible, so the mark has to actually be there: count the pixels that survive
-      // compositing and differ from the backdrop enough to read at tab size.
+      // No backdrop tile: the corners stay transparent so the tab strip shows through.
+      const corners = [0, (width - 1) * 4, (height - 1) * width * 4, (height * width - 1) * 4];
+      for (const at of corners) {
+        if (pixels[at + 3] !== 0) failures.push(output + ": corner alpha " + pixels[at + 3]);
+      }
+      // Composite onto a white tab strip and count pixels that differ from it enough to read at
+      // tab size. A white mark (the old bug) or an empty canvas both fail here.
       let ink = 0;
       for (let at = 0; at < pixels.length; at += 4) {
-        if (pixels[at + 3]! < 128) continue;
-        if (Math.abs(luminance(pixels, at) - corner) > 64) ink += 1;
+        const alpha = pixels[at + 3]! / 255;
+        const over = 255 * (1 - alpha) + luminance(pixels, at) * alpha;
+        if (255 - over > 64) ink += 1;
       }
       const coverage = ink / (width * height);
-      if (coverage < 0.1) failures.push(output + ": only " + (coverage * 100).toFixed(1) + "% ink");
+      if (coverage < 0.1) failures.push(output + ": only " + (coverage * 100).toFixed(1) + "% ink on a light tab");
     }
     expect(failures, "these favicons vanish on a light tab strip").toEqual([]);
   });

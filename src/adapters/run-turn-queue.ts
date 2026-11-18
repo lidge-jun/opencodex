@@ -1,4 +1,5 @@
 import type { AdapterEvent } from "../types";
+import { truncationReasonFor } from "../responses/truncated-stop-reason";
 
 type QueueReader = (result: IteratorResult<AdapterEvent>) => void;
 
@@ -158,29 +159,107 @@ async function* replay(
   }
 }
 
+export const DEFAULT_MAX_REASONING_EVENTS = 65_536;
+
+/**
+ * Required-tool reasoning and zero-output token-limit preflight may hold buffered reasoning,
+ * but never for an unbounded/trickling prelude. Bound the reasoning hold to commit and replay.
+ */
+export const DEFAULT_MAX_REASONING_HOLD_MS = 1_000;
+
+/**
+ * Classifies an adapter terminal event that reached an output token limit before producing output.
+ *
+ * When an upstream candidate exhausts its max output token budget without emitting any text or tool
+ * calls, this classifies the event as an HTTP 502 `zero_output_token_limit` error so combo failover
+ * can attempt a backup target. Candidate cooling is request-local (`comboFailureCooldownScope` returns
+ * "none") because the failure is specific to the requested token limit rather than provider unhealthiness.
+ */
+export function classifyZeroOutputTokenLimit(
+  event: AdapterEvent,
+  options?: { allowCompactionWithContent?: boolean },
+): Extract<AdapterEvent, { type: "error" }> | undefined {
+  const zeroOutputLimit = event.type === "incomplete"
+    ? event.reason === "max_output_tokens" && event.retryable !== false && event.endTurn !== false && !event.providerState
+    : event.type === "done"
+      && event.stopReason?.trim().toLowerCase() !== "pause_turn"
+      && (["max_tokens", "length", "max_output_tokens"].includes(event.stopReason ?? "") || truncationReasonFor(event.stopReason) === "max_output_tokens")
+      && event.endTurn !== false && !event.providerState && (options?.allowCompactionWithContent || !event.compactionEncryptedContent);
+  if (!zeroOutputLimit) return undefined;
+  // With bufferCompaction, a compaction summary may have been produced in-memory without streaming.
+  // When that run terminates on max_tokens, classify it under the same code so failover can advance,
+  // since zero output was committed/streamed to the client.
+  const message = options?.allowCompactionWithContent
+    ? "Remote compaction reached output token limit before completing"
+    : "Provider reached its output token limit before producing output";
+  return {
+    type: "error", status: 502, errorType: "upstream_error", code: "zero_output_token_limit",
+    message,
+    ...((event.type === "done" || event.type === "incomplete") && event.usage ? { usage: event.usage } : {}),
+  };
+}
+
+export function isReasoningEvent(event: AdapterEvent): boolean {
+  return event.type === "thinking_delta"
+    || event.type === "thinking_signature"
+    || event.type === "redacted_thinking"
+    || event.type === "kiro_redacted_reasoning"
+    || event.type === "reasoning_raw_delta";
+}
+
+export function isContentEvent(event: AdapterEvent): boolean {
+  switch (event.type) {
+    case "text_delta":
+      return event.text.length > 0;
+    case "tool_call_start":
+    case "tool_call_delta":
+    case "tool_call_end":
+    case "web_search_call_begin":
+    case "web_search_call_end":
+      return true;
+    default:
+      return false;
+  }
+}
+
 export async function preflightAdapterEvents(
   source: AsyncIterable<AdapterEvent>,
   classifyFirstEvent?: (event: AdapterEvent) => Extract<AdapterEvent, { type: "error" }> | undefined,
-  options?: { maxWaitMs?: number; honorReady?: boolean },
+  options?: {
+    maxWaitMs?: number;
+    honorReady?: boolean;
+    bufferCompaction?: boolean;
+    maxReasoningHoldMs?: number;
+  },
 ): Promise<AdapterEventPreflight> {
   const iterator = source[Symbol.asyncIterator]();
   const buffered: AdapterEvent[] = [];
   let replayUnsafe = false;
+  let bufferedReasoningCodeUnits = 0;
   const maxWaitMs = options?.maxWaitMs;
   if (maxWaitMs !== undefined && maxWaitMs <= 0) {
     return { stream: replay(buffered, iterator), empty: false, replayUnsafe, timedOut: true };
   }
   let timeout: ReturnType<typeof setTimeout> | undefined;
   let timeoutPromise: Promise<"timeout"> | undefined;
+  let retainedHeartbeats = 0;
   if (maxWaitMs !== undefined) {
     timeoutPromise = new Promise(resolve => {
       timeout = setTimeout(() => resolve("timeout"), maxWaitMs);
     });
   }
+  const maxReasoningHoldMs = options?.maxReasoningHoldMs !== undefined
+    ? options.maxReasoningHoldMs
+    : DEFAULT_MAX_REASONING_HOLD_MS;
+  let reasoningTimeout: ReturnType<typeof setTimeout> | undefined;
+  let reasoningPromise: Promise<"reasoning-hold-expired"> | undefined;
   try {
     while (true) {
       const pendingNext = iterator.next();
-      const raced = timeoutPromise ? await Promise.race([pendingNext, timeoutPromise]) : await pendingNext;
+      const raceCandidates: Promise<IteratorResult<AdapterEvent> | "timeout" | "reasoning-hold-expired">[] = [pendingNext];
+      if (timeoutPromise) raceCandidates.push(timeoutPromise);
+      if (reasoningPromise) raceCandidates.push(reasoningPromise);
+      const raced = await Promise.race(raceCandidates);
       if (raced === "timeout") {
         return {
           stream: replay(buffered, iterator, pendingNext),
@@ -189,19 +268,73 @@ export async function preflightAdapterEvents(
           timedOut: true,
         };
       }
+      if (raced === "reasoning-hold-expired") {
+        return {
+          stream: replay(buffered, iterator, pendingNext),
+          empty: false,
+          replayUnsafe,
+        };
+      }
       const next = raced;
-      if (next.done) return { stream: replay(buffered, iterator), empty: true, replayUnsafe };
+      if (next.done) {
+        const hasMeaningful = buffered.some(event => event.type !== "heartbeat");
+        return { stream: replay(buffered, iterator), empty: !hasMeaningful, replayUnsafe };
+      }
       if (next.value.type === "heartbeat") {
+        const wasUnsafe = replayUnsafe;
         replayUnsafe ||= next.value.replayUnsafe === true;
         // Preserve the latch in replay even after the original unsafe heartbeat is evicted.
         buffered.push(replayUnsafe ? { ...next.value, replayUnsafe: true } : next.value);
+        retainedHeartbeats += 1;
+        if (replayUnsafe && !wasUnsafe) {
+          for (let i = 0; i < buffered.length; i++) {
+            const ev = buffered[i];
+            if (ev.type === "heartbeat" && !ev.replayUnsafe) {
+              buffered[i] = { ...ev, replayUnsafe: true };
+            }
+          }
+        }
         if (next.value.preflightReady === true && options?.honorReady !== false) {
           return { stream: replay(buffered, iterator), empty: false, replayUnsafe, ready: true };
         }
-        if (buffered.length > PREFLIGHT_HEARTBEAT_RETAIN_LIMIT) buffered.shift();
+        if (retainedHeartbeats > PREFLIGHT_HEARTBEAT_RETAIN_LIMIT) {
+          const firstHeartbeatIndex = buffered.findIndex(e => e.type === "heartbeat");
+          if (firstHeartbeatIndex !== -1) {
+            buffered.splice(firstHeartbeatIndex, 1);
+            retainedHeartbeats -= 1;
+          }
+        }
         continue;
       }
-      const classifiedError = replayUnsafe ? undefined : classifyFirstEvent?.(next.value);
+      const shouldBuffer = classifyFirstEvent !== undefined || options?.bufferCompaction === true;
+      const emptyDelta = next.value.type === "text_delta" && next.value.text.length === 0;
+      const isBufferingEvent = isReasoningEvent(next.value)
+        || emptyDelta
+        || (options?.bufferCompaction === true && next.value.type === "text_delta");
+
+      if (isBufferingEvent) {
+        if (!shouldBuffer || maxReasoningHoldMs <= 0) {
+          buffered.push(next.value);
+          return { stream: replay(buffered, iterator), empty: false, replayUnsafe };
+        }
+        if (!reasoningPromise && maxReasoningHoldMs > 0) {
+          reasoningPromise = new Promise(resolve => {
+            reasoningTimeout = setTimeout(() => resolve("reasoning-hold-expired"), maxReasoningHoldMs);
+          });
+        }
+        buffered.push(next.value);
+        bufferedReasoningCodeUnits += retainedEventCodeUnits(next.value);
+        if (buffered.length > DEFAULT_MAX_REASONING_EVENTS || bufferedReasoningCodeUnits > DEFAULT_MAX_EVENT_CODE_UNITS) {
+          return { stream: replay(buffered, iterator), empty: false, replayUnsafe };
+        }
+        continue;
+      }
+      const hasPriorMeaningful = buffered.some(e => e.type !== "heartbeat");
+      const classifiedError = replayUnsafe
+        ? undefined
+        : hasPriorMeaningful
+          ? (next.value.type === "done" || next.value.type === "incomplete" ? classifyFirstEvent?.(next.value) : undefined)
+          : classifyFirstEvent?.(next.value);
       if (classifiedError) {
         buffered.push(classifiedError);
         await iterator.return?.();
@@ -216,6 +349,7 @@ export async function preflightAdapterEvents(
     }
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
+    if (reasoningTimeout !== undefined) clearTimeout(reasoningTimeout);
   }
 }
 

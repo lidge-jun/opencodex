@@ -9,6 +9,7 @@ export function AddCodexAccountWaitingStep({
   deviceCode,
   instructions,
   browserLaunch,
+  deviceOnly,
   manualCode,
   manualCodeBusy,
   manualCodeWaiting,
@@ -27,6 +28,8 @@ export function AddCodexAccountWaitingStep({
   deviceCode?: string;
   instructions?: string;
   browserLaunch?: BrowserLaunch;
+  /** The proxy's configuration requires the device grant for Codex logins. */
+  deviceOnly?: boolean;
   manualCode: string;
   manualCodeBusy: boolean;
   manualCodeWaiting: boolean;
@@ -46,6 +49,7 @@ export function AddCodexAccountWaitingStep({
     <>
       <h3 style={{ marginBottom: 4 }}>{reauthAccountId ? t("codexAuth.reauthenticate") : t("codexAuth.oauthLogin")}</h3>
       <p className="modal-desc">{t("codexAuth.oauthWaiting")}</p>
+      {deviceOnly && <p className="modal-desc">{t("codexAuth.deviceOnlyEnforced")}</p>}
       <LoginHint
         hint={{ url: authUrl, deviceCode, instructions, browserLaunch }}
         paste={{

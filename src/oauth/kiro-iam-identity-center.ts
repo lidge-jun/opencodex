@@ -55,7 +55,10 @@ async function listProfilesInRegion(reply: KiroIamReply, access: string, region:
   const tokens = new Set<string>();
   let nextToken: string | undefined;
   for (let page = 0; page < 8; page++) {
-    const data = await call(reply, access, region, "ListAvailableProfiles", { maxResults: 50, ...(nextToken ? { nextToken } : {}) });
+    // No maxResults: AWS answers maxResults above 10 with 400 ValidationException, and other
+    // Kiro clients report 400 REQUEST_BODY_INVALID for any maxResults; the default page plus
+    // nextToken pagination works for both.
+    const data = await call(reply, access, region, "ListAvailableProfiles", nextToken ? { nextToken } : {});
     if (!Array.isArray(data.profiles)) throw new Error("Kiro IAM profiles unavailable");
     for (const item of data.profiles) {
       const profile = record(item);

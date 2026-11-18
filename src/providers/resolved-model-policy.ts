@@ -43,6 +43,7 @@ export type StaticProviderPolicyField =
   | "reasoningDetailsModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "showThinkingSummary"
   | "escapeBuiltinToolNames" | "googleMode" | "project" | "location" | "modelCapabilities"
   | "modelAutoCompactTokenLimits" | "modelSuppressSyntheticMax" | "modelReasoningSummaryDelivery"
+  | "thinkingDisplay" | "modelThinkingDisplay"
   | "codexToolMode" | "modelAdapters";
 type StaticProviderPolicyShape = Pick<OcxProviderConfig, StaticProviderPolicyField>;
 export type ResolvedProviderStaticPolicy = Readonly<Partial<StaticProviderPolicyShape>> & Readonly<{
@@ -60,6 +61,7 @@ export interface ResolvedPerModelStaticPolicy extends Readonly<ReasoningCapabili
   readonly supportsReasoningSummaries?: boolean;
   readonly supportsVerbosity?: boolean;
   readonly supportsServiceTier?: boolean;
+  readonly supportsResponsesCustomTools?: boolean;
   readonly fastTierDescription?: string;
   readonly directReasoningEffort?: boolean;
   readonly responsesUpstreamStreaming?: boolean;
@@ -182,6 +184,8 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
     "supportsVerbosity", "responsesItemIdRepair",
     "showThinkingSummary", "escapeBuiltinToolNames", "googleMode", "project", "location",
   ] as const) putScalar(key, entry?.[key] as StaticProviderPolicyShape[typeof key] | undefined);
+  // Operator-only display policy; no registry entry declares it (#8363).
+  put("thinkingDisplay", provider.thinkingDisplay, provider.thinkingDisplay !== undefined ? "operator" : "unknown");
   const legacyClinePassLadder = entry !== undefined && input.providerName === "cline-pass"
     && provider.reasoningWireFormat === "gateway-object"
     && sameStringArray(provider.reasoningEfforts, ["low"]);
@@ -218,6 +222,7 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
   for (const key of [
     "modelAutoCompactTokenLimits", "modelSuppressSyntheticMax",
     "modelReasoningSummaryDelivery", "codexToolMode", "modelAdapters",
+    "modelThinkingDisplay",
   ] as const) putScalar(key, undefined);
   put("modelCapabilities", mergeReasoningModelCapabilities(entry?.modelCapabilities, provider.modelCapabilities),
     provider.modelCapabilities !== undefined ? "operator-capability" : entry?.modelCapabilities !== undefined ? "registry" : "unknown");
@@ -344,6 +349,8 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
   const modelSupportsServiceTier = fastOff
     ? false
     : modelValue(providerPolicy.modelSupportsServiceTier) ?? providerPolicy.supportsServiceTier;
+  const modelSupportsResponsesCustomTools = input.modelCapabilities?.responsesCustomTools
+    ?? providerPolicy.supportsResponsesCustomTools;
   const model: ResolvedPerModelStaticPolicy = {
     adapter,
     ...reasoningCapabilities,
@@ -358,6 +365,7 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
     ...(modelSupportsReasoningSummaries !== undefined ? { supportsReasoningSummaries: modelSupportsReasoningSummaries } : {}),
     ...(modelSupportsVerbosity !== undefined ? { supportsVerbosity: modelSupportsVerbosity } : {}),
     ...(modelSupportsServiceTier !== undefined ? { supportsServiceTier: modelSupportsServiceTier } : {}),
+    ...(modelSupportsResponsesCustomTools !== undefined ? { supportsResponsesCustomTools: modelSupportsResponsesCustomTools } : {}),
     ...(modelSupportsServiceTier === true && entry?.fastTierDescription !== undefined
       ? { fastTierDescription: entry.fastTierDescription }
       : {}),
@@ -408,6 +416,9 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
   const exactServiceTierSource = modelSource(provider.modelSupportsServiceTier, registryServiceTierDefaults);
   modelProvenance.supportsServiceTier = !fastOff && exactServiceTierSource !== "unknown" ? exactServiceTierSource
     : providerProvenance.supportsServiceTier ?? "unknown";
+  modelProvenance.supportsResponsesCustomTools = input.modelCapabilities?.responsesCustomTools !== undefined
+    ? "operator-capability"
+    : providerProvenance.supportsResponsesCustomTools ?? "unknown";
   modelProvenance.responsesUpstreamStreaming = model.responsesUpstreamStreaming === undefined ? "unknown" : "registry";
   modelProvenance.responsesTerminalRepair = model.responsesTerminalRepair === undefined ? "unknown" : "registry";
   modelProvenance.fastTierDescription = model.fastTierDescription === undefined ? "unknown" : "registry";

@@ -32,29 +32,25 @@ interface ShimRestoreLockRecord {
   createdAt: number;
 }
 
-interface ShimRestoreLockSnapshot {
+interface ShimRestoreLockOwner {
   record: ShimRestoreLockRecord;
   ownerPath: string;
-  lockIdentity: FileIdentity;
   fingerprint: ShimPathFingerprint;
+}
+
+interface ShimRestoreLockSnapshot {
+  lockIdentity: FileIdentity;
+  /** Sorted by owner filename so two snapshots compare entry by entry. */
+  owners: ShimRestoreLockOwner[];
 }
 
 function restoreLockPath(): string {
   return join(getConfigDir(), "codex-shim.autorestore.lock");
 }
 
-function readShimRestoreLockSnapshot(path: string): ShimRestoreLockSnapshot | null {
-  let lockIdentity: BigIntStats;
-  let entries: string[];
-  try {
-    lockIdentity = lstatSync(path, { bigint: true });
-    if (!lockIdentity.isDirectory()) return null;
-    entries = readdirSync(path);
-  } catch {
-    return null;
-  }
-  if (entries.length !== 1 || !entries[0].endsWith(".json")) return null;
-  const ownerPath = join(path, entries[0]);
+function readShimRestoreLockOwner(path: string, entry: string): ShimRestoreLockOwner | null {
+  if (!entry.endsWith(".json")) return null;
+  const ownerPath = join(path, entry);
   const probe = stableShimPathProbe(ownerPath);
   if (!probe || probe.fingerprint.kind !== "file" || probe.fingerprint.size > 4096) return null;
   try {
@@ -62,40 +58,81 @@ function readShimRestoreLockSnapshot(path: string): ShimRestoreLockSnapshot | nu
     if (value.version !== 1 || typeof value.token !== "string" || value.token.length === 0
       || typeof value.pid !== "number" || !Number.isSafeInteger(value.pid) || value.pid <= 0
       || typeof value.createdAt !== "number" || !Number.isFinite(value.createdAt)) return null;
-    if (entries[0] !== `${value.token}.json`) return null;
-    const currentLockIdentity = lstatSync(path, { bigint: true });
-    if (!currentLockIdentity.isDirectory() || !sameFileIdentity(lockIdentity, currentLockIdentity)) return null;
-    return {
-      record: value as ShimRestoreLockRecord,
-      ownerPath,
-      lockIdentity,
-      fingerprint: probe.fingerprint,
-    };
+    if (entry !== `${value.token}.json`) return null;
+    return { record: value as ShimRestoreLockRecord, ownerPath, fingerprint: probe.fingerprint };
   } catch {
     return null;
   }
 }
 
-function sameShimRestoreLock(left: ShimRestoreLockSnapshot, right: ShimRestoreLockSnapshot): boolean {
-  return left.record.token === right.record.token
-    && sameFileIdentity(left.lockIdentity, right.lockIdentity)
-    && sameFingerprint(left.fingerprint, right.fingerprint);
+/**
+ * Every entry must be a valid token-named owner record; one unaccounted entry (foreign file,
+ * unparsable or empty record, mismatched name) makes the whole lock unreadable. A normal lock
+ * holds one owner. Two or more are not produced by the current acquire path, but have been
+ * observed in the field (#8317) and must stay recoverable rather than block repair forever.
+ */
+function readShimRestoreLockSnapshot(path: string): ShimRestoreLockSnapshot | null {
+  let lockIdentity: BigIntStats;
+  let entries: string[];
+  try {
+    lockIdentity = lstatSync(path, { bigint: true });
+    if (!lockIdentity.isDirectory()) return null;
+    entries = readdirSync(path).sort();
+  } catch {
+    return null;
+  }
+  if (entries.length === 0) return null;
+  const owners: ShimRestoreLockOwner[] = [];
+  for (const entry of entries) {
+    const owner = readShimRestoreLockOwner(path, entry);
+    if (!owner) return null;
+    owners.push(owner);
+  }
+  try {
+    const currentLockIdentity = lstatSync(path, { bigint: true });
+    if (!currentLockIdentity.isDirectory() || !sameFileIdentity(lockIdentity, currentLockIdentity)) return null;
+  } catch {
+    return null;
+  }
+  return { lockIdentity, owners };
 }
 
+/** Release only ever removes a lock it solely owns; an ambiguous set is left to stale recovery. */
+function soleShimRestoreLockOwner(path: string): ShimRestoreLockOwner | null {
+  const snapshot = readShimRestoreLockSnapshot(path);
+  return snapshot?.owners.length === 1 ? snapshot.owners[0] : null;
+}
+
+function sameShimRestoreLock(left: ShimRestoreLockSnapshot, right: ShimRestoreLockSnapshot): boolean {
+  return sameFileIdentity(left.lockIdentity, right.lockIdentity)
+    && left.owners.length === right.owners.length
+    && left.owners.every((owner, index) => owner.record.token === right.owners[index].record.token
+      && sameFingerprint(owner.fingerprint, right.owners[index].fingerprint));
+}
+
+/**
+ * Reclaim requires every owner record to be past the stale window and to name a dead PID.
+ * Any live, fresh or unaccounted entry keeps the lock: age alone never evicts a live holder,
+ * and an entry this code cannot attribute might belong to an owner it cannot judge.
+ */
 function reclaimStaleRestoreLock(path: string, beforeDelete?: () => void): boolean {
   const observed = readShimRestoreLockSnapshot(path);
   if (!observed) return false;
-  const createdAt = Math.max(observed.record.createdAt, observed.fingerprint.mtimeMs);
-  if (Date.now() - createdAt <= CODEX_SHIM_RESTORE_LOCK_STALE_MS) return false;
-  if (isProcessAlive(observed.record.pid)) return false;
+  const now = Date.now();
+  for (const owner of observed.owners) {
+    const createdAt = Math.max(owner.record.createdAt, owner.fingerprint.mtimeMs);
+    if (now - createdAt <= CODEX_SHIM_RESTORE_LOCK_STALE_MS) return false;
+    if (isProcessAlive(owner.record.pid)) return false;
+  }
   const current = readShimRestoreLockSnapshot(path);
   if (!current || !sameShimRestoreLock(observed, current)) return false;
   beforeDelete?.();
   try {
-    // The token is part of the owner filename. Even if the lock directory is
-    // replaced after the comparison, this unlink cannot target a successor's
-    // differently named owner record.
-    unlinkSync(observed.ownerPath);
+    // The token is part of each owner filename. Even if the lock directory is
+    // replaced after the comparison, these unlinks cannot target a successor's
+    // differently named owner record. A failure part-way leaves a smaller set
+    // of the same dead owners, which the next attempt reclaims.
+    for (const owner of observed.owners) unlinkSync(owner.ownerPath);
     rmdirSync(path);
     return true;
   } catch {
@@ -132,7 +169,7 @@ function tryAcquireShimRestoreLock(beforeStaleDelete?: () => void): ShimRestoreL
           released = true;
           try { closeSync(fd!); } catch { /* stale recovery handles an uncertain lock */ }
           try {
-            const current = readShimRestoreLockSnapshot(path);
+            const current = soleShimRestoreLockOwner(path);
             if (identity && current && current.record.token === record.token
               && sameFileIdentity(identity, current.fingerprint.identity)) {
               unlinkSync(ownerPath);
@@ -145,7 +182,7 @@ function tryAcquireShimRestoreLock(beforeStaleDelete?: () => void): ShimRestoreL
       if (fd !== null) {
         try { closeSync(fd); } catch { /* best-effort close before ownership cleanup */ }
         try {
-          const current = readShimRestoreLockSnapshot(path);
+          const current = soleShimRestoreLockOwner(path);
           if (identity && current && current.record.token === record.token
             && sameFileIdentity(identity, current.fingerprint.identity)) {
             unlinkSync(ownerPath);

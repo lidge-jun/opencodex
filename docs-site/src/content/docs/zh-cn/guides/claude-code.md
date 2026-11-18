@@ -52,7 +52,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（以订阅方式启动且未设置时为原生 `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`） |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | OpenCodex 将层级槽位设为路由别名时对应的 `/model` 标签（例如 `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`）。launchd 系统环境和 shell 钩子中也成对写入。模型 ID 仍为别名。您自己设置的槽位或标签不会被修改 |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | 启用 `alwaysEnableEffort` 时设为 `1`（条件注入） |
-| `ENABLE_TOOL_SEARCH` | 设置了 `claudeCode.toolSearch` 时注入（条件注入，默认关闭） |
+| `ENABLE_TOOL_SEARCH` | 设置了 `claudeCode.toolSearch` 时注入（条件注入；默认不注入，沿用 Claude Code 自身的默认值） |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | 设置 `maxContextTokens` 时使用的旧版上下文覆盖项（条件注入） |
 你自行导出的变量始终优先。额外参数会直接透传：`ocx claude -p "hello"`。
 
@@ -117,8 +117,17 @@ Anthropic。若任一提供方请求头包含代理准入密钥，该密钥会�
 
 使用代理已保存 OAuth 凭据的受管理原生请求还会统一已声明自定义工具在延迟引用和内联添加或删除中的名称。参数、模式和缓存标记保持不变。系统消息中的内联工具变更需要发送 `inline-tools-2026-09-15`；存在相应类型的块时，面向 Anthropic 官方 API 的构建器会保留该请求头。
 
-可以设置 `claudeCode.nativePassthrough: false` 来禁用；也可以通过
-`claudeCode.anthropicBaseUrl` 指向其他位置。
+可以设置 `claudeCode.nativePassthrough: false`、运行 `ocx claude config set --native-passthrough off`，
+或关闭仪表盘 Providers → Anthropic Claude → Accounts 中 Claude 账户池下方的 **Claude 原生透传** 开关来禁用；也可以通过
+`claudeCode.anthropicBaseUrl` 指向其他位置。Claude 模型选择器和 Claude Desktop 传入的别名先于 `modelMap` 解析。以原始模型 ID 为键的
+`modelMap` 条目，无论透传开启还是关闭，都会将请求发送到其他提供商的目标模型。关闭透传后，没有映射的原始
+Claude 模型 ID 会交给路由器。路由器先检查路由策略别名，再检查组合别名。
+两者均不匹配时，依次检查：`defaultModel` 为该 ID 的已启用提供商、已启用的
+`anthropic` 或 `anthropic-*` 提供商、模型列表包含该 ID 的提供商、提供商侧的模型别名，最后是默认提供商。
+当路由是 Anthropic OAuth 提供商时，由 OpenCodex 中保存的 Anthropic 账户处理请求；再保存一个账户即可在
+429 时故障转移，而主动的 Claude OAuth 账户池 需要开启 `anthropicAccountPool.enabled` 才会生效。
+路由从下一个请求开始按新设置执行；已在运行的 Claude Code 会话需要重新启动，以便模型槽位和上下文窗口
+保持一致。
 
 ## Claude Desktop 模式：网关（默认）与第一方
 
@@ -341,9 +350,7 @@ v1 别名按字面解码（历史上 model ID 中包含的两字符序列 `~s` /
 可以在 Claude 页面调整压缩值。**警告：**如果将其提高到超过模型的实际窗口，该模型将无法正常
 工作——聊天会在触发摘要之前报错。
 
-规范化上下文超限错误时，只使用提供方错误消息的前 65,536 个 UTF-16 代码单元。
-后面的诊断信息或 token 数可能被丢弃，且不会添加截断标记。
-详细限制和 token 数处理条件见[英文指南](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)。
+Messages 错误响应规范化使用固定文案，不保留提供方的原文或 token 数量。识别到上下文超限时返回 `prompt is too long: The request exceeds the model's context window.`。流中首个字段为 error 事件的块最多保留 1 MiB；超过后返回不含压缩触发短语的固定错误。范围和两项例外见[英文指南](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)。
 
 低于 1M 的原生 Anthropic 模型绝不会被自动标记。你自行导出的压缩值在启动槽位标记上始终优先（代理会使用**你的**
 值来判断哪些模型可以安全标记）。发现列表忽略该导出值并保持固定下限。手动编辑配置时填入的无效值会回退到 829,800。
@@ -538,9 +545,9 @@ role；`tool_result` 缺少 `tool_use_id`；`tool_use` 缺少 id/name；指定�
 **Anthropic 路由请求：**适配器会管理工具、系统内容和倒数第二条用户消息的缓存断点，以及顶层
 自动 `cache_control`。稳定轮次通常能达到约 99.9% 的缓存命中率。
 
-**原生 OpenAI/ChatGPT 路由：**派生会话范围的 `prompt_cache_key`（存在时取自
-`metadata.user_id`，否则回退到系统内容哈希）和用于缓存亲和性的 `session_id` 请求头。
-缓存键包含模型和完整的工具 schema。
+**原生 OpenAI/ChatGPT 路由：**派生 `prompt_cache_key`（`metadata.user_id` 为字符串时取自该值，
+否则回退到系统内容哈希），并仅在存在会话标识时派生用于缓存亲和性的 `session_id` 请求头（不会从共享回退键派生）。
+由系统内容哈希派生的回退键（仅在存在系统内容时使用）还包含模型和完整的工具 schema。
 
 **Token 计算：**Anthropic 输出会从 `input_tokens` 中减去 `cached_tokens` 和
 `cache_write_tokens`，并将它们分别公开为 `cache_read_input_tokens` 和

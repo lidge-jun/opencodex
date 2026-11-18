@@ -4,6 +4,23 @@ import type { CompanionSettings } from '../src/pages/usage-companion-utils';
 
 describe('tray data', () => {
   const now = Date.UTC(2026, 8, 21, 0);
+  test('OAuth tray identity uses only alias or the safe label and a localized ordinal', () => {
+    const parse = parseAccounts as unknown as (value: unknown, kind: string, ordinal: (index: number) => string) => ReturnType<typeof parseAccounts>;
+    const rows = parse({ accounts: [
+      { id: 'one', alias: 'Work', maskedLabel: 'f***t@example.com', email: 'first@example.com' },
+      { id: 'two', maskedLabel: 's***d@example.com', email: 'second@example.com' },
+      { id: 'three', email: 'third@example.com' },
+    ] }, 'oauth', index => `Account ${index}`);
+    expect(rows.map(row => row.label)).toEqual(['Work', 's***d@example.com', 'Account 3']);
+    expect(rows.map(row => row.email)).toEqual([undefined, undefined, undefined]);
+  });
+  test('blank Codex aliases fall through to the masked email or id', () => {
+    const rows = parseAccounts({ accounts: [
+      { id: 'one', alias: '  ', email: 'person@example.com' },
+      { id: 'two', alias: '\t' },
+    ] });
+    expect(rows.map(row => row.label)).toEqual(['p•••@e•••.com', 'two']);
+  });
   test('reset accepts seconds/milliseconds and rejects missing, invalid and expired observations', () => {
     for (const value of [undefined, null, 0, -1, NaN, Infinity, '2026-10-01', 9e18]) expect(resetTimestamp(value)).toBeNull();
     expect(resetTimestamp(now / 1000)).toBe(now);

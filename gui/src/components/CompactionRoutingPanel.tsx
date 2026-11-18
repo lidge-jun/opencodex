@@ -270,9 +270,13 @@ function CompactionRoutingControls({ apiBase, models, providers: providerList = 
         <div style={{ flex: "1 1 20rem", minWidth: 0 }}>
           <div className="font-semibold" id="compaction-routing-title">{t("compactionRouting.title")}</div>
           <div className="muted setting-hint">{t("compactionRouting.description")}</div>
-          <div className="muted setting-hint">{t("compactionRouting.dataNotice")}</div>
-          <div className="muted setting-hint">{t("compactionRouting.effortHint")}</div>
-          <div className="muted setting-hint">{t("compactionRouting.sourcesHint")}</div>
+          {/* The policy text stays one click away so the controls are not buried under it. */}
+          <details className="pv2-more">
+            <summary>{t("proxyV2.details")}</summary>
+            <div className="muted setting-hint">{t("compactionRouting.dataNotice")}</div>
+            <div className="muted setting-hint">{t("compactionRouting.effortHint")}</div>
+            <div className="muted setting-hint">{t("compactionRouting.sourcesHint")}</div>
+          </details>
         </div>
         <div className="dash-delegation-controls compaction-routing-controls" style={{ flex: "0 1 auto" }}>
           <div className="compaction-field">

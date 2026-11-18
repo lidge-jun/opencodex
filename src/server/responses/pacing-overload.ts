@@ -10,5 +10,5 @@ export function requestPacingOverloadResponse(error: unknown): Response | undefi
     "rate_limit_error",
     error.message,
     { retryAfter: String(error.retryAfterSeconds) },
-  ));
+  ), error.reason === "keys_exhausted" ? undefined : "pacing");
 }

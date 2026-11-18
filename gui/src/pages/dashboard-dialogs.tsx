@@ -7,6 +7,7 @@ import {
 import type { useDashboardData } from "./use-dashboard-data";
 import { shadowSourceModelLabel } from "./shadow-call-source";
 import SubagentSurfaceWarningModal from "../components/SubagentSurfaceWarningModal";
+import PlaintextV2ConsentModal from "../components/PlaintextV2ConsentModal";
 import { SUBAGENT_SURFACE_GUIDE_URL } from "../subagent-surface";
 
 type Dash = ReturnType<typeof useDashboardData>;
@@ -213,7 +214,15 @@ export function DashboardDialogs(d: Dash) {
           </div>
         </div>
       </dialog>
-      {(pendingMaMode || maAdvisoryOpen) && (
+      {pendingMaMode === "v2-plaintext" ? (
+        // Dedicated consent: one checkbox-gated PUT covers the experimental plaintext notice
+        // and the mode write; the generic advisory warning stays for every other reason.
+        <PlaintextV2ConsentModal
+          busy={maBusy}
+          onConfirm={() => { void keepMaMode(); }}
+          onDismiss={dismissMaSurfaceDialog}
+        />
+      ) : (pendingMaMode || maAdvisoryOpen) && (
         <SubagentSurfaceWarningModal
           reason={pendingMaMode ? "selection" : "advisory"}
           mode={pendingMaMode ?? maAdvisory?.mode ?? "default"}

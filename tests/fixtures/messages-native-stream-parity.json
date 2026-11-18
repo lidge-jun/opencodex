@@ -1,0 +1,499 @@
+{
+  "baseCommit": "895a859893147d3056ebd1881ec398ab03b037d2",
+  "results": {
+    "tap-overflow": {
+      "bytes": "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"request_too_large\",\"message\":\"prompt is too long zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e\"},\"request_id\":\"zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e\"}\n\n",
+      "calls": [
+        {
+          "status": 200,
+          "closeReason": "terminal"
+        }
+      ],
+      "cancelled": []
+    },
+    "native-fixture-overflow": {
+      "status": 200,
+      "bytes": "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"request_too_large\",\"message\":\"prompt is too long zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e\"},\"request_id\":\"zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e\"}\n\n",
+      "sends": 1,
+      "cancelled": [],
+      "settlements": [
+        {
+          "status": 200,
+          "closeReason": "terminal",
+          "mode": "native"
+        }
+      ]
+    },
+    "native-anthropic-overflow": {
+      "status": 200,
+      "bytes": "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"request_too_large\",\"message\":\"prompt is too long zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e\"},\"request_id\":\"zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e\"}\n\n",
+      "sends": 1,
+      "cancelled": [],
+      "settlements": [
+        {
+          "status": 200,
+          "closeReason": "terminal",
+          "mode": "native"
+        }
+      ]
+    },
+    "tap-throughput": {
+      "bytes": "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"too many tokens per minute zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e\"},\"request_id\":\"zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e\"}\n\n",
+      "calls": [
+        {
+          "status": 200,
+          "closeReason": "terminal"
+        }
+      ],
+      "cancelled": []
+    },
+    "native-fixture-throughput": {
+      "status": 200,
+      "bytes": "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"too many tokens per minute zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e\"},\"request_id\":\"zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e\"}\n\n",
+      "sends": 1,
+      "cancelled": [],
+      "settlements": [
+        {
+          "status": 200,
+          "closeReason": "terminal",
+          "mode": "native"
+        }
+      ]
+    },
+    "native-anthropic-throughput": {
+      "status": 200,
+      "bytes": "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"too many tokens per minute zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e\"},\"request_id\":\"zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e\"}\n\n",
+      "sends": 1,
+      "cancelled": [],
+      "settlements": [
+        {
+          "status": 200,
+          "closeReason": "terminal",
+          "mode": "native"
+        }
+      ]
+    },
+    "tap-guard": {
+      "bytes": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"role\":\"assistant\",\"content\":[],\"model\":\"wire-model\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"fixture\",\"name\":\"undeclared\"}}\n\n\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"anthropic passthrough upstream stream ended before message_stop\"}}\n\n",
+      "calls": [
+        {
+          "status": 502,
+          "terminalStatus": "failed",
+          "closeReason": "terminal"
+        }
+      ],
+      "cancelled": [],
+      "usage": {
+        "inputTokens": 5,
+        "outputTokens": 0
+      },
+      "phase": "mid_stream",
+      "source": "synthetic"
+    },
+    "native-fixture-guard": {
+      "status": 200,
+      "bytes": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"role\":\"assistant\",\"content\":[],\"model\":\"fixture/wire-model\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"routed provider emitted undeclared client tool; only request-declared tools may be called\",\"code\":\"undeclared_tool_call\"}}\n\n",
+      "sends": 1,
+      "cancelled": [],
+      "usage": {
+        "inputTokens": 5,
+        "outputTokens": 0
+      },
+      "settlements": [
+        {
+          "status": 502,
+          "terminalStatus": "failed",
+          "closeReason": "terminal",
+          "mode": "native"
+        }
+      ]
+    },
+    "native-anthropic-guard": {
+      "status": 200,
+      "bytes": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"role\":\"assistant\",\"content\":[],\"model\":\"anthropic/wire-model\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"routed provider emitted undeclared client tool; only request-declared tools may be called\",\"code\":\"undeclared_tool_call\"}}\n\n",
+      "sends": 1,
+      "cancelled": [],
+      "usage": {
+        "inputTokens": 5,
+        "outputTokens": 0
+      },
+      "settlements": [
+        {
+          "status": 502,
+          "terminalStatus": "failed",
+          "closeReason": "terminal",
+          "mode": "native"
+        }
+      ]
+    },
+    "tap-eof": {
+      "bytes": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"role\":\"assistant\",\"content\":[],\"model\":\"wire-model\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"anthropic passthrough upstream stream ended before message_stop\"}}\n\n",
+      "calls": [
+        {
+          "status": 502,
+          "terminalStatus": "failed",
+          "closeReason": "terminal"
+        }
+      ],
+      "cancelled": [],
+      "usage": {
+        "inputTokens": 5,
+        "outputTokens": 0
+      },
+      "phase": "mid_stream",
+      "source": "synthetic"
+    },
+    "native-fixture-eof": {
+      "status": 200,
+      "bytes": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"role\":\"assistant\",\"content\":[],\"model\":\"fixture/wire-model\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"anthropic passthrough upstream stream ended before message_stop\"}}\n\n",
+      "sends": 1,
+      "cancelled": [],
+      "usage": {
+        "inputTokens": 5,
+        "outputTokens": 0
+      },
+      "phase": "mid_stream",
+      "source": "synthetic",
+      "streamAborted": true,
+      "settlements": [
+        {
+          "status": 502,
+          "terminalStatus": "failed",
+          "closeReason": "terminal",
+          "mode": "native"
+        }
+      ]
+    },
+    "native-anthropic-eof": {
+      "status": 200,
+      "bytes": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"role\":\"assistant\",\"content\":[],\"model\":\"anthropic/wire-model\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"anthropic passthrough upstream stream ended before message_stop\"}}\n\n",
+      "sends": 1,
+      "cancelled": [],
+      "usage": {
+        "inputTokens": 5,
+        "outputTokens": 0
+      },
+      "phase": "mid_stream",
+      "source": "synthetic",
+      "streamAborted": true,
+      "settlements": [
+        {
+          "status": 502,
+          "terminalStatus": "failed",
+          "closeReason": "terminal",
+          "mode": "native"
+        }
+      ]
+    },
+    "tap-stop-error": {
+      "bytes": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"role\":\"assistant\",\"content\":[],\"model\":\"wire-model\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"error\"}}\n\n\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"upstream ended the turn with stop_reason \\\"error\\\"\"}}\n\n",
+      "calls": [
+        {
+          "status": 502,
+          "terminalStatus": "failed",
+          "closeReason": "terminal"
+        }
+      ],
+      "cancelled": [],
+      "usage": {
+        "inputTokens": 5,
+        "outputTokens": 0
+      },
+      "phase": "mid_stream",
+      "source": "synthetic"
+    },
+    "native-fixture-stop-error": {
+      "status": 200,
+      "bytes": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"role\":\"assistant\",\"content\":[],\"model\":\"fixture/wire-model\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"error\"}}\n\n\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"upstream ended the turn with stop_reason \\\"error\\\"\"}}\n\n",
+      "sends": 1,
+      "cancelled": [],
+      "usage": {
+        "inputTokens": 5,
+        "outputTokens": 0
+      },
+      "phase": "mid_stream",
+      "source": "synthetic",
+      "streamAborted": true,
+      "settlements": [
+        {
+          "status": 502,
+          "terminalStatus": "failed",
+          "closeReason": "terminal",
+          "mode": "native"
+        }
+      ]
+    },
+    "native-anthropic-stop-error": {
+      "status": 200,
+      "bytes": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"role\":\"assistant\",\"content\":[],\"model\":\"anthropic/wire-model\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"error\"}}\n\n\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"upstream ended the turn with stop_reason \\\"error\\\"\"}}\n\n",
+      "sends": 1,
+      "cancelled": [],
+      "usage": {
+        "inputTokens": 5,
+        "outputTokens": 0
+      },
+      "phase": "mid_stream",
+      "source": "synthetic",
+      "streamAborted": true,
+      "settlements": [
+        {
+          "status": 502,
+          "terminalStatus": "failed",
+          "closeReason": "terminal",
+          "mode": "native"
+        }
+      ]
+    },
+    "tap-complete": {
+      "bytes": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"role\":\"assistant\",\"content\":[],\"model\":\"wire-model\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+      "calls": [
+        {
+          "status": 200,
+          "closeReason": "terminal"
+        }
+      ],
+      "cancelled": [],
+      "usage": {
+        "inputTokens": 5,
+        "outputTokens": 3
+      }
+    },
+    "native-fixture-complete": {
+      "status": 200,
+      "bytes": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"role\":\"assistant\",\"content\":[],\"model\":\"fixture/wire-model\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+      "sends": 1,
+      "cancelled": [],
+      "usage": {
+        "inputTokens": 5,
+        "outputTokens": 3
+      },
+      "settlements": [
+        {
+          "status": 200,
+          "closeReason": "terminal",
+          "mode": "native"
+        }
+      ]
+    },
+    "native-anthropic-complete": {
+      "status": 200,
+      "bytes": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"role\":\"assistant\",\"content\":[],\"model\":\"anthropic/wire-model\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+      "sends": 1,
+      "cancelled": [],
+      "usage": {
+        "inputTokens": 5,
+        "outputTokens": 3
+      },
+      "settlements": [
+        {
+          "status": 200,
+          "closeReason": "terminal",
+          "mode": "native"
+        }
+      ]
+    },
+    "tap-cap": {
+      "bytes": "\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"anthropic passthrough body exceeded 32 bytes\"}}\n\n",
+      "calls": [
+        {
+          "status": 502,
+          "terminalStatus": "incomplete",
+          "closeReason": "body_overflow"
+        }
+      ],
+      "cancelled": [
+        "QuotaExceededError"
+      ]
+    },
+    "native-fixture-cap": {
+      "status": 200,
+      "bytes": "\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"anthropic passthrough body exceeded 32 bytes\"}}\n\n",
+      "sends": 1,
+      "cancelled": [
+        "QuotaExceededError"
+      ],
+      "settlements": [
+        {
+          "status": 502,
+          "terminalStatus": "incomplete",
+          "closeReason": "body_overflow",
+          "mode": "native"
+        }
+      ]
+    },
+    "native-anthropic-cap": {
+      "status": 200,
+      "bytes": "\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"anthropic passthrough body exceeded 32 bytes\"}}\n\n",
+      "sends": 1,
+      "cancelled": [
+        "QuotaExceededError"
+      ],
+      "settlements": [
+        {
+          "status": 502,
+          "terminalStatus": "incomplete",
+          "closeReason": "body_overflow",
+          "mode": "native"
+        }
+      ]
+    },
+    "tap-stall": {
+      "bytes": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"role\":\"assistant\",\"content\":[],\"model\":\"wire-model\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"timeout_error\",\"message\":\"anthropic passthrough body stalled: no upstream bytes for 0s\"}}\n\n",
+      "calls": [
+        {
+          "status": 502,
+          "terminalStatus": "incomplete",
+          "closeReason": "body_stall"
+        }
+      ],
+      "cancelled": [
+        "TimeoutError"
+      ],
+      "usage": {
+        "inputTokens": 5,
+        "outputTokens": 0
+      }
+    },
+    "native-fixture-stall": {
+      "status": 200,
+      "bytes": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"role\":\"assistant\",\"content\":[],\"model\":\"fixture/wire-model\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"timeout_error\",\"message\":\"anthropic passthrough body stalled: no upstream bytes for 1s\"}}\n\n",
+      "sends": 1,
+      "cancelled": [
+        "TimeoutError"
+      ],
+      "usage": {
+        "inputTokens": 5,
+        "outputTokens": 0
+      },
+      "settlements": [
+        {
+          "status": 502,
+          "terminalStatus": "incomplete",
+          "closeReason": "body_stall",
+          "mode": "native"
+        }
+      ]
+    },
+    "native-anthropic-stall": {
+      "status": 200,
+      "bytes": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"role\":\"assistant\",\"content\":[],\"model\":\"anthropic/wire-model\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"timeout_error\",\"message\":\"anthropic passthrough body stalled: no upstream bytes for 1s\"}}\n\n",
+      "sends": 1,
+      "cancelled": [
+        "TimeoutError"
+      ],
+      "usage": {
+        "inputTokens": 5,
+        "outputTokens": 0
+      },
+      "settlements": [
+        {
+          "status": 502,
+          "terminalStatus": "incomplete",
+          "closeReason": "body_stall",
+          "mode": "native"
+        }
+      ]
+    },
+    "tap-read-error": {
+      "bytes": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"role\":\"assistant\",\"content\":[],\"model\":\"wire-model\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"anthropic passthrough upstream stream failed: fixture stream read failure\"}}\n\n",
+      "calls": [
+        {
+          "status": 502,
+          "terminalStatus": "failed",
+          "closeReason": "terminal"
+        }
+      ],
+      "cancelled": [],
+      "usage": {
+        "inputTokens": 5,
+        "outputTokens": 0
+      },
+      "phase": "mid_stream",
+      "source": "synthetic"
+    },
+    "native-fixture-read-error": {
+      "status": 200,
+      "bytes": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"role\":\"assistant\",\"content\":[],\"model\":\"fixture/wire-model\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"anthropic passthrough upstream stream failed: fixture stream read failure\"}}\n\n",
+      "sends": 1,
+      "cancelled": [],
+      "usage": {
+        "inputTokens": 5,
+        "outputTokens": 0
+      },
+      "phase": "mid_stream",
+      "source": "synthetic",
+      "streamAborted": true,
+      "settlements": [
+        {
+          "status": 502,
+          "terminalStatus": "failed",
+          "closeReason": "terminal",
+          "mode": "native"
+        }
+      ]
+    },
+    "native-anthropic-read-error": {
+      "status": 200,
+      "bytes": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"role\":\"assistant\",\"content\":[],\"model\":\"anthropic/wire-model\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"anthropic passthrough upstream stream failed: fixture stream read failure\"}}\n\n",
+      "sends": 1,
+      "cancelled": [],
+      "usage": {
+        "inputTokens": 5,
+        "outputTokens": 0
+      },
+      "phase": "mid_stream",
+      "source": "synthetic",
+      "streamAborted": true,
+      "settlements": [
+        {
+          "status": 502,
+          "terminalStatus": "failed",
+          "closeReason": "terminal",
+          "mode": "native"
+        }
+      ]
+    },
+    "tap-cancel": {
+      "bytes": "",
+      "calls": [
+        {
+          "status": 499,
+          "closeReason": "client_cancel"
+        }
+      ],
+      "cancelled": [
+        "string"
+      ]
+    },
+    "native-fixture-cancel": {
+      "status": 200,
+      "bytes": "",
+      "sends": 1,
+      "cancelled": [
+        "string"
+      ],
+      "settlements": [
+        {
+          "status": 499,
+          "closeReason": "client_cancel",
+          "mode": "native"
+        }
+      ]
+    },
+    "native-anthropic-cancel": {
+      "status": 200,
+      "bytes": "",
+      "sends": 1,
+      "cancelled": [
+        "string"
+      ],
+      "settlements": [
+        {
+          "status": 499,
+          "closeReason": "client_cancel",
+          "mode": "native"
+        }
+      ]
+    }
+  }
+}

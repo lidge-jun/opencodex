@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDefaultConfig, loadConfig, saveConfig } from "../../src/config";
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused } from "../../src/oauth/account-auto-pause";
-import { AccountRefusalStreaks, autoPauseThreshold, classifyPermanentAccountRefusal, permanentAccountRefusal } from "../../src/oauth/account-auto-pause-policy";
+import { AccountRefusalStreaks, classifyPermanentAccountRefusal, isConclusiveAccountBan, permanentAccountRefusal } from "../../src/oauth/account-auto-pause-policy";
+import { effectiveAccountAutoPause } from "../../src/config/account-auto-pause-revisions";
 import { getValidAccessSnapshotForAccount, OAuthAccountPausedError } from "../../src/oauth";
 import { getAccountSet, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
 import { routedProviderConfig } from "../../src/router";
@@ -34,8 +35,9 @@ function configFor(name: string, mode: "oauth" | "key" | "forward" = "oauth"): O
   config.defaultProvider = name;
   return config;
 }
-async function oauthFixture(name = "command-code") {
+async function oauthFixture(name = "command-code", edit?: (config: OcxConfig) => void) {
   const config = configFor(name);
+  edit?.(config);
   for (let n = 0; n < 2; n++) await saveCredential(name, {
     access: `synthetic-access-${n}`, refresh: `synthetic-refresh-${n}`,
     expires: Date.now() + 3_600_000, accountId: `synthetic-${n}`, source: "oauth",
@@ -79,10 +81,11 @@ describe("permanent account refusal classification", () => {
     expect(await permanentAccountRefusal(new Response("x".repeat(20_000), { status: 403 }))).toBeUndefined();
   });
   test("default off, default threshold two, strict schema", () => {
-    expect(autoPauseThreshold(undefined)).toBeUndefined();
-    expect(autoPauseThreshold({ enabled: false })).toBeUndefined();
-    expect(autoPauseThreshold({ enabled: true })).toBe(2);
-    for (const n of [0, -1, 1.5, 101]) expect(autoPauseThreshold({ enabled: true, consecutiveFailures: n })).toBeUndefined();
+    const row = { adapter: "openai-chat" };
+    expect(effectiveAccountAutoPause(row)).toBeUndefined();
+    expect(effectiveAccountAutoPause({ ...row, accountAutoPause: { enabled: false } })).toBeUndefined();
+    expect(effectiveAccountAutoPause({ ...row, accountAutoPause: { enabled: true } })).toEqual({ threshold: 2, conclusiveOnly: false });
+    for (const n of [0, -1, 1.5, 101]) expect(effectiveAccountAutoPause({ ...row, accountAutoPause: { enabled: true, consecutiveFailures: n } })).toBeUndefined();
     const config = configFor("fixture");
     expect(configSchema.safeParse(config).success).toBe(true);
     config.providers.fixture!.accountAutoPause!.consecutiveFailures = 0;
@@ -330,4 +333,133 @@ test("a stale pre-resume response cannot erase the resumed account's refusal str
   await stale(refusal());
   await f.capture()(refusal());
   expect(getAccountSet("command-code")!.accounts[0]!.paused).toBe(true);
+});
+
+test("manual idempotent resume on an enabled key fences in-flight account auto-pause attempts", async () => {
+  const config = configFor("fixture", "key");
+  const provider = config.providers.fixture!;
+  provider.apiKey = "synthetic-A";
+  provider.apiKeyPool = [{ id: "A", key: "synthetic-A" }, { id: "B", key: "synthetic-B" }];
+  provider.accountAutoPause!.consecutiveFailures = 1;
+  saveConfig(config);
+  const routed = routedProviderConfig("fixture", provider);
+  const observe = captureAccountAutoPauseAttempt("fixture", routed, { config }, new Headers({ authorization: `Bearer ${routed.apiKey}` }))!;
+  expect(observe).toBeDefined();
+
+  // Manual resume (including an already enabled key) clears details and changes the revision, fencing already-sent refusals.
+  expect(setProviderApiKeyPaused(config, "fixture", "A", false)).toBe(true);
+
+  const response = refusal();
+  await observe(response);
+  expect(wasAccountAutoPaused(response)).toBe(false);
+  expect(config.providers.fixture!.apiKeyPool![0]!.disabled).not.toBe(true);
+  expect(loadConfig().providers.fixture!.apiKeyPool![0]!.disabled).not.toBe(true);
+  expect(config.providers.fixture!.apiKey).toBe("synthetic-A");
+  expect(loadConfig().providers.fixture!.apiKey).toBe("synthetic-A");
+
+  const freshRouted = routedProviderConfig("fixture", config.providers.fixture!);
+  const freshObserve = captureAccountAutoPauseAttempt("fixture", freshRouted, { config }, new Headers({ authorization: `Bearer ${freshRouted.apiKey}` }))!;
+  const freshResponse = refusal();
+  await freshObserve(freshResponse);
+  expect(wasAccountAutoPaused(freshResponse)).toBe(true);
+  expect(config.providers.fixture!.apiKeyPool![0]!.disabled).toBe(true);
+  expect(loadConfig().providers.fixture!.apiKeyPool![0]!.disabled).toBe(true);
+  expect(config.providers.fixture!.apiKey).toBe("synthetic-B");
+});
+
+// #8752: a Cloud Code Assist provider with no policy still pauses on Google's own permanent verdict.
+const ccaRow = { adapter: "google", googleMode: "cloud-code-assist", authMode: "oauth", baseUrl: "https://daily-cloudcode-pa.googleapis.com" };
+const relayBaseUrl = "https://cloudcode-relay.example.test";
+const ccaProvider = (config: OcxConfig, name: string, accountAutoPause?: OcxConfig["providers"][string]["accountAutoPause"], baseUrl = ccaRow.baseUrl) => {
+  config.providers[name] = { ...config.providers[name]!, ...ccaRow, baseUrl } as OcxConfig["providers"][string];
+  if (accountAutoPause === undefined) delete config.providers[name]!.accountAutoPause;
+  else config.providers[name]!.accountAutoPause = accountAutoPause;
+};
+const ccaBan = () => Response.json(googleEnvelope(ccaTosAppeal), { status: 403 });
+
+test("a Cloud Code Assist provider with no policy defaults to pausing on the first Terms of Service ban only", () => {
+  expect(effectiveAccountAutoPause(ccaRow)).toEqual({ threshold: 1, conclusiveOnly: true });
+  expect(effectiveAccountAutoPause({ ...ccaRow, accountAutoPause: { enabled: false } })).toBeUndefined();
+  expect(effectiveAccountAutoPause({ ...ccaRow, accountAutoPause: {} })).toBeUndefined();
+  expect(effectiveAccountAutoPause({ ...ccaRow, accountAutoPause: { enabled: true, consecutiveFailures: 3 } })).toEqual({ threshold: 3, conclusiveOnly: false });
+  expect(effectiveAccountAutoPause({ ...ccaRow, baseUrl: "https://cloudcode-pa.googleapis.com" })).toEqual({ threshold: 1, conclusiveOnly: true });
+  for (const row of [{ ...ccaRow, googleMode: "vertex" }, { ...ccaRow, googleMode: undefined }, { ...ccaRow, adapter: "openai-chat" }]) {
+    expect(effectiveAccountAutoPause(row)).toBeUndefined();
+  }
+  // The default needs OAuth on a first-party Cloud Code Assist destination; anything else may relay a refusal.
+  for (const baseUrl of [relayBaseUrl, "http://daily-cloudcode-pa.googleapis.com", "https://daily-cloudcode-pa.googleapis.com:8443",
+    "https://daily-cloudcode-pa.googleapis.com.example.test", undefined]) {
+    expect(effectiveAccountAutoPause({ ...ccaRow, baseUrl })).toBeUndefined();
+  }
+  for (const authMode of ["key", "forward", undefined]) expect(effectiveAccountAutoPause({ ...ccaRow, authMode })).toBeUndefined();
+  expect(effectiveAccountAutoPause({ ...ccaRow, baseUrl: relayBaseUrl, accountAutoPause: { enabled: true } })).toEqual({ threshold: 2, conclusiveOnly: false });
+  expect(isConclusiveAccountBan(403, googleEnvelope(ccaTosContact))).toBe(true);
+  expect(isConclusiveAccountBan(403, googleEnvelope("Your subscription is inactive"))).toBe(false);
+  expect(isConclusiveAccountBan(403, payload())).toBe(false);
+  expect(isConclusiveAccountBan(401, { error: { code: 401, status: "UNAUTHENTICATED", message: ccaTosDisabled } })).toBe(false);
+  expect(isConclusiveAccountBan(403, googleEnvelope(ccaTosAppeal, { type: "rate_limit_error" }))).toBe(false);
+});
+
+test("a Cloud Code Assist account with no policy is paused by its first Terms of Service ban", async () => {
+  const f = await oauthFixture("google-antigravity", config => ccaProvider(config, "google-antigravity"));
+  expect(f.config.providers["google-antigravity"]!.accountAutoPause).toBeUndefined();
+  const response = await f.capture()(ccaBan());
+  expect(response.status).toBe(403);
+  expect(wasAccountAutoPaused(response)).toBe(true);
+  const set = getAccountSet("google-antigravity")!;
+  expect(set.accounts[0]!.paused).toBe(true);
+  expect(set.accounts[0]!.pauseDetails?.reason).toBe("account_permission_denied");
+  expect(set.activeAccountId).toBe(f.ids[1]!);
+});
+
+test("a Cloud Code Assist account behind a custom baseUrl pauses on a ban only with the explicit opt-in", async () => {
+  const f = await oauthFixture("google-antigravity", config => ccaProvider(config, "google-antigravity", undefined, relayBaseUrl));
+  expect(f.capture()).toBeUndefined();
+  expect(getAccountSet("google-antigravity")!.accounts[0]!.paused).not.toBe(true);
+
+  f.config.providers["google-antigravity"]!.accountAutoPause = { enabled: true, consecutiveFailures: 1 };
+  saveConfig(f.config);
+  const response = await f.capture()(ccaBan());
+  expect(wasAccountAutoPaused(response)).toBe(true);
+  expect(getAccountSet("google-antigravity")!.accounts[0]!.paused).toBe(true);
+});
+
+test("the Cloud Code Assist default counts a ban only from a first-party final destination", async () => {
+  const f = await oauthFixture("google-antigravity", config => ccaProvider(config, "google-antigravity"));
+  const wire = new Headers({ authorization: `Bearer ${f.snapshot.accessToken}` });
+  const relayed = f.capture();
+  relayed.physical(true, wire, `${relayBaseUrl}/v1internal:streamGenerateContent`);
+  expect(wasAccountAutoPaused(await relayed(ccaBan()))).toBe(false);
+  expect(getAccountSet("google-antigravity")!.accounts[0]!.paused).not.toBe(true);
+
+  const direct = f.capture();
+  direct.physical(true, wire, `${ccaRow.baseUrl}/v1internal:streamGenerateContent`);
+  expect(wasAccountAutoPaused(await direct(ccaBan()))).toBe(true);
+  expect(getAccountSet("google-antigravity")!.accounts[0]!.paused).toBe(true);
+});
+
+test("without a policy, other permanent refusals never pause a Cloud Code Assist account", async () => {
+  const f = await oauthFixture("google-antigravity", config => ccaProvider(config, "google-antigravity"));
+  for (let n = 0; n < 3; n++) {
+    await f.capture()(refusal());
+    await f.capture()(Response.json(googleEnvelope("Your subscription is inactive"), { status: 403 }));
+  }
+  expect(getAccountSet("google-antigravity")!.accounts[0]!.paused).not.toBe(true);
+});
+
+test("an explicit opt-out keeps a banned Cloud Code Assist account selectable", async () => {
+  const f = await oauthFixture("google-antigravity", config => ccaProvider(config, "google-antigravity", { enabled: false }));
+  expect(f.capture()).toBeUndefined();
+  expect(getAccountSet("google-antigravity")!.accounts[0]!.paused).not.toBe(true);
+});
+
+test("a Cloud Code Assist default row is revision-tracked and a policy change fences an in-flight ban", async () => {
+  const f = await oauthFixture("google-antigravity", config => ccaProvider(config, "google-antigravity"));
+  expect(loadConfig().accountAutoPausePolicyRevisions?.["google-antigravity"]).toEqual(expect.any(String));
+  const inFlight = f.capture();
+  f.config.providers["google-antigravity"]!.accountAutoPause = { enabled: false };
+  saveConfig(f.config);
+  const response = await inFlight(ccaBan());
+  expect(wasAccountAutoPaused(response)).toBe(false);
+  expect(getAccountSet("google-antigravity")!.accounts[0]!.paused).not.toBe(true);
 });

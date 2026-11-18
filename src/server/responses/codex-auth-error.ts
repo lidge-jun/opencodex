@@ -2,7 +2,7 @@ import { markProxyError } from "../../lib/client-error-body";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
 import { formatErrorResponse } from "../../bridge";
 import {
-  CodexAccountCooldownError,
+  CodexAccountCooldownError, CodexMainAccountHardLockError, CodexMainAccountCreditsOffError, CodexPoolAccountCreditsOffError, CodexReserveUnavailableError, CodexRecoveryWithheldError,
   codexMainProfileDrainingResponse,
   cooldownErrorResponse,
   CodexAuthContextError,
@@ -28,9 +28,9 @@ export interface CodexAuthContextErrorResponseOptions {
 
 export function codexModelAvailabilityErrorResponse(error: CodexModelAvailabilityError): Response {
   if (error.reason === "temporarily_unavailable") {
-    return markProxyError(formatErrorResponse(429, "rate_limit_error", error.message));
+    return markProxyError(formatErrorResponse(429, "rate_limit_error", error.message), "model_availability");
   }
-  return markProxyError(formatErrorResponse(400, "invalid_request_error", error.message));
+  return markProxyError(formatErrorResponse(400, "invalid_request_error", error.message), "model_availability");
 }
 
 /** Actionable sign-in guidance without guessing which upstream revocation cause occurred. */
@@ -87,7 +87,11 @@ export function mapCodexAuthContextErrorToResponse(
     const response = cooldownErrorResponse(error, options.now, options.accountSelector);
     // Exact class only (#7850): main hard-lock, credit, Reserve, recovery-withheld and future
     // policy subclasses keep their own retry semantics, including in combo target cooldowns.
-    return markProxyError(error.constructor === CodexAccountCooldownError ? markCodexAccountCooldownResponse(response) : response);
+    const presentation = error instanceof CodexMainAccountHardLockError ? "hard_lock"
+      : error instanceof CodexRecoveryWithheldError ? "recovery"
+      : error instanceof CodexMainAccountCreditsOffError || error instanceof CodexPoolAccountCreditsOffError || error instanceof CodexReserveUnavailableError ? undefined
+      : options.accountSelector ? "cooldown_pinned" : "cooldown";
+    return markProxyError(error.constructor === CodexAccountCooldownError ? markCodexAccountCooldownResponse(response) : response, presentation);
   }
   if (error instanceof CodexMainProfileDrainingError) {
     return markProxyError(codexMainProfileDrainingResponse());

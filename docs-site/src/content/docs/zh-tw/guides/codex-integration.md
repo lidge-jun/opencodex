@@ -146,7 +146,7 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-在 macOS 上，opencodex 在明確選擇、shim、PATH、既有安裝路徑和可執行的裸 `codex` 後備命令之後，依序檢查 `/Applications/ChatGPT.app` 和 `~/Applications/ChatGPT.app` 中的 Codex 應用程式內建 CLI，要求其 XML `Info.plist` 識別碼為 `com.openai.codex`，且不會用應用程式候選項自動取代仍可執行的已儲存選擇。
+在 macOS 上，opencodex 在明確選擇、shim、PATH、既有安裝路徑和可執行的裸 `codex` 後備命令之後，依序檢查 `/Applications/ChatGPT.app` 和 `~/Applications/ChatGPT.app` 中的 Codex 應用程式內建 CLI，要求其 XML `Info.plist` 識別碼為 `com.openai.codex`，且不會用應用程式候選項自動取代仍可執行的已儲存選擇。 若完全找不到 Codex CLI，`ocx connect status` 就緒狀態背後的目錄探測也會嘗試這些內建位置，因此僅有應用程式內建 CLI 的 Child 會回報其支援的推理等級，而不是 `unverified`；執行時仍會套用下列檢查。
 
 執行檢查也會辨識任意位置的 `Codex.app` 和 `ChatGPT.app`，包括移動後的應用程式套件、明確的
 `CODEX_CLI_PATH` 或設定的執行階段命令，以及符號連結別名。名稱只觸發驗證，不代表可信。
@@ -177,6 +177,8 @@ home，而 ChatGPT/Codex App 仍讀取 `%USERPROFILE%\\.codex`。`ocx status` �
 Codex 保持一致。opencodex 也透過 WebSocket 提供 `/v1/responses`。專用 provider 只會在
 `"websockets": true` 時宣告 `supports_websockets = true`；loopback 模式下，Codex 的內建 provider
 可能先嘗試 WebSocket，若 proxy 未啟用此功能則回傳 `426`，讓 Codex fallback 到 HTTP/SSE。
+
+啟用 `v2-plaintext` 模式或 `plaintextV2AgentMessages` 旗標時，本機重放要求同一個獲准的 OpenCodex 呼叫方，以及請求自身非空白的 `thread-id`。父執行緒、loopback 位址、上游憑證或預留位置金鑰都不是該身分。沒有獲准呼叫方主體身分的用戶端，以及沒有自身執行緒的請求，必須省略 `previous_response_id`，重新傳送完整對話。預設的 loopback Codex 與 DSH 設定不會建立該呼叫方身分。任一設定啟用期間保留的狀態在停用後仍維持綁定。預設 `v1` 對未綁定的狀態保留既有的父執行緒範圍續接行為，包括預設 loopback 呼叫方。這與上游原生擁有的 Responses ID 各自獨立。
 
 ## Thread identity 與歷史記錄
 

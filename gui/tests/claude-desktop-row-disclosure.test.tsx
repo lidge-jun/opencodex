@@ -4,6 +4,10 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import ClaudeDesktop from "../src/pages/ClaudeDesktop";
 import { LanguageProvider } from "../src/i18n/provider";
+import { chooseOption, selectTrigger, selectValue } from "./helpers/custom-select";
+
+/** The row's "Move to" family picker (the app's Select trigger). */
+const MOVE_SELECT = ".claude-move-row [role=combobox]";
 
 /**
  * Second disclosure tier: a model row is a one-line summary until opened.
@@ -107,7 +111,7 @@ test("a non-default row starts collapsed with no edit controls in the DOM", asyn
   expect(second.querySelector(".claude-model-body")).toBeNull();
   expect(second.querySelector(".claude-alias")).toBeNull();
   expect(second.querySelector("input[type=radio]")).toBeNull();
-  expect(second.querySelector("select")).toBeNull();
+  expect(second.querySelector(MOVE_SELECT)).toBeNull();
 });
 
 // The row a user came to change should not need a second click to reach.
@@ -125,7 +129,7 @@ test("opening a row reveals alias, default radio and the move control", async ()
   expect(summary("Second Model").getAttribute("aria-expanded")).toBe("true");
   expect(second.querySelector(".claude-alias")?.textContent).toBe("claude-opus-second");
   expect(second.querySelector("input[type=radio]")).not.toBeNull();
-  expect(second.querySelector("select")).not.toBeNull();
+  expect(second.querySelector(MOVE_SELECT)).not.toBeNull();
 });
 
 // Triage information must never go behind the fold: availability, context and effort
@@ -151,18 +155,13 @@ test("a pending move destination survives collapsing and reopening the row", asy
   await mount();
   await click(summary("Second Model"));
 
-  const select = row("Second Model").querySelector("select") as unknown as HTMLSelectElement;
-  await act(async () => {
-    select.value = "sonnet";
-    select.dispatchEvent(new testWindow.Event("change", { bubbles: true }) as never);
-  });
+  await chooseOption(selectTrigger(row("Second Model"), MOVE_SELECT), "sonnet");
 
   await click(summary("Second Model"));
   expect(summary("Second Model").getAttribute("aria-expanded")).toBe("false");
   await click(summary("Second Model"));
 
-  const reopened = row("Second Model").querySelector("select") as unknown as HTMLSelectElement;
-  expect(reopened.value).toBe("sonnet");
+  expect(selectValue(selectTrigger(row("Second Model"), MOVE_SELECT))).toBe("sonnet");
 });
 
 test("a collapsed row is still draggable", async () => {

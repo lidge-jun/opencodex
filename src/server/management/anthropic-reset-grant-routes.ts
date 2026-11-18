@@ -56,7 +56,7 @@ const MESSAGES = {
   grant_not_usable: "This reset grant cannot be used right now.",
   operation_identity_mismatch: "This operation belongs to another account or grant.",
   in_flight: "This reset is still being processed.",
-  unresolved_prior_operation: "An earlier reset attempt for this grant is not confirmed yet.",
+  unresolved_prior_operation: "An earlier reset attempt on this account is not confirmed yet.",
   unknown_outcome_expired: "This attempt can no longer be retried; re-read the account.",
   unknown_outcome: "The reset did not answer; its outcome is unknown.",
   journal_write_failed: "The reset answered but could not be recorded; its outcome is unknown here.",

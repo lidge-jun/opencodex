@@ -1,3 +1,6 @@
+/* Imported by its component, so it sits in the `legacy` cascade layer itself:
+   unlayered CSS would outrank design/bridge.css and every Tailwind utility. */
+@layer legacy {
 /* ============================================================================
    Claude page — Code content under one subtitle; reuses card/setting-row
    vocabulary from styles.css. Uses only design tokens; adds no gradients of its
@@ -311,4 +314,5 @@
 .claude-visibility-preview-title {
   font-weight: var(--weight-medium);
   color: var(--text);
+}
 }

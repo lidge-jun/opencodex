@@ -84,10 +84,74 @@ ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
+ocx link recover (--link-id <id> | --operation-id <id>) [--json]
 ocx link reconnect --link-id <id> [--json]
+ocx link check (--link-id <id> | --all) [--no-wait] [--json]
+ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]
+ocx link sync (--link-id <id> | --all) [--no-wait] [--json]
+ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]
+ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]
 ```
 
 Sans terminal interactif (TTY), `--expect-fingerprint` est obligatoire. Dans un terminal interactif, vous pouvez l’omettre si vous confirmez explicitement l’empreinte proposée.
+
+Sur le Home, `ocx link check (--link-id <id> | --all)` lit pour chaque enfant lancé par le Home sa version installée, son type d’installation et sa voie de mise à jour : il exécute `ocx update --plan` de l’enfant par SSH (60 secondes par enfant, trois à la fois), qui calcule un plan sans rien modifier. Un enfant antérieur à 2.97.0 renvoie `owner-action` (`legacy-ocx`) ; sa version vient d’un appel SSH en lecture seule de plus sur macOS et Linux, ou de la version qu’il a annoncée par le lien sous Windows. Les liens ouverts depuis l’enfant et les enfants `ocx-child` sont signalés sans SSH. `ocx link status --json` ajoute alors un bloc `child` à chaque ligne (versions, écart de version, fraîcheur du catalogue, activité, dernière opération). Détails et codes de sortie : [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity) (en anglais).
+
+### Opérer les enfants depuis le Home
+
+`ocx link sync`, `ocx link restart-codex` et `ocx link update` s’exécutent sur les enfants lancés par le Home via la connexion SSH du lien et affichent la tâche en JSON. `sync` exécute le `ocx sync --expect-link` épinglé (enfant 2.93.0 ou plus récent). `restart-codex` synchronise, puis redémarre les app-servers Codex de l’enfant pour qu’un Codex en cours charge le catalogue actuel ; `--scope codex` relance aussi l’application de bureau. Un redémarrage vise un seul lien ; `restart-codex` et `--restart-codex` exigent `--yes`, tandis que `ocx link sync --link-id <id> --restart-app-server-only` redémarre les app-servers sans confirmation. Le redémarrage est ignoré (`restart-skipped:link-active`) tant que le Home relaie une requête de modèle pour cet enfant. Pour un enfant antérieur à 2.69, une requête non diffusée en flux n’est visible qu’au début de sa réponse. `update --yes` met l’OpenCodex de l’enfant à la version de ce Home, jamais à une autre, avec le propre outil de mise à jour de l’enfant (enfant 2.97.0 ou plus récent ; npm et pnpm passent par leur lanceur Node, si bien que `ocx link check` y exécute aussi `node --version` en lecture seule), un enfant à la fois, puis resynchronise après une application réussie, échouée ou annulée ; une application au résultat inconnu n’est ni relancée ni resynchronisée, vérifiez-la avec `ocx link check`. La mise à jour interrompt les requêtes relayées pour cet enfant. Les enfants Windows ne prennent en charge que `sync`, et les enfants `ocx-child` signalent redémarrages et mises à jour comme non pris en charge. La CLI exige un Home lié à loopback ; sur tout autre Home, ces opérations ne sont pas disponibles, et la page Remote Link du tableau de bord propose les mêmes actions pour un enfant lancé par le Home. Détails et codes de sortie : [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home) (en anglais). Cette protection est au mieux : une requête qui démarre entre la vérification et le redémarrage peut encore être interrompue ; suspendez les nouvelles requêtes sur cet enfant si ses tours doivent être préservés. Le Home ne peut pas non plus savoir si Codex est au milieu d'un tour qui exécute un outil plutôt qu'une requête de modèle ; laissez donc les tours Codex actifs sur cet enfant se terminer avant de redémarrer Codex ou de mettre à jour OpenCodex là-bas. Une mise à jour manuelle redémarre l'OpenCodex de cet enfant et termine tout tour encore relayé pour lui ; les mises à jour automatiques attendent que l'enfant soit inactif. `ocx sync --restart-children` (ou `--restart-children=codex --yes`) applique la même règle lors de la propagation d’une synchronisation du Home, à tous les enfants ou à ceux désignés par `--child <linkId>` : chaque enfant est synchronisé, et seul son redémarrage est sauté (`restart-skipped:link-active`) tant qu’une requête relayée est en cours.
+
+### Versions et actions des enfants
+
+Sur le Home, chaque ligne Remote Link porte ce que le Home a appris en dernier sur cet enfant, et une ligne lancée par le Home porte aussi ses contrôles. Les badges indiquent :
+
+- la version de l'enfant, avec `Behind Home (<home version>)`, `Same version as Home` ou `Newer than Home` à côté, et `Update available: <home version>` quand une mise à jour peut être appliquée. Un enfant lancé depuis son propre tableau de bord affiche sa version sans badge d'écart, et un enfant `ocx-child` affiche toujours `unknown`.
+- le type d'installation (`Desktop app`, `GOAT`, `Source checkout`), ou le jeton brut en police à chasse fixe quand cette version ne le nomme pas.
+- `Catalog current` ou `Catalog out of date`. `Codex restart needed (<n>)` et `Codex not running` n'apparaissent qu'une fois que l'enfant signale l'état de son Codex, ce qu'ajoutera une version ultérieure ; aucun enfant publié ne l'envoie encore, donc ces deux badges ne s'affichent pas aujourd'hui.
+- la dernière opération, sous la forme `Last <operation>: <state>` avec sa raison en police à chasse fixe, et celle en cours tant qu'une tâche occupe le lien.
+
+Quand le Home ne peut pas mettre cet enfant à jour lui-même, la ligne indique quoi faire à la place : utiliser Check for Updates dans OpenCodex Desktop sur cet enfant, mettre à jour à la main, via `mise`, ou laisser GOAT s'en charger. Une raison inconnue s'affiche comme un jeton, jamais comme une phrase devinée.
+
+Les quatre actions démarrent la même tâche que la CLI ; elles exigent donc les mêmes versions sur l'enfant :
+
+- **Check** lit les informations d'installation de l'enfant, comme `ocx link check`.
+- **Sync now** y exécute le `ocx sync --expect-link` épinglé, comme `ocx link sync`.
+- **Restart Codex** ouvre un choix de portée. `Codex app-servers` redémarre les app-servers d'arrière-plan de l'enfant pour qu'ils chargent le catalogue actuel ; cela ne rafraîchit pas l'app-server propre à l'application Codex de bureau, redémarrez donc cette application pour cela. `Codex desktop app` la quitte et la relance aussi, ce qui met fin aux conversations qui y sont ouvertes.
+- **Update** amène l'OpenCodex de l'enfant à la version de ce Home avec le propre outil de mise à jour de l'enfant, comme `ocx link update`. La confirmation indique que l'OpenCodex de l'enfant redémarre et que tout tour encore relayé pour lui se termine, et que les mises à jour automatiques attendent que l'enfant soit inactif.
+
+**Check all** et **Update all** agissent sur tous les liens éligibles lancés par le Home ; Update all traite toujours un enfant à la fois et ne vise jamais une autre version. Une tâche en cours affiche une ligne par enfant avec son état, la version de départ et d'arrivée, le résultat de la synchronisation du catalogue et celui du redémarrage. Le panneau disparaît quand la tâche se termine et les lignes se rafraîchissent ; une tâche que le Home ne connaît plus, parce qu'il a redémarré, le dit et laisse l'état de chaque ligne répondre. Tant qu'une tâche occupe un lien, ses actions et Disconnect sont désactivés ; le serveur refuse de toute façon la requête.
+
+Sous la liste, le panneau **Child automation** affiche et modifie le même fichier de politique que `ocx link policy` : propagation du catalogue (automatique par défaut), redémarrage de Codex (jamais par défaut), mises à jour (automatiques quand inactif par défaut, pas encore actives dans cette version) et la période d'inactivité. L'enregistrement n'écrit que ce que vous avez changé. Si le fichier de politique était endommagé, le panneau indique que la propagation automatique du catalogue et les mises à jour automatiques sont désactivées, et l'enregistrement écrit alors tous les réglages pour que les modes que vous avez choisis soient ceux qui persistent. Ces contrôles ne contournent jamais le serveur : il revérifie la politique, l'état du lien et l'activité de l'enfant à chaque tâche.
+
+Ne liez pas une machine que vous ne possédez pas : le Home y exécute des commandes avec votre clé SSH.
+
+### Propagation automatique du catalogue et politique des enfants
+
+La propagation du catalogue est activée par défaut. Quand le catalogue du Home change (l’actualisation automatique du catalogue signale un changement, ou une vérification toutes les 5 minutes repère une modification faite dans le tableau de bord ou par l’API de gestion), le Home attend 60 secondes que les modifications se stabilisent (au plus 5 minutes après le premier changement). Ensuite, sans aucune action de votre part, il ouvre une session SSH en arrière-plan vers chaque enfant éligible et exécute le même `ocx sync --expect-link` épinglé que `ocx link sync`, sans redémarrage de Codex sauf si vous en activez un (`childCodexRestart`, ci-dessous). Un enfant est éligible quand son lien a été lancé par le Home, que son tunnel est connecté, qu’aucune autre opération n’y tourne et que la dernière synchronisation lancée par ce Home y est antérieure au changement ; un enfant qui a seulement téléchargé le catalogue reste en retard. Un enfant qui relaie des requêtes de modèle n’est synchronisé que si ses réglages Codex correspondent déjà à ceux du Home et que son runtime client OpenCodex a redémarré depuis l’application de ces réglages, car sinon la synchronisation redémarre ce runtime ; sinon il est synchronisé une fois inactif. Une synchronisation échouée est retentée après 5 minutes, puis à intervalle doublé jusqu’à 6 heures, et un enfant antérieur à 2.93.0 n’est retenté qu’après avoir signalé une autre version. Ces tâches apparaissent comme les autres, avec `trigger: "auto"`. Un Home sans lien n’exécute rien de tout cela.
+
+La propagation corrige le fichier de catalogue de l’enfant. Un app-server Codex déjà lancé sur l’enfant garde la liste chargée jusqu’à son redémarrage : utilisez `ocx link restart-codex --link-id <id> --yes` ou `ocx sync --restart-children`, ou laissez le Home redémarrer les app-servers avec `ocx link policy --child-codex-restart app-server-when-idle`, ce qu’il ne fait que sur un enfant encore inactif au moment de sa synchronisation. Ce réglage vaut pour la prochaine synchronisation automatique ; un enfant dont le catalogue est déjà à jour n’est pas resynchronisé, donc pas redémarré : redémarrez-le vous-même.
+
+La politique est stockée dans `<configDir>/link/child-policy.json` sur le Home, jamais dans `config.json` :
+
+| Réglage | Défaut | Valeurs |
+|---|---|---|
+| `catalogFanout` | `auto` | `auto`, `manual` |
+| `childCodexRestart` | `never` | `never`, `app-server-when-idle` |
+| `updates` | `auto-when-idle` | `off`, `notify`, `auto-when-idle` |
+| `idleAfterMs` | `600000` (10 minutes) | 1 à 60 minutes |
+
+Par défaut, `updates` maintient automatiquement les enfants inactifs à la version du Home. Les mises à jour automatiques ne sont pas actives dans cette version ; le réglage est déjà enregistré, si bien qu’un refus avec `ocx link policy --updates notify` ou `--updates off` restera valable quand elles arriveront. `idleAfterMs` est la durée sans requête de modèle relayée après laquelle un enfant est considéré inactif ; il détermine aussi `activity.idle` dans `ocx link status`.
+
+```text
+ocx link policy                                    # lire la politique
+ocx link policy --catalog-fanout manual            # désactiver la propagation automatique du catalogue
+ocx link policy --child-codex-restart app-server-when-idle
+ocx link policy --updates off --idle-after-minutes 20 --json
+```
+
+`GET` et `PUT /api/link/children/policy` lisent et modifient les mêmes réglages (jeton d’administration en boucle locale, ou session du tableau de bord) ; un `PUT` n’envoie que les réglages qu’il modifie. Si le fichier est endommagé ou contient une valeur inconnue, la propagation automatique du catalogue et les mises à jour sont désactivées, et `ocx link policy` l’indique. Un enregistrement efface l’avertissement mais laisse désactivé tout réglage non nommé ; réactivez-les explicitement, par exemple `ocx link policy --catalog-fanout auto --updates auto-when-idle`. Le Home ne réécrit jamais le fichier de lui-même.
+
+Ne liez pas une machine qui ne vous appartient pas : le Home y exécute des commandes avec votre clé SSH.
 
 ## Guides associés
 

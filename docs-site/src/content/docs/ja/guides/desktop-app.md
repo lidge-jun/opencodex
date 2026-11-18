@@ -15,6 +15,19 @@ OpenCodex デスクトップアプリはネイティブのトレイとウェブ�
 
 リリース版の `OpenCodex.app` は Developer ID で署名され、Apple による公証を受けています。そのため初回起動時、通常はダウンロードしたアプリの標準的な確認だけが表示されます。それでも macOS がブロックする場合は **System Settings → Privacy & Security → Open Anyway** を使ってください。
 
+#### Homebrew（デスクトップアプリ）
+
+Homebrew Cask を使ってデスクトップアプリをインストールすることもできます：
+
+```bash
+brew install --cask opencodex
+```
+
+- **アプリ内更新（`auto_updates`）**：デスクトップアプリには更新機能があり、Cask は `auto_updates true` を宣言しています。ただし、対象を指定した `brew upgrade --cask opencodex` や greedy アップグレードでは、アプリ内更新でより新しくなったアプリが置き換えられることがあります。Homebrew でアップグレードする前に、インストール済みアプリと Cask のバージョンを確認してください。
+- **CLI とバックグラウンドサービス**：Cask がインストールするのは、CLI と proxy ランタイムを同梱した `OpenCodex.app` のみです。独立した CLI やヘッドレスサービスには、npm またはリリースアーカイブから別途 `ocx` をインストールできます。両者は `~/.opencodex` の設定を共有します。その CLI にサービスを引き継がせるには、OpenCodex を終了し、別途インストールした CLI を明示的に選択して（有効な場合は [Desktop へのパッケージランチャーの引き継ぎ](/getting-started/installation/)も回避し）、`ocx service install` を実行します。[端末コマンドの選択](/guides/desktop-app/#using-the-ocx-cli-with-the-desktop-app)と[ランタイムの所有権](/reference/cli/lifecycle/#runtime-ownership)を参照してください。
+- **Cask のアップグレード後のサービス**：Cask のアンインストール処理は、別途インストールした CLI の `com.opencodex.proxy` launchd ジョブと plist も削除し、バックグラウンドサービスを停止することがあります。アップグレード後は OpenCodex を終了し、macOS の GUI ログインセッションで上記の別途インストールした CLI を明示的に選び、`ocx service status` を実行します。サービスが存在しなければ `ocx service install`、インストール済みでロードされていなければ `ocx service repair` を実行し、再度 `ocx service status` で確認します。 `ocx service install` はポートを削除されたジョブからではなく `OCX_BAKE_PORT` または `config.port` から取得します。サービス登録後にどちらかを変更した場合は、古いポートを指したままのクライアントを更新してください。同じアンインストール手順で Desktop 自身の Start at Login 項目（launchd ジョブ `OpenCodex`）も削除されるため、使用している場合は OpenCodex で **Start at Login** を再度オンにしてください。
+- **`--zap` によるデータ削除**：`brew uninstall --zap --cask opencodex` は `~/.opencodex` と `~/.opencodex-desktop` を削除します。これにより、それらのディレクトリにある CLI と Desktop の共有設定や状態データも削除されます。`--zap` を使用する前に、残したいデータをバックアップしてください。 2.97.0 より前の Cask 定義にはこの 2 つのディレクトリが含まれておらず、Homebrew はインストール時に記録された定義でアンインストールすることがあります。`--zap` の後にこれらが残っていないか確認し、削除したい場合は手動で削除してください。
+
 ### Windows
 
 `OpenCodex-<version>-windows-x64.msi` をダウンロードしてインストーラーを実行します。まだコード署名されていないため、Windows SmartScreen が警告することがあります。リリースページからダウンロードしたことを確認してから **More info → Run anyway** を選んでください。
@@ -71,6 +84,8 @@ Tauri updater が新しいアプリのバージョンを見つけると、macOS 
 デスクトップアプリでは、ダッシュボードの更新ボタンからアプリ専用の更新ページを開けます。そこで再確認、保留中の署名済み更新のインストール、ダッシュボードへの戻る操作を行えます。同じインストール操作はトレイメニューからも利用できます。インストールに失敗しても更新は再試行できます。トレイアイコンのない Linux デスクトップでもこのページを使えます。通常のブラウザのダッシュボードでは、代わりにそのプロキシのパッケージを更新します。
 
 更新はインストール前にプロジェクトの署名済み更新用公開鍵で検証されます。macOS のアプリ内更新では `OpenCodex-<version>-macos.app.tar.gz` をダウンロードします。DMG は初回インストール用です。リリースマニフェストは更新用キーのシークレットが設定された場合にのみ生成され、その場合は 4 プラットフォームすべての署名が必要です。
+
+Windows では、アプリのウィンドウを使わずに更新することもできます（SSH など）。OpenCodex を実行している Windows アカウントで開いた管理者権限のターミナルで、インストール先の `ocx.exe` を使って `"C:\Program Files\OpenCodex\ocx.exe" update --desktop` を実行します（別の場所にインストールした場合はフォルダーを読み替えてください）。サービス、SYSTEM のスケジュールされたタスク、別のアカウントは独自の OpenCodex ホームを使うためこのプロキシを見つけられず、古いバージョンのまま残します。トレイと同じ公開リリースを確認し、同じアップデーター鍵で MSI を検証して不一致があれば拒否し、UI なしでインストールしたあと、古いバージョンのまま動いているプロキシを再起動して新しいバージョンが応答するようにします。`--check` は確認のみ、`--json` は機械可読な結果を出力します。終了コード 0 は完了または最新、1 は何もインストールされていない、2 はインストール済みだが古いプロキシがまだ動いている（または Windows の再起動が必要）、3 はインストーラーが時間内に終わらなかったことを示します。別のインストールから起動したプロキシは停止しません。MSI を手動でインストールした場合、`ocx status` がインストール済みのバージョンが実行中のプロキシより新しいことを伝え、このコマンドを表示します。
 
 ## ウィジェット
 

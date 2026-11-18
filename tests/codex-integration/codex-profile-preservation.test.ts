@@ -5,39 +5,30 @@
  * generated profile writes, the plan reads the real profile path, and an edit that
  * lands before the write lock is not overwritten.
  */
-import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
-import * as fs from "node:fs";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir, userInfo } from "node:os";
-import { join, relative, isAbsolute } from "node:path";
-import type { OcxConfig } from "../../src/types";
-import { installIsolatedCodexHome } from "../helpers/isolated-codex-home";
-import { repoRoot } from "../helpers/repo-root";
+import { describe, expect, test } from "bun:test";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { assertNotRealCodexHomeUnderTest, isTestHomeGuardArmed } from "../../src/lib/test-home-guard";
+import { helperPath, repoRoot } from "../helpers/repo-root";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
-// The profile path is fixed when src/codex/paths first loads, so own a Codex home before the
-// path-dependent modules are imported. A run without the repository preload (an absolute test
-// path from another directory) must never touch the developer's real profile.
-const isolatedHome = installIsolatedCodexHome("ocx-profile-preservation-");
-const { buildProfileFileForTarget, preserveUnmanagedProfileKeys } = await import("../../src/codex/inject/config-toml");
-const { deriveCodexInjectionPlan } = await import("../../src/codex/inject/plan");
-const { CODEX_PROFILE_PATH } = await import("../../src/codex/paths");
-const within = (root: string, path: string) => {
-  const rel = relative(realpathSync(root), realpathSync(join(path, "..")));
-  return !rel.startsWith("..") && !isAbsolute(rel);
-};
-// Only this test's own home, or a preload sandbox HOME distinct from the account's real home.
-const sandboxHome = process.env.HOME && process.env.HOME !== userInfo().homedir ? process.env.HOME : null;
-if (!within(isolatedHome.path, CODEX_PROFILE_PATH) && !(sandboxHome && within(sandboxHome, CODEX_PROFILE_PATH))) {
-  throw new Error("codex-profile-preservation: refusing to run against a Codex profile outside a test home");
+// The guard must remain armed even when this file is run outside the repository preload.
+if (!isTestHomeGuardArmed()) throw new Error("test home guard is not armed");
+if (process.env.OCX_REAL_HOME) {
+  let refused = false;
+  try { assertNotRealCodexHomeUnderTest(join(process.env.OCX_REAL_HOME, ".codex")); }
+  catch (error) {
+    if (/refusing to write the real Codex home/.test(String(error))) refused = true;
+    else throw error;
+  }
+  if (!refused) throw new Error("real Codex home guard identity mismatch");
 }
-afterAll(() => { isolatedHome.restore(); });
+const { buildProfileFileForTarget, preserveUnmanagedProfileKeys } = await import("../../src/codex/inject/config-toml");
 
 const loopback = { baseUrl: "http://127.0.0.1:10100/v1", requiresAdmissionToken: false, tokenEnv: "OPENCODEX_API_AUTH_TOKEN" as const };
 const remote = { baseUrl: "http://10.20.30.40:10100/v1", requiresAdmissionToken: true, tokenEnv: "OPENCODEX_API_AUTH_TOKEN" as const };
 const WIDE = "9223372036854775807";
-
-afterEach(() => { rmSync(CODEX_PROFILE_PATH, { force: true }); });
 
 describe("carried assignments keep their original bytes", () => {
   test.each([
@@ -149,52 +140,70 @@ describe("a carried key never redefines a generated table", () => {
   });
 });
 
+// The preload can cache CODEX_PROFILE_PATH before this module loads. Disk cases therefore
+// give a fresh child its own home before any path-dependent module is imported.
+function runProfilePlanChild(scenario: string): Record<string, unknown> {
+  const owned = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-profile-plan-")));
+  let completed = false;
+  try {
+    const child = Bun.spawnSync([process.execPath, helperPath("profile-plan-case.ts"), scenario], {
+      cwd: repoRoot(), env: { ...process.env, OCX_TEST_HOME_GUARD: "1", CODEX_HOME: owned,
+        OCX_TEST_PROFILE_OWNED_HOME: owned, CODEX_SQLITE_HOME: owned, OPENCODEX_HOME: join(owned, "ocx") },
+      stdout: "pipe", stderr: "pipe", timeout: 4_000,
+    });
+    expect(child.exitCode, child.stderr.toString()).toBe(0);
+    const result = JSON.parse(child.stdout.toString().trim().split("\n").at(-1)!);
+    completed = true;
+    return result;
+  } finally {
+    // A timed-out child may still have descendants; retain its owned scratch root.
+    if (completed) rmSync(owned, { recursive: true, force: true });
+  }
+}
+
+// The injection children must resolve every mutable home inside their caller-owned root.
+const injectionChildPrelude = `
+  const fs=require('node:fs'),path=require('node:path');
+  const paths=require('./src/codex/paths'),guard=require('./src/lib/test-home-guard');
+  const owned=fs.realpathSync.native(process.env.OCX_TEST_PROFILE_OWNED_HOME);
+  if(!guard.isTestHomeGuardArmed())throw new Error('test home guard is not armed');
+  guard.assertNotRealCodexHomeUnderTest(owned);
+  if(fs.realpathSync.native(paths.CODEX_HOME)!==owned ||
+     fs.realpathSync.native(path.dirname(paths.CODEX_PROFILE_PATH))!==owned ||
+     fs.realpathSync.native(process.env.CODEX_SQLITE_HOME)!==owned ||
+     path.resolve(process.env.OPENCODEX_HOME)!==path.join(owned,'.ocx-fixture'))
+    throw new Error('injection child escaped its owned home');
+`;
+
 describe("the injection plan", () => {
   test("reads the profile on disk and keeps its unmanaged keys", () => {
     const existing = 'stream_idle_timeout_ms = 60000\nfeatures = { fast_mode = false }\n\n[features]\nfast_mode = false\n';
-    writeFileSync(CODEX_PROFILE_PATH, existing);
-    const plan = deriveCodexInjectionPlan('model = "fixture-model"\n', {
-      config: { fastMode: true } as OcxConfig, routingTarget: loopback, catalogPathOption: null, journalReadOnly: true,
-    });
-    if (plan.kind !== "ok") throw new Error(plan.message);
+    const plan = runProfilePlanChild("profile-source");
+    expect(plan.kind).toBe("ok");
     expect(plan.profileSource).toBe(existing);
-    const parsed = Bun.TOML.parse(plan.profileContent) as Record<string, unknown>;
+    const parsed = Bun.TOML.parse(plan.profileContent as string) as Record<string, unknown>;
     expect(parsed.stream_idle_timeout_ms).toBe(60000);
     expect(parsed.features).toEqual({ fast_mode: true });
   });
 
-  const planWithoutJournal = () => deriveCodexInjectionPlan('model = "fixture-model"\n', {
-    config: {} as OcxConfig, routingTarget: loopback, catalogPathOption: null, journalReadOnly: true,
+  test("treats a profile removed as it is read as absent", () => {
+    const result = runProfilePlanChild("removed");
+    expect(result.removed).toBe(true);
+    const plan = result.plan as Record<string, unknown>;
+    expect(plan.kind).toBe("ok");
+    expect(plan.profileSource).toBeNull();
   });
 
-  test("treats a profile removed after the existence check as absent", () => {
-    // The profile reported present and then gone is a removal between the check and the read.
-    const realExists = fs.existsSync;
-    const exists = spyOn(fs, "existsSync").mockImplementation(path => path === CODEX_PROFILE_PATH || realExists(path));
-    try {
-      const plan = planWithoutJournal();
-      if (plan.kind !== "ok") throw new Error(plan.message);
-      expect(plan.profileSource).toBeNull();
-    } finally { exists.mockRestore(); }
-  });
-
-  test("the shared profile reader used at plan and lock time treats only a missing file as absent", async () => {
-    const { readCodexProfileSource } = await import("../../src/codex/inject/plan");
-    rmSync(CODEX_PROFILE_PATH, { force: true });
-    expect(readCodexProfileSource()).toBeNull();
-    writeFileSync(CODEX_PROFILE_PATH, "stream_max_retries = 8\n");
-    expect(readCodexProfileSource()).toBe("stream_max_retries = 8\n");
-    rmSync(CODEX_PROFILE_PATH, { force: true });
-    mkdirSync(CODEX_PROFILE_PATH);
-    try { expect(readCodexProfileSource).toThrow(/EISDIR|directory/i); }
-    finally { rmSync(CODEX_PROFILE_PATH, { recursive: true, force: true }); }
+  test("the shared profile reader used at plan and lock time treats only a missing file as absent", () => {
+    const reader = runProfilePlanChild("reader");
+    expect(reader.missing).toBeNull();
+    expect(reader.present).toBe("stream_max_retries = 8\n");
+    expect(reader.error).toMatch(/EISDIR|directory/i);
   });
 
   test("an unreadable profile other than a missing one still fails the plan", () => {
-    mkdirSync(CODEX_PROFILE_PATH);
-    try {
-      expect(planWithoutJournal).toThrow(/EISDIR|directory/i);
-    } finally { rmSync(CODEX_PROFILE_PATH, { recursive: true, force: true }); }
+    const unreadable = runProfilePlanChild("unreadable");
+    expect(unreadable.error).toMatch(/EISDIR|directory/i);
   });
 
   test("refuses retryably when the profile changes before the write lock is held", () => {
@@ -203,8 +212,9 @@ describe("the injection plan", () => {
       writeFileSync(join(home, "config.toml"), 'model = "fixture-model"\n');
       writeFileSync(join(home, "opencodex.config.toml"), "stream_idle_timeout_ms = 1\n");
       const child = Bun.spawnSync([process.execPath, "-e", `
-        const fs=require('node:fs'),{spyOn}=require('bun:test');
-        const locks=require('./src/codex/config-write-lock'),paths=require('./src/codex/paths');
+        ${injectionChildPrelude}
+        const {spyOn}=require('bun:test');
+        const locks=require('./src/codex/config-write-lock');
         const original=locks.acquireConfigWriteLock;let edited=false;
         const spy=spyOn(locks,'acquireConfigWriteLock').mockImplementation(async (...args)=>{
           if(!edited){edited=true;fs.writeFileSync(paths.CODEX_PROFILE_PATH,'stream_max_retries = 9\\n');}
@@ -212,7 +222,8 @@ describe("the injection plan", () => {
         });
         let result;try{result=await require('./src/codex/inject').injectCodexConfig(10100);}finally{spy.mockRestore();}
         console.log(JSON.stringify({result,profile:fs.readFileSync(paths.CODEX_PROFILE_PATH,'utf8')}));
-      `], { cwd: repoRoot(), env: { ...process.env, CODEX_HOME: home, OPENCODEX_HOME: join(home, ".ocx-fixture") },
+      `], { cwd: repoRoot(), env: { ...process.env, OCX_TEST_HOME_GUARD: "1", OCX_TEST_PROFILE_OWNED_HOME: home,
+        CODEX_HOME: home, CODEX_SQLITE_HOME: home, OPENCODEX_HOME: join(home, ".ocx-fixture") },
         stdout: "pipe", stderr: "pipe", timeout: SPAWN_BUDGET_MS - 5_000 });
       expect(child.exitCode, child.stderr.toString()).toBe(0);
       const out = JSON.parse(child.stdout.toString().trim().split("\n").at(-1)!);
@@ -239,14 +250,16 @@ function runInjectChild(prime: boolean, script: string): Record<string, any> {
     writeFileSync(join(home, "config.toml"), 'model = "fixture-model"\n');
     if (!prime) writeFileSync(join(home, "opencodex.config.toml"), "stream_idle_timeout_ms = 1\n");
     const child = Bun.spawnSync([process.execPath, "-e", `
-      const fs=require('node:fs'),{spyOn}=require('bun:test');
-      const paths=require('./src/codex/paths'),coord=require('./src/codex/inject-coordination'),inject=require('./src/codex/inject');
+      ${injectionChildPrelude}
+      const {spyOn}=require('bun:test');
+      const coord=require('./src/codex/inject-coordination'),inject=require('./src/codex/inject');
       const read=()=>fs.readFileSync(paths.CODEX_PROFILE_PATH,'utf8');
       const run=async(port=10101)=>{try{return await inject.injectCodexConfig(port);}catch(error){return {threw:String(error&&error.message)};}};
       if(${prime}){const primed=await run(10100);if(!primed.success)throw new Error('priming failed: '+JSON.stringify(primed));}
       const before=read();const kinds=[];inject.setBeforeHistoryArtifactCommitForTests(kind=>kinds.push(kind));
       ${script}
-    `], { cwd: repoRoot(), env: { ...process.env, CODEX_HOME: home, OPENCODEX_HOME: join(home, ".ocx-fixture") },
+    `], { cwd: repoRoot(), env: { ...process.env, OCX_TEST_HOME_GUARD: "1", OCX_TEST_PROFILE_OWNED_HOME: home,
+      CODEX_HOME: home, CODEX_SQLITE_HOME: home, OPENCODEX_HOME: join(home, ".ocx-fixture") },
       stdout: "pipe", stderr: "pipe", timeout: SPAWN_BUDGET_MS - 5_000 });
     expect(child.exitCode, child.stderr.toString()).toBe(0);
     return JSON.parse(child.stdout.toString().trim().split("\n").at(-1)!);

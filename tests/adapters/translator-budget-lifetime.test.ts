@@ -8,6 +8,11 @@ import {
 } from "../../src/server/responses/core-lifetime";
 import { isNonReplayableResponse, markResponseNonReplayable } from "../../src/lib/upstream-retry";
 import {
+  isPolicyCandidateRefusal, PolicyCandidateUnavailableError, policyCandidateRefusalResponse,
+  isMandatoryToolChoiceRefusal, MandatoryToolChoiceUnavailableError,
+} from "../../src/server/responses/policy-request-scope";
+import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
+import {
   markNativePassthroughSseResponse, isNativePassthroughSseResponse,
   markEagerRelaySseResponse, isEagerRelaySseResponse,
   markPreinspectedJsonResponse, isPreinspectedJsonResponse,
@@ -175,6 +180,48 @@ for (const outerLease of [false, true]) {
     });
   }
 }
+
+test.each([true, false])("policy refusal authority survives lifetime wrappers only for a local response (%s)", async local => {
+  const refusal = policyCandidateRefusalResponse(new PolicyCandidateUnavailableError())!;
+  // An upstream can reproduce every wire byte, but cannot mint the local response identity.
+  const source = local ? refusal : new Response(await refusal.text(), { status: refusal.status, headers: refusal.headers });
+  let released = 0;
+  const budget = createTranslatorBudget();
+  const wrapped = finalizeAccountLease(finalizeOwnedTranslatorBudget(source, budget), () => { released++; });
+  expect(isPolicyCandidateRefusal(wrapped)).toBe(local);
+  expect(wrapped.status).toBe(409);
+  expect((await wrapped.json()).error.code).toBe("policy_candidate_unavailable");
+  expect(released).toBe(1);
+  expect(budget.snapshot().currentBytes).toBe(0);
+});
+
+for (const mode of ["read", "cancel"] as const) test.each(["generic", "tool", "spoof"])(
+  `combo failure after both lifetime wrappers retains authority and releases once (${mode}, %s)`, async kind => {
+  const baseline = translatorLiveBudgetCountForTests(), aggregate = translatorObservedBufferSnapshot();
+  const refusal = policyCandidateRefusalResponse(kind === "generic"
+    ? new PolicyCandidateUnavailableError() : new MandatoryToolChoiceUnavailableError())!;
+  const source = kind !== "spoof" ? refusal : new Response(await refusal.text(), { status: refusal.status, headers: refusal.headers });
+  let released = 0;
+  const budget = createTranslatorBudget();
+  budget.openCall("refusal");
+  budget.chargeRetained(512, { kind: "tool_args", callId: "refusal" });
+  const wrapped = finalizeAccountLease(finalizeOwnedTranslatorBudget(source, budget), () => { released++; });
+  let rebuilt: Response | undefined;
+  try {
+    rebuilt = (await consumeComboFailure(wrapped)).response;
+    expect(rebuilt.status).toBe(409);
+    expect(isPolicyCandidateRefusal(rebuilt)).toBe(kind !== "spoof");
+    expect(isMandatoryToolChoiceRefusal(rebuilt)).toBe(kind === "tool");
+    expect(source.bodyUsed).toBe(true); expect(wrapped.bodyUsed).toBe(true);
+    expect(released).toBe(1);
+    expect(budget.snapshot()).toMatchObject({ currentBytes: 0, activeCalls: 0 });
+    expect(translatorLiveBudgetCountForTests()).toBe(baseline);
+    expect(translatorObservedBufferSnapshot()).toMatchObject({ currentBytes: aggregate.currentBytes, active: aggregate.active });
+    if (mode === "read") expect((await rebuilt.json()).error.code).toBe("upstream_error");
+    else await rebuilt.body?.cancel();
+    expect(released).toBe(1);
+  } finally { await rebuilt?.body?.cancel().catch(() => {}); await wrapped.body?.cancel().catch(() => {}); budget.dispose(); }
+});
 
 for (const surface of ["responses", "chat-completions", "claude-messages"] as const) {
   test(`${surface}: HTTP owner links request abort to its unread response budget`, async () => {

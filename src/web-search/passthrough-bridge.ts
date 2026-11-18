@@ -63,6 +63,7 @@ import { buildWebSearchTool, WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 import { safeWebSearchSources } from "./sources";
 import { runOllamaWebSearch } from "./ollama-executor";
 import { runAnthropicWebSearch } from "./anthropic-executor";
+import type { AuxiliaryModelSend } from "../lib/request-execution-budget";
 import { runXaiWebSearch, validateXaiSearchOptions } from "./xai-executor";
 import { runGeminiWebSearch } from "./gemini-executor";
 import { runExaWebSearch } from "./exa-executor";
@@ -75,6 +76,7 @@ import {
 } from "./sidecar-providers";
 import { providerDestinationConfigError } from "../lib/destination-policy";
 import { redactSecretString } from "../lib/redact";
+import { ExplicitBodyStallError } from "../lib/response-body-inactivity";
 import { rememberBridgeSearchReplay } from "../responses/bridge-search-replay-cache";
 import { withAnthropicHelperRefusal } from "../sidecar/auth";
 
@@ -831,6 +833,7 @@ export function createOllamaBridgeExecutor(
 
 /** Per-search credentials and sidecar settings. Secrets stay off the plan object. */
 export interface PassthroughWebSearchBridgeExecutorContext {
+  dispatchSidecarSend?: AuxiliaryModelSend;
   providerApiKey?: string;
   auth?: PassthroughWebSearchBridgeAuth;
   hostedTool?: Record<string, unknown>;
@@ -972,6 +975,7 @@ export function createPassthroughWebSearchBridgeExecutor(
           settings,
           querySignal,
           anthropic.config,
+          context.dispatchSidecarSend,
         );
       }
       case "xai": {
@@ -1047,6 +1051,12 @@ async function* bridgeStreamBlocks(
       const message = error instanceof Error ? error.message : String(error);
       // A held-event overflow is this proxy's own bound. Attributing it to an upstream read
       // failure would blame the provider for a refusal the bridge made.
+      // The operator's explicit stallTimeoutSec expiring is a stall, reported with the same
+      // `upstream_stall_timeout` terminal the relay and adapter paths use (#8206).
+      if (error instanceof ExplicitBodyStallError) {
+        yield* emit(state.failLegFrames("upstream_stall_timeout", message));
+        return;
+      }
       yield* emit(state.failLegFrames(
         WEB_SEARCH_BRIDGE_ERROR_CODE,
         error instanceof HeldCallBudgetExceededError

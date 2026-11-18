@@ -259,6 +259,8 @@ Connections > API keys 包含独立的听写和实时语音区域。数据密钥
 
 ## `POST /v1/responses/compact`
 
+如果 compact 请求包含格式错误的 OpenCodex 自有 retained-compaction 输入（`ocx2:`），则返回 HTTP 400，且 `error.type` 为 `"invalid_request_error"`。验证时机及对账号状态的影响见[英文规范参考](/reference/proxy-formats/#post-v1responsescompact)。
+
 Compaction 会为需要缩短长 Responses 会话的客户端返回替换历史。
 
 | 路由类型 | 行为 |

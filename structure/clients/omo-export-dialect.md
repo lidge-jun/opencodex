@@ -11,7 +11,8 @@ keeps `PI_API_DIALECT` (`openai-completions`), so a bad value never fails the co
 top-level `omoClientExport` field in `src/config/schema/config-schema.ts` adds the outer fallback: a
 malformed block (not an object) is dropped as a whole with `.optional().catch(undefined)`.
 
-The scope is omo only. Pi, Gentle Shell and the other Pi-format clients keep `PI_EXPORT_OPTIONS`.
+The dialect setting is omo-only. Pi, Gentle Shell and the other Pi-format clients keep the default
+Chat dialect; Pi also preserves [nested model selectors](export-model-names.md#scope-and-policy).
 
 ## Export and refresh
 

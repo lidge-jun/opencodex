@@ -110,7 +110,7 @@ ocx logout <provider>
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth 使用獨立的 Grok CLI 訂閱 gateway。API key 覆寫使用 `https://api.x.ai/v1`，並可能注入 Priority Processing。優先使用即時 Grok catalog；fallback 預設為 `grok-4.5`。 |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude 模型；即時模型列表從 `/v1/models` 取得。 |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code 模型。`kimi-for-coding` 目前指向 K2.8 Preview，支援 100 萬 token 上下文、`low`/`high`/`max` 推理及文字、圖片輸入。`k3-256k` 的上下文上限固定為 256K。 |
-| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | 以 Responses 協定共用 `kimi` 的 OAuth 登入與模型清單。推理內容在伺服器端維持加密，工具呼叫及結果仍可見。 |
+| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | 以 Responses 協定共用 `kimi` 的 OAuth 登入與模型清單。推理內容在伺服器端維持加密，工具呼叫及結果仍可見。 可在儀表板的 **Add provider** 選擇器（**Kimi (Responses)**）中新增，或執行 `ocx provider add kimi-responses --live`。它沒有獨立登入：已登入 Kimi 時新增無需再次登入；從選擇器中此項登入也只會建立這一列，不會更動 `kimi` 列。從任一列登出（`ocx logout kimi` 或 `ocx logout kimi-responses`，本機或使用 `--live`，或在儀表板任一列點選 **Logout**）都會為兩列移除目前的 Kimi 帳號並加以提示；若還儲存了其他 Kimi 帳號，它會成為兩列目前使用的帳號；該帳號暫停期間兩列都不會使用它，若需要重新登入，請重新登入該帳號。在儀表板（或使用 `--live`）刪除其中一列時，只要另一列仍在使用，登入會保留；刪除最後一列會一併刪除登入。本機 `ocx provider remove` 與其他提供者相同，會保留已儲存的登入。 |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research 訂閱 gateway（Hermes Agent 使用相同 backend）。透過 `portal.nousresearch.com` 做 device-grant 登入；access token 是每次請求使用的 inference JWT。混合付費與 `:free` 模型 catalog（`tencent/hy3:free`、`stepfun/step-3.7-flash:free` 等）會從已登入帳號即時探索。Refresh token 為單次使用，每次 refresh 都會輪換。 |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初次登入會匯入已安裝且已登入的 `kiro-cli` session。Unix 可用 `curl -fsSL https://cli.kiro.dev/install` &#124; `bash` 安裝；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`，再執行 `kiro-cli login`。**Add account** 會先登出 `kiro-cli`、啟動新的 browser login，切換 `kiro-cli` 所使用的帳號並保存 account-scoped profile metadata。既有 OpenCodex 帳號會保留；取消或失敗時會恢復先前的 `kiro-cli` session。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 透過 Cloud Code Assist wire 使用 Google OAuth。即時探索使用 CCA 經認證的 `v1internal:fetchAvailableModels` 端點，發布目前登入帳號可用的 agent 模型；維護中的 catalog 作為 fallback。 |
@@ -264,7 +264,7 @@ database 並移除目前的 WAL、SHM 與 journal sidecar，再發布先前的 s
 
 ## 3. API 金鑰目錄
 
-opencodex 內建 107 個 preset：85 個 key-based、18 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
+opencodex 內建 109 個 preset：87 個 key-based、18 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
 preset。儀表板的 **Add provider** picker 會開啟 key provider 的 dashboard、驗證金鑰並儲存；驗證方式
 依 provider 而異。主要條目如下。
 
@@ -317,7 +317,7 @@ IDE／CLI，不透過 API；`minimax/minimax-m2.5` 是文件列出的 API 免費
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
-| [BigModel Coding Plan — Responses (靜態模型清單)](/guides/providers/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
+| [BigModel Coding Plan — Responses (靜態模型清單)](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
 | Qwen Cloud | Token plan（預設）：`https://token-plan.maas.qwencloudapi.com/compatible-mode/v1` · pay as you go：`https://dashscope.aliyuncs.com/compatible-mode/v1` · 或 Custom |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
@@ -517,6 +517,13 @@ quota probe 只會把 active key 傳送到 canonical A6API host，並拒絕 redi
 key-based provider 也能保存多個 key。透過 Providers 頁面新增 key 時，會存到 `provider.apiKeyPool`、
 設為 active，並同步到 `provider.apiKey`，讓路由與 adapter 繼續讀取原本欄位。同一個下拉選單可切換或
 移除 key；管理 API 為 `/api/providers/keys`，而且只回傳遮蔽後的 key。
+
+儀表板中每個 API key 列皆提供獨立的暫停與恢復按鈕（亦可使用 `ocx account pause` 與 `ocx account resume`
+命令）。已暫停的金鑰不會參與自動請求路由、failover 容錯切換與冷卻恢復（Responses xAI 圖片／影片橋接已規劃好的媒體呼叫會沿用規劃時的金鑰）。若另一個啟用列共用相同金鑰參照，該參照仍可使用。若暫停現用參照的最後一個啟用列，
+OpenCodex 會依環狀順序（ring order）自動切換至金鑰池中下一個未暫停的可用金鑰；若池中所有金鑰皆已暫停，
+必須使用該提供者的請求會回傳 HTTP 403 `permission_error`，直到恢復金鑰為止。內建 Images 路由仍可使用其他符合條件的上游。
+選取已暫停的金鑰列會恢復並將其設為現用金鑰。
+獨立的「恢復」按鈕會保留目前可用的現用金鑰；只有目前未選取可用金鑰時，才會將恢復的金鑰設為現用金鑰。
 
 ### 從終端切換帳號
 

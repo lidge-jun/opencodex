@@ -248,5 +248,29 @@ test("passive account refresh reports unobserved without sending a quota request
   expect(body.accounts[0].quotaMode).toBe("passive");
   expect(body.accounts[0].quota).toBeUndefined();
   expect(body.accounts[0].quotaUnavailable).toBeUndefined();
+  expect(body.accounts[0].quotaUnknownReason).toBe("passive_not_observed");
   expect(requests).toBe(0);
+});
+
+test("#8397 a read that reports no balance says not_reported, and a paused key was not read", async () => {
+  const config = { port: 0, defaultProvider: "abliteration", providers: {
+    abliteration: { adapter: "openai-chat", authMode: "key", baseUrl: "https://api.abliteration.ai/v1", apiKey: "fixture-ab" },
+    openrouter: { adapter: "openai-chat", authMode: "key", baseUrl: "https://openrouter.ai/api/v1", apiKey: "fixture-first",
+      apiKeyPool: [{ id: "first", key: "fixture-first" }, { id: "held", key: "fixture-held", disabled: true }] },
+  } } as OcxConfig;
+  const seen: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    seen.push(new Headers(init?.headers).get("authorization") ?? "");
+    if (String(input).startsWith("https://api.abliteration.ai/")) return Response.json({ data: { total_credits: 0, total_usage: 0 } });
+    return Response.json({ data: { limit: 100, limit_remaining: 50 } });
+  }) as typeof fetch;
+  const before = Date.now();
+  const empty = await (await read("/api/providers/keys?name=abliteration&quota=1&refresh=1", config)).json();
+  expect(empty.keys[0]).toMatchObject({ quotaMode: "probe", quota: null, quotaUnavailable: false, quotaUnknownReason: "not_reported" });
+  expect(empty.keys[0].quotaReadAt).toBeGreaterThanOrEqual(before);
+  const pool = await (await read("/api/providers/keys?name=openrouter&quota=1&refresh=1", config)).json();
+  const held = pool.keys.find((key: { id: string }) => key.id === "held");
+  expect(held).toMatchObject({ quotaUnavailable: true, quotaUnknownReason: "not_read" });
+  expect(Object.hasOwn(held, "quotaReadAt")).toBe(false);
+  expect(seen).not.toContain("Bearer fixture-held");
 });

@@ -66,6 +66,11 @@ const moduleOf = (file: string): string => file.replace(/^src\//, "").replace(/\
 const key = (method: string, path: string): string => `${method} ${path}`;
 
 describe("management route registry reconciliation", () => {
+  test("route-to exposes exactly its versioned read, intent write and explicit sync methods", () => {
+    const scanned = distinctRoutes(scanRoutes(join(repoRoot, "src/server/management/route-to-routes.ts")));
+    expect(scanned.unresolved).toEqual([]);
+    expect([...scanned.pairs].sort()).toEqual(["GET /api/route-to", "POST /api/route-to/sync", "PUT /api/route-to"]);
+  });
   test("dashboard plan uses the shared proof-bound production inspection path", async () => {
     const proof = "P".repeat(43);
     const root = process.platform === "win32" ? "C:\\fixture-only" : "/tmp/fixture-only";
@@ -351,6 +356,93 @@ describe("management route registry reconciliation", () => {
       if (!src.includes(`"${route.path}"`)) missing.push(`${key(route.method, route.path)} not in ${file}`);
     }
     expect(missing).toEqual([]);
+  });
+
+  test("every path guard against an imported or local path constant is declared", () => {
+    // Why this exists: `/api/codex/desktop-compatibility/authorization` was live in
+    // `desktop-authorization.ts` while absent from the registry, and every check in this
+    // file stayed green. The owner compares `pathname !== DESKTOP_AUTHORIZATION_PATH`, where
+    // the constant is imported from another module, so:
+    //   - the text scanner sees no `=== "/api/…"` literal and reports nothing;
+    //   - check 2's literal search finds no literal in the owner file;
+    //   - the per-module count only compares declarations to something the scan can see,
+    //     so an entirely undeclared module balances at zero.
+    // The defect is not "the path text is missing", it is "the guard is invisible". So scan
+    // for identifier path guards directly and require at least the narrowed method to be
+    // declared. Widened methods stay opt-in per file: a guard that only narrows GET still
+    // answers POST, and this check must not invent routes a single guard does not prove.
+    const literalConstants = (absoluteFile: string): Map<string, string> => {
+      const src = readFileSync(absoluteFile, "utf8");
+      const found = new Map<string, string>();
+      for (const match of src.matchAll(/(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*"(\/[^"]*)"/g)) {
+        found.set(match[1]!, match[2]!);
+      }
+      return found;
+    };
+    const importedConstants = (absoluteFile: string): Map<string, string> => {
+      const src = readFileSync(absoluteFile, "utf8");
+      const found = new Map<string, string>();
+      for (const match of src.matchAll(/import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*"([^"]+)"/g)) {
+        const specifier = match[2]!;
+        if (!specifier.startsWith(".")) continue;
+        const base = resolve(dirname(absoluteFile), specifier);
+        const resolved = [`${base}.ts`, `${base}/index.ts`].find(existsSync);
+        if (!resolved) continue;
+        const exported = literalConstants(resolved);
+        for (const raw of match[1]!.split(",")) {
+          const name = raw.trim().split(/\s+as\s+/).pop()!.trim();
+          if (name && exported.has(name)) found.set(name, exported.get(name)!);
+        }
+      }
+      return found;
+    };
+    const declared = new Set(MANAGEMENT_ROUTES.map(route => key(route.method, route.path)));
+    const undeclared: string[] = [];
+    for (const file of routeCarryingFiles()) {
+      const absoluteFile = join(repoRoot, file);
+      const source = readFileSync(absoluteFile, "utf8");
+      if (!/pathname\s*(?:===|!==)\s*[A-Za-z_$]/.test(source)) continue;
+      const constants = new Map([...importedConstants(absoluteFile), ...literalConstants(absoluteFile)]);
+      const lines = source.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        const guard = /pathname\s*(===|!==)\s*([A-Za-z_$][\w$]*)/.exec(lines[i] ?? "");
+        if (!guard) continue;
+        const path = constants.get(guard[2]!);
+        if (!path || !path.startsWith("/api/")) continue;
+        // The narrowed method may sit on the guard line or in the block it opens — the
+        // shape `if (pathname !== PATH) return null;` followed by `if (method === "GET")`
+        // then `if (method !== "POST")` is how both this route and its Desktop siblings
+        // are written. Read a short forward window and stop at the next path guard, so a
+        // later unrelated route cannot lend this one a method.
+        const window: string[] = [];
+        for (let j = i; j <= Math.min(i + 3, lines.length - 1); j++) {
+          const line = lines[j] ?? "";
+          if (j > i && /pathname\s*(?:===|!==)\s*/.test(line)) break;
+          window.push(line.replace(/\/\/.*$/, ""));
+        }
+        const methods = new Set([...window.join(" ").matchAll(/method\s*===?\s*"([A-Z]+)"/g)].map(m => m[1]!));
+        for (const match of window.join(" ").matchAll(/method\s*!==\s*"([A-Z]+)"/g)) methods.add(match[1]!);
+        // No readable method means no exact claim: the verbs live in a dispatch this check
+        // cannot read, and inventing one is how a gate starts failing on correct code.
+        for (const method of methods) {
+          if (!declared.has(key(method, path))) {
+            undeclared.push(`${key(method, path)} at ${file}:${i + 1} (${guard[2]})`);
+          }
+        }
+      }
+    }
+    expect(undeclared).toEqual([]);
+  });
+
+  test("the Desktop authorization route is declared for both methods, not inferred", () => {
+    // The route exists in `desktop-authorization.ts` behind an imported constant, and the
+    // persistent-dashboard consent audit derives its mutation list from this registry. An
+    // omitted declaration therefore removes the route from the audit that is supposed to
+    // prove a remembered-admin session cannot mutate. Pin both methods explicitly.
+    const declared = MANAGEMENT_ROUTES.filter(route => route.path === "/api/codex/desktop-compatibility/authorization");
+    expect(declared.map(route => [route.method, route.mutates, route.mechanism, route.exempt?.reason]).sort())
+      .toEqual([["GET", false, "path-constant", "session-only"], ["POST", true, "path-constant", "session-only"]]);
+    for (const route of declared) expect(route.module).toBe("server/management/desktop-authorization");
   });
 
   test("per-module counts reconcile: declared == scanned pairs + declared non-literal", () => {
