@@ -3,6 +3,8 @@ title: Sélecteur de modèles de Codex App
 description: Comment les modèles opencodex apparaissent dans Codex App, Codex CLI et Codex TUI par l'intermédiaire du catalogue Codex partagé.
 ---
 
+Par défaut : `false`. Avec `"omitDisabledNativeModels": true` dans `config.json`, puis `ocx sync`, les lignes natives désactivées sont omises du catalogue, du cache et de la découverte HTTP au format Codex. Le modèle d’héritage natif validé avant omission conserve les métadonnées des lignes routées. Les requêtes directes gardent leur routage habituel. Les descriptions de masquage ci-dessous concernent le comportement par défaut.
+
 opencodex ne modifie pas Codex App. Il écrit la même configuration et le même catalogue de modèles Codex
 que ceux utilisés par Codex CLI et TUI. Le serveur d'application lit cet état partagé, mais certaines versions
 de Codex Desktop appliquent dans le moteur de rendu une seconde liste d'autorisation distante et peuvent
@@ -220,8 +222,7 @@ Codex trie les entrées visibles du sélecteur par `priority` croissante et prop
 remplacements de modèle pour `spawn_agent`. La page **Sous-agents** du tableau de bord permet de choisir et
 d'enregistrer jusqu'à cinq identifiants natifs non qualifiés ou identifiants routés `provider/model`.
 `subagentModels`, lorsqu'il est configuré manuellement, accepte aussi les identifiants qualifiés par compte
-`<selector>/<native-openai-model>`, mais le tableau de bord ne propose pas ces identifiants exacts ; enregistrer
-la page remplace la liste par les choix visibles dans le tableau de bord. opencodex attribue des priorités de
+`<selector>/<native-openai-model>`. Le tableau de bord conserve ces identifiants exacts lors de l’enregistrement de la liste, même si les modèles ne sont plus disponibles dans le catalogue actuel. opencodex attribue des priorités de
 catalogue basses dans l'ordre choisi. Lorsque les lignes qualifiées par compte sont activées, les sélections
 natives non qualifiées s'étendent en groupes qualifiés par sélecteur. Les autres modèles restent accessibles
 par leur identifiant exact.

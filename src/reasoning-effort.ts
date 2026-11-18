@@ -153,8 +153,13 @@ export function sanitizeCodexReasoningEfforts(efforts: readonly string[] | undef
 /**
  * Provider/model configured reasoning levels for the Codex catalog. `undefined` means “no override”,
  * while an empty array means “intentionally expose no effort control for this model”.
+ * Read-only callers can suppress stale-snapshot refresh without changing the returned ladder.
  */
-export function configuredReasoningEfforts(provider: OcxProviderConfig, modelId: string): string[] | undefined {
+export function configuredReasoningEfforts(
+  provider: OcxProviderConfig,
+  modelId: string,
+  options?: { refreshMetadata?: boolean },
+): string[] | undefined {
   if (modelInList(provider.noReasoningModels, modelId)) return [];
   const modelEfforts = modelRecordValue(provider.modelReasoningEfforts, modelId);
   // Rungs this account actually had refused are removed for every ladder source (registry
@@ -180,7 +185,7 @@ export function configuredReasoningEfforts(provider: OcxProviderConfig, modelId:
   // not request work.
   const fromMetadata = reasoningEffortsFromMetadata(provider, modelId);
   if (fromMetadata !== undefined) {
-    ensureReasoningMetadataSnapshot();
+    if (options?.refreshMetadata !== false) ensureReasoningMetadataSnapshot();
     return dropLearnedUnsupportedReasoningEfforts(provider, modelId, healMappedTiers(provider, modelId, fromMetadata));
   }
   return undefined;

@@ -178,7 +178,7 @@ describe("native Anthropic image input reaches client documents", () => {
     const expectedInputs = models
       .map(model => ({ id: model.namespaced, input: ["text", "image"] }))
       .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-    const expectedFastInputs = ["claude-opus-4-8", "claude-opus-5", "claude-opus-5-5"]
+    const expectedFastInputs = ["claude-fable-5-2", "claude-opus-4-8", "claude-opus-5", "claude-opus-5-5"]
       .map(model => ({ id: `${provider}/${model}--fast`, input: ["text", "image"] }))
       .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
     const expectImageInputs = (rows: Array<{ id: string; input: string[] }>) => {
@@ -205,7 +205,7 @@ describe("native Anthropic image input reaches client documents", () => {
     const hermes = buildClientConfig("hermes", context) as HermesGeneratedConfig;
     const raycast = buildClientConfig("raycast", context) as RaycastGeneratedConfig;
     for (const model of models) {
-      expect(kimi.models[`${OPENCODE_PROVIDER_ID}/${model.namespaced}`]?.capabilities).toEqual(["image_in"]);
+      expect(kimi.models[`${OPENCODE_PROVIDER_ID}/${model.namespaced}`]?.capabilities).toContain("image_in");
       expect(opencode.provider[OPENCODE_PROVIDER_ID]!.models[model.namespaced]?.modalities?.input).toEqual(["text", "image"]);
       expect(opencode.provider[OPENCODE_PROVIDER_ID]!.models[model.namespaced]?.attachment).toBe(true);
       const nativeCapabilities = opencode.providers[OPENCODE_PROVIDER_ID]!.models[model.namespaced]?.capabilities;

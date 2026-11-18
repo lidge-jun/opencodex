@@ -56,7 +56,12 @@ When the visible catalog is Codex code mode — a freeform unified `exec` and no
 the redirect steers the model INSIDE `exec`: shell, file, search, and fetch are nested
 `tools.<name>(...)` helpers of the JavaScript cell with `text(...)` required for output, and the
 wording never recommends the top-level `shell_command`/`exec_command` bridge code mode does not
-expose; separately listed namespaced tools remain callable as usual. A flat catalog with a bare
+expose; separately listed namespaced tools are called directly, outside `exec`. Cursor can defer
+the Codex client tools, `exec` included, behind its own `GetDynamicTools`/`CallDynamicTool` pair
+(#8132), so code-mode redirects and guidance never claim top-level reach: they add
+`CURSOR_DEFERRED_TOOL_FALLBACK`, which names `CallDynamicTool` with namespace
+`opencodex-responses` and the listed tool name. This removes a false statement; it does not
+register tools at the top level or stop a first native attempt. A flat catalog with a bare
 bridge or a non-freeform unified `exec` keeps the default bridge wording, and a catalog with no
 execution path at all keeps naming the request's actual client/MCP wire names.
 
@@ -256,9 +261,16 @@ replay of available raw history; the same limits and final overflow error still 
 Token estimation includes retained external root blobs, including checkpoint-carried roots.
 Missing or invalid UTF-8 blobs are skipped with bounded provider diagnostics; estimating does not
 alter blob-retention metrics.
-Root-echo eligibility is `cursorNeedsExternalToolContinuation`, which includes native
-`composer-2.5` and `composer-2.5-fast`, not only external wire models, so the restoration reaches
-every replay that carries an invocation line. Coverage lives in
+Root-echo eligibility is `cursorReplaysToolResultInRoot` (`src/adapters/cursor/discovery.ts`): every
+`cursorNeedsExternalToolContinuation` model, which includes native `composer-2.5` and
+`composer-2.5-fast`, plus the Auto router (wire `default`, any routing level), so the restoration
+reaches every replay that carries an invocation line. Auto keeps its bare `resumeAction`, but
+without the result in root text it asked to run the same successful command again instead of
+answering (#8538); that reverses the #2318 omission, whose envelope echo the filter below now
+catches. Continuation action selection and checkpoint retention stay on
+`cursorNeedsExternalToolContinuation`: Auto's checkpoint carries pending tool state that full
+replay does not rebuild, so elided root text must not discard it.
+`tests/providers/cursor/cursor-auto-tool-result-replay.test.ts` covers Auto. Coverage lives in
 `tests/providers/cursor/cursor-tool-result-invocation.test.ts`.
 
 ## Cursor executable tool schema ownership
@@ -367,6 +379,11 @@ marker and remaining echo tail. A harmless partial suffix is flushed on normal c
 a distinctive truncated marker at end is dropped. `CursorMidstreamEchoObserver` still
 records findings, and eligible non-isolated turns remint the conversation id for the NEXT
 turn. The current send is never retried because leading prose may already have escaped.
+The unresolved marker uses the shared [pending-line bound](../transports/byte-accounting.md#stream-buffer-accounting),
+including trailing whitespace. Overflow terminates the turn with 502 `translation_buffer_limit`
+and closes the transport; it does not release the held candidate or emit a successful terminal.
+`tests/providers/cursor/cursor-auto-tool-result-replay.test.ts` exercises this through the Auto
+adapter with a tool result in history and an injected transport, without an upstream resend.
 Markers inside a Markdown fenced code block are quoted examples. Fences follow CommonMark: an
 opener is a run of at least three backticks or tildes indented at most three spaces, and only a run
 of the same character, at least as long and followed by nothing but whitespace, closes it. A marker
@@ -378,7 +395,7 @@ replay scrub keeps a marker line only inside a fence that closes later in the st
 (`closedFenceLines`), and the remint follows the filter's verdict (a confirmed echo, or a fenced marker
 released by hold overflow): `CursorMidstreamEchoObserver` findings are diagnostics only. The filter and the next-turn remint
 are armed for every model that replays tool results as root text
-(`cursorNeedsExternalToolContinuation`, which includes the native-wire composer-2.5 builds);
+(`cursorReplaysToolResultInRoot`, which includes the native-wire composer-2.5 builds and Auto);
 the opening-bytes prefix retry stays external-only, because its corrective continuation text is
 encoded for external wire models alone.
 

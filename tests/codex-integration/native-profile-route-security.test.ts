@@ -125,6 +125,24 @@ describe("native-main profile routes at the management admission boundary", () =
     }
   }, SERVER_BUDGET_MS);
 
+  test("admission requires management credentials and never dispatches to the profile manager", async () => {
+    const config = loopbackConfig();
+    saveConfig(config);
+    const calls: string[] = [];
+    const server = startServer(0, { managementApi: { nativeProfileApi: { manager: testManager(calls) } } });
+    try {
+      const request = (headers: HeadersInit = {}) => fetch(new URL("/api/native-main-profiles/admission", server.url), { headers });
+      expect((await request()).status).toBe(401);
+      expect((await request({ "x-opencodex-api-key": "wrong-admin-token" })).status).toBe(401);
+      const response = await request({ "x-opencodex-api-key": "native-main-admin-token" });
+      expect(response.status).toBe(200);
+      expect(["ready", "blocked"]).toContain((await response.json() as { admissionStatus?: string }).admissionStatus);
+      expect(calls).toEqual([]);
+    } finally {
+      await server.stop(true);
+    }
+  }, SERVER_BUDGET_MS);
+
   test("requires a same-origin GUI session CSRF token for every native mutation before dispatch", async () => {
     const config = loopbackConfig();
     saveConfig(config);

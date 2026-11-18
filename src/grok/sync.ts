@@ -32,9 +32,15 @@ async function defaultFetchAllModels(config: OcxConfig): Promise<CatalogModel[]>
 export async function syncGrokConfig(
   port: number,
   config: OcxConfig,
-  opts: { hostname?: string; probeHostname?: string; grokHome?: string; refreshOnly?: { admit: () => boolean } } = {},
+  opts: { hostname?: string; probeHostname?: string; grokHome?: string; refreshOnly?: { admit: () => boolean };
+    /** Recheck caller-owned desired state/lifecycle after asynchronous catalog work. */
+    admit?: () => boolean } = {},
   deps: GrokSyncDeps = { fetchAllModels: defaultFetchAllModels, injectGrokConfig },
 ): Promise<GrokInjectResult> {
+  const skipped = (): GrokInjectResult => ({
+    ok: true, changed: false, message: "Grok config sync skipped: caller admission is no longer current.",
+  });
+  if (opts.admit && !opts.admit()) return skipped();
   let projection: ReturnType<typeof projectGrokCatalog>;
   try {
     const allRouted = await deps.fetchAllModels(config);
@@ -54,6 +60,9 @@ export async function syncGrokConfig(
     unauthenticatedLoopbackListener: config.unauthenticatedLoopbackListener,
   });
   const targetUrl = new URL(target.baseUrl);
+  // Admission and the synchronous writer share one event-loop turn. A toggle or
+  // shutdown that landed while catalog discovery awaited must win over this snapshot.
+  if (opts.admit && !opts.admit()) return skipped();
   return deps.injectGrokConfig(Number(targetUrl.port), projection.models, {
     hostname: target.requiresAdmissionToken
       ? (opts.hostname ?? config.hostname)

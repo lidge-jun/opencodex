@@ -106,6 +106,9 @@ async function probe(firstStatus: 401 | 429 | 400) {
     resolveSelectionAdapter: () => adapter,
     resolveCopilotSelection: async () => {},
     noteRoutedAttemptSend: () => {},
+    // Mirror key-account transport metadata deferral; this fixture's log callback is a no-op.
+    attemptSendDeferred: () => true,
+    deferPhysicalAttribution: false,
     // Preserve the real response-ownership fence at the executor, while avoiding HTTP
     // and endpoint admission that could conceal an observe-only accounting defect.
     oauthDispatch: () => async (input, init) =>

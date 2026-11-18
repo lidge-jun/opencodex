@@ -52,7 +52,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（以订阅方式启动且未设置时为原生 `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`） |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | OpenCodex 将层级槽位设为路由别名时对应的 `/model` 标签（例如 `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`）。launchd 系统环境和 shell 钩子中也成对写入。模型 ID 仍为别名。您自己设置的槽位或标签不会被修改 |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | 启用 `alwaysEnableEffort` 时设为 `1`（条件注入） |
-| `ENABLE_TOOL_SEARCH` | 设置了 `claudeCode.toolSearch` 时注入（条件注入，默认关闭） |
+| `ENABLE_TOOL_SEARCH` | 设置了 `claudeCode.toolSearch` 时注入（条件注入；默认不注入，沿用 Claude Code 自身的默认值） |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | 设置 `maxContextTokens` 时使用的旧版上下文覆盖项（条件注入） |
 你自行导出的变量始终优先。额外参数会直接透传：`ocx claude -p "hello"`。
 
@@ -341,9 +341,7 @@ v1 别名按字面解码（历史上 model ID 中包含的两字符序列 `~s` /
 可以在 Claude 页面调整压缩值。**警告：**如果将其提高到超过模型的实际窗口，该模型将无法正常
 工作——聊天会在触发摘要之前报错。
 
-规范化上下文超限错误时，只使用提供方错误消息的前 65,536 个 UTF-16 代码单元。
-后面的诊断信息或 token 数可能被丢弃，且不会添加截断标记。
-详细限制和 token 数处理条件见[英文指南](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)。
+Messages 错误响应规范化使用固定文案，不保留提供方的原文或 token 数量。识别到上下文超限时返回 `prompt is too long: The request exceeds the model's context window.`。流中首个字段为 error 事件的块最多保留 1 MiB；超过后返回不含压缩触发短语的固定错误。范围和两项例外见[英文指南](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)。
 
 低于 1M 的原生 Anthropic 模型绝不会被自动标记。你自行导出的压缩值在启动槽位标记上始终优先（代理会使用**你的**
 值来判断哪些模型可以安全标记）。发现列表忽略该导出值并保持固定下限。手动编辑配置时填入的无效值会回退到 829,800。
@@ -499,7 +497,7 @@ Search 和图像描述沿用仓库已有的 Claude Code OAuth fingerprint 先例
 | Assistant `tool_use` | `function_call`（`input` → JSON 字符串化的 `arguments`） |
 | 用户 `tool_result` | `function_call_output`（`is_error` → `[tool error]` 前缀） |
 | 重放 `thinking` / `redacted_thinking` | `reasoning` 项；签名和脱敏载荷保存在有界 `ocxr1` 信封中 |
-| Function 工具 | `{type: "function"}`（`web_search*` → `{type: "web_search"}`）. 在到 `api.anthropic.com` 的转换路由上，带类型的 `web_search_*` 和 `web_fetch_*` 声明也会发送到 Anthropic 并在服务端执行；如果网页搜索边车提供了 `web_search`，则优先使用边车。搜索和抓取结果以 `server_tool_use` 及对应的 `web_search_tool_result` / `web_fetch_tool_result` 块返回客户端 |
+| Function 工具 | `{type: "function"}`（`web_search*` → `{type: "web_search"}`）. 在到 `api.anthropic.com` 的转换路由上，带类型的 `web_search_*` 和 `web_fetch_*` 声明也会发送到 Anthropic 并在服务端执行；如果网页搜索边车提供了 `web_search`，则优先使用边车。搜索和抓取结果以 `server_tool_use` 及对应的 `web_search_tool_result` / `web_fetch_tool_result` 块返回客户端 带有 `allowed_domains`、`blocked_domains` 或 `user_location` 的托管搜索会从转换后的 Responses/Chat 路由中移除；强制调用已移除的搜索返回 400。有效的 `defer_loading` 函数定义仍可作为普通函数调用。参见[转换限制](/guides/claude-code/#search-restrictions-and-deferred-tools-on-translated-routes)。 |
 | `tool_choice` | `auto`→`auto`，`none`→`none`，`any`→`required`，指定函数→`{type:"function",name}`，托管 WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
@@ -531,16 +529,16 @@ role；`tool_result` 缺少 `tool_use_id`；`tool_use` 缺少 id/name；指定�
 **错误分类：**400 `invalid_request_error`、401 `authentication_error`、
 402 `billing_error`、403 `permission_error`、404 `not_found_error`、409 `conflict_error`、
 413 `request_too_large`、429 `rate_limit_error`、504 `timeout_error`、529 `overloaded_error`，
-其他 5xx 为 `api_error`。`Retry-After` 会保留。
+其他 5xx 为 `api_error`。`Retry-After` 以整数秒发送（HTTP 日期会换算为剩余秒数），上限为 8 天。
 
 ## 提示缓存与 token 用量
 
 **Anthropic 路由请求：**适配器会管理工具、系统内容和倒数第二条用户消息的缓存断点，以及顶层
 自动 `cache_control`。稳定轮次通常能达到约 99.9% 的缓存命中率。
 
-**原生 OpenAI/ChatGPT 路由：**派生会话范围的 `prompt_cache_key`（存在时取自
-`metadata.user_id`，否则回退到系统内容哈希）和用于缓存亲和性的 `session_id` 请求头。
-缓存键包含模型和完整的工具 schema。
+**原生 OpenAI/ChatGPT 路由：**派生 `prompt_cache_key`（`metadata.user_id` 为字符串时取自该值，
+否则回退到系统内容哈希），并仅在存在会话标识时派生用于缓存亲和性的 `session_id` 请求头（不会从共享回退键派生）。
+由系统内容哈希派生的回退键（仅在存在系统内容时使用）还包含模型和完整的工具 schema。
 
 **Token 计算：**Anthropic 输出会从 `input_tokens` 中减去 `cached_tokens` 和
 `cache_write_tokens`，并将它们分别公开为 `cache_read_input_tokens` 和

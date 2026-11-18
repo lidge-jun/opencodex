@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
+import { resolveTurnStateHandle } from "../../src/server/turn-state-handles";
 import {
   buildWarmupCompletionFrames,
   pumpResponsesSseToWebSocket,
@@ -16,6 +17,12 @@ import {
 } from "../../src/server/index/live-sideband";
 import { RESPONSE_TTL_MS } from "../../src/responses/state";
 import type { ServerWebSocket } from "bun";
+import { relaySseWithFailedTail } from "../../src/server/relay";
+import { relaySseEagerBounded } from "../../src/server/relay-eager";
+import { relaySseWithBlockRewrite } from "../../src/server/sse-payload-rewrite";
+import { createOutboundCredentialMask, createTerminalErrorRedactionBlockRewrite } from "../../src/server/responses/terminal-error-redaction";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import { buildResponsesTransport } from "../../src/adapters/openai-responses/transport";
 
 function mockWs(sendResult = 1): { ws: ServerWebSocket<WsData>; sent: string[] } {
   const sent: string[] = [];
@@ -41,6 +48,66 @@ function sseStream(frames: string[], onCancel?: () => void): ReadableStream<Uint
 }
 
 describe("WS endpoint re-framer (120/132)", () => {
+  test.each(["tee", "eager"] as const)("%s delivers an untyped refusal without echoing the selected credential", async mode => {
+    const secret = 'fixture"chosen\\credential';
+    const headers = { authorization: `Bearer ${secret}` };
+    const maskCredential = createOutboundCredentialMask(headers);
+    const rewrite = createTerminalErrorRedactionBlockRewrite(headers, maskCredential);
+    const source = sseStream([`data: ${JSON.stringify({ error: { code: "cyber_policy", message: `blocked ${secret}` } })}\n\n`]);
+    const body = mode === "tee"
+      ? relaySseWithFailedTail(relaySseWithBlockRewrite(source, rewrite, createTranslatorBudget()), new AbortController(), undefined, { maskCredential })
+      : relaySseEagerBounded(source, new AbortController(), {
+        inspectChunk() {}, finishInspection() {}, sawTerminal: () => false, onSynthetic() {}, onClientCancel() {}, onDone() {}, rewriteBlocks: rewrite,
+      }, { maskCredential });
+    const { ws, sent } = mockWs();
+    await pumpResponsesSseToWebSocket(ws, body);
+    const messages = sent.map(frame => JSON.parse(frame));
+    expect(messages.map(frame => frame.type)).toEqual(["response.failed"]);
+    expect(messages[0].response.error.code).toBe("cyber_policy");
+    expect(messages[0].response.error.message).toContain("[REDACTED]");
+    expect(messages[0].response.error.message).not.toContain(secret);
+  });
+  test.each(["tee", "eager"] as const)("%s keeps no prefix of a selected credential that contains a pattern token", async mode => {
+    // A pattern rule (sk-..., Bearer ...) matching inside the credential must not split it
+    // before the exact mask runs, or the unpatterned prefix survives everywhere downstream.
+    const secret = `${"W".repeat(80)}-sk-abcdefgHIJK`;
+    const prefix = "W".repeat(40);
+    const headers = { authorization: `Bearer ${secret}` };
+    const maskCredential = createOutboundCredentialMask(headers);
+    const rewrite = createTerminalErrorRedactionBlockRewrite(headers, maskCredential);
+    const source = sseStream([`data: ${JSON.stringify({ error: { message: `echo ${secret} tail` } })}\n\n`]);
+    const body = mode === "tee"
+      ? relaySseWithFailedTail(relaySseWithBlockRewrite(source, rewrite, createTranslatorBudget()), new AbortController(), undefined, { maskCredential })
+      : relaySseEagerBounded(source, new AbortController(), {
+        inspectChunk() {}, finishInspection() {}, sawTerminal: () => false, onSynthetic() {}, onClientCancel() {}, onDone() {}, rewriteBlocks: rewrite,
+      }, { maskCredential });
+    const { ws, sent } = mockWs();
+    const observed: string[] = [];
+    await pumpResponsesSseToWebSocket(ws, body, { untilEof: true, onSsePayload: payload => observed.push(payload) });
+    expect(sent.map(frame => (JSON.parse(frame) as { type?: string }).type)).toContain("response.failed");
+    expect([sent.join("\n").includes(prefix), observed.join("\n").includes(prefix)]).toEqual([false, false]);
+  });
+  test.each(["tee", "eager"] as const)("%s never returns a quoted selected credential through an object key", async mode => {
+    const secret = 'fixture"keyed\\credential';
+    const headers = { authorization: `Bearer ${secret}` };
+    const maskCredential = createOutboundCredentialMask(headers);
+    const rewrite = createTerminalErrorRedactionBlockRewrite(headers, maskCredential);
+    const source = sseStream([`data: ${JSON.stringify({ [secret]: "kept", nested: { [secret]: 1 }, error: { code: "cyber_policy", message: "blocked" } })}\n\n`]);
+    const body = mode === "tee"
+      ? relaySseWithFailedTail(relaySseWithBlockRewrite(source, rewrite, createTranslatorBudget()), new AbortController(), undefined, { maskCredential })
+      : relaySseEagerBounded(source, new AbortController(), {
+        inspectChunk() {}, finishInspection() {}, sawTerminal: () => false, onSynthetic() {}, onClientCancel() {}, onDone() {}, rewriteBlocks: rewrite,
+      }, { maskCredential });
+    const { ws, sent } = mockWs();
+    await pumpResponsesSseToWebSocket(ws, body);
+    const messages = sent.map(frame => JSON.parse(frame) as Record<string, unknown>);
+    expect(messages.map(frame => frame.type)).toEqual(["response.failed"]);
+    // Parsed, so an escaped spelling in the wire text cannot hide the secret from this check.
+    const keys = (value: unknown): string[] => value && typeof value === "object"
+      ? Object.entries(value).flatMap(([key, item]) => [key, ...keys(item)]) : [];
+    expect(keys(messages).some(key => key.includes(secret))).toBe(false);
+    expect(sent.join("\n")).not.toContain(JSON.stringify(secret).slice(1, -1));
+  });
   test("server config declares explicit websocket idle timeout policy", () => {
     // src/server/index.ts is a facade now. The idle-timeout constant moved to the
     // live-sideband leaf, the handler body to the websocket-handler leaf, and the wiring
@@ -300,6 +367,62 @@ describe("WS endpoint re-framer (120/132)", () => {
     expect(terminals).toEqual(["failed"]);
   });
 
+  test.each(["key", "forward"] as const)("preserves original client identity through the WebSocket handoff to a custom %s provider", authMode => {
+    const userAgent = "T3 Code/0.166.0 (Mac OS; arm64) unknown (T3 Code; 0.1.6)";
+    const inbound = new Headers({
+      "user-agent": userAgent,
+      originator: "T3 Code",
+      "x-codex-app-version": "0.1.6",
+      "x-codex-window-id": "original-window",
+      "x-codex-installation-id": "original-installation",
+      authorization: "Bearer caller-secret",
+      cookie: "session=caller-secret",
+      "chatgpt-account-id": "caller-account",
+      "x-oai-attestation": "caller-attestation",
+      "x-openai-agent-assertion": "caller-assertion",
+      "x-unrelated-client-header": "do-not-forward",
+    });
+    const selected = selectForwardHeaders(inbound);
+    const incoming = new Request("http://localhost/v1/responses", {
+      method: "POST", headers: selected, body: "{}",
+    });
+    const built = buildResponsesTransport({
+      adapter: "openai-responses", baseUrl: "https://example.com/v1", apiKey: "provider-secret", authMode,
+      forwardClientHeaders: ["originator", "user-agent", "x-codex-app-version", "x-codex-window-id", "x-codex-installation-id"],
+    }, { headers: incoming.headers });
+    const outgoing = new Headers(built.headers);
+    expect(outgoing.get("user-agent")).toBe(userAgent);
+    expect(outgoing.get("originator")).toBe("T3 Code");
+    expect(outgoing.get("x-codex-app-version")).toBe("0.1.6");
+    expect(outgoing.get("x-codex-window-id")).toBe("original-window");
+    expect(outgoing.get("x-codex-installation-id")).toBe("original-installation");
+    expect(outgoing.get("authorization")).toBe(authMode === "key" ? "Bearer provider-secret" : null);
+    for (const name of ["cookie", "chatgpt-account-id", "x-oai-attestation", "x-openai-agent-assertion", "x-unrelated-client-header"]) {
+      expect(outgoing.has(name)).toBe(false);
+    }
+    const defaultTransport = buildResponsesTransport({
+      adapter: "openai-responses", baseUrl: "https://example.com/v1", apiKey: "provider-secret", authMode,
+    }, { headers: selected });
+    const defaultHeaders = new Headers(defaultTransport.headers);
+    expect(defaultHeaders.get("user-agent")).toBe(userAgent);
+    expect(defaultHeaders.has("x-codex-app-version")).toBe(false);
+    expect(defaultHeaders.has("x-codex-window-id")).toBe(false);
+    expect(defaultHeaders.has("x-codex-installation-id")).toBe(false);
+    for (const name of ["x-codex-window-id", "x-codex-installation-id"]) {
+      const single = buildResponsesTransport({
+        adapter: "openai-responses", baseUrl: "https://other.example.com/v1", authMode,
+        forwardClientHeaders: [name],
+      }, { headers: selected });
+      const singleHeaders = new Headers(single.headers);
+      expect(singleHeaders.get(name)).toBe(inbound.get(name));
+      const other = name === "x-codex-window-id" ? "x-codex-installation-id" : "x-codex-window-id";
+      expect(singleHeaders.has(other)).toBe(false);
+    }
+    const absent = selectForwardHeaders(new Headers());
+    expect(absent.has("user-agent")).toBe(false);
+    expect(absent.has("x-codex-app-version")).toBe(false);
+  });
+
   test("stores only allowlisted inbound headers and emits only safe response headers", () => {
     const inbound = new Headers({
       authorization: "Bearer secret",
@@ -323,15 +446,15 @@ describe("WS endpoint re-framer (120/132)", () => {
       "x-codex-secondary-primary-reset-at": "1781928000",
       "x-codex-secondary-limit-name": "Secondary",
     }));
+    // Without a send binding the turn-state token is dropped; unknown families and limit labels are too.
     expect(outbound).toEqual({
       "retry-after": "2",
-      "x-codex-turn-state": "state",
-      "x-codex-primary-used-percent": "100.0",
+      "x-codex-primary-used-percent": "100",
       "x-codex-primary-window-minutes": "15",
-      "x-codex-secondary-primary-reset-at": "1781928000",
-      "x-codex-secondary-limit-name": "Secondary",
       "x-ratelimit-remaining": "4",
     });
+    const bound = safeResponseHeaders(new Headers({ "x-codex-turn-state": "state" }), { turnStateBinding: "send-a" });
+    expect(resolveTurnStateHandle(bound["x-codex-turn-state"]!, "send-a")).toEqual({ value: "state" });
   });
 
   test("bounded sniffing replays the full body without dropping bytes", async () => {

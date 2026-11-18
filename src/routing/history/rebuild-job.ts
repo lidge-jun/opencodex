@@ -13,6 +13,7 @@ import { RequestHistoryIndexStaleError } from "./ingest";
 import type { RebuildWorkerReply, RebuildWorkerRequest } from "./rebuild-protocol";
 
 const CLOSE_TIMEOUT_MS = 5_000;
+type WorkerSuccess = Exclude<RebuildWorkerReply, { type: "error" }>;
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -34,7 +35,7 @@ function errorFromReply(reply: Extract<RebuildWorkerReply, { type: "error" }>): 
 
 export class RebuildWorkerJob {
   private readonly worker: Worker;
-  private pending: { resolve: (rows: number) => void; reject: (error: unknown) => void } | null = null;
+  private pending: { resolve: (reply: WorkerSuccess) => void; reject: (error: unknown) => void } | null = null;
   private exited = false;
   private exitedCleanly = false;
   private disposal: Promise<void> | null = null;
@@ -49,8 +50,8 @@ export class RebuildWorkerJob {
       this.pending = null;
       if (!pending) return;
       const reply = event.data;
-      if (reply.type === "built") pending.resolve(reply.rows);
-      else pending.reject(errorFromReply(reply));
+      if (reply.type === "error") pending.reject(errorFromReply(reply));
+      else pending.resolve(reply);
     });
     this.worker.addEventListener("error", (event: Event) => {
       this.fail(new Error((event as ErrorEvent).message || "request-history rebuild worker failed"));
@@ -68,14 +69,27 @@ export class RebuildWorkerJob {
     pending?.reject(error);
   }
 
-  /** Build the complete private file; resolves with the ingested row count. */
-  build(indexPath: string, buildPath: string, reason: string, revision: UsageLogRevision): Promise<number> {
+  private send(request: RebuildWorkerRequest): Promise<WorkerSuccess> {
     if (this.exited || this.disposal) return Promise.reject(new Error("request-history rebuild worker is not running"));
     if (this.pending) return Promise.reject(new Error("request-history rebuild worker is busy"));
     return new Promise((resolve, reject) => {
       this.pending = { resolve, reject };
-      this.worker.postMessage({ type: "build", indexPath, buildPath, reason, revision } satisfies RebuildWorkerRequest);
+      this.worker.postMessage(request);
     });
+  }
+
+  /** Build the complete private file; resolves with the ingested row count. */
+  async build(indexPath: string, buildPath: string, reason: string, revision: UsageLogRevision): Promise<number> {
+    const reply = await this.send({ type: "build", indexPath, buildPath, reason, revision });
+    if (reply.type !== "built") throw new Error("unexpected request-history build reply");
+    return reply.rows;
+  }
+
+  /** Scan a read-only connection off-loop; operational errors are not corruption. */
+  async check(indexPath: string): Promise<boolean> {
+    const reply = await this.send({ type: "check", indexPath });
+    if (reply.type !== "checked") throw new Error("unexpected request-history integrity reply");
+    return reply.healthy;
   }
 
   /** Stop the thread; waits a bounded time for it to exit. */

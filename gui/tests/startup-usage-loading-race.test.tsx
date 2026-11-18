@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, useState } from "react";
+import { act, useEffect, useState } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
@@ -103,7 +103,9 @@ test("an aborted Startup fetch must not clear loading while its replacement is i
 
   function Harness() {
     const [apiBase, setApiBase] = useState("http://old");
-    (window as unknown as { __bumpApiBase?: () => void }).__bumpApiBase = () => setApiBase("http://new");
+    useEffect(() => {
+      (window as unknown as { __bumpApiBase?: () => void }).__bumpApiBase = () => setApiBase("http://new");
+    }, []);
     return (
       <LanguageProvider>
         <Startup apiBase={apiBase} />
@@ -133,7 +135,7 @@ test("an aborted Startup fetch must not clear loading while its replacement is i
   await settle();
 
   expect(container.textContent).toContain("Checking startup protection");
-  const refresh = Array.from(container.querySelectorAll<HTMLButtonElement>("button.btn"))
+  const refresh = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
     .find(button => (button.textContent ?? "").includes("Refresh"));
   expect(refresh).toBeTruthy();
   expect(refresh!.disabled).toBe(true);
@@ -168,15 +170,17 @@ test("an aborted Usage fetch must not clear loading while its replacement is in 
     cachedInputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0, coverageRatio: 1,
   };
   const usage = (generatedAt: number) => ({
-    range: "7d", surface: "all", since: null, generatedAt,
-    summary, days: [], models: [], providers: [],
+    range: "30d", surface: "all", sourceFilter: { client: "all", device: { kind: "all" } }, legacyUnclassifiedRequests: 0, since: null, generatedAt,
+    summary, days: [], models: [], providers: [], historyTruncated: false, truncatedPrefixBytes: 0, entriesTruncated: false, entriesDropped: 0,
   });
   const STALE = usage(1);
   const FRESH = usage(2);
 
   function Harness() {
     const [apiBase, setApiBase] = useState("http://old");
-    (window as unknown as { __bumpApiBase?: () => void }).__bumpApiBase = () => setApiBase("http://new");
+    useEffect(() => {
+      (window as unknown as { __bumpApiBase?: () => void }).__bumpApiBase = () => setApiBase("http://new");
+    }, []);
     return (
       <LanguageProvider>
         <Usage apiBase={apiBase} />

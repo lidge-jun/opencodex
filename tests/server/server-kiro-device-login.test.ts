@@ -22,6 +22,36 @@ async function api(config: OcxConfig, path: string, body?: Record<string, unknow
 }
 
 describe("native Kiro management login", () => {
+  test("IAM starts validate settings and profile selection stays bound to its owner", async () => {
+    fixture = kiroDeviceFixture();
+    const cfg = config(); saveConfig(cfg);
+    let calls = 0;
+    fixture.setPost(async (url, body, headers) => {
+      calls++;
+      if (url.endsWith("/client/register")) return response({ clientId: "id", clientSecret: "private-secret" });
+      if (url.endsWith("/device_authorization")) return response({ ...socialAuthorization, verificationUri: "https://device.sso.us-east-1.amazonaws.com/" });
+      if (url.endsWith("/token")) return response({ accessToken: "private-access", refreshToken: "private-refresh", expiresIn: 3600 });
+      if (headers?.["x-amz-target"]?.endsWith("ListAvailableProfiles")) return response({ profiles: url.includes("us-east-1")
+        ? [{ arn: profileArn, profileName: "First" }, { arn: profileArn+"-second", profileName: "Second" }] : [] });
+      return response({ userInfo: { email: "user@example.test" } });
+    });
+    const input = { provider: "kiro", method: "iam-identity-center", startUrl: "https://example.awsapps.com/start", region: "us-east-1" };
+    expect((await api(cfg, "/api/oauth/login", { ...input, region: "bad.region" })).status).toBe(400);
+    expect(calls).toBe(0);
+    const start = await api(cfg, "/api/oauth/login", input, "gui-session");
+    expect(start.status).toBe(200);
+    fixture.advance(5_000);
+    const state = await api(cfg, `/api/oauth/status?provider=kiro&flowId=${start.data.flowId}`, undefined, "gui-session");
+    expect(state.data.state).toBe("select-profile");
+    const selection = { provider: "kiro", flowId: start.data.flowId, profileArn };
+    expect((await api(cfg, "/api/oauth/login", selection, "admin-token")).status).toBe(404);
+    expect((await api(cfg, "/api/oauth/login", { ...selection, profileArn: profileArn+"-forged" }, "gui-session")).status).toBe(404);
+    const done = await api(cfg, "/api/oauth/login", selection, "gui-session");
+    expect(done.data.state).toBe("done");
+    expect(cfg.providers.kiro).toBeDefined();
+    expect(JSON.stringify([start.data, state.data, done.data])).not.toMatch(/private-access|private-refresh|private-secret|user@example/);
+  });
+
   test("native only with a valid method; reauth and invalid methods are rejected", async () => {
     fixture = kiroDeviceFixture();
     const cfg = config(); saveConfig(cfg);

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning-replay-cache";
+import { encodeReasoningEnvelope } from "../../src/responses/reasoning-envelope";
 import {
   clearResponseStateForTests,
   flushResponseState,
@@ -167,6 +168,69 @@ describe("combo mandatory reasoning replay failover", () => {
     },
   );
 
+  test.each([false, true])(
+    "a child turn preserves the parent's Claude thinking prefix (combo=%s)",
+    async (combo) => {
+      takeSpendHome();
+      const bodies: Array<{ messages: unknown[] }> = [];
+      const claude = serve(async request => {
+        bodies.push(await request.json() as { messages: unknown[] });
+        return Response.json({
+          id: "msg_mock", type: "message", role: "assistant", model: "claude-opus-5-5",
+          content: [{ type: "text", text: "Mock reply" }], stop_reason: "end_turn",
+          usage: { input_tokens: 10, output_tokens: 2 },
+        });
+      });
+      const other = serve(() => chatSuccess("Mock child reply", "gpt-test"));
+      const config = comboConfig({
+        claude: provider("anthropic", baseUrl(claude), "key-claude"),
+        other: provider("openai-chat", baseUrl(other), "key-other"),
+      }, [{ provider: "claude", model: "claude-opus-5-5" }]);
+      const signature = "A".repeat(64);
+      const raw = {
+        model: combo ? "combo/free" : "claude/claude-opus-5-5",
+        reasoning: { effort: "high" },
+        prompt_cache_key: "parent-thread",
+        input: [
+          { type: "message", role: "user", content: "Earlier question" },
+          {
+            type: "reasoning",
+            id: "rs_mock",
+            summary: [{ type: "summary_text", text: "Earlier thinking" }],
+            encrypted_content: encodeReasoningEnvelope({ sig: signature }),
+          },
+          { type: "message", role: "assistant", content: "Earlier answer" },
+          { type: "message", role: "user", content: "Continue" },
+        ],
+      };
+      const parent = { "thread-id": "parent-thread", session_id: "shared-session" };
+      const child = { ...parent, "thread-id": "child-thread", "x-codex-parent-thread-id": "parent-thread" };
+      const sibling = { ...child, "thread-id": "sibling-thread" };
+      const send = async (body: Record<string, unknown>, headers: Record<string, string>): Promise<void> => {
+        const response = await post(config, body, {}, headers);
+        expect(response.status).toBe(200);
+        await response.text();
+      };
+
+      await send(raw, parent);
+      const original = structuredClone(bodies[0]!.messages);
+      expect(JSON.stringify(original)).toContain(`"signature":"${signature}"`);
+      await send({ model: "other/gpt-test", input: "Child task", prompt_cache_key: "parent-thread" }, child);
+      // The parent's next Claude turn must still carry the signature the child never saw.
+      await send(raw, parent);
+      expect(bodies[1]!.messages).toEqual(original);
+      await send(raw, sibling);
+      expect(bodies[2]!.messages).toEqual(original);
+      // The child's own turn really changed route, so its foreign signature is stripped.
+      await send(raw, child);
+      expect(JSON.stringify(bodies[3]!.messages)).not.toContain(signature);
+      // A real model switch inside the parent still strips it.
+      await send({ model: "other/gpt-test", input: "Switch parent model" }, parent);
+      await send(raw, parent);
+      expect(JSON.stringify(bodies[4]!.messages)).not.toContain(signature);
+    },
+  );
+
   test("a missing provider row preserves the existing combo-unavailable response", async () => {
     const config = comboConfig({}, [{ provider: "missing", model: "bad-model" }]);
 
@@ -175,7 +239,8 @@ describe("combo mandatory reasoning replay failover", () => {
     expect(response.status).toBe(503);
     expect(response.headers.get("content-type")).toBe("application/json");
     expect(await response.text()).toBe(
-      '{"error":{"message":"No available targets for combo: free (missing/bad-model: provider missing)","type":"server_error","code":"combo_unavailable"}}',
+      '{"error":{"message":"No available targets for combo (1 target; target 1 (missing): provider missing)","type":"server_error","code":"combo_unavailable",'
+        + '"combo":{"cause":"unavailable","targets":1,"attempted":0,"causes":{"unavailable":1}}}}',
     );
   });
 
@@ -266,11 +331,13 @@ describe("combo mandatory reasoning replay failover", () => {
     expect(await response.text()).toContain("compatible backup");
   });
 
-  test("an exhausted combo reports target_incompatible when mandatory plaintext is unavailable", async () => {
+  for (const contextRefusal of [false, true]) test(`an exhausted combo with unavailable mandatory plaintext retains context refusal: ${contextRefusal}`, async () => {
     takeSpendHome();
     let firstTargetFails = false;
     const first = serve(() => firstTargetFails
-      ? Response.json({ error: { type: "server_error", code: "upstream_server_error", message: "busy" } }, { status: 500 })
+      ? Response.json({ error: contextRefusal
+        ? { type: "invalid_request_error", code: "context_length_exceeded", message: "Please reduce the length of the messages or completion." }
+        : { type: "server_error", code: "upstream_server_error", message: "busy" } }, { status: contextRefusal ? 400 : 500 })
       : Response.json(responsesSuccess("seed identity", "m1")));
     let strictHits = 0;
     const strict = serve(() => {
@@ -304,8 +371,9 @@ describe("combo mandatory reasoning replay failover", () => {
     const error = await response.json() as { error?: { code?: string; message?: string } };
 
     expect(response.status).toBe(400);
-    expect(error.error?.code).toBe("target_incompatible");
-    expect(error.error?.message).toBe(TARGET_INCOMPATIBLE_MESSAGE);
+    expect(error.error?.code).toBe(contextRefusal ? "context_length_exceeded" : "target_incompatible");
+    expect(error.error?.message).toBe(contextRefusal
+      ? "Please reduce the length of the messages or completion." : TARGET_INCOMPATIBLE_MESSAGE);
     expect(strictHits).toBe(0);
   });
 });

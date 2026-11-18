@@ -495,6 +495,48 @@ describe("Gemini tool schema type arrays", () => {
   });
 });
 
+describe("Claude root composition (#8302)", () => {
+  // The issue's probe: Claude behind GetChatMessage answers invalid_argument for a root oneOf.
+  const probe = {
+    oneOf: [
+      { type: "object", properties: { a: { type: "string" } }, required: ["a"], additionalProperties: false },
+      { type: "object", properties: { b: { type: "string" } }, required: ["b"], additionalProperties: false },
+    ],
+  };
+  const flat = (uid: string, parameters: unknown) => normalizeDevinToolParameters(uid, parameters) as Record<string, unknown>;
+
+  test("claude uids flatten a root oneOf into one object schema", () => {
+    const out = flat("claude-opus-5-5", probe);
+    expect(out.oneOf).toBeUndefined();
+    expect(out.type).toBe("object");
+    expect(out.properties).toEqual({ a: { type: "string" }, b: { type: "string" } });
+    // oneOf branches are alternatives, so neither branch's required list holds for every call.
+    expect(out.required).toBeUndefined();
+  });
+
+  test("root anyOf and allOf flatten too; allOf keeps its required names", () => {
+    const anyOf = flat("claude-sonnet-5-low", { anyOf: probe.oneOf });
+    expect(anyOf.anyOf).toBeUndefined();
+    expect(Object.keys(anyOf.properties as object)).toEqual(["a", "b"]);
+    const allOf = flat("MODEL_CLAUDE_4_SONNET", { allOf: probe.oneOf });
+    expect(allOf.allOf).toBeUndefined();
+    expect(allOf.required).toEqual(["a", "b"]);
+  });
+
+  test("the encoded claude request carries no root composition", () => {
+    const tools = [{ name: "probe", description: "Probe tool.", parameters: probe }];
+    const claude = build([{ role: "user", content: "x" }], { tools, modelUid: "claude-opus-5-5" });
+    expect(claude.includes(Buffer.from('"oneOf"'))).toBe(false);
+    expect(claude.includes(Buffer.from('"properties":{"a":{"type":"string"},"b":{"type":"string"}}'))).toBe(true);
+  });
+
+  test("claude schemas without a root composition, and non-claude uids, are untouched", () => {
+    const plain = { type: "object", properties: { x: { oneOf: [{ type: "string" }, { type: "number" }] } } };
+    expect(normalizeDevinToolParameters("claude-opus-5-5", plain)).toBe(plain);
+    expect(normalizeDevinToolParameters("swe-2", probe)).toBe(probe);
+  });
+});
+
 describe("oversized history classification", () => {
   // One word piece per "word ", so `words` is the estimate.
   const history = (words: number): ChatHistoryItem[] => [{ role: "user", content: "word ".repeat(words) }];

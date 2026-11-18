@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   guiUpdateWorkerCommand, isTrustedSystemdRunFile, resolveSystemdRun, resetSystemdRunProbeForTests,
-  resolveSystemdRunAsync, SYSTEMD_SCOPE_ARGS,
+  resolveSystemdRunAsync, SYSTEMD_SCOPE_ARGS, dashboardRestartRefusal,
 } from "../../src/update/worker-launch";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -236,4 +236,52 @@ test("launcher trust also checks lexical ancestors of a canonical system target"
   expect(isTrustedSystemdRunFile(candidate, deps("/usr/local"))).toBe(false);
   expect(isTrustedSystemdRunFile(candidate, deps("/nix/store"))).toBe(false);
   expect(isTrustedSystemdRunFile("relative/systemd-run", deps(undefined))).toBe(false);
+});
+
+// #7967: a dashboard restart must not stop a proxy whose worker cannot survive the stop, or one
+// run by a unit the updater does not restart.
+describe("dashboard restart supervisor check", () => {
+  // The per-user manager unit, joined so the literal does not read as an e-mail address.
+  const manager = ["user", "1000.service"].join("@");
+  const userUnit = `0::/user.slice/user-1000.slice/${manager}/app.slice/opencodex-proxy.service\n`;
+  const base = { platform: "linux" as const, env: { INVOCATION_ID: "abc" }, systemdRun: "/usr/bin/systemd-run", unitName: "opencodex-proxy" };
+
+  test("OpenCodex's own user unit with a usable scope may update", () => {
+    expect(dashboardRestartRefusal({ ...base, readCgroup: () => userUnit })).toBeNull();
+    // cgroup v1 lists the systemd hierarchy beside controller lines.
+    expect(dashboardRestartRefusal({ ...base, readCgroup: () => `4:memory:/user.slice\n1:name=systemd:/user.slice/user-1000.slice/${manager}/app.slice/opencodex-proxy.service\n` })).toBeNull();
+    // A delegated child cgroup below the unit is still that unit.
+    expect(dashboardRestartRefusal({ ...base, readCgroup: () => `0::/user.slice/user-1000.slice/${manager}/app.slice/opencodex-proxy.service/payload\n` })).toBeNull();
+  });
+
+  test("a custom system unit is refused even when it reuses the unit name", () => {
+    for (const cgroup of [
+      "0::/system.slice/opencodex.service\n",
+      "0::/system.slice/opencodex-proxy.service\n",
+      `0::/user.slice/user-1000.slice/${manager}/app.slice/other.service\n`,
+      `0::/user.slice/user-1000.slice/${manager}/app.slice/not-opencodex-proxy.service\n`,
+      "",
+    ]) {
+      expect(dashboardRestartRefusal({ ...base, readCgroup: () => cgroup })).toContain("not OpenCodex's own");
+    }
+    expect(dashboardRestartRefusal({ ...base, readCgroup: () => { throw new Error("no proc"); } })).toContain("not OpenCodex's own");
+  });
+
+  test("no usable scope launcher under systemd is refused", () => {
+    expect(dashboardRestartRefusal({ ...base, systemdRun: undefined, readCgroup: () => userUnit })).toContain("cannot leave the service's cgroup");
+    // A unit that unsets INVOCATION_ID is still found from its .service cgroup.
+    expect(dashboardRestartRefusal({ ...base, env: {}, readCgroup: () => "0::/system.slice/opencodex.service\n" })).toContain("cannot leave the service's cgroup");
+  });
+
+  test("outside systemd or off Linux nothing changes", () => {
+    const unread = () => { throw new Error("must not read the cgroup"); };
+    expect(dashboardRestartRefusal({ ...base, env: {}, systemdRun: undefined, readCgroup: () => "0::/user.slice/user-1000.slice/session-3.scope\n" })).toBeNull();
+    // A desktop terminal runs in a scope below the per-user manager: not a service.
+    expect(dashboardRestartRefusal({ ...base, env: {}, systemdRun: undefined, readCgroup: () => `0::/user.slice/user-1000.slice/${manager}/app.slice/app-org.gnome.Terminal.slice/vte-spawn-1.scope\n` })).toBeNull();
+    expect(dashboardRestartRefusal({ ...base, env: {}, systemdRun: undefined, readCgroup: () => `0::/user.slice/user-1000.slice/${manager}/init.scope\n` })).toBeNull();
+    // A shell moved into its own scope keeps an inherited INVOCATION_ID; the cgroup decides.
+    expect(dashboardRestartRefusal({ ...base, readCgroup: () => `0::/user.slice/user-1000.slice/${manager}/app.slice/run-r1.scope\n` })).toBeNull();
+    expect(dashboardRestartRefusal({ ...base, env: {}, systemdRun: undefined, readCgroup: () => { throw new Error("no proc"); } })).toBeNull();
+    expect(dashboardRestartRefusal({ ...base, platform: "darwin", systemdRun: undefined, readCgroup: unread })).toBeNull();
+  });
 });

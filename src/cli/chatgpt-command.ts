@@ -164,7 +164,7 @@ CODEX_CLI_PATH launcher: ${app.shim === null ? "unknown" : app.shim ? "yes" : "n
       console.error("ChatGPT process inspection failed; no launcher was changed and no app was opened. Retry after resolving inspection.");
       return 1;
     }
-    if (binary) writeChatgptShimLauncher(undefined, binary);
+    if (binary) writeChatgptShimLauncher(undefined, binary, install.root);
     if (!(await quitApp(install, launcher))) {
       console.error("ChatGPT exit could not be confirmed; no new app was opened. Check the running app and retry.");
       return 1;

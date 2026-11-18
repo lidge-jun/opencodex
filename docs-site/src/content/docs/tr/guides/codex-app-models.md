@@ -3,6 +3,8 @@ title: Codex App model seçicisi
 description: opencodex modellerinin paylaşılan Codex kataloğu aracılığıyla Codex App, Codex CLI ve Codex TUI içinde nasıl göründüğü.
 ---
 
+Varsayılan `false`. `config.json` içinde `"omitDisabledNativeModels": true` ayarlayıp `ocx sync` çalıştırarak devre dışı native satırları katalogdan, önbellekten ve Codex biçimli HTTP model listesinden çıkarabilirsiniz. Çıkarmadan önce doğrulanan kalıtım şablonu routed satırların meta verilerini korur. Doğrudan isteklerin yönlendirmesi değişmez. Aşağıdaki gizleme açıklamaları varsayılan ayarlar içindir.
+
 opencodex, Codex App'i yamalamaz. Codex CLI/TUI'nin kullandığı aynı Codex
 yapılandırmasını ve model kataloğunu yazar. Uygulama sunucusu (app-server) bu
 paylaşılan durumu okur, ancak bazı Codex Desktop sürümleri oluşturucuda
@@ -252,9 +254,7 @@ sıralar ve ilk beşini `spawn_agent` model geçersiz kılmaları olarak bildiri
 Kontrol paneli Alt Ajanlar sayfası en fazla beş yalın yerel kimliği veya
 yönlendirilen `provider/model` kimliğini seçip kaydedebilir. Manuel olarak
 yapılandırılan `subagentModels` ayrıca hesap nitelikli
-`<seçici>/<yerel-openai-modeli>` kimliklerini de kabul eder, ancak kontrol
-paneli bu tam kimlikleri sunmaz; sayfayı kaydetmek listenin yerine kontrol
-panelinde görünen seçenekleri koyar. opencodex seçilen sırada düşük katalog
+`<selector>/<native-openai-model>` kimliklerini de kabul eder. Kontrol paneli, geçerli katalogda bulunmayan modeller dahil, kaydedilmiş bu tam kimlikleri listeyi kaydederken korur. opencodex seçilen sırada düşük katalog
 öncelikleri atar; hesap nitelikli seçici satırları etkinleştirildiğinde yalın
 yerel seçimler seçici nitelikli gruplara genişler. Diğer modeller tam kimlikle
 çağrılabilir durumda kalır.

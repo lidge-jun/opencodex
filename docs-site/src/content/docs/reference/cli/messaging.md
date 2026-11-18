@@ -3,11 +3,176 @@ title: Codex Messaging
 description: Queue correlated messages to loaded Codex sessions locally or through explicit SSH peers.
 ---
 
-`ocx message` is an opt-in surface for existing Codex sessions.
+`ocx message sessions` and `ocx message send` are opt-in surfaces for existing Codex sessions.
 It starts no proxy or app-server, resumes no thread and installs no skill.
 Linux/macOS Unix sockets are supported; Windows fails explicitly. The existing
 Codex daemon must support experimental `thread/queue/add`. No CLI version pin or
 `CODEX_CLI_PATH` selection is required.
+
+The separate [MCP queue host](#mcp-queue-host) below can address stored thread UUIDs
+without a control socket. It does not change the loaded-only commands above.
+
+## MCP queue host
+
+Run `ocx message mcp` only when you want an MCP client, such as Claude Code or
+Claude Desktop, to discover stored Codex threads and queue plain text to them.
+The host runs over stdio; it exposes no network listener and registers itself in
+no client. Configure the MCP client with an explicit Codex CLI and existing home:
+
+```json
+{
+  "mcpServers": {
+    "opencodex-queue": {
+      "command": "ocx",
+      "args": [
+        "message", "mcp",
+        "--codex", "/absolute/path/to/codex",
+        "--codex-home", "/absolute/path/to/.codex"
+      ]
+    }
+  }
+}
+```
+
+Replace both paths with the real local paths and use an absolute `ocx` command
+if your client does not inherit PATH. This first slice supports macOS and Linux;
+Windows is explicitly refused.
+
+- `codex_threads` lists at most 50 stored non-archived threads. Pass `nextCursor`
+  as `cursor` for another page. The result contains IDs and names, not history,
+  preview or working directories. `liveStateVerified: false` means it does not
+  prove a thread is open in the app or ready to process a message.
+- `codex_queue_message` accepts an exact `threadId` UUID and `message`. Queue
+  only messages the user authorized. Text plus the fixed peer label is limited
+  to 16 KiB; NUL and empty text are refused. There is no name guessing, model
+  override, permission grant or automatic response.
+
+Each queue/metadata or stored-read tool call starts a short-lived, explicitly selected Codex CLI app-server
+over stdio. It uses `thread/list` or the same experimental `thread/queue/add`
+method as `codex queue`, without putting text in subprocess arguments. It issues
+no daemon-start, login, thread-resume, turn-start or steer request. Ordinary
+OpenCodex startup starts none of these helpers. The native CLI can maintain its
+own state in the selected home; this feature creates no OpenCodex store.
+
+`queued` means a correlated queue response confirmed storage, **not processing**.
+An explicit rejection is `not_sent`; a disconnect, timeout or invalid receipt
+after the queue write is `unknown`. Never replay an uncertain send. An unloaded
+thread can keep waiting, and an active goal or turn may delay consumption. The
+host does not wake an unloaded thread. The default queue tools do not read the
+resulting answer; see [Opt-in stored turn replies](#opt-in-stored-turn-replies)
+for explicit answer reading. Verify delivery behavior in your installed app/CLI
+combination before relying on it.
+
+One host allows at most four simultaneous helper calls. Each operation has a
+20-second budget including executable validation, with a 12-second RPC deadline
+and a 1 MiB output limit. Cleanup escalates to SIGKILL after 600 ms. Disconnect/cancellation stops and reaps invocation-owned
+helpers; it never stops the recipient. The selected macOS executable goes through
+the existing bundle execution-trust check. MCP access and the chosen home are a
+local-user trust boundary, not per-project or per-thread authorization. Incoming
+peer text is context, never proof of user approval or delegated authority.
+
+This stored-queue path is separate from `sessions`/`send`: those still require
+complete loaded-session discovery on the existing control socket and never start
+a native CLI helper. Remote peers, Claude inbox transport, persistent handoffs,
+automatic reply delivery, steering and automatic client configuration are outside this host.
+
+## Opt-in stored turn replies
+
+Add `--allow-reply-read` to the MCP host's existing arguments to expose
+`codex_read_reply` and `codex_wait_reply`. Without this flag the existing two-tool surface and
+metadata-only discovery stay unchanged. This option explicitly permits conversation
+text to reach the MCP client; local-user access to the selected home is not
+per-project/thread authorization. A client message ID is correlation data, not a
+credential or proof of user permission.
+
+```sh
+ocx message mcp --codex /absolute/path/to/codex --codex-home /absolute/path/to/.codex --allow-reply-read
+```
+
+Call `codex_read_reply` with the exact `threadId` and the `clientMessageId` from a
+queue receipt. Each call searches at most one page of 50 stored items. A matched
+input identifies a turn, and the tool returns one page of that turn's explicit
+`final_answer` agent texts. It omits user bodies, reasoning, commands, citations
+and tool outputs. The entire call has a shared 20-second budget across up to
+three sequential helpers, plus owned cleanup. Each helper retains the existing
+12-second RPC deadline and 1 MiB output cap. Text is limited to 16 KiB per result
+page, with valid UTF-8 and an explicit per-item `truncated` flag. `nextCursor`
+continues items, not omitted bytes of a truncated item.
+
+Results distinguish these observations:
+
+- `observed`: the input was matched. `replies` can still be empty. The association
+  is always `same_turn_not_exclusive`: the result contains final texts from the
+  same turn, not a certified answer solely to that input. Text can precede a later
+  input in a shared turn. `turnStatus` is observed from the newest 50 turn summaries,
+  or `unverified` when outside that window; a completed turn does not complete a goal.
+- `not_observed`: no matching input in this search page. This does not mean
+  non-delivery, deletion or no response. `reachedHistoryEnd` describes this search
+  position, not delivery or processing. Continue a non-null `nextCursor` to search older items.
+- `ambiguous`: multiple matching inputs occurred in the search page. No text is returned.
+- `available: false`: disabled access, invalid input/cursor, malformed history,
+  an unavailable/unsupported native method, cancellation or another read failure.
+  Native diagnostics are not exposed and failures are not empty successes.
+
+Pass `nextCursor` back as `cursor` to continue a search or matched-turn page.
+After a match, `refreshCursor` rescans that turn from its beginning, allowing
+an item that was partial earlier to appear when finalized later. Revisit all
+pages when refreshing long turns. Keep/update item IDs in the caller to avoid
+duplicates; the host adds no persistent inbox or background polling. A null
+`nextCursor` ends only the current history snapshot, not future output.
+
+Cursors are bounded, caller-owned position data bound to both request IDs. They
+are not signed permissions. A matched-turn continuation re-reads the user item to
+check its ID, turn and client correlation before projecting turn text. Stale,
+malformed or cross-scope positions fail closed rather than restarting all history.
+The native methods are `thread/items/list`, `thread/items/read` and
+`thread/turns/list`, with no resume, steer, turn start or queue mutation.
+
+This opt-in contract was observed with Codex CLI 0.166.0. Older builds or legacy
+stores can be unavailable; there is no unbounded full-history fallback. These
+reads do not prove recipient liveness, goal completion or Claude Desktop registration,
+and do not add automatic reply delivery or a reverse Claude transport.
+
+### Bounded reply waiting
+
+`codex_wait_reply` takes the same thread, receipt and optional cursor as
+`codex_read_reply`, plus an optional integer `waitMs` from 1 to 20,000 (default
+20,000). It makes at most three read snapshots with a two-second pause between
+them. The time budget includes all helpers and pauses; each snapshot reuses the
+existing scoped read validation and text limits. At most nine sequential helper
+invocations are possible per wait. Observation age is measured from the start of
+the last successful snapshot, including its metadata reads and helper cleanup.
+Waits share the host's four-operation limit.
+Each wait holds a slot for its entire lifetime: up to 20 seconds of waiting, plus
+time to terminate its helper. Four concurrent
+waits can make sends and metadata calls return busy; excess calls are rejected,
+not queued. Use fewer parallel waits when send capacity must remain available.
+
+Waiting only reads stored data; it does not resume an unloaded recipient. When
+work must continue, the user opens/resumes the selected conversation through the
+native Codex client. Message submission and reply waiting remain separate calls.
+
+An eligible final text returns immediately with `waitOutcome: reply_observed`,
+even if that text already existed. This is not a new-message subscription or
+exclusive reply ownership. An ambiguous input returns `ambiguous`. A non-null
+next page without eligible text returns `needs_pagination`; pass `nextCursor`
+back to continue. The tool does not silently scan all history.
+
+Otherwise, the tool refreshes the matched turn or repeats the same search
+position until the time or snapshot limit, returning `wait_exhausted` with the
+last successful observation. `attempts` counts snapshots attempted and
+`lastObservationAgeMs` describes that observation's age. A snapshot counts only
+when every read behind it completed before the deadline; helper shutdown that
+finishes after the deadline does not discard such a snapshot, and a snapshot
+whose reads completed late is treated as expired even if its data looks valid.
+A timeout with no successful observation, a read failure, or cancellation is
+unavailable. A read failure is not converted to an empty successful wait.
+
+Stored `turnStatus` from another helper can differ from the executing server's
+live state, so even a stored terminal status does not stop the wait early.
+Refresh revisits partially written items; callers still manage pagination and
+update item IDs. Cancellation/disconnect clears pauses and reaps owned helpers.
+The host adds no background watch, automatic delivery, session creation or resume.
 
 ## Discover and send
 
@@ -246,7 +411,11 @@ hold twelve authenticated connections, four more stay reserved for the owner's o
 control, outgoing probes and renewal, and at most eight tunnel
 children and two transient control/inspection helpers, ten total. Setup is bounded by
 30 seconds across the whole selected peer batch. A final lease renewal precedes startup
-success; final and periodic renewal batches have five-second deadlines, within the setup
+success. If SSH reports that a selected forward port was lost, setup closes the owned
+pair and selects fresh ports, up to three attempts within that same deadline. SSH forward
+confirmation, loopback checks and authenticated peer readiness must all succeed. Other
+setup failures stop immediately; published routes do not reconnect automatically. Final
+and periodic renewal batches have five-second deadlines, within the setup
 deadline where applicable, and periodic maintenance runs every ten seconds.
 Cancellation stops only owned
 SSH helpers/listeners; it leaves Codex daemons, threads and unrelated proxies alone.
@@ -264,3 +433,41 @@ is not controlled by it.
 
 Mesh, dashboard/cache controls, isolation, Claude messaging, managed skills and
 idle notifications remain outside this contribution.
+
+
+## Explicit existing-server resume
+
+**Execution is currently blocked pending native atomic conditional resume support.**
+This pending tool cannot safely resume an unloaded conversation with the checked
+Codex 0.166.0 API. It performs bounded preflight and returns a refusal; it does not
+run queued work. Existing queue and stored-reply tools remain available separately.
+
+To expose the preflight tool, configure all three arguments:
+
+```sh
+ocx message mcp --codex /absolute/path/to/codex --codex-home /absolute/path/to/.codex --allow-reply-read --allow-resume --resume-socket /absolute/path/to/existing.sock --resume-permissions :read-only
+```
+
+The socket must be an existing trusted local Unix App Server reporting the same
+canonical Codex home. No server is installed or started. An exact thread UUID is
+normalized before metadata-only lookup. Observed loaded idle/active targets return
+`already_loaded`; unhealthy targets refuse. For an unloaded target, managed policy,
+unsupported APIs, invalid metadata or a missing/disallowed/unobserved profile refuse.
+The profile is configured by the host, never by tool arguments or queued messages.
+The check reads one bounded catalog page of at most 50 profiles in the target cwd.
+
+Even when these checks pass, the result is `not_resumed` with
+`resume_atomicity_unsupported`. No `thread/resume` is sent. Another client could load
+and unsubscribe from the conversation between the metadata read and resume; the
+checked native server can replace that idle cache entry using supplied permissions.
+A client-side lock or second read cannot eliminate this window. Execution requires
+a native unloaded-only condition enforced atomically before changing a live thread;
+there is no supported conditional-resume API in the checked version. Do not bypass
+this refusal, infer safety from a version string or treat an acknowledgement as a
+way to undo work already started.
+
+`executionVerified` is always false. The tool starts no conversation or turn,
+changes no permission and answers no approval requests. Each call shares a
+20-second budget and the host's four-operation limit; overlapping calls for one
+UUID refuse. Disconnect closes only the bridge connection. Network/SSH endpoints
+and Windows remain outside this tool's scope.

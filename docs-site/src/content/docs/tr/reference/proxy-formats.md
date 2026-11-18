@@ -227,6 +227,14 @@ Akışsız çıktı `object: "chat.completion"` içerir. Akışlı çıktı `obj
 çağrısı ve kullanım bilgileri kaynak olayların bunları taşıdığı yerlere geri
 çevrilir.
 
+Bu uç noktadaki hata yanıtları ve akış hata çerçeveleri proxy tarafından yazılmış mesajlar kullanır.
+Proxy, sağlayıcı hatasını hız sınırına ulaşıldı, kota veya kredi tükendi, bağlam penceresi aşıldı,
+model kullanılamıyor, konum desteklenmiyor veya hesap doğrulaması gerekiyor gibi sabit bir duruma
+ayırır ve o durumun sabit mesajını döndürür. Politika retleri, yeniden gönderim retleri ve proxy
+sınırlarının kendi sabit mesajları vardır. HTTP durumu, `error.type`, `error.code` ve `Retry-After`
+anlamını korur; bu nedenle `context_length_exceeded`, `insufficient_quota` veya
+`rate_limit_exceeded` gibi kodlara göre dallanan istemciler önceki gibi davranır.
+
 Dahili yürütme yolu Responses tabanlı olduğundan bir sağlayıcı adaptörü daha dar
 bir özellik kümesi uygulayabilir. Örneğin seçilen adaptör tarafından temsil
 edilemeyen bir istek özelliği anlamı sessizce değiştirilmek yerine bir hata

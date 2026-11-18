@@ -24,6 +24,7 @@ description: 供應商設定、憑證、配額與模型目錄指令。
 | `quota` | `--refresh`, `--json` | 讀取供應商配額報告。 |
 | `presets` | `--json` | 列出儀表板供應商預設。 |
 | `account-mode` | `pool`, `direct`, `--json` | 選擇池化或直接的 Codex 帳號路由。 |
+| `import-cc-switch` | `--source <FILE>`, `--provider <id>`, `--apply`, `--restore`, `--allow-private-network`, `--json` | 從 CC-Switch SQLite（`cc-switch.db`）或舊版 JSON 檔案預覽、選擇性套用或還原無金鑰供應商項目。 |
 
 預設的 `add`、`remove` 與 `set-default` 修改本機設定。修改執行中的代理需加 `--live`，線上刪除還需 `--yes`。`--sync --json` 同樣會在儲存後嘗試同步；失敗時保留儲存結果，以非零狀態結束，並回傳 `needsSync: true`。`--live` 不能與 `--sync` 同用。pacing 與 snapshot/apply 操作請見[英文指南](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline)。
 
@@ -39,6 +40,27 @@ ocx models live --provider ark --json
 ```
 
 `--jsonl` 僅輸出已設定的供應商，每行一個 JSON 物件。每個物件的欄位與 `--json` 輸出中 `configured` 陣列的元素相同，不包含 `registryCount` 摘要。指令碼可以逐行處理這些物件。`--json` 與 `--jsonl` 不能同時使用。
+
+### 無金鑰匯入 CC-Switch 供應商
+
+```bash
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db
+ocx stop
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db --provider my-provider --apply
+# 在另一個終端機啟動代理（或執行 ocx ensure），再新增金鑰：
+ocx start
+printf '%s\n' "$API_KEY" | ocx account add-key my-provider
+
+# 獨立的回滾路徑（先停止代理；僅移除未修改的無金鑰項目）：
+ocx stop
+ocx provider import-cc-switch --restore
+```
+
+`ocx provider import-cc-switch` 僅從一般本機 CC-Switch SQLite 資料庫或舊版 JSON 檔案投射明確白名單內的非機密中繼資料欄位（供應商 ID、應用類型、base URL、協定轉接器與預設模型）。為掃描輸入會暫時讀取來源與內嵌設定位元組，但金鑰／憑證欄位、自由文字顯示名稱與 TOML 註解會在位元組層級略過，絕不解碼為字串、寫入磁碟或記錄日誌，且暫存位元組緩衝區會在 `finally` 中清零。窄化 base URL 路徑規則（`http(s)://host[:port]` 配空路徑或 1–4 個小寫 `[a-z0-9._-]` API 路徑段，如 `/v1`、`/api/v1` 或 `/compatible-mode/v1`）與識別碼／模型語法檢查僅作為縱深防禦並拒絕不合規值（不回顯原值）。來源檔案透過 `O_NOFOLLOW | O_NONBLOCK` 描述元驗證單次開啟，SQLite 在記憶體中唯讀反序列化且不寫入暫存檔；具有多個硬連結（`nlink > 1`）的 SQLite 檔案會被拒絕以防透過別名路徑繞過附屬檔檢查，若同層 `-wal` 或 `-journal` 檔案非空則會拒絕匯入並提示先關閉 CC-Switch（或執行資料庫 checkpoint）再重試。請僅從受信任的本機 CC-Switch 來源檔案匯入，並在新增憑證前核對輸出的每個 ID、模型與 `baseUrl`：
+
+- **預覽（預設）：** 需要 `--source <FILE>`，不寫入任何內容，回報發現、可用、衝突與無效項目數量。
+- **套用（`--apply`）：** 需要 `--source <FILE>` 且代理已停止（`ocx stop`），在 Remote Link Child 上會被拒絕。重複指定 `--provider <id>` 可僅匯入所選項目，傳入 `--allow-private-network` 可允許迴路或私有網路 base URL。即使未事先預覽，`--apply` 也會在寫入無金鑰供應商項目與回滾日誌 `$OPENCODEX_HOME/cc-switch-provider-import-journal.json` 之前輸出每個匯入供應商的 ID、預設模型與目標 URL（文字模式輸出至 `stdout`，`--json` 模式輸出至 `stderr`）；存在使用中回滾日誌時再次執行 `--apply` 會被拒絕。核對輸出項目後啟動代理（在另一終端機執行 `ocx start` 或執行 `ocx ensure`），再透過 `printf '%s\n' "$API_KEY" | ocx account add-key <provider>`（管線標準輸入）或 `ocx login <provider>` 新增憑證。
+- **還原（`--restore`）：** 獨立的回滾路徑（而非新增憑證的後續步驟），要求代理已停止（`ocx stop`），在 Remote Link Child 上會被拒絕，且不接受 `--source`、`--provider` 或 `--allow-private-network`。它會以唯讀位元組方式檢查 `auth.json`（無法讀取或格式損毀時安全保留），僅從使用中日誌移除仍維持匯入時無金鑰狀態、未被選為 `defaultProvider`，且未被路由、組合（combos）、回退策略（fallback policy）、OAuth 帳號或 API 金鑰參照的供應商。
 
 ## 認證
 
@@ -64,7 +86,7 @@ ocx login anthropic
 透過執行中的代理列出並切換供應商帳號與 API-key 池。隨附的說明介面如下：
 
 ```text
-Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
+Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|reset-affinity|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex 帳號池、OAuth 帳號與 API 金鑰（識別碼依 API 回傳遮罩顯示）。
 history openai <pool-account-id> [--limit <1-200>]  單一 Codex 帳號池帳號的近期路由決策。
@@ -79,6 +101,7 @@ pause <provider> <id|alias|main>  將帳號移出自動選擇。
 resume <provider> <id|alias|main>  將暫停的帳號放回自動選擇。
 pause-exhausted <provider>  暫停所有配額已用盡的帳號。
 clear-cooldown <openai|anthropic> <id|alias|main>  清除上游失敗後設定的冷卻。
+reset-affinity <anthropic|anthropic2> [--json]  確認所有工作階段綁定均已清除，即使沒有帳號也適用；帳號選擇與暫停狀態保持不變。請在 Home 執行；Remote Link Child 只會指出 Home，不會傳送請求。
 strategy <provider> [<quota|round-robin|fill-first|reset-first>]  帳號池放置策略；省略取值即讀取目前值。
 sticky <provider> [<1-100>]  已綁定執行緒在同一帳號上保留的請求數；省略取值即讀取目前值。
 remove <provider> <id|alias|main> --yes  在存在檢查後移除已儲存的帳號或金鑰。
@@ -92,7 +115,7 @@ main <doctor|list|register|add|reauth|switch|recover>  管理帳號池稱為 'ma
 Codex 池選擇套用於清除既有親和性後的下一個請求；進行中的請求保留其擷取的帳號。
 ```
 
-除 `import-orca` 外，子指令都需要代理正在執行，CLI 自動解析其記錄的 runtime 連接埠；`import-orca` 的預覽完全在本機進行，而 `import-orca --apply` 需要代理已停止。成功的操作離開 0。無效用法、未知供應商或帳號／金鑰 id、不可達的代理或 API 失敗則離開 1。憑證欄位完全依管理 API 回傳的方式顯示（包含其遮罩）；原始 API 金鑰與 OAuth token 永不回傳。顯示便利性在客戶端合成，與儀表板相同：`main` 是 `openai` 帳號池中 Codex App 登入的 CLI 別名，無電子郵件的 OAuth 帳號顯示為 `Account N`，而 plan／label 欄位在 plan、遮罩電子郵件、label 與遮罩金鑰之間回退。
+除 `import-orca` 外，子指令都需要代理正在執行，CLI 自動解析其記錄的 runtime 連接埠；`import-orca` 的預覽完全在本機進行，而 `import-orca --apply` 需要代理已停止。成功的操作離開 0。無效用法、未知供應商或帳號／金鑰 id、不可達的代理或 API 失敗通常以 1 結束。但 `reset-affinity` 遇到 HTTP 404 時結束碼為 4，遇到 HTTP 409 時為 5；其他 API 失敗或未確認的結果則為 1。憑證欄位完全依管理 API 回傳的方式顯示（包含其遮罩）；原始 API 金鑰與 OAuth token 永不回傳。顯示便利性在客戶端合成，與儀表板相同：`main` 是 `openai` 帳號池中 Codex App 登入的 CLI 別名，無電子郵件的 OAuth 帳號顯示為 `Account N`，而 plan／label 欄位在 plan、遮罩電子郵件、label 與遮罩金鑰之間回退。
 
 `--json` 帳號列使用此通用結構（不可用時省略可選欄位）：
 
@@ -136,7 +159,7 @@ Codex 池選擇套用於清除既有親和性後的下一個請求；進行中�
 
 `auto` 會清除手動選擇，讓池重新依自身策略分配工作 — 但若 Codex 帳號的 id 恰為 `auto`，則精確 id 比對優先；`ocx account clear <provider>` 一律還原自動選擇。Codex 帳號可以用 `ocx account alias` 設定的別名代替 id 來指定；`priority`、`pause`、`resume`、`clear-cooldown`、`remove` 與 `alias` 亦然。對於 Codex 帳號，`auto`、`main` 和 `__main__` 為保留字（不區分大小寫），不能設為別名。OAuth 帳號與 API 金鑰的顯示名稱仍遵循原有規則。
 
-選擇既有的 Codex 帳號、OAuth 帳號或 API 金鑰。對於 `openai`，`main` 選擇 Codex App 登入。Codex 池選擇清除行程本地親和性並套用於下一個請求，包含來自既有可見任務的請求；代理重啟或親和性驅逐也可能使任務未綁定，而進行中的請求保留其擷取的帳號。這僅控制池路由；Direct 模式繼續使用呼叫者擁有／原生的 main 憑證。基於用量的主動切換、401/403 重新認證、429/retry-after 冷卻、排除，以及 pre-output 429/402 失敗復原稍後可能選擇另一個合格的池帳號。當基於用量的切換關閉時，這些復原路徑仍然活躍。OpenCodex 在帳號變更後重播對話，但供應商端的 prompt cache 可能是冷的。未知的供應商或 id 離開 1。
+選擇既有的 Codex 帳號、OAuth 帳號或 API 金鑰。對於 `openai`，`main` 選擇 Codex App 登入。Codex 池選擇清除親和性並套用於下一個請求，包含來自既有可見任務的請求；帶有工作階段 ID 的請求（包括一般 Codex CLI 和 App 回合及子代理），或錨定到直接父任務的無工作階段請求，其綁定在關閉時最後一次親和性儲存成功的情況下，代理正常重啟後可保留，閒置時間最長為 24 小時。更深層的無工作階段鏈和 Codex App 主要登入的綁定僅保留在記憶體中，重啟後會重新指派；驅逐、帳號刪除、重新登入、崩潰或親和性重置仍可能使任務未綁定，而進行中的請求保留其擷取的帳號。這僅控制池路由；Direct 模式繼續使用呼叫者擁有／原生的 main 憑證。基於用量的主動切換、401/403 重新認證、429/retry-after 冷卻、排除，以及 pre-output 429/402 失敗復原稍後可能選擇另一個合格的池帳號。當基於用量的切換關閉時，這些復原路徑仍然活躍。OpenCodex 在帳號變更後重播對話，但供應商端的 prompt cache 可能是冷的。未知的供應商或 id 離開 1。
 在 **401/403** 時，App 登入清除該帳號的行程本地親和性並要求重新認證。
 在 **429** 時，opencodex 遵循 `Retry-After`、啟動帳號冷卻、清除親和性，並可能將請求輪換到另一個合格的池帳號。這些失敗轉換在 `autoSwitchThreshold: 0` 時仍然活躍；該設定僅停用基於用量的主動切換。
 `--json` 回傳：
@@ -151,7 +174,7 @@ Codex 池選擇套用於清除既有親和性後的下一個請求；進行中�
 
 ### `ocx account pause|resume <provider> <id|alias|main> [--json]`
 
-暫停或恢復 Codex、Anthropic 或通用 OAuth 供應商池中的單一帳號，包括
+暫停或恢復 Codex、Anthropic、通用 OAuth 或 API-key 供應商池中的單一帳號或金鑰，包括
 `google-antigravity`。在 Codex 池中，`main` 僅代表 Codex 內建帳號；OAuth 帳號必須用 id 或唯一別名識別。
 已暫停的 OAuth 帳號不會參與請求選帳、429 輪替或主動 Token 刷新，也不能手動選取。
 若暫停目前使用中的帳號，系統會在有其他可用帳號時切換過去。若全部帳號都已暫停，
@@ -330,13 +353,15 @@ Preview 建置使用 `<OPENCODEX_HOME>/native-main-profiles`。該配置絕不�
 
 ### `ocx models [subcommand]` · `ocx model <subcommand>`
 
-`ocx model` 是 `ocx models` 的別名。無子指令時，列出已設定供應商中靜態播種的模型。`--provider` 過濾一個已設定的供應商，而 `--json` 回傳模型中繼資料。`live` 讀取執行中的目錄；`add`、`edit`、`remove` 與 `list-custom` 管理手動目錄項目；`enable`、`disable` 與 `provider` 控制可見性；`selected` 控制供應商允許清單；`context` 控制供應商 context 上限；而 `shadow` 管理背景 shadow-call 攔截。
+`ocx model` 是 `ocx models` 的別名。無子指令時，列出已儲存及路由器已知的模型 ID，包括 registry 預設、自訂模型和目前 CLI 程序的探索快取。新 CLI 程序的快取可能為空，這不是執行中代理的目錄。部分舊版金鑰預設在變更連線位址後仍可能保留 registry 預設。`--provider` 過濾一個已設定的供應商，而 `--json` 回傳模型中繼資料。`live` 讀取執行中的目錄；`add`、`edit`、`remove` 與 `list-custom` 管理手動目錄項目；`enable`、`disable` 與 `provider` 控制可見性；`selected` 控制供應商允許清單；`context` 控制供應商 context 上限；而 `shadow` 管理背景 shadow-call 攔截。
+
+`reasoningEfforts` 清單僅在使用 `--json` 時顯示。`null` 表示清單未知或未查詢，包括查詢需要開啟系統鑰匙圈的情況。空陣列 `[]` 表示明確設定了空清單，或該模型的推理強度已停用，例如透過 `noReasoningModels` 停用。使用 `ocx models live` 查看執行中代理的目錄。
 
 `add` 與 `remove` 預設儲存至本機；`--live` 修改執行中的代理。本機 `--json` 儲存時若無代理，回傳 `sync.status: "not-attempted"`、`needsSync: true`，結束碼為 0。實際嘗試的同步失敗時保留儲存結果，以非零碼結束。`list-custom` 是本機清單。`display-name` 使用原始上游 ID，`order` 使用 picker 的 public ID。完整排列、featured 前綴與 native 順序重設限制請見[英文步驟](/reference/cli/providers-accounts/#display-names-and-picker-identities)。
 
 | 子指令 | 支援的旗標 | 動作 |
 | --- | --- | --- |
-| `list`（預設） | `--provider <name>`, `--json` | 列出已設定供應商中播種的模型。 |
+| `list`（預設） | `--provider <name>`, `--json` | 列出本機已儲存及路由器已知的模型。 |
 | `live` | `--provider <name>`, `--json` | 讀取執行中的目錄，包含 runtime 探索的模型。列標記為 `native`/`routed`、`custom` 與 `enabled`/`disabled`。 |
 | `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | 在本機註冊自訂模型，或使用 `--live` 在執行中的代理上註冊。 |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | 編輯自訂模型。`-` 清除欄位；`0` 清除 context window。 |

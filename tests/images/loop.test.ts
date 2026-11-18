@@ -11,12 +11,15 @@ import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { PROVIDER_INPUT_TOO_LARGE_MESSAGE } from "../../src/server/responses/context-overflow";
 import { markResponseNonReplayable } from "../../src/lib/upstream-retry";
 import { RequestPacingQueueOverloadError } from "../../src/providers/request-pacing";
-import { parseStreamWithProgress, type ParseStreamWithProgressOptions } from "../../src/web-search/progress-stream";
+import { bridgeToResponsesSSE as realBridgeToResponsesSSE } from "../../src/bridge";
+import { parseStreamWithProgress, WebSearchConsumerInactivityError, type ParseStreamWithProgressOptions } from "../../src/web-search/progress-stream";
 import { TRANSLATOR_MAX_CALL_ARGUMENT_BYTES, TRANSLATOR_MAX_TURN_BYTES, translatorLiveBudgetCountForTests } from "../../src/lib/translator-budget";
 
 const realParseStreamWithProgress = parseStreamWithProgress;
+const originalBridgeToResponsesSSE = realBridgeToResponsesSSE;
 let useRealProgressStream = false;
 let fulfillCallCount = 0;
+let bridgeEvents: AdapterEvent[] = [];
 
 const PREV_HOME = process.env.OPENCODEX_HOME;
 // `mock.restore()` does not undo `mock.module`: Bun keeps both overrides below for every
@@ -24,6 +27,7 @@ const PREV_HOME = process.env.OPENCODEX_HOME;
 // and restore only the ones captured: a setup that failed partway must not install an empty module.
 let realProgressStream: Record<string, unknown> | undefined;
 let realFulfill: Record<string, unknown> | undefined;
+let realBridge: Record<string, unknown> | undefined;
 let runWithImageBridgeProduction: typeof import("../../src/images/loop")["runWithImageBridge"];
 let clampImageMaxRounds: typeof import("../../src/images/loop")["clampImageMaxRounds"];
 let DEFAULT_MAX_ROUNDS: typeof import("../../src/images/loop")["DEFAULT_MAX_ROUNDS"];
@@ -39,7 +43,16 @@ beforeAll(async () => {
   mock.restore();
   realProgressStream = { ...(await import("../../src/web-search/progress-stream")) };
   realFulfill = { ...(await import("../../src/images/fulfill")) };
+  realBridge = { ...(await import("../../src/bridge")) };
+  mock.module("../../src/bridge", () => ({
+    ...realBridge,
+    bridgeToResponsesSSE: (events: AsyncIterable<AdapterEvent>, ...args: Parameters<typeof realBridgeToResponsesSSE> extends [unknown, ...infer R] ? R : never) =>
+      originalBridgeToResponsesSSE((async function* () {
+        for await (const event of events) { bridgeEvents.push(event); yield event; }
+      })(), ...args),
+  }));
   mock.module("../../src/web-search/progress-stream", () => ({
+    ...realProgressStream,
     parseStreamWithProgress: async function* (_resp: Response, parse: ProviderAdapter["parseStream"], opts: ParseStreamWithProgressOptions) {
       if (useRealProgressStream) yield* realParseStreamWithProgress(_resp, parse, opts);
       else for await (const e of parse(_resp, opts.translatorBudget)) yield e;
@@ -74,6 +87,7 @@ afterAll(() => {
   mock.restore();
   if (realProgressStream) { const real = realProgressStream; mock.module("../../src/web-search/progress-stream", () => real); }
   if (realFulfill) { const real = realFulfill; mock.module("../../src/images/fulfill", () => real); }
+  if (realBridge) { const real = realBridge; mock.module("../../src/bridge", () => real); }
 });
 
 // --- Mock adapter: yields canned events per iteration from a queue ---
@@ -90,6 +104,7 @@ beforeEach(() => {
   fulfillResult = { ...defaultFulfillResult, files: [...defaultFulfillResult.files] };
   buildRequestCalls = 0;
   streamQueue = [];
+  bridgeEvents = [];
 });
 
 describe.each(["runTurn", "parseStream"] as const)("image-loop collection bounds — %s", mode => {
@@ -311,6 +326,18 @@ async function runAndGetSSE(streams: AdapterEvent[][], fulfill?: ImageCallResult
 }
 
 describe("runWithImageBridge", () => {
+  test("a stalled search-stream consumer reports a timeout in the terminal", async () => {
+    const error = new WebSearchConsumerInactivityError(123);
+    const response = await runWithImageBridge({
+      parsed: makeParsed(), plan,
+      adapter: { ...mockAdapter, parseStream: async function* () { throw error; } },
+    });
+    const sse = await response.text();
+    expect(bridgeEvents.find(event => event.type === "error")).toMatchObject({ type: "error", status: 504, message: error.message });
+    expect(sse).toContain("response.failed");
+    expect(sse).toContain(error.message);
+  });
+
   // #7316: once the image turn is streaming, a later iteration's provider overflow must end as the
   // main path's terminal context_length_exceeded rather than a generic upstream failure.
   test("a later iteration's HTTP 413 ends as a terminal context_length_exceeded", async () => {

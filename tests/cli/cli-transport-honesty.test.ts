@@ -19,6 +19,7 @@ import { repoPath } from "../helpers/repo-root";
  */
 
 const DISPATCH_SOURCE = readFileSync(repoPath("src", "cli", "dispatch.ts"), "utf8");
+const SYNC_SOURCE = readFileSync(repoPath("src", "cli", "sync-command.ts"), "utf8");
 
 /**
  * Matches `await someHandler(...); return 0;` — the shape that silently discards a
@@ -107,6 +108,7 @@ describe("#2697 dispatch runners preserve handler exit codes", () => {
   test("no runner discards a handler exit code outside the allowlist", () => {
     const offenders = swallowingRunners(DISPATCH_SOURCE).filter(name => !CANNOT_FAIL_ALLOWLIST.has(name));
     expect(offenders).toEqual([]);
+    expect(SYNC_SOURCE.match(SWALLOWED_EXIT_CODE) ?? []).toEqual([]);
   });
 
   test("provider and models return process.exitCode rather than a literal 0", () => {

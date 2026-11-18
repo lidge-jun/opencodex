@@ -3,6 +3,8 @@ title: Codex App 모델 선택기
 description: 공유 Codex 카탈로그를 통해 opencodex 모델이 Codex App, Codex CLI, Codex TUI에 표시되는 방식.
 ---
 
+기본값은 `false`입니다. `config.json`에 `"omitDisabledNativeModels": true`를 설정하고 `ocx sync`를 실행하면 비활성화한 native 행을 catalog와 cache, Codex 형식의 HTTP 모델 목록에서 제외합니다. 제외 전 검증한 상속 템플릿을 보존하므로 routed 행의 메타데이터는 유지되며 직접 요청의 라우팅은 바뀌지 않습니다. 아래 hide 설명은 기본 설정에 해당합니다.
+
 opencodex는 Codex App을 직접 고치지 않습니다. Codex CLI/TUI와 같은 Codex 설정과 모델 카탈로그를
 씁니다. app-server는 이 공유 상태를 읽지만, 일부 Codex Desktop 릴리스는 renderer에서 추가 remote
 allowlist를 적용해 routed row를 picker에서 제거할 수 있습니다. 명시적 `nativeAlias: true` combo가
@@ -264,9 +266,7 @@ Ultra Fast는 사용량·비용이 더 크며 Codex 자체 기능 제한도 계�
 Codex는 선택기에 보이는 카탈로그 항목을 `priority` 오름차순으로 정렬한 뒤 처음 다섯 개를
 `spawn_agent` model override로 노출합니다. 대시보드 Subagents 페이지에서는 bare native id 또는
 routed `provider/model` id를 최대 다섯 개 선택하고 저장할 수 있습니다. 수동으로 설정한
-`subagentModels`는 account-qualified `<selector>/<native-openai-model>` id도 지원하지만,
-대시보드는 이러한 exact id를 제공하지 않으며 페이지를 저장하면 목록이 대시보드에 표시되는 선택 항목으로
-교체됩니다. opencodex는 선택한 순서대로 낮은 카탈로그 priority를 부여합니다. 계정 한정 선택기 행이
+`subagentModels`는 account-qualified `<selector>/<native-openai-model>` id도 지원합니다. 대시보드는 현재 카탈로그에 없는 모델을 포함하여, 저장된 정확한 id를 목록을 저장할 때도 유지합니다. opencodex는 선택한 순서대로 낮은 카탈로그 priority를 부여합니다. 계정 한정 선택기 행이
 활성화되어 있으면 bare native 선택은 selector-qualified 그룹으로 확장됩니다. 다른 모델도 정확한 id로
 직접 호출할 수 있습니다.
 

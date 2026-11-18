@@ -106,8 +106,12 @@ test.each(["true", "false", ""])("preserves the actual upgrade value %j with mix
   expect((await exchange(upgrade(["X-Reasoning-Included", value]))).headers.get(flag)).toBe(value);
 });
 
-test("duplicate inclusion headers preserve their HTTP-combined value", async () => {
-  expect((await exchange(upgrade([flag, "true", "X-Reasoning-Included", "false"]))).headers.get(flag)).toBe("true, false");
+test("duplicate inclusion headers stay present without echoing their combined value", async () => {
+  expect((await exchange(upgrade([flag, "true", "X-Reasoning-Included", "false"]))).headers.get(flag)).toBe("");
+});
+
+test("an upgrade inclusion value outside true/false stays present as an empty value", async () => {
+  expect((await exchange(upgrade([flag, "zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e"]))).headers.get(flag)).toBe("");
 });
 
 test("a handshake event after open cannot replace the validated connection default", async () => {

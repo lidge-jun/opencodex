@@ -5,12 +5,14 @@ import { navigateHash } from "../../hash-routing";
 import { useT } from "../../i18n/shared";
 import { Notice, Switch } from "../../ui";
 import ClientMark from "../../components/ClientMark";
+import { useHelpToggle } from "../../components/v2-connect/help-toggle";
 import { markFor } from "../../components/integration-marks";
 import IntegrationStateBadge from "./IntegrationStateBadge";
 import ConsequenceDialog, { type ConsequenceCopy } from "./ConsequenceDialog";
 import RestoreDialog from "./RestoreDialog";
 import { RollbackHistory } from "./RollbackHistory";
 import { describeRefusal } from "./refusal-copy";
+import { previewRecoveryFor, type PreviewRecovery } from "./preview-recovery";
 import { loadCursorIntegrationStatus } from "./cursor-api";
 import {
   buildOverviewRows,
@@ -33,7 +35,6 @@ import {
   bindingFor,
   deleteJournalEntry,
   IntegrationApiError,
-  isIntegrationPreviewUnavailable,
   isMissingJournalEntry,
   type IntegrationJournalRow,
   type IntegrationStatus,
@@ -109,6 +110,7 @@ interface BulkDisableState {
   actions: BulkDisableAction[];
   loading: boolean;
   failure: string | null;
+  recovery: PreviewRecovery | null;
   stale: boolean;
   failures: string[];
 }
@@ -143,6 +145,7 @@ function OverviewCard({
   onOpen,
   onToggle,
   onOverwrite,
+  onChooseProfile,
 }: {
   row: OverviewRow;
   pending: boolean;
@@ -151,6 +154,8 @@ function OverviewCard({
   onToggle: (() => void) | null;
   /** Present only for a conflicted file client; null everywhere else. */
   onOverwrite: (() => void) | null;
+  /** Aside only: one plan names one profile, so the aggregate card cannot replace. */
+  onChooseProfile: (() => void) | null;
 }) {
   const t = useT();
   const detail = row.detail ?? (row.detailKey ? t(row.detailKey, row.detailVars ?? undefined) : null);
@@ -167,8 +172,13 @@ function OverviewCard({
     : null;
   const toggleOn = row.toggleOn ?? row.applied;
   const removableKiloIssue = row.status !== null && canDisableKiloWithCandidateIssue(row.status);
+  // One of three readings a glance needs: connected, not yet, needs attention.
+  const tone = !row.installed && row.state !== "unknown" ? "idle"
+    : row.state === "current" ? "on"
+    : row.state === "stale" || row.state === "conflict" || row.state === "unsafe" ? "attention"
+      : row.state === "absent" ? "off" : "idle";
   return (
-    <li className="integration-card" data-client={row.id}>
+    <li className="integration-card" data-client={row.id} data-tone={tone}>
       <div className="integration-card-head">
         {/*
           Before the title, not inside it: the title IS the card's one control
@@ -229,9 +239,31 @@ function OverviewCard({
             {t("integrations.action.overwrite")}
           </button>
         )}
+        {/*
+          Aside has no aggregate writer: a fingerprint describes one profile's
+          file, and the server refuses an unprofiled plan for exactly that
+          reason. The card therefore sends the user to the per-profile surface
+          instead of opening a dialog that could never load a plan.
+        */}
+        {onChooseProfile && (
+          <button type="button" className="btn btn-ghost" onClick={onChooseProfile} disabled={pending}>
+            {t("integrations.action.chooseProfile")}
+          </button>
+        )}
       </div>
     </li>
   );
+}
+
+/*
+ * Apps that are not on this machine have nothing to switch on, so they fold away under
+ * one disclosure instead of filling the page with "Not installed" cards. An unread
+ * source (`unknown`) stays in the main grid: it may well be installed.
+ */
+function elsewhere(row: OverviewRow): boolean {
+  return row.state !== "unknown"
+    && (row.state === "not-installed" || !row.installed)
+    && !(row.toggleOn ?? row.applied);
 }
 
 export default function IntegrationsOverview({
@@ -242,6 +274,7 @@ export default function IntegrationsOverview({
   active?: boolean;
 }) {
   const t = useT();
+  const help = useHelpToggle(t("integrations.catalog.title"));
   const [bulkPending, setBulkPending] = useState(false);
   const [bulkResult, setBulkResult] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [restoring, setRestoring] = useState<IntegrationJournalRow | null>(null);
@@ -255,6 +288,7 @@ export default function IntegrationsOverview({
     plan: IntegrationMutationPlan | null;
     loading: boolean;
     failure: string | null;
+    recovery: PreviewRecovery | null;
   } | null>(null);
   const [bulkPlans, setBulkPlans] = useState<BulkDisableState | null>(null);
   const cardPreviewAbortRef = useRef<AbortController | null>(null);
@@ -443,14 +477,17 @@ export default function IntegrationsOverview({
    * single-client PUT the card uses, so every client gets its own snapshot and
    * its own journal row, and one refusal cannot silently swallow the rest.
    */
-  const requestDisableAll = async () => {
-    if (bulkPending || bulkPlans || appliedClients.length === 0) return;
+  const requestDisableAll = async (
+    /** Recovery replaces the failed plan set it is retrying; the first request never does. */
+    replacing = false,
+  ) => {
+    if (bulkPending || (bulkPlans && !replacing) || appliedClients.length === 0) return;
     const controller = new AbortController();
     const generation = bulkPreviewGenerationRef.current + 1;
     bulkPreviewGenerationRef.current = generation;
     bulkPreviewAbortRef.current?.abort();
     bulkPreviewAbortRef.current = controller;
-    setBulkPlans({ actions: [], loading: true, failure: null, stale: false, failures: [] });
+    setBulkPlans({ actions: [], loading: true, failure: null, recovery: null, stale: false, failures: [] });
     try {
       const actions = await Promise.all(appliedClients.map(async client => {
         const row = rows.find(candidate => candidate.status?.clientId === client.clientId);
@@ -462,17 +499,30 @@ export default function IntegrationsOverview({
       }));
       if (controller.signal.aborted || generation !== bulkPreviewGenerationRef.current) return;
       bulkPreviewAbortRef.current = null;
-      setBulkPlans({ actions, loading: false, failure: null, stale: false, failures: [] });
+      setBulkPlans({ actions, loading: false, failure: null, recovery: null, stale: false, failures: [] });
     } catch (error) {
       if (controller.signal.aborted || generation !== bulkPreviewGenerationRef.current) return;
       bulkPreviewAbortRef.current = null;
-      if (isIntegrationPreviewUnavailable(error)) {
-        setBulkPlans(null);
-        refresh();
-        return;
-      }
-      setBulkPlans({ actions: [], loading: false, failure: t("integrations.preview.failed"), stale: false, failures: [] });
+      const recovery = previewRecoveryFor(error);
+      setBulkPlans({
+        actions: [], loading: false, recovery, stale: false, failures: [],
+        failure: recovery === null ? t("integrations.preview.failed") : null,
+      });
     }
+  };
+
+  const recoverBulkPlans = async () => {
+    // Close and any newer bulk preview move the generation; a stale recovery must not revive it.
+    const generation = bulkPreviewGenerationRef.current;
+    try {
+      await loadIntegrationStates(apiBase);
+    } catch {
+      // Fall through: the next preview answers again, and its refusal is the
+      // message the user can act on.
+    }
+    if (generation !== bulkPreviewGenerationRef.current) return;
+    refresh();
+    await requestDisableAll(true);
   };
 
   const closeBulkPlans = () => {
@@ -529,7 +579,7 @@ export default function IntegrationsOverview({
     if (staleActions.length > 0) {
       refresh();
       setBulkPending(false);
-      setBulkPlans({ actions: staleActions, loading: false, failure: null, stale: true, failures: failed });
+      setBulkPlans({ actions: staleActions, loading: false, failure: null, recovery: null, stale: true, failures: failed });
       setBulkResult(failed.length === 0
         ? null
         : { tone: "err", text: t("integrations.bulk.partial", { clients: failed.join("; ") }) });
@@ -630,29 +680,62 @@ export default function IntegrationsOverview({
     }
   };
 
-  const requestFilePlan = async (row: OverviewRow, operation: Exclude<IntegrationPlanOperation, "restore">) => {
-    if (!row.status || plannedCard) return;
+  const requestFilePlan = async (
+    row: OverviewRow,
+    operation: Exclude<IntegrationPlanOperation, "restore">,
+    /** Recovery replaces the failed plan it is retrying; the first request never does. */
+    replacing = false,
+  ) => {
+    if (!row.status || (plannedCard && !replacing)) return;
     const controller = new AbortController();
     const generation = cardPreviewGenerationRef.current + 1;
     cardPreviewGenerationRef.current = generation;
     cardPreviewAbortRef.current?.abort();
     cardPreviewAbortRef.current = controller;
-    setPlannedCard({ row, operation, plan: null, loading: true, failure: null });
+    setPlannedCard({ row, operation, plan: null, loading: true, failure: null, recovery: null });
     try {
       const plan = await previewIntegrationMutation(apiBase, row.status.clientId, operation, controller.signal);
       if (controller.signal.aborted || generation !== cardPreviewGenerationRef.current) return;
       cardPreviewAbortRef.current = null;
-      setPlannedCard({ row, operation, plan, loading: false, failure: null });
+      setPlannedCard({ row, operation, plan, loading: false, failure: null, recovery: null });
     } catch (error) {
       if (controller.signal.aborted || generation !== cardPreviewGenerationRef.current) return;
       cardPreviewAbortRef.current = null;
-      if (isIntegrationPreviewUnavailable(error)) {
-        setPlannedCard(null);
-        refresh();
-        return;
-      }
-      setPlannedCard({ row, operation, plan: null, loading: false, failure: t("integrations.preview.failed") });
+      /*
+       * No retained roster is NOT a dead end. Closing the dialog, as this used
+       * to, looked like the button did nothing; keep the dialog and offer the
+       * one read that makes the next preview answerable.
+       */
+      const recovery = previewRecoveryFor(error);
+      setPlannedCard({
+        row, operation, plan: null, loading: false, recovery,
+        failure: recovery === null ? t("integrations.preview.failed") : null,
+      });
     }
+  };
+
+  /*
+   * Read the collection again, then re-ask for the plan.
+   *
+   * The collection read is an ordinary authoritative load and is what retains
+   * the export roster the preview reads. Waiting for it — rather than the
+   * fire-and-forget refresh() — is the whole recovery; nothing here writes a
+   * client file, and the preview stays side-effect free.
+   */
+  const recoverPlannedCard = async () => {
+    const planned = plannedCard;
+    if (!planned) return;
+    // Close and any newer preview move the generation; a stale recovery must not revive it.
+    const generation = cardPreviewGenerationRef.current;
+    try {
+      await loadIntegrationStates(apiBase);
+    } catch {
+      // The preview will answer (or refuse) again; a second error banner here
+      // would only obscure the one the user can act on.
+    }
+    if (generation !== cardPreviewGenerationRef.current) return;
+    refresh();
+    await requestFilePlan(planned.row, planned.operation, true);
   };
 
   const closePlannedCard = () => {
@@ -692,6 +775,25 @@ export default function IntegrationsOverview({
    *
    * Errors propagate so the dialog can show them while the user still has cancel.
    */
+  const presentRows = rows.filter(row => !elsewhere(row));
+  const elsewhereRows = rows.filter(elsewhere);
+  const renderCard = (row: OverviewRow) => (
+    <OverviewCard
+      key={row.id}
+      row={row}
+      pending={cardPending !== null}
+      result={cardResults[row.id] ?? null}
+      onOpen={() => navigateHash(row.hash)}
+      onToggle={row.toggle ? () => requestToggle(row, !(row.toggleOn ?? row.applied)) : null}
+      onOverwrite={row.status !== null && row.status.clientId !== "aside" && row.status.state === "conflict" && row.status.reason !== "candidate-conflict" && row.installed
+        ? () => void requestFilePlan(row, "overwrite")
+        : null}
+      onChooseProfile={row.status?.clientId === "aside" && row.status.state === "conflict" && row.status.reason !== "candidate-conflict" && row.installed
+        ? () => navigateHash(row.hash)
+        : null}
+    />
+  );
+
   return (
     <section className="integrations-overview">
       <div className="integration-summary">
@@ -699,11 +801,11 @@ export default function IntegrationsOverview({
           <span className="integration-summary-label">{t("integrations.summary.detected")}</span>
           <strong>{counts.detected}</strong>
         </div>
-        <div className="integration-summary-cell">
+        <div className="integration-summary-cell" data-tone={counts.applied > 0 ? "ok" : undefined}>
           <span className="integration-summary-label">{t("integrations.summary.applied")}</span>
           <strong>{counts.applied}</strong>
         </div>
-        <div className="integration-summary-cell">
+        <div className="integration-summary-cell" data-tone={counts.stale > 0 ? "warn" : undefined}>
           <span className="integration-summary-label">{t("integrations.summary.stale")}</span>
           <strong>{counts.stale}</strong>
         </div>
@@ -720,16 +822,8 @@ export default function IntegrationsOverview({
         )}
         <div className="integration-summary-cell">
           <span className="integration-summary-label">{t("integrations.summary.lastChange")}</span>
-          <strong>{lastChange ? new Date(lastChange).toLocaleString() : t("integrations.status.unknown")}</strong>
+          <strong className="integration-summary-when">{lastChange ? new Date(lastChange).toLocaleString() : t("integrations.status.unknown")}</strong>
         </div>
-        <button
-          type="button"
-          className="btn btn-ghost"
-          onClick={() => void requestDisableAll()}
-          disabled={bulkPending || Boolean(bulkPlans) || appliedClients.length === 0}
-        >
-          {t("integrations.summary.disableAll")}
-        </button>
       </div>
 
       {/*
@@ -745,10 +839,21 @@ export default function IntegrationsOverview({
         as the things it is not part of. This h3 owns the catalog; rollback
         below is its sibling.
       */}
-      <h3>{t("integrations.catalog.title")}</h3>
+      <div className="connect-catalog-head">
+        <h3>{t("integrations.catalog.title")}</h3>
+        {help.button}
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm connect-disable-all"
+          onClick={() => void requestDisableAll()}
+          disabled={bulkPending || Boolean(bulkPlans) || appliedClients.length === 0}
+        >
+          {t("integrations.summary.disableAll")}
+        </button>
+      </div>
+      {help.panel(<p>{t("integrations.onboarding")}</p>, "connect-help-panel")}
       <ApiKeysRow row={keysRow} />
 
-      <p className="page-sub">{t("integrations.onboarding")}</p>
       {statesResource.state.kind === "failed-cold" && (
         <Notice tone="err">{t("integrations.error.load")}</Notice>
       )}
@@ -773,21 +878,18 @@ export default function IntegrationsOverview({
           <p className="page-sub">{t("common.loading")}</p>
         )
       ) : (
-        <ul className="integration-cards">
-          {rows.map(row => (
-            <OverviewCard
-              key={row.id}
-              row={row}
-              pending={cardPending !== null}
-              result={cardResults[row.id] ?? null}
-              onOpen={() => navigateHash(row.hash)}
-              onToggle={row.toggle ? () => requestToggle(row, !(row.toggleOn ?? row.applied)) : null}
-              onOverwrite={row.status !== null && row.status.state === "conflict" && row.status.reason !== "candidate-conflict" && row.installed
-                ? () => void requestFilePlan(row, "overwrite")
-                : null}
-            />
-          ))}
-        </ul>
+        <>
+          {presentRows.length > 0 && <ul className="integration-cards">{presentRows.map(renderCard)}</ul>}
+          {elsewhereRows.length > 0 && (
+            <details className="connect-elsewhere">
+              <summary>
+                <span className="connect-elsewhere-title">{t("connectV2.elsewhereTitle", { count: String(elsewhereRows.length) })}</span>
+                <span className="connect-elsewhere-hint">{t("connectV2.elsewhereHint")}</span>
+              </summary>
+              <ul className="integration-cards integration-cards--elsewhere">{elsewhereRows.map(renderCard)}</ul>
+            </details>
+          )}
+        </>
       )}
       {clientsSettled && installedFileClients.length === 0 && (
         <div className="integration-empty">
@@ -904,6 +1006,8 @@ export default function IntegrationsOverview({
           plan={plannedCard.plan}
           planLoading={plannedCard.loading}
           planFailure={plannedCard.failure}
+          previewRecovery={plannedCard.recovery}
+          onPreviewRecovery={recoverPlannedCard}
           onClose={closePlannedCard}
           onConfirm={async plan => {
             if (!plan) return;
@@ -920,6 +1024,8 @@ export default function IntegrationsOverview({
           planStale={bulkPlans.stale}
           planLoading={bulkPlans.loading}
           planFailure={bulkPlans.failure}
+          previewRecovery={bulkPlans.recovery}
+          onPreviewRecovery={recoverBulkPlans}
           onClose={closeBulkPlans}
           onConfirm={async () => { await disableAll(bulkPlans); }}
         />

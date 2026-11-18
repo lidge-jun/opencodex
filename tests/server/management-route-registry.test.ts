@@ -14,6 +14,7 @@ import { SIBLING_REFUSED_MANAGEMENT_PATHS, siblingRefusesManagementRequest } fro
 import { markSiblingStart, resetSiblingStartForTests } from "../../src/codex/sibling-start";
 import { scanRoutes, distinctRoutes } from "../helpers/management-route-scan";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 /**
  * Reconciles the declared route registry against source, in three directions.
@@ -65,6 +66,11 @@ const moduleOf = (file: string): string => file.replace(/^src\//, "").replace(/\
 const key = (method: string, path: string): string => `${method} ${path}`;
 
 describe("management route registry reconciliation", () => {
+  test("route-to exposes exactly its versioned read, intent write and explicit sync methods", () => {
+    const scanned = distinctRoutes(scanRoutes(join(repoRoot, "src/server/management/route-to-routes.ts")));
+    expect(scanned.unresolved).toEqual([]);
+    expect([...scanned.pairs].sort()).toEqual(["GET /api/route-to", "POST /api/route-to/sync", "PUT /api/route-to"]);
+  });
   test("dashboard plan uses the shared proof-bound production inspection path", async () => {
     const proof = "P".repeat(43);
     const root = process.platform === "win32" ? "C:\\fixture-only" : "/tmp/fixture-only";
@@ -92,6 +98,10 @@ describe("management route registry reconciliation", () => {
     // runs through the production async spawn runner, not a mocked event loop.
     const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-cli-update-gated-npm-")));
     const gateFile = join(dir, "release");
+    // Hosted Windows took 2703ms before answering (run 40796504652). Keep
+    // responsiveness relative to the child's cap, with room for runner contention.
+    const gateCapMs = process.platform === "win32" ? INTERNAL_DEADLINE_MS : 4_000;
+    const responsiveMs = gateCapMs * 5 / 8;
     const integrity = `sha512-${Buffer.alloc(64, 7).toString("base64")}`;
     const mainJson = JSON.stringify({ name: "@openai/codex", version: "1.4.2",
       optionalDependencies: { "@openai/codex-linux-x64": "1.4.2" },
@@ -103,8 +113,8 @@ describe("management route registry reconciliation", () => {
         "-e",
         'const fs=require("node:fs"),g=process.env.OCX_GATE_FILE,a=process.env.OCX_GATE_ANSWER,d=Date.now()+Number(process.env.OCX_GATE_CAP_MS);'
         + 'const t=setInterval(()=>{if(!fs.existsSync(g)&&Date.now()<=d)return;clearInterval(t);process.stdout.write(a+"\\n",()=>process.exit(0))},15)',
-      ], { ...options, windowsVerbatimArguments: false,
-        env: { ...options.env, OCX_GATE_FILE: gateFile, OCX_GATE_CAP_MS: "4000",
+      ], { ...options, timeout: SPAWN_BUDGET_MS, windowsVerbatimArguments: false,
+        env: { ...options.env, OCX_GATE_FILE: gateFile, OCX_GATE_CAP_MS: String(gateCapMs),
           OCX_GATE_ANSWER: args.join(" ").includes("@openai/codex-linux-x64@") ? backingJson : mainJson } });
     const managed = { schemaVersion: 1, candidateAvailable: true, candidateVersion: "1.0.0",
       candidateSource: "environment", selectionAttested: true,
@@ -125,6 +135,8 @@ describe("management route registry reconciliation", () => {
     const emptyHome = join(dir, "empty-home");
     mkdirSync(emptyHome, { recursive: true });
     process.env.OPENCODEX_HOME = emptyHome;
+    let responseDeadline: ReturnType<typeof setTimeout> | undefined;
+    let planPromise: ReturnType<typeof handleCodexCliUpdateRoutes> | undefined;
     try {
       const makeCtx = (pathname: string): ManagementContext => {
         const req = new Request(`http://localhost${pathname}`);
@@ -133,20 +145,20 @@ describe("management route registry reconciliation", () => {
           convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
           syncClaudeAgentDefsBestEffort: async () => {} };
       };
-      const planPromise = handleCodexCliUpdateRoutes(makeCtx("/api/codex/cli-update/plan"));
+      planPromise = handleCodexCliUpdateRoutes(makeCtx("/api/codex/cli-update/plan"));
       // Let the first gated child spawn, then an unrelated request must still answer.
       const firedAt = Date.now();
       await new Promise(resolve => setTimeout(resolve, 150));
       const concurrent = await Promise.race([
         handleCodexCliUpdateRoutes(makeCtx("/api/codex/cli-update/jobs/11111111-2222-3333-4444-555555555555"))
           .then(response => ({ kind: "responded" as const, response })),
-        new Promise<{ kind: "blocked" }>(resolve => setTimeout(() => resolve({ kind: "blocked" }), 3_000)),
+        new Promise<{ kind: "blocked" }>(resolve => { responseDeadline = setTimeout(() => resolve({ kind: "blocked" }), responsiveMs); }),
       ]);
       // Under a synchronous spawn this race can only settle after the child cap.
       expect(concurrent.kind).toBe("responded");
       // A parked event loop defers BOTH arms past the child cap, so the response
       // arriving "first" is not enough — the wall clock is the discriminator.
-      expect(Date.now() - firedAt).toBeLessThan(2_500);
+      expect(Date.now() - firedAt).toBeLessThan(responsiveMs);
       if (concurrent.kind === "responded") {
         // POSIX reads an empty store (404); Windows refuses the unsupported store
         // lane (503). Either way the unrelated request answered while planning waited.
@@ -158,12 +170,20 @@ describe("management route registry reconciliation", () => {
       expect(await response?.json()).toMatchObject({ applicable: true, targetVersion: "1.4.2" });
       expect(planner).toHaveBeenCalledTimes(1);
     } finally {
-      planner.mockRestore();
-      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(dir, { recursive: true, force: true });
+      clearTimeout(responseDeadline);
+      try {
+        // An assertion failure must release and reap the metadata child before
+        // deleting its gate directory or restoring the planner's environment.
+        writeFileSync(gateFile, "release");
+        await planPromise;
+      } finally {
+        planner.mockRestore();
+        if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = oldHome;
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
-  });
+  }, SPAWN_BUDGET_MS);
 
   test("plan dispatch failure returns HTTP 503 without a second dispatch", async () => {
     const dispatch = spyOn(cliUpdateWorkerModule, "runCodexCliUpdatePlanInWorker")
@@ -201,6 +221,7 @@ describe("management route registry reconciliation", () => {
     expect(untrustedIngress?.status).toBe(403);
     expect(await untrustedIngress?.json()).toEqual({ error: "local_dashboard_confirmation_required" });
     ctx.trustedLoopbackIngress = true;
+    ctx.sessionControl = { isPaired: () => true, isCurrent: () => true, revokeCurrent: () => true };
     ctx.req = new Request(request.url, { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ requestId: "retry-key-00001", planId: "a".repeat(32), confirmed: false }) });
     const unconfirmed = await handleCodexCliUpdateRoutes(ctx);
@@ -222,6 +243,7 @@ describe("management route registry reconciliation", () => {
       const ctx: ManagementContext = { req, url: new URL(req.url),
         config: { port: 10100, providers: {} } as import("../../src/types").OcxConfig, deps: {}, version: "test",
         principal: "gui-session", trustedLoopbackIngress: true, guiSessionIssuance: "loopback",
+        sessionControl: { isPaired: () => true, isCurrent: () => true, revokeCurrent: () => true },
         convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
         syncClaudeAgentDefsBestEffort: async () => {} };
       const response = await handleCodexCliUpdateRoutes(ctx);
@@ -247,6 +269,7 @@ describe("management route registry reconciliation", () => {
       const ctx: ManagementContext = { req: makeRequest(), url: new URL("http://localhost/api/codex/cli-update/apply"),
         config: { port: 10100, providers: {} } as import("../../src/types").OcxConfig, deps: {}, version: "test",
         principal: "gui-session", trustedLoopbackIngress: true, guiSessionIssuance: "loopback",
+        sessionControl: { isPaired: () => true, isCurrent: () => true, revokeCurrent: () => true },
         convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
         syncClaudeAgentDefsBestEffort: async () => {} };
       const storeDir = join(configDir, "codex-cli-update-jobs"), heldLock = join(storeDir, "admission.lock");
@@ -333,6 +356,93 @@ describe("management route registry reconciliation", () => {
       if (!src.includes(`"${route.path}"`)) missing.push(`${key(route.method, route.path)} not in ${file}`);
     }
     expect(missing).toEqual([]);
+  });
+
+  test("every path guard against an imported or local path constant is declared", () => {
+    // Why this exists: `/api/codex/desktop-compatibility/authorization` was live in
+    // `desktop-authorization.ts` while absent from the registry, and every check in this
+    // file stayed green. The owner compares `pathname !== DESKTOP_AUTHORIZATION_PATH`, where
+    // the constant is imported from another module, so:
+    //   - the text scanner sees no `=== "/api/…"` literal and reports nothing;
+    //   - check 2's literal search finds no literal in the owner file;
+    //   - the per-module count only compares declarations to something the scan can see,
+    //     so an entirely undeclared module balances at zero.
+    // The defect is not "the path text is missing", it is "the guard is invisible". So scan
+    // for identifier path guards directly and require at least the narrowed method to be
+    // declared. Widened methods stay opt-in per file: a guard that only narrows GET still
+    // answers POST, and this check must not invent routes a single guard does not prove.
+    const literalConstants = (absoluteFile: string): Map<string, string> => {
+      const src = readFileSync(absoluteFile, "utf8");
+      const found = new Map<string, string>();
+      for (const match of src.matchAll(/(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*"(\/[^"]*)"/g)) {
+        found.set(match[1]!, match[2]!);
+      }
+      return found;
+    };
+    const importedConstants = (absoluteFile: string): Map<string, string> => {
+      const src = readFileSync(absoluteFile, "utf8");
+      const found = new Map<string, string>();
+      for (const match of src.matchAll(/import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*"([^"]+)"/g)) {
+        const specifier = match[2]!;
+        if (!specifier.startsWith(".")) continue;
+        const base = resolve(dirname(absoluteFile), specifier);
+        const resolved = [`${base}.ts`, `${base}/index.ts`].find(existsSync);
+        if (!resolved) continue;
+        const exported = literalConstants(resolved);
+        for (const raw of match[1]!.split(",")) {
+          const name = raw.trim().split(/\s+as\s+/).pop()!.trim();
+          if (name && exported.has(name)) found.set(name, exported.get(name)!);
+        }
+      }
+      return found;
+    };
+    const declared = new Set(MANAGEMENT_ROUTES.map(route => key(route.method, route.path)));
+    const undeclared: string[] = [];
+    for (const file of routeCarryingFiles()) {
+      const absoluteFile = join(repoRoot, file);
+      const source = readFileSync(absoluteFile, "utf8");
+      if (!/pathname\s*(?:===|!==)\s*[A-Za-z_$]/.test(source)) continue;
+      const constants = new Map([...importedConstants(absoluteFile), ...literalConstants(absoluteFile)]);
+      const lines = source.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        const guard = /pathname\s*(===|!==)\s*([A-Za-z_$][\w$]*)/.exec(lines[i] ?? "");
+        if (!guard) continue;
+        const path = constants.get(guard[2]!);
+        if (!path || !path.startsWith("/api/")) continue;
+        // The narrowed method may sit on the guard line or in the block it opens — the
+        // shape `if (pathname !== PATH) return null;` followed by `if (method === "GET")`
+        // then `if (method !== "POST")` is how both this route and its Desktop siblings
+        // are written. Read a short forward window and stop at the next path guard, so a
+        // later unrelated route cannot lend this one a method.
+        const window: string[] = [];
+        for (let j = i; j <= Math.min(i + 3, lines.length - 1); j++) {
+          const line = lines[j] ?? "";
+          if (j > i && /pathname\s*(?:===|!==)\s*/.test(line)) break;
+          window.push(line.replace(/\/\/.*$/, ""));
+        }
+        const methods = new Set([...window.join(" ").matchAll(/method\s*===?\s*"([A-Z]+)"/g)].map(m => m[1]!));
+        for (const match of window.join(" ").matchAll(/method\s*!==\s*"([A-Z]+)"/g)) methods.add(match[1]!);
+        // No readable method means no exact claim: the verbs live in a dispatch this check
+        // cannot read, and inventing one is how a gate starts failing on correct code.
+        for (const method of methods) {
+          if (!declared.has(key(method, path))) {
+            undeclared.push(`${key(method, path)} at ${file}:${i + 1} (${guard[2]})`);
+          }
+        }
+      }
+    }
+    expect(undeclared).toEqual([]);
+  });
+
+  test("the Desktop authorization route is declared for both methods, not inferred", () => {
+    // The route exists in `desktop-authorization.ts` behind an imported constant, and the
+    // persistent-dashboard consent audit derives its mutation list from this registry. An
+    // omitted declaration therefore removes the route from the audit that is supposed to
+    // prove a remembered-admin session cannot mutate. Pin both methods explicitly.
+    const declared = MANAGEMENT_ROUTES.filter(route => route.path === "/api/codex/desktop-compatibility/authorization");
+    expect(declared.map(route => [route.method, route.mutates, route.mechanism, route.exempt?.reason]).sort())
+      .toEqual([["GET", false, "path-constant", "session-only"], ["POST", true, "path-constant", "session-only"]]);
+    for (const route of declared) expect(route.module).toBe("server/management/desktop-authorization");
   });
 
   test("per-module counts reconcile: declared == scanned pairs + declared non-literal", () => {

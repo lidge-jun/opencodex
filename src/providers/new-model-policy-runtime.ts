@@ -7,6 +7,15 @@ import { adoptPersistedModelDiscovery } from "../config/live-reconcile";
 import type { OcxConfig } from "../types";
 import { reconcileSuccessfulModelDiscoveries } from "./new-model-policy";
 
+/** Selections `admit` widened during one reconcile, keyed by provider. */
+function admitSelections(target: OcxConfig, run: () => boolean): Record<string, string[] | undefined> {
+  const before = new Map(Object.entries(target.providers).map(([name, provider]) => [name, provider.selectedModels?.length]));
+  run();
+  return Object.fromEntries(Object.entries(target.providers)
+    .filter(([name, provider]) => provider.selectedModels?.length !== before.get(name))
+    .map(([name, provider]) => [name, provider.selectedModels]));
+}
+
 function inventory(config: OcxConfig): unknown {
   const validated = validateConfigCandidate(config);
   if (!validated.ok) return null;
@@ -54,8 +63,11 @@ export function finalizeModelDiscovery(
   }
   if (!baseline.persisted && publishProjection) {
     // Drift already existed at admission. Do not add unsaved disables or advance the live
-    // merge baseline: a later rebase-save must preserve the operator's on-disk choices.
-    const projection = { ...config, modelDiscovery: structuredClone(config.modelDiscovery),
+    // merge baseline: a later rebase-save must preserve the operator's on-disk choices. The
+    // provider rows are copied too, so an `admit` widens the projection's selection only.
+    const providers = Object.fromEntries(Object.entries(config.providers).map(([name, provider]) => [name,
+      provider.selectedModels === undefined ? provider : { ...provider, selectedModels: [...provider.selectedModels] }]));
+    const projection = { ...config, providers, modelDiscovery: structuredClone(config.modelDiscovery),
       disabledModels: config.disabledModels === undefined ? undefined : [...config.disabledModels] };
     reconcile(projection);
     publishProjection(projection);
@@ -70,8 +82,9 @@ export function finalizeModelDiscovery(
       }
       // Re-evaluate against the latest baseline and manual choices under the mutation lock.
       // A second caller then adopts a first caller's result rather than disabling an ID twice.
-      const changed = reconcile(fresh);
-      return { changed, value: { modelDiscovery: fresh.modelDiscovery, disabledModels: fresh.disabledModels } };
+      let changed = false;
+      const selectedModels = admitSelections(fresh, () => changed = reconcile(fresh));
+      return { changed, value: { modelDiscovery: fresh.modelDiscovery, disabledModels: fresh.disabledModels, selectedModels } };
     });
     if (result.status === "unavailable" || !result.value) return false;
     adoptPersistedModelDiscovery(config, result.value);

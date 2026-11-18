@@ -48,6 +48,9 @@ function delegateProvider(provider: OcxProviderConfig, zedProvider: ZedProvider)
     apiKey: "zed-delegate-placeholder",
     models: undefined,
     liveModels: false,
+    // The anthropic delegate names api.anthropic.com only to borrow its body builder; the wire goes
+    // to Zed, which is not the first-party host the Advisor server tool defaults to (#8448).
+    forwardAdvisorTool: false,
   };
   if (zedProvider === "anthropic") {
     return { ...common, adapter: "anthropic", baseUrl: "https://api.anthropic.com" };
@@ -165,9 +168,11 @@ export function zedEventStream(
   const output = new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
       if (finished) return;
-      buffer += decoder.decode(chunk, { stream: true });
+      const decoded = decoder.decode(chunk, { stream: true });
+      buffer += decoded;
       let start = 0;
-      let newline = buffer.indexOf("\n", start);
+      // A drained suffix has no newline; only new text can complete a frame.
+      let newline = decoded.includes("\n") ? buffer.indexOf("\n", start) : -1;
       while (newline >= 0 && !finished) {
         processLine(buffer.slice(start, newline), controller);
         start = newline + 1;
@@ -354,12 +359,7 @@ export function createZedAdapter(provider: OcxProviderConfig, cacheRetention?: A
           : item,
       );
     }
-    if (zedProvider === "open_ai") {
-      // Codex carries this turn's client tools in a private additional_tools input item.
-      // Zed rejects that variant, so promote the current turn and drop every wrapper
-      // before the built-in tool filter runs.
-      liftZedAdditionalTools(providerRequest, parsed._replayPrefixLen ?? 0);
-    }
+    // OpenAI wrappers were promoted before delegation; serialized input has no provenance tags.
     if (zedProvider === "open_ai" && Array.isArray(providerRequest.tools)) {
       // Zed's Responses decoder supports function/custom tools, not Codex's built-in web_search.
       const supported = (tool: unknown) => isRecord(tool) && (tool.type === "function" || tool.type === "custom");

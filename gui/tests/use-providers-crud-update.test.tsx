@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { act, useEffect, useRef, useState } from "react";
+import { act, useLayoutEffect, useRef } from "react";
 import type { Root } from "react-dom/client";
 import { Window } from "happy-dom";
 import { useProvidersCrud } from "../src/pages/use-providers-crud";
+import { configureApiTargets } from "../src/api";
+import { standaloneApiTargets } from "../src/api-targets";
 import type { ProviderUpdatePatch, ProviderUpdateResult } from "../src/components/provider-workspace/types";
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -80,12 +82,16 @@ async function mountCrud(overrides: {
   fetchConfig?: () => Promise<void>;
   fetchProviderQuotas?: (refresh?: boolean) => Promise<void>;
   refreshCodexAccount?: () => Promise<unknown>;
+  onProviderRemoved?: (name: string) => void;
+  notify?: (msg: string, ok: boolean) => void;
 } = {}) {
+  configureApiTargets(standaloneApiTargets("http://localhost:10100"));
   const container = document.createElement("div");
   document.body.append(container);
   const { createRoot } = await import("react-dom/client");
   let root!: Root;
   let updateProvider!: (name: string, patch: ProviderUpdatePatch) => Promise<{ ok: boolean; error?: string }>;
+  let confirmRemoveProvider!: (name: string | null) => Promise<void>;
 
   function Harness() {
     const removeBusyRef = useRef(false);
@@ -96,18 +102,20 @@ async function mountCrud(overrides: {
       workspaceSelected: null,
       setWorkspaceSelected: () => {},
       setRemoveConfirmName: () => {},
-      notify: () => {},
+      notify: overrides.notify ?? (() => {}),
       fetchConfig: overrides.fetchConfig ?? (async () => {}),
       fetchOauth: async () => {},
       fetchProviderQuotas: overrides.fetchProviderQuotas ?? (async () => {}),
       refreshCodexAccount: overrides.refreshCodexAccount,
+      onProviderRemoved: overrides.onProviderRemoved,
     });
-    const [ready, setReady] = useState(false);
-    useEffect(() => {
+    // Publish after commit, before the test body reads the callbacks. A layout effect
+    // keeps that order without a second render to flip a ready flag.
+    useLayoutEffect(() => {
       updateProvider = crud.updateProvider;
-      setReady(true);
-    }, [crud.updateProvider]);
-    return ready ? <div data-ready="1" /> : null;
+      confirmRemoveProvider = crud.confirmRemoveProvider;
+    }, [crud.updateProvider, crud.confirmRemoveProvider]);
+    return <div data-ready="1" />;
   }
 
   await act(async () => {
@@ -115,7 +123,7 @@ async function mountCrud(overrides: {
     root.render(<Harness />);
   });
   expect(container.querySelector("[data-ready]")).toBeTruthy();
-  return { root, updateProvider };
+  return { root, updateProvider, confirmRemoveProvider };
 }
 
 test("a codexAccountMode patch sends the standalone body and awaits quota + Codex refreshes", async () => {
@@ -183,5 +191,44 @@ test("non-mode patches do not refresh quotas or the Codex controller", async () 
   expect(fetchProviderQuotas).not.toHaveBeenCalled();
   expect(refreshCodexAccount).not.toHaveBeenCalled();
 
+  await act(async () => { root.unmount(); });
+});
+
+test("a confirmed provider removal drops that target's parked draft", async () => {
+  const removed: string[] = [];
+  globalThis.fetch = (async () => Response.json({ defaultProvider: "other" })) as typeof fetch;
+  const { root, confirmRemoveProvider } = await mountCrud({ onProviderRemoved: name => removed.push(name) });
+
+  await act(async () => { await confirmRemoveProvider("shared-provider"); });
+
+  expect(removed).toEqual(["shared-provider"]);
+  await act(async () => { root.unmount(); });
+});
+
+test("a failed provider removal keeps the parked draft", async () => {
+  const removed: string[] = [];
+  globalThis.fetch = (async () => Response.json({ error: "refused" }, { status: 409 })) as typeof fetch;
+  const { root, confirmRemoveProvider } = await mountCrud({ onProviderRemoved: name => removed.push(name) });
+
+  await act(async () => { await confirmRemoveProvider("shared-provider"); });
+
+  expect(removed).toEqual([]);
+  await act(async () => { root.unmount(); });
+});
+
+test("a removal completion after a target change does not toast on the new target", async () => {
+  const notices: Array<{ msg: string; ok: boolean }> = [];
+  let finish!: (response: Response) => void;
+  globalThis.fetch = (async () => await new Promise<Response>(resolve => { finish = resolve; })) as typeof fetch;
+  const { root, confirmRemoveProvider } = await mountCrud({ notify: (msg, ok) => notices.push({ msg, ok }) });
+
+  const pending = confirmRemoveProvider("shared-provider");
+  configureApiTargets(standaloneApiTargets("http://localhost:10101"));
+  await act(async () => {
+    finish(Response.json({ defaultProvider: "other" }));
+    await pending;
+  });
+
+  expect(notices).toEqual([]);
   await act(async () => { root.unmount(); });
 });

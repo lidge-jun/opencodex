@@ -150,6 +150,19 @@ döngüde otomatik enjeksiyon kaldırılmışsa manuel olarak birleştirebilece�
 kök anahtarları içerir; geri döngü olmayanda ise özel sağlayıcı formunu içerir.
 Harici sağlayıcı modu bu profile dokunmaz.
 
+Bu dosya yeniden oluşturulurken OpenCodex'in yönetmediği düz kök anahtarlar
+korunur; böylece `stream_idle_timeout_ms` veya `stream_max_retries` gibi
+eklediğiniz bir ayar sonraki enjeksiyondan sonra da kalır. Korunan her atama,
+birden çok satıra yayılan değerler ve 64 bit tamsayılar dahil yazıldığı gibi
+kopyalanır ve ilk tablonun önüne yerleştirilir. Tablo içindeki anahtarlar ve
+`a.b = 1` gibi noktalı kök anahtarlar korunmaz. Çakışmada her zaman OpenCodex
+kazanır: sahip olduğu kök anahtarlar (`model_provider`, `model_catalog_json`,
+`openai_base_url`) kullanılan yönlendirme moduna göre yeniden yazılır ve
+profilin yazdığı bir tabloyla aynı adı taşıyan kök anahtar (profil `[features]`
+yazarken satır içi `features = { ... }` gibi) atılır. Enjeksiyon yazma kilidini
+beklerken dosya değişirse enjeksiyon yeniden denenebilir bir hatayla durur ve
+düzenlemeniz yerinde kalır.
+
 :::caution
 `openai_base_url`, `model_provider` ve `model_catalog_json` gibi kök anahtarlar
 ilk `[tablo]` başlığından önce **bulunmalıdır**. Enjektör bu yerleşimi garanti
@@ -203,6 +216,8 @@ geçişli yüzeylerini yerel Codex ile hizalı tutar. opencodex ayrıca WebSocke
 olduğunda `supports_websockets = true` bildirir; geri döngüde Codex'in yerleşik
 sağlayıcısı önce WebSocket'i deneyebilir ve devre dışı bırakılmış bir proxy
 `426` döndürür, böylece Codex HTTP/SSE'ye geri döner.
+
+`v2-plaintext` modu veya `plaintextV2AgentMessages` bayrağı etkin olduğunda yerel yeniden oynatma, aynı kabul edilmiş OpenCodex çağıranını ve isteğin kendi boş olmayan `thread-id` değerini gerektirir. Üst iş parçacığı, geri döngü adresi, yukarı akış kimlik bilgisi veya yer tutucu anahtar bu kimlik değildir. Kabul edilmiş çağıran kimliği olmayan istemcilerin ve kendi iş parçacığı olmayan isteklerin `previous_response_id` olmadan tüm konuşmayı yeniden göndermesi gerekir. Varsayılan geri döngü Codex ve DSH yapılandırmaları bu çağıran kimliğini oluşturmaz. Ayarlardan biri etkinken saklanan durum, ayar devre dışı bırakıldıktan sonra da bağlı kalır. Varsayılan `v1` modunda bağlı olmayan durum, varsayılan geri döngü çağıranları dahil mevcut üst iş parçacığı kapsamındaki devam davranışını korur. Bu, doğrudan yukarı akış hizmetinin sahip olduğu Responses kimliklerinden ayrıdır.
 
 ## İş parçacığı kimliği ve geçmişi
 

@@ -4,7 +4,7 @@ import { retainUpstreamMessagesRequestId, upstreamMessagesRequestIdHeaders } fro
 
 const ocxId = `ocx-${"1".repeat(32)}`;
 
-test("Messages uses the ledger id and preserves the upstream id and existing exposure", async () => {
+test("Messages uses the ledger id and omits the upstream id and keeps existing exposure", async () => {
   const original = new Response(new ReadableStream<Uint8Array>({
     start(controller) {
       controller.enqueue(new TextEncoder().encode("fixture"));
@@ -14,7 +14,7 @@ test("Messages uses the ledger id and preserves the upstream id and existing exp
     "request-id": "req_fixture",
     "x-opencodex-request-id": "caller-controlled",
     "x-opencodex-upstream-request-id": "caller-controlled",
-    "Access-Control-Expose-Headers": "X-Existing, ReQuEsT-Id",
+    "Access-Control-Expose-Headers": "X-Existing, ReQuEsT-Id, X-OpenCodex-Upstream-Request-Id",
     "retry-after": "3",
   } });
   const body = original.body;
@@ -24,13 +24,13 @@ test("Messages uses the ledger id and preserves the upstream id and existing exp
   expect(response.statusText).toBe("Fixture Refusal");
   expect(response.headers.get("request-id")).toBe(ocxId);
   expect(response.headers.get("x-opencodex-request-id")).toBe(ocxId);
-  expect(response.headers.get("x-opencodex-upstream-request-id")).toBe("req_fixture");
+  expect(response.headers.get("x-opencodex-upstream-request-id")).toBeNull();
   expect(response.headers.get("retry-after")).toBe("3");
   const exposed = response.headers.get("Access-Control-Expose-Headers")!.toLowerCase().split(",").map(value => value.trim());
   expect(exposed).toContain("x-existing");
   expect(exposed.filter(value => value === "request-id")).toHaveLength(1);
   expect(exposed).toContain("x-opencodex-request-id");
-  expect(exposed).toContain("x-opencodex-upstream-request-id");
+  expect(exposed).not.toContain("x-opencodex-upstream-request-id");
   expect(await response.text()).toBe("fixture");
 });
 
@@ -43,7 +43,7 @@ test("Responses keeps its existing request-id semantics", () => {
 
 test("upstream metadata is bounded, allowlisted and never invented", () => {
   expect(upstreamMessagesRequestIdHeaders(new Headers({ "request-id": "req_fixture", "set-cookie": "fixture" })))
-    .toEqual({ "request-id": "req_fixture" });
+    .toEqual({});
   for (const value of ["", "account_fixture", "req_", `req_${"x".repeat(129)}`, "req_has space"]) {
     expect(upstreamMessagesRequestIdHeaders(new Headers({ "request-id": value }))).toEqual({});
     const response = withMessagesRequestLogId(new Response(null, { headers: {

@@ -1,14 +1,28 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 import { formatErrorResponse } from "../../src/bridge";
+import { isProxyError } from "../../src/lib/client-error-body";
+import { finalizeAccountLease } from "../../src/server/responses/core-lifetime";
+import { MandatoryToolChoiceUnavailableError, PolicyCandidateUnavailableError, policyCandidateRefusalResponse } from "../../src/server/responses/policy-request-scope";
 import { RequestPacingQueueOverloadError } from "../../src/providers/request-pacing";
 import { fetchWithTransientRetry, isNonReplayableResponse, markResponseNonReplayable } from "../../src/lib/upstream-retry";
 import { shouldRetryCodexPoolAccountQuota } from "../../src/server/responses/core-codex-account";
 import type { OcxConfig } from "../../src/types";
-import { beginRequestAttempt, type RequestLogContext } from "../../src/server/request-log";
+import { beginRequestAttempt, noteAttemptSend, type RequestLogContext } from "../../src/server/request-log";
 import type { RouteDecisionTraceV1 } from "../../src/routing/trace";
+import { clearFallbackEventsForTests, recentFallbackEvents } from "../../src/routing/fallback-policy";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { parseSyntheticRowId } from "../../src/server/fast-row";
+import { boundEntryIdForLane, clearProviderCacheAffinityForTests, recordProviderCacheAffinity } from "../../src/providers/cache-affinity";
+import { finalizeProviderCacheAffinity } from "../../src/server/request-log-cache-affinity";
+import { currentCacheAffinityIdentity } from "../../src/providers/cache-affinity-identity";
+import { routedProviderConfig } from "../../src/providers/routed-config";
+import { stampApiKeyAccountLabel } from "../../src/providers/label";
+import { saveConfig } from "../../src/config";
 import {
   handleResponsesWithPolicyFallback,
   rankPolicyFallbackCandidates,
@@ -61,6 +75,218 @@ function seedAttempt(logCtx: RequestLogContext, provider: string, model: string)
 }
 
 describe("policy candidate fallback", () => {
+  let home: string;
+  let previousHome: string | undefined;
+  beforeEach(() => { previousHome = process.env.OPENCODEX_HOME; home = mkdtempSync(join(tmpdir(), "ocx-policy-fallback-")); process.env.OPENCODEX_HOME = home; });
+  afterEach(() => { if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome; removeTreeWithRetry(home); });
+  test.each([401, 402, 429, "local"] as const)("synthetic failure attribution across candidates (%s)", async outcome => {
+    clearProviderCacheAffinityForTests();
+    const lane = "policy-terminal-source";
+    const providerName = outcome === "local" ? "provider-a" : "provider-b";
+    const config = fixtureConfig();
+    config.providers[providerName]!.apiKeyPool = [{ id: "a", key: "fixture-key" }, { id: "b", key: "other-key" }];
+    saveConfig(config);
+    recordProviderCacheAffinity({ lane, providerName, entryId: "a", identity: currentCacheAffinityIdentity(providerName, config.providers[providerName], "a"), model: outcome === "local" ? "model-a" : "model-b", cacheWrite: 4000 });
+    const log: RequestLogContext = { model: "model-a", provider: "provider-a", affinityLane: lane };
+    const trace = policyTrace();
+    trace.candidates[2]!.eligible = false;
+    let calls = 0;
+    const response = await handleResponsesWithPolicyFallback(request(), config, log, {}, {
+      runCore: async (req, _config, context, options) => {
+        options.onRequestBodyParsed?.(await req.json());
+        context.routeDecision = trace;
+        if (++calls === 1) {
+          context.terminalSource = "synthetic";
+          context.affinityProviderName = "provider-a";
+          context.affinityKeyEntryId = "a";
+          context.cacheAffinityApplicable = true;
+          if (outcome === "local") stampApiKeyAccountLabel(context, "provider-a", routedProviderConfig("provider-a", config.providers["provider-a"]!));
+          return Response.json({ error: { message: "local failure" } }, { status: outcome === "local" ? 429 : 503 });
+        }
+        if (outcome === "local") return policyCandidateRefusalResponse(new PolicyCandidateUnavailableError())!;
+        seedAttempt(context, "provider-b", "model-b");
+        noteAttemptSend(context.activeAttempt, undefined);
+        context.affinityProviderName = "provider-b";
+        context.affinityKeyEntryId = "a";
+        context.cacheAffinityApplicable = true;
+        stampApiKeyAccountLabel(context, "provider-b", routedProviderConfig("provider-b", config.providers["provider-b"]!));
+        return Response.json({ error: { message: "upstream refusal" } }, { status: outcome });
+      },
+    });
+    expect(calls).toBe(2);
+    expect(response.status).toBe(outcome === "local" ? 429 : outcome);
+    expect(log.terminalSource).toBe(outcome === "local" ? "synthetic" : undefined);
+    finalizeProviderCacheAffinity(log, response.status, undefined);
+    expect(boundEntryIdForLane(lane)).toBe(outcome === "local" ? "a" : undefined);
+    clearProviderCacheAffinityForTests();
+  });
+  test.each([false, true])("upstream failure body settles when the next policy hop is refused=%s", async denied => {
+    const config = fixtureConfig();
+    if (denied) config.fallback = { routes: { "policy/daily": { provider: false } } };
+    let calls = 0, released = 0;
+    const original = finalizeAccountLease(formatErrorResponse(503, "upstream_error", "synthetic failure"), () => { released++; });
+    const success = Response.json({ status: "completed" });
+    const response = await handleResponsesWithPolicyFallback(request(), config, {}, {}, {
+      runCore: async (req, _config, context, options) => {
+        calls++;
+        options.onRequestBodyParsed?.(await req.json());
+        context.routeDecision = policyTrace();
+        return calls === 1 ? original : success;
+      },
+    });
+    try {
+      expect(calls).toBe(denied ? 1 : 2);
+      expect(response.status).toBe(denied ? 503 : 200);
+      expect(original.bodyUsed).toBe(true);
+      expect(released).toBe(1);
+      expect(response.bodyUsed).toBe(false);
+      const body = await response.json();
+      if (denied) expect(body.error.code).toBe("fallback_refused");
+      else expect(body.status).toBe("completed");
+      expect(released).toBe(1);
+    } finally { await original.body?.cancel().catch(() => {}); await response.body?.cancel().catch(() => {}); await success.body?.cancel().catch(() => {}); }
+  });
+  test.each([
+    [["tool", "tool", "tool"], 400],
+    [["tool", "generic", "tool"], 409],
+    [["generic", "tool", "tool"], 409],
+    [["tool", "upstream", "tool"], 500],
+    [["upstream", "tool", "tool"], 500],
+  ] as const)("exhaustion preserves mixed failures and settles discarded local bodies (%s)", async (kinds, status) => {
+    let calls = 0;
+    const released = [0, 0, 0], bodies: Response[] = [];
+    const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), {}, {}, {
+      runCore: async (req, _config, context, options) => {
+        const index = calls++, kind = kinds[index];
+        options.onRequestBodyParsed?.(await req.json());
+        context.routeDecision = policyTrace();
+        const source = kind === "upstream" ? formatErrorResponse(500, "upstream_error", "synthetic failure")
+          : policyCandidateRefusalResponse(kind === "tool" ? new MandatoryToolChoiceUnavailableError() : new PolicyCandidateUnavailableError())!;
+        const body = finalizeAccountLease(source, () => { released[index]++; });
+        bodies.push(body);
+        return body;
+      },
+    });
+    expect(calls).toBe(3);
+    expect(response.status).toBe(status);
+    const text = await response.text();
+    expect(text.includes("mandatory tool_choice")).toBe(status === 400);
+    if (status === 400) expect(isProxyError(response)).toBe(true);
+    expect(released).toEqual([1, 1, 1]);
+    expect(bodies.every(body => body.bodyUsed)).toBe(true);
+  });
+  test("a refusal minted after a physical send is a taken hop, not a skip", async () => {
+    // A re-negotiated destination can refuse only after its send — a Copilot credential or
+    // account recovery settles the wire mid-dispatch. That refusal is not a local skip: the
+    // hop it rode commits, and the sent destination becomes the next hop's source, which is
+    // where a provider-scoped fallback refusal keys on.
+    const trace = policyTrace();
+    const config = {
+      ...fixtureConfig(),
+      fallback: { providers: { "provider-b": { provider: false } } },
+    } as OcxConfig;
+    const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
+    const seenModels: string[] = [];
+    clearFallbackEventsForTests();
+    const response = await handleResponsesWithPolicyFallback(request(), config, logCtx, {}, {
+      runCore: async (req, _config, childLog, options) => {
+        const body = await req.json() as { model: string };
+        options.onRequestBodyParsed?.(body);
+        seenModels.push(body.model);
+        childLog.routeDecision = trace;
+        if (seenModels.length === 1) {
+          seedAttempt(childLog, "provider-a", "model-a");
+          return Response.json({ error: { type: "rate_limit_error" } }, { status: 429 });
+        }
+        seedAttempt(childLog, "provider-b", "model-b");
+        noteAttemptSend(childLog.activeAttempt, undefined);
+        return policyCandidateRefusalResponse(new MandatoryToolChoiceUnavailableError())!;
+      },
+    });
+
+    expect(response.status).toBe(409);
+    expect(seenModels).toEqual(["policy/daily", "provider-b/model-b"]);
+    const body = await response.json() as { error: { code: string; fallback?: Record<string, unknown> } };
+    expect(body.error.code).toBe("fallback_refused");
+    expect(body.error.fallback).toMatchObject({
+      kind: "provider", scope: "provider", scopeKey: "provider-b",
+      from: "provider-b/model-b", to: "provider-c/model-c",
+    });
+    expect(recentFallbackEvents().map(event => ({ from: event.from, to: event.to, outcome: event.outcome }))).toEqual([
+      { from: "provider-a/model-a", to: "provider-b/model-b", outcome: "taken" },
+      { from: "provider-b/model-b", to: "provider-c/model-c", outcome: "refused" },
+    ]);
+  });
+  test("a refusal minted before any send still skips without committing its hop", async () => {
+    // Behavior pin for the seam's other side: a candidate refused before its first physical
+    // send remains a local skip. Its hop is never committed, the prior failure is retained,
+    // and the next hop is still evaluated from the candidate that actually failed before it.
+    const trace = policyTrace();
+    const config = {
+      ...fixtureConfig(),
+      fallback: { providers: { "provider-b": { provider: false } } },
+    } as OcxConfig;
+    const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
+    const seenModels: string[] = [];
+    clearFallbackEventsForTests();
+    const response = await handleResponsesWithPolicyFallback(request(), config, logCtx, {}, {
+      runCore: async (req, _config, childLog, options) => {
+        const body = await req.json() as { model: string };
+        options.onRequestBodyParsed?.(body);
+        seenModels.push(body.model);
+        childLog.routeDecision = trace;
+        if (seenModels.length === 1) {
+          seedAttempt(childLog, "provider-a", "model-a");
+          return Response.json({ error: { type: "rate_limit_error" } }, { status: 429 });
+        }
+        if (seenModels.length === 2) {
+          seedAttempt(childLog, "provider-b", "model-b");
+          return policyCandidateRefusalResponse(new MandatoryToolChoiceUnavailableError())!;
+        }
+        return Response.json({ status: "completed" });
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(seenModels).toEqual(["policy/daily", "provider-b/model-b", "provider-c/model-c"]);
+    expect(recentFallbackEvents().map(event => ({ from: event.from, to: event.to, outcome: event.outcome }))).toEqual([
+      { from: "provider-a/model-a", to: "provider-c/model-c", outcome: "taken" },
+    ]);
+  });
+  test.each([400, 422])("HTTP %s reflected free-tier prose does not authorize a policy fallback", async status => {
+    let calls = 0;
+    const failure = formatErrorResponse(status, "invalid_request_error", "Invalid value: free tier allows a single request", {
+      classified: true, upstreamCode: null,
+    });
+    const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), {} as RequestLogContext, {}, {
+      runCore: async (req, _config, context, options) => {
+        calls++;
+        options.onRequestBodyParsed?.(await req.json());
+        context.routeDecision = policyTrace();
+        return calls === 1 ? failure : Response.json({ status: "completed" });
+      },
+    });
+    expect(calls).toBe(1);
+    expect(response).toBe(failure);
+  });
+
+  test("reflected quota prose does not authorize a policy fallback", async () => {
+    let calls = 0;
+    const failure = formatErrorResponse(400, "invalid_request_error", "Invalid value: weekly quota exceeded", {
+      classified: true, upstreamCode: null,
+    });
+    const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), {} as RequestLogContext, {}, {
+      runCore: async (req, _config, context, options) => {
+        calls++;
+        options.onRequestBodyParsed?.(await req.json());
+        context.routeDecision = policyTrace();
+        return calls === 1 ? failure : Response.json({ status: "completed" });
+      },
+    });
+    expect(calls).toBe(1);
+    expect(response).toBe(failure);
+  });
+
   for (const nested of [false, true]) {
     test.each(["cyber_policy", "upstream_no_response", "upstream_reset_replay_refused"])(
       `policy preserves explicit model code over diagnostic %s (nested=${nested})`, async type => {
@@ -101,7 +327,13 @@ describe("policy candidate fallback", () => {
     },
   );
 
-  for (const hardCode of ["upstream_no_response", "origin_rejected", "origin-rejected", " ORIGIN-REJECTED ", "cyber_policy"]) {
+  for (const hardCode of [
+    "upstream_no_response",
+    "origin_rejected",
+    "origin-rejected",
+    " ORIGIN-REJECTED ",
+    "cyber_policy",
+  ]) {
     test.each(["root", "nested"])(`policy preserves ${hardCode} at %s beside a competing code`, async location => {
       let calls = 0;
       const refusal = "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.";
@@ -215,6 +447,39 @@ describe("policy candidate fallback", () => {
       { authorization, chatgptAccountId: "sidecar-account" },
     ]);
     expect(snapshots[1]).toBe(snapshots[0]);
+  });
+  test("a policy hop does not persist the previous candidate's cache-affinity outcome", async () => {
+    const log: RequestLogContext = { model: "", provider: "" };
+    let calls = 0;
+    const response = await handleResponsesWithPolicyFallback(
+      request(),
+      fixtureConfig(),
+      log,
+      {},
+      {
+        runCore: async (req, _config, context, options) => {
+          options.onRequestBodyParsed?.(await req.json());
+          context.routeDecision = policyTrace();
+          if (++calls === 1) {
+            context.cacheAffinity = "kept";
+            context.cacheAffinityReason = "cache";
+            context.affinityKeptEntryId = "old-key";
+            context.cacheAffinityApplicable = true;
+            context.affinityKeyEntryId = "old-key";
+            return Response.json({ error: { message: "retry next candidate" } }, { status: 503 });
+          }
+          context.provider = "provider-b";
+          context.cacheAffinityApplicable = false;
+          return Response.json({ status: "completed" });
+        },
+      },
+    );
+    expect(response.status).toBe(200);
+    expect(calls).toBe(2);
+    expect(log.cacheAffinity).toBeUndefined();
+    expect(log.cacheAffinityReason).toBeUndefined();
+    expect(log.affinityKeptEntryId).toBeUndefined();
+    expect(log.affinityKeyEntryId).toBeUndefined();
   });
 
   test("ranks only eligible untried candidates by score and stable original order", () => {
@@ -704,6 +969,160 @@ describe("policy candidate fallback", () => {
     });
     expect(response.status).toBe(200);
     expect(await response.text()).toContain("hello");
+    expect(calls).toBe(1);
+  });
+
+  test("a shadow-intercepted policy route retries the next candidate with the original body", async () => {
+    // The intercept rewrites the model AFTER the body-parsed hook, so the snapshot gate cannot
+    // key on the destination. Without the snapshot this request's captured policy route loses
+    // traversal entirely and the caller receives the internal 409 instead of the next candidate.
+    const trace = policyTrace();
+    const config = {
+      ...fixtureConfig(),
+      shadowCallIntercept: { enabled: true, model: "policy/daily", sourceModels: ["shadow-helper"] },
+    } as OcxConfig;
+    const logCtx = { requestedModel: "shadow-helper-x", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
+    const seenModels: string[] = [];
+    const seenIsolated: boolean[] = [];
+    const seenCandidates: Array<string | undefined> = [];
+    let retriedBody: Record<string, unknown> | undefined;
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "shadow-helper-x", input: "hello", stream: false,
+        tool_choice: { type: "function", name: "get_value" },
+        tools: [{ type: "function", name: "get_value" }],
+      }),
+    });
+    const response = await handleResponsesWithPolicyFallback(req, config, logCtx, {}, {
+      runCore: async (attempt, _config, ctx, options) => {
+        const body = await attempt.json() as Record<string, unknown> & { model: string };
+        options.onRequestBodyParsed?.(body);
+        seenModels.push(body.model);
+        seenIsolated.push(options.shadowCallIntercepted === true);
+        seenCandidates.push(options.policyFallbackCandidate === undefined
+          ? undefined : `${options.policyFallbackCandidate.provider}/${options.policyFallbackCandidate.model}`);
+        ctx.routeDecision = trace;
+        if (seenModels.length === 1) {
+          // What preparation records when interception rewrites to a policy target: the shared
+          // log carries the configured source prefix, the scope carries the captured decision.
+          ctx.shadowCallRewrittenFrom = "shadow-helper";
+          seedAttempt(ctx, "provider-a", "model-a");
+          // Emulate preparation's in-place normalization on the parsed body: the retry must
+          // replay the immutable snapshot, never these mutations.
+          body.model = "policy/daily";
+          body.input = "mutated by preparation";
+          (body.tools as unknown[]).push({ type: "function", name: "injected_tool" });
+          return policyCandidateRefusalResponse(new MandatoryToolChoiceUnavailableError())!;
+        }
+        retriedBody = body;
+        seedAttempt(ctx, "provider-b", "model-b");
+        return Response.json({ status: "completed" });
+      },
+    });
+    expect(response.status).toBe(200);
+    expect(seenModels).toEqual(["shadow-helper-x", "provider-b/model-b"]);
+    expect(seenCandidates).toEqual([undefined, "provider-b/model-b"]);
+    // The replay is the immutable caller body — original tools and tool_choice, not the
+    // post-interception mutations the first attempt's preparation made in place.
+    expect(retriedBody).toMatchObject({
+      model: "provider-b/model-b",
+      input: "hello",
+      tool_choice: { type: "function", name: "get_value" },
+    });
+    expect(retriedBody!.tools).toEqual([{ type: "function", name: "get_value" }]);
+    // The retried candidate keeps helper isolation and the suppressed selector label through
+    // the existing option; the first-party attempt left it unset.
+    expect(seenIsolated).toEqual([false, true]);
+  });
+
+  test("a shadow-intercepted policy route exhausts candidates to the client-facing 400", async () => {
+    const trace = policyTrace();
+    const config = {
+      ...fixtureConfig(),
+      shadowCallIntercept: { enabled: true, model: "policy/daily", sourceModels: ["shadow-helper"] },
+    } as OcxConfig;
+    const logCtx = { requestedModel: "shadow-helper-x", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
+    const seenModels: string[] = [];
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "shadow-helper-x", input: "hello", stream: false }),
+    });
+    const response = await handleResponsesWithPolicyFallback(req, config, logCtx, {}, {
+      runCore: async (attempt, _config, ctx, options) => {
+        const body = await attempt.json() as { model: string };
+        options.onRequestBodyParsed?.(body);
+        seenModels.push(body.model);
+        ctx.routeDecision = trace;
+        ctx.shadowCallRewrittenFrom = "shadow-helper";
+        seedAttempt(ctx, "provider", body.model);
+        return policyCandidateRefusalResponse(new MandatoryToolChoiceUnavailableError())!;
+      },
+    });
+    expect(seenModels).toEqual(["shadow-helper-x", "provider-b/model-b", "provider-c/model-c"]);
+    expect(response.status).toBe(400);
+    expect((await response.text()).includes("mandatory tool_choice")).toBe(true);
+    expect(isProxyError(response)).toBe(true);
+  });
+
+  test("a shadow-intercepted policy route keeps declared failover for upstream failures", async () => {
+    // The missing snapshot suppressed every retry on an intercepted policy route, not only the
+    // tool-choice refusal: an operator-approved failover target must still take the next
+    // eligible candidate after an ordinary retryable failure.
+    const trace = policyTrace();
+    const config = {
+      ...fixtureConfig(),
+      shadowCallIntercept: { enabled: true, model: "policy/daily", sourceModels: ["shadow-helper"] },
+    } as OcxConfig;
+    const logCtx = { requestedModel: "shadow-helper-x", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
+    const seenModels: string[] = [];
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "shadow-helper-x", input: "hello", stream: false }),
+    });
+    const response = await handleResponsesWithPolicyFallback(req, config, logCtx, {}, {
+      runCore: async (attempt, _config, ctx, options) => {
+        const body = await attempt.json() as { model: string };
+        options.onRequestBodyParsed?.(body);
+        seenModels.push(body.model);
+        ctx.routeDecision = trace;
+        ctx.shadowCallRewrittenFrom = "shadow-helper";
+        seedAttempt(ctx, "provider", body.model);
+        return seenModels.length === 1
+          ? Response.json({ error: { type: "rate_limit_error" } }, { status: 429 })
+          : Response.json({ status: "completed" });
+      },
+    });
+    expect(response.status).toBe(200);
+    expect(seenModels).toEqual(["shadow-helper-x", "provider-b/model-b"]);
+  });
+
+  test("a shadow-source request without a policy decision takes no candidate retry", async () => {
+    // The widened snapshot only arms traversal; a source request that was not intercepted into
+    // a policy route still returns its first response untouched.
+    const config = {
+      ...fixtureConfig(),
+      shadowCallIntercept: { enabled: true, model: "provider-a/model-a", sourceModels: ["shadow-helper"] },
+    } as OcxConfig;
+    const logCtx = { requestedModel: "shadow-helper-x", attempts: [] } as unknown as RequestLogContext;
+    let calls = 0;
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "shadow-helper-x", input: "hello", stream: false }),
+    });
+    const failure = Response.json({ error: { type: "rate_limit_error" } }, { status: 429 });
+    const response = await handleResponsesWithPolicyFallback(req, config, logCtx, {}, {
+      runCore: async (attempt, _config, ctx, options) => {
+        calls += 1;
+        options.onRequestBodyParsed?.(await attempt.json());
+        return failure;
+      },
+    });
+    expect(response).toBe(failure);
     expect(calls).toBe(1);
   });
 });

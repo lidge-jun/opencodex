@@ -59,6 +59,8 @@ describe("xAI Responses destination detection", () => {
   test.each([
     "https://api.x.ai/v1",
     "https://api.x.ai:443/v1",
+    "https://us.api.x.ai/v1",
+    "https://US.API.X.AI:443/v1",
     XAI_GROK_CLI_BASE_URL,
     "https://CLI-CHAT-PROXY.GROK.COM:443/v1",
   ])("accepts the exact xAI HTTPS destination %s", baseUrl => {
@@ -69,6 +71,9 @@ describe("xAI Responses destination detection", () => {
     "http://api.x.ai/v1",
     "https://api.x.ai:444/v1",
     "https://api.x.ai.evil.test/v1",
+    "http://us.api.x.ai/v1",
+    "https://us.api.x.ai:444/v1",
+    "https://us.api.x.ai.evil.test/v1",
     "https://cli-chat-proxy.grok.com.evil.test/v1",
     "not a URL",
   ])("rejects a non-xAI or malformed destination %s", baseUrl => {

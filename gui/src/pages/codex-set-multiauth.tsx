@@ -7,11 +7,15 @@ import MainAccountHardLockSetting from "../components/MainAccountHardLockSetting
 import { useCodexAccountPool } from "../hooks/useCodexAccountPool";
 import CodexAccountPickerSetting from "../components/CodexAccountPickerSetting";
 import { codexAccountModeState, type CodexAccountModeState } from "../codex-multi-state";
-import { navigateHash } from "../hash-routing";
+import { openProviderAccountMode, openProviderSettings } from "../protocol-deep-links";
+import { IconChevron } from "../icons";
 import { ensureOpenAiProvider, openAiAccountProviderState, OpenAiEnableError } from "../provider-payload";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { startVisibilityPoll } from "../visibility-poll";
 import { createBoundedFetch } from "../bounded-fetch";
+import { HelpButton, HelpRegion, InlineBanner } from "../components/v2-accounts/surface";
+import { useHelp } from "../components/v2-accounts/use-help";
+import { useLegacyTargetPreflightNotice } from "./use-legacy-target-preflight-notice";
 
 export type OpenAiAccountBannerState = CodexAccountModeState | "invalid" | null;
 
@@ -25,42 +29,61 @@ export function OpenAiAccountModeBanner({
   onEnable: () => void;
 }) {
   const t = useT();
+  const help = useHelp();
   // Nothing is known yet: an empty titled card is a blank slab that later jumps when
   // /api/config arrives. Render nothing and let the pool section own the space.
   if (state === null) return null;
+  const settled = state === "pool" || state === "direct";
+  const modeLabel = state === "pool" ? t("codexAuth.accountModePool") : t("codexAuth.accountModeDirect");
   return (
-    <div className="panel openai-account-mode-banner" style={{ marginBottom: 16 }}>
-      <div className="row">
-        <strong>{t("codexAuth.accountModeTitle")}</strong>
-        {state === "pool" ? (
-          <span className="badge badge-accent openai-account-mode-banner__badge-slot">{t("codexAuth.accountModePool")}</span>
-        ) : state === "direct" ? (
-          <span className="badge badge-green openai-account-mode-banner__badge-slot">{t("codexAuth.accountModeDirect")}</span>
-        ) : null}
-      </div>
-      {state === "pool" && (
-        <p className="card-sub openai-account-mode-banner__desc">{t("codexAuth.accountModePoolDesc")}</p>
-      )}
-      {state === "direct" && (
-        <p className="card-sub openai-account-mode-banner__desc">
-          {t("codexAuth.accountModeDirectDesc")}{" "}
-          <button type="button" className="link-btn" onClick={() => navigateHash("providers")}>
-            {t("codexAuth.openProviders")}
+    // One quiet line when the mode is settled: the mode is the state, its explanation sits
+    // behind the "?". A missing or disabled provider is a problem, so it stays spelled out.
+    <div className={`openai-account-mode-banner acc-mode flex flex-col gap-2 rounded-[12px] px-4 py-3 ring-1 ring-line ${settled ? "bg-transparent" : "bg-surface"}`}>
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5">
+        <span className="text-[13px] font-medium text-fg-muted">{t("codexAuth.accountModeTitle")}</span>
+        {settled && (
+          // The mode is the state; following it opens the one control that changes it, in
+          // Providers -> OpenAI. Changing the mode stays an explicit choice there (#8501).
+          <button
+            type="button"
+            className="badge badge-muted badge-clickable openai-account-mode-banner__badge-slot"
+            aria-label={`${modeLabel} — ${t("codexAuth.changeAccountMode")}`}
+            title={t("codexAuth.changeAccountMode")}
+            onClick={() => openProviderAccountMode("openai")}
+          >
+            {modeLabel}
+            <IconChevron width={12} height={12} aria-hidden="true" />
           </button>
-        </p>
-      )}
-      {(state === "absent" || state === "disabled") && (
-        <div className="row" style={{ alignItems: "center", marginTop: 8 }}>
-          <p className="card-sub" style={{ flex: 1, margin: 0 }}>{t("codexAuth.openaiUnavailableDesc")}</p>
-          <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={onEnable}>
+        )}
+        {settled && (
+          <HelpButton open={help.open} controls={help.id} name={t("codexAuth.accountModeTitle")} onToggle={help.toggle} />
+        )}
+        {(state === "absent" || state === "disabled") && (
+          <button type="button" className="btn btn-primary btn-sm ml-auto" disabled={busy} onClick={onEnable}>
             {busy ? t("codexAuth.enablingOpenai") : t("codexAuth.enableOpenai")}
           </button>
-        </div>
+        )}
+      </div>
+      {settled && (
+        <HelpRegion id={help.id} open={help.open}>
+          {state === "pool" && t("codexAuth.accountModePoolDesc")}
+          {state === "direct" && (
+            <>
+              {t("codexAuth.accountModeDirectDesc")}{" "}
+              <button type="button" className="link-btn" onClick={() => openProviderAccountMode("openai")}>
+                {t("codexAuth.changeAccountMode")}
+              </button>
+            </>
+          )}
+        </HelpRegion>
+      )}
+      {(state === "absent" || state === "disabled") && (
+        <p className="card-sub m-0 text-[13px] text-fg-muted">{t("codexAuth.openaiUnavailableDesc")}</p>
       )}
       {state === "invalid" && (
-        <p className="card-sub openai-account-mode-banner__desc">
+        <p className="card-sub openai-account-mode-banner__desc m-0 text-[13px] text-fg-muted">
           {t("codexAuth.openaiMissing")}{" "}
-          <button type="button" className="link-btn" onClick={() => navigateHash("providers")}>
+          <button type="button" className="link-btn" onClick={() => openProviderSettings("openai")}>
             {t("codexAuth.openProviders")}
           </button>
         </p>
@@ -106,14 +129,16 @@ type CachedMode = {
  * cache to gain nothing, and the backend namespace /api/codex-auth/* does not
  * move either (devlog 004 §C: a dozen test files bind to it).
  */
-export default function CodexSetMultiauth({ apiBase }: { apiBase: string }) {
+export default function CodexSetMultiauth({ apiBase, targetKey }: { apiBase: string; targetKey?: string }) {
   // The controller, not just the setting, owns proxy-specific state and callbacks.
-  return <CodexSetMultiauthForProxy key={apiBase} apiBase={apiBase} />;
+  // A relay keeps one apiBase across a re-pair, so the logical target is the frame key:
+  // keying by apiBase alone would keep A's banner and account mode under B.
+  return <CodexSetMultiauthForProxy key={targetKey ?? apiBase} apiBase={apiBase} targetKey={targetKey} />;
 }
 
-function CodexSetMultiauthForProxy({ apiBase }: { apiBase: string }) {
+function CodexSetMultiauthForProxy({ apiBase, targetKey }: { apiBase: string; targetKey?: string }) {
   const t = useT();
-  const poolController = useCodexAccountPool(apiBase);
+  const poolController = useCodexAccountPool(apiBase, true, targetKey);
   const { load: loadAccounts } = poolController;
   const ownerMountedRef = useRef(false);
   useLayoutEffect(() => {
@@ -124,7 +149,9 @@ function CodexSetMultiauthForProxy({ apiBase }: { apiBase: string }) {
   const onHardLockSaved = useCallback(() => ownerMountedRef.current
     ? loadAccounts(false)
     : Promise.resolve(false), [loadAccounts]);
-  const configCacheKey = `ocx.codex-auth.config.v1:${apiBase}`;
+  // The cached account mode belongs to the logical target, not to the relay base that
+  // served it: two hubs share one apiBase, and A's banner must not seed B.
+  const configCacheKey = `ocx.codex-auth.config.v1:${targetKey ?? apiBase}`;
   const cached = readSessionListCache<CachedMode>(configCacheKey);
   const [bannerState, setBannerState] = useState<OpenAiAccountBannerState>(() => cached?.bannerState ?? null);
   const [accountModeState, setAccountModeState] = useState<CodexAccountModeState | null>(
@@ -135,6 +162,9 @@ function CodexSetMultiauthForProxy({ apiBase }: { apiBase: string }) {
   const initialModeKeyRef = useRef<string | null>(null);
   const [enableBusy, setEnableBusy] = useState(false);
   const [enableError, setEnableError] = useState("");
+  // The pool's own mutations hit the same legacy relay preflight as Providers'.
+  const [legacyPreflightNotice, setLegacyPreflightNotice] = useState(false);
+  useLegacyTargetPreflightNotice(targetKey ?? apiBase, () => setLegacyPreflightNotice(true));
 
   const loadMode = useCallback(async () => {
     const bounded = createBoundedFetch(15_000);
@@ -203,13 +233,15 @@ function CodexSetMultiauthForProxy({ apiBase }: { apiBase: string }) {
       busy={enableBusy}
       onEnable={() => { void enableOpenAi(); }}
     />
-    {enableError && <div className="notice notice-err" role="alert">{enableError}</div>}
+    {legacyPreflightNotice && <InlineBanner tone="warn" role="status">{t("prov.legacyTargetPreflight")}</InlineBanner>}
+    {enableError && <InlineBanner tone="err" role="alert">{enableError}</InlineBanner>}
   </>;
 
   return (
     <>
       <CodexAccountPool
         apiBase={apiBase}
+        targetKey={targetKey}
         controller={poolController}
         hasMainHardLockSetting
         accountModeState={accountModeState}

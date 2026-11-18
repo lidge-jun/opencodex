@@ -7,7 +7,7 @@ import {
   type CodexExecBoundaryAsyncDeps,
 } from "../codex/exec-boundary";
 import {
-  beginCodexCliSelectionParentWrite,
+  beginCodexCliSelectionParentWriteAsync,
   CodexCliSelectionMutationBusyError,
 } from "../codex/cli-update-selection-gate";
 import { remoteWorkspaceThreadStartParams } from "./workspace-coordinator";
@@ -371,7 +371,7 @@ export class CodexRemoteWorkspaceRuntimeFactory implements RemoteWorkspaceRuntim
     // installer termination/readback; a new session must not appear inside that
     // window. Busy is the same explicit pre-spawn failure path as a spawn
     // throw, so the bridge and isolation are reclaimed identically.
-    const selectionWrite = beginCodexCliSelectionParentWrite();
+    const selectionWrite = await beginCodexCliSelectionParentWriteAsync();
     if (!selectionWrite.entered) {
       // Both teardown steps are attempted before the refusal leaves: the
       // ordered runner keeps a rejected bridge stop from skipping isolation

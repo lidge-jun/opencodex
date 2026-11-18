@@ -100,7 +100,11 @@ function detectFeatures(body: unknown, anthropicBeta?: string): Set<ClaudeFeatur
       if (Object.hasOwn(tool, "cache_control")) codes.add("cache_control");
       if (Object.hasOwn(tool, "input_examples")) codes.add("input_examples");
       if (tool.strict === true) codes.add("strict_tools");
-      if (tool.defer === true || tool.defer_loading === true) codes.add("deferred_tools");
+      // Valid function definitions lower to eager tools when the destination lacks deferral.
+      // Top-level deferral and declarations without a callable definition remain unsupported.
+      const eagerFunction = typeof tool.name === "string" && tool.name.length > 0 && isRec(tool.input_schema)
+        && (tool.type === undefined || tool.type === "function" || tool.type === "custom");
+      if (tool.defer === true || (tool.defer_loading === true && !eagerFunction)) codes.add("deferred_tools");
       if (nonDirectCaller(tool.allowed_callers)) codes.add("caller_mode");
       const type = tool.type;
       // Ordinary client function names do not convey hosted execution semantics.

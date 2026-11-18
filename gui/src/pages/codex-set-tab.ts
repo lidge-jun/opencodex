@@ -6,12 +6,12 @@ import type { KeyboardEvent } from "react";
  * what makes the tab survive a refresh, a bookmark, and back/forward — and it is
  * the pattern devlog 004 §A3 identifies as the one the ask actually names.
  */
-export type CodexSetTab = "multiauth" | "prompt" | "desktop";
-const tabs: readonly CodexSetTab[] = ["multiauth", "prompt", "desktop"];
+export type CodexSetTab = "multiauth" | "prompt" | "desktop" | "cli";
+const tabs: readonly CodexSetTab[] = ["multiauth", "prompt", "desktop", "cli"];
 
 export function readCodexSetTabFromHash(): CodexSetTab {
   const hash = window.location.hash.replace(/^#\/?/, "");
-  return hash === "codex-set/desktop" ? "desktop" : hash === "codex-set/prompt" ? "prompt" : "multiauth";
+  return hash === "codex-set/desktop" ? "desktop" : hash === "codex-set/prompt" ? "prompt" : hash === "codex-set/cli" ? "cli" : "multiauth";
 }
 
 export function selectCodexSetTab(next: CodexSetTab): void {

@@ -127,3 +127,18 @@ for (const stream of [false, true]) test(`inline-looking text grants no client t
   expect(text).toContain("undeclared_tool_call");
   expect(text).not.toContain('"type":"tool_use"');
 });
+
+for (const oauth of [false, true]) for (const stream of [false, true]) for (const upstreamStream of [false, true]) {
+  test(`native undeclared refusal uses proxy wording OAuth=${oauth} SSE=${stream} upstream SSE=${upstreamStream}`, async () => {
+    const name = "zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e";
+    const { response, text } = await send({ oauth, stream, upstreamStream, messages: [user, addition], name });
+    expect(response.status).toBe(stream && upstreamStream ? 200 : 502);
+    const payloads = stream && upstreamStream ? text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6))) : [JSON.parse(text)];
+    const failure = payloads.find(value => value.error);
+    expect(failure).toBeDefined();
+    expect(failure.error.type).toBe("api_error");
+    expect(failure.error.code).toBe("undeclared_tool_call");
+    expect(failure.error.message).toContain("undeclared client tool");
+    expect(text).not.toContain(name);
+  });
+}

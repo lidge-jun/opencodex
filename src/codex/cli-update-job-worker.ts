@@ -34,9 +34,7 @@ import { trustedNodeLauncherContext } from "../cli/launcher-context";
 import { spawnWorker } from "../lib/worker-embed";
 import { recoverClosedCodexCliUpdateWorker } from "./cli-update-worker-recovery";
 import {
-  CODEX_CLI_UPDATE_GATE_FREE,
-  CODEX_CLI_UPDATE_GATE_PARENT_WRITE,
-  CODEX_CLI_UPDATE_GATE_WORKER_COMMIT,
+  codexCliSelectionGateState,
   cancelCodexCliUpdateFence,
   codexCliUpdateSelectionGate,
   createCodexCliUpdateFence,
@@ -108,13 +106,8 @@ export interface CodexCliUpdateWorkerDiagnostics {
 }
 
 export function codexCliUpdateWorkerDiagnostics(): CodexCliUpdateWorkerDiagnostics {
-  const raw = Atomics.load(new Int32Array(codexCliUpdateSelectionGate()), 0);
-  const gate = raw === CODEX_CLI_UPDATE_GATE_FREE ? "free"
-    : raw === CODEX_CLI_UPDATE_GATE_PARENT_WRITE ? "parent_write"
-    : raw >= CODEX_CLI_UPDATE_GATE_WORKER_COMMIT ? "worker_commit"
-    : "unrecognized";
   return {
-    gate,
+    gate: codexCliSelectionGateState(),
     liveJobs: [...liveJobs.entries()].map(([jobId, record]) => ({
       jobId, settled: record.settled(), workerClosed: record.workerClosed(),
     })),
@@ -188,8 +181,7 @@ function trackUnjoined(worker: Worker, alreadyClosed: boolean): void {
  * recovery releases admission only after matching terminal proof.
  */
 function warnIfCommitGateHeld(): void {
-  if (Atomics.load(new Int32Array(codexCliUpdateSelectionGate()), 0)
-    < CODEX_CLI_UPDATE_GATE_WORKER_COMMIT) return;
+  if (codexCliSelectionGateState() !== "worker_commit") return;
   console.warn(
     "[opencodex] a Codex CLI update worker closed while the shared selection gate still reads"
     + " worker_commit; admission awaits owner-scoped terminal evidence — inspect"

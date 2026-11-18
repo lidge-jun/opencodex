@@ -13,11 +13,14 @@ import { parseReadyArgs, type ReadyArgs } from "./ready";
 import { parseResolveArgs, type ResolveArgs } from "./resolve";
 import { parseStopApproval } from "./stop-approval";
 import { parseSyncExpectation, SYNC_EXPECTATION_USAGE_EXIT } from "./sync-expectation";
-import { maybeAutoRestoreCodexShim } from "./codex-shim-autorestore";
+import { parseSyncFanoutFlags } from "./sync-flags";
+import { maybeAutoRestoreCodexShimAsync } from "./codex-shim-autorestore";
 import { findCommand } from "./registry";
 import { printUnknownCommand } from "./help-recovery";
 import { noteCredentialArgv, redactSecretArgs } from "./secret-args";
 import { maybeNoticeVersionSkew } from "./version-skew-notice";
+import { settleConfigRootForCli } from "./config-root-startup";
+import { isOrchestratedUpdateArgv } from "../update/orchestrated-arguments.mjs";
 
 export interface CliHead {
   kind: "version" | "help" | "ready" | "resolve" | "command";
@@ -40,6 +43,7 @@ export function parseCliHead(argv: string[]): CliHead {
   const args = argv;
   // Codex owns its forwarded grammar; wrapper documentation is `ocx help codex`.
   if (command === "codex") return { kind: "command", command, args };
+  if (command === "update" && isOrchestratedUpdateArgv(args.slice(1))) return { kind: "command", command, args };
   if (command === "--version" || command === "-v" || command === "version") {
     return { kind: "version", command, args };
   }
@@ -64,7 +68,7 @@ export function parseCliHead(argv: string[]): CliHead {
     };
   }
   // P1: pre-parse `ocx ready` and reject invalid arguments with exit 64 BEFORE
-  // maybeAutoRestoreCodexShim (or any discovery/probe/filesystem-capable global
+  // maybeAutoRestoreCodexShimAsync (or any discovery/probe/filesystem-capable global
   // preflight) runs. `ready --help` / `help ready` already exited above, so this
   // only sees ready args without a help flag. Valid args are stashed so the
   // switch dispatch can call runReady without a second parse.
@@ -74,7 +78,7 @@ export function parseCliHead(argv: string[]): CliHead {
     return { kind: "ready", command, args, readyArgs: parsed.args };
   }
   // Same ordering contract as `ready`: `ocx resolve` rejects any argument with exit
-  // 64 BEFORE maybeAutoRestoreCodexShim (or any other preflight with side effects) runs.
+  // 64 BEFORE maybeAutoRestoreCodexShimAsync (or any other preflight with side effects) runs.
   if (command === "resolve") {
     const parsed = parseResolveArgs(args.slice(1));
     if (!parsed.ok) return { kind: "resolve", command, args, resolveArgs: undefined };
@@ -115,7 +119,7 @@ export async function runCli(argv: string[]): Promise<CliHead> {
         console.error("  Default wait timeout is 45 seconds.");
         process.exit(64);
       }
-      maybeAutoRestoreCodexShim(head.command, head.args);
+      await maybeAutoRestoreCodexShimAsync(head.command, head.args);
       return head;
     }
     case "resolve": {
@@ -128,7 +132,7 @@ export async function runCli(argv: string[]): Promise<CliHead> {
         console.error("  and the identity-checked liveness verdict.");
         process.exit(64);
       }
-      maybeAutoRestoreCodexShim(head.command, head.args);
+      await maybeAutoRestoreCodexShimAsync(head.command, head.args);
       return head;
     }
     case "command":
@@ -137,7 +141,7 @@ export async function runCli(argv: string[]): Promise<CliHead> {
         process.exit(1);
       }
       if (head.command === "stop" && !parseStopApproval(head.args.slice(1)).ok) {
-        console.error("Usage: ocx stop [--json [--expect-pid <pid> --expect-port <port> --expect-hostname <host> --expect-config-home <home> --expect-cli-version <version> --expect-compatibility-token <hex>]]");
+        console.error("Usage: ocx stop [--deadline-ms <ms>] [--json [--expect-pid <pid> --expect-port <port> --expect-hostname <host> --expect-config-home <home> --expect-cli-version <version> --expect-compatibility-token <hex>]]");
         process.exit(64);
       }
       const uninstallError = uninstallArgsError(head.command, head.args);
@@ -147,14 +151,22 @@ export async function runCli(argv: string[]): Promise<CliHead> {
       }
       // #7694: a malformed pinned sync is refused before any preflight reads or repairs anything.
       if (head.command === "sync") {
+        const flags = parseSyncFanoutFlags(head.args.slice(1));
+        if (!flags.ok) {
+          console.error(flags.message);
+          process.exit(SYNC_EXPECTATION_USAGE_EXIT);
+        }
         const pinned = parseSyncExpectation(head.args.slice(1));
         if (!pinned.ok) {
           console.error(pinned.message);
           process.exit(SYNC_EXPECTATION_USAGE_EXIT);
         }
       }
+      // Before any preflight or command write: wait once for the config-root ACL flight (#7815).
+      // Commands skipsCodexShimAutoRestore exempts are skipped there too; see config-root-startup.
+      await settleConfigRootForCli(head.command, head.args);
       await maybeNoticeVersionSkew(head.command, head.args);
-      maybeAutoRestoreCodexShim(head.command, head.args);
+      await maybeAutoRestoreCodexShimAsync(head.command, head.args);
       return head;
   }
 }

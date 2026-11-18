@@ -8,12 +8,30 @@
  * closes it. The serving thread then swaps the finished file in.
  */
 
+import { Database } from "bun:sqlite";
 import { buildIndexFile, removeAbandonedBuilds } from "./build-file";
+import { isHistoryIndexCorruption } from "./sqlite-errors";
 import type { RebuildWorkerReply, RebuildWorkerRequest } from "./rebuild-protocol";
 
 declare const self: Worker;
 
 function handle(request: RebuildWorkerRequest): RebuildWorkerReply {
+  if (request.type === "check") {
+    let handle: Database | undefined;
+    try {
+      handle = new Database(request.indexPath, { readonly: true });
+      handle.exec("PRAGMA busy_timeout = 5000");
+      const row = handle.query("PRAGMA quick_check").get() as { quick_check?: string } | undefined;
+      return { type: "checked", healthy: row?.quick_check === "ok" };
+    } catch (error) {
+      if (isHistoryIndexCorruption(error)) return { type: "checked", healthy: false };
+      throw error;
+    } finally {
+      // Release the live index before posting a verdict: the serving thread
+      // may immediately replace it, including on Windows.
+      handle?.close();
+    }
+  }
   removeAbandonedBuilds(request.indexPath);
   const rows = buildIndexFile(request.buildPath, request.reason, request.revision);
   return { type: "built", rows };

@@ -64,6 +64,8 @@ let serverStartupReleaseFlights = new WeakMap<ReturnType<typeof Bun.serve>, Prom
 let releaseServerStartupLifecycleImpl: typeof releaseNativeMainStartupLifecycle = releaseNativeMainStartupLifecycle;
 
 export function setServerRef(server: ReturnType<typeof Bun.serve> | undefined): void { _serverRef = server; }
+/** The port the main listener is actually bound to, or null before it serves. */
+export function boundServerPort(): number | null { return _serverRef?.port ?? null; }
 /**
  * Legacy/test-only drain control. Production scoped operations must use a lease,
  * while process shutdown uses the irreversible shutdown latch.

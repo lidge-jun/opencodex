@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
+import { planAnthropicServerTools } from "../../src/adapters/anthropic/advisor-tool";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 import { loadConfig, saveConfig } from "../../src/config";
 import * as destinationPolicy from "../../src/lib/destination-policy";
@@ -104,6 +105,22 @@ const tool = {
   function: { name: "get_weather", parameters: { type: "object", properties: {} } },
 };
 
+/** Hosted search mixed with a client function tool, serialized through the Responses adapter. */
+function mixedHostedToolTypes(provider: OcxProviderConfig): unknown {
+  const built = withTestTranslatorBudget(createResponsesPassthroughAdapter({ ...provider, adapter: "openai-responses" })).buildRequest({
+    modelId: MODEL,
+    context: { messages: [] },
+    stream: true,
+    options: {},
+    _rawBody: {
+      model: MODEL,
+      input: "hi",
+      tools: [{ type: "web_search" }, { type: "function", name: "get_weather", parameters: { type: "object", properties: {} } }],
+    },
+  }, { headers: new Headers() });
+  return (JSON.parse(String(built.body)) as { tools?: Array<{ type: string }> }).tools?.map(entry => entry.type);
+}
+
 interface CarryCase {
   /** The stored row besides adapter and base URL. */
   seed: Partial<OcxProviderConfig>;
@@ -112,6 +129,12 @@ interface CarryCase {
 }
 
 const CASES: Record<ProviderCompatCarryField, CarryCase> = {
+  singleLeadingSystemMessage: {
+    seed: { singleLeadingSystemMessage: true },
+    probe: provider => nativeBody(provider, {
+      messages: [{ role: "user", content: "hi" }, { role: "developer", content: "be brief" }],
+    }).messages,
+  },
   preserveResponsesReasoningContent: {
     seed: { preserveResponsesReasoningContent: true },
     probe: provider => {
@@ -119,6 +142,22 @@ const CASES: Record<ProviderCompatCarryField, CarryCase> = {
       parsed.modelId = MODEL;
       const built = withTestTranslatorBudget(createResponsesPassthroughAdapter({ ...provider, adapter: "openai-responses" })).buildRequest(parsed, { headers: new Headers() });
       return (JSON.parse(String(built.body)) as { input: Array<{ content: unknown }> }).input[0]!.content;
+    },
+  },
+  promoteAdditionalTools: {
+    seed: { promoteAdditionalTools: true },
+    probe: provider => {
+      const parsed = parseRequest({
+        model: MODEL,
+        input: [
+          { type: "message", role: "user", content: "hi" },
+          { type: "additional_tools", tools: [tool] },
+        ],
+      });
+      parsed.modelId = MODEL;
+      const built = withTestTranslatorBudget(createResponsesPassthroughAdapter({ ...provider, adapter: "openai-responses" })).buildRequest(parsed, { headers: new Headers() });
+      const body = JSON.parse(String(built.body)) as { input: Array<{ type: string }>; tools?: unknown[] };
+      return { inputTypes: body.input.map(i => i.type), hasTools: Array.isArray(body.tools) && body.tools.length > 0 };
     },
   },
   foldDeveloperRoleToSystem: {
@@ -162,6 +201,20 @@ const CASES: Record<ProviderCompatCarryField, CarryCase> = {
   retryOnReset: {
     seed: { retryOnReset: { enabled: true, replacements: 1 } },
     probe: provider => resetReplayPolicyFor(provider),
+  },
+  unsupportedHostedTools: {
+    seed: { unsupportedHostedTools: ["web_search"] },
+    probe: mixedHostedToolTypes,
+  },
+  unsupportedHostedToolsWithClientTools: {
+    seed: { unsupportedHostedToolsWithClientTools: ["web_search"] },
+    probe: mixedHostedToolTypes,
+  },
+  forwardAdvisorTool: {
+    seed: { forwardAdvisorTool: true },
+    // The Anthropic adapter's server-tool plan for this (non-first-party) gateway.
+    probe: provider => planAnthropicServerTools({ ...provider, adapter: "anthropic" },
+      [{ type: "advisor_20260301", name: "advisor", model: "claude-opus-4-8" }], undefined, new Set(), false).declared,
   },
 };
 
@@ -281,6 +334,25 @@ describe("an overwrite that moves the provider carries none of it", () => {
 });
 
 describe("PATCH and POST validate the settings they name", () => {
+  test("PATCH writes and clears promoteAdditionalTools", async () => {
+    await withServer({ relay: { adapter: "openai-responses", baseUrl: BASE_URL } }, async url => {
+      const set = await send(url, "/api/providers?name=relay", "PATCH", { promoteAdditionalTools: true });
+      expect(set.status).toBe(200);
+      expect(loadConfig().providers.relay?.promoteAdditionalTools).toBe(true);
+
+      const disable = await send(url, "/api/providers?name=relay", "PATCH", { promoteAdditionalTools: false });
+      expect(disable.status).toBe(200);
+      expect(loadConfig().providers.relay?.promoteAdditionalTools).toBe(false);
+
+      const bad = await send(url, "/api/providers?name=relay", "PATCH", { promoteAdditionalTools: "yes" });
+      expect(bad.status).toBe(400);
+
+      const clear = await send(url, "/api/providers?name=relay", "PATCH", { promoteAdditionalTools: null });
+      expect(clear.status).toBe(200);
+      expect(loadConfig().providers.relay).not.toHaveProperty("promoteAdditionalTools");
+    });
+  });
+
   test("PATCH writes and clears foldDeveloperRoleToSystem and reasoningWireFormat", async () => {
     await withServer({ relay: { adapter: "openai-chat", baseUrl: BASE_URL } }, async url => {
       const set = await send(url, "/api/providers?name=relay", "PATCH", {
@@ -300,6 +372,57 @@ describe("PATCH and POST validate the settings they name", () => {
       const cleared = loadConfig().providers.relay!;
       expect(cleared).not.toHaveProperty("foldDeveloperRoleToSystem");
       expect(cleared).not.toHaveProperty("reasoningWireFormat");
+    });
+  });
+
+  test("PATCH writes, normalizes, and clears unsupportedHostedToolsWithClientTools; GET returns it", async () => {
+    await withServer({ relay: { adapter: "openai-responses", baseUrl: BASE_URL, apiKey: "sk-relay" } }, async url => {
+      const set = await send(url, "/api/providers?name=relay", "PATCH", {
+        unsupportedHostedToolsWithClientTools: [" web_search ", "web_search"],
+      });
+      expect(set.status).toBe(200);
+      expect(loadConfig().providers.relay?.unsupportedHostedToolsWithClientTools).toEqual(["web_search"]);
+
+      const listed = await (await fetch(new URL("/api/providers", url))).json() as Array<Record<string, unknown>>;
+      expect(listed.find(row => row.name === "relay")?.unsupportedHostedToolsWithClientTools).toEqual(["web_search"]);
+
+      for (const value of [["web_serch"], "web_search", [42], {}]) {
+        const bad = await send(url, "/api/providers?name=relay", "PATCH", { unsupportedHostedToolsWithClientTools: value });
+        expect(bad.status).toBe(400);
+        expect(((await bad.json()) as { error: string }).error).toContain("unsupportedHostedToolsWithClientTools");
+        expect(loadConfig().providers.relay?.unsupportedHostedToolsWithClientTools).toEqual(["web_search"]);
+      }
+
+      // An unrelated PATCH leaves it alone.
+      const unrelated = await send(url, "/api/providers?name=relay", "PATCH", { promoteAdditionalTools: true });
+      expect(unrelated.status).toBe(200);
+      expect(loadConfig().providers.relay?.unsupportedHostedToolsWithClientTools).toEqual(["web_search"]);
+
+      const clear = await send(url, "/api/providers?name=relay", "PATCH", { unsupportedHostedToolsWithClientTools: null });
+      expect(clear.status).toBe(200);
+      expect(loadConfig().providers.relay).not.toHaveProperty("unsupportedHostedToolsWithClientTools");
+
+      const empty = await send(url, "/api/providers?name=relay", "PATCH", { unsupportedHostedToolsWithClientTools: [] });
+      expect(empty.status).toBe(200);
+      expect(loadConfig().providers.relay).not.toHaveProperty("unsupportedHostedToolsWithClientTools");
+    });
+  });
+
+  test("POST accepts a valid unsupportedHostedToolsWithClientTools and refuses a misspelling", async () => {
+    await withServer({}, async url => {
+      const bad = await send(url, "/api/providers", "POST", {
+        name: "relay",
+        provider: { adapter: "openai-responses", baseUrl: BASE_URL, unsupportedHostedToolsWithClientTools: ["web_serch"] },
+      });
+      expect(bad.status).toBe(400);
+      expect(loadConfig().providers.relay).toBeUndefined();
+
+      const good = await send(url, "/api/providers", "POST", {
+        name: "relay",
+        provider: { adapter: "openai-responses", baseUrl: BASE_URL, unsupportedHostedToolsWithClientTools: ["web_search_preview"] },
+      });
+      expect(good.status).toBe(200);
+      expect(loadConfig().providers.relay?.unsupportedHostedToolsWithClientTools).toEqual(["web_search_preview"]);
     });
   });
 

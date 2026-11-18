@@ -184,7 +184,7 @@ describe("parseCliHead (pure CLI head, Phase 1)", () => {
 
 describe("uninstall argument validation", () => {
   test("uninstall and remove reject trailing arguments before shim preflight", async () => {
-    const preflight = spyOn(autorestore, "maybeAutoRestoreCodexShim").mockImplementation(() => {});
+    const preflight = spyOn(autorestore, "maybeAutoRestoreCodexShimAsync").mockResolvedValue(undefined);
     const error = spyOn(console, "error").mockImplementation(() => {});
     const exit = spyOn(process, "exit").mockImplementation((() => { throw new Error("usage-exit"); }) as never);
     try {
@@ -201,7 +201,7 @@ describe("uninstall argument validation", () => {
   });
 
   test("uninstall help bypasses preflight and bare commands retain it", async () => {
-    const preflight = spyOn(autorestore, "maybeAutoRestoreCodexShim").mockImplementation(() => {});
+    const preflight = spyOn(autorestore, "maybeAutoRestoreCodexShimAsync").mockResolvedValue(undefined);
     const output = spyOn(console, "log").mockImplementation(() => {});
     const exit = spyOn(process, "exit").mockImplementation((() => { throw new Error("help-exit"); }) as never);
     try {
@@ -218,4 +218,32 @@ describe("uninstall argument validation", () => {
       expect(preflight).toHaveBeenCalledTimes(2);
     } finally { preflight.mockRestore(); output.mockRestore(); exit.mockRestore(); }
   });
+});
+
+test.each([
+  ["ready", "ready"], ["resolve", "resolve"], ["uninstall", "command"],
+] as const)("the %s head awaits async shim preflight before becoming dispatchable", async (command, kind) => {
+  let entered!: () => void, release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const preflight = spyOn(autorestore, "maybeAutoRestoreCodexShimAsync").mockImplementation(async () => {
+    entered();
+    await held;
+  });
+  let dispatchable = false;
+  const pending = runCli([command]).then(head => { dispatchable = true; return head; });
+  try {
+    await Promise.race([started, pending.then(() => { throw new Error("head returned without entering preflight"); })]);
+    // Reach another event-loop turn while the preflight promise is unresolved.
+    await new Promise<void>(resolve => setTimeout(resolve, 0));
+    expect(preflight).toHaveBeenCalledTimes(1);
+    expect(preflight).toHaveBeenCalledWith(command, [command]);
+    expect(dispatchable).toBe(false);
+    release();
+    expect(await pending).toMatchObject({ kind, command, args: [command] });
+    expect(dispatchable).toBe(true);
+  } finally {
+    release();
+    try { await pending; } finally { preflight.mockRestore(); }
+  }
 });

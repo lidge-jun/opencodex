@@ -1,3 +1,4 @@
+import { errorDestinationText, providerErrorDestinationLabel } from "../lib/error-destination";
 import type { OcxComboTarget, OcxConfig } from "../types";
 import { getCachedProviderRoutingQuota } from "../providers/quota-routing-cache";
 import type { ProviderQuota, ProviderQuotaWindow } from "../providers/quota-types";
@@ -5,6 +6,7 @@ import { sleepWithAbort } from "../lib/upstream-retry";
 import {
   clearComboTargetCooldownIfUnchanged,
   comboTargetCooldownRevision,
+  comboTargetCooldownStatus,
   coolComboTarget,
   earliestComboCooldown,
   isComboTargetInCooldown,
@@ -57,16 +59,69 @@ export class UnknownComboError extends Error {
   }
 }
 
+declare const exclusionBrand: unique symbol;
+/** Service diagnostics name configured positions and validated providers only. */
+export function comboLogLabel(config: OcxConfig, comboId: string): string {
+  const index = Object.keys(config.combos ?? {}).indexOf(comboId);
+  return index < 0 ? "combo" : `combo ${index + 1}`;
+}
+export function comboTargetLogLabel(config: OcxConfig, comboId: string, target: OcxComboTarget): string {
+  const index = getCombo(config, comboId)?.targets.findIndex(item => targetKey(item) === targetKey(target)) ?? -1;
+  return `target ${index + 1} (${errorDestinationText(providerErrorDestinationLabel(target.provider))})`;
+}
+
+export type ComboExclusionReasons = string & { readonly [exclusionBrand]: true };
+
+/** One target's coarse failure class in a `combo_unavailable` answer (#7965). */
+export type ComboTargetUnavailableCause = "quota" | "permission" | "transient" | "unsupported" | "unavailable";
+/** The combo-level class: the one class every classified target shares, `mixed` when they differ, `unknown` when none was classified. */
+export type ComboUnavailableCause = ComboTargetUnavailableCause | "mixed" | "unknown";
+
+/**
+ * Machine-readable fields on the public `combo_unavailable` error (#7965). Counts and closed classes
+ * only: no combo id, provider name, model, account or upstream text.
+ */
+export interface ComboUnavailableDiagnostics {
+  readonly cause: ComboUnavailableCause;
+  /** Targets configured on the combo. */
+  readonly targets: number;
+  /** Targets this request dispatched before the answer. */
+  readonly attempted: number;
+  /** How many targets fell in each class; classes no target fell in are omitted. */
+  readonly causes: Readonly<Partial<Record<ComboTargetUnavailableCause, number>>>;
+}
+
+/** Fold per-target classes into the combo-level diagnostics. */
+export function comboUnavailableDiagnostics(
+  targets: number,
+  attempted: number,
+  classes: readonly ComboTargetUnavailableCause[],
+): ComboUnavailableDiagnostics {
+  const causes: Partial<Record<ComboTargetUnavailableCause, number>> = {};
+  for (const value of classes) causes[value] = (causes[value] ?? 0) + 1;
+  const distinct = Object.keys(causes) as ComboTargetUnavailableCause[];
+  const cause: ComboUnavailableCause = distinct.length === 0 ? "unknown" : distinct.length === 1 ? distinct[0]! : "mixed";
+  return { cause, targets, attempted, causes };
+}
+
+/** Why a combo had no target to pick: the readable message suffix and its machine-readable form. */
+export interface ComboExclusion {
+  readonly reasons: ComboExclusionReasons;
+  readonly diagnostics: ComboUnavailableDiagnostics;
+}
+
 export class NoAvailableComboTargetsError extends Error {
   readonly code = "combo_unavailable";
 
-  constructor(readonly comboId: string, readonly reasons = "") {
-    super(`No available targets for combo: ${comboId}${reasons ? ` (${reasons})` : ""}`);
+  constructor(readonly comboId: string, readonly exclusion?: ComboExclusion) {
+    super(`No available targets for combo${exclusion ? ` (${exclusion.reasons})` : ""}`);
     this.name = "NoAvailableComboTargetsError";
   }
 }
 
-function providerExclusionReason(config: OcxConfig, target: OcxComboTarget, now: number): string | undefined {
+type ComboExclusionReason = "provider missing" | "provider disabled" | "quota exhausted" | "cooldown" | "ineligible for this request";
+
+function providerExclusionReason(config: OcxConfig, target: OcxComboTarget, now: number): ComboExclusionReason | undefined {
   const provider = Object.hasOwn(config.providers, target.provider) ? config.providers[target.provider] : undefined;
   if (!provider) return "provider missing";
   if (provider.disabled === true) return "provider disabled";
@@ -92,29 +147,88 @@ export function comboTargetSkipTrigger(
 }
 
 /**
- * Why each target of a combo cannot be picked right now, for a zero-attempt refusal. Only the
- * configured provider/model and a coarse label are named, never account or request data.
+ * The class a skipped target contributes to `combo_unavailable` diagnostics. A cooldown is
+ * classified by the HTTP status its entry kept: 429/402 is quota, 401/403 is permission, and any
+ * other or missing status is transient.
  */
+function exclusionCause(reason: ComboExclusionReason, comboId: string, target: OcxComboTarget, now: number): ComboTargetUnavailableCause {
+  if (reason === "quota exhausted") return "quota";
+  if (reason === "ineligible for this request") return "unsupported";
+  if (reason !== "cooldown") return "unavailable";
+  const status = comboTargetCooldownStatus(comboId, target, now);
+  return status === 429 || status === 402 ? "quota" : status === 401 || status === 403 ? "permission" : "transient";
+}
+
+/**
+ * Why each target of a combo cannot be picked right now, for a zero-attempt refusal. Only the
+ * target index, validated provider label and a closed exclusion reason are named; the same pass
+ * yields the machine-readable diagnostics.
+ */
+/** Why the picker would pass over one target, in picker order: provider, cooldown, then request eligibility. */
+function targetExclusionReason(
+  config: OcxConfig,
+  comboId: string,
+  target: NormalizedComboTarget,
+  eligible: ((target: NormalizedComboTarget) => boolean) | undefined,
+  now: number,
+): ComboExclusionReason | undefined {
+  let reason = providerExclusionReason(config, target, now);
+  const cooldown = reason ? undefined : earliestComboCooldown(comboId, [target], now);
+  if (cooldown) reason = "cooldown";
+  if (!reason && eligible) {
+    try {
+      if (!eligible(target)) reason = "ineligible for this request";
+    } catch {
+      // An eligibility check can exhaust the translator budget; the target still was not picked.
+      reason = "ineligible for this request";
+    }
+  }
+  return reason;
+}
+
+/**
+ * One target's `combo_unavailable` class, from the same checks and precedence as
+ * {@link comboExclusion}, or `undefined` when nothing excludes it.
+ */
+export function comboTargetUnavailableCause(
+  config: OcxConfig,
+  comboId: string,
+  target: NormalizedComboTarget,
+  eligible?: (target: NormalizedComboTarget) => boolean,
+  now = Date.now(),
+): ComboTargetUnavailableCause | undefined {
+  const reason = targetExclusionReason(config, comboId, target, eligible, now);
+  return reason ? exclusionCause(reason, comboId, target, now) : undefined;
+}
+
+export function comboExclusion(
+  config: OcxConfig,
+  comboId: string,
+  eligible?: (target: NormalizedComboTarget) => boolean,
+  now = Date.now(),
+): ComboExclusion {
+  const targets = getCombo(config, comboId)?.targets ?? [];
+  const classes: ComboTargetUnavailableCause[] = [];
+  const reasons = targets.flatMap((target, index) => {
+    const reason = targetExclusionReason(config, comboId, target, eligible, now);
+    if (!reason) return [];
+    classes.push(exclusionCause(reason, comboId, target, now));
+    return [`target ${index + 1} (${errorDestinationText(providerErrorDestinationLabel(target.provider))}): ${reason}`];
+  }).join("; ");
+  return {
+    reasons: `${targets.length} target${targets.length === 1 ? "" : "s"}${reasons ? `; ${reasons}` : ""}` as ComboExclusionReasons,
+    diagnostics: comboUnavailableDiagnostics(targets.length, 0, classes),
+  };
+}
+
+/** The readable half of {@link comboExclusion}. */
 export function comboExclusionReasons(
   config: OcxConfig,
   comboId: string,
   eligible?: (target: NormalizedComboTarget) => boolean,
   now = Date.now(),
-): string {
-  return (getCombo(config, comboId)?.targets ?? []).flatMap(target => {
-    let reason = providerExclusionReason(config, target, now);
-    const cooldown = reason ? undefined : earliestComboCooldown(comboId, [target], now);
-    if (cooldown) reason = `cooldown ${Math.max(1, Math.ceil((cooldown.expiry - now) / 1000))}s`;
-    if (!reason && eligible) {
-      try {
-        if (!eligible(target)) reason = "ineligible for this request";
-      } catch {
-        // An eligibility check can exhaust the translator budget; the target still was not picked.
-        reason = "ineligible for this request";
-      }
-    }
-    return reason ? [`${targetKey(target)}: ${reason}`] : [];
-  }).join("; ");
+): ComboExclusionReasons {
+  return comboExclusion(config, comboId, eligible, now).reasons;
 }
 
 /** Capture usable providers' quota cooldowns; request eligibility is deferred to exhaustion. */
@@ -324,7 +438,7 @@ function reserveAllCooledTargets(
   const next = state ?? { successes: 0, currentWeights: new Map<string, number>(), successfulUses: new Map<string, number>() };
   next.lastCooldownReprobeAt = now;
   selectionState.set(comboId, next);
-  console.warn(`[combo] ${comboId}: reserving all-cooled targets for one request; minimum reprobe interval ${combo.cooldownReprobe.intervalMs}ms`);
+  console.warn(`[combo] ${comboLogLabel(config, comboId)}: reserving all-cooled targets for one request; minimum reprobe interval ${combo.cooldownReprobe.intervalMs}ms`);
   return reserved;
 }
 
@@ -624,7 +738,7 @@ export async function pickComboTargetWithWait(
     const normalDelay = soonest === undefined ? undefined : soonest.expiry - now;
     if (normalDelay !== undefined && normalDelay <= options.waitForCooldownMs) {
       console.warn(
-        `[combo] ${comboId}: deferring last resort, waiting ${normalDelay}ms for ${targetKey(soonest!.target)}`,
+        `[combo] ${comboLogLabel(config, comboId)}: deferring last resort, waiting ${normalDelay}ms for ${comboTargetLogLabel(config, comboId, soonest!.target)}`,
       );
       try {
         await (options.sleep ?? sleepWithAbort)(normalDelay, options.abortSignal);
@@ -677,7 +791,7 @@ export async function pickComboTargetWithWait(
   // Its target preserves configured order for ties.
   const target = earliest.target;
   console.warn(
-    `[combo] ${comboId}: all targets cooling, waiting ${delay}ms for ${targetKey(target)}`,
+    `[combo] ${comboLogLabel(config, comboId)}: all targets cooling, waiting ${delay}ms for ${comboTargetLogLabel(config, comboId, target)}`,
   );
   try {
     await (options.sleep ?? sleepWithAbort)(delay, options.abortSignal);
@@ -742,6 +856,6 @@ export function tryPickComboModel(config: OcxConfig, modelId: string, preview = 
   if (!comboId) return null;
   if (!getCombo(config, comboId)) throw new UnknownComboError(comboId);
   const picked = pickComboTarget(config, comboId, { preview, allowCooldownReprobe: false });
-  if (!picked) throw new NoAvailableComboTargetsError(comboId, comboExclusionReasons(config, comboId));
+  if (!picked) throw new NoAvailableComboTargetsError(comboId, comboExclusion(config, comboId));
   return picked;
 }

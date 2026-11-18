@@ -1,3 +1,4 @@
+import type { ClientFacingModelLabel } from "../../lib/error-destination";
 import type { CodexAccountModelRefusal } from "../../combos/failover";
 import type { NativeResponseControl } from "./native-response-control";
 import type { AdapterEvent, OcxUsage, OcxProviderContinuationState, OcxConfig } from "../../types";
@@ -32,8 +33,24 @@ export interface ConsumedComboFailure {
   classificationText: string;
   /** Complete bounded-envelope evidence captured before display truncation; never serialized. */
   codexModelRefusal?: CodexAccountModelRefusal;
+  /** Complete bounded-envelope malformed response_format diagnostic verdict captured before display truncation. */
+  malformedResponseFormat?: boolean;
+  /** Complete bounded-envelope OpenRouter opaque-400 verdict captured before display truncation. */
+  openRouterOpaque400?: boolean;
+  /** Complete bounded-envelope unoffered-tool-call verdict captured before display truncation. */
+  unofferedToolCallRefusal?: boolean;
+  /** Complete bounded-envelope provider moderation verdict captured before display truncation. */
+  providerModerationRefusal?: boolean;
   /** Structured upstream `error.code` when present in the failure body. */
   upstreamCode?: string;
+  /**
+   * The envelope root's own structured code when it differs from {@link upstreamCode}.
+   *
+   * `normalizeUpstreamErrorText` selects the nested record first, so a root verdict would
+   * otherwise never reach the combo decision. Both transports pass it, and the decision hops
+   * only when the root and the record each would.
+   */
+  upstreamRootCode?: string;
   /** Sanitized structured `error.message`; compared only against proxy-owned constants, never emitted. */
   upstreamMessage?: string;
   /** Complete structured provider type, retained for conservative recovery classification. */
@@ -96,8 +113,14 @@ export interface DirectRequestOption {
 }
 
 export interface HandleResponsesOptions {
+  /** Original caller label, carried through synthetic children without route substitution. */
+  clientModelLabel?: ClientFacingModelLabel;
+  /** Original client envelope label when a combo was selected by a synthetic rewrite. */
+  clientResponseModelLabel?: ClientFacingModelLabel;
   /** Immutable caller scope inherited by a capability-authenticated internal sidecar request. */
   admissionScope?: AdmissionModelScope;
+  /** Captured synchronously at ingress, before parsing or child replay can suspend. */
+  advisorAdmissionPolicy?: import("../../types/admission-policy").CapturedAdmissionPolicy;
   /** Internal request-owned policy authorization; never read from client headers or body. */
   policyRequestScope?: PolicyRequestScope;
   /** Internal concrete selector chosen from the original policy evaluation. */
@@ -116,6 +139,8 @@ export interface HandleResponsesOptions {
   claudeGoAffinity?: { sessionLane?: string };
   /** Validated Claude metadata identity; projected only into final canonical attempt headers. */
   claudeNativeSessionId?: string;
+  /** Private Claude bridge pool identity (validated, principal-scoped when derived); completes session-id/thread-id only on Codex account-selection headers. */
+  claudeBridgePoolSession?: string;
   /** Original live policy owner; separate from caller-specific routing/sidecar snapshots. */
   codexAuthPolicy?: CodexAuthPolicyConfig;
   turnAdmissionLease?: AdmissionLease;
@@ -138,6 +163,8 @@ export interface HandleResponsesOptions {
    * holder with no principal preserves keyless replay; never populate it from client data.
    */
   replayPrincipal?: Readonly<{ clientPrincipalId: string | undefined }>;
+  /** Captured for the logical request and inherited by retries and combo children. */
+  readonly plaintextV2Decision?: boolean;
   /** Called at most once after the complete client body is read and accepted for dispatch. */
   onRequestBodyRead?: () => void;
   /** Internal handoff for retry wrappers that must reuse the already-accounted request body. */
@@ -145,6 +172,8 @@ export interface HandleResponsesOptions {
   forceEmptyResponseId?: boolean;
   /** Internal, connection-owned control channel; never reconstructed from headers. */
   nativeControl?: NativeResponseControl;
+  /** A Remote Link WebSocket turn: told the expanded input and the terminal (src/server/link-turn.ts). */
+  linkTurn?: import("../link-turn").LinkTurnObserver;
   abortSignal?: AbortSignal;
   /** One-shot TTFT callback: first non-empty model output observed (WP4). */
   onFirstOutput?: () => void;
@@ -189,14 +218,24 @@ export interface HandleResponsesOptions {
   anthropicServerTools?: readonly Record<string, unknown>[];
   /** The Claude client's replayable server-tool exchanges (`replayedAnthropicServerBlocks`); same scope. */
   anthropicServerReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>;
+  /** The caller's cached system prefix (`systemCachePrefix`); same scope. */
+  anthropicSystemCachePrefix?: string;
   /** Metadata-qualified Messages discovery evidence, never caller JSON or a preselected destination. */
   anthropicToolLoadingSource?: Readonly<Record<string, unknown>>;
   /** Droid's per-request effort default; each concrete combo or policy target applies it only if its ladder allows it. */
   droidDefaultEffort?: string;
-  /** PF-07: the Chat source a combo child may send natively; set only by the Chat ingress. */
+  /** The Chat or Messages source a combo child may send natively; set only by that ingress. */
   protocolSource?: import("./core-combo-native").ComboProtocolSource;
   /** Internal transport identity for route-scoped upstream compatibility policy. */
   inboundTransport?: "websocket";
+  /**
+   * Set by the HTTP `/v1/responses` ingress only: a streaming combo turn whose target selection
+   * outlasts `COMBO_SELECTION_KEEPALIVE_THRESHOLD_MS` commits a 200 SSE head and sends keepalive
+   * comments (#8326). `clock` is a test seam; production uses the global timers.
+   */
+  comboSelectionKeepalive?: {
+    clock?: { setTimeout(callback: () => void, ms: number): unknown; clearTimeout(handle: unknown): void };
+  };
   /**
    * Claude replay may add native-main auth so OpenAI sidecars remain available.
    * Strip only that internal credential when the final route is a noncanonical
@@ -215,6 +254,13 @@ export interface HandleResponsesOptions {
   callerDirectAuth?: CallerDirectAuth | null;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
+  /**
+   * Set by the combo loop for each child. A child logs into its own context, which the combo
+   * copies once when the child commits, and the bridge reports usage after that, at the terminal
+   * frame. The transport calls this when it binds that usage on the child's context, so the combo
+   * can carry the binding to the context that writes the row.
+   */
+  onBridgeUsageBound?: () => void;
   /** Child-owned prepaid initial send; capacity remains charged until dispatch or unsent release. */
   comboInitialSend?: { permit: SingleUseDispatchPermit; producerOwned?: boolean };
   /** Exact externally booked combo hop, used for its child's spend preflight and send reports. */
@@ -275,6 +321,12 @@ export interface HandleResponsesOptions {
   clientEncoder?: ClientEncoderOption;
   /** Chat ingress raw-channel delivery preference; never an upstream generation option. */
   chatRawReasoningVisible?: boolean;
+  /** Value-free fact retained before Chat instruction content is projected to text. */
+  chatInstructionImage?: boolean;
+  /** Original Responses instruction image, retained across preprocessing and combo replay. */
+  responsesInstructionImage?: boolean;
+  /** File-backed Responses image retained before parsing and replay. */
+  responsesFileImage?: boolean;
   /** Set only by the Chat or Messages ingress on an eligible Antigravity route; see {@link DirectRequestOption}. */
   directRequest?: DirectRequestOption;
 }

@@ -3,6 +3,8 @@ title: Codex App 模型選擇器
 description: opencodex 模型如何透過共享 Codex 目錄出現在 Codex App、Codex CLI 和 Codex TUI 中。
 ---
 
+預設值為 `false`。在 `config.json` 中設定 `"omitDisabledNativeModels": true` 並執行 `ocx sync`，即可從目錄、快取與 Codex 格式的 HTTP 模型清單中移除已停用的 native 列。移除前經過驗證的繼承範本會另外保留，因此 routed 列的中繼資料不變，直接請求的路由也不變。下文的 hide 說明適用於預設設定。
+
 opencodex 不會修改 Codex App。它會寫入 Codex CLI/TUI 所使用的同一套 Codex 設定和模型目錄。
 Codex 的 app-server 會讀取這份共享狀態，但部分 Codex Desktop 版本會在 renderer 套用第二層
 遠端模型 allowlist，仍可能把已路由的列從選擇器中移除。
@@ -155,8 +157,7 @@ DeepSeek 與 Volcengine Ark 歸類為 `false`），而未分類的自訂 gateway
 
 Codex 會按 `priority` 升序排列選擇器中可見的目錄條目，並將前五個顯示為 `spawn_agent` 模型
 override。儀表板的 Subagents 頁面可以選擇並儲存最多五個裸原生 id 或路由的 `provider/model`
-id。手動設定的 `subagentModels` 也接受帳號限定的 `<selector>/<native-openai-model>` id，但
-儀表板不提供這些精確 id；儲存頁面時會把列表替換為儀表板可見的選擇。opencodex 會按所選順序
+id。手動設定的 `subagentModels` 也接受帳號限定的 `<selector>/<native-openai-model>` id。儲存列表時，儀表板會保留這些已儲存的精確 id，包括目前目錄中已無法使用的模型。opencodex 會按所選順序
 賦予較低的目錄 priority；啟用帳號限定選擇器列時，裸原生選擇會展開為選擇器限定群組。其他模型
 仍可透過精確 id 直接呼叫。
 

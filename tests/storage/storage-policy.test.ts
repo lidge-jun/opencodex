@@ -69,6 +69,9 @@ function seedHome(sizes: Array<{ name: string; bytes: number; when: Date }>): st
     insert.run({ $id: entry.name, $path: `archived_sessions/${entry.name}` });
   }
   db.exec("COMMIT");
+  // An unfinalized prepared statement keeps the file open after close(); on Windows that open
+  // handle blocks the afterEach removal for its whole retry budget and leaks the home.
+  insert.finalize();
   db.close();
   return home;
 }

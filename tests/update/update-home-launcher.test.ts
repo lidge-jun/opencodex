@@ -276,7 +276,7 @@ test("the new package remains inspectable by an already-running v1 updater", () 
     && value?.entry === "__update-home-probe" && Object.keys(value).length === 3;
   expect(legacyAccepts(declaration)).toBe(true);
   const start = source.indexOf('if (process.argv[2] === "__update-home-probe")');
-  const end = source.indexOf("const desktopPlan =", start);
+  const end = source.indexOf('if (process.argv[2] === "__update-orchestrated-identity")', start);
   const run = updateSourceFunction("deps", `with (deps) { ${source.slice(start, end).replace("import.meta.url", "\"fixture\"")} }`);
   let response = "";
   const terminal = new Error("exit");

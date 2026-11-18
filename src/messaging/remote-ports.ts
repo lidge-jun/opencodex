@@ -8,12 +8,36 @@ type RemoteProcFile = {
   close(): Promise<void>;
 };
 
-/** Select a candidate only; actual forwarding and authenticated readiness must still succeed. */
+export type RemotePortAllocator = () => { port: number; stop(force?: boolean): void };
+export interface RemotePortReservation { port: number; handoff(): void; release(): void }
+const pendingPorts = new Set<number>();
+const PORT_ALLOCATION_ATTEMPTS = 8;
+// A listener-table row is about 150 bytes; a longer unterminated row is not a kernel table.
+const PROC_ROW_BYTES = 4096;
+const allocateRemotePort: RemotePortAllocator = () => Bun.listen({ hostname: "127.0.0.1", port: 0,
+  exclusive: true, socket: { data(socket) { socket.end(); } } });
+
+/** Hold the socket until handoff, and the process-local claim until the owned attempt closes. */
+export function reserveRemotePort(allocate = allocateRemotePort, excluded: ReadonlySet<number> = new Set()): RemotePortReservation {
+  for (let attempt = 0; attempt < PORT_ALLOCATION_ATTEMPTS; attempt++) {
+    const listener = allocate(), port = listener.port;
+    if (!validPort(port)) { listener.stop(true); throw remoteError("invalid_port", "Cannot allocate an unprivileged messaging port candidate."); }
+    if (pendingPorts.has(port) || excluded.has(port)) { listener.stop(true); continue; }
+    pendingPorts.add(port);
+    let held = true, released = false;
+    const handoff = () => { if (held) { held = false; listener.stop(true); } };
+    return { port, handoff, release() {
+      if (released) return;
+      released = true; handoff(); pendingPorts.delete(port);
+    } };
+  }
+  throw remoteError("forward_port_lost", "Cannot allocate a distinct messaging forward port.");
+}
+
+/** A remote stdio helper cannot transfer its socket to sshd; the initiating owner checks SSH failure. */
 export function remotePortCandidate(): number {
-  const listener = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data(socket) { socket.end(); } } });
-  const port = listener.port; listener.stop(true);
-  if (!validPort(port)) throw remoteError("invalid_port", "Cannot allocate an unprivileged messaging port candidate.");
-  return port;
+  const reservation = reserveRemotePort();
+  try { return reservation.port; } finally { reservation.release(); }
 }
 /** Refuse GatewayPorts/public binds; neither port existence nor this scan proves endpoint identity. */
 export async function remotePortIsLoopback(port: number, budget: MessageBudget, capacity: RemoteCapacity,
@@ -23,7 +47,8 @@ export async function remotePortIsLoopback(port: number, budget: MessageBudget, 
   budget.throwIfEnded();
   const platform = inspector.platform ?? process.platform;
   if (platform === "linux") {
-    const found: string[] = [], hex = port.toString(16).toUpperCase().padStart(4, "0");
+    const hex = port.toString(16).toUpperCase().padStart(4, "0");
+    let loopback = false, exposed = false;
     for (const path of ["/proc/net/tcp", "/proc/net/tcp6"]) {
       let fd: RemoteProcFile;
       try { fd = await (inspector.openProc ?? (path => open(path, "r")))(path); }
@@ -32,19 +57,28 @@ export async function remotePortIsLoopback(port: number, budget: MessageBudget, 
         throw error;
       }
       try {
-        const bytes = Buffer.alloc(4 * 1024 * 1024 + 1); let size = 0;
-        while (size < bytes.length) {
-          budget.throwIfEnded(); const next = await fd.read(bytes, size, bytes.length - size, null);
-          if (!next.bytesRead) break; size += next.bytesRead;
-        }
-        if (size >= bytes.length) return false;
-        for (const line of bytes.subarray(0, size).toString("utf8").split("\n").slice(1)) {
+        // Stream every row: the table lists all of the host's sockets, including TIME_WAIT, so a
+        // busy machine passes any fixed size. A public listener anywhere in it must still refuse.
+        const chunk = Buffer.alloc(64 * 1024); let pending = "", header = true;
+        const row = (line: string) => {
+          if (header) { header = false; return; }
           const fields = line.trim().split(/\s+/), [address, fieldPort] = (fields[1] ?? "").split(":");
-          if (fields[3] === "0A" && fieldPort === hex) found.push(address!);
+          if (fields[3] !== "0A" || fieldPort !== hex) return;
+          if (address === "0100007F" || address === "00000000000000000000000001000000") loopback = true;
+          else exposed = true;
+        };
+        for (;;) {
+          budget.throwIfEnded(); const next = await fd.read(chunk, 0, chunk.length, null);
+          if (!next.bytesRead) break;
+          const lines = (pending + chunk.toString("latin1", 0, next.bytesRead)).split("\n");
+          pending = lines.pop()!;
+          if (pending.length > PROC_ROW_BYTES) return false;
+          for (const line of lines) row(line);
         }
+        row(pending);
       } finally { await fd.close(); }
     }
-    return found.length > 0 && found.every(address => address === "0100007F" || address === "00000000000000000000000001000000");
+    return loopback && !exposed;
   }
   if (platform === "darwin") {
     const output = await runRemoteHelper(["/usr/sbin/lsof", "-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fn"], budget, capacity,

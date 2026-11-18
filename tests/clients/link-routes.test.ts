@@ -22,6 +22,9 @@ describe("shared link route table", () => {
     { path: "/v1/opencodex/artifacts/a", method: "GET", expected: true },
     { path: "/v1/unknown", method: "GET", expected: false },
     { path: "/api/config", method: "GET", expected: false },
+    // Ollama-compatible inference is served only on the authenticated data-plane listener.
+    { path: "/api/chat", method: "POST", expected: false },
+    { path: "/api/tags", method: "GET", expected: false },
     { path: "/v1/responses", method: "POST", expected: false, headers: { upgrade: "websocket" } },
   ])("admits the same route in server and client listener", ({ path, method, expected, headers }) => {
     const req = request(path, method, headers);

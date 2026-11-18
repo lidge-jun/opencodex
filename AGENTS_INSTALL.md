@@ -52,6 +52,43 @@ The following instructions concern **starring the repository on GitHub**.
   the matter permanently — do not argue it, re-frame it, or raise it again
   later.
 
+### Telemetry
+
+Anonymous daily usage telemetry defaults to on only after a human has seen the
+disclosure notice (in the GUI or an interactive TTY prompt). An agent must never
+enable telemetry or acknowledge the telemetry disclosure on the user's behalf:
+`PUT /api/telemetry` and `ocx telemetry enable` refuse agent-driven callers with
+`agent_consent_required` (and `ocx telemetry enable` refuses a non-interactive
+terminal with `tty_required`), and `ocx config set`/`unset telemetry` refuse every
+caller. Opting out (`ocx telemetry disable`, `OCX_TELEMETRY=0` or `DO_NOT_TRACK=1`)
+is always permitted.
+
+A public leaderboard profile is a separate user-consent action: it publishes a handle and
+daily usage totals under the user's chosen name. An agent must never connect one or answer
+its prompt. `POST /api/telemetry/profile` requires a human dashboard session, and
+`ocx telemetry profile connect` refuses agent-driven callers with `agent_consent_required`
+and non-interactive terminals with `tty_required`. Disconnecting
+(`ocx telemetry profile disconnect`), which deletes the profile, is always permitted.
+
+### Google Antigravity sign-in
+
+Signing in to Google Antigravity puts the user's Google account at risk: Google
+has disabled Gemini and Antigravity access on accounts used through third-party
+tools ("This service has been disabled in this account for violation of Terms of
+Service."). Only the account owner can accept that risk. An agent must never:
+
+- pass `--accept-antigravity-risk` to `ocx login`, `ocx account login`, or
+  `ocx account import`, or answer their y/N prompt. Agent-driven runs are
+  refused with `antigravity_risk_not_acknowledged` whatever the flag says;
+  treat that as the final answer.
+- send `acknowledgeAntigravityRisk: true` to `POST /api/oauth/login` or
+  `POST /api/oauth/accounts/import`, or tick the dashboard dialog's checkbox
+  for the user.
+
+Relay the warning and let the user run the command themselves or use the
+dashboard. The management API cannot tell an agent holding the admin token from
+the CLI, so for that route this rule is the boundary.
+
 ## Where things are installed
 
 An agent asked to install, inspect, repair, or remove opencodex needs to know what is written
@@ -92,7 +129,7 @@ A host that has both a Task Scheduler entry and a WinSW service is in a conflict
 
 ### The CLI
 
-`npm install -g @bitkyc08/opencodex` puts `ocx` on the PATH from npm's global prefix, and the
+`npm install -g --allow-scripts=bun @bitkyc08/opencodex` puts `ocx` on the PATH from npm's global prefix, and the
 Bun runtime it needs is bundled inside that package. There is no separate runtime to install and
 no WSL layer on Windows.
 
@@ -133,9 +170,12 @@ agent-driven callers regardless:
   the one-time marker.
 - [`src/server/management/sidebar-routes.ts`](./src/server/management/sidebar-routes.ts)
   — the `403 agent_consent_required` refusal.
+- [`src/oauth/antigravity-risk.ts`](./src/oauth/antigravity-risk.ts) — the
+  Antigravity acknowledgement, refused for agent-driven CLI runs.
 
 Regression coverage: `tests/server/startup-prompt.test.ts`,
-`tests/cli/agent-driven.test.ts`, `tests/server/sidebar-routes.test.ts`.
+`tests/cli/agent-driven.test.ts`, `tests/server/sidebar-routes.test.ts`,
+`tests/oauth/oauth-antigravity-risk.test.ts`.
 
 ### Pending Codex account validation
 

@@ -181,6 +181,35 @@ test("notice display rules are scoped so a hidden notice cannot paint", async ()
 });
 
 /* #3353 — a bare password box explained nothing. */
+/* #8338 — a valid token behind a TLS-terminating proxy was reported as unverifiable. */
+test("a Remember refusal explains the address and lets the user sign in without it", async () => {
+  const calls: Array<[string, boolean | undefined]> = [];
+  const pending = promptForAdminToken(async (token, remember) => {
+    calls.push([token, remember]);
+    return remember ? "remember-unsupported" : "accepted";
+  });
+  const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog")!;
+  const form = dialog.querySelector<HTMLFormElement>("form")!;
+  const password = form.elements.namedItem("password") as HTMLInputElement;
+  const remember = form.querySelector<HTMLInputElement>('input[name="remember-device"]')!;
+  remember.checked = true;
+  password.value = "valid-token";
+  form.dispatchEvent(new testWindow.Event("submit", { bubbles: true, cancelable: true }));
+  await Promise.resolve();
+  await Promise.resolve();
+  const alert = dialog.querySelector<HTMLElement>('[role="alert"]')!;
+  expect(alert.textContent).toContain("cannot remember this device");
+  expect(alert.textContent).not.toContain("could not be verified");
+  expect(remember.checked).toBe(false);
+  expect(remember.disabled).toBe(true);
+  expect(dialog.isConnected).toBe(true);
+  // The refusal is about the address, so the typed token stays for a one-submit retry.
+  expect(password.value).toBe("valid-token");
+  form.dispatchEvent(new testWindow.Event("submit", { bubbles: true, cancelable: true }));
+  expect(await pending).toBe("valid-token");
+  expect(calls).toEqual([["valid-token", true], ["valid-token", false]]);
+});
+
 test("the dialog explains the credential and links the setup guide", async () => {
   const pending = promptForAdminToken(async () => "accepted");
   const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog")!;

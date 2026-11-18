@@ -142,7 +142,9 @@ describe("install scripts", () => {
     const script = await readText("scripts/install.sh");
 
     expect(script).toContain("Node.js 18+ is required");
-    expect(script).toContain("npm install -g @bitkyc08/opencodex");
+    // #8361: npm 12 blocks bun's postinstall by default, so a bare install produces a
+    // package whose bundled runtime never unpacked. Both installers must permit that one script.
+    expect(script).toContain("npm install -g --allow-scripts=bun @bitkyc08/opencodex");
     expect(script).toContain("command -v ocx");
     expect(script).toContain("ocx help");
     expect(script).not.toContain("bun install -g @bitkyc08/opencodex");
@@ -153,7 +155,7 @@ describe("install scripts", () => {
     const script = await readText("scripts/install.ps1");
 
     expect(script).toContain("Node.js 18+ is required");
-    expect(script).toContain("& $npm.Source install -g @bitkyc08/opencodex");
+    expect(script).toContain("& $npm.Source install -g --allow-scripts=bun @bitkyc08/opencodex");
     expect(script).toContain("$LASTEXITCODE");
     expect(script).toContain("Get-Command ocx.cmd");
     expect(script).toContain("Get-Command ocx");
@@ -218,26 +220,34 @@ exit 0
     const launcher = await readText("bin/ocx.mjs");
 
     expect(launcher).toContain('process.argv[2] === "update"');
-    expect(launcher).toContain('["install", "-g", `${PKG}@${tag}`]');
-    expect(launcher).toContain('["add", "-g", "--allow-build=bun", `${PKG}@${tag}`]');
+    expect(launcher).toContain('const selector = child?.version ?? tag;');
+    // #8361: the launcher's own npm reinstall must allow bun's postinstall for the same
+    // reason the shipped installers do; a bare install leaves the runtime un-unpacked.
+    expect(launcher).toContain('["install", "-g", "--allow-scripts=bun", `${PKG}@${selector}`]');
+    expect(launcher).toContain('["add", "-g", "--allow-build=bun", `${PKG}@${selector}`]');
+    expect(launcher).toContain('const tag = updateTag(current);');
     expect(launcher).toContain('return String(currentVersion).includes("-preview.") ? "preview" : "latest"');
     expect(launcher).toContain("!isBunGlobalInstall()");
     expect(launcher).toContain("repairCodexShimIfNeeded(postUpdateLauncher, homePolicy.authorizeMutation)");
     expect(launcher).toContain("runNpmSelfUpdate()");
     expect(launcher).toContain("runPnpmSelfUpdate()");
+    const bunStart = launcher.indexOf('const child = probeSpawn(bun,');
+    for (const entry of ['if (installMethod === "npm") await runNpmSelfUpdate();',
+      'if (installMethod === "pnpm") await runPnpmSelfUpdate();',
+      'await runPackageManagerSelfUpdate(installMethod, childArgs);']) {
+      expect(launcher.indexOf(entry)).toBeGreaterThan(-1);
+      expect(launcher.indexOf(entry)).toBeLessThan(bunStart);
+    }
   });
 
   test("release helper watches the workflow run it just dispatched", async () => {
     const script = await readText("scripts/release.ts");
 
     expect(script).toContain("waitForReleaseWorkflowRun");
-    // The invariant is that the dispatched run is located by workflow, branch
-    // and commit — not that the call is a shell string. Every external command
-    // now goes through the shared launcher as an argv array, because Bun.$
-    // resolved PATH itself and walked past the Windows `.cmd` test shims.
+    // Pin the workflow and dev branch without filtering by a mutable pre-dispatch SHA.
     expect(script).toContain('"gh", "run", "list", "--workflow", "release.yml", "--branch"');
-    expect(script).toContain('"--commit"');
-    expect(script).toContain("createdAt,databaseId,headSha,status,url");
+    expect(script).not.toContain('"--commit"');
+    expect(script).toContain("createdAt,databaseId,headSha,status,url,headBranch,event,workflowDatabaseId");
     expect(script).toContain("await watchRun(releaseRun.databaseId)");
   });
 

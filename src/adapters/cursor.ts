@@ -5,7 +5,7 @@ import { decodeCursorJwtPayload } from "../oauth/cursor";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { cursorExecDeniedMessage, cursorRequestDeclaresFullAccess } from "./cursor/exec-policy";
 import { isCursorBenignCancelError, isCursorIncompleteToolCallMessage, isCursorInvalidArgumentError, isCursorOverflowRemintCandidate, isCursorRootEnvelopeError, safeCursorErrorMessage, type CursorSizeContext } from "./cursor/cursor-errors";
-import { cursorCheckpointModelAffinityId, cursorNeedsExternalToolContinuation, inferCursorContextWindow, isCursorExternalWireModel } from "./cursor/discovery";
+import { cursorCheckpointModelAffinityId, cursorReplaysToolResultInRoot, inferCursorContextWindow, isCursorExternalWireModel } from "./cursor/discovery";
 import { createCursorKvStore, type CursorKvStore } from "./cursor/kv-store";
 import { mapCursorServerMessage } from "./cursor/message-mapper";
 import {
@@ -310,11 +310,12 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           const echoSniffer = armEchoSniffer ? new CursorEnvelopeEchoSniffer() : undefined;
           // Mid-stream observer (devlog 260828 F1/F2): diagnostic-only; armed with the
           // prefix sniffer because both fire on flattened tool-result replay priming.
-          // The composer-2.5 builds are native-wire but also replay the tool result as root text
-          // (cursorNeedsExternalToolContinuation), so the client-visible strip and the next-turn
-          // remint follow that predicate. The prefix retry above stays external-only: its
-          // corrective continuation text is encoded for external wire models alone.
-          const armMidstreamEcho = cursorNeedsExternalToolContinuation(activeRequest.modelId) && replaysToolResult;
+          // The composer-2.5 builds and Auto are native-wire but also replay the tool result as root
+          // text (cursorReplaysToolResultInRoot), so the client-visible strip and the next-turn
+          // remint follow that predicate; Auto's #2317 envelope echo is why it is armed there. The
+          // prefix retry above stays external-only: its corrective continuation text is encoded for
+          // external wire models alone.
+          const armMidstreamEcho = cursorReplaysToolResultInRoot(activeRequest.modelId) && replaysToolResult;
           const midstreamObserver = armMidstreamEcho ? new CursorMidstreamEchoObserver() : undefined;
           const midstreamFilter = armMidstreamEcho ? new ToolEnvelopeEchoFilter() : undefined;
           // Claude's factual redirects allow truthful routing prose; it is not a failure claim.

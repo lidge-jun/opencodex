@@ -258,7 +258,7 @@ export interface StreamParseState {
   translatorBudget?: TranslatorBudget;
   /** A capture bridge may impose a tighter ceiling on distinct calls and retained blocks. */
   maxToolBlockStarts?: number;
-  /** Qoder's isolated CLI names, validated at partial block start before retaining anything. */
+  /** Qoder's accepted CLI names to selected wire identities; validates partial starts and alias deduplication. */
   toolBridgeNames?: ReadonlyMap<string, string>;
   /** Set before an over-limit block can be allocated or emitted. */
   toolCallLimitExceeded?: boolean;
@@ -464,7 +464,10 @@ function resolveToolBlockKey(state: StreamParseState, event: StreamMessage): num
 function isEmittedToolCallRepeat(state: StreamParseState, id: string, name: string, argumentsJson: string): boolean {
   const previous = state.emittedToolCalls?.get(id);
   if (!previous) return false;
-  if (previous.name !== name || previous.argumentsJson !== argumentsJson) {
+  const selectedName = state.toolBridgeNames?.get(name);
+  const sameName = previous.name === name
+    || (selectedName !== undefined && selectedName === state.toolBridgeNames?.get(previous.name));
+  if (!sameName || previous.argumentsJson !== argumentsJson) {
     throw new CodingAgentProtocolError("Coding-agent CLI reused a completed tool call ID with conflicting name or input.");
   }
   return true;
@@ -594,7 +597,9 @@ function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): Adapt
           throw new CodingAgentProtocolError("Coding-agent CLI started a tool block with an invalid or undeclared name.");
         }
         const previous = state.emittedToolCalls?.get(id);
-        if (previous && previous.name !== name) {
+        const selectedName = state.toolBridgeNames?.get(name);
+        if (previous && previous.name !== name
+          && (selectedName === undefined || selectedName !== state.toolBridgeNames?.get(previous.name))) {
           throw new CodingAgentProtocolError("Coding-agent CLI reused a completed tool call ID with conflicting name or input.");
         }
         const distinctIds = state.completeAssistantToolUse ? (state.partialToolCallIds ??= new Set<string>()) : undefined;
@@ -724,7 +729,7 @@ function textPart(text: string): WireContentPart {
 }
 
 /** Encode an OpenCodex image content part as an Anthropic base64/url image block; never drop it. */
-function imagePart(imageUrl: string): WireContentPart | undefined {
+export function imagePart(imageUrl: string): WireContentPart | undefined {
   const match = /^data:([^;]+);base64,(.+)$/s.exec(imageUrl);
   if (match) return { type: "image", source: { type: "base64", media_type: match[1], data: match[2] } };
   if (/^https?:\/\//i.test(imageUrl)) return { type: "image", source: { type: "url", url: imageUrl } };

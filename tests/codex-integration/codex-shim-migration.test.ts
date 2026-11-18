@@ -60,6 +60,10 @@ describe.skipIf(process.platform === "win32")("legacy Unix shim migration", () =
   }));
 
   test("Windows legacy diagnostics omit Unix migration and sourcing advice", () => fixture(f => {
+    // Windows installs keep the original launcher as a regular file, never a link.
+    const saved = fs.readFileSync(f.backup);
+    fs.unlinkSync(f.backup);
+    fs.writeFileSync(f.backup, saved, { mode: 0o755 });
     fs.writeFileSync(f.statePath, JSON.stringify({ ...f.state, platform: "win32" }));
     const diagnostic = diagnoseCodexShim();
     expect(diagnostic).toMatchObject({ installed: true, healthy: true });

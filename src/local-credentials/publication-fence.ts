@@ -50,8 +50,27 @@ export function withCredentialPublicationFence<T>(home: string, fn: () => T, wai
   try { return fn(); } finally { release(); }
 }
 
+/**
+ * Await a peer without using SQLite's blocking busy handler on the serving thread. Unlike that
+ * handler, a failed attempt does not keep SQLite's PENDING lock, so a continuous stream of shared
+ * readers can hold a writer off until its deadline; the writer then fails closed with SQLITE_BUSY.
+ */
 export async function withCredentialPublicationFenceAsync<T>(home: string, fn: () => Promise<T>): Promise<T> {
-  const release = acquire(home, CREDENTIAL_FENCE_WRITER_WAIT_MS);
+  const deadline = performance.now() + CREDENTIAL_FENCE_WRITER_WAIT_MS;
+  let retryDelayMs = 25;
+  let release: () => void;
+  for (;;) {
+    try { release = acquire(home, 0); break; }
+    catch (error) {
+      const remaining = deadline - performance.now();
+      if (!String((error as { code?: unknown })?.code ?? "").startsWith("SQLITE_BUSY") || remaining <= 0) throw error;
+      // A native SQLite busy wait blocks every HTTP request in this process.
+      // Keep the same total budget while letting the serving event loop run.
+      // The loop tries once more after the last sleep, as SQLite's own busy handler would.
+      await new Promise<void>(resolve => setTimeout(resolve, Math.min(retryDelayMs, remaining)));
+      retryDelayMs = Math.min(retryDelayMs * 2, 100);
+    }
+  }
   try { return await fn(); } finally { release(); }
 }
 

@@ -46,6 +46,37 @@ test("settings PUT uses the injected startup-health reader", async () => {
   });
 });
 
+test("settings and startup health retain the same Desktop login evidence", async () => {
+  for (const loginState of ["enabled", "disabled", "unknown"] as const) {
+    const enabled = loginState === "enabled";
+    const health = startupHealthFixture({
+      status: enabled ? "protected" : "at-risk", routingKind: "opencodex-local",
+      desktop: { owned: true, running: true, loginEnabled: enabled, loginState, viable: enabled },
+    });
+    const deps: ManagementApiDeps = { getCachedStartupHealth: async () => health };
+    for (const path of ["/api/startup-health", "/api/settings"]) {
+      const req = new Request(`http://127.0.0.1:10100${path}`);
+      const response = await handleManagementAPI(req, new URL(req.url), baseConfig(), deps);
+      expect(response?.status).toBe(200);
+      const body = await response!.json() as { desktop?: { loginState?: string }; startupHealth?: { desktop?: { loginState?: string } } };
+      expect((path === "/api/settings" ? body.startupHealth : body)?.desktop?.loginState).toBe(loginState);
+    }
+  }
+});
+
+test("settings and startup health preserve stopped Desktop supervision evidence", async () => {
+  const desktop = { owned: true, running: false, loginEnabled: false, loginState: "unknown" as const, viable: false };
+  const health = startupHealthFixture({ status: "at-risk", routingKind: "opencodex-local", desktop });
+  const deps: ManagementApiDeps = { getCachedStartupHealth: async () => health };
+  for (const path of ["/api/startup-health", "/api/settings"]) {
+    const req = new Request(`http://127.0.0.1:10100${path}`);
+    const response = await handleManagementAPI(req, new URL(req.url), baseConfig(), deps);
+    expect(response?.status).toBe(200);
+    const body = await response!.json() as { desktop?: typeof desktop; startupHealth?: { desktop?: typeof desktop } };
+    expect((path === "/api/settings" ? body.startupHealth : body)?.desktop).toEqual(desktop);
+  }
+});
+
 afterEach(() => invalidateStartupHealthCache());
 
 /** Leave a probe in flight that never settles until released, as a slow Windows service query does. */

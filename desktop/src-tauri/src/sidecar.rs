@@ -198,13 +198,17 @@ pub fn start(
         .map_err(|error| error.to_string())?
         .join("gui")
         .join("dist");
-    let command = app
+    let mut command = app
         .shell()
         .sidecar("ocx")
         .map_err(|error| error.to_string())?
         .args(["start", "--port", &endpoint.port.to_string()])
         .env("OPENCODEX_GUI_DIST", gui_dist)
         .env(SUPERVISED_ENV, "1");
+    // The installer's opt-out could not be saved: keep this session from sending anything.
+    if crate::installer_telemetry::sidecar_env_opt_out() {
+        command = command.env("OCX_TELEMETRY", "0");
+    }
     let (events, child) =
         crate::process_spawn::with_spawn(|| command.spawn()).map_err(|error| error.to_string())?;
     let watch = watch.for_child(child.pid());

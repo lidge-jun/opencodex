@@ -7,6 +7,16 @@ description: 獨立專家諮詢，支援 manual、preflight 與依據證據的 a
 
 這與子代理面（見[代理設定](/zh-tw/reference/configuration/agents/)）不同：子代理是透過 Codex 協作工具由 Worker 發起的委託。顧問是客户端完全不可見的代理側 sidecar —— 即使從不 spawn 的 Worker 也能獲得建議。
 
+## 僅傳送問題
+
+要減少重複輸入，請在顧問頁面啟用 **僅傳送主模型的問題**，或執行：
+
+```sh
+ocx advisor set --context-mode question-only
+```
+
+此選項只傳送固定顧問指令和主模型的問題。問題最多保留 2,000 字元，超長時附加截斷提示。OpenCodex 不自動附加任務、對話歷史、工具結果、工具目錄、主模型身分或修復證據。主模型必須補充必要背景。空問題不會送往顧問模型。此模式暫停 preflight 和 adaptive 自動諮詢；主動諮詢、共享確認與現有次數限制仍然生效。預設值 `context` 保留下述上下文共享行為。使用 `--context-mode context` 可恢復。
+
 ## 設定
 
 在儀表板 **Advisor** 頁面從目錄選擇專家模型。選擇器原樣儲存原生、供應商、指定帳戶、自訂和組合模型的識別碼。已停用和等待初始選擇的模型不會作為新選項。已儲存但不在可選目錄中的識別碼會保留並顯示警告，直到您選擇其他模型或清除。目錄載入失敗時保留目前選擇並提供重試。請選擇能回傳文字建議的模型；目錄不保證諮詢相容性。CLI 和 API 仍接受路由器支援的模型字串。
@@ -29,13 +39,14 @@ description: 獨立專家諮詢，支援 manual、preflight 與依據證據的 a
 | `model?` | `string` | — | 專家模型。任何路由權威接受的模型字串：裸原生模型（`gpt-6-astra`）、明確 `provider/model`（`anthropic/claude-sonnet-4-6`、`xai/grok-...`）或帳戶限定的原生模型。完整支援跨 provider：Worker 與 Advisor 無需同屬一個 provider。 |
 | `effort?` | `string` | `"max"` | Advisor 呼叫的推理強度（`low` 至 `ultra`）。 |
 | `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | 何時諮詢顧問。 |
+| `contextMode?` | `"context" \| "question-only"` | `"context"` | 上下文共享方式。`question-only` 要求主模型主動提問，並暫停自動諮詢。 |
 | `maxConsultationsPerTask?` | `integer` | `3` | 自適應任務諮詢上限（1–3 次嘗試），包含手動呼叫。 |
 | `timeoutMs?` | `number` | `120000` | 回環諮詢逾時。 |
 | `contextSharingConsent?` | `"v1"` | 缺省 | 操作者同意把任務上下文傳送給所設定的顧問 provider。只有 `"v1"` 是目前版本。缺省、過期或其他值都表示不傳送任務內容。`enabled: true` 本身不是同意。 |
 
 透過儀表板的 **Advisor** 頁面或 `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>` 管理。
 
-沒有目前同意時，`ocx advisor on` 不會開啟跨 provider 傳送：它會印出揭露並停止。`ocx advisor on --ack-context-sharing` 與 `ocx advisor consent` 記錄 `v1`。`ocx advisor consent --revoke` 會移除同意並立即停止傳送。`ocx advisor set` 不授予同意。儀表板上的同意核取方塊預設不勾選。
+沒有目前同意時，`ocx advisor on` 不會開啟跨 provider 傳送：它會印出揭露並停止。`ocx advisor on --ack-context-sharing` 與 `ocx advisor consent` 記錄 `v1`。`ocx advisor consent --revoke` 會移除同意。尚未發出的諮詢會被阻擋，但已經發出的諮詢無法取消，已經離開代理的上下文也無法收回。`ocx advisor set` 不授予同意。儀表板上的同意核取方塊預設不勾選。
 
 ## 策略
 
@@ -60,11 +71,17 @@ description: 獨立專家諮詢，支援 manual、preflight 與依據證據的 a
 
 所設定的顧問 provider 可能與 Worker 的 provider 不同。
 
+諮詢同時遵守呼叫者擷取的 API key 模型範圍、付費 combo 同意與裝置 fallback 限制，以及 Advisor 自身准入金鑰的主機限制：設定時為 `OPENCODEX_API_AUTH_TOKEN` 或本代理接受的服務 token 檔案，否則為第一個設定的 API key。只有在最後這種情況下金鑰順序才有影響：請把能存取 Advisor 模型的金鑰放在第一位，否則每次諮詢都無法使用。設定了環境或服務 token 時，由該 token 決定諮詢。這些規則同樣適用於 combo 選擇、巢狀決策模型與重試。無法滿足這些規則的諮詢會向 worker 回傳不可用通知。
+
+例如，`allowMeteredComboTargets: false` 的 `laptop` 金鑰無法透過 Advisor 在計費 combo 目標上花費，`fallback.devices.laptop.provider: false` 也會阻擋 Advisor 的 provider fallback 跳轉。沒有金鑰的 loopback 呼叫者仍需要 combo 的 `allowMeteredTargets: true` 選擇加入。當兩個金鑰都設定 `allowMeteredComboTargets: true` 且 combo 設定 `allowMeteredTargets: true` 時，即使經由公開綁定的 loopback 監聽器，Advisor 也能使用計費目標。伺服器在驗證請求時擷取呼叫者政策，早於等待本文容量或讀取本文；之後的金鑰或 fallback 編輯無法擴大該次諮詢。這也涵蓋路由的視覺輔助、compact 請求及其決策模型，以及 WebSocket 回合內的每次候選重試。每個新的 WebSocket 回合會擷取自己的政策。
+
 OpenCodex 不會把 provider API key、Authorization 標頭、OAuth token、僅後端使用的設定密鑰、行程環境或隱藏的思維鏈寫進該提示，也不會解密或轉送加密的 provider 私有推理。**任務內容不做通用脫敏。** 貼進任務的金鑰、工具讀到的檔案裡的秘密、工具或日誌印出的 token 都可能被傳送。OpenCodex 不執行通用 DLP。
 
 ## 權威
 
 手動建議是 Worker 自己發出的 `advisor` 呼叫所對應的工具結果。結果是一個 JSON 物件。`advice` 是顧問模型的文字。`status` 由執行期寫入。
+
+基於 fetch 的 Web 搜尋回合中，只有實際生效的 `tool_choice` 允許合成 `advisor` 工具時，搜尋迴圈才會提供該工具並攔截手動諮詢呼叫。將 `allowed_tools` 限制為 `web_search` 不允許手動諮詢顧問。啟用託管搜尋不會擴大此工具權限範圍。
 
 自動建議的 JSON 內容放在獨立的 user-role 建議訊息中。developer 訊息只保留固定的執行期傳輸說明，顧問產生的文字不會進入 developer/system 內容；OpenAI Chat 與 Anthropic 都能傳遞它，不需偽造工具呼叫。JSON 跳脫能防止結構突破與欄位偽造，但不能保證模型忽略自然語言中的惡意指令。專門的諮詢結果協定可進一步區分建議與使用者請求。每個請求最多進行 3 次諮詢與 4 次 Advisor worker 續寫。諮詢額度耗盡後移除 advisor 工具，重複呼叫只允許一次攜帶上限結果的最終續寫；再次呼叫會以 502 advisor_continuation_limit 結束，不再傳送隱藏的 worker 請求。空完成重試共用此上限。
 
@@ -81,6 +98,7 @@ Advisor 失敗是 fail-open 的：已經發出的諮詢若失敗（模型不可�
 ## PR1 限制
 
 - 原生 OpenAI passthrough 回合（ChatGPT 池 Worker）不會獲得合成工具；advisor 支援覆蓋路由（translated）provider。preflight 諮詢適用於 run-turn 介面卡；工具不適用。
+- 翻譯後的 `/v1/messages` 請求（例如將 Claude Code 路由至翻譯 provider）與 `/v1/responses`、`/v1/chat/completions` 一樣取得合成工具與 preflight 諮詢。`policy` 與上下文共享同意遵循相同規則，設定從目前組態讀取，因此撤銷同意會阻止進行中的請求發起尚未送出的諮詢；它不會取消已送出的諮詢，也無法收回已離開代理的上下文。
 - 不提供語義卡住偵測、任務完成複核、升級分層、多專家或投票；自適應觸發只使用已觀察到的工具證據。
 - preflight 去重帳本是行程內的；代理重啟後，進行中的任務可能再收到一次 preflight 諮詢。
 

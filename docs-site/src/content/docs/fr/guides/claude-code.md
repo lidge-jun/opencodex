@@ -15,8 +15,9 @@ ajouter un compte). Par défaut, chaque requête utilise uniquement le compte **
 Un groupe de comptes Claude **expérimental et facultatif** (`anthropicAccountPool.enabled`) ajoute l'affinité de
 session et la sélection des nouvelles sessions basée sur l'usage entre ces comptes OAuth. Il ne contrôle **pas** le basculement sur 429 : dès que deux comptes utilisables sont enregistrés, une requête limitée bascule vers un autre compte que l'option soit activée ou non, et cela ne peut pas être désactivé. Pour les **nouvelles**
 sessions uniquement, `anthropicAccountPool.strategy` sélectionne un compte éligible : `quota` (par défaut)
-choisit la plus faible utilisation connue dans la fenêtre configurée par `anthropicAccountPool.quotaWindow`
-(`five-hour` par défaut, `weekly` ou `max-utilization`) lorsqu'elle dépasse `autoSwitchThreshold` ; `round-robin`
+conserve le compte actif jusqu'à ce que son utilisation dans la fenêtre définie par
+`anthropicAccountPool.quotaWindow` (`five-hour` par défaut, `weekly` ou `max-utilization`) atteigne
+`autoSwitchThreshold` (80 par défaut), puis passe au compte le moins utilisé, en privilégiant les comptes encore sous leur propre seuil ; `round-robin`
 répartit les sessions uniformément (`stickyLimit`, `1` par défaut) ; `fill-first` utilise le compte actif jusqu'à
 un délai de récupération, une réauthentification ou le seuil, puis passe au suivant. Cette fonction est
 **désactivée par défaut** et reste expérimentale.
@@ -64,7 +65,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` ; lors d'un lancement par abonnement, si non défini, `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]` natif |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | Libellé `/model` d'un emplacement de niveau qu'OpenCodex règle sur un alias routé (par exemple `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`). La même paire est écrite dans l'environnement système launchd et dans le hook shell. L'identifiant du modèle reste l'alias. Un emplacement ou un libellé que vous définissez vous-même n'est pas modifié |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `1` lorsque `alwaysEnableEffort` est activé (conditionnel) |
-| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` lorsqu'il est défini (conditionnel ; désactivé par défaut) |
+| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` lorsqu'il est défini (conditionnel ; non injecté par défaut, la valeur par défaut de Claude Code s’applique) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | Remplacement du contexte hérité lorsque `maxContextTokens` est défini (conditionnel) |
 Les variables que vous exportez vous-même gagnent toujours. Les arguments supplémentaires passent par : `ocx claude -p "hello"`.
 
@@ -490,9 +491,7 @@ Trois états de configuration :
 La valeur de compactage est réglable dans **Connexion → Claude**. **Avertissement :** une valeur supérieure à la fenêtre réelle d'un modèle
 rend ce modèle inutilisable : les tours échouent avant que le résumé puisse se déclencher.
 
-La normalisation des erreurs de dépassement de contexte utilise uniquement les 65 536 premières unités de code UTF-16 du message du fournisseur.
-Les diagnostics ou nombres de jetons situés après cette limite peuvent disparaître sans marqueur de troncature.
-Consultez le [guide anglais](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling) pour les limites exactes et les conditions de reprise des nombres de jetons.
+La normalisation des réponses d'erreur Messages utilise un texte fixe, sans conserver le texte du fournisseur ni les nombres de jetons. Un dépassement de contexte reconnu renvoie `prompt is too long: The request exceeds the model's context window.`. Dans un flux, un bloc dont le premier champ est l'événement error est conservé jusqu'à 1 Mio ; au-delà, une erreur fixe sans phrase de compaction est renvoyée. Consultez le [guide anglais](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling) pour la portée et les deux exceptions.
 
 Les modèles Anthropic natifs dont le contexte est inférieur à 1M ne sont jamais marqués automatiquement. Une fenêtre de compactage que vous exportez vous-même
 reste prioritaire pour le marquage des variables de lancement ; le proxy s'appuie sur votre valeur pour déterminer les modèles qui peuvent recevoir le marqueur sans risque.
@@ -663,7 +662,7 @@ Le proxy traduit chaque requête Anthropic Messages API au format Codex Response
 | Assistant `tool_use` | `function_call` (`input` → JSON-stringifié `arguments`) |
 | Utilisateur `tool_result` | `function_call_output` (`is_error` → préfixe `[tool error]`) |
 | Relecture de `thinking` / `redacted_thinking` | Éléments `reasoning` avec enveloppes `ocxr1` bornées pour les signatures et les contenus masqués |
-| Outils fonctionnels | `{type: "function"}` (`web_search*` → `{type: "web_search"}`) |
+| Outils fonctionnels | `{type: "function"}` (`web_search*` → `{type: "web_search"}`) La recherche hébergée avec `allowed_domains`, `blocked_domains` ou `user_location` est omise sur les routes Responses/Chat traduites ; la forcer renvoie 400. Les définitions de fonctions `defer_loading` valides restent appelables comme fonctions ordinaires. Voir les [limites de traduction](/guides/claude-code/#search-restrictions-and-deferred-tools-on-translated-routes). |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, fonction nommée→`{type:"function",name}`, hébergée WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
@@ -694,7 +693,7 @@ Sur l’adaptateur Anthropic prévu, les blocs signés non masqués (y compris t
 **Taxonomie des erreurs :** 400 `invalid_request_error`, 401 `authentication_error`,
 402 `billing_error`, 403 `permission_error`, 404 `not_found_error`, 409 `conflict_error`,
 413 `request_too_large`, 429 `rate_limit_error`, 504 `timeout_error`, 529 `overloaded_error`,
-autre 5xx `api_error`. `Retry-After` est conservé.
+autre 5xx `api_error`. `Retry-After` est envoyé en secondes entières (une date HTTP devient le nombre de secondes restantes), plafonné à huit jours.
 
 ## Mise en cache des prompts et utilisation des jetons
 
@@ -702,9 +701,9 @@ autre 5xx `api_error`. `Retry-After` est conservé.
 et l'avant-dernier message utilisateur, ainsi que le champ `cache_control` automatique de premier niveau. Les tours stables
 atteignent généralement un taux d'accès au cache d'environ 99.9 %.
 
-**Routage OpenAI/ChatGPT natif :** produit une valeur `prompt_cache_key` propre à la session, à partir de
-`metadata.user_id` lorsqu'il est présent ou, à défaut, d'un hachage du contenu système, ainsi qu'un en-tête `session_id`
-pour l'affinité du cache. La clé de cache inclut le modèle et l'intégralité des schémas d'outils.
+**Routage OpenAI/ChatGPT natif :** produit une valeur `prompt_cache_key`, à partir de
+`metadata.user_id` lorsqu'il s'agit d'une chaîne ou, à défaut, d'un hachage du contenu système, ainsi qu'un en-tête `session_id`
+pour l'affinité du cache, cet en-tête provenant uniquement d'une identité de session et jamais de la clé de repli partagée. La clé de repli dérivée du contenu système (utilisée seulement si un contenu système est présent) inclut aussi le modèle et l'intégralité des schémas d'outils.
 
 **Calcul des jetons d'entrée :** Anthropic soustrait `cached_tokens` et `cache_write_tokens` de
 `input_tokens`, les exposant comme `cache_read_input_tokens` et `cache_creation_input_tokens`.

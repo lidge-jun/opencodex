@@ -6,8 +6,11 @@ import { LanguageProvider } from "../src/i18n/provider";
 import { useT } from "../src/i18n/shared";
 import AddProviderModal from "../src/components/AddProviderModal";
 import { OAUTH_LOGIN_POLL_INTERVAL_MS } from "../src/components/use-add-provider-oauth";
+import { BROWSER_LOGIN_POLL_ATTEMPTS } from "../src/oauth-login-budget";
 import { useProvidersOAuth } from "../src/pages/use-providers-oauth";
 import type { OAuthAccount, OAuthStatus } from "../src/pages/providers-shared";
+import { configureApiTargets } from "../src/api";
+import { standaloneApiTargets } from "../src/api-targets";
 
 /**
  * The add-provider OAuth pane renders the authorization URL so a user whose
@@ -104,9 +107,10 @@ async function mountModal(onAdded: (name: string) => void = () => {}) {
   await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
 }
 
-function ProvidersOAuthHarness({ provider = "orcarouter-oauth", apiBase = "", onSettled }: {
+function ProvidersOAuthHarness({ provider = "orcarouter-oauth", apiBase = "", targetKey, onSettled }: {
   provider?: string;
   apiBase?: string;
+  targetKey?: string;
   onSettled?: (provider: string) => void;
 }) {
   const t = useT();
@@ -121,6 +125,7 @@ function ProvidersOAuthHarness({ provider = "orcarouter-oauth", apiBase = "", on
   useEffect(() => () => { aliveRef.current = false; }, []);
   const { loginOAuth, cancelLoginOAuth } = useProvidersOAuth({
     apiBase,
+    targetKey,
     t,
     aliveRef,
     accountSets,
@@ -163,6 +168,7 @@ function ProvidersOAuthHarness({ provider = "orcarouter-oauth", apiBase = "", on
 }
 
 async function mountProvidersOAuthHarness(props: Parameters<typeof ProvidersOAuthHarness>[0] = {}) {
+  configureApiTargets(standaloneApiTargets(props.apiBase ?? ""));
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
     root = createRoot(host);
@@ -281,6 +287,70 @@ test("pagehide cancels an account login and allows another login after bfcache r
     await new Promise((r) => setTimeout(r, 20));
   });
   expect(pendingLogins).toHaveLength(1);
+});
+
+test("a target change clears the old login UI and an old completion cannot restore it", async () => {
+  let resolveA!: (response: Response) => void;
+  let loginCalls = 0;
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (url.includes("/api/oauth/login")) {
+      loginCalls += 1;
+      if (loginCalls === 1) return await new Promise<Response>(resolve => { resolveA = resolve; });
+      return Response.json({ url: "https://b.example/login" });
+    }
+    if (url.includes("/api/oauth/status")) return Response.json({ loggedIn: false });
+    return Response.json({});
+  }) as typeof fetch;
+  await mountProvidersOAuthHarness({ targetKey: "hub-a" });
+  expect(host.querySelector('[data-testid="oauth-busy"]')!.textContent).toBe("orcarouter-oauth");
+
+  await act(async () => {
+    root!.render(<LanguageProvider><ProvidersOAuthHarness targetKey="hub-b" /></LanguageProvider>);
+  });
+  expect(host.querySelector('[data-testid="oauth-busy"]')!.textContent).toBe("idle");
+  expect(host.querySelector('[data-testid="oauth-login-info"]')!.textContent).toBe("no-login-info");
+
+  await act(async () => {
+    resolveA(Response.json({ url: "https://a.example/login" }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+  });
+  expect(host.querySelector('[data-testid="oauth-login-info"]')!.textContent).toBe("no-login-info");
+
+  await act(async () => { clickByText("Log in again"); await new Promise(resolve => setTimeout(resolve, 20)); });
+  expect(host.querySelector('[data-testid="oauth-login-info"]')!.textContent).toBe("https://b.example/login");
+});
+
+test("a target change resets the add-provider modal's busy state and device URL", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const renderModal = async (targetKey: string) => {
+    await act(async () => {
+      root ??= createRoot(host);
+      root.render(
+        <LanguageProvider>
+          <AddProviderModal apiBase="" targetKey={targetKey} existingNames={[]} initialTier="paid" onClose={() => {}} onAdded={() => {}} />
+        </LanguageProvider>,
+      );
+    });
+  };
+  await renderModal("hub-a");
+  await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
+  clickByText("Claude");
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  clickByText("Log in with Claude");
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  await act(async () => { pendingLogins.shift()?.(A_URL); await new Promise((r) => setTimeout(r, 20)); });
+  expect(host.querySelector(".login-url-block-text")?.textContent).toBe(A_URL);
+
+  await renderModal("hub-b");
+  // The old target's spinner and device URL must not survive under the new label.
+  expect(host.querySelector(".login-url-block-text")).toBeNull();
+
+  // The new target's own login still works.
+  clickByText("Log in with Claude");
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  await act(async () => { pendingLogins.shift()?.(B_URL); await new Promise((r) => setTimeout(r, 20)); });
+  expect(host.querySelector(".login-url-block-text")?.textContent).toBe(B_URL);
 });
 
 test("pagehide clears the add-provider OAuth hint and allows another login", async () => {
@@ -725,7 +795,8 @@ for (const surface of ["providers", "modal"] as const) {
           await act(async () => { server.logins[0]!.reject(new Error("request failed")); });
         } else {
           await server.answerLogin(0);
-          for (let i = 0; i < (surface === "modal" ? 100 : 150); i++) await server.tick();
+          // Both surfaces share one browser budget (#8618).
+          for (let i = 0; i < BROWSER_LOGIN_POLL_ATTEMPTS; i++) await server.tick();
         }
         expect(server.cancels).toHaveLength(1);
         await act(async () => { win.dispatchEvent(new win.Event("pagehide")); });

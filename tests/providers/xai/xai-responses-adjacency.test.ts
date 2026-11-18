@@ -22,20 +22,111 @@ function xaiOauthResponses(overrides: Partial<OcxProviderConfig> = {}): OcxProvi
 }
 
 function buildBody(provider: OcxProviderConfig, rawBody: Record<string, unknown>): Record<string, unknown> {
+  const requestBody = typeof rawBody.model === "string" ? rawBody : { model: MODEL, ...rawBody };
+  const before = structuredClone(requestBody);
   const built = createResponsesPassthroughAdapter(provider).buildRequest({
-    modelId: MODEL,
+    modelId: typeof requestBody.model === "string" ? requestBody.model : MODEL,
     context: { messages: [] },
     stream: true,
     options: {},
     previousResponseId: typeof rawBody.previous_response_id === "string"
       ? rawBody.previous_response_id
       : undefined,
-    _rawBody: { model: MODEL, ...rawBody },
+    _rawBody: requestBody,
   } as Parameters<ReturnType<typeof createResponsesPassthroughAdapter>["buildRequest"]>[0], {
     headers: new Headers(),
   });
+  if (built instanceof Promise) throw new Error("Expected a synchronous Responses request builder");
+  expect(requestBody).toEqual(before);
   return JSON.parse(String(built.body)) as Record<string, unknown>;
 }
+
+describe("xAI Responses include compatibility", () => {
+  for (const baseUrl of ["https://api.x.ai/v1", "https://us.api.x.ai/v1", "https://cli-chat-proxy.grok.com/v1"]) {
+    test(`preserves Grok 4.7 encrypted tool continuation at ${baseUrl}`, () => {
+      const raw = {
+        model: "grok-4.7",
+        store: false,
+        reasoning: { effort: "xhigh" },
+        include: ["output.encrypted_content", "reasoning.encrypted_content", "web_search_call.action.sources", "output.encrypted_content"],
+        tools: [{ type: "function", name: "read_fixture", parameters: { type: "object", properties: {} } }],
+        input: [
+          { type: "reasoning", encrypted_content: "synthetic-native-ciphertext", summary: [] },
+          { type: "function_call", call_id: "call_fixture", name: "read_fixture", arguments: "{}" },
+          { type: "function_call_output", call_id: "call_fixture", output: "nonce=synthetic-fixture" },
+        ],
+      };
+      const before = structuredClone(raw);
+      const body = buildBody(xaiOauthResponses({ baseUrl }), raw);
+
+      expect(body.include).toEqual(["reasoning.encrypted_content", "web_search_call.action.sources"]);
+      expect(body.model).toBe("grok-4.7");
+      expect(body.reasoning).toEqual(raw.reasoning);
+      expect(body.store).toBe(false);
+      expect(body.tools).toEqual(raw.tools);
+      expect(body.input).toEqual(raw.input);
+      expect(raw).toEqual(before);
+    });
+  }
+
+  test("does not invent include values for absent, empty or non-array input", () => {
+    const provider = xaiOauthResponses();
+    expect(buildBody(provider, { input: [] })).not.toHaveProperty("include");
+    expect(buildBody(provider, { input: [], include: [] }).include).toEqual([]);
+    expect(buildBody(provider, { input: [], include: "reasoning.encrypted_content" }).include)
+      .toBe("reasoning.encrypted_content");
+  });
+
+  for (const baseUrl of ["https://chatgpt.com/backend-api/codex", "https://gateway.example/v1", "https://api.x.ai.evil.example/v1", "https://api.x.ai:444/v1"]) {
+    test(`preserves include entries and caller input outside xAI at ${baseUrl}`, () => {
+      const raw = { include: ["output.encrypted_content", "reasoning.encrypted_content"], input: [] };
+      const before = structuredClone(raw);
+      const body = buildBody(xaiOauthResponses({ baseUrl, authMode: "key" }), raw);
+
+      expect(body.include).toEqual(raw.include);
+      expect(raw).toEqual(before);
+    });
+  }
+
+  test("drops the include entry xAI rejects instead of ignoring", () => {
+    const body = buildBody(xaiOauthResponses(), {
+      include: ["output.encrypted_content", "reasoning.encrypted_content"],
+      input: [],
+    });
+
+    expect(body.include).toEqual(["reasoning.encrypted_content"]);
+  });
+
+  test("drops an include that only carried the unsupported entry", () => {
+    const body = buildBody(xaiOauthResponses(), {
+      include: ["output.encrypted_content"],
+      input: [],
+    });
+
+    expect(body).not.toHaveProperty("include");
+  });
+
+  test("strips the rejected include entry for the US regional endpoint", () => {
+    const provider = xaiOauthResponses({ baseUrl: "https://us.api.x.ai/v1", authMode: "key" });
+    const body = buildBody(provider, {
+      include: ["output.encrypted_content", "reasoning.encrypted_content"], input: [],
+    });
+    expect(body.include).toEqual(["reasoning.encrypted_content"]);
+    expect(buildBody(provider, { include: ["output.encrypted_content"], input: [] }))
+      .not.toHaveProperty("include");
+  });
+
+  test("leaves another Responses destination's include untouched", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      authMode: "key",
+    };
+    const body = buildBody(provider, { include: ["output.encrypted_content"], input: [] });
+
+    expect(body.include).toEqual(["output.encrypted_content"]);
+  });
+});
 
 describe("xAI Responses tool-result adjacency", () => {
   test("the xAI registry entry seeds adjacency and pairing without marking the provider stateless", () => {

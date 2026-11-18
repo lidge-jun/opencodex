@@ -35,6 +35,7 @@ export default function ProviderCurrentQuota({ report, reading, onRefreshQuota }
   return <section className="pws-usage-block" aria-label={t("pws.currentAccountUsage")}>
     <div className="pws-usage-block-head">
       <h3 className="pws-section-title">{t("pws.currentAccountUsage")}</h3>
+      {reading?.planLabel && <span className="badge badge-green">{reading.planLabel}</span>}
       {onRefreshQuota && effective.quotaMode !== "unsupported" && <div className="pws-quota-refresh">
         {result !== null && <span role="status" className={result ? "pws-status-ok" : "pws-status-warn"}>
           {t(result ? "pws.quotaCheckCompleted" : "codexAuth.quotaRefreshFailed")}

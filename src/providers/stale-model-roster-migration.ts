@@ -45,6 +45,8 @@ export interface StaleModelRoster {
   provider: string;
   /** The exact saved roster this migration may replace, and nothing else. */
   from: readonly string[];
+  /** Exact old roster after id renames; metadata additions still compare against `from`. */
+  afterModelRenames?: readonly string[];
   to: readonly string[];
   /** Per-model seed values for the added ids, written only into containers that exist. */
   contextWindows?: Readonly<Record<string, number>>;
@@ -131,6 +133,7 @@ export const STALE_MODEL_ROSTERS: readonly StaleModelRoster[] = [
   {
     provider: "moonshot",
     from: KIMI_API_MODELS_BEFORE_K31,
+    afterModelRenames: KIMI_API_MODELS_BEFORE_K31.map(id => id === "kimi-k2.5" ? "kimi-k3.1-pro" : id),
     to: KIMI_API_MODELS,
     contextWindows: KIMI_API_MODEL_CONTEXT_WINDOWS,
     defaultReasoningEfforts: KIMI_API_DEFAULT_REASONING_EFFORTS,
@@ -193,7 +196,8 @@ export function projectStaleModelRosters(
       }
       continue;
     }
-    if (!sameList(prov.models, entry.from)) continue;
+    if (!sameList(prov.models, entry.from)
+      && !(entry.afterModelRenames && sameList(prov.models, entry.afterModelRenames))) continue;
     prov.models = [...entry.to];
     fillExisting(prov.modelContextWindows, entry.contextWindows, added);
     fillExisting(prov.modelMaxOutputTokens, entry.maxOutputTokens, added);

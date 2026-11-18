@@ -156,6 +156,7 @@ describe("state-store sweeper", () => {
       "pool-rotation",
       "combo-rotation",
       "combo-session-recall",
+      "provider-cache-affinity",
       "guardian-backoff",
       "codex-reauth",
       "oauth-reauth",

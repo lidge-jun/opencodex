@@ -37,8 +37,8 @@ import { getServerListenPort } from "../server/lifecycle";
 import type { DesktopPickerState } from "./desktop-app/picker-freshness";
 
 async function defaultRestartDesktopApp(): Promise<CodexDesktopRestartSummary> {
-  const { restartCodexDesktopApp } = await import("./desktop-app-restart");
-  const outcome = restartCodexDesktopApp({ allowHandoff: false });
+  const { restartCodexDesktopAppAsync } = await import("./desktop-app-restart");
+  const outcome = await restartCodexDesktopAppAsync({ allowHandoff: false });
   return {
     attempted: outcome.attempted,
     stopped: outcome.stopped,

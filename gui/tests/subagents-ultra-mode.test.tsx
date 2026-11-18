@@ -102,6 +102,30 @@ test("does not enable Ultra mode for the default surface even when V2 is enabled
   expect(ultraSwitch().getAttribute("aria-pressed")).toBe("false");
 });
 
+test("an unconfirmed plaintext receipt refreshes applied state while keeping the save error", async () => {
+  const dialogProto = (testWindow as unknown as { HTMLDialogElement?: { prototype: Record<string, unknown> } }).HTMLDialogElement?.prototype;
+  if (dialogProto && typeof dialogProto.showModal !== "function") dialogProto.showModal = function () { (this as { open?: boolean }).open = true; };
+  v2Responses = [
+    { ok: true, body: { enabled: false, multiAgentMode: "default", supportsPlaintextV2Mode: true } },
+    { ok: true, body: { enabled: true, multiAgentMode: "v2-plaintext", supportsPlaintextV2Mode: true, plaintextAgentMessagesEnabled: true } },
+  ];
+  await mount();
+  container.querySelector(".swi-advanced")?.setAttribute("open", "");
+  const plaintext = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="radio"]'))
+    .find(button => button.textContent?.includes("plaintext"));
+  expect(plaintext).toBeTruthy();
+  await act(async () => { plaintext!.click(); });
+  const dialog = container.querySelector("dialog[data-plaintext-v2-consent]");
+  expect(dialog).toBeTruthy();
+  await act(async () => { dialog!.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click(); });
+  await act(async () => { dialog!.querySelector<HTMLButtonElement>(".btn-primary")!.click(); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+  expect(v2Call).toBe(2);
+  expect(plaintext!.getAttribute("aria-checked")).toBe("true");
+  expect(container.textContent).toContain("Failed to save proactive delegation settings");
+  expect(requests.filter(item => item.init?.method === "PUT")).toHaveLength(1);
+});
+
 test("clears the page load error after a successful Ultra mode retry", async () => {
   v2Responses = [
     { ok: false, body: { error: "temporary failure" }, status: 503 },

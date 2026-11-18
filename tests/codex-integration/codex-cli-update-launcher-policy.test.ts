@@ -40,7 +40,7 @@ describe("Codex CLI updater launcher policy", () => {
     const guard = source.slice(source.lastIndexOf("if (", probeCall), probeCall);
     expect(guard).toContain("!codexCliUpdateInspection");
     expect(guard).toContain("isNodeModulesInstall()");
-    expect(source).toContain("resolveBun({ allowInstall: !codexCliUpdateInspection })");
+    expect(source).toContain("const bunRuntime = resolveBun({ allowInstall: !passiveSync && !orchestratedUpdate && !passiveCapabilities && !codexCliUpdateInspection, allowMissing: orchestratedUpdate || passiveSync });");
     // A missing bundle makes installJs nullable; allowInstall still gates its execution.
     expect(source).toContain(
       'if (allowInstall && installJs && existsSync(installJs)) {\n    const r = probeSpawnSync(process.execPath, [installJs], { stdio: "inherit" });',

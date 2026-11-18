@@ -232,7 +232,8 @@ function rewriteForUpstream(
   }
 
   let changed = false;
-  const next: Record<string, unknown> = {};
+  // Recursive tool lowering must retain the input item's historical/live symbol marker.
+  const next: Record<string, unknown> = { ...value };
   for (const [key, entry] of Object.entries(value)) {
     const rewritten = rewriteForUpstream(entry, names, callIds);
     next[key] = rewritten;

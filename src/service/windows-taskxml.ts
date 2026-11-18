@@ -9,12 +9,19 @@ import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from "../lib/win-paths";
 import { cachedCurrentWindowsIdentity, resolveCurrentWindowsPrincipal, WINDOWS_PRINCIPAL_LOOKUP_TIMEOUT_MS } from "../lib/windows-user-principal";
 import { resolveServiceListenPort, resolvedProxyEnv } from "./definition";
-import { cliEntry, filterTransientServicePath, serviceLogPath, currentCodexSqliteHomeAbsolute } from "./state";
+import { cliEntry, filterTransientServicePath, serviceLogPath, currentCodexSqliteHomeAbsolute, currentWindowsServiceCodexHome, currentOpenCodexHome } from "./state";
 
+/**
+ * Escape a value for the quoted `set "NAME=value"` form every wrapper assignment uses.
+ * Inside the quotes cmd treats `^`, `&`, `|`, `<`, `>` and parentheses as literal, so a
+ * caret must stay single: doubling it would point the variable at a different path. Percent
+ * expansion still runs in a batch file, so `%` becomes `%%`. `!` is literal because the
+ * wrapper runs under DisableDelayedExpansion. A quote or line break cannot be represented
+ * and is dropped.
+ */
 function windowsBatchValue(value: string): string {
   return value
     .replace(/%/g, "%%")
-    .replace(/\^/g, "^^")
     .replace(/"/g, "")
     .replace(/[\r\n]/g, "");
 }
@@ -80,12 +87,14 @@ export function buildWindowsServiceScript(
     windowsBatchSet(BUN_RUNTIME_SOURCE_ENV, bunRuntimeSource),
     windowsBatchSet(BUN_RUNTIME_PATH_ENV, bun, "path"),
     windowsBatchSet("PATH", path, "pathList"),
-    windowsBatchSet("CODEX_HOME", process.env.CODEX_HOME?.trim(), "path"),
-    windowsBatchSet("CODEX_SQLITE_HOME", currentCodexSqliteHomeAbsolute("windows"), "path"),
-    windowsBatchSet("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim(), "path"),
+    windowsBatchSet("CODEX_HOME", currentWindowsServiceCodexHome()),
+    windowsBatchSet("CODEX_SQLITE_HOME", currentCodexSqliteHomeAbsolute("windows")),
+    windowsBatchSet("OPENCODEX_HOME", currentOpenCodexHome()),
     ...proxyEnv.map(({ name, value }) => windowsBatchSet(name, value)),
-    windowsBatchSet("OCX_API_TOKEN_FILE", serviceApiTokenFilePath(), "path"),
-    windowsBatchSet("OCX_SERVICE_LOG", serviceLogPath(), "path"),
+    // Absolute like the homes above: a profile-variable form could read the token, or write
+    // the log, under another profile than the home the proxy is pinned to.
+    windowsBatchSet("OCX_API_TOKEN_FILE", serviceApiTokenFilePath()),
+    windowsBatchSet("OCX_SERVICE_LOG", serviceLogPath()),
     windowsBatchSet("OCX_BUN", bun, "path"),
     windowsBatchSet("OCX_CLI", cli ?? undefined, "path"),
     // Standalone executables have no npm package tree; recovery is "replace the executable", so no OCX_PKG_DIR/restore_backup wiring.
@@ -509,11 +518,21 @@ export function windowsTaskHasSessionRecoveryTriggers(
     scoped.some(element =>
       taskXmlDecodedValueEquals(element, "StateChange", stateChange)
       && taskXmlOptionalValueEquals(element, "Enabled", "true")
-      && windowsTaskTriggerScopeAcceptable(element, expectedUserId)));
+      && windowsTaskUserIdMatches(element, expectedUserId)));
+}
+
+/** Verify the exported run-as user. Trigger scopes do not identify the task principal. */
+export function windowsTaskPrincipalMatches(xml: string, expectedUserIds: readonly string[]): boolean {
+  const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
+  if (taskXmlHasPrefixedTag(scrubbed, "Principals") || taskXmlElementCount(scrubbed, "Principals") !== 1
+    || taskXmlHasPrefixedTag(scrubbed, "Principal") || taskXmlElementCount(scrubbed, "Principal") !== 1) return false;
+  const principal = taskXmlSection(taskXmlSection(scrubbed, "Principals"), "Principal");
+  return taskXmlElementCount(principal, "GroupId") === 0 && !taskXmlHasPrefixedTag(principal, "GroupId")
+    && windowsTaskUserIdMatches(principal, expectedUserIds);
 }
 
 /**
- * A trigger's scope is acceptable only when it names the expected account exactly.
+ * A principal or trigger names the expected account only when its UserId matches exactly.
  *
  * An unscoped recovery trigger is not identity proof. Production registration resolves a SID
  * before writing XML; a missing scope therefore means the fixed-name task is legacy or foreign
@@ -521,7 +540,7 @@ export function windowsTaskHasSessionRecoveryTriggers(
  * Treating an unknown expected identity as a wildcard would let a fresh status process accept a
  * task bound to another user's session and suppress the repair that should replace it.
  */
-function windowsTaskTriggerScopeAcceptable(
+function windowsTaskUserIdMatches(
   element: string,
   expectedUserId: ExpectedWindowsTaskUserId | undefined,
 ): boolean {
@@ -548,7 +567,7 @@ function windowsTaskRegistrationBaseHealthy(
   xml: string,
   wscript = windowsWscript(),
   launcher = windowsLauncherVbsPath(),
-  allowLossyPaths = true,
+  { allowLossyPaths = true, allowDisabled = false }: { allowLossyPaths?: boolean; allowDisabled?: boolean } = {},
 ): boolean {
   const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
   // taskXmlSection() takes the FIRST match and the schema allows arbitrary XML under
@@ -566,7 +585,8 @@ function windowsTaskRegistrationBaseHealthy(
     && taskXmlOptionalValueEquals(trigger, "Enabled", "true")
     && /<LogonType>\s*InteractiveToken\s*<\/LogonType>/i.test(principal)
     && taskXmlRunLevelAcceptable(principal)
-    && taskXmlOptionalValueEquals(settings, "Enabled", "true")
+    && (taskXmlOptionalValueEquals(settings, "Enabled", "true")
+      || (allowDisabled && taskXmlDecodedValueEquals(settings, "Enabled", "false")))
     && /<MultipleInstancesPolicy>\s*IgnoreNew\s*<\/MultipleInstancesPolicy>/i.test(settings)
     && /<ExecutionTimeLimit>\s*PT0S\s*<\/ExecutionTimeLimit>/i.test(settings)
     // Compare decoded VALUES, not encodings: Task Scheduler canonicalizes the
@@ -608,9 +628,21 @@ export function windowsTaskRegistrationRefreshableLegacy(
 ): boolean {
   const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
   const triggers = taskXmlSection(scrubbed, "Triggers");
-  return windowsTaskRegistrationBaseHealthy(xml, wscript, launcher, false)
-    && taskXmlElementCount(triggers, "SessionStateChangeTrigger") === 0
+  return windowsTaskRegistrationBaseHealthy(xml, wscript, launcher, { allowLossyPaths: false })
+    && windowsTaskHasNoSessionRecoveryTriggers(triggers);
+}
+
+function windowsTaskHasNoSessionRecoveryTriggers(triggers: string): boolean {
+  return taskXmlElementCount(triggers, "SessionStateChangeTrigger") === 0
     && !taskXmlHasPrefixedTag(triggers, "SessionStateChangeTrigger");
+}
+
+/** Stop accepts either recognized shape, including a disabled task, with exact ownership. */
+export function windowsTaskRegistrationMatchesForStop(xml: string, launcher: string, userIds: readonly string[]): boolean {
+  if (!windowsTaskRegistrationBaseHealthy(xml, windowsWscript(), launcher, { allowLossyPaths: false, allowDisabled: true })
+    || !windowsTaskPrincipalMatches(xml, userIds)) return false;
+  const triggers = taskXmlSection(taskXmlWithoutCommentsAndCdata(xml), "Triggers");
+  return windowsTaskHasSessionRecoveryTriggers(triggers, userIds) || windowsTaskHasNoSessionRecoveryTriggers(triggers);
 }
 
 export interface WindowsSchedulerXmlState {

@@ -199,6 +199,7 @@ export default function CustomLayerDialog({
         <label className="field">
           <span className="muted text-label">{t("codexSet.custom.titleLabel")}</span>
           <input
+            className="input"
             type="text"
             value={title}
             maxLength={MAX_TITLE_CHARS + 20}
@@ -208,7 +209,7 @@ export default function CustomLayerDialog({
 
         <label className="field">
           <span className="muted text-label">{t("codexSet.custom.bodyLabel")}</span>
-          <textarea rows={10} value={body} onChange={e => setBody(e.target.value)} />
+          <textarea className="input" rows={10} value={body} onChange={e => setBody(e.target.value)} />
         </label>
 
         <p className="muted small">{t("codexSet.custom.bodySize", { bytes: bodyBytes, max: MAX_BODY_BYTES })}</p>

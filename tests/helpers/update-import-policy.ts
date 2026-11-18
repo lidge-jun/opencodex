@@ -1,11 +1,27 @@
 // Best-effort regression lint data for known dependency edges and bindings, not a
 // security boundary or completeness proof. Runtime mutation guards enforce authority.
-export const updateStaticImports: Readonly<Record<string, readonly string[]>> = {
+import { orchestratedChildReview } from "./update-review-orchestrated-child";
+import { orchestratedEntryReview } from "./update-review-orchestrated-entry";
+import { signedSupplyReview } from "./update-review-signed-supply";
+import { mergeStaticImports } from "./update-review-table";
+
+const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
   "bin/ocx.mjs": [
+    // Pre-mutation mutex admission and session/argument verification.
+    'import { acquireSyncGuard, staleUpdateMarkerHint } from "../src/update/sync-update-mutex.mjs";',
+    'import { isOrchestratedUpdateArgv, parseOrchestratedUpdateArgs, parseOrchestratedChildArgs } from "../src/update/orchestrated-arguments.mjs";',
+    'import { createLegacyUpdateSession, createOrchestratedChildSession, decodeOrchestratedExpect } from "../src/update/orchestrated-session.mjs";',
+    'import { matchesOrchestratedPnpmOwner } from "../src/update/orchestrated-pnpm.mjs";',
+    'import { createUpdatePlanToken } from "../src/update/orchestrated-token.mjs";',
+    // The orchestration driver starts an independently admitted update child.
+    'import { applyNodeOrchestratedUpdate } from "../src/update/orchestrated-node-driver.mjs";',
+    // Package supervisor spawn is guarded by package authorization.
+    'import { runPosixInstallerSync } from "../src/update/posix-install-supervisor.mjs";',
     "import { guardedRun, guardedSpawn, guardedSpawnSync, guardedExit, probeProcessAlive, relayOwnSignal } from \"../src/update/mutation-guard.mjs\";",
     "import { probeSpawn, probeSpawnSync } from \"../src/update/mutation-guard.mjs\";",
     "import { createSupervisionLatch, inspectDesktopSupervision } from \"../src/service/desktop-supervision.mjs\";",
     "import { planDesktopCliHandoff, runDesktopCliHandoff } from \"../src/lib/desktop-cli-handoff.mjs\";",
+    "import { forwardLauncherSignals } from \"../src/lib/launcher-signal-forwarding.mjs\";",
     "import { desktopCliRecordPath } from \"../src/lib/desktop-cli-record.mjs\";",
     "import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from \"../src/update/stop-contract.mjs\";",
     "import { probeProxyLiveness } from \"../src/update/proxy-liveness-probe.mjs\";",
@@ -25,7 +41,8 @@ export const updateStaticImports: Readonly<Record<string, readonly string[]>> = 
     "import { scopeTranspilerCacheToRuntime } from \"../src/lib/bun-transpiler-cache-scope.mjs\";",
     "import { findDesktopCli, findPathBun } from \"../src/lib/bun-path-runtime.mjs\";",
     "import { npmInvocation } from \"../src/update/npm-invocation.mjs\";",
-    "import { runNpmInstall } from \"../src/update/npm-install.mjs\";",
+    // Both installer entry points authorize the package spawn.
+    'import { runNpmInstall, runWindowsInstallerSync } from "../src/update/npm-install.mjs";',
     "import { pnpmInvocationForPath, resolvePnpmCommands } from \"../src/update/pnpm-invocation.mjs\";",
     "import { detectInstallOwnershipFromPath } from \"../src/update/install-detection.mjs\";",
     "import { pnpmOwnerInvocation, resolvePnpmGlobalOwner, runPnpmGlobalUpdate, } from \"../src/update/pnpm-global-install.mjs\";",
@@ -54,6 +71,11 @@ export const updateStaticImports: Readonly<Record<string, readonly string[]>> = 
   ],
   "src/update/check-types.ts": [],
   "src/update/codex-cli-update-launch-policy.mjs": [],
+  "src/update/config-preflight.ts": [
+    // Read-only config descriptor inspection and passive raw diagnostics; warnings are discarded, no backup is written.
+    'import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";',
+    'import { configDiagnosticsFromRaw } from "../config/diagnostics";'
+  ],
   "src/update/desktop-badge.ts": [
     "import { defaultUpdateTag } from \"./index\";"
   ],
@@ -66,8 +88,8 @@ export const updateStaticImports: Readonly<Record<string, readonly string[]>> = 
     "import { removePid, removeRuntimePort } from \"../config/process-state\";",
     "import { dropWindowsTcpRowsForLocalPort } from \"../server/windows-tcp-drop\";",
     "import { stopWinswService } from \"../lib/winsw\";",
-    "import { stopWindows } from \"../service\";",
-    "import { killWindowsSchedulerWrappers } from \"../lib/windows-service-wrappers\";",
+    // #7771: Part A of the checked Windows stop; its authorizer is the service mutation gate.
+    "import { runWindowsServiceStopPartA } from \"../service/windows-service-stop\";",
     "import { guardedRun, guardedKill, guardedExecFileSync, materializeMutationData, UpdateMutationRefusedError, type UpdateMutationAuthorizer } from \"./mutation-guard.mjs\";"
   ],
   "src/update/guarded-tray-ops.ts": [
@@ -75,6 +97,14 @@ export const updateStaticImports: Readonly<Record<string, readonly string[]>> = 
     "import { guardedRun, UpdateMutationRefusedError, type UpdateMutationAuthorizer } from \"./mutation-guard.mjs\";"
   ],
   "src/update/index.ts": [
+    // Child identity/session setup precedes mutation; installer supervisors authorize their spawns.
+    'import { createLegacyUpdateSession, createOrchestratedChildSession, decodeOrchestratedExpect } from "./orchestrated-session.mjs";',
+    'import { protectOrchestratedWorkerSignals } from "./orchestrated-child.mjs";',
+    'import { runPosixInstallerSync } from "./posix-install-supervisor.mjs";',
+    'import { runWindowsInstallerSync } from "./npm-install.mjs";',
+    // Formatting only: recovery guidance for a refusal by a witnessless update marker (#8524).
+    'import { staleUpdateMarkerHint } from "./sync-update-mutex.mjs";',
+    'import { verifyOrchestratedInstall } from "./orchestrated-tree.mjs";',
     "import { guardedRun, guardedSpawn, guardedSpawnSync } from \"./mutation-guard.mjs\";",
     "import { probeSpawn, probeSpawnSync } from \"./mutation-guard.mjs\";",
     "import { createSupervisionLatch, inspectDesktopSupervision } from \"../service/desktop-supervision.mjs\";",
@@ -85,8 +115,9 @@ export const updateStaticImports: Readonly<Record<string, readonly string[]>> = 
     "import { decidePostStopUpdate } from \"./stop-decision.mjs\";",
     "import { existsSync, readFileSync, readdirSync } from \"node:fs\";",
     "import { fileURLToPath } from \"node:url\";",
-    "import { dirname, join, resolve } from \"node:path\";",
-    "import { getConfigDir, loadConfig } from \"../config\";",
+    "import { dirname, isAbsolute, join, resolve } from \"node:path\";",
+    "import { getConfigDir, getConfigPath, loadConfig } from \"../config\";",
+    'import { runConfigPreflight } from "./config-preflight";',
     "import { readPid, readRuntimePort, getRuntimePortPath } from \"../config/process-state\";",
     "import { pendingTeardownOutstanding } from \"../config/pending-teardown\";",
     "import { planUpdateRuntimeHandling, planStoppedRuntimeRecovery, inspectPackageRuntimeLiveness } from \"./runtime-ownership.mjs\";",
@@ -96,7 +127,7 @@ export const updateStaticImports: Readonly<Record<string, readonly string[]>> = 
     "import { npmInvocation } from \"./npm-invocation.mjs\";",
     "import { pnpmInvocation, pnpmInvocationForPath, resolvePnpmCommands } from \"./pnpm-invocation.mjs\";",
     "import { detectInstallOwnershipFromPath } from \"./install-detection.mjs\";",
-    "import { pnpmOwnerInvocation, readPnpmGlobalPackage, resolvePnpmGlobalOwner, runPnpmGlobalUpdate, } from \"./pnpm-global-install.mjs\";",
+    "import { pnpmOwnerInvocation, pnpmOwnerEnvironment, readPnpmGlobalPackage, resolvePnpmGlobalOwner, runPnpmGlobalUpdate, } from \"./pnpm-global-install.mjs\";",
     "import { checkRegistryPackageIntegrity } from \"./registry-integrity.mjs\";",
     "import { npmCachePreflightFailureMessage, runNpmCachePreflight, } from \"./npm-cache-preflight.mjs\";",
     "import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from \"./tray-update-plan.mjs\";",
@@ -109,7 +140,9 @@ export const updateStaticImports: Readonly<Record<string, readonly string[]>> = 
     "import { freshServingPid, hasRestartableServiceManager, readParentPid, readServiceManagerPid, restartServiceManagerJob, supervisionVerdict, unsettledManagerWarning, unsupervisedRuntimeWarning, } from \"./supervised-recovery.mjs\";"
   ],
   "src/update/install-detection.mjs": [
-    "import { existsSync, readFileSync, realpathSync, statSync } from \"node:fs\";"
+    "import { existsSync, readFileSync, realpathSync, statSync } from \"node:fs\";",
+    // Dependency-free pnpm store-layout spelling shared with the tree verifier (#8183).
+    "import { isInMarkedPnpmCustomStore, isInPnpmGlobalStoreLinks } from \"./pnpm-store-layout.mjs\";"
   ],
   "src/update/job-pinned-start.ts": [
     "import { guardedSpawn } from \"./mutation-guard.mjs\";",
@@ -136,10 +169,7 @@ export const updateStaticImports: Readonly<Record<string, readonly string[]>> = 
     "import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from \"./tray-update-plan.mjs\";"
   ],
   "src/update/job-windows-restart.ts": [
-    "import { join } from \"node:path\";",
-    "import { getConfigDir } from \"../config\";",
-    "import { guardedStopWinsw, guardedStopWindows, guardedKillWindowsWrappers } from \"./guarded-runtime-ops\";",
-    "import { readServiceBackend } from \"../service\";"
+    "import { guardedStopWindowsChecked } from \"./guarded-runtime-ops\";"
   ],
   "src/update/job.ts": [
     "import { guardedRun, guardedSpawnSync, materializeMutationData } from \"./mutation-guard.mjs\";",
@@ -157,7 +187,7 @@ export const updateStaticImports: Readonly<Record<string, readonly string[]>> = 
     "import { guardedKillProxy, guardedRemovePid, guardedRemoveRuntimePort, guardedDropWindowsTcp, guardedPublishJob, type KillProxy } from \"./guarded-runtime-ops\";",
     "import { isHealthzVersion, isOpencodexHealthz, probeHostname, proxyIdentityAt, type HealthzIdentity, } from \"../server/proxy-liveness\";",
     "import { isServiceInstalled, isServiceViable } from \"../service\";",
-    "import { stopWindowsServiceWrappersBestEffort } from \"./job-windows-restart\";",
+    "import { stopWindowsServiceForRestart, WINDOWS_SERVICE_STOP_ABORT } from \"./job-windows-restart\";",
     "import { createUpdateServiceHomePolicy, inspectUpdateServiceHome, type UpdateServiceHomeInspector } from \"./service-home-authority\";",
     "import { runUpdateRestartWithOwnershipLease, type ServiceOwnershipResolution } from \"./restart-ownership\";",
     "import { restartServiceManagerAfterUpdate, unsettledManagerRestartFailure, unsupervisedRestartFailure, type ManagerRestartFn } from \"./job-supervised-restart\";",
@@ -205,23 +235,74 @@ export const updateStaticImports: Readonly<Record<string, readonly string[]>> = 
     "import { npmInvocation } from \"./npm-invocation.mjs\";"
   ],
   "src/update/npm-install.mjs": [
-    "import { guardedSpawn, materializeMutationData } from \"./mutation-guard.mjs\";",
+    // Package supervisor dispatch is guarded; arguments are materialized before authorization.
+    'import { guardedSpawn, guardedSpawnSync, materializeMutationData } from "./mutation-guard.mjs";',
     "import { dirname, join, win32 } from \"node:path\";",
-    "import { fileURLToPath } from \"node:url\";"
+    "import { fileURLToPath } from \"node:url\";",
+    // Windows installer witness publication before the supervisor request (#8524).
+    'import { publishWindowsInstallerPid } from "./windows-installer-marker.mjs";',
+    // Refuses the Windows supervisor test seam outside a test process.
+    'import { isTestHomeGuardArmed } from "./test-home-guard.mjs";'
   ],
   "src/update/npm-invocation.mjs": [
     "import { existsSync, realpathSync } from \"node:fs\";",
     "import { win32 } from \"node:path\";"
   ],
+  "src/update/windows-installer-marker.mjs": [
+    // Unique temp name for the marker publication.
+    'import { randomUUID } from "node:crypto";',
+    // Marker publication: replaces only a marker awaiting an installer.
+    'import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";',
+    // Read-only home derivation for the test-home guard.
+    'import { dirname } from "node:path";',
+    // Signal-zero liveness of an earlier recorded supervisor.
+    'import { probeProcessAlive } from "./mutation-guard.mjs";',
+    // Refuses the real home under test.
+    'import { assertNotRealHomeUnderTest } from "./test-home-guard.mjs";',
+  ],
+  // Supervisor entry: its reviewed caller launches it through the package-guarded spawn; it runs only what its stdin caller supplies.
+  "src/update/posix-install-supervisor-entry.mjs": [
+    // Supervisor entry body; see the supervisor rows for what it enforces.
+    'import { runPosixInstallerSupervisorMain } from "./posix-install-supervisor.mjs";',
+  ],
+  "src/update/posix-install-supervisor.mjs": [
+    // Installer spawn in the supervisor child; its reviewed caller launches it through guardedSpawnSync at line 18.
+    'import { spawn } from "node:child_process";',
+    // Guarded package authorization precedes supervisor spawn.
+    'import { guardedSpawnSync } from "./mutation-guard.mjs";',
+    // Marker publication in the supervisor child: replaces only a mutating marker.
+    'import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";',
+    // Read-only resolution of the supervisor entry.
+    'import { fileURLToPath } from "node:url";',
+    // Read-only construction of the supervisor entry path.
+    'import { dirname, join } from "node:path";',
+  ],
+  // Admission mutex and home checks precede update mutation.
+  "src/update/sync-update-mutex.mjs": [
+    // Pre-mutation home creation and read-only marker inspection.
+    'import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync } from "node:fs";',
+    // Read-only construction of admission and marker paths.
+    'import { dirname, join, posix, win32 } from "node:path";',
+    // Pre-mutation admission lease and read-only lease inspection.
+    'import { acquireOwnershipMutationLease, inspectOwnershipMutationLease, ownershipMutationLeasePath } from "../service/ownership-mutation-lease.mjs";',
+    // Read-only construction of ownership lease paths.
+    'import { serviceStateFilesFor } from "../service/install-state-contract.mjs";',
+    // Pre-mutation test-home assertion and read-only test detection.
+    'import { assertNotRealHomeUnderTest, isTestHomeGuardArmed } from "./test-home-guard.mjs";',
+  ],
+  // Pre-mutation admission mutex and read-only inspection re-export.
+  "src/update/sync-update-mutex.ts": ['export * from "./sync-update-mutex.mjs";'],
+  // Read-only construction and comparison of protected home paths.
+  "src/update/test-home-guard.mjs": ['import { basename, dirname, join, resolve } from "node:path";'],
   "src/update/ownership-transaction.ts": [
     "import { readFileSync } from \"node:fs\";",
     "import { acquireOwnershipMutationLease, ownershipMutationLeaseChildEnvironment, unprivilegedOwnershipMutationEnvironment, } from \"../service/ownership-mutation-lease.mjs\";"
   ],
   "src/update/pnpm-global-install.mjs": [
-    "import { existsSync, readFileSync, realpathSync, statSync } from \"node:fs\";",
-    "import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from \"node:path\";",
+    "import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from \"node:fs\";",
+    "import { basename, dirname, isAbsolute, join, parse, relative, resolve, win32 } from \"node:path\";",
     "import { pnpmInvocationForPath } from \"./pnpm-invocation.mjs\";",
-    "import { verifyPnpmInstallTree } from \"./transactional-install.mjs\";"
+    "import { pnpmPackageUsesGlobalStoreLinks, verifyPnpmInstallTree } from \"./transactional-install.mjs\";"
   ],
   "src/update/pnpm-invocation.mjs": [
     "import { existsSync } from \"node:fs\";",
@@ -291,8 +372,9 @@ export const updateStaticImports: Readonly<Record<string, readonly string[]>> = 
     "import { guardedRenameSync, ownedArtifactRm } from \"./mutation-guard.mjs\";",
     "import { probeSpawnSync } from \"./mutation-guard.mjs\";",
     "import { randomBytes } from \"node:crypto\";",
-    "import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from \"node:fs\";",
-    "import { basename, dirname, join } from \"node:path\";"
+    "import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, writeFileSync } from \"node:fs\";",
+    "import { basename, delimiter, dirname, isAbsolute, join, parse, relative, resolve, sep } from \"node:path\";",
+    "import { isInMarkedPnpmCustomStore } from \"./pnpm-store-layout.mjs\";"
   ],
   "src/update/tray-update-plan.mjs": [],
   "src/update/update-failure-guidance.mjs": [
@@ -304,23 +386,27 @@ export const updateStaticImports: Readonly<Record<string, readonly string[]>> = 
     "import { dirname, isAbsolute } from \"node:path\";"
   ]
 };
-export const updateDeferredImports: readonly string[] = [
+export const updateStaticImports = mergeStaticImports(baseStaticImports, orchestratedEntryReview.staticImports, orchestratedChildReview.staticImports, signedSupplyReview.staticImports);
+const baseDeferredImports: readonly string[] = [
+  // Read-only identity verification before the child enters mutation.
+  'src/update/index.ts:runUpdate:session = createOrchestratedChildSession({ home: getConfigDir(), resultPath: child.resultPath, resultCapability: child.resultCapability, expect, notAfter: child.notAfter, verifyIdentity: async () => (await import("./orchestrated-entry")).verifyOrchestratedChildIdentity(expect, child.version) })',
   "src/update/index.ts:resolvedRuntimeOwnership:{ resolveServiceOwnership } = await import(\"../service\")",
-  "src/update/index.ts:runUpdate:{ serviceStatePaths } = await import(\"../service\")",
-  "src/update/index.ts:runUpdate:{ inspectUpdateServiceHome } = await import(\"./service-home-authority\")",
-  "src/update/index.ts:runUpdate:{ isServiceInstalled } = await import(\"../service\")",
-  "src/update/index.ts:runUpdate:{ getWindowsTrayStatus, guardedStartWindowsTray, guardedStopWindowsTray } = await import(\"./guarded-tray-ops\")",
-  "src/update/index.ts:runUpdate:{ serviceReinstallArgs, isServiceViable } = await import(\"../service\")",
-  "src/update/index.ts:runUpdate:{ guardedStartWindowsTray } = await import(\"./guarded-tray-ops\")",
-  "src/update/index.ts:runUpdate:{ guardedStartWindowsTray } = await import(\"./guarded-tray-ops\")",
-  "src/update/index.ts:runUpdate:{ isCodexShimInstalled } = await import(\"../codex/shim\")",
-  "src/update/index.ts:runUpdate:{ serviceReinstallArgs } = await import(\"../service\")",
-  "src/update/index.ts:runUpdate:{ guardedReclaimListenPort: reclaimListenPort } = await import(\"./guarded-port-reclaim\")",
-  "src/update/index.ts:runUpdate:{ isServiceViable } = await import(\"../service\")",
-  "src/update/index.ts:runUpdate:{ guardedStartWindowsTray } = await import(\"./guarded-tray-ops\")",
+  "src/update/index.ts:runUpdateWithSession:{ serviceStatePaths } = await import(\"../service\")",
+  "src/update/index.ts:runUpdateWithSession:{ inspectUpdateServiceHome } = await import(\"./service-home-authority\")",
+  "src/update/index.ts:runUpdateWithSession:{ isServiceInstalled } = await import(\"../service\")",
+  "src/update/index.ts:runUpdateWithSession:{ getWindowsTrayStatus, guardedStartWindowsTray, guardedStopWindowsTray } = await import(\"./guarded-tray-ops\")",
+  "src/update/index.ts:runUpdateWithSession:{ serviceReinstallArgs, isServiceViable } = await import(\"../service\")",
+  "src/update/index.ts:runUpdateWithSession:{ guardedStartWindowsTray } = await import(\"./guarded-tray-ops\")",
+  "src/update/index.ts:runUpdateWithSession:{ guardedStartWindowsTray } = await import(\"./guarded-tray-ops\")",
+  "src/update/index.ts:runUpdateWithSession:{ isCodexShimInstalled } = await import(\"../codex/shim\")",
+  "src/update/index.ts:runUpdateWithSession:{ serviceReinstallArgs } = await import(\"../service\")",
+  "src/update/index.ts:runUpdateWithSession:{ guardedReclaimListenPort: reclaimListenPort } = await import(\"./guarded-port-reclaim\")",
+  "src/update/index.ts:runUpdateWithSession:{ isServiceViable } = await import(\"../service\")",
+  "src/update/index.ts:runUpdateWithSession:{ guardedStartWindowsTray } = await import(\"./guarded-tray-ops\")",
   "src/update/job-update-tray.ts:defaultWorkerTrayHandoff:{ getWindowsTrayStatus, guardedStartWindowsTray, guardedStopWindowsTray } = await import(\"./guarded-tray-ops\")",
   "src/update/job.ts:restartAfterUpdate:{ serviceReinstallArgs } = await import(\"../service\")"
 ];
+export const updateDeferredImports: readonly string[] = [...baseDeferredImports, ...orchestratedEntryReview.deferredImports, ...orchestratedChildReview.deferredImports, ...signedSupplyReview.deferredImports];
 // Existing trusted wrapper internals: each complete expression is reviewed.
 // Import permission does not grant a wrapper arbitrary loader/global access.
 export const updateBoundaryRootSites = new Map([

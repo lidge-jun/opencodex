@@ -7,6 +7,16 @@ description: manual, preflight 및 증거 기반 adaptive 정책을 제공하는
 
 이는 서브에이전트 서피스([에이전트 구성](/ko/reference/configuration/agents/) 참조)와 다릅니다. 서브에이전트는 Codex 협업 도구를 통한 워커 주도 위임입니다. 어드바이저는 클라이언트에게 보이지 않는 프록시 측 사이드카입니다 — 아무것도 spawn하지 않는 워커도 조언을 받을 수 있습니다.
 
+## 질문만 전송
+
+반복 입력을 줄이려면 Advisor 페이지에서 질문만 전송 옵션을 켜거나 다음을 실행하세요:
+
+```sh
+ocx advisor set --context-mode question-only
+```
+
+이 모드는 고정 지침과 워커의 질문만 전송합니다(최대 2,000자와 잘림 안내). 작업, 대화 기록, 도구 결과, 도구 목록, 워커 식별 정보 및 수정 증거는 첨부하지 않습니다. 워커가 필요한 배경을 질문에 포함해야 합니다. 빈 질문은 공급자 호출 없이 거부됩니다. preflight와 adaptive 자동 자문은 중지되며 수동 자문, 동의 및 기존 호출 제한은 유지됩니다. 기본값 `context`는 아래에 설명된 동작을 유지합니다. `--context-mode context`로 복원할 수 있습니다.
+
 ## 구성
 
 대시보드 **어드바이저** 페이지에서 카탈로그 선택기로 전문가 모델을 선택하세요. 네이티브, 공급자, 계정 지정, 사용자 정의 및 콤보 선택자의 정확한 카탈로그 식별자를 저장합니다. 비활성 모델과 초기 선택 대기 모델은 새 선택에 표시하지 않습니다. 선택 가능한 목록에 없는 저장된 식별자는 경고와 함께 유지되며, 다른 모델을 선택하거나 지우기 전까지 변경되지 않습니다. 카탈로그 로드 실패 시 현재 선택을 보존하고 재시도를 제공합니다. 텍스트 조언을 반환할 수 있는 모델을 선택하세요. 카탈로그가 상담 호환성을 보장하지는 않습니다. CLI와 API는 라우터가 지원하는 모델 문자열을 계속 허용합니다.
@@ -29,13 +39,14 @@ description: manual, preflight 및 증거 기반 adaptive 정책을 제공하는
 | `model?` | `string` | — | 전문가 모델. 라우터가 허용하는 모든 모델 문자열: 네이티브 모델(`gpt-6-astra`), 명시적 `provider/model`(`anthropic/claude-sonnet-4-6`, `xai/grok-...`), 계정 한정 네이티브 모델. 크로스 프로바이더를 완전히 지원합니다. |
 | `effort?` | `string` | `"max"` | 어드바이저 호출의 추론 강도(`low`~`ultra`). |
 | `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | 상담 시점. |
+| `contextMode?` | `"context" \| "question-only"` | `"context"` | 맥락 공유. `question-only`는 워커의 명시적 질문을 요구하며 자동 자문을 중지합니다. |
 | `maxConsultationsPerTask?` | `integer` | `3` | 적응형 작업 상담 한도(1–3회 시도, 수동 호출 포함). |
 | `timeoutMs?` | `number` | `120000` | 루프백 상담 타임아웃. |
 | `contextSharingConsent?` | `"v1"` | 없음 | 설정된 어드바이저 프로바이더로 작업 맥락을 보내는 운영자 동의. 현재 값은 `"v1"`뿐입니다. 없거나, 오래되었거나, 다른 값이면 작업 내용을 보내지 않습니다. `enabled: true`만으로는 동의가 아닙니다. |
 
 대시보드 **Advisor** 페이지 또는 `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>`로 관리합니다.
 
-현재 동의가 없으면 `ocx advisor on`은 프로바이더 간 전송을 켜지 않습니다. 고지를 출력하고 멈춥니다. `ocx advisor on --ack-context-sharing`와 `ocx advisor consent`가 `v1`을 기록합니다. `ocx advisor consent --revoke`는 동의를 지우고 전송을 즉시 멈춥니다. `ocx advisor set`은 동의를 부여하지 않습니다. 대시보드의 동의 확인란은 미리 선택되지 않습니다.
+현재 동의가 없으면 `ocx advisor on`은 프로바이더 간 전송을 켜지 않습니다. 고지를 출력하고 멈춥니다. `ocx advisor on --ack-context-sharing`와 `ocx advisor consent`가 `v1`을 기록합니다. `ocx advisor consent --revoke`는 동의를 지웁니다. 아직 디스패치되지 않은 상담은 차단되지만, 이미 디스패치된 상담은 취소할 수 없고 이미 프록시를 떠난 맥락도 되돌릴 수 없습니다. `ocx advisor set`은 동의를 부여하지 않습니다. 대시보드의 동의 확인란은 미리 선택되지 않습니다.
 
 ## 정책
 
@@ -60,11 +71,17 @@ description: manual, preflight 및 증거 기반 adaptive 정책을 제공하는
 
 설정된 어드바이저 프로바이더는 워커의 프로바이더와 다를 수 있습니다.
 
+상담은 호출자에게서 캡처한 API 키의 모델 범위, 유료 combo 동의, 디바이스 fallback 제한과 Advisor 자체 승인 키의 호스트 제한을 모두 따릅니다. 승인 키는 설정된 경우 `OPENCODEX_API_AUTH_TOKEN` 또는 이 프록시가 받아들이는 서비스 토큰 파일이고, 그렇지 않으면 첫 번째로 구성된 API 키입니다. 키 순서는 이 마지막 경우에만 의미가 있습니다. Advisor 모델에 접근할 수 있는 키를 맨 앞에 두지 않으면 모든 상담을 사용할 수 없습니다. 환경 토큰이나 서비스 토큰이 설정되어 있으면 그 토큰이 상담을 결정합니다. 이 규칙은 combo 선택, 중첩 판정 모델, 재시도에도 적용됩니다. 규칙을 충족하지 못한 상담은 worker에게 사용 불가 안내를 반환합니다.
+
+예를 들어 `allowMeteredComboTargets: false`인 `laptop` 키는 Advisor를 통해 종량제 combo 대상에 비용을 쓸 수 없고, `fallback.devices.laptop.provider: false`는 Advisor의 프로바이더 fallback 홉도 막습니다. 키가 없는 loopback 호출자는 여전히 combo의 `allowMeteredTargets: true` 옵트인이 필요합니다. 두 키가 모두 `allowMeteredComboTargets: true`를 설정하고 combo가 `allowMeteredTargets: true`를 설정하면, 공개 바인드의 loopback 리스너를 거치더라도 Advisor가 종량제 대상을 사용할 수 있습니다. 서버는 본문 용량을 기다리거나 본문을 읽기 전, 요청을 인증할 때 호출자 정책을 캡처합니다. 이후 키나 fallback을 편집해도 그 상담의 범위는 넓어지지 않습니다. 라우팅된 비전 도우미, compact 요청과 그 판정 모델, WebSocket 턴 안의 모든 후보 재시도에도 똑같이 적용됩니다. 새 WebSocket 턴은 각자 자신의 정책을 캡처합니다.
+
 OpenCodex는 프로바이더 API 키, Authorization 헤더, OAuth 토큰, 백엔드 전용 설정 비밀, 프로세스 환경, 숨겨진 사고 과정을 그 프롬프트에 넣지 않습니다. 암호화된 프로바이더 사유 추론을 복호해 전달하지도 않습니다. **작업 내용의 비밀은 일반적으로 제거되지 않습니다.** 작업에 붙여 넣은 키, 도구가 읽은 파일 속의 비밀, 도구나 로그가 출력한 토큰은 전송될 수 있습니다. OpenCodex는 범용 DLP를 실행하지 않습니다.
 
 ## 권한
 
 수동 조언은 워커가 직접 호출한 `advisor`에 대한 도구 결과입니다. 결과는 JSON 객체입니다. `advice`는 어드바이저 모델의 텍스트입니다. `status`는 런타임이 씁니다.
+
+fetch 기반 웹 검색 턴에서는 실제 적용되는 `tool_choice`가 합성 `advisor` 도구를 허용할 때만 해당 도구를 노출하고 수동 상담 호출을 가로챕니다. `allowed_tools`가 `web_search`로 제한되어 있으면 어드바이저 수동 상담은 허용되지 않습니다. 호스팅 검색을 활성화해도 이 도구 허용 범위가 넓어지지는 않습니다.
 
 자동 조언의 인용된 JSON은 별도의 user 역할 자문 메시지로 전달합니다. developer 메시지에는 고정된 런타임 지시만 남고, Advisor가 생성한 텍스트는 developer/system에 들어가지 않습니다. OpenAI Chat과 Anthropic 모두 가짜 도구 호출 없이 이를 지원합니다. JSON 인용은 구조 탈출과 필드 위조를 막지만 자연어 프롬프트 주입을 완전히 차단하지는 않습니다. 전용 프로토콜은 일반 사용자 입력과 조언을 더 명확히 구분할 수 있습니다. 요청당 상담은 최대 3회, 워커 이어가기는 최대 4회입니다. 상담 한도에 도달하면 advisor 도구를 제거하고 반복 호출에 한도 결과를 전달하는 마지막 이어가기를 한 번만 허용합니다. 다시 호출하면 추가 전송 없이 502 advisor_continuation_limit로 끝납니다. 빈 완료 재시도도 같은 한도를 공유합니다.
 
@@ -81,6 +98,7 @@ OpenCodex는 프로바이더 API 키, Authorization 헤더, OAuth 토큰, 백엔
 ## PR1 제한
 
 - 네이티브 OpenAI 패스스루 턴(ChatGPT 풀 워커)에는 합성 도구가 주입되지 않습니다. 어드바이저는 라우팅(번역) 제공자를 대상으로 합니다. preflight 상담은 run-turn 어댑터에 적용되지만 도구는 적용되지 않습니다.
+- 번역된 `/v1/messages` 요청(예: 번역 제공자로 라우팅한 Claude Code)도 `/v1/responses`, `/v1/chat/completions`와 마찬가지로 합성 도구와 preflight 상담을 받습니다. `policy`와 맥락 공유 동의는 같은 규칙을 따르며, 설정은 현재 구성에서 읽습니다. 따라서 동의를 철회하면 진행 중인 요청이 아직 디스패치되지 않은 상담을 시작하는 것은 차단되지만, 이미 디스패치된 상담은 취소되지 않고 이미 프록시를 떠난 맥락도 되돌릴 수 없습니다.
 - 의미 기반 막힘 감지, 완료 검토, 단계별 에스컬레이션, 다중 전문가 또는 투표는 제공하지 않습니다.
 - preflight 중복 제거 원장은 프로세스 내에 있습니다. 프록시 재시작 후 진행 중인 작업은 preflight 상담을 한 번 더 받을 수 있습니다.
 

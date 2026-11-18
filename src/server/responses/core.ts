@@ -12,8 +12,15 @@ import { createInferenceSendBudget } from "../inference/context";
 import { finalizeOwnedTranslatorBudget, finalizeAccountLease } from "./core-lifetime";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { executeComboResponses } from "./core-combo";
+import {
+  comboSelectionKeepaliveApplies,
+  comboSelectionKeepaliveLadderOptions,
+  selectComboWithKeepalive,
+} from "./combo-selection-keepalive";
 import { registerTurn, unregisterTurn } from "../lifecycle";
 import { runWithCompactionRecovery } from "./compaction-recovery";
+import { captureAdmissionPolicy } from "../capture-admission-policy";
+import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 /**
  * Route one `/v1/responses` request through the adapter pipeline: recovery loop, passthrough
  * wire, image/web-search bridges, and the terminal-guard continuation.
@@ -35,6 +42,8 @@ export async function handleResponses(
   try {
     const response = await runWithCompactionRecovery(req, config, logCtx, {
       ...options, abortSignal,
+      plaintextV2Decision: options.plaintextV2Decision ?? isPlaintextV2AgentMessagesEnabled(config),
+      advisorAdmissionPolicy: options.advisorAdmissionPolicy ?? captureAdmissionPolicy(config, options.admission, options.admissionScope),
       openAiSidecarAuth: options.openAiSidecarAuth === undefined
         ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.openAiSidecarAuth,
       nativeCallerAuth: options.nativeCallerAuth === undefined
@@ -61,6 +70,22 @@ export async function handleResponses(
   }
 }
 export async function handleComboResponses(
+  req: Request,
+  rawBody: unknown,
+  comboId: string,
+  config: OcxConfig,
+  logCtx: RequestLogContext,
+  options: HandleResponsesOptions & { translatorBudget: TranslatorBudget },
+): Promise<Response> {
+  if (!comboSelectionKeepaliveApplies(rawBody, options)) return runComboLadder(req, rawBody, comboId, config, logCtx, options);
+  // A slow selection may answer with a keepalive head while the ladder below keeps running (#8326).
+  const model = (rawBody as { model?: unknown }).model;
+  return selectComboWithKeepalive(
+    hooks => runComboLadder(req, rawBody, comboId, config, logCtx, comboSelectionKeepaliveLadderOptions(options, hooks)),
+    { model: typeof model === "string" ? model : comboId, logCtx, signal: options.abortSignal, clock: options.comboSelectionKeepalive?.clock },
+  );
+}
+async function runComboLadder(
   req: Request,
   rawBody: unknown,
   comboId: string,

@@ -61,5 +61,7 @@ token 存放在個別的憑證儲存中，而非 `config.json`。帳號 id 與�
 :::note[原子寫入]
 opencodex 透過臨時檔加上重新命名（`atomicWriteFile`）寫入受管的 `config.toml` 與
 `opencodex-catalog.json`。當 `ocx stop` 與代理的 shutdown handler 這類同時寫入者
-一起恢復 Codex 時，這可避免只寫了一半的檔案。
+一起恢復 Codex 時，這可避免只寫了一半的檔案。在 Windows 上，若 `opencodex-catalog.json` 帶有唯讀屬性
+而使重新命名被拒，opencodex 會清除該屬性並重試一次；仍失敗時會回報 `Codex catalog is read-only: <path>`，
+而不是單純的 `EPERM`。
 :::

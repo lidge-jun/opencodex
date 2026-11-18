@@ -8,23 +8,36 @@ runs helper features around provider requests.
 
 ## Server fields
 
+`completeOnMaxOutputTokens` is an optional boolean, default `false`. Set it to `true` to
+report a token-limited translated Responses text answer as `completed` rather than `incomplete`.
+The answer remains truncated: OpenCodex preserves its exact text, including unfinished Markdown.
+Only nonempty plain-text output qualifies. Tool calls and hosted operations (even if completed),
+reasoning, `text.format` with `json_schema` or `json_object`, compaction, explicitly unfinished
+turns, errors and missing terminal events remain excluded. Context-window exhaustion and
+`pause_turn` remain incomplete. Chat Completions, Anthropic Messages and native Responses
+passthrough, including native WebSocket output, retain their existing stop behavior.
+
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
+| `completeOnMaxOutputTokens?` | `boolean` | `false` | Opt in to completing eligible token-limited translated Responses text output. Text stays truncated; see the eligibility and exclusions above. |
 | `port` | `number` | `10100` | Proxy listen port. |
-| `hostname?` | `string` | `"127.0.0.1"` | Bind address. A non-loopback bind requires a data-admission token, resolved from `OPENCODEX_API_AUTH_TOKEN`, then `OCX_API_TOKEN_FILE`, then the installed owner-only `service-api-token` — nothing has to be exported by hand. See [Remote access](#remote-access). |
+| `hostname?` | `string` | `"127.0.0.1"` | Bind address. A non-loopback bind requires a configured client key in `config.apiKeys` or a shared data token, resolved from `OPENCODEX_API_AUTH_TOKEN`, then `OCX_API_TOKEN_FILE`, then the installed owner-only `service-api-token`. See [Remote access](#remote-access). |
 | `proxy?` | `string` | — | Outbound HTTP(S) or SOCKS5 proxy URL (`socks5://host:port`), `${ENV_VAR}`, or `"auto"`. HTTP URLs apply to `HTTP_PROXY` / `HTTPS_PROXY` when those are unset. SOCKS5 URLs use OpenCodex's real SOCKS5 transport and are also exposed through `ALL_PROXY` (`ocx start --socks5`); inherited `HTTP(S)_PROXY` is cleared in this process. Loopback stays in `NO_PROXY`. `"auto"` reads Windows WinINET or macOS static HTTP/HTTPS settings once at startup. Inherited HTTP(S) proxy variables skip discovery; on macOS, inherited `ALL_PROXY`/`all_proxy` also skips it. Windows keeps separate `http=` and `https=` entries; a bare `ProxyServer` applies to both. macOS translates IP literals, `*`, and a valid `*.<domain>` glob to Bun's `.<domain>` bypass. That glob also bypasses the bare apex `<domain>`. The exact link-local ranges `169.254/16`, `169.254.0.0/16`, and `fe80::/10` are omitted with a diagnostic: link-local IP literals use the proxy. Other CIDRs, globs, and simple-host exceptions refuse discovery without changing the proxy environment. Disabled, malformed, PAC/WPAD, SOCKS-only, and live changes are not followed. Restart after changing system settings. |
 | `noProxy?` | `string \| string[]` | — | Hosts that bypass `proxy`, merged with inherited `NO_PROXY` and loopback entries. A string may use comma-separated `NO_PROXY` syntax or `${ENV_VAR}`. |
-| `emptyCompletionRetry?` | `boolean` | `false` | Opt in to one identical Responses retry when a turn has no text or tool call, including a stream that ends before a terminal event and a Vertex AI `MALFORMED_FUNCTION_CALL` failure that arrives before any output. The retry may be billable. `OCX_EMPTY_COMPLETION_RETRY=0` disables it without changing config; combo and routed-compaction turns remain excluded. |
+| `emptyCompletionRetry?` | `boolean` | `false` | Opt in to one identical Responses retry when a turn has no text or tool call, including a stream that ends before a terminal event and a Vertex AI `MALFORMED_FUNCTION_CALL` failure that arrives before any output. The same opt-in covers clean empty Chat completions with hosted search before its search limit and before any output has streamed, preserving gathered search results and failing with `empty_completion_retry_failed` after one unsuccessful retry. After the search limit, empty Chat completions use the existing forced-answer recovery instead, independently of this setting. The retry may be billable. `OCX_EMPTY_COMPLETION_RETRY=0` disables it without changing config; combo and routed-compaction turns remain excluded. |
 | `dropCodexSafetyBuffering?` | `boolean` | `false` | Remove optional client-facing hints from canonical Codex Responses passthrough: the two `x-codex-safety-buffering-enabled` / `x-codex-safety-buffering-faster-model` response headers, `response.metadata` events whose metadata type is `safety_buffering`, and top-level `safety_buffering` fields. Other headers, response data, policy refusals and failures are preserved. This does not disable provider safety enforcement or upstream buffering. Native `codex.response.metadata.headers` WebSocket metadata and `/responses/compact` are outside this filter. |
-| `stallTimeoutSec?` | `number` | `300` (public) / disabled (local) | Seconds without meaningful upstream progress (Responses and native Chat) before the stream is cut. Unset, a **local** upstream (loopback, private, or a `.local`/`.lan` name) defaults to disabled and a public upstream to 300 s; a positive value applies to both (minimum 1 s); `0` disables the silence watchdog everywhere. Disabled leaves a silent-but-healthy local model connected (keep-alives still flow). Canonical ChatGPT Responses folded from SSE into non-streaming JSON retain a separate 15-minute whole-turn ceiling even when the silence watchdog is disabled. Pending `/v1/responses/compact` body reads share this budget but default to 300 s even for a local upstream — the route buffers the complete body while holding an active-turn lease — and an explicit value, including `0`, still wins. |
+| `stallTimeoutSec?` | `number` | `300` (public) / disabled (local) | Seconds without meaningful upstream progress (Responses and native Chat) before the stream is cut. Unset, a **local** upstream (loopback, private, or a `.local`/`.lan` name) defaults to disabled and a public upstream to 300 s; a positive value applies to both (minimum 1 s); `0` disables the silence watchdog everywhere. Native Responses passthrough streams (an `openai-responses` provider, or the native ChatGPT route relayed to a streaming client) are cut only when you set a positive value explicitly; when the field is unset, they behave as they did before this budget covered them, except that a public body chosen by `retryOnReset` reset selection is still guarded by the 300 s default, and a stall there ends with `upstream_reset`, or with `web_search_bridge_failed` when the provider has the web-search bridge enabled and that body is the bridge's first leg. On those streams the budget measures byte silence: any bytes from the provider, including SSE comments, count as activity. Web-search continuation legs are bounded only by an explicit positive value; when the field is unset they have no stall guard, even after a guarded first leg. Native steering and injection WebSocket chains are not, because between responses they wait for the client. A stall there ends the stream with `response.failed` and code `upstream_stall_timeout`. Disabled leaves a silent-but-healthy local model connected (keep-alives still flow). Canonical ChatGPT Responses folded from SSE into non-streaming JSON retain a separate 15-minute whole-turn ceiling even when the silence watchdog is disabled. Pending `/v1/responses/compact` body reads share this budget but default to 300 s even for a local upstream — the route buffers the complete body while holding an active-turn lease — and an explicit value, including `0`, still wins. |
 | `oauthOpenBrowser?` | `boolean` | `true` | Whether a login may open a browser on the machine running the proxy. Absent and `true` both open, so an existing install is unchanged; only an explicit `false` declines. Decline when you need the authorization link in a different browser profile, or when the dashboard is not on the proxy's machine — the login still starts and the URL is still returned and displayed. `POST /api/oauth/login` and `POST /api/codex-auth/login` accept a per-request `openBrowser` boolean that overrides this, and the dashboard exposes the same choice beside the login button. Both routes report the outcome as `browserLaunch`: `started`, `failed` (nothing could be opened; the dashboard says so), or `skipped`. Device-code flows never open a browser either way. |
 | `connectTimeoutMs?` | `number` | `200000` (public) / disabled (local) | Per-attempt deadline from dispatch until the upstream returns its first response header (DNS/TCP/TLS and the header wait); it ends before body generation and is unrelated to `stallTimeoutSec`, which governs the body stream. Unset, a **local** upstream (loopback, private, or a `.local`/`.lan` name) defaults to disabled and a public upstream to 200 s; a positive value applies to both; `0` (or any non-positive value) disables the header deadline everywhere. Disabled is what lets a local model spend minutes in prompt prefill on a large prompt without the first-header clock cutting a healthy turn. |
+| `offlineResendWaitSec?` | `number` | off | Opt-in wait after the provider's name fails to resolve (DNS `ENOTFOUND` or `EAI_AGAIN`), for example while a laptop wakes or changes Wi-Fi. OpenCodex checks DNS once a second for the name the request resolves (the provider's, or the outbound proxy's when one carries the request) for up to this many seconds (maximum 300) and then resends the request once. Nothing reached the provider, so the resend cannot repeat its work, and it counts against the request's existing send budget. Only the first send of a `/v1/responses` request waits: a combo moves on to its next member instead, and a refused or unreachable connection, an IP-literal provider or proxy address, a failure on a later retry, a second DNS failure, an exhausted wait or a cancelled request returns the original error at once. Each DNS check is itself bounded by the wait and by client cancellation. Vertex AI and Antigravity (Google Cloud Code Assist), Kiro, Cursor, Zed, Command Code and MiMo Free own their transport and keep their own retry behavior; direct Google AI Studio uses the wait. Unset or `0` keeps today's immediate 502. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Graceful drain deadline before active turns are aborted. |
 | `websockets?` | `boolean` | `false` | Advertise and admit the client-facing Responses WebSocket path. False keeps clients on HTTP/SSE; it does not disable an eligible canonical ChatGPT upstream WS optimization. Complete-input requests may reuse an upstream connection within the same selected credential, account, thread and turn; changed handshake policy or missing identity keeps requests on separate connections. This does not trim HTTP input or create previous-response IDs. |
 | `codexNativeSteering?` | `boolean` | `false` | Experimental, native-only mid-turn steering on the Responses WebSocket endpoint. Requires `websockets: true`, a compatible upstream/client, and a pinned account/model/tool surface. Validated generation settings can change in explicit saved-result continuations. Does not enable translated models or HTTP fallback. See [native steering](/guides/codex-integration/#experimental-native-mid-turn-steering). |
 | `codexNativeInjection?` | `boolean` | `false` | Experimental saved function-result injection on compatible native multi-agent WebSocket turns. Requires `websockets: true`, explicit `multi_agent.enabled`, and an eligible provider. Separate from steering; no automatic tool rerun or recovery create. See [native injection](/guides/codex-integration/#experimental-native-function-result-injection). |
 | `nativeReasoningRetention?` | `{ modelSwitch?: boolean; accountSwitch?: boolean }` | both `false` | Permit reasoning ciphertext forwarding across a known model or account change on the same canonical ChatGPT backend. Account retention is experimental. See [Native reasoning retention](#native-reasoning-retention). |
+| `workflowBudget?` | `{ maxConcurrentChildren?: number; maxPhysicalSends?: number; maxDistinctChildren?: number }` | `8` / `256` / `64` | Per-task fan-out ceilings: turns running at once, upstream sends per 10-minute window, and distinct subagent threads per window. Omitted fields keep the built-in value. See [Workflow limits](#workflow-limits). |
 | `corsAllowOrigins?` | `string[]` | `[]` | Additional exact origins allowed by CORS. Loopback origins are always allowed. Authority-based browser extension origins such as `chrome-extension://<extension-id>` are supported; `*` is not a wildcard. Firefox and Safari regenerate the extension UUID (per install / per browser launch), so update the entry when the origin changes. |
+| `dashboardTrustedProxy?` | `{ origin: string; proxyAddresses: string[]; trustHeaders?: ("x-forwarded-host" \| "x-forwarded-proto")[] }` | unset | Standalone only, opt-in: lets **Remember this device** work through one TLS-terminating reverse proxy. `origin` is one exact `https://` origin, `proxyAddresses` are the proxy's exact IP addresses (no ranges or wildcards), and `trustHeaders` reads the browser host from `X-Forwarded-Host` and/or requires `X-Forwarded-Proto: https` (default: `Host` only). Ignored on a loopback bind or a Hub. See [Remember behind a reverse proxy](/guides/web-dashboard/#remember-behind-a-reverse-proxy). |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Generated `ocx_…` data-plane admission credentials on non-loopback binds. They do not authorize management APIs; management access uses the separate credential documented in the [management reference](/reference/management-api/). Dashboard-managed. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in archived-session cleanup policy. Never enabled implicitly. |
 | `usageLedgerMaxBytes?` | `number` | unset | Opt-in ceiling in bytes for `usage.jsonl`. Absent means the request history grows without limit, which stays the default. See [usage history size](#usage-history-size). |
@@ -32,10 +45,10 @@ runs helper features around provider requests.
 | `metricsExport.enabled?` | `boolean` | `false` | Enable process-local aggregate request metrics at authenticated `GET /api/metrics`. Restart required; disabled mode returns 404 and starts no exporter activity. |
 | `serviceHealthRecovery.enabled?` | `boolean` | `false` | Opt-in recovery for the background service: a small sentinel process probes `/healthz` and, when the proxy stays alive but answers nothing for about a minute of back-to-back probes, terminates it so the service manager (Task Scheduler, launchd, systemd, WinSW) restarts it. Only the managed service child starts one; requests the stuck process held are not replayed. At most three recoveries per hour. Restart required. Automatic recovery requires a numeric bind address (or the default localhost/wildcard mapping); DNS bind names are not monitored. A changed recorded address or port stops monitoring. |
 | `spend?` | `{ root?: { maxTokens?: number }; identity?: { maxTokens?: number }; pool?: { maxTokens?: number }; retentionDays?: number }` | unset | Durable token ceilings, off unless you write one. Each scope bounds settled spend plus in-flight reservations plus unresolved spend: `root` is one task including its whole fan-out, `identity` is one account across every task it serves, and `pool` is one provider pool. They intersect, so a request is admitted only when all three have room — which is what holds a ceiling against a client that mints a new task id per request. A reservation is the request's whole input plus its enforceable output ceiling, counted as if every cached prefix misses. Observe-only mode still journals, so every server owns the state directory's single-writer lease; an explicit sibling must use a separate `OPENCODEX_HOME`. Spend survives an ordinary process restart when its writes reached the filesystem, but the journal does not promise survival across host power loss because each append is not fsynced. Raising or removing a ceiling changes the allowance for requests started afterward; requests already running keep their starting policy. `maxTokens` must be a positive integer (0 would refuse everything), `retentionDays` is 1–365 and defaults to 7, and an unknown key in this section is rejected rather than ignored. A refusal is a local HTTP 429 carrying `x-opencodex-local-refusal: workflow_spend_exhausted`, and its message names the scope and the ceiling; no provider is contacted. With an applicable ceiling, dispatch is also refused if its token reservation cannot be booked, including full tracking capacity. Requests without an applicable ceiling remain observe-only. |
-
 | `codexAutoStart?` | `boolean` | `true` | Let the Codex shim run `ocx ensure` before launching Codex. False makes ensure a no-op. |
 | `codexShimAutoRestore?` | `boolean` | `true` | Restore an installed shim after a completed external Codex update replaces it. Environment opt-out: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `codexDesktopAuthless?` | `boolean` | `false` | Opt-in authless Codex Desktop routing on a loopback bind: inject the dedicated `opencodex` provider with `requires_openai_auth = false` so Desktop opens without a ChatGPT login. Ignored on non-loopback binds. `ocx system settings --desktop-authless on`. See [Codex integration](/guides/codex-integration/#authless-codex-desktop-opt-in). |
+| `codexReserveEnabled?` | `boolean` | `false` (seeded once from `codexDesktopAuthless`) | Luna Reserve compatibility, independent of the authless switch. On a loopback, non-client proxy it lets loopback-admitted Reserve requests through, and adds the `gpt-reserve` row when a `codexAccountNamespaces` selector targets the main Codex account (an empty selector map means no row, and the account picker can hide it); upstream Reserve permission is still checked on every request. Existing installs keep their previous Reserve state: until a one-time seed copies `codexDesktopAuthless` here and records `codexReserveMigration` (at the first start of this version), Reserve follows authless; afterwards an absent value means off. `ocx system settings --reserve on`. See [Luna Reserve alongside routed models](/reference/cli/providers-accounts/#luna-reserve-alongside-routed-models). |
 | `codexAccountPickerEnabled?` | `boolean` | unset | Whether generated account-qualified catalog rows (`<selector>/<model>`) are advertised. Enabling it once fills an absent or empty `codexAccountNamespaces` with default selectors; `false` hides the generated rows without deleting exact routing bindings. An omitted flag keeps a non-empty hand-written selector map enabled. The Luna Reserve row is account-qualified, so it is written only when a selector targets the main Codex account; when it is suppressed, catalog sync logs the reason and the action that restores it. |
 | `codexAccountNamespaces?` | `Record<string, string>` | unset | Public selector to Codex account mapping. The main login maps to the config-only sentinel `@main`; added accounts map to their account id. Normally generated by enabling `codexAccountPickerEnabled` rather than hand-authored. An empty map means no account-qualified rows exist, including the Luna Reserve row. |
 | `codexClientCompaction?` | `boolean` | `false` | Opt into Codex client-side compaction on an authenticated loopback bind. Uses the dedicated `opencodex` provider identity with `requires_openai_auth = true`, preventing new routed compactions from storing OpenCodeX-owned `ocx1:` state. `codexDesktopAuthless` takes precedence when both are enabled and keeps `requires_openai_auth = false`. V2 sub-agent routing is unchanged. `ocx system settings --client-compaction on`. See [Codex integration](/guides/codex-integration/#client-side-compaction-opt-in). |
@@ -43,7 +56,7 @@ runs helper features around provider requests.
 | `codexMainAccountHardLock?` | `boolean` | `true` | Block new identity-matched main-account requests at their per-window threshold. Only explicit `false` opts out. See [main-account protection](/reference/cli/providers-accounts/#main-account-quota-protection). |
 | `codexMainAccountHardLockThresholds?` | `{ short?: number; long?: number }` | `{ short: 90, long: 98 }` | Independent 5h and weekly/monthly thresholds. Integers 80–100, with `short <= long`. Invalid persisted fields fall back to defaults; the settings API rejects invalid writes before mutation. |
 | `codexMainAccountHardLockFallback?` | `{ enabled?: boolean; model?: string; reasoningEffort?: string }` | off | Extended hard-lock settings: while the lock blocks and no Codex account can serve the request, qualifying native-Codex-model requests reroute to `model` with `reasoningEffort` instead of failing. `enabled: false` pauses the reroute and keeps the model. An absent section or model keeps the refusal behavior; a usable Pool account still serves first. `reasoningEffort` must be a declared effort; invalid persisted sections degrade to off and the settings API rejects invalid writes before mutation. See [main-account protection](/reference/cli/providers-accounts/#main-account-quota-protection). |
-| `nativeMainRefresh?` | `"codex" \| "opencodex"` | auto | Who refreshes the native main ChatGPT login in `CODEX_HOME`. `"codex"` asks the Codex binary (app-server `getAuthStatus`, Codex 0.130.0 or newer, found through the same runtime resolution as `ocx sync`, including the ChatGPT app bundle) and never writes `auth.json`; this also works when Codex stores its login in the OS keyring. When the file is absent, native Pool and stored Direct requests consult the current Codex login, including after restart; logout and account changes take effect at the next credential lookup. Each keyring answer is authoritative for that lookup: a missing or withheld token makes that materialization unavailable, and a later answer may use even the same bearer. No permanent keyring refusal is retained; requests already holding a bearer may finish without a send-time recheck. File-backed credential behavior is unchanged. A verified account change clears the previous account's quota restrictions before selection. On the first lookup after restart, a valid saved quota record must identify a different account before old restrictions are removed. The same account keeps its restrictions, and manual pause settings remain unchanged. Account-card quota reads, startup Pool priming and idle main-quota recovery also use the owned keyring login; passive recovery preserves the traffic reauthentication quarantine. `"opencodex"` keeps OpenCodex's guarded `auth.json` writer. Unset picks `"codex"` when a supported binary is found; without one, both unset and `"codex"` fall back to the guarded writer. `ocx doctor` shows the active mode under Native main refresh. |
+| `nativeMainRefresh?` | `"codex" \| "opencodex"` | auto | Who refreshes the native main ChatGPT login in `CODEX_HOME`. `"codex"` asks the Codex binary (app-server `getAuthStatus`, Codex 0.130.0 or newer, found through the same runtime resolution as `ocx sync`, including the ChatGPT app bundle) and never writes `auth.json`; this also works when Codex stores its login in the OS keyring. When the file is absent, native Pool and stored Direct requests consult the current Codex login, including after restart; logout and account changes take effect at the next credential lookup. Each keyring answer is authoritative for that lookup: a missing or withheld token makes that materialization unavailable, and a later answer may use even the same bearer. No permanent keyring refusal is retained; requests already holding a bearer may finish without a send-time recheck. File-backed credential behavior is unchanged. A verified account change clears the previous account's quota restrictions before selection. On the first lookup after restart, a valid saved quota record must identify a different account before old restrictions are removed. The same account keeps its restrictions, and manual pause settings remain unchanged. Account-card quota reads, startup Pool priming and idle main-quota recovery also use the owned keyring login; passive recovery preserves the traffic reauthentication quarantine. `"opencodex"` keeps OpenCodex's guarded `auth.json` writer. Unset picks `"codex"` when a supported binary is found; without one, both unset and `"codex"` fall back to the guarded writer. `ocx doctor` shows the active mode under Native main refresh. While Codex rewrites `auth.json` in place, a lookup that finds it empty or partially written uses the last complete login read for the same home and file. A missing file, a file without a ChatGPT login, an account switch, pausing or reauthenticating the main account, or a change of refresh owner ends that immediately, and an expired token still goes to the selected refresh owner. |
 | `resetCreditAutoRedeem?` | `{ enabled?: boolean; leadTimeMinutes?: number }` | off | Opt-in: redeem the main Codex account's soonest-expiring reset credit `leadTimeMinutes` (1–60, default 10) before it expires. Every attempt re-reads the upstream credit list first and skips when the credit is gone (for example, redeemed by hand); the `redeem_request_id` is journaled in `$OPENCODEX_HOME/reset-credit-auto-redeem.json` before the call so a crash replays the same idempotent request instead of spending a second credit. Servers sharing this configuration directory coordinate reservations and settlements so one process does not replace another's request record. Logs carry a hashed account key only. |
 | `syncResumeHistory?` | `boolean` | `true` | Reversible Codex App history compatibility. Original metadata is backed up and restored by `ocx stop` / `ocx restore`. |
 | `spendPoolAliases?` | `Record<string, string>` | unset | Explicit historical salted pool-alias to canonical provider mappings. Keep this key at the top level, outside `spend`. See [Historical pool continuity](#historical-pool-continuity). |
@@ -52,6 +65,7 @@ runs helper features around provider requests.
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | Web-search sidecar options. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Image-description sidecar options. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Standalone Images relay options for Codex `image_gen`. |
+| `telemetry?` | `OcxTelemetryConfig` | default-on after human disclosure | Anonymous daily usage telemetry consent state (`decision`, `decidedAt`, `noticeShownAt`). Nothing is sent until a person has seen the notice or opted in. Overridden by `OCX_TELEMETRY=0` or `DO_NOT_TRACK=1`. See [Telemetry (`telemetry`)](#telemetry-telemetry) and [Telemetry and Privacy](/guides/telemetry/). |
 
 On Linux x64/arm64 with pidfd support, service health recovery binds termination to the proxy's
 kernel process identity, so PID reuse cannot redirect it. The sentinel's watching log ends in
@@ -76,6 +90,33 @@ This example retains reasoning `encrypted_content` on a known model switch withi
 Retention means that OpenCodex may forward the carried ciphertext. It cannot confirm that the upstream accepts or reuses that reasoning. A detected decrypt rejection still enters the existing bounded cleanup recovery, and the rejection memo takes precedence over either switch. Response and conversation references, foreign reasoning item ids, uploaded-file account restrictions and cache isolation continue using their own ownership rules. Native compaction blocks keep their existing cleanup behavior; direct native `/v1/responses/compact` sanitization is unchanged.
 
 Use `GET /api/native-reasoning-retention` to read the resolved booleans and `PUT` with a partial boolean object to update them. `PUT` with JSON `null` restores both defaults. Invalid fields or unknown keys are rejected; a malformed file block disables retention with a warning. Dashboard/API changes apply to subsequent requests. Local `ocx config set/unset` edits require a restart to converge the running proxy.
+
+## Workflow limits
+
+OpenCodex bounds how much one task may fan out. A task is the root conversation, identified by the client's `x-codex-parent-thread-id` header, together with every subagent it starts. Three count ceilings apply to each task, and requests over any of them are refused locally with HTTP 429 and an `x-opencodex-local-refusal` header naming the ceiling (`workflow_concurrency_exhausted`, `workflow_sends_exhausted` or `workflow_children_exhausted`); no provider is contacted.
+
+If physical admission refuses a request after token reservation, its unstarted reservation is returned immediately. Started sends and other pending bookings remain accounted for. Native continuation refusals retain HTTP 429 in the request log as well as in the client error.
+
+| Field | Default | Allowed | Meaning |
+| --- | --- | --- | --- |
+| `maxConcurrentChildren` | `8` | 2–64 | Turns one task may run at the same time. One slot is always reserved for the task's own conversation, so subagents may use one fewer. |
+| `maxPhysicalSends` | `256` | 1–10000 | Upstream send admissions, retries included, per 10-minute window. Every physical admission checks and claims a slot atomically, so concurrent requests and retries share the same ceiling. An unused dispatch permit consumes no slot; a claimed physical start remains counted even if it later fails. |
+| `maxDistinctChildren` | `64` | 1–1024 | Distinct subagent threads one task may start inside the same window. |
+
+The defaults suit most installs. Raise them when a workflow that legitimately runs many subagents in parallel keeps hitting a ceiling; lower them to stop a runaway fan-out sooner:
+
+```jsonc
+{
+  "workflowBudget": {
+    "maxConcurrentChildren": 16,
+    "maxPhysicalSends": 1024
+  }
+}
+```
+
+The **Subagents** page of the dashboard shows the effective ceilings and edits them. `GET /api/workflow-budget/settings` returns the effective values with their defaults and allowed ranges; `PUT` with a partial object updates them, and JSON `null` restores the defaults. Dashboard/API changes apply to the next request without a restart and never reset what a task has already used; `POST /api/workflow-budget/clear` remains the way to forgive one task. A malformed file block is ignored with a warning and the built-in ceilings stay in force. Local `ocx config set/unset` edits require a restart to converge the running proxy. The 10-minute window, the reserved interactive slot and the 512 tracked tasks are not configurable.
+
+An idle task keeps its tracking slot while it has unexpired sends or child history, even if it has only partly used a limit. The proxy reuses only slots with no active turn, no remaining count history and no exhausted token budget. If all 512 slots must be retained, a new task receives local HTTP 429 with `workflow_tracking_exhausted` instead of resetting another task's allowance. Slots become reusable as their count windows expire; durable token ceilings remain independent. Count history is process-local and is not made persistent by this retention rule.
 
 ## Upstream transport recovery
 
@@ -168,6 +209,25 @@ history; review the full-scope warning in the lifecycle reference before running
 
 Native Chat also uses `stallTimeoutSec` while waiting for upstream output, with the same local-vs-public default: an unset budget is disabled for a local upstream and 300 s for a public one, and `0` disables it everywhere. Nonempty text, reasoning, refusal, tool updates, and finish frames renew the allowance; keepalive comments, role-only frames, and usage alone do not. Waiting for a slow client to read pauses the allowance. A stall produces `upstream_stall_timeout`: an error frame for streaming clients, or HTTP 502 for non-streaming clients. Cancellation before a terminal result returns a cancellation error instead of a successful partial answer. Buffered Chat results accept both LF and CRLF SSE framing, including multiline data.
 
+### Combo selection keepalive
+
+A streaming `POST /v1/responses` request to a combo can wait while the combo chooses a target:
+it inspects each child stream before any output, hops past zero-output failures, and can wait out a
+short cooldown. If that selection takes longer than 15 seconds, OpenCodex commits an HTTP 200
+`text/event-stream` head and sends a `: keepalive` comment, then another every 15 seconds until a
+target is chosen, so a proxy or load balancer with an idle limit does not drop the connection. The
+threshold and interval are fixed; there is no setting for them.
+
+Committing the head commits the status. After it, the chosen target's stream follows in the same
+response, and a failure of every target arrives as one `response.failed` event whose `error.code`
+(and `type` and message) is the one the HTTP error would have carried, for example
+`combo_unavailable`. Response headers of the chosen target, such as `Retry-After` or
+`openai-model`, are not sent once the head is committed; the request log still records the
+failure's original HTTP status. A selection that finishes within 15 seconds is unchanged: the
+client receives the chosen target's own status and headers, and an all-targets failure keeps its
+real HTTP status. Non-streaming requests, WebSocket requests, and the Chat Completions and
+Anthropic Messages endpoints keep the HTTP status in every case.
+
 ## Codex quota network diagnostics
 
 The main Codex account row may include `quotaRefresh` when a quota fetch was
@@ -258,8 +318,7 @@ need it.
 
 ## Remote access
 
-The default `127.0.0.1` bind is loopback-only. A non-loopback address such as `0.0.0.0` or a tailnet
-IP requires token authentication on both `/api/*` and the data plane.
+The default `127.0.0.1` bind is loopback-only. A non-loopback address such as `0.0.0.0` or a tailnet IP requires a data-admission credential for model requests: a configured client key in `config.apiKeys` or a shared data token. Management routes `/api/*` use the independent `OPENCODEX_ADMIN_AUTH_TOKEN` or generated admin token, including on loopback. A data credential does not grant management access; never give the admin token to a model client.
 
 You do not have to produce that token. `ocx service install` provisions one on a non-loopback bind,
 in this order: `OPENCODEX_API_AUTH_TOKEN` from the installing shell, then an existing owner-only
@@ -291,15 +350,13 @@ x-opencodex-api-key: your-secret-token
 
 | Endpoint | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` | not accepted | **required** | not accepted |
-| `/v1/chat/completions` | not accepted | **required** | not accepted |
+| `/v1/responses` | accepted | accepted | not accepted |
+| `/v1/chat/completions` | accepted | accepted | not accepted |
 | `/v1/messages` | accepted | accepted | accepted |
 | `/v1/messages/count_tokens` | accepted | accepted | accepted |
 | `/v1/models` | accepted | accepted | accepted |
 
-Responses and Chat Completions reserve `Authorization` for possible Codex Direct passthrough, so only
-the dedicated admission header is accepted there. Dashboard-generated `apiKeys` may replace the
-environment token after startup; candidates are compared in constant time.
+Responses and Chat Completions accept a recognized data-plane credential in `x-opencodex-api-key` or, when that dedicated header is absent, empty or whitespace-only, in `Authorization: Bearer`. A nonempty dedicated header, after trimming whitespace, takes precedence even if invalid; a valid bearer does not rescue it. An unrelated bearer is not a proxy admission credential, and `x-api-key` is not accepted on these routes. Dashboard-generated `apiKeys` and the shared data token are compared in constant time; management credentials do not grant model admission.
 
 Messages and `count_tokens` keep accepting all three admission forms for routed-client compatibility. Native
 Anthropic passthrough is stricter on a non-loopback bind: proxy admission must use
@@ -425,13 +482,18 @@ use `ssh -g -L`, broad container publishing, or forwarding modes that expose the
 
 ## Account email masking (`privacy`)
 
-Stored account emails are masked everywhere they leave the proxy — the dashboard account lists,
+Stored account emails are masked by default wherever they leave the proxy — the dashboard account lists,
 `GET /api/codex-auth/accounts`, `GET /api/oauth/status`, and the `ocx status` logins section all
 show `p***n@example.com` rather than the address on file.
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `privacy.maskEmails?` | `boolean` | `true` | Set to `false` to show stored account emails in full. Absent, `true`, and any malformed value all keep masking, so only a deliberate `false` reveals an address. |
+| `privacy.maskEmails?` | `boolean` | `true` | Set to `false` to reveal stored account emails in projected email fields. Absent, `true`, and any malformed value keep masking, so only a deliberate `false` reveals an address. |
+
+Dashboard labels for OAuth accounts (Claude, Grok, Kiro, and the other OAuth providers) follow this
+flag: masked by default, the stored email when it is `false`. An account alias takes precedence over
+the email label. The active account uses the same label in Overview, the reset and coupon dialogs,
+and the remove confirmation. The desktop tray surfaces keep showing the masked form either way.
 
 Turn it off when you run many accounts on a machine you control and cannot tell them apart from
 masked forms. Read the flag as a disclosure decision rather than a display preference: management
@@ -448,6 +510,42 @@ way.
 block exists, because `config set` walks into existing objects and never creates them. Write the
 whole object instead — `ocx config set privacy '{"maskEmails":false}'` — or add the block to
 `config.json` by hand.
+
+## Telemetry (`telemetry`)
+
+Anonymous daily usage telemetry defaults to on only after a person has seen the disclosure notice
+(in the GUI popup or an interactive terminal prompt). The `telemetry` block in `config.json` records
+that consent state:
+
+```json
+{
+  "telemetry": {
+    "decision": "accepted",
+    "decidedAt": "2026-11-07T09:00:00.000Z",
+    "noticeShownAt": "2026-11-07T09:00:00.000Z"
+  }
+}
+```
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `telemetry.decision?` | `"accepted" \| "declined"` | unset (undecided) | Explicit user choice. `"declined"` disables telemetry and deletes `<OPENCODEX_HOME>/telemetry-id.json`; `"accepted"` enables daily reports. |
+| `telemetry.decidedAt?` | `string` (ISO 8601) | unset | UTC timestamp when `decision` was recorded. Only completed UTC calendar days strictly after the UTC day of `decidedAt ?? noticeShownAt` (`day > formatUtcDay(decidedAt ?? noticeShownAt)`) are ever sent; the consent/disclosure day itself and earlier days are never backfilled. |
+| `telemetry.noticeShownAt?` | `string` (ISO 8601) | unset | UTC timestamp when a human saw the disclosure in the web dashboard or an interactive terminal. When `decision` is unset, telemetry sends only if `noticeShownAt` is set (`default-on`); without it the proxy remains in `awaiting-notice`. |
+
+The collector endpoint (`https://telemetry.opencodex.me/v1/events`) is a code constant and cannot
+be configured in `config.json`.
+
+Two environment variables override `config.json` and disable telemetry immediately without modifying
+saved `config.json` (observing either opt-out at proxy startup or on a scheduler tick also persists
+`ineligibleThroughDay` set to today's UTC day in `<OPENCODEX_HOME>/telemetry-state.json` and deletes
+`<OPENCODEX_HOME>/telemetry-id.json`, so opt-out days are never backfilled and a fresh ID is minted
+if the variable is later removed):
+
+- `OCX_TELEMETRY=0` (also accepts `false`, `off`, or `no`, case-insensitive)
+- `DO_NOT_TRACK=1` (also accepts `true` or `yes`, case-insensitive)
+
+`ocx config set telemetry` and `ocx config unset telemetry` are refused for all callers, and `ocx config import` ignores any imported `telemetry` block for every caller and preserves persisted `telemetry` state unchanged. Use `ocx telemetry enable` (requires an interactive human TTY; prints the disclosure block and confirmation prompt, or exits non-zero with `agent_consent_required` / `tty_required`), `ocx telemetry disable`, `ocx telemetry status [--json]`, or the dashboard **Proxy details** toggle instead. See [Telemetry and Privacy](/guides/telemetry/) for the full payload schema and retention policy.
 
 ## Storage cleanup
 
@@ -639,7 +737,7 @@ modes, the preview, and the per-request trace.
 | --- | --- | --- | --- |
 | `protocols.unrepresentable?` | `"legacy" \| "reject"` | `"legacy"` | `legacy` sends a request whose path drops a feature and records the loss in the trace. `reject` refuses it with HTTP 400 before any send, naming only the feature keys. |
 | `protocols.rollout.nativeChatCombos?` | `boolean` | `false` | Send an eligible Chat candidate inside a combo natively from its own copy of the client body. |
-| `protocols.rollout.managedMessagesNative?` | `boolean` | `false` | Send Messages natively to a direct, key-authenticated Anthropic provider instead of through the internal Responses bridge. |
+| `protocols.rollout.managedMessagesNative?` | `boolean` | `false` | Send Messages natively to an eligible direct Anthropic provider or a key-auth Anthropic-compatible or first-party Anthropic child in a strict failover combo without a default effort. Other combo strategies, policy routes and bridge-only rewrites retain the bridge. |
 | `protocols.rollout.managedMessagesNativeOAuth?` | `boolean` | `false` | Native Messages for the `anthropic` OAuth provider on `api.anthropic.com`, including stored account pools. Requires `managedMessagesNative`. For the settled `anthropic` provider, an enabled pool supplies true for absent native flags when `anthropicAccountPool.nativeMessages` is absent or true. Explicit false/malformed flags and a false/malformed pool preference remain off. Other providers and pool-off keep explicit rollout behavior. Eligible pooled requests retain shared selection, affinity and bounded pre-output recovery. Recognized JSON-string `metadata.user_id` account UUIDs are aligned with the serving OAuth credential; device and session fields are preserved. |
 | `protocols.rollout.directEncoders?` | `boolean` | `false` | Encode Chat and Messages answers from a non-Responses upstream directly from adapter events. |
 | `protocols.rollout.antigravityDirect?` | `boolean` | `true` | Send a Chat or Messages request to a single Google Antigravity route without the internal Responses body in either direction. Request settings still pass through the usual policies, and a request the lane cannot carry uses the bridge. Set `false` to turn it off. |
@@ -676,6 +774,7 @@ These settings govern `/v1/messages`, `/v1/messages/count_tokens`, the `ocx clau
 | `claudeCode.authModeMigratedAt?` | `string` | unset | Internal one-time upgrade marker. Do not set manually. |
 | `claudeCode.classifierModel?` | `string` | unset | Explicit target for Claude Code Auto Mode classifier turns, as a qualified `provider/model` (for example `RelayA/claude-opus-5`). Auto Mode sends bare safety checks such as `claude-opus-5` with no provider, so without this they fall through to `defaultProvider` — which may not speak Anthropic at all. Nothing is inferred automatically: only a target you declare here is used. |
 | `claudeCode.classifierFallbacks?` | `string[]` | unset | Ordered classifier targets used when `classifierModel` is not set. Same qualified `provider/model` form; the first usable entry wins. An explicit `modelMap` entry for the classifier model still outranks both. |
+| `claudeCode.desktopModelVisibility?` | `{ mode: "include" \| "exclude"; routes: string[] }` | unset | Which `provider/model` routes the Claude Desktop gateway list carries. `include` lists only `routes` (new models stay hidden); `exclude` lists all but `routes` (new models appear). Unset lists every available model. If the selection leaves no available models, the writer falls back to every available model, including normally hidden routes; update the selection to narrow it again. Affects only Claude Desktop's static and hybrid lists; set it from **Connect → Claude Desktop**. |
 | `claudeCode.subagentEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | inherit | Effort written to generated `~/.claude/agents/ocx-*.md`; separate from Codex guidance and proxy caps. Restart through `ocx claude` to regenerate. |
 
 The compatibility policy applies to Claude Code, Desktop and other clients using translated
@@ -769,9 +868,20 @@ provider-qualified model with its own credentials and quota only when `sourceMod
 or matches the incoming model. A list containing only `provider/*` entries does not cover a bare
 native compaction model.
 
+When `model` names a combo, a compaction whose targets are all cooling fails fast with
+`combo_unavailable`, and the message names the earliest recovery, for example `(retry in ~2m)`.
+A refusal from a cooling local Codex Pool account cools its combo target only for the short combo
+backoff, so the target returns once that account recovers. To let a dedicated compaction combo try
+its cooled targets again without waiting out a long upstream `Retry-After`, enable that combo's
+opt-in [all-cooled recovery](/guides/combos/#retry-all-cooled-targets-opt-in), for example
+`{"cooldownReprobe": {"enabled": true, "intervalMs": 300000}}`. Recovery stays demand-driven and
+keeps account quota and admission checks; it cannot make an exhausted account serve.
+
 OpenCodex changes only requests with explicit `request_kind: "compaction"` metadata whose
 `compaction.trigger` is one of the values you listed, sent to `/v1/responses/compact` or to
-`/v1/responses` with a `compaction_trigger` input item. Later conversation turns keep their
+`/v1/responses` with a `compaction_trigger` input item. With `codexClientCompaction` enabled,
+the local checkpoint prompt also matches when metadata specifies `compaction.implementation` as
+`"responses"`; it remains a normal text summary request. Later conversation turns keep their
 original routing and settings. Missing, malformed, or conflicting metadata does not activate the
 override, including on older clients without trigger metadata; when several copies of the
 metadata are supplied they must name the same trigger. WebSocket requests use each frame's
@@ -997,10 +1107,12 @@ interception.
 | --- | --- | --- | --- |
 | `provider?` | `string` | automatic OpenAI selection | Explicit custom API-key `openai-responses` provider for `/v1/images/generations` and `/v1/images/edits`. Registry-managed ids are rejected. |
 | `timeoutMs?` | `number` | `300000` | Whole-request timeout for one standalone Images request. |
+| `videoProvider?` | `string` | xAI | API-key provider that serves the in-turn `video_gen` bridge with its own `baseUrl` and key. `xai` stays pinned to `https://api.x.ai/v1`; other registry ids are rejected. See [Video Bridge](/guides/video-bridge/#choosing-the-video-provider). |
 
 Explicit selection fails closed when the provider is missing, disabled, incompatible, or lacks a
 usable key; it never falls back to another paid upstream. The endpoint must implement the OpenAI
-Images API paths and response shape expected by Codex.
+Images API paths and response shape expected by Codex. `videoProvider` follows the same rule: an
+unusable value answers each `video_gen` call with its error and sends nothing.
 
 Both search loops keep `web_search` declared after the search budget is exhausted. Further calls receive a paired limit-reached result without another physical search; at most `maxSearchesPerTurn + 3` model iterations run before a terminal error. Ordinary caller tools and cancellation still end the loop. Empty-answer recovery alone removes all tools.
 
@@ -1201,3 +1313,5 @@ Locality is a timeout policy, not network-access authorization. Classification u
 Disabling the header clock preserves client cancellation and any enclosing overall deadline. An explicitly positive `stallTimeoutSec` still bounds local body silence; unset local stall/header clocks provide no automatic bound before headers. Native Chat/Messages local JSON reads use the local stall budget; public JSON reads retain their previous `max(connectTimeoutMs ?? 200000, 5000)` budget. Compact body reads retain their 300-second default even locally. Image/search sidecar budgets are unchanged.
 
 Optional `opencodeClientExport` controls the generated OpenCode provider's `headerTimeoutMs`, `chunkTimeoutMs`, and `timeoutMs` (positive milliseconds or `false` to disable). Unset values preserve OpenCode defaults; malformed fields are omitted. These provider-wide settings are emitted into V1 options and V2 settings. See [slow local models](/guides/opencode/#slow-local-models-prefill-timeouts).
+
+Optional, config-file-only `omoClientExport.api` selects the dialect of the managed Pi-based omo provider block: `openai-completions` (default) or `openai-responses`. Other values are ignored. Only omo reads it. After adding, changing or removing this key, restart the proxy (`ocx service restart` for a service install, or `ocx stop`, then `ocx start`), then refresh **Connect → omo** in the dashboard. Refresh uses the running proxy's config; it does not reload the file. See [integrations](/guides/integrations/).

@@ -3,7 +3,7 @@ import { disconnectClient } from "../client/connect";
 import { readClientConnectionState, sameClientConnectionOwner } from "../client/state";
 import { assertClientLifecycleHeld, withClientLifecycle } from "../client/lifecycle-lock";
 import { inspectRemoteDesktopCleanup, readDesktopDisconnectReceipt } from "../claude/desktop-remote-store";
-import { removeOwnedConfigState, type ConfigRemovalResult } from "../lib/config-ownership";
+import { beginConfigOwnershipTeardown, removeOwnedConfigState, type ConfigRemovalResult } from "../lib/config-ownership";
 import { windowsSecretAclReapPendingAtOrBelow } from "../lib/windows-secret-acl";
 import { supportsDesktopPicker } from "../claude/desktop-picker-platform";
 import { sharedTeardownAuthorized, type UninstallObservation } from "./uninstall-plan";
@@ -63,6 +63,17 @@ export async function removeOwnedConfigAfterDesktopCleanup(
   if (!sharedTeardownAuthorized(observed)) {
     throw new Error("Client cleanup refused: service or proxy teardown is not proven.");
   }
+  // A rerun after an interrupted uninstall finds the tombstone; this process's own cleanup steps
+  // (picker, disconnect, integrations) still register state, which the remover below then removes.
+  const endTeardown = beginConfigOwnershipTeardown();
+  try {
+    return await removeOwnedConfigInTeardown(deps);
+  } finally {
+    endTeardown();
+  }
+}
+
+async function removeOwnedConfigInTeardown(deps: UninstallClientStateDeps): Promise<ConfigRemovalResult> {
   const state = deps.readConnection();
   if (state.kind !== "connected" && state.kind !== "disconnected") {
     throw new Error("Client cleanup refused: connection state is invalid or mismatched.");

@@ -1901,32 +1901,28 @@ describe("shared refresh flight plan reconciliation (#2892 gap 2 follow-up)", ()
   });
 
   test("records with EMPTY account ids are never treated as the same identity (#2892 review)", async () => {
-    const { getValidCodexToken, readCodexAccountRecord, saveCodexAccountCredential } =
+    const { CodexCredentialUnavailableError, getValidCodexToken, readCodexAccountRecord } =
       await import("../../src/codex/account-store");
     // Grant fingerprint, access token and expiry all match, and both ids are "". Two empty strings
     // compare equal but prove nothing about which upstream account either record was meant to use,
     // so propagation must fail closed rather than write a credential into an unidentified record.
     const shared = { accessToken: "anon-old", refreshToken: "anon-grant", expiresAt: 0, chatgptAccountId: "" };
-    saveCodexAccountCredential("anon-owner", { ...shared });
-    saveCodexAccountCredential("anon-alias", { ...shared });
-    const aliasGeneration = readCodexAccountRecord("anon-alias")!.generation;
+    const stored = JSON.stringify({ "anon-owner": { credential: shared, generation: 1 },
+      "anon-alias": { credential: shared, generation: 2 } });
+    writeFileSync(ACCOUNTS_PATH, stored);
 
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async () => Response.json({
-      access_token: "anon-new",
-      refresh_token: "anon-rotated",
-      expires_in: 3600,
-    })) as typeof fetch;
+    let sends = 0;
+    globalThis.fetch = (async () => { sends += 1; throw new Error("invalid identity must not refresh"); }) as typeof fetch;
     try {
-      await getValidCodexToken("anon-owner");
-
-      // The owner still rotates normally.
-      expect(readCodexAccountRecord("anon-owner")!.credential?.refreshToken).toBe("anon-rotated");
-      // The unidentified record is untouched, generation included.
-      const alias = readCodexAccountRecord("anon-alias")!;
-      expect(alias.credential?.accessToken).toBe("anon-old");
-      expect(alias.credential?.refreshToken).toBe("anon-grant");
-      expect(alias.generation).toBe(aliasGeneration);
+      // Neither unidentified record is admitted; no refresh or propagation can start.
+      for (const id of ["anon-owner", "anon-alias"]) {
+        expect(readCodexAccountRecord(id)).toBeNull();
+        await expect(getValidCodexToken(id)).rejects.toBeInstanceOf(CodexCredentialUnavailableError);
+      }
+      expect(sends).toBe(0);
+      // Both credentials and generations remain byte-identical on disk.
+      expect(fs.readFileSync(ACCOUNTS_PATH, "utf8")).toBe(stored);
     } finally {
       globalThis.fetch = originalFetch;
     }

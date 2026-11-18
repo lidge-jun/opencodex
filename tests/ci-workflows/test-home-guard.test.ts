@@ -12,7 +12,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   assertNotRealHomeUnderTest,
@@ -740,6 +740,19 @@ const canSymlink = (() => {
     // And the refusal is not armed-gated: the run that caused the incident armed nothing.
     expect(() => assertRemovalOutsideProtectedTrees(protectedHomeForTests())).toThrow("refusing to remove");
 
+    // #7853: a child whose NAME starts with two dots is still inside the tree. Only a leading
+    // ".." component leaves it. The real home (first entry) is refused by equality only.
+    for (const tree of trees.slice(1)) {
+      expect(protectedRemovalReason(join(tree, "..backup"))).not.toBeNull();
+      expect(protectedRemovalReason(join(tree, "..backup", "config.json"))).not.toBeNull();
+    }
+    // And where the filesystem ignores case, a case variant names the same tree, existing or not.
+    if (process.platform === "win32" || process.platform === "darwin") {
+      const upper = join(dirname(protectedHomeForTests()), ".OPENCODEX");
+      expect(protectedRemovalReason(upper)).not.toBeNull();
+      expect(protectedRemovalReason(join(upper, "config.json"))).not.toBeNull();
+    }
+
     const ordinary = mkdtempSync(join(tmpdir(), "ocx-removal-allowed-"));
     try {
       expect(protectedRemovalReason(ordinary)).toBeNull();
@@ -805,6 +818,41 @@ const canSymlink = (() => {
       expect(JSON.parse(probe.stdout.trim())).toEqual({
         fixture: true, checkout: true, parent: true, sibling: true, link: true,
       });
+    } finally {
+      unlinkSync(codexLink);
+    }
+  });
+
+  // Windows' path.relative ignores case whatever the guard decides, so this case cannot arise there.
+  // Every letter of the checkout name is flipped, so the sibling differs whichever case the name
+  // uses; a name with no cased letter has no case-colliding sibling at all.
+  const checkoutName = basename(REPO_ROOT);
+  const caseFlippedName = [...checkoutName]
+    .map(ch => (ch === ch.toUpperCase() ? ch.toLowerCase() : ch.toUpperCase()))
+    .join("");
+  test.skipIf(!canSymlink || process.platform === "win32" || caseFlippedName === checkoutName)("on a case-folding platform the checkout exemption still compares case exactly", async () => {
+    // The guard folds case on macOS so protection refuses broadly, but a case-sensitive APFS volume
+    // can hold ~/.codex/worktrees/repo and a distinct ~/.codex/worktrees/REPO side by side. The
+    // child reports darwin before loading the guard, so the guard folds while path comparison stays
+    // exact, which is that volume. Folding the exemption too exempted the sibling (#7853 review).
+    const probeId = beginProbe("16-checkout-case-sibling");
+    const realHome = mkdtempSync(join(tmpdir(), "ocx-sentinel-home-"));
+    const codexLink = join(realHome, ".codex");
+    symlinkSync(dirname(REPO_ROOT), codexLink);
+    mkdirSync(join(realHome, ".opencodex"), { recursive: true });
+    const caseSibling = join(dirname(REPO_ROOT), caseFlippedName);
+    try {
+      const probe = await runProbe(probeId, `
+        Object.defineProperty(process, "platform", { value: "darwin" });
+        const { protectedRemovalReason } = await import("${REPO_ROOT_URL}src/lib/test-home-guard");
+        console.log(JSON.stringify({
+          distinct: ${JSON.stringify(caseSibling)} !== ${JSON.stringify(REPO_ROOT)},
+          fixture: protectedRemovalReason(${JSON.stringify(join(REPO_ROOT, "tests", ".tmp-guard-fixture"))}) === null,
+          caseSibling: protectedRemovalReason(${JSON.stringify(join(caseSibling, "config.json"))}) !== null,
+        }));
+      `, { OCX_REAL_HOME: realHome, OCX_TEST_HOME_GUARD: "1" });
+
+      expect(JSON.parse(probe.stdout.trim())).toEqual({ distinct: true, fixture: true, caseSibling: true });
     } finally {
       unlinkSync(codexLink);
     }

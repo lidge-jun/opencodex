@@ -14,9 +14,9 @@ Code 可以使用每一個已路由的供應商——包括 OAuth 登入、帳�
 
 **實驗性、opt-in** 的 Claude 帳號池（`anthropicAccountPool.enabled`）會在這些 OAuth 帳號之間加入
 sticky session affinity 與依用量的新工作階段選擇。它**不**控制 429 容錯移轉：只要儲存了兩個以上可用帳號，被限流的請求無論此開關開或關都會切換到另一個帳號，且無法關閉。僅對**新**工作階段，`anthropicAccountPool.strategy`
-會在合格帳號之間選擇：`quota`（預設）在用量高於 `autoSwitchThreshold` 時，依
-`anthropicAccountPool.quotaWindow` 所設定的視窗挑選已知用量最低者（`five-hour` 為預設，亦可選
-`weekly` 或 `max-utilization`）；
+會在合格帳號之間選擇：`quota`（預設）保留現用帳號，直到 `anthropicAccountPool.quotaWindow` 所設定視窗的用量
+（`five-hour` 為預設，亦可選 `weekly` 或 `max-utilization`）達到 `autoSwitchThreshold`
+（預設 80），然後轉到用量最低的帳號，並優先選擇低於自身閾值的帳號；
 `round-robin` 平均分散（`stickyLimit`，預設 `1`）；`fill-first` 一直使用作用中帳號直到冷卻、重新認證
 或達到閾值，然後前進。它**預設關閉**，仍屬實驗性功能。
 
@@ -57,7 +57,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（以訂閱方式啟動且未設定時為原生 `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`） |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | OpenCodex 將層級槽位設為路由別名時對應的 `/model` 標籤（例如 `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`）。launchd 系統環境與 shell 掛鉤中也成對寫入。模型 ID 仍為別名。您自行設定的槽位或標籤不會被修改 |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | 啟用 `alwaysEnableEffort` 時設為 `1`（條件注入） |
-| `ENABLE_TOOL_SEARCH` | 設定 `claudeCode.toolSearch` 時注入（條件注入，預設關閉） |
+| `ENABLE_TOOL_SEARCH` | 設定 `claudeCode.toolSearch` 時注入（條件注入；預設不注入，沿用 Claude Code 自身的預設值） |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | 設定 `maxContextTokens` 時使用的舊版上下文覆蓋項（條件注入） |
 你自行匯出的變數始終優先。額外引數會直接透傳：`ocx claude -p "hello"`。
 
@@ -97,6 +97,8 @@ Claude Code 需要在 `ANTHROPIC_AUTH_TOKEN` 中有 token 才能與閘道器通�
 | 有 Claude 登入（`~/.claude.json` 的 OAuth 帳號、`.credentials.json`、macOS keychain，或已匯出的 `ANTHROPIC_API_KEY`） | 不設定 token，讓你的訂閱與聯結器繼續運作 |
 | 完全沒有 Claude 認證 | 注入佔位 token，讓 Claude Code 不再要求登入，並經由代理路由 |
 | 無法判斷（keychain 無法讀取、檔案損毀） | 假設為訂閱並印出警告——讀取失敗時絕不會把付費訂閱者改成走代理 |
+
+鎖住的 macOS keychain 視為「無法判斷」。opencodex 最多等待 keychain 回應 1.5 秒，絕不取消解鎖提示；執行中的代理在一次查詢逾時後 60 秒內不再詢問 keychain，因此重新整理儀表板不會疊加提示。每個新的 `ocx claude` 程序會各自詢問一次。若手動將 `authMode` 設為 proxy 或 subscription，則完全不查詢 keychain。
 
 此判斷會在每次啟動時重新計算，不會被記住，因此登入或登出會在下一次 `ocx claude` 時自動生效，
 無需重新設定。
@@ -398,9 +400,7 @@ v1 別名按字面解碼（歷史上 model ID 中包含的兩字元序列 `~s` /
 可以在 Claude 頁面調整壓縮值。**警告：**如果將其提高到超過模型的實際視窗，該模型將無法正常
 工作——聊天會在觸發摘要之前報錯。
 
-正規化上下文超限錯誤時，只使用提供方錯誤訊息的前 65,536 個 UTF-16 程式碼單元。
-後面的診斷資訊或 token 數可能被捨棄，且不會新增截斷標記。
-詳細限制和 token 數處理條件請參閱[英文指南](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)。
+Messages 錯誤回應正規化使用固定文案，不保留提供方原文或 token 數量。辨識到上下文超限時傳回 `prompt is too long: The request exceeds the model's context window.`。串流中第一個欄位為 error 事件的區塊最多保留 1 MiB；超過後傳回不含壓縮觸發短語的固定錯誤。範圍和兩項例外請見[英文指南](/guides/claude-code/#auto-context-big-context-models-without-the-200k-ceiling)。
 
 低於 1M 的原生 Anthropic 模型絕不會被自動標記。你自行匯出的壓縮值在啟動槽位標記上始終優先（代理會使用**你的**
 值來判斷哪些模型可以安全標記）。探索列表忽略該匯出值並保持固定下限。手動編輯設定時填入的無效值會回退到 829,800。
@@ -556,7 +556,7 @@ Search 和圖像描述沿用儲存庫已有的 Claude Code OAuth fingerprint 先
 | Assistant `tool_use` | `function_call`（`input` → JSON 字串化的 `arguments`） |
 | 使用者 `tool_result` | `function_call_output`（`is_error` → `[tool error]` 字首） |
 | 重放 `thinking` / `redacted_thinking` | `reasoning` 項目；簽名與遮蔽載荷保存在有界 `ocxr1` 信封中 |
-| Function 工具 | `{type: "function"}`（`web_search*` → `{type: "web_search"}`） |
+| Function 工具 | `{type: "function"}`（`web_search*` → `{type: "web_search"}`） 帶有 `allowed_domains`、`blocked_domains` 或 `user_location` 的託管搜尋會從轉換後的 Responses/Chat 路由中移除；強制呼叫已移除的搜尋會回傳 400。有效的 `defer_loading` 函式定義仍可作為一般函式呼叫。參見[轉換限制](/guides/claude-code/#search-restrictions-and-deferred-tools-on-translated-routes)。 |
 | `tool_choice` | `auto`→`auto`，`none`→`none`，`any`→`required`，指定名稱 function→`{type:"function",name}`，hosted WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
@@ -588,16 +588,16 @@ role；`tool_result` 缺少 `tool_use_id`；`tool_use` 缺少 id/name；指定�
 **錯誤分類：**400 `invalid_request_error`、401 `authentication_error`、
 402 `billing_error`、403 `permission_error`、404 `not_found_error`、409 `conflict_error`、
 413 `request_too_large`、429 `rate_limit_error`、504 `timeout_error`、529 `overloaded_error`，
-其他 5xx 為 `api_error`。`Retry-After` 會保留。
+其他 5xx 為 `api_error`。`Retry-After` 以整數秒傳送（HTTP 日期會換算為剩餘秒數），上限為 8 天。
 
 ## 提示快取與 token 用量
 
 **Anthropic 路由請求：**適配器會管理工具、系統內容和倒數第二條使用者訊息的快取斷點，以及頂層
 自動 `cache_control`。穩定輪次通常能達到約 99.9% 的快取命中率。
 
-**原生 OpenAI/ChatGPT 路由：**派生會話範圍的 `prompt_cache_key`（存在時取自
-`metadata.user_id`，否則回退到系統內容雜湊）和用於快取親和性的 `session_id` 標頭。
-快取鍵包含模型和完整的工具 schema。
+**原生 OpenAI/ChatGPT 路由：**派生 `prompt_cache_key`（`metadata.user_id` 為字串時取自該值，
+否則回退到系統內容雜湊），並僅在存在會話識別時派生用於快取親和性的 `session_id` 標頭（不會從共享回退鍵派生）。
+由系統內容雜湊派生的回退鍵（僅在存在系統內容時使用）還包含模型和完整的工具 schema。
 
 **Token 計算：**Anthropic 輸出會從 `input_tokens` 中減去 `cached_tokens` 和
 `cache_write_tokens`，並將它們分別公開為 `cache_read_input_tokens` 和

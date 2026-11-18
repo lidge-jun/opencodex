@@ -32,13 +32,14 @@ let runtimeActiveCodexAccountId: string | undefined;
 
 /** Manual selection resets transient routing evidence without bypassing a real 429 cooldown. */
 export function resetCodexRoutingForManualSelection(accountId: string): void {
-  clearThreadAccountMap();
+  clearThreadAccountMap({ preserveConversationStateIssuers: true });
   // Manual selection is the operator source of truth — drop any automatic runtime cursor.
   runtimeActiveCodexAccountId = undefined;
-  // Record the pick as an unspent one-shot on the SHARED scope only. An independent scope
-  // gets no entry on purpose: every write site the guard protects is already skipped for
-  // independent scopes, so an entry there would be state nothing reads — and state nothing
-  // reads is what the next reader mistakes for a rule.
+  // Record the pick as an unspent one-shot on the shared scope and on each independent scope
+  // whose ring is seeded below. The cursor guard (`manualPreferenceBlocks`) still only acts on
+  // the shared scope: every write site it protects skips independent scopes. The independent
+  // entries have exactly one reader, round-robin placement, which keeps the selected account
+  // among its candidates until a dispatch in that scope spends the entry.
   //
   // Seeding happens ONLY here. A pool-driven promote must never create or move a preference,
   // or the pool would manufacture an operator intent nobody expressed.
@@ -50,6 +51,7 @@ export function resetCodexRoutingForManualSelection(accountId: string): void {
   for (const scope of new Set(Object.values(NATIVE_MODEL_QUOTA_SCOPES))) {
     if (isIndependentCodexQuotaScope(scope)) {
       seedPoolRotationAccount(codexPoolKeyForScope(scope), accountId);
+      manualPreference.set(codexPoolKeyForScope(scope), accountId);
     }
   }
   // Quota avoidance is a preference, like the soft avoid dropped above, and an operator naming
@@ -91,6 +93,7 @@ export function resetCodexRoutingForClearedSelection(): void {
   for (const scope of new Set(Object.values(NATIVE_MODEL_QUOTA_SCOPES))) {
     if (isIndependentCodexQuotaScope(scope)) {
       clearPoolRotationState(codexPoolKeyForScope(scope));
+      manualPreference.delete(codexPoolKeyForScope(scope));
     }
   }
 }
@@ -141,6 +144,11 @@ export function forgetManualPreference(accountId: string): void {
 export function manualPreferenceBlocks(poolKey: string, accountId: string): boolean {
   const preferred = manualPreference.get(poolKey);
   return preferred !== undefined && preferred !== accountId;
+}
+
+/** The unspent operator selection for this pool scope, if any. Read-only. */
+export function unspentManualPreference(poolKey: string): string | undefined {
+  return manualPreference.get(poolKey);
 }
 
 export function getEffectiveActiveCodexAccountId(config: OcxConfig): string | undefined {

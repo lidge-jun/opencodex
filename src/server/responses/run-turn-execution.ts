@@ -1,3 +1,4 @@
+import { formatClientRetryAfter } from "../../lib/client-retry-after";
 import { mapSpendLedgerStorageError } from "./spend-storage-error";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
@@ -7,7 +8,7 @@ import type { ResponsesEffects } from "./response-effects";
 import type { ResponsesSendBudget } from "./request-send-budget";
 import type { ResponsesCompletionPolicy } from "./completion-policy";
 import { linkAbortSignal, runTurnAdapterSseResponses } from "./core-lifetime";
-import { createAdapterEventQueue, preflightAdapterEvents, type AdapterEventPreflight } from "../../adapters/run-turn-queue";
+import { createAdapterEventQueue, preflightAdapterEvents, classifyZeroOutputTokenLimit, isContentEvent, DEFAULT_MAX_REASONING_HOLD_MS, type AdapterEventPreflight } from "../../adapters/run-turn-queue";
 import {
   bindRouteReasoningReplayScope,
   adapterNeedsForcedContinuation,
@@ -49,7 +50,7 @@ import { rememberResponseState } from "../../responses/state";
 import { trackStreamLifetime } from "../lifecycle";
 import { awaitThoughtSignatureDurability } from "../../responses/thought-signature-replay";
 import { undeclaredToolCallMessage } from "../responses-undeclared-tool-guard";
-import { emptyToolCatalogRefusal, guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
+import { currentTurnToolBridgeMaps, emptyToolCatalogRefusal, guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
 // LOCAL PATCH (runturn-websearch)
 import { planWebSearch } from "../../web-search";
 import { runTurnWebSearchInitialParsed, runTurnWebSearchLoop } from "../../web-search/run-turn-loop";
@@ -58,6 +59,7 @@ import { WEB_SEARCH_TOOL_NAME } from "../../web-search/synthetic-tool";
 import { orderDevinMessagesOutput } from "../../claude/devin-output-order";
 import { unboundPoolSpendRefusalMessage } from "../workflow-refusal";
 import { claudeUsagePreflight } from "../../adapters/claude-cli/usage-admission";
+import { responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
 
 // LOCAL PATCH (runturn-websearch): top-level fields route binding or the
 // adapter itself may write during a turn. Iteration-local `turnParsed` objects
@@ -131,6 +133,7 @@ export async function executeResponsesRunTurn(
     | "noteAdapterRecoveryWithheld"
     | "reserveCredentialHop"
     | "pendingHopPermit"
+    | "dispatchSidecarSend"
   >,
   completionPolicy: Pick<ResponsesCompletionPolicy, "emptyCompletionGuardEnabled">,
 ): Promise<Response> {
@@ -179,6 +182,18 @@ export async function executeResponsesRunTurn(
   // Publish the known subscription pause before headers or a CLI turn, preserving its reset
   // across both Responses and translated Chat instead of presenting a retryable generic 502.
   if (transportState.runTurnAdapter.name === "claude-cli") {
+    if (options.chatInstructionImage || options.responsesInstructionImage || responsesHasInstructionImage(parsed._rawBody)
+      || parsed.context.messages.some(message => message.role === "developer"
+        && Array.isArray(message.content) && message.content.some(part => part.type === "image"))) {
+      cancelResponseCompletion();
+      releaseSearchProbeLease();
+      const refusal = new Response(JSON.stringify({ error: {
+        type: "invalid_request_error", code: "unsupported_input_modality", param: null,
+        message: "Claude Code CLI does not support images in developer instructions.",
+      } }), { status: 400, headers: { "Content-Type": "application/json" } });
+      markResponseNonReplayable(refusal);
+      return refusal;
+    }
     let usage: Awaited<ReturnType<typeof claudeUsagePreflight>>;
     try {
       usage = await claudeUsagePreflight(parsed.modelId);
@@ -196,7 +211,7 @@ export async function executeResponsesRunTurn(
       } }), {
         status: 429,
         headers: { "Content-Type": "application/json",
-          ...(usage.resetAt ? { "Retry-After": String(Math.max(1, Math.ceil((usage.resetAt - Date.now()) / 1000))) } : {}),
+          ...(usage.resetAt ? { "Retry-After": formatClientRetryAfter(Math.max(1, Math.ceil((usage.resetAt - Date.now()) / 1000)))! } : {}),
         },
       });
       markResponseNonReplayable(refusal);
@@ -268,6 +283,7 @@ export async function executeResponsesRunTurn(
     const failedKeys = new Set<string>();
     const keyAttemptLimit = route.provider.apiKeyPool?.length ?? 0;
     let lastKeyFailure: Extract<AdapterEvent, { type: "error" }> | undefined;
+    let authRecoveryRefusal: Response | undefined;
     let runTurnAttemptSeq = 0;
     const runTurnAttempt = async (
       targetQueue: AdapterEventQueue,
@@ -374,8 +390,13 @@ export async function executeResponsesRunTurn(
           Object.assign(parsed, routeState);
         }
       } catch (err) {
-        const storageRefusal = mapSpendLedgerStorageError(err, logCtx);
-        emit(storageRefusal ? { type: "error", ...storageRefusal } : err instanceof RequestPacingQueueOverloadError
+        if (err instanceof OAuthAccountPausedError) {
+          const message = publicOAuthAuthenticationErrorMessage(err);
+          authRecoveryRefusal ??= formatErrorResponse(403, "permission_error", message);
+          emit({ type: "error", status: 403, errorType: "permission_error", message });
+        } else {
+          const storageRefusal = mapSpendLedgerStorageError(err, logCtx);
+          emit(storageRefusal ? { type: "error", ...storageRefusal } : err instanceof RequestPacingQueueOverloadError
           ? {
               type: "error",
               status: 429,
@@ -399,6 +420,7 @@ export async function executeResponsesRunTurn(
                 type: "error",
                 message: err instanceof Error ? err.message : String(err),
               });
+        }
       } finally {
         if (attemptSeq === 1) options.comboInitialSend?.permit.release();
         devinProducers.delete(producerAbort);
@@ -477,7 +499,6 @@ export async function executeResponsesRunTurn(
     // selected; the turn then moves to a surviving stored account, or, with none, the client
     // gets the login instruction instead of an opaque upstream 401.
     let oauth401ReplayAttempted = false;
-    let authRecoveryRefusal: Response | undefined;
     const refuseLocalAuthRecovery = (error: Extract<AdapterEvent, { type: "error" }>, cause: unknown): boolean => {
       const cancelled = runTurnAbort.signal.aborted;
       if (!cancelled && !(cause instanceof OAuthTokenRefreshBusyError) && !(cause instanceof OAuthAccountPausedError)) return false;
@@ -755,12 +776,16 @@ export async function executeResponsesRunTurn(
 
     const clientToolCatalog = requestState.clientToolCatalogRestriction && route.provider.authMode !== "forward"
       ? requestState.clientToolCatalogRestriction : undefined;
-    const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, bareCustomToolNames, toolSearchToolNames } = clientToolCatalog
-      ? { ...toolBridgeMaps, ...clientToolCatalog } : toolBridgeMaps;
+    const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, bareCustomToolNames, toolSearchToolNames } = currentTurnToolBridgeMaps(toolBridgeMaps, clientToolCatalog);
     const enforceDeclaredToolNames = inboundWire !== "chat" && inboundWire !== "anthropic";
     const classifyUndeclaredFirstTool = (
       event: AdapterEvent,
     ): Extract<AdapterEvent, { type: "error" }> | undefined => {
+      // Called only at the first meaningful event; preflight protects side effects.
+      const zeroOutputLimit = options.comboAttempt
+        ? classifyZeroOutputTokenLimit(event, { allowCompactionWithContent: routedCompaction })
+        : undefined;
+      if (zeroOutputLimit) return zeroOutputLimit;
       // This tool is declared to the adapter by the private search loop.
       if (wsPlan && event.type === "tool_call_start" && event.name === WEB_SEARCH_TOOL_NAME) return undefined;
       const emptyCatalogRefusal = emptyToolCatalogRefusal(event, clientToolCatalog);
@@ -772,7 +797,7 @@ export async function executeResponsesRunTurn(
         type: "error",
         status: 502,
         errorType: "upstream_error",
-        message: undeclaredToolCallMessage(effectiveName),
+        message: undeclaredToolCallMessage(),
       };
     };
     const grokDevinPreflight = !options.comboAttempt && logCtx.surface === "grok" && inboundWire === "responses"
@@ -808,17 +833,19 @@ export async function executeResponsesRunTurn(
         ? Date.now() + (resolveStallTimeoutSec(stallTimeoutSec) || DEFAULT_STALL_TIMEOUT_SEC) * 1_000
         : undefined;
       if (runTurnFailoverArmed()) {
-        // Preflight holds only heartbeats and the first meaningful event. A first-event 429 can be
-        // replayed transparently; after any output reaches the bridge, a later error stays terminal.
+        // Preflight holds heartbeats, pre-output reasoning up to the reasoning hold bound,
+        // and the first meaningful event. A first-event 429 or zero-output token-limit terminal
+        // can be replayed transparently; after any output reaches the bridge or the reasoning
+        // hold expires, a later error stays terminal.
         eventSource = await preflightRunTurnFailover(eventSource, wsFirstParsed, preflightDeadlineAt);
-        if (authRecoveryRefusal) {
-          cancelResponseCompletion();
-          runTurnAbort.abort();
-          queue.close();
-          cleanupRunTurnAbort();
-          releaseSearchProbeLease();
-          return authRecoveryRefusal;
-        }
+      }
+      if (authRecoveryRefusal) {
+        cancelResponseCompletion();
+        runTurnAbort.abort();
+        queue.close();
+        cleanupRunTurnAbort();
+        releaseSearchProbeLease();
+        return authRecoveryRefusal;
       }
       if (grokDevinPreflight) {
         const preflight = await preflightAdapterEvents(eventSource, undefined, {
@@ -830,9 +857,14 @@ export async function executeResponsesRunTurn(
       }
       if (options.comboAttempt) {
         const preflight = await preflightAdapterEvents(
-          eventSource, classifyUndeclaredFirstTool, { honorReady: false },
+          eventSource, classifyUndeclaredFirstTool, {
+            honorReady: false,
+            bufferCompaction: routedCompaction,
+            maxReasoningHoldMs: DEFAULT_MAX_REASONING_HOLD_MS,
+          },
         );
         if (preflight.error || preflight.empty) {
+          if (preflight.error?.usage) transportState.bindKeyUsageFromBridge(preflight.error.usage);
           runTurnAbort.abort();
           queue.close();
           const classified = adapterFailureFromEvent(preflight.error ?? {
@@ -858,6 +890,7 @@ export async function executeResponsesRunTurn(
       // iterations; terminal output keeps flowing through the same queue/bridge.
       if (wsPlan) {
         eventSource = runTurnWebSearchLoop(eventSource, {
+          dispatchSidecarSend: sendBudgetState.dispatchSidecarSend,
           parsed,
           plan: wsPlan,
           translatorBudget,
@@ -896,7 +929,7 @@ export async function executeResponsesRunTurn(
           queue.close();
         }, 2_000,
         {
-          translatorBudget,
+          translatorBudget, proxyErrorContext: logCtx,
           replayCacheScope: parsed._reasoningReplayScope,
           ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
           stallTimeoutSec,
@@ -908,9 +941,12 @@ export async function executeResponsesRunTurn(
           enforceDeclaredToolNames,
           // Same wire split: only a Responses client (Codex) needs the refusal as a failure.
           terminalRefusalAsFailed: enforceDeclaredToolNames,
+          escapeMemoryCitationTags: enforceDeclaredToolNames,
           toolParameterSchemas,
           ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
           ...(routedCompaction ? { compaction: true, compactionRetention: parsed._compactionRetention } : {}),
+          completeOnMaxOutputTokens: config.completeOnMaxOutputTokens === true && enforceDeclaredToolNames,
+          textFormat: parsed.options.textFormat,
           // grok-build's strict decoder dies on the typed response.heartbeat frame; its
           // eventsource layer tolerates comment keep-alives. Codex needs the opposite.
           ...(logCtx.surface === "grok" ? { heartbeatStyle: "comment" as const } : {}),
@@ -965,14 +1001,14 @@ export async function executeResponsesRunTurn(
       for await (const event of await preflightRunTurnFailover(
         (async function* () { yield* firstAttemptEvents; })(),
       )) runTurnEvents.push(event);
-      if (authRecoveryRefusal) {
-        cancelResponseCompletion();
-        runTurnAbort.abort();
-        queue.close();
-        cleanupRunTurnAbort();
-        releaseSearchProbeLease();
-        return authRecoveryRefusal;
-      }
+    }
+    if (authRecoveryRefusal) {
+      cancelResponseCompletion();
+      runTurnAbort.abort();
+      queue.close();
+      cleanupRunTurnAbort();
+      releaseSearchProbeLease();
+      return authRecoveryRefusal;
     }
     if (grokDevinPreflight) {
       const preflight = await preflightAdapterEvents(
@@ -1007,6 +1043,7 @@ export async function executeResponsesRunTurn(
           {
             parsed,
             plan: wsPlan,
+            dispatchSidecarSend: sendBudgetState.dispatchSidecarSend,
             translatorBudget,
             emptyCompletionRetry: emptyCompletionGuardEnabled,
             forwardProvider: wsPlan.forwardSidecar?.provider,
@@ -1034,15 +1071,21 @@ export async function executeResponsesRunTurn(
         const firstMeaningfulIndex = events.findIndex(event => event.type !== "heartbeat");
         const firstMeaningful = firstMeaningfulIndex === -1 ? undefined : events[firstMeaningfulIndex];
         // Same boundary as the streaming preflight: a replay-unsafe heartbeat means the adapter
-        // already ran a local side effect, so an undeclared tool call after it keeps the bridge's
+        // already ran a local side effect, so an undeclared tool call or error after it keeps the bridge's
         // fail-closed refusal instead of becoming a hop that sends the turn to another target.
-        const replayUnsafe = events
-          .slice(0, firstMeaningfulIndex === -1 ? events.length : firstMeaningfulIndex)
-          .some(event => event.type === "heartbeat" && event.replayUnsafe === true);
-        const classifiedError = firstMeaningful && !replayUnsafe
-          ? classifyUndeclaredFirstTool(firstMeaningful)
+        // Fail closed: any replay-unsafe heartbeat anywhere in the buffered turn disables replaying
+        // undeclared tools or zero-output token-limit terminals.
+        const replayUnsafe = events.some(event => event.type === "heartbeat" && event.replayUnsafe === true);
+        const sawContent = events.some(isContentEvent);
+        const terminalEvent = [...events].reverse().find(event => event.type === "done" || event.type === "incomplete");
+        const zeroOutputLimit = (!sawContent || routedCompaction) && terminalEvent
+          ? classifyZeroOutputTokenLimit(terminalEvent, { allowCompactionWithContent: routedCompaction })
+          : undefined;
+        const classifiedError = !replayUnsafe
+          ? (zeroOutputLimit ?? (firstMeaningful ? classifyUndeclaredFirstTool(firstMeaningful) : undefined))
           : undefined;
         if (!firstMeaningful || firstMeaningful.type === "error" || classifiedError) {
+          if (classifiedError?.usage) transportState.bindKeyUsageFromBridge(classifiedError.usage);
           const classified = adapterFailureFromEvent(classifiedError ?? (firstMeaningful?.type === "error"
             ? firstMeaningful
             : { type: "error", status: 502, message: "Adapter ended before producing a response" }));
@@ -1067,11 +1110,14 @@ export async function executeResponsesRunTurn(
         toolNsMap,
         declaredToolNames,
         enforceDeclaredToolNames,
+        escapeMemoryCitationTags: enforceDeclaredToolNames,
         toolParameterSchemas,
         freeformToolNames,
         bareCustomToolNames,
         toolSearchToolNames,
         ...(routedCompaction ? { compaction: true, compactionRetention: parsed._compactionRetention } : {}),
+        completeOnMaxOutputTokens: config.completeOnMaxOutputTokens === true && enforceDeclaredToolNames,
+        textFormat: parsed.options.textFormat,
         onProviderState: state => { providerState = state; },
         onUsage: usage => {
           transportState.bindKeyUsageFromBridge(usage);
@@ -1097,10 +1143,12 @@ export async function executeResponsesRunTurn(
         commitReasoningReplayServingRoute();
       }
       notifyResponseComplete(json);
-      return new Response(JSON.stringify(json), {
+      const response = new Response(JSON.stringify(json), {
         status: (json.error as OcxErrorPayload | undefined)?.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE ? 503 : 200,
         headers: { "Content-Type": "application/json" },
       });
+      runTurnAdapterSseResponses.add(response);
+      return response;
     } catch (error) {
       if (!isTranslatorBudgetExceededError(error)) throw error;
       runTurnAbort.abort();

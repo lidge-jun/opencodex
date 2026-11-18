@@ -59,6 +59,8 @@ export interface ManagementApiDeps {
   /** Read-only process-local aggregate metrics; absent keeps the scrape route unavailable. */
   requestMetrics?: RequestMetricsSnapshotter;
   checkPackageUpdate?: (channel: Channel) => Promise<UpdateCheckResult>;
+  /** Test seam for the dashboard restart supervisor check (src/update/worker-launch.ts). */
+  dashboardRestartRefusal?: typeof import("../../update/worker-launch").dashboardRestartRefusal;
   remoteWorkspaceHub?: RemoteWorkspaceHubApi;
   remoteWorkspaceSessions?: RemoteWorkspaceSessionsApi;
   /** The listener retains and awaits teardown only after this optional subsystem activates. */
@@ -91,6 +93,7 @@ export interface ManagementApiDeps {
   fetchAllModels?: (config: OcxConfig) => Promise<CatalogModel[]>;
   /** Codex role auto-assign's one sizing model call; route tests answer it without a provider. */
   completeCodexRoleSizing?: import("./codex-role-auto-assign").CompleteRoleSizing;
+  loadCodexRoleCapability?: import("../../codex/role-capability").LoadCapability;
   /**
    * Writer seam for the Grok toggle: lets a test place the file in any state
    * between the pre-write recheck and the write itself (the r8 post-inspection
@@ -156,14 +159,22 @@ export interface ManagementApiDeps {
   codexPromptPaths?: CodexPromptPaths;
   /** Link seams are getters so the optional listener and supervisor are singletons. */
   linkSupervisor?: () => LinkSupervisor;
-  linkListener?: () => Pick<LinkListenerLifecycle<unknown>, "ensureStarted" | "status" | "close" | "onAuthenticatedCatalog"> & Partial<Pick<LinkListenerLifecycle<unknown>, "peerObservation">> & Partial<Pick<import("../index/optional-listeners").OptionalListenerSet<unknown>, "ensureClaudeIntercept" | "claudeInterceptOutcome">>;
+  linkListener?: () => Pick<LinkListenerLifecycle<unknown>, "ensureStarted" | "status" | "close" | "onAuthenticatedCatalog"> & Partial<Pick<LinkListenerLifecycle<unknown>, "peerObservation">> & Partial<Pick<import("../index/optional-listeners").OptionalListenerSet<unknown>, "ensureClaudeIntercept" | "claudeInterceptOutcome" | "linkActivity" | "linkTraffic" | "catalogPull" | "flushCatalogPulls">>;
   readLinkStore?: () => LinkStore;
   writeLinkStore?: (store: LinkStore) => void;
   linkKnownHostsPath?: () => string;
   sshRunner?: SshRunner;
-  issueApiKey?: (config: OcxConfig, name: string) => IssuedApiKey;
+  /** id: the key id an operation reserved before issuing it (src/server/management/link-operation.ts). */
+  issueApiKey?: (config: OcxConfig, name: string, id?: string) => IssuedApiKey;
+  /** The operation journal (src/link/operations-journal.ts); defaults to <configDir>/link/operations.json. */
+  linkOperationsPath?: () => string;
+  /** The per-alias lock (src/link/alias-lock.ts): directory, clock, sleep and wait bound. */
+  linkAliasLock?: import("../../link/alias-lock").AliasLockDeps;
+  /** Called before an operation's effect mark is written; a throw stands for a failed journal write (tests). */
+  linkOperationMarkHook?: (effect: string, phase: "intent" | "done") => void;
   revokeApiKey?: (config: OcxConfig, id: string) => boolean;
   loadLinkCandidates?: () => Array<{ alias: string; source: "ssh_config" | "tailscale" }>;
+  resolveChildBinarySource?: typeof import("../../link/child-binary-source").resolveChildBinarySource;
   /** Bound public inference port, not the ingress receiving this management request. */
   liveListenPort?: () => number | undefined;
   now?: () => number;

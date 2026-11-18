@@ -1,0 +1,767 @@
+/* v2 styles for the Accounts & limits (Codex Set, Providers) page. Imported by design/theme.css into the `bridge`
+   layer, after bridge.css: above every v1 sheet, below Tailwind utilities. Prefer
+   Tailwind classes in the components; keep this file for what utilities cannot say. */
+
+/* ============================================================================
+   Shared pieces (components/v2-accounts)
+   ============================================================================ */
+.acc-skel {
+  display: block;
+  background: linear-gradient(90deg, var(--ocx-surface-2) 0%, var(--ocx-surface) 50%, var(--ocx-surface-2) 100%);
+  background-size: 200% 100%;
+  animation: acc-skel-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes acc-skel-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .acc-skel { animation: none; }
+}
+.acc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--ocx-surface-2);
+  color: var(--ocx-fg-muted);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.acc-banner .link-btn { font-size: inherit; }
+.acc-banner--warn { background: color-mix(in oklab, var(--ocx-warning-soft) 45%, var(--ocx-raised)); }
+.acc-banner--err { background: color-mix(in oklab, var(--ocx-danger-soft) 45%, var(--ocx-raised)); }
+.acc-help .link-btn { font-size: inherit; padding: 0; }
+.acc-help[hidden] { display: none !important; }
+
+/* Bare icon at rest, a soft plate only on hover. */
+.acc-icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ocx-fg-subtle);
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+.acc-icon-btn:hover:not(:disabled) { background: var(--ocx-surface-2); color: var(--ocx-fg); }
+.acc-icon-btn:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 1px; }
+.acc-icon-btn:disabled { opacity: 0.45; cursor: default; }
+.acc-icon-btn[aria-busy="true"] { animation: acc-busy 1s ease-in-out infinite alternate; }
+@keyframes acc-busy { to { opacity: 0.4; } }
+
+/* ============================================================================
+   Codex tab: accounts (CodexAccountPool, also embedded in Providers → OpenAI)
+   ============================================================================ */
+.acc-v2 .acc-head { margin: 0; align-items: center; }
+.acc-v2 .acc-head .codex-auth-page-head__actions { gap: 14px; }
+.acc-v2 .codex-auth-credits-toggle,
+.acc-v2 .codex-credit-spend { gap: 8px; }
+.acc-v2 .codex-auth-credits-toggle__label { color: var(--ocx-fg-muted); font-size: 13px; }
+
+/* Chips: one inverse chip for "selected", quiet neutrals for the rest, colour only for state. */
+.acc-v2 .badge {
+  height: 20px;
+  padding: 0 7px;
+  gap: 4px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--ocx-surface-2);
+  color: var(--ocx-fg-muted);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 20px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.acc-v2 .badge-primary { background: var(--ocx-accent); color: var(--ocx-on-accent); }
+.acc-v2 .badge-amber { background: var(--ocx-warning-soft); color: var(--ocx-warning); }
+.acc-v2 .badge-green { background: var(--ocx-success-soft); color: var(--ocx-success); }
+.acc-v2 .badge-clickable { cursor: pointer; filter: none; }
+.acc-v2 .badge-clickable:hover { box-shadow: inset 0 0 0 1px var(--ocx-line-strong); filter: none; }
+.acc-v2 .badge-clickable:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 1px; }
+.acc-v2 .badge svg { width: 11px; height: 11px; }
+/* The reserved ticket slot kept a v1 card head from growing; a v2 row wraps its chips instead. */
+.acc-v2 .codex-ticket-badge-slot { display: none; }
+.acc-v2 .card-badges { gap: 4px; }
+
+/* Panel body: rows separated by hairlines. */
+.acc-accounts > .acc-panel__body { overflow: hidden; }
+.acc-accounts > .acc-panel__body > * + * { border-top: 1px solid var(--ocx-line); }
+.acc-accounts > .acc-panel__body > .acc-row-banner { margin: 10px 12px; border-top: 0; }
+.acc-accounts > .acc-panel__body > .acc-row-banner + * { border-top: 0; }
+.acc-accounts .codex-auth-actions-row { margin: 0; gap: 2px; }
+.acc-accounts .codex-auth-actions-row .btn { color: var(--ocx-fg-muted); background: transparent; border-color: transparent; }
+.acc-v2 .acc-head--embedded .codex-auth-action-btn { color: var(--ocx-fg-muted); background: transparent; border-color: transparent; }
+.acc-v2 .acc-head--embedded .codex-auth-action-btn:hover:not(:disabled),
+.acc-accounts .codex-auth-actions-row .btn:hover:not(:disabled) { color: var(--ocx-fg); background: var(--ocx-surface-2); border-color: transparent; }
+
+.acc-row.card {
+  position: relative;
+  margin: 0;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.acc-row.card.is-active { background: light-dark(rgb(9 9 11 / 0.018), rgb(255 255 255 / 0.022)); }
+.acc-row.has-more > .acc-row__head { padding-right: 38px; }
+.acc-row .acc-row__actions .btn { height: 30px; }
+.acc-row__notes,
+.acc-row__meters { margin: 10px 0 0 20px; }
+.acc-row__notes { display: flex; flex-direction: column; gap: 4px; }
+.acc-row__notes + .acc-row__meters { margin-top: 12px; }
+.acc-row.is-paused .acc-row__meters { opacity: 0.55; }
+.acc-row__notes .card-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin: 0;
+  padding: 0;
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--ocx-fg-muted);
+}
+.acc-row__notes .card-sub p { margin: 0; }
+.acc-row__notes .link-btn { font-size: 12.5px; }
+.acc-row__notes .acc-reauth { gap: 8px 12px; }
+.acc-row__notes .codex-main-hard-lock-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 12.5px;
+  color: var(--ocx-fg-muted);
+}
+.acc-row__notes .codex-main-hard-lock-status p { margin: 0; }
+.acc-row__notes .codex-main-hard-lock-status { justify-content: flex-start; }
+
+/* Account mode: the mode as a quiet chip, never the inverse "selected" chip. */
+.acc-v2 .acc-mode .badge { background: var(--ocx-surface-2); color: var(--ocx-fg); font-size: 11.5px; min-width: 0; }
+.acc-row__notes .codex-main-hard-lock-status.is-blocked { color: var(--ocx-warning); }
+
+/* The ⋯ overflow: the summary docks to the row corner, the body opens full width under it. */
+.acc-more { display: block; }
+.acc-more > summary.acc-more__summary {
+  position: absolute;
+  top: 13px;
+  right: 10px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  min-width: 0;
+  border-radius: 8px;
+  color: var(--ocx-fg-subtle);
+  list-style: none;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+.acc-more > summary.acc-more__summary::-webkit-details-marker { display: none; }
+.acc-more > summary.acc-more__summary:hover,
+.acc-more[open] > summary.acc-more__summary { background: var(--ocx-surface-2); color: var(--ocx-fg); }
+.acc-more > summary.acc-more__summary:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 1px; }
+.acc-settings.codex-account-more-body {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  margin: 12px 0 2px 20px;
+  padding: 0;
+  border-radius: 8px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.acc-setting {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  min-height: 46px;
+  padding: 7px 12px;
+}
+.acc-setting + .acc-setting { border-top: 1px solid var(--ocx-line); }
+.acc-setting__label { min-width: 0; font-size: 12.5px; color: var(--ocx-fg-muted); overflow-wrap: anywhere; }
+.acc-setting__control { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px; margin-left: auto; }
+.acc-setting:not(:has(> .acc-setting__label)) > .acc-setting__control { width: 100%; margin-left: 0; }
+.acc-settings :is(.codex-account-priority, .codex-account-auto-switch, .codex-account-credits) {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.acc-settings :is(.codex-account-priority-label, .codex-account-auto-switch-label, .codex-account-credits__label) {
+  margin-right: auto;
+  color: var(--ocx-fg);
+  font-size: 13px;
+  font-weight: 500;
+}
+.acc-settings .acc-danger-btn { color: var(--ocx-danger); }
+.acc-settings .acc-danger-btn:hover:not(:disabled) { background: var(--ocx-danger-soft); color: var(--ocx-danger); border-color: transparent; }
+
+/* Quota meters: a native <meter> drawn as a hairline track with a rounded fill. The fill colour
+   comes from --acc-meter-fill, which the component switches to warning or danger. Each engine's
+   pseudo-elements sit in their own rule, since one unknown selector drops the whole rule. */
+.acc-quota-meter {
+  --acc-meter-track: color-mix(in oklab, var(--ocx-fg) 7%, transparent);
+  --acc-meter-fill: color-mix(in oklab, var(--ocx-fg) 80%, transparent);
+  appearance: none;
+  display: block;
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--acc-meter-track);
+}
+.acc-quota-meter::-webkit-meter-bar { height: 100%; border: 0; border-radius: 999px; background: var(--acc-meter-track); }
+.acc-quota-meter::-webkit-meter-optimum-value { border-radius: 999px; background: var(--acc-meter-fill); }
+.acc-quota-meter::-webkit-meter-suboptimum-value { border-radius: 999px; background: var(--acc-meter-fill); }
+.acc-quota-meter::-webkit-meter-even-less-good-value { border-radius: 999px; background: var(--acc-meter-fill); }
+.acc-quota-meter::-moz-meter-bar { border-radius: 999px; background: var(--acc-meter-fill); }
+
+/* Meters: credits slot drawn as one more meter cell. */
+.acc-meters { padding: 0; }
+.acc-meters.quota-compact--pending { height: auto; min-height: 0; max-height: none; overflow: visible; }
+.acc-meters .quota-row--codex-credits {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "label val" "bar bar" "note note";
+  row-gap: 6px;
+  column-gap: 12px;
+  align-items: baseline;
+  min-height: 0;
+  padding: 0;
+}
+.acc-meters .quota-row--codex-credits .quota-label { grid-area: label; font-size: 12px; line-height: 16px; color: var(--ocx-fg-muted); font-weight: 400; }
+.acc-meters .quota-row--codex-credits .quota-val { grid-area: val; font-size: 13px; line-height: 16px; font-weight: 500; color: var(--ocx-fg); }
+.acc-meters .quota-row--codex-credits .bar { grid-area: bar; height: 6px; border-radius: 999px; background: color-mix(in oklab, var(--ocx-fg) 7%, transparent); }
+.acc-meters .quota-row--codex-credits .bar-fill { border-radius: 999px; background: color-mix(in oklab, var(--ocx-fg) 80%, transparent); }
+.acc-meters .quota-row--codex-credits .quota-reset-label { grid-area: note; font-size: 11.5px; line-height: 16px; color: var(--ocx-fg-subtle); }
+.acc-meters .quota-row--codex-credits :is(.quota-reset-day, .quota-reset-time) { display: none; }
+
+/* Inside the accounts body: the pool sub-heading, the empty pool. */
+.acc-pool-label {
+  padding: 10px 16px 0;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--ocx-fg-subtle);
+}
+.acc-pool-label + * { border-top: 0 !important; }
+.acc-pool-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 22px 24px 24px;
+  text-align: center;
+}
+.acc-pool-empty__title { margin: 0; font-size: 14px; font-weight: 500; color: var(--ocx-fg); }
+.acc-pool-empty__hint { margin: 0 0 6px; max-width: 60ch; font-size: 13px; line-height: 19px; color: var(--ocx-fg-muted); text-wrap: balance; }
+
+/* Native main-login profiles (its own component, drawn as a v2 card here). */
+.acc-native-main > .panel {
+  margin: 0 !important;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.acc-native-main > .panel h3,
+.acc-native-main > .panel h2 { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+
+/* Rotation strategy: the choice on one line, its explanation behind the "?". */
+.acc-v2 .account-pool-strategy-card {
+  margin: 0;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.acc-v2 .account-pool-strategy-controls .setting-row { padding: 0; border: 0; align-items: center; }
+.acc-v2 .account-pool-strategy-controls .setting-row + .setting-row { padding-top: 12px; margin-top: 4px; border-top: 1px solid var(--ocx-line); }
+.acc-v2 .account-pool-strategy-controls .setting-label .title { font-size: 14px; font-weight: 600; color: var(--ocx-fg); }
+.acc-v2 .account-pool-strategy-controls .acc-help .desc { display: block; margin: 0; font-size: 13px; line-height: 19px; color: var(--ocx-fg-muted); }
+.acc-v2 .account-pool-strategy-controls .setting-row { align-items: flex-start; }
+.acc-v2 .account-pool-strategy-controls .acc-strategy-title { min-height: 32px; }
+.acc-v2 .account-pool-strategy-controls .setting-label { flex: 1 1 320px; min-width: 0; }
+.acc-v2 .account-pool-strategy-controls .setting-controls { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.acc-v2 .account-pool-strategy-controls .account-pool-threshold-badge { order: -1; }
+.acc-v2 .account-pool-strategy-controls .setting-controls .custom-select { width: auto; min-width: 180px; }
+.acc-v2 .account-pool-strategy-controls .setting-controls .select-trigger { width: 100%; }
+.acc-v2 .account-pool-threshold-badge { height: 24px; padding: 0 9px; }
+
+/* Advanced settings: a disclosure row, then the boxes as one ruled list. */
+.acc-v2 .codex-auth-advanced { margin: 0; }
+.acc-v2 .codex-auth-advanced__toggle {
+  width: auto;
+  padding: 6px 10px;
+  margin-left: -10px;
+  border-radius: 8px;
+  color: var(--ocx-fg-muted);
+  font-size: 13px;
+  font-weight: 500;
+  transition: background-color 0.15s, color 0.15s;
+}
+.acc-v2 .codex-auth-advanced__toggle:hover { background: var(--ocx-surface); color: var(--ocx-fg); }
+.acc-v2 .codex-auth-advanced__toggle:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 1px; }
+.acc-v2 .codex-auth-advanced__boxes {
+  display: flex;
+  flex-direction: column;
+  margin-top: 8px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.acc-v2 .codex-auth-advanced__boxes > .card {
+  margin: 0;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: 0;
+  background: var(--ocx-bg);
+  box-shadow: none;
+}
+.acc-v2 .codex-auth-advanced__boxes > .card:first-child { border-radius: 8px 8px 0 0; }
+.acc-v2 .codex-auth-advanced__boxes > .card:last-child { border-radius: 0 0 8px 8px; }
+.acc-v2 .codex-auth-advanced__boxes > .card:only-child { border-radius: 8px; }
+.acc-v2 .codex-auth-advanced__boxes > .card + .card { border-top: 1px solid var(--ocx-line); }
+.acc-v2 .codex-auth-advanced__boxes > .card strong { font-size: 14px; font-weight: 600; }
+.acc-v2 .codex-auth-advanced__boxes .card-sub { padding-left: 0; padding-right: 0; color: var(--ocx-fg-muted); font-size: 13px; }
+
+/* ============================================================================
+   Codex tab: Prompt layers (same card language: a panel, its rows in an inset body)
+   ============================================================================ */
+.codex-set-prompt.panel {
+  padding: 16px 18px 18px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.codex-set-prompt > .row:first-child { align-items: center; gap: 10px; }
+.codex-set-prompt > .row:first-child > strong { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+.codex-set-prompt > .card-sub { padding: 4px 0 0; margin: 0; font-size: 13px; color: var(--ocx-fg-muted); }
+.codex-set-prompt .codex-set-prompt__rows {
+  margin: 12px 0 0;
+  padding: 0 14px;
+  border-radius: 8px;
+  background: var(--ocx-bg);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.codex-set-prompt .codex-set-prompt__row {
+  min-height: 44px;
+  padding: 8px 0;
+  border-bottom-color: var(--ocx-line);
+}
+/* State, not decoration: a switch already marks the rows you can act on. */
+.codex-set-prompt .codex-set-prompt__row[data-layer-class="config-toggle"],
+.codex-set-prompt .codex-set-prompt__row[data-layer-class="base"] {
+  margin-left: 0;
+  padding-left: 0;
+  border-left: 0;
+}
+.codex-set-prompt .codex-set-prompt__pos { color: var(--ocx-fg-subtle); }
+.codex-set-prompt .codex-set-prompt__name.link-btn {
+  color: var(--ocx-fg);
+  font-size: 13.5px;
+  text-decoration: none;
+}
+.codex-set-prompt .codex-set-prompt__name.link-btn:hover { text-decoration: underline; text-decoration-color: var(--ocx-line-strong); text-underline-offset: 3px; }
+.codex-set-prompt .codex-set-prompt__key { color: var(--ocx-fg-subtle); opacity: 1; }
+.codex-set-prompt .codex-set-prompt__note { color: var(--ocx-fg-muted); }
+.codex-set-prompt .codex-set-prompt__group { margin-top: 20px; padding-top: 0; border-top: 0; }
+.codex-set-prompt .codex-set-prompt__group strong {
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  text-transform: none;
+  color: var(--ocx-fg);
+}
+.codex-set-prompt .codex-set-prompt__group + .muted { margin: 4px 0 0; font-size: 13px; line-height: 19px; color: var(--ocx-fg-muted); }
+.codex-set-prompt .codex-set-prompt__extensions { margin: 14px 0 0; font-size: 12.5px; color: var(--ocx-fg-muted); }
+.codex-set-prompt .codex-set-custom { margin-top: 20px; padding-top: 0; border-top: 0; }
+.codex-set-prompt .codex-set-custom > .row:first-child { align-items: center; }
+.codex-set-prompt .codex-set-custom > .row:first-child > strong { font-size: 13.5px; font-weight: 600; }
+.codex-set-prompt .notice { border-radius: 10px; }
+
+/* A bare v1 `.btn` (no variant) falls back to the UA grey; on these surfaces it is the
+   outline secondary button. */
+:is(.codex-set-prompt, .acc-desktop, .acc-native-main, .acc-v2) .btn:not(.btn-primary, .btn-danger, .btn-ghost, .link-btn) {
+  background: var(--ocx-raised);
+  border-color: var(--ocx-line-strong);
+  color: var(--ocx-fg);
+}
+:is(.codex-set-prompt, .acc-desktop, .acc-native-main, .acc-v2) .btn:not(.btn-primary, .btn-danger, .btn-ghost, .link-btn):hover:not(:disabled) {
+  background: var(--ocx-surface);
+}
+
+/* ============================================================================
+   Codex tab: Desktop compatibility
+   ============================================================================ */
+.acc-desktop.panel {
+  padding: 20px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.acc-desktop h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.015em; }
+.acc-desktop p { margin: 0; }
+.acc-desktop .text-body { font-size: 13.5px; line-height: 20px; color: var(--ocx-fg-muted); }
+.acc-desktop .text-control { font-size: 12.5px; line-height: 18px; color: var(--ocx-fg-muted); }
+.acc-desktop .acc-desktop__refresh { position: absolute; top: 18px; right: 18px; }
+.acc-desktop .acc-desktop__setting.panel,
+.acc-desktop .acc-desktop__card,
+.acc-desktop .acc-desktop__confirm {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ocx-bg);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.acc-desktop .acc-desktop__card > * { max-width: 100%; }
+.acc-desktop .acc-desktop__card > .connect-pairing {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.acc-desktop .connect-pairing :is(p, pre, code) { margin: 0; }
+.acc-desktop .connect-pairing > p { font-size: 13px; color: var(--ocx-fg-muted); font-weight: 400; }
+.acc-desktop .connect-pairing > .btn { align-self: flex-start; }
+.acc-desktop .connect-pairing .api-form-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
+.acc-desktop .connect-pairing .api-form-row .input { flex: 1 1 240px; }
+.acc-desktop .acc-desktop__card { align-items: stretch; }
+.acc-desktop .acc-desktop__card :is(h2, h3) { font-size: 14px; font-weight: 600; margin: 0; }
+.acc-desktop .acc-banner { align-self: stretch; }
+.acc-desktop__status {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--ocx-line);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.acc-desktop__stat { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 12px 14px; background: var(--ocx-bg); }
+.acc-desktop__stat dt { font-size: 12px; color: var(--ocx-fg-muted); }
+.acc-desktop__stat dd { margin: 0; font-size: 13.5px; color: var(--ocx-fg); }
+.acc-desktop__stat code { padding: 0; background: none; font-size: 12.5px; color: var(--ocx-fg); }
+.acc-desktop__stat .acc-desktop__detail { font-size: 11.5px; color: var(--ocx-fg-subtle); }
+.acc-desktop__state { display: inline-flex; align-items: center; gap: 7px; }
+.acc-desktop__confirm legend { float: left; width: 100%; margin: 0 0 2px; padding: 0; font-size: 14px; font-weight: 600; }
+.acc-desktop__confirm label.row { gap: 8px; font-size: 13px; }
+
+/* ============================================================================
+   Providers: list + detail (React Bits Pro app-sidebar / app-shell, notifications-5)
+   ============================================================================ */
+.pws-root { gap: 20px; }
+
+/* The list: a sidebar panel with its own search, grouped rows, one raised selected row. */
+.pws-rail {
+  align-self: start;
+  gap: 4px;
+  padding: 8px;
+  border-right: 0;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.pws-search-row { gap: 6px; padding-bottom: 4px; }
+.pws-search-wrap .pws-search-input {
+  height: 34px;
+  border-radius: 10px;
+  border-color: transparent;
+  background: var(--ocx-bg);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+  font-size: 13px;
+}
+.pws-filter-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border-color: transparent;
+  background: var(--ocx-bg);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+  color: var(--ocx-fg-muted);
+}
+.pws-filter-btn:hover,
+.pws-filter-btn--active { color: var(--ocx-fg); background: var(--ocx-raised); }
+.pws-filter-menu {
+  border-radius: 12px;
+  border-color: transparent;
+  background: var(--ocx-raised);
+  box-shadow: 0 0 0 1px var(--ocx-line), var(--ocx-shadow-lg);
+}
+.pws-rail-group-head {
+  padding: 10px 8px 4px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ocx-fg-subtle);
+}
+.providers-workspace-rail-row {
+  min-height: 44px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  transition: background-color 0.15s, box-shadow 0.15s;
+}
+.providers-workspace-rail-row:hover { background: light-dark(rgb(9 9 11 / 0.04), rgb(255 255 255 / 0.05)); }
+.providers-workspace-rail-row--selected,
+.providers-workspace-rail-row--selected:hover {
+  background: var(--ocx-raised);
+  box-shadow: 0 1px 2px rgb(16 24 40 / 0.06), 0 0 0 1px var(--ocx-line);
+}
+.providers-workspace-rail-row:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: -2px; }
+.providers-workspace-rail-name-label { font-size: 13.5px; font-weight: 500; color: var(--ocx-fg); }
+.providers-workspace-rail-secondary { font-size: 12px; color: var(--ocx-fg-muted); }
+.pws-rail-row-remove { border-radius: 8px; color: var(--ocx-fg-subtle); }
+.pws-rail-row-remove:hover { background: var(--ocx-danger-soft); color: var(--ocx-danger); }
+.pws-main { padding: 0; }
+
+/* Overview: header, a calm stat strip, attention banners, then two panels. */
+.pws-dashboard { gap: 16px; padding: 0; }
+.pws-dashboard-header { align-items: center; min-height: 34px; }
+.pws-dashboard-title { font-size: 17px; font-weight: 600; letter-spacing: -0.015em; color: var(--ocx-fg); }
+.pws-dashboard-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.pws-dashboard-summary--unverified { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 600px) {
+  .pws-dashboard-summary--unverified { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.pws-dashboard-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 14px 18px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.pws-dashboard-card + .pws-dashboard-card { box-shadow: inset 1px 0 0 var(--ocx-line); }
+.pws-dashboard-card-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: 12.5px;
+  letter-spacing: 0;
+  color: var(--ocx-fg-muted);
+}
+.pws-dashboard-card-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--ocx-fg-subtle); flex-shrink: 0; }
+.pws-dashboard-card--ok .pws-dashboard-card-dot { background: var(--ocx-success); }
+.pws-dashboard-card--warn.has-count .pws-dashboard-card-dot { background: var(--ocx-warning); }
+.pws-dashboard-card-count,
+.pws-dashboard-card--ok .pws-dashboard-card-count,
+.pws-dashboard-card--warn .pws-dashboard-card-count,
+.pws-dashboard-card--muted .pws-dashboard-card-count {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ocx-fg);
+}
+.pws-dashboard-card--muted .pws-dashboard-card-count { color: var(--ocx-fg-muted); }
+
+.pws-dashboard-section-title,
+.pws-dashboard-attention .pws-dashboard-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  text-transform: none;
+  color: var(--ocx-fg);
+}
+.pws-dashboard-banners { gap: 8px; }
+.pws-dashboard-row.pws-dashboard-row--attention {
+  grid-template-columns: 16px 22px minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--ocx-warning-soft) 40%, var(--ocx-raised));
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+  color: var(--ocx-fg);
+}
+.pws-dashboard-row.pws-dashboard-row--attention:hover { background: color-mix(in oklab, var(--ocx-warning-soft) 70%, var(--ocx-raised)); }
+.pws-dashboard-banner-icon { display: inline-grid; place-items: center; color: var(--ocx-warning); }
+.pws-dashboard-row-name { font-size: 13.5px; font-weight: 500; color: var(--ocx-fg); }
+.pws-dashboard-row-meta { font-size: 12.5px; color: var(--ocx-fg-muted); }
+.pws-dashboard-columns { gap: 16px; }
+.pws-dashboard-section--rate-limits,
+.pws-dashboard-section--recent {
+  min-height: 0;
+  padding: 12px 8px 8px;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.pws-dashboard-section--rate-limits > .pws-dashboard-section-title,
+.pws-dashboard-recent-details > summary.pws-dashboard-section-title { padding: 0 8px 6px; }
+.pws-dashboard-recent-details > summary.pws-dashboard-section-title { cursor: pointer; padding-bottom: 4px; list-style: none; }
+.pws-dashboard-recent-details > summary.pws-dashboard-section-title::-webkit-details-marker { display: none; }
+.pws-dashboard-recent-details > summary.pws-dashboard-section-title::after {
+  content: "";
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  margin-right: 4px;
+  border-right: 1.5px solid var(--ocx-fg-subtle);
+  border-bottom: 1.5px solid var(--ocx-fg-subtle);
+  transform: rotate(-45deg);
+  transition: transform 0.2s;
+}
+.pws-dashboard-recent-details[open] > summary.pws-dashboard-section-title::after { transform: rotate(45deg); }
+.pws-dashboard-recent-details > summary.pws-dashboard-section-title:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 2px; border-radius: 6px; }
+.pws-dashboard-recent-details[open] > summary.pws-dashboard-section-title { padding-bottom: 6px; }
+.pws-dashboard-row { border-radius: 8px; padding: 8px; transition: background-color 0.15s; }
+.pws-dashboard-row:hover { background: light-dark(rgb(9 9 11 / 0.04), rgb(255 255 255 / 0.05)); }
+.pws-dashboard-row:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: -2px; }
+.pws-dashboard-empty { margin: 0; padding: 4px 8px 8px; min-height: 0; font-size: 13px; color: var(--ocx-fg-muted); }
+.pws-capacity-details { border-top-color: var(--ocx-line); }
+.pws-capacity-incomplete {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--ocx-warning);
+}
+.pws-capacity-incomplete::before {
+  content: "";
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  margin-top: 2px;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+/* Detail: header, segmented tabs, overview sections as cards. */
+.pws-detail-back-link { border-radius: 8px; color: var(--ocx-fg-muted); font-size: 13px; }
+.pws-detail-back-link:hover { color: var(--ocx-fg); }
+.pws-detail-title { font-size: 19px; font-weight: 600; letter-spacing: -0.02em; }
+.pws-detail-id { color: var(--ocx-fg-subtle); }
+.pws-detail-tabs {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  gap: 2px;
+  margin: 12px 0 18px;
+  padding: 2px;
+  border-bottom: 0;
+  border-radius: 10px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.pws-detail-tab {
+  height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--ocx-fg-subtle);
+  transition: color 0.15s, background-color 0.2s, box-shadow 0.2s;
+}
+.pws-detail-tab:hover { color: var(--ocx-fg-muted); }
+.pws-detail-tab--active,
+.pws-detail-tab--active:hover {
+  color: var(--ocx-fg);
+  background: light-dark(var(--ocx-raised), var(--ocx-surface-2));
+  box-shadow: 0 1px 2px rgb(16 24 40 / 0.08), 0 0 0 1px var(--ocx-line);
+}
+.pws-detail-tab:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 1px; }
+.pws-section-title { font-size: 12.5px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--ocx-fg); }
+
+.pws-overview-layout { gap: 16px; }
+.pws-overview-main,
+.pws-overview-sidebar { gap: 16px; }
+.pws-overview-layout .pws-section {
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.pws-overview-sidebar > .pws-usage-block {
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.pws-overview-sidebar > .pws-usage-block .pws-usage-block-head { align-items: center; }
+.pws-overview-sidebar > .pws-usage-block .pws-section-title { margin: 0; }
+.pws-overview-layout .pws-section-title { margin-bottom: 8px; }
+/* Usage tab: each block is its own card instead of a rule-separated stack. */
+.pws-detail-panel > .pws-section > .pws-usage-block {
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--ocx-surface);
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+}
+.pws-detail-panel > .pws-section > .pws-usage-block + .pws-usage-block { margin-top: 16px; padding-top: 14px; border-top: 0; }
+.pws-usage-metric { border-radius: 10px; }
+.pws-overview-layout .pws-kv-row { padding: 7px 0; font-size: 13px; }
+.pws-overview-layout .pws-kv-row + .pws-kv-row { box-shadow: inset 0 1px 0 var(--ocx-line); }
+.pws-overview-layout .pws-kv-row dt { color: var(--ocx-fg-muted); }
+.pws-auth-summary--warn {
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--ocx-warning-soft) 40%, var(--ocx-raised));
+  box-shadow: inset 0 0 0 1px var(--ocx-line);
+  font-size: 13px;
+}
+.pws-auth-summary--warn svg { color: var(--ocx-warning); }
+.pws-notes-textarea { border-radius: 10px; border-color: var(--ocx-line-strong); background: var(--ocx-bg); }
+.pws-notes-textarea:focus { box-shadow: 0 0 0 2px var(--ocx-highlight-soft); border-color: var(--ocx-highlight); }

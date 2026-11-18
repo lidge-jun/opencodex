@@ -7,12 +7,13 @@
  *
  * Destination: the unauthenticated loopback listener when one is enabled, otherwise the bind
  * address (#4236), resolved by localInferenceDestination rather than composing 127.0.0.1 by hand.
- * Admission: localAdmissionToken (env token, hardened service token file, first apiKeys entry),
- * sent as x-opencodex-api-key and never Authorization, because an admission secret in a
- * forwardable header is a forwarding hazard. Never the admin token.
+ * Admission: selfFetchAdmissionToken (env token, hardened service token file, first apiKeys entry;
+ * only a recognized one when the destination requires no admission), sent as x-opencodex-api-key
+ * and never Authorization, because an admission secret in a forwardable header is a forwarding
+ * hazard. Never the admin token.
  */
 import type { OcxConfig } from "../types";
-import { localAdmissionToken, localInferenceDestination } from "./local-destinations";
+import { localInferenceDestination, selfFetchAdmissionToken } from "./local-destinations";
 import { signalWithTimeout, cancelBodyOnAbort } from "./abort";
 import { readBoundedResponseBytes } from "./bounded-body";
 import { redactSecretString } from "./redact";
@@ -64,12 +65,13 @@ export function localChatCompletionBaseUrl(
 export async function postLocalChatCompletion(request: LocalChatCompletionRequest): Promise<LocalChatCompletionOutcome> {
   const { config, label, logTag } = request;
   const headers: Record<string, string> = { "Content-Type": "application/json", ...request.headers };
-  const admission = localAdmissionToken(config);
+  const target = destination(config);
+  const admission = selfFetchAdmissionToken(config, target);
   if (admission) headers["x-opencodex-api-key"] = admission;
   // A bind that demands admission with no resolvable credential would return 401 with a body
   // the caller reports as a failure; naming the cause once is the difference between "it is
   // broken" and a fixable configuration note.
-  if (!admission && !request.baseUrlOverride && destination(config).requiresAdmissionToken) {
+  if (!admission && !request.baseUrlOverride && target.requiresAdmissionToken) {
     console.warn(
       `[${logTag}] ${label} has no opencodex data-plane credential for `
       + `${localChatCompletionBaseUrl(config)} — the self-fetch will be refused.`,

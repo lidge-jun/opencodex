@@ -1,6 +1,7 @@
 import { formatErrorResponse as formatReplaySafetyError } from "../../src/bridge/errors";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
+  SendBudgetExhaustedError,
   fetchWithResetRetry,
   fetchWithTransientRetry,
   isConnectionResetError,
@@ -317,6 +318,142 @@ describe("retryBackoffDelayMs", () => {
     expect(response.headers.get("x-should-retry")).toBe("false");
     expect(await response.json()).toEqual({ error: { details: { retryable: false } } });
     expect(cancelled).toBe(false);
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  test("a 5xx context-overflow verdict is returned without a resend (#8127)", async () => {
+    silenceWarn();
+    for (const body of [
+      JSON.stringify({ error: { type: "server_error", message: "Your input exceeds the context window of this model" } }),
+      "Your input exceeds the context window of this model",
+    ]) {
+      const upstream = new Response(body, { status: 500 });
+      const mock = mockDoFetch([upstream, new Response("duplicate"), new Response("duplicate")]);
+      const response = await fetchWithTransientRetry(mock.doFetch);
+      expect(response).toBe(upstream);
+      expect(await response.text()).toBe(body);
+      expect(mock.calls).toHaveLength(1);
+    }
+  });
+
+  test("the overflow peek stops at the byte limit even for multibyte text", async () => {
+    silenceWarn();
+    const body = "é".repeat(8_192) + " Your input exceeds the context window of this model";
+    const mock = mockDoFetch([new Response(body, { status: 500 }), new Response("ok")]);
+    expect((await fetchWithTransientRetry(mock.doFetch)).status).toBe(200);
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  test("time spent inspecting a response body does not count as a slow upstream attempt", async () => {
+    silenceWarn();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { setTimeout(() => { controller.enqueue(new TextEncoder().encode("unavailable")); controller.close(); }, 180); },
+    });
+    const mock = mockDoFetch([new Response(body, { status: 500 }), new Response("ok")]);
+    expect((await fetchWithTransientRetry(mock.doFetch, { slowAttemptMs: 100 })).status).toBe(200);
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  test("aborting during an overflow peek returns the original response promptly", async () => {
+    silenceWarn();
+    const abort = new AbortController();
+    const first = new Response(new ReadableStream<Uint8Array>({}), { status: 500 });
+    const mock = mockDoFetch([first, new Response("ok")]);
+    setTimeout(() => abort.abort(), 20);
+    const result = await Promise.race([
+      fetchWithTransientRetry(mock.doFetch, { abortSignal: abort.signal }),
+      new Promise<"late">(resolve => setTimeout(() => resolve("late"), 150)),
+    ]);
+    expect(result).toBe(first);
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  test("empty body chunks cannot starve cancellation during the overflow peek", async () => {
+    silenceWarn();
+    const abort = new AbortController();
+    let pulls = 0;
+    const first = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls >= 10_000) controller.close(); else controller.enqueue(new Uint8Array());
+      },
+    }, { highWaterMark: 0 }), { status: 500 });
+    const mock = mockDoFetch([first, new Response("ok")]);
+    const clone = first.clone.bind(first);
+    first.clone = () => { setTimeout(() => abort.abort(), 30); return clone(); };
+    expect(await fetchWithTransientRetry(mock.doFetch, { abortSignal: abort.signal })).toBe(first);
+    expect(pulls).toBeLessThan(10_000);
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  test("a 5xx body that never ends does not stall the overflow check (#8127)", async () => {
+    silenceWarn();
+    const mock = mockDoFetch([new Response(new ReadableStream(), { status: 503 }), new Response("ok")]);
+    const response = await fetchWithTransientRetry(mock.doFetch);
+    expect(response.status).toBe(200);
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  test("a 5xx throttle worded as too many tokens is still retried (#8127)", async () => {
+    silenceWarn();
+    const mock = mockDoFetch([
+      new Response(JSON.stringify({ error: { message: "Too many tokens, please wait before trying again." } }), { status: 500 }),
+      new Response("ok"),
+    ]);
+    const response = await fetchWithTransientRetry(mock.doFetch);
+    expect(response.status).toBe(200);
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  test.each([
+    "Your input does not exceed the context window; the service is unavailable",
+    "Your request doesn't exceed the token limit; retry later",
+    "Your request exceeds neither the context window nor the token limit; the service is temporarily unavailable",
+    "if the input exceeds the context window, shorten it; the server is unavailable",
+    "Failed to load the maximum context length configuration",
+    "Does the input exceed the context window? The server is unavailable",
+    "Invalid tool name: 'prompt is too long'",
+    "Input is too long for username",
+  ])("a 5xx without an actual overflow verdict remains retryable: %s", async message => {
+    silenceWarn();
+    const mock = mockDoFetch([Response.json({ error: { message } }, { status: 503 }), new Response("ok")]);
+    expect((await fetchWithTransientRetry(mock.doFetch)).status).toBe(200);
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  test("a JSON-escaped negation does not stop a transient retry", async () => {
+    silenceWarn();
+    const body = '{"error":{"message":"Your input does not exceed the context \\u0077indow; retry later"}}';
+    const mock = mockDoFetch([new Response(body, { status: 503 }), new Response("ok")]);
+    expect((await fetchWithTransientRetry(mock.doFetch)).status).toBe(200);
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  test("a definite overflow still stops retries when a later sentence says not to retry", async () => {
+    silenceWarn();
+    const first = new Response("Your input exceeds the context window. Do not retry.", { status: 503 });
+    const mock = mockDoFetch([first, new Response("duplicate")]);
+    expect(await fetchWithTransientRetry(mock.doFetch)).toBe(first);
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  test("a definite overflow stays terminal when its remedy mentions configuration", async () => {
+    silenceWarn();
+    const first = new Response("Your input exceeds the context window; adjust your configuration.", { status: 503 });
+    const mock = mockDoFetch([first, new Response("duplicate")]);
+    expect(await fetchWithTransientRetry(mock.doFetch)).toBe(first);
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  test.each([
+    "If input exceeds the context window, shorten it. This input exceeds the context window.",
+    "Failed to load context window configuration. Your input exceeds the context window.",
+    "Too many tokens: prompt is too long",
+  ])("a separate or explicit overflow verdict stops a resend: %s", async message => {
+    silenceWarn();
+    const first = new Response(message, { status: 503 });
+    const mock = mockDoFetch([first, new Response("duplicate")]);
+    expect(await fetchWithTransientRetry(mock.doFetch)).toBe(first);
     expect(mock.calls).toHaveLength(1);
   });
 
@@ -749,3 +886,101 @@ describe("ambiguous reset safety through error formatting", () => {
     expect((await response.json()).error.code).toBe("cyber_policy");
   });
 });
+
+const destinationSentinel = "zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e";
+for (const [input, expected] of [
+  ["https://provider.example.test", "https://provider.example.test"],
+  [`https://${destinationSentinel}:password@provider.example.test/v1`, "https://provider.example.test"],
+  [`https://provider.example.test/${destinationSentinel}`, "https://provider.example.test"],
+  [`https://provider.example.test/v1?key=${destinationSentinel}`, "https://provider.example.test"],
+  [`https://provider.example.test/v1#${destinationSentinel}`, "https://provider.example.test"],
+  [`https://${destinationSentinel}@provider.example.test:8443/${destinationSentinel}?key=${destinationSentinel}#${destinationSentinel}`, "https://provider.example.test:8443"],
+  ["http://[2001:db8::1]:8080/v1?key=fixture", "http://[2001:db8::1]:8080"],
+  ["https://provider.example.test:443/", "https://provider.example.test"],
+  ["wss://provider.example.test:8443/live?key=fixture", "wss://provider.example.test:8443"],
+  [destinationSentinel, "the provider"], ["not a URL", "the provider"], ["__proto__", "the provider"],
+  ["constructor", "the provider"], ["toString", "the provider"], ["https://provider.example.test:65536/", "the provider"],
+  [`file:///${destinationSentinel}`, "the provider"], [`data:text/plain,${destinationSentinel}`, "the provider"],
+] as const) test(`send-budget constructor bounds destination case=${expected} input=${input.includes(destinationSentinel) ? "sentinel" : input}`, () => {
+  // Constructor validation also covers values supplied without the branded type.
+  const error = new SendBudgetExhaustedError(input as never);
+  expect(error).toBeInstanceOf(SendBudgetExhaustedError);
+  expect(error.code).toBe("request_send_budget_exhausted");
+  expect(error.message).toBe(`request send budget exhausted before dispatch (${expected})`);
+  expect(error.message).not.toContain(destinationSentinel);
+});
+
+test("pacing constructor bounds a value that is not a provider id", async () => {
+  const { RequestPacingQueueOverloadError } = await import("../../src/providers/request-pacing");
+  const error = new RequestPacingQueueOverloadError(`https://${destinationSentinel}@provider.example.test/${destinationSentinel}?key=${destinationSentinel}`, "queue_full", 1);
+  expect(error).toBeInstanceOf(RequestPacingQueueOverloadError);
+  expect(error.reason).toBe("queue_full");
+  expect(error.message).toBe("request pacing queue for provider 'the provider' is full");
+  expect(error.message).not.toContain(destinationSentinel);
+});
+
+test("destination factories retain only owned origins or validated provider ids", async () => {
+  const { errorDestinationLabel, providerErrorDestinationLabel, errorDestinationText } = await import("../../src/lib/error-destination");
+  const label = errorDestinationLabel(`https://${destinationSentinel}@provider.example.test:8443/${destinationSentinel}?key=${destinationSentinel}`);
+  expect(errorDestinationText(label)).toBe("https://provider.example.test:8443");
+  expect(new SendBudgetExhaustedError(label).code).toBe("request_send_budget_exhausted");
+  expect(new SendBudgetExhaustedError(label).message).toBe("request send budget exhausted before dispatch (https://provider.example.test:8443)");
+  expect(errorDestinationText(providerErrorDestinationLabel("cursor"))).toBe("cursor");
+  expect(new SendBudgetExhaustedError(providerErrorDestinationLabel("cursor")).message).toBe("request send budget exhausted before dispatch (cursor)");
+  expect(errorDestinationText(providerErrorDestinationLabel("x".repeat(65)))).toBe("the provider");
+  expect(errorDestinationText(providerErrorDestinationLabel({ toString() { throw new Error("unexpected conversion"); } } as never))).toBe("the provider");
+  expect(errorDestinationText(providerErrorDestinationLabel(`https://${destinationSentinel}@provider.example.test`))).toBe("the provider");
+  for (const copy of [{ ...label }, JSON.parse(JSON.stringify(label)), { kind: "provider", value: destinationSentinel }, Object.create({ value: destinationSentinel })]) {
+    expect(errorDestinationText(copy as never)).toBe("the provider");
+    const failure = new SendBudgetExhaustedError(copy as never);
+    expect(failure).toBeInstanceOf(SendBudgetExhaustedError);
+    expect(failure.code).toBe("request_send_budget_exhausted");
+    expect(failure.message).toBe("request send budget exhausted before dispatch (the provider)");
+    expect(failure.message).not.toContain(destinationSentinel);
+  }
+  expect(new SendBudgetExhaustedError().message).toBe("request send budget exhausted before dispatch");
+});
+
+for (const kind of ["unsupported", "login"] as const) test(`OAuth provider constructor bounds an invalid provider id kind=${kind}`, async () => {
+  const { UnsupportedOAuthProviderError, OAuthLoginRequiredError } = await import("../../src/oauth");
+  const id = `https://${destinationSentinel}@provider.example.test/${destinationSentinel}?key=${destinationSentinel}`;
+  const error = kind === "unsupported" ? new UnsupportedOAuthProviderError(id) : new OAuthLoginRequiredError(id);
+  expect(error).toBeInstanceOf(kind === "unsupported" ? UnsupportedOAuthProviderError : OAuthLoginRequiredError);
+  expect(error.name).toBe(kind === "unsupported" ? "UnsupportedOAuthProviderError" : "OAuthLoginRequiredError");
+  expect(error.message).toBe(kind === "unsupported" ? "Unsupported OAuth provider in config: the provider" : "Not logged in to the provider. Run: ocx login the provider");
+  expect(error.message).not.toContain(destinationSentinel);
+});
+
+for (const value of [destinationSentinel, { toString: () => destinationSentinel }, NaN, Infinity, -1]) {
+  test(`invalid send-budget diagnostic bounds ${typeof value}`, async () => {
+    const { InvalidSendBudgetError } = await import("../../src/lib/upstream-retry");
+    const error = new InvalidSendBudgetError(value);
+    expect(error).toBeInstanceOf(InvalidSendBudgetError);
+    expect(error.name).toBe("InvalidSendBudgetError");
+    expect(error.message).toBe("invalid upstream send budget: invalid");
+    expect(error.message).not.toContain(destinationSentinel);
+  });
+}
+for (const statuses of [[], [503]]) test(`retry evidence owns its diagnostic statuses=${statuses.length}`, async () => {
+  const { UpstreamRetryEvidenceError } = await import("../../src/lib/upstream-retry");
+  const cause = new Error(destinationSentinel);
+  const error = new UpstreamRetryEvidenceError(statuses, cause);
+  expect(error).toBeInstanceOf(UpstreamRetryEvidenceError);
+  expect(error.cause).toBe(cause);
+  expect(error.transientStatuses).toEqual(statuses);
+  expect(error.message).toBe(statuses.length ? "upstream fetch failed after transient 5xx response(s)" : "upstream fetch failed");
+  expect(error.message).not.toContain(destinationSentinel);
+});
+
+for (const [value, expected] of [["provider/model-v1", "provider/model-v1"], ["combo/fast", "combo/fast"],
+  [`https://${destinationSentinel}@provider.example/${destinationSentinel}?key=${destinationSentinel}`, "the requested model"],
+  ["a".repeat(129), "the requested model"], ["model\nmetadata", "the requested model"], ["", "the requested model"],
+  [{ toString: () => destinationSentinel }, "the requested model"]] as const) {
+  test(`client model label projects ${typeof value}, length=${typeof value === "string" ? value.length : 0}`, async () => {
+    const { clientFacingModelLabel, clientFacingModelText } = await import("../../src/lib/error-destination");
+    const label = clientFacingModelLabel(value);
+    expect(typeof label).toBe("object"); expect(Object.isFrozen(label)).toBe(true);
+    expect(clientFacingModelText(label)).toBe(expected);
+    expect(clientFacingModelText({} as never)).toBe("the requested model");
+  });
+}

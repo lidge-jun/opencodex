@@ -1,5 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import * as proxyLiveness from "../../src/server/proxy-liveness";
 import { proxyStillLiveAfterStop } from "../../src/service";
+import { WINDOWS_STOP_CAPS } from "../../src/service/windows-stop-budget";
 
 /**
  * #764: `ocx service stop` reported success while the proxy kept running, and native Codex was
@@ -123,6 +125,72 @@ describe("service stop verification (#764)", () => {
       expect(winClock.now()).toBeGreaterThanOrEqual(7000);
     } finally {
       Object.defineProperty(process, "platform", { value: original, configurable: true });
+    }
+  });
+});
+
+/**
+ * #7771: the tracked-proxy stop's orphan discovery is part of the checked Windows stop's
+ * admitted budget (030 "Time budget"), which reserves 3 s for it. The helper used to
+ * hard-code 7 s for every platform and every caller, so a Windows stop that had already
+ * paid for Part A and Part B could still spend 7 s on discovery — past the deadline its
+ * admission had just proven — and a non-Windows stop must keep today's 7 s.
+ */
+describe("orphan discovery is capped by the caller, not hard-coded (#7771)", () => {
+  // The helper calls findLiveProxy directly, so the spy is the seam: it records the
+  // deadline the helper asked for and answers "nothing live" so no process is touched.
+  const discoveredBudget = async (io: Record<string, unknown>): Promise<number> => {
+    const { stopTrackedProxyForServiceCommand } = await import("../../src/service/orchestration");
+    let seen = -1;
+    const started = Date.now();
+    const spy = spyOn(proxyLiveness, "findLiveProxy").mockImplementation((async (options: { deadlineAt?: number }) => {
+      seen = (options.deadlineAt ?? 0) - started;
+      return null;
+    }) as never);
+    try {
+      await stopTrackedProxyForServiceCommand(io as never);
+    } finally {
+      spy.mockRestore();
+    }
+    return seen;
+  };
+
+  test("the default keeps today's 7 s window", async () => {
+    const budget = await discoveredBudget({});
+    expect(budget).toBeGreaterThanOrEqual(6_900);
+    expect(budget).toBeLessThanOrEqual(7_100);
+  });
+
+  test("a Windows checked caller's admitted 3 s is what discovery gets", async () => {
+    const budget = await discoveredBudget({ orphanDiscoveryCapMs: WINDOWS_STOP_CAPS.orphanDiscovery });
+    expect(WINDOWS_STOP_CAPS.orphanDiscovery).toBe(3_000);
+    expect(budget).toBeGreaterThanOrEqual(2_900);
+    expect(budget).toBeLessThanOrEqual(3_100);
+  });
+
+  test("an absent Part A still names the cap: discovery is the only port proof left", async () => {
+    const { windowsServiceRemovalStop, windowsServiceStopBeforeRestore } = await import("../../src/service/cli-windows-stop");
+    const { setWindowsServiceStopHooksForTests } = await import("../../src/service/windows-service-stop");
+    const { partAResult } = await import("../helpers/windows-stop-caller-fixtures");
+    setWindowsServiceStopHooksForTests({ partA: async () => partAResult("absent") });
+    try {
+      // The endpoint probes are injected: both callers would otherwise fall through to
+      // the real ones, which on Windows spend their full window before answering, and this
+      // test is about the discovery budget, not about that wait.
+      const probed: unknown[] = [];
+      for (const run of [windowsServiceStopBeforeRestore, windowsServiceRemovalStop]) {
+        const seen: unknown[] = [];
+        await run({
+          ownsSharedTeardown: () => false,
+          resolveTarget: async () => null,
+          stopTracked: async io => { seen.push(io); return "stopped"; },
+          endpointLiveness: async endpoint => { probed.push(endpoint); return "dead"; },
+        });
+        expect(seen).toEqual([{ target: null, skipPortWait: false, orphanDiscoveryCapMs: 3_000 }]);
+      }
+      expect(probed.length).toBe(2);
+    } finally {
+      setWindowsServiceStopHooksForTests(null);
     }
   });
 });

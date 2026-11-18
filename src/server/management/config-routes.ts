@@ -11,6 +11,8 @@ import { mainAccountHardLockFallbackSchema } from "../../config/schema/main-acco
 import { anthropicSidecarPatchError } from "../../config/schema/anthropic-account-pool";
 import { isAnthropicInstanceId } from "../../providers/anthropic-instance-id";
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
+import { adoptReserveCapabilityMigration, isCodexReserveEnabled, RESERVE_CAPABILITY_MIGRATION_VERSION } from "../../config/reserve-capability";
+import { readConfigFileSnapshot } from "../../config/diagnostics";
 import type { IntegrationClientId } from "../../integrations/registry";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -89,6 +91,7 @@ import { getUsageDebugLogEntries } from "../../usage/debug";
 import { parseRange, parseUsageSurface, summarizeUsage } from "../../usage/summary";
 import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
 import { getProviderRegistryEntry } from "../../providers/registry";
+import { providerHasStoredApiKey } from "../../providers/api-keys";
 import { VISION_REASONING_EFFORTS, isVisionReasoningEffort } from "../../reasoning-effort";
 import { normalizeVisionReasoningForModel } from "../../vision/reasoning";
 import {
@@ -390,7 +393,12 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
   // for up to 15s, including the admin-token check. An injected reader stays authoritative.
   const readStartupHealthSnapshot = deps.getCachedStartupHealth ?? getStartupHealthSnapshot;
   if (url.pathname === "/api/config" && req.method === "GET") {
-    return jsonResponse(withProviderCatalogCapabilityDTO(safeConfigDTO(config), config));
+    const dto = safeConfigDTO(config) as { providers: Record<string, Record<string, unknown>> };
+    for (const [name, provider] of Object.entries(config.providers)) {
+      const publicProvider = dto.providers[name];
+      if (publicProvider) publicProvider.hasApiKey = providerHasStoredApiKey(provider);
+    }
+    return jsonResponse(withProviderCatalogCapabilityDTO(dto, config));
   }
 
   if (url.pathname === "/api/config" && req.method === "PUT") {
@@ -464,6 +472,8 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
       showCodexCredits: config.showCodexCredits === true,
       // Absent means off (today's Design B injection), so the GUI/CLI render a plain switch.
       codexDesktopAuthless: config.codexDesktopAuthless === true,
+      // Luna Reserve's own switch (#4961); before its one-time seed it still reads the legacy flag.
+      codexReserveEnabled: isCodexReserveEnabled(config),
       // Absent keeps Design B remote compaction; true selects the dedicated provider identity.
       codexClientCompaction: config.codexClientCompaction === true,
       codexDesktopSwitches: describeCodexDesktopSwitches(config, await observedCodexDesktopSwitchApply()),
@@ -565,6 +575,7 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
       codexMainAccountHardLockThresholds?: unknown;
       codexMainAccountHardLockFallback?: unknown;
       codexDesktopAuthless?: unknown;
+      codexReserveEnabled?: unknown;
       codexClientCompaction?: unknown;
       compactionRouting?: unknown;
       compactionRecovery?: unknown;
@@ -584,12 +595,13 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
       && body.codexMainAccountHardLockThresholds === undefined
       && body.codexMainAccountHardLockFallback === undefined
       && body.codexDesktopAuthless === undefined
+      && body.codexReserveEnabled === undefined
       && body.codexClientCompaction === undefined
       && body.compactionRouting === undefined
       && body.compactionRecovery === undefined
       && body.reasoningRetention === undefined
       && body.memoryModels === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexCredits, ultraFastTier, fastRows, codexMainAccountHardLock, codexMainAccountHardLockThresholds, codexMainAccountHardLockFallback, codexDesktopAuthless, codexClientCompaction, compactionRouting, compactionRecovery, reasoningRetention, or memoryModels" }, 400);
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexCredits, ultraFastTier, fastRows, codexMainAccountHardLock, codexMainAccountHardLockThresholds, codexMainAccountHardLockFallback, codexDesktopAuthless, codexReserveEnabled, codexClientCompaction, compactionRouting, compactionRecovery, reasoningRetention, or memoryModels" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
@@ -637,6 +649,9 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
     }
     if (body.codexDesktopAuthless !== undefined && typeof body.codexDesktopAuthless !== "boolean") {
       return jsonResponse({ error: "codexDesktopAuthless boolean is required" }, 400);
+    }
+    if (body.codexReserveEnabled !== undefined && typeof body.codexReserveEnabled !== "boolean") {
+      return jsonResponse({ error: "codexReserveEnabled boolean is required" }, 400);
     }
     if (body.codexClientCompaction !== undefined && typeof body.codexClientCompaction !== "boolean") {
       return jsonResponse({ error: "codexClientCompaction boolean is required" }, 400);
@@ -688,7 +703,7 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
     }
     let pickerWasEnabled = false, pickerIsEnabled = false;
     let authlessIsEnabled = false, clientCompactionIsEnabled = false, fastRowsIsEnabled = false;
-    let desktopSwitchesChanged = false, fastRowsChanged = false;
+    let desktopSwitchesChanged = false, fastRowsChanged = false, reserveIsEnabled = false, reserveChanged = false;
     const refusal = await settleConfigRoot(configRoot(), () => {
       if (hardLockThresholds) {
         hardLockThresholds = { ...config.codexMainAccountHardLockThresholds, ...hardLockThresholds };
@@ -702,6 +717,7 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
       }
       pickerWasEnabled = codexAccountPickerEnabled(config);
       const authlessWasEnabled = config.codexDesktopAuthless === true;
+      const reserveWasEnabled = isCodexReserveEnabled(config);
       const clientCompactionWasEnabled = config.codexClientCompaction === true;
       const fastRowsWasEnabled = config.fastRows !== false;
       const restoreCompactionRouting = captureConfigTopLevelRollback(config, ["compactionRouting", "compactionRecovery", "memoryModels", "reasoningRetention"]);
@@ -734,6 +750,10 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
         hasCodexMainAccountHardLockFallback: Object.hasOwn(config, "codexMainAccountHardLockFallback"),
         codexDesktopAuthless: config.codexDesktopAuthless,
         hasCodexDesktopAuthless: Object.hasOwn(config, "codexDesktopAuthless"),
+        codexReserveEnabled: config.codexReserveEnabled,
+        hasCodexReserveEnabled: Object.hasOwn(config, "codexReserveEnabled"),
+        codexReserveMigration: config.codexReserveMigration,
+        hasCodexReserveMigration: Object.hasOwn(config, "codexReserveMigration"),
         codexClientCompaction: config.codexClientCompaction,
         hasCodexClientCompaction: Object.hasOwn(config, "codexClientCompaction"),
       };
@@ -774,6 +794,13 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
         else if (body.codexMainAccountHardLock === true) deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
         if (hardLockFallback === null) deleteConfigTopLevelKey(config, "codexMainAccountHardLockFallback");
         else if (hardLockFallback?.success) config.codexMainAccountHardLockFallback = hardLockFallback.data;
+        // An explicit Reserve choice is the operator's decision (#4961); an explicit false is persisted.
+        // An authless-only change is not seeded here: the writer seeds from the file under its lock,
+        // so a stale live object cannot overwrite another process's Reserve decision.
+        if (typeof body.codexReserveEnabled === "boolean") {
+          config.codexReserveEnabled = body.codexReserveEnabled;
+          config.codexReserveMigration = RESERVE_CAPABILITY_MIGRATION_VERSION;
+        }
         if (body.codexDesktopAuthless === true) config.codexDesktopAuthless = true;
         else if (body.codexDesktopAuthless === false) deleteConfigTopLevelKey(config, "codexDesktopAuthless");
         if (body.codexClientCompaction === true) config.codexClientCompaction = true;
@@ -801,6 +828,8 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
         pickerIsEnabled = codexAccountPickerEnabled(config);
         (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
         authlessIsEnabled = config.codexDesktopAuthless === true;
+        reserveIsEnabled = isCodexReserveEnabled(config);
+        reserveChanged = reserveWasEnabled !== reserveIsEnabled;
         clientCompactionIsEnabled = config.codexClientCompaction === true;
         fastRowsIsEnabled = config.fastRows !== false;
         fastRowsChanged = fastRowsWasEnabled !== fastRowsIsEnabled;
@@ -845,6 +874,17 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
         if (previousSettings.hasCodexDesktopAuthless) {
           config.codexDesktopAuthless = previousSettings.codexDesktopAuthless;
         } else deleteConfigTopLevelKey(config, "codexDesktopAuthless");
+        // Once the file was published it is the authority: adopt its Reserve fields, since the
+        // failure may have come before the writer adopted the projection it wrote.
+        if (error instanceof ConfigWritePublishedError) {
+          const published = readConfigFileSnapshot();
+          if (published.diagnostics.source === "file") adoptReserveCapabilityMigration(config, published.diagnostics.config);
+        } else {
+          if (previousSettings.hasCodexReserveEnabled) config.codexReserveEnabled = previousSettings.codexReserveEnabled;
+          else deleteConfigTopLevelKey(config, "codexReserveEnabled");
+          if (previousSettings.hasCodexReserveMigration) config.codexReserveMigration = previousSettings.codexReserveMigration;
+          else deleteConfigTopLevelKey(config, "codexReserveMigration");
+        }
         if (previousSettings.hasCodexClientCompaction) {
           config.codexClientCompaction = previousSettings.codexClientCompaction;
         } else deleteConfigTopLevelKey(config, "codexClientCompaction");
@@ -863,7 +903,8 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
     // injector, which is why flipping either switch left `config.toml` in its old shape until
     // a separate `ocx sync` (#4809). Both halves are needed when a Desktop switch changes; a
     // picker-only update still refreshes just the catalog.
-    const catalogRefresh = pickerWasEnabled !== pickerIsEnabled || desktopSwitchesChanged || fastRowsChanged
+    // A Reserve change adds or removes the account-qualified Reserve row; config.toml is unaffected.
+    const catalogRefresh = pickerWasEnabled !== pickerIsEnabled || desktopSwitchesChanged || fastRowsChanged || reserveChanged
       ? await convergeCodexCatalog()
       : undefined;
     if (fastRowsChanged) {
@@ -896,6 +937,7 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
       catalogRefreshPending,
       fastRows: config.fastRows !== false,
       codexDesktopAuthless: authlessIsEnabled,
+      codexReserveEnabled: reserveIsEnabled,
       codexClientCompaction: clientCompactionIsEnabled,
       codexDesktopSwitches,
       compactionRouting: config.compactionRouting ?? null,
@@ -972,11 +1014,22 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
       // Resolve the systemd-scope launcher before spawning: the first request
       // would otherwise run up to four sequential five-second probes inside
       // spawnSync on the shared event loop.
-      const { resolveSystemdRunAsync } = await import("../../update/worker-launch");
+      const { resolveSystemdRunAsync, dashboardRestartRefusal } = await import("../../update/worker-launch");
       const systemdRun = process.platform === "linux" && process.env.INVOCATION_ID
         ? await resolveSystemdRunAsync()
         : undefined;
-      return jsonResponse({ ok: true, job: startUpdateJob(channel, body.restart !== false, {
+      const restart = body.restart !== false;
+      // Refuse before any package mutation, with or without restart: the update stops the proxy
+      // first, so a worker that dies with the service cgroup, or a restart aimed at a unit that
+      // does not own this proxy, leaves the dashboard down (#7967).
+      // Only an update that would actually run is refused; an unavailable update or a source
+      // checkout keeps its own refusal from startUpdateJob.
+      if (checked.canUpdate) {
+        const { TASK } = await import("../../service/state");
+        const refusal = (deps.dashboardRestartRefusal ?? dashboardRestartRefusal)({ systemdRun, unitName: TASK });
+        if (refusal) return jsonResponse({ error: refusal, code: "update_restart_unsupervised" }, 409);
+      }
+      return jsonResponse({ ok: true, job: startUpdateJob(channel, restart, {
         checkForUpdateFn: () => checked,
         spawnWorkerFn: (jobId, runChannel, runRestart) =>
           spawnGuiUpdateWorker(jobId, runChannel, runRestart, { resolveSystemdRun: () => systemdRun }),
@@ -990,8 +1043,8 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
   }
 
   if (url.pathname === "/api/update/status" && req.method === "GET") {
-    const { readUpdateJob } = await import("../../update/job");
-    const job = readUpdateJob(url.searchParams.get("jobId"));
+    const { readUpdateJobForStatus } = await import("../../update/job");
+    const job = readUpdateJobForStatus(url.searchParams.get("jobId"));
     if (!job) return jsonResponse({ error: "update job not found" }, 404);
     return jsonResponse({ ok: true, job });
   }

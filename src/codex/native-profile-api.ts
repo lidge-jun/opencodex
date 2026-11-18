@@ -74,6 +74,13 @@ async function withMainRequestDrain<T>(deps: NativeProfileApiDeps, operation: ()
   }
 }
 
+function admissionFields(): { admissionStatus: "ready" | "blocked"; admissionBlockReason?: string } {
+  const gate = nativeMainStartupGateSnapshot();
+  return gate.status === "blocked"
+    ? { admissionStatus: gate.status, admissionBlockReason: gate.reason }
+    : { admissionStatus: gate.status };
+}
+
 async function withRecoveryGateTransition<T>(
   manager: NativeProfileManager,
   deps: NativeProfileApiDeps,
@@ -141,13 +148,32 @@ export async function handleNativeProfileAPI(
   deps: NativeProfileApiDeps = {},
 ): Promise<Response | null> {
   if (!url.pathname.startsWith("/api/native-main-profiles")) return null;
+  // Admission is read from this process's startup gate only. It constructs no manager and runs
+  // no doctor sweep, so the single-use local read capability `ocx doctor` holds can reach it
+  // without reaching staging cleanup, profile ids or filesystem paths.
+  if (url.pathname === "/api/native-main-profiles/admission" && req.method === "GET") {
+    return jsonResponse(admissionFields(), 200, req, config);
+  }
   try {
     const manager = deps.manager ?? new NativeProfileManager();
     if (url.pathname === "/api/native-main-profiles" && req.method === "GET") {
       return jsonResponse(await manager.list(), 200, req, config);
     }
     if (url.pathname === "/api/native-main-profiles/doctor" && req.method === "GET") {
-      return jsonResponse(await withNativeMainApiOperation(manager, () => manager.doctor(), { mode: "shared" }), 200, req, config);
+      try {
+        const doc = await withNativeMainApiOperation(manager, () => manager.doctor(), { mode: "shared" });
+        return jsonResponse({ ...doc, ...admissionFields() }, 200, req, config);
+      } catch (error) {
+        if (!(error instanceof NativeProfileError)) throw error;
+        return jsonResponse({
+          error: error.message,
+          code: error.code,
+          retryable: error.retryable,
+          ...(error.cleanupRequired === true ? { cleanupRequired: true } : {}),
+          ...(typeof error.plaintextMayRemain === "boolean" ? { plaintextMayRemain: error.plaintextMayRemain } : {}),
+          ...admissionFields(),
+        }, error.status, req, config);
+      }
     }
     if (url.pathname === "/api/native-main-profiles/register" && req.method === "POST") {
       const input = await body(req);

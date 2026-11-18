@@ -1,3 +1,4 @@
+import { validReplayOwnerKey } from "./replay-owner";
 import type {
   ResidentInput,
   ResidentResponseState,
@@ -20,6 +21,7 @@ export interface SnapshotLoadStore {
 interface LegacySnapshotState {
   createdAt?: unknown;
   clientThreadId?: unknown;
+  replayOwnerKey?: unknown;
   items?: unknown;
   providers?: OcxProviderContinuationState;
   conversationId?: unknown;
@@ -41,6 +43,11 @@ export function loadSnapshotEntry(id: string, value: unknown, store: SnapshotLoa
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
   const rec = value as LegacySnapshotState & { kind?: unknown; spill?: unknown };
   if (typeof rec.createdAt !== "number" || !Number.isFinite(rec.createdAt)) return;
+  if (rec.replayOwnerKey !== undefined && !validReplayOwnerKey(rec.replayOwnerKey)) {
+    store.replaceMapEntry(id, store.tombstone(id, rec.createdAt));
+    return;
+  }
+  const replayOwnerKey = rec.replayOwnerKey;
   const clientThreadId = typeof rec.clientThreadId === "string" && rec.clientThreadId.trim().length > 0
     ? rec.clientThreadId.trim()
     : undefined;
@@ -61,6 +68,7 @@ export function loadSnapshotEntry(id: string, value: unknown, store: SnapshotLoa
       kind: "spill",
       createdAt: rec.createdAt,
       ...(clientThreadId ? { clientThreadId } : {}),
+      ...(replayOwnerKey ? { replayOwnerKey } : {}),
       // Item count is unknown until materialization, so accept any non-negative integer
       // here; the spill payload validator re-checks it against the real array.
       ...(anchorFor(Number.MAX_SAFE_INTEGER) !== undefined ? { providerOutputStart: anchorFor(Number.MAX_SAFE_INTEGER) } : {}),
@@ -90,6 +98,7 @@ export function loadSnapshotEntry(id: string, value: unknown, store: SnapshotLoa
   const resident = store.measureResidentEntry(id, {
     createdAt: rec.createdAt,
     ...(clientThreadId ? { clientThreadId } : {}),
+    ...(replayOwnerKey ? { replayOwnerKey } : {}),
     items: rec.items,
     ...(anchorFor(rec.items.length) !== undefined ? { providerOutputStart: anchorFor(rec.items.length) } : {}),
     ...(providers ? { providers } : {}),

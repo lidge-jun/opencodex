@@ -122,7 +122,7 @@ test.skipIf(process.platform === "win32")("messaging SSH consumers pass hostile 
         }
         let finish!: (code: number) => void, closed = false;
         const exited = new Promise<number>(resolve => { finish = resolve; });
-        return { pid: 0, exited, output: Promise.resolve(""), async close() {
+        return { pid: 0, exited, output: Promise.resolve(""), forwardReady: Promise.resolve(), async close() {
           if (closed) return;
           closed = true; retired.push(direction);
           if (direction === "L") listener?.stop(true);

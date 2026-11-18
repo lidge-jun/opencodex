@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -276,6 +276,25 @@ describe("Zed Hosted AI provider", () => {
     expect(request.body).toContain("cache_control");
     expect(request.body).not.toContain("\"ttl\"");
   });
+  test("the borrowed api.anthropic.com builder never forwards Claude Code's Advisor tool to Zed", async () => {
+    const responses = [
+      jsonResponse({ default_organization_id: "org-1" }),
+      jsonResponse({ token: "llm-token-1" }),
+      jsonResponse({ models: [{ id: "claude-haiku-4-5", provider: "anthropic" }] }),
+    ];
+    globalThis.fetch = (async () => {
+      const response = responses.shift();
+      if (!response) throw new Error("unexpected Zed catalog fetch");
+      return response;
+    }) as typeof globalThis.fetch;
+    // An operator opt-in on the Zed row does not reach the delegate either: Zed is not first-party.
+    const provider: OcxProviderConfig = { adapter: "zed", baseUrl: "https://cloud.zed.dev", authMode: "oauth", apiKey: "access-token", forwardAdvisorTool: true };
+    const parsed = parseRequest({ model: "claude-haiku-4-5", input: "hello zed", stream: true });
+    parsed._zedAuthContext = { userId: "user-1" };
+    parsed._anthropicServerTools = [{ type: "advisor_20260301", name: "advisor", model: "claude-opus-4-8" }];
+    const request = await withTestTranslatorBudget(createZedAdapter(provider)).buildRequest(parsed);
+    expect(request.body).not.toContain("advisor_20260301");
+  });
   test("normalizes OpenAI input and removes Codex-only fields for Zed backend", async () => {
     const responses = [
       jsonResponse({ default_organization_id: "org-1" }),
@@ -444,6 +463,28 @@ describe("Zed OpenAI tool relay", () => {
     expect(JSON.stringify(parsed._rawBody)).toBe(rawBefore);
     expect(rawBefore).toContain("additional_tools");
     expect(rawBefore).toContain("reasoning");
+  });
+
+  test("a current tool_search_output stays current after a replayed wrapper is lifted", async () => {
+    catalogFetch();
+    const lookup = { type: "function", name: "lookup", parameters: { type: "object", properties: {} } };
+    const parsed = parseRequest({
+      model: "gpt-6.1-sol",
+      input: [
+        { type: "additional_tools", tools: [{ type: "function", name: "old_tool", parameters: { type: "object", properties: {} } }] },
+        { type: "tool_search_output", call_id: "search", status: "completed", execution: "client", tools: [lookup] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "now" }] },
+      ],
+      tools: [],
+      stream: true,
+    });
+    parsed._zedAuthContext = { userId: "user-1" };
+    parsed._replayPrefixLen = 1;
+    const adapter = withTestTranslatorBudget(createZedAdapter(provider));
+    const request = await adapter.buildRequest(parsed);
+    const body = JSON.parse(request.body).provider_request;
+    expect(JSON.stringify(body.input)).not.toContain("old_tool");
+    expect(body.tools.map((tool: { name?: string }) => tool.name)).toEqual(["lookup"]);
   });
 
   async function relay(frames: unknown[]): Promise<unknown[]> {
@@ -890,17 +931,52 @@ describe("Zed inference send accounting", () => {
 });
 
 describe("Zed stream framing", () => {
-  async function translate(chunks: string[], provider: ZedProvider = "anthropic"): Promise<Array<Record<string, unknown>>> {
+  async function translate(chunks: Array<string | Uint8Array>, provider: ZedProvider = "anthropic"): Promise<Array<Record<string, unknown>>> {
     const encoder = new TextEncoder();
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
-        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        for (const chunk of chunks) controller.enqueue(typeof chunk === "string" ? encoder.encode(chunk) : chunk);
         controller.close();
       },
     });
     const text = await new Response(zedEventStream(body, provider)).text();
     return text.split("\n\n").filter(Boolean).map(frame => JSON.parse(frame.replace(/^data: /, "")) as Record<string, unknown>);
   }
+
+  test("bounds newline search work for a large fragmented frame", async () => {
+    const event = { type: "content_block_delta", delta: { text: "a".repeat(256 * 256) } };
+    const wire = `${JSON.stringify({ event })}\n${JSON.stringify({ status: "stream_ended" })}\n`;
+    const chunks = Array.from({ length: Math.ceil(wire.length / 256) }, (_, i) => wire.slice(i * 256, (i + 1) * 256));
+    const indexOf = String.prototype.indexOf;
+    const includes = String.prototype.includes;
+    let scannedChars = 0;
+    const recordScan = (text: string, search: string, start: number, found: number) => {
+      if (search === "\n") scannedChars += Math.max(0, (found < 0 ? text.length : found + 1) - start);
+    };
+    const indexing = spyOn(String.prototype, "indexOf").mockImplementation(function (search, start = 0) {
+      const found = Reflect.apply(indexOf, this, [search, start]);
+      recordScan(String(this), search, start, found);
+      return found;
+    });
+    const checking = spyOn(String.prototype, "includes").mockImplementation(function (search, start = 0) {
+      recordScan(String(this), search, start, Reflect.apply(indexOf, this, [search, start]));
+      return Reflect.apply(includes, this, [search, start]);
+    });
+    let frames: Array<Record<string, unknown>>;
+    try { frames = await translate(chunks); } finally { indexing.mockRestore(); checking.mockRestore(); }
+    expect(frames).toEqual([event, { type: "message_stop" }]);
+    expect(scannedChars).toBeLessThanOrEqual(4 * wire.length);
+  });
+
+  test("preserves split UTF-8, CRLF, coalesced lines and terminal suppression", async () => {
+    const event = { type: "content_block_delta", delta: { text: "é한😀" } };
+    const wire = `: keepalive\r\ndata: ${JSON.stringify({ event })}\r\n${JSON.stringify({ event: { type: "ping" } })}\n${JSON.stringify({ status: "stream_ended" })}\n{malformed after terminal\n`;
+    const bytes = new TextEncoder().encode(wire);
+    for (const size of [1, 7, bytes.length]) {
+      const chunks = Array.from({ length: Math.ceil(bytes.length / size) }, (_, i) => bytes.subarray(i * size, (i + 1) * size));
+      expect(await translate(chunks)).toEqual([event, { type: "ping" }, { type: "message_stop" }]);
+    }
+  });
 
   test("forwards events and stops at the explicit stream-ended status", async () => {
     const frames = await translate([

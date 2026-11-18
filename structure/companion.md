@@ -83,6 +83,12 @@ and `exhausted` follows `isCodexQuotaExhausted` (100% in a governing window or t
 The "Use" action (`app/Sources/NativeTray/AccountSwitch.swift`) appears on hover, keyboard focus
 and as an accessibility action; an exhausted account stays switchable with a warning.
 
+OAuth account labels use a trimmed alias, then the server's trimmed `maskedLabel`, then an
+English `Account N` ordinal. The native panel receives no secondary email for OAuth rows, including
+when an older server supplies a legacy email; raw account IDs remain available for switching.
+Codex and API-key account labels retain their existing projection. Rust inline tests cover these
+selection and compatibility rules.
+
 The web tray (`gui/src/pages/Tray.tsx`, the Windows and Linux popup) shows the same account state. `gui/src/pages/tray-data.ts` mirrors the native projection: `providerSources` names each provider's switch kind from the same config rules, `parseAccounts` derives `switchState`, `blockedReason` and `exhausted` with the same rules, and `accountSwitchRequest` builds the same route and body. The popup sends it with the dashboard session instead of the desktop capability, then reloads. The popup is its own entry point, so before its first request `gui/src/pages/tray-targets.ts` runs App's target sequence (discover, configure, bootstrap the hub's shared session on a connected client) and every read and switch goes to the shared-plane base (the hub origin or the local relay prefix) instead of the local client runtime; nothing is polled until that resolves, and a failed discovery shows a retryable error. `gui/tests/tray-targets.test.ts` and `gui/tests/tray-hub-routing-dom.test.tsx` pin that routing. Provider headings use the dashboard's `ProviderIcon`, and bars use `quotaSeverity` (warn 70%, critical 90%). `gui/tests/tray-data.test.ts` pins the parity.
 
 The Tauri title reads `usage_today()`, matching the widget and retained Swift client. Every refresh

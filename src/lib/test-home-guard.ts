@@ -191,7 +191,7 @@ function missingPreloadHint(): string {
  */
 export function isProtectedHomeUnderTest(dir: string): boolean {
   if (!isTestHomeGuardArmed()) return false;
-  return canonicalize(dir) === PROTECTED_HOME;
+  return samePathIgnoringPlatformCase(canonicalize(dir), PROTECTED_HOME);
 }
 
 /**
@@ -204,7 +204,7 @@ export function isProtectedHomeUnderTest(dir: string): boolean {
  */
 export function assertNotRealHomeUnderTest(dir: string): void {
   if (!isTestHomeGuardArmed()) return;
-  if (canonicalize(dir) !== PROTECTED_HOME) return;
+  if (!samePathIgnoringPlatformCase(canonicalize(dir), PROTECTED_HOME)) return;
   throw new Error(
     `refusing to write the real OpenCodex home (${PROTECTED_HOME}) from a test process. `
     + "Point OPENCODEX_HOME at a temp directory for this test, or inject persistence "
@@ -227,7 +227,7 @@ export function protectedLaunchAgentsDirForTests(): string {
  */
 export function assertNotRealLaunchAgentsUnderTest(dir: string): void {
   if (!isTestHomeGuardArmed()) return;
-  if (canonicalize(dir) !== PROTECTED_LAUNCH_AGENTS) return;
+  if (!samePathIgnoringPlatformCase(canonicalize(dir), PROTECTED_LAUNCH_AGENTS)) return;
   throw new Error(
     `refusing to write the real LaunchAgents directory (${PROTECTED_LAUNCH_AGENTS}) from a test `
     + "process: os.homedir() ignores HOME, so rewriting HOME does not move this path. Pass an "
@@ -238,7 +238,7 @@ export function assertNotRealLaunchAgentsUnderTest(dir: string): void {
 /** Throw when an armed test process is about to write the real native Codex home. */
 export function assertNotRealCodexHomeUnderTest(dir: string): void {
   if (!isTestHomeGuardArmed()) return;
-  if (canonicalize(dir) !== PROTECTED_CODEX_HOME) return;
+  if (!samePathIgnoringPlatformCase(canonicalize(dir), PROTECTED_CODEX_HOME)) return;
   throw new Error(
     `refusing to write the real Codex home (${PROTECTED_CODEX_HOME}) from a test process. `
     + "Point CODEX_HOME at a temp directory for this test before writing Codex files "
@@ -285,6 +285,15 @@ function foldPlatformCase(path: string): string {
   return process.platform === "darwin" || process.platform === "win32" ? path.toLowerCase() : path;
 }
 
+/**
+ * Path equality as the default filesystem on this platform sees it. A not-yet-existing
+ * `.OPENCODEX` canonicalizes through its parent and keeps its spelling, so a plain `===`
+ * against the canonical home calls it a different directory on Windows and macOS (#7853).
+ */
+function samePathIgnoringPlatformCase(a: string, b: string): boolean {
+  return foldPlatformCase(a) === foldPlatformCase(b);
+}
+
 function isSameOrInsideIgnoringPlatformCase(root: string, candidate: string): boolean {
   const parent = foldPlatformCase(root);
   const child = foldPlatformCase(candidate);
@@ -322,10 +331,29 @@ export function protectedRemovalTreesForTests(): readonly string[] {
   return [PROTECTED_REAL_HOME, ...PROTECTED_TREES.map(tree => tree.path)];
 }
 
-/** Whether `child` sits strictly below `parent`, both already canonicalized. */
+/**
+ * Whether `child` sits strictly below `parent`, both already canonicalized.
+ *
+ * Containment is decided per path component, with case folded where the filesystem folds it.
+ * A prefix test on the relative path called a direct child named `..backup` "outside", so the
+ * removal guard let it through (#7853).
+ */
 function isInside(parent: string, child: string): boolean {
+  return !samePathIgnoringPlatformCase(parent, child) && isSameOrInsideIgnoringPlatformCase(parent, child);
+}
+
+/**
+ * Whether `child` sits strictly below `parent` with case PRESERVED, deciding per path component.
+ *
+ * Only for the checkout exemption below, which LIFTS a refusal. Folding case there would let a
+ * running checkout at `~/.codex/worktrees/repo` exempt a distinct `~/.codex/worktrees/REPO` on a
+ * case-sensitive macOS volume. Protection decisions fold, because comparing too broadly only refuses
+ * more; an exemption must not, because the same breadth removes more.
+ */
+function isInsidePreservingCase(parent: string, child: string): boolean {
+  if (parent === child) return false;
   const rel = relative(parent, child);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  return rel !== "" && !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`);
 }
 
 let checkoutRootSpellings: readonly string[] | undefined;
@@ -362,7 +390,7 @@ function checkoutRoots(): readonly string[] {
  * tree (one at `$HOME`, or the virtual root of a compiled build) never qualifies.
  */
 function isOwnCheckoutContent(protectedPath: string, candidate: string): boolean {
-  return checkoutRoots().some(root => isInside(protectedPath, root) && isInside(root, candidate));
+  return checkoutRoots().some(root => isInsidePreservingCase(protectedPath, root) && isInsidePreservingCase(root, candidate));
 }
 
 /**
@@ -387,12 +415,12 @@ export function protectedRemovalReason(target: string): string | null {
   // form still names it. Upstream Codex makes the same distinction in its writable-root
   // handling, keeping logical and resolved forms side by side rather than collapsing to one.
   for (const candidate of [canonicalize(target), resolve(target)]) {
-    if (candidate === PROTECTED_REAL_HOME || candidate === LEXICAL_REAL_HOME) {
+    if (samePathIgnoringPlatformCase(candidate, PROTECTED_REAL_HOME) || samePathIgnoringPlatformCase(candidate, LEXICAL_REAL_HOME)) {
       return `the real home directory (${PROTECTED_REAL_HOME})`;
     }
     for (const tree of PROTECTED_TREES) {
       for (const protectedPath of [tree.path, tree.lexical]) {
-        if (candidate === protectedPath) return `${tree.label} (${protectedPath})`;
+        if (samePathIgnoringPlatformCase(candidate, protectedPath)) return `${tree.label} (${protectedPath})`;
         if (isInside(protectedPath, candidate) && !isOwnCheckoutContent(protectedPath, candidate)) {
           return `a path inside ${tree.label} (${protectedPath})`;
         }

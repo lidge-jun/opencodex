@@ -14,6 +14,16 @@ This is distinct from the subagent surface (see
 delegation through Codex's collaboration tools. The advisor is a proxy-side sidecar the client
 never sees — even a worker that never spawns anything can be advised.
 
+## Question-only mode
+
+To reduce repeated input, select **Send only the worker’s question** in the Advisor page, or run:
+
+```sh
+ocx advisor set --context-mode question-only
+```
+
+This opt-in setting sends only a fixed advisor instruction and the worker’s question (up to 2,000 retained characters plus a truncation notice). OpenCodex does not attach the task, conversation history, tool results, tool catalog, worker identity or repair evidence. The worker must write a self-contained question with essential background. Empty questions are rejected without a provider call. Automatic preflight and adaptive repair consultations are paused; manual calls, consent and existing consultation limits still apply. The default `context` mode keeps the context-sharing behavior described below. Use `--context-mode context` to restore it.
+
 ## Configuration
 
 On the dashboard **Advisor** page (under the **Subagents** sidebar row), choose the expert model from the catalog selector. It saves the exact catalog identifier, including native, provider, account-qualified, custom and combo selectors. Disabled models and models awaiting initial selection are not offered as new choices. A saved identifier missing from the selectable catalog remains visible with a warning and is preserved until you choose another model or clear it. Catalog loading failures preserve the selection and provide Retry. Choose a model that can return text advice: the catalog does not guarantee consultation compatibility. The CLI and API continue to accept router-supported model strings.
@@ -36,6 +46,7 @@ On the dashboard **Advisor** page (under the **Subagents** sidebar row), choose 
 | `model?` | `string` | — | The expert model. Any model string the router accepts: a bare native model (`gpt-6-astra`), an explicit `provider/model` (`anthropic/claude-sonnet-4-6`, `xai/grok-...`), or an account-qualified native model. Cross-provider is fully supported: the worker and the advisor do not need to share a provider. |
 | `effort?` | `string` | `"max"` | Reasoning effort for the advisor call (`low` through `ultra`). |
 | `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | When the advisor is consulted. |
+| `contextMode?` | `"context" \| "question-only"` | `"context"` | Context sharing. `question-only` requires an explicit worker question and pauses automatic consultations. |
 | `maxConsultationsPerTask?` | `integer` | `3` | Adaptive task allowance (1–3 attempts), including manual calls. |
 | `timeoutMs?` | `number` | `120000` | Loopback consultation timeout. |
 | `contextSharingConsent?` | `"v1"` | absent | Operator consent to send task context to the configured Advisor provider. Only `"v1"` is current. Absent, stale, or any other value means no task context is sent. |
@@ -55,10 +66,11 @@ consent is missing: it prints this disclosure and stops. `ocx advisor set` does 
   When the worker has produced its first orientation evidence (an assistant tool call OR a tool
   result after the latest user message), the proxy consults the advisor and injects the advice
   before the worker's next turn — even if the worker never calls the tool. The trigger is a
-  deterministic, documented approximation, not a semantic "model is stuck" detector. An
-  attempted consultation that FAILS is not silently treated as advice: the task retries after
-  the failure's ledger entry expires, so a temporary advisor outage does not permanently
-  silence the policy.
+  deterministic, documented approximation, not a semantic "model is stuck" detector. A
+  failed consultation does not inject valid advice or block the worker's task. A later
+  consultation becomes eligible after the failure's ledger entry expires, so a temporary
+  advisor outage does not permanently silence the policy. Dispatched failures report an
+  unavailable notice as described below; they do not restart the worker's task.
 - **`adaptive`** — adds failed-repair consultations to the initial preflight attempt. The proxy
   must observe a completed failing validation, a subsequent successful file-edit tool result,
   and a new execution of the **same command in the same working directory** failing again.
@@ -118,6 +130,21 @@ A consultation may send:
 
 The configured Advisor provider may differ from the worker provider.
 
+Consultations obey both the caller's captured API-key model scope, paid-combo consent and device
+fallback limits, and the host limits of Advisor's own admission key: `OPENCODEX_API_AUTH_TOKEN` or the service token file when set and accepted by this proxy, otherwise the first configured API key. Only in that last case does key
+order matter: put a key that can reach the Advisor model first, or every consultation is unavailable.
+When an environment or service token is set, that token controls the consultation instead. These rules also apply to combo choices, nested
+decision models and retries. A consultation that cannot satisfy them returns an unavailable
+notice to the worker.
+
+For example, a `laptop` key with `allowMeteredComboTargets: false` cannot spend on
+metered combo targets through Advisor, and `fallback.devices.laptop.provider: false`
+also blocks Advisor's provider fallback hops. An unkeyed loopback caller still needs
+the combo's `allowMeteredTargets: true` opt-in. When both keys set `allowMeteredComboTargets: true` and the combo sets `allowMeteredTargets: true`, Advisor can use its metered targets, also through the loopback listener of a public bind. The server captures caller policy when it
+authenticates the request, before waiting for body capacity or reading the body; later key or fallback edits cannot broaden that consultation.
+This also covers routed vision helpers, compact requests and their decision models, and every
+candidate retry within a WebSocket turn. Each new WebSocket turn captures its own policy.
+
 OpenCodex does not insert provider API keys, authorization headers, OAuth tokens, backend-only
 config secrets, process environment, or hidden chain-of-thought into that prompt. It does not
 decrypt or forward encrypted provider-private reasoning. **Task content is not secret-redacted.**
@@ -141,6 +168,17 @@ Each request allows at most three consultations, including automatic attempts, a
 After consultation exhaustion the `advisor` tool is removed. A repeated call receives one final
 paired limit result; if the worker calls it again, typed 502 `advisor_continuation_limit` ends the
 request without another hidden worker call. The bound is shared with empty-completion retries.
+
+Fetch-based web-search turns support the same manual consultation path when the effective
+`tool_choice` permits the synthetic `advisor` tool. The search loop exposes and intercepts
+`advisor` calls only within that scope; an `allowed_tools` choice restricted to `web_search`
+excludes manual Advisor consultations. Permitted `web_search` and `advisor` calls are handled in
+worker order. Search and Advisor iterations have separate allowances,
+and a real client tool call still returns control to the client. Run-turn and image/video sidecar turns remain subject to their existing limitations.
+If the worker emits an excluded `advisor` call, the turn fails with `undeclared_tool_call`
+before that call reaches the client. A normal client tool named `advisor` remains available
+only while the current iteration declares and permits it; a tools-disabled recovery cannot reuse an earlier declaration.
+Usage accounting includes each worker turn once, including the leg rejected by the Advisor continuation limit.
 
 Suppression does not read Advisor strings. Automatic dedup is the server-owned ledger. A
 developer message, including one that copies the transport text, does not suppress preflight.
@@ -180,6 +218,12 @@ consultation never switches the session's main model.
 - Native OpenAI passthrough turns (ChatGPT-pool workers) do not get the synthetic tool; advisor
   support covers routed (translated) providers. Preflight consultation applies to run-turn
   adapters; the tool does not.
+- Translated `/v1/messages` requests (for example Claude Code routed to a translated provider)
+  get the synthetic tool and preflight like `/v1/responses` and `/v1/chat/completions`. The
+  same `policy` and context-sharing consent rules apply, and the settings are read from the live
+  config, so a consent revocation blocks consultations for requests already in flight that have
+  not yet been dispatched. It does not cancel a dispatched consultation or retract context that
+  already left the proxy.
 - No semantic stuck detection, completion review, escalation tiers, multiple advisors or voting.
   Adaptive consultation requires the structured validation/edit/retry evidence described above.
 - The preflight dedup ledger is process-local; after a proxy restart, a task in progress may

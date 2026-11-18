@@ -284,7 +284,7 @@ export async function runDesktopRestartHandoff(
   try {
     const restart = io.restart
       ? io.restart(false)
-      : (await import("../desktop-app-restart")).restartCodexDesktopApp({
+      : await (await import("../desktop-app-restart")).restartCodexDesktopAppAsync({
         allowHandoff: false,
         lock: io.lock,
       });

@@ -18,6 +18,10 @@ import {
   createRequestMetricsOwner,
 } from "../../src/server/request-metrics";
 import { ATTEMPT_RECOVERY_KIND_ROSTER } from "../../src/usage/telemetry-contract";
+import { normalizeUsageEntryForTest, type PersistedUsageEntry } from "../../src/usage/log";
+import { requestLogDto } from "../../src/server/management/shared";
+import { requestLogEntryFromPersistedUsage } from "../../src/server/request-log";
+import { failureSummary } from "../../gui/src/pages/logs-failure-summary";
 
 /**
  * The durable ledger, the Prometheus exporter and the dashboard have to answer "how did this
@@ -29,7 +33,7 @@ import { ATTEMPT_RECOVERY_KIND_ROSTER } from "../../src/usage/telemetry-contract
  * specifically about a 200 that must NOT read as success.
  */
 
-const LOCALES = ["en", "ko", "ja", "zh", "zh-TW", "de", "fr", "ru", "tr", "vi"] as const;
+const LOCALES = ["en", "ko", "ja", "zh", "zh-TW", "de", "fr", "ru", "tr", "vi", "pt"] as const;
 
 function sampleValue(snapshot: string, series: string): number {
   const line = snapshot.split("\n").find(row => row.startsWith(series + " "));
@@ -103,6 +107,42 @@ describe("terminal classification is stated once", () => {
 });
 
 describe("send totals agree across surfaces", () => {
+  test("lossy attempt normalization is exposed to the request log DTO", () => {
+    const attempt = { ordinal: 1, provider: "openai", model: "model", adapter: "openai-chat",
+      status: 500, durationMs: 100, sendCount: 3, recoveryKinds: [], usageStatus: "unreported" } as const;
+    const entry = { requestId: "lossy", timestamp: 1, provider: "openai", model: "model",
+      status: 500, durationMs: 100, usageStatus: "unreported", spend: { sends: 3, settled: 3, unresolved: 0 },
+      attempts: [attempt, { ...attempt, ordinal: 2, sendCount: 0, adapter: "" }] } as PersistedUsageEntry;
+    const normalized = normalizeUsageEntryForTest(entry);
+    expect(normalized.attempts).toHaveLength(1);
+    const valid = normalizeUsageEntryForTest({ ...entry, attempts: [attempt] });
+    expect(JSON.stringify(normalized)).toBe(JSON.stringify(valid));
+    expect(JSON.stringify(normalizeUsageEntryForTest(normalized))).toBe(JSON.stringify(normalized));
+    expect(Object.prototype.propertyIsEnumerable.call(normalized, "attemptNormalizationDropped")).toBe(false);
+    expect(normalized.attemptNormalizationDropped).toBe(true);
+    expect(requestLogEntryFromPersistedUsage(normalized).attemptNormalizationDropped).toBe(true);
+    expect(requestLogDto(normalized).attemptNormalizationDropped).toBe(true);
+    expect(failureSummary(requestLogDto(requestLogEntryFromPersistedUsage(normalized)), null, key => key).retries).toBeUndefined();
+    expect(normalizeUsageEntryForTest(normalized).attemptNormalizationDropped).toBe(true);
+    expect(normalizeUsageEntryForTest({ ...entry, attempts: [attempt] }).attemptNormalizationDropped).toBeUndefined();
+    expect(failureSummary(requestLogDto(requestLogEntryFromPersistedUsage(valid)), null, key => key).retries).toBe(2);
+  });
+
+  test("an explicitly persisted normalization-loss marker survives reads and serialization", () => {
+    const entry = { requestId: "marked", timestamp: 1, provider: "openai", model: "model",
+      status: 500, durationMs: 100, usageStatus: "unreported", attemptNormalizationDropped: true } as PersistedUsageEntry;
+    const normalized = normalizeUsageEntryForTest(JSON.parse(JSON.stringify(entry)));
+    expect(normalized.attemptNormalizationDropped).toBe(true);
+    expect(Object.prototype.propertyIsEnumerable.call(normalized, "attemptNormalizationDropped")).toBe(true);
+    expect(JSON.parse(JSON.stringify(normalized)).attemptNormalizationDropped).toBe(true);
+    expect(JSON.stringify(normalizeUsageEntryForTest(normalized))).toBe(JSON.stringify(normalized));
+  });
+
+  test.each(["future-fault", "constructor"])("unknown persisted cause %s is dropped", cause => {
+    const entry = { requestId: "unknown", timestamp: 1, provider: "openai", model: "model",
+      status: 500, durationMs: 100, usageStatus: "unreported", failureCause: cause } as PersistedUsageEntry;
+    expect(normalizeUsageEntryForTest(entry).failureCause).toBeUndefined();
+  });
   /**
    * The budget charged four sends while the attempt rows account for three. Both numbers are
    * real and they answer different questions, so the surfaces have to agree about WHICH one the
@@ -146,8 +186,8 @@ describe("send totals agree across surfaces", () => {
 
   test("the dashboard shows the send total and the unresolved remainder", () => {
     const page = readFileSync(repoPath("gui", "src", "pages", "Logs.tsx"), "utf8");
-    expect(page).toContain("requestPhysicalSends");
-    expect(page).toContain("requestUnresolvedSends");
+    expect(page).toContain("summary.sends");
+    expect(page).toContain("summary.unresolved");
   });
 });
 
@@ -197,9 +237,10 @@ describe("the dashboard recovery roster cannot drift from the durable one", () =
     expect(page).not.toContain('type AttemptRecoveryKind =');
   });
 
-  test("every label key the page names exists in all ten catalogs", () => {
-    const page = readFileSync(repoPath("gui", "src", "pages", "Logs.tsx"), "utf8");
-    const keys = [...new Set([...page.matchAll(/"(logs\.detail\.(?:attempt\.recovery|outcome|sends|cause|stage|resend)\.[a-zA-Z0-9]+)"/g)]
+  test("every label key the page names exists in all eleven catalogs", () => {
+    const page = ["Logs.tsx", "logs-failure-summary.ts"]
+      .map(file => readFileSync(repoPath("gui", "src", "pages", file), "utf8")).join("\n");
+    const keys = [...new Set([...page.matchAll(/"(logs\.detail\.(?:attempt\.recovery|outcome|sends|retries|cause|stage|resend)\.[a-zA-Z0-9]+)"/g)]
       .map(match => match[1]!))];
     expect(keys.length).toBeGreaterThan(ATTEMPT_RECOVERY_KIND_ROSTER.length);
     const gaps: string[] = [];
@@ -269,7 +310,7 @@ describe("the failure cause is derived once and reported everywhere", () => {
   });
 
   test("every cause the recorder can derive has a dashboard label", () => {
-    const page = readFileSync(repoPath("gui", "src", "pages", "Logs.tsx"), "utf8");
+    const page = readFileSync(repoPath("gui", "src", "pages", "logs-failure-summary.ts"), "utf8");
     const block = page.slice(page.indexOf("const FAILURE_CAUSE_KEYS"), page.indexOf("} as const satisfies Record<RequestFailureCause"));
     const missing = REQUEST_METRICS_FAILURE_CAUSES.filter(cause => !block.includes(`"${cause}":`));
     expect(missing).toEqual([]);

@@ -7,6 +7,7 @@ import { Database } from "bun:sqlite";
 import { resolveCodexStateDbPath } from "./paths";
 import { openCodexStateForPreflight } from "./history-state-open";
 import { atomicWriteFile, getConfigDir } from "../config";
+import { sameFileIdentity, statTimeMs, type FileIdentity } from "../lib/file-identity";
 import {
   CODEX_HISTORY_RESUMABLE_SOURCES,
   codexHistoryBackupId,
@@ -268,15 +269,15 @@ function readFirstLineProviderValue(path: string, expectedId: string): string | 
 
 function patchFirstLineProviderInPlace(
   path: string, expectedId: string, provider: string,
-  expectedIdentity: { dev: number | bigint; ino: number | bigint },
+  expectedIdentity: FileIdentity,
 ): FirstLineProviderResult {
   historyAppendHooks?.beforeFirstLineOpen?.(path);
   const fd = openSync(path, "r+");
   try {
     const assertIdentity = (): void => {
       assertHistoryDescriptorIdentity(path, fd);
-      const held = fstatSync(fd);
-      if (held.dev !== expectedIdentity.dev || held.ino !== expectedIdentity.ino) {
+      const held = fstatSync(fd, { bigint: true });
+      if (!sameFileIdentity(held, expectedIdentity)) {
         throw new CodexHistoryIntegrityError("history_rollout_identity_changed");
       }
     };
@@ -346,6 +347,14 @@ export const HISTORY_RELABEL_STANDS_DOWN = "history_paginated_requires_native_wr
  */
 export const HISTORY_PAGINATED_OPENAI_NEEDS_ROOT_OVERRIDE = "history_paginated_openai_requires_native_writer";
 
+/**
+ * The same paginated `openai` rows, found while the resolved Codex is 0.166 or later (#8191).
+ * Those builds resume or list a thread only under the provider it was created with, so the retained
+ * root override no longer keeps these rows reachable once the default provider changes. A hard
+ * refusal: nothing is relabeled or rewritten, and the transition does not happen.
+ */
+export const HISTORY_PAGINATED_OPENAI_PROVIDER_LOCKED = "history_paginated_openai_provider_locked";
+
 function assertLegacyHistoryRecord(line: string): void {
   let value: unknown;
   try { value = JSON.parse(line); } catch { throw new CodexHistoryIntegrityError("history_rollout_record_invalid"); }
@@ -360,10 +369,10 @@ function assertLegacyHistoryRecord(line: string): void {
 }
 
 function assertHistoryDescriptorIdentity(path: string, fd: number): void {
-  const held = fstatSync(fd);
-  let current: ReturnType<typeof lstatSync>;
-  try { current = lstatSync(path); } catch { throw new CodexHistoryIntegrityError("history_rollout_identity_changed"); }
-  if (!current.isFile() || current.isSymbolicLink() || current.dev !== held.dev || current.ino !== held.ino) {
+  const held = fstatSync(fd, { bigint: true });
+  let current: import("node:fs").BigIntStats;
+  try { current = lstatSync(path, { bigint: true }); } catch { throw new CodexHistoryIntegrityError("history_rollout_identity_changed"); }
+  if (!current.isFile() || current.isSymbolicLink() || !sameFileIdentity(current, held)) {
     throw new CodexHistoryIntegrityError("history_rollout_identity_changed");
   }
 }
@@ -476,6 +485,29 @@ export function preflightCodexHistoryInjection(
     return error instanceof CodexHistoryIntegrityError
       ? error.message
       : "history_injection_preflight_unavailable";
+  } finally {
+    db?.close();
+  }
+}
+
+/**
+ * Read-only: does this store hold an `openai`-tagged thread Codex has already paginated (#8191)?
+ * For a transition whose preflight scans no rows (client compaction relabels nothing) but which
+ * still makes `opencodex` the default provider. Null when the store cannot be read.
+ */
+export function hasPaginatedOpenaiThreads(stateDbPath?: string): boolean | null {
+  let db: Database | undefined;
+  try {
+    const resolvedPath = stateDbPath ?? resolveCodexStateDbPath();
+    if (!existsSync(resolvedPath)) return false;
+    db = openCodexStateForPreflight(resolvedPath);
+    const columns = db.query<{ name: string }, []>("PRAGMA table_info(threads)").all();
+    if (!columns.some(column => column.name === "history_mode")) return false;
+    return db.query<{ hit: number }, []>(
+      "SELECT 1 AS hit FROM threads WHERE model_provider = 'openai' AND history_mode = 'paginated' LIMIT 1",
+    ).get() !== null;
+  } catch {
+    return null;
   } finally {
     db?.close();
   }
@@ -693,8 +725,8 @@ function inspectBackupForNoop(path: string, stateDbPath: string): StrictBackupIn
 
 function historyFileIdentity(path: string): string | null {
   try {
-    const stat = statSync(path);
-    return [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(":");
+    const stat = statSync(path, { bigint: true });
+    return [stat.dev, stat.ino, Number(stat.size), statTimeMs(stat.mtimeNs), statTimeMs(stat.ctimeNs)].join(":");
   } catch {
     return null;
   }
@@ -1132,7 +1164,7 @@ function updateSessionMeta(
   } = {},
 ): SessionMetaUpdateResult {
   if (!path || !existsSync(path)) return { changed: false, durableProvider: false };
-  const validatedIdentity = lstatSync(path);
+  const validatedIdentity = lstatSync(path, { bigint: true });
   if (options.expectedFileIdentity !== undefined
     && historyFileIdentity(path) !== options.expectedFileIdentity) {
     return { changed: false, durableProvider: false, conflict: true };

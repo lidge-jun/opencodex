@@ -1,3 +1,4 @@
+import { clientFacingModelLabel, clientFacingModelText, type ClientFacingModelLabel } from "../lib/error-destination";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
@@ -13,6 +14,7 @@ import { configuredReasoningEfforts, modelRecordValue } from "../reasoning-effor
 import { commandCodeReasoningEfforts, refreshCommandCodeReasoningEfforts } from "../providers/command-code-efforts";
 import { identifyRoutedModel } from "./identity";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
+import { normalizeAnthropicInputSchema } from "./anthropic-input-schema";
 import { parseDataUrl } from "./image";
 import { createAdapterPhysicalSend } from "./physical-send";
 import { SendBudgetExhaustedError } from "../lib/upstream-retry";
@@ -25,10 +27,25 @@ import {
 import { CommandCodeToolTextFilter, type CommandCodeDeclaredTools } from "./command-code-tool-text";
 import { EMPTY_COMMAND_CODE_PROJECT_CONTEXT, loadCommandCodeProjectContext } from "./command-code-project-context";
 
+/**
+ * Text-call recovery matches markup against the schema the model was shown (`wireTools`), so a
+ * root-composed tool keeps the top-level `properties` its markup names. Definitions are dropped
+ * because the restored-value validator accepts no `$ref`: a reference left in the normalized
+ * schema still fails closed there. The original schema is validated too (`declaredSchema`),
+ * because the wire view flattens root alternatives and would otherwise admit calls the tool
+ * itself rejects.
+ */
+function recoverySchema(tool: OcxTool): Record<string, unknown> {
+  const { $defs: _defs, definitions: _definitions, ...schema } = normalizeAnthropicInputSchema(tool.parameters);
+  return schema;
+}
+
 function declaredTools(tools: OcxTool[]): CommandCodeDeclaredTools {
   return new Map(tools.map(tool => [
     namespacedToolName(tool.namespace, tool.name),
-    { freeform: tool.freeform === true, schema: tool.parameters },
+    tool.freeform === true
+      ? { freeform: true, schema: tool.parameters }
+      : { freeform: false, schema: recoverySchema(tool), declaredSchema: tool.parameters },
   ]));
 }
 
@@ -206,7 +223,7 @@ function wireTools(tools: OcxTool[]): Array<Record<string, unknown>> {
   return tools.map(tool => ({
     name: namespacedToolName(tool.namespace, tool.name),
     description: tool.description,
-    input_schema: tool.parameters,
+    input_schema: normalizeAnthropicInputSchema(tool.parameters),
   }));
 }
 
@@ -424,27 +441,32 @@ async function*ndjson(response: Response, budget: TranslatorBudget): AsyncGenera
   const encoder = new TextEncoder();
   let buffer = "";
   let bufferBytes = 0;
+  // One live buffer owns one charge; resizing must not reserve old + replacement together.
+  const resizeBuffer = (nextBytes: number) => {
+    if (nextBytes > bufferBytes) {
+      budget.reserveTransient(nextBytes - bufferBytes, { kind: "live_transient" }).commitRetained();
+    } else {
+      budget.releaseRetained(bufferBytes - nextBytes, { kind: "live_transient" });
+    }
+    bufferBytes = nextBytes;
+  };
   try {
     for (;;) {
       const { value, done } = await reader.read();
-      const next = buffer + decoder.decode(value, { stream: !done });
-      const nextBytes = encoder.encode(next).byteLength;
-      const reservation = budget.reserveTransient(nextBytes, { kind: "live_transient" });
-      buffer = next;
-      reservation.commitRetained();
-      budget.releaseRetained(bufferBytes, { kind: "live_transient" });
-      bufferBytes = nextBytes;
-      let newline = buffer.indexOf("\n");
+      const decoded = decoder.decode(value, { stream: !done });
+      // TextDecoder emits complete code points, so fragment UTF-8 sizes are additive.
+      const nextBytes = bufferBytes + encoder.encode(decoded).byteLength;
+      resizeBuffer(nextBytes);
+      buffer += decoded;
+      // The retained suffix has no newline; only new text can complete a record.
+      const hasNewline = decoded.includes("\n");
+      let newline = hasNewline ? buffer.indexOf("\n") : -1;
       while (newline >= 0) {
         const line = buffer.slice(0, newline).trim(); buffer = buffer.slice(newline + 1);
         if (line) yield* decodeEventLine(line);
         newline = buffer.indexOf("\n");
       }
-      const residualBytes = encoder.encode(buffer).byteLength;
-      const residualReservation = budget.reserveTransient(residualBytes, { kind: "live_transient" });
-      residualReservation.commitRetained();
-      budget.releaseRetained(bufferBytes, { kind: "live_transient" });
-      bufferBytes = residualBytes;
+      if (hasNewline) resizeBuffer(encoder.encode(buffer).byteLength);
       if (done) break;
     }
     const final = buffer.trim();
@@ -542,17 +564,13 @@ function requestWithoutReasoningEffort(request: AdapterRequest): AdapterRequest 
 
 /** The upstream's plan refusal prefix; `MODEL_NOT_IN_PLAN_OTHER` and later mentions do not count. */
 const COMMAND_CODE_PLAN_REFUSAL = /^MODEL_NOT_IN_PLAN(?::|$)/;
-/** A model id the message may quote; anything else is described without repeating it. */
-const DISPLAYABLE_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
-
 /**
  * Fixed client copy for a plan refusal. The upstream detail is never quoted: it is free text this
  * proxy does not control, and quota or reasoning-effort words in it would steer the downstream
  * classifiers (quota recording, effort repair) on a refusal that no resend can change.
  */
-function commandCodePlanRefusalMessage(modelId: string | undefined): string {
-  const model = modelId && DISPLAYABLE_MODEL_ID.test(modelId) ? `the model "${modelId}"` : "the requested model";
-  return `Command Code refused ${model}: this account's plan does not include it (MODEL_NOT_IN_PLAN). `
+function commandCodePlanRefusalMessage(model: ClientFacingModelLabel): string {
+  return `Command Code refused ${clientFacingModelText(model)}: this account's plan does not include it (MODEL_NOT_IN_PLAN). `
     + "Choose a model the plan includes or change the Command Code plan; retrying this request will not succeed.";
 }
 
@@ -584,7 +602,7 @@ async function normalizeCommandCodePlanRefusal(
     headers.set("x-opencodex-upstream-status", "403");
     headers.set("x-opencodex-refusal", MODEL_NOT_IN_PLAN_REFUSAL_MARKER);
     const refusal = new Response(JSON.stringify({ error: {
-      type: "invalid_request_error", code: MODEL_NOT_IN_PLAN_CODE, message: commandCodePlanRefusalMessage(modelId),
+      type: "invalid_request_error", code: MODEL_NOT_IN_PLAN_CODE, message: commandCodePlanRefusalMessage(clientFacingModelLabel(undefined)),
     } }), { status: 400, statusText: "Bad Request", headers });
     // Identity is the provenance dispatch, combo and policy fallback check; the header is diagnostic.
     markVerifiedModelNotInPlanResponse(refusal);

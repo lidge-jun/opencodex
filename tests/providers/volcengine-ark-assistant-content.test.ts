@@ -34,9 +34,9 @@ interface ChatMsg {
   tool_call_id?: string;
 }
 
-function wire(provider: OcxProviderConfig, messages: OcxMessage[]): ChatMsg[] {
+function wire(provider: OcxProviderConfig, messages: OcxMessage[], modelId = "kimi-k3"): ChatMsg[] {
   const parsed: OcxParsedRequest = {
-    modelId: "kimi-k3",
+    modelId,
     context: { messages },
     stream: false,
     options: {},
@@ -136,5 +136,29 @@ describe("Volcengine Ark empty assistant content (#796)", () => {
     const genericReasoning = providerFor("https://example.test/v1");
     genericReasoning.preserveReasoningContentModels = ["kimi-k3"];
     expect(assistantsOf(wire(genericReasoning, reasoningHistory))[0].content).toBe("");
+  });
+
+  for (const modelId of ["kimi-k3-1-pro", "kimi-k3-1-pro-261024"]) {
+    test(`${modelId} replays tool, orphan and reasoning-only turns with string content`, () => {
+      const assistant = assistantsOf(wire(ark, history, modelId))[0];
+      expect(assistant.content).toBe("");
+      expect(assistant.tool_calls).toHaveLength(1);
+      expect(assistantsOf(wire(ark, history.slice(2), modelId))[0].content).toBe("");
+      const reasoning: OcxMessage[] = [
+        { role: "assistant", content: [{ type: "thinking", thinking: "deliberating" }], timestamp: 0 },
+      ];
+      const replay = assistantsOf(wire({ ...ark, preserveReasoningContentModels: [modelId] }, reasoning, modelId))[0];
+      expect(replay.content).toBe("");
+      expect(replay.reasoning_content).toBe("deliberating");
+      expect(assistantsOf(wire(arkCodingPlan, history, modelId))[0].content).toBe("");
+      expect(assistantsOf(wire(generic, history, modelId))[0].content).toBe("");
+    });
+  }
+
+  test("Kimi matching follows the model ID sent upstream", () => {
+    const bracketed = "kimi-k3-1-pro-261024[1m]";
+    expect(assistantsOf(wire({ ...ark, modelSuffixBracketStrip: true }, history, bracketed))[0].content).toBe("");
+    expect(assistantsOf(wire(ark, history, bracketed))[0].content).toEqual([{ type: "text", text: "" }]);
+    expect(assistantsOf(wire(ark, history, "kimi-k3-1-pro-261024-extra"))[0].content).toEqual([{ type: "text", text: "" }]);
   });
 });

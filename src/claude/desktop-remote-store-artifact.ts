@@ -5,7 +5,7 @@ import { readServiceApiTokenState, readTokenBackupState, serviceApiTokenFingerpr
 import { profilePath, type Desktop3pMetadata } from "./desktop-3p-library";
 import { StoreIO, metadata, storePaths, MAX_DESKTOP_METADATA_ENTRIES, type JsonFile } from "./desktop-remote-store-io";
 import {
-  DesktopStoreError, digest, origin, parseBaseline, parseDisconnect, parseOwner, parseState, projection, projectionHash, mergeProjection,
+  DesktopStoreError, canonical, digest, origin, parseBaseline, parseDisconnect, parseOwner, parseState, projection, projectionHash, mergeProjection,
   sameOwner, type ArtifactPending, type Baseline, type DesktopRemoteOwner, type Projection, type StoreState,
 } from "./desktop-remote-store-state";
 
@@ -125,7 +125,7 @@ export function establish(io: StoreIO, owner: DesktopRemoteOwner, known: readonl
   return bundle;
 }
 
-export function artifact(io: StoreIO, bundle: Bundle, next: Projection, kind: ArtifactPending["kind"], tokenFingerprint: string, desiredSelection?: string | null): void {
+export function artifact(io: StoreIO, bundle: Bundle, next: Projection, kind: ArtifactPending["kind"], tokenFingerprint: string, desiredSelection?: string | null, overwriteConflict = false): void {
   const state = bundle.state!;
   const targetPath = profilePath(bundle.paths.library, state.targetId);
   let current = io.read(targetPath);
@@ -143,7 +143,18 @@ export function artifact(io: StoreIO, bundle: Bundle, next: Projection, kind: Ar
     if (pending.kind !== kind || pending.after !== after || pending.tokenFingerprint !== tokenFingerprint
       || (before !== pending.before && before !== pending.after)) throw new DesktopStoreError("conflict");
     if (kind === "apply" && selection !== pending.beforeSelection && selection !== pending.afterSelection) throw new DesktopStoreError("conflict");
-  } else if (before !== state.lastProjectionHash) throw new DesktopStoreError("conflict");
+  } else if (before !== state.lastProjectionHash) {
+    // Consent covers only edited fields of the selected, settled, already-owned row.
+    // Owner, path, metadata, token and pending-transaction checks remain mandatory.
+    if (!overwriteConflict || kind !== "apply" || state.phase !== "active" || !current
+      || !existing || selection !== state.targetId) throw new DesktopStoreError("conflict");
+    const snapshotPath = join(bundle.paths.root, "overwrites", `${current.hash}.json`);
+    const snapshot = io.read(snapshotPath, 1024 * 1024, true);
+    if (snapshot && canonical(snapshot.value) !== canonical(current.value)) throw new DesktopStoreError("conflict");
+    if (!snapshot) io.write(snapshotPath, current.value, null);
+    // artifact's ordinary pending record now journals this exact edited preimage.
+    io.compare(targetPath, current);
+  }
   const afterSelection = desiredSelection === undefined ? selection : desiredSelection;
   const settledPhase = kind === "restore" ? "restored" : "active";
   if (!pending && existing && before === after && afterSelection === selection

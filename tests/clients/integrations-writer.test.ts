@@ -15,6 +15,7 @@ import {
   applyIntegration,
   disableIntegration,
   overwriteIntegration,
+  refreshIntegration,
   restoreIntegration,
   type IntegrationWriteInput,
 } from "../../src/integrations/writer";
@@ -1630,5 +1631,31 @@ describe("the managed file size bound", () => {
     }
     expect(readFileSync(configPath, "utf8")).toBe(seed);
     expect(readIntegrationState(input({ clientId: "pi" })).state).toBe("absent");
+  });
+});
+
+describe("omo dialect opt-in (#7431)", () => {
+  const RESPONSES = { ...CONFIG, omoClientExport: { api: "openai-responses" } } as OcxConfig;
+  const FOREIGN = { baseUrl: "http://elsewhere/v1", api: "anthropic-messages", apiKey: "OTHER_KEY", models: [] };
+
+  test("refresh keeps the Responses dialect and leaves foreign provider rows alone", () => {
+    const configPath = installOmo();
+    writeFileSync(configPath, JSON.stringify({ providers: { other: FOREIGN } }, null, 2) + "\n");
+    expect(applyIntegration(input({ clientId: "omo", config: RESPONSES })).ok).toBe(true);
+    const refreshed = refreshIntegration(input({ clientId: "omo", config: RESPONSES }));
+    expect(refreshed.ok).toBe(true);
+    const written = JSON.parse(readFileSync(configPath, "utf8"));
+    expect(written.providers.opencodex.api).toBe("openai-responses");
+    expect(written.providers.other).toEqual(FOREIGN);
+  });
+
+  test("dropping the opt-in writes Chat again on the next refresh, and disable keeps foreign rows", () => {
+    const configPath = installOmo();
+    writeFileSync(configPath, JSON.stringify({ providers: { other: FOREIGN } }, null, 2) + "\n");
+    expect(applyIntegration(input({ clientId: "omo", config: RESPONSES })).ok).toBe(true);
+    expect(refreshIntegration(input({ clientId: "omo" })).ok).toBe(true);
+    expect(JSON.parse(readFileSync(configPath, "utf8")).providers.opencodex.api).toBe("openai-completions");
+    expect(disableIntegration(input({ clientId: "omo" })).ok).toBe(true);
+    expect(JSON.parse(readFileSync(configPath, "utf8")).providers).toEqual({ other: FOREIGN });
   });
 });

@@ -9,6 +9,7 @@ import { redactUserPath } from "../lib/redact";
 import { enrichProviderFromCatalog } from "../oauth/key-providers";
 import { deriveInitProviders } from "../providers/derive";
 import { pinSponsorsWithinKind } from "../providers/sponsor-order";
+import { maybeShowTelemetryPrompt } from "./telemetry";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 
 /** Parse a setup TCP port; only an empty answer selects the default. */
@@ -257,9 +258,9 @@ export async function runInit(): Promise<void> {
     prompt.throwIfCancelled();
     if (shimAnswer.trim().toLowerCase() !== "n") {
       try {
-        const { installCodexShim } = await import("../codex/shim");
+        const { installCodexShimAsync } = await import("../codex/shim");
         prompt.throwIfCancelled();
-        const result = installCodexShim();
+        const result = await installCodexShimAsync();
         console.log(result.installed ? `✅ ${result.message}` : `⚠️  ${result.message}`);
       } catch (err) {
         if (err instanceof InitCancelledError) throw err;
@@ -292,5 +293,8 @@ export async function runInit(): Promise<void> {
     }
   } finally {
     prompt.close();
+  }
+  if (configCreated && !process.exitCode) {
+    await maybeShowTelemetryPrompt();
   }
 }

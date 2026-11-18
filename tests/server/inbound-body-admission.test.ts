@@ -21,6 +21,7 @@ import {
   UNGATED_LOOPBACK_ROUTES,
 } from "../../src/server/inbound-body-admission";
 import { configureInboundBodyBudget, createInboundBodyBudget, inboundBodyBudget } from "../../src/server/inbound-body-budget";
+import { OLLAMA_JSON_BODY_ROUTES } from "../../src/server/ollama-native-paths";
 import { drainAndRemoveFixtureRoots } from "../helpers/fixture-teardown";
 import { saturateInboundBodyBudget } from "../helpers/inbound-body-budget";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -38,7 +39,7 @@ function fixtureAdmission(...args: Parameters<typeof withRaisedInboundBodyAdmiss
 const RAISED_BODY_LIMIT = MAX_CONFIGURABLE_INBOUND_BODY_BYTES;
 // Read the gate's own set rather than a second copy: a route added to admission
 // without protocol coverage, or covered here but never admitted, must not pass.
-const raisedBodyPaths = [...CONFIGURABLE_JSON_BODY_ROUTES];
+const raisedBodyPaths = [...CONFIGURABLE_JSON_BODY_ROUTES, ...OLLAMA_JSON_BODY_ROUTES];
 /** Synchronize upload and producer milestones without timer-based ordering. */
 function bodyDeferred() {
   let resolve!: () => void;
@@ -590,7 +591,7 @@ describe("raised inbound body admission lifetime", () => {
   }
 
   for (const normalized of [false, true]) {
-    test(`retains measured JSON bytes with translator normalization ${normalized}`, async () => {
+    test(`retains normalized JSON bytes with translator budget ${normalized}`, async () => {
       const text = "1e20";
       const req = admissionRequest("/v1/responses", text);
       const translator = normalized ? createTranslatorBudget() : undefined;
@@ -601,8 +602,31 @@ describe("raised inbound body admission lifetime", () => {
           assert.equal(await readJsonRequestBody(req, translator, RAISED_BODY_LIMIT), 1e20);
           return new Response("held");
         }, req);
-        const expected = normalized ? Buffer.byteLength(JSON.stringify(1e20)) : Buffer.byteLength(text);
+        const expected = Buffer.byteLength(JSON.stringify(1e20));
         assert.deepEqual(testBudget.snapshot(), { reservedBytes: expected, activeLeases: 1, queuedRequests: 0 });
+        await response.text();
+      } finally {
+        await response?.body?.cancel().catch(() => undefined);
+        translator?.dispose();
+      }
+    });
+  }
+
+  for (const normalized of [false, true]) {
+    test(`measures a deeply nested valid JSON body with translator budget ${normalized}`, async () => {
+      // Deeper than the call stack allows a recursive serializer to walk, and well under the limit.
+      const depth = 500_000;
+      const text = "[".repeat(depth) + "]".repeat(depth);
+      const req = admissionRequest("/v1/responses", text);
+      const translator = normalized ? createTranslatorBudget() : undefined;
+      let response: Response | undefined;
+      try {
+        response = await admittedBodyWork(async () => {
+          assert.equal(Array.isArray(await readJsonRequestBody(req, translator, RAISED_BODY_LIMIT)), true);
+          return new Response("held");
+        }, req);
+        assert.equal(response.status, 200);
+        assert.deepEqual(testBudget.snapshot(), { reservedBytes: text.length, activeLeases: 1, queuedRequests: 0 });
         await response.text();
       } finally {
         await response?.body?.cancel().catch(() => undefined);
@@ -815,6 +839,12 @@ describe("raised inbound body admission at the real HTTP boundary", () => {
         });
         assert.equal(response.status, 503, path);
         assert.equal(response.headers.get("retry-after"), "1", path);
+        if (OLLAMA_JSON_BODY_ROUTES.has(path)) {
+          // Native clients get their own error shape; the refusal still owns one logged row.
+          assert.deepEqual(await response.json(), { error: "server temporarily unavailable; retry later" }, path);
+          assert.match(response.headers.get("x-opencodex-request-id") ?? "", /^ocx-/, path);
+          continue;
+        }
         const payload = await response.json() as { type?: string; error: { type: string; code: string } };
         assert.equal(payload.error.code, "server_busy", path);
         assert.equal(payload.error.type, path.startsWith("/v1/messages") ? "overloaded_error" : "server_error", path);

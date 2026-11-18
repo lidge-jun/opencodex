@@ -19,6 +19,13 @@ The server composition root registers it synchronously at startup; a successful 
 updates activation, including enable after startup and disable/reset. The runtime is loaded only
 when an active factory is used, so its process-local ledger is not constructed by an inactive
 install. `sidecar-execution.ts` reads the core-owned slot, not Advisor settings or runtime.
+Request-scoped copies of the live config, such as the Claude replay config `/v1/messages` passes to
+the Responses pipeline, are linked with `linkAdvisorPlanConfig` so they resolve the live config's
+factory at lookup time. The view's `advisor` reads through to the live config, so a consent
+revocation after the copy still blocks outbound transfer up to dispatch: the runtime rechecks
+consent immediately before the loopback call, and a revocation after that call has been dispatched
+neither cancels it nor retracts context already sent
+(`tests/advisor/advisor-messages-replay-config.test.ts`).
 Advisor settings admit the complete synchronous candidate/read/patch/save/activation phase through the [config admission contract](config.md). Production uses the current disk candidate when present, preserving unrelated disk edits during admission. Successful saves adopt the committed Advisor subtree and its field-scoped live baseline together, including known absence after reset, without advancing unrelated pending live edits. Fallback or error-bearing diagnostics are refused before mutation. Deadline refusal leaves live and durable settings untouched and retains the existing `write_failed` response. Successful receipts are serialized in that callback before another settings mutation can run.
 Management loads `advisor-routes.ts` only for the Advisor namespace. The guard is attached through
 `_advisorGuard`. `tests/advisor/advisor-core-boundary.test.ts` enforces the transitive load-time
@@ -59,8 +66,41 @@ multi-call pairing, overlap and lifecycle release.
   applies, but the synthetic tool is never injected because the run-turn loop cannot intercept it.
 - Native OpenAI passthrough: no advisor support in PR1. The request path is byte-identical to a
   proxy without the advisor; the limitation is documented, not silently degraded.
-- Turns claimed by the web-search or image/video sidecar loops keep the advisor tool un-injected;
-  preflight still applies.
+- Fetch-based web-search turns: full manual support. `createAdvisorSidecarStep` shares the same
+  consultation and continuation bounds with the normal guard. The search scanner consumes advisor
+  calls alongside `web_search`, fulfills them in worker order, and replays paired results without
+  exposing the synthetic call to the client. The synthetic tool and scanner are enabled only when
+  the request's effective `tool_choice` permits Advisor; an `allowed_tools` scope that permits only
+  web search cannot be widened into an expert consultation. Without an active Advisor sidecar,
+  an emitted `advisor` call is refused before its ID or arguments reach the client unless that
+  iteration declares and permits it as an ordinary client tool. Partial calls are refused at
+  their start, and the terminal refusal retains worker usage. Synthetic permission is also
+  iteration-scoped: tools-disabled empty-answer recovery refuses Advisor even when the original
+  turn installed the sidecar; ordinary exhausted-Advisor iterations retain paired limit handling.
+  Mixed real client calls still end
+  interception. Search and Advisor iterations have independent allowances within one hard loop cap;
+  consultation waits emit heartbeats and share the loop's cancellation signal. `advisor-responses-wiring.test.ts`
+  covers search-enabled, mixed-call, real-client-call and repeated-consultation paths. The limit
+  reports accumulated worker usage once, without attaching it again to the terminal error;
+  `tests/advisor/advisor-web-search.test.ts` covers the accounting and independent allowances.
+- Turns claimed by the image/video sidecar loops keep the advisor tool un-injected; preflight still applies.
+
+## Claude Code's typed Advisor server tool
+
+Claude Code also declares Anthropic's own Advisor server tool (`advisor_YYYYMMDD`, beta
+`advisor-tool-2026-03-01`), which Anthropic runs server-side under the same wire name `advisor`.
+The two never share a turn. When this sidecar injects its synthetic tool,
+`src/server/responses/sidecar-execution.ts` removes the declaration for the whole turn, so a later
+web-search iteration without the synthetic tool cannot forward it either, and records the protocol
+reason `advisor-tool-shadowed-by-proxy-advisor` for a destination that would otherwise receive it.
+`planAnthropicServerTools` (`src/adapters/anthropic/advisor-tool.ts`) also withholds the completed
+Advisor history and the beta while a function tool named `advisor` owns the name, the same rule that
+keeps the web-search sidecar's `web_search` ahead of a typed search. With
+this sidecar off, the declaration reaches first-party Anthropic, or a gateway with
+`forwardAdvisorTool: true`, and its blocks round-trip to the client. Destination, replay and scope
+rules are in [providers and adapters](providers-and-adapters.md);
+`tests/claude-integration/claude-translated-advisor-tool.test.ts` covers both sides of the precedence
+through the Responses core.
 
 ## Recursion fence (server-owned authority)
 
@@ -85,13 +125,70 @@ The loopback call re-enters the normal data plane, so model resolution, provider
 mapping, and usage accounting are the routing authority's job. Any model string the router
 accepts works as the advisor: a bare native model, an explicit `provider/model`, or an
 account-qualified native model. The advisor never builds its own router and never touches
-provider credentials. `src/server/advisor-admission-scope.ts` carries the originating request's
-immutable provider/model admission scope over the loopback hop as capability-authenticated
-metadata and remains authoritative for every final
-physical Advisor destination, including alias, policy, combo, and retry resolution; the local
-transport credential cannot widen it.
+provider credentials. `src/server/capture-admission-policy.ts` freezes a credential-free copy of
+the caller's model scope, metered consent class, fallback policy and resolved device ids at HTTP
+authentication, before any inbound-body capacity wait or body parsing; `src/server/index/serve-options.ts`
+hands that snapshot to the Responses, Chat, Messages and compact handlers. WebSocket turns capture
+before dispatch; policy-profile retries retain the outer owner's snapshot. Compact retains it through
+native retries and routed Responses/JEV handoffs. `src/types/admission-policy.ts` defines these decision inputs.
+`src/server/advisor-admission-scope.ts` holds them in a process-local registry for one consultation.
+Its random 256-bit handle is honored only beside the current process-owned capability; unknown
+or missing handles are refused. Consultation completion or failure releases the entry; abort
+revokes it immediately, even while transport work is still settling. Registration owns a frozen copy.
+The bounded scope envelope remains validated separately. Neither handle nor capability is sent upstream.
+
+Routed vision carries the same frozen policy through its plan and a scoped registry entry. Its
+separate sidecar capability header authenticates inheritance without suppressing Advisor on the helper.
+Chat intersects that registration with the host snapshot captured at authentication; missing or
+expired registrations presented with a valid capability are refused. Completion, failure and abort
+release the entry. Ordinary client headers cannot grant inherited policy authority.
+A loopback listener (a loopback bind or the secondary loopback listener) admits the self-fetch before
+reading any token, so that snapshot carries no key limits. After the capability and registration
+are validated, Chat therefore also resolves the `x-opencodex-api-key` the self-fetch presents and
+intersects that key's scope, paid-combo consent and fallback device identity; a presented credential
+the data plane does not recognize is refused. Other loopback callers keep plain loopback admission.
+`tests/advisor/advisor-caller-policy-host-key.test.ts` drives both loopback ingress shapes.
+Senders pick that credential with `selfFetchAdmissionToken` (`src/lib/local-destinations.ts`): the
+unchanged ladder where the destination requires admission, otherwise only the first ladder credential
+this data plane recognizes, so a hub client key a loopback bind left out of its admission credentials
+is not sent. When a loopback listener admitted the hop, `selfFetchHostPolicy` takes paid-combo
+consent from the validated key instead of the loopback default a public bind always refuses; the
+combo's own opt-in and the caller's consent still bind, and the hop keeps loopback transport identity.
+`tests/advisor/advisor-caller-policy-self-fetch.test.ts` covers both on the real listener.
+
+The host keeps its admission identity and adds the captured caller constraints. Shared scope,
+metered-consent and fallback guards require the intersection of caller and host policy for every
+resolved destination, combo pick (including router-collapsed picks), proactive/reactive fallback
+and child invocation. Nested JEV decision turns retain that same admission. Scope intersection
+checks each original scope, preserving bare and provider-qualified model semantics. Later edits
+or removal of the caller's key or fallback settings cannot broaden the frozen decision inputs.
+`tests/advisor/advisor-caller-policy.test.ts` exercises these constraints through real handlers.
+`tests/advisor/advisor-caller-policy-routing.test.ts` covers laptop provider-fallback refusals,
+native combo dispatch, early capture, external forgeries and worker-unavailable delivery.
+`advisor-caller-policy-ingress.test.ts` and `advisor-caller-policy-http.test.ts` widen live config during body reads and capacity waits.
+`advisor-caller-policy-vision.test.ts`, `advisor-caller-policy-replay.test.ts` and
+`advisor-caller-policy-compact.test.ts` cover routed helpers, policy candidates and compact JEV turns;
+`advisor-caller-policy-sidecar-authority.test.ts` covers sidecar capability admission and registration lifetime.
 
 ## Context and safety boundaries
+
+`advisor.contextMode` defaults to `context`. With `question-only`, the consultation sends only a
+fixed question-only system instruction and the worker's trimmed `question` (at most 2,000 Unicode
+code points plus a truncation notice). No task, transcript, tool catalog, worker identity or repair
+evidence is attached. The protocol guard and builder share `src/server/responses/advisor-question.ts`:
+clipping preserves surrogate pairs, scans only through the first excess code point and is idempotent.
+`buildAdvisorUserPrompt` returns before reading parsed task state. The
+synthetic tool requires a self-contained string question. Its schema omits length constraints so
+Google's `reject-lossy` policy can accept it; the runtime enforces nonempty input and the shared bound.
+Both the runtime and low-level consultation
+executor reject empty questions without dispatch. The runtime re-reads the mode before dispatch.
+Its synchronous admission hook also prevents invalid question-only calls from consuming the guard's
+consultation allowance. Worker continuations retain their independent hard limit, including invalid calls.
+Automatic preflight and adaptive repair consultation are disabled in this mode because they have
+no worker-written question. Existing consent, request limits and adaptive task budgets still apply.
+The management API, CLI `--context-mode` and dashboard checkbox configure the same field.
+The CLI capability registry publishes the flag and automation exception in the generated `skills/ocx/` operating reference.
+`tests/advisor/advisor-consult.test.ts` checks real loopback request equality across history sizes.
 
 **Context-sharing consent is required before any of that transfer.** `advisor.enabled` does not
 grant it. The operator records `advisor.contextSharingConsent: "v1"` from the dashboard checkbox,
@@ -141,9 +238,8 @@ substring search. Automatic preflight is not decided from developer-message text
 manual tool result is a separate provenance check; every other history form — ordinary tool
 output, developer text, user text, and failure notices (`<opencodex_advisor_unavailable>`) —
 matches nothing. The guard never composes failure prose itself: `AdvisorPlan.formatUnavailable`
-owns that text and neutralizes untrusted fragments. Upstream HTTP failures are logged as a
-status code only, so an error body that echoes the prompt is not written to the worker context
-or the log line.
+owns that text and neutralizes untrusted fragments. Upstream HTTP failures use a status code only; transport exceptions use a fixed failure category.
+Neither upstream error bodies nor exception messages enter worker context or consultation logs.
 
 Keys are SHA-256 digests, never a short fold and never raw text: one domain-separated digest
 over `conversation identity + task boundary + worker model`, where the task boundary digests the
@@ -277,7 +373,9 @@ request under the advisor model. Consultation usage is never merged into the wor
 usage; intercepted worker legs are, via the same usage-merge rule the terminal guard applies.
 
 `src/advisor/activity.ts` holds config-scoped process memory: at most 100 records, at most 24
-hours old, with pruning on access and no timer. `GET /api/advisor/activity` and `ocx advisor
+hours old, with pruning on access and no timer. The store is keyed by the LIVE config object, so a
+request that runs on a linked view (the Claude replay config) records into the feed the management
+route reads. `GET /api/advisor/activity` and `ocx advisor
 activity` expose trigger, status, models, requested/mapped effort, duration and reported tokens.
 There are no task bodies, commands, advice, conversation identifiers or provider error bodies
 in these records. Dashboard polling runs only while its page is visible. Restart clears activity,

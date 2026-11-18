@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "listenerPort": 20100,
+  "links": [
+    {
+      "id": "lnk_0123456789abcdef",
+      "alias": "pen-alpha",
+      "direction": "hub-initiated",
+      "hostKeyFingerprint": "SHA256:ABCDEFGHIJKLMNOP",
+      "tunnelPort": 10100,
+      "apiKeyId": "data-key-id",
+      "createdAt": "2026-09-25T00:00:00.000Z",
+      "remotePlatform": "posix",
+      "childKind": "full"
+    },
+    {
+      "id": "lnk_fedcba9876543210",
+      "alias": "beta",
+      "direction": "client-initiated",
+      "hostKeyFingerprint": null,
+      "tunnelPort": 10101,
+      "apiKeyId": "data-key-id-2",
+      "createdAt": "2026-09-26T00:00:00.000Z"
+    }
+  ]
+}

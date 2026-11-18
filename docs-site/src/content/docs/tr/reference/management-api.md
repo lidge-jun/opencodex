@@ -12,6 +12,8 @@ Etkileşimli bir istemci için [Web Kontrol Panelini](/tr/guides/web-dashboard/)
 veya otomasyon oluştururken bu referansı kullanın. Kalıcı değerler nihai olarak
 [Yapılandırma](/tr/reference/configuration/) bölümünü takip eder.
 
+<a id="authentication-model"></a>
+
 ## Kimlik doğrulama modeli
 
 Yönetim API'sinin, veri düzlemi API anahtarlarından bağımsız kendi yönetici
@@ -103,11 +105,11 @@ Doğrulanamayan kullanım HTTP 502, `error.code: "attempt_unresolved"` ve geçer
 Claude kullanım sıfırlamaları **Providers > Anthropic > Accounts** üzerinden aynı
 şekilde çalışır. Oturum açmış her hesap satırında kalan sıfırlamaları gösteren
 bir bilet rozeti bulunur; iletişim kutusu ikinci bir onaydan sonra bir sıfırlama
-kullanır. Sıfırlama, haftalık sıfırlama gününü değiştirmeden 5 saatlik ve
-haftalık limitleri yeniler. Bir talep zamanında yanıt vermezse iletişim kutusu
+kullanır. Her sıfırlama hakkının kendi son kullanma tarihi ve sıfırladığı limitler olduğundan iletişim kutusu hangisinin kullanılacağını seçtirir: şu anda kullanılabilen ve ilk sona eren hak önceden seçilir, şu anda kullanılamayan haklar gerekçeleriyle birlikte devre dışı gösterilir ve onay adımı o `grantId` gönderilmeden önce seçilen hakkın adını, son kullanma tarihini ve sıfırladığı limitleri gösterir. Sunucu seçilen hakkı yeniden denetler ve kullanılamayan bir hakkı `409 grant_not_usable` ile reddeder. Sıfırlama, haftalık sıfırlama gününü değiştirmeden o hakkın sıfırladığı limitleri (genellikle 5 saatlik ve
+haftalık limitleri) yeniler. Bir talep zamanında yanıt vermezse iletişim kutusu
 `operationId` değerini korur ve on dakika boyunca aynı kimlikle yeniden deneme
 olanağı sunar; Claude Code istemcisi de bu şekilde toparlanır. Bu süre içinde
-aynı sıfırlama hakkı için yeni bir işlem reddedilir. Sıfırlama yalnızca kontrol
+o hesapta hangi sıfırlama hakkı için olursa olsun yeni bir işlem reddedilir. Sıfırlama yalnızca kontrol
 panelinden kullanılabilir: tek başına yönetici belirteci `403 session_required`
 yanıtını alır.
 
@@ -296,15 +298,19 @@ Güvenilir ilk model listesi hazır olana kadar `/api/selected-models` ve `/api/
 | `GET /api/oauth/status` | Bir sağlayıcının OAuth akışını yoklayın | 400 bilinmeyen sağlayıcı |
 | `POST /api/oauth/logout` | Seçilen sağlayıcı kimlik bilgisini kaldırın | 400 bilinmeyen sağlayıcı; `oauth_mutation_busy` |
 | `GET, DELETE /api/oauth/accounts` | Maskelenmiş hesapları listeleyin veya bir hesabı kaldırın Kiro satırları otomatik seçimden dışlandığında `autoSelectable` ve kapalı bir `skipReason` taşır; tek etkin hesap yine istek gönderebilir. Kota isteğe bağlıdır. | 400 geçersiz sağlayıcı/kimlik; 404 hesap eksik; `oauth_mutation_busy` |
-| `PUT /api/oauth/accounts/active` | Aktif OAuth hesabını seçin | 400 geçersiz sağlayıcı/hesap; `oauth_mutation_busy` |
+| `PUT /api/oauth/accounts/active` | Aktif OAuth hesabını seçin | 400 geçersiz sağlayıcı/hesap; `oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `selectionCommitted: true`, `retryable: true`; hesap seçimi kaydedildi; hesap etkin olsa bile aynı isteği yeniden gönderin) |
 | `GET, PUT, PATCH /api/oauth/accounts/pool` | Anthropic OAuth havuz politikasını okuyun veya güncelleyin | 400 Anthropic olmayan sağlayıcı veya geçersiz politika |
 | `POST /api/oauth/accounts/clear-cooldown` | Bir OAuth hesabının çalışma zamanı soğuma süresini temizleyin | 400 geçersiz sağlayıcı/hesap |
 | `PUT /api/oauth/accounts/alias` | Bir OAuth hesap takma adını ayarlayın veya temizleyin | 400 geçersiz sağlayıcı/hesap/takma ad |
-| `PUT /api/oauth/accounts/pause` | Anthropic veya genel OAuth hesabını duraklatın/sürdürün. Body `{ provider, accountId, paused }`; etkin hesap duraklatıldığında varsa kullanılabilir başka hesaba geçilir. | 400 desteklenmeyen sağlayıcı veya geçersiz body; 404 hesap yok; `oauth_mutation_busy` |
+| `PUT /api/oauth/accounts/pause` | Anthropic veya genel OAuth hesabını duraklatın/sürdürün. Body `{ provider, accountId, paused }`; etkin hesap duraklatıldığında varsa kullanılabilir başka hesaba geçilir. | 400 desteklenmeyen sağlayıcı veya geçersiz body; 404 hesap yok; `oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `pauseCommitted: true`, `retryable: true`; duraklatma durumu kaydedildi; hesabı ve durumu koruyup `retryAffinityReset: true` ekleyerek yeniden deneyin; sunucu yeniden başlatıldıktan sonra da sıfırlama doğrulanır) |
 | `GET, POST, DELETE /api/providers/keys` | Maskelenmiş sağlayıcı anahtarlarını listeleyin, bir tane ekleyin/etkinleştirin veya kaldırın | 400 geçersiz girdi; 404 sağlayıcı/anahtar eksik |
 | `PUT /api/providers/keys/active` | Bir sağlayıcının etkin anahtarını seçin | 400 geçersiz girdi; 404 sağlayıcı/anahtar eksik |
 | `PUT /api/providers/keys/alias` | Bir sağlayıcı anahtarı takma adını ayarlayın veya temizleyin | 400 geçersiz girdi; 404 sağlayıcı/anahtar eksik |
+| `PUT /api/providers/keys/pause` | Bir sağlayıcı API anahtarını duraklatın veya sürdürün. Body `{ name, id, paused }`; etkin anahtar duraklatıldığında halka sırasına göre bir sonraki kullanılabilir anahtar seçilir. Başarılı yanıtta sonuç `activeAccountId` (veya `null`) ve `activeAccountChanged` yer alır. | 400 geçersiz girdi; 404 sağlayıcı/anahtar eksik |
 | `GET, POST, PATCH, DELETE /api/keys` | Veri düzlemi kabul anahtarlarını listeleyin, oluşturun, düzenleyin veya silin | 400 geçersiz gövde/kimlik; 404 anahtar eksik |
+| `PUT /api/oauth/accounts/affinity-reset` | Hesap gerektirmeden provider konuşma bağlantılarının sıfırlanmasını doğrulayın. Body `{ provider }`; başarı: `affinityResetConfirmed: true`. CLI: `ocx account reset-affinity anthropic --json` (`anthropic2` supported). | 400 invalid body/provider; 503 `affinity_reset_not_persisted`, `retryable: true` |
+
+Pano, hesap kaybolsa bile sıfırlamanın kaydedildiği doğrulanana kadar uyarıyı korur. Yükleme hatası, duraklatma veya yeniden giriş gereksinimi denemeyi silmez. Hesabın yokluğu listeden doğrulandığında Yeniden Dene, `{ provider }` ile `PUT /api/oauth/accounts/affinity-reset` çağırır; uyarı yalnızca `affinityResetConfirmed: true` ile kaldırılır. Bu işlem ilk hatadan sonra oluşanlar dahil tüm bağlantıları temizler, hesap seçmez veya devam ettirmez ve boş listede de çalışır. Bekleyen sıfırlama varken silme `retryAffinityReset=true` gönderir; kayıt hatası 503 `affinity_reset_not_persisted`, `deletionCommitted: true` ve `retryable: true` döndürür. Hesap zaten silinmiştir: silmeyi değil yalnızca sıfırlamayı yeniden deneyin. Normal silme kalan hesapların bağlantılarını korur. İşlem kayıtlı Anthropic OAuth örnekleriyle sınırlıdır ve mevcut yönetim kimlik doğrulaması ile kaynak kontrollerini korur.
 
 Kimlik bilgisi listesi yanıtları kasıtlı olarak maskelenir. OAuth erişim
 belirteçleri ve eksiksiz sağlayıcı API anahtarları kontrol paneli istemcilerine

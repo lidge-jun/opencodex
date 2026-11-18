@@ -231,7 +231,8 @@ describe("new-model policy", () => {
       });
       expect(changed).toBe(true);
       expect(config.disabledModels).toBeUndefined();
-      expect(config.modelDiscovery!.recentArrivals!.vendor).toEqual([{ id: "b", at: now }]);
+      // #8236: every new row records whether the policy disabled it, so the status can tell.
+      expect(config.modelDiscovery!.recentArrivals!.vendor).toEqual([{ id: "b", at: now, disabledByPolicy: false }]);
     });
 
     test("an explicit disabled choice survives a provider on override", () => {
@@ -244,5 +245,64 @@ describe("new-model policy", () => {
       });
       expect(config.disabledModels).toEqual(["vendor/b"]);
     });
+  });
+});
+
+describe("#8236 opt-in admit for custom selections", () => {
+  const baseline = { ids: ["a"], removed: [], updatedAt: now };
+
+  test("admit hands every new id to a custom selection and disables nothing", () => {
+    const r = applyNewModelPolicy({ provider: "vendor", discoveredIds: ["a", "d"], baseline, policy: "admit", hasSelectedModels: true, customSelection: true, now });
+    expect(r.idsToAdmit).toEqual(["d"]);
+    expect(r.slugsToDisable).toEqual([]);
+  });
+
+  test("admit leaves preset and unselected providers alone, and the default policy admits nothing", () => {
+    expect(applyNewModelPolicy({ provider: "vendor", discoveredIds: ["a", "d"], baseline, policy: "admit", hasSelectedModels: true, customSelection: false, now }).idsToAdmit).toEqual([]);
+    expect(applyNewModelPolicy({ provider: "vendor", discoveredIds: ["a", "d"], baseline, policy: "admit", now }).idsToAdmit).toEqual([]);
+    expect(applyNewModelPolicy({ provider: "vendor", discoveredIds: ["a", "d"], baseline, policy: "on", hasSelectedModels: true, customSelection: true, now }).idsToAdmit).toEqual([]);
+  });
+
+  test("admit follows the same provider-then-global precedence", () => {
+    const config = { port: 1, defaultProvider: "p", providers: { p: { newModelPolicy: "admit" as const }, q: {} }, modelDiscovery: { newModelPolicy: "off" as const } };
+    expect(effectiveNewModelPolicy(config as never, "p")).toBe("admit");
+    expect(effectiveNewModelPolicy(config as never, "q")).toBe("off");
+    const globalAdmit = { ...config, modelDiscovery: { newModelPolicy: "admit" as const } };
+    expect(effectiveNewModelPolicy(globalAdmit as never, "q")).toBe("admit");
+  });
+
+  test("reconcile appends an arrival to a custom selection once, and a later deselect sticks", () => {
+    const config = {
+      port: 10100, defaultProvider: "vendor",
+      providers: { vendor: { selectedModels: ["a"], newModelPolicy: "admit" as const } },
+      modelDiscovery: { knownModels: { vendor: { ids: ["a"], removed: [], updatedAt: now } } },
+    } as never as Parameters<typeof reconcileSuccessfulModelDiscoveries>[0]["config"];
+    const models = [{ provider: "vendor", id: "a" }, { provider: "vendor", id: "d" }];
+    expect(reconcileSuccessfulModelDiscoveries({ config, models, authoritativeProviders: ["vendor"], now })).toBe(true);
+    expect(config.providers.vendor!.selectedModels).toEqual(["a", "d"]);
+    expect(config.modelDiscovery?.recentArrivals?.vendor).toEqual([{ id: "d", at: now, admitted: true, disabledByPolicy: false }]);
+    // The user hides it again; the id is known now, so it is never re-admitted.
+    config.providers.vendor!.selectedModels = ["a"];
+    reconcileSuccessfulModelDiscoveries({ config, models, authoritativeProviders: ["vendor"], now });
+    expect(config.providers.vendor!.selectedModels).toEqual(["a"]);
+  });
+
+  test("a preset-derived selection is never widened by admit", () => {
+    const config = {
+      port: 10100, defaultProvider: "vendor",
+      providers: { vendor: { selectedModels: ["a"], newModelPolicy: "admit" as const, modelPreset: { mode: "preset" as const } } },
+      modelDiscovery: { knownModels: { vendor: { ids: ["a"], removed: [], updatedAt: now } } },
+    } as never as Parameters<typeof reconcileSuccessfulModelDiscoveries>[0]["config"];
+    reconcileSuccessfulModelDiscoveries({ config, models: [{ provider: "vendor", id: "a" }, { provider: "vendor", id: "d" }], authoritativeProviders: ["vendor"], now });
+    expect(config.providers.vendor!.selectedModels).toEqual(["a"]);
+  });
+
+  test("an arrival the off policy disabled is marked as disabled by policy", () => {
+    const config = {
+      port: 10100, defaultProvider: "vendor", providers: { vendor: {} },
+      modelDiscovery: { newModelPolicy: "off" as const, knownModels: { vendor: { ids: ["a"], removed: [], updatedAt: now } } },
+    } as never as Parameters<typeof reconcileSuccessfulModelDiscoveries>[0]["config"];
+    reconcileSuccessfulModelDiscoveries({ config, models: [{ provider: "vendor", id: "a" }, { provider: "vendor", id: "d" }], authoritativeProviders: ["vendor"], now });
+    expect(config.modelDiscovery?.recentArrivals?.vendor).toEqual([{ id: "d", at: now, disabledByPolicy: true }]);
   });
 });

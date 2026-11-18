@@ -1,10 +1,10 @@
 import { journalOwner } from "../codex/journal";
-import { diagnoseCodexShim, installCodexShim, uninstallCodexShim } from "../codex/shim";
+import { diagnoseCodexShim, installCodexShimAsync, uninstallCodexShimAsync } from "../codex/shim";
 import { readManagementJsonBody } from "../server/management/body";
 import type { OcxClientConnectionConfig } from "../types";
 import { disconnectClient, syncConnectedClient } from "./connect";
 import { linkHomeName } from "./link-home";
-import { isLinkConnection } from "./state";
+import { isLinkConnection, readClientConnectionState, sameClientConnectionOwner, type ClientConnectionState } from "./state";
 
 export type HubReachability = "unknown" | "online" | "offline" | "unauthorized";
 
@@ -15,6 +15,8 @@ export interface MachineStatusV1 {
   sharedBase: string;
   sharedServerOrigin: string;
   managementTransport: "direct" | "relay";
+  /** Present when this listener's relay can check an expected target before forwarding. */
+  relayTargetCheck?: "expected-target-v1";
   apiKeyId: string;
   protocolVersion: 1;
   connectedAt: string;
@@ -32,6 +34,8 @@ export interface MachineApiDeps {
   setHubReachability?: (value: HubReachability) => void;
   /** Link mode: the Home's name as this listener knows it (sidecar alias or recorded host name). */
   linkHomeName?: () => string | null;
+  /** The saved connection; a scheduled route-intent sync can change its selection while this runs. */
+  readConnection?: () => ClientConnectionState;
 }
 
 const defaultDeps: MachineApiDeps = {
@@ -69,6 +73,7 @@ function statusPayload(req: Request, state: OcxClientConnectionConfig, deps: Mac
     sharedBase: relay ? `${machineBase}/api/machine/hub-relay` : state.managementUrl,
     sharedServerOrigin: linkMode ? machineBase : state.managementUrl,
     managementTransport: relay ? "relay" : state.managementTransport,
+    ...(relay && !linkMode ? { relayTargetCheck: "expected-target-v1" as const } : {}),
     apiKeyId: state.apiKeyId,
     protocolVersion: state.protocolVersion,
     connectedAt: state.connectedAt,
@@ -92,8 +97,13 @@ export async function handleMachineApi(
     return Response.json(statusPayload(req, state, deps), { headers: { "Cache-Control": "no-store" } });
   }
   if (url.pathname === "/api/machine/clients" && readMethod) {
+    // A Link Child's route-intent tick rewrites the saved selection after this listener started.
+    // Report the saved one while it still belongs to the connection this listener serves.
+    const current = (deps.readConnection ?? readClientConnectionState)();
+    const selected = current.kind === "connected" && sameClientConnectionOwner(current.value, state)
+      ? current.value.selectedClients : state.selectedClients;
     return Response.json({
-      selectedClients: [...state.selectedClients],
+      selectedClients: [...selected],
       journalOwner: journalOwner(),
       shim: diagnoseCodexShim(),
     }, { headers: { "Cache-Control": "no-store" } });
@@ -112,6 +122,10 @@ export async function handleMachineApi(
         input.restartCodex === undefined ? {} : { restartCodex: input.restartCodex },
       );
       deps.setHubReachability?.("online");
+      // A sync whose journal handover failed is not complete: a supervised restart could undo it.
+      if (result.journalHandoverFailed) {
+        return Response.json({ success: false, ...result, error: "Codex routing was applied, but the Codex journal could not be handed to this connection; sync again, and if it repeats, sync once more after the next OpenCodex restart." }, { status: 409 });
+      }
       return Response.json({ success: true, ...result });
     } catch (error) {
       const message = error instanceof Error ? error.message : "client sync failed";
@@ -130,8 +144,9 @@ export async function handleMachineApi(
       return Response.json({ error: "action must be install, repair, or uninstall" }, { status: 400 });
     }
     try {
-      const result = input.action === "uninstall" ? uninstallCodexShim() : installCodexShim();
-      return Response.json({ success: true, action: input.action, result, shim: diagnoseCodexShim() });
+      const result = input.action === "uninstall" ? await uninstallCodexShimAsync() : await installCodexShimAsync();
+      // 200 either way so the dashboard re-reads the shim diagnosis; a refusal is not a success.
+      return Response.json({ success: !result.refused, action: input.action, result, shim: diagnoseCodexShim() });
     } catch (error) {
       return Response.json({ success: false, error: error instanceof Error ? error.message : "shim action failed" }, { status: 409 });
     }

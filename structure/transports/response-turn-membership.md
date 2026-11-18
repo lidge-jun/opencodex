@@ -19,6 +19,25 @@ so clearing a caller-owned Buffer does not mutate the signing key. No key is gen
 The absent/malformed-key default changes no input. The pass uses bounded linear
 indexing with at most 65,536 input items and retains existing item references.
 
+Independently of structural normalization, request preparation snapshots current-turn
+tool names for output normalization. Responses enforces membership in that catalog;
+Chat and Messages enforce it when the caller explicitly empties a catalog, while
+omitted and partial catalogs retain deferred delivery. Declarations prepended while
+expanding `previous_response_id` remain history and cannot grant current-turn membership.
+A nameless hosted declaration that translated adapters expose as a function (`tool_search`)
+adds that function name to the snapshot only when the current turn declares it; a replayed
+declaration still grants nothing.
+Delivery intersects current names with the existing selection-filtered bridge names, so
+`tool_choice` cannot be widened by the snapshot. Ordinary Responses validation retains its
+delivery owner and diagnostics; the additional guard enforces explicit-empty catalogs and
+Responses replay boundaries. Initial hosted-sidecar deferred delivery retains its existing contract.
+`tests/responses/explicit-empty-tool-catalog-history.test.ts` covers these continuation boundaries
+and normalization across adapter/run-turn JSON/SSE. The real direct Messages planner and delivery
+share one signed-history translation budget in `tests/responses/current-turn-tool-catalog-direct.test.ts`.
+Namespace restoration must also name a current canonical identity; an ambiguous historical bare
+alias is refused while the current canonical spelling stays callable. The two identity directions
+are covered by `tests/responses/current-turn-tool-catalog-namespace.test.ts` on both delivery lanes.
+
 `tests/responses/turn-membership.test.ts` covers token and scope controls;
 `tests/responses/turn-membership-ingress.test.ts` proves actual ingress-to-supplier
 request equality against the buffered reference and refusal of keyless ownership.
@@ -34,5 +53,9 @@ The trusted `completedToolBlocks` build metadata is set only for authenticated o
 streaming Responses requests with durable membership and without compaction. It reaches initial,
 retry and queued rebuilds through `src/server/responses/adapter-dispatch.ts` and
 `src/server/responses/request-transport.ts`; missing metadata keeps earlier tool delivery off.
-This structural mechanism does not alter supplier bodies, reasoning effort, retry policy,
+`src/server/responses/request-transport.ts` also records eligible key rate-limit headers through the process-local passive observation owner, without changing routing. This structural mechanism does not alter supplier bodies, reasoning effort, retry policy,
 settlement or provider-opaque replay scope.
+
+The route-independent Claude bridge pool key agrees with final Codex selection; see [Claude affinity](../data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch).
+
+Right after continuation expansion, and only for a request that carries a Remote Link turn observer (a link WebSocket turn, or a relayed request with the link relay's internal token header), `request-prepare.ts` reports the expanded input to `src/server/link-turn.ts`; an expansion miss reports a failure. A request without an observer runs no code there, and the header is removed before anything is forwarded (`structure/remote-link.md`). The same seam receives the chain outcome (expanded, unexpanded or none) and, at the two refusals of an unexpanded continuation, marks the row's link continuation as a miss with reason missing.

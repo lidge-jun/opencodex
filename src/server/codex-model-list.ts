@@ -1,10 +1,13 @@
 import { websocketsEnabled } from "../config";
+import { omitDisabledNativeCatalogEntries } from "../codex/catalog/native-omission";
 import type { OcxConfig } from "../types";
 import { buildCatalogEntries } from "../codex/catalog/build-entries";
 import { loadCatalogTemplate } from "../codex/catalog/bundled";
 import { applyNativeVisibility, nativeContextLimits } from "../codex/catalog/metadata";
 import { readCatalog, readCodexCatalogPath, type CatalogModel } from "../codex/catalog/parsing";
 import { readNativeBaseline, retainedNativeSourcePriorities } from "../codex/catalog/native-priority";
+import { resolveMultiAgentMode } from "../config/multi-agent-surface";
+import { resolveRoutedCatalogDefaults } from "../config/schema/routed-catalog-defaults";
 
 interface CodexModelListInput {
   config: OcxConfig;
@@ -30,7 +33,7 @@ export function buildCodexModelList({
     baseline: readNativeBaseline(catalogPath),
     retainedBySlug: retainedNativeSourcePriorities(readCatalog(catalogPath)?.models ?? []),
   };
-  const maMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
+  const maMode = resolveMultiAgentMode(config);
   // Account rows include hidden supported ids so newly re-enabled natives reappear before sync.
   const catalogNativeSlugs = accountSelectors.length > 0
     ? [...new Set([...availableAccountNativeSlugs, ...accountNativeSlugs])]
@@ -40,7 +43,7 @@ export function buildCodexModelList({
     websocketsEnabled(config), maMode, exactComboSlugs, accountSelectors,
     suppressedBareNativeSlugs, new Set(), nativeContextLimits(config), accountNativeSlugs,
     accountNativeSlugsBySelector, config.keepNativeChatGptOnV1 === true, config.modelPickerOrder,
-    nativeSource,
+    nativeSource, resolveRoutedCatalogDefaults(config),
   );
-  return { models: applyNativeVisibility(entries, disabledModels, accountSelectors.length > 0, new Set(accountNativeSlugs)) };
+  return { models: omitDisabledNativeCatalogEntries(applyNativeVisibility(entries, disabledModels, accountSelectors.length > 0, new Set(accountNativeSlugs)), config) };
 }

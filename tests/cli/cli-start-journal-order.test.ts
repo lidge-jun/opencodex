@@ -10,6 +10,7 @@ import { join, resolve } from "node:path";
 import { watchdogMs } from "../helpers/ci-watchdog";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
+import { captureStartupChildOutput } from "../helpers/startup-child-output";
 import {
   inspectServiceStateRecords,
   selectAuthoritativeServiceState,
@@ -33,6 +34,7 @@ const JOURNAL_OWNERSHIP_BUDGET_MS = Math.max(30_000, OWNER_WAIT_MS * 4);
 const cliPath = repoPath("src/cli/index.ts");
 const roots: string[] = [];
 const children: Array<ReturnType<typeof Bun.spawn>> = [];
+const startupOutputs: Array<ReturnType<typeof captureStartupChildOutput>> = [];
 
 type Fixture = {
   root: string;
@@ -162,6 +164,7 @@ afterEach(async () => {
     const child = children.pop()!;
     if (child.exitCode === null) await child.exited;
   }
+  for (const output of startupOutputs.splice(0)) await output.finish();
   while (roots.length) removeTreeWithRetry(roots.pop()!);
 });
 
@@ -398,21 +401,17 @@ function freeLoopbackPort(): number {
 }
 
 /**
- * Spawn `ocx start` and wait for its runtime record and settled readiness.
- *
- * `port` pins the listener with `--port`. A pinned port comes from freeLoopbackPort(), which
- * releases its probe before the child binds, so another process on the runner can take it in
- * between; a hard-pinned start then waits out port reclaim (up to 60 s) before it binds and
- * publishes, which outlasts OWNER_WAIT_MS with the child alive and no record. Pass `undefined`
- * when the case does not need a predetermined port: the child keeps config.port and binds its
- * own, and the runtime record supplies the port it chose.
+ * Drain both child pipes immediately and await the CLI's post-sync startup signal or exit.
+ * Record publication and /readyz are then assertions, with no independent wall-clock deadline.
+ * The existing test budget remains the watchdog for a child that never signals or exits.
+ * A supplied port still pins --port; undefined uses the configured port.
  */
 async function startSibling(
   env: Record<string, string>,
   siblingHome: string,
   port: number | undefined,
   cwd: string,
-): Promise<{ child: ReturnType<typeof Bun.spawn>; runtime: { pid: number; port: number; siblingOfPort?: number } }> {
+) {
   const child = Bun.spawn([process.execPath, cliPath, "start", ...(port === undefined ? [] : ["--port", String(port)])], {
     cwd,
     env,
@@ -420,67 +419,28 @@ async function startSibling(
     stderr: "pipe",
   });
   children.push(child);
+  const output = captureStartupChildOutput(child.stdout, child.stderr);
+  startupOutputs.push(output);
+  await output.waitForStartup(child);
   const runtimePath = join(siblingHome, "runtime-port.json");
-  // Allowlisted fields only: the record also carries the per-process attestationSecret.
-  let lastRecord: string | null = null;
-  let exitedEarly = false;
   let runtime: { pid: number; port: number; siblingOfPort?: number };
   try {
-    runtime = await waitFor(async () => {
-      if (child.exitCode !== null) {
-        exitedEarly = true;
-        throw new Error(`sibling exited ${child.exitCode}: ${await new Response(child.stderr).text()}`);
-      }
-      if (!existsSync(runtimePath)) return null;
-      try {
-        const value = JSON.parse(readFileSync(runtimePath, "utf8")) as { pid: number; port: number; hostname?: string; siblingOfPort?: number };
-        lastRecord = JSON.stringify({ pid: value.pid, port: value.port, hostname: value.hostname, siblingOfPort: value.siblingOfPort });
-        const portOk = Number.isInteger(value.port) && value.port >= 1 && value.port <= 65535
-          && (port === undefined || value.port === port);
-        return value.pid === child.pid && portOk ? value : null;
-      } catch {
-        return null;
-      }
-    }, "sibling runtime record");
-  } catch (error) {
-    // An early exit already reported its stderr and consumed the stream.
-    if (exitedEarly) throw error;
-    // Report what the child was doing, which the bare deadline message cannot.
-    if (child.exitCode === null) child.kill("SIGKILL");
-    const tail = async (stream: unknown): Promise<string> => {
-      try {
-        return await Promise.race([
-          new Response(stream as ReadableStream<Uint8Array>).text().then(text => text.slice(-4000)),
-          Bun.sleep(2000).then(() => "<no EOF within 2s>"),
-        ]);
-      } catch {
-        return "<unreadable>";
-      }
-    };
-    const [stdout, stderr] = await Promise.all([tail(child.stdout), tail(child.stderr)]);
-    throw new Error(
-      `${(error as Error).message} (requested port ${port ?? "config"}, pid ${child.pid}, last record ${lastRecord ?? "none"})\n`
-        + `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
-    );
+    const record = JSON.parse(readFileSync(runtimePath, "utf8"));
+    // Allowlisted fields only: never put the runtime's attestationSecret in assertion output.
+    runtime = { pid: record.pid, port: record.port, siblingOfPort: record.siblingOfPort };
+  } catch {
+    throw new Error(`sibling signalled startup without a readable runtime record: ${JSON.stringify(output.snapshot())}`);
   }
-  const readyPort = runtime.port;
-  // /readyz settles after the startup sync. Without the sibling gate that sync is exactly
-  // what rewrote the shared config.toml, so the bytes are compared only once it has settled,
-  // and it has to settle as "ready": a sibling that wrote nothing has nothing to fail.
-  let settled: string | undefined;
-  await waitFor(async () => {
-    try {
-      const response = await fetch(`http://127.0.0.1:${readyPort}/readyz`, { signal: AbortSignal.timeout(500) });
-      const body = await response.json() as { status?: string; pid?: number };
-      if (body.pid !== child.pid || body.status === undefined || body.status === "pending") return null;
-      settled = body.status;
-      return true;
-    } catch {
-      return null;
-    }
-  }, "sibling readiness");
-  expect(settled).toBe("ready");
-  return { child, runtime };
+  expect(runtime.pid).toBe(child.pid);
+  expect(Number.isInteger(runtime.port) && runtime.port >= 1 && runtime.port <= 65535).toBe(true);
+  if (port !== undefined) expect(runtime.port).toBe(port);
+  // Keep the independent identity/readiness proof before comparing shared routing bytes.
+  const response = await fetch(`http://127.0.0.1:${runtime.port}/readyz`);
+  const ready = await response.json() as { status?: string; pid?: number };
+  expect(response.ok).toBe(true);
+  expect(ready.pid).toBe(child.pid);
+  expect(ready.status).toBe("ready");
+  return { child, runtime, output };
 }
 
 /**
@@ -559,7 +519,7 @@ describe("a sibling instance leaves the live owner's client routing alone", () =
       expect(stop.exitCode, stop.stderr).toBe(0);
       expect(stop.stdout).toContain(`Client routing stays on the proxy at port ${ownerRuntime.port}`);
       await sibling.child.exited;
-      expect(await new Response(sibling.child.stdout).text()).toContain(
+      expect((await sibling.output.finish()).stdout.tail).toContain(
         `Client routing stays on the proxy at port ${ownerRuntime.port}; this instance serves direct requests on port ${siblingPort} only.`,
       );
       expect(snapshot()).toEqual(before);
@@ -685,7 +645,7 @@ describe("a sibling instance leaves the live owner's client routing alone", () =
     const stop = await runCli({ ...fx, env: { ...fx.env, OPENCODEX_HOME: siblingHome } }, ["stop"]);
     expect(stop.exitCode, stop.stderr).toBe(0);
     await replacement.child.exited;
-    expect(await new Response(replacement.child.stdout).text()).toContain(
+    expect((await replacement.output.finish()).stdout.tail).toContain(
       `Client routing stays on the proxy at port ${ownerPort}; this instance serves direct requests on port ${siblingPort} only.`,
     );
     expect(snapshot()).toEqual(before);

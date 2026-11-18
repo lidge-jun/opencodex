@@ -27,7 +27,9 @@ async function run(scenario: string) {
       while (alive() && Date.now() < deadline) await Bun.sleep(20);
       expect(alive(), "owned recovery fixture must exit").toBe(false);
     }
-    return { exit, trace, log: out + err, pendingReceipt: existsSync(home.path("pending-teardown-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.unreadable.json")) };
+    const markerPath = home.path("update-orchestrated.json");
+    const marker = existsSync(markerPath) ? JSON.parse(readFileSync(markerPath, "utf8")) : null;
+    return { exit, trace, marker, log: out + err, pendingReceipt: existsSync(home.path("pending-teardown-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.unreadable.json")) };
   } finally { home.remove(); }
 }
 
@@ -48,6 +50,14 @@ test.skipIf(process.platform === "win32")("the actual Bun updater leases stop th
   const recovery = result.trace.find(row => row.phase === "recovery");
   expect(recovery, result.log).toMatchObject({ contenderBlocked: false, delegated: true, canJoin: true });
   expect(result.trace.at(-1)).toMatchObject({ phase: "after", reacquired: true, parentToken: false });
+}, 30_000);
+
+test.skipIf(process.platform === "win32")("unconfirmed installer termination retains the fence and defers recovery", async () => {
+  const result = await run("supervisor-unconfirmed");
+  expect(result.exit, result.log).toBe(1);
+  expect(result.trace.map(row => row.phase)).toEqual(["stop", "replacement", "after"]);
+  expect(result.marker).toMatchObject({ phase: "failed", fenceUntil: expect.any(Number) });
+  expect(result.log).toContain("Installer termination was not confirmed");
 }, 30_000);
 
 test.skipIf(process.platform === "win32").each(["package-fail", "stop-throw", "replacement-throw", "recovery-throw"])("%s keeps recovery owned and releases before exit", async scenario => {

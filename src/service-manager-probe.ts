@@ -28,6 +28,7 @@ import {
 } from "./lib/windows-elevation";
 import { decodeWindowsTextBytes } from "./lib/windows-text";
 import { WINSW_SERVICE_ID } from "./lib/winsw";
+import { decodePlistString } from "./service/plist-xml";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV } from "./lib/bun-runtime";
 import { REAL_BUN_MIN_BYTES } from "./lib/bun-binary-validator.mjs";
 import { WINDOWS_WRAPPER_PROTOCOL_ENV, WINDOWS_WRAPPER_STAY_OUT_EXIT_CODE } from "./service/windows-wrapper-exit";
@@ -76,7 +77,7 @@ export type ServiceManagerInstallation =
 
 /** Injected so a test can observe the EXACT argv production emits. */
 export interface ProbeRunner {
-  (file: string, args: readonly string[]): {
+  (file: string, args: readonly string[], options?: { readonly input?: string }): {
     status: number | null;
     stdout: string;
     stderr: string;
@@ -152,9 +153,10 @@ export function createWindowsTaskListingCache(): WindowsTaskListingCache {
   };
 }
 
-export const defaultProbeRunner: ProbeRunner = (file, args) => {
+export const defaultProbeRunner: ProbeRunner = (file, args, options) => {
   const result = spawnSync(file, [...args], {
     encoding: "utf8",
+    input: options?.input,
     windowsHide: true,
     timeout: SERVICE_PROBE_TIMEOUT_MS,
   });
@@ -220,6 +222,12 @@ const LAUNCHCTL_NO_SUCH_SERVICE = 113;
  * headless Mac — no GUI domain, and no installation either.
  */
 const LAUNCHCTL_NO_SUCH_DOMAIN = 112;
+/**
+ * Observed on a headless Mac (#7697), but unsupported action is not proof that
+ * no GUI login exists. Only independent session evidence can qualify GUI 125;
+ * a user-domain 125 remains unknown because its services are independent.
+ */
+const LAUNCHCTL_DOMAIN_UNSUPPORTED_ACTION = 125;
 
 /**
  * Residue on disk, distinguished from a path that could not be read.
@@ -240,16 +248,9 @@ function unknown(reason: string): ServiceManagerInstallation {
   return { kind: "unknown", reason };
 }
 
-/** Decode the entities buildPlist's plistString applies. `&amp;` goes last so a
- *  literal `&amp;lt;` written by a double-escaped value stays `&lt;`. */
-function plistStringValue(raw: string): string {
-  return raw
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, "\"")
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
-}
+/** Decode the entities and character references buildPlist's encoder applies, in one pass,
+ *  so a literal `&amp;lt;` written by a double-escaped value stays `&lt;`. */
+const plistStringValue = decodePlistString;
 
 /** Pull `<key>NAME</key><string>VALUE</string>` out of a plist body. */
 function plistEnvValue(body: string, key: string): string | null {
@@ -338,6 +339,36 @@ function inspectSystemdOffline(home: string): ServiceManagerInstallation {
   };
 }
 
+/**
+ * TN2083: /dev/console identifies only the foreground user; switched-out GUI
+ * sessions survive. XNU's IOService::updateConsoleUsers publishes the complete
+ * supplied array on the registry root, with UID separate from OnConsole:
+ * https://github.com/apple-oss-distributions/xnu/blob/main/iokit/Kernel/IOService.cpp
+ * https://github.com/apple-oss-distributions/xnu/blob/main/iokit/IOKit/IOKitKeysPrivate.h
+ * Both commands inherit the runner's 2s bound. Missing or malformed evidence
+ * cannot prove absence; do not cache session evidence across admissions.
+ */
+function launchdGuiSessionAbsent(run: ProbeRunner, uid: number): boolean {
+  try {
+    const registry = run("/usr/sbin/ioreg", ["-a", "-r", "-d", "1", "-n", "Root"]);
+    if (registry.spawnFailed || registry.timedOut || registry.status !== 0 || !registry.stdout.trim()) return false;
+    const converted = run("/usr/bin/plutil", ["-extract", "0.IOConsoleUsers", "json", "-o", "-", "-"], {
+      input: registry.stdout,
+    });
+    if (converted.spawnFailed || converted.timedOut || converted.status !== 0) return false;
+    const sessions: unknown = JSON.parse(converted.stdout);
+    if (!Array.isArray(sessions)) return false;
+    return sessions.every(session => {
+      if (!session || typeof session !== "object" || Array.isArray(session)) return false;
+      const sessionUid: unknown = session.kCGSSessionUserIDKey;
+      return typeof sessionUid === "number" && Number.isInteger(sessionUid)
+        && sessionUid >= 0 && sessionUid < 0xffff_ffff && sessionUid !== uid;
+    });
+  } catch {
+    return false;
+  }
+}
+
 function inspectLaunchd(deps: Required<Pick<ProbeDeps, "run" | "uid" | "home">>): ServiceManagerInstallation {
   const definitionPath = join(deps.home, "Library", "LaunchAgents", `${LABEL}.plist`);
 
@@ -357,6 +388,16 @@ function inspectLaunchd(deps: Required<Pick<ProbeDeps, "run" | "uid" | "home">>)
     if (printed.status === 0) { registration = "present"; break; }
     if (printed.status === LAUNCHCTL_NO_SUCH_SERVICE) continue;
     if (printed.status === LAUNCHCTL_NO_SUCH_DOMAIN) { unreachableDomains += 1; continue; }
+    /*
+     * Unsupported action alone says nothing about loaded jobs. Qualify GUI
+     * 125 only with independent evidence excluding this UID's GUI sessions;
+     * the separate user-domain query and plist checks remain mandatory.
+     */
+    if (printed.status === LAUNCHCTL_DOMAIN_UNSUPPORTED_ACTION && domain.startsWith("gui/")) {
+      if (!launchdGuiSessionAbsent(deps.run, deps.uid)) return unknown("GUI login session absence could not be established");
+      unreachableDomains += 1;
+      continue;
+    }
     return unknown(`launchctl print exited ${String(printed.status)}: ${printed.stderr.trim()}`);
   }
 
@@ -368,12 +409,10 @@ function inspectLaunchd(deps: Required<Pick<ProbeDeps, "run" | "uid" | "home">>)
       return unknown("launchd has a job loaded but its plist is missing");
     }
     /*
-     * Nothing staged, and every domain either answered "no such service" or does
-     * not exist. 112 is an answer ABOUT THE DOMAIN and is label-independent —
-     * querying a domain with no service name at all returns it — so an
-     * unreachable domain cannot be hiding a job of ours. Calling this `unknown`
-     * instead would refuse every write on a fresh headless Mac, which has no
-     * GUI domain and no installation either.
+     * Nothing staged, and every domain either answered service-scoped 113,
+     * did not exist (112), or returned GUI 125 corroborated by independent
+     * evidence of no GUI session for this UID. A user-domain 113 alone cannot
+     * exclude a job in the GUI domain's separate service set.
      */
     void unreachableDomains;
     return { kind: "absent" };

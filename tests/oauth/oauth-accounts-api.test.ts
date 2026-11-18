@@ -299,6 +299,51 @@ describe("multiauth accounts API", () => {
     }
   });
 
+  test("GET keeps the account label masked by default and keeps maskedLabel masked", async () => {
+    saveConfig({ ...baseConfig(), privacy: { maskEmails: "false" } } as unknown as OcxConfig);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts?provider=anthropic", server.url));
+      expect(res.status).toBe(200);
+      const body = await res.json() as { accounts: Array<{ id: string; accountLabel?: string; maskedLabel?: string }> };
+      const first = body.accounts.find(account => account.id === "aaaa1111");
+      expect(first?.accountLabel).toBe("f***t@example.com");
+      expect(first?.maskedLabel).toBe("f***t@example.com");
+      expect(JSON.stringify(body).includes("first@example.com")).toBe(false);
+    } finally { await server.stop(true); }
+  });
+
+  test("GET shows the raw account label when email masking is disabled (#8286)", async () => {
+    saveConfig({ ...baseConfig(), privacy: { maskEmails: false } });
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts?provider=anthropic", server.url));
+      expect(res.status).toBe(200);
+      const body = await res.json() as { accounts: Array<{ id: string; email?: string; accountLabel?: string; maskedLabel?: string }> };
+      const first = body.accounts.find(account => account.id === "aaaa1111");
+      expect(first?.email).toBe("first@example.com");
+      expect(first?.accountLabel).toBe("first@example.com");
+      // The tray-facing masked label keeps its contract regardless of the flag.
+      expect(first?.maskedLabel).toBe("f***t@example.com");
+      expect(first?.maskedLabel).not.toBe(first?.email);
+    } finally { await server.stop(true); }
+  });
+
+  test("GET omits identity labels for malformed and absent stored emails", async () => {
+    const authPath = join(testDir, "auth.json");
+    const auth = JSON.parse(readFileSync(authPath, "utf8"));
+    auth.anthropic.accounts[0].credential.email = "not-an-email";
+    delete auth.anthropic.accounts[1].credential.email;
+    writeFileSync(authPath, JSON.stringify(auth), { mode: 0o600 });
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts?provider=anthropic", server.url));
+      const body = await res.json() as { accounts: Array<{ accountLabel?: string; maskedLabel?: string }> };
+      expect(body.accounts.map(account => account.maskedLabel)).toEqual([undefined, undefined]);
+      expect(body.accounts.map(account => account.accountLabel)).toEqual([undefined, undefined]);
+    } finally { await server.stop(true); }
+  });
+
   test("GET includes projected health with redacted healthSummary", async () => {
     const server = startServer(0);
     try {
@@ -574,12 +619,12 @@ describe("multiauth accounts API", () => {
       for (const [body, code] of [
         [{ provider: "openai", format: "cockpit-tools", document: [] }, "unsupported_provider"],
         [{ provider: "unknown", format: "cockpit-tools", document: [] }, "unsupported_provider"],
-        [{ provider: "google-antigravity", format: "unknown", document: [] }, "unsupported_format"],
-        [{ provider: "google-antigravity", format: "cockpit-tools", document: { accounts: [] } }, "invalid_document"],
-        [{ provider: "google-antigravity", format: "cockpit-tools", document: "not-an-array" }, "invalid_document"],
+        [{ provider: "google-antigravity", acknowledgeAntigravityRisk: true, format: "unknown", document: [] }, "unsupported_format"],
+        [{ provider: "google-antigravity", acknowledgeAntigravityRisk: true, format: "cockpit-tools", document: { accounts: [] } }, "invalid_document"],
+        [{ provider: "google-antigravity", acknowledgeAntigravityRisk: true, format: "cockpit-tools", document: "not-an-array" }, "invalid_document"],
         [{ provider: "Google-Antigravity", format: "cockpit-tools", document: [] }, "unsupported_provider"],
         [{ provider: " google-antigravity ", format: "cockpit-tools", document: [] }, "unsupported_provider"],
-        [{ provider: "google-antigravity", format: "Cockpit-Tools", document: [] }, "unsupported_format"],
+        [{ provider: "google-antigravity", acknowledgeAntigravityRisk: true, format: "Cockpit-Tools", document: [] }, "unsupported_format"],
       ] as const) {
         const response = await fetch(new URL("/api/oauth/accounts/import", server.url), {
           method: "POST",
@@ -609,7 +654,7 @@ describe("multiauth accounts API", () => {
       headers: { "Content-Type": "application/json" },
       body: new ReadableStream<Uint8Array>({
         start(controller) {
-          controller.enqueue(new TextEncoder().encode('{"provider":"google-antigravity",'));
+          controller.enqueue(new TextEncoder().encode('{"provider":"google-antigravity","acknowledgeAntigravityRisk":true,'));
         },
         cancel() { bodyCancelled = true; },
       }),
@@ -680,6 +725,7 @@ describe("multiauth accounts API", () => {
         body: JSON.stringify({
           provider: "google-antigravity",
           format: "cockpit-tools",
+          acknowledgeAntigravityRisk: true,
           document: [
             { email: "first@example.com", refresh_token: "first-refresh" },
             { email: "second@example.com", refresh_token: "second-refresh" },
@@ -724,6 +770,7 @@ describe("multiauth accounts API", () => {
         body: JSON.stringify({
           provider: "google-antigravity",
           format: "cockpit-tools",
+          acknowledgeAntigravityRisk: true,
           document: [{ email: "IMPORTED@example.com", refresh_token: refreshToken, tags: ["tag"], notes: "ignored" }],
         }),
       });
@@ -763,6 +810,7 @@ describe("multiauth accounts API", () => {
       const boundaryBody = JSON.stringify({
         provider: "google-antigravity",
         format: "cockpit-tools",
+        acknowledgeAntigravityRisk: true,
         document: boundaryDocument,
       });
       expect(encoder.encode(JSON.stringify(boundaryDocument)).byteLength).toBe(ACCOUNT_IMPORT_MAX_BYTES);
@@ -819,6 +867,7 @@ describe("multiauth accounts API", () => {
         body: JSON.stringify({
           provider: "google-antigravity",
           format: "cockpit-tools",
+          acknowledgeAntigravityRisk: true,
           document: [
             { email: "claimed@example.com", refresh_token: canary },
             { email: "provider@example.com", refresh_token: "rejected-token" },
@@ -852,6 +901,7 @@ describe("multiauth accounts API", () => {
         body: JSON.stringify({
           provider: "google-antigravity",
           format: "cockpit-tools",
+          acknowledgeAntigravityRisk: true,
           document: [{ email: "provider@example.com", refresh_token: "safe", notes: "x".repeat(ACCOUNT_IMPORT_MAX_BYTES) }],
         }),
       });

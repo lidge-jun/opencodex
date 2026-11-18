@@ -13,15 +13,21 @@ const canonicalForward: OcxProviderConfig = {
   authMode: "forward",
 };
 
-function outboundBody(provider: OcxProviderConfig, rawBody: Record<string, unknown>): Record<string, unknown> {
+function outboundBody(
+  provider: OcxProviderConfig,
+  rawBody: Record<string, unknown>,
+): Record<string, unknown> {
   const adapter = createAdapter(provider);
-  const request = adapter.buildRequest({
-    modelId: String(rawBody.model ?? "gpt-5.6-luna"),
-    context: { messages: [] },
-    stream: rawBody.stream === true,
-    options: {},
-    _rawBody: rawBody,
-  }, { headers: new Headers({ authorization: "Bearer test-token" }) });
+  const request = adapter.buildRequest(
+    {
+      modelId: String(rawBody.model ?? "gpt-5.6-luna"),
+      context: { messages: [] },
+      stream: rawBody.stream === true,
+      options: {},
+      _rawBody: rawBody,
+    },
+    { headers: new Headers({ authorization: "Bearer test-token" }) },
+  );
   try {
     return JSON.parse(request.body) as Record<string, unknown>;
   } finally {
@@ -142,29 +148,43 @@ describe("canonical ChatGPT forward prompt envelope", () => {
   });
 });
 
-
 describe("canonical forward user metadata boundary", () => {
-  test.each(["gpt-5.3-codex-spark", "gpt-5.6-luna"])("strips only top-level user for %s", model => {
-    const raw = {
-      model, user: "synthetic-client", prompt_cache_key: "synthetic-cache",
-      safety_identifier: "synthetic-safety", stream: true,
-      input: [{ type: "message", role: "user", content: "hello" }],
-      tools: [{ type: "function", name: "lookup", parameters: {
-        type: "object", properties: { user: { type: "string" } }, required: ["user"],
-      } }],
-    };
-    const snapshot = structuredClone(raw);
-    const body = outboundBody(canonicalForward, raw);
-    expect(Object.hasOwn(body, "user")).toBe(false);
-    expect(body.prompt_cache_key).toBe(raw.prompt_cache_key);
-    expect(body.safety_identifier).toBe(raw.safety_identifier);
-    expect(body.input).toEqual(raw.input);
-    expect(body.tools).toEqual(raw.tools);
-    expect(raw).toEqual(snapshot);
-  });
+  test.each(["gpt-5.3-codex-spark", "gpt-5.6-luna"])(
+    "strips top-level user and safety_identifier for %s",
+    (model) => {
+      const raw = {
+        model,
+        user: "synthetic-client",
+        prompt_cache_key: "synthetic-cache",
+        safety_identifier: "synthetic-safety",
+        stream: true,
+        input: [{ type: "message", role: "user", content: "hello" }],
+        tools: [
+          {
+            type: "function",
+            name: "lookup",
+            parameters: {
+              type: "object",
+              properties: { user: { type: "string" } },
+              required: ["user"],
+            },
+          },
+        ],
+      };
+      const snapshot = structuredClone(raw);
+      const body = outboundBody(canonicalForward, raw);
+      expect(Object.hasOwn(body, "user")).toBe(false);
+      expect(body.prompt_cache_key).toBe(raw.prompt_cache_key);
+      expect(Object.hasOwn(body, "safety_identifier")).toBe(false);
+      expect(body.input).toEqual(raw.input);
+      expect(body.tools).toEqual(raw.tools);
+      expect(raw).toEqual(snapshot);
+    },
+  );
   test("Claude translation retains session metadata locally but omits user on the native wire", () => {
     const raw = anthropicToResponsesBody({
-      model: "gpt-5.3-codex-spark", max_tokens: 32,
+      model: "gpt-5.3-codex-spark",
+      max_tokens: 32,
       metadata: { user_id: "synthetic-claude-session" },
       messages: [{ role: "user", content: "hello" }],
     });
@@ -181,9 +201,15 @@ describe("canonical forward user metadata boundary", () => {
     { ...canonicalForward, baseUrl: "https://gateway.example/v1" },
     { ...canonicalForward, baseUrl: "https://chatgpt.com.example/backend-api/codex" },
     { ...canonicalForward, authMode: "key" as const },
-  ])("does not strip user from a different destination: %j", provider => {
-    const body = outboundBody(provider, { model: "model", user: "synthetic-client", input: "hello" });
+  ])("does not strip user or safety_identifier from a different destination: %j", (provider) => {
+    const body = outboundBody(provider, {
+      model: "model",
+      user: "synthetic-client",
+      safety_identifier: "synthetic-safety",
+      input: "hello",
+    });
     expect(body.user).toBe("synthetic-client");
+    expect(body.safety_identifier).toBe("synthetic-safety");
   });
   test("normalizes the canonical trailing slash without changing field-absent requests", () => {
     const provider = { ...canonicalForward, baseUrl: canonicalForward.baseUrl + "/" };

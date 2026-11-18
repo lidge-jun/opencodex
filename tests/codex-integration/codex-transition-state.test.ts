@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { samePath } from "../helpers/same-path";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -58,6 +60,25 @@ function transition(txId: string) {
     nextRetryAt: "2026-08-04T12:00:00.000Z",
   };
 }
+
+test("coordinator detects adjacent large file identities", () => {
+  const realLstat = fs.lstatSync;
+  const id = 2n ** 53n;
+  let replaced = false;
+  const spy = spyOn(fs, "lstatSync").mockImplementation(((target, options) => {
+    const value = options?.bigint ? realLstat(target, { bigint: true }) : realLstat(target);
+    const ino = replaced ? id + 1n : id;
+    return samePath(target, coordinatorPath) ? Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: options?.bigint ? ino : Number(ino) }) : value;
+  }) as typeof fs.lstatSync);
+  try {
+    const controller = openCodexCoordinatorTransaction(coordinatorPath);
+    try {
+      replaced = true;
+      expect(Number(id)).toBe(Number(id + 1n));
+      expect(() => controller.assertStablePath()).toThrow("substituted");
+    } finally { controller.close(); }
+  } finally { spy.mockRestore(); }
+});
 
 test("resolve persists zero counts only for a verified-noop proof", () => {
   const started = beginCodexTransition(

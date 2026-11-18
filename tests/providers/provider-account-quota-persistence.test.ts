@@ -188,3 +188,68 @@ describe("provider quota snapshot deadlines", () => {
     expect(readPersistedAccountQuotas().get(KEY)?.monthlyPercent).toBe(20);
   });
 });
+
+// #7815: a cache write under the config root waits out an overlapping optional config-root ACL
+// flight, whose inheritance would otherwise race the new file's explicit grant.
+test("a snapshot write waits for an in-flight config-root ACL flight, then lands", async () => {
+  const acl = await import("../../src/lib/windows-secret-acl");
+  const { setSyntheticWindowsPrincipalForTests } = await import("../../src/lib/windows-user-principal");
+  const success = { success: true, exitCode: 0, timedOut: false, stdout: "" };
+  let entered!: () => void, release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  acl.resetHardenedStateForTests();
+  acl.setPlatformForTests("win32");
+  setSyntheticWindowsPrincipalForTests("*S-1-5-21-1-2-3-1001");
+  acl.setIcaclsRunnerForTests(() => success);
+  acl.setAsyncIcaclsRunnerForTests(async () => { entered(); await held; return success; });
+  try {
+    const flight = acl.hardenSecretDirAsync(home, { required: false });
+    await started;
+    try {
+      schedulePersistAccountQuotas(() => [[KEY, quota(15)]]);
+      await settle();
+      expect(existsSync(join(home, FILE))).toBe(false);
+    } finally { release(); await flight; }
+    await settle();
+    expect(readPersistedAccountQuotas().get(KEY)?.monthlyPercent).toBe(15);
+  } finally {
+    acl.setAsyncIcaclsRunnerForTests(null);
+    acl.setIcaclsRunnerForTests(null);
+    acl.setPlatformForTests(null);
+    setSyntheticWindowsPrincipalForTests(null);
+    acl.resetHardenedStateForTests();
+  }
+});
+
+test("a snapshot still waiting for ACL admission is dropped by cancellation", async () => {
+  const acl = await import("../../src/lib/windows-secret-acl");
+  const { setSyntheticWindowsPrincipalForTests } = await import("../../src/lib/windows-user-principal");
+  const success = { success: true, exitCode: 0, timedOut: false, stdout: "" };
+  let entered!: () => void, release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  acl.resetHardenedStateForTests();
+  acl.setPlatformForTests("win32");
+  setSyntheticWindowsPrincipalForTests("*S-1-5-21-1-2-3-1001");
+  acl.setIcaclsRunnerForTests(() => success);
+  acl.setAsyncIcaclsRunnerForTests(async () => { entered(); await held; return success; });
+  try {
+    const flight = acl.hardenSecretDirAsync(home, { required: false });
+    await started;
+    try {
+      schedulePersistAccountQuotas(() => [[KEY, quota(15)]]);
+      await settle();
+      // The timer fired and the write is waiting; a clear must still win.
+      cancelPendingAccountQuotaPersist();
+    } finally { release(); await flight; }
+    await settle();
+    expect(existsSync(join(home, FILE))).toBe(false);
+  } finally {
+    acl.setAsyncIcaclsRunnerForTests(null);
+    acl.setIcaclsRunnerForTests(null);
+    acl.setPlatformForTests(null);
+    setSyntheticWindowsPrincipalForTests(null);
+    acl.resetHardenedStateForTests();
+  }
+});

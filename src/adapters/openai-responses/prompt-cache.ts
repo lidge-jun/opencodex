@@ -71,7 +71,9 @@ export function stripPromptCacheBreakpoints(
   if (!isPlainObject(value)) return { value, changed: false, complete: true };
 
   let changed = Object.hasOwn(value, "prompt_cache_breakpoint");
-  const next: Record<string, unknown> = {};
+  // Keep symbol provenance when rebuilding an input item or one of its nested fields.
+  const next: Record<string, unknown> = { ...value };
+  delete next.prompt_cache_breakpoint;
   for (const [key, entry] of Object.entries(value)) {
     if (key === "prompt_cache_breakpoint") continue;
     const rewritten = stripPromptCacheBreakpoints(entry, state, depth + 1);

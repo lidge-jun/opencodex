@@ -116,6 +116,8 @@ context 上限或覆寫已宣告的能力。它會改變精確路由的優先順
 
 每個請求從 Anthropic 開始。Anthropic 的可重試失敗會將該請求移到 OpenAI；OpenAI 的可重試失敗可將它移到 Google。終端錯誤會立即停止，而不嘗試剩餘目標。
 
+提供者的 HTTP 400 回應仍可能是針對特定目標的。OpenRouter 的不透明提供者包裝（帶有數字 `code: 400`、無 `type` 且 `metadata.raw: "ERROR"` 的 `Provider returned error`）會被視為目標特定的，允許 combo 嘗試下一個目標而無需冷卻失敗的目標。具類型的未編碼 400、已知的格式錯誤 `response_format` 結構錯誤，以及根層自行宣告終端代碼的封裝仍為終端錯誤；根層自行宣告跳轉訊號（`model_not_found`、`insufficient_quota`、`usage_limit_exceeded`、`free_rate_limited`、`input_admission_refused` 或 `unsupported_input_modality`）不會新增判定，空代碼視為無代碼。本指南後續描述的已辨識目標不相容情況仍會繼續推進。
+
 ### Round-robin：平滑加權批次
 
 `round-robin` 使用平滑加權輪詢。較大的目標權重讓該目標隨時間獲得較大份額，而不會將其所有份額一次送出為一長區塊。`stickyLimit` 控制在下次加權選擇前有多少成功請求留在所選目標上。
@@ -164,14 +166,17 @@ Combo 失敗分為**跳轉**失敗與**終端**失敗。
 | --- | --- |
 | HTTP 401、403、404、408、429 或任何 5xx | 冷卻目標並跳到下一個合格目標。 |
 | 分類為認證、訂閱、配額、限流、過載或上游伺服器錯誤 | 冷卻目標並跳轉，即使單靠狀態碼不足。 |
-| 客戶端取消（499）、`origin_rejected`、cyber-policy 拒絕、上下文溢出或其他無效請求 | 停止並回傳錯誤；另一個目標不會讓請求變為有效。 |
-| 結構化 HTTP 400，明確拒絕 `user`、對 `reasoning.effort`/`reasoning_effort` 回傳不支援值、回傳模型特定影像輸入拒絕（`param: input`），或拒絕該路由無法讀取的輸入媒體（`unsupported_input_modality`） | 在輸出開始前跳轉到下一個符合條件的目標，且不記錄冷卻時間；參見下方選用參數相容性。 |
+| 客戶端取消（499）、`origin_rejected`、cyber-policy 拒絕、其他無效請求 | 停止並回傳錯誤；另一個目標不會讓請求變為有效。 |
+| 輸出前確認的上下文超限（包括 HTTP 400） | 不冷卻該目標，嘗試下一個尚未嘗試的合格目標；耗盡後回傳第一個確認的 HTTP 400 上下文錯誤（其他狀態碼的上下文拒絕也會切換到下一個目標，但不會被保留）。 |
+| 結構化 HTTP 400，明確拒絕 `user`、對 `reasoning.effort`/`reasoning_effort` 回傳不支援值、回傳模型特定影像輸入拒絕（`param: input`），或拒絕該路由無法讀取的輸入媒體（`unsupported_input_modality`） | 對於 reasoning effort 拒絕，在發送預算允許的情況下先在同一目標上嘗試下一個更低的已發布檔位；若所有檔位均未成功，在拒絕符合已識別的相容形式時於提交輸出前跳轉且不記錄冷卻時間，否則保持終止。其他列出的不相容直接跳轉且不記錄冷卻時間；參見下方選用參數相容性。 |
 | 由行程內轉接器（`runTurn`）執行的 Responses 回合中，目前請求未宣告的第一個工具呼叫（在任何輸出與不可重播的副作用之前） | 讓該目標進入冷卻，並以相同的工具目錄跳轉到下一個目標。出現可見輸出或不可重播的副作用之後，拒絕即為最終結果。Chat Completions 與 Anthropic Messages 請求不受影響。 |
 | 任何其他未分類錯誤 | 停止並回傳錯誤。 |
 
 跳轉的目標在沒有設定 `cooldownMs` 時使用上游回退冷卻：請求速率限制代碼 `1302`/`1305` 為 5 秒，用量額度耗盡（不論 HTTP 狀態，包括 502）或憑證/計費失敗為 10 分鐘，其他情況為 60 秒。若上游回應包含有效的 `Retry-After` 值，opencodex 改用它；Codex 重設標頭與設定的 `cooldownMs` 優先於這些回退值。接受數字秒與 HTTP-date 值。明確的上游 `Retry-After` 最長為 24 小時；重設推導、設定與回退冷卻最長為 10 分鐘。
 
-目前請求永不重試同一已嘗試目標。後續請求會略過它直到冷卻到期。若無合格目標剩餘，代理回傳 HTTP 503 並帶 `error.code = "combo_unavailable"`。
+目前請求永不重試同一已嘗試目標。後續請求會略過它直到冷卻到期。若尚未嘗試任何目標且沒有合格目標，代理回傳 HTTP 503 並帶 `error.code = "combo_unavailable"`。
+
+確認 HTTP 400 上下文拒絕後，若合格目標或傳送預算耗盡，會以 `context_length_exceeded` 回傳第一個此類拒絕，優先於後續可重試錯誤（包括配額錯誤）。這也適用於剩餘目標無法重播推理或缺少計費使用同意的情況。取消、後續致命拒絕和明確的備援政策拒絕仍會立即停止；不會向未獲同意的計費目標傳送請求。
 
 :::note
 Failover 是刻意受限的。它有助於目標特定的可用性、認證、配額與過載失敗；不會隱藏呼叫者錯誤或策略拒絕。
@@ -293,11 +298,11 @@ Combo id 未知。回應為 HTTP 404 並帶 type `invalid_request_error`。執�
 
 ### 為什麼 failover 在第一個錯誤後就停止了？
 
-該錯誤是終端的而非目標特定的。修正無效輸入、縮減過大的上下文、處理策略拒絕，或更正被拒的請求來源。Combo 對那些情況不會跳轉。
+該錯誤是終端的而非目標特定的。修正無效輸入、處理策略拒絕，或更正被拒的請求來源。Combo 對那些情況不會跳轉。
 
 ## 選用參數相容性
 
-一般 400 錯誤仍會終止請求，但明確拒絕 `user`、對 `reasoning.effort`/`reasoning_effort` 回傳不支援值、回傳模型特定影像輸入拒絕（`param: input`），或拒絕該路由無法讀取的輸入媒體（`unsupported_input_modality`）的結構化錯誤，可讓 combo 在輸出開始前嘗試下一個符合條件的目標，而不記錄冷卻時間。安全政策拒絕、取消及已開始的輸出仍不可重播。
+一般 400 錯誤仍會終止請求，但 OpenRouter 的不透明提供者包裝（帶有數字 `code: 400`、無 `type` 且 `metadata.raw: "ERROR"` 的 `Provider returned error`），或明確拒絕 `user`、對 `reasoning.effort`/`reasoning_effort` 回傳不支援值、回傳模型特定影像輸入拒絕（`param: input`），或拒絕該路由無法讀取的輸入媒體（`unsupported_input_modality`）的結構化錯誤，以及完全相符的供應商包 `{"code":"invalid-argument","error":"Invalid reasoning effort."}`，可在輸出提交前跳轉。當 combo 目標拒絕所請求的 reasoning effort 時，combo 首先在共用發送預算內、每次拒絕退一個檔位地在該目標上重試下一個更低的已發布 effort 檔位；這適用於所有識別出的 effort 拒絕。如果更低檔位均未成功，符合上述形式之一的拒絕將前進到另一個目標而不冷卻被拒絕的目標，在下一檔位無剩餘發送額度時保留該目標的原始 400；其他 effort 拒絕保持終止。以 `unsupported_input_modality` 拒絕媒體的路由以相同方式跳轉。這些是針對該請求的不相容，並非目標不健康的證據。直接請求保留其單次 effort 降級修復。相容性復原不會隱式將 `none` 改為其他 effort，也不會將 combo 跳轉擴大到任意無效請求。安全政策拒絕、取消及已開始的輸出仍不可重播。單目標請求仍回傳未解決的上游拒絕。
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).
 

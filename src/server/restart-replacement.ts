@@ -202,7 +202,9 @@ function openDefaultRestartHandoffLog(now: () => number): RestartHandoffLog | nu
   const configDir = getConfigDir();
   const path = restartHandoffLogPath(configDir);
   // Owned like crash.log, so uninstall removes it with the rest of the config directory.
-  try { recordOwnedConfigPath(configDir, path); } catch { /* the log is optional */ }
+  // The log is optional: a refused registration (uninstall in progress) skips it rather than
+  // creating a file uninstall does not know about.
+  try { recordOwnedConfigPath(configDir, path); } catch { return null; }
   return openRestartHandoffLog(path, now);
 }
 

@@ -1,4 +1,5 @@
 import SubagentForceControl from "../components/subagents-workspace/SubagentForceControl";
+import WorkflowBudgetPanel from "../components/WorkflowBudgetPanel";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { readJsonOrThrow } from "../fetch-json";
 import { Notice } from "../ui";
@@ -8,8 +9,12 @@ import { readSessionListCache, writeSessionListCache } from "../session-list-cac
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import SubagentSurfaceWarningModal from "../components/SubagentSurfaceWarningModal";
-import { SUBAGENT_SURFACE_GUIDE_URL } from "../subagent-surface";
+import PlaintextV2ConsentModal from "../components/PlaintextV2ConsentModal";
+import { SUBAGENT_SURFACE_GUIDE_URL, confirmsPlaintextV2Mode, type SubagentSurfaceMode } from "../subagent-surface";
 import { useSubagentDelegation, type UltraModePatch, type UltraModeState } from "./use-subagent-delegation";
+import { InEffectSummary } from "../components/v2-subagents/InEffectSummary";
+import { formatNamespacedModelId } from "../provider-icons";
+import { sectionAnchorId } from "../section-anchors";
 
 type CachedSubagents = { available: string[]; chosen: string[]; fallback?: string[]; pollMs?: number; fallbackAvailable?: string[] };
 
@@ -20,6 +25,11 @@ const UNLOADED_ULTRA_MODE: UltraModeState = {
 
 function seedSubagents(cacheKey: string): CachedSubagents | null {
   return readSessionListCache<CachedSubagents>(cacheKey);
+}
+
+/** Scrolls the page to one of its sections, for the section index. */
+function jump(target: "featured" | "delegation" | "pin") {
+  document.getElementById(sectionAnchorId("subagents", target))?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 export default function Subagents({ apiBase }: { apiBase: string }) {
@@ -55,6 +65,8 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     setChosen(next);
   }, []);
   const delegation = useSubagentDelegation(apiBase);
+  /** The Claude Code pin as the pin panel last read or wrote it, for the summary tiles. */
+  const [pin, setPin] = useState<string | null | undefined>(undefined);
   const [ultraState, setUltraState] = useState<{ apiBase: string; mode: UltraModeState } | null>(null);
   const ultraModeCurrent = ultraState?.apiBase === apiBase;
   const ultraMode = ultraModeCurrent ? ultraState.mode : UNLOADED_ULTRA_MODE;
@@ -65,7 +77,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
    * for. Switching endpoints with the dialog open must not apply one proxy's answer to another,
    * and tagging beats clearing it from an effect, which would be a cascading render.
    */
-  const [pendingSurface, setPendingSurface] = useState<{ mode: "default" | "v2"; apiBase: string } | null>(null);
+  const [pendingSurface, setPendingSurface] = useState<{ mode: "default" | "v2" | "v2-plaintext"; apiBase: string } | null>(null);
   const [ultraLoadFailed, setUltraLoadFailed] = useState(false);
   const ultraLoadGeneration = useRef(0);
   const currentUltraApiBase = useRef(apiBase);
@@ -83,10 +95,12 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     const res = await fetch(`${apiBase}/api/v2`, { signal });
     const data = await readJsonOrThrow<{
       enabled?: boolean;
-      multiAgentMode?: "v1" | "default" | "v2";
+      multiAgentMode?: SubagentSurfaceMode;
       multiAgentModeHintText?: string | null;
       keepNativeChatGptOnV1?: boolean;
       multiAgentModeHintRecommendation?: { text?: unknown; revision?: unknown };
+      supportsPlaintextV2Mode?: boolean;
+      plaintextAgentMessagesEnabled?: boolean;
     }>(res, t("sub.ultraModeLoadFail"));
     if (!data) return false;
     if (signal?.aborted || generation !== ultraLoadGeneration.current || currentUltraApiBase.current !== apiBase) return false;
@@ -108,8 +122,15 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       // Ultra mode replaces Codex's effort-derived policy for every model. The
       // `default` surface still preserves upstream V1 pins (for example luna),
       // so only an explicitly forced V2 catalog is an effective surface here.
-      multiAgentV2Enabled: data.enabled === true && data.multiAgentMode === "v2",
-      multiAgentMode: data.multiAgentMode ?? "default",
+      // 'v2-plaintext' is also a forced V2 surface: every catalog row is pinned v2
+      // while the global feature stays off.
+      multiAgentV2Enabled: (data.enabled === true && data.multiAgentMode === "v2")
+        || data.multiAgentMode === "v2-plaintext",
+      multiAgentMode: data.multiAgentMode === "v1" || data.multiAgentMode === "v2" || data.multiAgentMode === "v2-plaintext"
+        ? data.multiAgentMode
+        : "default",
+      supportsPlaintextV2Mode: data.supportsPlaintextV2Mode === true,
+      plaintextAgentMessagesEnabled: data.plaintextAgentMessagesEnabled === true,
     } });
     return true;
   }, [apiBase, t]);
@@ -139,12 +160,21 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       });
-      await readJsonOrThrow(res, t("sub.ultraModeSaveFail"));
+      const receipt = await readJsonOrThrow(res, t("sub.ultraModeSaveFail"));
+      if (patch.multiAgentMode === "v2-plaintext" && !confirmsPlaintextV2Mode(receipt)) {
+        throw new Error(t("sub.ultraModeSaveFail"));
+      }
       if (currentUltraApiBase.current !== requestApiBase || !await loadUltraMode()) return;
       setOk(true);
       setStatus(t("sub.ultraModeSaved"));
     } catch (error) {
       if (currentUltraApiBase.current !== requestApiBase) return;
+      if (patch.multiAgentMode === "v2-plaintext") {
+        // A failed receipt cannot prove the write failed. Reconcile this server's state
+        // without turning the original save failure into a success notification.
+        try { await loadUltraMode(); } catch { /* retain the save error */ }
+        if (currentUltraApiBase.current !== requestApiBase) return;
+      }
       setOk(false);
       setStatus(error instanceof Error && error.message ? error.message : t("sub.networkError"));
     } finally {
@@ -350,10 +380,25 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     );
   }
 
+  const firstOption = delegation.available.find(option => option.namespaced === delegation.model);
+  const firstModel = !delegation.model ? ""
+    : firstOption ? formatNamespacedModelId(`${firstOption.provider}/${firstOption.model}`, t) : delegation.model;
+
   return (
     <>
-      <div className="page-head">
+      <div className="page-head flex-col items-start gap-1.5">
         <h2>{t("nav.subagents")}</h2>
+        <p className="m-0 text-[14px] text-fg-muted">{t("subagentsV2.lede")}</p>
+      </div>
+      <div className="mt-5 mb-6">
+        <InEffectSummary
+          chosen={chosen}
+          max={FEATURED_MAX}
+          firstModel={firstModel}
+          firstEffort={delegation.effort}
+          pin={pin}
+          onJump={jump}
+        />
       </div>
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
       {state.showError && <Notice tone="err">{t("sub.loadFail")}</Notice>}
@@ -364,19 +409,23 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           <button type="button" className="btn btn-ghost btn-sm" disabled={fallbackLoading} onClick={() => { setFallbackLoading(true); void loadFallback(); }}>{t("common.retry")}</button>
         </Notice>
       )}
-      <SubagentForceControl key={apiBase} apiBase={apiBase} roster={chosen} />
       <SubagentsWorkspace
         available={available}
         fallbackAvailable={fallbackAvailable ?? []}
         chosen={chosen}
         onToggle={toggle}
         onMove={move}
-          fallback={fallback}
-          fallbackPollMs={fallbackPollMs}
-          fallbackBusy={fallbackBusy || !fallbackLoaded}
-          onFallbackChange={models => { fallbackRevision.current += 1; setFallback(models); }}
-          onFallbackPollMsChange={pollMs => { fallbackRevision.current += 1; setFallbackPollMs(pollMs); }}
-          onFallbackSave={() => { void saveFallback(); }}
+        fallback={fallback}
+        fallbackPollMs={fallbackPollMs}
+        fallbackBusy={fallbackBusy || !fallbackLoaded}
+        onFallbackChange={models => { fallbackRevision.current += 1; setFallback(models); }}
+        onFallbackPollMsChange={pollMs => { fallbackRevision.current += 1; setFallbackPollMs(pollMs); }}
+        onFallbackSave={() => { void saveFallback(); }}
+        settingsExtra={<>
+          <SubagentForceControl key={apiBase} apiBase={apiBase} roster={chosen}
+            id={sectionAnchorId("subagents", "pin")} onForceChange={setPin} />
+          <WorkflowBudgetPanel apiBase={apiBase} id={sectionAnchorId("subagents", "budget")} />
+        </>}
         delegation={{
           apiBase,
           model: delegation.model,
@@ -391,8 +440,10 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           ultraSaving: ultraSaving || !ultraModeCurrent,
           // This page carries the same v1/base/v2 switch as Models and the Dashboard, so it
           // needs the same gate: base and v2 wait for an answer, everything else writes.
+          // 'v2-plaintext' also waits — for its own consent dialog, which stages the
+          // plaintext acknowledgement onto the same request as the mode.
           onUltraModeSave: patch => {
-            if (patch.multiAgentMode === "default" || patch.multiAgentMode === "v2") {
+            if (patch.multiAgentMode === "default" || patch.multiAgentMode === "v2" || patch.multiAgentMode === "v2-plaintext") {
               setPendingSurface({ mode: patch.multiAgentMode, apiBase });
               return;
             }
@@ -402,7 +453,20 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           onUltraModeRetry: () => { void retryUltraMode(); },
         }}
       />
-      {pendingSurface && pendingSurface.apiBase === apiBase && (
+      {pendingSurface && pendingSurface.apiBase === apiBase && pendingSurface.mode === "v2-plaintext" && (
+        <PlaintextV2ConsentModal
+          busy={ultraSaving}
+          onConfirm={() => {
+            setPendingSurface(null);
+            void saveUltraMode({
+              multiAgentMode: "v2-plaintext",
+              plaintextAgentMessagesAcknowledged: true,
+            });
+          }}
+          onDismiss={() => setPendingSurface(null)}
+        />
+      )}
+      {pendingSurface && pendingSurface.apiBase === apiBase && pendingSurface.mode !== "v2-plaintext" && (
         <SubagentSurfaceWarningModal
           reason="selection"
           mode={pendingSurface.mode}

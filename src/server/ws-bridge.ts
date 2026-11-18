@@ -1,4 +1,7 @@
+import { isolateCodexPoolAccountHeaders } from "../codex/forward-transport-headers";
+import { isUntypedBareUpstreamError } from "./bare-upstream-error";
 import type { NativeResponseControl } from "./responses/native-response-control";
+import type { HandleResponsesOptions } from "./responses/core-options";
 import type { ServerWebSocket } from "bun";
 import { responsesJsonEventSequence } from "./responses-json-events";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
@@ -7,12 +10,18 @@ import { headersForCodexAuthContext } from "../codex/auth-context";
 import type { ResponsesTerminalStatus } from "../bridge";
 import type { DataPlaneAdmission } from "./auth-cors";
 import type { AdmissionLease, AdmissionReservation } from "../lib/admission";
-import { BoundedSseFrameBuffer } from "./sse-frame-buffer";
+import { BoundedSseFrameBuffer, MAX_CLIENT_SSE_FRAME_BYTES } from "./sse-frame-buffer";
+import type { LinkTrafficFlow } from "../link/traffic";
 import { sseDataPayload as parseSseBlock } from "./sse-payload-rewrite";
 import { safeResponseHeaders } from "./safe-response-headers";
 import type { AudioSocketTarget } from "./audio-dictation";
 import type { CodexWebSocketActivity } from "../codex/websocket-activity";
 import { AGENT_ASSERTION_HEADER } from "../lib/authorization-scheme";
+import { isProxyError } from "../lib/client-error-body";
+import { WORKFLOW_LOCAL_REFUSAL_HEADER } from "../lib/workflow-budget";
+import { NativeContinuationRefusalError } from "./responses/native-continuation-refusal";
+import type { UsageClient } from "../usage/client";
+import { LINK_WS_LIMITS, linkPumpTimer, linkPumpWaitObserver } from "./index/link-websocket-limits";
 
 export { safeResponseHeaders } from "./safe-response-headers";
 
@@ -21,6 +30,7 @@ type ResponsesTerminalReporter = (status: ResponsesTerminalStatus) => void;
 type ResponsesPayloadObserver = (payload: string) => void;
 
 export interface WsData {
+  client?: UsageClient;
   responsesActivity?: CodexWebSocketActivity;
   nativeControl?: NativeResponseControl;
   /** Content-free per-turn explanation; never a model capability assertion. */
@@ -34,6 +44,8 @@ export interface WsData {
    * attribution.
    */
   admission?: DataPlaneAdmission;
+  /** Local-only loopback replay identity; revalidated each turn without retaining its secret. */
+  replayPrincipal?: HandleResponsesOptions["replayPrincipal"];
   authContext?: CodexAuthContext; // last resolved account decision for observability/registry cleanup
   cancel?: () => void; // cancels the in-flight stream reader/fetch
   turnId?: number; // monotonically increasing per socket; prevents stale frames after replacement turns
@@ -52,6 +64,8 @@ export interface WsData {
   liveFinish?: AudioSocketTarget["finish"];
   liveOutcome?: number | "timeout" | "connect_error";
   liveMaxSessionMs?: number;
+  liveFinalizationMs?: number;
+  liveFinalizing?: boolean;
   liveConnectTimer?: ReturnType<typeof setTimeout>;
   liveSessionTimer?: ReturnType<typeof setTimeout>;
   liveAbortSignal?: AbortSignal;
@@ -69,6 +83,29 @@ export interface WsData {
   /** Turn/account ownership retained for the complete sideband socket lifetime. */
   liveTurnAdmissionLease?: AdmissionLease;
   admissionLease?: AdmissionReservation<ServerWebSocket<WsData>>;
+  /** Set only on Remote Link sockets: native steering and injection are unavailable there. */
+  nativeControlDisabled?: boolean;
+  /** Present only on a Remote Link socket (src/server/index/link-websocket.ts). */
+  link?: LinkSocketBinding;
+  /** Remote Link sockets only: one observer per admitted turn, by the handler's turn id. */
+  linkTurnObserver?: (turnId: number) => import("./link-turn").LinkTurnObserver;
+  /** Remote Link sockets only: the turn's cleanup ran, so its capture entry goes. */
+  linkTurnEnded?: (turnId: number) => void;
+}
+
+/** The verified identity and lease owner of one Remote Link socket; no secret is kept. */
+export interface LinkSocketBinding {
+  readonly linkId: string;
+  readonly keyId: string;
+  readonly fingerprint: string;
+  /** Set once the socket is fenced (revoked or switched off); later frames are dropped. */
+  fenced: boolean;
+  /** Releases every lease of the upgrade exactly once, from the close callback. */
+  readonly leases: { closed(): void };
+  /** Set by the link pump while it waits for Bun's drain; the link handler calls it on drain and close. */
+  drained?: () => void;
+  /** This socket's flow in the Home's per-link traffic book: message payload bytes each way (link-websocket.ts). */
+  traffic?: LinkTrafficFlow;
 }
 
 export interface LiveSidebandUpstreamFailure {
@@ -103,12 +140,16 @@ export function buildResponsesWsData(
   admission: DataPlaneAdmission,
   admissionLease?: AdmissionReservation<ServerWebSocket<WsData>>,
   sessionLaneId?: string,
+  client?: UsageClient,
+  replayPrincipal?: HandleResponsesOptions["replayPrincipal"],
 ): WsData {
   // Auth is handshake-time only on this path: the per-frame contexts have no
   // request headers left to re-resolve from, so the decision rides along here.
   return {
     headers,
     admission,
+    ...(replayPrincipal ? { replayPrincipal } : {}),
+    ...(client ? { client } : {}),
     ...(admissionLease ? { admissionLease } : {}),
     ...(sessionLaneId ? { sessionLaneId } : {}),
   };
@@ -120,18 +161,28 @@ export class WsSendDroppedError extends Error {
   }
 }
 
+/** Capture inbound WS auth and metadata for reconstructed turns; provider egress filters again. */
 export function selectForwardHeaders(
   headers: Headers,
-  codexOverride?: { accessToken: string; chatgptAccountId: string },
+  codexOverride?: { accessToken: string; chatgptAccountId: string; kind?: "pool" | "main-pool" },
 ): Headers {
   const selected = new Headers();
   for (const name of FORWARD_HEADERS) {
     const value = headers.get(name);
-    if (value) selected.set(name, value);
+    if (value !== null) selected.set(name, value);
+  }
+  // WS turns rebuild an HTTP request from this snapshot. Keep original client
+  // identity available for the same per-provider policy used by HTTP requests.
+  // These are not credentials and do not extend the outbound provider allowlist.
+  for (const name of ["user-agent", "x-codex-app-version"]) {
+    const value = headers.get(name);
+    if (value !== null) selected.set(name, value);
   }
   if (codexOverride) {
     selected.set("authorization", `Bearer ${codexOverride.accessToken}`);
     selected.set("chatgpt-account-id", codexOverride.chatgptAccountId);
+    if (codexOverride.kind !== "main-pool") isolateCodexPoolAccountHeaders(selected, codexOverride.chatgptAccountId);
+    else selected.delete("x-oai-attestation");
   } else {
     // Kept for the WS turn pipeline, which drops it again everywhere except first-party Direct.
     const assertion = headers.get(AGENT_ASSERTION_HEADER);
@@ -172,6 +223,9 @@ export function sendTextFrame(ws: ServerWebSocket<WsData>, payload: string): voi
   const result = ws.send(payload);
   if (result === 0) throw new WsSendDroppedError();
   // Bun returns -1 when queued with backpressure. That is accepted; a later 0 is the hard failure.
+  // A link socket counts what Bun took, queued or written; a local socket has no flow and pays one property read.
+  const flow = ws.data.link?.traffic;
+  if (flow) flow.fromHome(Buffer.byteLength(payload));
 }
 
 export function sendJsonFrame(ws: ServerWebSocket<WsData>, payload: Record<string, unknown>): void {
@@ -249,6 +303,8 @@ export async function pumpResponsesSseToWebSocket(
     untilEof?: boolean;
     onTerminal?: ResponsesTerminalReporter;
     onSsePayload?: ResponsesPayloadObserver;
+    /** The body is the upstream itself (native control), so no relay tail follows a bare envelope. */
+    rawUpstream?: boolean;
   } = {},
 ): Promise<void> {
   const reader = sseStream.getReader();
@@ -262,9 +318,54 @@ export async function pumpResponsesSseToWebSocket(
   };
   const cancel = () => {
     clientCancelled = true;
+    wakeLinkWait?.();
     void reader.cancel().catch(() => {});
   };
   ws.data.cancel = cancel;
+
+  // Remote Link sockets only (design T4 6.2): after a send that leaves more than the threshold
+  // buffered, wait for Bun's drain before the next event, even within one upstream chunk, and feed
+  // the framer one bounded slice of a chunk at a time. Local sockets keep the single synchronous loop.
+  const link = ws.data.link;
+  let wakeLinkWait: (() => void) | undefined;
+  let linkStopped = false;
+  const waitForLinkDrain = async (): Promise<void> => {
+    if (!link || ws.getBufferedAmount() <= LINK_WS_LIMITS.sendThresholdBytes) return;
+    let stalled = false;
+    const observer = linkPumpWaitObserver();
+    observer?.(true);
+    await new Promise<void>(resolve => {
+      const clock = linkPumpTimer();
+      // One deadline for the whole wait, however many drain callbacks arrive before it ends.
+      const timer = clock.start(() => { stalled = true; done(); }, LINK_WS_LIMITS.sendStallMs);
+      function done(): void {
+        clock.stop(timer);
+        if (link!.drained === drained) link!.drained = undefined;
+        if (wakeLinkWait === done) wakeLinkWait = undefined;
+        resolve();
+      }
+      // Bun's drain means "ready for more", not "below the threshold": re-check on every callback.
+      function drained(): void {
+        if (!clientCancelled && ws.readyState === OPEN && ws.getBufferedAmount() > LINK_WS_LIMITS.sendThresholdBytes) return;
+        done();
+      }
+      link.drained = drained;
+      wakeLinkWait = done;
+    });
+    observer?.(false);
+    if (stalled && !clientCancelled) {
+      try { ws.close(1011, "link websocket send stalled"); } catch { /* already closing */ }
+      throw new WsSendDroppedError();
+    }
+  };
+  const slicesOf = (chunk: Uint8Array): Uint8Array[] => {
+    if (!link || chunk.byteLength <= LINK_WS_LIMITS.framerSliceBytes) return [chunk];
+    const slices: Uint8Array[] = [];
+    for (let offset = 0; offset < chunk.byteLength; offset += LINK_WS_LIMITS.framerSliceBytes) {
+      slices.push(chunk.subarray(offset, offset + LINK_WS_LIMITS.framerSliceBytes));
+    }
+    return slices;
+  };
 
   const decoder = new TextDecoder();
   const framer = new BoundedSseFrameBuffer();
@@ -274,12 +375,22 @@ export async function pumpResponsesSseToWebSocket(
   const handlePayload = (payload: string): boolean => {
     if (!isCurrent()) return true;
     if (payload === "[DONE]") return false;
-    try {
-      options.onSsePayload?.(payload);
-    } catch {
-      /* payload observation must not affect WebSocket delivery */
-    }
     const type = payloadType(payload);
+    let untypedBare = false;
+    if (!type) {
+      try { untypedBare = isUntypedBareUpstreamError(JSON.parse(payload)); } catch { /* protocol error below */ }
+    }
+    // A relayed stream follows an untyped envelope with its own response.failed, so the envelope
+    // waits for it. A raw upstream body has no such tail: the envelope stays the protocol error
+    // it always was and is not recorded as a verdict the client never received.
+    if (!(untypedBare && options.rawUpstream)) {
+      try {
+        options.onSsePayload?.(payload);
+      } catch {
+        /* payload observation must not affect WebSocket delivery */
+      }
+    }
+    if (untypedBare && !options.rawUpstream) return false;
     if (!type) {
       reportTerminal("incomplete");
       sendProtocolError(ws, 502, "Invalid JSON payload in upstream SSE frame");
@@ -302,14 +413,22 @@ export async function pumpResponsesSseToWebSocket(
   };
 
   try {
-    while (!terminalSeen) {
+    reading: while (!terminalSeen) {
       const { done, value } = await reader.read();
       if (done) break;
-      for (const frame of framer.feed(value)) {
-        const payload = parseSseBlock(decoder.decode(frame.block));
-        if (payload && handlePayload(payload)) break;
+      for (const slice of slicesOf(value)) {
+        for (const frame of framer.feed(slice)) {
+          const payload = parseSseBlock(decoder.decode(frame.block));
+          if (payload && handlePayload(payload)) continue reading;
+          if (link) {
+            await waitForLinkDrain();
+            if (clientCancelled || ws.readyState !== OPEN) { linkStopped = true; break reading; }
+          }
+        }
       }
     }
+    // A link pump stopped by a cancel or close mid-chunk has nothing left to deliver or report.
+    if (linkStopped) return;
     const tail = framer.finish();
     if (!terminalSeen && tail.byteLength > 0) {
       const payload = parseSseBlock(decoder.decode(tail));
@@ -330,9 +449,10 @@ export async function pumpResponsesSseToWebSocket(
       && isCurrent()
       && ws.readyState === OPEN
       && !(err instanceof WsSendDroppedError)) {
-      reportTerminal("incomplete");
+      reportTerminal(err instanceof NativeContinuationRefusalError ? "failed" : "incomplete");
       try {
-        sendUpstreamError(ws, 502, err);
+        if (err instanceof NativeContinuationRefusalError) await sendResponseToWebSocket(ws, err.response, isCurrent);
+        else sendUpstreamError(ws, 502, err);
       } catch (sendErr) {
         // If delivery is already dropped, there is no useful error frame left
         // to send. Swallow only that expected transport signal; other failures
@@ -373,6 +493,81 @@ export function sendResponsesJsonAsEvents(
   onTerminal?.(finalStatus);
 }
 
+/**
+ * Remote Link sockets only (design T4 6.2): wait until the send buffer is at or below the threshold, re-checking on
+ * every drain callback, under one stall deadline for the whole wait. A stall closes the socket with 1011 and throws,
+ * as the SSE pump does; a closed socket or a cancelled turn ends the wait, and only a live, current turn's stall
+ * closes the socket.
+ */
+async function waitForLinkSendRoom(ws: ServerWebSocket<WsData>, turn: { cancelled: boolean; wake?: () => void; isCurrent: () => boolean }): Promise<void> {
+  const link = ws.data.link;
+  if (!link || turn.cancelled || ws.getBufferedAmount() <= LINK_WS_LIMITS.sendThresholdBytes) return;
+  let stalled = false;
+  const observer = linkPumpWaitObserver();
+  observer?.(true);
+  await new Promise<void>(resolve => {
+    const clock = linkPumpTimer();
+    const timer = clock.start(() => { stalled = true; done(); }, LINK_WS_LIMITS.sendStallMs);
+    function done(): void {
+      clock.stop(timer);
+      if (link!.drained === drained) link!.drained = undefined;
+      if (turn.wake === done) turn.wake = undefined;
+      resolve();
+    }
+    function drained(): void {
+      if (!turn.cancelled && ws.readyState === OPEN && ws.getBufferedAmount() > LINK_WS_LIMITS.sendThresholdBytes) return;
+      done();
+    }
+    link.drained = drained;
+    turn.wake = done;
+  });
+  observer?.(false);
+  if (stalled && !turn.cancelled && turn.isCurrent()) {
+    try { ws.close(1011, "link websocket send stalled"); } catch { /* already closing */ }
+    throw new WsSendDroppedError();
+  }
+}
+
+/**
+ * sendResponsesJsonAsEvents for a link socket: each synthesized event waits for send room first, the turn's cancel
+ * (supersession or close) ends that wait, and an event larger than the client frame limit is never sent: the turn
+ * ends incomplete with the 502 error frame the SSE pump sends for an oversized upstream frame.
+ */
+async function sendResponsesJsonAsLinkEvents(
+  ws: ServerWebSocket<WsData>,
+  response: Record<string, unknown>,
+  isCurrent: () => boolean,
+  onTerminal?: ResponsesTerminalReporter,
+  onPayload?: ResponsesPayloadObserver,
+): Promise<void> {
+  const finalStatus = response.status === "failed" || response.status === "incomplete" ? response.status : "completed";
+  const turn: { cancelled: boolean; wake?: () => void; isCurrent: () => boolean } = { cancelled: false, isCurrent };
+  const previous = ws.data.cancel;
+  const cancel = () => {
+    turn.cancelled = true;
+    turn.wake?.();
+    previous?.();
+  };
+  ws.data.cancel = cancel;
+  try {
+    for (const frame of responsesJsonEventSequence(response)) {
+      await waitForLinkSendRoom(ws, turn);
+      if (turn.cancelled || !isCurrent() || ws.readyState !== OPEN) return;
+      const text = JSON.stringify(frame);
+      if (Buffer.byteLength(text) > MAX_CLIENT_SSE_FRAME_BYTES) {
+        onTerminal?.("incomplete");
+        sendJsonFrame(ws, buildWsErrorFrame(502, protocolError("synthesized response event exceeded " + MAX_CLIENT_SSE_FRAME_BYTES + " bytes")));
+        return;
+      }
+      try { onPayload?.(text); } catch { /* payload observation must not affect WebSocket delivery */ }
+      sendTextFrame(ws, text);
+    }
+    onTerminal?.(finalStatus);
+  } finally {
+    if (ws.data.cancel === cancel) ws.data.cancel = previous;
+  }
+}
+
 function errorPayloadFromText(text: string): Record<string, unknown> {
   try {
     const json = JSON.parse(text) as { error?: unknown };
@@ -396,6 +591,7 @@ export async function sendResponseToWebSocket(
     untilEof?: boolean;
     onTerminal?: ResponsesTerminalReporter;
     onSsePayload?: ResponsesPayloadObserver;
+    rawUpstream?: boolean;
   } = {},
 ): Promise<void> {
   if (!isCurrent()) {
@@ -406,7 +602,10 @@ export async function sendResponseToWebSocket(
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     if (!isCurrent()) return;
-    sendJsonFrame(ws, buildWsErrorFrame(response.status, errorPayloadFromText(text), response.headers));
+    const frame = buildWsErrorFrame(response.status, errorPayloadFromText(text), response.headers);
+    const refusal = isProxyError(response) ? response.headers.get(WORKFLOW_LOCAL_REFUSAL_HEADER) : null;
+    if (refusal) (frame.headers as Record<string, string>)[WORKFLOW_LOCAL_REFUSAL_HEADER] = refusal;
+    sendJsonFrame(ws, frame);
     return;
   }
 
@@ -427,6 +626,7 @@ export async function sendResponseToWebSocket(
       untilEof: options.untilEof,
       onTerminal: options.onTerminal,
       onSsePayload: options.onSsePayload,
+      rawUpstream: options.rawUpstream,
     });
     return;
   }
@@ -435,7 +635,8 @@ export async function sendResponseToWebSocket(
     const text = await response.text();
     if (!isCurrent()) return;
     const json = JSON.parse(text) as Record<string, unknown>;
-    sendResponsesJsonAsEvents(ws, json, options.onTerminal, options.onSsePayload);
+    if (ws.data.link) await sendResponsesJsonAsLinkEvents(ws, json, isCurrent, options.onTerminal, options.onSsePayload);
+    else sendResponsesJsonAsEvents(ws, json, options.onTerminal, options.onSsePayload);
     return;
   }
 
@@ -450,6 +651,7 @@ export async function sendResponseToWebSocket(
       untilEof: options.untilEof,
       onTerminal: options.onTerminal,
       onSsePayload: options.onSsePayload,
+      rawUpstream: options.rawUpstream,
     });
     return;
   }
@@ -459,7 +661,8 @@ export async function sendResponseToWebSocket(
   const trimmed = text.trim();
   if (trimmed.startsWith("{")) {
     const json = JSON.parse(trimmed) as Record<string, unknown>;
-    sendResponsesJsonAsEvents(ws, json, options.onTerminal, options.onSsePayload);
+    if (ws.data.link) await sendResponsesJsonAsLinkEvents(ws, json, isCurrent, options.onTerminal, options.onSsePayload);
+    else sendResponsesJsonAsEvents(ws, json, options.onTerminal, options.onSsePayload);
     return;
   }
 

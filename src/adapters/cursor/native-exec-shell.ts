@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { withoutSupervisorMarkers } from "../../lib/supervisor-markers";
 import { resolve } from "node:path";
 import { foregroundShellUnavailableMessage, runForegroundShell, type CursorForegroundShellOwner } from "./native-foreground-shell";
 import { create } from "@bufbuild/protobuf";
@@ -430,7 +431,7 @@ export function backgroundShellSpawnExec(execMsg: ExecServerMessage, sessionId: 
   if (!admissionLease) return backgroundShellSpawnError(execMsg, args.command, cwd, "background shell limit reached");
   let child: ChildProcessWithoutNullStreams;
   try {
-    child = backgroundShellRuntime.spawn(args.command, { cwd, shell: true });
+    child = backgroundShellRuntime.spawn(args.command, { cwd, shell: true, env: withoutSupervisorMarkers(process.env) });
   } catch (err) {
     admissionLease.release();
     return backgroundShellSpawnError(execMsg, args.command, cwd, errorText(err));

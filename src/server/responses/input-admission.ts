@@ -1,3 +1,4 @@
+import { clientFacingModelText, type ClientFacingModelLabel } from "../../lib/error-destination";
 /**
  * Pre-dispatch input admission (#1412).
  *
@@ -10,6 +11,7 @@
  * catches the pathological case and stays out of the way otherwise. Every uncertainty
  * resolves toward admitting.
  */
+import { collapseDevinModelUid, DEVIN_MODEL_CONTEXT_WINDOWS } from "../../adapters/devin/live-models";
 import {
   nativeOpenAiContextWindow,
   nativeOpenAiMaxInputTokens,
@@ -63,6 +65,8 @@ export interface InputAdmissionResult {
   estimatedTokens: number;
   /** Resolved ceiling, or null when nothing could be resolved (=> always admitted). */
   ceiling: number | null;
+  /** Actual shared context window when an input-only ceiling differs. */
+  contextWindow?: number | null;
   /** Output space reserved by the combo preflight; absent on the loose direct gate. */
   requiredOutputHeadroom?: number;
 }
@@ -168,6 +172,35 @@ interface ResolvedContextLimits {
   ceiling: number | null;
 }
 
+/**
+ * Devin spells one model dotted in catalog families (`swe-1.7`) and hyphenated in uids
+ * (`swe-1-7`), with optional effort suffixes (`swe-2-flash-medium`). A per-model record is
+ * matched on the exact id first, then the effort-collapsed id, then both hyphenated forms, and
+ * finally on record keys folded the same way (`swe-1.7` serves a `swe-1-7-medium` request), so
+ * an operator override on any of those spellings binds before a provider-wide default.
+ */
+function devinRecordValue(record: Record<string, number> | undefined, modelId: string): number | null {
+  const normalized = modelId.replace(/\./g, "-");
+  // Lower-case before collapsing so an upper-case effort suffix (SWE-1-7-MEDIUM) is removed too.
+  const collapsed = collapseDevinModelUid(normalized.toLowerCase());
+  for (const key of new Set([modelId, collapseDevinModelUid(modelId), normalized, collapsed])) {
+    const value = positive(modelRecordValue(record, key));
+    if (value !== null) return value;
+  }
+  if (!record) return null;
+  // Exact spellings missed; fold dotted record keys only now so an exact key always wins.
+  for (const target of new Set([normalized, collapsed])) {
+    // Fold case too, like modelRecordValue's exact-spelling lookup.
+    const folded = target.toLowerCase();
+    for (const [key, raw] of Object.entries(record)) {
+      if (key.replace(/\./g, "-").toLowerCase() !== folded) continue;
+      const value = positive(raw);
+      if (value !== null) return value;
+    }
+  }
+  return null;
+}
+
 function resolveContextLimits(
   provider: OcxProviderConfig,
   providerName: string,
@@ -177,7 +210,10 @@ function resolveContextLimits(
   // `modelRecordValue`, not a bare lookup: the catalog resolves these same two maps that
   // way, so a `gpt-oss` entry covers `gpt-oss:120b`. Reading raw here made the gate fall
   // back to the provider-wide window and refuse turns the model can plainly hold.
-  const configured = positive(modelRecordValue(provider.modelContextWindows, modelId))
+  const devin = provider.adapter === "devin";
+  const configured = (devin
+    ? devinRecordValue(provider.modelContextWindows, modelId)
+    : positive(modelRecordValue(provider.modelContextWindows, modelId)))
     ?? positive(provider.contextWindow);
 
   // The canonical `openai` registry entry declares no context fields, so without this the
@@ -199,9 +235,14 @@ function resolveContextLimits(
     : null;
   const nativeMaxInput = canonicalNativeBare ? positive(nativeOpenAiMaxInputTokens(modelId, nativeLimits)) : null;
 
-  const window = canonicalNativeBare ? (native ?? generatedNativeWindow(modelId, configured, nativeContextCap)) : configured;
+  // Devin's live catalog windows reach the Codex model list but never `provider.modelContextWindows`;
+  // without the adapter table every devin combo target resolved no window and the strict gate stayed open.
+  const window = canonicalNativeBare ? (native ?? generatedNativeWindow(modelId, configured, nativeContextCap))
+    : (configured ?? (devin ? devinRecordValue(DEVIN_MODEL_CONTEXT_WINDOWS, modelId) : null));
   // modelMaxInputTokens is an input-only cap, so it can only tighten the window.
-  const configuredMaxInput = positive(modelRecordValue(provider.modelMaxInputTokens, modelId));
+  const configuredMaxInput = devin
+    ? devinRecordValue(provider.modelMaxInputTokens, modelId)
+    : positive(modelRecordValue(provider.modelMaxInputTokens, modelId));
   const limits = [window, configuredMaxInput, nativeMaxInput].filter((v): v is number => v !== null);
   return { window, ceiling: limits.length === 0 ? null : Math.min(...limits) };
 }
@@ -310,6 +351,7 @@ export function checkComboTargetInputAdmission(
     estimatedTokens,
     ceiling,
     requiredOutputHeadroom,
+    ...(window !== ceiling ? { contextWindow: window } : {}),
   };
 }
 
@@ -325,8 +367,30 @@ export function checkInputAdmission(
   modelId: string,
   nativeContextCap?: NativeContextLimitsInput,
 ): InputAdmissionResult {
-  const ceiling = resolveInputCeiling(provider, providerName, modelId, nativeContextCap);
+  const { window, ceiling } = resolveContextLimits(provider, providerName, modelId, nativeContextCap);
   if (ceiling === null) return { admitted: true, estimatedTokens: 0, ceiling: null };
   const estimatedTokens = estimateInputTokens(parsed, modelId, provider);
-  return { admitted: estimatedTokens <= ceiling * ADMISSION_TOLERANCE, estimatedTokens, ceiling };
+  return { admitted: estimatedTokens <= ceiling * ADMISSION_TOLERANCE, estimatedTokens, ceiling,
+    ...(window !== ceiling ? { contextWindow: window } : {}) };
+}
+
+export function inputAdmissionRefusalMessage(input: InputAdmissionResult, model: ClientFacingModelLabel): string {
+  const count = (value: number | null) => value !== null && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : 0;
+  const label = clientFacingModelText(model);
+  const estimate = count(input.estimatedTokens);
+  const ceiling = count(input.ceiling);
+  if (input.contextWindow !== undefined && input.estimatedTokens > ceiling) {
+    const window = input.contextWindow === null ? "" : `; context window: ${count(input.contextWindow)} tokens`;
+    return `Estimated input (~${estimate} tokens) exceeds the input limit of ${label} (${ceiling} tokens${window}). `
+      + "Start a new session or choose a model with a larger input limit.";
+  }
+  const window = count(input.contextWindow ?? input.ceiling);
+  const inputLimit = input.contextWindow !== undefined ? `; input limit: ${ceiling} tokens` : "";
+  return input.requiredOutputHeadroom !== undefined
+    ? `Estimated input (~${estimate} tokens) plus ${count(input.requiredOutputHeadroom)} `
+      + `tokens of requested output headroom cannot fit the context window of ${label} `
+      + `(${window} tokens${inputLimit}).`
+    : `Estimated input (~${estimate} tokens) is far past the context window `
+      + `of ${label} (${window} tokens${inputLimit}). Start a new session or choose a `
+      + `model with a larger context window.`;
 }

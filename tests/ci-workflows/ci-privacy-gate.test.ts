@@ -66,11 +66,8 @@ function selected(job: string, event: string, ci: string): boolean {
 }
 
 describe("the privacy scan selection", () => {
-  test("the push trigger keeps mirroring the ci filter exactly", () => {
-    // Pull-request scope, like docs-site-build and structure-gate: dev, main and
-    // preview require a pull request, so no devlog change reaches an integration
-    // line without passing through one.
-    expect([...(workflow.on?.push?.paths ?? [])].sort()).toEqual([...(filters.ci ?? [])].sort());
+  test("the privacy scan is not triggered by a push event", () => {
+    expect(workflow.on?.push).toBeUndefined();
   });
 
   test("no job or step still reads a privacy filter output", () => {

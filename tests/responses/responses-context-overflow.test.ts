@@ -468,7 +468,7 @@ describe("combo whose targets all fail local input admission", () => {
     const message = String(error.message);
     expect(message).not.toBe(PROVIDER_INPUT_TOO_LARGE_MESSAGE);
     expect(message).toContain("refused this turn locally");
-    expect(message).toContain("No target of combo fallback that was tried");
+    expect(message).toContain("No target of this combo that was tried");
     expect(message).toMatch(/~\d+ tokens/);
     expect(message).toContain("(1000 tokens)");
     expect(message).toContain("(2000 tokens)");
@@ -483,7 +483,7 @@ describe("combo whose targets all fail local input admission", () => {
     const { error, hits, attempts } = await runCombo(false, "cooled");
     expect(hits).toBe(0);
     const message = String(error.message);
-    expect(message).toContain("No target of combo fallback that was tried can fit its input");
+    expect(message).toContain("No target of this combo that was tried can fit its input");
     expect(message).toContain("(1000 tokens)");
     expect(message).not.toContain("(2000 tokens)");
     expect(attempts.map(attempt => attempt.errorCode)).toEqual(["input_admission_refused"]);

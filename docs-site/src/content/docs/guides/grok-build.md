@@ -106,6 +106,14 @@ outside the managed markers, where nothing opencodex does can clobber them. See
 `base_url` (a host that is actually reachable from where you run `grok`) and `api_key`
 (your `OPENCODEX_API_AUTH_TOKEN`).
 
+**An enabled `unauthenticatedLoopbackListener` is the exception.** When that listener is on,
+opencodex writes the managed block after all, pointing at `127.0.0.1` on the listener's port,
+because loopback requests there need no admission token regardless of how the public listener is
+bound. A port-less companion listener shares the proxy port, and OpenCodex accepts that shape only
+on a specific non-loopback address; on the wildcards `0.0.0.0` or `::` it refuses the pair, so give
+the loopback listener a distinct `port` to use this exception. The manual recipe below still
+applies when you want to manage those entries yourself.
+
 Do not replace `api_key` with `env_key` here. An `env_key` that fails to resolve does not
 stop the request — Grok falls through to your xAI session
 token and sends it to whatever `base_url` the entry names, which for a LAN deployment is a
@@ -118,9 +126,9 @@ contact xAI directly.
 
 ## Manual recipe (without auto-registration)
 
-If you manage `~/.grok/config.toml` yourself — or opencodex is on a non-loopback bind — add
-a `[model_providers.opencodex]` block and per-model tables that reference it, outside the
-`# >>> opencodex managed block` markers:
+If you manage `~/.grok/config.toml` yourself — or opencodex is on a non-loopback bind with the
+loopback listener off — add a `[model_providers.opencodex]` block and per-model tables that
+reference it, outside the `# >>> opencodex managed block` markers:
 
 ```toml
 [model_providers.opencodex]
@@ -133,12 +141,14 @@ model = "anthropic/claude-opus-4-8"
 model_provider = "opencodex"
 ```
 
-For a proxy reachable over the network, point `base_url` at the address `grok` can actually
-dial and use your admission token:
+For a proxy reachable over the network, configure a TLS frontend before supplying your admission
+token, then point `base_url` at its HTTPS address. Alternatively, use a local tunnel and its
+loopback address. Grok stores the literal `api_key` in `~/.grok/config.toml`; restrict access to
+that file and keep it out of version control and shared backups.
 
 ```toml
 [model_providers.opencodex]
-base_url = "http://192.168.1.10:10100/v1"   # the reachable host, not 127.0.0.1
+base_url = "https://proxy.example.com/v1"   # configured TLS frontend
 api_backend = "responses"
 api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 

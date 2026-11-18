@@ -18,18 +18,47 @@ import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { assertNotRealCodexHomeUnderTest, assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import {
   forgetEphemeralSecretPath,
+  flushWindowsSecretAclReapsBeforeRemoval,
   hardenSecretPath,
   hardenSecretPathAsync,
   reattributeHardenedSecretPath,
   windowsSecretAclReapPendingForPath,
+  WindowsSecretAclSettleTimeoutError,
 } from "../lib/windows-secret-acl";
 import {
   renameAtomicFile,
   renameAtomicFileAsync,
 } from "../lib/windows-atomic-replace";
+import {
+  catalogReadOnlyRepairFor,
+  publishWithReadOnlyRepair,
+  setCatalogReadOnlyRepairForTests as setCatalogReadOnlyRepairOverride,
+} from "../lib/codex-catalog-read-only";
 import { getConfigDir } from "./paths";
 
 let atomicSequence = 0;
+const aclDestinations = new Map<string, Set<string>>();
+
+/** Track overlapping writes, refusing only children retained past their timeout belt. */
+function admitAtomicAclWork(target: string, temp: string, enabled: boolean): (() => void) | undefined {
+  if (!enabled || !windowsHardeningApplies()) return undefined;
+  const destination = join(realpathSync(dirname(target)), basename(target));
+  const key = process.platform === "win32" ? destination.toLowerCase() : destination;
+  const temps = aclDestinations.get(key) ?? new Set<string>();
+  if ([...temps].some(windowsSecretAclReapPendingForPath)) throw new WindowsSecretAclSettleTimeoutError();
+  temps.add(temp);
+  aclDestinations.set(key, temps);
+  const release = (): void => {
+    temps.delete(temp);
+    if (temps.size === 0) aclDestinations.delete(key);
+  };
+  return () => {
+    if (windowsSecretAclReapPendingForPath(temp)) {
+      // Caller settlement is bounded; admission resumes only after actual handle release.
+      void flushWindowsSecretAclReapsBeforeRemoval(temp).then(release);
+    } else release();
+  };
+}
 
 /**
  * Whether this writer's Windows ACL branch applies.
@@ -77,6 +106,16 @@ export interface AtomicWriteHooks {
   validateBeforeRename?: (targetPath: string) => void;
   /** Publication receipt; runs before any post-rename cleanup can fail. */
   afterRename?: (targetPath: string) => void;
+}
+
+/**
+ * Test seam for the read-only catalog repair (#8358). `null` disables it, `undefined`
+ * restores the production rule (win32 and the OpenCodex catalog artifact only).
+ */
+export function setCatalogReadOnlyRepairForTests(
+  repair: Parameters<typeof setCatalogReadOnlyRepairOverride>[0],
+): void {
+  setCatalogReadOnlyRepairOverride(repair);
 }
 
 export class AtomicWriteResidualTempError extends Error {
@@ -207,7 +246,7 @@ function writePrivateTempFile(
   try {
     onCreated(descriptor);
     if (windowsHardeningApplies()) {
-      hardenSecretPath(path, { required: true, timeoutMemoKey });
+      hardenSecretPath(path, { required: true, timeoutMemoKey, retryTimedOutOnce: true });
     }
     // Keyed on the REAL platform, not the override: on a POSIX host the mode is
     // the boundary and `assertPrivateTempDescriptor` demands 0o600, which an
@@ -248,7 +287,7 @@ function writePrivateTempFileWith(
   try {
     onCreated(descriptor);
     if (windowsHardeningApplies()) {
-      hardenSecretPath(path, { required: true, timeoutMemoKey });
+      hardenSecretPath(path, { required: true, timeoutMemoKey, retryTimedOutOnce: true });
     }
     if (process.platform !== "win32") fchmodSync(descriptor, 0o600);
     assertPrivateTempDescriptor(path, descriptor, requireStableIdentity);
@@ -271,7 +310,7 @@ async function writePrivateTempFileAsync(
   try {
     onCreated(descriptor);
     if (windowsHardeningApplies()) {
-      await hardenSecretPathAsync(path, { required: true, timeoutMemoKey });
+      await hardenSecretPathAsync(path, { required: true, timeoutMemoKey, retryTimedOutOnce: true });
     }
     if (process.platform !== "win32") {
       fchmodSync(descriptor, 0o600);
@@ -297,8 +336,11 @@ function atomicWriteFileToTarget(
   if (recordOwnership) recordOwnedConfigPath(getConfigDir(), path);
   assertResolvedTargetAllowed(path, target);
   const tmp = `${target}.ocx.${process.pid}.${nextAtomicTempSequence()}.tmp`;
+  const releaseAcl = admitAtomicAclWork(target, tmp, io === undefined);
   let hardened = false;
   let ownsTemp = false;
+  // Cleanup must not consume the destination's recovery attempt for a later write.
+  let cleanupHarden = false;
   let publicationAttempted = false;
   let identity: BigIntStats | undefined;
   const created = (descriptor: number): void => {
@@ -321,7 +363,7 @@ function atomicWriteFileToTarget(
       // its ChangeTime bump is what used to invalidate the harden memo one line
       // later. On POSIX the mode IS the boundary, so it stays.
       if (windowsHardeningApplies()) {
-        hardenSecretPath(tempPath, { required: true, timeoutMemoKey: path });
+        hardenSecretPath(tempPath, { required: true, timeoutMemoKey: path, retryTimedOutOnce: !cleanupHarden });
         return;
       }
       try { chmodSync(tempPath, 0o600); } catch { /* platform may ignore chmod */ }
@@ -350,7 +392,13 @@ function atomicWriteFileToTarget(
       publicationAttempted = true;
       linkSync(tmp, target);
       assertIdentity(target);
-    } else effective.rename(tmp, target);
+    } else {
+      // The Codex catalog owner repairs its own read-only artifact (#8358); every
+      // other destination, and every other platform, keeps the plain rename.
+      const repair = catalogReadOnlyRepairFor(target);
+      if (repair) publishWithReadOnlyRepair(() => effective.rename(tmp, target), target, repair);
+      else effective.rename(tmp, target);
+    }
     hooks.afterRename?.(target);
     if (exclusive) { assertIdentity(tmp); effective.unlink(tmp); }
     // The rename is only as durable as the directory entry recording it. Fsyncing the temp's
@@ -365,6 +413,7 @@ function atomicWriteFileToTarget(
     forgetEphemeralSecretPath(tmp);
   } catch (cause) {
     if (!ownsTemp) throw cause;
+    cleanupHarden = true;
     let sharedTemp = false;
     if (exclusive) {
       try { sharedTemp = assertIdentity(tmp).nlink > 1n; } catch (error) {
@@ -403,7 +452,7 @@ function atomicWriteFileToTarget(
     if (removed) forgetEphemeralSecretPath(tmp);
     if (!removed) throw new AtomicWriteResidualTempError(tmp, hardened, { cause });
     throw cause;
-  }
+  } finally { releaseAcl?.(); }
 }
 
 export function atomicWriteFile(
@@ -490,16 +539,19 @@ export async function atomicWriteFileAsync(
   testSeam?: AtomicWriteAsyncTestSeam,
 ): Promise<void> {
   let ownsTemp = false;
+  let cleanupHarden = false;
   const effective: AtomicWriteAsyncIO = io ?? {
     write: (tempPath, value) => writePrivateTempFileAsync(tempPath, value, path, () => { ownsTemp = true; }),
     harden: async tempPath => {
       // Same reasoning as the synchronous writer above.
       if (windowsHardeningApplies()) {
-        await hardenSecretPathAsync(tempPath, { required: true, timeoutMemoKey: path });
+        await hardenSecretPathAsync(tempPath, { required: true, timeoutMemoKey: path, retryTimedOutOnce: !cleanupHarden });
         return;
       }
       try { chmodSync(tempPath, 0o600); } catch { /* platform may ignore chmod */ }
     },
+    // The read-only catalog repair (#8358) is wired only into the sync writer; no async
+    // caller writes the Codex catalog today. Route one through publishWithReadOnlyRepair too.
     rename: renameAtomicFileAsync,
     truncate: target => truncateSync(target, 0),
     unlink: unlinkSync,
@@ -507,6 +559,7 @@ export async function atomicWriteFileAsync(
   const target = resolveWriteTarget(path);
   assertResolvedTargetAllowed(path, target);
   const tmp = `${target}.ocx.${process.pid}.${nextAtomicTempSequence()}.tmp`;
+  const releaseAcl = admitAtomicAclWork(target, tmp, io === undefined);
   let hardened = false;
   let tempWasHardenedBeforeContent = false;
   try {
@@ -520,6 +573,7 @@ export async function atomicWriteFileAsync(
     forgetEphemeralSecretPath(tmp);
   } catch (cause) {
     if (!ownsTemp) throw cause;
+    cleanupHarden = true;
     // The async ACL belt bounds the writer, but it is not evidence that icacls released this
     // path. Leave the temp in the existing residual state instead of racing an unlink against a
     // live Windows handle. The default Windows writer hardens before writing secret bytes; a
@@ -555,5 +609,5 @@ export async function atomicWriteFileAsync(
     if (removed) forgetEphemeralSecretPath(tmp);
     if (!removed) throw new AtomicWriteResidualTempError(tmp, hardened, { cause });
     throw cause;
-  }
+  } finally { releaseAcl?.(); }
 }

@@ -1,6 +1,7 @@
 import { dottedToolName, namespacedToolName } from "../types";
 import { collectResponsesToolGroups } from "./tool-groups";
 import { collectAmbiguousDottedAliases, dottedAliasIsUnambiguous } from "./tool-name-aliases";
+import { hasItemProvenance, isHistoricalItem } from "./item-provenance";
 
 export interface RoutedNamespaceToolIdentity {
   namespace: string;
@@ -344,13 +345,25 @@ function rewriteInputItem(item: unknown, plan: NamespaceRewritePlan, emitted: Se
 export function rewriteRoutedNamespaceToolsForUpstream(
   body: unknown,
   convertedCustomToolNames?: ReadonlySet<string>,
+  replayPrefixLength?: number,
 ): {
   body: unknown;
   aliases: Map<string, RoutedNamespaceToolIdentity>;
 } {
   if (!isPlainObject(body)) return { body, aliases: new Map() };
-  const groups = collectResponsesToolGroups(body);
+  const currentTurnStart = Number.isFinite(replayPrefixLength)
+    ? Math.max(0, Math.trunc(replayPrefixLength!))
+    : 0;
+  const hasProvenance = Array.isArray(body.input) && body.input.some(hasItemProvenance);
+  const isHistorical = (item: unknown, index: number) =>
+    hasProvenance ? isHistoricalItem(item) : index < currentTurnStart;
+  const groups = collectResponsesToolGroups(Array.isArray(body.input)
+    ? { ...body, input: body.input.filter((item, index) => !isHistorical(item, index)) }
+    : body);
   const plan = buildRewritePlan(groups);
+  const historicalPlan = buildRewritePlan(collectResponsesToolGroups({
+    input: Array.isArray(body.input) ? body.input.filter(isHistorical) : [],
+  }));
 
   // Deliberately not gated on the plan being non-empty: a turn whose catalog is absent can still
   // replay call items carrying a private `namespace`.
@@ -360,8 +373,13 @@ export function rewriteRoutedNamespaceToolsForUpstream(
   let input = body.input;
   if (Array.isArray(body.input)) {
     let inputChanged = false;
-    const rewrittenInput = body.input.map(item => {
-      const next = rewriteInputItem(item, plan, emitted);
+    const historicalEmitted = new Set<string>();
+    const rewrittenInput = body.input.map((item, index) => {
+      const historicalCatalog = isHistorical(item, index) && isPlainObject(item) && item.type === "additional_tools";
+      const itemEmitted = historicalCatalog
+        ? historicalEmitted
+        : emitted;
+      const next = rewriteInputItem(item, historicalCatalog ? historicalPlan : plan, itemEmitted);
       if (next !== item) inputChanged = true;
       return next;
     });

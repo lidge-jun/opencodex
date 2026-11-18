@@ -135,7 +135,7 @@ for the command, disable-key semantics, and safety constraints.
 
 ### What this means for a disabled native model
 
-Without a native alias configured, disabling a bare native GPT slug does not remove it from the
+By default, without a native alias configured, disabling a bare native GPT slug does not remove it from the
 catalog. The row stays with `visibility: "hide"`, which `/v1/models` and the dashboard both honour
 — they stop listing the model — while Desktop, under the policy above, can keep showing it. So the
 model can still be picked in Desktop after you disabled it, and the surfaces disagree about whether
@@ -147,9 +147,13 @@ runs on the model you disabled, or fails on whatever path that id resolves to. E
 outcome is not the one the toggle implies.
 
 The row is retained deliberately. It holds the real upstream metadata, so re-enabling the model
-restores that metadata instead of a synthesized guess. When you need the row gone outright rather
-than hidden, configure a `nativeAlias` combo: while one exists, disabled bare native rows are
-omitted from the effective catalog entirely.
+restores that metadata instead of a synthesized guess. To omit disabled native rows without a
+native alias, set `"omitDisabledNativeModels": true` in `config.json` and run `ocx sync`.
+The option defaults off. Sync, the generated cache, and Codex-shaped HTTP discovery omit the
+disabled rows while retaining a separately validated native inheritance template, so routed
+rows keep their input and tool metadata even when the only template row was disabled.
+Direct requests to a disabled native id still route normally. A `nativeAlias` combo also keeps
+its existing omission behavior independently of this flag.
 
 If Codex's `config.toml` pins a root `model` that this proxy does not expose — a disabled model
 among them — every new session starts on a model opencodex does not serve. `ocx doctor` reports
@@ -411,8 +415,8 @@ Ultra Fast increases usage/cost, and Codex's own feature requirements still appl
 Codex sorts picker-visible catalog entries by ascending `priority` and advertises the first five as
 `spawn_agent` model overrides. The dashboard Subagents page can select and save up to five bare
 native ids or routed `provider/model` ids. Manually configured `subagentModels` also accepts
-account-qualified `<selector>/<native-openai-model>` ids, but the dashboard does not offer those
-exact ids; saving the page replaces the list with dashboard-visible choices. opencodex assigns low
+account-qualified `<selector>/<native-openai-model>` ids. The dashboard retains these exact saved
+ids, including models missing from the current catalog, when saving the roster. opencodex assigns low
 catalog priorities in the selected order; when account-qualified picker rows are enabled, bare native selections
 expand into selector-qualified groups. Other models remain callable by exact id.
 

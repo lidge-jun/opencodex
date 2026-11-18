@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import * as versionLine from "../../scripts/version-line";
 import {
   compareTagsLenient,
   compareVersions,
@@ -7,6 +8,38 @@ import {
   nextStableRelease,
   parseVersion,
 } from "../../scripts/version-line";
+
+describe("release versions derived from dev", () => {
+  test("advances the base after stable without a committed version bump", () => {
+    expect(versionLine.devReleaseVersion({ base: "2.100.0", stableTags: ["v2.100.0"], previewTags: [], channel: "latest" }))
+      .toBe("2.100.1");
+  });
+
+  test("honors a reviewed higher manifest base", () => {
+    expect(versionLine.devReleaseVersion({ base: "3.0.0", stableTags: ["v2.100.0"], previewTags: [], channel: "latest" }))
+      .toBe("3.0.0");
+  });
+
+  test("increments same-day previews and never reuses a version", () => {
+    expect(versionLine.devReleaseVersion({ base: "2.100.0", stableTags: ["v2.99.0"], previewTags: ["v2.100.0-preview.20261108.1"], channel: "preview", stamp: "20261108" }))
+      .toBe("2.100.0-preview.20261108.2");
+  });
+
+  test("starts the next preview above a published stable", () => {
+    expect(versionLine.devReleaseVersion({ base: "2.100.0", stableTags: ["v2.100.0"], previewTags: [], channel: "preview", stamp: "20261108" }))
+      .toBe("2.100.1-preview.20261108.1");
+  });
+
+  test("accepts older legacy preview tags while resolving the next release", () => {
+    expect(versionLine.devReleaseVersion({ base: "2.100.0", stableTags: ["v2.99.0"], previewTags: ["v2.1.12-preview.1", "v2.5.5-preview.2"], channel: "preview", stamp: "20261108" }))
+      .toBe("2.100.0-preview.20261108.1");
+  });
+
+  test("refuses a higher published preview and clock regression", () => {
+    expect(() => versionLine.devReleaseVersion({ base: "2.100.0", stableTags: ["v2.99.0"], previewTags: ["v2.101.0-preview.20261108.1"], channel: "latest" })).toThrow();
+    expect(() => versionLine.devReleaseVersion({ base: "2.100.0", stableTags: ["v2.99.0"], previewTags: ["v2.100.0-preview.20261109.1"], channel: "preview", stamp: "20261108" })).toThrow();
+  });
+});
 
 describe("version line algebra", () => {
   test("parses optional v, prerelease identifiers, and ignored build metadata", () => {

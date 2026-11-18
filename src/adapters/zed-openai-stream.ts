@@ -1,3 +1,4 @@
+import { markProxyError } from "../lib/client-error-body";
 import type { AdapterEvent, OcxMessagePhase, OcxUsage } from "../types";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
@@ -700,7 +701,7 @@ export async function* translateZedOpenAiStream(
     yield* flushUnclosed(false);
     if (terminal) return;
     if (unfinished) {
-      yield { type: "incomplete", reason: "adapter_eof", ...(usage ? { usage } : {}) };
+      yield markProxyError({ type: "incomplete" as const, reason: "adapter_eof", ...(usage ? { usage } : {}) });
       return;
     }
     const done: AdapterEvent = {

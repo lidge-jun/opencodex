@@ -16,6 +16,7 @@ import { hasHelpFlag, printSubcommandUsage } from "./help";
 import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
 import { assertAnthropicInstanceLoginConfig } from "../oauth/store-anthropic-instance";
+import { oauthCredentialSlot } from "../oauth/credential-siblings";
 import { dropProviderCustomModels } from "../providers/provider-id-rewrite";
 import { cleanupRemovedGcpCredentials, commitProviderGcpCredentialRemoval, providerGcpCredentialMarkers } from "../providers/gcp-credential-cleanup";
 import { providerCredentialInputError } from "../providers/api-keys";
@@ -281,7 +282,7 @@ async function handleAdd(args: string[], deps: ProviderCommandDeps): Promise<voi
         if ((authMode ?? registryEntry.authKind) === "forward") {
           console.warn(`Warning: provider "${name}" uses ChatGPT login (forward auth); --api-key is ignored.`);
         } else if ((authMode ?? registryEntry.authKind) === "oauth") {
-          console.warn(`Warning: provider "${name}" uses OAuth auth; --api-key is ignored. Run: ocx login ${name}`);
+          console.warn(`Warning: provider "${name}" uses OAuth auth; --api-key is ignored. Run: ocx login ${oauthCredentialSlot(name)}`);
         } else {
           provConfig.apiKey = apiKey;
         }
@@ -452,7 +453,7 @@ async function handleAdd(args: string[], deps: ProviderCommandDeps): Promise<voi
   for (const line of modelSelectionGuidance(name)) console.log(line);
   if (setDefault) console.log(`   Set as default provider.`);
   if (registryEntry?.authKind === "oauth") {
-    console.log(`   Authenticate with: ocx login ${name}`);
+    console.log(`   Authenticate with: ocx login ${oauthCredentialSlot(name)}`);
   }
   if (registryEntry?.authKind === "key" && !apiKey) {
     const envKey = `${name.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY`;
@@ -653,6 +654,11 @@ export async function handleProviderCommand(args: string[], deps: ProviderComman
   if (sub === "pacing") {
     const { handleProviderPacingCommand } = await import("./provider-settings");
     process.exitCode = await handleProviderPacingCommand(subArgs, deps);
+    return;
+  }
+  if (sub === "import-cc-switch") {
+    const { cmdProviderCcSwitchImport } = await import("./provider-cc-switch-import");
+    process.exitCode = await cmdProviderCcSwitchImport(subArgs);
     return;
   }
 

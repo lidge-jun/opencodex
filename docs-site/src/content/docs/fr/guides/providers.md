@@ -124,7 +124,7 @@ ocx logout <provider>
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth utilise la passerelle d'abonnement Grok CLI distincte. Le remplacement par clé API utilise `https://api.x.ai/v1` et peut injecter Priority Processing. Catalogue Grok découvert en direct en priorité ; `grok-4.5` est le modèle de repli par défaut. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Modèles Claude ; liste des modèles récupérée en direct depuis `/v1/models`. |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Modèles Kimi Code. L'alias `kimi-for-coding` pointe actuellement vers K2.8 Preview (contexte de 1 M de tokens, raisonnement `low`/`high`/`max`, texte et images). `k3-256k` offre une limite fixe de 256 K. |
-| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | Réutilise la connexion OAuth de `kimi` avec les mêmes modèles sur le protocole Responses. Le contenu du raisonnement reste chiffré côté serveur ; les appels d'outils et leurs résultats restent visibles. |
+| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | Réutilise la connexion OAuth de `kimi` avec les mêmes modèles sur le protocole Responses. Le contenu du raisonnement reste chiffré côté serveur ; les appels d'outils et leurs résultats restent visibles. Ajoutez-le depuis le sélecteur **Add provider** du tableau de bord (**Kimi (Responses)**) ou avec `ocx provider add kimi-responses --live`. Il n'a pas de connexion propre : l'ajouter alors que Kimi est déjà connecté ne demande pas de seconde connexion, et se connecter depuis son entrée du sélecteur ne crée que cette ligne, sans toucher à la ligne `kimi`. Se déconnecter depuis l'une ou l'autre ligne (`ocx logout kimi` ou `ocx logout kimi-responses`, en local ou avec `--live`, ou **Logout** sur l'une ou l'autre ligne du tableau de bord) retire le compte Kimi actif pour les deux lignes et l'indique ; si un autre compte Kimi est enregistré, il devient actif pour les deux lignes ; aucune ligne ne l'utilise tant qu'il est suspendu, et s'il doit se reconnecter, reconnectez-le. Supprimer une ligne depuis le tableau de bord (ou avec `--live`) conserve la connexion tant que l'autre l'utilise, et supprimer la dernière la supprime ; un `ocx provider remove` local laisse les connexions enregistrées en place, comme pour les autres fournisseurs. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Passerelle d'abonnement Nous Research (le même service en amont que celui utilisé par Hermes Agent). Connexion par autorisation d'appareil auprès de `portal.nousresearch.com` ; le jeton d'accès est le JWT d'inférence envoyé avec chaque requête. Le catalogue mixte de modèles payants et `:free` (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...) est découvert en direct pour le compte connecté. Les jetons d'actualisation sont à usage unique et renouvelés à chaque actualisation. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | La connexion initiale importe la session de l'installation locale de `kiro-cli`, déjà authentifiée (sous Unix, installez avec `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`; sous Windows PowerShell, utilisez `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`; puis exécutez `kiro-cli login`). **Ajouter un compte** déconnecte `kiro-cli`, lance une nouvelle connexion dans le navigateur qui change le compte utilisé par `kiro-cli`, puis enregistre les métadonnées propres au profil. Les comptes OpenCodex existants sont préservés ; une annulation ou un échec restaure la session `kiro-cli` précédente. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth avec le protocole Cloud Code Assist. La découverte en direct utilise le point de terminaison CCA authentifié `v1internal:fetchAvailableModels` et publie les modèles d'agent accessibles au compte connecté ; le catalogue maintenu reste la solution de repli. |
@@ -180,8 +180,7 @@ Les fournisseurs OAuth dont les identifiants comportent un identifiant de compte
 peuvent conserver plusieurs connexions. La page **Fournisseurs** affiche ces comptes dans une liste déroulante,
 permet d'en ajouter un autre et de changer de compte actif sans déconnecter les autres. Une connexion ordinaire
 avec un identifiant Kimi qui ne contient aucune information d'identité remplace l'emplacement actif, tandis que l'action explicite **Ajouter un
-compte** préserve cet emplacement et en active un nouveau, distinct. Les comptes Kiro sont indexés par ARN de
-profil. `chatgpt` n'utilise toujours qu'un seul emplacement, car les comptes du pool Codex sont gérés dans un
+compte** préserve cet emplacement et en active un nouveau, distinct. Les comptes Kiro utilisent l’ARN du profil avec l’adresse e-mail de l’utilisateur connecté lorsqu’elle est disponible ; plusieurs utilisateurs peuvent conserver des identifiants distincts pour un même profil d’organisation. `chatgpt` n'utilise toujours qu'un seul emplacement, car les comptes du pool Codex sont gérés dans un
 registre distinct. Les jetons restent dans `~/.opencodex/auth.json` ; `/api/oauth/accounts` ne renvoie que des
 métadonnées masquées.
 
@@ -255,6 +254,8 @@ dans le pool de comptes, ce que fait aussi le pool de comptes Codex du tableau d
 
 ### Importation des identifiants Kiro
 
+Dans le tableau de bord, choisissez **AWS IAM Identity Center**, puis indiquez l’URL du portail d’accès AWS et la région SSO de votre organisation. Autorisez le code d’appareil dans votre navigateur et choisissez le profil Kiro à enregistrer si plusieurs sont proposés. Aucun CLI ni accès SSH n’est nécessaire. Les instructions CLI ci-dessous concernent le choix **Kiro CLI**.
+
 La connexion Kiro nécessite la CLI Kiro : sous Unix, installez-la avec `curl -fsSL https://cli.kiro.dev/install | bash` ;
 sous Windows PowerShell, utilisez `irm 'https://cli.kiro.dev/install.ps1' | iex`, puis connectez-vous avec `kiro-cli login`.
 En l'absence de session `kiro-cli`, `ocx login kiro` se rabat sur un jeton d'accès collé ou sur la variable
@@ -309,7 +310,7 @@ existante n'est pas concernée.
 
 ## 3. Catalogue des clés API
 
-opencodex fournit 106 préréglages intégrés : 85 à clé, 17 OAuth, trois locaux et un préréglage par défaut de
+opencodex fournit 108 préréglages intégrés : 87 à clé, 17 OAuth, trois locaux et un préréglage par défaut de
 transfert ChatGPT. Dans le tableau de bord, le sélecteur **Ajouter un fournisseur** ouvre le tableau de bord du
 fournisseur à clé, valide la clé et l'enregistre ; la validation dépend du fournisseur. Parmi les entrées notables :
 
@@ -359,12 +360,12 @@ promotionnels de Cline ne sont accessibles que dans l'IDE ou la CLI Cline, pas p
 | Novita AI | `https://api.novita.ai/openai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
-| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
+| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1`. L’API `moonshot` utilise `kimi-k3.1-pro` par défaut ; les sélections `kimi-k2.5` enregistrées pour les adresses API officielles migrent vers ce modèle. |
 | Hugging Face | `https://router.huggingface.co/v1` |
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
-| [BigModel Coding Plan — Responses (liste statique)](/guides/providers/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
+| [BigModel Coding Plan — Responses (liste statique)](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
 | Qwen Cloud | Forfait à jetons (par défaut) : `https://token-plan.maas.qwencloudapi.com/compatible-mode/v1` · Facturation à l'usage : `https://dashscope.aliyuncs.com/compatible-mode/v1` · ou personnalisé |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
@@ -649,7 +650,7 @@ reste une passerelle à clé ou jeton d'abonnement sur son point de terminaison 
 Copilot présente un catalogue qui utilise plusieurs protocoles : ces modèles (`gpt-5.3-codex`, `gpt-5.4`,
 `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) rejettent
 `/chat/completions` pour le trafic d'agent. opencodex route donc ces modèles sur l'API Responses par défaut,
-tandis que tous les autres modèles Copilot restent sur Chat Completions. L'ordre de priorité est le suivant :
+tandis que tous les autres modèles Copilot restent sur Chat Completions. `gpt-6-sol`, `gpt-6-luna`, `gpt-6.2-sol`, `gpt-6.2-astra` utilisent aussi Responses comme valeur par défaut préventive intégrée ; aucun rejet n'a été observé pour eux et la présence des modèles GPT-6.2 dans Copilot n'est pas vérifiée. L'ordre de priorité est le suivant :
 verrouillage explicite du protocole → entrée [`modelAdapters`](/fr/reference/configuration/providers/) définie
 par l'utilisateur → valeur par défaut du registre → adaptateur commun au fournisseur. Pour faire passer par
 Responses un modèle dépourvu de valeur par défaut intégrée, par exemple `gpt-5.4-nano`, définissez

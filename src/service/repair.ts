@@ -10,17 +10,56 @@ import { assertServiceAuthEnvironment } from "./auth-preflight";
 import { assertServiceEnvironmentMatchesInstall } from "./guards";
 import { installLaunchd, restartLaunchdJob } from "./launchd";
 import type { LaunchdInstallOutcome } from "./launchd";
-import { TASK, writeServiceInstallState, serviceSourceDir, resolveServiceOwnership, serviceLauncherPathDiagnostic } from "./state";
+import { TASK, writeServiceInstallState, serviceSourceDir, resolveServiceOwnership, serviceLauncherPathDiagnostic, windowsLauncherVbsPath, windowsServiceScriptPath } from "./state";
 import type { ServiceOwnership, ServiceOwnershipResolution } from "./state";
 import { installSystemd } from "./systemd";
-import { writeWindowsSchedulerAssets, reregisterWindowsSchedulerTask, windowsSchedulerRegistrationMatchesSnapshot, restoreWindowsSchedulerTaskIfAbsent, startWindows, stopWindows, statusWindowsXml } from "./windows-ops";
+import { writeWindowsSchedulerAssets, reregisterWindowsSchedulerTask, windowsSchedulerRegistrationMatchesSnapshot, restoreWindowsSchedulerTaskIfAbsent, startWindows, stopWindows, statusWindowsXml, snapshotWindowsSchedulerAssets } from "./windows-ops";
 import { probeWindowsSchedulerTask, SCHEDULER_SETTLE_DELAYS_MS, settleDelay } from "./windows-scheduler";
 import type { WindowsSchedulerTaskProbe } from "./windows-scheduler";
 import { taskXmlSection, taskXmlWithoutCommentsAndCdata, taskXmlElementCount, taskXmlOptionalValueEquals, windowsTaskRegistrationOwnedByAttempt, windowsTaskHasSessionRecoveryTriggers, windowsTaskRegistrationHealthy, windowsTaskRegistrationRefreshableLegacy } from "./windows-taskxml";
 import type { ExpectedWindowsTaskUserId } from "./windows-taskxml";
 import { win32 } from "node:path";
 import { assertNoDesktopSupervision, createSupervisionLatch, type SupervisionInspector, type SupervisionLatch } from "./desktop-command-guard";
+import { prepareDisconnectedClientServiceRestart } from "./disconnected-client-restart";
+import type { HeldRestartReceipt } from "./restart-proxy-stop";
+import { killWindowsSchedulerWrappers } from "../lib/windows-service-wrappers";
+import { clearPendingTeardown, pendingTeardownPathFor } from "../config/pending-teardown";
 
+/** Append what the caller's state means to an error, keeping the error itself (its class and code). */
+function withContext(error: unknown, context: string): unknown {
+  if (error instanceof Error) { error.message = `${error.message} ${context}`; return error; }
+  return new Error(`${String(error)} ${context}`);
+}
+
+/**
+ * Release the deferred-teardown receipts a scheduler restart kept, each once a replacement serves
+ * the endpoint it names. Returns the receipts kept: client routing still names those endpoints,
+ * and `ocx stop` finishes an abandoned receipt by restoring native client routing.
+ */
+async function releaseRestartReceipts(
+  held: readonly HeldRestartReceipt[],
+  confirm?: (receipt: HeldRestartReceipt, stoppedPids: readonly number[]) => Promise<boolean>,
+): Promise<HeldRestartReceipt[]> {
+  const stoppedPids = held.map(receipt => receipt.pid);
+  const kept: HeldRestartReceipt[] = [];
+  for (const receipt of held) {
+    const serving = await (confirm ?? (async (target: HeldRestartReceipt, pids: readonly number[]) => {
+      const { schedulerReplacementServing } = await import("./orchestration");
+      return schedulerReplacementServing(target.endpoint, pids);
+    }))(receipt, stoppedPids);
+    if (!serving) { kept.push(receipt); continue; }
+    if (!clearPendingTeardown(receipt.nonce)) {
+      console.warn(`⚠️  Could not remove the restart's teardown receipt ${pendingTeardownPathFor(receipt.nonce)}; the next 'ocx stop' finishes it.`);
+    }
+  }
+  return kept;
+}
+
+const RESTART_RECEIPT_KEPT = "The restart kept its teardown receipt, because client routing still points at the stopped proxy's port and no replacement was proven to serve it. "
+  + "Once a proxy serves there, run 'ocx stop' and then 'ocx service start'; if none does, 'ocx stop' restores native client routing.";
+
+/** What a scheduler restart's stops kept, shared with the wrapper that settles it on failure. */
+type RestartReceiptState = { held: HeldRestartReceipt[]; startIssued: boolean };
 /**
  * The two CLI verbs `repairService` serves. They differ on ONE platform and ONE case: a
  * macOS job that is already loaded from the current plist, which `repair` must not touch and
@@ -35,7 +74,25 @@ export interface RepairServiceDeps extends RuntimePreflightDeps {
   assertEnv?: () => void;
   assertAuth?: () => void;
   writeSchedulerAssets?: (runtime: DurableBunRuntime) => void;
+  /** Captures the current scheduler assets and returns their restore; see snapshotWindowsSchedulerAssets. */
+  snapshotSchedulerAssets?: () => () => void;
   stopScheduler?: () => void;
+  /** Same installation-scoped wrapper cleanup used by service stop/install. */
+  killServiceWrappers?: () => void;
+  /** Bounded post-stop respawn verification; null proves no proxy answered. */
+  schedulerProxyStillLive?: () => Promise<{ port: number } | null>;
+  /**
+   * Stops the home-verified tracked proxy with a receipt-backed deferred stop, and throws for a proxy
+   * that still answers but cannot be verified (stopTrackedProxyForServiceRestart); failures propagate.
+   */
+  stopTrackedProxy?: () => Promise<unknown>;
+  /**
+   * After the scheduler start, whether a replacement other than the stopped pids serves; only then
+   * does the restart release the deferred-teardown receipts its stops kept (schedulerReplacementServing).
+   */
+  confirmSchedulerReplacement?: (receipt: HeldRestartReceipt, stoppedPids: readonly number[]) => Promise<boolean>;
+  /** Refuses a restart that must not stop this home's live proxy (assertSchedulerRestartTargetAllowed). */
+  assertSchedulerRestartTarget?: () => Promise<void>;
   startScheduler?: () => void;
   writeSchedulerState?: (runtime: DurableBunRuntime) => void;
   writeNativeState?: (runtime: DurableBunRuntime) => void;
@@ -70,6 +127,7 @@ export interface RepairServiceDeps extends RuntimePreflightDeps {
   schedulerLauncher?: string;
   /** Test seam — defaults to process.platform so Linux CI cannot hit real installSystemd. */
   platform?: NodeJS.Platform;
+  prepareDisconnectedClientRestart?: () => Promise<void>;
   /** Test seam for a recorded temporary launcher. */
   launcherPathDiagnostic?: () => string | null;
 }
@@ -156,6 +214,19 @@ export async function assertSchedulerRegistrationBeforeStart(
  * macOS/Linux: re-run the user-level install/reload path.
  */
 export async function repairService(deps: RepairServiceDeps = {}): Promise<void> {
+  const restart: RestartReceiptState = { held: [], startIssued: false };
+  try {
+    await repairServiceWith(deps, restart);
+  } catch (error) {
+    if (restart.held.length === 0) throw error;
+    // A recovery start may have brought a proxy back on the stopped endpoint; only then may the
+    // receipt go. Otherwise the error names what was kept and how to finish it.
+    const kept = restart.startIssued ? await releaseRestartReceipts(restart.held, deps.confirmSchedulerReplacement) : restart.held;
+    throw kept.length > 0 ? withContext(error, RESTART_RECEIPT_KEPT) : error;
+  }
+}
+
+async function repairServiceWith(deps: RepairServiceDeps, restart: RestartReceiptState): Promise<void> {
   const latch = deps.supervisionLatch ?? createSupervisionLatch();
   assertNoDesktopSupervision(deps.inspectSupervision, latch);
   const diagnose = deps.diagnose ?? diagnoseService;
@@ -193,8 +264,55 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
   const temporaryLauncher = (deps.launcherPathDiagnostic ?? (() => serviceLauncherPathDiagnostic(undefined, platform, true)))();
   if (temporaryLauncher) console.warn(`⚠️ ${temporaryLauncher}`);
 
+  const assertRestartOwnership = () => {
+    assertNoDesktopSupervision(deps.inspectSupervision, latch);
+    (deps.assertEnv ?? assertServiceEnvironmentMatchesInstall)();
+    const current = (deps.readOwnership ?? resolveServiceOwnership)();
+    if (!Bun.deepEquals(current, ownership, true)) throw new Error("Service ownership changed during restart.");
+  };
+  // Ends the task instance only. The wrappers it leaves running still supervise the proxy, so they
+  // are cleaned up after that proxy accepted its stop (below): removing them first left a survivor
+  // whose stop was refused or unverifiable with nothing to restart it (#8416).
+  let schedulerStopped = false;
+  // Deferred-teardown receipts the scheduler restart's stops kept: client routing still names the
+  // stopped endpoints, so they are released only once a replacement serves (end of the scheduler path).
+  const holdRestartReceipt = (receipt: HeldRestartReceipt) => { restart.held.push(receipt); };
+  const stopSchedulerForRestart = (beforeStop: () => void) => {
+    if (schedulerStopped) return;
+    beforeStop();
+    (deps.stopScheduler ?? stopWindows)();
+    schedulerStopped = true;
+  };
+  // Defer cleanup until the selected backend's registration has been verified.
+  const prepareDisconnectedRestart = async (verifyRegistration?: () => void) => {
+    if (deps.verb !== "restart") return;
+    const beforeStop = () => { assertRestartOwnership(); verifyRegistration?.(); };
+    beforeStop();
+    const schedulerBackend = platform === "win32" && diag.backend !== "native";
+    await (deps.prepareDisconnectedClientRestart ?? (() => prepareDisconnectedClientServiceRestart({
+      beforeStop,
+      ...(schedulerBackend ? { stop: async (pid: number) => {
+        const { stopProxyForServiceRestart } = await import("./restart-proxy-stop");
+        return stopProxyForServiceRestart(pid, holdRestartReceipt);
+      } } : {}),
+      stopManager: async () => {
+        const { platformOps } = await import("./orchestration");
+        const ops = platformOps(diag.backend === "native" ? "native" : "scheduler", { platform });
+        if (!ops) throw new Error("Service manager is unavailable; restart stopped.");
+        // The import yields; repeat ownership and registration proof immediately before stop.
+        beforeStop();
+        if (platform === "win32" && diag.backend !== "native") {
+          stopSchedulerForRestart(beforeStop);
+          return;
+        }
+        ops.stop();
+      },
+    })))();
+  };
+
   if (platform === "win32") {
     if (diag.backend === "native") {
+      if (deps.verb === "restart") await prepareDisconnectedRestart();
       await (deps.repairNative ?? ((selected: DurableBunRuntime) => installWinswService(defaultWinswEntry(serviceSourceDir, selected))))(runtime);
       assertNoDesktopSupervision(deps.inspectSupervision, latch);
       (deps.writeNativeState ?? ((selected: DurableBunRuntime) => writeServiceInstallState("native", undefined, {}, selected)))(runtime);
@@ -256,8 +374,103 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
           : "Task Scheduler registration is not a recognized legacy OpenCodex definition; it was preserved for manual review.",
       );
     }
-    try { (deps.stopScheduler ?? stopWindows)(); } catch { /* not running */ }
-    (deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)(runtime);
+    const verifyRegistrationBeforeStop = () => {
+      let currentXml = "";
+      try { currentXml = readSchedulerXml(); } catch { /* Refuse unreadable registration below. */ }
+      if (!currentXml.trim()) throw new Error("Task Scheduler registration became unreadable before stop; it was preserved and not stopped.");
+      if (!windowsSchedulerRegistrationMatchesSnapshot(currentXml, registeredXml)) {
+        throw new Error("Task Scheduler registration changed before stop; it was preserved and not stopped.");
+      }
+    };
+    // Capture the assets the verified registration runs before anything is stopped. A snapshot that
+    // cannot be read (an ACL refusal) then refuses while the service is still running, rather than
+    // after the stop, where the failed-rewrite recovery below could never start it again.
+    const restoreAssets = (deps.snapshotSchedulerAssets ?? snapshotWindowsSchedulerAssets)();
+    if (deps.verb === "restart") {
+      await (deps.assertSchedulerRestartTarget ?? (async () => {
+        const { assertSchedulerRestartTargetAllowed } = await import("./orchestration");
+        return assertSchedulerRestartTargetAllowed();
+      }))();
+      await prepareDisconnectedRestart(verifyRegistrationBeforeStop);
+      assertRestartOwnership();
+      verifyRegistrationBeforeStop();
+      stopSchedulerForRestart(() => { assertRestartOwnership(); verifyRegistrationBeforeStop(); });
+      // `schtasks /end` does not reach the wrapper's child, so a Home or a connected Child proxy
+      // survives it. Stop that home-verified proxy with a receipt-backed deferred stop: the task is
+      // still registered, so a bare /api/stop is refused as respawnable, and this restart is what
+      // verifies the respawn window below. A refused stop propagates with the wrappers untouched.
+      const stopTracked = deps.stopTrackedProxy ?? (async () => {
+        const { stopTrackedProxyForServiceRestart } = await import("./orchestration");
+        return stopTrackedProxyForServiceRestart(holdRestartReceipt);
+      });
+      const stillLive = deps.schedulerProxyStillLive ?? (async () => {
+        const { proxyStillLiveAfterStop } = await import("./orchestration");
+        return proxyStillLiveAfterStop({ canRespawn: true });
+      });
+      assertRestartOwnership();
+      verifyRegistrationBeforeStop();
+      try {
+        await stopTracked();
+      } catch (error) {
+        throw withContext(error, "The scheduler wrappers that supervise it were left in place.");
+      }
+      assertRestartOwnership();
+      verifyRegistrationBeforeStop();
+      (deps.killServiceWrappers ?? (() => killWindowsSchedulerWrappers({
+        scriptPath: windowsServiceScriptPath(),
+        launcherPath: windowsLauncherVbsPath(),
+      })))();
+      let live = await stillLive();
+      if (live) {
+        // A wrapper can respawn its child between the proxy's exit and the cleanup above. Nothing
+        // brings it back once the wrappers are gone, so stop that one the same way and look again.
+        // The wrappers are already gone here: a stop that fails now leaves that proxy unsupervised,
+        // and the restart says so instead of implying anything still watches it.
+        const unsupervised = "A proxy a scheduler wrapper restarted before the wrapper cleanup is still running, and the wrappers that supervised it were already removed, so nothing restarts it if it exits. "
+          + "Stop it with 'ocx stop', then run 'ocx service restart' again.";
+        assertRestartOwnership();
+        verifyRegistrationBeforeStop();
+        try {
+          await stopTracked();
+          live = await stillLive();
+        } catch (error) {
+          throw withContext(error, unsupervised);
+        }
+        if (live) throw new Error(unsupervised);
+      }
+      assertRestartOwnership();
+      verifyRegistrationBeforeStop();
+    } else {
+      try { (deps.stopScheduler ?? stopWindows)(); } catch { /* not running */ }
+    }
+    // The proxy is stopped now. A rewrite that fails (a read-only asset, an ACL refusal) must not
+    // leave it stopped: put the previous assets back and start the registration verified above,
+    // which still runs them (the snapshot above), then report the original failure.
+    try {
+      (deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)(runtime);
+    } catch (err) {
+      const recoveryErrors: unknown[] = [];
+      try { restoreAssets(); } catch (error) { recoveryErrors.push(error); }
+      if (recoveryErrors.length === 0) {
+        try {
+          await assertSchedulerSnapshotBeforeStart(
+            readSchedulerXml,
+            registeredXml,
+            deps.settleSchedulerRead ?? settleDelay,
+            "Task Scheduler registration changed after the failed asset write; it was preserved and not started.",
+            "Task Scheduler registration became unreadable after the failed asset write; it was preserved and not started.",
+          );
+          assertNoDesktopSupervision(deps.inspectSupervision, latch);
+          (deps.startScheduler ?? startWindows)(); restart.startIssued = true;
+        } catch (error) {
+          recoveryErrors.push(error);
+        }
+      }
+      if (recoveryErrors.length > 0) {
+        throw new AggregateError([err, ...recoveryErrors], "Scheduler assets could not be written, and the previous registration was not restarted.");
+      }
+      throw err;
+    }
     // Rewriting the on-disk assets does not touch the definition Task Scheduler holds, so a
     // task registered by an older version keeps its old triggers forever: status reports it
     // stale, tells the user to run repair, and repair changes nothing it complains about.
@@ -349,7 +562,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
               "Task Scheduler state remained unreadable before restart; the registration was preserved and not started.",
             );
             assertNoDesktopSupervision(deps.inspectSupervision, latch);
-            (deps.startScheduler ?? startWindows)();
+            (deps.startScheduler ?? startWindows)(); restart.startIssued = true;
           } catch (error) {
             recoveryErrors.push(error);
           }
@@ -375,10 +588,14 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
       "Task Scheduler registration became unreadable before restart; it was preserved and not started.",
     );
     assertNoDesktopSupervision(deps.inspectSupervision, latch);
-    (deps.startScheduler ?? startWindows)();
+    (deps.startScheduler ?? startWindows)(); restart.startIssued = true;
     (deps.writeSchedulerState ?? ((selected: DurableBunRuntime) => writeServiceInstallState("scheduler", undefined, {}, selected)))(runtime);
+    const kept = await releaseRestartReceipts(restart.held, deps.confirmSchedulerReplacement);
+    restart.held = [];
+    if (kept.length > 0) console.warn(`⚠️  ${RESTART_RECEIPT_KEPT}`);
     return;
   }
+  if (deps.verb === "restart") await prepareDisconnectedRestart();
   if (platform === "darwin") {
     const outcome = (deps.repairLaunchd ?? installLaunchd)();
     // `installLaunchd` is the only function that knows whether it published anything, and its

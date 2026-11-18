@@ -54,20 +54,6 @@
   gap: var(--space-4);
 }
 
-/* Settings keep one reading order and one control column across the overview. */
-.dash-overview-tools {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-4);
-  align-items: stretch;
-}
-
-.dash-overview-tools > .panel {
-  min-width: 0;
-  height: 100%;
-  box-sizing: border-box;
-}
-
 /* Sidecar settings: two panels side by side, gap matches --space-4.
 
    The track floor is the width at which a card can still render its real layout — copy
@@ -538,39 +524,6 @@
   container: dashboard-overview / inline-size;
 }
 
-.dash-overview-head .stat-row {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-}
-
-.dash-overview-head .stat-row > .stat {
-  min-width: 0;
-  min-height: 126px;
-  display: grid;
-  grid-template-rows: 24px 36px 18px;
-  align-content: center;
-  justify-content: stretch;
-  gap: 4px;
-}
-
-.dash-overview-head .stat .label {
-  margin: 0;
-  min-width: 0;
-}
-
-.dash-overview-head .stat .value {
-  min-width: 0;
-  align-self: center;
-  font-variant-numeric: tabular-nums;
-}
-
-.dash-overview-head .dash-stat-version {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dash-overview-head .dash-stat-coverage { margin: 0; }
-
 .dash-overview-stack .panel {
   min-width: 0;
   padding: 20px;
@@ -594,23 +547,6 @@
   gap: 8px;
   min-width: 0;
 }
-
-.dash-overview-tools .dash-delegation-controls {
-  justify-content: flex-start;
-}
-
-.dash-overview-tools .dash-delegation-controls > .custom-select:first-child {
-  flex: 1 1 14rem;
-  min-width: 0;
-}
-
-.dash-overview-tools .dash-delegation-controls > .btn {
-  margin-left: auto;
-}
-
-.dash-effort-panel .injection-label { order: 0; }
-.dash-effort-controls { order: 1; }
-.dash-effort-controls > .custom-select { flex: 1; min-width: 0; }
 
 .dash-overview-stack .dash-delegation-controls .select-trigger,
 .dash-effort-controls .select-trigger,
@@ -704,10 +640,6 @@
 .dash-overview-stack .setting-hint,
 .dash-overview-stack .dash-sync-hint { max-width: 60ch; }
 
-@container dashboard-overview (max-width: 64rem) {
-  .dash-overview-head .stat-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
-
 @container dashboard-overview (max-width: 46rem) {
   .dash-overview-stack .dash-delegation-summary,
   .dash-overview-stack .dash-sync-summary,
@@ -729,23 +661,10 @@
 }
 
 @container dashboard-overview (max-width: 30rem) {
-  .dash-overview-head .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dash-overview-stack .panel { padding: 16px; }
   .dash-overview-stack .select-trigger,
   .dash-overview-stack .panel .btn:not([aria-haspopup="dialog"]),
   .dash-overview-stack .dash-vision-advanced-trigger { min-height: 44px; }
-}
-
-
-.dash-ma-option { min-width: 36px; padding: 5px 10px; }
-
-@container dashboard-overview (max-width: 22rem) {
-  .dash-overview-head .dash-ma-switch { max-width: 100%; }
-  .dash-overview-head .dash-ma-option {
-    min-width: 0;
-    flex: 1 1 auto;
-    padding: 5px 4px;
-  }
 }
 
 .source-scope-groups { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-6); margin-top: var(--space-3); max-height: 220px; overflow: auto; }

@@ -696,13 +696,37 @@ describe("Codex CLI install provenance", () => {
 });
 
 describe("install content binding", () => {
+  test("a manifest path identity change above numeric precision refuses", async () => {
+    const fs = virtualManagedNpmGlobal();
+    let changed = false;
+    const deps = virtualInspectionDeps(fs, {
+      lstat: (path: string, options?: { bigint?: boolean }) => {
+        const value = fs.lstat(path, options) as object;
+        return path === VIRTUAL_MANIFEST
+          ? { ...value, ino: options?.bigint ? 9007199254740992n + BigInt(changed) : 9007199254740992 }
+          : value;
+      },
+      stat: (path: string, options?: { bigint?: boolean }) => {
+        const value = fs.stat(path, options) as object;
+        return path === VIRTUAL_MANIFEST ? { ...value, ino: options?.bigint ? 9007199254740992n : 9007199254740992 } : value;
+      },
+      readFile: (path: string) => {
+        const value = fs.readFile(path);
+        if (path === VIRTUAL_MANIFEST) changed = true;
+        return value;
+      },
+    });
+    expect((await inspectCodexCliInstall(deps)).managed).toBe(false);
+    expect(changed).toBe(true);
+  });
+
   test("an ownership-only read never opens the backing bytes", async () => {
     const fs = virtualManagedNpmGlobal();
     const probed: string[] = [];
     const deps = virtualInspectionDeps(fs, {
-      lstat: (path: string) => {
+      lstat: (path: string, options?: { bigint?: boolean }) => {
         if (path.includes("@openai/codex-")) probed.push(path);
-        return fs.lstat(path);
+        return fs.lstat(path, options);
       },
       readFile: (path: string) => {
         if (path === VIRTUAL_BACKING_BINARY) {
@@ -795,8 +819,8 @@ describe("install content binding", () => {
     const stat = fs.stat;
     const deps = virtualInspectionDeps(fs, {
       observeInstallContent: true,
-      stat: (path: string) => {
-        const result = stat(path);
+      stat: (path: string, options?: { bigint?: boolean }) => {
+        const result = stat(path, options);
         if (path === VIRTUAL_BACKING_BINARY) {
           backingStats.count += 1;
           if (backingStats.count === 1) fs.bumpIdentity(path);
@@ -806,6 +830,22 @@ describe("install content binding", () => {
     });
     const report = await inspectCodexCliInstall(deps);
     expect(report.installContentDigest).toBeNull();
+  });
+
+  test("a backing identity change above numeric precision refuses", async () => {
+    const fs = virtualManagedNpmGlobal();
+    let count = 0;
+    const deps = virtualInspectionDeps(fs, {
+      observeInstallContent: true,
+      stat: (path: string, options?: { bigint?: boolean }) => {
+        const value = fs.stat(path, options) as object;
+        if (path !== VIRTUAL_BACKING_BINARY) return value;
+        const changed = count++ > 0;
+        return { ...value, ino: options?.bigint ? 9007199254740992n + BigInt(changed) : 9007199254740992 };
+      },
+    });
+    expect((await inspectCodexCliInstall(deps)).installContentDigest).toBeNull();
+    expect(count).toBeGreaterThan(1);
   });
 
   test("the package-vendor fallback binds when no resolve hit exists and globals are fully probed", async () => {

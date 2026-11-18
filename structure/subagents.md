@@ -21,15 +21,13 @@ CLI installation inspection reason codes, including Windows deferral, follow the
 
 ## Plaintext V2 agent messages
 
-`src/responses/plaintext-v2-agent-messages.ts` owns the experimental, configuration-only
-`plaintextV2AgentMessages` request compiler and response restoration. The default is unset;
-only explicit true on Responses ingress to the final canonical ChatGPT forward route activates it.
+`src/responses/plaintext-v2-agent-messages.ts` owns the experimental request compiler and response restoration. `src/types/multi-agent.ts` owns the shared surface-mode type used by configuration and re-exported by catalog parsing. The legacy `plaintextV2AgentMessages` field defaults to unset; explicit true or the explicitly selected `v2-plaintext` mode enables it through `isPlaintextV2AgentMessagesEnabled` in `src/config/multi-agent-surface.ts`. Selecting or leaving that mode preserves the independent legacy field. Only Responses ingress to the final canonical ChatGPT forward route activates rewriting. Catalog pins affect new sessions, but the compiler predicate is evaluated for every eligible request, including later requests from existing V2 sessions. Disabling this setting does not delete retained history, provider, response-cache or diagnostic copies.
 A default collaboration catalog is required: top-level `tools`, or, when that field is absent,
 the first input item's developer `additional_tools` catalog used by Responses Lite. Explicit
 top-level catalogs take precedence; user-role and later historical catalogs do not opt in.
 The compiler preserves caller objects,
 aliases the namespace and three message functions, and removes only their true encryption marker.
-Declaration/reference collisions refuse the whole rewrite without changing the request.
+Declaration/reference collisions refuse the whole rewrite without changing the request. The request-level mode decision is captured once for combo children and internal retries; a disabled setting at normalization prevents compilation while keeping the captured replay scope strict.
 
 `src/adapters/openai-responses.ts` returns request-local alias capabilities. The Responses core
 refreshes them after every request rebuild and restores JSON, SSE and WebSocket identities after
@@ -50,6 +48,7 @@ response/debug state. This is application-level plaintext over HTTPS, depends on
 upstream behavior, and does not decrypt existing tasks or replace authenticated recovery.
 
 Restored calls and selectors carry an explicit collaboration namespace and unqualified child name.
+Restoration treats a null namespace as absent, rejects non-string namespace types, and restores the native namespace/name pair before HTTP/WS delivery and continuation publication.
 Codex treats qualified names literally and defaults absent namespaces to functions. Only child
 declarations inherit their restored namespace container; the compiler never invents an empty
 encryption marker when the upstream omitted it or returned a nonempty marker.
@@ -60,9 +59,9 @@ Pool credentials used by subagent routes can be
 [linked to Orca-managed homes](codex-home.md#orca-source-owned-account-import). The account-store
 resolver enforces source identity and expiry before those credentials reach routing.
 
-## Multi-agent surface mode (3-state)
+## Multi-agent surface mode
 
-See [surface selection and capacity](subagent-capacity.md#multi-agent-surface-mode-3-state) for the mode, global flag and hybrid configuration contract.
+See [surface selection and capacity](subagent-capacity.md#multi-agent-surface-selection) for the mode, global flag and hybrid configuration contract.
 
 ### Concurrent child limit
 
@@ -279,7 +278,7 @@ and `tests/server/server-native-catalog-priority.test.ts`.
 
 When account selectors are active, one featured bare native id expands into a complete selector row
 group. Catalog priorities use the selector count as a stride so each group stays together without
-widening Codex's five-row advertisement window. Fresh defaults are Astra, GPT-6.1 Sol and Luna
+widening Codex's five-row advertisement window. Fresh defaults are GPT-6.2 Astra, GPT-6.2 Sol and GPT-6 Luna
 (`DEFAULT_SUBAGENT_MODELS`). Startup upgrades unmarked rosters once: prepend `gpt-6-astra`, retain the first four unique
 non-Astra choices, then move retained bare `gpt-5.5` last. The old fifth choice is dropped;
 an unmarked empty list becomes Astra only, and an unset list receives the fresh defaults.
@@ -288,7 +287,8 @@ and drops every other bare `gpt-5.5`/`gpt-5.6` id; ids with a `/` are untouched,
 empty by the cleanup receives the defaults.
 A third one-time step (version 3) rewrites bare `gpt-6-sol` to `gpt-6.1-sol` in place without
 duplicating it; routed and account-qualified ids keep their spelling, and GPT-6 Sol re-added later
-stays. `subagentModelsVersion: 3` records completion, so later user edits (including an empty list or
+stays. Version 4 replaces bare `gpt-6-astra` and `gpt-6.1-sol` in place with their GPT-6.2 successors and deduplicates while keeping qualified IDs.
+`subagentModelsVersion: 4` records completion, so later user edits (including an empty list or
 removing Astra) persist. The migration rebases on the latest disk config under the existing
 mutation lock; failed persistence degrades to an in-memory roster for that run without a stale
 whole-config overwrite. Existing disabled-model visibility rules remain unchanged.
@@ -356,26 +356,33 @@ the same refusal as the PUT. Applying a proposal is the ordinary
   is not sent. The call goes through the proxy's own `/v1/chat/completions` via
   `postLocalChatCompletion` (`src/lib/local-chat-completion.ts`, shared with the routed vision describer), on
   the root `model` of Codex `config.toml` unless the caller names one. An answer that is not the strict JSON
-  shape, a missing role, or a field outside the vocabulary leaves that role **unsized** with the reason;
-  nothing is guessed. Keys beyond the five answer fields are ignored, and all five stay required. The
+  shape, a missing role, or a tier or effort outside the vocabulary leaves that role **unsized** with the reason;
+  a missing or unknown domain defaults to general. Keys beyond the six answer fields are ignored; the other five stay required. The
   sizing model never names a model.
-- **Mapping is deterministic code.** `src/codex/role-auto-assign.ts` draws candidates from
-  `subagentSelectableModels` (the same list the role picker renders) and tiers them: `codexRoleTiers` in the
-  opencodex config first, then price rank (input plus output per 1M tokens). Three or more priced models
-  split evenly across the three tiers. Fewer are anchored at the top, the dearest frontier and each cheaper
-  one a tier lower, so one is frontier and two are standard and frontier; fast is the tier left empty,
-  which keeps a standard role on the cheaper model. Unpriced, unmapped models are never proposed. A role
-  gets the lowest sufficient tier, then the lowest price, then the model it already uses when that model is
-  in the tie, then picker order. Effort binds to ladder positions of the chosen
-  model (floor, default or middle, the rung above, ceiling), collapsing inside the range; it is proposed
-  for every sized role whose chosen model has a non-empty ladder. Apply and `--apply` insert or
-  replace `model_reasoning_effort` through the same span-preserving editor as `model`, located by
-  the same TOML-aware scan. An empty ladder gives `proposedEffort: null`, meaning no proposal;
-  Apply omits `effort` and preserves the existing pin. A null proposal never means a null PUT. A routed
-  model's ladder is its row's
-  `reasoningEfforts`; a row that declares none takes the ladder the written Codex catalog shows for it, an
-  explicit empty list stays empty, and a row without its own default takes the catalog's default when that
-  rung is on the ladder.
+- **Mapping is deterministic code.** `src/codex/role-auto-assign.ts` draws candidates from `subagentSelectableModels` (the
+  same list the role picker renders) and tiers them: `codexRoleTiers` in the opencodex config first, then measured score in
+  the role's task domain, then price rank (input plus output per 1M tokens). The sizing answer carries a neutral `domain`
+  (coding, agentic, reasoning, writing, knowledge, general; missing means general), and `src/codex/role-capability.ts` reads
+  that domain's scores from Artificial Analysis once per UTC day when `codexRoleCapability.artificialAnalysis.apiKey`
+  resolves, page by page from the free list `/api/v2/language/models/free` until `pagination.has_more` is false (the legacy `/api/v2/data/llms/models` answers 410 Gone after 2026-11-04); every domain takes the Intelligence Index, since the Coding and Agentic Indexes are always null and the free list has no math index. The source refuses redirects, keeps a 30-second timeout per request, and fails the read past ten pages or 16 MiB across them. With no key or on failure it
+  keeps configured tiers and price signals, reports the reason through `capability.error`, and returns null source
+  attribution. The `capability` block attributes the source; Artificial Analysis terms forbid redistribution, so its scores
+  are dropped from that block. Mapped models keep their mapped tier either way. With two or more measured unmapped
+  candidates, those are tiered by distinct score values (equal scores share a tier) without requiring prices, and unmeasured
+  unmapped ones are not proposed; otherwise price rank decides. `capability.error` is set only when no key is configured or
+  the source cannot be read; a source that answered but matched fewer than two candidates leaves it null, and a
+  proposal picked by price rank carries `tierSource: "price"`. Three or more priced models split evenly across the three
+  tiers. Fewer are anchored at the top, the dearest frontier and each cheaper one a tier lower, so one is frontier and two
+  are standard and frontier; fast is the tier left empty, which keeps a standard role on the cheaper model. Price tiering
+  excludes unpriced, unmapped models. A role gets the lowest sufficient tier, then the lowest price, then the higher
+  measured score, then the model it already uses when that model is in the tie, then picker order. Effort binds to ladder
+  positions of the chosen model (floor, default or middle, the rung above, ceiling), collapsing inside the range; it is
+  proposed for every sized role whose chosen model has a non-empty ladder. Apply and `--apply` insert or replace
+  `model_reasoning_effort` through the same span-preserving editor as `model`, located by the same TOML-aware scan. An empty
+  ladder gives `proposedEffort: null`, meaning no proposal; Apply omits `effort` and preserves the existing pin. A null
+  proposal never means a null PUT. A routed model's ladder is its row's `reasoningEfforts`; a row that declares none takes
+  the ladder the written Codex catalog shows for it, an explicit empty list stays empty, and a row without its own default
+  takes the catalog's default when that rung is on the ladder.
 
 The sizing call is injectable (`completeCodexRoleSizing` on the management deps), so route tests answer it
 without a provider. Sibling instances refuse the preview too: it sits under the refused
@@ -470,6 +477,15 @@ and stores only `features.multi_agent_v2.multi_agent_mode_hint_text` in Codex TO
 `null` removes that key. The hint affects new native Codex sessions when their v2 surface
 is active, without changing reasoning effort or the proxy guidance switch.
 
+The integrations toggle `PUT /api/native-integrations/claude` reconciles the generated `ocx-*` definitions
+through `syncClaudeAgentDefsBestEffort` after it persists Off, so the marker-owned regular files are
+pruned at once without model discovery (On keeps the launch and startup sync); a repeated Off reconciles again to remove
+definitions an older version left behind (#7968). The reconcile is best effort: an unlink failure
+leaves that file and the toggle still succeeds. A save that fails before publishing restores the in-memory block, so a
+retry on the same config is a real transition; one that published first keeps the new value. User-authored and symlinked `ocx-*` files are never
+touched, and a live sibling instance still owns the directory. Coverage:
+`tests/claude-integration/claude-first-party-agent-sync.test.ts`.
+
 Claude Code `ocx-*` agent definitions consume the same effective `claudeCode.blockedSkills` policy
 as inbound bundle elision. When the list is non-empty (default: `claude-api`), generated definitions
 whose marker-stripped model resolves to a routed id receive a preventive instruction not to invoke
@@ -539,7 +555,7 @@ The account history response can include a [low-confidence effective capacity es
 
 Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; an initial JEV null choice separately strips caller effort.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; in the default `decide` mode an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 

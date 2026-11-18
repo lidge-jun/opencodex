@@ -63,6 +63,7 @@ export interface VertexKeyProjectOptions {
   signal?: AbortSignal;
   provider?: OcxProviderConfig;
   providerName?: string;
+  beforeSend?: () => void;
   /** Test seam for the bounded-body and request deadline. */
   timeoutMs?: number;
 }
@@ -92,8 +93,10 @@ async function probe(
   fetchImpl: typeof fetch,
   signal: AbortSignal,
   timeoutMs: number,
+  beforeSend?: () => void,
 ): Promise<string | undefined> {
   const probeSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
+  beforeSend?.();
   try {
     const res = await fetchImpl(PROBE_URL, {
       method: "POST",
@@ -137,6 +140,7 @@ function startInflight(
   apiKey: string,
   fetchImpl: typeof fetch,
   timeoutMs: number,
+  beforeSend?: () => void,
 ): InflightProbe {
   const controller = new AbortController();
   const waiters = new Set<ProbeWaiter>();
@@ -145,8 +149,11 @@ function startInflight(
 
   void (async () => {
     let project: string | undefined;
+    let failure: unknown;
     try {
-      project = await probe(apiKey, fetchImpl, controller.signal, timeoutMs);
+      project = await probe(apiKey, fetchImpl, controller.signal, timeoutMs, beforeSend);
+    } catch (error) {
+      failure = error;
     } finally {
       if (inflight.get(key) === entry) inflight.delete(key);
     }
@@ -154,6 +161,7 @@ function startInflight(
     for (const waiter of Array.from(waiters)) {
       cleanupWaiter(waiter);
       if (waiter.signal?.aborted) waiter.reject(waiter.signal.reason);
+      else if (failure !== undefined) waiter.reject(failure);
       else waiter.resolve(project);
     }
   })();
@@ -186,7 +194,7 @@ export async function resolveVertexApiKeyProject(
   // provider.proxy) must reject the caller rather than being swallowed into an express fallback.
   const fetchImpl = selectProbeFetch(opts);
   const timeoutMs = opts.timeoutMs ?? PROBE_TIMEOUT_MS;
-  const entry = inflight.get(key) ?? startInflight(key, apiKey, fetchImpl, timeoutMs);
+  const entry = inflight.get(key) ?? startInflight(key, apiKey, fetchImpl, timeoutMs, opts.beforeSend);
 
   return new Promise<string | undefined>((resolve, reject) => {
     if (signal?.aborted) {

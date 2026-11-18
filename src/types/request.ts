@@ -38,9 +38,10 @@ export interface OcxReasoningReplayScopeRef {
    */
   readonly clientPrincipalId?: string;
   /**
-   * Conversation namespace for replay state. Historically this was always the Codex parent-thread
-   * id; headerless Responses callers use a raw sanitized thread/Cursor/session fallback, never the
-   * hashed request-log conversation id.
+   * Conversation namespace for replay state. The request's own thread-id wins so a child agent
+   * cannot write its route into the parent's record (#8632); otherwise this is the Codex
+   * parent-thread id, and headerless Responses callers use a raw sanitized thread/Cursor/session
+   * fallback, never the hashed request-log conversation id.
    */
   readonly clientThreadId: string;
   current?: Readonly<OcxReasoningReplayIdentity>;
@@ -67,6 +68,8 @@ export interface OcxParsedRequest {
   stream: boolean;
   options: OcxRequestOptions;
   _rawBody?: unknown;
+  /** Trusted ingress provenance: preserve Chat's tool defaults only on the final Responses wire. */
+  _chatCompletionsInput?: boolean;
   /** Claude replay tags, retained only until each route binding verifies them. */
   _nativeReasoningReplay?: ReadonlyMap<string, string>;
   _nativeReasoningBoundOwner?: NativeReasoningOwner;
@@ -86,6 +89,13 @@ export interface OcxParsedRequest {
    * followed them (`call:<tool_use id>` / `text:<text>`). Same audience as `_anthropicServerTools`.
    */
   _anthropicServerReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>;
+  /**
+   * The caller's `instructions` prefix through its last cache-marked system block. The anthropic
+   * adapter ends a system block there so the breakpoint stays off the per-turn tail.
+   */
+  _anthropicSystemCachePrefix?: string;
+  /** The request arrived on the Anthropic Messages surface (Claude Code, Claude Desktop). */
+  _anthropicInbound?: boolean;
   /**
    * Boundary between replayed history and this turn's newly appended input. Usually the
    * items the proxy restored from local previous_response_id state; also set when the
@@ -139,6 +149,8 @@ export interface OcxParsedRequest {
   _dropForeignReasoningItemIds?: boolean;
   /** Final-route opt-in: emit v2 collaboration message arguments as plaintext on ChatGPT. */
   _plaintextV2AgentMessages?: boolean;
+  _plaintextV2Decision?: boolean;
+  _plaintextV2EverPrepared?: boolean;
   /**
    * Optional authenticated tenant/operator namespace for Cursor thread→conversation derivation.
    * When absent (single-operator local proxy), derivation stays local-scoped.
@@ -181,6 +193,13 @@ export interface OcxParsedRequest {
    */
   _structuredOutput?: boolean;
   /**
+   * True for a Claude Messages `output_config.format` json_schema. Anthropic promises an answer
+   * that conforms to that schema, whatever `strict` the Responses translation states for
+   * OpenAI-compatible destinations, so an emulating adapter (Kiro) holds it to full conformance.
+   * Process-local; never forwarded.
+   */
+  _structuredOutputConformance?: boolean;
+  /**
    * True when the input carried `{type:"compaction_trigger"}` — Codex remote compaction v2 asking
    * this turn to produce a `{type:"compaction"}` output item. Routed adapters can't natively;
    * the server runs the model as a summarizer and the bridge emits a synthetic compaction item
@@ -203,6 +222,14 @@ export interface OcxParsedRequest {
    * provider-private continuation caches again on every later turn.
    */
   _contextCompactionBoundary?: boolean;
+  /**
+   * Codex's own per-turn metadata for this request says `history_initialization: "New"` (HTTP header,
+   * or a WebSocket frame's own `client_metadata`). Read once in request preparation; the experimental
+   * Anthropic `perMessageEffort` option takes it as the new-transcript receipt (#6895).
+   */
+  _codexNewHistory?: boolean;
+  /** This turn's per-message effort bookkeeping (src/adapters/anthropic/per-message-effort.ts). */
+  _perMessageEffort?: PerMessageEffortTurn;
   /**
    * Core-owned registration slot for the optional advisor subsystem (src/advisor). Set per request
    * by the sidecar planner, never at module load: the core Responses path only sees this
@@ -414,7 +441,7 @@ export interface OcxRequestOptions {
    * upstream wire has an equivalent. The openai-chat adapter re-nests it as chat
    * `response_format`, the exact inverse of responseFormatToText in src/chat/inbound.ts.
    * The native passthrough ignores it (it forwards `_rawBody.text` verbatim) and Kiro
-   * keeps rejecting structured output via `_structuredOutput`.
+   * emulates it through a private structured-output tool (src/adapters/kiro/structured-output.ts).
    */
   textFormat?: {
     type: "json_schema" | "json_object";
@@ -470,7 +497,8 @@ export type AdapterEvent =
   | { type: "thinking_delta"; thinking: string }
   // Anthropic extended-thinking round-trip: signature_delta for the current thinking block, and
   // opaque redacted_thinking blocks. Both must be replayed verbatim or tool-use turns 400.
-  | { type: "thinking_signature"; signature: string }
+  // afterOutput marks a turn-level attestation emitted after text/tools, not a new thinking block.
+  | { type: "thinking_signature"; signature: string; afterOutput?: true }
   | { type: "redacted_thinking"; data: string }
   // Kiro reasoning round-trip: the encrypted reasoning blob for the CURRENT assistant turn, tagged
   // with the wire field it arrived on. Never rendered — it only rides the reasoning item's envelope
@@ -545,6 +573,17 @@ export interface OcxUrlCitation {
 }
 
 /**
+ * One turn's per-message effort state (#6895). Spread copies of the parsed request share it, so a
+ * rebuild of the same turn is seen as a second build.
+ */
+export interface PerMessageEffortTurn {
+  /** The pending decision this turn owns, until it commits or is abandoned. */
+  token?: string;
+  generation: string;
+  builds: number;
+}
+
+/**
  * Canonical usage convention (devlog/260711_claude_inbound/070):
  * - `inputTokens` is the TOTAL prompt size, INCLUDING cache reads and cache writes
  *   (OpenAI Responses convention). Anthropic parse sites normalize into this shape.
@@ -573,6 +612,13 @@ export interface OcxUsage {
   cacheCreation1hInputTokens?: number;
   reasoningOutputTokens?: number;
   estimated?: boolean;
+  /**
+   * The adapter read these counts off the upstream's own usage frame. Only an adapter whose
+   * provider is estimated by default (usageForFinalLog) sets it, and a merge keeps it only when
+   * every leg had it. A figure taken off a bridged wire or guessed never carries it, so the
+   * provider default still marks those as estimated.
+   */
+  upstreamReported?: true;
   /**
    * The raw upstream usage object for Responses-shaped upstreams (openai/codex#41980 parity):
    * codex-rs preserves the complete `response.usage` object through its own pipeline, so fields

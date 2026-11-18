@@ -6,15 +6,16 @@ import {
   fstatSync,
   lstatSync,
   openSync,
-  type Stats,
+  type BigIntStats,
 } from "node:fs";
 
 import { hardenSecretPathAsync } from "../lib/windows-secret-acl";
+import { sameFileIdentity } from "../lib/file-identity";
 
 export interface StableLockFile {
   readonly fd: number;
-  readonly dev: number;
-  readonly ino: number;
+  readonly dev: bigint;
+  readonly ino: bigint;
   close(): void;
 }
 
@@ -27,8 +28,8 @@ export class StableLockPathUnsafeError extends Error {
 
 interface StableLockEntry {
   readonly fd: number;
-  readonly dev: number;
-  readonly ino: number;
+  readonly dev: bigint;
+  readonly ino: bigint;
   refs: number;
 }
 
@@ -55,7 +56,7 @@ function reference(path: string, entry: StableLockEntry): StableLockFile {
   };
 }
 
-function assertRegular(stats: Stats, path: string): void {
+function assertRegular(stats: BigIntStats, path: string): void {
   if (!stats.isFile() || stats.isSymbolicLink()) {
     throw new StableLockPathUnsafeError(`unsafe SQLite lock path: ${path}`);
   }
@@ -67,8 +68,8 @@ function errorCode(error: unknown): string | undefined {
     : undefined;
 }
 
-function matches(handle: StableLockFile, stats: Stats): boolean {
-  return handle.dev === stats.dev && handle.ino === stats.ino;
+function matches(handle: StableLockFile, stats: BigIntStats): boolean {
+  return sameFileIdentity(handle, stats);
 }
 
 export function openStableLockFile(path: string, platform: NodeJS.Platform = process.platform): StableLockFile {
@@ -84,11 +85,11 @@ export function openStableLockFile(path: string, platform: NodeJS.Platform = pro
       throw error;
     }
   }
-  if (existsSync(path)) assertRegular(lstatSync(path), path);
+  if (existsSync(path)) assertRegular(lstatSync(path, { bigint: true }), path);
   const noFollow = platform === "win32" ? 0 : constants.O_NOFOLLOW;
   const fd = openSync(path, constants.O_RDWR | constants.O_CREAT | noFollow, 0o600);
   try {
-    const descriptor = fstatSync(fd);
+    const descriptor = fstatSync(fd, { bigint: true });
     assertRegular(descriptor, path);
     const entry: StableLockEntry = {
       fd,
@@ -109,9 +110,9 @@ export function openStableLockFile(path: string, platform: NodeJS.Platform = pro
 }
 
 export function assertStableLockFile(path: string, handle: StableLockFile): void {
-  let pathStats: Stats;
+  let pathStats: BigIntStats;
   try {
-    pathStats = lstatSync(path);
+    pathStats = lstatSync(path, { bigint: true });
   } catch (error) {
     if (errorCode(error) === "ENOENT") {
       throw new StableLockPathUnsafeError(`SQLite lock path identity changed: ${path}`);

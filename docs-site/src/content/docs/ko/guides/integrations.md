@@ -25,7 +25,7 @@ Windows에서 절대 경로가 필요한 오버라이드는 드라이브 문자(
 | omo | `~/.omo/agent/models.json` | JSON | 새 세션에서 | 루프백 자리표시자 |
 | Cline CLI | `~/.cline/data/settings/providers.json` 및 같은 위치의 `models.json` | JSON 파일 쌍 | Cline을 중지하고 다시 시작한 뒤 | 루프백 자리표시자 |
 | Kilo | `~/.config/kilo`에서 먼저 존재하는 `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, `config.json` (`XDG_CONFIG_HOME`로 디렉터리 변경 가능, 모두 없으면 `kilo.jsonc` 생성) | JSONC | 새 세션에서 | `OPENCODEX_KILO_API_KEY` |
-| Command Code | `~/.commandcode/providers.json` (Windows 기본 홈 사용 시: `HOME ?? USERPROFILE` 값이 비어 있거나 공백만으로 구성되지 않은 Windows 절대 경로일 때만 사용하고, 그 외에는 `homedir()` 사용. 별도로 전달된 홈은 유지. 해당 홈 아래의 `.commandcode\providers.json`) | JSON | 다음 Command Code 실행 시 | 없음 — 키 없는 루프백 (`apiKey: false`) |
+| Command Code | `~/.commandcode/providers.json` (Windows 기본 홈 사용 시: `HOME ?? USERPROFILE` 값이 비어 있거나 공백만으로 구성되지 않은 Windows 절대 경로일 때만 사용하고, 그 외에는 `homedir()` 사용. 별도로 전달된 홈은 유지. 해당 홈 아래의 `.commandcode\providers.json`) | JSON | 다음 Command Code 실행 시 | 없음 — 키 없는 루프백 (`apiKey: false`). 데스크톱 앱은 자체 로그인이 필요하며 opencodex는 `auth.json`을 기록하지 않습니다 |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` Windows에서) | JSON | 파일 변경 시 즉시 | 키 없는 루프백 |
 
 생성된 카탈로그에는 각 프로바이더 선택에서 활성화된 모델만 들어갑니다. Pi와 Aside를 포함한 다운로드와 관리형 연동 모두에 적용됩니다. 관리 모델 목록에는 전체 모델이 계속 표시되어 추가 모델을 활성화할 수 있습니다.
@@ -76,6 +76,8 @@ OpenClaw에는 역할이 서로 다른 여러 설정이 있습니다. `OPENCLAW_
 
 opencodex는 자체 환경에서 이 값을 읽습니다. 게이트웨이가 프로필이나 옮겨진 홈에서 실행된다면 opencodex도 같은 변수를 설정해 시작하세요. 그렇지 않으면 다른 설치를 올바르게 따라가게 됩니다.
 
+CLI의 `ocx integration client enable|disable --client <id>`는 대시보드 토글처럼 이 컴퓨터만 바꿉니다. route 의도를 쓰는 Remote Link Home에서는 이 변경을 Home 자신의 결정으로 기록하므로 `ocx sync`가 유지하고, 연결된 Child는 기본값을 그대로 따릅니다. Child가 상속하는 값을 바꾸려면 `ocx route to <client> on|off`를 사용하세요. Remote Link Child에서는 일반 토글을 거부하고 그 기기용 Home 명령을 출력합니다. 해당 Child만 제외하려면 그곳에서 `ocx route to <client> off --local`을 사용하세요. [Remote Link](/ko/guides/remote-link/)를 참고하세요.
+
 ## 스위치가 아닌 다른 다섯 서피스
 
 **API Keys**는 클라이언트가 아니라 opencodex 자체 자격 증명을 관리합니다. **Codex CLI**는 프록시 서비스가 직접 연결합니다. opencodex를 시작하면 적용되고 멈추면 네이티브 라우팅이 복원되므로 파일별 스위치가 없습니다. **Claude**는 자체 활성화 플래그와 Desktop의 Save/Apply 흐름을 유지하고, **Grok Build**는 모델을 선택한 뒤 적용하는 경계를 유지합니다. 모두 이 기능보다 먼저 있던 동작이며 바뀌지 않았습니다. **Cursor**는 아무 파일도 쓰지 않습니다. 탭에서 탐지 결과, 게이트웨이 값, 마지막 요청을 보여주고 나머지는 Cursor Private Inference 안에서 처리합니다.
@@ -106,9 +108,9 @@ Apply, Replace, Disable, Restore는 미리 보기로 시작합니다. 대화 상
 
 계획에 변경이 없다면 관리 대상 클라이언트 문서가 이미 요청한 상태라는 뜻입니다. Aside 프로필을 선택했다면 관리 문서가 바뀌지 않아도 확인 시 그 프로필의 동기화 기본 설정을 저장할 수 있습니다.
 
-검토 후 파일이 바뀌면 오래된 계획으로 판단해 쓰기를 거부합니다. 대화 상자가 갱신된 계획을 보여주고 다시 확인을 요청하며, 자동으로 쓰기를 재시도하지 않습니다. 미리 보기를 일시적으로 사용할 수 없다면 페이지를 일반적으로 새로고침하고 작업을 다시 시작하세요.
+검토 후 파일이 바뀌면 오래된 계획으로 판단해 쓰기를 거부합니다. 대화 상자가 갱신된 계획을 보여주고 다시 확인을 요청하며, 자동으로 쓰기를 재시도하지 않습니다. 미리 보기가 모델 카탈로그가 아직 로드되지 않았다고 알리면 대화 상자는 열린 채로 **카탈로그 로드 후 다시 시도**를 제공합니다. 통합 목록을 다시 읽은 뒤 계획을 다시 요청합니다.
 
-Aside는 선택한 프로필 하나에 같은 미리 보기와 확인 흐름을 사용합니다. **Sync all profiles**는 별도 일괄 작업이며 하나의 통합 미리 보기에 묶이지 않습니다.
+Aside는 선택한 프로필 하나에 같은 미리 보기와 확인 흐름을 사용합니다. **Sync all profiles**는 별도 일괄 작업이며 하나의 통합 미리 보기에 묶이지 않습니다. 하나의 계획은 한 프로필의 파일만 설명하므로, 충돌 상태인 Aside 개요 카드는 **프로필 선택**을 제공하고 블록 교체는 해당 프로필 페이지에서 합니다.
 
 ## 실제로 예상해야 할 동작
 
@@ -233,6 +235,16 @@ Undo는 원래 없던 파일까지 포함해 **두 원본 바이트 문자열 �
 
 다운로드되는 `cline-config-bundle.json`에는 두 네이티브 문서 구성 요소가 있습니다. `providers.json`용 `settings`와 `models.json`용 `catalog`입니다. 번들 자체가 Cline 설정 파일은 아닙니다. 저널을 남기는 병합과 롤백에는 연동 명령을 권장합니다. 생성된 연동은 원격 수용 연결을 지원하지 않으며 인증이 없는 루프백 접근이 필요합니다.
 
+## omo (Pi 기반) Responses 방언
+
+관리되는 Pi 기반 omo 블록은 기본으로 Chat 방언(`api: "openai-completions"`)을 씁니다. Chat은 도구 호출 사이에서 이전 단계의 추론을 버리므로 긴 omo 도구 루프에서 차이가 납니다. 연결과 모든 갱신에서 Responses 방언을 쓰게 하려면 opencodex 설정 파일에만 넣을 수 있는 다음 키를 추가하세요.
+
+```json
+{ "omoClientExport": { "api": "openai-responses" } }
+```
+
+수정한 설정을 읽도록 프록시를 다시 시작한 뒤(서비스로 설치했다면 `ocx service restart`, 아니면 `ocx stop` 다음 `ocx start`), 대시보드의 **Connect → omo**에서 omo 통합을 갱신하세요. 갱신만 하면 실행 중인 프록시의 설정을 쓰므로 설정 파일을 다시 읽지 않습니다. 이 설정은 omo에만 적용되며 Pi, Gentle Shell 등 다른 Pi 형식 클라이언트는 `openai-completions`를 유지합니다. Chat으로 되돌리려면 키를 지우고 같은 방법으로 다시 시작한 뒤 **Connect → omo**를 갱신하세요. 알 수 없는 값은 무시됩니다. opencodex는 여전히 `~/.omo/agent/models.json`의 `providers.opencodex`만 관리하며 다른 프로바이더는 그대로 둡니다.
+
 ## omo (Codex / LazyCodex) 역할별 추론 강도
 
 LazyCodex가 감지되면 omo 탭의 **omo (Codex / LazyCodex)** 섹션에서 `$CODEX_HOME/agents/*.toml`에 있는 역할마다 모델과 추론 강도를 고른 뒤 **저장**을 누를 수 있습니다. 모델 고정이 없는 역할의 행은 강도만 저장할 수 있고, 그 역할은 계속 모델을 상속합니다. opencodex는 그 역할 파일의 루트 `model`과 `model_reasoning_effort` 키만 고치고, 없는 고정값은 파일 위쪽에 추가합니다. 역할의 지침, 다른 주석과 다른 키는 그대로 둡니다. 모델만 바꿔 저장하면 `effort`를 보내지 않으므로 두 파일의 추론 강도가 그대로 유지됩니다. 단계를 고르면 역할 파일의 `model_reasoning_effort`를 추가하거나 바꾸고, LazyCodex가 그 단계를 지원하면 `~/.omo/omo.jsonc`의 `[codex].agents.<role>.reasoning`에도 씁니다(`ultra`는 역할 파일에만 남고, 이전 `reasoning`은 제거합니다). 명령줄에서는 `ocx agent roles set <role> <model> --effort <level>`로 같은 작업을 합니다.
@@ -244,6 +256,8 @@ LazyCodex가 감지되면 omo 탭의 **omo (Codex / LazyCodex)** 섹션에서 `$
 `~/.omo/omo.jsonc`가 없으면 새로 만들지 않습니다. 주석이 있으면 저장할 때 주석이 사라지므로 파일을 건드리지 않습니다. 이때는 값을 직접 설정하세요. 미러를 건너뛰어도 역할 파일 저장은 취소되지 않습니다. 역할 파일은 저장됐지만 omo.jsonc 쓰기에 실패하면 그 행의 버튼이 **omo.jsonc 다시 시도**로 바뀌고, **추론 강도 상속**으로 해제한 경우(`null`)를 포함해 같은 강도 선택을 다시 보냅니다. 재시도가 성공하기 전까지는 그 역할에서 강도를 바꾸지 않는 다음 **저장**이나 **자동 배정**의 **적용**도 대기 중인 선택을 함께 보냅니다. 강도를 직접 고르면 그 값이 우선합니다.
 
 **자동 배정**은 필요한 능력과 추론 강도를 판정한 역할 가운데 선택된 모델의 강도 단계 목록이 비어 있지 않은 모든 역할에 추론 강도를 제안하며, **적용**, **모두 적용** 또는 `ocx agent roles suggest --apply`는 그 역할의 `model_reasoning_effort` 값을 추가하거나 바꿉니다. 강도는 선택된 모델 자체의 단계에서 정하며, 가장 낮은 단계, 기본 단계, 기본보다 한 단계 높은 단계, 가장 높은 단계 중 하나입니다. 단계 목록이 비어 있으면 강도를 제안하지 않고(`proposedEffort: null`), 적용할 때 `effort`를 보내지 않아 기존 강도 고정을 그대로 둡니다. `null` 제안은 고정값을 지우지 않습니다.
+
+CLI의 `ocx agent roles suggest --apply`는 한 이력 묶음에 **변경할 역할을 최대 50개** 적용합니다. 이미 같은 값으로 설정됐거나 평가·배정되지 않은 역할은 세지 않습니다. 50개를 넘으면 역할 업데이트를 하나도 보내지 않고 종료 코드 5로 거부합니다. `--apply` 없이 미리 확인한 뒤, 개별 변경에는 `ocx agent roles set <role> <model> [--effort <level>]`을 사용하세요. 도중에 실패했을 때 확인된 쓰기와 미확인 요청을 구분하고 재시도하는 방법은 [CLI 적용·복구 규칙](/reference/cli/agents/)을 참고하세요.
 
 ## Kilo
 

@@ -90,6 +90,8 @@ modality 和 reasoning metadata；目标显式声明的限制仍然优先，因�
 
 ## 选择策略
 
+无法保留强制 `tool_choice` 的目标会在发送前跳过；如果所有目标都不兼容，则返回说明该限制的错误。判断会考虑仅支持 `auto` 选择的 Chat 模型，以及 OpenAI 虚拟模型实际发送到上游的模型策略。直接 hosted/MCP 选择、`tool_search` 和无效选择值的处理范围请参阅[英文基准说明](/guides/combos/#failover-ordered-primary-and-backups)。
+
 ### 故障切换：按顺序的主目标和备用目标
 
 `failover` 会按配置顺序选择第一个合格目标。当 provider 存在、已启用、未处于冷却中，并且能够满足任何特殊请求约束时，该目标就是合格的。权重和 `stickyLimit` 不影响这种策略。
@@ -101,6 +103,8 @@ modality 和 reasoning metadata；目标显式声明的限制仍然优先，因�
 3. `google/gemini-3-pro`
 
 每个请求都会先从 Anthropic 开始。Anthropic 的可重试失败会把该请求切换到 OpenAI；OpenAI 的可重试失败则可以切换到 Google。终止性错误会立即停止，而不会尝试剩余目标。
+
+提供方的 HTTP 400 响应仍可能是针对特定目标的。OpenRouter 的不透明提供方包装（带有数字 `code: 400`、无 `type` 且 `metadata.raw: "ERROR"` 的 `Provider returned error`）会被视为目标特定的，允许 combo 尝试下一个目标而无需冷却失败的目标。带类型的未编码 400、已知的格式错误的 `response_format` 模式错误，以及根层自行声明终止代码的封装仍为终止性错误；根层自行声明跳转信号（`model_not_found`、`insufficient_quota`、`usage_limit_exceeded`、`free_rate_limited`、`input_admission_refused` 或 `unsupported_input_modality`）不会新增判定，空代码视为无代码。本指南后面描述的已识别目标不兼容情况仍会继续推进。
 
 ### 轮询：平滑的加权批次
 
@@ -150,15 +154,19 @@ combo 失败分为 **跳转** 失败和 **终止** 失败。
 | HTTP 401、403、404、408、429，或任何 5xx | 使该目标进入冷却，并跳转到下一个合格目标。 |
 | HTTP 410，并明确表明模型已到生命周期终点、retired、deprecated、sunset、decommissioned 或不再可用 | 仅冷却该目标并继续跳转。无关的 410 仍然是终止错误。 |
 | 被分类为认证、订阅、配额、速率限制、过载或上游服务器错误 | 即使仅凭状态码不足以判断，也会使该目标进入冷却并跳转。 |
-| 客户端取消（499）、`origin_rejected`、cyber-policy 拒绝、上下文溢出，或其他无效请求 | 停止并返回错误；换其他目标也无法让请求变得有效。 |
+| 提供方或网关的 HTTP 400 或 422 审核判定（结构化的 `moderation_refusal` 或 `content_filter` 代码；只有审核文字而没有该代码时仍会停止） | 不冷却该目标，尝试下一个目标；其他提供方的过滤器可能接受该提示。若同一响应体中还带有终止性拒绝（cyber 或 bio 策略、`invalid_prompt`、`content_policy_violation`、安全系统文字），仍会停止。 |
+| 客户端取消（499）、`origin_rejected`、cyber-policy 拒绝、或其他无效请求 | 停止并返回错误；换其他目标也无法让请求变得有效。 |
+| 输出前确认的上下文超限（包括 HTTP 400） | 不冷却该目标，尝试下一个尚未尝试的合格目标；耗尽后返回第一个确认的 HTTP 400 上下文错误（其他状态码的上下文拒绝也会切换到下一个目标，但不会被保留）。 |
 | HTTP 400 明确表示使用 ChatGPT 账户运行 Codex 时不支持该模型 | 在输出提交前尝试下一个已配置目标。完整拒绝句必须位于 `detail`、`error.message` 或纯文本中；同时包含 `detail` 与 `error` 的混合封装仍会终止请求。此原因本身不会将账户标为需要重新登录，也不会让供应商的所有模型进入冷却。 |
-| 结构化 HTTP 400，明确拒绝 `user`、对 `reasoning.effort`/`reasoning_effort` 返回不支持值、返回模型特定图像输入拒绝（`param: input`），或拒绝该路由无法读取的输入媒体（`unsupported_input_modality`） | 在输出开始前跳转到下一个符合条件的目标，且不记录冷却时间；参见下方可选参数兼容性。 |
+| 结构化 HTTP 400，明确拒绝 `user`、对 `reasoning.effort`/`reasoning_effort` 返回不支持值、返回模型特定图像输入拒绝（`param: input`），或拒绝该路由无法读取的输入媒体（`unsupported_input_modality`） | 对于 reasoning effort 拒绝，在发送预算允许的情况下先在同一目标上尝试下一个更低的已发布档位；若所有档位均未成功，在拒绝符合已识别的兼容形式时在提交输出前跳转且不记录冷却时间，否则保持终止。其他列出的不匹配直接跳转且不记录冷却时间；参见下方可选参数兼容性。 |
 | 由进程内适配器（`runTurn`）执行的 Responses 回合中，当前请求未声明的第一个工具调用（在任何输出和不可重放的副作用之前） | 让该目标进入冷却，并以相同的工具目录跳转到下一个目标。出现可见输出或不可重放的副作用之后，拒绝即为最终结果。Chat Completions 和 Anthropic Messages 请求不受影响。 |
 | 任何其他未分类错误 | 停止并返回错误。 |
 
 未设置 `cooldownMs` 时，发生跳转的目标使用上游回退值：对于上游代码为 `1302` 或 `1305` 的请求速率限制 429，等待 5 秒；账户配额窗口已耗尽时，等待 10 分钟；其他情况等待 60 秒。配额窗口耗尽通过上游代码（`usage_limit_exceeded`、`usage_limit_reached`、`1308`）或文本 `usage limit reached` 识别，与 HTTP 状态码无关：ChatGPT Codex 后端会把已耗尽的窗口报告为 502，而不是文档所述的 429。已经会让整个提供方失效的凭据和计费失败（`invalid_api_key`、`insufficient_quota`、`payment_required` 等）也使用同样的 10 分钟冷却。设置后，只要不存在可用的上游 `Retry-After` 或 Codex 重置信号，就会应用 `cooldownMs`，包括这些请求速率限制 429。接受数字形式的 `Retry-After` 秒数和 HTTP-date 值，显式上游 `Retry-After` 最多 24 小时；重置推导、配置和回退冷却最多 10 分钟。优先级从强到弱依次为：显式 `Retry-After` → Codex 重置标头（`x-codex-primary-reset-at`、`x-codex-secondary-reset-at` 或 `x-codex-tertiary-reset-at`）→ combo 的 `cooldownMs`（已设置时）→ 配额窗口耗尽或凭据/计费失败时的 10 分钟冷却 → 上游速率限制代码 `1302`/`1305` 的 5 秒请求速率限制回退值 → 60 秒默认值。配额窗口会被优先判断，因此同时带有请求速率限制代码和用量上限文本的失败会冷却 10 分钟，而不是 5 秒。有效的即时指令 `Retry-After: 0` 会保留为上游即时指令，不会被配置的冷却替换。
 
-当前请求不会再次重试同一个已经尝试过的目标——但有一个例外：设置了 `waitForCooldownMs` 的单目标 combo 由于没有可故障转移的替代目标，可以在同一请求内该目标的冷却结束后重试其唯一目标。请求本地的兼容性拒绝仍然直接返回而不重试。后续请求会跳过它，直到冷却结束。已过去的 HTTP-date `Retry-After` 同样会像 `Retry-After: 0` 一样保留为上游即时指令。设置 `waitForCooldownMs` 后，后续请求可以等待最早恢复资格的目标的冷却，单次选择尝试最多等待该上限，然后重新选择一次。因此，多次故障切换跳转的请求总共最多等待 `hops × waitForCooldownMs`。默认值为 `0`；当所有合格目标都处于冷却中时，请求会立即失败并返回 HTTP 503；该 `combo_unavailable` 503 会带有 `Retry-After` 标头，其值等于剩余冷却时间最短的目标，向上取整为整秒，最小值为 1 秒。等待不加入抖动，因此可能同时唤醒。请求中止会取消这次等待并返回正常的 `client_cancelled` 响应；取消后不会调度备用目标。combo 目标冷却是进程本地、按 combo 区分的状态，与原生账户路由使用的账户级 Codex 配额冷却彼此独立。
+当前请求不会再次重试同一个已经尝试过的目标——但有一个例外：设置了 `waitForCooldownMs` 的单目标 combo 由于没有可故障转移的替代目标，可以在同一请求内该目标的冷却结束后重试其唯一目标。请求本地的兼容性拒绝仍然直接返回而不重试。后续请求会跳过它，直到冷却结束。已过去的 HTTP-date `Retry-After` 同样会像 `Retry-After: 0` 一样保留为上游即时指令。设置 `waitForCooldownMs` 后，后续请求可以等待最早恢复资格的目标的冷却，单次选择尝试最多等待该上限，然后重新选择一次。因此，多次故障切换跳转的请求总共最多等待 `hops × waitForCooldownMs`。默认值为 `0`；当所有合格目标都处于冷却中时，请求会立即失败并返回 HTTP 503；该 `combo_unavailable` 503 会带有 `Retry-After` 标头，其值等于剩余冷却时间最短的目标，向上取整为整秒，最小值为 1 秒。等待不加入抖动，因此可能同时唤醒。请求中止会取消这次等待并返回正常的 `client_cancelled` 响应；取消后不会调度备用目标。combo 目标冷却是按 combo 区分的状态，与原生账户路由使用的账户级 Codex 配额冷却彼此独立。它会连同绝对到期时间保存到 opencodex 主目录下的 `combo-cooldowns.json`，因此重启后仍保持到该时间；共享同一主目录的代理不会缩短彼此的冷却。保存、重命名或删除 combo 会清除其冷却。
+
+上述 HTTP 503 规则适用于尚未尝试任何目标时。确认 HTTP 400 上下文拒绝后，若合格目标或发送预算耗尽，会以 `context_length_exceeded` 返回第一个此类拒绝，优先于后续可重试错误（包括配额错误）。剩余目标无法重放推理或缺少计费使用同意时也适用。取消、后续致命拒绝和明确的回退策略拒绝仍会立即停止；不会向未经同意的计费目标发送请求。
 
 :::note
 故障切换是有边界的。它有助于处理特定目标的可用性、认证、配额和过载失败；它不会掩盖调用方错误或策略拒绝。
@@ -296,11 +304,11 @@ combo id 不存在。响应是 HTTP 404，类型为 `invalid_request_error`。�
 
 ### 为什么故障切换在第一次错误后就停止了？
 
-该错误是终止性的，而不是针对目标的。修复无效输入、缩小过大的上下文、处理策略拒绝，或者纠正被拒绝的请求来源。对于这些情况，combo 不会继续跳转。
+该错误是终止性的，而不是针对目标的。修复无效输入、处理策略拒绝，或者纠正被拒绝的请求来源。对于这些情况，combo 不会继续跳转。
 
 ## 可选参数兼容性
 
-一般 400 错误仍会终止请求，但明确拒绝 `user`、对 `reasoning.effort`/`reasoning_effort` 返回不支持值、返回模型特定图像输入拒绝（`param: input`），或拒绝该路由无法读取的输入媒体（`unsupported_input_modality`）的结构化错误，可让 combo 在输出开始前尝试下一个符合条件的目标，而不记录冷却时间。安全策略拒绝、取消以及已经开始的输出仍不可重放。
+一般 400 错误仍会终止请求，但 OpenRouter 的不透明提供方包装（带有数字 `code: 400`、无 `type` 且 `metadata.raw: "ERROR"` 的 `Provider returned error`），或明确拒绝 `user`、对 `reasoning.effort`/`reasoning_effort` 返回不支持值、返回模型特定图像输入拒绝（`param: input`），或拒绝该路由无法读取的输入媒体（`unsupported_input_modality`）的结构化错误，以及完全匹配的供应商包 `{"code":"invalid-argument","error":"Invalid reasoning effort."}`，可在输出提交前跳转。当 combo 目标拒绝所请求的 reasoning effort 时，combo 首先在共享发送预算内、每次拒绝退一个档位地在该目标上重试下一个更低的已发布 effort 档位；这适用于所有识别出的 effort 拒绝。如果更低档位均未成功，符合上述形式之一的拒绝将前进到另一个目标而不冷却被拒绝的目标，在下一档位无剩余发送额度时保留该目标的原始 400；其他 effort 拒绝保持终止。以 `unsupported_input_modality` 拒绝媒体的路由以相同方式跳转。这些是针对该请求的不匹配，并非目标不健康的证据。直接请求保留其单次 effort 降级修复。兼容性恢复不会隐式将 `none` 改为其他 effort，也不会将 combo 跳转扩大到任意无效请求。安全策略拒绝、取消以及已经开始的输出仍不可重放。单目标请求仍返回未解决的上游拒绝。
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).
 

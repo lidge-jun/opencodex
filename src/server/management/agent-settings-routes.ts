@@ -1,4 +1,6 @@
 import { prepareClaudeCodePatch } from "./claude-code-settings-patch";
+import { beginCodexCliSelectionParentWriteAsync, withCodexCliSelectionParentWriteAsync,
+  CodexCliSelectionMutationBusyError, type CodexCliSelectionAsyncParentWrite } from "../../codex/cli-update-selection-gate";
 import { readConfigForAdmittedMutation } from "../../config/persisted-mutation";
 import { mirrorDesiredEnabledOntoSnapshot, persistDesktopModeField, persistDesktopProfileField } from "./claude-desktop-config-writers";
 import { getConfigDir as configRoot, withConfigDirHardeningSettled as settleConfigRoot } from "../../config/paths";
@@ -7,6 +9,7 @@ import { ensureManagementClaudeIntercept, interceptStartRefusal, interceptStatus
 import { persistCommittedDesktopGateway } from "../../claude/desktop-gateway-state";
 import { captureDesktopAppliedMarker, commitDesktopAppliedMarker } from "../../claude/desktop-applied-marker";
 import { isPassiveRead } from "../../lib/passive-read";
+import { captureHomeRouteDefaultsBeforeHomeSwitch } from "../../routing/home-route-capture";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -16,6 +19,7 @@ import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, filterCatalogVisibleModels, invalidateCodexModelsCache, nativeContextLimits, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import { mergeModelPinnedEfforts, modelPinnedEffortsConfigError } from "../../config/provider-validation";
 import { MULTI_AGENT_SURFACE_ADVISORY_VERSION, multiAgentSurfaceAdvisory, resolveMultiAgentMode } from "../../config/multi-agent-surface";
+import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { captureConfigTopLevelRollback, parsedConfigRebaseDeletionKeys, projectConfigRebaseProvenance } from "../../config/rebase-provenance";
 import { anthropicSidecarPatchError } from "../../config/schema/anthropic-account-pool";
 import { isAnthropicInstanceId } from "../../providers/anthropic-instance-id";
@@ -205,6 +209,7 @@ export async function injectionModelView(config: OcxConfig, routed: readonly Cat
 export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise<Response | null> {
   try { return await handleAgentSettingsRoutesImpl(ctx); }
   catch (error) {
+    if (error instanceof CodexCliSelectionMutationBusyError) return jsonResponse({ error: error.message, retryable: true }, 503);
     if (!(error instanceof WindowsSecretAclSettleTimeoutError)) throw error;
     return jsonResponse({ error: "Could not save settings", code: "write_failed", diagnostic: { stage: "ca", cause: "ETIMEDOUT" } }, 500);
   }
@@ -291,6 +296,8 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       multiAgentMode: resolveMultiAgentMode(config),
       multiAgentSurfaceAdvisory: multiAgentSurfaceAdvisory(config),
       keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
+      plaintextAgentMessagesEnabled: isPlaintextV2AgentMessagesEnabled(config),
+      supportsPlaintextV2Mode: true,
       agentsEnabled: getAgentsEnabled(),
       agentsMaxDepth: getAgentsMaxDepth(),
       subagentDeveloperInstructions: getSubagentDeveloperInstructions(),
@@ -298,7 +305,9 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       multiAgentModeHintRecommendation: MULTI_AGENT_MODE_HINT_RECOMMENDATION,
       // max_depth is V1-only upstream; this is the global-flag statement, derived
       // server-side so no client can present it as an effective V2 limit.
-      agentsMaxDepthAppliesWhenV2Disabled: !enabled,
+      // 'v2-plaintext' keeps the flag off but still runs the V2 surface through
+      // catalog pins, so the V1 limit does not apply there either.
+      agentsMaxDepthAppliesWhenV2Disabled: !enabled && resolveMultiAgentMode(config) !== "v2-plaintext",
     });
   }
   if (url.pathname === "/api/v2" && req.method === "PUT") {
@@ -312,6 +321,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       subagentDeveloperInstructions?: unknown;
       multiAgentModeHintText?: unknown;
       multiAgentSurfaceAdvisoryAcknowledged?: unknown;
+      plaintextAgentMessagesAcknowledged?: unknown;
     };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const wantsFlag = body.enabled !== undefined;
@@ -323,12 +333,13 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     const wantsSubagentInstructions = body.subagentDeveloperInstructions !== undefined;
     const wantsModeHintText = body.multiAgentModeHintText !== undefined;
     const wantsAdvisoryAck = body.multiAgentSurfaceAdvisoryAcknowledged !== undefined;
+    const wantsPlaintextAck = body.plaintextAgentMessagesAcknowledged !== undefined;
     if (!wantsFlag && !wantsThreads && !wantsMode && !wantsKeepNative && !wantsAgentsEnabled && !wantsMaxDepth && !wantsSubagentInstructions && !wantsModeHintText && !wantsAdvisoryAck) {
       return jsonResponse({ error: "body must set enabled, multiAgentMode, keepNativeChatGptOnV1, maxConcurrentThreadsPerSession, agentsEnabled, agentsMaxDepth, subagentDeveloperInstructions, multiAgentModeHintText, and/or multiAgentSurfaceAdvisoryAcknowledged" }, 400);
     }
     if (wantsFlag && typeof body.enabled !== "boolean") return jsonResponse({ error: "body.enabled must be a boolean" }, 400);
-    if (wantsMode && body.multiAgentMode !== "v1" && body.multiAgentMode !== "default" && body.multiAgentMode !== "v2") {
-      return jsonResponse({ error: "body.multiAgentMode must be 'v1', 'default', or 'v2'" }, 400);
+    if (wantsMode && body.multiAgentMode !== "v1" && body.multiAgentMode !== "default" && body.multiAgentMode !== "v2" && body.multiAgentMode !== "v2-plaintext") {
+      return jsonResponse({ error: "body.multiAgentMode must be 'v1', 'default', 'v2', or 'v2-plaintext'" }, 400);
     }
     if (wantsKeepNative && typeof body.keepNativeChatGptOnV1 !== "boolean") {
       return jsonResponse({ error: "body.keepNativeChatGptOnV1 must be a boolean" }, 400);
@@ -364,25 +375,37 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     if (wantsAdvisoryAck && typeof body.multiAgentSurfaceAdvisoryAcknowledged !== "boolean") {
       return jsonResponse({ error: "body.multiAgentSurfaceAdvisoryAcknowledged must be a boolean" }, 400);
     }
-    const mode = wantsMode ? body.multiAgentMode as "v1" | "default" | "v2" : undefined;
+    if (wantsPlaintextAck && typeof body.plaintextAgentMessagesAcknowledged !== "boolean") {
+      return jsonResponse({ error: "body.plaintextAgentMessagesAcknowledged must be a boolean" }, 400);
+    }
+    const mode = wantsMode ? body.multiAgentMode as "v1" | "default" | "v2" | "v2-plaintext" : undefined;
     const readModePlan = () => {
       const effectiveMode = mode ?? config.multiAgentMode ?? "default";
       const effectiveKeepNative = wantsKeepNative
         ? body.keepNativeChatGptOnV1 === true
         : config.keepNativeChatGptOnV1 === true;
       const hybridPinActive = effectiveMode === "v2" && effectiveKeepNative;
-      const modeFlag = mode === "v2" ? !hybridPinActive : mode === "v1" ? false : undefined;
+      const pinDrivenV2 = hybridPinActive || effectiveMode === "v2-plaintext";
+      const pinConflict = effectiveMode === "v2-plaintext"
+        ? "body.enabled=true conflicts with multiAgentMode 'v2-plaintext': Codex's global multi_agent_v2 override outranks catalog pins"
+        : "body.enabled=true conflicts with keepNativeChatGptOnV1: Codex's global multi_agent_v2 override outranks catalog pins";
+      const modeFlag = mode === "v2" ? !hybridPinActive : mode === "v1" || mode === "v2-plaintext" ? false : undefined;
       if (wantsFlag && modeFlag !== undefined && body.enabled !== modeFlag) {
         return jsonResponse({
-          error: hybridPinActive
-            ? "body.enabled=true conflicts with keepNativeChatGptOnV1: Codex's global multi_agent_v2 override outranks catalog pins"
+          error: pinDrivenV2
+            ? pinConflict
             : `body.enabled conflicts with multiAgentMode '${mode}'`,
         }, 400);
       }
-      if (wantsFlag && body.enabled === true && hybridPinActive) {
+      if (wantsFlag && body.enabled === true && pinDrivenV2) {
         return jsonResponse({
-          error: "body.enabled=true conflicts with keepNativeChatGptOnV1: Codex's global multi_agent_v2 override outranks catalog pins",
+          error: pinConflict,
         }, 400);
+      }
+      // Recheck consent against the admitted state as well as the initial snapshot.
+      if (mode === "v2-plaintext" && resolveMultiAgentMode(config) !== "v2-plaintext"
+          && body.plaintextAgentMessagesAcknowledged !== true) {
+        return jsonResponse({ error: "body.multiAgentMode 'v2-plaintext' requires plaintextAgentMessagesAcknowledged === true: native v2 collaboration messages are delivered as plaintext on the canonical ChatGPT route" }, 400);
       }
       const requestedFlag = wantsFlag
         ? body.enabled as boolean
@@ -402,10 +425,8 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     // repeats this check, but doing it here prevents an earlier flag/mode/agents
     // write from landing before an unsupported runtime returns 502.
     if (wantsModeHintText && body.multiAgentModeHintText !== null
-        && probeCodexSupportsModeHint() === false) {
-      return jsonResponse({
-        error: `writing multiAgentModeHintText failed: ${MODE_HINT_UNSUPPORTED_ERROR}`,
-      }, 502);
+        && await withCodexCliSelectionParentWriteAsync(probeCodexSupportsModeHint, { signal: req.signal }) === false) {
+      return jsonResponse({ error: `writing multiAgentModeHintText failed: ${MODE_HINT_UNSUPPORTED_ERROR}` }, 502);
     }
     const warnings: string[] = [];
     let requestedFlag: boolean | undefined;
@@ -428,8 +449,13 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       return jsonResponse({ error: configWriteLockFailureMessage(configWriteLock), retryable: configWriteLock.error === "locked" }, 502);
     }
     const heldWriteLock = configWriteLock !== null && configWriteLock.ok ? configWriteLock.handle : undefined;
+    let selectionWrite: CodexCliSelectionAsyncParentWrite | undefined;
     try {
-      const writeRefusal = await settleConfigRoot(configRoot(), () => {
+      if (wantsFlag || wantsMode || wantsThreads || wantsKeepNative || (wantsModeHintText && body.multiAgentModeHintText !== null)) {
+        selectionWrite = await beginCodexCliSelectionParentWriteAsync({ signal: req.signal });
+        if (!selectionWrite.entered) return jsonResponse({ error: "codex_cli_selection_busy", retryable: true }, 503);
+      }
+      const commit = () => {
         const currentPlan = readModePlan();
         if (currentPlan instanceof Response) return currentPlan;
         const { effectiveMode } = currentPlan;
@@ -451,6 +477,9 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
           else config.multiAgentMode = mode;
           saveConfigPreservingClaudeCode(config);
           warnings.push(`Multi-agent mode set to '${mode}'. Applies to new sessions.`);
+          if (mode === "v2-plaintext" && config.keepNativeChatGptOnV1 === true) {
+            warnings.push("keepNativeChatGptOnV1 is stored but inactive under 'v2-plaintext': ChatGPT-native rows are pinned on v2.");
+          }
         }
         if (wantsKeepNative) {
           if (body.keepNativeChatGptOnV1 === true) config.keepNativeChatGptOnV1 = true;
@@ -459,6 +488,8 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
           warnings.push(body.keepNativeChatGptOnV1 === true
             ? (effectiveMode === "v2"
               ? "ChatGPT-native models stay on v1 while other models use v2. Applies to new sessions."
+              : effectiveMode === "v2-plaintext"
+              ? "keepNativeChatGptOnV1 is stored but inactive under 'v2-plaintext': ChatGPT-native rows are pinned on v2. Applies to new sessions."
               : "keepNativeChatGptOnV1 is stored but inactive until multi-agent mode is v2. Applies to new sessions.")
             : "ChatGPT-native models follow the selected v1/v2/base surface. Applies to new sessions.");
         }
@@ -497,9 +528,11 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
           }
         }
         return null;
-      });
+      };
+      const writeRefusal = await settleConfigRoot(configRoot(), () => selectionWrite ? selectionWrite.commit(commit) : commit());
       if (writeRefusal) return writeRefusal;
     } finally {
+      selectionWrite?.exit();
       if (heldWriteLock) releaseConfigWriteLock(heldWriteLock);
     }
     // Derived from fresh post-write readers (readConfigText is uncached): upstream
@@ -519,12 +552,14 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       multiAgentMode: resolveMultiAgentMode(config),
       multiAgentSurfaceAdvisory: multiAgentSurfaceAdvisory(config),
       keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
+      plaintextAgentMessagesEnabled: isPlaintextV2AgentMessagesEnabled(config),
+      supportsPlaintextV2Mode: true,
       agentsEnabled: getAgentsEnabled(),
       agentsMaxDepth: getAgentsMaxDepth(),
       subagentDeveloperInstructions: getSubagentDeveloperInstructions(),
       multiAgentModeHintText: getMultiAgentModeHintText(),
       multiAgentModeHintRecommendation: MULTI_AGENT_MODE_HINT_RECOMMENDATION,
-      agentsMaxDepthAppliesWhenV2Disabled: !enabled,
+      agentsMaxDepthAppliesWhenV2Disabled: !enabled && resolveMultiAgentMode(config) !== "v2-plaintext",
       warnings,
       catalogRefresh,
     });
@@ -554,26 +589,28 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     const body = parsedBody as { enabled?: unknown };
     if (typeof body.enabled !== "boolean") return jsonResponse({ error: "body.enabled must be a boolean" }, 400);
     const { isDefaultModeRequestUserInputEnabled, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY, activeCodexConfigPath } = await import("../../codex/features");
-    const before = isDefaultModeRequestUserInputEnabled();
-    let toggle = deps.toggleDefaultModeRequestUserInput;
-    if (!toggle) {
-      try {
-        const { codexFeaturesInvocation, runCodexFeaturesCommand } = await import("../../cli/v2");
-        const action = body.enabled ? "enable" : "disable";
-        const invocation = codexFeaturesInvocation(action, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY, process.platform, { requireAvailable: true });
-        toggle = (_enabled, env, validate) => runCodexFeaturesCommand(action, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY, env, validate, invocation);
-      } catch (error) {
-        return jsonResponse({ error: `default_mode_request_user_input toggle failed: ${error instanceof Error ? error.message : String(error)}` }, 502);
+    const selectionWrite = await beginCodexCliSelectionParentWriteAsync({ signal: req.signal });
+    if (!selectionWrite.entered) return jsonResponse({ error: "codex_cli_selection_busy", retryable: true }, 503);
+    try {
+      const before = isDefaultModeRequestUserInputEnabled();
+      let toggle = deps.toggleDefaultModeRequestUserInput;
+      if (!toggle) {
+        try {
+          const { codexFeaturesInvocation, runCodexFeaturesCommand } = await import("../../cli/v2");
+          const action = body.enabled ? "enable" : "disable";
+          const invocation = selectionWrite.commit(() => codexFeaturesInvocation(action, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY, process.platform, { requireAvailable: true }));
+          toggle = (_enabled, env, validate) => runCodexFeaturesCommand(action, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY, env, validate, invocation);
+        } catch (error) {
+          if (error instanceof CodexCliSelectionMutationBusyError) throw error;
+          return jsonResponse({ error: `default_mode_request_user_input toggle failed: ${error instanceof Error ? error.message : String(error)}` }, 502);
+        }
       }
-    }
-    // The `codex features` subprocess rewrites config.toml itself — run it
-    // under the shared write lock so it cannot interleave with an opencodex
-    // scalar edit or injection mid-write on either side.
-    const { acquireConfigWriteLock, releaseConfigWriteLock, configWriteLockFailureMessage, runConfigWriteChild, ConfigWriteDestinationChanged } = await import("../../codex/config-write-lock");
-    const configPath = activeCodexConfigPath();
-    // Preserve native home creation only after executable resolution succeeds.
-    prepareCodexHome(dirname(configPath));
-    {
+      // Keep selection ownership across the config-lock await and the whole
+      // synchronous child execution: an updater must not replace this command.
+      const { acquireConfigWriteLock, releaseConfigWriteLock, configWriteLockFailureMessage, runConfigWriteChild, ConfigWriteDestinationChanged } = await import("../../codex/config-write-lock");
+      const configPath = activeCodexConfigPath();
+      // Preserve native home creation only after executable resolution succeeds.
+      selectionWrite.commit(() => prepareCodexHome(dirname(configPath)));
       const configLock = await acquireConfigWriteLock(configPath);
       if (!configLock.ok) {
         return jsonResponse({ error: configWriteLockFailureMessage(configLock), retryable: configLock.error === "locked" }, 502);
@@ -581,8 +618,9 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       let toggleError: string | null = null;
       let destinationChanged = false;
       try {
-        runConfigWriteChild(configPath, configLock.handle, (env, validate) => toggle!(body.enabled as boolean, env, validate));
+        selectionWrite.commit(() => runConfigWriteChild(configPath, configLock.handle, (env, validate) => toggle!(body.enabled as boolean, env, validate)));
       } catch (error) {
+        if (error instanceof CodexCliSelectionMutationBusyError) throw error;
         destinationChanged = error instanceof ConfigWriteDestinationChanged;
         const err = error as { stderr?: unknown; message?: string };
         const raw = err.stderr;
@@ -605,7 +643,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
         warnings.push("Applies to new sessions; restart the Codex app or wait out its picker cache to see the change.");
       }
       return jsonResponse({ ok: true, enabled, changed: enabled !== before, warnings });
-    }
+    } finally { selectionWrite.exit(); }
   }
 
   // Subagent prompt injection model: single native or routed model whose info is
@@ -972,13 +1010,19 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     }
   }
   if (url.pathname === "/api/claude-desktop" && req.method === "PUT") {
-    let body: { profile?: unknown };
+    let body: { profile?: unknown; visibility?: unknown };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     try {
       const { parseDesktopProfile, preserveDesktopAppliedState, reconcileDesktopProfile, sameProfileContent } = await import("../../claude/desktop-profile");
       const parsed = parseDesktopProfile(body.profile);
       const initial = loadConfig();
       const current = await buildClaudeDesktopState(initial);
+      // #7702: absent keeps the stored selection, null clears it (list every model).
+      const { parseDesktopModelVisibility, desktopRouteVisible, readDesktopModelVisibility, sameDesktopModelVisibility } = await import("../../claude/desktop-model-visibility");
+      const visibility = body.visibility === undefined || body.visibility === null ? body.visibility : parseDesktopModelVisibility(body.visibility);
+      if (visibility && !current.models.some(model => model.available && desktopRouteVisible(visibility, model.route))) {
+        throw new Error("Claude Desktop needs at least one visible available model");
+      }
       const availableRoutes = new Set(current.models.filter(item => item.available).map(item => item.route));
       for (const route of Object.keys(parsed.assignments)) {
         if (!current.profile.assignments[route] && !availableRoutes.has(route)) {
@@ -1012,10 +1056,15 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
             || (latest && expectedProfile && !sameProfileContent(latest, expectedProfile))) {
             return { changed: false, value: null };
           }
+          if (visibility !== undefined && !sameDesktopModelVisibility(
+            readDesktopModelVisibility(persisted.claudeCode), readDesktopModelVisibility(initial.claudeCode),
+          )) return { changed: false, value: null };
           persisted.claudeCode = {
             ...(persisted.claudeCode ?? {}),
             desktopProfile: preserveDesktopAppliedState(latest ?? current.profile, rebuilt),
           };
+          if (visibility) persisted.claudeCode.desktopModelVisibility = visibility;
+          else if (visibility === null) delete persisted.claudeCode.desktopModelVisibility;
           return { changed: true, value: structuredClone(persisted.claudeCode) };
         });
         if (outcome.status !== "unavailable" && outcome.value !== null) {
@@ -1027,6 +1076,10 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
               ...(config.claudeCode ?? {}),
               desktopProfile: structuredClone(outcome.value.desktopProfile),
             };
+          }
+          if (visibility !== undefined && config.claudeCode) {
+            if (outcome.value?.desktopModelVisibility) config.claudeCode.desktopModelVisibility = structuredClone(outcome.value.desktopModelVisibility);
+            else delete config.claudeCode.desktopModelVisibility;
           }
         }
         return outcome;
@@ -1095,9 +1148,9 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
         const { claudeInterceptProxyPort } = await import("../../claude/intercept/runtime");
         const configured = claudeInterceptProxyPort(config, config.port ?? 10100);
         if (started.state.proxyPort !== configured) return jsonResponse({ ok: false, code: "port_mismatch", bound: started.state.proxyPort, configured }, 409);
-        const { setIntegrationEnabled } = await import("../../codex/desired-state");
+        const { setHomeIntegrationEnabled } = await import("../../routing/home-route-capture");
         const desired = await withFirstPartySecretsSettled(configRoot(), () => {
-          const result = setIntegrationEnabled("claude-desktop", true);
+          const result = setHomeIntegrationEnabled("claude-desktop", true);
           if (result.ok) mirrorDesiredEnabledOntoSnapshot(config, "claude-desktop", true);
           return result;
         });
@@ -1186,9 +1239,10 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
           }
         });
       }
-      const { setIntegrationEnabled, claudeDesktopIntegrationEnabled } = await import("../../codex/desired-state");
+      const { claudeDesktopIntegrationEnabled } = await import("../../codex/desired-state");
+      const { setHomeIntegrationEnabled } = await import("../../routing/home-route-capture");
       const desired = await settleConfigRoot(configRoot(), () => {
-          const result = setIntegrationEnabled("claude-desktop", true);
+          const result = setHomeIntegrationEnabled("claude-desktop", true);
           if (result.ok) mirrorDesiredEnabledOntoSnapshot(config, "claude-desktop", true);
           return result;
         });
@@ -1383,6 +1437,8 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
         savedFingerprint,
         onDiskFingerprint: observed.fingerprint ?? null,
         configPath: observed.selectedProfilePath,
+        // The list Desktop runs now (#7702), so the dashboard can count and diff against it.
+        appliedModels: gatewayApplied ? (await import("../../claude/desktop-model-visibility")).readAppliedDesktopModels(observed.selectedProfilePath) : null,
         stale,
         // Tri-state by ID match, independent of profile health: null =
         // undeterminable (no/unreadable metadata or no appliedId); a readable
@@ -1506,9 +1562,11 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     // Auto is a RESOLUTION, recomputed per request — never stored state. Detection is
     // daemon-side, so it cannot see a key exported only in the user's terminal; the
     // GUI labels the badge with detectionScope for exactly that reason.
-    const { defaultAuthDetectDeps, detectClaudeAuth, ownAdmissionTokens } = await import("../../claude/auth-detect");
+    const { defaultAuthDetectDeps, detectClaudeAuth, ownAdmissionTokens, resolveClaudeKeychainPresence } = await import("../../claude/auth-detect");
     const { authModeIntent, resolveClaudeAuthMode } = await import("../../claude/auth-mode");
-    const authDetection = detectClaudeAuth(defaultAuthDetectDeps(process.env, ownAdmissionTokens(config)));
+    // Awaited, never spawned synchronously: a blocked Keychain lookup must not stall /healthz (#8161).
+    const keychainPresence = await resolveClaudeKeychainPresence(config.claudeCode?.authMode);
+    const authDetection = detectClaudeAuth(defaultAuthDetectDeps(process.env, ownAdmissionTokens(config), keychainPresence));
     const resolvedAuthMode = resolveClaudeAuthMode(config, authDetection);
     const contextWindows = buildClaudeContextWindows(
       [...visibleNativeSlugs(config)],
@@ -1813,6 +1871,10 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       const prepared = prepareClaudeCodePatch(config, body);
       if (prepared instanceof Response) return prepared;
       const { next, nextFastMode } = prepared;
+      // The Claude toggle is this Home's alone: freeze what Children inherit before it moves, and
+      // refuse before anything changes when that cannot be saved.
+      const captureRefused = body.enabled !== undefined ? captureHomeRouteDefaultsBeforeHomeSwitch() : null;
+      if (captureRefused) return jsonResponse({ error: captureRefused.message, code: "route_intent_unavailable" }, captureRefused.retryable ? 409 : 500);
       // Stamps the auth-mode migration sentinel on EVERY persist of this block. Without it,
       // choosing Auto (which DELETES authMode) or merely toggling Claude on (App.tsx PUTs
       // `{enabled}` alone and creates the block) would be converted into a sticky manual

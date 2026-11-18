@@ -5,10 +5,20 @@ import { startClientRuntimeUnderOwnershipLease } from "../../src/cli/client-star
 import { recoverStartStateUnderOwnershipLease } from "../../src/cli/start-owner-fence";
 import { serviceChildOwnershipDecisionForClassifiedChild } from "../../src/service/service-child-ownership";
 import type { ServiceOwnershipResolution } from "../../src/service/state";
+import { clientRuntimeRecord } from "../../src/client/runtime";
+import { currentServingCommand } from "../../src/config/serving-runtimes";
 
 class StayOut extends Error {}
 
 describe("connected-client start ownership fence", () => {
+  test("published connected-client identity retains the current serving command", () => {
+    expect(clientRuntimeRecord(123, 12345).command).toEqual(currentServingCommand());
+  });
+  test("ordinary start publishes its serving command alongside the attestation secret", () => {
+    const cli = readFileSync(repoPath("src/cli/index.ts"), "utf8");
+    const record = cli.slice(cli.indexOf("writeRuntime: bound =>"), cli.indexOf("stopBound: bound =>"));
+    expect(record).toContain("command: currentServingCommand()");
+  });
   test("a desktop claim committed at recovery lease acquisition skips sibling marking and journal reconciliation", async () => {
     let ownership: ServiceOwnershipResolution = { kind: "none", revision: 0 };
     expect(serviceChildOwnershipDecisionForClassifiedChild(true, () => ownership)).toEqual({ kind: "proceed" });
@@ -128,7 +138,8 @@ describe("connected-client start ownership fence", () => {
     // serve() binds and publishes (it runs again for a restart rollback, OCX-6); the lease is
     // released only once the first serve() returned, i.e. after publication.
     const serve = runtime.slice(runtime.indexOf("const serve = async"), runtime.indexOf("const stopServing"));
-    expect(serve).toMatch(/writePid\(process\.pid\);\s*\n\s*writeRuntimePort\(clientRuntimeRecord\(process\.pid, boundPort, attestationSecret\)\);/);
+    // Each publication also stamps a fresh servingGeneration (restart sync fence, #8416).
+    expect(serve).toMatch(/writePid\(process\.pid\);\s*\n(?:\s*\/\/[^\n]*\n)*\s*writeRuntimePort\(\{ \.\.\.clientRuntimeRecord\(process\.pid, boundPort, attestationSecret\), servingGeneration: randomUUID\(\) \}\);/);
     expect(runtime).toMatch(/await serve\(\);\s*\n\s*options\.afterPublish\?\.\(\);/);
   });
 });

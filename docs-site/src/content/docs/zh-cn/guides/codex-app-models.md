@@ -3,6 +3,8 @@ title: Codex App 模型选择器
 description: opencodex 中的模型如何通过共享 Codex 目录出现在 Codex App、Codex CLI 和 Codex TUI 中。
 ---
 
+默认值为 `false`。在 `config.json` 中设置 `"omitDisabledNativeModels": true` 并运行 `ocx sync`，即可从目录、缓存和 Codex 格式的 HTTP 模型列表中移除已禁用的 native 行。移除前经过验证的继承模板会单独保留，因此 routed 行的元数据不变，直接请求的路由也不变。下文的 hide 说明适用于默认设置。
+
 opencodex 不会修改 Codex App。它会写入 Codex CLI/TUI 使用的同一套 Codex 配置和模型目录。
 app-server 会读取这份共享状态，但部分 Codex Desktop 版本还会在 renderer 中应用第二层远程
 allowlist，因此仍可能从选择器里删掉路由模型。
@@ -118,7 +120,7 @@ fast_mode = true
 
 ## 子代理选择
 
-Codex 会按 `priority` 升序对选择器可见的目录条目排序，并把前五个作为 `spawn_agent` 模型 override 暴露出来。仪表盘 Subagents 页面最多可以选择并保存五个裸原生 id 或路由 `provider/model` id。手动设置的 `subagentModels` 也支持账户限定的 `<selector>/<native-openai-model>` id，但仪表盘不会提供这些精确 id；保存该页面会用仪表盘中可见的选项替换整个列表。opencodex 会按所选顺序分配较低的目录 priority；启用账户限定的选择器行时，裸原生选择会展开为 selector-qualified 分组。其他模型仍然可以通过精确 id 调用。
+Codex 会按 `priority` 升序对选择器可见的目录条目排序，并把前五个作为 `spawn_agent` 模型 override 暴露出来。仪表盘 Subagents 页面最多可以选择并保存五个裸原生 id 或路由 `provider/model` id。手动设置的 `subagentModels` 也支持账户限定的 `<selector>/<native-openai-model>` id。保存列表时，仪表盘会保留这些已保存的精确 id，包括当前目录中已不可用的模型。opencodex 会按所选顺序分配较低的目录 priority；启用账户限定的选择器行时，裸原生选择会展开为 selector-qualified 分组。其他模型仍然可以通过精确 id 调用。
 
 精选模型列表与 Dashboard 的 **Sub-agent delegation** 选择彼此独立。它只决定 Codex 先提供哪些 override；它不会自己选择模型，也不会触发委派。
 

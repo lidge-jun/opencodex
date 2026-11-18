@@ -14,6 +14,16 @@ Cela se distingue de la surface des sous-agents (voir
 délégation initiée par le worker via les outils de collaboration de Codex. Le conseiller est un
 sidecar côté proxy invisible du client — même un worker qui ne spawn jamais peut être conseillé.
 
+## Question uniquement
+
+Pour réduire les entrées répétées, activez l’option correspondante dans la page Advisor ou exécutez :
+
+```sh
+ocx advisor set --context-mode question-only
+```
+
+Ce mode envoie uniquement une instruction fixe et la question du worker (2 000 caractères conservés, puis un avis de troncature). Aucun historique, tâche, résultat d’outil, catalogue, identité du worker ou preuve de réparation n’est ajouté. Le worker doit fournir les informations nécessaires. Les questions vides sont refusées sans appel au fournisseur. Les consultations automatiques preflight et adaptive sont suspendues ; le consentement et les limites existantes restent requis. Le mode par défaut `context` conserve le comportement décrit ci-dessous. `--context-mode context` le rétablit.
+
 ## Configuration
 
 Sur la page **Advisor**, choisissez le modèle dans le catalogue. Le sélecteur conserve exactement les identifiants natifs, de fournisseur, de compte, personnalisés et de combo. Les modèles désactivés ou en attente de sélection initiale ne sont pas proposés. Un identifiant enregistré absent du catalogue reste visible avec un avertissement, jusqu’à son remplacement ou sa suppression. Un échec de chargement conserve la sélection et propose de réessayer. Choisissez un modèle capable de fournir des conseils textuels : le catalogue ne garantit pas la compatibilité des consultations. La CLI et l’API acceptent toujours les chaînes de modèle prises en charge par le routeur.
@@ -36,6 +46,7 @@ Sur la page **Advisor**, choisissez le modèle dans le catalogue. Le sélecteur 
 | `model?` | `string` | — | Le modèle expert. Toute chaîne de modèle acceptée par le routeur : modèle natif seul (`gpt-6-astra`), `provider/model` explicite (`anthropic/claude-sonnet-4-6`, `xai/grok-...`) ou modèle natif qualifié par compte. Inter-fournisseurs entièrement pris en charge. |
 | `effort?` | `string` | `"max"` | Intensité de raisonnement de l'appel conseiller (`low`–`ultra`). |
 | `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | Quand consulter le conseiller. |
+| `contextMode?` | `"context" \| "question-only"` | `"context"` | Partage du contexte. `question-only` exige une question explicite du worker et suspend les consultations automatiques. |
 | `maxConsultationsPerTask?` | `integer` | `3` | Budget adaptatif par tâche (1 à 3 tentatives, appels manuels compris). |
 | `timeoutMs?` | `number` | `120000` | Délai de la consultation en boucle locale. |
 | `contextSharingConsent?` | `"v1"` | absent | Consentement de l'opérateur pour envoyer le contexte de la tâche au fournisseur conseiller configuré. Seul `"v1"` est courant. Une valeur absente, périmée ou autre n'autorise aucun envoi. `enabled: true` n'est pas ce consentement. |
@@ -43,7 +54,7 @@ Sur la page **Advisor**, choisissez le modèle dans le catalogue. Le sélecteur 
 Gérez-le via la page **Advisor** du tableau de bord ou
 `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>`.
 
-Sans consentement courant, `ocx advisor on` n'active pas le partage inter-fournisseurs : il affiche cette divulgation et s'arrête. `ocx advisor on --ack-context-sharing` et `ocx advisor consent` enregistrent `v1`. `ocx advisor consent --revoke` retire le consentement et arrête immédiatement l'envoi. `ocx advisor set` n'accorde pas le consentement. La case du tableau de bord n'est pas précochée.
+Sans consentement courant, `ocx advisor on` n'active pas le partage inter-fournisseurs : il affiche cette divulgation et s'arrête. `ocx advisor on --ack-context-sharing` et `ocx advisor consent` enregistrent `v1`. `ocx advisor consent --revoke` retire le consentement. Les consultations qui n'ont pas encore été envoyées sont bloquées, mais une consultation déjà envoyée ne peut pas être annulée, et le contexte déjà transmis hors du proxy ne peut pas être retiré. `ocx advisor set` n'accorde pas le consentement. La case du tableau de bord n'est pas précochée.
 
 ## Politiques
 
@@ -77,11 +88,17 @@ Une consultation peut envoyer :
 
 Le fournisseur conseiller configuré peut différer de celui du worker.
 
+Les consultations respectent à la fois la portée de modèles capturée de la clé d'API de l'appelant, son consentement aux combos payants et ses limites de repli par appareil, et les limites d'hôte de la propre clé d'admission d'Advisor : `OPENCODEX_API_AUTH_TOKEN` ou le fichier de jeton du service s'il est défini et accepté par ce proxy, sinon la première clé d'API configurée. L'ordre des clés ne compte que dans ce dernier cas : placez en premier une clé qui peut atteindre le modèle Advisor, sinon chaque consultation est indisponible. Lorsqu'un jeton d'environnement ou de service est défini, c'est lui qui contrôle la consultation. Ces règles s'appliquent aussi aux choix de combo, aux modèles de décision imbriqués et aux nouvelles tentatives. Une consultation qui ne peut pas les satisfaire renvoie au worker un avis d'indisponibilité.
+
+Par exemple, une clé `laptop` avec `allowMeteredComboTargets: false` ne peut pas dépenser sur des cibles de combo facturées via Advisor, et `fallback.devices.laptop.provider: false` bloque aussi les sauts de repli de fournisseur d'Advisor. Un appelant loopback sans clé a toujours besoin de l'option `allowMeteredTargets: true` du combo. Lorsque les deux clés définissent `allowMeteredComboTargets: true` et que le combo définit `allowMeteredTargets: true`, Advisor peut utiliser ses cibles facturées, y compris via l'écouteur loopback d'une liaison publique. Le serveur capture la politique de l'appelant lorsqu'il authentifie la requête, avant d'attendre de la capacité pour le corps ou de le lire ; des modifications ultérieures des clés ou du repli ne peuvent pas élargir cette consultation. Cela couvre aussi les assistants de vision routés, les requêtes compact et leurs modèles de décision, ainsi que chaque nouvelle tentative de candidat dans un tour WebSocket. Chaque nouveau tour WebSocket capture sa propre politique.
+
 OpenCodex n'insère pas dans ce prompt de clés d'API de fournisseur, d'en-têtes Authorization, de jetons OAuth, de secrets de configuration réservés au backend, d'environnement de processus, ni de chaîne de pensée cachée. Il ne déchiffre pas et ne transmet pas un raisonnement privé chiffré du fournisseur. **Le contenu de la tâche n'est pas expurgé de secrets.** Une clé collée dans la tâche, un secret dans un fichier lu par les outils, ou un jeton imprimé par un outil ou un journal peut être envoyé. OpenCodex n'exécute pas de DLP général.
 
 ## Autorité
 
 Le conseil manuel est le résultat d'outil de l'appel `advisor` que le worker a lui-même émis. Ce résultat est un objet JSON. Le champ `advice` est le texte du modèle conseiller. Le champ `status` est écrit par le runtime.
+
+Lors des tours de recherche web basés sur fetch, la boucle de recherche n'expose l'outil synthétique `advisor` et n'intercepte ses appels de consultation manuelle que si le `tool_choice` effectif l'autorise. Un choix `allowed_tools` limité à `web_search` exclut les consultations manuelles du conseiller. Activer la recherche hébergée n'élargit pas cette autorisation.
 
 Le conseil automatique est un objet JSON cité dans un message consultatif de rôle user distinct. Seule l’instruction fixe du runtime reste dans le message developer ; le texte généré par le conseiller ne passe jamais dans developer/system. Cela fonctionne avec OpenAI Chat et Anthropic sans inventer un appel d’outil. Les guillemets empêchent la rupture structurelle et les champs falsifiés, pas toute injection en langage naturel. Un protocole dédié pourrait mieux distinguer le conseil d’une demande utilisateur. Chaque requête permet au plus trois consultations et quatre continuations du worker. À la limite, l’outil advisor est retiré ; un nouvel appel reçoit une dernière continuation avec un résultat de limite, puis un autre appel termine avec 502 advisor_continuation_limit sans nouvel envoi. La limite est partagée avec les reprises de complétion vide.
 
@@ -108,6 +125,13 @@ codage, et une consultation ne change jamais le modèle principal de la session.
 - Les tours natifs OpenAI en passthrough (workers du pool ChatGPT) ne reçoivent pas l'outil
   synthétique ; le conseiller couvre les fournisseurs routés (traduits). La consultation
   preflight s'applique aux adaptateurs run-turn ; l'outil non.
+- Les requêtes `/v1/messages` traduites (par exemple Claude Code routé vers un fournisseur
+  traduit) reçoivent l'outil synthétique et la consultation preflight comme `/v1/responses` et
+  `/v1/chat/completions`. Les mêmes règles de `policy` et de consentement au partage de contexte
+  s'appliquent, et les réglages sont lus dans la configuration active : une révocation du
+  consentement empêche donc les requêtes déjà en cours de lancer une consultation qui n'a pas
+  encore été envoyée. Elle n'annule pas une consultation déjà envoyée et ne retire pas le contexte
+  déjà sorti du proxy.
 - Pas de détection sémantique de blocage, de revue finale, de niveaux d’escalade, de conseillers multiples ou de vote.
 - Le registre de déduplication preflight vit dans le processus ; après un redémarrage du proxy,
   une tâche en cours peut recevoir une tentative preflight de plus.

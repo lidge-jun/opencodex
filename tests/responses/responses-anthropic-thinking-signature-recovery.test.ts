@@ -4,13 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { httpStatusFromTerminalError } from "../../src/lib/errors";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
-import { markResponseNonReplayable, SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
+import { markResponseNonReplayable, SendBudgetExhaustedError, providerErrorDestinationLabel } from "../../src/lib/upstream-retry";
 import { resetWorkflowBudgetsForTest } from "../../src/lib/workflow-budget";
 import { encodeReasoningEnvelope } from "../../src/responses/reasoning-envelope";
 import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning-replay-cache";
 import { resetThoughtSignatureReplayForTests } from "../../src/responses/thought-signature-replay";
 import * as thoughtSignatureReplay from "../../src/responses/thought-signature-replay";
 import * as pacing from "../../src/providers/request-pacing";
+import * as proxyEnv from "../../src/lib/proxy-env";
 import { saveCredential, getAccountSet, setActiveAccount } from "../../src/oauth/store";
 import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
 import { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY } from "../../src/lib/spend-reservation-ledger";
@@ -31,11 +32,16 @@ const REDACTED = "synthetic-redacted-thinking";
 const REJECTION = "Invalid `signature` in `thinking` block. The block is bound to a different conversation. Remove the thinking block and retry.";
 let testDir = "";
 let releaseSpendHome: (() => void) | undefined;
+let configuredFetch: ReturnType<typeof spyOn> | undefined;
 
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-anthropic-thinking-recovery-"));
   process.env.OPENCODEX_HOME = testDir;
   releaseSpendHome = acquireOwnedSpendHome();
+  globalThis.fetch = (() => { throw new Error("No active in-memory thinking-recovery fixture"); }) as typeof fetch;
+  // Media and OAuth helpers may select SOCKS before reaching global fetch. Keep every
+  // configured transport inside the same memory fixture, with no native fallback.
+  configuredFetch = spyOn(proxyEnv, "configuredOutboundFetch").mockImplementation((input, init) => globalThis.fetch(input, init));
   clearReasoningReplayCacheForTests();
   resetThoughtSignatureReplayForTests();
   resetWorkflowBudgetsForTest();
@@ -48,6 +54,7 @@ beforeEach(() => {
 afterEach(() => {
   try { releaseSpendHome?.(); } finally {
     releaseSpendHome = undefined;
+    configuredFetch?.mockRestore(); configuredFetch = undefined;
     globalThis.fetch = originalFetch;
     clearReasoningReplayCacheForTests();
     resetThoughtSignatureReplayForTests();
@@ -429,7 +436,7 @@ describe("Anthropic thinking-signature recovery through Responses dispatch", () 
   test("a local send-budget refusal retains 429 identity after refetch aborts its upstream signal", async () => {
     const bodies = fakeUpstream(index => {
       if (index === 1) return streamRejection();
-      if (index === 2) throw new SendBudgetExhaustedError("synthetic-upstream");
+      if (index === 2) throw new SendBudgetExhaustedError(providerErrorDestinationLabel("synthetic-upstream"));
       return success(true);
     });
     const result = await send(true);
@@ -466,13 +473,14 @@ describe("Anthropic thinking-signature recovery through Responses dispatch", () 
     test(`the shared send budget can deny recovery (initialStreamError=${initialStreamError})`, async () => {
       const bodies = fakeUpstream(index => index === 1
         ? initialStreamError ? streamRejection() : rejection() : success(initialStreamError));
+      // The initial physical send consumes the sole slot; the repair must be refused.
       const budget = createRequestExecutionBudget({
-        maxTotalModelSends: 0, baseSendAllowance: 0, finalRecoveryAllowance: 0,
+        maxTotalModelSends: 1, baseSendAllowance: 1, finalRecoveryAllowance: 0,
         maxAlternateTargetSends: 0, maxTargetTransitions: 0,
       }, "thinking-recovery-budget-refused");
       await send(initialStreamError, undefined, { sendBudget: budget });
       expect(bodies).toHaveLength(1);
-      expect(budget.used).toBe(0);
+      expect(budget.used).toBe(1);
       await send(initialStreamError);
       expect(bodies).toHaveLength(2);
       expect(bodies[1]).toContain(SIGNATURE);
@@ -656,7 +664,7 @@ test("a later media iteration preserves a structured send-budget refusal after t
       return Response.json({ error: { message: "Synthetic image refusal" } }, { status: 400 });
     }
     if (url !== "https://anthropic.example.test/v1/messages") throw new Error("Unexpected test network target");
-    if (++inferenceCalls > 1) throw new SendBudgetExhaustedError("synthetic-later-media-send");
+    if (++inferenceCalls > 1) throw new SendBudgetExhaustedError(providerErrorDestinationLabel("synthetic-later-media-send"));
     return sse(frame("message_start", { message: { usage: { input_tokens: 2 } } }),
       frame("content_block_start", { index: 0, content_block: { type: "tool_use", id: "image_fixture", name: "image_gen", input: {} } }),
       frame("content_block_delta", { index: 0, delta: { type: "input_json_delta", partial_json: '{"prompt":"fixture"}' } }),

@@ -44,7 +44,7 @@ for (const rejectCleanup of [false, true]) {
           })();
           closes.push(close);
           if (index === 1) pair.aStore.mutate(state => { state.generation = crypto.randomUUID(); });
-          return { pid: 0, exited, output: Promise.resolve(""), close };
+          return { pid: 0, exited, output: Promise.resolve(""), forwardReady: Promise.resolve(), close };
         },
       });
       await expect(result).rejects.toThrow(rejectCleanup ? "fixture cleanup incomplete" : "configuration changed");
@@ -90,7 +90,7 @@ for (const [rejectCleanup, deliberateRemoval] of [[false, false], [true, false],
             if (rejectCleanup && index === 1) throw remoteError("cleanup_incomplete", "fixture cleanup incomplete");
           })();
           closes.push(close); exits.push(() => finish(0));
-          return { pid: 0, exited, output: Promise.resolve(""), close };
+          return { pid: 0, exited, output: Promise.resolve(""), forwardReady: Promise.resolve(), close };
         },
       });
       await resolveRemoteRoute(pair.aStore, "worker", budget);
@@ -228,7 +228,7 @@ for (const failRenewal of [false, true]) test.skipIf(process.platform === "win32
           if (listener) await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
           free(); finish(0);
         })();
-        closes.push(close); return { pid: 0, exited, output: Promise.resolve(""), close };
+        closes.push(close); return { pid: 0, exited, output: Promise.resolve(""), forwardReady: Promise.resolve(), close };
       },
     });
     if (failRenewal) {

@@ -123,3 +123,41 @@ model — rather than clearing it. Settings projection and writes live beside th
 Exact pool selectors also honor the credits-after-limit policy. `pool-credit-policy.ts` reads cached usage and configured plan metadata without credential I/O. Authentication checks before and after credential acquisition; provider overrides, materialization and recovery rechecks retain the live policy privately by context identity. `createCodexAuthDispatchGuard` rechecks live credit policy at HTTP and Responses WebSocket dispatch after pacing or retry backoff, alongside the independent Reserve guard. A policy refusal releases unused probes and never quarantines a valid credential. Coverage: `tests/codex-integration/codex-pool-credit-policy.test.ts`.
 
 `src/providers/openai-sidecar-credit.ts` carries the resolved stored-account policy into direct vision and search sends. Every physical helper send, including reset and 429 replays, rechecks the live policy before contacting the provider. The alpha/search relay uses the same callback and returns a reset-bound 429 on refusal. Optional helpers return a policy error without recording a connection failure; an unused probe is released. Caller-owned Direct authentication and native-main policy remain separate. Coverage: `tests/codex-integration/codex-sidecar-credit-policy.test.ts`.
+## Pool-only policy (#7410)
+
+`codexPool.poolOnly` (default off) keeps automatic Pool resolution off native main. The single decision is
+`codexAccountUnusableReason` in `src/codex/account-usability.ts`, which reports `pool_only` for `__main__` whenever the
+policy is on, unless the caller sets `explicitAccountSelector`. Every selector, preview and recovery path that already
+consults usability (`src/codex/routing/selection.ts`, `src/codex/routing.ts` preserve paths, subagent fallback in
+`src/codex/subagent-model-fallback.ts`, the request-prepare preview) therefore agrees without its own branch; only an
+account-qualified subagent route passes `explicitAccountSelector`. `resolveCodexAuthContext` in `src/codex/auth-context.ts` adds
+the paths that never reach selection: it skips request-owned main pin preservation, stored-main discovery and main
+entitlement reads, both caller-main fallbacks (no candidate, stored-account cooldown) and the no-candidate main policy
+check, and refuses with `CodexPoolAuthenticationError` if any selector still names main. Fixed selectors (an exact account,
+`__main__`, Reserve) and Direct mode stay outside the policy: their selection options and `isCodexAuthContextUsable` for a
+`fixedAccount` main-pool context pass `explicitAccountSelector`. `src/sidecar/auth.ts` (web-search and vision login presence)
+gets no opt-out, so main alone counts as no Codex login under the policy. Paused, duplicate-main, entitlement and cooldown checks are
+unchanged, and the policy never makes an ineligible stored account usable. Coverage:
+`tests/codex-integration/codex-pool-only-policy.test.ts`; `tests/codex-integration/codex-pool-caller-fallback-policy.test.ts`
+keeps the default-mode fallbacks.
+## Hard-lock refusal read
+
+`resolveCodexAuthContext` (`src/codex/auth-context.ts`) catches a `CodexMainAccountHardLockError` and asks
+`refreshMainHardLockBeforeRefusal` (`src/codex/auth-api/main-hard-lock-refusal-read.ts`) for one fresh
+usage read before refusing (#8113). The read runs only when the blocking usage was last measured more
+than 60 s ago (`getMainPolicyUsageObservedAt` in `src/codex/quota.ts`: the oldest per-window measurement time among the
+windows the reading retains; only a measured percentage renews its own window, never credits, reset metadata or
+another window, and a reading restored from disk has none, so it counts as stale); concurrent refusals share one in-flight read, and each main identity gets at most one read per
+minute, remembered per identity so switching logins cannot reset it. Usage-query backoff, a paused or reauthentication-required main and native-main maintenance skip
+it, and the read is passive: it never sets or clears the reauthentication quarantine. If the fresh reading
+no longer blocks, the request is resolved once more; otherwise the original refusal stands.
+A refusal on the proxy-owned main credential reads through the recovery probe under the native-main claim,
+always with paced usage scheduling so a failure or `Retry-After` defers the next read in Direct mode too.
+A caller-owned main request (caller-owned Direct, or a request-scoped main bearer in Pool) never reads the
+physical credential: it reads with its own bearer and publishes only while that bearer still HMAC-matches the
+observed main credential and its `MainQuotaDispatch` proof is still live, which also fences credential commits
+that advance the mutation epoch before the observed credential changes, and it takes a quota dispatch sequence so a response
+older than a published dispatch never overwrites it. An explicit stored-account selection is proxy-owned whatever bearer
+arrived. Coverage:
+`tests/codex-integration/main-account-hard-lock-refusal-read.test.ts` and the startup restore cases in
+`tests/codex-integration/main-account-hard-lock-auth.test.ts`.

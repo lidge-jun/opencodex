@@ -37,7 +37,7 @@ import {
   TRANSLATOR_MAX_TURN_BYTES,
   TranslatorBudgetExceededError,
 } from "../lib/translator-budget";
-import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "../web-search/progress-stream";
+import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchConsumerInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "../web-search/progress-stream";
 import { fulfillImageCall } from "./fulfill";
 import { parseVideoCallArgs, pollVideoWithHeartbeats, buildVideoResult, createVideoBudget } from "./fulfill-video";
 import { submitVideoJob } from "./xai-video-client";
@@ -348,6 +348,7 @@ export interface ImageBridgeDeps {
   waitForRequestSlot?: (signal?: AbortSignal) => Promise<ProviderRequestSlot | void>;
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
   onUsage?: (usage: OcxUsage | undefined) => void;
+  proxyErrorContext?: object;
   /**
    * After an `on429` rotation, offered the usage of the hidden iterations the left credential
    * served. Returning true means it was billed to that credential's attempt, so `onUsage` will not
@@ -390,6 +391,8 @@ export interface ImageBridgeDeps {
   forceEmptyResponseId?: boolean;
   /** Responses inbound only: deliver a non-retryable upstream refusal as `response.failed`. */
   terminalRefusalAsFailed?: boolean;
+  /** False for Chat/Messages inbound: their clients never parse `<oai-mem-citation>`, so text stays raw. */
+  escapeMemoryCitationTags?: boolean;
 }
 
 /**
@@ -894,7 +897,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       if (error instanceof LoopError) throw error;
       if (error instanceof SendBudgetExhaustedError) throw new LoopError(429, error.message,
         { type: "error", status: 429, errorType: "rate_limit_error", code: error.code, message: error.message, retryable: false });
-      if (error instanceof RoutedModelInactivityError) throw new LoopError(504, error.message);
+      if (error instanceof RoutedModelInactivityError || error instanceof WebSearchConsumerInactivityError) throw new LoopError(504, error.message);
       if (error instanceof WebSearchStreamProtocolError) throw new LoopError(502, error.message);
       throw new LoopError(502, `Provider stream error: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -1025,9 +1028,13 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                 continue;
               }
               const vArgs = parseVideoCallArgs(call.args);
+              const videoAuth = videoPlan!.auth;
               let vResult;
               if (!vArgs.ok) {
                 vResult = { ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0, error: vArgs.error };
+              } else if (!videoAuth) {
+                // An unusable images.videoProvider answers the call; it never reaches any upstream.
+                vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt, files: [], count: 0, error: videoPlan!.unavailable };
               } else {
                 paidVideoCalls += 1;
                 const videoTimeout = videoTimeoutMs ?? 300_000;
@@ -1045,13 +1052,13 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                       ...(vArgs.resolution != null ? { resolution: vArgs.resolution } : {}),
                       ...(vArgs.aspectRatio != null ? { aspectRatio: vArgs.aspectRatio } : {}),
                     },
-                    videoPlan!.auth, linkedDeadline,
+                    videoAuth, linkedDeadline,
                   );
                   const remainingMs = videoDeadline - Date.now();
                   if (remainingMs <= 0) {
                     vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt, files: [], count: 0, error: `video generation timed out after ${Math.floor(videoTimeout / 1000)}s` };
                   } else {
-                  const pollGen = pollVideoWithHeartbeats(requestId, videoPlan!.auth, linkedDeadline, remainingMs);
+                  const pollGen = pollVideoWithHeartbeats(requestId, videoAuth, linkedDeadline, remainingMs);
                   let pollResult: { ok: true; videoUrl: string } | { ok: false; error: string };
                   try {
                     for (;;) {
@@ -1215,11 +1222,12 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       internalAbort.abort("client closed responses stream");
     }, 2_000,
     {
-      translatorBudget,
+      translatorBudget, proxyErrorContext: deps.proxyErrorContext,
       replayCacheScope: parsed._reasoningReplayScope,
       ...(deps.clientToolCatalogRestriction ? { ...deps.clientToolCatalogRestriction, enforceDeclaredToolNames: false } : {}),
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       ...(deps.terminalRefusalAsFailed ? { terminalRefusalAsFailed: true } : {}),
+      ...(deps.escapeMemoryCitationTags === false ? { escapeMemoryCitationTags: false } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       chatRawReasoningVisible: deps.chatRawReasoningVisible,
       hideRawReasoning: parsed.options.hideRawReasoning,

@@ -57,8 +57,8 @@ an audit or compiler failure stops the remaining steps.
 The suite uses Bun 1.4.4 (`package.json`'s `testRunnerBun`) while the shipped runtime is 1.4.4.
 `scripts/test.ts` finds a 1.4.4 binary on PATH or in `~/.bun/bin`, or uses `OCX_TEST_RUNNER_BUN`.
 Install that version locally if it is missing; the resolver never downloads it.
-The roles remain independently checked even when their versions match. Promotion requires
-a successful full cross-platform `lane=all` run on the candidate head.
+The roles remain independently checked even when their versions match. Release selection requires
+a successful full cross-platform `lane=all` dispatch on the exact candidate SHA.
 
 Run `bun run test` by default. If a full run is disproportionately expensive for the task size,
 available machine resources, or concurrent worktrees, you must at least run focused regression tests
@@ -94,9 +94,10 @@ cd docs-site && bun install && bun dev
 
 ## Docs publishing
 
-The public docs publish to GitHub Pages at <https://opencodex.me/>. The
-`.github/workflows/deploy-docs.yml` workflow runs on `main` pushes that touch `docs-site/**` or the
-workflow itself, builds `docs-site`, and deploys the generated site. Before pushing docs changes,
+The public docs publish to GitHub Pages at <https://opencodex.me/>. A maintainer manually
+runs `.github/workflows/deploy-docs.yml` from `dev`; it builds the latest published stable release,
+or a specified published stable tag, at its resolved commit. Deployment is separate from npm release.
+Before pushing docs changes,
 run:
 
 ```bash
@@ -109,14 +110,16 @@ bun run build
 
 GitHub Actions intentionally stay small:
 
-- **Cross-platform CI** (`.github/workflows/ci.yml`) runs on pull requests and `main` pushes that
-  touch runtime, tests, package, script, TypeScript, or workflow files. Its Bun matrix covers Linux,
-  Windows, and macOS with install, typecheck, tests, privacy scan, a release-helper build smoke, GUI
-  build, and `ocx help`. A second three-OS lane proves npm global install works without a separately
-  installed Bun by using the package's bundled runtime.
-- **Release** (`.github/workflows/release.yml`) is manual. It does not act as a second full CI
-  pipeline; before dry-run or publish it requires the exact release commit (`GITHUB_SHA`) to already
-  have a successful Cross-platform CI run.
+- **Cross-platform CI** (`.github/workflows/ci.yml`) runs the scoped Linux checks on pull
+  requests; the full Linux, macOS and Windows matrix runs by manual dispatch from `dev` with
+  `lane=all`. A PR green is not full-platform release evidence. After a batch of merges,
+  maintainers run one full dispatch on `dev` rather than one per PR.
+- **Release** (`.github/workflows/release.yml`) is a manual `dev` workflow that selects an exact
+  source with qualifying full-lane evidence, stamps the version in build checkouts, and checks
+  npm and GitHub release history before it publishes. Publication stays off until the maintainer
+  completes the cutover checks and enables it; an interrupted run is recovered by an
+  operator-attested resume that never republishes an npm version. See
+  [`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/dev/MAINTAINERS.md) for the current procedure.
 - **Stale needs-info** (`.github/workflows/stale-needs-info.yml`) runs daily on the default branch.
   Open issues labeled `needs-info` with no activity for 14 days get a warning; after 7 more idle
   days they close as not planned. Any update clears the stale warning. To keep long-lived work open,
@@ -131,33 +134,15 @@ GitHub Actions intentionally stay small:
   form already seeds `documentation`). Maintainers can re-apply area labels to all open issues with
   workflow_dispatch `backfill_open_areas` after the workflow is on the default branch.
 
-Use the helper for releases:
-
-
-Before running the helper, choose the intended release version and dispatch
-`.github/workflows/dev-version-bump.yml` from the default branch with
-`intended-version=<version>` and `mode=pre-move`. Review and merge the PR it opens
-into `dev`, then promote to `main` or `preview` and run the helper. If `dev` already
-outranks the intended version, the workflow reports `changed=false` and no bump PR
-is needed. Publishing still requires successful CI on the exact release commit.
-
-```bash
-bun run release <version>           # commits/pushes the bump; publish workflow is dry-run by default
-bun run release --bump minor        # derive the next patch, minor, or major version from tags and npm channels
-bun run release <version> --publish # publish after the CI-gated dry run is understood
-bun run release:watch               # watch the newest Release workflow run
-```
-
-`--bump patch|minor|major` is an alternative to an explicit version. Once a preview tag opens a
-higher version core, `--bump patch` refuses to continue the older stable patch line; ship that fix
-in the open preview core instead.
+The legacy version-bump and promotion procedure is not the new release path. Do not use it
+as a substitute while the new publication gates remain unresolved.
 
 ## Branches
 
-- `dev` — the only integration target. Open your pull request here.
-- `main` — releases only. It moves by maintainer-controlled promotion from
-  `dev`; do not open feature pull requests against it.
-- `preview` — the prerelease train.
+- `dev` — the only integration target and the repository default branch. Open your pull
+  request here.
+- `main` and `preview` were deleted once the single-branch model was in place. Their released
+  history remains reachable through tags; neither is an integration or promotion target.
 
 The `dev2-go` line that carried the Go native port has been retired, and the
 dual-track carry policy with it. Its history is published read-only at
@@ -170,23 +155,25 @@ description.
 
 ## Pull requests
 
-- Target **`dev`**. Do not open feature or fix pull requests against **`main`**.
-- Branch from the current **`dev`** tip, not from **`main`**. The required **`enforce-target`** check rejects heads whose merge base sits on the **`main`** tip while the branch is far behind the pull request base (the failure mode seen in #644).
+- Target **`dev`**. The required **`enforce-target`** check rejects any other base
+  except a stacked child targeting another open pull request's head.
+- Branch from the current **`dev`** tip. A head that drifts too far behind `dev`
+  has its review-readiness latest-dev claim unticked rather than being rejected.
 - Write a real description: a **Summary** of what changed and why, plus a **Test plan** (or equivalent substance). Empty bodies, placeholder-only text, and descriptions that use escaped `\n` instead of real line breaks fail the check.
 - If the pull request changes files under `gui/`, include a screenshot of the UI change in the description; the `enforce-target` check re-runs on description edits until the screenshot is present. Drag the image into the description editor rather than committing it: an image on your branch rides the squash merge into `dev`. Maintainers uploading from the command line use the `pr-assets` branch and link by commit SHA.
-- Workflow changes in this repository use **`pull_request_target`**. Updated enforcement logic applies only after the workflow is promoted to the repository default branch — the same operational caveat documented in #631.
+- Workflow changes in this repository use **`pull_request_target`**. Updated enforcement logic applies only after the workflow reaches the repository default branch — the same operational caveat documented in #631.
 
 ## Project maintainers
 
 The current maintainers, their responsibilities, and the review and merge policy are documented in
-[`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/main/MAINTAINERS.md). GitHub review
+[`MAINTAINERS.md`](https://github.com/lidge-jun/opencodex/blob/dev/MAINTAINERS.md). GitHub review
 ownership for the repository and security-sensitive paths is declared in `.github/CODEOWNERS`.
 
 Contributor pull requests normally need a maintainer's approval. A current maintainer with
 GitHub `maintain` or `admin` access may explicitly integrate a PR into `dev`, including their
 own, without a second maintainer approval. The decision and exact-head verification must be
 recorded; CI, security review and outstanding maintainer objections still apply. This exception
-does not change `main`/`preview` review rules or allow direct pushes, force-pushes or deletion.
+does not allow direct pushes, force-pushes or deletion.
 
 ## Conventions
 

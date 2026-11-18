@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { formatErrorResponse } from "../bridge";
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/account-id";
+import { isolateCodexPoolClientMetadata } from "../codex/forward-transport-headers";
+import { CodexInstallationIdUnavailableError } from "../codex/installation-id";
 import { cancelBodyOnAbort, clearableDeadline } from "../lib/abort";
 import type { AdmissionLease } from "../lib/admission";
 import { captureExplicitOpenAiCallerAuth } from "../providers/openai-sidecar";
@@ -73,7 +75,7 @@ export async function handleExternalLive(
     if (offer instanceof Response) return offer;
     if (!options.bindings.hasCapacity()) return formatErrorResponse(503, "server_busy", "Live call capacity reached");
     const frameless = new URL(req.url).pathname === "/v1/live";
-    const session = offer.session ? { ...offer.session } : frameless ? {
+    let session = offer.session ? { ...offer.session } : frameless ? {
       model: LIVE_AUDIO_MODEL, instructions: "", audio: { output: { voice: "cove" } }, delegation: { type: "client" },
     } : undefined;
     if (session?.model === "gpt-live-1") session.model = LIVE_AUDIO_MODEL;
@@ -85,6 +87,8 @@ export async function handleExternalLive(
     deadline.signal.throwIfAborted();
     if (resolved instanceof Response) return resolved;
     relay = resolved;
+    session = isolateCodexPoolClientMetadata(session, relay.authContext?.kind === "pool"
+      ? relay.authContext.chatgptAccountId : undefined) as typeof session;
     const headers = protocolHeaders(options.client, relay, frameless);
     let body: BodyInit;
     if (relay.keyed) {
@@ -129,7 +133,8 @@ export async function handleExternalLive(
       "content-type": upstream.headers.get("content-type") ?? "application/sdp",
       location: `/v1/${frameless ? "live" : "realtime/calls"}/${alias}`,
     } });
-  } catch {
+  } catch (error) {
+    if (error instanceof CodexInstallationIdUnavailableError) return formatErrorResponse(503, "server_busy", error.message);
     if (req.signal.aborted || controller.signal.aborted) {
       outcome = undefined;
       return formatErrorResponse(req.signal.aborted ? 499 : 503, "client_closed_request", "Live call canceled");
@@ -178,6 +183,7 @@ export async function resolveExternalLiveSocket(
       return formatErrorResponse(409, "authentication_error", "Live call account is no longer available");
     }
     return {
+      authContext: relay.authContext,
       headers: Object.fromEntries(protocolHeaders(client, relay, frameless)),
       upstreamWsUrl: buildLiveSidebandUpstreamWsUrl(upstreamTarget, binding ? binding.sidebandBaseUrl : config.experimentalRealtimeWsBaseUrl),
       maxSessionMs: LIVE_CALL_TTL_MS,

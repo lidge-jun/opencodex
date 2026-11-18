@@ -7,7 +7,7 @@
  * one, or serves routes outside its allowlist. These tests start real servers and speak HTTP
  * to them, so those regressions have somewhere to fail.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { connect } from "node:net";
@@ -26,6 +26,13 @@ import {
 import type { OcxConfig } from "../../src/types";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { allowOwnInterfaceAddressesForTest } from "../helpers/network-egress-guard";
+
+// This suite connects to the machine's own non-loopback interface address on purpose; the
+// test network guard (#8848) refuses that address everywhere else.
+let restoreEgressGuard: (() => void) | undefined;
+beforeAll(() => { restoreEgressGuard = allowOwnInterfaceAddressesForTest(); });
+afterAll(() => restoreEgressGuard?.());
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
@@ -239,6 +246,10 @@ describe("hub management ingress", () => {
         { path: "/readyz" },
         { path: "/v1/responses", headers: { Connection: "Upgrade", Upgrade: "websocket" } },
         { path: "/missing-static.js" },
+        // Ollama-compatible paths live under /api/ but are data plane, never management ingress.
+        { path: "/api/version" },
+        { path: "/api/tags" },
+        { path: "/api/chat" },
       ];
       for (const entry of denied) {
         const response = await fetch(`${base}${entry.path}`, { headers: entry.headers });
@@ -376,6 +387,10 @@ describe("unauthenticated loopback listener", () => {
         { method: "GET", path: "/v1/alpha/search" },
         { method: "GET", path: "/v1/images/generations" },
         { method: "GET", path: "/v1/images/edits" },
+        // Ollama-compatible inference stays on the authenticated listener.
+        { method: "POST", path: "/api/chat", body: "{}" },
+        { method: "POST", path: "/api/generate", body: "{}" },
+        { method: "GET", path: "/api/tags" },
       ];
       for (const { method, path, body } of denied) {
         const res = await fetch(`${base}${path}`, {

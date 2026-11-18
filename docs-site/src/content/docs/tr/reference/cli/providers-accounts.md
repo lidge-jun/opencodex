@@ -27,6 +27,7 @@ bir ad hem `--adapter` hem de `--base-url` gerektirir.
 | `quota` | `--refresh`, `--json` | Sağlayıcı kota raporlarını okuyun. |
 | `presets` | `--json` | Kontrol paneli sağlayıcı önayarlarını listeleyin. |
 | `account-mode` | `pool`, `direct`, `--json` | Havuzlanmış veya doğrudan Codex hesap yönlendirmesini seçin. |
+| `import-cc-switch` | `--source <FILE>`, `--provider <id>`, `--apply`, `--restore`, `--allow-private-network`, `--json` | CC-Switch SQLite (`cc-switch.db`) veya JSON dosyasından anahtarsız sağlayıcı girdilerini önizleyin, seçerek uygulayın veya geri yükleyin. |
 
 Varsayılan `add`, `remove` ve `set-default` yerel yapılandırmayı değiştirir. Çalışan proxy için `--live`, canlı silme için ayrıca `--yes` kullanın. `--sync --json` da kayıttan sonra eşitlemeyi dener; başarısızlıkta kayıt korunur, sıfır olmayan çıkış kodu ve `needsSync: true` döner. `--live` ile `--sync` birlikte kullanılamaz. Pacing ve snapshot/apply için [İngilizce kılavuza](/reference/cli/providers-accounts/#snapshot-edit-and-apply-with-a-baseline) bakın.
 
@@ -62,6 +63,27 @@ saygı duymanız gereken bir sınırdır. Önemli olmasının iki nedeni:
 
 Gizli olan her şey için `--api-key` veya bir OAuth girişi kullanın.
 :::
+
+### Anahtarsız CC-Switch sağlayıcı içe aktarma
+
+```bash
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db
+ocx stop
+ocx provider import-cc-switch --source ~/.cc-switch/cc-switch.db --provider my-provider --apply
+# Proxy'yi başka bir terminalde başlatın (veya ocx ensure çalıştırın), ardından anahtar ekleyin:
+ocx start
+printf '%s\n' "$API_KEY" | ocx account add-key my-provider
+
+# Ayrı geri alma yolu (önce proxy'yi durdurun; yalnızca düzenlenmemiş anahtarsız girdileri kaldırır):
+ocx stop
+ocx provider import-cc-switch --restore
+```
+
+`ocx provider import-cc-switch`, düz bir CC-Switch SQLite veritabanından veya eski JSON dosyasından **yalnızca** açıkça izin verilen gizli olmayan meta veri alanlarındaki değerleri (sağlayıcı kimlikleri, uygulama türleri, temel URL'ler, bağdaştırıcılar ve varsayılan modeller) yansıtır. Girdiyi taramak için kaynak ve gömülü yapılandırma baytları geçici olarak okunur; gizli alanlar, serbest metin görünen adları ve TOML yorumları bayt düzeyinde atlanır, hiçbir zaman dizelere çözülmez, yazılmaz veyagünlüklenmez ve geçici bayt arabellekleri `finally` içinde sıfırlanır. Dar temel URL yolu kuralları (boş yola veya `/v1`, `/api/v1`, `/compatible-mode/v1` gibi 1–4 küçük harfli `[a-z0-9._-]` API yolu segmentine sahip `http(s)://host[:port]`) ve tanımlayıcı/model sözdizimi denetimleri derinlemesine savunma sağlar ve uygun olmayan değerleri yansıtmadan reddeder. Kaynak dosyalar `O_NOFOLLOW | O_NONBLOCK` tanımlayıcı doğrulamasıyla bir kez açılır ve SQLite için geçici dosya olmadan bellekte salt okunur olarak açılır; birden fazla sabit bağlantıya (`nlink > 1`) sahip SQLite dosyaları yan dosya denetimlerinin takma ad yoluyla aşılmasını önlemek için reddedilir ve kardeş `-wal` veya `-journal` dosyası boş değilse içe aktarma reddedilerek CC-Switch'i kapatıp (veya veritabanını checkpoint edip) yeniden denemenizi ister. Yalnızca güvendiğiniz yerel bir CC-Switch kaynağından içe aktarın ve kimlik bilgisi eklemeden önce yazdırılan her kimliği, modeli ve `baseUrl` değerini doğrulayın:
+
+- **Önizleme (varsayılan):** `--source <FILE>` gerektirir, hiçbir şey yazmaz ve bulunan, uygun, çakışan ve geçersiz girdileri raporlar.
+- **Uygulama (`--apply`):** `--source <FILE>` ve durdurulmuş bir proxy (`ocx stop`) gerektirir; Remote Link Child üzerinde reddedilir. Yalnızca seçili girdileri aktarmak için `--provider <id>` bayrağını tekrarlayın veya geri döngü/özel ağ temel URL'lerine izin vermek için `--allow-private-network` geçirin. Önceden önizleme yapılmasa bile `--apply`, anahtarsız sağlayıcı girdilerini ve `$OPENCODEX_HOME/cc-switch-provider-import-journal.json` geri alma günlüğünü yazmadan önce içe aktarılan her sağlayıcı kimliğini, varsayılan modeli ve hedef URL'yi yazdırır (metin modunda `stdout`, `--json` modunda `stderr`); etkin bir günlük varken ikinci bir `--apply` reddedilir. Yazdırılan girdileri doğrulayın, proxy'yi başlatın (başka bir terminalde `ocx start` veya `ocx ensure`) ve `printf '%s\n' "$API_KEY" | ocx account add-key <provider>` (standart girdi borusu) ya da `ocx login <provider>` ile kimlik bilgilerini ekleyin.
+- **Geri yükleme (`--restore`):** kimlik bilgisi eklemenin devamı olmayan ayrı bir geri alma yoludur; durdurulmuş bir proxy (`ocx stop`) gerektirir, Remote Link Child üzerinde reddedilir ve `--source`, `--provider` veya `--allow-private-network` almaz. `auth.json` dosyasını bayt düzeyinde salt okunur denetler (okunamaz veya bozuksa güvenli biçimde korur) ve etkin günlükten yalnızca içe aktarılan anahtarsız durumuyla hâlâ eşleşen, `defaultProvider` olarak seçilmemiş ve yönlendirme, kombolar (combos), yedekleme politikası (fallback policy), OAuth hesapları veya API anahtarları tarafından başvurulmayan sağlayıcıları kaldırır.
 
 ## Kimlik Doğrulama
 
@@ -115,7 +137,7 @@ Bir sağlayıcı için saklanan OAuth kimlik bilgisini kaldırın.
 listeleyin ve değiştirin. Sağlanan yardım arayüzü şöyledir:
 
 ```text
-Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
+Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|reset-affinity|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 history openai <pool-account-id> [--limit <1-200>]  Recent routing decisions for one Codex pool account.
@@ -129,6 +151,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged. Run on the Home; a Remote Link Child names the Home and sends no request.
 strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Havuz stratejisi; least-loaded yalnızca Kiro içindir.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
@@ -146,7 +169,7 @@ A selection-order change applies from the next unbound request and never moves a
 
 `import-orca` dışındaki alt komutlar proxy'nin çalışmasını gerektirir ve kaydedilen çalışma zamanı portunu otomatik çözer; `import-orca` önizlemesi tamamen yereldir ve `import-orca --apply` proxy'nin durdurulmuş olmasını gerektirir. Başarılı işlemler 0 ile çıkar. Geçersiz kullanım,
 bilinmeyen bir sağlayıcı veya hesap/anahtar kimliği, erişilemeyen bir proxy veya
-bir API hatası 1 ile çıkar. Kimlik bilgisi alanları tam olarak yönetim API'sinin
+bir API hatası normalde 1 ile çıkar. `reset-affinity` için HTTP 404 çıkış kodu 4, HTTP 409 çıkış kodu 5 döndürür; diğer API hataları ve doğrulanmamış sonuçlar 1 döndürür. Kimlik bilgisi alanları tam olarak yönetim API'sinin
 döndürdüğü gibi (maskelemesi dahil) görüntülenir; ham API anahtarları ve OAuth
 belirteçleri asla döndürülmez. Görüntüleme kolaylıkları kontrol paneli gibi
 istemci tarafında sentezlenir: `main`, `openai` hesap havuzundaki Codex App
@@ -221,10 +244,8 @@ yine de 0 ile çıkar. `--json` şunu döndürür:
 `auto` elle yapılan seçimi temizler; havuz işi yeniden kendi stratejisiyle yerleştirir — ancak id'si `auto` olan bir Codex hesabı varsa tam id eşleşmesi kazanır ve `ocx account clear <provider>` her zaman otomatik seçimi geri yükler. Bir Codex hesabı, id yerine `ocx account alias` ile verilen takma adla da belirtilebilir; bu `priority`, `pause`, `resume`, `clear-cooldown`, `remove` ve `alias` için de geçerlidir. Codex hesaplarında `auto`, `main` ve `__main__` büyük/küçük harf fark etmeksizin ayrılmış sözcüklerdir ve takma ad olarak atanamaz. OAuth hesaplarının ve API anahtarlarının görünen adları için mevcut kurallar geçerlidir.
 
 Mevcut bir Codex hesabını, OAuth hesabını veya API anahtarını seçer. `openai`
-için `main` Codex App girişini seçer. Bir Codex Havuzu seçimi süreç içi yerel
-bağlılığı temizler ve mevcut görünür bir görevden gelen istekler de dahil olmak
-üzere bir sonraki isteğe uygulanır; proxy yeniden başlatması veya bağlılık
-çıkarma işlemi de bir görevi bağımsız bırakabilirken devam eden istekler
+için `main` Codex App girişini seçer. Bir Codex Havuzu seçimi bağlılığı temizler ve mevcut görünür bir görevden gelen istekler de dahil olmak
+üzere bir sonraki isteğe uygulanır. Oturum kimliği taşıyan isteklerin (normal Codex CLI ve App turları ile alt ajanlar dahil) veya doğrudan üst öğesine bağlanan oturumsuz isteklerin bağları, kapatma sırasında son bağlılık kaydı başarılı olursa proxy düzgün yeniden başlatıldığında 24 saate kadar boşta kalma süresiyle korunabilir. Daha derin oturumsuz zincirler ve Codex App ana girişine ait bağlar yalnızca bellekte kalır ve yeniden başlatmadan sonra yeniden atanır; çıkarma, hesap silme, yeniden giriş, çökme veya bağlılık sıfırlaması bir görevi bağımsız bırakabilirken devam eden istekler
 yakaladıkları hesabı tutar. Bu yalnızca Havuz yönlendirmesini denetler; Direct
 modu arayana ait/yerel ana kimlik bilgisini kullanmaya devam eder. Kullanıma
 dayalı proaktif geçiş, 401/403 yeniden kimlik doğrulaması, 429/retry-after

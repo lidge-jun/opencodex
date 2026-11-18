@@ -125,7 +125,7 @@ export function deriveStartupHealth(inputs: StartupHealthInputs): StartupHealth 
   const recommendedAction = status === "at-risk" && ownsLocalRouting && inputs.desktop !== undefined
     ? inputs.diagnosticStale || inputs.desktop.loginEnabled
       ? "Reopen OpenCodex and check Start at Login."
-      : "Turn on Start at Login in the OpenCodex menu so the desktop app starts this proxy after a restart."
+      : "Check Start at Login in the OpenCodex menu and follow its guidance."
     : null;
   return {
     ...inputs,
@@ -225,7 +225,9 @@ function classifyStartupHealthSummary(health: StartupHealth): string {
   const command = health.recommendedCommand ?? health.commands.restoreNative;
   if (health.routingKind === "unknown") return `AT RISK after restart (Codex routing could not be verified; run '${command}')`;
   if (health.routingKind === "custom-local") return `AT RISK after restart (custom local gateway lifecycle is not managed by opencodex; run '${command}')`;
-  if (health.desktop?.supervisor && !health.desktop.loginEnabled && !health.diagnosticStale) return "AT RISK after restart (OpenCodex Desktop runs this proxy, but its Start at Login could not be verified; turn it on in the OpenCodex menu)";
+  if (health.desktop?.supervisor && !health.desktop.loginEnabled && !health.diagnosticStale) return health.desktop.loginState === "disabled"
+    ? "AT RISK after restart (OpenCodex Desktop runs this proxy; Start at Login is disabled; check the OpenCodex menu)"
+    : "AT RISK after restart (OpenCodex Desktop runs this proxy; Start at Login could not be verified; check the OpenCodex menu)";
   if (health.desktop) return "AT RISK after restart (desktop startup could not be verified; reopen OpenCodex and check Start at Login)";
   if (health.shimCoverage === "cli-only") return `AT RISK for Codex Desktop after restart (launcher shim covers CLI scripts only; run '${command}')`;
   if (health.serviceConflict) return `AT RISK after restart (background service managers conflict; run '${command}')`;

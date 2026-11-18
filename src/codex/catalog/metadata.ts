@@ -53,6 +53,8 @@ import {
   NATIVE_GPT6_SOL_MODEL,
   NATIVE_GPT61_SOL_MODEL,
   NATIVE_GPT61_TERRA_MODEL,
+  NATIVE_GPT62_SOL_MODEL,
+  NATIVE_GPT62_ASTRA_MODEL,
   NATIVE_RESERVE_MODEL,
   NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS,
   NATIVE_OPENAI_MODELS,
@@ -80,6 +82,8 @@ export {
   NATIVE_GPT6_SOL_MODEL,
   NATIVE_GPT61_SOL_MODEL,
   NATIVE_GPT61_TERRA_MODEL,
+  NATIVE_GPT62_SOL_MODEL,
+  NATIVE_GPT62_ASTRA_MODEL,
   NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS,
   NATIVE_OPENAI_MODELS,
   SELF_DESCRIBED_NATIVE_OPENAI_MODELS,
@@ -103,6 +107,8 @@ export const DOCUMENTED_NATIVE_OPENAI_ADDITIONS = [
   NATIVE_GPT61_SOL_MODEL,
   // Terra's pinned row has the same client floor and backfills older installed catalogs too.
   NATIVE_GPT61_TERRA_MODEL,
+  NATIVE_GPT62_SOL_MODEL,
+  NATIVE_GPT62_ASTRA_MODEL,
 ];
 
 export function configuredNativeAliasSlugs(
@@ -118,15 +124,14 @@ export function configuredNativeAliasSlugs(
 }
 
 /**
- * Bare native rows that must be absent, rather than merely hidden, while Desktop native-alias
- * compatibility is active. Codex Desktop's remote allowlist can ignore `visibility: "hide"`;
- * omitting disabled native rows is therefore part of the explicit native-alias opt-in.
+ * Bare native rows omitted by native-alias compatibility or explicit native-omission opt-in.
+ * Codex Desktop's remote allowlist can ignore `visibility: "hide"`.
  */
 export function desktopAllowlistSuppressedNativeSlugs(
-  config: Pick<OcxConfig, "combos" | "disabledModels">,
+  config: Pick<OcxConfig, "combos" | "disabledModels" | "omitDisabledNativeModels">,
 ): Set<string> {
   const suppressed = configuredNativeAliasSlugs(config);
-  if (suppressed.size === 0) return suppressed;
+  if (suppressed.size === 0 && config.omitDisabledNativeModels !== true) return suppressed;
   const disabled = disabledNativeSlugs(config);
   for (const slug of NATIVE_OPENAI_MODELS) {
     if (disabled.has(slug)) suppressed.add(slug);
@@ -214,6 +219,8 @@ export const NATIVE_OPENAI_CONTEXT_OVERRIDES: Record<string, { contextWindow?: n
   // raised its Codex & Work default to 500,000 on 2026-10-11; the 872,000 ceiling is unchanged.
   [NATIVE_GPT61_SOL_MODEL]: { ...NATIVE_GPT61_SOL_CONTEXT },
   [NATIVE_GPT61_TERRA_MODEL]: { ...NATIVE_GPT61_TERRA_CONTEXT },
+  [NATIVE_GPT62_SOL_MODEL]: { ...NATIVE_GPT6_CONTEXT, contextWindow: 500_000 },
+  [NATIVE_GPT62_ASTRA_MODEL]: { ...NATIVE_GPT6_CONTEXT },
   // Astra Minor borrows Astra's row, so it inherits Astra's numbers. No account we hold can reach
   // it, so this is inheritance, not a measurement.
   [NATIVE_GPT6_ASTRA_MINOR_MODEL]: { ...NATIVE_GPT6_CONTEXT },

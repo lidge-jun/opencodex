@@ -68,6 +68,24 @@
   white-space: nowrap;
 }
 
+/* A limit upstream reports as not in effect: neutral, so it never reads as a warning. */
+.quota-window-inactive {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.quota-window-share {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
 .quota-stacked-reset {
   min-width: 0;
   overflow-wrap: anywhere;

@@ -11,6 +11,7 @@ import { reconcilePoolRotationState } from "../codex/pool-rotation";
 import { reconcileCodexQuotaAccounts } from "../codex/quota";
 import { reconcileQuotaRecovery, sweepExpiredQuotaRecovery } from "../codex/quota-401-recovery";
 import { bindUpstreamRequestCompressionConfig } from "../server/responses/request-compression";
+import { bindWorkflowBudgetConfig } from "./workflow-budget-config";
 import {
   listLiveCodexAccountIds,
   reconcileCodexRoutingHealth,
@@ -23,6 +24,7 @@ import {
 import { reconcileComboWarningMemos } from "../combos/request";
 import { reconcileComboRotationState } from "../combos/resolve";
 import { reconcileComboRecall, sweepExpiredComboRecall } from "../server/responses/combo-session-recall";
+import { reconcileProviderCacheAffinity, sweepExpiredProviderCacheAffinity } from "../providers/cache-affinity";
 import { listLiveComboTargetKeys } from "../combos/types";
 import {
   listLiveConfigOwnershipRoots,
@@ -82,6 +84,7 @@ export function setLiveStateStoreConfig(config: OcxConfig): void {
   // The one place the server's live config object is installed; detached configs (catalog sync)
   // never come through here, so the outbound compression opt-in follows the running server only.
   bindUpstreamRequestCompressionConfig(config);
+  bindWorkflowBudgetConfig(config);
   notifyLiveConfigObservers(config);
 }
 
@@ -105,6 +108,11 @@ export function buildGenerationContext(): GenerationContext {
   return {
     generation: 0,
     providerNames,
+    disabledProviderNames: new Set(Object.entries(liveServerConfig.providers)
+      .filter(([, provider]) => provider.disabled === true)
+      .map(([name]) => name)),
+    providerKeyEntryIds: new Map(Object.entries(liveServerConfig.providers)
+      .map(([name, provider]) => [name, new Set((provider.apiKeyPool ?? []).map(entry => entry.id))] as const)),
     comboIds: new Set(Object.keys(liveServerConfig.combos ?? {})),
     comboTargets: listLiveComboTargetKeys(liveServerConfig),
     codexAccountIds: listLiveCodexAccountIds(liveServerConfig),
@@ -158,6 +166,11 @@ export const STATE_STORE_REGISTRATIONS = [
     name: "combo-session-recall",
     sweepExpired: sweepExpiredComboRecall,
     reconcileGeneration: reconcileComboRecall,
+  },
+  {
+    name: "provider-cache-affinity",
+    sweepExpired: sweepExpiredProviderCacheAffinity,
+    reconcileGeneration: context => reconcileProviderCacheAffinity(context, liveServerConfig?.providers),
   },
   { name: "guardian-backoff", reconcileGeneration: reconcileGuardianBackoff },
   { name: "codex-reauth", reconcileGeneration: reconcileCodexReauthState },

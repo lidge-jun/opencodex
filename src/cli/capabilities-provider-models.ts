@@ -80,10 +80,17 @@ export const PROVIDER_MODEL_CAPABILITIES: readonly Capability[] = [
     details: ["Without a mutation flag this reads only. --clear sends models:[], not a model named -.", "Read JSON is the CLI projection {provider, selected: string[], available: string[]}, not the API's provider-keyed maps; missing entries become empty arrays. --set/--clear JSON returns the server's write receipt unchanged."],
   },
   {
-    command: ["models", "list"], summary: "List static configured models locally.",
+    command: ["provider", "import-cc-switch"], summary: "Preview, apply, or restore keyless CC-Switch provider entries locally.",
+    usage: "ocx provider import-cc-switch [--source <cc-switch.db|config.json>] [--provider <id>]... [--apply | --restore] [--allow-private-network] [--json]",
+    routes: [], mutates: true, json: "payload",
+    flags: [{ name: "--source", value: "string", summary: "CC-Switch SQLite database or legacy JSON file; required for preview and apply." }, { name: "--provider", value: "string", summary: "Repeatable source ID or target provider name filter." }, { name: "--apply", value: "boolean", summary: "Write eligible keyless provider entries and record a rollback journal; requires a stopped proxy." }, { name: "--restore", value: "boolean", summary: "Remove unedited keyless providers recorded by the active import journal; requires a stopped proxy." }, { name: "--allow-private-network", value: "boolean", summary: "Permit loopback or private-network provider base URLs." }, { name: "--json", value: "boolean", summary: "Emit the preview, apply, or restore report as JSON." }],
+    details: ["Projects values only from an explicit allowlist of non-secret metadata fields (provider IDs, app types, base URLs, wire dialects, and default models); source and embedded-config bytes are read transiently while secret fields, free-text names, and TOML comments are skipped at the byte level and never decoded into strings, written, or logged, and transient byte buffers are zeroed in finally.", "Only import from a trusted local CC-Switch source: apply prints every imported ID, model, and destination URL before writing, refuses SQLite hard links (nlink > 1) and non-empty -wal/-journal sidecars until CC-Switch is closed, and opens sources read-only with O_NOFOLLOW|O_NONBLOCK descriptor checks; restore inspects auth.json read-only at the byte level and retains any provider that was edited, selected as defaultProvider, or referenced by routing, combos, fallback policy, OAuth accounts, or API keys."],
+  },
+  {
+    command: ["models", "list"], summary: "List local configured and router-known models.",
     usage: "ocx models list [--provider <name>] [--json]", routes: [], mutates: false, json: "envelope",
-    flags: [{ name: "--provider", value: "string", summary: "Limit to a configured provider." }, { name: "--json", value: "boolean", summary: "Emit models and the static-catalog note." }],
-    details: ["A bare models invocation is equivalent. Reads local config, never the live catalog; use models live for runtime discovery."],
+    flags: [{ name: "--provider", value: "string", summary: "Limit to a configured provider." }, { name: "--json", value: "boolean", summary: "Emit models and the local-catalog note." }],
+    details: ["A bare models invocation is equivalent. Includes saved IDs, registry seeds, custom models and this process's discovery cache; use models live for the running catalog."],
   },
   {
     command: ["models","add"],
@@ -166,9 +173,9 @@ export const PROVIDER_MODEL_CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["models", "new-policy"], summary: "Read or set the policy for newly discovered models.",
-    usage: "ocx models new-policy [on|off] [--provider <name>] [--json]", routes: [{ method: "GET", path: "/api/model-discovery" }, { method: "PUT", path: "/api/model-discovery" }], mutates: true, json: "payload",
+    usage: "ocx models new-policy [on|off|admit] [--provider <name>] [--json]", routes: [{ method: "GET", path: "/api/model-discovery" }, { method: "PUT", path: "/api/model-discovery" }], mutates: true, json: "payload",
     flags: [{ name: "--provider", value: "string", summary: "Scope the read/write to a provider; omitted means global." }, { name: "--json", value: "boolean", summary: "Emit the policy view or receipt." }],
-    details: ["No state operand means read only. Only on/off writes exist; no inherit/clear operand is implemented."],
+    details: ["No state operand means read only. Writes on, off or admit; admit appends new arrivals to a provider's custom selectedModels and never widens a preset-derived selection. No inherit/clear operand is implemented."],
   },
   {
     command: ["models", "new-arrivals"], summary: "Read recent model discoveries.",
@@ -240,6 +247,22 @@ export const PROVIDER_MODEL_CAPABILITIES: readonly Capability[] = [
     command: ["alias", "defaults"], summary: "Toggle built-in model aliases globally or for a provider.",
     usage: "ocx alias defaults <on|off> [--provider <name>] [--json]", routes: [{ method: "PUT", path: "/api/default-aliases" }], mutates: true, json: "payload",
     flags: [{ name: "--provider", value: "string", summary: "Limit the toggle to one provider." }, { name: "--json", value: "boolean", summary: "Emit the alias settings receipt." }],
+  },
+  {
+    command: ["alias", "template", "set"], summary: "Set a provider's opt-in alias template for models without an alias.",
+    usage: "ocx alias template set <provider> <template> [--json]", routes: [{ method: "PUT", path: "/api/providers/{provider}/alias-template" }], mutates: true, json: "payload",
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the receipt with the generated and skipped preview." }],
+    details: ["Only the literal {providerAlias} and {modelBasename} placeholders are allowed, and {modelBasename} is required. Aliases are derived when models resolve and never written to config. Manual and built-in aliases win; a generated name that collides with anything already claimed is skipped, never renamed."],
+  },
+  {
+    command: ["alias", "template", "rm"], summary: "Remove a provider's alias template; its generated aliases disappear at once.",
+    usage: "ocx alias template rm <provider> [--json]", routes: [{ method: "PUT", path: "/api/providers/{provider}/alias-template" }], mutates: true, json: "payload",
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the receipt." }],
+  },
+  {
+    command: ["alias", "template", "show"], summary: "Read configured alias templates.",
+    usage: "ocx alias template show [<provider>] [--json]", routes: [{ method: "GET", path: "/api/aliases" }], mutates: false, json: "payload",
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the template map, or one provider's template." }],
   },
   {
     command: ["provider","pacing"],

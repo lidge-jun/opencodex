@@ -140,6 +140,8 @@ chaque requête commence par Anthropic. Un échec d’Anthropic autorisant une n
 échec similaire d’OpenAI peut la faire basculer vers Google. Une erreur terminale interrompt immédiatement le traitement au lieu de
 essayer les cibles restantes.
 
+Une réponse HTTP 400 d'un fournisseur peut toujours être spécifique à une cible. L'enveloppe opaque de fournisseur d'OpenRouter (`Provider returned error` avec un `code: 400` numérique, aucun `type`, et `metadata.raw: "ERROR"`) est traitée comme locale à la cible et permet au combo d'essayer la cible suivante sans placer la cible défaillante en période de refroidissement. Les 400 typés sans code, les erreurs connues de schéma `response_format` malformé et une enveloppe dont la racine énonce son propre code terminal restent terminales ; une racine qui énonce son propre signal de rebond (`model_not_found`, `insufficient_quota`, `usage_limit_exceeded`, `free_rate_limited`, `input_admission_refused` ou `unsupported_input_modality`) n'ajoute aucun nouveau verdict, et un code vide est traité comme une absence de code. Les incompatibilités de cibles reconnues décrites plus loin dans ce guide continuent d'avancer.
+
 ### Round-robin : lots pondérés lisses
 
 `round-robin` utilise un round-robin pondéré en douceur. Un poids cible plus grand donne à cet objectif un plus grand
@@ -200,8 +202,9 @@ Les échecs d’un combo se répartissent entre ceux qui entraînent un **bascul
 | --- | --- |
 | HTTP 401, 403, 404, 408, 429, ou n'importe quel 5xx | Refroidissez la cible et passez à la prochaine cible éligible. |
 | Erreur classée comme erreur d’authentification, d’abonnement, de quota, de limitation de débit, de surcharge ou de serveur en amont | Place la cible en période de refroidissement et bascule, même si le statut seul ne suffit pas. |
-| Annulation client (499), `origin_rejected`, refus de cyber-politique, débordement de contexte ou autre demande invalide | Arrêtez et renvoyez l'erreur ; une autre cible ne rendrait pas la demande valide. |
-| Rejet structuré de `user`, valeur non prise en charge pour `reasoning.effort`/`reasoning_effort`, rejet d'entrée d'image propre à un modèle (`param: input`), ou refus d'un média d'entrée que la route ne peut pas lire (`unsupported_input_modality`) | Bascule vers la cible admissible suivante avant le début de la sortie, sans délai de refroidissement ; voir Compatibilité des paramètres facultatifs ci-dessous. |
+| Annulation client (499), `origin_rejected`, refus de cyber-politique ou autre demande invalide | Arrêtez et renvoyez l'erreur ; une autre cible ne rendrait pas la demande valide. |
+| Dépassement de contexte confirmé avant la sortie, y compris HTTP 400 | Essaie la prochaine cible admissible non tentée sans refroidissement ; à épuisement, renvoie la première erreur de contexte HTTP 400 confirmée (un refus de contexte avec un autre statut fait aussi passer à la cible suivante, sans être conservé). |
+| Rejet structuré de `user`, valeur non prise en charge pour `reasoning.effort`/`reasoning_effort`, rejet d'entrée d'image propre à un modèle (`param: input`), ou refus d'un média d'entrée que la route ne peut pas lire (`unsupported_input_modality`) | En cas de refus d'effort, tente le niveau publié immédiatement inférieur sur la même cible tant que le budget d'envoi le permet ; si aucun niveau ne fonctionne, bascule avant l'engagement de sortie sans refroidissement si le refus correspond à une enveloppe de compatibilité reconnue, sinon reste terminal. Les autres incompatibilités répertoriées basculent sans refroidissement ; voir Compatibilité des paramètres facultatifs ci-dessous. |
 | Premier appel d'outil d'un tour Responses exécuté par un adaptateur interne (`runTurn`) que la requête courante n'a pas déclaré, avant toute sortie et tout effet de bord non rejouable | Met la cible en refroidissement et bascule avec le même catalogue d'outils. Après une sortie visible ou un effet de bord non rejouable, le refus est définitif. Les requêtes Chat Completions et Anthropic Messages ne changent pas. |
 | Toute autre erreur non classifiée | Arrêtez et renvoyez l'erreur. |
 
@@ -210,8 +213,14 @@ valeur `Retry-After` valide, opencodex l’utilise à la place ; les en-têtes d
 acceptées, et un délai explicite `Retry-After` est plafonné à 24 heures ; les autres temps de recharge restent plafonnés à 10 minutes.
 
 La requête actuelle ne réessaye jamais la même cible tentée. Les demandes ultérieures l'ignorent jusqu'à ce qu'il soit
-le temps de recharge expire. S’il ne reste aucune cible éligible, le proxy renvoie HTTP 503 avec
+le temps de recharge expire. Si aucune cible n’a été tentée et qu’aucune n’est éligible, le proxy renvoie HTTP 503 avec
 `error.code = "combo_unavailable"`.
+
+Après un refus de contexte HTTP 400 confirmé, l’épuisement des cibles ou du budget d’envoi renvoie
+le premier refus sous `context_length_exceeded`, avant toute erreur ultérieure réessayable, même de quota.
+Cela inclut les cibles restantes incompatibles avec la relecture du raisonnement ou sans consentement
+de dépense. L’annulation, un refus fatal ultérieur ou un refus explicite de la politique de repli reste
+prioritaire ; aucune cible facturée sans consentement ne reçoit la requête.
 
 :::note
 Le basculement est intentionnellement limité. Il facilite la disponibilité, l'authentification et l'authentification spécifiques à la cible.
@@ -366,12 +375,12 @@ message de validation.
 
 ### Pourquoi le basculement s'est-il arrêté après la première erreur ?
 
-L’erreur était terminale plutôt que spécifique à la cible. Corriger une entrée invalide, réduire un contexte surdimensionné,
+L’erreur était terminale plutôt que spécifique à la cible. Corriger une entrée invalide,
 gérer un refus de politique ou corriger l’origine de la demande rejetée. Les combos ne sautent pas dans ces cas-là.
 
 ## Compatibilité des paramètres facultatifs
 
-Exception aux erreurs 400 terminales : un rejet structuré de `user`, une valeur non prise en charge pour `reasoning.effort`/`reasoning_effort`, un rejet d’entrée d’image propre à un modèle (`param: input`), ou le refus d’un média d’entrée que la route ne peut pas lire (`unsupported_input_modality`) peut faire passer le combo à la cible admissible suivante avant le début de la sortie, sans délai de refroidissement. Le refus de sécurité, l’annulation et une sortie déjà commencée restent non rejouables.
+Exception aux erreurs 400 terminales : l'enveloppe opaque d'OpenRouter (`Provider returned error` avec `code: 400`, aucun `type` et `metadata.raw: "ERROR"`), ou un rejet structuré de `user`, une valeur non prise en charge pour `reasoning.effort`/`reasoning_effort`, un rejet d’entrée d’image propre à un modèle (`param: input`), ou le refus d’un média d’entrée que la route ne peut pas lire (`unsupported_input_modality`), ainsi qu'après l'enveloppe fournisseur exacte `{"code":"invalid-argument","error":"Invalid reasoning effort."}`. Lorsqu'une cible de combo refuse l'effort de raisonnement demandé, le combo réessaye d'abord cette cible au niveau d'effort publié immédiatement inférieur, un niveau par refus et dans la limite du budget d'envoi partagé ; cela s'applique à tout refus d'effort reconnu. Si aucun niveau inférieur ne réussit, un refus correspondant à l'une des formes ci-dessus passe à une autre cible sans refroidir la cible rejetée, en conservant le 400 initial de cette cible lorsqu'il ne reste plus d'envoi disponible pour le niveau suivant ; les autres refus d'effort restent terminaux. Une route qui refuse le média de la requête avec le code `unsupported_input_modality` avance de la même façon. Ce sont des incompatibilités pour cette requête, et non la preuve que la cible est défaillante. Les requêtes directes conservent leur réparation unique par rétrogradation d'effort. La récupération de compatibilité ne transforme pas silencieusement `none` en un effort différent et n'élargit pas le saut de combo à des requêtes invalides arbitraires. Le refus de sécurité, l’annulation et une sortie déjà commencée restent non rejouables. Une requête à cible unique renvoie toujours un rejet non résolu en amont.
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).
 

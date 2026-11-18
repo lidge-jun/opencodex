@@ -46,9 +46,9 @@ ocx effort set --subagent -
 설정을 유지하면서 두 상한을 해제합니다. 상한이 적용되는 요청 surface는
 [Sub-agent surfaces](/ko/guides/sub-agent-surface/)를 참고하세요.
 
-### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
+### `ocx v2 <status|on|off|mode <v1|default|v2|v2-plaintext>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>>`
 
-Codex `multi_agent_v2` 기능 플래그와 세 상태 멀티 에이전트 surface mode를 관리합니다.
+Codex `multi_agent_v2` 기능 플래그와 네 상태 멀티 에이전트 surface mode를 관리합니다.
 
 | 하위 명령 | 동작 |
 | --- | --- |
@@ -57,8 +57,12 @@ Codex `multi_agent_v2` 기능 플래그와 세 상태 멀티 에이전트 surfac
 | `off` | `multi_agent_v2` 기능을 끄고 catalog를 다시 동기화합니다. |
 | `mode v1` | 모든 모델을 v1으로 고정하고, native v2를 끄며, 활성 thread 한도를 유지합니다. |
 | `mode default` | 업스트림에서 지정한 model surface pin을 따릅니다. |
-| `mode v2` | 모든 모델을 v2로 고정하고, native v2를 켜며, 활성 thread 한도를 유지합니다. |
+| `mode v2` | 모델을 v2로 고정하고 활성 thread 한도를 유지합니다. `keep-native-v1`이 꺼져 있으면 전역 native v2를 켜고, 켜져 있으면 전역 강제를 끄고 catalog pin을 사용합니다. |
+| `mode v2-plaintext --acknowledge-plaintext-agent-messages` | V2를 새 세션에 선택하고 전역 강제를 끈 채 적격 작업을 평문으로 전달합니다. 진입하려면 `--acknowledge-plaintext-agent-messages`가 필요합니다. |
+| `keep-native-v1 on\|off` | `mode v2`에서 ChatGPT 네이티브 모델을 v1로, 라우팅된 모델을 v2로 유지합니다. 켜면 catalog 동기화 전에 전역 V2 강제를 끕니다. |
 | `threads <n>` | 활성 v1/v2 thread 한도를 1 이상의 정수로 설정합니다. |
+| `mode-hint <text>` | 모든 모델과 추론 노력에 능동 위임 힌트(Ultra 모드)를 설정합니다. |
+| `mode-hint --clear` | 힌트를 제거해 추론 노력에 따른 정책을 복원합니다. |
 
 ```bash
 ocx v2 status
@@ -70,7 +74,9 @@ ocx v2 threads 16
 
 `mode` 하위 명령은 `multiAgentMode`를 opencodex config에 쓰고 Codex catalog를 다시 동기화합니다.
 mode와 flag 전환은 현재 숫자 thread 한도를 유효한 v1/v2 Codex key 사이로 옮깁니다.
-전환이 실패하면 원래의 `config.toml`이 복원됩니다. 변경은 새 Codex 세션에만 적용되고, 실행 중인 세션은 고정된 surface를 유지합니다.
+전환이 실패하면 원래의 `config.toml`이 복원됩니다. 카탈로그 변경은 새 Codex 세션에 적용되고 실행 중인 세션은 고정된 surface를 유지하지만, 활성화된 평문 컴파일러는 기존 V2 세션의 후속 적격 요청에도 적용됩니다.
+
+Subagents 대시보드의 Ultra 모드 스위치는 네이티브 기능이 켜진 명시적 `ocx v2 mode v2` 또는 전역 강제 없이 카탈로그 pin을 사용하는 `v2-plaintext` 모드가 필요합니다. `ocx v2 on`만으로는 이 조건을 충족하지 않습니다.
 
 ## 콤보 라우팅
 
@@ -192,6 +198,8 @@ family는 `opus`, `fable`, `sonnet`, `haiku`이며, 새 route는 `opus`에서 �
 선택한 provider의 전체 전송 설정이 이 설치의 로컬 리스너 또는 저장된 로컬 클라이언트 연결에 대해 생성한 관리 블록과 일치할 때만, 누락된 `OPENCODEX_API_AUTH_TOKEN`을 이 설치의 `service-api-token`에서 읽습니다. 이름이나 주입 주석만으로는 허용하지 않습니다. 알 수 없거나 원격인 목적지, 기본 profile, 프로젝트 설정, `OPENAI_BASE_URL`, 전달된 `-c`/`--config`, `-p`/`--profile`, `-C`/`--cd`, `--remote`는 자동 읽기를 생략합니다. 사용자가 export한 자격 증명과 인자는 보존하며, 토큰 파일 경로 재정의와 관리 토큰 충돌은 거부합니다.
 
 일치가 확인된(`matched`) autostart wrapper만 backing Codex를 직접 실행합니다. 검사 예외를 포함한 알 수 없는 상태는 검증된 bypass가 필요하며, 관리되는 Windows CMD wrapper는 현재 생성 템플릿 전체와 일치해야 `OCX_SHIM_BYPASS=1`로 실행합니다. 일반 npm 런처는 지원합니다. 검증할 수 없거나 오래된 wrapper는 종료 코드 1로 거부하며 Codex를 시작하지 않습니다. `ocx codex-shim install`로 갱신하세요. 이 실행은 shim을 수리하지 않으며, 내용 검사는 Windows backing 파일 출처나 동시 경로 교체를 보장하지 않습니다.
+
+macOS에서는 도움말과 버전을 포함한 매 실행 시, 선택한 실행 파일의 경로나 정규 경로가 `.app` 번들 내부에 있으면 검증합니다. 이름을 바꾼 번들과 번들 내부를 가리키는 심볼릭 링크도 번들 및 실행 파일의 안전한 소유권, 권한, OpenAI 서명을 요구합니다. 선택한 번들 구성원은 실행 파일, 중간 디렉터리 또는 번들 전체의 심볼릭 링크를 거쳐도 해당 번들의 정규 `Contents/` 내부에 있어야 합니다. 검증 실패 시 Codex를 시작하지 않고 종료 코드 1을 반환합니다. npm 설치를 포함한 일반 번들 외부 실행 파일의 동작은 유지됩니다.
 
 런처 도움말은 `ocx help codex`, Codex 도움말은 `ocx codex --help`입니다. 이후 plain `codex`의 동작은 기존과 같습니다.
 

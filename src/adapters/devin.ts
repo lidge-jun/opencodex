@@ -692,6 +692,11 @@ export function mapDevinToolCallStartForTests(
   return mapDevinToolCallStart(id, name, buildDevinReturnedToolNameMap(tools));
 }
 
+/**
+ * Create the native Devin adapter with bounded per-instance cascade-ID state.
+ * The configured provider ID selects the stored tenant slot; runTurn translates
+ * native chat events and marks turn signatures for downstream output ownership.
+ */
 export function createDevinAdapter(
   provider: OcxProviderConfig,
   context: { providerId?: string } = {},
@@ -730,6 +735,11 @@ export function createDevinAdapter(
       };
     },
 
+    /**
+     * Execute one native chat turn through admitted sends and emit adapter events.
+     * Keeps signed continuation and optional unsigned retries request-scoped; late
+     * provider attestations are marked afterOutput for downstream replay ownership.
+     */
     async runTurn(parsed: OcxParsedRequest, incoming: IncomingMeta, emit: (event: AdapterEvent) => void) {
       if (incoming.abortSignal?.aborted) {
         emit({ type: "error", message: DEVIN_CLIENT_CLOSED_MESSAGE, status: 499, retryable: false });
@@ -937,7 +947,7 @@ export function createDevinAdapter(
           if (event.kind === "reasoning_signature") {
             // Carried back out so the next turn can replay it in the prompt's
             // signature field; an unsigned replay is what the service ignores.
-            emit({ type: "thinking_signature", signature: encodeDevinSignature(event.signature, event.signatureType) });
+            emit({ type: "thinking_signature", signature: encodeDevinSignature(event.signature, event.signatureType), afterOutput: true });
             continue;
           }
           if (event.kind === "tool_call_start") {

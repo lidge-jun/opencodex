@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { samePath } from "../helpers/same-path";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -67,6 +69,24 @@ afterEach(() => {
 function pathInCodexHome(name: string): string {
   return join(codexHome, name);
 }
+
+test("residue inspection detects adjacent large file identities", () => {
+  const path = pathInCodexHome("config.toml");
+  writeFileSync(path, 'model = "example"\n');
+  const realStat = fs.statSync;
+  const id = 2n ** 53n;
+  let observations = 0;
+  const spy = spyOn(fs, "statSync").mockImplementation(((target, options) => {
+    const value = options?.bigint ? realStat(target, { bigint: true }) : realStat(target);
+    if (!samePath(target, path)) return value;
+    const ino = id + BigInt(observations++ > 0);
+    return Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: options?.bigint ? ino : Number(ino) });
+  }) as typeof fs.statSync);
+  try {
+    expect(Number(id)).toBe(Number(id + 1n));
+    expect(classifyNativeRoutedResidue()).toMatchObject({ kind: "indeterminate", surface: "config", reason: "surface changed while it was being observed" });
+  } finally { spy.mockRestore(); }
+});
 
 function canonicalPathInCodexHome(name: string): string {
   return join(realpathSync.native(codexHome), name);

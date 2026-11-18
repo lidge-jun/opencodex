@@ -25,7 +25,7 @@ Windows で絶対パスが必要なオーバーライドには、ドライブ文
 | omo | `~/.omo/agent/models.json` | JSON | 新しいセッション | ループバック用プレースホルダー |
 | Cline CLI | `~/.cline/data/settings/providers.json` と同階層の `models.json` | JSON のペア | Cline の停止と再起動後 | ループバック用プレースホルダー |
 | Kilo | `~/.config/kilo` 内で最初に存在する `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json`、`config.json`（`XDG_CONFIG_HOME` でディレクトリを変更可能。どれもなければ `kilo.jsonc` を作成） | JSONC | 新しいセッション | `OPENCODEX_KILO_API_KEY` |
-| Command Code | `~/.commandcode/providers.json` (Windows の既定ホームを使用する場合: `HOME ?? USERPROFILE` が空文字列や空白のみではなく Windows の絶対パスの場合に限り使用し、それ以外は `homedir()`。別途指定されたホームは保持。その配下の `.commandcode\providers.json`) | JSON | Command Code の次回起動時 | なし — キー不要のループバック (`apiKey: false`) |
+| Command Code | `~/.commandcode/providers.json` (Windows の既定ホームを使用する場合: `HOME ?? USERPROFILE` が空文字列や空白のみではなく Windows の絶対パスの場合に限り使用し、それ以外は `homedir()`。別途指定されたホームは保持。その配下の `.commandcode\providers.json`) | JSON | Command Code の次回起動時 | なし — キー不要のループバック (`apiKey: false`)。デスクトップアプリは独自のサインインが必要で、opencodex は `auth.json` を書き込みません |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` Windows の場合) | JSON | ファイル変更を即時反映 | キー不要のループバック |
 
 生成されるカタログには、各プロバイダーの選択で有効なモデルのみが含まれます。これはダウンロードと管理対象の統合の両方に適用され、Pi と Aside も対象です。管理画面のモデル一覧にはすべてのモデルが表示されるため、追加のモデルを有効にできます。
@@ -100,9 +100,9 @@ Apply、Replace、Disable、Restore はプレビューから始まります。�
 
 計画に変更がない場合、管理対象のクライアント文書は要求した状態にすでになっています。選択された Aside プロファイルでは、文書に変更がなくても、確定によって同期の設定が保存される場合があります。
 
-確認後にファイルが変更されると、古い計画として書き込みが拒否されます。ダイアログは更新された計画に置き換えて再確認を求め、自動再試行はしません。プレビューが一時的に使えない場合は、通常どおりページを再読み込みして操作をやり直してください。
+確認後にファイルが変更されると、古い計画として書き込みが拒否されます。ダイアログは更新された計画に置き換えて再確認を求め、自動再試行はしません。プレビューがモデルカタログ未読み込みを報告した場合、ダイアログは開いたままで **カタログを読み込んで再試行** を表示します。統合一覧を読み直してから計画を再度取得します。
 
-Aside も選択したプロファイル 1 件ずつ同じプレビューと確認の手順を使います。**Sync all profiles** は別の一括操作であり、1 つの統合プレビューには結び付きません。
+Aside も選択したプロファイル 1 件ずつ同じプレビューと確認の手順を使います。**Sync all profiles** は別の一括操作であり、1 つの統合プレビューには結び付きません。1 つの計画は 1 プロファイルのファイルだけを表すため、競合している Aside の概要カードには **プロファイルを選択** が表示され、ブロックの置き換えはそのプロファイルのページで行います。
 
 ## 実際に起こること
 
@@ -223,6 +223,16 @@ Undo は、もともと存在しなかったファイルも含め、**元の両�
 
 ダウンロードされる `cline-config-bundle.json` には、`providers.json` 用の `settings` と `models.json` 用の `catalog` という 2 つのネイティブ文書要素が含まれます。それ自体は Cline の設定ファイルではありません。ジャーナル付きのマージとロールバックには統合コマンドを使ってください。生成された統合はリモートの受け入れ認証に対応せず、認証不要のループバックアクセスが必要です。
 
+## omo (Pi ベース) の Responses 方言
+
+管理対象の Pi ベース omo ブロックは、既定で Chat 方言 (`api: "openai-completions"`) を使います。Chat はツール呼び出しをまたいで前のステップの推論を落とすため、長い omo のツールループで影響が出ます。有効化とすべての更新で Responses 方言を書き込むには、opencodex の設定ファイルにだけ設定できる次のキーを追加します。
+
+```json
+{ "omoClientExport": { "api": "openai-responses" } }
+```
+
+編集した設定を読み込むためにプロキシを再起動し (サービスとしてインストールした場合は `ocx service restart`、それ以外は `ocx stop` の後に `ocx start`)、ダッシュボードの **Connect → omo** から omo 統合を更新してください。更新だけでは実行中のプロキシの設定を使い、設定ファイルは読み直しません。この設定は omo にだけ適用され、Pi、Gentle Shell などほかの Pi 形式のクライアントは `openai-completions` のままです。Chat に戻すには、キーを削除して同じ手順で再起動し、**Connect → omo** を更新します。不明な値は無視されます。opencodex が所有するのは引き続き `~/.omo/agent/models.json` の `providers.opencodex` だけで、ほかのプロバイダーはそのまま残ります。
+
 ## omo (Codex / LazyCodex) のロール別推論負荷
 
 LazyCodex が検出されると、omo タブの **omo (Codex / LazyCodex)** セクションで、`$CODEX_HOME/agents/*.toml` にある各ロールのモデルと推論負荷を選んで **保存** できます。モデルが固定されていないロールの行では推論負荷だけを保存でき、そのロールは引き続きモデルを継承します。opencodex はそのロールファイルのルートにある `model` と `model_reasoning_effort` のキーだけを更新し、存在しない固定値はファイルの先頭付近に追加します。ロールの指示、ほかのコメントやキーはそのまま残ります。モデルだけを変えて保存すると `effort` を送らないため、両方のファイルの推論負荷は変わりません。段階を選ぶとロールファイルの `model_reasoning_effort` を追加または置き換え、LazyCodex がその段階に対応していれば `~/.omo/omo.jsonc` の `[codex].agents.<role>.reasoning` にも書き込みます（`ultra` はロールファイルにだけ残り、以前の `reasoning` は削除されます）。コマンドラインでは `ocx agent roles set <role> <model> --effort <level>` で同じ操作ができます。
@@ -234,6 +244,8 @@ LazyCodex が検出されると、omo タブの **omo (Codex / LazyCodex)** セ�
 `~/.omo/omo.jsonc` が存在しない場合は作成しません。コメントを含む場合は、保存するとコメントが消えるためファイルに触れません。その場合は値を手動で設定してください。ミラーをスキップしても、ロールファイルの保存は取り消されません。ロールファイルの保存に成功して omo.jsonc の書き込みに失敗した場合、その行のボタンが **omo.jsonc を再試行** に変わり、**推論エフォートを継承** による解除（`null`）を含めて同じ推論負荷の選択を再送します。再試行が成功するまでは、そのロールで推論負荷を変えずに行う次の **保存** や **自動割り当て** の **適用** も、保留中の選択を一緒に送ります。推論負荷を明示的に選ぶと、その値が優先されます。
 
 **自動割り当て** は、必要な能力と推論負荷を評価したロールのうち、選んだモデルの推論負荷の段階リストが空でないすべてのロールに推論負荷を提案します。**適用**、**すべて適用**、または `ocx agent roles suggest --apply` は、そのロールの `model_reasoning_effort` を追加または置き換えます。推論負荷は選んだモデル自身の段階から、最も低い段階、既定の段階、既定より 1 つ上の段階、最も高い段階のいずれかになります。段階リストが空なら推論負荷を提案せず（`proposedEffort: null`）、適用時は `effort` を送らないため既存の固定値はそのまま残ります。`null` の提案が固定値を消すことはありません。
+
+CLI の `ocx agent roles suggest --apply` は、1 つの履歴バッチで最大 **50 件の変更対象ロール**を適用します。設定が既に一致するロール、評価されていないロール、割当先のないロールは数えません。50 件を超える場合は、ロールの更新を一件も送信せず終了コード 5 で拒否します。`--apply` なしでプレビューし、個別の変更には `ocx agent roles set <role> <model> [--effort <level>]` を使ってください。途中で失敗した場合の確認済み・未確認の更新と再試行の注意点は、[CLI の適用と復旧の契約](/reference/cli/agents/)を参照してください。
 
 ## Kilo
 

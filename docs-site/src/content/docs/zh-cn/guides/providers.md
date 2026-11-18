@@ -105,7 +105,7 @@ ocx logout <provider>
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth 使用独立的 Grok CLI 订阅网关。API 密钥覆盖模式使用 `https://api.x.ai/v1`，并可能注入 Priority Processing。优先使用实时 Grok 目录；回退默认模型为 `grok-4.5`。 |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude 模型；实时模型列表从 `/v1/models` 获取。 |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code Plan 编程模型。默认使用稳定的 `kimi-for-coding` 别名（当前指向 K2.8 Preview）：100 万 token 上下文、可调 `low`/`high`/`max` 思考档（默认 `max`）、支持文本 + 图片输入。已下架的 `kimi-k2.x` 选择会在升级时自动迁移到该别名。进阶：添加 `kimi-responses` 预设可让同一 Kimi 账号登录走 OpenAI Responses 协议（思考内容在服务端保持加密，工具调用保持可见；Chat 预设保留明文推理）。 |
-| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | 同一 Kimi 账号登录（复用 `kimi` 的 OAuth 凭据）走 OpenAI Responses 协议。模型名单与能力与 `kimi` 相同；思考内容在服务端保持加密，工具调用与结果保持可见。 |
+| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | 同一 Kimi 账号登录（复用 `kimi` 的 OAuth 凭据）走 OpenAI Responses 协议。模型名单与能力与 `kimi` 相同；思考内容在服务端保持加密，工具调用与结果保持可见。 可在仪表盘的 **Add provider** 选择器（**Kimi (Responses)**）中添加，或运行 `ocx provider add kimi-responses --live`。它没有独立登录：已登录 Kimi 时添加无需再次登录；从选择器中该项登录也只会创建这一行，不会改动 `kimi` 行。从任一行退出（`ocx logout kimi` 或 `ocx logout kimi-responses`，本地或使用 `--live`，或在仪表盘任一行点击 **Logout**）都会为两行移除当前的 Kimi 账号并给出提示；若还保存了其他 Kimi 账号，它会成为两行的当前账号；该账号暂停期间两行都不会使用它，如需重新登录，请重新登录该账号。在仪表盘（或使用 `--live`）删除其中一行时，只要另一行仍在使用，登录会保留；删除最后一行会一并删除登录。本地 `ocx provider remove` 与其他提供方一样，会保留已保存的登录。 |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research 订阅网关（与 Hermes Agent 使用同一后端）。通过设备授权登录 `portal.nousresearch.com`；access 令牌是每个请求的 inference JWT。付费 + `:free` 模型混合目录（`tencent/hy3:free`、`stepfun/step-3.7-flash:free` 等）会从已登录账户实时发现。Refresh 令牌是单次使用，每次刷新都会轮换。 |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 首次登录会导入已安装并已登录的 Kiro CLI 会话（Unix 使用 `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`；然后运行 `kiro-cli login`）。**添加账户**会先退出 `kiro-cli`，再启动新的浏览器登录，从而切换 `kiro-cli` 自身使用的账户，并保存账户范围的配置文件元数据。现有 OpenCodex 账户会保留；如果取消或失败，则恢复之前的 `kiro-cli` 会话。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 通过 Cloud Code Assist 协议使用 Google OAuth。实时发现调用已认证的 CCA `v1internal:fetchAvailableModels` 端点，并仅发布当前登录账户可用的 agent 模型；维护中的目录仍作为回退。 |
@@ -158,7 +158,7 @@ Kimi Code 原生 Responses 路由会省略明确正文为空的 assistant 历史
 
 OAuth 凭据中带有稳定账号 id 或邮箱的提供商可以保存多个登录。Providers 页面会在下拉列表中显示这些
 账号，允许继续添加，并在不登出其他账号的情况下切换当前账号。普通登录时，没有身份信息的 Kimi 凭据会替换
-当前 active slot；显式 **添加账号** 会保留原有 slot 并激活一个独立的新 slot。Kiro 账户以配置文件 ARN 为键。
+当前 active slot；显式 **添加账号** 会保留原有 slot 并激活一个独立的新 slot。Kiro 账户结合配置文件 ARN 与已登录用户的电子邮件地址（若可用）来区分身份；共享同一组织配置文件的用户可以各自保留独立的凭据。
 `chatgpt` 始终只有一个 slot，因为 Codex 账号池使用独立存储。令牌仍保存在
 `~/.opencodex/auth.json` 中；`/api/oauth/accounts` 只返回脱敏后的 metadata。
 
@@ -176,6 +176,8 @@ cat accounts.json | ocx account import google-antigravity --format cockpit-tools
 内联 JSON 和额外的位置参数会被拒绝。请将导出的文件保密，并在导入后删除或安全存储。
 
 ### Kiro 凭据导入
+
+在仪表盘选择 **AWS IAM Identity Center**，输入组织的 AWS 访问门户 URL 和 SSO 区域，即可添加账户，无需 CLI 或 SSH。在浏览器批准设备代码后，如有多个 Kiro 配置文件，请选择要保存的配置文件。下面的 CLI 步骤适用于 **Kiro CLI** 选项。
 
 Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/install | bash` 安装；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1' | iex`；然后先运行 `kiro-cli login`。如果没有 `kiro-cli` 会话，`ocx login kiro` 会回退到粘贴的访问令牌或 `KIRO_ACCESS_TOKEN` 环境变量。
 
@@ -199,6 +201,8 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 `workbuddy-ai/default-model`。支持流式输出、工具调用和非流式客户端；概览和账户页显示剩余积分、已用/总量、基础及赠送积分，
 并在可查询时显示下一批非每日积分的到期时间。刷新读取当前账户的账单汇总；查询失败不会
 显示为零。积分仅用于展示，不会因付费积分耗尽而禁用仍可用的免费模型。
+报告的积分总量大于零时，顶部配额摘要会显示不可用积分的百分比（包括冻结积分），四舍五入
+到整数。它不会显示耗尽警告，因为免费模型可能仍可使用。单批积分到期不会被显示为整个余额的重置时间。
 
 这是参考 [Magpie WorkBuddy 插件](https://github.com/magpie-community/plugins/tree/e7f65641df820dfd715c0d2241f99f2092e4efb1/packages/workbuddy)
 实现的非官方订阅协议。上游的客户端通道或账号限制会原样拒绝请求，不会改写代理身份提示词
@@ -218,7 +222,7 @@ API Key 提供商，也不负责让 WorkBuddy 桌面客户端使用 OpenCodex �
 
 ## 3. API 密钥目录
 
-opencodex 内置 106 个预设：85 个密钥预设、17 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+opencodex 内置 108 个预设：87 个密钥预设、17 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 
@@ -267,12 +271,12 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 | Novita AI | `https://api.novita.ai/openai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
-| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
+| Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1`。`moonshot` API 默认使用 `kimi-k3.1-pro`；官方 API 地址中已保存的 `kimi-k2.5` 选择会迁移到该模型。 |
 | Hugging Face | `https://router.huggingface.co/v1` |
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
 | 智谱 AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
-| [BigModel Coding Plan — Responses (静态模型列表)](/guides/providers/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
+| [BigModel Coding Plan — Responses (静态模型列表)](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
 | Qwen Cloud | Token plan（默认）: `https://token-plan.maas.qwencloudapi.com/compatible-mode/v1` · 按量付费: `https://dashscope.aliyuncs.com/compatible-mode/v1` · 或自定义 |
 | 腾讯云 Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |

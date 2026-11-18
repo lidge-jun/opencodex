@@ -1,5 +1,5 @@
 import { beginApiSessionHandoff, fetchApiSessionValidation, hasApiSession } from "./api";
-import type { ApiTarget } from "./api-targets";
+import { isClientStateChangedResponse, type ApiTarget } from "./api-targets";
 import { discardResponseBody, withFetchDeadline } from "./bounded-fetch";
 import { parseRemoteLinkStatus } from "./remote-link-api";
 
@@ -8,7 +8,7 @@ let pairingDeadlineMs = 10_000;
 export function setPairingDeadlineForTests(ms: number): void { pairingDeadlineMs = ms; }
 
 export class PairingError extends Error {
-  readonly kind: "invalid-code" | "refused" | "origin-denied" | "cloudflare-challenge" | "remote-link-unauthorized" | "remote-link-forbidden" | "unreachable" | "request-failed" | "invalid-response";
+  readonly kind: "invalid-code" | "refused" | "origin-denied" | "cloudflare-challenge" | "remote-link-unauthorized" | "remote-link-forbidden" | "client-state-changed" | "unreachable" | "request-failed" | "invalid-response";
   constructor(kind: PairingError["kind"]) {
     super(`pairing_${kind}`);
     this.kind = kind;
@@ -135,6 +135,7 @@ export async function validateRemoteLinkSession(apiBase: string, fetchImpl?: typ
     deadline.throwIfAborted();
     if (!response.ok) {
       if (await isHtmlChallenge(response)) throw new PairingError("cloudflare-challenge");
+      if (await isClientStateChangedResponse(response)) throw new PairingError("client-state-changed");
       discardResponseBody(response);
       if (response.status === 401) throw new PairingError("remote-link-unauthorized");
       if (response.status === 403) throw new PairingError("remote-link-forbidden");

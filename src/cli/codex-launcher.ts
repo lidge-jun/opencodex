@@ -25,19 +25,20 @@ import { spawn } from "node:child_process";
 import { loadConfig } from "../config";
 import { getCodexRoutingKind, type CodexRoutingKind } from "../codex/inject";
 import { inspectCodexShimBackingForCommand } from "../codex/shim";
+import { validatedCodexExecInvocationAsync, type CodexExecBoundaryAsyncDeps } from "../codex/exec-boundary";
 import { CODEX_GLOBAL_OPTIONS_WITH_VALUE, CODEX_INTERNAL_COMMANDS, CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC } from "../codex/shim-templates";
 import { withoutSiblingMarker } from "../codex/sibling-start";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { tokenCollidesWithAdmin } from "../lib/admin-secrets";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../lib/service-secrets";
-import { commandInvocation } from "../lib/win-exec";
 import { findExecutableOnPath } from "../remote-control/workspace-executable";
 import { findLiveProxy, type LiveProxy } from "../server/proxy-liveness";
-import { codexCredentialDestinationIsTrusted, resolveCodexLaunchHome } from "./codex-launch-auth";
+import { attestCodexRuntime, codexCredentialDestinationIsTrusted, resolveCodexLaunchHome, type CodexRuntimeAttestation } from "./codex-launch-auth";
 import { codexCommandCanBypass, CODEX_UNVERIFIED_SHIM } from "./codex-launch-command";
 import { codexTokenArgsAreSafe, codexTokenEnvironmentIsSafe } from "./codex-launch-policy";
 import { codexTokenWithheldDiagnostic, type CodexTokenRefusal, type CodexTokenRefusalReporter } from "./codex-launch-diagnostics";
+import { withoutSupervisorMarkers } from "../lib/supervisor-markers";
 
 export interface CodexLaunchEnv {
   [key: string]: string | undefined;
@@ -115,7 +116,8 @@ export function codexProxyStartEnv(base: CodexLaunchEnv = process.env): CodexLau
   const withTokenFile = stripped.OPENCODEX_API_AUTH_TOKEN?.trim()
     ? stripped
     : { ...stripped, OCX_API_TOKEN_FILE: serviceApiTokenFilePath() };
-  return { ...withTokenFile, OCX_SERVICE: "1" } as CodexLaunchEnv;
+  // A shell a supervised runtime handed to a tool carries its supervisor's markers; this proxy is not its.
+  return withoutSupervisorMarkers({ ...withTokenFile, OCX_SERVICE: "1" }) as CodexLaunchEnv;
 }
 
 export type CodexProxyEnsureDeps = {
@@ -158,7 +160,9 @@ export type CodexLaunchEnvDeps = {
   args?: readonly string[];
   /** Test seam; production reads the hardened service token file. */
   serviceToken?: (base: CodexLaunchEnv) => string | null;
-  credentialDestination?: (home: string, report?: CodexTokenRefusalReporter) => boolean;
+  credentialDestination?: (home: string, report?: CodexTokenRefusalReporter, runtimeAttestation?: CodexRuntimeAttestation | null) => boolean;
+  /** Exact origin that proved this home's runtime-record secret. */
+  runtimeAttestation?: CodexRuntimeAttestation | null;
 };
 
 /** Read the client admission credential from this installation's service-token file. */
@@ -186,6 +190,7 @@ export function buildCodexLaunchEnv(
     };
     if (!codexTokenArgsAreSafe(deps.args ?? [])) return withhold("args");
     if (!codexTokenEnvironmentIsSafe(env)) return withhold("environment");
+    if (!deps.runtimeAttestation) return withhold("destination");
     // NO_PROXY parsing and precedence vary across native HTTP/WebSocket transports.
     // Without proving bypass, preserve the user's transport but never load a secret.
     const home = resolveCodexLaunchHome(env);
@@ -193,8 +198,8 @@ export function buildCodexLaunchEnv(
     let refusal: CodexTokenRefusal = "destination";
     const report: CodexTokenRefusalReporter = reason => { refusal = reason; };
     const trusted = deps.credentialDestination
-      ? deps.credentialDestination(home, report)
-      : codexCredentialDestinationIsTrusted(home, undefined, report);
+      ? deps.credentialDestination(home, report, deps.runtimeAttestation)
+      : codexCredentialDestinationIsTrusted(home, undefined, report, deps.runtimeAttestation);
     if (!trusted) return withhold(refusal);
     const token = (deps.serviceToken ?? defaultServiceToken)(env);
     if (!token) return withhold("credential");
@@ -265,14 +270,26 @@ export function resolveCodexLaunchCommand(
   }
 }
 
-/** Launch the selected Codex command with inherited IO and preserve its exit status. */
-function spawnCodex(args: readonly string[], env: CodexLaunchEnv): Promise<number> {
+export interface CodexSpawnDeps extends CodexLaunchCommandDeps {
+  execBoundary?: CodexExecBoundaryAsyncDeps;
+  spawn?: typeof spawn;
+}
+
+/** Validate the final backing command immediately before each launch, including fast paths. */
+export async function spawnCodex(args: readonly string[], env: CodexLaunchEnv, deps: CodexSpawnDeps = {}): Promise<number> {
+  let launch: CodexLaunchCommand, inv: Awaited<ReturnType<typeof validatedCodexExecInvocationAsync>>;
+  try {
+    launch = resolveCodexLaunchCommand(env, deps);
+    inv = await validatedCodexExecInvocationAsync(launch.command, args, { ...deps.execBoundary, verifyAnyAppBundle: true, env: launch.env as NodeJS.ProcessEnv });
+  } catch (error) {
+    // A selected executable that vanished before verification is the same missing CLI
+    // the spawn-time ENOENT branch below reports, not a trust refusal.
+    const missing = error instanceof CodexNotFoundError || (error as NodeJS.ErrnoException | null)?.code === "ENOENT";
+    console.error(missing ? CODEX_INSTALL_HINT : `❌ Cannot launch codex: ${error instanceof Error ? error.message : "executable verification failed"}`);
+    return 1;
+  }
   return new Promise<number>(resolve => {
-    let launch: CodexLaunchCommand;
-    try { launch = resolveCodexLaunchCommand(env); }
-    catch (error) { console.error(error instanceof CodexNotFoundError ? CODEX_INSTALL_HINT : CODEX_UNVERIFIED_SHIM); resolve(1); return; }
-    const inv = commandInvocation(launch.command, args);
-    const child = spawn(inv.file, inv.args, { stdio: "inherit", env: launch.env as NodeJS.ProcessEnv, ...inv.options });
+    const child = (deps.spawn ?? spawn)(inv.file, inv.args, { stdio: "inherit", env: launch.env as NodeJS.ProcessEnv, ...inv.options });
     child.on("error", (err: NodeJS.ErrnoException) => {
       if (err.code === "ENOENT") {
         console.error(CODEX_INSTALL_HINT);
@@ -306,5 +323,9 @@ export async function cmdCodex(args: string[]): Promise<number> {
     // what the session does next; `ocx doctor` names the autostart failure.
     console.error(CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC);
   }
-  return spawnCodex(args, buildCodexLaunchEnv(process.env, { routingKind, args }));
+  // A public health marker proves liveness, not ownership of the listener. Never read the
+  // persisted service token until the exact runtime-record endpoint answers a fresh challenge.
+  const runtimeAttestation = plan.kind === "routed" && live !== null
+    ? await attestCodexRuntime(live) : null;
+  return spawnCodex(args, buildCodexLaunchEnv(process.env, { routingKind, args, runtimeAttestation }));
 }

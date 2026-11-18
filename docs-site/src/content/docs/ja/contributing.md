@@ -57,59 +57,10 @@ CI だけに任せたり、ローカルテストを一律に省略したりす�
 cd docs-site && bun install && bun dev
 ```
 
-## ドキュメントのデプロイ
+## CI / Release / Pages
 
-公開ドキュメントは GitHub Pages の <https://opencodex.me/ja/> に公開されます。
-`.github/workflows/deploy-docs.yml` は `main` push で `docs-site/**` またはワークフロー自体が変わると
-実行されます。`docs-site` をビルドした後、生成されたサイトをデプロイします。ドキュメント変更を push する前に以下を
-実行してください。
+公開、CI、リリース、ブランチについては[英語の正本](/contributing/)を参照してください。
 
-```bash
-cd docs-site
-bun install --frozen-lockfile
-bun run build
-```
-
-## CI とリリース
-
-GitHub Actions は必要な作業のみを行います。
-
-- **Cross-platform CI**(`.github/workflows/ci.yml`)はランタイム、テスト、パッケージ、スクリプト、
-  TypeScript、ワークフローファイルが変更された pull request と `main` push で実行されます。Bun matrix は Linux、
-  Windows、macOS で install、typecheck、tests、privacy scan、release helper build smoke、GUI build、
-  `ocx help` を検査します。別途 3 OS レーンはバンドルランタイムを使い、Bun を別途インストールしなくても
-  npm global install が動作するか確認します。
-- **Release**(`.github/workflows/release.yml`)は手動で実行します。2 つ目の完全 CI パイプラインではなく、
-  dry-run や publish 前に正確なリリースコミット(`GITHUB_SHA`)で Cross-platform CI が
-  成功したか確認します。
-
-リリースには helper を使ってください。
-
-
-helper の実行前にリリース予定のバージョンを決め、デフォルトブランチから
-`.github/workflows/dev-version-bump.yml` を `intended-version=<version>`、
-`mode=pre-move` で実行してください。生成された PR をレビューして `dev` にマージし、
-`main` または `preview` に昇格してから helper を実行します。`dev` がすでに予定の
-バージョンより新しい場合は `changed=false` となり、バージョン更新 PR は不要です。
-公開には正確なリリースコミットの CI 成功が引き続き必要です。
-
-```bash
-bun run release <version>           # バージョン bump を commit/push、publish ワークフローはデフォルト dry-run
-bun run release --bump minor        # tag と npm channel から次の patch、minor、major バージョンを導出
-bun run release <version> --publish # CI-gated dry-run を確認した後、実際の publish
-bun run release:watch               # 直近の Release ワークフロー run を監視
-```
-
-明示的なバージョンの代わりに `--bump patch|minor|major` を指定できます。上位 core の preview tag が
-作られた後は、`--bump patch` は古い stable patch ラインの継続を拒否します。その修正は開いている
-preview core に含めてください。
-
-## ブランチ
-
-- `dev` — 唯一の統合先。すべての PR をここに出します。
-- `main` — リリース専用。`dev` からメンテナーが昇格させるときだけ動きます。機能 PR を直接
-  出さないでください。
-- `preview` — プレリリーストレイン。
 
 Go ネイティブポートを担っていた `dev2-go` は廃止し、2 本の統合ラインを維持する方針も
 終了しました。履歴は

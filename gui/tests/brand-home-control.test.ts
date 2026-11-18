@@ -28,10 +28,10 @@ test("the brand is an interactive control, not an inert div", () => {
   expect(brand).toContain('type="button"');
 });
 
-test("activating the brand navigates to the dashboard", () => {
+test("activating the brand navigates Home", () => {
   // navigateToPage is the deliberate-navigation helper the nav rows use: it pushes a
   // history entry, so Back returns to the page the user came from.
-  expect(brand).toContain('navigateToPage("dashboard")');
+  expect(brand).toContain('navigateToPage("home")');
 });
 
 test("using the brand inside the drawer closes the drawer", () => {
@@ -43,7 +43,7 @@ test("using the brand inside the drawer closes the drawer", () => {
 test("the brand carries an accessible name and marks the current page", () => {
   // The visible text is the product name, which does not say what the control does.
   expect(brand).toContain('aria-label={t("nav.goHome")}');
-  expect(brand).toContain('page === "dashboard"');
+  expect(brand).toContain('page === "home"');
   expect(brand).toContain('"aria-current"');
 });
 

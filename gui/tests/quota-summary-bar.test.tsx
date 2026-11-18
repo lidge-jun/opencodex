@@ -37,14 +37,14 @@ const rows = buildQuotaSummary(freshQuotaReportsFromResponse([
   { provider: "kimi", label: "Kimi", updatedAt: now, quota: { weeklyPercent: 31, updatedAt: now } },
 ], now), provider => provider);
 
-async function mount() {
+async function mount(renderRows = rows) {
   const container = document.createElement("div");
   document.body.append(container);
   const { createRoot } = await import("react-dom/client");
   let root!: Root;
   await act(async () => {
     root = createRoot(container);
-    root.render(<QuotaSummaryChips rows={rows} t={t} locale="en" />);
+    root.render(<QuotaSummaryChips rows={renderRows} t={t} locale="en" />);
   });
   const list = container.querySelector("ul")!;
   return {
@@ -57,11 +57,52 @@ async function mount() {
   };
 }
 
+test("WorkBuddy chip names unavailable credits so frozen funds are not called used", async () => {
+  const workbuddy = buildQuotaSummary(freshQuotaReportsFromResponse([
+    { provider: "workbuddy-ai", label: "WorkBuddy AI", updatedAt: now, quota: {
+      updatedAt: now, workbuddyCredits: { total: 100, used: 0, remaining: 0, frozen: 100, groups: [] },
+    } },
+  ], now), provider => provider);
+  const view = await mount(workbuddy);
+  expect(view.chip("WorkBuddy AI").textContent).toContain("quotaSummary.creditsUnavailable");
+  expect(view.chip("WorkBuddy AI").textContent).toContain("100%");
+  await view.unmount();
+});
+
+test("WorkBuddy chip rounds its informational percentage to the nearest whole number", async () => {
+  const workbuddy = buildQuotaSummary(freshQuotaReportsFromResponse([
+    { provider: "workbuddy-ai", label: "WorkBuddy AI", updatedAt: now, quota: {
+      updatedAt: now, workbuddyCredits: { total: 100, used: 89.6, remaining: 10.4, frozen: 0, groups: [] },
+    } },
+  ], now), provider => provider);
+  const view = await mount(workbuddy);
+  expect(view.chip("WorkBuddy AI").textContent).toContain("90%");
+  await view.unmount();
+});
+
 async function click(element: Element) {
   await act(async () => {
     element.dispatchEvent(new testWindow.MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }) as unknown as Event);
   });
 }
+
+test("Mistral quota chip shows budget amounts and plan in its actual popover", async () => {
+  const reports = freshQuotaReportsFromResponse([{ provider: "mistral", updatedAt: now, quota: { updatedAt: now, customWindows: [
+    { label: "API budget", displayLabel: "API budget (EUR 2.50 of EUR 20.00 used; EDU)", percent: 12.5 },
+    { label: "Vibe budget", displayLabel: "Vibe budget (EUR 0.20 of EUR 10.00 used; EDU)", percent: 2 },
+  ] } }], now);
+  const container = document.createElement("div");
+  document.body.append(container);
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(container);
+  await act(async () => { root.render(<QuotaSummaryChips rows={buildQuotaSummary(reports, name => name)} t={t} locale="en" />); });
+  const chip = container.querySelector("a.quota-summary-chip")!;
+  await act(async () => { chip.dispatchEvent(new testWindow.PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" }) as never); });
+  const popover = container.querySelector(".quota-summary-popover")!;
+  expect(popover.textContent).toContain("API budget (EUR 2.50 of EUR 20.00 used; EDU)");
+  expect(popover.textContent).toContain("Vibe budget (EUR 0.20 of EUR 10.00 used; EDU)");
+  await act(async () => { root.unmount(); });
+});
 
 /** happy-dom does no layout, so the scroll metrics a real browser would report are stubbed. */
 async function scrollMetrics(list: HTMLElement, metrics: { scrollWidth: number; clientWidth: number; scrollLeft: number }) {

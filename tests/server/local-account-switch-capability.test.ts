@@ -77,7 +77,7 @@ describe("local account switch capability", () => {
     const replay = proof.clone();
     expect(hasLocalAccountSwitchCapability(proof, local)).toBe(true);
     expect(hasLocalAccountSwitchCapability(replay, local)).toBe(false);
-    for (const target of [`${path}?x=1`, `${path}/`, "/api/codex-auth/accounts/alias", "/api/update/desktop-snapshot"]) {
+    for (const target of [`${path}?x=1`, `${path}/`, "/api/codex-auth/accounts/alias", "/api/update/desktop-snapshot", "/api/oauth/accounts/affinity-reset"]) {
       const req = new Request(`http://127.0.0.1:${port}${target}`, { method: "PUT", headers: signed(path, body).headers, body });
       expect(hasLocalAccountSwitchCapability(req, local)).toBe(false);
     }

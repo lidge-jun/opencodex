@@ -552,13 +552,13 @@ test("noncanonical Responses preserves provider-owned safety-buffering hints", a
         adapter: "openai-responses",
         baseUrl: "https://fixture.test/v1",
         authMode: "key" as const,
-        apiKey: "fixture-key",
+        apiKey: "fixture-key", models: ["model", "provider-model"],
       },
       {
         adapter: "openai-responses",
         baseUrl: "https://fixture.test/v1",
         authMode: "forward" as const,
-        headers: { authorization: "Bearer provider-static" },
+        headers: { authorization: "Bearer provider-static" }, models: ["model", "provider-model"],
       },
     ]) {
       const config = {
@@ -575,7 +575,7 @@ test("noncanonical Responses preserves provider-owned safety-buffering hints", a
       }), config, { model: "", provider: "" });
 
       expect(response.headers.get("x-codex-safety-buffering-enabled")).toBe("provider-owned");
-      expect(response.headers.get("x-codex-safety-buffering-faster-model")).toBe("provider-model");
+      expect(response.headers.get("x-codex-safety-buffering-faster-model")).toBe("provider-model"); // a configured model of this provider
       expect(await response.text()).toBe(upstream);
     }
   } finally {
@@ -1579,7 +1579,8 @@ describe("OpenAI Responses passthrough sanitization", () => {
 
     for (const lite of [false, true]) {
       const body = build(lite);
-      const tools = lite ? body.input[0]?.tools : body.tools;
+      const tools = body.tools;
+      if (lite) expect(body.input).toEqual([]);
       expect(tools?.map(tool => tool.name)).toEqual([
         "mcp__codex_app__safe_union",
         "mcp__codex_app__plain",
@@ -2478,8 +2479,8 @@ describe("OpenAI Responses passthrough sanitization", () => {
       tool_choice: Record<string, unknown>;
     };
 
-    expect(body.tools).toBeUndefined();
-    expect(body.input[0]?.tools).toEqual([{ type: "web_search" }]);
+    expect(body.tools).toEqual([{ type: "web_search" }]);
+    expect(body.input).toEqual([]);
     expect(body.tool_choice).toEqual({ type: "web_search" });
   });
 
@@ -2641,10 +2642,7 @@ describe("OpenAI Responses passthrough sanitization", () => {
             tools: [{ type: "function", name: "read", defer_loading: true, parameters: {} }],
           },
         ],
-        input: [{
-          type: "additional_tools",
-          tools: [{ type: "function", name: "loose", defer_loading: true, parameters: {} }],
-        }],
+        input: [{ type: "additional_tools", tools: [{ type: "function", name: "loose", defer_loading: true, parameters: {} }] }],
       },
     }, { headers: new Headers() });
     const body = JSON.parse(request.body) as {
@@ -2655,7 +2653,9 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(body.tools[0]).toEqual({ type: "web_search" });
     expect(body.tools[1]).toMatchObject({ type: "function", name: "workspace__read" });
     expect(body.tools[1]).not.toHaveProperty("defer_loading");
-    expect(body.input[0].tools[0]).not.toHaveProperty("defer_loading");
+    expect(body.tools[2]).toMatchObject({ type: "function", name: "loose" });
+    expect(body.tools[2]).not.toHaveProperty("defer_loading");
+    expect(body.input).toEqual([]);
   });
 
   test("preserves prompt_cache_key in the raw Responses passthrough body", () => {

@@ -47,6 +47,7 @@ export async function executePassthroughResponse(
       sidecarState,
       responseEffects,
       nativeExchange,
+      sendBudgetState.dispatchSidecarSend,
     );
     // Delivery has already classified SSE (including a missing upstream content type)
     // and consumed bounded JSON/errors. Guard only its remaining direct body, outside

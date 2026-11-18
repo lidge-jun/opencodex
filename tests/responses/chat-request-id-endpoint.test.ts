@@ -118,7 +118,7 @@ test("handler-recorded invalid request has a history ID", async () => {
 });
 
 test("Reserve vision-helper refusal has its history ID", async () => {
-  launch(false, 200, { codexDesktopAuthless: true, defaultProvider: "openai", providers: {
+  launch(false, 200, { codexReserveEnabled: true, defaultProvider: "openai", providers: {
     openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
       authMode: "forward", codexAccountMode: "direct" },
   } });

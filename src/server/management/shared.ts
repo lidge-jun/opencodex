@@ -254,6 +254,7 @@ export function requestLogDto(
 ): Record<string, unknown> {
   return {
     ...entry,
+    ...(entry.attemptNormalizationDropped === true ? { attemptNormalizationDropped: true } : {}),
     ...resendVerdict(entry),
     displayMetrics: {
       tokPerSecond: tokPerSecondResult(entry),
@@ -409,10 +410,14 @@ export async function buildClaudeDesktopState(config: OcxConfig, stored?: OcxCla
   for (const id of desktopVisibleNativeSlugs(config)) {
     effortByRoute.set(`native/${id}`, true);
   }
+  const { desktopRouteVisible, filterDesktopModelsByVisibility, readDesktopModelVisibility } = await import("../../claude/desktop-model-visibility");
+  const visibility = readDesktopModelVisibility(config.claudeCode);
   const models = Object.keys(profile.assignments).sort().map(route => ({
     route,
     label: modelByRoute.get(route)?.label ?? route,
     available: available.has(route),
+    // Desktop list membership (#7702), separate from the tier assignment below.
+    visible: desktopRouteVisible(visibility, route),
     ...(modelByRoute.get(route)?.contextWindow ? { contextWindow: modelByRoute.get(route)!.contextWindow } : {}),
     effortSupported: effortByRoute.get(route) ?? false,
     // Read-only view of the 1M capability the written Desktop config already emits,
@@ -420,10 +425,21 @@ export async function buildClaudeDesktopState(config: OcxConfig, stored?: OcxCla
     supports1m: routeSupportsOneMillion(route, modelByRoute.get(route)?.contextWindow),
     assignment: profile.assignments[route]!,
   }));
+  const rendered = renderDesktopProfile(profile, profileModels);
+  const selected = filterDesktopModelsByVisibility(
+    rendered.map(model => ({ ...model, anthropicFamilyTier: model.family })),
+    rendered.map(model => model.route),
+    visibility,
+  );
+  // Match the writer's empty-selection fallback without changing the saved intent.
+  const listed = selected.length > 0 ? selected : rendered;
   return {
     profile,
     models,
-    rendered: renderDesktopProfile(profile, profileModels),
+    rendered,
+    visibility: visibility ?? null,
+    // What the next apply writes, including generateDesktop3pModels' empty-selection fallback.
+    listed: listed.map(({ route, name, label, family, isFamilyDefault }) => ({ route, name, label, family, isFamilyDefault: !!isFamilyDefault })),
     port: config.port,
   };
 }

@@ -470,9 +470,9 @@ describe("memory model routing", () => {
     await response.text();
     expect(calls[0]!.model).toBe("cheap");
     expect(calls[0]!.reasoning.effort).toBe("high");
-    // A combo target has to reach the dispatcher as `model`, so the rewritten selector is what the
-    // log records as requested; the phase itself is named in the route decision.
-    expect(logCtx.requestedModel).toBe("combo/memory");
+    // The dispatcher receives the concrete target; requestedModel keeps the original client selector.
+    // The phase itself remains named in the route decision.
+    expect(logCtx.requestedModel).toBe("gpt-5.6-luna");
     expect(logCtx.routeDecision?.selected.reason).toBe("memory-extract");
   });
 });

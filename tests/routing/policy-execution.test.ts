@@ -134,6 +134,35 @@ describe("policy execution (RI-05)", () => {
     expect(route.modelId).toBe("m1");
   });
 
+  test("policy and combo targets keep their exact model when a display name could re-decode it", () => {
+    const base = baseConfig();
+    const config = baseConfig({
+      providers: {
+        ...base.providers,
+        other: {
+          adapter: "openai-chat",
+          baseUrl: "https://other.example/v1",
+          apiKey: "ko",
+          modelDisplayNames: { "a/b": "Display-only A/B" },
+        },
+      },
+      combos: { exactcombo: { strategy: "failover", targets: [{ provider: "other", model: "a-b" }] } },
+      routingProfiles: {
+        exact: {
+          candidates: [{ provider: "other", model: "a-b" }],
+          unknownEvidence: { capability: "penalize", health: "penalize", quota: "penalize", cost: "penalize" },
+        },
+      },
+    });
+    expect(routeModel(config, "other/a-b").modelId).toBe("a/b");
+    const policy = routeModel(config, "policy/exact");
+    expect(policy.modelId).toBe("a-b");
+    expect(policy.routeDecision!.selected.model).toBe("a-b");
+    const combo = routeModel(config, "combo/exactcombo");
+    expect(combo.modelId).toBe("a-b");
+    expect(combo.combo!.target.model).toBe("a-b");
+  });
+
   test("existing explicit, combo, native and default routes are unchanged", () => {
     const config = baseConfig();
     expect(routeModel(config, "a/m1")).toMatchObject({ routeKind: "explicit-provider", providerName: "a", modelId: "m1" });

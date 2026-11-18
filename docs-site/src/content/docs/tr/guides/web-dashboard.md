@@ -22,6 +22,11 @@ sunucusunu çalışan bir proxy'ye karşı ayrı olarak çalıştırabilirsiniz:
 
 ```bash
 ocx start
+```
+
+Proxy bu terminalde çalışmaya devam etsin. İkinci bir terminalde GUI geliştirme sunucusunu başlatın:
+
+```bash
 bun run dev:gui
 ```
 
@@ -41,7 +46,7 @@ yalnızca bellekte tutar ve `localStorage` veya `sessionStorage`'a yazmaz;
 kaydedilip kaydedilmeyeceği tamamen tarayıcının veya şifre yöneticisinin
 kararıdır.
 
-**Bu cihazı hatırla** varsayılan olarak kapalıdır. Doğrudan HTTPS panelinde (veya yerel loopback üzerinden) yönetici belirteci, sunucunun verdiği HttpOnly, SameSite=Strict cihaz çerezi ve bu sitenin localStorage alanında saklanan ayrı bir cihaz kanıtıyla değiştirilir. HTTPS çerezi Secure ve ana makineyle sınırlıdır. Çerez de kanıt da yönetici belirteci değildir; hiçbiri tek başına çalışmaz. Aynı ana makine adının portları çerezleri paylaşır; origin kapsamındaki kanıt, hatırlanan cihazı bu panelin origin’ine bağlar. Yine de ayrı bir ana makine adı tercih edin. Yönetici belirteci localStorage veya sessionStorage içine yazılmaz. Tarayıcı depolaması kullanılamıyorsa veya kanıt kaydedilemiyorsa Hatırla işlemi kullanılamadığını bildirir.
+**Bu cihazı hatırla** varsayılan olarak kapalıdır. Doğrudan HTTPS panelinde (veya yerel loopback üzerinden) yönetici belirteci, sunucunun verdiği HttpOnly, SameSite=Strict cihaz çerezi ve bu sitenin localStorage alanında saklanan ayrı bir cihaz kanıtıyla değiştirilir. HTTPS çerezi Secure ve ana makineyle sınırlıdır. Çerez de kanıt da yönetici belirteci değildir; hiçbiri tek başına çalışmaz. Aynı ana makine adının portları çerezleri paylaşır; origin kapsamındaki kanıt, hatırlanan cihazı bu panelin origin’ine bağlar. Yine de ayrı bir ana makine adı tercih edin. Yönetici belirteci localStorage veya sessionStorage içine yazılmaz. Tarayıcı depolaması kullanılamıyorsa veya kanıt kaydedilemiyorsa Hatırla işlemi kullanılamadığını bildirir. TLS'i sonlandıran bir ters proxy arkasındaki bağımsız bir panelde OpenCodex düz bir HTTP isteği görür ve bu adres için Hatırla'yı reddeder; oturum açma penceresi bunu açıklar ve seçeneği kapatır, Hatırla olmadan oturum açmak çalışmaya devam eder. Güvenilen bir Hub yönetim dinleyicisi istisnadır ve cihazları hatırlamaya devam edebilir. İstisna: bağımsız modda `dashboardTrustedProxy` ayarı, hatırlamayı bu tek proxy üzerinden de mümkün kılar (tam HTTPS origin, proxy IP adresleri ve güvenilen başlıklar belirtilir; ayrıntılar için kılavuzun İngilizce sürümündeki "Remember behind a reverse proxy" bölümüne bakın).
 
 Özel dashboard-sessions.json çerezin, kanıtın, yönetici kimlik bilgisinin ve tarayıcı kimliğinin özetlerini, sunucu origin’ini ve sabit 30 günlük süreyi saklar. Safari ana ekran uygulaması yeniden açılınca geçerli cihaz kaydı kısa bir oturumu yeniler. Hatırlanan oturumlar onay gerektiren işlemleri yetkilendiremez: GitHub yıldızı, sıfırlama kredisi tüketimi, istem katmanı düzenlemeleri, Meta Muse girişi, masaüstü uyumluluk değişiklikleri veya kota doğrulaması. Bunlar için yeni bir yerel veya eşleştirilmiş oturum kullanın. Relay, başka origin ve uzak düz HTTP Hatırla seçeneğini desteklemez. Süre dolması, tarayıcı kimliği değişmesi veya belirtecin değiştirilip sunucunun yeniden başlatılması yeniden giriş gerektirir.
 
@@ -57,6 +62,8 @@ zaman yukarı akışta yenilemeye zorlamaz.
 
 - Her etiket, bildirilen pencereler arasında tercih edileni gösterir: önce haftalık, sonra
   aylık, sonra 5 saatlik, sonra sağlayıcı adlı bir pencere veya ön ödemeli krediler.
+- Ön ödemeli kredilerin en az %90'ı kullanılmışsa ve tercih edilen normal pencere kritik
+  değilse etikette krediler gösterilir. Normal pencere de kritikse önceliğini korur.
 - Etiket %70 kullanımda amber rengine, %90 kullanımda kırmızıya döner.
 - Bildirilen tüm pencereleri sıfırlama saati ve okuma zamanıyla görmek için etiketin
   üzerine gelin veya klavyeyle odaklayın. Dokunmatik ekranda ilk dokunuş bu ayrıntıları gösterir.
@@ -80,6 +87,7 @@ zaman yukarı akışta yenilemeye zorlamaz.
 | **Başlangıç güvenliği** | Ayrı servis ve başlatıcı dolgu sağlığı artı tam onarım komutlarıyla enjekte edilen Codex yönlendirmesinin yeniden başlatmada hayatta kalıp kalmadığını gösterin. |
 | **Windows sistem tepsisi** | Tek tıklamayla proxy başlatma, durdurma, yeniden başlatma, kontrol paneli erişimi ve durum için kullanıcı başına bir oturum açma tepsisi yükleyin. Tepsi bir kontrolördür, bir proxy yeniden başlatma servisi değildir. |
 | **Codex otomatik başlatma** | Zaten kurulu bir Codex başlatıcı dolgusunun `ocx ensure` çalıştırmasına izin verin. Bu anahtar bir dolgu veya arka plan servisi kurmaz. |
+| **Telemetri** | **Proxy ayrıntıları** (`#proxy-telemetry`) altında **Anonim kullanım istatistiklerini paylaş** anahtarını değiştirin ve **JSON önizlemesi** görünümünü inceleyin. Onay açılır penceresi yalnızca **Devam** tıklandığında (`PUT /api/telemetry`) seçimi kaydeder; kapatılması hiçbir şey kaydetmez. Bkz. [Telemetri ve Gizlilik](/tr/guides/telemetry/). |
 | **Sağlayıcılar** | Sağlayıcıları ekleyin, düzenleyin, varsayılanı ayarlayın (yalnızca etkin sağlayıcılar), etkinleştirin/devre dışı bırakın ve kaldırın; desteklendiğinde OAuth hesap havuzlarını ve API anahtarı havuzlarını yönetin. Geçerli varsayılanı kaldırmak, bir tane varsa kalan ilk etkin sağlayıcıya geçer; aksi takdirde silme reddedilir ve geçerli varsayılan tutulur. Sağlayıcı Ayarları, eksik, yavaş veya aşırı büyük `/models` kataloglarına sahip uç noktalar için canlı model keşfini devre dışı bırakabilir. Claude (Anthropic) OAuth havuzları için oturum açmış her hesap kendi 5 saatlik ve haftalık hız sınırı çubuklarını gösterir (kullanım kimlik bilgisi başınadır); başarısız bir araştırma bilinen son çubukları tutar ve bir sonraki başarılı yenilemeye kadar bunları kullanılamaz olarak işaretler. |
 | **Sağlayıcı ekle** | Hesap girişi, API anahtarı hizmetleri, yerel sunucular veya özel bir uç nokta için kayıt defteri destekli önayarları arayın. |
 | **Codex Auth** | ChatGPT/Codex havuz hesapları ekleyin, sonraki oturum hesabını seçin, 5 saatlik / haftalık / 30 günlük kotaları yenileyin, kota otomatik geçişini etkinleştirin veya devre dışı bırakın, %1–100 eşiğini ayarlayın ve geçici arıza yük devretmesini yapılandırın. |
@@ -92,13 +100,23 @@ zaman yukarı akışta yenilemeye zorlamaz.
 
 Kullanım, panel, sağlayıcı çalışma alanı, sağlayıcı kataloğu ve API anahtarı görünümleri, okunabilir kayıt kalmasa bile dışlanan kayıtlar için uyarı gösterir. Sayılar, tarihler ve kullanım sıralamaları yalnızca okunabilir kayıtlara dayanır. Geçmiş eksikse en çok kullanılan model sırası kaydedilmez; başka bir sıra seçin veya yeniden denemeden önce geçmişi onarın.
 
+### Uygulamaya göre kullanım
+
+Usage, geçerli erişim kapsamı içinde **Tüm uygulamalar**, **Tüm cihazlar** ve **30 gün** seçili olarak açılır. Sayfa açıkken uygulama, cihaz veya zaman aralığını daraltabilirsiniz; yeniden açıldığında varsayılanlar geri gelir.
+
+Tüm uygulamalar seçiliyken Models ve Providers bölümlerinden sonra **Uygulamalar** dökümü görünür. Seçilen cihazlar ve dönem için uygulama başına toplam jetonlardaki payı, jeton sayısını, tahmini API liste fiyatı maliyetini, istek sayısını ve kullanımı ölçülen istek sayısını gösterir. Codex CLI, masaüstü ve IDE kullanımı Codex altında birleştirilir. İstemci bilgisi olmayan eski kayıtlar **Sınıflandırılmamış** olarak gösterilir; **Bilinmeyen** ve **Diğer** kategorilerinden ayrıdır. Tek bir uygulama seçildiğinde döküm gizlenir. Dökümü sağlamayan proxy için kullanılamadığı belirtilir; boş döküm, raporda uygulama kullanımı olmadığı anlamına gelir.
+
 ### İstek günlüklerini filtreleme
 
-Filtreler yüklü günlükte yüzey, yakalanan istekler, sağlayıcı, tam model adı, durum, zaman, hız ve konuşma kimliğini birleştirir. Seçenekler yedek denemeleri de içerir; model eşleşmesi büyük/küçük harfi ve dış boşlukları yok sayar, kısmi adları eşleştirmez. Kaybolan seçenek tüm kayıtlara döner.
+İstek ayrıntıları, genel proxy hatası metni yerine kaydedilmiş upstream hata nedenini öncelikli gösterir. Fiziksel gönderim sayısı geçerliyse her zaman gösterilir; eksik veya geçersiz muhasebe bilgisi sıfır yerine **Unavailable** olarak görüntülenir. **Retries**, yalnızca muhasebesi tamamen kesinleşmiş ve tutarlı tek bir deneme kaydı bulunduğunda ilk gönderimden sonraki ek gönderim sayısını gösterir. Birden fazla deneme, çözümlenmemiş veya tutarsız muhasebe ve kayıplı attempt normalizasyonu, uydurma yeniden deneme sayısı yerine retries alanını gizler. Bilinmeyen kalıcı nedenler, ham atıf olmadan durum tabanlı başlığa döner. **Upstream reason**, sınıflandırılmış bir sağlayıcı durumunu (örneğin hız sınırı, kota veya kredinin tükenmesi, bağlam penceresinin aşılması, desteklenmeyen konum, hesap doğrulaması gerekmesi veya modelin kullanılamaması), **Failure detail** ise takılma zaman aşımı veya bayt sınırı gibi proxy tarafından yazılan metni gösterir; yeni satırlar sağlayıcının kendi hata metnini saklamaz. Eski `usage.jsonl` dosyalarında hâlâ bulunabilir, ancak pano okurken bu metni atar.
+
+Logs, uygulama sekmeleri yerine tüm uygulamaların isteklerini birlikte gösterir ve her isteğe yalnızca simge içeren bir istemci rozeti ekler. Tanınan istemciler SVG logolarını, bilinmeyen veya diğer istemciler ise nötr bir soru işareti simgesini kullanır. Uygulama adları görünür metin olmadan ekran okuyuculara sunulmaya devam eder. İstemci bilgisinin olmaması, Codex veya istek hatası anlamına gelmez. Rozet, sağlayıcı ve protokolden bağımsız olarak istemci uygulamasını belirtir; uygulama filtresi değildir.
+
+Filtreler yüklü günlükte yakalanan istekler, sağlayıcı, tam model adı, durum, zaman, hız ve konuşma kimliğini birleştirir. Seçenekler yedek denemeleri de içerir; model eşleşmesi büyük/küçük harfi ve dış boşlukları yok sayar, kısmi adları eşleştirmez. Kaybolan seçenek tüm kayıtlara döner.
 
 Son 15 dakika, saat ve gün pencereleri Logs sekmesinde otomatik yenileme kapalıyken de 30 saniyede bir güncellenir. Hız, tam istek süresindeki saniyelik çıktı jetonudur: 15 altı, 15 dahil 50 altı, en az 50; hız filtresi açıkken ölçülemeyenler dışlanır. Başarı 2xx, hata 4xx/5xx anlamındadır.
 
-Sayaç eşleşen ve yüklü toplam sayıları gösterir; sıfırlama tüm satırları geri getirir. Eşleşme olmaması boş günlükten ayrılır. Yüzey seçimi oklar ve Home/End ile çalışır. Yüklü günlüğün dışındaki geçmiş sorgulanmaz.
+Sayaç eşleşen ve yüklü toplam sayıları gösterir; sıfırlama tüm satırları geri getirir. Eşleşme olmaması boş günlükten ayrılır. Yüklü günlüğün dışındaki geçmiş sorgulanmaz.
 
 ### Bir bölüme bağlantı verme
 

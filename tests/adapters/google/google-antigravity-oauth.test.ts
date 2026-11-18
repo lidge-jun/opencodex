@@ -6,8 +6,13 @@ import { join } from "node:path";
 import { getCredential, saveCredential } from "../../../src/oauth/store";
 import { ANTIGRAVITY_IDE_VERSION } from "../../../src/adapters/client-fingerprint";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
+import { OAuthCallbackFlow } from "../../../src/oauth/callback-server";
+import { publicOAuthAuthenticationErrorMessage, runLogin } from "../../../src/oauth";
+import { getDefaultConfig } from "../../../src/config";
+import { AntigravityProjectDiscoveryError, summarizeAntigravityDiscovery } from "../../../src/oauth/antigravity-discovery-diagnostics";
 
 const realFetch = globalThis.fetch;
+const secret = "PRIVATE_DISCOVERY_SENTINEL";
 const prevGoogleUa = process.env.GOOGLE_ANTIGRAVITY_USER_AGENT;
 beforeEach(() => { delete process.env.GOOGLE_ANTIGRAVITY_USER_AGENT; });
 afterEach(() => {
@@ -25,6 +30,187 @@ function routeFetch(handler: (url: string, init?: RequestInit) => Response | Pro
   }) as typeof fetch;
   return { calls };
 }
+
+// Exercise the real exchange and runLogin admission, without a browser/listening socket or writes.
+async function failedDiscoveryLogin(load: () => Response, onboard: () => Response): Promise<string> {
+  routeFetch(url => url.includes("oauth2.googleapis.com/token")
+    ? Response.json({ access_token: secret, refresh_token: secret })
+    : url.includes(":loadCodeAssist") ? load() : onboard());
+  const flow = spyOn(OAuthCallbackFlow.prototype, "login").mockImplementation(async function () {
+    await this.generateAuthUrl("state", "http://127.0.0.1/callback");
+    return this.exchangeToken("code", "state", "http://127.0.0.1/callback");
+  });
+  let writes = 0;
+  const rejectWrite = async (): Promise<never> => { writes++; throw new Error("unexpected persistence"); };
+  try {
+    let caught: unknown;
+    try {
+      await runLogin("google-antigravity", { signal: new AbortController().signal, onAuth() {} }, undefined, {
+        loadConfig: getDefaultConfig,
+        saveCredential: rejectWrite,
+        saveAccountCredential: rejectWrite,
+        saveConfig: rejectWrite,
+        mutatePersistedConfig: rejectWrite,
+      });
+    } catch (error) { caught = error; }
+    expect(caught).toBeInstanceOf(Error);
+    expect(writes).toBe(0);
+    const message = (caught as Error).message;
+    expect(message).toContain("could not discover a Cloud Code Assist project");
+    expect(message).not.toContain(secret);
+    return message;
+  } finally { flow.mockRestore(); }
+}
+
+describe("antigravity sanitized failed-login discovery diagnostics", () => {
+  test("typed error projects only sanitized observations even when message and cause are overwritten", () => {
+    const error = new AntigravityProjectDiscoveryError();
+    error.observe("loadCodeAssist", 403, undefined);
+    error.observe("onboardUser", 200, { done: false, [secret]: secret });
+    error.observe("onboardUser", 200, { done: true, error: { message: secret } });
+    const safeMessage = error.message;
+    error.message = secret;
+    error.cause = new Error(secret);
+    const projected = publicOAuthAuthenticationErrorMessage(error);
+    expect(projected).toBe(safeMessage);
+    expect(projected).toContain('"stage":"loadCodeAssist","status":403');
+    expect(projected).toContain('"outcome":"done-with-error"');
+    expect(projected).not.toContain('"outcome":"pending"');
+    expect(projected.match(/"stage":"onboardUser"/g)).toHaveLength(1);
+    expect(projected).not.toContain(secret);
+  });
+
+  test("pure summary contains only fixed fields, enums and status with private keys/values", () => {
+    const summary = summarizeAntigravityDiscovery("onboardUser", 200, {
+      [secret]: secret, done: true, error: { [secret]: secret }, name: secret,
+      cloudaicompanionProject: secret, projectId: { id: secret, [secret]: secret }, project: { [secret]: secret },
+      response: { [secret]: secret, cloudaicompanionProject: [secret], projectId: null },
+    });
+    expect(summary).not.toContain(secret);
+    expect(JSON.parse(summary)).toEqual({
+      stage: "onboardUser", status: 200, root: "object", outcome: "done-with-error", done: "true", error: "present",
+      projects: { cloudaicompanionProject: "string", projectId: "object-with-id", project: "object-without-id" },
+      response: { cloudaicompanionProject: "other", projectId: "other", project: "absent" },
+    });
+  });
+
+  for (const [label, load, outcome, root] of [
+    ["HTTP refusal", () => new Response(secret, { status: 403 }), "http-refusal", "unparseable"],
+    ["malformed JSON", () => new Response(secret), "unparseable", "unparseable"],
+    ["array root", () => Response.json([{ [secret]: secret }]), "invalid-root", "array"],
+    ["scalar root", () => Response.json(secret), "invalid-root", "other"],
+    ["null root", () => Response.json(null), "invalid-root", "other"],
+    ["object without project", () => Response.json({ [secret]: secret }), "no-project", "object"],
+  ] as const) {
+    test(`${label} has its own loadCodeAssist summary and cannot persist`, async () => {
+      const message = await failedDiscoveryLogin(load, () => new Response(secret, { status: 403 }));
+      expect(message).toContain(`"stage":"loadCodeAssist","status":${label === "HTTP refusal" ? 403 : 200}`);
+      expect(message).toContain(`"root":"${root}","outcome":"${outcome}"`);
+      expect(message).toContain('"stage":"onboardUser","status":403');
+    });
+  }
+
+  for (const [label, body, done, error] of [
+    ["done-with-error", { done: true, error: { [secret]: secret }, name: secret }, "true", "present"],
+    ["done-without-project", { done: true, response: { [secret]: secret } }, "true", "absent"],
+    ["pending", { done: false, name: secret }, "false", "absent"],
+    ["pending", { [secret]: secret }, "absent", "absent"],
+  ] as const) {
+    test(`onboardUser ${label} (done=${done}) stays sanitized and within budget`, async () => {
+      const realSetTimeout = globalThis.setTimeout;
+      let waits = 0;
+      const timer = spyOn(globalThis, "setTimeout").mockImplementation(((handler, delay, ...args) => {
+        if (delay === 2000) { waits++; return realSetTimeout(handler, 0, ...args); }
+        return realSetTimeout(handler, delay, ...args);
+      }) as typeof setTimeout);
+      let polls = 0;
+      try {
+        const message = await failedDiscoveryLogin(() => Response.json({}), () => { polls++; return Response.json(body); });
+        expect(message).toContain(`"root":"object","outcome":"${label}"`);
+        expect(message).toContain(`"done":"${done}","error":"${error}"`);
+        expect(polls).toBe(label === "pending" ? 5 : 1);
+        expect(waits).toBe(label === "pending" ? 5 : 0);
+        expect(message.match(/"stage":"onboardUser"/g)?.length).toBe(1);
+      } finally { timer.mockRestore(); }
+    });
+  }
+
+  test("only known project keys and value types appear, never arbitrary keys or values", async () => {
+    const message = await failedDiscoveryLogin(() => Response.json({
+      [secret]: secret, name: secret, done: secret, error: { message: secret },
+      cloudaicompanionProject: { [secret]: secret }, projectId: 42, project: [],
+    }), () => Response.json({ done: true, error: { [secret]: secret }, response: {
+      [secret]: secret, cloudaicompanionProject: "", projectId: { id: "", [secret]: secret }, project: null,
+    } }));
+    expect(message).toContain('"cloudaicompanionProject":"object-without-id","projectId":"other","project":"other"');
+    expect(message).toContain('"cloudaicompanionProject":"string","projectId":"object-with-id","project":"other"');
+    expect(message).not.toContain('"name"');
+    expect(message).not.toContain('"message"');
+  });
+
+  for (const [label, response, status, root, polls, waits] of [
+    ["malformed JSON", () => new Response(secret), 200, "unparseable", 5, 5],
+    ["array root", () => Response.json([{ [secret]: secret }]), 200, "array", 5, 5],
+    ["scalar root", () => Response.json(secret), 200, "other", 5, 5],
+    ["null root", () => Response.json(null), 200, "other", 1, 0],
+    ["hard refusal", () => new Response(secret, { status: 403 }), 403, "unparseable", 1, 0],
+    ["transient refusal", () => new Response(secret, { status: 503 }), 503, "unparseable", 5, 5],
+    ["rate limit", () => new Response(secret, { status: 429 }), 429, "unparseable", 5, 5],
+  ] as const) {
+    test(`onboardUser ${label} keeps its original poll budget`, async () => {
+      const realSetTimeout = globalThis.setTimeout;
+      let waitCount = 0;
+      const timer = spyOn(globalThis, "setTimeout").mockImplementation(((handler, delay, ...args) => {
+        if (delay === 2000) { waitCount++; return realSetTimeout(handler, 0, ...args); }
+        return realSetTimeout(handler, delay, ...args);
+      }) as typeof setTimeout);
+      let pollCount = 0;
+      try {
+        const message = await failedDiscoveryLogin(() => Response.json({}), () => { pollCount++; return response(); });
+        expect(message).toContain(`"stage":"onboardUser","status":${status},"root":"${root}"`);
+        expect(pollCount).toBe(polls);
+        expect(waitCount).toBe(waits);
+      } finally { timer.mockRestore(); }
+    });
+  }
+
+  test("a null onboarding body after a refused loadCodeAssist still reports both sanitized stages", async () => {
+    // Without a loadCodeAssist account the onboarding call has no catch, so a TypeError on `null.done`
+    // used to replace the discovery error with generic OAuth text.
+    const message = await failedDiscoveryLogin(() => new Response(secret, { status: 403 }), () => Response.json(null));
+    expect(message).toContain('"stage":"loadCodeAssist","status":403,"root":"unparseable","outcome":"http-refusal"');
+    expect(message).toContain('"stage":"onboardUser","status":200,"root":"other","outcome":"invalid-root"');
+  });
+
+  for (const key of ["cloudaicompanionProject", "projectId", "project"]) {
+    for (const value of ["accepted-project", { id: "accepted-project" }]) {
+      test(`accepted ${key} ${typeof value} still discovers without onboarding`, async () => {
+        const { calls } = routeFetch(() => Response.json({ [key]: value, [secret]: secret }));
+        expect(await discoverAntigravityProject("tok")).toBe("accepted-project");
+        expect(calls).toHaveLength(1);
+      });
+      test(`accepted onboardUser ${key} ${typeof value} still discovers`, async () => {
+        const { calls } = routeFetch(url => Response.json(url.includes(":loadCodeAssist") ? {} : {
+          done: true, response: { [key]: value, [secret]: secret },
+        }));
+        expect(await discoverAntigravityProject("tok")).toBe("accepted-project");
+        expect(calls).toHaveLength(2);
+      });
+    }
+  }
+
+  test("caller abort propagates unchanged during onboarding", async () => {
+    const ctrl = new AbortController();
+    const reason = new Error("caller cancelled");
+    const { calls } = routeFetch(url => {
+      if (url.includes(":loadCodeAssist")) return Response.json({});
+      ctrl.abort(reason);
+      throw reason;
+    });
+    await expect(discoverAntigravityProject("tok", ctrl.signal)).rejects.toBe(reason);
+    expect(calls).toHaveLength(2);
+  });
+});
 
 describe("antigravity project discovery", () => {
   test("loadCodeAssist returns the project (cloudaicompanionProject)", async () => {

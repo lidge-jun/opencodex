@@ -112,6 +112,17 @@ describe("web-search sidecar", () => {
       .toBe("bridge-only-policy");
   });
 
+  test("runtime availability changes only the search policy", () => {
+    expect(nativeMessagesDeclineReason(route(), searchBody, config(), { webSearchBackendAvailable: false })).toBeUndefined();
+    expect(nativeMessagesDeclineReason(route(), searchBody, config(), { webSearchBackendAvailable: true })).toBe("bridge-only-policy");
+    expect(nativeMessagesDeclineReason(route(), searchBody, config({ protocols: { rollout: { managedMessagesNative: false } } }),
+      { webSearchBackendAvailable: false })).toBe("rollout-disabled");
+    expect(nativeMessagesDeclineReason(route(), { ...searchBody, tool_choice: { type: "none" } }, config(),
+      { webSearchBackendAvailable: true })).toBeUndefined();
+    expect(nativeMessagesDeclineReason(route({ pinnedReasoningEffort: "high" }), searchBody, config(),
+      { webSearchBackendAvailable: false })).toBe("bridge-only-policy");
+  });
+
   test("a disabled sidecar or a tool choice that excludes search stays native", () => {
     const off = config({ claudeCode: { webSearchSidecar: { enabled: false } } } as Partial<OcxConfig>);
     expect(nativeMessagesDeclineReason(route(), searchBody, off)).toBeUndefined();

@@ -12,6 +12,7 @@ import {
 } from "../../src/server/lifecycle";
 import {
   blockNativeMainRecovery,
+  blockNativeMainStartupForUnownedServiceHome,
   completeNativeMainRecovery,
   initializeNativeMainStartupGate,
   nativeMainStartupGateSnapshot,
@@ -26,6 +27,63 @@ afterEach(() => {
 });
 
 describe("native main profile management API", () => {
+  test("admission reads only the startup gate and never reaches the profile manager", async () => {
+    const fence = blockNativeMainStartupForUnownedServiceHome("foreign-ownership");
+    // Every manager access throws: the route must not construct, sweep or read profiles.
+    const manager = new Proxy({}, { get: () => { throw new Error("admission must not touch the profile manager"); } }) as NativeProfileManager;
+    const request = new Request("http://localhost/api/native-main-profiles/admission");
+    try {
+      const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, { manager });
+      expect(response?.status).toBe(200);
+      expect(await response?.json()).toEqual({ admissionStatus: "blocked", admissionBlockReason: "foreign-ownership" });
+    } finally {
+      await fence.release();
+    }
+    const released = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, { manager });
+    const body = await released?.json() as Record<string, unknown>;
+    expect(Object.keys(body).every(key => key === "admissionStatus" || key === "admissionBlockReason")).toBe(true);
+  });
+
+  test("profile doctor reports when native-main admission is fenced", async () => {
+    const fence = blockNativeMainStartupForUnownedServiceHome("foreign-ownership");
+    const manager = { doctor: async () => ({ recoveryPending: false }) } as unknown as NativeProfileManager;
+    const request = new Request("http://localhost/api/native-main-profiles/doctor");
+    try {
+      const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, { manager });
+      expect(response?.status).toBe(200);
+      expect(await response?.json()).toMatchObject({
+        recoveryPending: false,
+        admissionStatus: "blocked",
+        admissionBlockReason: "foreign-ownership",
+      });
+    } finally {
+      await fence.release();
+    }
+  });
+
+  test("the doctor owner-guard 503 still reports the startup gate", async () => {
+    const fence = blockNativeMainStartupForUnownedServiceHome("foreign-ownership");
+    const context = { homeId: "home-owner-busy", codexHome: "\\\\server\\share" };
+    // Model a live server whose owner lease is unavailable on an unsupported filesystem.
+    // The real `assertNativeMainOwner` then throws its own 503 BEFORE doctor() runs, and the
+    // endpoint must preserve that error plus its admission fields.
+    const { retainNativeMainOwner } = await import("../../src/codex/native-main-owner");
+    const owner = retainNativeMainOwner(context as never, { retryMs: 10, platform: "win32" });
+    const manager = { context, doctor: async () => { throw new Error("doctor must not run under a busy owner"); } } as unknown as NativeProfileManager;
+    const request = new Request("http://localhost/api/native-main-profiles/doctor");
+    try {
+      const response = await handleNativeProfileAPI(request, new URL(request.url), {} as OcxConfig, { manager });
+      expect(response?.status).toBe(503);
+      const body = await response?.json() as Record<string, unknown>;
+      expect(body?.code).toBe("NATIVE_MAIN_OWNER_UNAVAILABLE");
+      expect(body?.admissionStatus).toBe("blocked");
+      expect(body?.admissionBlockReason).toBe("foreign-ownership");
+    } finally {
+      await owner.release();
+      await fence.release();
+    }
+  });
+
   test("long Direct/non-main work does not block switch while new main selection is fenced", async () => {
     const longPoolTurn = tryAdmitTurn();
     expect(longPoolTurn).not.toBeNull();

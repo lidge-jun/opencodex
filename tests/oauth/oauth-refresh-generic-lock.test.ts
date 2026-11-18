@@ -15,7 +15,7 @@ import {
 } from "../../src/oauth";
 import type { OAuthCredentials } from "../../src/oauth/types";
 import { ChatGptTokenError, ChatGptTokenRequestError, refreshChatGPTToken } from "../../src/oauth/chatgpt";
-import { getAccountCredential, getAccountSet, saveCredential } from "../../src/oauth/store";
+import { createOAuthRefreshIntentLock, getAccountCredential, getAccountSet, markAccountNeedsReauth, saveCredential } from "../../src/oauth/store";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { getActiveTurnCount, tryAdmitTurn } from "../../src/server/lifecycle";
 import { handleResponses } from "../../src/server/responses";
@@ -84,6 +84,43 @@ describe("generic OAuth refresh lock + CAS", () => {
     expect(results[0]).toBe("kimi-fresh");
     expect(tracker.calls()).toBe(1);
     expect(getAccountCredential("kimi", accountId)?.refresh).toBe("rotated-refresh");
+  });
+
+  test("a needsReauth mark while waiting for the lock rejects usable callers but not an unrestricted joiner", async () => {
+    const accountId = await seedExpiredKimi();
+    const tracker = stubKimiRefresh(async () => ({ access: "kimi-fresh", refresh: "rotated-refresh", expires: Date.now() + 3_600_000 }));
+    const guard = await createOAuthRefreshIntentLock("kimi", accountId).acquire();
+    const usable = getValidAccessSnapshotForAccount("kimi", accountId, { requireUsableAccount: true });
+    const unrestricted = getValidAccessTokenForAccount("kimi", accountId);
+    await markAccountNeedsReauth("kimi", accountId, true);
+    guard.release();
+    await expect(usable).rejects.toBeInstanceOf(OAuthLoginRequiredError);
+    // The unrestricted joiner retries as its own owner; a successful refresh clears the mark.
+    await expect(unrestricted).resolves.toBe("kimi-fresh");
+    expect(tracker.calls()).toBe(1);
+    expect(getAccountSet("kimi")?.accounts.find(row => row.id === accountId)?.needsReauth).not.toBe(true);
+  });
+
+  test("a needsReauth mark during a usable-only provider refresh survives the rotation and rejects the caller", async () => {
+    const accountId = await seedExpiredKimi();
+    let entered!: () => void;
+    const inFlight = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    stubKimiRefresh(async () => {
+      entered();
+      await held;
+      return { access: "kimi-fresh", refresh: "rotated-refresh", expires: Date.now() + 3_600_000 };
+    });
+    const usable = getValidAccessSnapshotForAccount("kimi", accountId, { requireUsableAccount: true });
+    await inFlight;
+    await markAccountNeedsReauth("kimi", accountId, true);
+    release();
+    await expect(usable).rejects.toBeInstanceOf(OAuthLoginRequiredError);
+    const row = getAccountSet("kimi")?.accounts.find(candidate => candidate.id === accountId);
+    expect(row?.needsReauth).toBe(true);
+    // The rotated refresh token is still persisted; only the mark is kept.
+    expect(row?.credential.refresh).toBe("rotated-refresh");
   });
 
   test("failed refresh clears single-flight so a later call can retry", async () => {

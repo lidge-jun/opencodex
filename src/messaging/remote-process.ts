@@ -2,9 +2,14 @@ import { linkSshSpawnEnv } from "../link/ssh-runner";
 import { MessageBudget } from "./budget";
 import { RemoteCapacity, remoteError, REMOTE_LIMITS } from "./remote-contract";
 import { LocalMessagingError } from "./types";
+import { remoteForwardFailure } from "./remote-forward-failure";
 
 export interface RemoteHelper {
   readonly pid: number; readonly exited: Promise<number>; readonly output: Promise<string>;
+  readonly forwardReady: Promise<void>;
+  readonly forwardFailed?: boolean;
+  /** After cleanup: intrinsic I/O or pre-cleanup exit failure, excluding cleanup-induced exits. */
+  readonly setupFailure?: Error;
   close(): Promise<void>;
 }
 /** Narrow subprocess seam for offline lifecycle tests; production always uses owned Bun children. */
@@ -24,13 +29,21 @@ export function spawnRemoteHelper(argv: readonly string[], capacity: RemoteCapac
   stdin?: string, env = linkSshSpawnEnv(), options: RemoteHelperOptions = {}): RemoteHelper {
   if (signal?.aborted) throw remoteError("cancelled", "Messaging helper was cancelled before spawn.");
   const release = capacity.reserveHelper(options.purpose ?? "persistent");
+  let ready!: () => void, notReady!: (reason: unknown) => void;
+  const forwardReady = new Promise<void>((resolve, reject) => { ready = resolve; notReady = reject; });
+  void forwardReady.catch(() => {});
+  const forwardFailure = remoteForwardFailure(argv, ready);
+  if (!forwardFailure.enabled) ready();
+  // Command-line options are first-value-wins; only owned forwards request bounded token inspection.
+  const spawnArgv = forwardFailure.enabled ? [argv[0]!, "-o", "LogLevel=DEBUG1", ...argv.slice(1)] : [...argv];
   let child: RemoteHelperProcess;
-  try { child = options.spawn ? options.spawn(argv, env)
-    : Bun.spawn([...argv], { stdin: "pipe", stdout: "pipe", stderr: "pipe", detached: true, env }); }
+  try { child = options.spawn ? options.spawn(spawnArgv, env)
+    : Bun.spawn(spawnArgv, { stdin: "pipe", stdout: "pipe", stderr: "pipe", detached: true, env }); }
   catch { release(); throw remoteError("ssh_unavailable", "The messaging SSH helper could not start."); }
   const readers = [child.stdout.getReader(), child.stderr.getReader()];
   let closing: Promise<void> | undefined;
   let failure: Error | undefined;
+  let interrupted = false;
   const cancelledPipes = [false, false];
   const pipeEnds: (() => void)[] = [];
   const naturalPipes = readers.map(() => new Promise<void>(resolve => { pipeEnds.push(resolve); }));
@@ -45,6 +58,7 @@ export function spawnRemoteHelper(argv: readonly string[], capacity: RemoteCapac
   };
   const close = (): Promise<void> => closing ??= (async () => {
     signal?.removeEventListener("abort", abort);
+    interrupted = child.exitCode === null;
     signalGroup("SIGTERM");
     const force = setTimeout(() => signalGroup("SIGKILL"), 500);
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -65,6 +79,7 @@ export function spawnRemoteHelper(argv: readonly string[], capacity: RemoteCapac
         cancelledPipes[index] = true; void reader.cancel().catch(() => {});
       }
       stopOutput(cleanupFailure ?? failure ?? remoteError("ssh_incomplete", "Messaging helper output capture was stopped."));
+      notReady(cleanupFailure ?? failure ?? remoteError(child.exitCode !== null && child.exitCode !== 0 && forwardFailure.failed ? "forward_port_lost" : "ssh_failed", "Messaging SSH forward was not confirmed."));
       // Cancellation cannot prove natural EOF; unresolved ownership keeps its helper capacity charged.
     }
   })();
@@ -78,7 +93,8 @@ export function spawnRemoteHelper(argv: readonly string[], capacity: RemoteCapac
       for (;;) {
         const next = await readers[index]!.read();
         if (next.done) { if (!cancelledPipes[index]) pipeEnds[index]!(); break; }
-        if (index === 1 || discarding) continue; // stderr is never retained or returned.
+        if (index === 1) { forwardFailure.write(next.value); continue; } // No diagnostic bytes are retained or returned.
+        if (discarding) continue;
         try {
           bytes += next.value.byteLength;
           if (bytes > 64 * 1024) throw remoteError("ssh_output_limit", "Messaging helper output exceeded its limit.");
@@ -107,8 +123,18 @@ export function spawnRemoteHelper(argv: readonly string[], capacity: RemoteCapac
     if (failure) throw failure; return out;
   })]);
   void output.catch(() => {});
+  void output.then(async () => {
+    const code = await child.exited;
+    if (!forwardFailure.ready) notReady(remoteError(code !== 0 && forwardFailure.failed ? "forward_port_lost" : "ssh_failed", "Messaging SSH forward was not confirmed."));
+  }, notReady).catch(notReady);
   void child.exited.then(() => { signal?.removeEventListener("abort", abort); }).catch(() => {});
-  return { pid: child.pid, exited: child.exited, output, close };
+  return { pid: child.pid, exited: child.exited, output, forwardReady, get forwardFailed() { return forwardFailure.failed; },
+    get setupFailure() {
+      if (failure) return failure;
+      if (!interrupted && child.exitCode !== null && (child.exitCode !== 0 || !forwardFailure.ready)) {
+        return remoteError(child.exitCode !== 0 && forwardFailure.failed ? "forward_port_lost" : "ssh_failed", "Messaging SSH forward setup failed.");
+      }
+    }, close };
 }
 
 /** One bounded batch covers helper startup, stdin, exit and output; errors never include raw output. */

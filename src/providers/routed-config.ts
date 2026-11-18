@@ -10,6 +10,7 @@ import type { OcxProviderConfig } from "../types";
 import { providerUsesKeyAuthOverride, resolveProviderApiKey } from "./key-store";
 import { GCP_CREDENTIAL_MARKER_PREFIX } from "../lib/gcp-adc";
 import { captureProviderApiKeySelection } from "./api-key-selection-capture";
+import { captureVertexEnvironmentKey } from "./vertex-environment-authority";
 import { assertProviderDestinationAllowed } from "../lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "../lib/redact";
 import { PROVIDER_REGISTRY, registryEntryForProviderDestination } from "./registry";
@@ -22,6 +23,7 @@ import {
 } from "./static-model-discovery";
 import { resolveModelPolicy } from "./resolved-model-policy";
 import { mapFill, nestedMapFill, stableUnion } from "./resolved-model-policy-merge";
+import { withAnthropicModelOutputCaps } from "./anthropic-output-caps";
 
 /** Same endpoint modulo surrounding space and trailing slashes — matches `matchBaseUrlChoice`. */
 function isSameEndpoint(a: string, b: string): boolean {
@@ -110,9 +112,36 @@ function usableResolvedApiKey(apiKey: string | undefined): string | undefined {
   return typeof resolved === "string" && resolved.trim().length > 0 ? resolved : undefined;
 }
 
+/** Bind the environment values used by Vertex to the routed request for send-time checks. */
+function snapshotVertexEnvironment(provider: OcxProviderConfig): OcxProviderConfig {
+  if (provider.adapter !== "google" || provider.googleMode !== "vertex") return provider;
+  const reference = provider._apiKeyAttempt?.reference;
+  if (reference && (reference.startsWith("keychain:") || reference.startsWith("$"))
+    && (!provider.apiKey?.trim() || provider.apiKey === "N/A" || provider.apiKey.startsWith("<") || reference === "keychain:")) {
+    throw new Error("Vertex API key reference could not be resolved");
+  }
+  const marker = provider.apiKey?.startsWith(GCP_CREDENTIAL_MARKER_PREFIX) === true;
+  const configuredKey = provider.apiKey && !provider.apiKey.startsWith("<") && provider.apiKey !== "N/A" ? provider.apiKey : undefined;
+  captureVertexEnvironmentKey(provider._apiKeyAttempt, provider);
+  if (!marker && (configuredKey || process.env.GOOGLE_CLOUD_API_KEY)) return provider;
+  return {
+    ...provider,
+    project: provider.project?.trim() ? provider.project : process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT,
+    location: provider.location || process.env.GOOGLE_CLOUD_LOCATION,
+  };
+}
+
+/** Resolve registry defaults, destination capability maps, and credential snapshots for a provider row. */
 export function routedProviderConfig(providerName: string, provider: OcxProviderConfig): OcxProviderConfig {
   provider = { ...provider, _apiKeyAttempt: provider._apiKeyAttempt ?? captureProviderApiKeySelection(provider) };
   const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
+  if (provider.authMode === "forward" && (
+    (provider.adapter === "google" && provider.googleMode === "vertex")
+    || (registryEntry?.adapter === "google" && (provider.googleMode ?? registryEntry.googleMode) === "vertex"
+      && providerMatchesRegistryTransportWithStaticGuards(providerName, provider))
+  )) {
+    throw new Error("Vertex does not support forward authentication");
+  }
   if (!registryEntry || !providerMatchesRegistryTransportWithStaticGuards(providerName, provider)) {
     assertProviderDestinationAllowed(providerName, provider);
     // A row whose adapter no longer matches its registry entry still reaches the Responses
@@ -124,10 +153,13 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     const destination = registryEntryForProviderDestination(provider);
     const inputModalities = provider.inputModalities === undefined
       ? registryInputModalitiesForDestination(providerName, provider) : undefined;
-    return {
+    return withAnthropicModelOutputCaps(snapshotVertexEnvironment({
       ...provider,
       ...(inputModalities ? { inputModalities } : {}),
       apiKey: usableResolvedApiKey(provider.apiKey),
+      ...(destination?.modelReasoningEfforts ? {
+        modelReasoningEfforts: mapFill(destination.modelReasoningEfforts, provider.modelReasoningEfforts)[0],
+      } : {}),
       ...(destination?.modelDefaultReasoningEfforts ? {
         modelDefaultReasoningEfforts: mapFill(destination.modelDefaultReasoningEfforts, provider.modelDefaultReasoningEfforts)[0],
       } : {}),
@@ -140,7 +172,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
       ...(provider.dropResponsesReasoningItems === undefined && destination?.dropResponsesReasoningItems !== undefined
         ? { dropResponsesReasoningItems: destination.dropResponsesReasoningItems }
         : {}),
-    };
+    }));
   }
   const resolvedApiKey = usableResolvedApiKey(provider.apiKey);
   const staticModelCatalog = !providerSupportsLiveModelDiscovery(providerName, provider);
@@ -324,6 +356,8 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(provider.foldDeveloperRoleToSystem === undefined && registryEntry.foldDeveloperRoleToSystem !== undefined
       ? { foldDeveloperRoleToSystem: registryEntry.foldDeveloperRoleToSystem }
       : {}),
+    ...(provider.singleLeadingSystemMessage === undefined && registryEntry.singleLeadingSystemMessage !== undefined
+      ? { singleLeadingSystemMessage: registryEntry.singleLeadingSystemMessage } : {}),
     ...(provider.reasoningWireFormat === undefined && registryEntry.reasoningWireFormat !== undefined
       ? { reasoningWireFormat: registryEntry.reasoningWireFormat }
       : {}),
@@ -358,5 +392,5 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(thinkingBudgetModels ? { thinkingBudgetModels } : {}),
   };
   applyDirectReasoningEffortContracts(registryEntry, resolved, provider);
-  return resolved;
+  return withAnthropicModelOutputCaps(snapshotVertexEnvironment(resolved));
 }

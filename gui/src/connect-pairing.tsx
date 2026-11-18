@@ -3,6 +3,7 @@ import type { ApiTarget } from "./api-targets";
 import { useT } from "./i18n/shared";
 import { PairingError, submitConnectPairing } from "./connect-pairing-transport";
 import { useCopyFeedback } from "./components/use-copy-feedback";
+import { Button } from "@/components/ui-v2/button";
 
 export function ConnectPairingForm({
   target,
@@ -82,27 +83,35 @@ export function ConnectPairingForm({
     }
   };
 
-  return <section className="card connect-pairing" aria-labelledby="connect-pairing-title">
-    <h2 id="connect-pairing-title">{t(local ? "connection.pairing.code" : "connection.pairing.title")}</h2>
-    <p>{!local && <>{t("connection.pairing.hub")}: </>}<code>{target.serverOrigin}</code></p>
-    {!local && <p>{t("connection.pairing.getCode")}</p>}
-    <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}><code>{command}</code></pre>
-    <button type="button" className="btn btn-ghost" onClick={() => copyFeedback.copy(command, command)}>
-      {t(copied === "copied" ? "startup.copied" : "startup.copy")}
-    </button>
-    {copied === "unavailable" && <p role="status">{t("prov.linkCopyUnavailable")}</p>}
-    {!local && <p>{t("connection.pairing.askOperator")}</p>}
-    <p>{t("connection.pairing.notApiKey")}</p>
-    <form onSubmit={submit} className="api-form-row">
-      <label htmlFor="connect-pairing-code" className="field-label">{t("connection.pairing.code")}</label>
-      <input ref={codeInput} id="connect-pairing-code" name="pairingCode" value={grant}
-        onChange={(event: ChangeEvent<HTMLInputElement>) => setGrant(event.currentTarget.value)}
-        autoComplete="off" spellCheck={false} disabled={busy || validationPending} className="input mono"
-        aria-invalid={Boolean(error) || undefined} aria-describedby={error ? "connect-pairing-error" : undefined} />
-      <button type="submit" className="btn btn-primary" disabled={busy || (!validationPending && !grant.trim())}>
-        {t(busy ? "connection.pairing.submitting" : validationPending ? "connection.pairing.retryValidation" : "connection.pairing.submit")}
-      </button>
-      {error && <p id="connect-pairing-error" className="alert alert-err" role="alert">
+  // A v2 form card (React Bits `app-dialog-3` form framing): where to get the code, the code.
+  return <section className="connect-pairing flex min-w-0 flex-col rounded-[12px] bg-surface p-1 font-sans text-fg ring-1 ring-line" aria-labelledby="connect-pairing-title">
+    <div className="flex flex-col gap-1 px-4 pt-3 pb-3">
+      <h2 id="connect-pairing-title" className="m-0 text-[15px] leading-6 font-semibold tracking-[-0.01em]">{t(local ? "connection.pairing.code" : "connection.pairing.title")}</h2>
+      <p className="m-0 text-[13px] leading-5 text-fg-muted">{!local && <>{t("connection.pairing.hub")}: </>}<code className="font-mono text-fg">{target.serverOrigin}</code></p>
+    </div>
+    <div className="flex min-w-0 flex-col gap-3 rounded-[8px] bg-bg p-4 text-[13px] leading-5 text-fg-muted ring-1 ring-line">
+      {!local && <p className="m-0">{t("connection.pairing.getCode")}</p>}
+      <div className="flex min-w-0 items-start gap-1 rounded-[8px] bg-surface py-1 pr-1 pl-3 ring-1 ring-line">
+        <pre className="m-0 min-w-0 flex-1 py-1.5 font-mono text-[12.5px] leading-[18px] whitespace-pre-wrap text-fg [overflow-wrap:anywhere]"><code>{command}</code></pre>
+        <Button variant="ghost" size="sm" onClick={() => copyFeedback.copy(command, command)}>
+          {t(copied === "copied" ? "startup.copied" : "startup.copy")}
+        </Button>
+      </div>
+      {copied === "unavailable" && <p className="m-0" role="status">{t("prov.linkCopyUnavailable")}</p>}
+      {!local && <p className="m-0">{t("connection.pairing.askOperator")}</p>}
+      <p className="m-0">{t("connection.pairing.notApiKey")}</p>
+      <form onSubmit={submit} className="flex min-w-0 flex-col gap-1.5">
+        <label htmlFor="connect-pairing-code" className="text-[13px] font-semibold text-fg">{t("connection.pairing.code")}</label>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <input ref={codeInput} id="connect-pairing-code" name="pairingCode" value={grant}
+            onChange={(event: ChangeEvent<HTMLInputElement>) => setGrant(event.currentTarget.value)}
+            autoComplete="off" spellCheck={false} disabled={busy || validationPending} className="input mono min-w-0 flex-1 font-mono"
+            aria-invalid={Boolean(error) || undefined} aria-describedby={error ? "connect-pairing-error" : undefined} />
+          <Button type="submit" variant="primary" disabled={busy || (!validationPending && !grant.trim())}>
+            {t(busy ? "connection.pairing.submitting" : validationPending ? "connection.pairing.retryValidation" : "connection.pairing.submit")}
+          </Button>
+        </div>
+        {error && <p id="connect-pairing-error" className="m-0 text-[13px] text-danger" role="alert">
         {t(validationPending ? "connection.pairing.validationPending"
           : error === "invalid-code" ? "connection.pairing.notApiKey"
           : error === "unreachable" ? "connection.pairing.networkError"
@@ -110,9 +119,11 @@ export function ConnectPairingForm({
           : error === "origin-denied" ? "connection.pairing.originDenied"
           : error === "cloudflare-challenge" ? "connection.pairing.cloudflareChallenge"
           : error === "remote-link-unauthorized" || error === "remote-link-forbidden" ? "connection.pairing.sessionNotAuthorized"
+          : error === "client-state-changed" ? "connection.clientStateChanged"
           : error === "invalid-response" ? "connection.pairing.responseError" : "connection.pairing.error")}
-      </p>}
-    </form>
-    {target.transport === "relay" && <p className="text-muted">{t("connection.pairing.relayWarning")}</p>}
+        </p>}
+      </form>
+      {target.transport === "relay" && <p className="m-0 text-fg-subtle">{t("connection.pairing.relayWarning")}</p>}
+    </div>
   </section>;
 }

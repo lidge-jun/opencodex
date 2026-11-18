@@ -610,6 +610,7 @@ describe("headless GUI parity CLI", () => {
       ["/api/protocols", "ocx api protocols/explain/policy"],
       ["/api/settings", "ocx system"],
       ["/api/native-reasoning-retention", "(none — dedicated live CLI deferred; local policy via ocx config)"],
+      ["/api/workflow-budget/settings", "(none — dedicated live CLI deferred; local ceilings via ocx config)"],
       // Routing Intelligence (RI-04..RI-10): profiles + dry-run are mirrored by
       // `ocx route policy`. Analytics is GUI-first for now; the same request
       // history remains available through observe/index tooling.
@@ -635,6 +636,9 @@ describe("headless GUI parity CLI", () => {
       ["/api/subagent", "ocx agent"],
       ["/api/sync", "ocx system sync"],
       ["/api/system", "ocx observe/system"],
+      // Telemetry: status, enable and disable are `ocx telemetry`. The GUI's consent
+      // write (`PUT /api/telemetry`) is dashboard-session-only by design (an agent must not answer).
+      ["/api/telemetry", "ocx telemetry"],
       ["/api/update", "ocx system update"],
       ["/api/usage", "ocx observe usage"],
       ["/api/v2", "ocx v2/agent"],
@@ -1077,7 +1081,7 @@ describe("headless GUI parity CLI", () => {
         { role: "vague", model: null, status: "unsized", reason: "no JSON" },
       ],
     };
-    const runtime = fakeRuntime(req => req.method === "POST" ? proposals : { ok: true });
+    const runtime = fakeRuntime(req => req.method === "POST" ? proposals : { ok: true, batch: "suggest-batch" });
     const logSpy = spyOn(console, "log").mockImplementation(() => {});
     let output = "";
     try {
@@ -1093,7 +1097,7 @@ describe("headless GUI parity CLI", () => {
       { path: "/api/codex-agent-roles/auto-assign", method: "POST", body: { model: "a/sizer" } },
       { path: "/api/codex-agent-roles/auto-assign", method: "POST", body: {} },
       { path: "/api/codex-agent-roles/explorer", method: "PUT", body: { model: "a/small", effort: "low" } },
-      { path: "/api/codex-agent-roles/worker", method: "PUT", body: { model: "a/mid" } },
+      { path: "/api/codex-agent-roles/worker", method: "PUT", body: { model: "a/mid", batch: "suggest-batch" } },
     ]);
     expect(output).not.toMatch(/[\x07\x1b]/);
     expect(output).toContain("Use \\x1b]52;c;cG9pc29uZWQ=\\x07 carefully.");
@@ -1564,6 +1568,23 @@ describe("#2565 ocx provider quota renders bars, not a count", () => {
     expect(line).toContain("monthly 0.69%");
     expect(line).toContain("First-party models 0.77%");
     expect(line).toContain("API usage 0.19%");
+  });
+
+  test("a display-only window prints after routed windows with its weekly share, marked not in effect", () => {
+    const line = providerQuotaLine("anthropic", report("anthropic", {
+      weeklyPercent: 91,
+      customWindows: [{ label: "Opus", percent: 10 }],
+      displayWindows: [{ label: "Fable", percent: 4, weeklyAllowancePercent: 50 }, { label: "Opus", percent: 99 }],
+    }) as never);
+    // A routed row with the same label wins, as on the dashboard.
+    expect(line).toBe("anthropic weekly 91% Opus 10% Fable 4% (up to 50% of weekly; not in effect)");
+  });
+
+  test("a weekly share outside (0, 100] is not printed", () => {
+    const line = providerQuotaLine("anthropic", report("anthropic", {
+      displayWindows: [{ label: "Fable", percent: 4, weeklyAllowancePercent: 1e9 }],
+    }) as never);
+    expect(line).toBe("anthropic Fable 4% (not in effect)");
   });
 
   test("a report with no windows still names its provider", () => {

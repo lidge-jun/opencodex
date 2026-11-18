@@ -1,3 +1,4 @@
+import { markProxyError } from "../../lib/client-error-body";
 import { formatErrorResponse } from "../../bridge";
 import { SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE } from "../../lib/errors";
 import { markLocalRequestLogRefusal, type RequestLogContext } from "../request-log";
@@ -29,5 +30,5 @@ export function mapSpendLedgerStorageError(error: unknown, logCtx?: StorageRefus
 
 export function spendLedgerStorageErrorResponse(error: unknown, logCtx?: StorageRefusalLog): Response | undefined {
   const refusal = mapSpendLedgerStorageError(error, logCtx);
-  return refusal && formatErrorResponse(refusal.status, refusal.code, refusal.message);
+  return refusal && markProxyError(formatErrorResponse(refusal.status, refusal.code, refusal.message));
 }

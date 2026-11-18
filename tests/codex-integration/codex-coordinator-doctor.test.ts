@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { samePath } from "../helpers/same-path";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -78,6 +80,23 @@ test("doctor classifies and explicitly backs up a stable zero-byte coordinator",
   expect(existsSync(coordinatorPath)).toBe(false);
   expect(existsSync(recovered.backupPath)).toBe(true);
   rmSync(recovered.backupPath, { force: true });
+});
+
+test("doctor detects adjacent large file identities", () => {
+  privateFile(coordinatorPath);
+  const realLstat = fs.lstatSync;
+  const id = 2n ** 53n;
+  let observations = 0;
+  const spy = spyOn(fs, "lstatSync").mockImplementation(((target, options) => {
+    const value = options?.bigint ? realLstat(target, { bigint: true }) : realLstat(target);
+    if (!samePath(target, coordinatorPath)) return value;
+    const ino = id + BigInt(observations++ > 0);
+    return Object.assign(Object.create(Object.getPrototypeOf(value)), value, { ino: options?.bigint ? ino : Number(ino) });
+  }) as typeof fs.lstatSync);
+  try {
+    expect(Number(id)).toBe(Number(id + 1n));
+    expect(inspectCodexCoordinator().kind).toBe("changed");
+  } finally { spy.mockRestore(); }
 });
 
 test("doctor distinguishes unversioned, rowless, and authoritative coordinators", () => {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { bootstrapApiSession, configureApiTargets, fetchAudioUpload, installApiAuthFetch, installApiSessionFromHtml, resetApiAuthFetchForTests } from "../src/api";
+import { bootstrapApiSession, configureApiTargets, fetchAudioUpload, fetchDesktopSession, installApiAuthFetch, installApiSessionFromHtml, resetApiAuthFetchForTests } from "../src/api";
 import { targetsFromMachineStatus, type MachineStatusV1 } from "../src/api-targets";
 
 const LEGACY_TOKEN_KEY = "opencodex-api-token";
@@ -52,6 +52,16 @@ async function installMockAuthFetch(handler: typeof fetch): Promise<void> {
   // installApiAuthFetch replaces window.fetch — keep globalThis in sync for bare `fetch()`.
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: window.fetch });
 }
+
+test("Desktop POST receives a single 401 without bootstrap, admin prompt or replay", async () => {
+  const requests: string[] = []; let prompts = 0;
+  resetApiAuthFetchForTests(async () => { prompts++; return "fixture-admin"; });
+  await installMockAuthFetch((async input => { requests.push(String(input)); return Response.json({ error: "unauthorized" }, { status: 401 }); }) as typeof fetch);
+  const response = await fetchDesktopSession("/api/codex/desktop-compatibility/runtime", { method: "POST", body: "{}" });
+  expect(response.status).toBe(401); expect(requests).toEqual(["/api/codex/desktop-compatibility/runtime"]); expect(prompts).toBe(0);
+  await expect(fetchDesktopSession("http://other.example.test/api/codex/desktop-compatibility/runtime", { method: "POST" })).rejects.toThrow("desktop_target_changed");
+  expect(requests).toHaveLength(1);
+});
 
 /**
  * Declare a bind that requires a typed credential, as `serveGuiFile` does from
@@ -628,4 +638,34 @@ test("a mismatched bootstrap response/server origin clears every in-memory sessi
   expect((await fetch("https://hub.example.test/api/config")).status).toBe(401);
   expect(seenKeys).toEqual(["ocx_session_stale", null]);
   expect(sessionStorage.getItem(LEGACY_TOKEN_KEY)).toBeNull();
+});
+
+test("only successful key and link inventory mutations emit a source inventory event", async () => {
+  let events = 0;
+  window.addEventListener("opencodex:usage-source-inventory-changed", () => { events++; });
+  await installMockAuthFetch((async (input: RequestInfo | URL) => {
+    const url = String(input);
+    return new Response(null, { status: url.includes("fail=1") ? 403 : 200 });
+  }) as typeof fetch);
+  for (const [path, method] of [["/api/keys", "POST"], ["/api/keys/rotate/commit", "POST"], ["/api/link/apply", "POST"], ["/api/link/lnk_a", "DELETE"]]) {
+    await fetch(path!, { method });
+  }
+  expect(events).toBe(4);
+  await fetch("/api/keys?fail=1", { method: "DELETE" });
+  await fetch("/api/keys/reveal", { method: "POST" });
+  await fetch("/api/link/probe", { method: "POST" });
+  await fetch("/api/keys", { method: "GET" });
+  expect(events).toBe(4);
+});
+
+test("a missing event constructor does not turn a successful key mutation into failure", async () => {
+  await installMockAuthFetch((async () => new Response(null, { status: 200 })) as typeof fetch);
+  const descriptor = Object.getOwnPropertyDescriptor(window, "CustomEvent");
+  try {
+    Object.defineProperty(window, "CustomEvent", { configurable: true, value: undefined });
+    expect((await fetch("/api/keys", { method: "POST" })).status).toBe(200);
+  } finally {
+    if (descriptor) Object.defineProperty(window, "CustomEvent", descriptor);
+    else Reflect.deleteProperty(window, "CustomEvent");
+  }
 });

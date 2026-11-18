@@ -65,7 +65,7 @@ function button(label: string) {
     .find(value => value.textContent === label || value.getAttribute("aria-label") === label)!;
 }
 async function click(label: string) { await act(async () => { button(label).click(); }); }
-function enabled(label: string) { return button(label).getAttribute("aria-pressed") === "true"; }
+function enabled(label: string) { return button(label).getAttribute("aria-checked") === "true"; }
 
 test("loads conservative defaults and saves model/account choices independently through the dedicated route", async () => {
   await render("/proxy");

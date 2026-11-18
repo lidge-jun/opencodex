@@ -4,16 +4,20 @@ import { act, createRef, useEffect, useRef } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import KiroDeviceLoginDialog from "../src/components/KiroDeviceLoginDialog";
+import { kiroVerificationLink } from "../src/kiro-device-login-helpers";
 import { useKiroDeviceLogin } from "../src/components/use-kiro-device-login";
 import ProviderAuthPanel from "../src/components/provider-workspace/ProviderAuthPanel";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 import type { ProviderAuthHandlers } from "../src/components/provider-workspace/types";
 import { en } from "../src/i18n/en";
+import { chooseOption, selectTrigger } from "./helpers/custom-select";
 import { interpolate, type TFn } from "../src/i18n/shared";
 import { useProvidersOAuth } from "../src/pages/use-providers-oauth";
 import {
   finalizeKiroDeviceFlow, readKiroDeviceStatus, subscribeKiroDeviceFinal,
 } from "../src/kiro-device-login-finalizer";
+import { captureApiTarget, configureApiTargets } from "../src/api";
+import { standaloneApiTargets } from "../src/api-targets";
 
 const globals = ["document", "window", "navigator", "localStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previous: Record<(typeof globals)[number], unknown>;
@@ -81,6 +85,19 @@ async function click(label: string) {
 }
 async function start() { await click("Builder ID"); expect(requests.find(r => r.url.endsWith("/api/oauth/login"))?.init?.body).toBe(JSON.stringify({ provider: "kiro", method: "builder-id" })); }
 async function tick() { expect(ticks.length).toBeGreaterThan(0); await act(async () => { ticks.shift()!(); }); await flush(); }
+async function iamInput(portal = "https://example.awsapps.com/start", region = "eu-west-1") {
+  const inputs = host.querySelectorAll(".kiro-iam-form input");
+  await act(async () => {
+    for (const [index, value] of [portal, region].entries()) {
+      Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(inputs[index], value);
+      inputs[index]!.dispatchEvent(new win.Event("input", { bubbles: true }));
+    }
+  });
+}
+async function submitIamForm() {
+  await act(async () => { host.querySelector(".kiro-iam-form")!.dispatchEvent(new win.Event("submit", { bubbles: true, cancelable: true })); });
+  await flush();
+}
 function expectCancelBeforeStatus() {
   const cancelIndex = requests.findIndex(r => r.url.endsWith("/api/oauth/login/cancel")
     && JSON.parse(String(r.init?.body)).flowId === flowId);
@@ -96,6 +113,107 @@ test("chooser starts native login, shows code and safe link, then confirms done"
   await tick();
   expect(settled).toEqual(["added"]);
   expect(host.textContent).toContain("Kiro account added");
+  // Finished flows offer Close; there is nothing left to cancel.
+  const labels = [...host.querySelectorAll("button")].map(item => item.textContent?.trim());
+  expect(labels).toContain("Close");
+  expect(labels).not.toContain("Cancel");
+});
+
+test("a success carrying a warning stays open and offers Close, not Cancel", async () => {
+  responder = async url => url.endsWith("/api/oauth/login") ? json(view("pending")) : json(view("done", { warning: "duplicate_profile_arn" }));
+  await mountDialog(); await start(); await tick();
+  expect(closed).toBe(0);
+  expect(host.textContent).toContain("already in the account list");
+  const labels = [...host.querySelectorAll("button")].map(item => item.textContent?.trim());
+  expect(labels).toContain("Close");
+  expect(labels).not.toContain("Cancel");
+});
+
+test("IAM region starts empty and suggests AWS regions without limiting the field to them", async () => {
+  await mountDialog(); await click("AWS IAM Identity Center");
+  const region = host.querySelector<HTMLInputElement>('input[id$="-region"]')!;
+  expect(region.value).toBe("");
+  const options = [...host.querySelectorAll(`datalist[id="${region.getAttribute("list")}"] option`)];
+  expect(options.some(option => option.getAttribute("value") === "eu-central-1")).toBe(true);
+  await iamInput("https://example.awsapps.com/start", "eu-west-9"); await submitIamForm();
+  expect(JSON.parse(String(requests[0]!.init?.body)).region).toBe("eu-west-9");
+});
+
+test("an Identity Center access portal is a link only on an IAM flow", async () => {
+  const portal = "https://d-1234567890.awsapps.com/start/#/device?user_code=ABCD-1234";
+  responder = async url => url.endsWith("/api/oauth/login") ? json(view("pending", { method: "iam-identity-center", verificationUriComplete: portal })) : json(view("cancelled"));
+  await mountDialog(); await click("AWS IAM Identity Center"); await iamInput(); await submitIamForm();
+  expect(host.querySelector(`a[href="${portal}"]`)).not.toBeNull();
+  expect(host.textContent).not.toContain("Unexpected verification host");
+  expect(kiroVerificationLink(portal)).toBeNull();
+  expect(kiroVerificationLink("https://d-1234567890.awsapps.com/other", "iam-identity-center")).toBeNull();
+});
+
+test("IAM collects portal and region before starting and accepts regional AWS verification links", async () => {
+  responder = async url => url.endsWith("/api/oauth/login") ? json(view("pending", {
+    method: "iam-identity-center", verificationUri: "https://device.sso.eu-west-1.amazonaws.com/",
+  })) : json(view("done", { method: "iam-identity-center" }));
+  await mountDialog(); await click("AWS IAM Identity Center");
+  expect(requests).toHaveLength(0);
+  expect(host.querySelector('label[for$="-portal"]')?.textContent).toBe("AWS access portal URL");
+  await iamInput(); await submitIamForm();
+  expect(JSON.parse(String(requests[0]!.init?.body))).toEqual({
+    provider: "kiro", method: "iam-identity-center", startUrl: "https://example.awsapps.com/start", region: "eu-west-1",
+  });
+  expect(host.querySelector('a[href="https://device.sso.eu-west-1.amazonaws.com/"]')).not.toBeNull();
+  await tick();
+  expect(settled).toEqual(["added"]);
+});
+
+test("invalid IAM portal or region is explained without sending a login request", async () => {
+  await mountDialog(); await click("AWS IAM Identity Center");
+  await iamInput("https://evil.test/start", "eu-west-1.evil.test"); await submitIamForm();
+  expect(requests).toHaveLength(0);
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain("valid AWS region");
+  await click("Back");
+  expect(host.textContent).toContain("Builder ID");
+});
+
+test.each(["portal", "region"])("editing the IAM %s clears stale validation feedback", async field => {
+  await mountDialog(); await click("AWS IAM Identity Center");
+  await iamInput("https://evil.test/start", "invalid-region"); await submitIamForm();
+  expect(host.querySelector('[role="alert"]')).not.toBeNull();
+  const input = host.querySelector<HTMLInputElement>(`input[id$="-${field}"]`)!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(input,
+      field === "portal" ? "https://example.awsapps.com/start" : "eu-west-1");
+    input.dispatchEvent(new win.Event("input", { bubbles: true }));
+  });
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+  expect(host.querySelector('[aria-invalid="true"]')).toBeNull();
+  expect(host.querySelector("input[aria-describedby]")).toBeNull();
+  await submitIamForm();
+  expect(host.querySelector('[role="alert"]')).not.toBeNull();
+  expect(requests).toHaveLength(0);
+});
+
+test("IAM profile selection sends the server-offered ARN and completes only once", async () => {
+  const profiles = [
+    { arn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/team", name: "Team profile", region: "us-east-1" },
+    { arn: "arn:aws:codewhisperer:eu-central-1:123456789012:profile/europe", name: "European profile", region: "eu-central-1" },
+  ];
+  const choosing = view("select-profile", { method: "iam-identity-center", profiles });
+  responder = async (url, init) => {
+    if (url.endsWith("/api/oauth/login")) {
+      const body = JSON.parse(String(init?.body));
+      return json(body.profileArn ? view("done", { method: "iam-identity-center" }) : view("pending", { method: "iam-identity-center" }));
+    }
+    return json(choosing);
+  };
+  await mountDialog(); await click("AWS IAM Identity Center"); await iamInput(); await submitIamForm(); await tick();
+  expect(host.textContent).toContain("Choose a Kiro profile");
+  expect(settled).toEqual([]);
+  await chooseOption(selectTrigger(host, "[role=combobox]"), profiles[1]!.arn);
+  await submitIamForm();
+  const posts = requests.filter(request => request.url.endsWith("/api/oauth/login"));
+  expect(JSON.parse(String(posts[1]!.init?.body))).toEqual({ provider: "kiro", flowId, profileArn: profiles[1]!.arn });
+  expect(host.textContent).toContain("Kiro account added");
+  expect(settled).toEqual(["added"]);
 });
 
 test("unknown verification host is copyable text, not a link; warning is visible", async () => {
@@ -429,6 +547,30 @@ test("an already-expired finalizer cancels its inherited read without polling", 
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(bodyCancelled).toBe(1);
   expect(requests.filter(r => r.url.includes("/api/oauth/status?"))).toHaveLength(1);
+});
+
+test("a stale Kiro capture ends the poll without requesting the new target", async () => {
+  const relay = (origin: string) => {
+    const base = standaloneApiTargets("");
+    return {
+      ...base,
+      connected: true,
+      shared: { ...base.shared, baseUrl: "/api/machine/hub-relay", serverOrigin: origin, transport: "relay" as const },
+      apiKeyId: "fixture-key",
+      relayTargetCheck: "expected-target-v1" as const,
+    };
+  };
+  configureApiTargets(relay("hub-a"));
+  const capture = captureApiTarget("shared");
+  configureApiTargets(relay("hub-b"));
+  try {
+    const outcome = await finalizeKiroDeviceFlow("/api/machine/hub-relay", flowId, Date.now() + 10_000, undefined, capture);
+    expect(outcome).toBe("ended");
+    // The old flow is not forwarded to the new hub.
+    expect(requests).toEqual([]);
+  } finally {
+    configureApiTargets(standaloneApiTargets(""));
+  }
 });
 
 test("closing aborts the pending timer and never dispatches a hook status fetch", async () => {

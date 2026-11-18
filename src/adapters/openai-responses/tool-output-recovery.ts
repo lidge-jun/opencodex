@@ -3,6 +3,7 @@ import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "../
 import { isPlainObject } from "./internal";
 import { peekBridgeSearchReplay } from "../../responses/bridge-search-replay-cache";
 import { externalTaskInputResponsesContent } from "../../responses/task-input";
+import { copyItemProvenance } from "../../responses/item-provenance";
 
 const MAX_RESPONSES_CALL_ID_LENGTH = 64;
 
@@ -336,7 +337,7 @@ export function restoreBridgedWebSearchCalls(body: unknown, destinationScope: st
       if (memo && !occupiedCallIds.has(memo.callId)) {
         changed = true;
         occupiedCallIds.add(memo.callId);
-        restored.push({
+        const fnCall: Record<string, unknown> = {
           type: "function_call",
           ...(memo.sourceItemId ? { id: memo.sourceItemId } : {}),
           call_id: memo.callId,
@@ -344,8 +345,16 @@ export function restoreBridgedWebSearchCalls(body: unknown, destinationScope: st
           // The bridge records the complete arguments text from the call's own done frame; the
           // empty-object fallback matches what a continuation leg would have sent.
           arguments: memo.argumentsText.length > 0 ? memo.argumentsText : "{}",
-        });
-        restored.push({ type: "function_call_output", call_id: memo.callId, output: memo.output });
+        };
+        const fnOutput: Record<string, unknown> = {
+          type: "function_call_output",
+          call_id: memo.callId,
+          output: memo.output,
+        };
+        copyItemProvenance(item, fnCall);
+        copyItemProvenance(item, fnOutput);
+        restored.push(fnCall);
+        restored.push(fnOutput);
         continue;
       }
     }
@@ -397,7 +406,7 @@ export function repairOrphanedInputItems(
       const taskInput = isFnOutput && !hasStringCallId ? externalTaskInputResponsesContent(item) : undefined;
       if (taskInput) {
         changed = true;
-        repaired.push({ type: "message", role: "user", content: taskInput });
+        repaired.push(copyItemProvenance(item, { type: "message", role: "user", content: taskInput }));
         continue;
       }
       const callId = typeof item.call_id === "string" ? item.call_id : "";
@@ -409,11 +418,13 @@ export function repairOrphanedInputItems(
       const knownNullOutput = callId.length > 0 && item.output == null;
       if (repairOrphanOutputs && !paired && (knownNullOutput || usableOutput)) {
         changed = true;
-        repaired.push({
+        const msg: Record<string, unknown> = {
           type: "message",
           role: "user",
           content: orphanedToolOutputContent(item.output, callId),
-        });
+        };
+        copyItemProvenance(item, msg);
+        repaired.push(msg);
         continue;
       }
     }
@@ -429,9 +440,11 @@ export function repairOrphanedInputItems(
           const name = typeof item.name === "string" && item.name.length > 0 ? item.name : callId;
           const text = `[ocx] no tool result was recorded for "${name}"; execution status unknown — do not treat this as success, failure, or user-provided input.`;
           syntheticKeys.add(`${isFnCall ? "function" : "custom"}:${callId}`);
-          pendingSyntheticOutputs.push(isFnCall
+          const synthetic: Record<string, unknown> = isFnCall
             ? { type: "function_call_output", call_id: callId, output: text }
-            : { type: "custom_tool_call_output", call_id: callId, output: text });
+            : { type: "custom_tool_call_output", call_id: callId, output: text };
+          copyItemProvenance(item, synthetic);
+          pendingSyntheticOutputs.push(synthetic);
         }
       }
       continue;
@@ -522,6 +535,85 @@ export function repairOrphanedInputItems(
  * - 장점, 단점 및 영향: DeepSeek keeps one reasoning-bearing assistant turn for parallel calls and still accepts hook-interleaved single calls; tolerant providers stay byte/order equivalent, and duplicate, missing, or backwards call/result pairs are not guessed.
  */
 export function normalizeResponsesToolResultAdjacency(body: unknown): unknown {
+  return normalizeAdjacentToolBatches(mergeRepeatedResponsesToolOutputs(body));
+}
+
+type ToolOutputContent = string | unknown[];
+
+function toolOutputParts(output: ToolOutputContent): unknown[] {
+  if (Array.isArray(output)) return output;
+  return output.length > 0 ? [{ type: "input_text", text: output }] : [];
+}
+
+/**
+ * Join every output recorded for one Responses tool call into that call's first output.
+ *
+ * Codex code mode records several `custom_tool_call_output` items for one `exec` call: the yield
+ * marker (`Script running with cell ID N`), then each `notify()`/late cell output, sometimes after a
+ * later `wait` call. Tolerant upstreams accept that history. Strict OpenAI-compatible destinations
+ * reject it — DeepSeek answers `Duplicate tool output for call_id`, and OpenGateway's Responses API
+ * answers `Messages with role 'tool' must be a response to a preceding message with 'tool_calls'`
+ * — so every later turn of the thread fails, and the adjacency pass below refuses the whole body
+ * because the pair is not unique.
+ *
+ * Only an unambiguous shape is merged: exactly one matching call, and every output after it.
+ * Outputs are joined once in arrival order at the first output's position (the same rule the
+ * ollama-native mapper uses since #6576), so no content is dropped and no call is fabricated.
+ * String outputs stay strings when every piece is a string; otherwise all pieces become content
+ * parts. Reused call ids, outputs without a call, and outputs before their call stay untouched.
+ */
+export function mergeRepeatedResponsesToolOutputs(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  const input = body.input;
+  const calls = new Map<string, number[]>();
+  const outputs = new Map<string, number[]>();
+  const record = (map: Map<string, number[]>, key: string, index: number): void => {
+    const existing = map.get(key);
+    if (existing) existing.push(index);
+    else map.set(key, [index]);
+  };
+  for (let index = 0; index < input.length; index += 1) {
+    const item = input[index];
+    if (!isPlainObject(item) || typeof item.call_id !== "string" || item.call_id.length === 0) continue;
+    if (item.type === "function_call" || item.type === "local_shell_call") record(calls, `function:${item.call_id}`, index);
+    else if (item.type === "custom_tool_call") record(calls, `custom:${item.call_id}`, index);
+    else if (item.type === "function_call_output") record(outputs, `function:${item.call_id}`, index);
+    else if (item.type === "custom_tool_call_output") record(outputs, `custom:${item.call_id}`, index);
+  }
+
+  const merged = new Map<number, unknown>();
+  const dropped = new Set<number>();
+  for (const [key, outputIndices] of outputs) {
+    if (outputIndices.length < 2) continue;
+    const callIndices = calls.get(key);
+    if (!callIndices || callIndices.length !== 1 || outputIndices[0]! < callIndices[0]!) continue;
+    const pieces: ToolOutputContent[] = [];
+    let readable = true;
+    for (const outputIndex of outputIndices) {
+      const output = (input[outputIndex] as Record<string, unknown>).output;
+      if (typeof output === "string" || Array.isArray(output)) pieces.push(output);
+      else readable = false;
+    }
+    if (!readable) continue;
+    const allText = pieces.every((piece): piece is string => typeof piece === "string");
+    const joined = allText
+      ? pieces.filter(piece => piece.length > 0).join("\n\n")
+      : pieces.flatMap(toolOutputParts);
+    const [first, ...rest] = outputIndices;
+    merged.set(first!, { ...(input[first!] as Record<string, unknown>), output: joined });
+    for (const index of rest) dropped.add(index);
+  }
+  if (merged.size === 0) return body;
+
+  const next: unknown[] = [];
+  for (let index = 0; index < input.length; index += 1) {
+    if (dropped.has(index)) continue;
+    next.push(merged.has(index) ? merged.get(index) : input[index]);
+  }
+  return { ...body, input: next };
+}
+
+function normalizeAdjacentToolBatches(body: unknown): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
   const input = body.input;
   const calls = new Map<string, number[]>();

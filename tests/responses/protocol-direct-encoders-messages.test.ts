@@ -339,18 +339,37 @@ describe("direct Messages encoder matches bridge + converter (stream)", () => {
 });
 
 describe("direct Messages fold matches bridge + collector (non-stream)", () => {
+  test.each([
+    ["server_error", "server_error"],
+    ["upstream_error", "server_error"],
+    ["api_error", "server_error"],
+    ["internal_error", "server_error"],
+    ["upstream_error", "upstream_error"],
+  ])("generic-coded %s context overflow with errorType %s stays terminal on both paths", async (code, errorType) => {
+    const events: AdapterEvent[] = [{ type: "error", errorType,
+      code, message: "Your input exceeds the context window of this model", retryable: true }];
+    const frames = await expectStreamParity(events);
+    expect(frames).toEqual([{ event: "error", data: { type: "error", error: {
+      type: "invalid_request_error", code: "context_length_exceeded",
+      message: "prompt is too long: The request exceeds the model's context window.",
+    } } }]);
+    const response = await expectFoldParity(events);
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual(frames[0]!.data);
+  });
+
   test.each([400, 413, undefined])("context rejection remains terminal with upstream status %s", async status => {
     const events: AdapterEvent[] = [{ type: "error", status, errorType: "invalid_request_error",
       code: "context_length_exceeded", message: "Synthetic input limit", retryable: false }];
     const frames = await expectStreamParity(events);
     expect(frames).toEqual([{ event: "error", data: { type: "error", error: {
-      type: "invalid_request_error", code: "context_length_exceeded", message: "prompt is too long: Synthetic input limit",
+      type: "invalid_request_error", code: "context_length_exceeded", message: "prompt is too long: The request exceeds the model's context window.",
     } } }]);
     const response = await foldAnthropicMessage(replay(events), directOptions());
     expect(response.status).toBe(400);
     expect(response.headers.has("retry-after")).toBe(false);
     expect(await response.json()).toEqual({ type: "error", error: {
-      type: "invalid_request_error", code: "context_length_exceeded", message: "prompt is too long: Synthetic input limit",
+      type: "invalid_request_error", code: "context_length_exceeded", message: "prompt is too long: The request exceeds the model's context window.",
     } });
   });
 

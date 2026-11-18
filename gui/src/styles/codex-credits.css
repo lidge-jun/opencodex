@@ -1,3 +1,6 @@
+/* Imported by its component, so it sits in the `legacy` cascade layer itself:
+   unlayered CSS would outrank design/bridge.css and every Tailwind utility. */
+@layer legacy {
 /* Credits lives inside the existing compact slot, so no second slot padding. */
 .quota-row--codex-credits .quota-val {
   white-space: nowrap;
@@ -41,3 +44,4 @@
 .codex-account-credits { display: inline-flex; align-items: center; gap: 7px; }
 .codex-account-credits__label { font-size: var(--text-label); color: var(--muted); font-weight: var(--weight-medium); white-space: nowrap; }
 .codex-account-credits__toggle { transform: scale(.8); transform-origin: center; margin-inline: -3px; }
+}

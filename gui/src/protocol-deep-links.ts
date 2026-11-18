@@ -4,7 +4,8 @@
  * provider's settings.
  *
  * The state lives in the hash query (`#models/compatibility?inbound=chat&upstream=messages`,
- * `#providers?provider=<name>`, `#providers?provider=<name>&tab=accounts`), which
+ * `#providers?provider=<name>`, `#providers?provider=<name>&tab=accounts`,
+ * `#providers?provider=<name>&focus=account-mode`), which
  * `app-routing.ts` keeps for exactly these two routes. A
  * link is a deliberate navigation (`navigateHash` pushes a history entry), so Back returns to
  * the view the link was followed from and Forward restores the prefilter.
@@ -80,6 +81,19 @@ export function readProviderDeepLinkTab(hash: string = window.location.hash): Pr
   return readQuery(hash, PROVIDERS_HASH)?.get("tab") === "accounts" ? "accounts" : "settings";
 }
 
+/** A Settings field a providers link focuses. Only the Codex account mode control has one (#8501). */
+export type ProviderDeepLinkFocus = "account-mode";
+
+/** The Codex Auth mode badge links here: the provider's Settings, focused on its account mode. */
+export function providerAccountModeHash(provider: string): string {
+  return `${PROVIDERS_HASH}?${new URLSearchParams({ provider, focus: "account-mode" }).toString()}`;
+}
+
+/** The field a providers hash asks to focus. Anything but an exact `focus=account-mode` is none. */
+export function readProviderDeepLinkFocus(hash: string = window.location.hash): ProviderDeepLinkFocus | null {
+  return readQuery(hash, PROVIDERS_HASH)?.get("focus") === "account-mode" ? "account-mode" : null;
+}
+
 /** The provider a providers hash names, or `null`. */
 export function readProviderSettingsTarget(hash: string = window.location.hash): string | null {
   const name = readQuery(hash, PROVIDERS_HASH)?.get("provider")?.trim() ?? "";
@@ -101,6 +115,20 @@ export function openProviderSettings(provider: string): void {
  */
 export function openProviderAccounts(provider: string, win: Window & typeof globalThis = window): void {
   const target = providerAccountsHash(provider);
+  if (normalizeHashPath(win.location.hash) === target) {
+    win.dispatchEvent(new win.Event("hashchange"));
+    return;
+  }
+  navigateHash(target, win);
+}
+
+/**
+ * Open one provider's Settings focused on its account mode control. Like
+ * {@link openProviderAccounts}, an unchanged hash is announced by hand so following the link a
+ * second time focuses the control again.
+ */
+export function openProviderAccountMode(provider: string, win: Window & typeof globalThis = window): void {
+  const target = providerAccountModeHash(provider);
   if (normalizeHashPath(win.location.hash) === target) {
     win.dispatchEvent(new win.Event("hashchange"));
     return;

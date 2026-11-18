@@ -244,7 +244,7 @@ function instrumentRecoveryLauncher(source: string, directory: string): string {
   const boot = 'const probe = bootRestoreProbe(resolve(here, ".."));';
   replaceOnce(boot, `fixtureStatus("boot-restore-enter");\n    ${boot}\n    fixtureStatus("boot-restore-result", { action: probe.action });`);
   replaceOnce('} catch { /* the probe must never block launch */ }', '} catch (error) { fixtureStatus("boot-restore-error", recoveryErrorFields(error)); /* the probe must never block launch */ }');
-  const runtime = 'const bunRuntime = resolveBun({ allowInstall: !codexCliUpdateInspection });';
+  const runtime = 'const bunRuntime = resolveBun({ allowInstall: !passiveSync && !orchestratedUpdate && !passiveCapabilities && !codexCliUpdateInspection, allowMissing: orchestratedUpdate || passiveSync });';
   replaceOnce(runtime, `fixtureStatus("runtime-resolution-enter");\n${runtime}\nfixtureStatus("runtime-resolved", { source: bunRuntime.source });`);
   const install = 'const r = probeSpawnSync(process.execPath, [installJs], { stdio: "inherit" });';
   replaceOnce(install, `fixtureStatus("runtime-install-enter");\n    ${install}\n    fixtureStatus("runtime-install-result", { exitCode: r.status, signal: r.signal, ...recoveryErrorFields(r.error) });`);
@@ -255,7 +255,7 @@ function instrumentRecoveryLauncher(source: string, directory: string): string {
   fixtureStatus("runtime-exit", { exitCode: code, signal });`);
   replaceOnce('child.on("error", err => {', `child.on("error", err => {
   fixtureStatus("runtime-spawn-error", recoveryErrorFields(err));`);
-  replaceOnce('const clearHandlers = () => {', 'child.on("spawn", () => fixtureStatus("runtime-spawned", { pid: child.pid }));\nconst clearHandlers = () => {');
+  replaceOnce('forwarding.attach(child);', 'forwarding.attach(child);\nchild.on("spawn", () => fixtureStatus("runtime-spawned", { pid: child.pid }));');
   return source;
 }
 const updateSource = readFileSync(join(repoRoot, "src", "update", "index.ts"), "utf8");
@@ -345,10 +345,10 @@ describe("bounded recovery diagnostics", () => {
       'import { probeSpawn, probeSpawnSync } from "../src/update/mutation-guard.mjs";',
       'const probe = bootRestoreProbe(resolve(here, ".."));',
       '} catch { /* the probe must never block launch */ }',
-      'const bunRuntime = resolveBun({ allowInstall: !codexCliUpdateInspection });',
+      'const bunRuntime = resolveBun({ allowInstall: !passiveSync && !orchestratedUpdate && !passiveCapabilities && !codexCliUpdateInspection, allowMissing: orchestratedUpdate || passiveSync });',
       'const r = probeSpawnSync(process.execPath, [installJs], { stdio: "inherit" });',
       'const child = probeSpawn(bun,', 'child.on("exit", (code, signal) => {',
-      'child.on("error", err => {', 'const clearHandlers = () => {',
+      'child.on("error", err => {', 'forwarding.attach(child);',
     ];
     for (const seam of seams) {
       expect(() => instrumentRecoveryLauncher(launcherSource.replace(seam, ""), "/fixture"))
@@ -432,13 +432,15 @@ function resolveBun() {
   const r = probeSpawnSync(process.execPath, [installJs], { stdio: "inherit" });
   return { source: "bundled", path: "fixture-bun" };
 }
-const bunRuntime = resolveBun({ allowInstall: !codexCliUpdateInspection });
+const passiveSync = false;
+const bunRuntime = resolveBun({ allowInstall: !passiveSync && !orchestratedUpdate && !passiveCapabilities && !codexCliUpdateInspection, allowMissing: orchestratedUpdate || passiveSync });
 const bun = bunRuntime.path;
+const forwarding = { attach() {}, clear() { events.push("clear"); } };
 const child = probeSpawn(bun, ["fixture-cli", "start"], childOptions);
-const clearHandlers = () => { events.push("clear"); };
-child.on("error", err => { clearHandlers(); events.push(err); process.exit(1); });
+forwarding.attach(child);
+child.on("error", err => { forwarding.clear(); events.push(err); process.exit(1); });
 child.on("exit", (code, signal) => {
-  clearHandlers();
+  forwarding.clear();
   if (signal) { process.kill(process.pid, signal); return; }
   process.exit(code ?? 1);
 });
@@ -465,7 +467,8 @@ return child;`;
       process: { argv: ["node", "fixture", "start"], pid: 123, execPath: "node", on: () => {},
         exit: (code: number) => events.push(code), kill: (pid: number, signal: string) => events.push([pid, signal]) },
       bootRestoreProbe: () => ({ action: "none" }), resolve: () => "/fixture", here: "/fixture",
-      installJs: "fixture-install", codexCliUpdateInspection: false, childOptions, events,
+      installJs: "fixture-install", orchestratedUpdate: false, passiveCapabilities: false,
+      codexCliUpdateInspection: false, childOptions, events,
     };
     const execute = new Function("io", `const { ${Object.keys(io).join(", ")} } = io;\n${source}`);
     expect(execute(io)).toBe(child);
@@ -549,6 +552,16 @@ describe("update stops the running proxy before replacing files", () => {
     expect(gateAt).toBeGreaterThan(-1);
     expect(abortAt).toBeGreaterThan(-1);
     expect(gateAt).toBeLessThan(stopAt);
+    expect(abortAt).toBeLessThan(stopAt);
+  });
+
+  test("config pre-flight runs BEFORE the stop so fallback configuration aborts before stopping services", () => {
+    const preflightAt = updateSource.indexOf("configPreflight = runConfigPreflight(configPath);");
+    const abortAt = updateSource.indexOf("aborting update before stopping services");
+    const stopAt = updateSource.indexOf('selfLaunchArgv(["stop"])');
+    expect(preflightAt).toBeGreaterThan(-1);
+    expect(abortAt).toBeGreaterThan(-1);
+    expect(preflightAt).toBeLessThan(stopAt);
     expect(abortAt).toBeLessThan(stopAt);
   });
 
@@ -678,7 +691,10 @@ esac
 `);
         chmodSync(fakeNpm, 0o755);
 
-        const result = Bun.spawnSync(["node", launcher, "update"], {
+        // Resolve wrapper-managed Node to its actual executable: wrappers can prepend
+        // their own npm directory to PATH and bypass the fixture's failing npm.
+        const node = Bun.spawnSync(["node", "-p", "process.execPath"], { stdout: "pipe" }).stdout.toString().trim();
+        const result = Bun.spawnSync([node, launcher, "update"], {
           cwd: root,
           env,
           stdout: "pipe",
@@ -687,7 +703,7 @@ esac
         });
         const output = result.stdout.toString() + result.stderr.toString();
 
-        expect(result.exitCode).toBe(1);
+        expect(result.exitCode, output).toBe(1);
         expect(output).toContain("Stopping the running proxy before updating");
         expect(output).toContain("restarting the previous version directly");
         expect(output).toContain("'ocx status'");
@@ -823,7 +839,7 @@ esac
     expect(stopEnvAt).toBeLessThan(replacementAt);
     expect(launcherSource.slice(lockedPlanAt, stopAt)).toContain("!runtimePlan.mayStopRuntime");
     const packageReplacement = launcherSource.slice(stopAt, launcherSource.indexOf("const postInstallPlan", stopAt));
-    expect(packageReplacement.match(/unprivilegedOwnershipMutationEnvironment/g)).toHaveLength(3); // Windows npm, POSIX npm, pnpm.
+    expect(packageReplacement.match(/unprivilegedOwnershipMutationEnvironment/g)).toHaveLength(5); // Windows npm, both POSIX npm paths, both pnpm paths.
   });
 
   test("replacement refusal reaches owner-aware recovery before releasing authority", () => {

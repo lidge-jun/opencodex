@@ -4,12 +4,11 @@
  *
  * WHY THIS EXISTS
  *
- * `scripts/release.ts` runs only on `main` or `preview` (`allowedBranches`), bumps
- * `package.json` there, and pushes that branch. `release.yml` ends at "Create GitHub
- * release". Nothing advances `dev`. So the moment a release publishes, `dev` carries a
- * version that is at or behind a published one, and
- * `tests/ci-workflows/release-version-line.test.ts` fails on `dev` and on every pull request opened
- * against it — inherited red that a contributor cannot fix from their own diff.
+ * The former branch-based release flow advanced a release branch without advancing
+ * `dev`, leaving its planned version at or behind the published version. The current
+ * release flow builds from a green `dev` commit and stamps the version in each build;
+ * it does not require a committed pre-move. This helper remains available for an
+ * explicit maintainer-controlled version adjustment.
  *
  * That has been repaired by hand four times: `32529c2b2`, `e4a85d134`, `076ad3036`,
  * `befcac3e1`. The second of those ADDED the detector, and two more repairs followed
@@ -20,8 +19,8 @@
  * This decides a version. It does no git and no network work, which is what makes it
  * unit-testable and what keeps the credential surface in the workflow that calls it.
  * It does not merge anything: `.github/workflows/dev-version-bump.yml` uses the
- * output to open a pull request, and a human still merges that. Until they do, the
- * red persists. This is a prepared repair, not an automatic one.
+ * output to open a pull request, and a human still merges that. This is a prepared
+ * adjustment, not an automatic release step.
  *
  * THE RULE
  *

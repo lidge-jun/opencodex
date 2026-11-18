@@ -20,10 +20,10 @@
  * places Advisor output in developer/system content. User-role advice can still contain
  * hostile recommendations; the fixed policy tells the worker how to interpret that data.
  */
-import type { OcxConfig, OcxParsedRequest } from "../types";
+import type { OcxConfig, OcxParsedRequest, OcxTool } from "../types";
 import type { AdvisorPlan, AdvisorConsultOutcome } from "../server/responses/advisor-slot";
 import { createAdvisorGuard, MAX_ADVISOR_CONSULTATIONS_PER_REQUEST } from "../server/responses/advisor-slot";
-import { resolveAdvisorSettings, type AdvisorPolicy } from "./settings";
+import { resolveAdvisorSettings, type AdvisorContextMode, type AdvisorPolicy } from "./settings";
 import { consultAdvisor } from "./consult";
 import { buildAdvisorTool } from "./synthetic-tool";
 import { sanitizeLogMetadataString } from "../lib/redact";
@@ -36,6 +36,7 @@ import {
 } from "./state";
 import { formatAdvisorAdvice, advisorPreflightMessages, formatAdvisorUnavailable } from "./context";
 import { advisorActivityStore, type AdvisorActivityStore, type AdvisorTrigger } from "./activity";
+import { advisorPlanRootConfig } from "../server/responses/advisor-plan-slot";
 import { createAdvisorTaskBudget, type AdvisorTaskBudget } from "./budget";
 import { collectAdvisorRepairEvidence, type AdvisorRepairEvidence } from "./evidence";
 import type { AdmissionModelScope } from "../server/admission-model-scope";
@@ -55,6 +56,7 @@ export interface AdvisorRuntimeDeps {
   workerIdentity: string;
   workerModelId: string;
   admissionScope?: AdmissionModelScope;
+  admissionPolicy?: import("../types/admission-policy").CapturedAdmissionPolicy;
   abortSignal?: AbortSignal;
   /** Test seam; production always self-fetches the resolved local destination. */
   baseUrlOverride?: string;
@@ -94,7 +96,10 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
   const ledger = deps.ledger ?? sharedPreflightLedger;
   const now = deps.now ?? (() => Date.now());
   const budget = deps.budget ?? createAdvisorTaskBudget();
-  const activities = deps.activities ?? advisorActivityStore(deps.config);
+  // Identity-scoped state must key on the LIVE config: `GET /api/advisor/activity` reads the store
+  // of the management context's own config, so a request-scoped view (the Claude replay config)
+  // would record consultations the dashboard and CLI never see.
+  const activities = deps.activities ?? advisorActivityStore(advisorPlanRootConfig(deps.config));
   // Management PUT mutates this same config object (`config.advisor = ...`). Re-resolving
   // at dispatch is what makes a mid-request consent revocation stop outbound transfer.
   const liveSettings = () => resolveAdvisorSettings(deps.config);
@@ -139,7 +144,11 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
     reason: AdvisorTrigger,
     question: string | undefined,
     evidence?: AdvisorRepairEvidence,
+    abortSignal?: AbortSignal,
   ): Promise<AdvisorConsultOutcome> => {
+    const consultationSignal = abortSignal && deps.abortSignal
+      ? AbortSignal.any([deps.abortSignal, abortSignal])
+      : abortSignal ?? deps.abortSignal;
     const current = liveSettings();
     if (!current.enabled || current.model.trim() === "") {
       return {
@@ -169,6 +178,19 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
         ),
       };
     }
+    if (current.contextMode === "question-only") {
+      // A mode change after an automatic claim is operator policy, not a provider failure.
+      if (reason !== "manual") {
+        return { ok: false, isError: true, blocked: "settings", content: "" };
+      }
+      if (!question?.trim()) {
+        return {
+          ok: false,
+          isError: true,
+          content: formatAdvisorUnavailable("manual", "Question-only mode requires a self-contained question. Include the necessary background in question; no consultation sent."),
+        };
+      }
+    }
     // Same-consultation dedup within this request: identical trigger + focus returns a
     // non-advice outcome instead of a second expert call.
     const fingerprint = `${reason}|${question ?? ""}|${evidence?.id ?? ""}`;
@@ -187,7 +209,7 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
         content: formatAdvisorUnavailable(reason === "manual" ? "manual" : "preflight", result.error),
       };
     }
-    if (deps.abortSignal?.aborted) return { ok: false, isError: true, cancelled: true, content: "" };
+    if (consultationSignal?.aborted) return { ok: false, isError: true, cancelled: true, content: "" };
     const budgetKey = identify(parsed).budget;
     const requestCapped = consultations >= MAX_ADVISOR_CONSULTATIONS_PER_REQUEST;
     if (requestCapped
@@ -210,15 +232,17 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
           workerIdentity: deps.workerIdentity,
           advisorModel: current.model,
           reason,
+          contextMode: current.contextMode,
           ...(evidence ? { evidence } : {}),
           ...(question !== undefined ? { question } : {}),
         },
         deps.config,
         current.effort,
         current.timeoutMs,
-        deps.abortSignal,
+        consultationSignal,
         deps.baseUrlOverride,
-      deps.admissionScope,
+        deps.admissionScope,
+        deps.admissionPolicy,
       );
     } catch (error) {
       activities.finish(activityId, { status: "failed", durationMs: Math.max(0, now() - startedAt) });
@@ -262,7 +286,7 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
   const preflightInject = async (parsed: OcxParsedRequest): Promise<boolean> => {
     const task = identify(parsed);
     const current = liveSettings();
-    if (current.policy === "manual" || preflightUsed || deps.abortSignal?.aborted) return false;
+    if (current.contextMode === "question-only" || current.policy === "manual" || preflightUsed || deps.abortSignal?.aborted) return false;
     // No consent, disabled, or no model: do not claim, do not inject, do not send task context.
     if (!current.enabled || current.model.trim() === "" || current.contextSharingConsent === null) return false;
     // A genuine MANUAL consultation already advised this task (verifiable tool-result
@@ -334,10 +358,21 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
   };
 
   const plan: AdvisorPlan = {
-    consult: (parsed, reason, question) => runConsultation(parsed, reason, question),
+    shouldCountManualConsultation: question =>
+      liveSettings().contextMode !== "question-only" || Boolean(question?.trim()),
+    consult: (parsed, reason, question, abortSignal) => runConsultation(parsed, reason, question, undefined, abortSignal),
     // The guard's own failure/limit text goes through the same runtime-owned, marker-neutralized
     // formatter so no guard path can emit text that looks like a genuine advice wrapper.
     formatUnavailable: (kind, error) => formatAdvisorUnavailable(kind, error),
+  };
+
+  // Sidecar paths compare the advisor tool by reference, so each context mode keeps one object.
+  const advisorTools = new Map<AdvisorContextMode, OcxTool>();
+  const advisorTool = (): OcxTool => {
+    const mode = liveSettings().contextMode;
+    let tool = advisorTools.get(mode);
+    if (!tool) advisorTools.set(mode, tool = buildAdvisorTool(mode));
+    return tool;
   };
 
   return {
@@ -345,7 +380,8 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
     // The synthetic tool is only safe where the guard can intercept: run-turn adapters own their
     // own loops, so they get preflight support but never the tool (documented limitation).
     toolEnabled: initial.enabled,
-    tool: buildAdvisorTool(),
+    get tool() { return advisorTool(); },
+    shouldCountManualConsultation: plan.shouldCountManualConsultation,
     consult: plan.consult,
     formatUnavailable: plan.formatUnavailable,
     preflightInject,

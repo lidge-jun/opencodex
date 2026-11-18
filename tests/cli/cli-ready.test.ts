@@ -687,31 +687,32 @@ describe("handleStart readinessGate wiring (source-level)", () => {
   });
 });
 
-// ── P1: ready pre-parse before maybeAutoRestoreCodexShim (source-level) ────────
+// ── P1: ready pre-parse before maybeAutoRestoreCodexShimAsync (source-level) ────────
 // `ocx ready` must reject invalid arguments with exit 64 BEFORE the global
-// maybeAutoRestoreCodexShim preflight (or any discovery/probe/filesystem-capable
+// maybeAutoRestoreCodexShimAsync preflight (or any discovery/probe/filesystem-capable
 // step) runs. These source-level guards pin that ordering and the single-parse
 // contract so a future edit cannot silently move parsing back into handleReady
 // or after auto-restore. The head block lives in src/cli/root.ts (Phase 1 of the
 // CLI deepening); the dispatch switch stays in src/cli/index.ts. No
 // subprocess/network/HOME is used.
-describe("ready pre-parse before maybeAutoRestoreCodexShim (source-level, P1)", () => {
+describe("ready pre-parse before maybeAutoRestoreCodexShimAsync (source-level, P1)", () => {
   const rootSource = readFileSync(repoPath("src/cli/root.ts"), "utf8");
   const cliSource = readFileSync(repoPath("src/cli/index.ts"), "utf8");
 
-  test("ready pre-parse call runs BEFORE maybeAutoRestoreCodexShim", () => {
+  test("ready pre-parse call runs BEFORE maybeAutoRestoreCodexShimAsync", () => {
     const preparseIdx = rootSource.indexOf("parseReadyArgs(args.slice(1))");
     expect(preparseIdx, "pre-parse must call parseReadyArgs(args.slice(1))").toBeGreaterThanOrEqual(0);
-    const autoIdx = rootSource.indexOf("maybeAutoRestoreCodexShim(head.command, head.args)");
-    expect(autoIdx, "maybeAutoRestoreCodexShim must be called in runCli").toBeGreaterThanOrEqual(0);
-    expect(preparseIdx, "ready pre-parse must precede maybeAutoRestoreCodexShim").toBeLessThan(autoIdx);
+    const autoIdx = rootSource.indexOf("await maybeAutoRestoreCodexShimAsync(head.command, head.args)");
+    expect(autoIdx, "maybeAutoRestoreCodexShimAsync must be called in runCli").toBeGreaterThanOrEqual(0);
+    expect(preparseIdx, "ready pre-parse must precede maybeAutoRestoreCodexShimAsync").toBeLessThan(autoIdx);
   });
 
   test("invalid ready exits 64 inside the pre-parse block, before auto-restore", () => {
     // parseCliHead (pure) returns readyArgs: undefined for invalid args; the
     // fail-closed runCli guard then exits 64 before any shim/discovery side
     // effect can run.
-    const autoIdx = rootSource.indexOf("maybeAutoRestoreCodexShim(head.command, head.args)");
+    const autoIdx = rootSource.indexOf("await maybeAutoRestoreCodexShimAsync(head.command, head.args)");
+    expect(autoIdx, "the awaited async preflight must exist before slicing its preceding guards").toBeGreaterThanOrEqual(0);
     const beforeAuto = rootSource.slice(0, autoIdx);
     expect(beforeAuto).toContain('command === "ready"');
     expect(beforeAuto).toContain("parseReadyArgs(args.slice(1))");
@@ -742,7 +743,7 @@ describe("ready pre-parse before maybeAutoRestoreCodexShim (source-level, P1)", 
     expect(body).not.toContain("process.exit");
   });
 
-  test("valid ready dispatch reaches handleReady AFTER maybeAutoRestoreCodexShim, with fail-closed guard", () => {
+  test("valid ready dispatch reaches handleReady AFTER maybeAutoRestoreCodexShimAsync, with fail-closed guard", () => {
     // Ordering: index.ts awaits runCli (which runs parseCliHead and the shim
     // preflight inside root.ts) BEFORE dispatch.ts runs the ready runner.
     const runCliIdx = cliSource.indexOf("await runCli(process.argv.slice(2))");
@@ -750,7 +751,7 @@ describe("ready pre-parse before maybeAutoRestoreCodexShim (source-level, P1)", 
     const dispatchIdx = cliSource.indexOf("process.exit(await dispatchCommand(head");
     expect(dispatchIdx, "index.ts must exit via dispatchCommand").toBeGreaterThanOrEqual(0);
     expect(runCliIdx).toBeLessThan(dispatchIdx);
-    expect(rootSource).toContain("maybeAutoRestoreCodexShim(head.command, head.args)");
+    expect(rootSource).toContain("await maybeAutoRestoreCodexShimAsync(head.command, head.args)");
     // The ready runner lives in dispatch.ts (keyed "ready:"); slice its body
     // up to the next runner key, not a fixed width.
     const dispatchSource = readFileSync(repoPath("src/cli/dispatch.ts"), "utf8");
@@ -871,13 +872,15 @@ describe("handleStart OCX_SERVICE exit guard (source-level)", () => {
     expect(nonService, "non-service refusal keeps the exit 1 conflict error").not.toBeNull();
   });
 
-  test("service.ts teardown kills surviving wrapper processes on stop", () => {
+  test("service.ts teardown ends surviving wrapper processes on stop through the checked stop", () => {
     const serviceSource = readFileSync(repoPath("src/service/orchestration.ts"), "utf8");
-    expect(serviceSource).toMatch(/killWindowsServiceWrapperProcesses/);
     // The boolean `stopServiceIfInstalled` is gone — it collapsed a live manager into the
     // same false as "not installed" (#3008). The stop itself is the detailed function.
-    const callSite = serviceSource.match(/stopServiceIfInstalledDetailed[\s\S]{0,1600}?killWindowsServiceWrapperProcesses\(\)/);
-    expect(callSite, "wrapper kill must run during stopServiceIfInstalledDetailed").not.toBeNull();
+    // #7771: on Windows it is Part A of the checked stop, which ends the bound wrappers and
+    // waits for them instead of the best-effort path-token sweep.
+    const callSite = serviceSource.match(/stopServiceIfInstalledReport[\s\S]{0,2400}?runWindowsServiceStopPartA\(request\)/);
+    expect(callSite, "Part A must run during the service stop on Windows").not.toBeNull();
+    expect(serviceSource).not.toMatch(/killWindowsServiceWrapperProcesses/);
   });
 
   test("wrapper kill matches the canonical paths of THIS installation, not bare filenames", () => {
@@ -885,15 +888,15 @@ describe("handleStart OCX_SERVICE exit guard (source-level)", () => {
     // wrapper from another OpenCodex home (or any process whose command line
     // merely contains the name). The kill must target the exact canonical
     // paths windowsServiceScriptPath()/windowsLauncherVbsPath() produce.
-    const serviceSource = readFileSync(repoPath("src/service/windows-ops.ts"), "utf8");
-    expect(serviceSource).toMatch(/windowsServiceScriptPath\(\)/);
-    expect(serviceSource).toMatch(/windowsLauncherVbsPath\(\)/);
-    const killBody = serviceSource.match(/function killWindowsServiceWrapperProcesses\(\)[\s\S]*?\n}/);
-    expect(killBody, "killWindowsServiceWrapperProcesses body must exist").not.toBeNull();
-    expect(killBody![0]).toContain("windowsServiceScriptPath()");
-    expect(killBody![0]).toContain("windowsLauncherVbsPath()");
+    // Since #7771 the stop binds wrappers through the checked stop's binding rule, whose
+    // path set is exactly these canonical paths (tests/windows/windows-stop-binding.test.ts
+    // covers other homes, substrings and image names).
+    const live = readFileSync(repoPath("src/service/windows-checked-stop-live.ts"), "utf8");
+    const paths = live.match(/export function windowsStopCanonicalPaths\(\)[\s\S]*?\n}/);
+    expect(paths, "windowsStopCanonicalPaths body must exist").not.toBeNull();
+    expect(paths![0]).toContain("return [windowsLauncherVbsPath(), windowsServiceScriptPath()];");
     // Bare wrapper filenames must NOT be the match target.
-    expect(killBody![0]).not.toMatch(/\$pats = @\('opencodex-service\.cmd'\)/);
+    expect(live).not.toMatch(/\$pats = @\('opencodex-service\.cmd'\)/);
   });
 
   test("wrapper kill requires the canonical path as a complete command-line token", () => {

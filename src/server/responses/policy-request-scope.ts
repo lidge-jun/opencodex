@@ -1,4 +1,5 @@
 import { formatErrorResponse } from "../../bridge";
+import { markProxyError } from "../../lib/client-error-body";
 import type { RouteResult } from "../../router";
 import type { RouteDecisionTraceV1 } from "../../routing/trace";
 import { resolveOpenAiVirtualModel } from "../../providers/openai-virtual-models";
@@ -27,18 +28,43 @@ export class PolicyCandidateUnavailableError extends Error {
   }
 }
 
+export class MandatoryToolChoiceUnavailableError extends PolicyCandidateUnavailableError {
+  constructor() {
+    super();
+    this.name = "MandatoryToolChoiceUnavailableError";
+  }
+}
+
+export function mandatoryToolChoiceUnavailableResponse(): Response {
+  return markProxyError(formatErrorResponse(400, "invalid_request_error",
+    "This mandatory tool_choice cannot be preserved for a translated Chat destination."));
+}
+
 const localRefusals = new WeakSet<Response>();
+const mandatoryToolRefusals = new WeakSet<Response>();
 
 export function policyCandidateRefusalResponse(error: unknown): Response | undefined {
   if (!(error instanceof PolicyCandidateUnavailableError)) return undefined;
   const response = formatErrorResponse(409, "policy_candidate_unavailable", error.message);
   localRefusals.add(response);
+  if (error instanceof MandatoryToolChoiceUnavailableError) mandatoryToolRefusals.add(response);
   return response;
 }
 
 /** Upstream text or a matching error code cannot authorize another policy attempt. */
 export function isPolicyCandidateRefusal(response: Response): boolean {
   return localRefusals.has(response);
+}
+
+export function isMandatoryToolChoiceRefusal(response: Response): boolean {
+  return mandatoryToolRefusals.has(response);
+}
+
+/** Preserve local refusal authority when response lifetime owners wrap the body. */
+export function carryPolicyCandidateRefusal(source: Response, target: Response): Response {
+  if (localRefusals.has(source)) localRefusals.add(target);
+  if (mandatoryToolRefusals.has(source)) mandatoryToolRefusals.add(target);
+  return target;
 }
 
 export function capturePolicyRequestRoute(scope: PolicyRequestScope, route: RouteResult): RouteResult {

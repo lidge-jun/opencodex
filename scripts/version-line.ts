@@ -190,6 +190,57 @@ function previewIdentity(version: string): PreviewIdentity {
   };
 }
 
+/** Resolve the stamped release version without changing the committed development base. */
+export function devReleaseVersion(input: {
+  base: string;
+  stableTags: readonly string[];
+  previewTags: readonly string[];
+  channel: "latest" | "preview";
+  stamp?: string;
+}): string {
+  const planned = parseVersion(input.base);
+  if (!planned || planned.prerelease !== null || !/^\d+\.\d+\.\d+$/.test(input.base)) {
+    throw new Error(`development base must be a plain version: ${JSON.stringify(input.base)}`);
+  }
+  for (const tag of input.stableTags) {
+    const parsed = parseVersion(tag);
+    if (!parsed || parsed.prerelease !== null) throw new Error(`invalid stable tag: ${JSON.stringify(tag)}`);
+  }
+  const stable = newestVersion(input.stableTags);
+  const next = stable === null ? input.base : bumpCore(stable, "patch");
+  const core = compareVersions(input.base, next) >= 0 ? input.base : next;
+  const previews = input.previewTags.map(tag => {
+    const parsed = parseVersion(tag);
+    if (!parsed?.prerelease || parsed.prerelease[0] !== "preview"
+      || !/^\d{1,8}$/.test(parsed.prerelease[1] ?? "")
+      || parsed.prerelease.length > 3
+      || (parsed.prerelease[2] !== undefined && !/^\d+$/.test(parsed.prerelease[2]))) {
+      throw new Error(`invalid preview tag: ${JSON.stringify(tag)}`);
+    }
+    return { tag, parsed };
+  });
+  let candidate = core;
+  if (input.channel === "preview") {
+    if (!input.stamp || !/^\d{8}$/.test(input.stamp)) throw new Error("preview stamp must be YYYYMMDD");
+    const sameCore = previews.filter(item => versionCore(item.tag) === core);
+    const newest = newestVersion(sameCore.map(item => item.tag));
+    let ordinal = 1;
+    if (newest !== null) {
+      const prior = previews.find(item => item.tag === newest)!.parsed.prerelease!;
+      // Earlier releases used preview.1 rather than a calendar stamp. Their
+      // numeric identifier still participates in SemVer ordering below.
+      if (prior[1]!.length === 8) {
+        const identity = previewIdentity(newest);
+        if (input.stamp < identity.stamp) throw new Error("preview clock regression");
+        if (input.stamp === identity.stamp) ordinal = identity.ordinal + 1;
+      }
+    }
+    candidate = `${core}-preview.${input.stamp}.${ordinal}`;
+  }
+  assertAboveGlobalFloor(candidate, [...input.stableTags, ...input.previewTags]);
+  return candidate;
+}
+
 /** Resolve a preview core from the stable line, then succeed its same-core incumbent. */
 export function nextPreviewRelease(input: {
   kind: ReleaseBumpKind;

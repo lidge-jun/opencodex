@@ -19,7 +19,7 @@
 // Everything else in the row is left alone.
 
 import { PROVIDER_REGISTRY, normalizedProviderEndpoint } from "./registry";
-import { MINIMAX_M31_FLASH, MINIMAX_M31_FLASH_PREVIEW_RETIRED } from "./registry/model-seeds";
+import { KIMI_API_K31_REASONING_EFFORT_MAP, MINIMAX_M31_FLASH, MINIMAX_M31_FLASH_PREVIEW_RETIRED } from "./registry/model-seeds";
 import { MODEL_KEYED_RECORDS, MODEL_ID_LISTS, MODEL_ID_SCALARS, MODEL_NESTED_RECORDS } from "./model-rename-fields";
 import { providerConfigSeed } from "./derive";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -57,6 +57,12 @@ export interface ModelRename {
   dropNoReasoningModels?: boolean;
   /** Refresh exact registry defaults already saved under the replacement id. */
   targetSeedRefresh?: {
+    /**
+     * Refresh only values carried over from the retired id. Set this when the registry never
+     * seeded the replacement id with the stale values, so anything already saved under it is a
+     * user override even when it happens to equal the old seed.
+     */
+    onlyTransferred?: boolean;
     contextWindow?: { from: number; to: number };
     reasoning?: {
       fromEfforts: readonly string[];
@@ -121,6 +127,24 @@ export const MODEL_RENAMES: readonly ModelRename[] = [
   // rather than a merely outdated one.
   ...kimiCodingRenames("kimi", "subscription endpoint after K2.8 Preview shipped"),
   ...kimiCodingRenames("kimi-code", "coding endpoint after K2.8 Preview shipped"),
+  {
+    provider: "moonshot",
+    from: "kimi-k2.5",
+    to: "kimi-k3.1-pro",
+    // Verified 2026-10-28: https://platform.kimi.ai/docs/models.md
+    reason: "Moonshot discontinued K2.5 on 2026-08-31 and recommends K3.1 Pro for API users",
+    dropNoReasoningModels: true,
+    targetSeedRefresh: {
+      onlyTransferred: true,
+      contextWindow: { from: 262_144, to: 1_048_576 },
+      reasoning: {
+        fromEfforts: [],
+        toEfforts: ["low", "high", "max"],
+        defaultEffort: "max",
+        effortMap: KIMI_API_K31_REASONING_EFFORT_MAP,
+      },
+    },
+  },
   // Antigravity Flash generations. Google takes the previous Flash model off Cloud Code
   // Assist almost immediately when the next ships, so a saved 3.6 (or older 3.5) id is a
   // dead selection rather than a merely outdated one. Routing already redirects these ids
@@ -171,11 +195,12 @@ function dropRenamedIdsFromList(
   from: string,
   to: string,
   dropStaleTarget: boolean,
+  keepTarget = false,
 ): string[] | null {
   if (!Array.isArray(value)) return null;
   const hasRetired = value.includes(from);
-  if (!hasRetired && !(dropStaleTarget && value.includes(to))) return null;
-  return value.filter(entry => typeof entry === "string" && entry !== from && entry !== to);
+  if (!hasRetired && !(dropStaleTarget && !keepTarget && value.includes(to))) return null;
+  return value.filter(entry => typeof entry === "string" && entry !== from && (keepTarget || entry !== to));
 }
 
 function renameInRecord(value: unknown, from: string, to: string): Record<string, unknown> | null {
@@ -218,18 +243,22 @@ function targetReasoningMatchesStaleSeed(row: Record<string, unknown>, rename: M
 }
 
 /** Refresh only exact defaults emitted by the previous registry; preserve user overrides. */
-function refreshTargetSeed(row: Record<string, unknown>, rename: ModelRename): boolean {
+function refreshTargetSeed(
+  row: Record<string, unknown>, rename: ModelRename, savedBefore: { window: boolean; efforts: boolean },
+): boolean {
   const refresh = rename.targetSeedRefresh;
   if (!refresh) return false;
   let changed = false;
 
   const windows = row.modelContextWindows as Record<string, unknown> | undefined;
-  if (windows && refresh.contextWindow && windows[rename.to] === refresh.contextWindow.from) {
+  if (windows && refresh.contextWindow && windows[rename.to] === refresh.contextWindow.from
+    && !(refresh.onlyTransferred && savedBefore.window)) {
     windows[rename.to] = refresh.contextWindow.to;
     changed = true;
   }
 
   const reasoning = refresh.reasoning;
+  if (refresh.onlyTransferred && savedBefore.efforts) return changed;
   const efforts = row.modelReasoningEfforts as Record<string, unknown> | undefined;
   if (!reasoning || !efforts || !sameStringArray(efforts[rename.to], reasoning.fromEfforts)) return changed;
   efforts[rename.to] = [...reasoning.toEfforts];
@@ -359,6 +388,10 @@ export function projectModelRenames(
     // view rather than casting at each assignment.
     const row = prov as unknown as Record<string, unknown>;
     const seed = registrySeed(rename.provider);
+    const savedBefore = {
+      window: publishes(row.modelContextWindows, rename.to),
+      efforts: publishes(row.modelReasoningEfforts, rename.to),
+    };
     let touched = false;
     for (const field of MODEL_ID_LISTS) {
       if (isRegistryResidue(seed, field, row[field], rename)) continue;
@@ -368,6 +401,8 @@ export function projectModelRenames(
           rename.from,
           rename.to,
           targetReasoningMatchesStaleSeed(row, rename),
+          // A successor classification saved before the migration is the user's, not registry residue.
+          rename.targetSeedRefresh?.onlyTransferred === true,
         )
         : renameInList(row[field], rename.from, rename.to);
       if (!next) continue;
@@ -398,7 +433,7 @@ export function projectModelRenames(
       touched = true;
     }
     if (renameDisabledModels(config, rename)) touched = true;
-    if (touched && refreshTargetSeed(row, rename)) touched = true;
+    if (touched && refreshTargetSeed(row, rename, savedBefore)) touched = true;
 
     if (touched) {
       changed = true;

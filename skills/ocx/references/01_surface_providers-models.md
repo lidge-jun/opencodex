@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 49.
+Declared capabilities: 53.
 
 ### `ocx models price`
 
@@ -74,7 +74,7 @@ State-changing: yes. JSON mode: `envelope`.
 
 - Only routed provider/model selectors are supported. At least one option or --reset is required.
 - Context 0 or - and modalities/default effort - clear to null; reasoning efforts - restores inheritance while an empty string stores an empty ladder.
-- --reset clears all four overrides with null and cannot be combined with other settings. A saved-but-catalog-refresh-failed receipt must not be mistaken for an unsaved change.
+- --reset clears every override (including the API-only responsesCustomTools) with null and cannot be combined with other settings. A saved-but-catalog-refresh-failed receipt must not be mistaken for an unsaved change.
 
 ### `ocx provider list`
 
@@ -359,11 +359,33 @@ State-changing: yes. JSON mode: `envelope`.
 - Without a mutation flag this reads only. --clear sends models:[], not a model named -.
 - Read JSON is the CLI projection {provider, selected: string[], available: string[]}, not the API's provider-keyed maps; missing entries become empty arrays. --set/--clear JSON returns the server's write receipt unchanged.
 
+### `ocx provider import-cc-switch`
+
+Usage: `ocx provider import-cc-switch [--source <cc-switch.db|config.json>] [--provider <id>]... [--apply | --restore] [--allow-private-network] [--json]`
+
+Preview, apply, or restore keyless CC-Switch provider entries locally.
+
+State-changing: yes. JSON mode: `payload`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--source` | string | CC-Switch SQLite database or legacy JSON file; required for preview and apply. |
+| `--provider` | string | Repeatable source ID or target provider name filter. |
+| `--apply` | boolean | Write eligible keyless provider entries and record a rollback journal; requires a stopped proxy. |
+| `--restore` | boolean | Remove unedited keyless providers recorded by the active import journal; requires a stopped proxy. |
+| `--allow-private-network` | boolean | Permit loopback or private-network provider base URLs. |
+| `--json` | boolean | Emit the preview, apply, or restore report as JSON. |
+
+- Projects values only from an explicit allowlist of non-secret metadata fields (provider IDs, app types, base URLs, wire dialects, and default models); source and embedded-config bytes are read transiently while secret fields, free-text names, and TOML comments are skipped at the byte level and never decoded into strings, written, or logged, and transient byte buffers are zeroed in finally.
+- Only import from a trusted local CC-Switch source: apply prints every imported ID, model, and destination URL before writing, refuses SQLite hard links (nlink > 1) and non-empty -wal/-journal sidecars until CC-Switch is closed, and opens sources read-only with O_NOFOLLOW|O_NONBLOCK descriptor checks; restore inspects auth.json read-only at the byte level and retains any provider that was edited, selected as defaultProvider, or referenced by routing, combos, fallback policy, OAuth accounts, or API keys.
+
 ### `ocx models list`
 
 Usage: `ocx models list [--provider <name>] [--json]`
 
-List static configured models locally.
+List local configured and router-known models.
 
 State-changing: no. JSON mode: `envelope`.
 
@@ -372,9 +394,9 @@ Drives no management route.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--provider` | string | Limit to a configured provider. |
-| `--json` | boolean | Emit models and the static-catalog note. |
+| `--json` | boolean | Emit models and the local-catalog note. |
 
-- A bare models invocation is equivalent. Reads local config, never the live catalog; use models live for runtime discovery.
+- A bare models invocation is equivalent. Includes saved IDs, registry seeds, custom models and this process's discovery cache; use models live for the running catalog.
 
 ### `ocx models add`
 
@@ -594,7 +616,7 @@ State-changing: yes. JSON mode: `payload`.
 
 ### `ocx models new-policy`
 
-Usage: `ocx models new-policy [on|off] [--provider <name>] [--json]`
+Usage: `ocx models new-policy [on|off|admit] [--provider <name>] [--json]`
 
 Read or set the policy for newly discovered models.
 
@@ -610,7 +632,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--provider` | string | Scope the read/write to a provider; omitted means global. |
 | `--json` | boolean | Emit the policy view or receipt. |
 
-- No state operand means read only. Only on/off writes exist; no inherit/clear operand is implemented.
+- No state operand means read only. Writes on, off or admit; admit appends new arrivals to a provider's custom selectedModels and never widens a preset-derived selection. No inherit/clear operand is implemented.
 
 ### `ocx models new-arrivals`
 
@@ -838,6 +860,56 @@ State-changing: yes. JSON mode: `payload`.
 |---|---|---|
 | `--provider` | string | Limit the toggle to one provider. |
 | `--json` | boolean | Emit the alias settings receipt. |
+
+### `ocx alias template set`
+
+Usage: `ocx alias template set <provider> <template> [--json]`
+
+Set a provider's opt-in alias template for models without an alias.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/providers/{provider}/alias-template` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the receipt with the generated and skipped preview. |
+
+- Only the literal {providerAlias} and {modelBasename} placeholders are allowed, and {modelBasename} is required. Aliases are derived when models resolve and never written to config. Manual and built-in aliases win; a generated name that collides with anything already claimed is skipped, never renamed.
+
+### `ocx alias template rm`
+
+Usage: `ocx alias template rm <provider> [--json]`
+
+Remove a provider's alias template; its generated aliases disappear at once.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/providers/{provider}/alias-template` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the receipt. |
+
+### `ocx alias template show`
+
+Usage: `ocx alias template show [<provider>] [--json]`
+
+Read configured alias templates.
+
+State-changing: no. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/aliases` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the template map, or one provider's template. |
 
 ### `ocx provider pacing`
 

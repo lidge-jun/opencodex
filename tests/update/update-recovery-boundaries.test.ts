@@ -12,6 +12,7 @@ import { prepareWorkerUpdateHome } from "../../src/update/job-update-home";
 import { createSupervisionLatch } from "../../src/service/desktop-supervision.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../../src/update/tray-update-plan.mjs";
 import { transactionalNpmUpdate, transactionalNpmUpdateAsync, launcherUsableAfterNpmUpdate } from "../../src/update/transactional-install.mjs";
+import { createLegacyUpdateSession } from "../../src/update/orchestrated-session.mjs";
 
 const node = readFileSync(repoPath("bin/ocx.mjs"), "utf8");
 const bun = readFileSync(repoPath("src/update/index.ts"), "utf8");
@@ -54,7 +55,7 @@ for (const platform of ["win32", "linux"] as const) {
           expect(command.args).toContain("--update-package-only");
           expect(command.args).toContain("--update-worker-home");
         }
-        const body = section(node, "async function runPackageManagerSelfUpdate(manager) {", "function bunBinDir(")
+        const body = section(node, "async function runPackageManagerSelfUpdate(manager, child) {", "function bunBinDir(")
           .replaceAll("import.meta.url", JSON.stringify(new URL("../../bin/ocx.mjs", import.meta.url).href));
         const stage = (args: string[]) => {
           tree(join(args[args.indexOf("--prefix") + 1]!, "node_modules", "@bitkyc08", "opencodex"), "2.0.0");
@@ -64,8 +65,9 @@ for (const platform of ["win32", "linux"] as const) {
           return { status: 0, processTreeExited: true };
         };
         await execute(body + 'return runPackageManagerSelfUpdate("npm");', {
-          process: { argv: packageOnly ? [process.execPath, ...command.args] : [process.execPath, launcher, "update"], env: {}, execPath: process.execPath, platform,
+          process: { argv: packageOnly ? [process.execPath, ...command.args] : [process.execPath, launcher, "update"], env: {}, execPath: process.execPath, platform, once: () => {},
             exit: (code: number) => { exits.push(code); throw code; } },
+          createLegacyUpdateSession,
           console: { log: (line: string) => logs.push(line), warn: (line: string) => logs.push(line), error: (line: string) => logs.push(line) },
           PKG: "@bitkyc08/opencodex", here: join(live, "bin"), dirname, join, resolve, fileURLToPath,
           currentPackageVersion: () => "1.0.0", updateTag: () => "latest",
@@ -92,6 +94,7 @@ for (const platform of ["win32", "linux"] as const) {
           acquireOwnershipMutationLease: () => ({ token: "fixture", release() {} }),
           transactionalNpmUpdateAsync, transactionalNpmUpdateSync: transactionalNpmUpdate,
           runNpmInstall: async (invocation: { args: string[] }) => { await Promise.resolve(); return stage(invocation.args); },
+          runPosixInstallerSync: ({ args }: { args: string[] }) => ({ ...stage(args), groupExited: true, groupKilled: false }),
           launcherUsableAfterNpmUpdate, npmUpdateFailureGuidance, repairCodexShimIfNeeded() {}, launcherStartHint: () => "fixture start",
         }).catch((error: unknown) => { if (typeof error !== "number") throw error; });
         expect(installed).toBe(true);
@@ -133,10 +136,12 @@ for (const outcome of ["false", "throw", "promise"] as const) test(`async transa
 
 test("production pinned caller checks current service permission inside its wrapper callback", async () => {
   const prepare = section(worker, "function preparePortForPinnedStart(", "function spawnDetachedStart(");
-  const caller = section(worker, '    if (!homePolicy.authorizeMutation("runtime")) return false;\n    if (preparePort(', "    const ready = await waitForGhost(");
+  // #7771: the service stop now runs right before the synchronous preparation, so its outcome can
+  // abort; the service permission is still read immediately before it.
+  const caller = section(worker, '    if (!homePolicy.authorizeMutation("runtime")) return false;\n    // #7771', "    const ready = await waitForGhost(");
   for (const changed of ["same", "absent", "unknown"] as const) {
     let reads = 0, wrappers = 0, cleanup = 0;
-    const homePolicy = createUpdateServiceHomePolicy(() => ({ kind: ++reads < 3 ? "same" : changed }), () => {});
+    const homePolicy = createUpdateServiceHomePolicy(() => ({ kind: ++reads < 2 ? "same" : changed }), () => {});
     const result = await execute(prepare + "const preparePort = preparePortForPinnedStart;" + caller, {
       homePolicy, reclaimGate: () => homePolicy.authorizeMutation("runtime"), job: {}, port: 19001,
       listPids: () => [], aliveFn: () => false, verifyOcx: () => null, serviceInstalled: true,
@@ -238,7 +243,7 @@ for (const caller of callers) for (const outcome of ["vetoed", "refused", true] 
 test("production Node full stop refuses lost service permission before Windows wrapper cleanup", async () => {
   const stop = section(node, "    const stopNeeded =", "    const replacementOwnership =");
   const childStop = section(readFileSync(repoPath("src/service/orchestration.ts"), "utf8"),
-    "export function stopServiceIfInstalledDetailed()", "/** Delete install-state files").replace("export ", "");
+    "export async function stopServiceIfInstalledReport(", "/** Delete install-state files").replaceAll("export ", "");
   const guard = section(readFileSync(repoPath("src/service/guards.ts"), "utf8"),
     "export function assertServiceEnvironmentMatchesInstall(", "/**\n * Refuse a management").replace("export ", "");
   for (const [captured, changed] of [[true, "same"], [true, "absent"], [true, "unknown"], [false, "absent"]] as const) {
@@ -257,8 +262,10 @@ test("production Node full stop refuses lost service permission before Windows w
       resolveServiceState: () => ({ kind: changed === "same" ? "state" : "none", state: {} }),
       currentCodexHome: () => "", serviceCodexHomeMatchesInstall: () => true,
       currentOpenCodexHome: () => "", servicePathMatchesInstall: () => true,
-      probeWindowsSchedulerTask: () => ({ status: "absent" }), statusWinswRaw: () => "nonexistent",
-      killWindowsServiceWrapperProcesses: () => { wrappers++; }, classifyWindowsServiceStop: () => "absent",
+      // #7771: Part A of the checked stop is the Windows wrapper cleanup now; it is called
+      // synchronously at the first await, so a lost permission must refuse before it.
+      runWindowsServiceStopPartA: async () => { wrappers++; return { outcome: "absent" }; },
+      serviceStopOutcomeFromWindows: () => "absent",
       spawnSync: () => {
         stops++;
         const js = new Bun.Transpiler({ loader: "ts" }).transformSync(guard + childStop);

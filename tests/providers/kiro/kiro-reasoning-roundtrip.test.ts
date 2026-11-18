@@ -300,3 +300,52 @@ describe("kiro native reasoning effort — the GPT-5.6 family", () => {
       .toEqual({ output_config: { effort: "xhigh" } });
   });
 });
+
+// Live probe on 2026-11-07: Kiro accepted output_config.effort at every rung for these Claude
+// models except xhigh on the 4.6 pair, and rejected it (HTTP 400) for Haiku 4.5, Opus 4.5 and Sonnet 4.5.
+describe("kiro native reasoning effort — probed Claude models", () => {
+  function wireBody(modelId: string, effort: string): Record<string, unknown> {
+    const parsed = {
+      modelId,
+      stream: true,
+      options: { reasoning: effort, maxOutputTokens: 1000 },
+      context: { messages: [{ role: "user", content: "solve" }] },
+    } as unknown as Parameters<typeof buildKiroPayload>[0];
+    return buildKiroPayload(parsed, undefined, "disabled", "ide").payload;
+  }
+  const content = (body: Record<string, unknown>) => (body.conversationState as {
+    currentMessage: { userInputMessage: { content: string } };
+  }).currentMessage.userInputMessage.content;
+  const RUNGS = ["low", "medium", "high", "xhigh", "max"];
+  const NATIVE: Record<string, string[]> = {
+    "claude-opus-5.5": RUNGS, "claude-opus-5": RUNGS, "claude-opus-4.8": RUNGS, "claude-opus-4.7": RUNGS,
+    "claude-sonnet-5.5": RUNGS, "claude-sonnet-5": RUNGS, "claude-haiku-5.5": RUNGS,
+    "claude-opus-4.6": ["low", "medium", "high", "max"], "claude-sonnet-4.6": ["low", "medium", "high", "max"],
+  };
+
+  for (const [modelId, efforts] of Object.entries(NATIVE)) {
+    test(`${modelId} sends its accepted rungs natively, with no thinking tags`, () => {
+      for (const effort of efforts) {
+        const body = wireBody(modelId, effort);
+        expect(body.additionalModelRequestFields).toEqual({ output_config: { effort } });
+        expect(content(body)).toBe("solve");
+      }
+    });
+  }
+
+  test("xhigh on the 4.6 pair stays emulated", () => {
+    for (const modelId of ["claude-opus-4.6", "claude-sonnet-4.6"]) {
+      const body = wireBody(modelId, "xhigh");
+      expect(body.additionalModelRequestFields).toBeUndefined();
+      expect(content(body)).toContain("<thinking_mode>enabled</thinking_mode>");
+    }
+  });
+
+  test("models that rejected the native field stay emulated", () => {
+    for (const modelId of ["claude-haiku-4.5", "claude-opus-4.5", "claude-sonnet-4.5"]) {
+      const body = wireBody(modelId, "high");
+      expect(body.additionalModelRequestFields).toBeUndefined();
+      expect(content(body)).toContain("<thinking_mode>enabled</thinking_mode>");
+    }
+  });
+});

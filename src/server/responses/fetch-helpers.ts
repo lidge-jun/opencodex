@@ -19,6 +19,7 @@ import {
 } from "../../providers/request-pacing";
 import { withUpstreamHttpVersion } from "../../lib/upstream-http-version";
 import { providerTlsFetch } from "../../lib/provider-tls-profile";
+import { inheritPassiveKeyProof, markPassiveKeyTransparent } from "../../lib/passive-key-fetch-proof";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { configuredOutboundFetch } from "../../lib/proxy-env";
 import { isLoopbackUrl, rewriteUpstream } from "../../plugins/upstream-hooks";
@@ -33,6 +34,7 @@ import {
 import { redactSecretString } from "../../lib/redact";
 import { outboundCredentials } from "../../lib/outbound-credential-registry";
 import { compressUpstreamRequestBody, isCanonicalCodexResponsesUrl } from "./request-compression";
+import { redeemOutboundTurnState, TURN_STATE_BINDING_INIT, turnStateBinding } from "../turn-state-handles";
 
 export { withUpstreamHttpVersion };
 
@@ -53,13 +55,23 @@ const PHYSICAL_DISPATCH = Symbol.for("opencodex.physical-dispatch");
 // Final destination and headers after plugin rewrites and queued rebuilds, for observers that
 // must attribute a response to the credential that actually reached the wire.
 const PHYSICAL_SEND_OBSERVER = Symbol.for("opencodex.physical-send-observer");
+const PHYSICAL_SEND_GUARD = Symbol.for("opencodex.physical-send-guard");
 export type AccountAutoPauseObserver = ((response: Response) => Promise<Response>) & {
   physical?: (sameDestination: boolean, headers: Headers) => void;
 };
 /** Init fragment that reports the final send of the observer's attempt; empty when nothing observes. */
-export function physicalSendObserverInit(observer: AccountAutoPauseObserver | undefined, target: string): Record<symbol, unknown> {
+export function physicalSendObserverInit(observer: AccountAutoPauseObserver | undefined, target: string, onPhysicalSend?: () => void,
+  onFinalSend?: (sameDestination: boolean, headers: Headers) => void): Record<symbol, unknown> {
   const physical = observer?.physical;
-  return physical ? { [PHYSICAL_SEND_OBSERVER]: (destination: string, headers: Headers) => physical(destination === target, headers) } : {};
+  let noted = false;
+  return physical || onPhysicalSend || onFinalSend ? { [PHYSICAL_SEND_OBSERVER]: (destination: string, headers: Headers) => {
+    if (onPhysicalSend && !noted) { onPhysicalSend(); noted = true; }
+    physical?.(destination === target, headers);
+    onFinalSend?.(destination === target, headers);
+  } } : {};
+}
+export function physicalSendGuardInit(guard: (destination: string, headers: Headers) => void): Record<symbol, unknown> {
+  return { [PHYSICAL_SEND_GUARD]: guard };
 }
 // One WS attempt and its HTTP fallback are one logical physical-send receipt.
 const WS_FALLBACK_RECEIPT = Symbol.for("opencodex.ws-fallback-receipt");
@@ -229,7 +241,8 @@ export function sendWithConnectionPolicy(
   const largeCodexBody = !compressed && typeof body === "string"
     && isCanonicalCodexResponsesUrl(target)
     && Buffer.byteLength(body, "utf8") >= 1024 * 1024;
-  (init as Record<symbol, (() => void) | undefined> | undefined)?.[PHYSICAL_DISPATCH]?.();
+  (init as Record<symbol, ((destination: string, headers: Headers) => void) | undefined> | undefined)?.[PHYSICAL_SEND_GUARD]?.(target, headers);
+  (init as Record<symbol, ((body: BodyInit | null | undefined) => void) | undefined> | undefined)?.[PHYSICAL_DISPATCH]?.(body);
   (init as Record<symbol, ((destination: string, headers: Headers) => void) | undefined> | undefined)?.[PHYSICAL_SEND_OBSERVER]?.(target, headers);
   // Final headers, after plugin rewrites: an upstream can only echo what it received here, so the
   // request log refuses any diagnostic that repeats one of these values (see request-log-terminal-status).
@@ -283,7 +296,9 @@ export interface ProviderFetchOptions {
   /** Synchronous admission at actual credential dispatch, after pacing/backoff. */
   beforeDispatch?: (headers: Headers) => void;
   /** One-shot receipt after final local HTTP admission, immediately before executor entry. */
-  onPhysicalDispatch?: () => void;
+  onPhysicalDispatch?: (body?: BodyInit | null) => void;
+  /** Repeatable admission for native successor creates, after pacing and auth checks. */
+  onContinuationDispatch?: (frame: { body: Record<string, unknown>; text: string }) => void;
   /**
    * Opt-in (#6969): let a Codex WebSocket send hold empty lifecycle frames so an authoritative
    * upstream refusal before any output settles as a replayable gateway status. Only a caller that
@@ -320,6 +335,7 @@ export function providerFetch(
     (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => configuredOutboundFetch(input, init),
     { preconnect: globalThis.fetch.preconnect?.bind(globalThis.fetch) },
   ) as typeof globalThis.fetch);
+  markPassiveKeyTransparent(configuredFetch);
   const base = customExecutor ?? configuredFetch;
   const transport = options.providerName ? providerTlsFetch(options.providerName, provider, base) : base;
   const preconnect = (...args: Parameters<typeof globalThis.fetch.preconnect>): void => {
@@ -340,6 +356,7 @@ export function providerFetch(
       sendWithConnectionPolicy(transport, input, init, egressBinding),
     { preconnect },
   ) as typeof globalThis.fetch);
+  inheritPassiveKeyProof(dispatch, transport);
   const httpFetch = Object.assign(
     async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit,
       reacquirePacing?: (provider: OcxProviderConfig, modelId?: string) => Promise<void>,
@@ -363,12 +380,12 @@ export function providerFetch(
       options.beforeDispatch?.(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)));
       // No proxy option is attached here: a `dispatchOverride` may rebuild this request against
       // a different destination, so the route is decided at the physical send instead.
-      const sharedReceipt = (init as Record<symbol, (() => void) | undefined> | undefined)?.[WS_FALLBACK_RECEIPT];
+      const sharedReceipt = (init as Record<symbol, ((body: BodyInit | null | undefined) => void) | undefined> | undefined)?.[WS_FALLBACK_RECEIPT];
       let notified = false;
       const dispatchInit = { ...withUpstreamHttpVersion(input, init, provider), timeout: 0,
-        ...(options.onPhysicalDispatch ? { [PHYSICAL_DISPATCH]: () => {
-          if (sharedReceipt) sharedReceipt();
-          else if (!notified) { options.onPhysicalDispatch!(); notified = true; }
+        ...(options.onPhysicalDispatch ? { [PHYSICAL_DISPATCH]: (body: BodyInit | null | undefined) => {
+          if (sharedReceipt) sharedReceipt(body);
+          else if (!notified) { options.onPhysicalDispatch!(body); notified = true; }
         } } : {}),
       };
       return override
@@ -382,6 +399,10 @@ export function providerFetch(
   // else keeps the provider's HTTP fetch. See ws-upstream.ts for the details.
   const unobserved = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit,
     reacquirePacing?: (provider: OcxProviderConfig, modelId?: string) => Promise<void>) => {
+    // Turn-state handles are redeemed here, at the send, where the admitted caller, the provider and
+    // the outbound account are all settled; a handle bound to anything else is not forwarded.
+    const sendHeaders = (sent?: RequestInit) => new Headers(sent?.headers ?? (input instanceof Request ? input.headers : undefined));
+    init = redeemOutboundTurnState(init, turnStateBinding(providerName, sendHeaders(init)));
     const upstreamWebsocket = provider.upstreamWebsocket;
     if (!options.httpOnly && typeof input === "string" && init
       && shouldUseCodexWsUpstream(input, init, runtime, upstreamWebsocket)) {
@@ -405,16 +426,17 @@ export function providerFetch(
       // request over HTTP, and dropping the provider's `upstreamHttpVersion`
       // there would silently negotiate a transport the operator ruled out.
       let notified = false;
-      const notifyOnce = (): void => {
+      const notifyOnce = (body: BodyInit | null | undefined): void => {
         if (notified) return;
+        options.onPhysicalDispatch?.(body);
         notified = true;
-        options.onPhysicalDispatch?.();
       };
       const fallback = ((url: Parameters<typeof globalThis.fetch>[0], fallbackInit?: RequestInit) =>
         httpFetch(url, { ...fallbackInit, [WS_FALLBACK_RECEIPT]: notifyOnce } as RequestInit, reacquirePacing, null)) as typeof globalThis.fetch;
-      const wsSend = codexWsExecutor((url: Parameters<typeof globalThis.fetch>[0], wsInit?: RequestInit) => codexWsUpstreamFetch(String(url), wsInit ?? init,
+      const wsSend = codexWsExecutor((url: Parameters<typeof globalThis.fetch>[0], wsInit?: RequestInit) => codexWsUpstreamFetch(String(url),
+        { ...(wsInit ?? init), [TURN_STATE_BINDING_INIT]: turnStateBinding(providerName, sendHeaders(wsInit ?? init)) } as RequestInit,
         fallback, runtime, options.onCodexWsQuota, options.beforeDispatch, options.nativeControl,
-        async () => { (await waitForPacing(init.signal ?? undefined))?.release(); }, notifyOnce, options.preOutputRefusalHold),
+        async () => { (await waitForPacing(init.signal ?? undefined))?.release(); }, notifyOnce, options.preOutputRefusalHold, options.onContinuationDispatch),
         { provider, http: markEgressTransparentExecutor(fallback) });
       // A WS frame is a physical send like any other, so it runs the same override: that is where a
       // key-auth send is committed to its attempt row and the send budget is rebound to the

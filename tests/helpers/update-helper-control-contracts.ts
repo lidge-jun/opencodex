@@ -2,7 +2,34 @@
 // Runtime mutation guards enforce authority and freshness.
 // Probe, private-artifact cleanup and committed-swap rollback rows confer no new runtime authority.
 type Contract = readonly [file: string, context: string, call: string, count: number, contract: string];
-export const helperControlContracts: readonly Contract[] = [
+import { orchestratedChildReview } from "./update-review-orchestrated-child";
+import { orchestratedEntryReview } from "./update-review-orchestrated-entry";
+import { signedSupplyReview } from "./update-review-signed-supply";
+
+const baseHelperControlContracts: readonly Contract[] = [
+  ["src/lib/desktop-cli-handoff.mjs","runDesktopCliHandoff","launch.onSpawn(child.pid)",1,"pre-mutation: publish the sync lease delegate for the launched child"],
+  ["src/lib/desktop-cli-handoff.mjs","runDesktopCliHandoff","child.kill()",1,"pre-mutation: terminate the exact handoff child when delegate publication fails"],
+  ["src/service/ownership-mutation-lease.mjs","createLeaseHandle","writeFileSync(temporary, `${JSON.stringify({ ...observed.record, delegatePid: pid })}\\n`, { flag: \"wx\", mode: 0o600 })",1,"pre-mutation: publish a delegate only for the verified held lease"],
+  ["src/service/ownership-mutation-lease.mjs","createLeaseHandle","renameSync(temporary, observed.ownerPath)",1,"pre-mutation: replace the verified held lease delegate record"],
+  ["src/service/ownership-mutation-lease.mjs","createLeaseHandle","unlinkSync(temporary)",1,"pre-mutation: clean up this lease delegate temporary file"],
+  ["src/update/npm-install.mjs","runWindowsInstallerSync","guardedSpawnSync(authorizeMutation, \"package\", process.execPath, [\"--input-type=module\", \"-e\", script], { input: JSON.stringify({ invocation, timeoutMs, markerPath }), env, cwd, encoding: \"utf8\", windowsHide: true, stdio: [\"pipe\", \"pipe\", \"inherit\"], })",1,"guarded: package authorization immediately before Windows installer supervisor spawn"],
+  ["src/update/posix-install-supervisor.mjs","runPosixInstallerSync","guardedSpawnSync(authorizeMutation, \"package\", process.execPath, [entry, \"supervise\"], { input, encoding: \"utf8\", env, cwd, stdio: [\"pipe\", \"pipe\", \"inherit\"] })",1,"guarded: package authorization immediately before POSIX installer supervisor spawn"],
+  ["src/update/posix-install-supervisor.mjs","publish","writeFileSync(temp, JSON.stringify({ ...marker, installerPid: pid, installerPgid: pid }), { flag: \"wx\", mode: 0o600 })",1,"supervisor child: replaces only an existing marker in phase mutating with an integer pid (exclusive 0600 temp then rename); every reviewed caller passes join(configDir(), update-orchestrated.json)"],
+  ["src/update/posix-install-supervisor.mjs","publish","renameSync(temp, path)",1,"supervisor child: replaces only an existing marker in phase mutating with an integer pid; every reviewed caller passes join(configDir(), update-orchestrated.json)"],
+  ["src/update/posix-install-supervisor.mjs","publish","unlinkSync(temp)",1,"supervisor child: removes only its own unrenamed temp file"],
+  ["src/update/windows-installer-marker.mjs","publishWindowsInstallerPid","writeFileSync(temp, JSON.stringify({ ...marker, installerPid: pid }), { flag: \"wx\", mode: 0o600 })",1,"launcher or Windows bridge: replaces only a marker awaiting an installer (mutating, termination unconfirmed, no POSIX group, no live recorded supervisor) with the supervisor pid (exclusive 0600 temp then rename); every reviewed caller passes join(configDir(), update-orchestrated.json)"],
+  ["src/update/windows-installer-marker.mjs","publishWindowsInstallerPid","renameSync(temp, markerPath)",1,"launcher or Windows bridge: replaces only a marker awaiting an installer with the supervisor pid; every reviewed caller passes join(configDir(), update-orchestrated.json)"],
+  ["src/update/windows-installer-marker.mjs","publishWindowsInstallerPid","unlinkSync(temp)",1,"launcher or Windows bridge: removes only its own unrenamed temp file"],
+  ["src/update/posix-install-supervisor.mjs","alive","process.kill(-pgid, 0)",1,"supervisor child: signal-zero probe of the installer group this supervisor spawned"],
+  ["src/update/posix-install-supervisor.mjs","supervise","spawn(process.execPath, [entry, \"install\"], { detached: true, stdio: [\"pipe\", \"ignore\", \"inherit\"], cwd: config.cwd, env: process.env })",1,"supervisor child: starts its own detached installer group; reviewed caller runPosixInstallerSync launches this entry via guardedSpawnSync(authorizeMutation, 'package') at posix-install-supervisor.mjs:18"],
+  ["src/update/posix-install-supervisor.mjs","supervise","process.kill(-pid, \"SIGKILL\")",2,"supervisor child: terminates only the installer group this supervisor spawned"],
+  ["src/update/posix-install-supervisor.mjs","runPosixInstallerSupervisorMain","spawn(input.file, input.args, { cwd: input.cwd, env: process.env, stdio: [\"ignore\", \"inherit\", \"inherit\"] })",1,"supervisor child: runs exactly the installer its stdin caller supplied, with the invoking user's authority; reviewed caller runPosixInstallerSync launches this entry via guardedSpawnSync(authorizeMutation, 'package') at posix-install-supervisor.mjs:18"],
+  ["src/update/posix-install-supervisor.mjs","runPosixInstallerSupervisorMain","process.kill(process.pid, signal)",1,"supervisor child: re-raises the installer's terminating signal on itself"],
+  ["src/update/sync-update-mutex.mjs","ensureHome","mkdirSync(home, { mode: 0o700 })",1,"pre-mutation: create missing private home for admission mutex"],
+  ["src/update/sync-update-mutex.mjs","inspectUpdateMarker","openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))",1,"read-only: open marker without following symlinks"],
+  ["src/update/sync-update-mutex.mjs","inspectUpdateMarker","readSync(fd, buffer, 0, buffer.length, 0)",1,"read-only: inspect bounded update marker"],
+  ["src/update/sync-update-mutex.mjs","inspectUpdateMarker","process.kill(id, 0)",1,"read-only: signal-zero marker owner liveness check"],
+  ["src/update/sync-update-mutex.mjs","inspectUpdateMarker","closeSync(fd)",1,"read-only: close marker read descriptor"],
   ["src/update/notify.ts","maybeShowUpdatePrompt","process.exit(0)",1,"terminal prompt completes after ordinary runUpdate; no new update success publication"],
   ["src/update/service-home-probe-entry.ts","<module>","process.exit(1)",1,"reject malformed bounded probe argv"],
   ["src/update/notify.ts","maybeShowUpdatePrompt","createInterface({ input: process.stdin, output: process.stdout })",1,"ordinary terminal choice prompt, no update control"],
@@ -10,12 +37,14 @@ export const helperControlContracts: readonly Contract[] = [
   ["src/update/npm-install.mjs","runNpmInstall","process.stderr.write(chunk)",1,"forward own staging installer's diagnostic stream"],
   ["src/update/pnpm-read-policy.mjs","withPnpmCommandCwd","mkdtempSync(join(tmpdir(), \"ocx-pnpm-command-\"))",1,"exclusive disposable pnpm read-policy cwd"],
   ["src/update/pnpm-read-policy.mjs","withPnpmCommandCwd","rmdirSync(cwd)",1,"remove only identity-checked empty private command cwd"],
+  ["src/update/transactional-install.mjs","verifyPnpmInstallTree","/(?:^|[\\s\"'])--preserve-symlinks",1,"read-only: detect --preserve-symlinks in the running process flags"],
+  ["src/update/transactional-install.mjs","verifyPnpmInstallTree","[...process.execArgv, process.env.NODE_OPTIONS",1,"read-only: join the running process flags for the --preserve-symlinks check"],
   ["src/update/transactional-install.mjs","createOwnedStage","mkdir(stageRoot)",1,"exclusive randomly named private stage, never reuse an existing directory"],
   ["src/update/transactional-install.mjs","createOwnedStage","mkdir(join(stageRoot, \"lib\"))",1,"npm layout inside the exclusively owned stage"],
   ["src/update/transactional-install.mjs","npmUpdateTransaction","mkdirSync(backupRoot, { recursive: true })",1,"empty backup container; live swap separately guarded"],
   ["src/lib/bun-path-runtime.mjs","findPathBun","spawn(path, args,",1,"read-only bounded process/registration/registry probe"],
   ["src/lib/desktop-cli-handoff.mjs","runDesktopCliHandoff","spawnChild(plan.target,",1,"ordinary CLI handoff excludes update before child selection"],
-  ["src/lib/desktop-cli-handoff.mjs","runDesktopCliHandoff","child.kill(signal)",1,"ordinary handoff signal relay to its exact child"],
+  ["src/lib/launcher-signal-forwarding.mjs","forwardLauncherSignals","child.kill(signal)",1,"ordinary launcher signal relay to its exact attached child"],
   ["src/lib/desktop-cli-record.mjs","noMacAcl","spawnSync(\"/bin/ls\",",1,"read-only bounded process/registration/registry probe"],
   ["src/service/desktop-supervision.mjs","run","execFileSync(command, args,",1,"read-only bounded process/registration/registry probe"],
   ["src/service/ownership-mutation-lease.mjs","processAlive","process.kill(pid, 0)",1,"read-only bounded process/registration/registry probe"],
@@ -31,15 +60,18 @@ export const helperControlContracts: readonly Contract[] = [
   ["src/update/notify.ts","triggerBackgroundRefreshIfStale","probeSpawn(process.execPath, args,",1,"version-cache refresh child; no package/runtime/service controls"],
   ["src/update/npm-cache-preflight.mjs","runPreflightWorker","probeSpawn( options.execPath ?? process.execPath, workerArgs,",1,"private cache preflight worker, no live package/runtime mutation"],
   ["src/update/npm-install.mjs","runNpmInstall","guardedSpawn(authorizeMutation, \"package\", supervisor,",1,"single package dispatch from guarded bin/ocx.mjs callback; live swap separately reauthorized"],
-  ["src/update/npm-install.mjs","runNpmInstall","child.kill()",2,"terminate only own npm supervisor; unconfirmed tree retains stage"],
+  ["src/update/npm-install.mjs","runNpmInstall","child.kill()",3,"terminate only own npm supervisor; unconfirmed tree retains stage; an unrecorded supervisor is killed before it receives a request"],
   ["src/update/npm-install-job.ps1","native installer job","RequireAttribute(CreateProcess(file,",1,"create staging installer atomically in its own Job Object, no live swap"],
   ["src/update/npm-install-job.ps1","native installer job","Require(TerminateJobObject(job, 1));",1,"terminate only this installer's owned job and join before stage removal"],
   ["src/update/npm-install-job.ps1","native installer job","TerminateJobObject(job, 1);",1,"error cleanup only this installer's owned job, never discovered processes"],
   ["src/update/ownership-transaction.ts","withUpdateOwnershipLease","run({",1,"lease callback; guarded caller owns actual update controls"],
   ["src/update/pnpm-global-install.mjs","singleAbsoluteCommandPath","runPnpm(commandPath, args, true)",1,"read-only bounded process/registration/registry probe"],
+  ["src/update/pnpm-global-install.mjs","readPnpmStore","runPnpm([\"--version\"], true)",1,"read-only pnpm version probe for the global-store proof"],
+  ["src/update/pnpm-global-install.mjs","readPnpmStore","runPnpm([\"store\", \"path\", `--dir=${homeAnchor}`], true)",1,"read-only store query anchored at pnpm home, same runner and read cwd as list -g"],
+  ["src/update/pnpm-global-install.mjs","readPnpmStore","runPnpm(args, true)",1,"read-only selected virtual-store configuration query under the read policy"],
   ["src/update/pnpm-global-install.mjs","readPnpmGlobalPackage","runPnpm(ownerGlobalArgs([\"list\",",1,"read-only bounded process/registration/registry probe"],
   ["src/update/pnpm-global-install.mjs","listGlobalPackage","runPnpm(commandPath, [\"list\",",1,"read-only bounded process/registration/registry probe"],
-  ["src/update/pnpm-global-install.mjs","resolvePnpmGlobalOwner","runPnpm(commandPath, args, capture)",1,"read-only bounded process/registration/registry probe"],
+  ["src/update/pnpm-global-install.mjs","resolvePnpmGlobalOwner","runPnpm(commandPath, args, capture, owner)",1,"read-only bounded process/registration/registry probe"],
   ["src/update/pnpm-global-install.mjs","runPnpmGlobalUpdate","runPnpm(ownerGlobalArgs([\"add\",",2,"callback reauthorizes package immediately before spawn in bin/ocx.mjs or runOwnedPnpm"],
   ["src/update/pnpm-read-policy.mjs","withPnpmCommandCwd","run(PNPM_READ_CWD)",1,"callback reauthorizes package immediately before spawn in bin/ocx.mjs or runOwnedPnpm"],
   ["src/update/pnpm-read-policy.mjs","withPnpmCommandCwd","run(cwd)",1,"callback reauthorizes package immediately before spawn in bin/ocx.mjs or runOwnedPnpm"],
@@ -79,8 +111,7 @@ export const helperControlContracts: readonly Contract[] = [
   ["src/update/guarded-runtime-ops.ts","guardedRemoveRuntimePort","removeRuntimePort(undefined,",1,"same runtime gate immediately before record and registry unlink"],
   ["src/update/guarded-runtime-ops.ts","guardedDropWindowsTcp","dropWindowsTcpRowsForLocalPort(target,",1,"same runtime gate immediately before each prepared SetTcpEntry"],
   ["src/update/guarded-runtime-ops.ts","guardedStopWinsw","stopWinswService(mutationGate(",1,"same service gate at prepared native command"],
-  ["src/update/guarded-runtime-ops.ts","guardedStopWindows","stopWindows(mutationGate(",1,"same service gate at prepared scheduler command"],
-  ["src/update/guarded-runtime-ops.ts","guardedKillWindowsWrappers","killWindowsSchedulerWrappers(materializeMutationData(paths),",1,"same service gate after path/script preparation"],
+  ["src/update/guarded-runtime-ops.ts","guardedStopWindowsChecked","runWindowsServiceStopPartA({ authorize: mutationGate(authorize, \"service\"),",1,"same service gate at Part A entry and again before each bound-wrapper terminate (#7771)"],
   ["src/update/guarded-tray-ops.ts","guardedStartWindowsTray","guardedRun(authorize, \"own-tray\", startWindowsTray, [])",1,"materialize plain data then synchronous authorization and primitive dispatch"],
   ["src/update/guarded-tray-ops.ts","guardedStopWindowsTray","stopWindowsTray(()",1,"same tray gate after heartbeat and command preparation"],
   ["src/update/mutation-guard.mjs","guardedSpawn","guardedRun(authorize, kind, spawn, [file, args, options])",1,"materialize plain data then synchronous authorization and primitive dispatch"],
@@ -100,3 +131,4 @@ export const helperControlContracts: readonly Contract[] = [
   ["src/update/mutation-guard.mjs","guardedRun","operation(...data)",1,"materialized data then authorizer then direct primitive dispatch"],
   ["src/update/mutation-guard.mjs","ownedArtifactRm","native(...data)",1,"bounded private transaction artifact cleanup"]
 ];
+export const helperControlContracts: readonly Contract[] = [...baseHelperControlContracts, ...orchestratedEntryReview.contracts, ...orchestratedChildReview.contracts, ...signedSupplyReview.contracts];

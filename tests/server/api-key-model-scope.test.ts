@@ -1,3 +1,4 @@
+import { clientFacingModelLabel } from "../../src/lib/error-destination";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -113,14 +114,14 @@ describe("per-key model and provider scope", () => {
     const routed = routeModel(config, "cheap");
     expect(routed).toMatchObject({ providerName: "forbidden", modelId: "expensive" });
     expect(routeAllowedByScope(scope, routed)).toBe(false);
-    expect(() => assertRouteAllowedByScope(scope, "cheap", routed)).toThrow(AdmissionModelDeniedError);
+    expect(() => assertRouteAllowedByScope(scope, clientFacingModelLabel("cheap"), routed)).toThrow(AdmissionModelDeniedError);
 
     const permitted = routeModel(config, "allowed/small");
-    expect(() => assertRouteAllowedByScope(scope, "allowed/small", permitted)).not.toThrow();
+    expect(() => assertRouteAllowedByScope(scope, clientFacingModelLabel("allowed/small"), permitted)).not.toThrow();
   });
 
   test("a refusal is 403 and names the caller's own selector", () => {
-    const error = new AdmissionModelDeniedError("gldf-flash", { providerName: "xai", modelId: "grok-4.6" });
+    const error = new AdmissionModelDeniedError(clientFacingModelLabel("gldf-flash"), { providerName: "xai", modelId: "grok-4.6" });
     const body = admissionModelDeniedBody(error);
     expect(body.error.type).toBe(MODEL_NOT_ALLOWED_FOR_KEY);
     // The client learns which of its own requests was refused. A key that may

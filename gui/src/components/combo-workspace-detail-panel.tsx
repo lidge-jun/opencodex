@@ -12,7 +12,7 @@ import {
 } from "../combo-workspace-data";
 import { IconChevron, IconTrash } from "../icons";
 import { useT } from "../i18n/shared";
-import { Notice } from "../ui";
+import { Notice, Switch } from "../ui";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
 import { ComboCapabilities, EffortSelect, StrategySeg, TargetEditor } from "./combo-workspace-controls";
 import { ComboJevDecisionSection } from "./combo-workspace-jev-decision";
@@ -202,7 +202,7 @@ export function DetailPanel({
             {t("cws.allCombos")}
           </button>
         )}
-        <h2 className="combos-workspace-detail-title">{headerModel}</h2>
+        <h2 className={`combos-workspace-detail-title${isCreate && !draft.id.trim() ? " combos-workspace-detail-title--label" : ""}`}>{headerModel}</h2>
         {!isCreate && (
           <button type="button" className="chip cwi-copy-chip" onClick={() => { void copyModel(); }} title={t("cws.copyModel")}>
             {copied ? t("cws.copied") : t("cws.copyModel")}
@@ -309,15 +309,7 @@ export function DetailPanel({
               </p>
             </div>
             <div className="cwi-field">
-              <label htmlFor="cwi-edit-native-alias">
-                <input
-                  id="cwi-edit-native-alias"
-                  type="checkbox"
-                  checked={draft.nativeAlias}
-                  disabled={busy}
-                  onChange={(e) => updateDraft((d) => ({ ...d, nativeAlias: e.target.checked }))}
-                /> {t("cws.field.nativeAlias")}
-              </label>
+              <Switch on={draft.nativeAlias} disabled={busy} label={t("cws.field.nativeAlias")} showLabel onClick={() => updateDraft((d) => ({ ...d, nativeAlias: !d.nativeAlias }))} />
               <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
                 {t("cws.field.nativeAliasHint")}
               </p>

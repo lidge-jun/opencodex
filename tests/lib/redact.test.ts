@@ -11,6 +11,20 @@ import {
 } from "../../src/lib/redact";
 
 describe("redactSecretString", () => {
+  test("ASCII folding preserves every byte and original offset, including literal escape syntax (#7846)", () => {
+    const ascii = Array.from({ length: 128 }, (_, code) => String.fromCharCode(code)).join("");
+    for (const decode of [true, false]) {
+      for (const value of ["", ascii, "Priority GPT-5.5 /helper", "author%69zation", "author\\u0069zation", "author&#105;zation", "x&ii;-api-key", "%invalid&plain\\text"]) {
+        // A dropped non-ASCII prefix forces the general folding path. Its output and offsets
+        // must match the ASCII path after accounting for that prefix, for either decode mode.
+        const general = foldForMatching(`\u200b${value}`, decode);
+        expect(foldForMatching(value, decode)).toEqual({
+          folded: general.folded, map: general.map.map(offset => offset - 1),
+        });
+      }
+    }
+  });
+
   test("masks bearer, api, access, refresh, and profile values", () => {
     const input = [
       "Authorization: Bearer access-token-value-123456",
@@ -414,6 +428,27 @@ describe("redactSecretString", () => {
       expect(redacted).not.toContain("dXNlcjpwYXNz");
       expect(redacted).not.toContain("credential-suffix-123456");
     }
+  });
+
+  test("multipart part headers on an unterminated line are rejected in linear time", () => {
+    // As one regex, every `name=token` candidate on a line with no line break rescanned the rest
+    // of that line: 16,000 of them in one 176 KB message took seconds.
+    const unterminated = "name=token ".repeat(16_000);
+    const startedAt = performance.now();
+    expect(redactSecretString(unterminated)).toBe(unterminated);
+    expect(redactSecretString(`${unterminated}\rname=authorization\r\nsecret-body-123456`))
+      .toBe(`${unterminated}\rname=authorization\r\n${REDACTED_SECRET}`);
+    expect(performance.now() - startedAt).toBeLessThan(1_500);
+  });
+
+  test("JWT candidates inside one long token run are rejected in linear time", () => {
+    // As one regex, every `eyJ` in a run of token characters with no dot after it rescanned the
+    // rest of the run: tens of thousands of them took seconds. A real three-segment JWT is still masked.
+    const run = "eyJabcdefgh-".repeat(32_000);
+    const startedAt = performance.now();
+    expect(redactSecretString(run)).toBe(run);
+    expect(redactSecretString(`${run} eyJhbGciOiJIUzI1.eyJzdWIiOiIx.sig_-x`)).toBe(`${run} ${REDACTED_SECRET}`);
+    expect(performance.now() - startedAt).toBeLessThan(1_500);
   });
 
   test("a quoted form value is masked too", () => {

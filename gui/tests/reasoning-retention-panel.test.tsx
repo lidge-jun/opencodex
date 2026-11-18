@@ -72,7 +72,7 @@ test.each([null, { enabled: false }, { maxTokens: 50000, maxContextPercent: 10 }
   "starts off without explicit opt-in: %j", async initial => {
     setting = initial;
     await render();
-    expect(enabledButton().getAttribute("aria-pressed")).toBe("false");
+    expect(enabledButton().getAttribute("aria-checked")).toBe("false");
     expect(container.querySelector("#reasoning-retention-percent")).toBeNull();
     expect(container.querySelector("#reasoning-retention-tokens")).toBeNull();
     expect(button("Save").disabled).toBe(true);
@@ -105,7 +105,7 @@ test("explicit enable saves numeric defaults and disable persists off", async ()
   await act(async () => { button("Save").click(); });
   expect(writes.at(-1)).toEqual({ reasoningRetention: { enabled: false } });
   await render("/reload");
-  expect(enabledButton().getAttribute("aria-pressed")).toBe("false");
+  expect(enabledButton().getAttribute("aria-checked")).toBe("false");
   expect(button("Save").disabled).toBe(true);
 });
 
@@ -131,7 +131,7 @@ test("saves custom limits and reset removes settings and turns off", async () =>
   expect(container.querySelector<HTMLInputElement>('#reasoning-retention-tokens')!.value).toBe("50000");
   await act(async () => { button("Reset and turn off").click(); });
   expect(writes.at(-1)).toEqual({ reasoningRetention: null });
-  expect(enabledButton().getAttribute("aria-pressed")).toBe("false");
+  expect(enabledButton().getAttribute("aria-checked")).toBe("false");
   expect(container.querySelector("#reasoning-retention-percent")).toBeNull();
   expect(button("Reset and turn off").disabled).toBe(true);
 });

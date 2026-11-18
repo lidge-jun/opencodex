@@ -16,7 +16,7 @@
  * `<integrations>/hermes-profiles/<name>/`, so its records, journal and snapshots
  * can never be confused with the default profile's.
  */
-import { lstatSync, readdirSync, type Stats } from "node:fs";
+import { lstatSync, readdirSync, type BigIntStats } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { hermesHomeDir } from "../clients/config-export";
@@ -46,8 +46,8 @@ export class HermesProfileError extends Error {
   }
 }
 
-function lstatOrNull(path: string): Stats | null {
-  try { return lstatSync(path); }
+function lstatOrNull(path: string): BigIntStats | null {
+  try { return lstatSync(path, { bigint: true }); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as NodeJS.ErrnoException).code === "ENOTDIR") return null;
     throw new HermesProfileError("hermes_profiles_unavailable", 409, "Hermes profiles cannot be read");

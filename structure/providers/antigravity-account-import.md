@@ -30,7 +30,17 @@ providers guide.
   `source: "credential-file"`. A later token refresh that discovers no project keeps the stored
   one (`merged` in `src/oauth/index.ts`).
 - **Output.** Results carry only fixed codes and counts; no token, email or upstream text.
+- **Risk acknowledgement.** An imported Antigravity credential carries the same Google
+  account-ban risk as a login (`src/oauth/antigravity-risk.ts`). `POST /api/oauth/accounts/import`
+  refuses `provider: "google-antigravity"` with `403 {code: "antigravity_risk_not_acknowledged"}`
+  unless the body carries `acknowledgeAntigravityRisk: true`, before `importAccounts` runs, so
+  nothing is parsed, validated or written. Only the exact provider id is gated, matching the
+  import's own admission. The dashboard holds every chosen file behind the warning dialog and sends
+  the field only from that file's Continue; `ocx account import` prints the warning before reading
+  the source and needs a terminal `y` or `--accept-antigravity-risk` (always the flag with
+  `--stdin`), and refuses agent- or CI-driven runs.
 
 Coverage: `tests/server/account-import.test.ts` and
 `tests/server/account-import-project-fallback.test.ts` (fakes for validation, probe and upsert;
-no live calls).
+no live calls). The acknowledgement: `tests/oauth/oauth-antigravity-risk.test.ts`,
+`tests/cli/cli-account-login-options.test.ts` and `gui/tests/provider-account-import.test.tsx`.

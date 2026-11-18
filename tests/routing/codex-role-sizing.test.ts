@@ -3,6 +3,7 @@ import {
   DELEGATED_WORK_SIZING_SYSTEM_PROMPT,
   ROLE_INSTRUCTIONS_EXCERPT_CHARS,
   ROLE_SIZING_SYSTEM_PROMPT,
+  SIZING_DOMAINS,
   SIZING_EFFORTS,
   SIZING_TIERS,
   buildRoleSizingUserMessage,
@@ -19,15 +20,15 @@ const GOOD = {
 };
 
 describe("role sizing rubric", () => {
-  test("names every tier and effort and asks for JSON without model names", () => {
-    for (const word of [...SIZING_TIERS, ...SIZING_EFFORTS]) expect(ROLE_SIZING_SYSTEM_PROMPT).toContain(word);
+  test("names every tier, effort and domain and asks for JSON without model names", () => {
+    for (const word of [...SIZING_TIERS, ...SIZING_EFFORTS, ...SIZING_DOMAINS]) expect(ROLE_SIZING_SYSTEM_PROMPT).toContain(word);
     expect(ROLE_SIZING_SYSTEM_PROMPT).toContain("Do not name concrete model products");
     expect(ROLE_SIZING_SYSTEM_PROMPT).toContain('"move_down_if"');
   });
 
   test("the role rubric keeps its exact bytes, and one-shot work gets the rubric plus an addendum", () => {
     const digest = new Bun.CryptoHasher("sha256").update(ROLE_SIZING_SYSTEM_PROMPT).digest("hex");
-    expect(digest).toBe("5b611bbea1629e217d9d3ef77aeb02a331d99b1aed1d7d0074082ac7a1c11ff4");
+    expect(digest).toBe("c43da51d3b6acebaeff086993de9694c9b86a11f01bdaf4dd8c6629af71b0709");
     expect(DELEGATED_WORK_SIZING_SYSTEM_PROMPT.startsWith(`${ROLE_SIZING_SYSTEM_PROMPT}\n\n`)).toBe(true);
     expect(DELEGATED_WORK_SIZING_SYSTEM_PROMPT).toContain("one-shot");
   });
@@ -62,12 +63,23 @@ describe("parseRoleSizingResponse", () => {
         sizing: {
           tier: "standard",
           effort: "measured",
+          domain: "general",
           rationale: GOOD.rationale,
           moveUpIf: GOOD.move_up_if,
           moveDownIf: GOOD.move_down_if,
         },
       });
     }
+  });
+
+  test("reads the domain and sizes a role whose domain is missing or unknown on the general scale", () => {
+    const out = parseRoleSizingResponse(JSON.stringify({
+      roles: { coder: { ...GOOD, domain: "coding" }, odd: { ...GOOD, domain: "vibes" }, bare: GOOD },
+    }), ["coder", "odd", "bare"]);
+    expect(["coder", "odd", "bare"].map(role => {
+      const outcome = out.get(role)!;
+      return "sizing" in outcome ? outcome.sizing.domain : outcome.unsized;
+    })).toEqual(["coding", "general", "general"]);
   });
 
   test("marks every role unsized when the answer is not the JSON shape", () => {
@@ -93,7 +105,7 @@ describe("parseRoleSizingResponse", () => {
     expect(out.get("missing")).toEqual({ unsized: "the sizing model did not size this role" });
   });
 
-  test("ignores keys beyond the five it reads and keeps them out of the sizing", () => {
+  test("ignores keys beyond the six it reads and keeps them out of the sizing", () => {
     const out = parseRoleSizingResponse(JSON.stringify({
       roles: { explorer: { ...GOOD, confidence: 0.8, notes: ["cheap"] } },
     }), ["explorer"]);
@@ -101,6 +113,7 @@ describe("parseRoleSizingResponse", () => {
       sizing: {
         tier: "standard",
         effort: "measured",
+        domain: "general",
         rationale: GOOD.rationale,
         moveUpIf: GOOD.move_up_if,
         moveDownIf: GOOD.move_down_if,

@@ -29,6 +29,8 @@ import { shouldInjectApiAuthHeader, standaloneCodexRoutingTarget } from "../code
 import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../integrations/serialize";
 import { fileIO } from "../integrations/config-io";
 import { canonicalizeReasoningEfforts } from "../reasoning-effort";
+import { selectNestedSelectors } from "./config-export/nested-selectors";
+import { providerCodexAccountMode } from "../providers/registry";
 import { expandFastExportModels } from "./config-export/fast-models";
 import { namedExportContext } from "./config-export/alias-selectors";
 import { probeHostname } from "../server/proxy-liveness";
@@ -60,7 +62,7 @@ export { buildRaycastClientConfig, summarizeRaycast, buildRaycastContribution } 
 export { droidHomeDir, droidConfigPath, buildDroidClientConfig, summarizeDroid, buildDroidContribution, droidReasoningModels, droidDefaultsFromOwnedRows, validateDroidReasoningDefaults } from "./config-export/droid";
 export type { DroidModelEntry, DroidGeneratedConfig } from "./config-export/droid";
 
-import type { OpencodeLaunchEnv, OpencodeCatalogModel, ExportContext, PiModelEntry, ManagedContribution, ManagedFragment, ExportClientId, ExportClientSpec } from "./config-export/contracts";
+import type { ExportModel, OpencodeLaunchEnv, OpencodeCatalogModel, ExportContext, PiModelEntry, ManagedContribution, ManagedFragment, ExportClientId, ExportClientSpec } from "./config-export/contracts";
 import { OPENCODE_API_KEY_ENV_REF, OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG, OPENCODE_CONFIG_SCHEMA, OPENCODE_PROVIDER_ID, PI_API_DIALECT, LOOPBACK_API_KEY_PLACEHOLDER, HERMES_API_KEY_ENV_REF, OPENCLAW_API_KEY_ENV_REF, OPENCODE_API_KEY_ENV, HERMES_API_KEY_ENV, OPENCLAW_API_KEY_ENV, KILO_API_KEY_ENV } from "./config-export/constants";
 import { exportModelLabel, authoritativeContextWindow, outputBudgetFor, inputBudgetFor, normalizeExportModels, inputModalitiesForClient, opencodeModelCapabilities, proxyAdmissionHeaders, singleFragment } from "./config-export/model-metadata";
 import { exportReasoningEfforts, exportDefaultReasoningEffort, legacyReasoningMetadata, type LegacyEffortVariant } from "./config-export/reasoning-metadata";
@@ -531,6 +533,19 @@ export function commandCodeConfigPath(env: OpencodeLaunchEnv = process.env, home
 }
 
 /**
+ * Command Code's credential store, next to the provider file.
+ *
+ * Only the DESKTOP app reads this before it will show a workspace; the published
+ * CLI is content with `apiKey: false` in `providers.json`. It is the vendor's file,
+ * shared with real logins and other providers' tokens, so this integration NEVER
+ * writes it: the desktop user signs in themselves. Exported so callers and tests
+ * can name the path they must leave alone.
+ */
+export function commandCodeAuthPath(env: OpencodeLaunchEnv = process.env, home: string = homedir(), platform: NodeJS.Platform = process.platform): string {
+  return join(commandCodeHomeDir(env, home, platform), "auth.json");
+}
+
+/**
  * The provider store a current ZCode reads, which is NOT the file above.
  *
  * ZCode 3.14 moved custom providers to `v2/provider_config.json` and left
@@ -897,6 +912,18 @@ export interface PiProviderCompat {
 interface PiExportOptions {
   sendSessionAffinityHeaders?: boolean;
   /**
+   * Drop native OpenAI rows when the serving proxy runs Codex Direct (`codexAccountMode: direct`).
+   * Direct mode forwards the caller's own bearer, and Pi sends the loopback placeholder key, so a
+   * native row would only ever answer 401. The CLI-built Pi export omitted them before the export
+   * moved onto the serving proxy's roster (#8172); this keeps that behaviour.
+   */
+  omitNativeInCodexDirect?: boolean;
+  /**
+   * Use the raw nested upstream selector the serving proxy proved for a row (#8172). A row
+   * without that proof keeps its canonical key.
+   */
+  rawNestedModelIds?: boolean;
+  /**
    * Tell Pi to send its system prompt as `system` rather than `developer` (#5664).
    *
    * Pi sends `developer` for reasoning models by default. On `/v1/chat/completions` the proxy
@@ -906,6 +933,8 @@ interface PiExportOptions {
    * states it rather than leaving each user to hand-edit a block the next export rewrites.
    */
   foldDeveloperRole?: boolean;
+  /** Provider dialect; omitted writes `PI_API_DIALECT`. */
+  api?: "openai-completions" | "openai-responses";
 }
 
 export interface PiGeneratedConfig {
@@ -972,13 +1001,36 @@ export interface KimiProviderBlock {
  * authoritative context window is omitted from the document entirely rather
  * than guessed at. Catalog image input becomes `image_in`; other capabilities
  * are not inferred from routed model names.
+ * A declared effort ladder becomes `support_efforts` (limited to Kimi Code's
+ * documented levels) plus the `thinking` capability, and a declared default in
+ * that ladder becomes `default_effort` (#8095).
  */
 export interface KimiModelBlock {
   provider: string;
   model: string;
   max_context_size: number;
   display_name?: string;
-  capabilities?: ["image_in"];
+  capabilities?: Array<"thinking" | "image_in">;
+  support_efforts?: KimiEffort[];
+  default_effort?: KimiEffort;
+}
+
+/** Kimi Code's thinking efforts, in its documented order; anything else fails its config validation. */
+const KIMI_EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"] as const;
+type KimiEffort = typeof KIMI_EFFORT_ORDER[number];
+
+function kimiEfforts(model: ExportModel): { support_efforts?: KimiEffort[]; default_effort?: KimiEffort } {
+  // An explicit "no reasoning" declaration outranks any ladder that reached the exporter.
+  if (model.supportsReasoning === false || model.supportsReasoningEffort === false) return {};
+  const offered = new Set((model.reasoningEfforts ?? [])
+    .filter((effort): effort is string => typeof effort === "string")
+    .map(effort => effort.trim().toLowerCase()));
+  const support = KIMI_EFFORT_ORDER.filter(effort => offered.has(effort));
+  if (support.length === 0) return {};
+  const declared = typeof model.defaultReasoningEffort === "string"
+    ? model.defaultReasoningEffort.trim().toLowerCase() : undefined;
+  const fallback = support.find(effort => effort === declared);
+  return { support_efforts: support, ...(fallback ? { default_effort: fallback } : {}) };
 }
 
 export interface KimiGeneratedConfig {
@@ -1042,7 +1094,11 @@ export interface GajaeGeneratedConfig {
  */
 function buildPiClientConfig(ctx: ExportContext, options: PiExportOptions = {}): PiGeneratedConfig {
   const models: PiModelEntry[] = [];
-  for (const model of normalizeExportModels(ctx.models)) {
+  const roster = options.rawNestedModelIds ? selectNestedSelectors(ctx.models) : ctx.models;
+  const omitNative = options.omitNativeInCodexDirect === true
+    && providerCodexAccountMode("openai", ctx.config?.providers?.openai) === "direct";
+  for (const model of normalizeExportModels(roster)) {
+    if (omitNative && model.native === true) continue;
     // Text is the one modality every routed model supports; anything richer must come
     // from the catalog rather than an assumption — and must still be inside the enum
     // Pi accepts, because one rejected value empties the whole config.
@@ -1085,7 +1141,7 @@ function buildPiClientConfig(ctx: ExportContext, options: PiExportOptions = {}):
     providers: {
       [OPENCODE_PROVIDER_ID]: {
         baseUrl: ctx.baseUrl,
-        api: PI_API_DIALECT,
+        api: options.api ?? PI_API_DIALECT,
         apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
         ...(Object.keys(compat).length > 0 ? { compat } : {}),
         models,
@@ -1100,6 +1156,13 @@ function buildPiClientConfig(ctx: ExportContext, options: PiExportOptions = {}):
  * its models.json `compat` block (docs/models.md, docs/custom-provider.md).
  */
 const PI_EXPORT_OPTIONS: PiExportOptions = { sendSessionAffinityHeaders: true, foldDeveloperRole: true };
+const PI_NATIVE_SELECTOR_OPTIONS: PiExportOptions = { ...PI_EXPORT_OPTIONS, rawNestedModelIds: true, omitNativeInCodexDirect: true };
+/**
+ * Prime and Aside run the Pi runtime and read the same models.json, so they need Pi's developer-role
+ * statement (#8864): without it they send their system prompt as `developer`, which DashScope and
+ * Moonshot reject with a 400. Session affinity stays Pi's alone (eb8cc9ab73).
+ */
+const PI_DEVELOPER_ROLE_OPTIONS: PiExportOptions = { foldDeveloperRole: true };
 
 /** Do not let provider-controlled catalog text become an environment lookup. */
 function containsEnvInterpolation(value: string): boolean {
@@ -1174,12 +1237,18 @@ function buildKimiClientConfig(ctx: ExportContext): KimiGeneratedConfig {
     // so a model without an authoritative window is left out rather than
     // shipped with a number we invented.
     if (context === undefined) continue;
+    const efforts = kimiEfforts(model);
+    const capabilities: Array<"thinking" | "image_in"> = [
+      ...(efforts.support_efforts ? ["thinking" as const] : []),
+      ...(model.inputModalities?.includes("image") ? ["image_in" as const] : []),
+    ];
     models[kimiModelAlias(model.namespaced)] = {
       provider: OPENCODE_PROVIDER_ID,
       model: model.namespaced,
       max_context_size: context,
       ...(model.displayName ? { display_name: model.displayName } : {}),
-      ...(model.inputModalities?.includes("image") ? { capabilities: ["image_in"] as ["image_in"] } : {}),
+      ...(capabilities.length > 0 ? { capabilities } : {}),
+      ...efforts,
     };
   }
   return {
@@ -1301,7 +1370,7 @@ function buildOpencodeContribution(ctx: ExportContext): ManagedContribution {
 }
 
 function buildPiContribution(ctx: ExportContext): ManagedContribution {
-  const doc = buildPiClientConfig(ctx, PI_EXPORT_OPTIONS);
+  const doc = buildPiClientConfig(ctx, PI_NATIVE_SELECTOR_OPTIONS);
   return singleFragment("pi", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
 }
 
@@ -1350,7 +1419,7 @@ function buildGajaeContribution(ctx: ExportContext): ManagedContribution {
  * code is stamping the right client id on the ownership record.
  */
 function buildPrimeContribution(ctx: ExportContext): ManagedContribution {
-  const doc = buildPiClientConfig(ctx);
+  const doc = buildPiClientConfig(ctx, PI_DEVELOPER_ROLE_OPTIONS);
   return singleFragment("prime", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
 }
 
@@ -1373,7 +1442,7 @@ function buildPrimeContribution(ctx: ExportContext): ManagedContribution {
  * the fragment this client recorded and not one another client wrote.
  */
 function buildAsideContribution(ctx: ExportContext): ManagedContribution {
-  const doc = buildPiClientConfig(ctx);
+  const doc = buildPiClientConfig(ctx, PI_DEVELOPER_ROLE_OPTIONS);
   return singleFragment("aside", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
 }
 
@@ -1386,15 +1455,23 @@ function buildAsideContribution(ctx: ExportContext): ManagedContribution {
  * `thinkingLevelMap` levels. Evidence:
  * `devlog/_fin/260912_omo_client_integration/001_omo_contract.md`.
  *
- * The flag is passed HERE as well as in the spec's `build`, which is the one
- * thing Prime and Aside do not do. They pass the default on both paths, so they
- * are consistent; passing it on only one would make `ocx export --client omo`
+ * The flag is passed HERE as well as in the spec's `build`, the same rule Prime
+ * and Aside follow with their own options; passing it on only one would make `ocx export --client omo`
  * emit a `compat` block while enable and refresh wrote a file without it, and
  * the two would drift apart at the first refresh.
+ *
+ * The same rule covers the opt-in `omoClientExport.api` dialect (#7431): both paths read it from
+ * the live config, so a refresh keeps the Responses dialect instead of reverting it to Chat.
  */
 function buildOmoContribution(ctx: ExportContext): ManagedContribution {
-  const doc = buildPiClientConfig(ctx, PI_EXPORT_OPTIONS);
+  const doc = buildPiClientConfig(ctx, omoExportOptions(ctx));
   return singleFragment("omo", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
+}
+
+function omoExportOptions(ctx: ExportContext): PiExportOptions {
+  return ctx.config?.omoClientExport?.api === "openai-responses"
+    ? { ...PI_EXPORT_OPTIONS, api: "openai-responses" }
+    : PI_EXPORT_OPTIONS;
 }
 
 /** Cline's shared SDK store; command-local --config must be mirrored by the env override. */
@@ -1458,7 +1535,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     destination: env => piConfigPath(env),
     apiKeyEnv: "",
     exportHint: "Pi reads a non-secret placeholder from models.json; loopback needs no key.",
-    build: ctx => buildPiClientConfig(ctx, PI_EXPORT_OPTIONS),
+    build: ctx => buildPiClientConfig(ctx, PI_NATIVE_SELECTOR_OPTIONS),
     format: "json",
     summarize: summarizePi,
     buildContribution: buildPiContribution,
@@ -1583,7 +1660,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     // No env var exists behind this integration: buildCommandCodeClientConfig
     // writes `apiKey: false`, the documented keyless form for a loopback endpoint.
     apiKeyEnv: "",
-    exportHint: "The provider is written with `apiKey: false` — Command Code treats a keyless loopback endpoint as already authenticated. No key is stored or referenced.",
+    exportHint: "The provider is written with `apiKey: false`, the keyless form the CLI accepts. The desktop app needs its own Command Code sign-in; opencodex never writes `~/.commandcode/auth.json`.",
     build: buildCommandCodeClientConfig,
     format: "json",
     summarize: summarizeCommandCode,
@@ -1596,7 +1673,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     destination: env => primeConfigPath(env),
     apiKeyEnv: "",
     exportHint: "Prime Agent reads a non-secret placeholder from models.json; loopback needs no key.",
-    build: buildPiClientConfig,
+    build: ctx => buildPiClientConfig(ctx, PI_DEVELOPER_ROLE_OPTIONS),
     format: "json",
     summarize: summarizePi,
     buildContribution: buildPrimeContribution,
@@ -1614,7 +1691,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     destination: env => asideConfigPath(env),
     apiKeyEnv: "",
     exportHint: "Aside reads a non-secret placeholder from models.json; loopback needs no key.",
-    build: buildPiClientConfig,
+    build: ctx => buildPiClientConfig(ctx, PI_DEVELOPER_ROLE_OPTIONS),
     format: "json",
     summarize: summarizePi,
     buildContribution: buildAsideContribution,
@@ -1652,7 +1729,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     destination: env => omoConfigPath(env),
     apiKeyEnv: "",
     exportHint: "omo reads a non-secret placeholder from models.json; loopback needs no key.",
-    build: ctx => buildPiClientConfig(ctx, PI_EXPORT_OPTIONS),
+    build: ctx => buildPiClientConfig(ctx, omoExportOptions(ctx)),
     format: "json",
     summarize: summarizePi,
     buildContribution: buildOmoContribution,

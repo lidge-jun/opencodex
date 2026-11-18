@@ -1,4 +1,4 @@
-import { chmodSync, lstatSync, mkdirSync, realpathSync, unlinkSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, realpathSync, unlinkSync, type BigIntStats } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
 import { hardenSecretDir } from "../lib/windows-secret-acl";
@@ -8,7 +8,7 @@ import { DesktopStoreError, digest } from "./desktop-remote-store-state";
 export const MAX_DESKTOP_METADATA_ENTRIES = 256;
 
 export interface JsonFile { value: Record<string, unknown>; hash: string; identity: string }
-const identity = (s: NonNullable<ReturnType<typeof lstatSync>>): string => `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}`;
+const identity = (s: BigIntStats): string => `${s.dev}:${s.ino}:${s.size}:${s.mtimeNs}`;
 function missing(error: unknown): boolean { return (error as NodeJS.ErrnoException)?.code === "ENOENT"; }
 export function canonicalDirectory(path: string): string {
   const absolute = resolve(path);
@@ -33,20 +33,20 @@ export class StoreIO {
   private bytes = 0;
   private readonly seenSizes = new Map<string, number>();
   read(path: string, maxBytes = 1024 * 1024, privateFile = false): JsonFile | null {
-    let stat: ReturnType<typeof lstatSync>;
-    try { stat = lstatSync(path); }
+    let stat: BigIntStats;
+    try { stat = lstatSync(path, { bigint: true }); }
     catch (error) { if (missing(error)) return null; throw new DesktopStoreError("unsafe"); }
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maxBytes
-      || (privateFile && process.platform !== "win32" && (stat.mode & 0o077) !== 0)) throw new DesktopStoreError("unsafe");
+      || (privateFile && process.platform !== "win32" && (stat.mode & 0o077n) !== 0n)) throw new DesktopStoreError("unsafe");
     const counted = this.seenSizes.get(path) ?? 0;
-    this.bytes += Math.max(0, stat.size - counted);
-    this.seenSizes.set(path, Math.max(counted, stat.size));
+    this.bytes += Math.max(0, Number(stat.size) - counted);
+    this.seenSizes.set(path, Math.max(counted, Number(stat.size)));
     if (this.bytes > 8 * 1024 * 1024) throw new DesktopStoreError("unsafe");
     try {
       // The shared verified regular-file read keeps a swapped FIFO from parking this
       // open before the post-read identity recheck below can run.
       const bytes = readDesktopLibraryBytes(path, Math.min(maxBytes, MAX_DESKTOP_PROFILE_FILE_BYTES));
-      if (bytes.byteLength > maxBytes || identity(lstatSync(path)) !== identity(stat)) throw new DesktopStoreError("conflict");
+      if (bytes.byteLength > maxBytes || identity(lstatSync(path, { bigint: true })) !== identity(stat)) throw new DesktopStoreError("conflict");
       const value: unknown = JSON.parse(bytes.toString("utf8"));
       if (!isRecord(value)) throw new DesktopStoreError("unsafe");
       return { value, hash: digest(bytes.toString("utf8")), identity: identity(stat) };

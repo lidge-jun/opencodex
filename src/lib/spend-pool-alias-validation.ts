@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants, lstatSync, openSync, fstatSync, readFileSync, closeSync, type Stats } from "node:fs";
+import { constants, lstatSync, openSync, fstatSync, readFileSync, closeSync, type BigIntStats } from "node:fs";
 import { join } from "node:path";
 
 /** Read an existing single-owner salt without creating or hardening any file. */
@@ -8,14 +8,14 @@ export function readExistingSpendSalt(home: string): string | undefined {
   let salt: string | undefined;
   try {
     const path = join(home, "spend-ledger.salt");
-    const before = lstatSync(path);
-    if (!before.isFile() || before.nlink !== 1) return undefined;
-    const matches = (stat: Stats): boolean => stat.isFile() && stat.nlink === 1
+    const before = lstatSync(path, { bigint: true });
+    if (!before.isFile() || before.nlink !== 1n) return undefined;
+    const matches = (stat: BigIntStats): boolean => stat.isFile() && stat.nlink === 1n
       && stat.dev === before.dev && stat.ino === before.ino;
     fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-    if (!matches(fstatSync(fd))) return undefined;
+    if (!matches(fstatSync(fd, { bigint: true }))) return undefined;
     const contents = readFileSync(fd, "utf8").trim();
-    if (matches(fstatSync(fd)) && matches(lstatSync(path)) && /^[0-9a-f]{32,}$/.test(contents)) salt = contents;
+    if (matches(fstatSync(fd, { bigint: true })) && matches(lstatSync(path, { bigint: true })) && /^[0-9a-f]{32,}$/.test(contents)) salt = contents;
   } catch { salt = undefined; }
   finally {
     if (fd !== undefined) {

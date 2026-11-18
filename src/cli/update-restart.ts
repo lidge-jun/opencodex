@@ -12,7 +12,8 @@ import { acquireOwnershipMutationLease, unprivilegedOwnershipMutationEnvironment
 import { serviceStatePaths } from "../service/state";
 import { findLiveProxy, probeEndpointLiveness, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import { waitForPortAvailable } from "../server/ports";
-import { UPDATE_RESTART_CHILD_ENV, type UpdateRestartChildMarker } from "./update-restart-child";
+import { normalizeBindHostname } from "../server/bind-host";
+import { UPDATE_RESTART_CHILD_ENV, parseUpdateRestartMarker, type UpdateRestartChildMarker } from "./update-restart-child";
 import { assertUpdateRestartConfiguration, assertUpdateRestartHome, readUpdateRestartHome, type UpdateRestartHome, type UpdateRestartHomeDeps } from "./update-restart-home";
 import { observeAttestedUpdateReplacement, stopAttestedUpdateTarget } from "./update-restart-transport";
 import type { UpdateRestartCandidate } from "./update-restart-candidate";
@@ -39,7 +40,7 @@ export interface UpdateRestartIo {
   wait(ms: number): Promise<void>;
 }
 const ELIGIBILITY_REASONS = ["windows", "unsupported_platform", "foreground", "service", "shared_or_client",
-  "package_tree_fenced", "unverifiable_ancestry", "target_changed", "configuration_changed", "desktop"] as const;
+  "package_tree_fenced", "unverifiable_ancestry", "target_changed", "configuration_changed", "desktop", "blank_runtime_hostname"] as const;
 export type UpdateRestartEligibilityReason = (typeof ELIGIBILITY_REASONS)[number];
 
 /** Carries only a closed reason code across the eligibility/transport boundary. */
@@ -74,6 +75,13 @@ export async function runUpdateRestart(candidate: UpdateRestartCandidate, deadli
     lease = io.acquire();
     const home = candidate.home;
     if (JSON.stringify(io.home()) !== JSON.stringify(home)) throw new Error("home_changed");
+    if (candidate.runtime.hostname !== undefined && !candidate.runtime.hostname.trim()) {
+      eligibilityReason = "blank_runtime_hostname";
+      throw new Error("target");
+    }
+    const marker = parseUpdateRestartMarker(JSON.stringify({ home, version: candidate.cliVersion, port: candidate.target.port,
+      hostname: normalizeBindHostname(candidate.runtime.hostname), deadlineAt }));
+    if (normalizeBindHostname(candidate.target.hostname) !== marker.hostname) throw new Error("target");
     const revalidate = () => {
       withinDeadline();
       io.checkHome(home);
@@ -122,7 +130,7 @@ export async function runUpdateRestart(candidate: UpdateRestartCandidate, deadli
     withinDeadline();
     io.checkHome(home);
     phase = "start";
-    const child = io.start({ home, version: candidate.cliVersion, port: candidate.target.port, hostname: candidate.runtime.hostname ?? "", deadlineAt });
+    const child = io.start(marker);
     // The child must acquire its own lease and validate this frozen handoff before preflight.
     lease.release();
     lease = undefined;
@@ -136,7 +144,7 @@ export async function runUpdateRestart(candidate: UpdateRestartCandidate, deadli
       if (live) {
         io.checkHome(home);
         if (live.source !== "runtime" || live.pid !== child.pid || live.port !== candidate.target.port
-          || (live.hostname ?? "") !== (candidate.target.hostname ?? "") || live.role === "client"
+          || !live.hostname || normalizeBindHostname(live.hostname) !== marker.hostname || live.role === "client"
           || live.packageTreeFenced || live.version !== candidate.cliVersion) throw new Error("replacement_mismatch");
         return { ok: true, live };
       }
@@ -165,6 +173,7 @@ export function describeUpdateRestartFailure(code: string, reason?: UpdateRestar
         case "unverifiable_ancestry": return "The proxy's process ancestry or manager could not be verified. Run `ocx status` to identify its owner before restarting.";
         case "configuration_changed": return "The selected configuration or connection changed. Run `ocx status` to inspect the intended proxy before restarting.";
         case "target_changed": return "The captured proxy identity changed. Run `ocx status` to inspect the intended proxy before restarting.";
+        case "blank_runtime_hostname": return "The running proxy's runtime record has a blank hostname, so its bind address cannot be verified. Use `ocx status` and `ocx service status` as clues, not proof of ownership or bind address. Once ownership is verified, for a service use the owning installation's `ocx service restart`; for Desktop, use the app; for a foreground proxy, use its terminal. For a detached standalone proxy, independently verify its process, home, supervisor and actual bind. If verified and forced termination is acceptable, the owner can run `ocx stop` from that installation and home; it may refuse or force termination if graceful shutdown fails. Independently confirm the process has exited, its supervisor will not restart it, and the intended address and port are free before running `ocx start` with the intended settings. If any step is uncertain or fails, stop and ask the owner or administrator; do not edit the runtime record or kill unrelated processes.";
       }
     })();
     return `${action} Nothing was stopped by this restart attempt.`;
@@ -189,6 +198,10 @@ export function describeUpdateRestartFailure(code: string, reason?: UpdateRestar
     default:
       return "Update restart could not be confirmed; inspect `ocx status` before retrying.";
   }
+}
+
+export function reportUpdateRestartFailure(result: Extract<UpdateRestartResult, { ok: false }>): void {
+  console.error(`❌ ${describeUpdateRestartFailure(result.code, result.reason)} (${result.code})`);
 }
 
 export interface UpdateRestartStandaloneDeps {
@@ -253,6 +266,24 @@ export function standalone(target: UpdateRestartCandidate["target"], deadlineAt:
 }
 
 /** Production composition keeps stop/start side effects out of cli/index.ts. */
+/** Verify the new runtime record, its own proof, and an exact reread after attestation. */
+export async function observeUpdateRestartReplacement(candidate: UpdateRestartCandidate, deadline: number, childPid: number,
+  deps: { findLive: typeof findLiveProxy; readRuntime: typeof readRuntimePort; attest: typeof observeAttestedUpdateReplacement } =
+    { findLive: findLiveProxy, readRuntime: readRuntimePort, attest: observeAttestedUpdateReplacement }): Promise<LiveProxy | null> {
+  const live = await deps.findLive({ deadlineAt: deadline, attempts: 1 });
+  if (!live) return null;
+  if (live.pid !== childPid) throw new Error("update_restart_replacement_changed");
+  const runtime = deps.readRuntime(childPid);
+  if (!runtime?.attestationSecret || runtime.pid !== childPid || runtime.port !== candidate.target.port
+    || !runtime.hostname || normalizeBindHostname(runtime.hostname) !== normalizeBindHostname(candidate.runtime.hostname) || runtime.siblingOfPort !== undefined) {
+    throw new Error("update_restart_replacement_unattested");
+  }
+  const attested = await deps.attest({ target: { ...live, pid: childPid },
+    secret: runtime.attestationSecret, version: candidate.cliVersion, deadlineAt: deadline });
+  if (JSON.stringify(deps.readRuntime(childPid)) !== JSON.stringify(runtime)) throw new Error("update_restart_replacement_changed");
+  return attested;
+}
+
 export function restartFromCurrentInstallation(candidate: UpdateRestartCandidate, deadlineAt: number, environment: NodeJS.ProcessEnv): Promise<UpdateRestartResult> {
   const argv = startArgv(candidate.target.port);
   const executable = process.execPath;
@@ -286,21 +317,7 @@ export function restartFromCurrentInstallation(candidate: UpdateRestartCandidate
       child.unref();
       return child;
     },
-    observe: async (deadline, childPid) => {
-      const live = await findLiveProxy({ deadlineAt: deadline, attempts: 1 });
-      if (!live) return null;
-      if (live.pid !== childPid) throw new Error("update_restart_replacement_changed");
-      const runtime = readRuntimePort(childPid);
-      if (!runtime?.attestationSecret || runtime.port !== candidate.target.port
-        || runtime.hostname !== candidate.runtime.hostname || runtime.siblingOfPort !== undefined) {
-        throw new Error("update_restart_replacement_unattested");
-      }
-      const attested = await observeAttestedUpdateReplacement({ target: { ...live, pid: childPid },
-        secret: runtime.attestationSecret, version: candidate.cliVersion, deadlineAt: deadline });
-      const current = readRuntimePort(childPid);
-      if (JSON.stringify(current) !== JSON.stringify(runtime)) throw new Error("update_restart_replacement_changed");
-      return attested;
-    },
+    observe: (deadline, childPid) => observeUpdateRestartReplacement(candidate, deadline, childPid),
     wait: ms => Bun.sleep(ms),
   });
 }

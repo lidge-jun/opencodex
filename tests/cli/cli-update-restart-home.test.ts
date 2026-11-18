@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync, readFileSync, statSync, chmodSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -98,6 +98,34 @@ test("production parent guard rejects client and hostname drift before stop", ()
   expect(() => assertUpdateRestartConfiguration("127.0.0.1")).toThrow();
   writeFileSync(config, JSON.stringify({ hostname: "127.0.0.1", runtimeRole: "client" }));
   expect(() => assertUpdateRestartConfiguration("127.0.0.1")).toThrow();
+});
+test("a default bind is compatible with a diagnosed omitted hostname", () => {
+  const h = home();
+  writeFileSync(join(h.config, "config.json"), "{}\n");
+  expect(() => assertUpdateRestartConfiguration("127.0.0.1")).not.toThrow();
+});
+test("the initial home snapshot detects same-bind diagnosed hostname changes", () => {
+  const h = home();
+  const config = join(h.config, "config.json");
+  writeFileSync(config, "{}\n");
+  const captured = readUpdateRestartHome();
+  checkHome(captured);
+  writeFileSync(config, JSON.stringify({ hostname: "127.0.0.1" }));
+  expect(() => checkHome(captured)).toThrow("update_restart_home_changed");
+});
+test("capturing restart eligibility leaves retired config untouched and emits no warning", () => {
+  const h = home();
+  const config = join(h.config, "config.json");
+  const bytes = JSON.stringify({ providers: { "opencode-free": { adapter: "openai-chat", apiKey: "synthetic-key" } } });
+  writeFileSync(config, bytes);
+  const before = readdirSync(h.config);
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    readUpdateRestartHome();
+    expect(readFileSync(config, "utf8")).toBe(bytes);
+    expect(readdirSync(h.config)).toEqual(before);
+    expect(warn).not.toHaveBeenCalled();
+  } finally { warn.mockRestore(); }
 });
 test("production child checker refuses client and competing runtime before acquisition", () => {
   for (const kind of ["client", "runtime", "malformed-runtime"] as const) {

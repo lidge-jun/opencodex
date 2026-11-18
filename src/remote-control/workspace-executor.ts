@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from "node:path";
 import { renameAtomicFile } from "../lib/windows-atomic-replace";
+import { sameFileIdentity, statTimeMs } from "../lib/file-identity";
 import {
   REMOTE_WORKSPACE_MAX_TOOL_RESULT_BYTES,
   type RemoteWorkspaceToolName,
@@ -65,8 +66,8 @@ export interface RemoteWorkspaceCommandRunner {
 interface ApprovedRoot {
   id: string;
   path: string;
-  dev: number;
-  ino: number;
+  dev: bigint;
+  ino: bigint;
   birthtimeMs: number;
 }
 
@@ -170,20 +171,20 @@ function decodeUtf8(value: Uint8Array): string {
 }
 
 function assertOpenedRegularFile(root: string, target: string, descriptor: number, maximum: number) {
-  const opened = fstatSync(descriptor);
-  const linked = lstatSync(target);
-  if (opened.isFile() && linked.isFile() && (opened.nlink !== 1 || linked.nlink !== 1)) {
+  const opened = fstatSync(descriptor, { bigint: true });
+  const linked = lstatSync(target, { bigint: true });
+  if (opened.isFile() && linked.isFile() && (opened.nlink !== 1n || linked.nlink !== 1n)) {
     throw new Error("remote workspace hard-linked files are not allowed");
   }
   if (!opened.isFile() || !linked.isFile() || linked.isSymbolicLink()
-    || opened.dev !== linked.dev || opened.ino !== linked.ino
-    || opened.birthtimeMs !== linked.birthtimeMs) {
+    || !sameFileIdentity(opened, linked)
+    || statTimeMs(opened.birthtimeNs) !== statTimeMs(linked.birthtimeNs)) {
     throw new Error("remote workspace file identity changed during access");
   }
   const canonical = realpathSync(target);
   if (!inside(root, canonical)) throw new Error("remote workspace path escapes the approved root");
   if (opened.size > maximum) throw new Error("remote workspace file exceeds the read limit");
-  return opened;
+  return { size: Number(opened.size), mode: Number(opened.mode) };
 }
 
 function readBoundedRegularFile(root: string, target: string, maximum: number): { body: Buffer; mode: number } {
@@ -216,11 +217,11 @@ function assertStableWritableParent(root: string, target: string): void {
 }
 
 function assertApprovedRootIdentity(root: ApprovedRoot): void {
-  const linked = lstatSync(root.path);
+  const linked = lstatSync(root.path, { bigint: true });
   const canonical = realpathSync(root.path);
   if (!linked.isDirectory() || linked.isSymbolicLink()
-    || linked.dev !== root.dev || linked.ino !== root.ino
-    || linked.birthtimeMs !== root.birthtimeMs
+    || !sameFileIdentity(linked, root)
+    || statTimeMs(linked.birthtimeNs) !== root.birthtimeMs
     || relative(root.path, canonical) !== "") {
     throw new Error("remote workspace approved root identity changed; pair the folder again");
   }
@@ -256,13 +257,13 @@ export class RemoteWorkspaceExecutor {
       const metadata = lstatSync(root.path);
       if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error("remote workspace root must be a real directory");
       const canonical = realpathSync(root.path);
-      const identity = lstatSync(canonical);
+      const identity = lstatSync(canonical, { bigint: true });
       this.roots.set(root.id, {
         id: root.id,
         path: canonical,
         dev: identity.dev,
         ino: identity.ino,
-        birthtimeMs: identity.birthtimeMs,
+        birthtimeMs: statTimeMs(identity.birthtimeNs),
       });
     }
     if (this.roots.size === 0) throw new Error("remote workspace executor needs one approved root");

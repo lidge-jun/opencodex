@@ -178,12 +178,16 @@ describe("buildAnthropicMessagesPassthroughRequest with OAuth", () => {
     expect(counted.wireBody.system).toBe(system);
     expect(built.wireBody.system).toBe(system);
     expect(counted.wireBody).toEqual(built.wireBody);
-    expect([...counted.oauthToolNames!]).toEqual([["custom_lookup", "lookup"]]);
-    expect([...shaped.toolNames]).toEqual([...counted.oauthToolNames!]);
+    // The observed client keeps its own tool names: nothing is renamed, nothing to map back.
+    expect(counted.oauthToolNames?.size ?? 0).toBe(0);
+    expect(shaped.toolNames.size).toBe(0);
+    expect(built.wireBody.messages).toBe(source.messages);
+    expect(built.wireBody.tool_choice).toBe(source.tool_choice);
     expect(JSON.stringify(source)).toBe(before);
-    // Omitting the new options keeps the existing synthesized SDK prefix.
+    // Omitting the new options keeps the existing synthesized SDK prefix and the prefixed names.
     const generic = anthropicMessagesNativeWireBody(oauthProvider(), "m", source);
     expect(generic.wireBody.system).toEqual([{ type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION }, ...system]);
+    expect([...generic.oauthToolNames!]).toEqual([["custom_lookup", "lookup"]]);
     // Even a captured handle cannot select first-party behavior for a compatible destination.
     const foreign = anthropicMessagesNativeWireBody(oauthProvider({ baseUrl: "https://compatible.example" }), "m", source, { clientIdentity });
     expect(foreign.wireBody.system).toEqual(generic.wireBody.system);

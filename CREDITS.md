@@ -171,6 +171,15 @@ The only remaining trailer is automation.
 | --- | --- | --- | --- |
 | [#3988](https://github.com/lidge-jun/opencodex/pull/3988) | [@rrmlima](https://github.com/rrmlima) | [`e2bf1672c`](https://github.com/lidge-jun/opencodex/commit/e2bf1672c974611f8db736cd64a90e1dc443924a) / [`14ce693e5`](https://github.com/lidge-jun/opencodex/commit/14ce693e5846596c823941ce90add538713a25b1) | "Carries #3988 by @rrmlima (`cherry-pick -x`)" — Gemini/CCA/Vertex/AI Studio model-tail `(continue)` nudge in `messagesToGeminiFormat`. |
 
+On 2026-11-06, [#8214](https://github.com/lidge-jun/opencodex/pull/8214)'s description
+named the trailer for overlapping draft [#8176](https://github.com/lidge-jun/opencodex/pull/8176).
+The squash message replaced the description, so the landing commit kept only the
+maintainer trailer. #8176 stays open for its remaining work.
+
+| Pull request | Author | Landed as | What landed |
+| --- | --- | --- | --- |
+| [#8176](https://github.com/lidge-jun/opencodex/pull/8176) | [@luvs01](https://github.com/luvs01) | [#8214](https://github.com/lidge-jun/opencodex/pull/8214) ([`7757a2fe1`](https://github.com/lidge-jun/opencodex/commit/7757a2fe1ff390258752d91c5e35561b6c978634)) | "This overlaps the Messages portion of #8176; its other work remains outside this PR." — Windows separator-aware Bun `onLoad` fixture filters for the Messages refusal/review suites. |
+
 ## Report and diagnosis
 
 These fixes exist because of the report. The branch's own approach was not the

@@ -222,7 +222,8 @@ async function runShutdownBudgetChild(
   if (timer !== undefined) clearTimeout(timer);
   const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
   if (timedOut) {
-    throw new Error(`response spill shutdown budget child timed out after ${timeoutMs}ms (${scenario})`);
+    const progress = stderr.split(/\r?\n/).filter(line => line.startsWith("shutdown-budget-phase: ")).slice(-8).join("; ");
+    throw new Error(`response spill shutdown budget child timed out after ${timeoutMs}ms (${scenario}); ${progress || "no phase marker"}`);
   }
   if (exitCode !== 0) {
     throw new Error(`response spill shutdown budget child exited ${exitCode} (${scenario}): ${stderr.trim()}`);

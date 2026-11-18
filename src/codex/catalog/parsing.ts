@@ -1,4 +1,8 @@
 import type { VendorContextInference } from "./vendor-context";
+import type { MultiAgentMode } from "../../types/multi-agent";
+export type { MultiAgentMode } from "../../types/multi-agent";
+import { retainedNativeInheritanceTemplate } from "./native-template";
+export { findSupportedNativeTemplate } from "./native-template";
 import { isCodexControlPlaneModel } from "../control-plane-models";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -307,35 +311,7 @@ export function findNativeTemplate(catalog: RawCatalog | null): RawEntry | null 
       && m.opencodex_catalog_kind !== CODEX_NATIVE_ALIAS_CATALOG_KIND
       && m.owned_by !== COMBO_NAMESPACE
       && !hasOcxRoutedAuthorship(m),
-  ) ?? null;
-}
-
-/**
- * Template selection, as opposed to catalog VALIDITY.
- *
- * `findNativeTemplate` answers "does this look like a real catalog?" and must stay
- * permissive: four call sites use it as a validity gate, and a catalog holding only a
- * newly launched native model has to keep passing or sync falls back to stale data.
- *
- * This answers a different question — "which row should every routed model inherit
- * from?" — and must be strict. `deriveEntry` deep-clones the chosen row, so an unknown
- * bare row carrying `base_instructions` would become the template for every routed
- * model and hand them its native eligibility metadata. #2813 is the report that made
- * that concrete: a Reserve-shaped row injected by the client is exactly such a row.
- *
- * Returning null is safe and expected; `deriveEntry` falls back to a conservative
- * synthetic template.
- */
-export function findSupportedNativeTemplate(catalog: RawCatalog | null): RawEntry | null {
-  return catalog?.models?.find(
-    m => typeof m.slug === "string"
-      && SUPPORTED_NATIVE_OPENAI_SLUGS.has(m.slug)
-      && !m.slug.includes("/")
-      && "base_instructions" in m
-      && m.opencodex_catalog_kind !== CODEX_NATIVE_ALIAS_CATALOG_KIND
-      && m.owned_by !== COMBO_NAMESPACE
-      && !hasOcxRoutedAuthorship(m),
-  ) ?? null;
+  ) ?? retainedNativeInheritanceTemplate(catalog);
 }
 
 /** Does this row already carry an `ultrafast` tier the operator put there themselves? */
@@ -620,8 +596,6 @@ export function ensureStrictCatalogFields(
   return ensureAutoCompactTokenLimit(entry);
 }
 
-export type MultiAgentMode = "v1" | "default" | "v2";
-
 export interface MultiAgentModeOptions {
   /** Caller-owned source metadata already defines the default for these projected rows. */
   preserveDefaultMultiAgentVersion?: (entry: RawEntry) => boolean;
@@ -691,6 +665,9 @@ export function applyRoutedCodexToolMode(
  * `keepNativeChatGptOnV1` only applies when `mode === "v2"`. It leaves Sol/Terra
  * (and other ChatGPT-native rows) on v1 so a native parent can still spawn a
  * routed child. See issue #92.
+ *
+ * `"v2-plaintext"` stamps every row v2, ChatGPT-native rows included -- the mode is
+ * the plaintext-delivery opt-in, so no native/routed split applies.
  */
 export function applyMultiAgentMode(
   entries: RawEntry[],
@@ -769,9 +746,10 @@ export function applyMultiAgentMode(
     }
     return entries;
   }
+  const forcedVersion = mode === "v2-plaintext" ? "v2" : mode;
   for (const entry of entries) {
     recordMultiAgentOrigin(entry);
-    entry.multi_agent_version = mode;
+    entry.multi_agent_version = forcedVersion;
   }
   return entries;
 }

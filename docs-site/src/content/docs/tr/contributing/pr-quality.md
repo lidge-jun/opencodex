@@ -96,15 +96,7 @@ PR-head kodu yürütülmez.
   bir kilit dosyası (lockfile) açık bir onay etiketine ihtiyaç duyar. Bir kaynak
   dosyadaki yalnızca yorum değişikliği bir davranış değişikliği değildir ve yeni
   bir regresyon testi gerektirmez. [Yerel test politikası](/tr/contributing/) yine geçerlidir.
-- **Çapraz platform CI.** Test paketi her çekme isteği için Linux'ta parçalı
-  (sharded) ve macOS'ta tam olarak çalışır. Windows, dağıtım sınırında çalışır —
-  `main` veya `preview` dalına yükseltmede — bu nedenle yavaş veya kararsız bir
-  Windows çalıştırıcısı çekme isteğinizin ne zaman yeşile döneceğine karar
-  veremez.
-Bu, temel dalı ne olursa olsun **her** çekme isteği için çalışır — temeli başka
-bir açık PR'ın head'i olan yığılmış (stacked) bir alt öğe dahil. İşlerin çalışıp
-çalışmayacağına temel dal değil `paths:` filtresi karar verir: yalnızca
-dokümanlara veya `devlog/` dizinine dokunan bir PR hiçbir şeyi kuyruğa almaz.
+- **CI.** Yayınlama, CI, sürümler ve dallar için [İngilizce kaynak belgeye](/contributing/) bakın.
 
 - **Tür etiketi (Type label).** `label` denetimi, PR başlığınızdan `bug` /
   `enhancement` / `documentation` / `chore` etiketlerini türetir. Tanınabilir
@@ -123,7 +115,7 @@ engellemez.
 `enforce-target` ve `label` güvenilen varsayılan dal otomasyonunu kullanır. PR
 kapısı, her ikisi de depo varsayılan dalından yüklenen `pull_request_target`
 üzerinde ve CodeRabbit `status` olaylarında çalışır; bu nedenle yazma yeteneğine
-sahip davranış yalnızca kapı revizyonu `main` dalına yükseltildikten sonra
+sahip davranış yalnızca kapı revizyonu varsayılan dala ulaştıktan sonra
 değişir. Çapraz platform CI iş akışı `pull_request` üzerinde çalışır ve
 hedeflenen dalda yer aldığı anda yürürlüğe girer.
 

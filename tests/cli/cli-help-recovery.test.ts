@@ -191,7 +191,7 @@ describe("CLI help recovery", () => {
       const calls = [];
       let reportCalls = false;
       mock.module(${JSON.stringify(repoPath("src", "cli", "codex-shim-autorestore.ts"))}, () => ({
-        maybeAutoRestoreCodexShim: command => { calls.push(command); if (reportCalls) console.log("preflight called"); },
+        maybeAutoRestoreCodexShimAsync: async command => { calls.push(command); if (reportCalls) console.log("preflight called"); },
       }));
       // The lifecycle skew notice probes the configured (here: default) port. A developer machine
       // with a live proxy there would answer, so keep this admission test independent of the host.

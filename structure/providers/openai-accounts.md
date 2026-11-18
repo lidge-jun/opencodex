@@ -37,7 +37,7 @@ preserving a stale one would block every later migration.
 
 ## Model and wire identity
 
-Account-list rows retain each registered `slotId` and `slotKind`; optional `upstreamAccountKey` is a versioned HMAC of the ChatGPT account ID and user claim under the local administrator token. Native identity comes from the owned observation without passive credential reads; missing or conflicting claims omit the key, the native key needs one token that claims both the matching account and the user (an `auth.json` `account_id` alone, or account and user claims split across the ID and access tokens, omit it), Pool rows need the access token's matching account claim, and token rotation changes it. No raw identity or credential is serialized.
+[Pool installation identity](codex-installation-identity.md) is stable per account and OpenCodex home. Account-list rows retain each registered `slotId` and `slotKind`; optional `upstreamAccountKey` is a versioned HMAC of the ChatGPT account ID and user claim under the local administrator token. Native identity comes from the owned observation without passive credential reads; missing or conflicting claims omit the key, the native key needs one token that claims both the matching account and the user (an `auth.json` `account_id` alone, or account and user claims split across the ID and access tokens, omit it), Pool rows need the access token's matching account claim, and token rotation changes it. No raw identity or credential is serialized.
 The optional [native reasoning retention policy](../transports/native-reasoning-retention.md#runtime-boundary) can permit reasoning ciphertext forwarding across a known model or account change on the same canonical ChatGPT destination. It does not change account selection, entitlement, cache isolation, continuation-id ownership or uploaded-file retention; cross-account acceptance is not guaranteed.
 
 Native Spark membership and its model-specific request/tool exceptions are removed; the shared
@@ -68,7 +68,7 @@ Native Spark membership and its model-specific request/tool exceptions are remov
   a request goes upstream as `gpt-6-astra-minor`.
 
 - The flagship roster that lists unconditionally is `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`,
-  `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol` and `gpt-6.1-terra` (Sol and Luna added 2026-09-23 from a
+  `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6.2-sol` and `gpt-6.2-astra` (Sol and Luna added 2026-09-23 from a
   live roster probe; https://openai.com/index/introducing-gpt-6-sol-and-luna/; 6.1 Sol added
   2026-09-30 and 6.1 Terra on 2026-10-27 from openai/codex models.json). None is gated, and all are native-main
   drain sentinels. The confirmed-denial ordering below is still scoped to the first four
@@ -259,7 +259,7 @@ and native-main refresh. Exact structured terminal codes apply only to authentic
 statuses; HTTP 429/5xx and malformed responses remain transient. Description-only OAuth 400
 compatibility never overrides a structured code. Endpoint diagnostics contain fixed outcome, HTTP
 status, an allowlisted code and (pool only) the account's durable `p<hex6>` label, never descriptions
-or credential material. Pool refresh errors keep that status/code without changing cooldown class.
+or credential material. Pool refresh errors keep that status/code without changing cooldown class. `mapCodexAuthContextErrorToResponse` in `src/server/responses/codex-auth-error.ts` marks only ordinary account-cooldown Responses with process-local provenance; combo reconstruction preserves it under the [combo cooldown contract](../transports/responses-failover.md#single-target-cooldown-retry-ownership). This limits restated account delays at target recording without changing account admission, quota health, probe ownership, client Retry-After or any hard-lock, credit, Reserve or transient policy.
 Once a stored-pool record carries the persisted terminal verdict (`lastCodexValidationTerminal`
 with a failed status), `auth-api/pool-quota-probe.ts` answers passive quota reads with that
 `refresh_failed` reauthentication result instead of spending the dead grant again. Passive reads
@@ -317,7 +317,7 @@ Only file-backed refresh has a local grant fingerprint lock; keyring claim deadl
 
 Fileless Pool and stored-Direct requests discover the current identity before selection or quota policy, even when prior expiry metadata is usable or the previous account is hard-locked; the selected token is revalidated before dispatch.
 A discovery failure is retained as the request's own classified cause for an empty candidacy and for the exact `__main__` selector alike, rather than degrading to a blanket unavailability refusal. It stays evidence only while the credential remains unverifiable: a credential recovered while model-entitlement resolution is in flight is re-checked live, so an already-healthy login answers with the current selection outcome instead of the stale probe error. `src/codex/account-lifecycle.ts` applies the same identity transition to a validated owned RPC as to an owned file read: a changed account purges prior runtime/quota state and retires its writers, while unchanged or ambiguous identity preserves its quota policy and ambiguous identity cannot clear reauth quarantine. On the first owned observation after restart, `src/codex/quota.ts` discards legacy main quota only when a valid retained policy tag proves a different account; matching, missing or invalid tags retain their restrictions, and other accounts remain untouched. Startup, drain, caller-owned credential and Pool manual-pause fences remain; async stored-Direct materialization, including audio, uses the same resolver, while synchronous readers remain file-only.
-Account-card metadata, initial Pool quota priming and idle main-quota recovery also use the owned keyring login. `src/codex/auth-api/main-account-probe.ts` obtains an absent-file credential under the runtime lease before taking WHAM's shared claim; recovery reuses its exact prepared result. The handoff must still match the current home, identity writer, bearer HMAC and credential generation, and auth.json must remain absent. Copies, credential ABA, a changed home, a later file credential and stale responses cannot publish quota or reset-recovery proof; an invalid handoff cannot overwrite current credential presence. Verified RPC identity is retained instead of erased by a missing-file reconciliation. A confirmed current-home logout/refusal reports credential absence, while transport uncertainty preserves the prior observation; request error classification is unchanged. Passive preparation and WHAM reads preserve traffic quarantine and manual pause; explicit refresh retains its existing recovery meaning. `tests/codex-integration/main-account-credit-renewal.test.ts` and `tests/codex-integration/native-main-refresh-mode.test.ts` cover these boundaries. Armed test-home guards prevent auto-spawn; `ocx doctor` prints the active mode and reason.
+Account-card metadata, initial Pool quota priming and idle main-quota recovery also use the owned keyring login. `src/codex/auth-api/main-account-probe.ts` obtains an absent-file credential under the runtime lease before taking WHAM's shared claim; recovery reuses its exact prepared result. The handoff must still match the current home, identity writer, bearer HMAC and credential generation, and auth.json must remain absent. Copies, credential ABA, a changed home, a later file credential and stale responses cannot publish quota or reset-recovery proof; an invalid handoff cannot overwrite current credential presence. Verified RPC identity is retained instead of erased by a missing-file reconciliation. A confirmed current-home logout/refusal reports credential absence, while transport uncertainty preserves the prior observation; request error classification is unchanged. Passive preparation and WHAM reads preserve traffic quarantine and manual pause; explicit refresh retains its existing recovery meaning. `tests/codex-integration/main-account-credit-renewal.test.ts` and `tests/codex-integration/native-main-refresh-mode.test.ts` cover these boundaries. Armed test-home guards prevent auto-spawn; `ocx doctor` prints the active mode and reason. Retaining the last complete login while Codex rewrites the file is [native-main login retention](native-main-login-retention.md).
 
 ## Preserve signed-in quota
 
@@ -408,7 +408,7 @@ The credits module beside `src/codex/quota-types.ts` retains validated WHAM cred
 
 WHAM and response-header producers pass the exact captured pool writer, including refreshed replay and compact outcomes. Admission rechecks credential generation and publication UUID. Same-account refresh preserves prior history; replacement/removal invalidates it. Raw invalid percentages discard the entire trusted observation before display clamping; carried windows, reset credits alone, native main and staged-login probes never become durable pool history.
 
-`GET /api/codex-auth/quota/history` and `ocx account history openai <pool-account-id>` read only cached, identity-checked observations. The optional limit is 1–200. Public results omit the internal publication UUID and credential generation. These observations are inputs for capacity estimation; percentages alone do not establish absolute token capacity.
+`GET /api/codex-auth/quota/history` and `ocx account history openai <pool-account-id>` read only cached, identity-checked observations. The optional limit is 1–200. Public results omit the internal publication UUID and credential generation. These observations are inputs for capacity estimation; percentages alone do not establish absolute token capacity. `src/codex/quota-window-conflict.ts` (#8574) reads the same cached history for the current credential generation and reports `weeklyQuotaConflicts` on the pool account row when an earlier-reset weekly window is observed again after a later one (reset times within one hour are one window) while the earlier reset is still ahead; a true rollover or an early reset never repeats the old window. It picks no winner and never feeds admission, routing or credit consent; the dashboard card and the CLI QUOTA column only name it. The reader peeks the history (no prune, no clear, so a passive `/api/quota-pool` read changes nothing) and takes each row's credential record from the listing's one store snapshot.
 
 ## Observed effective token capacity
 
@@ -426,7 +426,7 @@ The Codex parser in `src/oauth/pool-kernel.ts` is reexported by the compatibilit
 
 The account-pool strategy control and `ocx account pool get openai strategy` summarize how the
 configured threshold applies to the active strategy. Manual-switch warnings use the routing usage
-score. A reset-less terminal short window is current only when its `shortObservedAt` is not in the
+score. A known long-window score excludes short usage when its valid reset has elapsed; absent or invalid resets retain it. A reset-less terminal short window is current only when its `shortObservedAt` is not in the
 future and is at most `TERMINAL_SHORT_WINDOW_FRESHNESS_MS` old; general `updatedAt` changes do not
 extend that observation.
 
@@ -492,7 +492,7 @@ Upstream API-key usage follows the [physical-attempt account attribution contrac
 `codexAccountAutoSwitchThresholds` is persisted per-account routing metadata. Each 0..100 value
 overrides global `autoSwitchThreshold` for that source account; absence inherits global, and 0 disables
 only usage-driven switching from that account. Runtime resolves this effective value for unbound
-selection, quota/reset-first bound-task re-evaluation, fill-first, priority-tier headroom, main-account
+selection, quota/reset-first bound-task re-evaluation, fill-first, [round-robin placement](codex-round-robin-placement.md), priority-tier headroom, main-account
 pin reuse, previews and subagent quota fallback. Failure recovery remains separate. The stable
 `__main__` alias participates, deletion removes an added account's sidecar entry, and malformed maps
 degrade as a unit rather than invalidating config. Zero never disables main-account hard-lock,
