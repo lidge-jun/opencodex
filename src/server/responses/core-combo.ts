@@ -396,6 +396,16 @@ function eligibleJevComboChoices(
 
 
 /** Dispatch a Responses combo within its shared send budget and preserve terminal child failures. */
+/** Detach config and resolved routes while retaining injected function identities. */
+function copyComboAdmissionState<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(copyComboAdmissionState) as T;
+  if (value && typeof value === "object" && (Object.getPrototypeOf(value) === Object.prototype
+    || Object.getPrototypeOf(value) === null)) {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, copyComboAdmissionState(entry)])) as T;
+  }
+  return value;
+}
+
 export async function executeComboResponses(
   req: Request,
   rawBody: unknown,
@@ -418,10 +428,11 @@ export async function executeComboResponses(
     provider: "combo",
     comboId,
   });
-  const combo = getCombo(config, comboId);
-  if (!combo) {
+  const ingressCombo = getCombo(config, comboId);
+  if (!ingressCombo) {
     return formatErrorResponse(404, "invalid_request_error", "Unknown combo");
   }
+  let combo = ingressCombo;
   // Resolve against the original request once; every bridge candidate receives the same trusted
   // result after its provisional Authorization is removed, including an explicitly keyless result.
   const replayPrincipal = options.replayPrincipal
@@ -432,7 +443,7 @@ export async function executeComboResponses(
   const admissionScope = options.admissionScope ?? resolveAdmissionModelScope(config, options.admission);
   // Present only when an opted-in ingress supplied a native source; otherwise every child
   // takes the bridge below exactly as before.
-  const protocolLanes = createComboProtocolLanes({
+  const buildProtocolLanes = (config: OcxConfig, targets: NonNullable<typeof combo>["targets"]) => createComboProtocolLanes({
     source: options.protocolSource,
     req,
     config,
@@ -440,8 +451,10 @@ export async function executeComboResponses(
     admissionScope,
     droidDefaultEffort: options.droidDefaultEffort,
     comboId,
-    targets: combo.targets,
+    targets,
   });
+  let protocolLanes = buildProtocolLanes(config, combo.targets);
+  let admissionConfig = config;
   // The ladder's own scope, derived from what this combo DECLARES. It shares the request-wide
   // counter with the holder that arrived on options -- a combo child already inherited that
   // counter, but nothing read it as a limit across targets -- while its transition and
@@ -484,18 +497,7 @@ export async function executeComboResponses(
   // children replay a snapshot and skip theirs.
   observeLinkTurnExpansion(options.linkTurn, req, logCtx, body,
     requestedPreviousId.trim().length > 0 ? (unresolvedPrevious ? "unexpanded" : "chained") : "none");
-  if (combo.imageInput === "disabled" && unresolvedPrevious) {
-    markLinkTurnMissing(logCtx);
-    return formatErrorResponse(
-      400,
-      "previous_response_not_found",
-      "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
-    );
-  }
-  if (combo.imageInput === "disabled" && comboRequestHasImageInput(body)) {
-    return formatErrorResponse(400, "invalid_request_error", "This combo does not accept image input");
-  }
-  let meteredAllowed = admissionMayUseMeteredComboTargets(config, options.admission, combo);
+  let meteredAllowed: boolean;
   const mayUseTarget = (target: (typeof combo.targets)[number]): boolean =>
     (meteredAllowed || !target.metered) && (combo.strategy !== "jev" || target.provider !== JEV_PROVIDER_ID);
   // The combo ladder owns the whole logical request, so the catalog diagnostic is counted here for
@@ -524,7 +526,7 @@ export async function executeComboResponses(
   });
   const reasoningReplayEligible = (target: (typeof combo.targets)[number]): boolean => {
     try {
-      const route = routeConcreteModel(config, `${target.provider}/${target.model}`);
+      const route = routeConcreteModel(admissionConfig, `${target.provider}/${target.model}`);
       const unavailable = mandatoryResponsesReasoningReplayUnavailable({
         body,
         clientThreadId: reasoningReplayConversationId,
@@ -580,10 +582,10 @@ export async function executeComboResponses(
     (body as { input?: unknown } | undefined)?.input,
   );
   const canDecryptUnreadableAgentTask = (target: (typeof combo.targets)[number]): boolean => {
-    const provider = config.providers[target.provider];
+    const provider = admissionConfig.providers[target.provider];
     if (!provider || provider.disabled === true) return false;
     try {
-      const route = routeConcreteModel(config, `${target.provider}/${target.model}`);
+      const route = routeConcreteModel(admissionConfig, `${target.provider}/${target.model}`);
       return isCanonicalOpenAiForwardProvider(route.provider);
     } catch {
       return false;
@@ -595,8 +597,8 @@ export async function executeComboResponses(
   const museToolEligible = (target: (typeof combo.targets)[number]): boolean => {
     if (!hasMandatoryToolChoice(body)) return true;
     try {
-      const selector = `${target.provider}/${target.model}`, { fastRow, effortRow } = parseSyntheticRowId(selector, config);
-      const route = routeConcreteModel(config, fastRow?.baseId ?? effortRow?.baseId ?? selector);
+      const selector = `${target.provider}/${target.model}`, { fastRow, effortRow } = parseSyntheticRowId(selector, admissionConfig);
+      const route = routeConcreteModel(admissionConfig, fastRow?.baseId ?? effortRow?.baseId ?? selector);
       const modelId = resolveOpenAiVirtualModel(route.providerName, route.modelId)?.wireModelId ?? route.modelId;
       const inboundWire = options.inboundWire ?? "responses";
       const policy = captureRouteStaticPolicy(route.providerName, modelId, route.provider,
@@ -627,31 +629,49 @@ export async function executeComboResponses(
     markProxyError(formatErrorResponse(400, "invalid_request_error", "No target of this combo can accept image input"));
   const warnComboImageOmission = (): void =>
     console.warn("[opencodex] combo has no image-capable target; images will be omitted");
-  const readCapability = (currentCombo = combo) => comboCapabilityGate(config, currentCombo, body, target => {
+  const resolveCapabilityRoute = (config: OcxConfig, target: Pick<(typeof combo.targets)[number], "provider" | "model">) => {
     try {
       const route = routeConcreteModel(config, `${target.provider}/${target.model}`);
       const provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, options.inboundWire);
       return { ...route, provider };
     } catch { return undefined; }
-  }, (target, route) => capabilityCandidate(target) && (!route || routeAllowedByScope(admissionScope, route)),
-  (route, parsed) => canDescribeComboImages({ config, req, options }, route, parsed));
-  const capabilityRefusal = (capability: Awaited<ReturnType<typeof readCapability>>, currentCombo = combo): Response | undefined => {
+  };
+  const captureRoutes = (config: OcxConfig) => new Map(combo.targets.map(target =>
+    [targetKey(target), copyComboAdmissionState(resolveCapabilityRoute(config, target))]));
+  const admitCombo = async (routes?: ReturnType<typeof captureRoutes>) => {
+    if (combo.imageInput === "disabled" && unresolvedPrevious) {
+      markLinkTurnMissing(logCtx);
+      return formatErrorResponse(
+        400,
+        "previous_response_not_found",
+        "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
+      );
+    }
+    if (combo.imageInput === "disabled" && comboRequestHasImageInput(body)) {
+      return formatErrorResponse(400, "invalid_request_error", "This combo does not accept image input");
+    }
+    meteredAllowed = admissionMayUseMeteredComboTargets(admissionConfig, options.admission, combo);
+    const capability = await comboCapabilityGate(admissionConfig, combo, body,
+      target => routes ? routes.get(targetKey(target)) : resolveCapabilityRoute(admissionConfig, target),
+      (target, route) => capabilityCandidate(target) && (!admissionScope || !!route && routeAllowedByScope(admissionScope, route)),
+      (route, parsed) => canDescribeComboImages({ config: admissionConfig, req, options: { ...options, admissionScope } }, route, parsed));
     if (capability.unservable === "audio") {
       return formatErrorResponse(400, "invalid_request_error", "No target of this combo can accept audio input");
     }
-    if (capability.unservable && currentCombo.onUnservable === "reject") {
+    if (capability.unservable && combo.onUnservable === "reject") {
       return capability.unservable === "context"
         ? formatErrorResponse(400, "invalid_request_error", "No target of this combo has a context window large enough for this request")
         : unservableImageResponse();
     }
+    return capability;
   };
-  const warnCapabilityDegradation = (reason: Awaited<ReturnType<typeof readCapability>>["unservable"]): void => {
+  const warnCapabilityDegradation = (reason: Exclude<Awaited<ReturnType<typeof admitCombo>>, Response>["unservable"]): void => {
     if (reason === "image") warnComboImageOmission();
     if (reason === "context") console.warn("[opencodex] combo has no target whose context window fits; sending to the largest");
   };
-  let capability = await readCapability();
-  const initialRefusal = capabilityRefusal(capability);
-  if (initialRefusal) return initialRefusal;
+  const initialAdmission = await admitCombo();
+  if (initialAdmission instanceof Response) return initialAdmission;
+  let capability = initialAdmission;
   warnCapabilityDegradation(capability.unservable);
   const visionRejectedTargets = new Set<string>();
   let omittingImages = capability.unservable === "image";
@@ -845,7 +865,7 @@ export async function executeComboResponses(
       if (!targetEligible(target)) return false;
       if (!admissionScope) return true;
       try {
-        return routeAllowedByScope(admissionScope, routeConcreteModel(config, `${target.provider}/${target.model}`));
+        return routeAllowedByScope(admissionScope, routeConcreteModel(admissionConfig, `${target.provider}/${target.model}`));
       } catch {
         return false;
       }
@@ -942,29 +962,33 @@ export async function executeComboResponses(
     let refreshedRefusal: Response | undefined;
     if ((!pinReuse?.decision || pick.cooldownReprobeTargets || awaitedPinEffort) && !options.abortSignal?.aborted) {
       const previousUnservable = capability.unservable;
-      const liveCombo = () => Object.hasOwn(config.combos ?? {}, comboId) ? config.combos?.[comboId] : undefined;
+      const previousCombo = combo;
+      const previousProtocolLanes = protocolLanes;
       let currentChoices: typeof choices = [];
-      // Retry only the local capability read. An unstable roster is unavailable.
+      // Retry admission locally. A paid decision can never be replayed here.
       for (let attempt = 0; attempt < 3; attempt++) {
-        const rawCombo = liveCombo();
-        if (!rawCombo) break;
-        const snapshot = structuredClone(rawCombo);
-        const selectionConfig = { ...config, combos: { [comboId]: snapshot } };
-        const currentCombo = getCombo(selectionConfig, comboId)!;
-        meteredAllowed = admissionMayUseMeteredComboTargets(config, options.admission, currentCombo);
-        capability = await readCapability(currentCombo);
+        admissionConfig = copyComboAdmissionState(config);
+        const currentCombo = getCombo(admissionConfig, comboId);
+        if (!currentCombo) break;
+        combo = currentCombo;
+        protocolLanes = buildProtocolLanes(admissionConfig, combo.targets);
+        const routes = captureRoutes(admissionConfig);
+        const result = await admitCombo(routes);
         if (options.abortSignal?.aborted) return clientCancelledResponse();
-        const latestCombo = liveCombo();
-        if (!Bun.deepEquals(snapshot, latestCombo)
-          || meteredAllowed !== admissionMayUseMeteredComboTargets(config, options.admission, latestCombo)) continue;
-        refreshedRefusal = capabilityRefusal(capability, currentCombo);
-        omittingImages = capability.unservable === "image";
-        if (!refreshedRefusal && previousUnservable !== capability.unservable) warnCapabilityDegradation(capability.unservable);
-        if (!refreshedRefusal) {
-          currentChoices = eligibleJevComboChoices(selectionConfig, comboId, jevTargetEligible, Date.now(), pick.cooldownReprobeTargets);
+        if (!Bun.deepEquals(admissionConfig, config) || !Bun.deepEquals(routes, captureRoutes(config))) continue;
+        if (result instanceof Response) {
+          refreshedRefusal = result;
+        } else {
+          capability = result;
+          omittingImages = capability.unservable === "image";
+          if (previousUnservable !== capability.unservable) warnCapabilityDegradation(capability.unservable);
+          currentChoices = eligibleJevComboChoices(admissionConfig, comboId, jevTargetEligible, Date.now(), pick.cooldownReprobeTargets);
         }
         break;
       }
+      admissionConfig = config;
+      combo = previousCombo;
+      if (!currentChoices.length) protocolLanes = previousProtocolLanes;
       const current = currentChoices.find(choice => choice.candidate.key === decision.targetKey
         && (decision.effort === null ? choice.candidate.reasoningEfforts.length === 0
           : choice.candidate.reasoningEfforts.includes(decision.effort)));

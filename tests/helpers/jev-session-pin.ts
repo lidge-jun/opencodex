@@ -85,8 +85,11 @@ export async function turn(config: OcxConfig, options: {
   log?: RequestLogContext;
   models?: string[];
   effort?: string;
+  input?: unknown;
+  previousResponseId?: string;
 } = {}): Promise<Response> {
-  const body = { model: "jev-auto", input: "Implement the next step.", stream: false,
+  const body = { model: "jev-auto", input: options.input ?? "Implement the next step.", stream: false,
+    ...(options.previousResponseId ? { previous_response_id: options.previousResponseId } : {}),
     ...(options.effort ? { reasoning: { effort: options.effort } } : {}) };
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (options.session !== null) headers.session_id = options.session ?? "session-a";
