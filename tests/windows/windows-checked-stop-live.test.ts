@@ -83,6 +83,71 @@ describe("capped command answers", () => {
     expect(parseTaskCsvState('"\\Tools\\opencodex-proxy","N/A","Running"')).toBe("unknown");
   });
 
+  test("schtasks CSV state reads the zh-CN and ko-KR status words (#8863)", () => {
+    // System32\zh-CN\schtasks.exe.mui: Running, Ready, Disabled, Queued.
+    expect(parseTaskCsvState('"\\opencodex-proxy","N/A","正在运行"')).toBe("running");
+    expect(parseTaskCsvState('"\\opencodex-proxy","2026/11/17 9:00:00","就绪"')).toBe("not-running");
+    expect(parseTaskCsvState('"\\opencodex-proxy","N/A","已禁用"')).toBe("not-running");
+    expect(parseTaskCsvState('"\\opencodex-proxy","N/A","已排队"')).toBe("not-running");
+    // ko-KR, observed on two machines: Running, Ready.
+    expect(parseTaskCsvState('"\\opencodex-proxy","N/A","실행 중"')).toBe("running");
+    expect(parseTaskCsvState('"\\opencodex-proxy","N/A","준비"')).toBe("not-running");
+    // Another task path still does not count, whatever the word.
+    expect(parseTaskCsvState('"\\Tools\\opencodex-proxy","N/A","正在运行"')).toBe("unknown");
+  });
+
+  test("a zh-CN task state is read from the CSV without starting PowerShell (#8863)", async () => {
+    const programs: string[] = [];
+    const deps = windowsCheckedStopLiveDeps({
+      run: async (program, args) => {
+        programs.push(program + " " + args[0]);
+        if (program === "powershell") throw new Error("PowerShell cannot start inside the 1 s manager-state cap");
+        return result(0, '"\\opencodex-proxy","N/A","正在运行"\r\n');
+      },
+    });
+    expect(await deps.taskState(1_000)).toBe("running");
+    expect(programs).toEqual(["schtasks /query"]);
+  });
+
+  test("a localized /end failure on an idle task is not-running only when the CSV says so (#8863)", async () => {
+    const idleEnd = (csv: string | null, endResult = result(1, "", "错误: 任务没有正在运行的实例。")) => {
+      const programs: string[] = [];
+      const deps = windowsCheckedStopLiveDeps({
+        run: async (program, args) => {
+          programs.push(program + " " + args[0]);
+          if (args[0] === "/end") return endResult;
+          return csv === null ? result(1, "", "query failed") : result(0, csv);
+        },
+      });
+      return { programs, ended: deps.endTask(2_000) };
+    };
+    const ready = idleEnd('"\\opencodex-proxy","N/A","就绪"');
+    expect(await ready.ended).toBe("not-running");
+    expect(ready.programs).toEqual(["schtasks /end", "schtasks /query"]);
+    expect(await idleEnd('"\\opencodex-proxy","N/A","준비"', result(1, "", "오류: 작업의 실행 중인 인스턴스가 없습니다.")).ended).toBe("not-running");
+    // A task that is still running, or a state that cannot be read, keeps the failure.
+    expect(await idleEnd('"\\opencodex-proxy","N/A","正在运行"').ended).toBe("failed");
+    expect(await idleEnd(null).ended).toBe("failed");
+    expect(await idleEnd('"\\opencodex-proxy","N/A","Wird ausgeführt"').ended).toBe("failed");
+    // A timed-out, refused or unspawned /end never reaches a second query.
+    const timedOut = idleEnd('"\\opencodex-proxy","N/A","就绪"', result(null, "", "", true));
+    expect(await timedOut.ended).toBe("failed");
+    expect(timedOut.programs).toEqual(["schtasks /end"]);
+    const refused = idleEnd('"\\opencodex-proxy","N/A","就绪"', result(null, "", "refusing a machine-global service mutation from an armed test process"));
+    expect(await refused.ended).toBe("failed");
+    expect(refused.programs).toEqual(["schtasks /end"]);
+    // The English answer keeps its direct classification.
+    const english = idleEnd(null, result(1, "", "ERROR: There is no running instance of the task."));
+    expect(await english.ended).toBe("not-running");
+    expect(english.programs).toEqual(["schtasks /end"]);
+    // A localized denial stays denied even when the task reads idle, and never queries again.
+    for (const denial of ["错误: 拒绝访问。", "오류: 액세스가 거부되었습니다."]) {
+      const denied = idleEnd('"\\opencodex-proxy","N/A","就绪"', result(1, "", denial));
+      expect(await denied.ended).toBe("denied");
+      expect(denied.programs).toEqual(["schtasks /end"]);
+    }
+  });
+
   test("sc.exe query and stop", () => {
     expect(parseScQueryState(result(1060, "[SC] EnumQueryServicesStatus:OpenService FAILED 1060:"))).toBe("nonexistent");
     expect(parseScQueryState(result(0, "        STATE              : 4  RUNNING"))).toBe("running");

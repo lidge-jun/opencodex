@@ -9,6 +9,14 @@ export const REPLY_MCP_CLIENT = "00000000-0000-4000-8000-000000000003";
 export const REPLY_MCP_TURN = "00000000-0000-4000-8000-000000000004";
 export interface QueueMcpCall { frame: { method: string; params?: Record<string, unknown> }; argv: string[]; sender?: string; home: string; pid: number }
 
+/**
+ * Fixture CLIs append one JSON line per frame from several processes while the test reads the
+ * same file, so a read can land mid-append. Only newline-terminated lines are complete.
+ */
+export function completeCaptureLines(text: string): QueueMcpCall[] {
+  return text.slice(0, text.lastIndexOf("\n") + 1).split("\n").filter(Boolean).map(line => JSON.parse(line) as QueueMcpCall);
+}
+
 /** Offline native CLI with one fixed failure mode, private capture and no user credentials. */
 export function queueMcpFixture(mode = "success") {
   const root = mkdtempSync(join(tmpdir(), "opencodex-test-queue-mcp-"));
@@ -18,6 +26,7 @@ export function queueMcpFixture(mode = "success") {
   writeFileSync(capture, "", { mode: 0o600 });
   writeFileSync(codex, `#!${process.execPath}
 const fs = require("node:fs");
+const readCalls = () => { const s = fs.readFileSync(${JSON.stringify(capture)}, "utf8"); return s.slice(0, s.lastIndexOf("\\n") + 1).split("\\n").filter(Boolean).map(x => JSON.parse(x)); };
 const rl = require("node:readline").createInterface({input:process.stdin});
 const mode = ${JSON.stringify(mode)};
 const emit = value => process.stdout.write(JSON.stringify(value)+"\\n");
@@ -61,7 +70,7 @@ rl.on("line", line => {
       return emit({id:2,result:{data:[user]}});
     }
     if(f.method === "thread/turns/list") {
-      const turnsCalls = fs.readFileSync(${JSON.stringify(capture)},"utf8").trim().split("\\n").map(x=>JSON.parse(x)).filter(x=>x.frame.method === "thread/turns/list").length;
+      const turnsCalls = readCalls().filter(x=>x.frame.method === "thread/turns/list").length;
       const response = {id:2,result:{data:mode === "reply-old-turn" ? [] : [{id:turnId,status:mode === "reply-bad-turns" ? "done" : mode === "reply-running" ? "inProgress" : mode === "reply-failed" ? "failed" : ["reply-interrupted","reply-wait-terminal"].includes(mode) ? "interrupted" : "completed",items:[]}],nextCursor:null}};
       if(mode === "reply-wait-timely-close") return emitBeforeDeadlineAndDelayClose(response);
       if(mode === "reply-wait-timely-close-later" && turnsCalls >= 2) return emitBeforeDeadlineAndDelayClose(response);
@@ -96,12 +105,12 @@ rl.on("line", line => {
     if(!searching && mode === "reply-earlier-final") data.unshift({...final,item:{...final.item,id:"earlier-answer",text:"earlier fixture answer"}});
     if(!searching && mode === "reply-refresh") {
       if(f.params.cursor != null) return emit({id:2,result:{data:[],nextCursor:null}});
-      const calls=fs.readFileSync(${JSON.stringify(capture)},"utf8").trim().split("\\n").map(x=>JSON.parse(x));
+      const calls=readCalls();
       const reads=calls.filter(x=>x.frame.method === "thread/items/list" && x.frame.params.turnId).length;
       if(reads<2) {final.item.phase="partial_answer";final.item.text="PRIVATE_PARTIAL";}
     }
     if(mode.startsWith("reply-wait-")) {
-      const calls=fs.readFileSync(${JSON.stringify(capture)},"utf8").trim().split("\\n").map(x=>JSON.parse(x));
+      const calls=readCalls();
       const reads=calls.filter(x=>x.frame.method === "thread/items/list" && x.frame.params.turnId).length;
       if(!searching && mode === "reply-wait-timely-close-later" && reads<2) {final.item.phase="partial_answer";final.item.text="PRIVATE_PARTIAL";}
       if(searching && mode === "reply-wait-late-input" && calls.filter(x=>x.frame.method === "thread/items/list").length===1) data=[];
@@ -110,7 +119,8 @@ rl.on("line", line => {
       if(!searching && mode === "reply-wait-failure" && reads>=2) return emit({id:2,error:{code:-32601,message:"PRIVATE_READ_FAILURE"}});
       if(!searching && mode === "reply-wait-hang-second" && reads>=2) return;
     }
-    if(!searching && mode === "reply-deadline-barrier") return;
+    // Hold the first reply RPC for each logical wait until the MCP disconnect cancels it.
+    if(!searching && ["reply-deadline-barrier","reply-wait-bound-barrier"].includes(mode)) return;
     return emit({id:2,result:{data,nextCursor}});
   }
   if(f.method === "thread/list") {
@@ -124,6 +134,6 @@ rl.on("line", line => {
 });
 `, { mode: 0o700 });
   chmodSync(codex, 0o700);
-  return { root, options: { codex, codexHome: home }, calls: (): QueueMcpCall[] => readFileSync(capture, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line)),
+  return { root, options: { codex, codexHome: home }, calls: (): QueueMcpCall[] => completeCaptureLines(readFileSync(capture, "utf8")),
     close: () => removeTreeWithRetry(root) };
 }

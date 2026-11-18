@@ -188,9 +188,10 @@ describe("workspace account integration seam", () => {
     // directly: a high-risk provider (anthropic, google-antigravity, meta-muse) must show
     // its warning before a REauthentication too, not only before the first login.
     // `requestLoginOAuth` is the warning-aware entry point and forwards the same
-    // (provider, addAccount, accountId) triple.
+    // (provider, addAccount, accountId) triple; the dialog's Continue adds the acknowledgement
+    // the API requires for google-antigravity.
     expect(page).toContain("requestLoginOAuth(provider, true, accountId)");
-    expect(page).toContain("void loginOAuth(pending.provider, pending.addAccount, pending.accountId)");
+    expect(page).toContain("void loginOAuth(pending.provider, pending.addAccount, pending.accountId, true)");
     expect(page).toContain("accountId: reauthTargetId, reauth: true");
     expect(page).toContain("prov.reauthIdentityMismatch");
     expect(page).toContain("oauthLoginGenerationRef");

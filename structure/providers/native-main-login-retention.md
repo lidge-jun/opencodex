@@ -21,7 +21,8 @@ copy is never revived; only a later complete read retains again:
 - a missing observation (a missing file is unavailable unless the Codex RPC confirms a login; see [native-main refresh ownership](openai-accounts.md#native-main-refresh-ownership)),
   a no-login observation, or an unreadable file;
 - account replacement: another OpenCodex credential publication (`advanceCodexCredentialMutationEpoch`),
-  a different file identity, an unlinked retained file, or a complete file naming another login;
+  a different file identity, an unlinked retained file, a complete file naming another login, or a
+  change of the shared main-account identity generation, including an independent account reconciliation;
 - revocation (`markMainRefreshGrantRejected`, `markAccountNeedsReauth` for `__main__`, a rejected grant
   on the retained login) and pause (`setCodexAccountPaused` for `__main__`);
 - a refresh-owner change. A retained entry records the configured `nativeMainRefresh` value. Config
@@ -37,10 +38,14 @@ login (for example `codex login` over an existing login) and no read lands betwe
 and the rewrite window, an incomplete read during that window can still return the old login, once,
 until the next complete read. A logout that deletes the file always gets a new identity.
 
-Every invalidation bumps a generation. A refresh captures its ticket before the token exchange,
-and retains the published login only if no invalidation happened meanwhile, so a completion after
-ownership loss cannot repopulate retention. A retained bearer that is expired (or the one upstream
-rejected) is discarded before use, and the credential status does not report it usable, so the
+Every invalidation bumps a retention generation. Entries and observation tickets also bind the
+main-account identity generation, so an observed account round trip cannot revive an old entry or
+ticket. A complete owned status/token read uses the shared lifecycle identity transition before
+capturing a new ticket, so prior-account cleanup finishes first and a later same-account reconciliation
+does not invalidate the new login. Write guards do not publish identity, and explicit refresh tickets are never recaptured. A refresh
+captures its ticket before the token exchange and retains the published login only if neither
+generation changed meanwhile, so a stale completion cannot repopulate retention. A retained bearer
+that is expired (or the one upstream rejected) is discarded before use, and the credential status does not report it usable, so the
 selected refresh owner decides exactly as for an unavailable file. The guarded writer cannot refresh
 a file mid-rewrite and reports no credential; Codex mode asks the RPC. Write guards (the pre-rename
 snapshot check and native device reauth) read the physical file and never retain.

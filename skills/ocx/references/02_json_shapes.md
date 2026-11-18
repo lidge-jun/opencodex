@@ -319,6 +319,9 @@ fields vary by flow. `flowId`, account identity and device code are different.
 Live OAuth logout returns `{schemaVersion:1, success:true, provider, live:true}`.
 Local logout instead uses `{schemaVersion:1, ok, provider, removed}`, with
 `reason:"not_found"` and exit 4 when absent. Never invent `removed` for live logout.
+A provider whose login serves several rows (`kimi`, `kimi-responses`) adds
+`credentialSlot` and `affectedRows` to both success shapes: the active account
+of that shared login was removed for every listed row.
 
 ## Settings and v2 receipts
 

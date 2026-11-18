@@ -292,7 +292,7 @@ base instructions, modalities, auto-compact fields, and strict parser booleans. 
 the canonical `provider/model`. Its display name uses the provider's exact `modelDisplayNames` override first,
 then trusted catalog metadata such as a configured qualified provider/model alias, then the public slug.
 This overlay never changes route identity or the upstream wire model, and its catalog fingerprint makes
-a label edit refresh Codex output.
+a label edit refresh Codex output. Operator defaults for the routed instruction and verbosity fields follow the [routed catalog row defaults contract](catalog-routed-defaults.md).
 
 Raw `/v1/models` rows advertise positive safe capacity values in both Cursor's nested
 `capabilities` object and top-level discovery fields used by other clients. A model with a larger
@@ -380,10 +380,10 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   an omission has no row to carry a reason, catalog sync emits one warn-once line naming the
   cause — absent canonical OpenAI provider, explicitly disabled picker, empty selector map, or a
   map with no main-account target — and the action that restores it
-  (`src/codex/catalog/reserve-warn.ts`). It is scoped to an install where authless Codex Desktop
-  routing is effective, so an install that never opted in is never told about a Reserve row it
-  did not ask for. An install that stores the flag where it cannot take effect is a different
-  silence, reported as `inertReason` by `describeCodexDesktopSwitches` rather than repeated here.
+  (`src/codex/catalog/reserve-warn.ts`). It is scoped to an install where the Reserve capability
+  is effective (`isEffectiveCodexReserve`), so an install that never opted in is never told about
+  a Reserve row it did not ask for. An install that enables Reserve where it cannot take effect is
+  a different silence and is not repeated here.
 - **Rotation is sticky.** A conversation stays on its selected account while that account is
   usable; failure moves it, success does not (`src/codex/pool-rotation.ts`).
 - **A transient hold is probed half-open, never opened all at once.** While a bound account is
@@ -470,11 +470,12 @@ declarations into `exec.description`, a measured 2.7x turn-1 payload increase (9
 this can exceed the 120,000-byte `McpTools` ceiling and drop `exec` and `wait` (#1830). Hosted search is separate:
 non-Cursor routes keep `web_search_tool_type: "text_and_image"`; Cursor omits it because runTurn bypasses the sidecar.
 
-Canonical Codex identities or turn metadata activate a diagnostic, never a refusal: at `EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD` (64) eager MCP definitions
-in top-level `tools`, client-sent Responses Lite `additional_tools`, or rendered Code Mode `exec` sections, `src/server/responses/codex-tool-catalog.ts` logs
-only the count and threshold and forwards the request unchanged. Codex resends a window's catalog at the head of each request, so position cannot mark
-history; the count runs after `expandPreviousResponseInput` and excludes only the proxy-restored prefix. Deferred definitions and compaction `input` are
-excluded. Dedup is one session, or one request without a session identity, in a bounded LRU. Test: `tests/responses/codex-eager-tool-catalog.test.ts`.
+Canonical Codex identities or turn metadata activate a diagnostic, never a refusal: `src/server/responses/codex-tool-catalog.ts` warns at 64 eager MCP definitions,
+logging only count and threshold. It counts top-level `tools`, client-sent Responses Lite `additional_tools`, and rendered Code Mode `exec` sections.
+The count runs after `expandPreviousResponseInput`, excluding proxy-restored history, deferred definitions, and compaction `input`; a client's own catalog resend counts.
+A shared budget allows 4,096 input/catalog entries (including rendered names) and 1,048,576 UTF-16 code units across canonical names and Code Mode descriptions.
+Costs are reserved before scans, replay copies, namespace expansion, Set insertion, and parsing; duplicates consume budget. Exhaustion skips the warning and its dedup entry.
+Requests stay unchanged. Warnings dedup per session in a bounded LRU, or per anonymous logical request. Test: `tests/responses/codex-eager-tool-catalog.test.ts`.
 
 > Decision record: [ADR-0022](decisions/ADR-0022-routed-tool-discovery-and-hosted-search.md)
 

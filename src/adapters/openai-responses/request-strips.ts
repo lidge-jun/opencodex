@@ -9,6 +9,7 @@ import { stripOpenAiOnlyWebSearchFields } from "./web-search";
 
 /**
  * Codex requests output.encrypted_content, which xAI, Meta, Azure and Kimi Code reject with HTTP 400.
+ * OpenCode Go uses the same compatibility policy because some of its Responses backends reject it.
  * The caller gates this on the destination. Preserve reasoning.encrypted_content
  * for stateless replay and leave unknown or malformed values for upstream validation.
  */

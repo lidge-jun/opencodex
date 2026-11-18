@@ -321,7 +321,7 @@ export function createResponsesSendBudget(
   /**
    * One credential hop of this logical request, admitted by the INTERSECTION of two bounds.
    *
-   * The snapshotted generic OAuth roster cap and `ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST`
+   * The snapshotted generic OAuth and Anthropic roster caps
    * bound rotation within one credential roster. What neither
    * can see is everything else this request already sent, so three hops layered on a spent
    * budget still reached upstream three more times. A hop now happens only when its own layer

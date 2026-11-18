@@ -1,4 +1,5 @@
 import { messagesFold502Cases } from "./messages-sse-fold-exceptions";
+import { hostedWindowsQuarantine } from "./windows-ci-quarantine";
 import { expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -139,7 +140,9 @@ export function registerMessagesOverflowRows(lanes: readonly Row["lane"][]) {
     expect(slices.flat().map(key)).toEqual(rows.map(key));
     for (const [index, selected] of slices.entries()) {
       const offset = index * sliceSize;
-      test(`${lane}: origin/dev rows ${offset + 1}-${offset + selected.length}`, async () => {
+      // #8262 hosted-Windows quarantine, restored: with it lifted (#8769) the dev lane=all at b378a43
+      // (run 43790630995) timed out shard 3/14 batch 6 at 480 s with these slices in the batch.
+      test.skipIf(hostedWindowsQuarantine && WINDOWS_SLOW_LANES.has(lane))(`${lane}: origin/dev rows ${offset + 1}-${offset + selected.length}`, async () => {
         const started = performance.now();
         const scratch = mkdtempSync(join(overflowScratchBase(), "ocx-overflow-slice-"));
         let safeToRemove = true;
