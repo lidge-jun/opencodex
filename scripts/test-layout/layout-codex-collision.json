@@ -52,5 +52,6 @@
   "codex-windows-current-sid.test.ts": "codex-integration",
   "codex-profile-preservation.test.ts": "codex-integration",
   "codex-quota-weekly-rollover.test.ts": "codex-integration",
-  "catalog-routed-defaults.test.ts": "codex-integration"
+  "catalog-routed-defaults.test.ts": "codex-integration",
+  "codex-auth-device-only.test.ts": "codex-integration"
 }

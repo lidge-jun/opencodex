@@ -564,6 +564,10 @@ Las nuevas opciones de inicio de sesión son específicas de flujo:
 
 Explícita add-off cuenta permite la preferencia de importación existente; no elimina una cuenta. Omission conserva los valores predeterminados anteriores de CLI. El operador debe completar la verificación del navegador/dispositivo. Mantenga `flowId`, ID de cuenta y código de verificación separados; una concesión de dispositivo devuelta no es un lanzamiento exitoso del navegador. `--no-wait --json` informa el traspaso, no el inicio de sesión completo. Conservar el estado pendiente, caducado, cancelado, pendiente de validación y pendiente de catálogo; nunca reinicie silenciosamente un flujo, credenciales de captura o verificación completa para el operador.
 
+En el modo de navegador, `ocx account login openai --code -` solicita la cancelación del flujo si la entrada canalizada está vacía o se agota el tiempo de espera de la lectura de stdin. Si el proxy no puede confirmar la cancelación, la CLI muestra el ID del flujo cuando está disponible.
+
+Si el proxy usa `codexAuthMethod: "device-only"`, la CLI rechaza `--code` antes de leer stdin y exige `--no-wait` con `--json`. En ambos casos, al rechazar la solicitud, intenta cancelar la autorización de dispositivo que inició el proxy. Use `ocx account login openai` para el inicio de sesión interactivo con código de dispositivo o `ocx account login openai --no-wait --json` para obtener los datos del flujo en JSON.
+
 `ocx account login openai --device` ejecuta el inicio de sesión de código de dispositivo de OpenAI en lugar de la devolución de llamada del navegador. Utilícelo cuando el host proxy no tiene navegador, o cuando nada puede alcanzar su `localhost:1455`: un contenedor, un VPS o cualquier concentrador alcanzado a través de SSH:
 
 ```bash

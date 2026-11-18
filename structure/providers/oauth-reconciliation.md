@@ -15,3 +15,5 @@ Copilot long-context evidence and xAI window overrides through restarts and re-l
 Saved seeds have no provenance separate from operator edits, so existing entries are retained;
 only missing operator-map defaults refresh. Live discovery and request-time admission keep their own limits.
 Regression coverage: `tests/oauth/oauth-reconcile-operator-maps.test.ts`.
+
+The pool login uses the internal `startLoginFlow` credential callback to receive its own grant after the OAuth store write. The credential stays out of public flow status. Automatic cleanup preserves the exact OAuth outcome until the pool owner settles. See [pool login policy and cancellation](openai-accounts.md#pool-login-policy-and-cancellation).
