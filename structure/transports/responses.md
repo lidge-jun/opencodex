@@ -94,13 +94,13 @@ Two coordinates that lower to the same wire name are treated as one tool when th
 a `functions` child of the same name are the duplicate the parser already tolerates — and the one
 `promoteClientLoadedTools` produces. The declaration is emitted once instead of failing the request.
 
-Replayed call items are lowered whether or not this turn declares the group they name. A catalog can
-be absent or change mid-session, but the client is still replaying items this layer's own response
-restoration stamped with a private `namespace`. Routed compaction runs this boundary before applying
-the summary tool policy so request-local aliases remain available for response restoration. Only
-`tool_choice` resolves a bare name through the catalog: a history
-item records which tool actually ran, so re-pointing it at a same-named namespace child would
-rewrite that record on a coincidence rather than translate it.
+Replayed calls keep their recorded identity when the current catalog omits their group. Routed
+compaction lowers that identity before applying the summary tool policy to retain request-local
+aliases. Only `tool_choice` resolves a bare name through the catalog, and only when unambiguous.
+A qualified function or custom selector, including an `allowed_tools` entry, requires the declared
+kind, namespace and name. The parser lowers it to the canonical wire name. The reserved `functions`
+group selects the root. An undeclared root `advisor` function selector defers to
+[Advisor sidecar admission](../advisor.md#execution-paths).
 
 A namespaced tool is registered under every coordinate a provider might echo — `ns__name`, the
 dotted `ns.name`, and the bare `name` — but six spellings never reach a DECLARED-NAME set under
@@ -411,11 +411,11 @@ Final-route normalization in `src/server/responses/core-normalize.ts` decodes cl
 
 | Owner | Responsibility |
 | --- | --- |
-| `core-pipeline.ts` | Request-phase composition, native-to-translated adapter handoff and pending admission/unused-hop cleanup; the public ingress remains in `core.ts`. |
+| `core-pipeline.ts`, `hosted-advisor-spend.ts` | Request-phase composition, native-to-translated handoff and pending admission/unused-hop cleanup. The original translated turn owns hosted Advisor's spend snapshot and withholding state. The pipeline checks explicit hosted Advisor against the admitted credential before vision preprocessing. |
 | `compaction-retention.ts` | Local direct-v2 reasoning retention, provisional archives and response-lifetime cleanup under the [routed compaction contract](responses-failover.md#compaction-routing-overrides). |
 | `request-prepare.ts` | Body parsing, combo handoff, final route, encrypted-task recovery and initial admission, retaining [original policy authorization](policy-fallback.md). Both shadow-intercept sites use `shadowCallPreservesSelectedModel` in `src/lib/shadow-call.ts`: explicit `request_kind: "turn"` plus `thread_source: "user"`, or spawned-child provenance, preserves the selected model. `x-openai-subagent: collab_spawn` is a connection header on both transports (a child session opens its own connection); turn metadata comes from the HTTP `x-codex-turn-metadata` header or, on WebSocket, only from each frame's `client_metadata["x-codex-turn-metadata"]` (including `subagent_kind: "thread_spawn"`), never from stale upgrade metadata. Kind-only `turn` helpers and missing/malformed metadata retain interception; concrete self-targets remain no-ops and helper combos retain failover. `tests/responses/responses-shadow-intercept.test.ts` covers both sites and frame precedence. xAI OAuth model-scope admission previews the billed Fast lane using the serialization decision shared with Chat, Messages and routed compact admission; final normalization rechecks the actual wire destination. |
 | `shadow-target-availability.ts` | Shadow-call target resolution for `request-prepare.ts`: an unavailable target fails once with `409 intercept_target_unavailable` instead of reaching the native source model or the default provider. |
-| `request-transport.ts` | Live credential selection, dispatch bindings, adapter replacement and same-target request identity. Each physical adapter binding owns the build-only [append-only Claude tool projection](../data-planes/claude-tool-loading.md), preserving the request's original catalog across fallback and rebuilds. Copilot Auto renewal onto Chat (including negotiation-401 refresh) signals the native owner before inference; `passthrough-dispatch.ts` reuses its inference-401/429 adapter handoff so JSON and SSE retain the Responses envelope. |
+| `request-transport.ts` | Live credential selection, dispatch bindings, adapter replacement and same-target request identity. Every selected adapter builder passes its resolved provider to the request-owned [hosted Advisor spend guard](responses-spend.md#prepaid-initial-sends) after credential admission, including sidecar copies and dispatch-time reselection. Initial optional planning uses the same resolved provider rather than a rebuilt credential route's default adapter. The HTTP dispatch guard checks the serialized hosted Advisor binding after upstream rewrites and before the send receipt. Each physical adapter binding owns the build-only [append-only Claude tool projection](../data-planes/claude-tool-loading.md), preserving the request's original catalog across fallback and rebuilds. Copilot Auto renewal onto Chat (including negotiation-401 refresh) signals the native owner before inference; `passthrough-dispatch.ts` reuses its inference-401/429 adapter handoff so JSON and SSE retain the Responses envelope. |
 | `request-sidecar-auth.ts` | Routed-compaction image projection, sidecar credential resolution and vision preprocessing. |
 | `response-effects.ts` | Completion notification, replay publication, live request-tool aliases and routed summary controls; Anthropic keeps client tools/system/options, and flags hosted-tool or mandatory-choice summaries so the adapter sends wire `tool_choice: none`. |
 | `request-send-budget.ts` | Request-wide send accounting, remaining allowance, the pending recovery permit and the shared ambiguous-resend grant. |

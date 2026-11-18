@@ -62,6 +62,35 @@ multi-call pairing, overlap and lifecycle release.
   `tests/advisor/advisor-responses-wiring.test.ts` exercises real streaming and buffered delivery.
   Client catalog checks wrap the Advisor guard, so synthetic calls are consumed internally before
   final worker output is checked against current client declarations, including direct encoders.
+  Synthetic injection requires the request's effective `tool_choice` to permit Advisor. For an
+  explicit selector or allowlist, `src/responses/parser-tools.ts` retains typed client selectors
+  and the selected root function names before provider translation. An unqualified function
+  selector can permit synthetic Advisor. An explicit root selector using the reserved `functions`
+  namespace also permits synthetic Advisor when no caller declaration owns the root name.
+  A caller-owned `advisor` can pass through when its
+  declared kind, name and any explicit namespace match the original selector and the effective choice permits it. With `auto`
+  or `required`, caller-owned tools follow the effective choice alone. A forced hosted search
+  excludes a caller-owned `advisor` even when the worker receives `auto`.
+  The guard resolves worker call names against the caller catalog, including flattened, dotted,
+  and compatible bare or reserved `functions` echoes. It checks the declaration against
+  the original typed selector and checks the effective choice on each worker leg. A forbidden call
+  is refused before consultation, continuation, or disclosure of its ID and arguments.
+  Linked Messages replay uses the same check. `src/claude/inbound-content-options.ts` identifies
+  an explicitly selected hosted Advisor from the original declaration before choice lowering.
+  The Responses core validates the original choice against the resolved route and admitted
+  catalog. Duplicate matches return a request-wide HTTP 400 before dispatch. A declaration
+  unavailable on the current route, under its model scope, or under the selected credential's
+  captured token spend ceiling refuses that candidate before dispatch.
+  Combo and policy fallback can try another candidate with the original declaration and choice.
+  When all attempted candidates are incompatible, delivery retains the public HTTP 400.
+  An admitted named choice drives Anthropic wire encoding and grants no root
+  function permission. Explicit hosted selections skip proxy preflight. Other automatic
+  consultations follow operator policy. The translated Messages wire and guard are covered by
+  `tests/claude-integration/claude-translated-hosted-advisor-choice.test.ts`.
+  A buffered refusal preserves the already-parsed rejected worker leg's terminal usage, merged
+  with earlier intercepted legs once. Streaming refusal closes its iterator immediately.
+  The empty-completion retry preserves `undeclared_tool_call` and merges available usage.
+  A streaming refusal can close the retry before that send reports terminal usage.
 - Run-turn adapters: preflight support only — the automatic pre-dispatch consultation attempt
   applies, but the synthetic tool is never injected because the run-turn loop cannot intercept it.
 - Native OpenAI passthrough: no advisor support in PR1. The request path is byte-identical to a
@@ -70,10 +99,11 @@ multi-call pairing, overlap and lifecycle release.
   consultation and continuation bounds with the normal guard. The search scanner consumes advisor
   calls alongside `web_search`, fulfills them in worker order, and replays paired results without
   exposing the synthetic call to the client. The synthetic tool and scanner are enabled only when
-  the request's effective `tool_choice` permits Advisor; an `allowed_tools` scope that permits only
-  web search cannot be widened into an expert consultation. Without an active Advisor sidecar,
-  an emitted `advisor` call is refused before its ID or arguments reach the client unless that
-  iteration declares and permits it as an ordinary client tool. Partial calls are refused at
+  the caller's selection and effective `tool_choice` permit Advisor. The same call resolver runs on each
+  search iteration and leaves the search tool's outbound translation intact. A caller-owned
+  `advisor` must be declared and permitted by both the original selector and current iteration's
+  effective choice. The loop refuses other unauthorized calls before their IDs or arguments
+  reach the client. Partial calls are refused at
   their start, and the terminal refusal retains worker usage. Synthetic permission is also
   iteration-scoped: tools-disabled empty-answer recovery refuses Advisor even when the original
   turn installed the sidecar; ordinary exhausted-Advisor iterations retain paired limit handling.
@@ -96,11 +126,53 @@ reason `advisor-tool-shadowed-by-proxy-advisor` for a destination that would oth
 `planAnthropicServerTools` (`src/adapters/anthropic/advisor-tool.ts`) also withholds the completed
 Advisor history and the beta while a function tool named `advisor` owns the name, the same rule that
 keeps the web-search sidecar's `web_search` ahead of a typed search. With
-this sidecar off, the declaration reaches first-party Anthropic, or a gateway with
-`forwardAdvisorTool: true`, and its blocks round-trip to the client. Destination, replay and scope
+this sidecar off and no applicable token spend ceiling, the declaration reaches first-party
+Anthropic, or a gateway with `forwardAdvisorTool: true`, and its blocks round-trip to the client. Destination, replay and scope
 rules are in [providers and adapters](providers-and-adapters.md);
 `tests/claude-integration/claude-translated-advisor-tool.test.ts` covers both sides of the precedence
 through the Responses core.
+
+Translated turns evaluate the current send's selected identity and effective wire. An applicable
+root, identity or pool token ceiling withholds the optional hosted declaration, completed Advisor
+history and beta from that send onward, while the main model and other tools continue. The same
+rule applies when the effective Anthropic provider appends an operator credential header recognized
+by `src/providers/api-key-response-ownership.ts`, which makes credential ownership ambiguous.
+An explicit Messages selection refuses either target before vision preprocessing or worker dispatch. An
+eligible fallback candidate can still fulfill the selection. The client receives HTTP 400 if no compatible route serves the request
+before response streaming starts. During streaming, a refused continuation emits a terminal error.
+`hosted-advisor-spend.ts` and `sidecar-execution.ts` use the transport's `initialAdapterProvider`
+to check the actual authenticated target's ceilings without starting main-model accounting. The
+original translated turn owns the numeric ceiling snapshot and shares it with the default policy
+candidate and translated Combo trackers. The budget's read-only
+`hasCapturedSpendCeiling` checks the original numeric ceilings against that target, including an
+identity selected after Combo prepayment. An inherited budget can also supply its published
+snapshot for that check. See [Responses spend](transports/responses-spend.md#prepaid-initial-sends)
+for precedence. The hosted-only identity binding leaves ordinary accounting scopes unchanged.
+The physical adapter builder supplies its own resolved provider when reapplying the same query
+to admitted replacement identities before serialization, including sidecar copies and dispatch-time
+reselection. Credential rebuilding may restore a provider-wide adapter, so eligibility follows this
+builder's effective wire instead. Once withheld, the optional hosted tool and replay stay withheld
+across later credentials, policy candidates and translated Combo children in the same turn.
+The Anthropic builder binds each serialized hosted Advisor request to the credential it applied.
+After upstream plugin rewrites and before the physical-send receipt, the HTTP guard requires an
+exact match and uses the same ownership classifier to reject conflicting credential headers. On
+failure, it refuses the explicit selection or rebuilds the optional request with its original
+serializer inputs and hosted Advisor withheld. The final headers omit the Advisor beta.
+Removing Advisor blocks from a validated mixed replay run preserves the other completed search
+or fetch exchanges at their original unique anchor, subject to the existing destination checks.
+For a choice without an explicit hosted selection, after the final tool catalog is known, an
+unmatched named `advisor` choice becomes `auto` when spend policy has removed its hosted tool or
+replay. A named selection with an ordinary or proxy function owner keeps that owner. The delivery
+maps are rebuilt and charged for newly usable tools;
+normal, web-search and image/video paths apply this before the adapter builds its request.
+An existing entry trace receives `advisor-tool-withheld-by-spend-policy`; unmarked
+Combo children retain the existing trace behavior. Main-model terminal usage does not independently account for
+the hosted Advisor. The proxy Advisor retains its separately budgeted consultations; see
+[Responses spend](transports/responses-spend.md). The same integration test covers all three scopes,
+streaming and buffered responses, replay, opted-in gateways, and policy changes after capture.
+`tests/responses/responses-first-send-spend-policy.test.ts` also covers target-dependent authority
+across key rotation, including a rebuilt provider whose default differs from its pinned wire,
+the web-search retry copy, post-rotation named-choice delivery and explicit hosted refusal.
 
 ## Recursion fence (server-owned authority)
 
