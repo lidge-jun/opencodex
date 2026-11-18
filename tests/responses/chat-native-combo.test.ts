@@ -12,6 +12,10 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleChatCompletions } from "../../src/server/chat-completions";
+import { createComboProtocolLanes } from "../../src/server/responses/core-combo-native";
+import { createInferenceSendBudget } from "../../src/server/inference/context";
+import { createProtocolEnvelope } from "../../src/protocols/envelope";
+import { routeConcreteModel } from "../../src/router";
 import { getRequestLogEntries } from "../../src/server/request-log";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { clearComboRecallForTests } from "../../src/server/responses/combo-session-recall";
@@ -23,6 +27,7 @@ import { resetProviderRequestPacingForTest } from "../../src/providers/request-p
 import { chatErrorStream, chatStream, responsesSuccess } from "../helpers/combo-failover-upstream";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import {
   ADVISOR_ADMISSION_SCOPE_HEADER,
@@ -173,6 +178,76 @@ async function send(config: OcxConfig, body: Rec, options: {
 }
 
 describe("native Chat candidates in a combo", () => {
+  test("union Chat ingress keeps inline audio and dispatches to its audio member", async () => {
+    const text = upstream(() => twoChoiceCompletion());
+    const audio = upstream(() => twoChoiceCompletion());
+    const config = comboConfig({
+      a: provider("openai-chat", text.baseUrl, { inputModalities: ["text"] }),
+      b: provider("openai-chat", audio.baseUrl, { inputModalities: ["text", "audio"] }),
+    }, [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }], NATIVE_ON);
+    config.combos!.pair!.capabilityPolicy = "union";
+    const part = { type: "input_audio", input_audio: { data: "AA==", format: "wav" } };
+    const messages = [{ role: "user", content: [part] }];
+    const { response, rows } = await send(config, { stream: false, messages });
+    expect(response.status).toBe(200);
+    expect(text.bodies).toHaveLength(0);
+    expect(audio.bodies).toHaveLength(1);
+    expect(audio.bodies[0]!.messages).toEqual(messages);
+    expect(rows[0]!.protocolTrace!.attempts![0]!.mode).toBe("native");
+  });
+
+  test.each([false, true])("union image uses a native member or rejects when vision auth is missing (metered=%s)", async metered => {
+    const blind = upstream(() => chatStream("blind"));
+    const image = upstream(() => twoChoiceCompletion());
+    const config = comboConfig({
+      a: provider("openai-chat", blind.baseUrl, { inputModalities: ["text"] }),
+      b: provider("openai-chat", image.baseUrl, { inputModalities: ["text", "image"] }),
+    }, [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }], NATIVE_ON);
+    config.visionSidecar = { enabled: true, backend: "openai" };
+    config.combos!.pair!.capabilityPolicy = "union";
+    config.combos!.pair!.onUnservable = "reject";
+    config.combos!.pair!.targets[1]!.metered = metered;
+    const messages = [{ role: "user", content: [{ type: "image_url", image_url: { url: "data:image/png;base64,AA==" } }] }];
+    const { response } = await send(config, { stream: false, messages });
+    expect(response.status).toBe(metered ? 400 : 200);
+    expect(blind.bodies).toHaveLength(0);
+    expect(image.bodies).toHaveLength(metered ? 0 : 1);
+    if (!metered) expect(image.bodies[0]!.messages).toEqual(messages);
+  });
+
+  test.each([["empty", []], ["unknown", undefined]] as const)("native adaptive Chat strips unsupported effort controls with ladder %s", (_label, ladder) => {
+    const target = { provider: "a", model: "m1" };
+    const config = comboConfig({
+      a: provider("openai-chat", "http://127.0.0.1:9/v1", { reasoningEfforts: ladder ? [...ladder] : undefined }),
+    }, [target], NATIVE_ON);
+    config.combos!.pair!.capabilityPolicy = "union";
+    config.combos!.pair!.reasoningEffortMode = "adaptive";
+    const originalBody = {
+      model: "combo/pair", messages: MESSAGES, stream: false,
+      reasoning_effort: "high", reasoning: { effort: "high", summary: "auto" },
+      thinking_budget: 1_024, thinking: { type: "enabled", budget_tokens: 1_024 },
+    };
+    const req = new Request("http://localhost/v1/chat/completions");
+    const logCtx = { model: "combo/pair", provider: "combo" };
+    const translatorBudget = createTestTranslatorBudget();
+    try {
+      const envelope = createProtocolEnvelope({ inbound: "chat", body: originalBody, translatorBudget });
+      const lanes = createComboProtocolLanes({
+        source: { inbound: "chat", envelope, dispatchNativeChild: async () => { throw new Error("planning only"); } },
+        req, logCtx, config, admissionScope: undefined, comboId: "pair", targets: [target],
+      });
+      const plan = lanes?.nativeChild(target, routeConcreteModel(config, "a/m1"),
+        createInferenceSendBudget(req, logCtx), undefined, false);
+      expect(plan?.body.reasoning).toEqual({ summary: "auto" });
+      for (const field of ["reasoning_effort", "thinking_budget", "thinking"]) {
+        expect(plan?.body).not.toHaveProperty(field);
+      }
+      expect(originalBody.reasoning.effort).toBe("high");
+    } finally {
+      translatorBudget.dispose();
+    }
+  });
+
   test.each([
     [{ reasoning_effort: "xhigh" }],
     [{ reasoning: { effort: "xhigh" } }],

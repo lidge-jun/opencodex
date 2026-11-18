@@ -36,6 +36,7 @@ import {
 import { captureRouteStaticPolicy, routeConcreteModel } from "../../router";
 import { comboDefaultEffort, concreteComboRequestBody, getCombo, type JevDecision } from "../../combos";
 import { comboAdvertisesEffortUnion } from "../../combos/capability-policy";
+import { comboStripsReasoningControls, stripUnsupportedReasoningControls } from "../../combos/request";
 import { clampComboCallerEffort } from "../../combos/request-capability";
 import { supportedLadderFor } from "../effort-policy";
 import { applyDroidReasoningDefault } from "../droid-reasoning-default";
@@ -341,6 +342,11 @@ function applyComboEffort(
 ): void {
   const combo = getCombo(config, comboId);
   if (!combo) return;
+  const ladder = supportedLadderFor({ provider: targetRoute.provider, modelId: targetRoute.modelId });
+  if (comboStripsReasoningControls(ladder, combo.reasoningEffortMode)) {
+    stripUnsupportedReasoningControls(body);
+    return;
+  }
   // Same precedence as the Chat inbound parser (`resolveReasoningEffort`): a string
   // `reasoning_effort` first, a string nested `reasoning.effort` second. A non-string top-level
   // value (an explicit null) is no caller effort, so the nested one still decides.
@@ -353,7 +359,6 @@ function applyComboEffort(
     // The parser reads a nested effort only when it is a level it knows; anything else is no effort.
     : typeof nested === "string" && OUTPUT_CONFIG_EFFORTS.has(nested) ? nested
     : hadEffort ? body.reasoning_effort : undefined;
-  const ladder = supportedLadderFor({ provider: targetRoute.provider, modelId: targetRoute.modelId });
   const shaped = concreteComboRequestBody(
     callerEffort !== undefined || hadEffort ? { reasoning: { effort: callerEffort } } : {},
     target,

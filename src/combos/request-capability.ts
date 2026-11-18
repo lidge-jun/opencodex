@@ -1,4 +1,5 @@
 import { nativeContextLimits } from "../codex/catalog/metadata";
+import { effectiveAdapterContract } from "../adapters/registry";
 import { getModelMetadataCaseInsensitive, resolveMetadataProvider } from "../generated/model-metadata";
 import { errorDestinationText, providerErrorDestinationLabel } from "../lib/error-destination";
 import { isCodexReasoningEffort, modelRecordValue, resolveEffortAtOrBelow } from "../reasoning-effort";
@@ -22,29 +23,31 @@ export interface ComboTargetRoute {
   providerName: string;
   provider: OcxProviderConfig;
   modelId: string;
+  codexAccountId?: string;
 }
 
 /** Resolves a combo target to its concrete route; `undefined` when it does not resolve. */
 export type ComboTargetRouter = (target: Pick<OcxComboTarget, "provider" | "model">) => ComboTargetRoute | undefined;
 
-/**
- * Image service for one member, judged with the same predicate the child request uses to decide
- * between raw delivery and the sidecar (`request-sidecar-auth.ts`). The sidecar counts as
- * available when the configuration enables it; whether its credentials admit this particular
- * turn is decided by the child, which strips the image when no plan is dispatchable. An
- * unresolved route or an unproven capability is `native`, matching the child's pass-through.
- */
-export function comboTargetImageService(
+type ComboVisionProbe = (route: ComboTargetRoute, parsed: OcxParsedRequest) => Promise<boolean>;
+
+/** Unknown image capability keeps the child's native pass-through behavior. */
+async function comboTargetImageService(
   config: OcxConfig,
   route: ComboTargetRoute | undefined,
-): ComboTargetService {
+  parsed: OcxParsedRequest | undefined,
+  canDescribe: ComboVisionProbe | undefined,
+): Promise<ComboTargetService> {
   if (!route || !requiresVisionPreprocessing(config, route.provider, route.modelId, route.providerName)) return "native";
-  return config.visionSidecar?.enabled === false ? "unable" : "degraded";
+  return parsed && config.visionSidecar?.enabled !== false && await canDescribe?.(route, parsed)
+    ? "degraded" : "unable";
 }
 
 function comboTargetAcceptsAudio(config: OcxConfig, route: ComboTargetRoute | undefined): boolean {
   if (!route) return false;
   const { provider, providerName, modelId } = route;
+  const wire = effectiveAdapterContract(provider.adapter).wire;
+  if (wire !== "openai-chat" && wire !== "openai-responses") return false;
   const declared = Object.hasOwn(provider.modelCapabilities ?? {}, modelId)
     ? provider.modelCapabilities?.[modelId]?.inputModalities : undefined;
   const modalities = declared ?? customRowInputModalities(config, providerName, modelId)
@@ -61,9 +64,13 @@ export interface ComboCapabilityGate {
   eligible: (target: Pick<OcxComboTarget, "provider" | "model">) => boolean;
   /** No enabled member can serve the request as is; the caller applies `onUnservable`. */
   unservable: ComboUnservable;
+  /** The child must still have a plan if it needs to describe images before sending. */
+  requiresVisionPlan: ComboCapabilityGate["eligible"];
 }
 
-const OPEN_GATE: ComboCapabilityGate = { eligible: () => true, unservable: false };
+const OPEN_GATE: ComboCapabilityGate = {
+  eligible: () => true, unservable: false, requiresVisionPlan: () => false,
+};
 
 interface ContextFit {
   fits: boolean;
@@ -93,12 +100,10 @@ function comboTargetContextFit(
   return { fits: result.admitted && result.estimatedTokens <= result.ceiling, window: result.contextWindow ?? result.ceiling };
 }
 
-/** The request as the child will parse it; undefined (no context filtering) when it does not parse. */
-function parsedForContext(body: unknown): OcxParsedRequest | undefined {
+/** The request as the child will parse it. */
+function parseComboInput(body: unknown): OcxParsedRequest | undefined {
   try {
-    const parsed = parseRequest(body);
-    // Compaction turns shrink the context; the child exempts them from admission, and so do we.
-    return parsed._compactionRequest === true ? undefined : parsed;
+    return parseRequest(body);
   } catch {
     return undefined;
   }
@@ -119,46 +124,56 @@ function parsedForContext(body: unknown): OcxParsedRequest | undefined {
  * - `"image"`: every member that can hold the input is unable to take the image. Those members stay
  *   eligible and the child strips the image, or the caller refuses.
  */
-export function comboCapabilityGate(
+export async function comboCapabilityGate(
   config: OcxConfig,
   combo: Pick<NormalizedComboConfig, "capabilityPolicy" | "targets">,
   body: unknown,
   route: ComboTargetRouter,
-  isAdmitted: (target: NormalizedComboConfig["targets"][number]) => boolean = () => true,
-): ComboCapabilityGate {
+  isAdmitted: (target: NormalizedComboConfig["targets"][number], route: ComboTargetRoute | undefined) => boolean = () => true,
+  canDescribe?: ComboVisionProbe,
+): Promise<ComboCapabilityGate> {
   if (combo.capabilityPolicy !== "union") return OPEN_GATE;
   const hasImage = comboRequestHasImageInput(body);
   const hasAudio = comboRequestHasAudioInput(body);
-  const parsed = parsedForContext(body);
-  if (!hasImage && !hasAudio && !parsed) return OPEN_GATE;
-  const enabled = combo.targets.filter(target => config.providers[target.provider]?.disabled !== true && isAdmitted(target));
-  if (enabled.length === 0) return OPEN_GATE;
+  const parsed = parseComboInput(body);
+  const contextInput = parsed?._compactionRequest ? undefined : parsed;
+  if (!hasImage && !hasAudio && !contextInput) return OPEN_GATE;
+  let hasAdmittedTarget = false;
   const judged = new Map<string, { image: ComboTargetService; context: ContextFit }>();
-  for (const target of enabled) {
+  for (const target of combo.targets) {
+    if (config.providers[target.provider]?.disabled === true) continue;
     const key = targetKey(target);
-    if (judged.has(key)) continue;
     const resolved = route(target);
+    if (!isAdmitted(target, resolved)) continue;
+    hasAdmittedTarget = true;
+    if (judged.has(key)) continue;
     if (hasAudio && !comboTargetAcceptsAudio(config, resolved)) continue;
+    const context = comboTargetContextFit(config, contextInput, resolved);
     judged.set(key, {
-      image: hasImage ? comboTargetImageService(config, resolved) : "native",
-      context: comboTargetContextFit(config, parsed, resolved),
+      image: hasImage && context.fits ? await comboTargetImageService(config, resolved, parsed, canDescribe) : "native",
+      context,
     });
   }
+  if (!hasAdmittedTarget) return OPEN_GATE;
   const verdicts = [...judged.values()];
-  if (verdicts.length === 0) return { eligible: () => false, unservable: "audio" };
+  if (verdicts.length === 0) return { ...OPEN_GATE, eligible: () => false, unservable: "audio" };
   const filter = (keep: (verdict: { image: ComboTargetService; context: ContextFit }) => boolean): ComboCapabilityGate["eligible"] =>
     target => {
       const verdict = judged.get(targetKey(target));
       return verdict !== undefined && keep(verdict);
     };
   if (verdicts.some(v => v.context.fits && v.image !== "unable")) {
-    return { eligible: filter(v => v.context.fits && v.image !== "unable"), unservable: false };
+    return {
+      eligible: filter(v => v.context.fits && v.image !== "unable"),
+      unservable: false,
+      requiresVisionPlan: filter(v => v.image === "degraded"),
+    };
   }
   if (verdicts.some(v => v.context.fits)) {
-    return { eligible: filter(v => v.context.fits), unservable: "image" };
+    return { ...OPEN_GATE, eligible: filter(v => v.context.fits), unservable: "image" };
   }
   const largest = Math.max(...verdicts.map(v => v.context.window ?? 0));
-  return { eligible: filter(v => (v.context.window ?? 0) === largest), unservable: "context" };
+  return { ...OPEN_GATE, eligible: filter(v => (v.context.window ?? 0) === largest), unservable: "context" };
 }
 
 /**

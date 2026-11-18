@@ -611,7 +611,7 @@ mirar la solicitud. Establece `capabilityPolicy: "union"` para anunciar lo que *
 servir y que el combo elija por solicitud:
 
 - **Catálogo.** `inputModalities` es la unión de las modalidades de los destinos, así que un único respaldo
-  de solo texto ya no oculta la entrada de imagen. Con `reasoningEffortMode: "adaptive"`, la escala de
+  de solo texto ya no oculta la entrada de imagen. El vídeo solo se anuncia si todos los destinos lo declaran. Con `reasoningEffortMode: "adaptive"`, la escala de
   esfuerzo es la unión de las escalas no vacías de los destinos, ordenada por rango; `"strict"` mantiene la
   intersección. `"intersection"` publica el menor `contextWindow` de los destinos y `"union"` el mayor.
   `"union"` usa los mayores límites `maxInputTokens` y `autoCompactTokenLimit`, sujetos a la ventana y al
@@ -619,13 +619,14 @@ servir y que el combo elija por solicitud:
   solo si todos los destinos declaran ese límite. `imageInput: "disabled"`
   sigue eliminando la imagen.
 - **Imágenes.** Para una solicitud con imágenes, cada destino es nativo (acepta imágenes), degradado (de
-  solo texto comprobado, y el [Vision Sidecar](/es/guides/sidecars/) está habilitado, así que describe la
-  imagen) o incapaz (de solo texto comprobado con el sidecar deshabilitado). Los destinos nativos y
+  solo texto comprobado, y el [Vision Sidecar](/es/guides/sidecars/) tiene un plan de envío para la
+  solicitud) o incapaz (de solo texto comprobado sin ese plan). Los destinos nativos y
   degradados conservan su orden configurado, así que un destino de suscripción degradado sigue sirviendo
   antes que uno nativo posterior; solo se omiten los incapaces. Un destino cuya capacidad de imagen se
   desconoce cuenta como nativo, el mismo paso directo que el destino aplica por sí solo.
-- **Audio.** Si la solicitud contiene audio, solo son elegibles los destinos que declaran esa modalidad.
-  Si ninguno puede aceptarlo, el proxy responde HTTP 400 antes del envío.
+- **Audio.** El destino debe declarar entrada de audio y usar un protocolo capaz de transportarla.
+  Las solicitudes Chat de un combo de unión admiten audio WAV o MP3 en línea. Si ningún destino
+  puede aceptarlo, el proxy responde HTTP 400 antes del envío.
 - **Contexto.** Antes de elegir, el proxy estima los tokens de entrada de la solicitud con el mismo
   estimador que usa su admisión de contexto (sobrestima un poco a propósito) y omite un destino cuyo
   límite de entrada no puede contenerlos. Una ventana desconocida es elegible para esta comprobación.

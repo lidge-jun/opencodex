@@ -41,57 +41,59 @@ const first = union.targets[0]!;
 const second = union.targets[1]!;
 
 describe("combo capabilityPolicy: request filtering", () => {
-  test("intersection never filters", () => {
+  test("intersection never filters", async () => {
     const cfg = config({ visionSidecar: { enabled: false } });
-    const gate = comboCapabilityGate(cfg, { ...union, capabilityPolicy: undefined }, imageBody, router(cfg));
+    const gate = await comboCapabilityGate(cfg, { ...union, capabilityPolicy: undefined }, imageBody, router(cfg));
     expect(gate.eligible(first)).toBe(true);
     expect(gate.unservable).toBe(false);
   });
 
-  test("a text-only member stays eligible for an image while the vision sidecar can describe it", () => {
+  test("a text-only member stays eligible for an image while the vision sidecar can describe it", async () => {
     const cfg = config();
-    const gate = comboCapabilityGate(cfg, union, imageBody, router(cfg));
+    const gate = await comboCapabilityGate(cfg, union, imageBody, router(cfg), undefined, async () => true);
     expect(gate.eligible(first)).toBe(true);
+    expect(gate.requiresVisionPlan(first)).toBe(true);
     expect(gate.eligible(second)).toBe(true);
+    expect(gate.requiresVisionPlan(second)).toBe(false);
   });
 
-  test("with the sidecar disabled the text-only member is skipped and the vision member serves", () => {
+  test("with the sidecar disabled the text-only member is skipped and the vision member serves", async () => {
     const cfg = config({ visionSidecar: { enabled: false } });
-    const gate = comboCapabilityGate(cfg, union, imageBody, router(cfg));
+    const gate = await comboCapabilityGate(cfg, union, imageBody, router(cfg));
     expect(gate.eligible(first)).toBe(false);
     expect(gate.eligible(second)).toBe(true);
     expect(gate.unservable).toBe(false);
   });
 
-  test("a request without an image never filters", () => {
+  test("a request without an image never filters", async () => {
     const cfg = config({ visionSidecar: { enabled: false } });
-    expect(comboCapabilityGate(cfg, union, textBody, router(cfg)).eligible(first)).toBe(true);
+    expect((await comboCapabilityGate(cfg, union, textBody, router(cfg))).eligible(first)).toBe(true);
   });
 
-  test("audio stays with a capable member and is refused if none can take it", () => {
+  test("audio stays with a capable member and is refused if none can take it", async () => {
     const audio: OcxProviderConfig = { ...vision, modelCapabilities: { "vision-model": { inputModalities: ["text", "audio"] } } };
     const cfg = config({ providers: { sub: textOnly, key: audio } });
-    const gate = comboCapabilityGate(cfg, union, audioBody, router(cfg));
+    const gate = await comboCapabilityGate(cfg, union, audioBody, router(cfg));
     expect(gate.unservable).toBe(false);
     expect(gate.eligible(first)).toBe(false);
     expect(gate.eligible(second)).toBe(true);
 
     const noAudio = config();
-    expect(comboCapabilityGate(noAudio, union, audioBody, router(noAudio)).unservable).toBe("audio");
+    expect((await comboCapabilityGate(noAudio, union, audioBody, router(noAudio))).unservable).toBe("audio");
   });
 
-  test("every enabled member unable opens the gate and reports unservable", () => {
+  test("every enabled member unable opens the gate and reports unservable", async () => {
     const cfg = config({ visionSidecar: { enabled: false }, providers: { sub: textOnly, key: { ...vision, disabled: true } } });
-    const gate = comboCapabilityGate(cfg, union, imageBody, router(cfg));
+    const gate = await comboCapabilityGate(cfg, union, imageBody, router(cfg));
     expect(gate.unservable).toBe("image");
     expect(gate.eligible(first)).toBe(true);
   });
 
-  test("an unresolved route or unproven capability is treated as native, like the child's pass-through", () => {
+  test("an unresolved route or unproven capability is treated as native, like the child's pass-through", async () => {
     const cfg = config({ visionSidecar: { enabled: false }, providers: { sub: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:9/v1" }, key: vision } });
-    const gate = comboCapabilityGate(cfg, union, imageBody, router(cfg));
+    const gate = await comboCapabilityGate(cfg, union, imageBody, router(cfg));
     expect(gate.eligible(first)).toBe(true);
-    expect(comboCapabilityGate(cfg, union, imageBody, () => undefined).eligible(first)).toBe(true);
+    expect((await comboCapabilityGate(cfg, union, imageBody, () => undefined)).eligible(first)).toBe(true);
   });
 });
 
@@ -99,7 +101,7 @@ describe("combo capabilityPolicy: selection under each strategy", () => {
   afterEach(() => clearComboSelectionState());
 
   for (const strategy of ["failover", "round-robin"] as const) {
-    test(`${strategy} never picks a member unable to take the image, and still uses it for text`, () => {
+    test(`${strategy} never picks a member unable to take the image, and still uses it for text`, async () => {
       const cfg = config({
         visionSidecar: { enabled: false },
         providers: {
@@ -109,17 +111,17 @@ describe("combo capabilityPolicy: selection under each strategy", () => {
         combos: { u: { strategy, capabilityPolicy: "union", targets: [{ provider: "sub", model: "text-model" }, { provider: "key", model: "vision-model" }] } },
       });
       const combo = getCombo(cfg, "u")!;
-      const picks = (body: unknown) => {
-        const gate = comboCapabilityGate(cfg, combo, body, router(cfg));
+      const picks = async (body: unknown) => {
+        const gate = await comboCapabilityGate(cfg, combo, body, router(cfg));
         return Array.from({ length: 4 }, () => {
           const pick = pickComboTarget(cfg, "u", { eligible: gate.eligible })!;
           noteComboSuccess("u", combo, pick.target);
           return targetKey(pick.target);
         });
       };
-      expect(new Set(picks(imageBody))).toEqual(new Set(["key/vision-model"]));
+      expect(new Set(await picks(imageBody))).toEqual(new Set(["key/vision-model"]));
       clearComboSelectionState();
-      expect(picks(textBody)).toContain("sub/text-model");
+      expect(await picks(textBody)).toContain("sub/text-model");
     });
   }
 });
@@ -172,11 +174,11 @@ describe("combo capabilityPolicy: context window", () => {
   });
 
   for (const strategy of ["failover", "round-robin"] as const) {
-    test(`${strategy} skips a member whose window cannot hold the input, and still uses it for a short turn`, () => {
+    test(`${strategy} skips a member whose window cannot hold the input, and still uses it for a short turn`, async () => {
       const cfg = contextConfig(strategy, "union");
       const combo = getCombo(cfg, "u")!;
-      const picks = (body: unknown) => {
-        const gate = comboCapabilityGate(cfg, combo, body, router(cfg));
+      const picks = async (body: unknown) => {
+        const gate = await comboCapabilityGate(cfg, combo, body, router(cfg));
         expect(gate.unservable).toBe(false);
         return Array.from({ length: 4 }, () => {
           const pick = pickComboTarget(cfg, "u", { eligible: gate.eligible })!;
@@ -184,35 +186,36 @@ describe("combo capabilityPolicy: context window", () => {
           return targetKey(pick.target);
         });
       };
-      expect(new Set(picks(longBody))).toEqual(new Set(["large/l"]));
+      expect(new Set(await picks(longBody))).toEqual(new Set(["large/l"]));
       clearComboSelectionState();
-      expect(picks(textBody)).toContain("small/s");
+      expect(await picks(textBody)).toContain("small/s");
     });
   }
 
-  test("no member can hold the input: only the largest window stays eligible and the gate reports context", () => {
+  test("no member can hold the input: only the largest window stays eligible and the gate reports context", async () => {
     const cfg = contextConfig("failover", "union");
-    const gate = comboCapabilityGate(cfg, getCombo(cfg, "u")!, hugeBody, router(cfg));
+    const gate = await comboCapabilityGate(cfg, getCombo(cfg, "u")!, hugeBody, router(cfg));
     expect(gate.unservable).toBe("context");
     expect(gate.eligible({ provider: "small", model: "s" })).toBe(false);
     expect(gate.eligible({ provider: "large", model: "l" })).toBe(true);
   });
 
-  test("intersection never filters on context, and a compaction turn is never filtered", () => {
+  test("intersection never filters on context, and a compaction turn is never filtered", async () => {
     const cfg = contextConfig("failover");
-    expect(comboCapabilityGate(cfg, getCombo(cfg, "u")!, longBody, router(cfg)).eligible({ provider: "small", model: "s" })).toBe(true);
+    const intersection = await comboCapabilityGate(cfg, getCombo(cfg, "u")!, longBody, router(cfg));
+    expect(intersection.eligible({ provider: "small", model: "s" })).toBe(true);
     const unionCfg = contextConfig("failover", "union");
     const compaction = { ...hugeBody, input: [{ role: "user", content: "word ".repeat(200_000) }, { type: "compaction_trigger" }] };
-    const gate = comboCapabilityGate(unionCfg, getCombo(unionCfg, "u")!, compaction, router(unionCfg));
+    const gate = await comboCapabilityGate(unionCfg, getCombo(unionCfg, "u")!, compaction, router(unionCfg));
     expect(gate.unservable).toBe(false);
     expect(gate.eligible({ provider: "small", model: "s" })).toBe(true);
   });
 
-  test("an unknown window fits, like the child's fail-open", () => {
+  test("an unknown window fits, like the child's fail-open", async () => {
     const cfg = config({
       providers: { small: { ...small, contextWindow: undefined }, large },
       combos: { u: { capabilityPolicy: "union", targets: [{ provider: "small", model: "s" }, { provider: "large", model: "l" }] } },
     });
-    expect(comboCapabilityGate(cfg, getCombo(cfg, "u")!, hugeBody, router(cfg)).eligible({ provider: "small", model: "s" })).toBe(true);
+    expect((await comboCapabilityGate(cfg, getCombo(cfg, "u")!, hugeBody, router(cfg))).eligible({ provider: "small", model: "s" })).toBe(true);
   });
 });

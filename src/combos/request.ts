@@ -74,8 +74,7 @@ export function concreteComboRequestBody(
   if (defaultEffortMode === "force" && (!defaultEffort || !isCodexReasoningEffort(defaultEffort))) {
     throw new Error("force combo default effort requires a valid defaultEffort");
   }
-  if (targetReasoningEfforts?.length === 0
-    || (reasoningEffortMode === "adaptive" && targetReasoningEfforts === undefined)) {
+  if (comboStripsReasoningControls(targetReasoningEfforts, reasoningEffortMode)) {
     stripUnsupportedReasoningControls(clone);
   }
   if (!defaultEffort || !isCodexReasoningEffort(defaultEffort)) return clone;
@@ -131,7 +130,14 @@ export function concreteComboRequestBody(
   return clone;
 }
 
-function stripUnsupportedReasoningControls(body: Record<string, unknown>): void {
+export function comboStripsReasoningControls(
+  ladder: readonly string[] | undefined,
+  mode: OcxComboReasoningEffortMode,
+): boolean {
+  return ladder?.length === 0 || (mode === "adaptive" && ladder === undefined);
+}
+
+export function stripUnsupportedReasoningControls(body: Record<string, unknown>): void {
   const reasoning = body.reasoning;
   if (reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)) {
     const next = { ...(reasoning as Record<string, unknown>) };

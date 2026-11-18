@@ -76,6 +76,7 @@ import { hasUnreadableEncryptedAgentTask } from "./encrypted-payload";
 import { eagerCodexToolCatalogSurface, warnEagerCodexToolCatalog } from "./codex-tool-catalog";
 import { clampComboCallerEffort, comboCapabilityGate } from "../../combos/request-capability";
 import { comboAdvertisesEffortUnion } from "../../combos/capability-policy";
+import { canDescribeComboImages } from "./request-sidecar-auth";
 import { captureRouteStaticPolicy, routeConcreteModel, comboRouteDecisionTrace } from "../../router";
 import { memoryModelRouteReason } from "./memory-models";
 import { baseProviderLabel, poolAccountProviderLabel } from "../../providers/label";
@@ -497,9 +498,14 @@ export async function executeComboResponses(
   const meteredAllowed = admissionMayUseMeteredComboTargets(config, options.admission, combo);
   const mayUseTarget = (target: (typeof combo.targets)[number]): boolean =>
     (meteredAllowed || !target.metered) && (combo.strategy !== "jev" || target.provider !== JEV_PROVIDER_ID);
-  const capability = comboCapabilityGate(config, combo, body, target => {
-    try { return routeConcreteModel(config, `${target.provider}/${target.model}`); } catch { return undefined; }
-  }, mayUseTarget);
+  const capability = await comboCapabilityGate(config, combo, body, target => {
+    try {
+      const route = routeConcreteModel(config, `${target.provider}/${target.model}`);
+      const provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, options.inboundWire);
+      return { ...route, provider };
+    } catch { return undefined; }
+  }, (target, route) => mayUseTarget(target) && (!route || routeAllowedByScope(admissionScope, route)),
+  (route, parsed) => canDescribeComboImages({ config, req, options }, route, parsed));
   if (capability.unservable === "audio") {
     return formatErrorResponse(400, "invalid_request_error", "No target of this combo can accept audio input");
   }
@@ -1374,6 +1380,7 @@ export async function executeComboResponses(
         // parent arrived with.
         sendBudget: targetSendBudget,
         comboAttempt: true,
+        ...(capability.requiresVisionPlan(pick.target) ? { comboRequiresVisionPlan: true } : {}),
         ...(capability.unservable === "context" ? { comboContextDegraded: true } : {}),
         comboInitialSend: initialSend,
         comboDispatchPermit: hopDecision?.allowed ? hopDecision.permit : undefined,

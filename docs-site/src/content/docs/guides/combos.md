@@ -991,7 +991,7 @@ looking at the request. Set `capabilityPolicy: "union"` to advertise what **any*
 and have the combo pick per request instead:
 
 - **Catalog.** `inputModalities` is the union of the targets' modalities, so one text-only backup no
-  longer hides image input. With `reasoningEffortMode: "adaptive"` the effort ladder is the union of
+  longer hides image input. Video remains advertised only when every target declares it. With `reasoningEffortMode: "adaptive"` the effort ladder is the union of
   the non-empty target ladders, ordered by rank; `"strict"` keeps the intersection, because strict
   promises every target serves the advertised rung as is. `"intersection"` publishes the smallest
   target `contextWindow`, and `"union"` publishes the largest. `"union"` uses the largest input and
@@ -999,13 +999,14 @@ and have the combo pick per request instead:
   policies publish the smallest `maxOutputTokens` when every target declares one and omit it otherwise. `imageInput: "disabled"` still
   removes image.
 - **Images.** For an image-bearing request each target is native (accepts images), degraded
-  (proven text-only, and the [Vision Sidecar](/guides/sidecars/) is enabled, so it describes the
-  image) or unable (proven text-only with the sidecar disabled). Native and degraded targets stay in
+  (proven text-only, and the [Vision Sidecar](/guides/sidecars/) has a dispatchable plan for the
+  request) or unable (proven text-only without such a plan). Native and degraded targets stay in
   their configured order, so a degraded subscription target still serves before a later native
   one; only unable targets are skipped. A target whose image capability is unknown counts as native,
   the same pass-through the target applies on its own.
-- **Audio.** Only targets that declare audio input are eligible when the request includes audio. If
-  none can take it, the proxy returns HTTP 400 without dropping the audio.
+- **Audio.** A target must declare audio input and use a wire that can carry it. Union Chat
+  requests can include inline WAV or MP3 audio. If none of the targets can take the audio, the
+  proxy returns HTTP 400 without dropping it.
 - **Context.** Before picking, the proxy estimates the request's input tokens with the same estimator
   its context admission uses (it overcounts slightly on purpose) and skips a target whose input limit
   cannot hold them. A target with an unknown window remains eligible on context. Compaction turns

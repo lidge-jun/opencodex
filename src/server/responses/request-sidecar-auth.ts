@@ -2,6 +2,9 @@ import { CodexInstallationIdUnavailableError } from "../../codex/installation-id
 import type { ResponsesRequestContext } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
+import type { OcxParsedRequest } from "../../types";
+import type { ComboTargetRoute } from "../../combos/request-capability";
+import { PolicyCandidateUnavailableError, policyCandidateRefusalResponse } from "./policy-request-scope";
 import type { ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactionTrigger } from "../../providers/openai-tiers";
 import { omitEarlierCompactionImages } from "../../responses/compaction-images";
@@ -32,9 +35,101 @@ import {
   CodexMainProfileDrainingError,
 } from "../../codex/auth-context";
 
+type SidecarRequestContext = Pick<ResponsesRequestContext, "options" | "config" | "req">;
+
+async function resolveResponsesOpenAiSidecar(
+  { options, config, req }: SidecarRequestContext,
+  route: Pick<ComboTargetRoute, "codexAccountId">,
+): Promise<ResolvedOpenAiForwardSidecar | undefined> {
+  try {
+    const candidates = listOpenAiForwardSidecarCandidates(config);
+    let sidecarAuth = options.openAiSidecarAuth;
+    if (!sidecarAuth && options.allowStoredOpenAiSidecarAuth === true
+      && route.codexAccountId === undefined
+      && candidates.some(candidate => candidate.accountMode === "direct")
+      && tryClaimStoredSidecarMainProfile(options.turnAdmissionLease)) {
+      // Request-local helper authority only: never promote this pair to caller, primary,
+      // or retry credentials. Claim before reading so profile switches remain fenced.
+      try {
+        const { getMainAccountToken } = await import("../../codex/main-account");
+        const token = getMainAccountToken();
+        if (token) sidecarAuth = captureExplicitOpenAiCallerAuth(new Headers({
+          authorization: `Bearer ${token.accessToken}`, "chatgpt-account-id": token.chatgptAccountId,
+        }), config);
+      } catch { /* stored enrichment is optional */ }
+    }
+    // Preserve explicit OpenAI helper auth across route changes without returning it to
+    // primary-provider headers or alternate-main retry. The resolver revalidates scope.
+    const sidecarHeaders = new Headers(req.headers);
+    sidecarHeaders.delete("authorization");
+    sidecarHeaders.delete("chatgpt-account-id");
+    if (sidecarAuth) {
+      sidecarHeaders.set("authorization", sidecarAuth.authorization);
+      sidecarHeaders.set("chatgpt-account-id", sidecarAuth.chatgptAccountId);
+    }
+    return await resolveFirstUsableOpenAiSidecar(
+      candidates,
+      sidecarHeaders,
+      config,
+      {
+        admission: options.admission,
+        signal: options.abortSignal,
+        codexAuthPolicy: options.codexAuthPolicy,
+        // Account-qualified native routes are passthrough, so their in-turn helper is vision.
+        // Scope its cooldown and outcome to the helper model, not the routed text model.
+        ...(route.codexAccountId !== undefined
+          ? { exactAccount: { accountId: route.codexAccountId, modelId: resolveOpenAiVisionModel(config) } }
+          : {}),
+        beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
+      },
+    );
+  } catch (err) {
+    // Sidecars are optional helpers for an otherwise independent routed turn.
+    // An unavailable/cooling/expired Multi credential disables the helper; it
+    // must not turn a valid routed-provider request into a Codex-auth failure.
+    if (
+      !(err instanceof CodexInstallationIdUnavailableError)
+      && !(err instanceof CodexPoolAuthenticationError)
+      && !(err instanceof CodexAuthContextError)
+      && !(err instanceof CodexAccountCooldownError)
+      && !(err instanceof CodexThreadAffinityExpiredError)
+      && !(err instanceof CodexMainProfileDrainingError)
+    ) throw err;
+  }
+}
+
+function responsesVisionPlan(
+  { config, options }: SidecarRequestContext,
+  { provider, providerName, modelId }: ComboTargetRoute,
+  parsed: OcxParsedRequest,
+  openAiSidecar: ResolvedOpenAiForwardSidecar | undefined,
+) {
+  return planVisionSidecar(config, provider, modelId, parsed, openAiSidecar, {
+    admission: options.admission, codexAuthPolicy: options.codexAuthPolicy, providerName,
+    advisorAdmissionPolicy: options.advisorAdmissionPolicy,
+  });
+}
+
+/** Use the child's real planner and auth rules, then return any unused recovery probe. */
+export async function canDescribeComboImages(
+  context: SidecarRequestContext,
+  route: ComboTargetRoute,
+  parsed: OcxParsedRequest,
+): Promise<boolean> {
+  if (context.options.visionDescribeTerminal) return false;
+  const openAiSidecar = shouldResolveOpenAiVisionSidecar(context.config, route.provider, route.modelId, parsed, route.providerName)
+    ? await resolveResponsesOpenAiSidecar(context, route) : undefined;
+  try {
+    const plan = responsesVisionPlan(context, route, parsed, openAiSidecar);
+    return plan !== undefined && plan.maxDescriptionsPerTurn > 0;
+  } finally {
+    openAiSidecar?.releaseProbeLease?.();
+  }
+}
+
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function prepareResponsesSidecarAuth(
-  requestContext: Pick<ResponsesRequestContext, "options" | "config" | "req">,
+  requestContext: SidecarRequestContext,
   requestState: Pick<
     PreparedResponsesRequest,
     | "parsed"
@@ -44,7 +139,7 @@ export async function prepareResponsesSidecarAuth(
   >,
   transportState: Pick<ResponsesTransport, "adapter" | "isPassthrough">,
 ) {
-  const { options, config, req } = requestContext;
+  const { options, config } = requestContext;
   const { parsed, route, translatorBudget } = requestState;
   const { isPassthrough } = transportState;
 
@@ -66,60 +161,7 @@ export async function prepareResponsesSidecarAuth(
       : (shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough)
         || shouldResolveOpenAiPassthroughWebSearchBridge(route.provider, parsed, isPassthrough)));
   if (needsOpenAiVision || needsOpenAiSearch) {
-    try {
-      const candidates = listOpenAiForwardSidecarCandidates(config);
-      let sidecarAuth = options.openAiSidecarAuth;
-      if (!sidecarAuth && options.allowStoredOpenAiSidecarAuth === true
-        && route.codexAccountId === undefined
-        && candidates.some(candidate => candidate.accountMode === "direct")
-        && tryClaimStoredSidecarMainProfile(options.turnAdmissionLease)) {
-        // Request-local helper authority only: never promote this pair to caller, primary,
-        // or retry credentials. Claim before reading so profile switches remain fenced.
-        try {
-          const { getMainAccountToken } = await import("../../codex/main-account");
-          const token = getMainAccountToken();
-          if (token) sidecarAuth = captureExplicitOpenAiCallerAuth(new Headers({
-            authorization: `Bearer ${token.accessToken}`, "chatgpt-account-id": token.chatgptAccountId,
-          }), config);
-        } catch { /* stored enrichment is optional */ }
-      }
-      // Preserve explicit OpenAI helper auth across route changes without returning it to
-      // primary-provider headers or alternate-main retry. The resolver revalidates scope.
-      const sidecarHeaders = new Headers(req.headers);
-      sidecarHeaders.delete("authorization");
-      sidecarHeaders.delete("chatgpt-account-id");
-      if (sidecarAuth) {
-        sidecarHeaders.set("authorization", sidecarAuth.authorization);
-        sidecarHeaders.set("chatgpt-account-id", sidecarAuth.chatgptAccountId);
-      }
-      openAiSidecar = await resolveFirstUsableOpenAiSidecar(
-        candidates,
-        sidecarHeaders,
-        config,
-        {
-          admission: options.admission,
-          codexAuthPolicy: options.codexAuthPolicy,
-          // Account-qualified native routes are passthrough, so their in-turn helper is vision.
-          // Scope its cooldown and outcome to the helper model, not the routed text model.
-          ...(route.codexAccountId !== undefined
-            ? { exactAccount: { accountId: route.codexAccountId, modelId: resolveOpenAiVisionModel(config) } }
-            : {}),
-          beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
-        },
-      );
-    } catch (err) {
-      // Sidecars are optional helpers for an otherwise independent routed turn.
-      // An unavailable/cooling/expired Multi credential disables the helper; it
-      // must not turn a valid routed-provider request into a Codex-auth failure.
-      if (
-        !(err instanceof CodexInstallationIdUnavailableError)
-        && !(err instanceof CodexPoolAuthenticationError)
-        && !(err instanceof CodexAuthContextError)
-        && !(err instanceof CodexAccountCooldownError)
-        && !(err instanceof CodexThreadAffinityExpiredError)
-        && !(err instanceof CodexMainProfileDrainingError)
-      ) throw err;
-    }
+    openAiSidecar = await resolveResponsesOpenAiSidecar(requestContext, route);
   }
 
   // Vision sidecar: the routed model can't see images (provider.noVisionModels). Describe each
@@ -131,12 +173,9 @@ export async function prepareResponsesSidecarAuth(
   // Responses callers. Marked + text-only routed model → strip, depth cap 1.
   const visionPlan = visionDescribeTerminal
     ? undefined
-    : planVisionSidecar(config, route.provider, route.modelId, parsed, openAiSidecar, {
-      admission: options.admission, codexAuthPolicy: options.codexAuthPolicy, providerName: route.providerName,
-      advisorAdmissionPolicy: options.advisorAdmissionPolicy,
-    });
+    : responsesVisionPlan(requestContext, route, parsed, openAiSidecar);
   const recordSidecarOutcome = openAiSidecar?.recordOutcome;
-  if (visionPlan) {
+  if (visionPlan && (!options.comboRequiresVisionPlan || visionPlan.maxDescriptionsPerTurn > 0)) {
     try {
       await describeImagesInPlace(
         parsed,
@@ -155,6 +194,10 @@ export async function prepareResponsesSidecarAuth(
   } else if (requiresVisionPreprocessing(config, route.provider, route.modelId, route.providerName)) {
     // Image capability is not positively proven but no sidecar plan is dispatchable: fail closed.
     // Never forward raw image bytes to an unverified upstream.
+    if (options.comboRequiresVisionPlan) {
+      openAiSidecar?.releaseProbeLease?.();
+      return policyCandidateRefusalResponse(new PolicyCandidateUnavailableError())!;
+    }
     stripImagesInPlace(parsed, translatorBudget);
     if (!needsOpenAiSearch) openAiSidecar?.releaseProbeLease?.();
   }

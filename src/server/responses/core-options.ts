@@ -269,6 +269,8 @@ export interface HandleResponsesOptions {
   comboAttempt?: boolean;
   /** `union` combo with no member whose window fits: the child keeps the loose direct admission. */
   comboContextDegraded?: boolean;
+  /** A union combo admitted this image-bearing child through a dispatchable vision plan. */
+  comboRequiresVisionPlan?: boolean;
   /**
    * Set by the combo loop for each child. A child logs into its own context, which the combo
    * copies once when the child commits, and the bridge reports usage after that, at the terminal

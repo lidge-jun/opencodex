@@ -119,10 +119,12 @@ export function comboCatalogOmissionReason(
   return null;
 }
 
-/** `union` advertises what any member serves (natively or through the vision sidecar). */
+/** Video has no per-member dispatch gate, so it is advertised only when common. */
 function comboInputModalities(combo: NormalizedComboConfig, members: readonly CatalogModel[]): string[] {
   const lists = members.map(member => member.inputModalities ?? ["text"]);
-  return combo.capabilityPolicy === "union" ? unionStrings(lists) : intersectStrings(lists);
+  return combo.capabilityPolicy === "union"
+    ? unionStrings(lists).filter(modality => modality !== "video" || lists.every(list => list.includes("video")))
+    : intersectStrings(lists);
 }
 
 export function deriveComboCatalogModel(
