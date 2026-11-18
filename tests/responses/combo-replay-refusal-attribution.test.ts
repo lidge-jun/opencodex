@@ -59,9 +59,11 @@ afterEach(async () => {
   }
 });
 
-async function turn(ingress: "HTTP" | "WebSocket", pool: boolean, reset: boolean) {
+async function turn(ingress: "HTTP" | "WebSocket", pool: boolean, reset: boolean, { withFallback = false } = {}) {
   const provider = pool ? "openai" : "fixture";
   const target = { provider, model: "gpt-5.5" };
+  const fallback = { provider: "fallback", model: "model-b" };
+  const fallbackBaseUrl = "https://combo-fallback.invalid/v1";
   const config = { port: 0, defaultProvider: provider, websockets: true, autoSwitchThreshold: 0,
     activeCodexAccountId: "fixture-pool", codexAccounts: pool ? [{ id: "fixture-pool", isMain: false,
       email: "fixture@example.test", chatgptAccountId: "fixture-chatgpt" }] : [],
@@ -71,8 +73,13 @@ async function turn(ingress: "HTTP" | "WebSocket", pool: boolean, reset: boolean
           ? { baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool" }
           : { baseUrl: "https://combo-fixture.invalid/v1", authMode: "key", apiKey: "synthetic-fixture" }),
       },
+      ...(withFallback ? {
+        [fallback.provider]: { adapter: "openai-responses", upstreamWebsocket: false, retryOn429: { enabled: false },
+          baseUrl: fallbackBaseUrl, authMode: "key", apiKey: "synthetic-fallback", models: [fallback.model] },
+      } : {}),
     },
-    combos: { refusal: { alias: "chain/refusal", strategy: "failover", waitForCooldownMs: 0, targets: [target] } },
+    combos: { refusal: { alias: "chain/refusal", strategy: "failover", waitForCooldownMs: 0,
+      targets: withFallback ? [target, fallback] : [target] } },
   } as OcxConfig;
   if (pool) {
     saveCodexAccountCredential("fixture-pool", { accessToken: "synthetic-access", refreshToken: "synthetic-refresh",
@@ -80,15 +87,20 @@ async function turn(ingress: "HTTP" | "WebSocket", pool: boolean, reset: boolean
     updateAccountQuota("fixture-pool", 10);
   }
   let sends = 0;
+  let fallbackSends = 0;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = input instanceof Request ? input.url : String(input);
     if (new URL(url).hostname === "127.0.0.1" || new URL(url).hostname === "localhost") {
       return originalFetch(input, init);
     }
-    expect(url).toBe(pool
-      ? "https://chatgpt.com/backend-api/codex/responses" : "https://combo-fixture.invalid/v1/responses");
-    sends++;
-    if (reset) throw Object.assign(new Error("synthetic connection reset"), { code: "ECONNRESET" });
+    if (withFallback && url === `${fallbackBaseUrl}/responses`) {
+      fallbackSends++;
+    } else {
+      expect(url).toBe(pool
+        ? "https://chatgpt.com/backend-api/codex/responses" : "https://combo-fixture.invalid/v1/responses");
+      sends++;
+      if (reset) throw Object.assign(new Error("synthetic connection reset"), { code: "ECONNRESET" });
+    }
     return Response.json({ error: { type: "rate_limit_error", code: "rate_limit_exceeded", message: "Fixture rate limit" } },
       { status: 429, headers: { "retry-after": "7" } });
   }) as typeof fetch;
@@ -141,7 +153,7 @@ async function turn(ingress: "HTTP" | "WebSocket", pool: boolean, reset: boolean
       expect(getCodexUpstreamHealth("fixture-pool")?.cooldownUntil).toBeGreaterThan(Date.now());
     }
   }
-  return { row, status, code };
+  return { row, status, code, fallbackSends };
 }
 
 test("combo rebuild carries a replay-refusal marker even without a parseable error code", async () => {
@@ -161,7 +173,7 @@ test.each([
   { kind: "synthetic replay refusal", status: 429, code: "upstream_reset_replay_refused", selected: 401 },
   { kind: "non-replayable upstream 429", status: 429, code: "rate_limit_exceeded", selected: 429 },
   { kind: "non-replayable upstream 402", status: 402, code: "insufficient_quota", selected: 402 },
-])("exhausted combo attributes quota by provenance for a $kind", async ({ status, code, selected }) => {
+])("combo exhaustion quota-selection boundary attributes quota by provenance for a $kind", async ({ status, code, selected }) => {
   const providers = Object.fromEntries(["primary", "fallback"].map(name => [name, {
     adapter: "openai-responses" as const, authMode: "key" as const, apiKey: "synthetic-fixture",
     baseUrl: `https://${name}.invalid/v1`,
@@ -194,8 +206,8 @@ test.each([
         if (code === "upstream_reset_replay_refused") retainReplayRefusal(response);
         else markResponseNonReplayable(response);
         const failure = await consumeComboFailure(response);
-        // Exercise the exhaustion policy through the child-failure seam. A real refusal stops
-        // before the fallback via replay metadata, which this fixture omits from the hop decision.
+        // Force exhaustion at the quota-selection boundary by clearing the hop-decision
+        // metadata. The HTTP test below covers the real stop before fallback.
         options!.onConsumedComboFailure!({ ...failure, nonReplayable: undefined, upstreamCode: undefined });
         return failure.response;
       },
@@ -213,6 +225,13 @@ test.each([
   } finally {
     budget.dispose();
   }
+});
+
+test("HTTP two-target combo stops before the fallback on replay refusal", async () => {
+  const { status, code, fallbackSends } = await turn("HTTP", false, true, { withFallback: true });
+  expect(fallbackSends).toBe(0);
+  expect(status).toBe(429);
+  expect(code).toBe("upstream_reset_replay_refused");
 });
 
 for (const ingress of ["HTTP", "WebSocket"] as const) {

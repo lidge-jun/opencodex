@@ -30,6 +30,15 @@ describe("classifyUpstreamCondition", () => {
     expect(classifyUpstreamCondition({ status: 400, message: "The model does not exist" })).toBe("model_unavailable");
   });
 
+  test.each([
+    "upstream_reset_replay_refused",
+    "upstream_closed_before_response",
+    "upstream_no_response",
+  ])("transport code %s takes precedence over the generic error type", (code) => {
+    expect(classifyUpstreamCondition({ status: 429, type: "rate_limit_error", code })).toBe("upstream_failed");
+    expect(classifyUpstreamCondition({ status: 401, type: "rate_limit_error", code })).toBe("auth_failed");
+  });
+
   test("context overflow from text needs the combo router's definite verdict", () => {
     // A validation error that quotes the caller's own value is not an overflow.
     const sdkValidation = "Error code: 400 - {'error': {'message': \"Invalid 'tools[0].function.name': 'prompt is too long'. Expected a string that matches the pattern.\", 'type': 'invalid_request_error', 'param': 'tools[0].function.name', 'code': 'invalid_value'}}";
