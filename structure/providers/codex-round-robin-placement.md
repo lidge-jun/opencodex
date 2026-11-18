@@ -4,7 +4,7 @@
 places a conversation that has no live binding. The threshold resolution itself is described under
 [per-account auto-switch thresholds](openai-accounts.md#per-account-auto-switch-thresholds).
 `reset-near-weighted` uses the same placement candidates and applies the
-[weighted reset preference](openai-accounts.md#reset-near-weighted-account-ordering) within the ring.
+[weighted reset preference](reset-near-weighted.md) within the ring.
 
 ## Placement prefers headroom
 

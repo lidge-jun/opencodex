@@ -368,13 +368,7 @@ The metadata probe (`probe()`, no `-w` or `-g`, output discarded) shares that sl
 
 ## Model routes
 
-For Anthropic OAuth, `src/oauth/anthropic-routing.ts` applies the first matching `anthropicAccountPool.routes` rule to every eligible pick. The declared account order is stable while its candidates remain eligible; active, manual, affinity, quota and strategy preferences only choose inside that set. A healthy session affinity outside a model route is ignored for that request and retained for later unrouted or differently routed models; the routed commit does not overwrite it. An explicit fallback widens an empty route to the ordinary pool, and fill-first then advances in ordinary pool order from the active account. A missing eligible route fails locally without that fallback. The rules are operator allowlists, not provider entitlement evidence. Request logs use `route:#<n>` for the 1-based rule position, not the operator name.
-
-The opt-in `reset-near-weighted` strategy uses the [shared weight rule](openai-accounts.md#reset-near-weighted-account-ordering)
-within the eligible Anthropic instance and model route. `src/providers/quota/account-cache.ts` supplies
-separate observation clocks for the two shared bars so a partial header cannot refresh a carried bar.
-The strategy uses its fixed usage cutoffs and the pool's `stickyLimit`. Healthy bound turns reuse their
-account. A keyless turn keeps the healthy active account without spending a new ring placement.
+For Anthropic OAuth, `src/oauth/anthropic-routing.ts` applies the first matching `anthropicAccountPool.routes` rule to every eligible pick. The declared account order is stable while its candidates remain eligible. Active, manual, affinity, quota and strategy preferences, including [reset-near-weighted](reset-near-weighted.md), choose inside that set. A healthy session affinity outside a model route is ignored for that request and retained for later unrouted or differently routed models; the routed commit does not overwrite it. An explicit fallback widens an empty route to the ordinary pool, and fill-first then advances in ordinary pool order from the active account. A missing eligible route fails locally without that fallback. The rules are operator allowlists, not provider entitlement evidence. Request logs use `route:#<n>` for the 1-based rule position, not the operator name.
 
 ## Quota labels
 

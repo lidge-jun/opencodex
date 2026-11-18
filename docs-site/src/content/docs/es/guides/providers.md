@@ -337,6 +337,8 @@ Solo `anthropic` y `anthropic2` admiten este modo; otros proveedores responden `
 
 OAuth proveedores cuyas credenciales incluyen un ID de cuenta estable o correo electrónico pueden mantener más de un inicio de sesión. La página Proveedores muestra esas cuentas en un menú desplegable, le permite agregar otra y cambia la cuenta activa sin cerrar la sesión de las otras. Un inicio de sesión normal con una credencial sin identidad Kimi reemplaza la ranura activa, mientras que un **Añadir cuenta** explícito conserva esa ranura y activa una nueva y distinta. Las cuentas de Kiro se identifican mediante el ARN del perfil y, cuando está disponible, el correo electrónico del usuario conectado. Distintos usuarios de un perfil de organización pueden conservar credenciales separadas. `chatgpt` siempre es de una sola ranura porque las cuentas de grupo Codex tienen un libro mayor separado. Los tokens permanecen en `~/.opencodex/auth.json`; `/api/oauth/accounts` devuelve solo metadatos enmascarados.
 
+Las sesiones nuevas de Codex y del grupo OAuth de Anthropic pueden usar [`reset-near-weighted`](/es/reference/configuration/providers/#reset-near-weighted) para priorizar la cuota semanal que está a punto de renovarse. La afinidad de las sesiones activas se conserva.
+
 <a id="cockpit-tools-antigravity-import"></a>
 
 ### Importación de Antigravity desde Cockpit Tools

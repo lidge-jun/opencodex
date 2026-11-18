@@ -399,12 +399,14 @@ Only fields named by `supported` may be written; null is not false, and an inert
 policy is not active pooling. Threshold zero and `enabled:false` are independent.
 Use `--enabled on|off`, `--threshold 0..100`, `--strategy`, `--sticky 1..100`, and
 `--quota-window` only where supported. OpenAI does not support pool enabled/window
-writes; `reset-first` is for OpenAI and generic OAuth pools (never Anthropic), `least-loaded` Kiro-only, and Anthropic windows
+writes; `reset-first` is for OpenAI and generic OAuth pools (never Anthropic), `reset-near-weighted` is for Codex and Anthropic only, `least-loaded` Kiro-only, and Anthropic windows
 are `five-hour`, `weekly`, `max-utilization`. Omitted fields stay unchanged.
 Read DTO fields such as routes, per-account concurrency or Anthropic `nativeMessages`
 do not imply a setter in this command; use only the listed CLI options. A save that
 returns `warning: "config_bookkeeping_failed"` was persisted but needs a fresh read to
 confirm the live state.
+
+Enable [weighted reset placement](/reference/configuration/providers/#reset-near-weighted) with `ocx account pool openai --strategy reset-near-weighted` or `ocx account pool anthropic --strategy reset-near-weighted`.
 
 ```bash
 ocx account pool anthropic --threshold 80 --quota-window five-hour --json
@@ -635,7 +637,7 @@ resume <provider> <id|alias|main>  Return a paused account to automatic selectio
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
 reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged. Run on the Home; a Remote Link Child names the Home and sends no request.
-strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Pool placement strategy; least-loaded is Kiro-only.
+strategy <provider> [<quota|round-robin|fill-first|reset-near-weighted|least-loaded|reset-first>]  Pool placement strategy; least-loaded is Kiro-only.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
 remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.
