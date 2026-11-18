@@ -23,7 +23,7 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   managerBound?: boolean;
   discoveryMiss?: boolean;
   standaloneRecord?: "legacy" | "current" | "stale" | "wrong-home" | "wrong-port" | "client-role";
-  legacyWindowsEvidence?: "match" | "foreign-sid" | "wrong-argv" | "wrong-pid" | "wrong-bind" | "client-role" | "serving-generation";
+  legacyWindowsEvidence?: "match" | "foreign-sid" | "wrong-argv" | "wrong-pid" | "wrong-port" | "wrong-bind" | "client-role" | "serving-generation";
   guarded?: boolean;
   /** #7771: the guarded path on a simulated win32, with a bound scheduler manager (separate child stop). */
   windowsGuarded?: boolean;
@@ -92,7 +92,8 @@ if (options.legacyWindowsEvidence) {
       if (file.endsWith("netstat.exe")) {
         const host = evidence === "wrong-bind" ? "0.0.0.0" : record.hostname;
         const pid = evidence === "wrong-pid" ? 4243 : record.pid;
-        return `TCP ${host}:${record.port} 0.0.0.0:0 LISTENING ${pid}\r\n`;
+        const port = evidence === "wrong-port" ? record.port + 1 : record.port;
+        return `TCP ${host}:${port} 0.0.0.0:0 LISTENING ${pid}\r\n`;
       }
       if (args.at(-1)?.includes("GetOwnerSid")) {
         return evidence === "foreign-sid" ? "" : "639000000000000000\r\n";

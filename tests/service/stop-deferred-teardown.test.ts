@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stopProxyGracefully } from "../../src/lib/process-control";
@@ -154,6 +154,8 @@ describe("API stop through process exit cleanup", () => {
 describe("parent CLI shared teardown completion", () => {
   test.each([
     ["match", true], ["foreign-sid", false], ["wrong-argv", false], ["wrong-pid", false],
+    // CIM has no process environment. A matching SID and start argv still need the recorded port.
+    ["wrong-port", false],
     ["wrong-bind", false], ["client-role", false], ["serving-generation", false],
   ] as const)("legacy Windows foreground evidence (%s)", (legacyWindowsEvidence, proved) => {
     const child = spawnSync(process.execPath, [fixturePath("parent-stop-runner.ts")], {
@@ -165,11 +167,17 @@ describe("parent CLI shared teardown completion", () => {
     expect(JSON.parse(child.stdout)).toEqual({ proved });
   });
 
-  test.skipIf(!["linux", "darwin", "win32"].includes(process.platform))(
-    "legacy standalone proof checks a live foreground process and its recorded listener scope",
+  for (const homeEvidence of ["absolute", "relative-match", "relative-mismatch"] as const) test.skipIf(
+    !["linux", "darwin", "win32"].includes(process.platform) || (process.platform === "win32" && homeEvidence !== "absolute"),
+  )(
+    `legacy standalone proof checks a live foreground process and its recorded listener scope (${homeEvidence})`,
     async () => {
       const { proveStandaloneStopRecord } = await import("../../src/cli/stop-restore");
       const hostname = process.platform === "win32" ? "127.0.0.1" : "0.0.0.0";
+      const configHome = realpathSync(home);
+      process.env.OPENCODEX_HOME = configHome;
+      const cwd = homeEvidence === "relative-mismatch" ? join(configHome, "other") : configHome;
+      mkdirSync(cwd, { recursive: true });
       const scriptDir = join(home, "src", "cli");
       mkdirSync(scriptDir, { recursive: true });
       const script = join(scriptDir, "index.ts");
@@ -178,7 +186,8 @@ describe("parent CLI shared teardown completion", () => {
         console.log(listener.port);
       `);
       const proxy = Bun.spawn([process.execPath, script, "start"], {
-        env: { ...process.env, OPENCODEX_HOME: home },
+        cwd,
+        env: { ...process.env, OPENCODEX_HOME: homeEvidence === "absolute" ? configHome : "." },
         stdout: "pipe", stderr: "inherit", signal: AbortSignal.timeout(15_000),
       });
       try {
@@ -186,7 +195,12 @@ describe("parent CLI shared teardown completion", () => {
         const port = Number(new TextDecoder().decode(value).trim());
         expect(port).toBeGreaterThan(0);
         const record = { pid: proxy.pid, port, hostname };
-        expect(await proveStandaloneStopRecord(record, proxy.pid, [])).toBeFunction();
+        const proof = await proveStandaloneStopRecord(record, proxy.pid, []);
+        if (homeEvidence === "relative-mismatch") {
+          expect(proof).toBeUndefined();
+          return;
+        }
+        expect(proof).toBeFunction();
         const wrongBind = hostname === "0.0.0.0" ? "127.0.0.1" : "0.0.0.0";
         expect(await proveStandaloneStopRecord({ ...record, hostname: wrongBind }, proxy.pid, [])).toBeUndefined();
       } finally {

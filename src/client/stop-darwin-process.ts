@@ -44,18 +44,30 @@ export function readDarwinStopEnvironment(pid: number): Buffer | undefined {
   return readDarwinStopProcessArgs(pid)?.environment;
 }
 
-/** PROC_PIDTBSDINFO supplies both the effective UID and microsecond process creation time. */
-export function readDarwinStopStart(pid: number): string | undefined {
+function readDarwinProcessInfo(pid: number, flavor: number, size: number): Buffer | undefined {
   const lib = dlopen("/usr/lib/libproc.dylib", {
     proc_pidinfo: { args: ["i32", "i32", "u64", "ptr", "i32"], returns: "i32" },
   });
   try {
-    // struct proc_bsdinfo from sys/proc_info.h, shared by arm64 and x86_64.
-    const info = Buffer.alloc(136);
-    if (lib.symbols.proc_pidinfo(pid, 3, 0n, ptr(info), info.length) !== info.length
-      || info.readUInt32LE(12) !== pid || info.readUInt32LE(20) !== process.geteuid?.()) return;
-    const seconds = info.readBigUInt64LE(120);
-    const micros = info.readBigUInt64LE(128);
-    if (seconds > 0n && micros < 1_000_000n) return `darwin:${seconds}:${micros}`;
+    const info = Buffer.alloc(size);
+    if (lib.symbols.proc_pidinfo(pid, flavor, 0n, ptr(info), size) === size) return info;
   } finally { lib.close(); }
+}
+
+/** PROC_PIDTBSDINFO supplies both the effective UID and microsecond process creation time. */
+export function readDarwinStopStart(pid: number): string | undefined {
+  // struct proc_bsdinfo from sys/proc_info.h, shared by arm64 and x86_64.
+  const info = readDarwinProcessInfo(pid, 3, 136);
+  if (!info || info.readUInt32LE(12) !== pid || info.readUInt32LE(20) !== process.geteuid?.()) return;
+  const seconds = info.readBigUInt64LE(120);
+  const micros = info.readBigUInt64LE(128);
+  if (seconds > 0n && micros < 1_000_000n) return `darwin:${seconds}:${micros}`;
+}
+
+export function readDarwinStopCwd(pid: number): string | undefined {
+  // PROC_PIDVNODEPATHINFO, struct proc_vnodepathinfo.pvi_cdir.vip_path[MAXPATHLEN].
+  const info = readDarwinProcessInfo(pid, 9, 2352);
+  const path = info?.subarray(152, 152 + 1024);
+  const end = path?.indexOf(0) ?? -1;
+  if (path && end > 0) return new TextDecoder("utf-8", { fatal: true }).decode(path.subarray(0, end));
 }

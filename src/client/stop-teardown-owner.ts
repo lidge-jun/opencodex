@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { statSync } from "node:fs";
+import { readlinkSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { NODE_LAUNCH_PROOF_PREFIX } from "../cli/launcher-context";
 import { parseStopApproval } from "../cli/stop-approval";
@@ -7,7 +7,7 @@ import { tokenizeCommandLine } from "../codex/app-server-processes";
 import { readProcessCommandLine, type ClientStopOwner } from "../config/process-state";
 import { readBoundedRegularFileSync } from "../lib/bounded-file-read";
 import { resolveTrustedWindowsPowerShellExe } from "../lib/windows-elevation";
-import { readDarwinStopArgv, readDarwinStopEnvironment, readDarwinStopStart } from "./stop-darwin-process";
+import { readDarwinStopArgv, readDarwinStopCwd, readDarwinStopEnvironment, readDarwinStopStart } from "./stop-darwin-process";
 
 const basename = (value: string) => value.toLowerCase().replace(/\\/g, "/").split("/").pop() ?? "";
 
@@ -88,11 +88,18 @@ export function readLegacyStopProcessHome(pid: number): string | undefined {
     };
     const override = setting("OPENCODEX_HOME");
     if (override && isAbsolute(override)) return resolve(override);
+    if (override && override !== "~" && !override.startsWith("~/") && !override.startsWith("~\\")) {
+      const cwd = process.platform === "linux"
+        ? new TextDecoder("utf-8", { fatal: true }).decode(readlinkSync(`/proc/${pid}/cwd`, { encoding: "buffer" }))
+        : readDarwinStopCwd(pid);
+      // procfs appends this marker when the working directory has been removed.
+      if (cwd && isAbsolute(cwd) && !(process.platform === "linux" && cwd.endsWith(" (deleted)"))) return resolve(cwd, override);
+      return;
+    }
     const home = setting("HOME");
     if (!home || !isAbsolute(home)) return;
     if (!override) return join(home, ".opencodex");
-    if (override === "~") return resolve(home);
-    if (override.startsWith("~/") || override.startsWith("~\\")) return join(home, override.slice(2));
+    return override === "~" ? resolve(home) : join(home, override.slice(2));
   } catch { /* An unreadable home cannot bind a legacy record. */ }
 }
 
