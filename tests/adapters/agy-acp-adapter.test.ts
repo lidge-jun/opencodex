@@ -4,6 +4,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, readdirSync } from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -174,6 +175,30 @@ describe("agy acp turn", () => {
       harden.mockRestore();
       forget.mockRestore();
       platform.mockRestore();
+      removeTreeWithRetry(root);
+    }
+  });
+
+  test("workspace removal failure is reported with fixed text after reaping", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-agy-acp-remove-failed-"));
+    const workspace = await createTurnWorkspace(join(root, "home"), root);
+    const remove = spyOn(fsPromises, "rm").mockRejectedValue(new Error("fixture-private-path"));
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    let reaped = false;
+    try {
+      const h = await run(script(), { deps: {
+        createWorkspace: async () => workspace, reap: async () => { reaped = true; },
+      } });
+      expect(reaped).toBe(true);
+      expect(terminal(h)).toEqual([expect.objectContaining({
+        type: "error", status: 502, message: "Antigravity ACP could not remove its private workspace.",
+      })]);
+      expect(existsSync(workspace.dir)).toBe(true);
+      expect(warn.mock.calls).toEqual([["Antigravity ACP could not remove its private workspace."]]);
+    } finally {
+      warn.mockRestore();
+      remove.mockRestore();
+      await workspace.remove();
       removeTreeWithRetry(root);
     }
   });

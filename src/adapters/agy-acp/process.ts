@@ -15,6 +15,14 @@ import { forgetEphemeralSecretDir, hardenSecretDirAsync, windowsSecretAclApplies
 
 export interface TurnWorkspace { dir: string; tmp: string; remove(): Promise<void> }
 
+export class AgyAcpCleanupError extends Error {}
+
+export class AgyAcpWorkspaceCleanupError extends AgyAcpCleanupError {
+  constructor() {
+    super("Antigravity ACP could not remove its private workspace.");
+  }
+}
+
 function isInside(child: string, parent: string): boolean {
   const rel = relative(parent, child);
   return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
@@ -29,7 +37,11 @@ export async function createTurnWorkspace(home: string, tempRoot = tmpdir()): Pr
   const created = await mkdtemp(join(root, "ocx-agy-acp-"));
   let aclDir: string | undefined;
   const remove = async (): Promise<void> => {
-    try { await rm(created, { recursive: true, force: true, maxRetries: 2 }); } catch { return; }
+    try { await rm(created, { recursive: true, force: true, maxRetries: 2 }); } catch {
+      const error = new AgyAcpWorkspaceCleanupError();
+      console.warn(error.message);
+      throw error;
+    }
     if (aclDir) forgetEphemeralSecretDir(aclDir);
   };
   try {
@@ -46,7 +58,8 @@ export async function createTurnWorkspace(home: string, tempRoot = tmpdir()): Pr
     await mkdir(tmp, { mode: 0o700 });
     return { dir, tmp, remove };
   } catch (error) {
-    await remove();
+    // Rollback reports its own fixed warning. The caller still receives the original setup error.
+    await remove().catch(() => {});
     throw error;
   }
 }
@@ -85,7 +98,7 @@ function defaultKillWindowsTree(pid: number, completed: (ok: boolean) => void): 
 
 const GROUP_POLL_MS = 25;
 
-export class AgyAcpTreeCleanupError extends Error {
+export class AgyAcpTreeCleanupError extends AgyAcpCleanupError {
   constructor(platform = process.platform) {
     super(platform === "win32"
       ? "Antigravity ACP could not confirm Windows process tree cleanup."
