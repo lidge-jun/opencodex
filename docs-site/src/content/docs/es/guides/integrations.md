@@ -760,7 +760,8 @@ ediciones. El bloque marcado de `agy` en un perfil de shell se elimina entero, i
 hecha dentro de él. Un enlace simbólico de un perfil de `agy` debe apuntar a otro perfil compatible
 de la misma familia de shells dentro de tu directorio personal. El archivo de configuración de
 Antigravity debe resolverse a la ruta exacta `~/.antigravity/settings.json`. Reinicia Antigravity, o
-abre una terminal nueva para `agy`, para aplicar un cambio.
+abre una terminal nueva para `agy`, para aplicar un cambio. Al desconectar, `agy` omite los perfiles
+sin registro de restauración si no se pueden resolver o leer.
 `ocx uninstall` desconecta los clientes con registros de restauración guardados antes de eliminar la
 configuración. Si no puede restaurar un cliente, la desinstalación se detiene y conserva su registro.
 

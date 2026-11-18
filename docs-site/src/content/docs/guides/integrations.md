@@ -1248,7 +1248,8 @@ otherwise reverts only OpenCodex's own entries and keeps your other edits. The m
 shell profile is removed whole, including any edit made inside it. An `agy` profile symlink must resolve
 to another supported profile for the same shell family under your home. Antigravity settings must resolve
 to the exact `~/.antigravity/settings.json` path. Restart Antigravity, or open a new terminal for `agy`,
-to apply a change. `ocx uninstall` disconnects clients with saved restore records
+to apply a change. During disconnect, `agy` skips profiles without a restore record if they cannot be
+resolved or read. `ocx uninstall` disconnects clients with saved restore records
 before removing configuration. If a client cannot be restored, uninstall stops and keeps its record.
 
 OpenCodex writes a placeholder key, never a real credential, so it refuses to connect when the proxy bind

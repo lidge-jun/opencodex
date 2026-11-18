@@ -62,21 +62,21 @@ function clientDestination(ctx: GatewayClientContext, path: string, allowedPaths
   return target;
 }
 
-function readClientDestination(target: string, ignoreUnreadable: boolean = false): ClientFile | null {
+function readClientDestination(target: string): ClientFile | null {
   try {
     const bytes = readBoundedRegularFileSync(target, MAX_CLIENT_BYTES);
     return { target, bytes, hash: sha256(bytes) };
   } catch (error) {
-    if (ignoreUnreadable || isMissingPathError(error)) return null;
+    if (isMissingPathError(error)) return null;
     throw error;
   }
 }
 
-export function readClientFile(ctx: GatewayClientContext, path: string, allowedPaths: readonly string[] = [path], ignoreUnreadable = false): ClientFile | null {
-  return readClientDestination(clientDestination(ctx, path, allowedPaths), ignoreUnreadable);
+export function readClientFile(ctx: GatewayClientContext, path: string, allowedPaths: readonly string[] = [path]): ClientFile | null {
+  return readClientDestination(clientDestination(ctx, path, allowedPaths));
 }
 
-/** Status can still report the client when a file exists but cannot be read. */
+/** Inspect a candidate without failing status or recovery when it cannot be resolved or read. */
 export function inspectClientFile(ctx: GatewayClientContext, path: string, allowedPaths: readonly string[] = [path]): ClientFile | null | undefined {
   try { return readClientFile(ctx, path, allowedPaths); } catch { return undefined; }
 }

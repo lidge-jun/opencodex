@@ -62,7 +62,8 @@ URL again and disconnect restores the original gateway block.
 Connect journals the replacement hash before editing the client file, so disconnect can recognise
 the original and pending states after an interrupted write. A profile is read as UTF-8 without NUL
 bytes or as BOM-prefixed UTF-16LE (used by Windows PowerShell 5.1 redirection). It is written back
-in the same encoding. If a recorded profile cannot be decoded, disconnect refuses with
+in the same encoding. During disconnect, an untracked profile that cannot be resolved or read is skipped.
+Recorded profiles are checked strictly. If a recorded profile cannot be decoded, disconnect refuses with
 `unsupported-file` and keeps the recovery record. A settings file with comments, trailing commas
 or a non-object root is refused with `unsupported-file` and left untouched.
 

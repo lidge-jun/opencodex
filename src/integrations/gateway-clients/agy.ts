@@ -245,7 +245,7 @@ function disconnect(ctx: GatewayClientContext): GatewayClientResult {
   for (const { path, kind } of profiles) {
     const entry = entries.get(path);
     const allowedPaths = allowedProfilePaths(available, kind);
-    const file = readClientFile(ctx, path, allowedPaths, entry === undefined);
+    const file = entry ? readClientFile(ctx, path, allowedPaths) : inspectClientFile(ctx, path, allowedPaths);
     assertSameTarget(entry, file?.target);
     if (!file) {
       if (entry) createdDirs.push(...entry.createdDirs);

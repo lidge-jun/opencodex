@@ -6,7 +6,7 @@ import {
 } from "../../src/service";
 import { pathToFileURL } from "node:url";
 import { repoRoot } from "../helpers/repo-root";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { removeOwnedConfigAfterDesktopCleanup, type UninstallClientStateDeps } from "../../src/cli/uninstall-client-state";
@@ -904,6 +904,32 @@ describe("uninstall restores recorded third-party integrations before deleting r
       f.deps.remove = () => removeGatewayFixtureConfig(f.configDir);
       expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
         .toEqual({ status: "removed", residualPaths: [] });
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+
+  test.skipIf(process.platform === "win32")("uninstall restores agy beside a dangling untracked profile", async () => {
+    const f = await fixture({ gatewayOnly: true });
+    try {
+      const profile = join(f.home, ".zshrc");
+      const bash = join(f.home, ".bashrc");
+      const missing = join(f.home, "missing-profile");
+      const original = "# existing zsh profile\n";
+      writeFileSync(profile, original);
+      const zshContext = { ...f.deps.gatewayContext(), env: { SHELL: "/bin/zsh" } };
+      expect(connectGatewayClient("agy", zshContext, config, config.port).ok).toBe(true);
+      expect(readFileSync(profile, "utf8")).toContain("opencodex agy");
+      symlinkSync(missing, bash);
+      const remove = f.deps.remove;
+      f.deps.remove = () => {
+        expect(readFileSync(profile, "utf8")).toBe(original);
+        expect(existsSync(join(f.configDir, "gateway-clients", "agy.json"))).toBe(false);
+        return remove();
+      };
+      expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .toEqual({ status: "removed", residualPaths: [] });
+      expect(readlinkSync(bash)).toBe(missing);
+      expect(existsSync(missing)).toBe(false);
+      expect(existsSync(f.configDir)).toBe(false);
     } finally { rmSync(f.root, { recursive: true, force: true }); }
   });
 

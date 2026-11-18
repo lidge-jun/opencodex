@@ -115,6 +115,20 @@ test.skipIf(process.platform === "win32")("agy updates a symlinked profile resol
   expect(existsSync(recordPath("agy"))).toBe(false);
 });
 
+test.skipIf(process.platform === "win32")("agy restores a recorded profile beside a dangling untracked profile", () => {
+  writeFileSync(profile(), originals.agy);
+  expect(GATEWAY_CLIENTS.agy.connect(ctx, target).ok).toBe(true);
+  const bash = join(ctx.home, ".bashrc");
+  const missing = join(ctx.home, "missing-profile");
+  symlinkSync(missing, bash);
+  ctx.env.SHELL = "/bin/bash";
+  expect(GATEWAY_CLIENTS.agy.disconnect(ctx)).toMatchObject({ ok: true, restore: "exact", changedFiles: [profile()] });
+  expect(read(profile())).toBe(originals.agy);
+  expect(readlinkSync(bash)).toBe(missing);
+  expect(existsSync(missing)).toBe(false);
+  expect(existsSync(recordPath("agy"))).toBe(false);
+});
+
 test.skipIf(process.platform === "win32")("restore refuses a recorded profile redirected to a different allowed file", () => {
   writeFileSync(profile(), originals.agy);
   expect(GATEWAY_CLIENTS.agy.connect(ctx, target).ok).toBe(true);
