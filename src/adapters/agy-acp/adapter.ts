@@ -30,7 +30,7 @@ import {
   type AcpConfigOption, type AcpSelectValue,
 } from "./options";
 import { AGY_ACP_MIN_VERSION, AGY_INSTALL_HINT, MAX_AGY_VERSION_OUTPUT_LENGTH, probeAgyVersion, resolveAgyBinary, type AgyVersionProbe } from "./binary";
-import { AgyAcpTreeCleanupError, createTurnWorkspace, defaultAgyAcpSpawn, reapProcessTree, type AgyAcpChild, type AgyAcpSpawn, type TurnWorkspace } from "./process";
+import { AgyAcpTreeCleanupError, agyExecutableMissing, createTurnWorkspace, defaultAgyAcpSpawn, reapProcessTree, type AgyAcpChild, type AgyAcpSpawn, type TurnWorkspace } from "./process";
 import { AcpOutputRedactor } from "./output-redaction";
 import { agyAcpPolicyRefusal } from "./policy";
 
@@ -86,6 +86,7 @@ async function runVersion(
 ): Promise<string | undefined> {
   let workspace: TurnWorkspace | undefined;
   let child: AgyAcpChild | undefined;
+  let spawnFailed = false;
   try {
     workspace = await makeWorkspace();
     const probe = spawnChild(binary, ["--version"], { cwd: workspace.dir, env: childEnv(workspace) });
@@ -100,7 +101,11 @@ async function runVersion(
     const exitCode = await new Promise<number | null | undefined>(resolve => {
       const timer = setTimeout(() => resolve(undefined), VERSION_TIMEOUT_MS);
       probe.once("close", (code: number | null) => { clearTimeout(timer); resolve(code); });
-      probe.once("error", () => { clearTimeout(timer); resolve(undefined); });
+      probe.once("error", (error: NodeJS.ErrnoException) => {
+        spawnFailed = agyExecutableMissing(probe, error);
+        clearTimeout(timer);
+        resolve(undefined);
+      });
       probe.stdin.end();
     });
     return exitCode === 0 ? out : undefined;
@@ -108,7 +113,7 @@ async function runVersion(
     return undefined;
   } finally {
     if (workspace) {
-      try { await cleanup(workspace, child); } catch (error) {
+      try { await cleanup(workspace, spawnFailed ? undefined : child); } catch (error) {
         // A natural Windows exit can supply a valid version even though taskkill can no
         // longer confirm its tree. The reaper warns and the workspace stays in place.
         if (!(error instanceof AgyAcpTreeCleanupError)) throw error;
@@ -217,6 +222,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
     const outstanding = new Map<JsonRpcId, Pending>();
     let nextId = 1;
     let settled = false;
+    let spawnFailed = false;
     let sessionId: string | undefined;
     let systemOnSession = false;
     let state: AcpConfigOption[] = [];
@@ -254,7 +260,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       settled = true;
       clearTimeout(turnTimer);
       incoming.abortSignal?.removeEventListener("abort", onAbort);
-      const reaped = cleanup(workspace, child).catch(error => {
+      const reaped = cleanup(workspace, spawnFailed ? undefined : child).catch(error => {
         // The reaper warns and retains the workspace. Keep an existing dispatch refusal.
         if (!refusal || !(error instanceof AgyAcpTreeCleanupError)) throw error;
       });
@@ -458,7 +464,10 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
 
     incoming.abortSignal?.addEventListener("abort", onAbort, { once: true });
     child.stdin.on("error", () => {});
-    child.on("error", () => fail("agy_acp_unavailable", AGY_INSTALL_HINT));
+    child.on("error", (error: NodeJS.ErrnoException) => {
+      spawnFailed = agyExecutableMissing(child, error);
+      fail("agy_acp_unavailable", AGY_INSTALL_HINT);
+    });
     child.on("close", (code: number | null) => {
       if (settled) return;
       flush(buffer);

@@ -91,6 +91,7 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   prose remain intact. Protocol errors may include a numeric code. Probe and turn workspaces are created under the
   system temporary directory outside the OpenCodex home. Windows requires a private NTFS ACL before either
   child can start. Retained workspaces can accumulate when cleanup repeatedly cannot be confirmed.
+  A missing executable that fails to spawn without an assigned PID leaves no process to reap.
   The version probe and each turn start with a fresh private workspace containing only an empty temp directory.
   On POSIX, workspace removal follows confirmed leader exit and a group check returning ESRCH after SIGKILL or
   ESRCH. Descendants that deliberately leave the process group are outside that check. Removing the workspace

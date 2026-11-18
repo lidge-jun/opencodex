@@ -31,7 +31,7 @@ class FakeChild extends EventEmitter {
   stdin = new PassThrough();
   stdout = new PassThrough();
   stderr = new PassThrough();
-  pid = 4242;
+  pid: number | undefined = 4242;
   exitCode: number | null = null;
   signalCode: NodeJS.Signals | null = null;
   kill(): boolean { return true; }
@@ -203,6 +203,27 @@ describe("agy acp turn", () => {
     });
     expect(errorCode(h)).toBe("agy_acp_unavailable");
     expect(calls).toEqual(confirmed ? ["reap", "remove"] : ["reap"]);
+  });
+
+  test.each(["probe", "turn"])("an asynchronous missing executable removes the %s workspace", async phase => {
+    let warned = false;
+    const h = await run(script(), {
+      deps: {
+        ...(phase === "probe" ? { probeVersion: undefined } : {}),
+        spawn: () => {
+          const child = new FakeChild();
+          child.pid = undefined;
+          queueMicrotask(() => child.emit("error", Object.assign(new Error("missing executable"), { code: "ENOENT" })));
+          return child as unknown as AgyAcpChild;
+        },
+        reap: child => reapProcessTree(child, {
+          graceMs: 0, reapTimeoutMs: 1000, platform: "win32", warnTreeFailure: () => { warned = true; },
+        }),
+      },
+    });
+    expect(h.removed).toBe(true);
+    expect(warned).toBe(false);
+    expect(errorCode(h)).toBe("agy_acp_unavailable");
   });
 
   test("a valid Windows version probe retains its workspace when taskkill cannot confirm a completed leader", async () => {

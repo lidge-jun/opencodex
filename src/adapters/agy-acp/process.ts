@@ -54,6 +54,11 @@ export async function createTurnWorkspace(home: string, tempRoot = tmpdir()): Pr
 export type AgyAcpChild = Pick<ChildProcessWithoutNullStreams, "stdin" | "stdout" | "stderr" | "pid" | "exitCode" | "signalCode" | "kill" | "on" | "once">;
 export type AgyAcpSpawn = (binary: string, args: string[], options: { cwd: string; env: Record<string, string> }) => AgyAcpChild;
 
+/** An asynchronous ENOENT with no assigned PID means spawn never created a process. */
+export function agyExecutableMissing(child: AgyAcpChild, error: NodeJS.ErrnoException): boolean {
+  return child.pid === undefined && error.code === "ENOENT";
+}
+
 export const defaultAgyAcpSpawn: AgyAcpSpawn = (binary, args, options) => spawn(binary, args, {
   ...options,
   stdio: ["pipe", "pipe", "pipe"],
