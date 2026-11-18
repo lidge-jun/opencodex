@@ -1131,20 +1131,35 @@ Recent Claude Code builds declare Anthropic's Advisor server tool (`advisor_2026
 request and returns a `server_tool_use` block named `advisor` followed by an
 `advisor_tool_result`. On the translated path OpenCodex handles it this way:
 
-- An `anthropic`-adapter provider on first-party `https://api.anthropic.com` receives the
+- A destination whose selected adapter is `anthropic` on first-party `https://api.anthropic.com` receives the
   declaration as sent and the beta header. An Anthropic-compatible gateway receives them only when
   its provider sets [`forwardAdvisorTool: true`](/reference/configuration/providers/), because a
   gateway without the Advisor would reject every Claude Code request that declares it.
-  `forwardAdvisorTool: false` turns it off for first-party Anthropic too.
-- Every other destination, including GPT, Gemini and gateways without the opt-in, drops the
-  declaration and runs the turn without advice. An Advisor declaration never blocks a combo child
-  or a fallback.
+  `forwardAdvisorTool: false` turns it off for first-party Anthropic too. This uses the model's
+  selected wire, including after a key or account replacement.
+- When the tool is optional, GPT, Gemini and gateways without the opt-in drop the declaration
+  and run the turn without hosted advice. Explicit selections require a compatible destination.
 - When the OpenCodex [Advisor](/reference/configuration/advisor/) is active for a turn, its own
   `advisor` tool owns the name and the declared tool is not forwarded. The request log records
   the protocol reason `advisor-tool-shadowed-by-proxy-advisor`.
 - A declaration whose `model` the caller's API key scope does not admit is not forwarded, and the
   request log records `advisor-tool-outside-model-scope`. The managed native Messages lane
   refuses such a request instead.
+- If the request's captured policy has an applicable root, identity or provider-pool token spend
+  ceiling for the current send's selected target, the hosted Advisor declaration, completed history
+  and beta are withheld from that send onward. When the tool is optional, the main turn continues.
+  On directly routed requests the log records `advisor-tool-withheld-by-spend-policy`.
+  Completed search or fetch exchanges beside the Advisor history remain available to destinations
+  that already permit them.
+  If `tool_choice` explicitly names the hosted declaration, OpenCodex refuses the capped target
+  before sending. A combo or routing profile can try a compatible candidate. If none can serve the
+  selection, OpenCodex returns HTTP 400 before streaming, or a terminal error during streaming.
+  This uses the policy captured for that request, including
+  its selected account and pool; later configuration changes do not alter that policy. A retry on
+  a replacement key or account checks the same policy before building its request. Once withheld,
+  the hosted Advisor stays withheld for the rest of the turn. Earlier sends on an unlimited
+  account are unaffected. Requests
+  without an applicable ceiling keep the forwarding rules above.
 - The `server_tool_use` and `advisor_tool_result` blocks reach Claude Code unchanged, with their
   `srvtoolu_` ids, for streaming and non-streaming requests. That covers the plaintext
   `advisor_result`, the encrypted `advisor_redacted_result` and `advisor_tool_result_error`.
@@ -1158,9 +1173,9 @@ request and returns a `server_tool_use` block named `advisor` followed by an
   declaration and the beta, so the model can consult again.
 - When the OpenCodex Advisor owns the name for a turn, Claude Code's earlier Advisor exchanges are
   also withheld for every request of that turn, so the prompt does not change partway through it.
-- Anthropic reports the advisor model's tokens separately from the main model's usage, and
-  OpenCodex does not add them to its usage log, key spend or the usage Claude Code receives.
-  Check Anthropic's console for the advisor cost.
+- OpenCodex does not independently account for the hosted advisor model's tokens in its usage log,
+  key spend or the usage Claude Code receives. This is why token ceilings withhold that optional
+  tool. When it is forwarded without a ceiling, check Anthropic's console for the advisor cost.
 
 ### Unicode-property patterns in tool schemas
 
