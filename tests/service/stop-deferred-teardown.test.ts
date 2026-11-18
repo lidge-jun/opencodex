@@ -69,7 +69,7 @@ async function runParentStop(options: {
   receipt: boolean; response: unknown; restore: CodexNativeRestoreResult; status?: number; clientTransport?: "hub" | "link";
   serverTeardown?: boolean; json?: boolean;
   clientServer?: "legacy" | "unknown" | "wrong-pid" | "malformed" | "oversized" | "unauthorized" | "redirect" | "body-timeout";
-  managerCascades?: boolean; guarded?: boolean; orphan?: boolean; exitCleanup?: boolean;
+  managerCascades?: boolean; managerBound?: boolean; discoveryMiss?: boolean; guarded?: boolean; orphan?: boolean; exitCleanup?: boolean;
   nativeSignal?: boolean; apiFailure?: boolean; stopBodyFailure?: boolean;
   alreadyStopped?: boolean; absence?: "dead" | "unknown" | "live"; managerState?: "inactive" | "active" | "unknown";
   configuredPort?: number; staleRuntimeRecord?: boolean; noRuntimeRecord?: boolean; deadPidReadsNull?: boolean;
@@ -93,14 +93,14 @@ async function runParentStop(options: {
   expect(existsSync(reportPath), child.stderr).toBe(true);
   const report = JSON.parse(readFileSync(reportPath, "utf8")) as {
     calls: { killed: number; native: number; grok: number; cleared: number; exited: number; service: number };
-    probes: string[]; absenceProbes: number[];
+    probes: string[]; absenceProbes: number[]; signals: string[];
     urls: string[]; transports: string[]; nonce?: string; receiptExists: boolean; unexpectedIo: string[];
   };
   expect(report.unexpectedIo, child.stderr).toEqual([]);
   const refusedWithoutReceipt = !options.receipt && (options.windowsStopWiring === true || options.clientTransport === "link");
   const changedBeforeLinkFence = options.clientTransport === "link" && options.connectDuringDiscovery;
   const stoppedByManager = options.managerCascades && options.deadPidReadsNull;
-  expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup || options.alreadyStopped || stoppedByManager || refusedWithoutReceipt || changedBeforeLinkFence ? 0 : 1);
+  expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup || options.alreadyStopped || options.noRuntimeRecord || stoppedByManager || refusedWithoutReceipt || changedBeforeLinkFence ? 0 : 1);
   return { ...report, exitCode: child.status, stderr: child.stderr, stdout: child.stdout };
 }
 
@@ -160,11 +160,24 @@ describe("parent CLI shared teardown completion", () => {
   });
 
   test("a standalone service can stop through its manager without a runtime record", async () => {
-    const outcome = await runParentStop({ receipt: true, managerCascades: true, deadPidReadsNull: true, noRuntimeRecord: true,
+    const outcome = await runParentStop({ receipt: true, managerBound: true, managerCascades: true,
+      discoveryMiss: true, deadPidReadsNull: true, noRuntimeRecord: true,
       json: true, response: null, restore: restoreResult(true) });
     expect(outcome.exitCode, outcome.stderr).toBe(0);
     expect(outcome.calls).toMatchObject({ service: 1, killed: 0, native: 1, grok: 1 });
     expect(JSON.parse(outcome.stdout)).toMatchObject({ runtimeDown: true, service: "stopped", sharedTeardown: "restored" });
+  });
+
+  test.each([false, true])("a discovery miss refuses to stop an unclassified live ocx start PID (cascading manager=%s)", async managerCascades => {
+    const outcome = await runParentStop({ receipt: true, noRuntimeRecord: true, discoveryMiss: true, managerCascades,
+      deadPidReadsNull: true, json: true, response: null, restore: restoreResult(true) });
+    expect({ managerStops: outcome.calls.service, signals: outcome.signals }).toEqual({ managerStops: 0, signals: [] });
+    expect(outcome.calls).toMatchObject({ native: 0, grok: 0 });
+    expect(outcome.nonce).toBeUndefined();
+    expect(outcome.exitCode, outcome.stderr).toBe(1);
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ runtimeDown: false, proxy: "ownership-refused", sharedTeardown: "skipped" });
+    expect(outcome.stderr).toContain("could not verify that live OpenCodex PID 4242 is standalone");
+    expect(outcome.stderr).toContain("ocx service status");
   });
 
   for (const staleRuntimeRecord of [true, false]) {

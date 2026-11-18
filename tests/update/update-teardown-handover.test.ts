@@ -245,8 +245,8 @@ describe("ocx stop under an update handover", () => {
     expect(JSON.parse(run.stdout)).toMatchObject({ sharedTeardown: "restored", exitCode: 0 });
   });
 
-  test("without a runtime record the stop restores instead of handing over a guessed receipt", () => {
-    const run = runStop(true, { noRuntimeRecord: true, nativeSignal: true });
+  test("a manager-bound standalone stop without a runtime record restores instead of handing over a guessed receipt", () => {
+    const run = runStop(true, { noRuntimeRecord: true, managerBound: true, nativeSignal: true });
     expect(run.exitCode, run.stderr).toBe(0);
     expect(run.calls).toMatchObject({ native: 1, grok: 1 });
     expect(receiptNames()).toEqual([]);

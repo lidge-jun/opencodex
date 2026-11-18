@@ -97,6 +97,9 @@ If a Remote Link Child is still running an older version without the stop fence,
 
 Stop the running proxy (by PID), remove the PID file, and restore native Codex for standalone owners. If a managed
 background service is installed, `ocx stop` also stops it first so it cannot respawn the proxy.
+If a live tracked PID could still be a Link Child, `ocx stop` leaves it running until it can verify
+its role or tie the PID to a matching service registration. Run `ocx service status` to identify
+its supervisor, or check the foreground terminal. Repair the runtime or saved Link records and retry.
 A native client that cannot prove whether it serves a Link or Hub connection refuses to stop. Update and restart older native clients through their supervisor, then retry. On a connected hub client, `ocx stop` leaves Codex routing, its
 model catalog and the Grok config as they are, including after a successful API stop: the connection
 owns them, and `ocx start` serves them again without re-injecting routing. Use `ocx disconnect` to hand Codex back to its own account. If Codex on a connected

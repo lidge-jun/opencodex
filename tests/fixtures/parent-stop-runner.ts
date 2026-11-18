@@ -20,6 +20,8 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   json?: boolean;
   clientServer?: "legacy" | "unknown" | "wrong-pid" | "malformed" | "oversized" | "unauthorized" | "redirect" | "body-timeout";
   managerCascades?: boolean;
+  managerBound?: boolean;
+  discoveryMiss?: boolean;
   guarded?: boolean;
   /** #7771: the guarded path on a simulated win32, with a bound scheduler manager (separate child stop). */
   windowsGuarded?: boolean;
@@ -115,6 +117,7 @@ mock.module("../../src/client/lifecycle-lock", () => ({ ...lifecycle,
 const endpoint = { hostname: "127.0.0.1", port: 10100 };
 const fakePid = 4242;
 const calls = { killed: 0, native: 0, grok: 0, cleared: 0, exited: 0, service: 0, lifecycle: 0, partB: 0, reclaim: 0 };
+const signals: string[] = [];
 /** The timeout each reclaimListenPort call asked for; #7771 makes a skipped 15 s wait visible. */
 const reclaimTimeouts: number[] = [];
 /** The Part A record each stop POST's receipt carried when the POST was sent (#7771). */
@@ -138,6 +141,12 @@ function unexpected(operation: string): never {
 
 // Neither an accidental POSIX signal nor the Windows taskkill fallback may reach the host.
 process.kill = ((pid: number, signal?: number | NodeJS.Signals) => {
+  if (options.discoveryMiss && pid === fakePid && (signal === "SIGTERM" || signal === "SIGKILL")) {
+    signals.push(signal);
+    calls.killed++;
+    if (signal === "SIGKILL") alive = false;
+    return true;
+  }
   if (options.nativeSignal && pid === fakePid && signal === "SIGTERM") { calls.killed++; alive = false; return true; }
   if (pid !== fakePid || signal !== 0) {
     calls.killed += 1;
@@ -150,6 +159,7 @@ process.kill = ((pid: number, signal?: number | NodeJS.Signals) => {
 mock.module("node:child_process", () => ({
   ...childProcess,
   execFileSync: (file: string) => {
+    if (options.discoveryMiss && file.endsWith("taskkill.exe")) { signals.push("taskkill /F"); calls.killed++; alive = false; return Buffer.alloc(0); }
     if (options.nativeSignal && file.endsWith("taskkill.exe")) { calls.killed++; alive = false; return Buffer.alloc(0); }
     calls.killed += 1; return unexpected("execFileSync");
   },
@@ -160,7 +170,7 @@ if (options.windowsStopWiring) (await import("../../src/cli/stop-windows-checked
 process.on("exit", () => {
   receiptBlocker?.close();
   writeFileSync(join(home, "parent-stop-result.json"), JSON.stringify({
-    calls, reclaimTimeouts, urls, probes, absenceProbes, transports, unexpectedIo, nonce, postPartA,
+    calls, signals, reclaimTimeouts, urls, probes, absenceProbes, transports, unexpectedIo, nonce, postPartA,
     receiptExists: nonce !== undefined && existsSync(receipts.pendingTeardownPathFor(nonce)),
   }));
 });
@@ -209,6 +219,14 @@ mock.module("../../src/service", () => ({ ...service, stopServiceIfInstalledDeta
   if (options.managerCascades) { alive = false; return "stopped"; }
   return "absent";
 } }));
+if (options.discoveryMiss || options.managerBound) {
+  const guarded = await import("../../src/service/guarded-manager-target");
+  mock.module("../../src/service/guarded-manager-target", () => ({ ...guarded,
+    inspectGuardedManagerTarget: (pid: number) => options.managerBound && pid === fakePid && alive
+      ? { kind: "bound", pid, managerPid: pid, backend: "systemd", childNeedsSeparateStop: false }
+      : { kind: "unknown", reason: "fixture manager does not own the tracked PID" },
+  }));
+}
 if (options.guarded) {
   const approval = { pid: fakePid, ...endpoint, configHome: home, cliVersion: "2.93.0", compatibilityToken: "fixture" };
   const manager = options.windowsGuarded
@@ -226,12 +244,12 @@ if (options.guarded) {
     observeGuardedManagerStopped: () => (options.windowsGuarded ? "inactive" : "stopped"),
   }));
 }
-if (options.orphan || options.alreadyStopped) {
+if (options.orphan || options.alreadyStopped || options.discoveryMiss) {
   const liveness = await import("../../src/server/proxy-liveness");
   mock.module("../../src/server/proxy-liveness", () => ({ ...liveness,
     findLiveProxy: async () => {
       if (options.connectDuringDiscovery) writeHubConnection();
-      return alive ? { ...endpoint, pid: fakePid, source: "config" } : null;
+      return alive && !options.discoveryMiss ? { ...endpoint, pid: fakePid, source: "config" } : null;
     },
     proveLiveProxyOwnedByHome: async () => "proven",
     probeEndpointLiveness: async (target: { port: number }) => { absenceProbes.push(target.port); return options.absence ?? "dead"; },

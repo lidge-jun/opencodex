@@ -166,7 +166,7 @@ import { uninstallPrivilegeRefusal } from "../lib/config-ownership";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { startArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
-import { abandonedTeardownIsSafeToFinish, assertConnectedClientStopSupported, clearRestoredStopReceipts, configuredStopEndpoint, connectedClientStopSkipLine, hasConnectedClientStopEvidence, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary, unsupportedConnectedStop, verifyConnectedStopTarget, type LinkStopPreflight, type StopTargetProof } from "./stop-restore";
+import { abandonedTeardownIsSafeToFinish, assertConnectedClientStopSupported, classifyStopRole, clearRestoredStopReceipts, configuredStopEndpoint, connectedClientStopSkipLine, isRegisteredServiceStopTarget, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary, stopOwnershipRefused, unclassifiedStopTarget, unsupportedConnectedStop, verifyConnectedStopTarget, type LinkStopPreflight, type StopTargetProof } from "./stop-restore";
 import { stopRestoreWriteGuard } from "./stop-restore-guard";
 import { startClientRuntimeUnderOwnershipLease } from "./client-start-fence";
 import { recoverStartJournalAfterOwnerRecheck, recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
@@ -1099,7 +1099,16 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
     : pendingTeardowns.filter(read => isPendingTeardownAbandoned(read, teardownOwnerStillRunning));
   let linkStop: LinkStopPreflight | undefined;
   let stopTarget: StopTargetProof | undefined;
-  const connectedStop = await hasConnectedClientStopEvidence(connectedClientState, initialRuntime, pendingTeardowns);
+  const stopRole = await classifyStopRole(connectedClientState, initialRuntime, pendingTeardowns);
+  const connectedStop = stopRole === "connected";
+  const trackedStopPid = connectedStop ? null : snapshot?.approval.pid ?? readPid();
+  if (trackedStopPid !== null) {
+    const standaloneRuntime = (stopRole === "standalone" || stoppingSibling) && initialRuntime?.pid === trackedStopPid
+      && Bun.deepEquals(readRuntimePort(trackedStopPid), initialRuntime, true);
+    if (!standaloneRuntime && !(connectedClientState.kind === "disconnected" && isRegisteredServiceStopTarget(trackedStopPid))) {
+      return stopOwnershipRefused(unclassifiedStopTarget(trackedStopPid));
+    }
+  }
   const preflight = connectedStop ? await preflightConnectedClientStop(snapshot?.approval, onFence, inheritedTeardowns,
     proof => { linkStop = proof; connectedClientSkip = null; }, proof => { stopTarget = proof; }, siblingOfPort) : null;
   const connectedClientAlreadyStopped = preflight === "already-stopped";
@@ -1124,6 +1133,8 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
     if (connectedStop) return verifyConnectedStopTarget(stopTarget, linkStop, pid);
     const current = readClientConnectionState();
     if (!stoppingSibling && current.kind === "connected" && current.value.transport === "link") throw unsupportedConnectedStop();
+    const trackedPid = readPid();
+    if (trackedPid !== null && trackedPid !== trackedStopPid) throw unclassifiedStopTarget(trackedPid);
   };
   const claimTeardown = (endpoint: { hostname: string; port: number }, endpointSource: "exact" | "guessed") => {
     if (teardownNonce || (!linkStop && (stoppingSibling || connectedClientSkip))) return;
@@ -1155,7 +1166,7 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
       acceptNotOwnedTeardown: notOwnedTeardownIsAcceptable(readClientConnectionState(), stoppingSibling),
       runtimeEndpoint: exact ?? undefined,
       runtimeEndpointOnly: true,
-      ...(verifiedLink ? { forceKill: verifiedLink.forceKill } : connectedStop ? { mayTerminate: () => { verifyStopTarget(pid); return true; } } : {}),
+      ...(verifiedLink ? { forceKill: verifiedLink.forceKill } : { mayTerminate: () => { verifyStopTarget(pid); return true; } }),
       skipPortWait: windowsPartBOwnsPortWait(), // #7771: Part B owns the Windows port wait on both paths.
     });
     // A valid receipt means the proxy deferred shared teardown to this process. If the

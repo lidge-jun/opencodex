@@ -21,7 +21,9 @@ import { directLocalHttpFetch } from "../server/direct-local-http";
 import { fetchBoundLocalManagementRead } from "../server/local-management-read-client";
 import { isSharedTeardownDeferredOnExit } from "../server/stop-teardown";
 import { findLiveProxy, isPackageTreeFencedHealthz, probeEndpointLiveness } from "../server/proxy-liveness";
-import { observeGuardedManagerStopped } from "../service/guarded-manager-target";
+import { inspectGuardedManagerTarget, observeGuardedManagerStopped } from "../service/guarded-manager-target";
+import { assertServiceEnvironmentMatchesInstall } from "../service/guards";
+import { installedServiceListenPort } from "../service/health";
 import type { StartExitTeardown } from "./dispatch";
 import type { StopOutcome } from "./stop-report";
 
@@ -46,6 +48,28 @@ export const unsupportedConnectedStop = () => new ProxyOwnershipRefusedError(
   "connected_client_stop_unsupported",
 );
 
+export function unclassifiedStopTarget(pid: number): ProxyOwnershipRefusedError {
+  return new ProxyOwnershipRefusedError(
+    `Stop refused: could not verify that live OpenCodex PID ${pid} is standalone. Run 'ocx service status' to identify its supervisor, or check the terminal that started it. Repair its runtime or saved Link records, then retry 'ocx stop'.`,
+    "connected_client_stop_unsupported",
+  );
+}
+
+export function stopOwnershipRefused(error: ProxyOwnershipRefusedError): StopOutcome {
+  console.error(error.message);
+  process.exitCode = 1;
+  return { ok: false, summary: { schema: "ocx-stop/1", ok: false, outcome: "failed", exitCode: 1,
+    runtimeDown: false, service: "absent", proxy: "ownership-refused", sharedTeardown: "skipped", message: error.message } };
+}
+
+export function isRegisteredServiceStopTarget(pid: number): boolean {
+  try {
+    assertServiceEnvironmentMatchesInstall();
+    const manager = inspectGuardedManagerTarget(pid, installedServiceListenPort());
+    return (manager.kind === "bound" || manager.kind === "bound-stray") && manager.pid === pid;
+  } catch { return false; }
+}
+
 function legacyLinkStopRefusal(): ProxyOwnershipRefusedError {
   return new ProxyOwnershipRefusedError(
     "Connected-client stop refused: this older Link Child has no stop fence. No process was stopped. To update/restart while keeping the Home connection: close Codex, Grok and other routed clients. Stop the old owner: press Ctrl+C in its foreground terminal, use Stop and quit its Desktop supervisor, or run the old installation's 'ocx stop' for a background service (including Task Scheduler). Once it is down, run the current installation's 'ocx stop' with the same OPENCODEX_HOME and client homes to clean up file routes. Keep clients closed until cleanup succeeds. Then run 'ocx start' (or 'ocx service start' for an installed service, or open the updated Desktop app) and run 'ocx sync --restart-codex'.",
@@ -65,25 +89,25 @@ export function verifyConnectedStopTarget(
   if (currentPid !== null && currentPid !== proof?.target.pid) throw unsupportedConnectedStop();
 }
 
-/** A failed discovery or ordinary standalone health is not a client-stop refusal. */
-export async function hasConnectedClientStopEvidence(
+/** A discovery miss cannot establish the role of a live tracked process. */
+export async function classifyStopRole(
   connection: ClientConnectionState, runtime: RuntimePortState | null, receipts: readonly OutstandingTeardown[],
-): Promise<boolean> {
+): Promise<"connected" | "standalone" | "unknown"> {
   const sibling = runtime?.siblingOfPort;
-  if (connection.kind === "connected" && (connection.value.transport === "link" || sibling === undefined)) return true;
-  if (connection.kind === "mismatched" || receipts.some(read => read.state === "valid" && read.receipt.ownerStartTime !== undefined)) return true;
+  if (connection.kind === "connected" && (connection.value.transport === "link" || sibling === undefined)) return "connected";
+  if (connection.kind === "mismatched" || receipts.some(read => read.state === "valid" && read.receipt.ownerStartTime !== undefined)) return "connected";
   const { readRouteIntentReceipt } = await import("../integrations/route-intent-state");
-  if (readRouteIntentReceipt()?.linkId !== undefined) return true;
+  if (readRouteIntentReceipt()?.linkId !== undefined) return "connected";
   if (runtime && isProcessAlive(runtime.pid)) {
-    if (runtime.clientLinkOwner !== undefined || runtime.servingGeneration !== undefined) return true;
+    if (runtime.clientLinkOwner !== undefined || runtime.servingGeneration !== undefined) return "connected";
     if (runtime.attestationSecret) {
       const capability = await assertConnectedClientStopSupported(runtime, { healthOnly: true }).catch(() => null);
-      if (capability) return capability.linkStopFence || capability.nativeClient;
+      if (capability) return capability.linkStopFence || capability.nativeClient ? "connected" : "standalone";
     }
   }
   // Classification needs only the reported role. The preflight must verify identity itself.
   const live = await findLiveProxy({ attempts: 1, verifyPidFn: () => null }).catch(() => null);
-  return live?.role === "client" && live.port !== sibling;
+  return live?.role === "client" && live.port !== sibling ? "connected" : "unknown";
 }
 
 // A guessed endpoint can name a standalone teardown obligation but cannot direct POST.
@@ -323,11 +347,7 @@ export async function preflightConnectedClientStop(
     }
     return null;
   } catch (cause) {
-    const error = cause instanceof ProxyOwnershipRefusedError ? cause : unsupportedConnectedStop();
-    console.error(error.message);
-    process.exitCode = 1;
-    return { ok: false, summary: { schema: "ocx-stop/1", ok: false, outcome: "failed", exitCode: 1,
-      runtimeDown: false, service: "absent", proxy: "ownership-refused", sharedTeardown: "skipped", message: error.message } };
+    return stopOwnershipRefused(cause instanceof ProxyOwnershipRefusedError ? cause : unsupportedConnectedStop());
   }
 }
 

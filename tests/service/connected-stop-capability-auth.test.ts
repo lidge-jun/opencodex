@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertConnectedClientStopSupported, hasConnectedClientStopEvidence } from "../../src/cli/stop-restore";
+import { assertConnectedClientStopSupported, classifyStopRole } from "../../src/cli/stop-restore";
 import { startMachineListener } from "../../src/client/machine-listener";
 import { saveConfig } from "../../src/config";
 import { isValidRuntimePortState, readRuntimePort, writeRuntimePort } from "../../src/config/process-state";
@@ -139,13 +139,13 @@ describe("connected stop preflight runtime authority", () => {
   test.each([true, false])("a fence-only health response is client evidence only with attestation (%s)", async healthProof => {
     listener({ healthProof, linkStopFence: true });
     const runtime = readRuntimePort(process.pid);
-    expect(await hasConnectedClientStopEvidence({ kind: "disconnected" }, runtime, [])).toBe(healthProof);
+    expect(await classifyStopRole({ kind: "disconnected" }, runtime, [])).toBe(healthProof ? "connected" : "unknown");
   });
 
   test("a legacy client role triggers preflight even without a runtime record", async () => {
     const { target } = listener({ health: "client", missingRecord: true });
     saveConfig({ ...serverAuthConfig(), port: target.port, hostname: target.hostname });
-    expect(await hasConnectedClientStopEvidence({ kind: "disconnected" }, null, [])).toBe(true);
+    expect(await classifyStopRole({ kind: "disconnected" }, null, [])).toBe("connected");
     await expect(assertConnectedClientStopSupported(target)).rejects.toThrow("Connected-client stop refused");
   });
 
