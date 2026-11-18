@@ -178,6 +178,12 @@ mock.module("../../src/config/pending-teardown", () => ({
 }));
 
 const state = await import("../../src/config/process-state");
+// The human stop notice must not inspect the host process with this fixture's synthetic PID.
+const supervision = await import("../../src/service/desktop-supervision.mjs");
+mock.module("../../src/service/desktop-supervision.mjs", () => ({
+  ...supervision,
+  inspectDesktopSupervision: () => ({ kind: "none" }),
+}));
 const readRuntime = state.readRuntimePort;
 if ((!options.alreadyStopped || options.staleRuntimeRecord) && !options.noRuntimeRecord) {
   writeFileSync(join(home, "runtime-port.json"), JSON.stringify({ ...endpoint, pid: fakePid, attestationSecret: ATTESTATION_SECRET }));
