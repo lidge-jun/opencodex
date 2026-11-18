@@ -723,7 +723,9 @@ describe("durable compatibility", () => {
 
 describe("AUTH_MATRIX is true of the running server", () => {
   test("every cell matches a real request", async () => {
-    saveConfig(remoteConfig());
+    const config = remoteConfig();
+    config.apiKeys![0]!.allowedProviders = ["test"];
+    saveConfig(config);
     const server = startServer(0);
     const key = "ocx_data_attributionone";
     try {

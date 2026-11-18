@@ -540,6 +540,10 @@ Para una reversión de contenedor, conserve tanto los volúmenes de estado con n
 
 El endpoint de datos de solo lectura es `GET /v1/usage`. Usa `x-opencodex-api-key` con una clave de cliente configurada; se rechazan las claves globales del entorno y las de administración. Acepta `range`, `surface`, `provider`, `model`, `since` y `until`. Rechaza opciones desconocidas o repetidas e identificadores de clave elegidos por quien hace la solicitud. Las filas demasiado grandes que se omiten conservan el aviso explícito de historial incompleto.
 
+Usa `GET /v1/usage/windows` en el listener de datos del concentrador para consultar la cuota de suscripción en caché de una sola cuenta del proveedor. Envía una clave de cliente configurada en `x-opencodex-api-key` o `Authorization: Bearer`. Asigna a la clave un solo proveedor permitido y deja vacía su lista de modelos permitidos. La ruta devuelve `401` para otras credenciales, incluidos el token compartido de la instancia y los tokens de administración. Una clave válida recibe `404 usage_windows_not_a_hub` en instalaciones autónomas o de cliente.
+
+Un proveedor con varias cuentas registradas devuelve `403 usage_windows_account_scope_required`. Los proveedores deshabilitados y las cuentas sin una lectura vigente devuelven una lista `windows` vacía. Cada fila indica el porcentaje consumido, el estado del límite de esa ventana y la hora de reinicio en milisegundos Unix. El proveedor OpenAI puede mostrar la única cuenta registrada en el grupo de ChatGPT. Remote Link permite `/v1/usage` y excluye `/v1/usage/windows`.
+
 Las credenciales de uso del cliente se envían solo por HTTPS o loopback HTTP. Tanto la solicitud como la respuesta deshabilitan el almacenamiento en caché.
 
 <a id="pairing-this-browser-with-a-hub"></a>
