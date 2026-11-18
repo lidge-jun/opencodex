@@ -824,12 +824,18 @@ describe("unified pool-settings contract (#695 wp5c)", () => {
     expect(parseGenericPoolStrategy(strategy, provider)).toBeNull();
     const server = startServer(0);
     try {
+      const seed = await fetch(new URL("/api/pool/settings", server.url), {
+        method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, strategy: "round-robin" }),
+      });
+      expect(seed.status).toBe(200);
       const previous = loadConfig().providers[provider]?.oauthAccountFailover;
+      expect(previous?.strategy).toBe("round-robin");
       for (const endpoint of ["/api/pool/settings", "/api/oauth/accounts/pool"]) {
         const response = await fetch(new URL(endpoint, server.url), {
           method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, strategy }),
         });
         expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({ error: "strategy must be one of: quota, round-robin, fill-first, reset-first" });
       }
       expect(loadConfig().providers[provider]?.oauthAccountFailover).toEqual(previous);
     } finally {
