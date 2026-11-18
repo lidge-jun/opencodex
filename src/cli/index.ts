@@ -166,7 +166,7 @@ import { uninstallPrivilegeRefusal } from "../lib/config-ownership";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { startArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
-import { assertConnectedClientStopSupported, clearRestoredStopReceipts, connectedClientStopSkipLine, needsConnectedStopPreflight, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary, unsupportedConnectedStop, type LinkStopPreflight } from "./stop-restore";
+import { abandonedTeardownIsSafeToFinish, assertConnectedClientStopSupported, clearRestoredStopReceipts, connectedClientStopSkipLine, needsConnectedStopPreflight, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary, unsupportedConnectedStop, verifyConnectedStopTarget, type LinkStopPreflight } from "./stop-restore";
 import { stopRestoreWriteGuard } from "./stop-restore-guard";
 import { startClientRuntimeUnderOwnershipLease } from "./client-start-fence";
 import { recoverStartJournalAfterOwnerRecheck, recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
@@ -1056,25 +1056,6 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
       return { hostname: "127.0.0.1", port: 10100 };
     }
   };
-  // Only a definitive "nothing is answering" authorizes finishing somebody else's
-  // abandoned teardown. The tri-state probe distinguishes that from "we could not tell"
-  // (timeout, a listener that withholds /healthz), which `findLiveProxy` collapses into
-  // the same null (#3008).
-  const abandonedTeardownIsSafeToFinish = async (
-    endpoint: { hostname: string; port: number } | null,
-  ): Promise<boolean> => {
-    // The endpoint has to come from the receipt. A crashed owner usually leaves no
-    // runtime-port record, and the configured port is the wrong question for a proxy
-    // started with an explicit --port: it refuses while the live one keeps serving.
-    // An obligation that cannot name its endpoint cannot be proven discharged.
-    if (!endpoint) return false;
-    try {
-      return await probeEndpointLiveness(endpoint) === "dead";
-    } catch {
-      // A probe that could not run is not evidence of absence.
-      return false;
-    }
-  };
   let stopFailed = false;
   let historyOnlyFailure = false;
   /**
@@ -1152,17 +1133,8 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
   const handoverRequested = updateTeardownHandoverRequested(process.env, () => shouldSyncCodexOnStart(loadConfig()))
     && !stoppingSibling && readClientConnectionState().kind !== "connected";
   let deferralHonoredByProxy = false;
-  const verifyStopTarget = (pid?: number) => {
-    const state = readClientConnectionState();
-    if (state.kind === "invalid" || state.kind === "mismatched") throw unsupportedConnectedStop();
-    if (linkStop) {
-      if (pid !== undefined && pid !== linkStop.target.pid) throw unsupportedConnectedStop();
-      if (pid === undefined || isProcessAlive(pid)) linkStop.verify();
-    } else if (!stoppingSibling && (state.kind === "connected" && state.value.transport === "link"
-      || readRuntimePort()?.clientLinkOwner != null) && !connectedClientAlreadyStopped) {
-      throw unsupportedConnectedStop();
-    }
-  };
+  const verifyStopTarget = (pid?: number) =>
+    verifyConnectedStopTarget(linkStop, stoppingSibling, connectedClientAlreadyStopped, pid);
   const claimTeardown = (endpoint: { hostname: string; port: number }, endpointSource: "exact" | "guessed") => {
     if (teardownNonce || stoppingSibling) return;
     if (connectedClientSkip) return;

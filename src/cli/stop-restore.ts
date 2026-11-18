@@ -46,6 +46,40 @@ export const unsupportedConnectedStop = () => new ProxyOwnershipRefusedError(
   "connected_client_stop_unsupported",
 );
 
+export function verifyConnectedStopTarget(
+  linkStop: LinkStopPreflight | undefined, stoppingSibling: boolean, alreadyStopped: boolean, pid?: number,
+): void {
+  const state = readClientConnectionState();
+  if (state.kind === "invalid" || state.kind === "mismatched") throw unsupportedConnectedStop();
+  if (linkStop) {
+    if (pid !== undefined && pid !== linkStop.target.pid) throw unsupportedConnectedStop();
+    if (pid === undefined || isProcessAlive(pid)) linkStop.verify();
+  } else if (!stoppingSibling && !alreadyStopped && (state.kind === "connected" && state.value.transport === "link"
+    || readRuntimePort()?.clientLinkOwner != null)) {
+    throw unsupportedConnectedStop();
+  }
+}
+
+// Only a definitive "nothing is answering" authorizes finishing somebody else's
+// abandoned teardown. The tri-state probe distinguishes that from "we could not tell"
+// (timeout, a listener that withholds /healthz), which `findLiveProxy` collapses into
+// the same null (#3008).
+export async function abandonedTeardownIsSafeToFinish(
+  endpoint: { hostname: string; port: number } | null,
+): Promise<boolean> {
+  // The endpoint has to come from the receipt. A crashed owner usually leaves no
+  // runtime-port record, and the configured port is the wrong question for a proxy
+  // started with an explicit --port: it refuses while the live one keeps serving.
+  // An obligation that cannot name its endpoint cannot be proven discharged.
+  if (!endpoint) return false;
+  try {
+    return await probeEndpointLiveness(endpoint) === "dead";
+  } catch {
+    // A probe that could not run is not evidence of absence.
+    return false;
+  }
+}
+
 /** Require the pinned runtime's proof before accepting its shutdown contract. */
 export async function assertConnectedClientStopSupported(
   target: ConnectedStopTarget | null, options: { requireLinkStopFence?: boolean } = {},
