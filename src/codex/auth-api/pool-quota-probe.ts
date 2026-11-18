@@ -363,7 +363,8 @@ export async function commitPoolQuotaResponse(
     rememberCodexCredits(accountId, ctx.poolWriter.historyIdentity, parseCodexCredits(data.credits));
   }
   const freshPlan = nonEmptyPlan(data.plan_type) ?? undefined;
-  const quota = parseUsageQuota({ ...data, plan_type: freshPlan ?? configuredPlan });
+  const usage = { ...data, plan_type: freshPlan ?? configuredPlan };
+  const quota = parseUsageQuota(usage);
   const freshResetCredits = quota?.resetCredits;
   if (!quota) {
     return {
@@ -376,8 +377,8 @@ export async function commitPoolQuotaResponse(
   if (!isCodexAccountGenerationLive(accountId, generation)) {
     return { quota: null, needsReauth: false, credentialGeneration: generation };
   }
-  const validPolicyObservation = isValidWhamHistoryObservation(data);
-  setAccountQuotaFromParsed(accountId, quota, writerGeneration, undefined, poolWhamPolicyObservation(data, quota),
+  const validPolicyObservation = isValidWhamHistoryObservation(usage);
+  setAccountQuotaFromParsed(accountId, quota, writerGeneration, undefined, poolWhamPolicyObservation(usage, quota),
     ctx.poolWriter && validPolicyObservation ? { writer: ctx.poolWriter, observedAt, source: "wham", raw: quota } : undefined,
     true);
   return {

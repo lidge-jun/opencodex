@@ -543,13 +543,14 @@ describe("business/enterprise group-based spend control quota", () => {
     expect(isValidWhamHistoryObservation(payload)).toBe(true);
   });
 
-  it("marks monthlyPercent exhausted when spend_control.reached is true and used_percent is omitted", () => {
+  it.each([undefined, null])("marks the quota exhausted when reached is true and used_percent is %p", usedPercent => {
     const payload = baseEnterprisePayload({
       spend_control: {
         reached: true,
         individual_limit: {
           source: "group_based_spend_controls",
           remaining: 0,
+          used_percent: usedPercent,
           reset_at: 1_796_083_200,
         },
       },
@@ -600,14 +601,30 @@ describe("business/enterprise group-based spend control quota", () => {
     clearAccountQuota();
   });
 
-  it("an invalid used_percent does not turn a reached spend control into a fresh exhausted reading", () => {
-    const payload = baseEnterprisePayload({
-      spend_control: {
-        reached: true,
-        individual_limit: { source: "group_based_spend_controls", used_percent: -1, reset_at: 1_796_083_200 },
-      },
-    });
-    expect(parseUsageQuota(payload)?.monthlyPercent).toBeUndefined();
+  const reachedWithPercentage = (usedPercent: unknown) => baseEnterprisePayload({
+    spend_control: {
+      reached: true,
+      individual_limit: { source: "group_based_spend_controls", used_percent: usedPercent, reset_at: 1_796_083_200 },
+    },
+  });
+
+  it.each([-1, "unreadable", "", true, {}])("does not display a monthly tuple for a reached control with invalid percentage %p", usedPercent => {
+    const quota = parseUsageQuota(reachedWithPercentage(usedPercent));
+    expect(quota?.monthlyPercent).toBeUndefined();
+    expect(quota?.monthlyResetAt).toBeUndefined();
+    expect(quota?.monthlyIsPrimaryWindow).toBeUndefined();
+  });
+
+  it.each([-1, "unreadable", "", true, {}])("rejects reached controls with invalid percentage %p in main policy and history", usedPercent => {
+    const payload = reachedWithPercentage(usedPercent);
+    expect([parseMainPolicyUsageQuota(payload), isValidWhamHistoryObservation(payload)]).toEqual([null, false]);
+  });
+
+  it("accepts a numeric string in a reached spend control", () => {
+    const payload = reachedWithPercentage("2.5");
+    expect(parseUsageQuota(payload)?.monthlyPercent).toBe(2.5);
+    expect(parseMainPolicyUsageQuota(payload)?.monthlyPercent).toBe(2.5);
+    expect(isValidWhamHistoryObservation(payload)).toBe(true);
   });
 
   it("ignores spend_control.individual_limit for non-business plans or unrelated sources", () => {
