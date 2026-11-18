@@ -6,6 +6,7 @@ import {
   estimateReasonsForBilling,
   formatEstimatedUsd,
   formatEstimatedUsdValue,
+  formatUsdPrecise,
   formatCredits,
   summarizeEstimatedCosts,
 } from "../src/pages/logs-cost-format";
@@ -130,4 +131,26 @@ describe("a billing basis governs what the estimate may claim", () => {
       { usageStatus: "reported", displayMetrics: { cost: { kind: "value", estimate: { cost: { total: 0.08 }, priorityLowerBound: true, billing: credits } } } },
     ])).toMatchObject({ estimatedCostUsd: 0.08, priorityLowerBound: false });
   });
+});
+
+test("a unit price keeps the configured precision", () => {
+  expect(formatUsdPrecise(0.12345649)).toBe("$0.12345649");
+});
+
+test("a credit row does not make an uncertain token estimate a conversation floor", () => {
+  const floor = { kind: "value", estimate: { cost: { total: 2 }, priorityLowerBound: true } } as const;
+  const credit = {
+    kind: "value", estimate: {
+      cost: { total: 0.08 }, billing: { source: "provider-credits", providerCredits: 2, creditPriceUsd: 0.04 },
+    },
+  } as const;
+  const token = {
+    kind: "value", estimate: { estimated: false, cost: { total: 10 } },
+    estimateReasons: ["cache_detail_missing"],
+  } as const;
+  const summary = (...costs: Array<typeof floor | typeof credit | typeof token>) =>
+    summarizeEstimatedCosts(costs.map(cost => ({ displayMetrics: { cost } })));
+
+  expect(summary(floor, credit).priorityLowerBound).toBe(true);
+  expect(summary(floor, credit, token)).toMatchObject({ estimatedCostUsd: 12.08, priorityLowerBound: false });
 });

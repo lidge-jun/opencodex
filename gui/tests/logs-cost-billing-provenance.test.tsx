@@ -124,6 +124,18 @@ function costSection(): HTMLElement {
   return section!;
 }
 
+async function filterConversation(container: HTMLElement, id: string) {
+  const input = container.querySelector<HTMLInputElement>('.logs-filter-container input[type="search"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(input, id);
+    input.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    await Promise.resolve();
+  });
+  const totals = container.querySelector(".logs-conversation-totals");
+  expect(totals).not.toBeNull();
+  return totals!.textContent ?? "";
+}
+
 test("a credit charge names no token price key or source and no lower bound", async () => {
   mockLogs([creditRow("credit-only")]);
   const { root } = await mountAndOpen("credit-only");
@@ -239,12 +251,24 @@ test("an older row without a billing field is still read as token-priced", async
 });
 
 
-test("mixed credit, lower-bound, and exact token legs retain the floor", async () => {
-  mockLogs([mixedThreeLegComboRow("mixed-three")]);
-  const { root } = await mountAndOpen("mixed-three");
+test.each([
+  ["reported", true],
+  ["estimated", false],
+] as const)("a mixed Combo renders the correct floor marker when the non-floor token leg is %s", async (usageStatus, lowerBound) => {
+  mockLogs([mixedThreeLegComboRow("mixed-three", usageStatus, "conversation-three")]);
+  const { root, container } = await mountAndOpen("mixed-three");
   try {
-    expect(costSection().textContent).toContain("≥");
-    expect(costSection().textContent).toContain("known lower bound");
+    const table = container.querySelector(".logs-table tbody")?.textContent ?? "";
+    const detail = costSection().textContent ?? "";
+    const conversation = await filterConversation(container, "conversation-three");
+    for (const text of [table, detail, conversation]) expect(text).toMatch(/\$1\.29\d{2}/);
+    expect(document.querySelector(".log-detail-attempts tbody")?.textContent).toContain("≥$1.2120");
+    expect({
+      table: table.includes("≥"),
+      detail: detail.includes("≥"),
+      detailReason: detail.includes("known lower bound"),
+      conversation: conversation.includes("≥"),
+    }).toEqual({ table: lowerBound, detail: lowerBound, detailReason: lowerBound, conversation: lowerBound });
   } finally { await act(async () => { root.unmount(); }); }
 });
 
@@ -278,12 +302,6 @@ test("rendered conversation keeps a floor alongside exact credits", async () => 
   mockLogs([exact, lower]);
   const { root, container } = await mountAndOpen("summary-exact");
   try {
-    const input = container.querySelector<HTMLInputElement>('.logs-filter-container input[type="search"]')!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(input, "conversation-a");
-      input.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
-      await Promise.resolve();
-    });
-    expect(container.querySelector(".logs-conversation-totals")?.textContent).toContain("≥$3.0000");
+    expect(await filterConversation(container, "conversation-a")).toContain("≥$3.0000");
   } finally { await act(async () => root.unmount()); }
 });

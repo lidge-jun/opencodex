@@ -441,6 +441,24 @@ describe("credit billing does not inherit token-rate lower bounds", () => {
     expect(combo?.priorityLowerBound).toBe(true);
   });
 
+  test.each([
+    ["reported", true],
+    ["estimated", undefined],
+  ] as const)("a mixed combo with a non-floor token leg whose usage is %s", (usageStatus, lowerBound) => {
+    refreshUserCostOverlays(grokConfig(0.04));
+    const combo = estimateComboCost([
+      { ordinal: 1, provider: "xai", model: "grok-4.7", usage: longPriority, usageStatus: "estimated", tierOutcome },
+      { ordinal: 2, provider: "xai", model: "grok-4.7", usage: longToken, usageStatus: "reported", tierOutcome },
+      { ordinal: 3, provider: "xai", model: "grok-4.7", usage: { inputTokens: 100, outputTokens: 10 }, usageStatus },
+    ]);
+
+    expect(combo?.billing).toEqual({ source: "mixed" });
+    expect(combo?.attempts?.[1]?.priorityLowerBound).toBe(true);
+    expect(combo?.attempts?.[2]?.priorityLowerBound).toBeUndefined();
+    expect(combo?.attempts?.[2]?.estimated).toBe(usageStatus === "estimated");
+    expect(combo?.priorityLowerBound).toBe(lowerBound);
+  });
+
   test("an exact token leg does not borrow the credit leg's irrelevant token rate", () => {
     refreshUserCostOverlays(grokConfig(0.04));
     // Both rows resolve a Priority long-context token rate, but only the second one was priced
