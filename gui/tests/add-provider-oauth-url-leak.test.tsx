@@ -30,7 +30,7 @@ let win: Window;
 let host: HTMLElement;
 let root: Root | null = null;
 let originalFetch: typeof globalThis.fetch;
-let pendingLogins: Array<(url: string) => void> = [];
+let pendingLogins: Array<(url: string, instructions?: string) => void> = [];
 let oauthStatus: { loggedIn: boolean; error?: string } = { loggedIn: false };
 let cancelledProviders: string[] = [];
 
@@ -66,7 +66,7 @@ beforeEach(() => {
       if (url.pathname === "/api/oauth/login" && (init?.method ?? "GET") === "POST") {
         // Held open so the test controls when the URL lands.
         return await new Promise<Response>((resolve) => {
-          pendingLogins.push((authUrl: string) => resolve(Response.json({ url: authUrl })));
+          pendingLogins.push((authUrl, instructions) => resolve(Response.json({ url: authUrl, instructions })));
         });
       }
       if (url.pathname === "/api/oauth/login/cancel" && (init?.method ?? "GET") === "POST") {
@@ -414,11 +414,13 @@ test("a proxy-owned login is polled past the dashboard's own browser budget", ()
 });
 
 test("the add-provider pane keeps a proxy-owned login cancellable after pagehide", async () => {
+  const instructions = "Complete Microsoft sign-in in the Chrome window OpenCodex opened.";
   await mountModal();
   await act(async () => { clickByText("Microsoft 365 Copilot"); });
   await act(async () => { clickByText("Log in with Microsoft 365 Copilot"); });
   expect(pendingLogins).toHaveLength(1);
-  await act(async () => { pendingLogins.shift()!(""); });
+  await act(async () => { pendingLogins.shift()!("", instructions); });
+  expect(host.textContent?.split(instructions)).toHaveLength(2);
   await act(async () => { win.dispatchEvent(new win.Event("pagehide")); });
   expect(cancelledProviders).toEqual([]);
   expect(host.textContent).toContain("Waiting for browser");

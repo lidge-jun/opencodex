@@ -6,6 +6,7 @@ import { credentialPinnedProviderConfigError, modelAdapterRecordConfigError } fr
 import { m365CallbackCode } from "../../src/oauth/m365-copilot-browser";
 import { m365CopilotAuthorizationUrl, M365_COPILOT_CLIENT_ID, m365CopilotClaims, refreshM365CopilotToken } from "../../src/oauth/m365-copilot";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
+import { deriveProviderPresets } from "../../src/providers/derive";
 import { isPublicOAuthProvider } from "../../src/oauth";
 import { providerSupportsLiveModelDiscovery } from "../../src/providers/static-model-discovery";
 import { parseToolCalls } from "../../src/adapters/m365-copilot/tools";
@@ -29,6 +30,16 @@ const request = (): OcxParsedRequest => ({ modelId: "claude-sonnet", stream: tru
 afterEach(clearM365CopilotConversations);
 
 describe("Microsoft 365 Copilot registration and authentication", () => {
+  test("offers the non-featured OAuth preset in Add provider", () => {
+    expect(getProviderRegistryEntry("m365-copilot")?.featured).toBe(false);
+    expect(deriveProviderPresets().find(preset => preset.id === "m365-copilot")).toMatchObject({
+      label: "Microsoft 365 Copilot",
+      auth: "oauth",
+      oauthProvider: "m365-copilot",
+      adapter: "m365-copilot",
+    });
+  });
+
   test("discovers account models separately from GitHub Copilot and retains legacy request aliases", () => {
     const entry = getProviderRegistryEntry("m365-copilot")!;
     expect(entry.authKind).toBe("oauth"); expect(isPublicOAuthProvider(entry.id)).toBe(true);

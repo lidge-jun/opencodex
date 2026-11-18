@@ -87,7 +87,7 @@ export function AddProviderOAuthPane({
         </div>
       )}
       {error && <div className="text-label" style={{ color: "var(--amber)" }}>{error}</div>}
-      {oauthMsg && (
+      {oauthMsg && (!oauthBusy || oauthMsg !== oauthInstructions) && (
         <div className="text-label" style={{ color: oauthMsgTone === "warn" ? "var(--amber)" : "var(--accent-hover)" }}>
           {oauthMsg}
         </div>
