@@ -280,6 +280,11 @@ function observeAdcSource(markerAccount: string | undefined): { source: string; 
   return next;
 }
 
+/** Observe the local ADC source without exchanging a token. */
+export function observeVertexAdcGeneration(markerAccount?: string): number {
+  return observeAdcSource(markerAccount).generation;
+}
+
 function base64UrlEncode(bytes: Uint8Array | string): string {
   const buf = typeof bytes === "string" ? Buffer.from(bytes, "utf8") : Buffer.from(bytes);
   return buf.toString("base64url");
@@ -560,15 +565,6 @@ export function copyVertexRequestAuthority(from: object, to: object): void {
 
 export function hasVertexRequestAuthority(request: object): boolean {
   return requestAuthorities.has(request);
-}
-
-/** Opaque identity of the authority captured at resolution, suitable for an in-process join key. */
-export function vertexRequestAuthorityIdentity(request: object): string | undefined {
-  const authority = requestAuthorities.get(request);
-  if (!authority) return undefined;
-  return requestDigest(JSON.stringify(authority.ambientKey
-    ? ["ambient", authority.ambientKey.digest, authority.ambientKey.generation]
-    : ["adc", authority.source, authority.generation]));
 }
 
 /** Fail closed if the locally observable credential source or final request changed. */

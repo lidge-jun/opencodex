@@ -666,7 +666,7 @@ State-changing: yes. JSON mode: `payload`.
 |---|---|---|
 | `--json` | boolean | Emit discovery status, newArrivals and recentArrivals. |
 
-- Clears the provider's model cache and runs catalog convergence; new models follow the configured new-model policy. Providers with liveModels off report applicable:false.
+- Refreshes one provider's model list. New models follow the configured new-model policy. If discovery is already running for that provider, the route returns HTTP 409 (`discovery_in_progress`). During cooldown it returns the recorded failure. Providers with liveModels off report applicable:false.
 
 ### `ocx models context status`
 

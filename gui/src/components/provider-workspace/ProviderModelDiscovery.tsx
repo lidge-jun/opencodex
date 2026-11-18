@@ -18,6 +18,7 @@ type RunState =
   | { kind: "running" }
   | { kind: "done"; liveModelCount: number | null; added: string[] }
   | { kind: "static" }
+  | { kind: "conflict" }
   | { kind: "failed"; detail?: string };
 
 const MAX_LISTED = 12;
@@ -42,9 +43,8 @@ export default function ProviderModelDiscovery({ apiBase, provider }: { apiBase:
   const t = useT();
   const [recent, setRecent] = useState<ArrivalRow[]>([]);
   const [run, setRun] = useState<RunState>({ kind: "idle" });
-  // Set once a refresh starts: from then on its answer owns the list, and a slower initial read
-  // must not replace it with the roster from before the refresh.
-  const refreshStarted = useRef(false);
+  // A refresh that supplies arrivals owns the list over a slower initial read.
+  const refreshOwnsArrivals = useRef(false);
 
   useEffect(() => {
     // The parent keys this component by server and provider, so state starts fresh per provider.
@@ -52,14 +52,13 @@ export default function ProviderModelDiscovery({ apiBase, provider }: { apiBase:
     fetch(`${apiBase}/api/model-discovery`)
       .then(response => response.ok ? response.json() : null)
       .then((json: { recentArrivals?: Record<string, unknown> } | null) => {
-        if (!cancelled && !refreshStarted.current) setRecent(arrivalRows(json?.recentArrivals?.[provider]));
+        if (!cancelled && !refreshOwnsArrivals.current) setRecent(arrivalRows(json?.recentArrivals?.[provider]));
       })
       .catch(() => { /* The list is informational; the button still works. */ });
     return () => { cancelled = true; };
   }, [apiBase, provider]);
 
   const discover = async () => {
-    refreshStarted.current = true;
     setRun({ kind: "running" });
     try {
       const response = await fetch(`${apiBase}/api/model-discovery/refresh`, {
@@ -67,10 +66,12 @@ export default function ProviderModelDiscovery({ apiBase, provider }: { apiBase:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider }),
       });
+      if (response.status === 409) { setRun({ kind: "conflict" }); return; }
       if (!response.ok) { setRun({ kind: "failed" }); return; }
       const json = await response.json() as RefreshResponse | null;
       if (!json) { setRun({ kind: "failed" }); return; }
       if (json.applicable === false) { setRun({ kind: "static" }); return; }
+      refreshOwnsArrivals.current = true;
       setRecent(arrivalRows(json.recentArrivals));
       if (json.discovery?.status === "failed") {
         const detail = [json.discovery.reason, json.discovery.httpStatus ? `HTTP ${json.discovery.httpStatus}` : null].filter(Boolean).join(" · ");
@@ -92,6 +93,7 @@ export default function ProviderModelDiscovery({ apiBase, provider }: { apiBase:
           <h3 id="pwi-model-discovery-title">{t("modelDiscover.recent")}</h3>
           <p role="status" aria-live="polite">
             {run.kind === "done" && t("modelDiscover.result", { count: run.liveModelCount ?? "?", added: run.added.length })}
+            {run.kind === "conflict" && t("modelDiscover.inProgress")}
             {run.kind === "static" && t("modelDiscover.static")}
             {run.kind === "failed" && `${t("modelDiscover.failed")}${run.detail ? ` · ${run.detail}` : ""}`}
           </p>

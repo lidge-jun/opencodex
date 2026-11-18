@@ -33,8 +33,7 @@ import {
 } from "../../oauth";
 import { getAccountSet } from "../../oauth/store";
 import { mayResolveModelsOAuth } from "../../oauth/model-discovery-auth";
-import { buildVertexProviderModelsRequest } from "../../providers/google-vertex-model-discovery";
-import { vertexRequestAuthorityIdentity } from "../../lib/gcp-adc";
+import { buildVertexProviderModelsRequest, captureVertexDiscoveryCredentialIdentity } from "../../providers/google-vertex-model-discovery";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
@@ -165,12 +164,13 @@ export interface CapturedProviderGather {
   readonly fastPolicyAuthority: FastPolicyAuthority;
   readonly metadataModelIdCaseFold: boolean;
   readonly effectiveAlias?: string | null;
-  readonly resolvedAuth?: ModelsAuthResolution;
+  readonly observedAuth?: ModelsAuthResolution;
   /**
-   * The active account and credential state before a refreshing resolver runs.
-   * Part of the aggregate join key, even when two accounts share an API host.
+   * The active OAuth account a refreshing capture was taken under. It is part of the
+   * flight's auth identity, so a caller on another account never joins a pending
+   * discovery started for this one, even when both accounts share an API host.
    */
-  readonly refreshingOAuthIdentity?: string;
+  readonly refreshingOAuthAccountId?: string;
   /**
    * Configured model ids this provider must keep even when live discovery omits
    * them — combo targets that are also listed in providers.*.models (OCX-111).
@@ -399,23 +399,22 @@ export function captureProviderGather(
     configured,
   );
   const metadataModelIdCaseFold = shouldCaseFoldMetadataModelId(name);
-  const needsDiscoveryAuth = provider.authMode !== "forward" && provider.liveModels !== false;
-  const resolvedAuth = !needsDiscoveryAuth ? undefined : authResolver.kind === "observed"
+  const observedAuth = authResolver.kind === "observed"
+    && provider.authMode !== "forward"
+    && provider.liveModels !== false
     ? authResolver.resolve(name, provider)
-    : provider.authMode !== "oauth" && effectiveGoogleMode(name, provider) !== "vertex"
-      ? { apiKey: resolveProviderApiKey(provider.apiKey), observed: false } satisfies ModelsAuthResolution
-      : undefined;
-  const refreshingOAuth = needsDiscoveryAuth && authResolver.kind === "refreshing"
-    && provider.authMode === "oauth" && mayResolveModelsOAuth(name, provider);
+    : undefined;
   // A refreshing capture carries the stored origin so accounts on different hosts keep separate
   // flights. Host-scoped auth rebuilds its request; B retains its configured captured target. Observed capture never
   // reads the live store.
-  const oauthApiBaseUrl = refreshingOAuth ? getOAuthCredentialApiBaseUrl(name) : resolvedAuth?.oauthApiBaseUrl;
-  const request = captureModelsRequest(name, provider, oauthApiBaseUrl, resolvedAuth?.workbuddy);
-  const accountSet = refreshingOAuth ? getAccountSet(name) : undefined;
-  const activeAccount = accountSet?.accounts.find(account => account.id === accountSet.activeAccountId);
-  const refreshingOAuthIdentity = refreshingOAuth
-    ? keyedGatherIdentity("catalog-refreshing-account-v1", [accountSet?.activeAccountId, accountSet?.selectionRevision, activeAccount])
+  const oauthApiBaseUrl = observedAuth
+    ? observedAuth.oauthApiBaseUrl
+    : authResolver.kind === "refreshing" && provider.authMode === "oauth" && mayResolveModelsOAuth(name, provider)
+      ? getOAuthCredentialApiBaseUrl(name)
+      : undefined;
+  const request = captureModelsRequest(name, provider, oauthApiBaseUrl, observedAuth?.workbuddy);
+  const refreshingOAuthAccountId = !observedAuth && authResolver.kind === "refreshing" && provider.authMode === "oauth" && mayResolveModelsOAuth(name, provider)
+    ? getAccountSet(name)?.activeAccountId
     : undefined;
   const resolved = resolveProviderModelDiscovery(name, provider);
   const discovery = detachedFrozen({
@@ -454,8 +453,8 @@ export function captureProviderGather(
     fastPolicyAuthority,
     metadataModelIdCaseFold,
     effectiveAlias,
-    ...(resolvedAuth ? { resolvedAuth: Object.freeze({ ...resolvedAuth }) } : {}),
-    ...(refreshingOAuthIdentity ? { refreshingOAuthIdentity } : {}),
+    ...(observedAuth ? { observedAuth: Object.freeze({ ...observedAuth }) } : {}),
+    ...(refreshingOAuthAccountId ? { refreshingOAuthAccountId } : {}),
     ...(retainConfiguredModelIds && retainConfiguredModelIds.size > 0
       ? { retainConfiguredModelIds }
       : {}),
@@ -472,8 +471,8 @@ export function captureGatherFlight(
   const providers = Object.entries(config.providers)
     // A decision service (canonical TypeSafe or a self-hosted `jev-decision` row) owns no model
     // transport: never probe its endpoint for /models and never publish its model id as routable.
-    .filter(([name, provider]) => (onlyProvider === undefined || name === onlyProvider)
-      && provider.disabled !== true && provider.adapter !== "jev-decision")
+    .filter(([name, provider]) => provider.disabled !== true && provider.adapter !== "jev-decision"
+      && (onlyProvider === undefined || name === onlyProvider))
     .map(([name, provider]) => captureProviderGather(
       name,
       provider,
@@ -493,9 +492,14 @@ export function captureGatherFlight(
       authMode: provider.provider.authMode ?? null,
       liveModels: provider.provider.liveModels ?? null,
       credential: provider.provider.apiKey ?? null,
-      resolvedAuth: provider.resolvedAuth ?? null,
-      oauthAccount: provider.refreshingOAuthIdentity ?? null,
-      cacheGeneration: captureModelCacheGeneration(provider.name),
+      observedAuth: provider.observedAuth ?? null,
+      // Vertex credential incarnations can change with identical config and API-key bytes.
+      vertexCredentialIdentity: onlyProvider === undefined && provider.provider.authMode !== "forward"
+        && provider.provider.authMode !== "oauth" && provider.provider.liveModels !== false
+        && effectiveGoogleMode(provider.name, provider.provider) === "vertex"
+        ? captureVertexDiscoveryCredentialIdentity(provider.provider, authResolver.kind === "refreshing")
+        : undefined,
+      oauthAccount: provider.refreshingOAuthAccountId ?? null,
       headers: provider.request.headersWithCredential,
       url: provider.request.url,
     }))),
@@ -505,7 +509,11 @@ export function captureGatherFlight(
       providers.map(provider => ({
         name: provider.name,
         metadataConfigDir: provider.metadataConfigDir,
-        provider: providerFlightPolicy(provider.provider),
+        // `fetch` is a caller-owned transport executor, not admitted state: the
+        // outbound transport honors it so a caller can supply its own HTTP path.
+        // It is the one member of a provider row that is legitimately a function,
+        // so it is dropped here rather than allowed to break every encode.
+        provider: omitProviderTransportExecutor(provider.provider),
         fastPolicyAuthority: provider.fastPolicyAuthority,
         // Combo retention is capture-time state, not a provider-row field. Two
         // gathers that share providers but differ in combo targets must not join.
@@ -520,45 +528,16 @@ export function captureGatherFlight(
   });
 }
 
-const providerExecutorIds = new WeakMap<typeof fetch, number>();
-let nextProviderExecutorId = 0;
-
-/** Encode callable transport overrides by reference. Hash the rest of the provider as data. */
-function providerFlightPolicy(provider: OcxProviderConfig) {
-  const executor = (provider as OcxProviderConfig & { fetch?: typeof fetch }).fetch;
-  if (typeof executor !== "function") return { provider };
-  let executorId = providerExecutorIds.get(executor);
-  if (executorId === undefined) {
-    executorId = ++nextProviderExecutorId;
-    providerExecutorIds.set(executor, executorId);
-  }
-  const { fetch: _executor, ...data } = provider as OcxProviderConfig & { fetch: typeof fetch };
-  return { provider: data, executorId };
-}
-
-/** Hash the resolved credentials and the policy that shapes a provider result. */
-export function providerDiscoveryFlightKey(
-  capture: CapturedProviderGather,
-  policy: {
-    auth: ModelsAuthResolution;
-    request: CapturedModelsRequest;
-    cacheGeneration: string;
-    ttlMs: number;
-    contextCap?: number;
-    admitAntigravitySiblings: boolean;
-    anthropicSelection: import("../../oauth/types").OAuthAccountSelection | null;
-  },
-): string {
-  const { auth: { observed, ...credential }, ...effective } = policy;
-  const { resolvedAuth, refreshingOAuthIdentity, request, provider, retainConfiguredModelIds, ...captured } = capture;
-  return keyedGatherIdentity("catalog-provider-flight-v1", {
-    ...captured,
-    ...effective,
-    provider: providerFlightPolicy(provider),
-    retainConfiguredModelIds: [...(retainConfiguredModelIds ?? [])].sort(),
-    credential,
-    vertexAuthority: credential.vertexAuth && vertexRequestAuthorityIdentity(credential.vertexAuth),
-  });
+/**
+ * Drop the caller-owned transport executor before hashing a provider row.
+ *
+ * Fails closed on anything ELSE that cannot be encoded: the point of hashing the
+ * whole row is that no field escapes the comparison, so a second function member
+ * must surface as an encode error rather than being quietly skipped here.
+ */
+function omitProviderTransportExecutor(provider: OcxProviderConfig): Record<string, unknown> {
+  const entries = Object.entries(provider).filter(([key]) => key !== "fetch");
+  return Object.fromEntries(entries);
 }
 
 export function materializeCapturedHeaders(

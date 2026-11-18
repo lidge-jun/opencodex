@@ -314,6 +314,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     const arrivalKey = (row: { id: string; at: string }) => `${row.id}\0${row.at}`;
     const before = new Set((config.modelDiscovery?.recentArrivals?.[provider] ?? []).map(arrivalKey));
     const discovery = await refreshProviderDiscovery(config, provider);
+    if (discovery === "in-progress") {
+      return jsonResponse({ error: "Model discovery is already in progress. Try again shortly.", code: "discovery_in_progress" }, 409);
+    }
     if (!discovery) return jsonResponse({ error: "live model discovery did not produce an observation" }, 503);
     const cached = getStaleCached(provider) ?? [];
     const recentArrivals = (config.modelDiscovery?.recentArrivals?.[provider] ?? []).map(row => ({

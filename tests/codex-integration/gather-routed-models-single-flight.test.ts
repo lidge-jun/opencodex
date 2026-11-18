@@ -12,6 +12,7 @@ import {
 } from "../../src/codex/model-cache";
 import { withStubbedProviderFetch } from "../helpers/catalog-provider-fetch";
 import type { OcxConfig } from "../../src/types";
+import { gatherRoutedModelsForCatalogGather } from "../../src/codex/catalog/routed-gather";
 import { CatalogGatherBusyError } from "../../src/codex/catalog/provider-fetch";
 
 const originalFetch = globalThis.fetch;
@@ -56,7 +57,7 @@ describe("gatherRoutedModels single-flight", () => {
       expect(newer.map(model => model.id)).toEqual(["last-good"]);
       expect(getProviderDiscoveryStatus(name)).toEqual(failure);
       releaseOld.resolve();
-      await older;
+      expect((await older).map(model => model.id)).toEqual(["superseded-live-model"]);
 
       expect(getProviderDiscoveryStatus(name)).toEqual(failure);
       expect(isModelsFetchCoolingDown(name)).toBe(true);
@@ -105,6 +106,38 @@ describe("gatherRoutedModels single-flight", () => {
     expect(fetchCount).toBe(1);
     expect(a.map(m => `${m.provider}/${m.id}`)).toEqual(["slow/model-a"]);
     expect(b).toEqual(a);
+  });
+
+  test("refreshing and observed full gathers keep separate provider fetches", async () => {
+    const name = "separate-gathers";
+    const config: OcxConfig = { providers: { [name]: {
+      adapter: "openai-chat", baseUrl: "https://api.example.test/v1", apiKey: "fixture-key", liveModels: true,
+    } } };
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      if (++sends === 1) {
+        started.resolve();
+        await release.promise;
+        return Response.json({ data: [{ id: "first-model" }] });
+      }
+      return Response.json({ data: [{ id: "second-model" }] });
+    }) as typeof fetch;
+    const first = gatherRoutedModels(config);
+    await started.promise;
+    const second = gatherRoutedModelsForCatalogGather(withStubbedProviderFetch(config), { authStoreBuffer: null });
+    try {
+      const rows = await Promise.race([second, Bun.sleep(100).then(() => null)]);
+      expect(rows?.map(row => row.id)).toEqual(["second-model"]);
+      expect(sends).toBe(2);
+      release.resolve();
+      expect((await first).map(row => row.id)).toEqual(["first-model"]);
+      expect(getStaleCached(name)?.map(row => row.id)).toEqual(["second-model"]);
+    } finally {
+      release.resolve();
+      await Promise.all([first, second]);
+    }
   });
 
   test("joiners still receive comboOmissions from the shared flight", async () => {
@@ -382,7 +415,7 @@ describe("gatherRoutedModels single-flight", () => {
     expect(filterCatalogVisibleModels(withSelModels, withSel).map(m => m.id)).toEqual(["keep-me"]);
   });
 
-  test("disabledModels-only config changes share discovery and retain their own visibility", async () => {
+  test("disabledModels-only config changes do not share a flight", async () => {
     let fetchCount = 0;
     let release!: () => void;
     const gate = new Promise<void>(resolve => {
@@ -416,9 +449,10 @@ describe("gatherRoutedModels single-flight", () => {
 
     const first = gatherRoutedModels(base);
     const second = gatherRoutedModels(withDisabled);
+    await Promise.resolve();
+    expect(fetchCount).toBe(2);
     release();
     const [all, withDisabledModels] = await Promise.all([first, second]);
-    expect(fetchCount).toBe(1);
     expect(all.map(m => m.id).sort()).toEqual(["drop-me", "keep-me"]);
     expect(withDisabledModels.map(m => m.id).sort()).toEqual(["drop-me", "keep-me"]);
     expect(filterCatalogVisibleModels(all, base).map(m => m.id).sort()).toEqual(["drop-me", "keep-me"]);

@@ -251,17 +251,9 @@ export function isModelCacheGenerationCurrent(provider: string, generation: stri
 }
 
 /**
- * How many times this provider's cached content has actually changed.
- *
- * Deliberately separate from the generation. A generation revokes an in-flight discovery's right
- * to publish, so it advances on an authority clear and must not be repurposed: moving it on a
- * successful publication would cancel writes that are still legitimate. This counts accepted
- * publications and removals instead, which is what a reader holding a derived roster needs to
- * know, and it advances on exactly the event a generation does not: a discovery that succeeded
- * and changed the rows.
- *
- * Reading is passive. An unseen provider reads as `0` rather than seeding an entry, so observing
- * one cannot alter what a later capture or publication sees.
+ * Track cached row changes independently from authority invalidation and discovery ordering.
+ * A reader holding a derived roster needs all three terms to revalidate publication.
+ * Reading a revision is passive and never creates a provider entry.
  */
 const providerCacheRevisions = new Map<string, number>();
 let globalContentRevision = 0;
@@ -293,8 +285,10 @@ export function observeModelCacheRevision(provider: string): string {
   // The global term covers a clear that empties the map wholesale, which per-provider counters
   // cannot express: without it, wiping every entry and republishing identical-looking rows would
   // read as unchanged. It also survives pruning, so a retired provider cannot come back with a
-  // counter that matches a roster built before it left.
-  return `${globalContentRevision}:${providerCacheRevisions.get(provider) ?? 0}`;
+  // counter that matches a roster built before it left. The publication watermark also
+  // retires older derived rosters on a newer failure, even when the rows stay unchanged.
+  return `${globalContentRevision}:${providerCacheRevisions.get(provider) ?? 0}`
+    + `:${providerCacheGenerations.get(provider) ?? 0}:${publishedDiscoveryGenerations.get(provider) ?? 0}`;
 }
 
 /**

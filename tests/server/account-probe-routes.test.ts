@@ -8,6 +8,7 @@ import { gatherRoutedModels, getLastComboCatalogOmissions } from "../../src/code
 import { gatherRoutedModelsForCatalogGather } from "../../src/codex/catalog/routed-gather";
 import { clearModelCache, getStaleCached } from "../../src/codex/model-cache";
 import { cmdAccountProbe } from "../../src/cli/account-probe";
+import { resolveObservedVertexDiscoveryAuth } from "../../src/providers/google-vertex-model-discovery";
 import { pinnedHttpPost } from "../../src/lib/pinned-http";
 import { PROXY_ENV_KEYS } from "../../src/lib/proxy-env";
 import { setAntigravityAccountQuotaTransportForTests } from "../../src/providers/quota/antigravity";
@@ -514,7 +515,7 @@ describe("management routes", () => {
     }
   });
 
-  test("overlapping refreshes share one fetch for only the requested provider", async () => {
+  test("an overlapping manual refresh returns 409 without sending to any provider", async () => {
     clearModelCache();
     const live = config();
     const started = Promise.withResolvers<void>();
@@ -536,18 +537,23 @@ describe("management routes", () => {
       const first = refresh();
       await started.promise;
       const second = refresh();
-      await new Promise<void>(resolve => setImmediate(resolve));
-      release.resolve();
-      const results = await Promise.all([first, second]);
-      expect(results.map(result => result.json.discovery)).toEqual(Array(2).fill({ status: "failed", reason: "http", httpStatus: 429 }));
-      expect({ requested, unrelated }).toEqual({ requested: 1, unrelated: 0 });
+      try {
+        const result = await Promise.race([second, Bun.sleep(100).then(() => null)]);
+        expect(result?.status).toBe(409);
+        expect(result?.json.code).toBe("discovery_in_progress");
+        expect({ requested, unrelated }).toEqual({ requested: 1, unrelated: 0 });
+      } finally {
+        release.resolve();
+        await second;
+        expect((await first).json.discovery).toEqual({ status: "failed", reason: "http", httpStatus: 429 });
+      }
     } finally {
       release.resolve();
       clearModelCache();
     }
   });
 
-  test.each(["refreshing", "observed"] as const)("manual refresh joins a held %s full gather", async mode => {
+  test.each(["refreshing", "observed"] as const)("manual refresh returns 409 during a held %s full gather", async mode => {
     clearModelCache();
     const live = config();
     const started = Promise.withResolvers<void>();
@@ -564,12 +570,15 @@ describe("management routes", () => {
     try {
       await started.promise;
       const manual = call(live, "/api/model-discovery/refresh", { provider: "live" });
-      await new Promise<void>(resolve => setImmediate(resolve));
-      release.resolve();
-      const [, result] = await Promise.all([full, manual]);
-      expect(result.status).toBe(200);
-      expect(result.json.discovery).toEqual({ status: "failed", reason: "http", httpStatus: 429 });
-      expect(sends).toBe(1);
+      try {
+        const result = await Promise.race([manual, Bun.sleep(100).then(() => null)]);
+        expect(result?.status).toBe(409);
+        expect(result?.json.code).toBe("discovery_in_progress");
+        expect(sends).toBe(1);
+      } finally {
+        release.resolve();
+        await manual;
+      }
     } finally {
       release.resolve();
       await full;
@@ -577,42 +586,47 @@ describe("management routes", () => {
     }
   });
 
-  test("a late full gather preserves the newer manual roster after credential rotation", async () => {
-    clearModelCache();
+  test("a second manual Vertex refresh returns 409 after an A → B → A credential rotation", async () => {
+    const name = "manual-vertex";
     const live = config();
+    const originalKey = process.env.GOOGLE_CLOUD_API_KEY;
     const started = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
-    const credentials: Array<string | null> = [];
-    const provider = live.providers.live! as OcxConfig["providers"][string] & { fetch: typeof fetch };
-    provider.apiKey = "fixture-previous-key";
-    provider.fetch = (async (_input, init) => {
-      const credential = new Headers(init?.headers).get("authorization");
-      credentials.push(credential);
-      if (credential === "Bearer fixture-previous-key") {
+    let sends = 0;
+    live.providers[name] = {
+      adapter: "google", googleMode: "vertex", authMode: "key", liveModels: true,
+      baseUrl: "https://aiplatform.googleapis.com",
+      fetch: (async () => {
+        sends++;
         started.resolve();
         await release.promise;
-        return Response.json({ data: [{ id: "old-model" }] });
-      }
-      return Response.json({ data: [{ id: "new-model" }] });
-    }) as typeof fetch;
-    const full = gatherRoutedModels(live);
+        return new Response(null, { status: 429 });
+      }) as typeof fetch,
+    } as OcxConfig["providers"][string];
+    process.env.GOOGLE_CLOUD_API_KEY = "fixture-vertex-a";
+    const refresh = () => call(live, "/api/model-discovery/refresh", { provider: name });
+    const first = refresh();
     try {
       await started.promise;
-      live.providers.live = { ...provider, apiKey: "fixture-current-key" };
-      const manual = await call(live, "/api/model-discovery/refresh", { provider: "live" });
-      expect(manual.status).toBe(200);
-      expect(manual.json.discovery).toEqual({ status: "ok" });
-      expect(getStaleCached("live")?.map(row => row.id)).toEqual(["new-model"]);
-      release.resolve();
-      await full;
-      expect(getStaleCached("live")?.map(row => row.id)).toEqual(["new-model"]);
-      expect((await gatherRoutedModels(live)).filter(row => row.provider === "live").map(row => row.id))
-        .toEqual(["new-model"]);
-      expect(credentials).toEqual(["Bearer fixture-previous-key", "Bearer fixture-current-key"]);
+      process.env.GOOGLE_CLOUD_API_KEY = "fixture-vertex-b";
+      expect(resolveObservedVertexDiscoveryAuth(live.providers[name]!)?.token).toBe("fixture-vertex-b");
+      process.env.GOOGLE_CLOUD_API_KEY = "fixture-vertex-a";
+      const second = refresh();
+      try {
+        const result = await Promise.race([second, Bun.sleep(100).then(() => null)]);
+        expect(result?.status).toBe(409);
+        expect(result?.json.code).toBe("discovery_in_progress");
+        expect(sends).toBe(1);
+      } finally {
+        release.resolve();
+        await second;
+      }
     } finally {
       release.resolve();
-      await full;
-      clearModelCache();
+      await first;
+      if (originalKey === undefined) delete process.env.GOOGLE_CLOUD_API_KEY;
+      else process.env.GOOGLE_CLOUD_API_KEY = originalKey;
+      clearModelCache(name);
     }
   });
 

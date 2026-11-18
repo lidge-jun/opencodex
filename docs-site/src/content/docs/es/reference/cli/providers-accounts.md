@@ -566,8 +566,9 @@ comprobaciones a la vez. Espera a que termine la comprobación actual antes de i
 
 Ejecuta ahora la detección de modelos del proveedor e indica cuántos modelos encontró y
 cuáles son nuevos. Es la misma acción que **Detectar ahora** en los ajustes del proveedor
-(`POST /api/model-discovery/refresh`). Las solicitudes simultáneas para el mismo proveedor
-comparten una actualización. Durante los 30 segundos posteriores a un fallo, la acción muestra ese
+(`POST /api/model-discovery/refresh`). Si ya hay una detección en curso para ese proveedor, la
+acción devuelve HTTP 409 (`discovery_in_progress`) sin consultar al proveedor. Durante los 30
+segundos posteriores a un fallo, la acción muestra ese
 fallo y conserva la última lista válida sin volver a consultar al proveedor. La sincronización del
 catálogo de Codex puede incorporar después la lista actualizada. Los catálogos estáticos indican
 que la detección en directo está desactivada.

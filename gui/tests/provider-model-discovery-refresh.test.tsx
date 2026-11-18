@@ -28,7 +28,7 @@ afterEach(() => {
   else delete (globalThis.navigator as { language?: string }).language;
 });
 
-test("a mount read answering after a finished refresh does not replace the refreshed list", async () => {
+test.each(["success", "conflict"] as const)("manual discovery renders the %s response", async outcome => {
   const previous = Object.fromEntries(DOM_GLOBALS.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   const testWindow = new Window({ url: "http://localhost/" });
   const container = testWindow.document.createElement("div");
@@ -44,6 +44,9 @@ test("a mount read answering after a finished refresh does not replace the refre
     const url = String(input);
     if (url.endsWith("/api/model-discovery")) return new Promise<Response>(resolve => { releaseInitial = resolve; });
     if (url.endsWith("/api/model-discovery/refresh")) {
+      if (outcome === "conflict") {
+        return Response.json({ code: "discovery_in_progress", error: "server-provided text" }, { status: 409 });
+      }
       return Response.json({
         ok: true, discovery: { status: "ok" }, liveModelCount: 2,
         newArrivals: [{ id: "fresh-model", at: "2026-11-12T00:00:00Z", state: "enabled" }],
@@ -66,6 +69,16 @@ test("a mount read answering after a finished refresh does not replace the refre
     const button = container.querySelector("button") as unknown as HTMLButtonElement;
     await act(async () => { button.click(); });
     await act(async () => { await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
+    if (outcome === "conflict") {
+      expect(container.querySelector('[role="status"]')?.textContent).toBe("Model discovery is already in progress. Try again shortly.");
+      expect(button.disabled).toBe(false);
+      await act(async () => {
+        releaseInitial(Response.json({ recentArrivals: { live: [{ id: "old-model", at: "2026-11-01T00:00:00Z" }] } }));
+        await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+      });
+      expect(container.textContent).toContain("old-model");
+      return;
+    }
     expect(container.textContent).toContain("fresh-model");
 
     // The mount read answers last, with the roster from before the refresh.

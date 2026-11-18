@@ -198,8 +198,8 @@ Nothing in the catalog validates Codex's own root `model` pin against this expos
 reports it (see [Runtime](runtime.md)).
 
 Provider live-model lists use a configured TTL (`src/codex/model-cache.ts`). Adding, deleting, or editing a provider's shape clears the cache. Disabled-only edits exclude that provider from gathering.
-Manual discovery expires freshness and keeps the last good rows for authority-checked fallback. During failure cooldown it returns the recorded failure without retrying.
-Manual and full catalog gathers share in-flight provider discovery when the resolved credentials, their authority, and provider policy match. A monotonic publication generation orders successes and failures. A newer failure preserves its status and cooldown when an older success finishes, while keeping the last good roster available for fallback.
+Manual discovery expires freshness and keeps the last good rows for authority-checked fallback. While the provider already has discovery in flight, the manual route returns HTTP 409 (`discovery_in_progress`) without sending another request. During failure cooldown it returns the recorded failure without retrying.
+Full gathers keep their aggregate join rules, with Vertex joins requiring the same credential generation. A monotonic publication generation orders successes and failures. A newer failure preserves its status, cooldown, and last good roster when an older success finishes. The read caller can receive its own rows. Convergence revalidates the provider publication revisions under the catalog write lock before writing any target.
 Only full gathers derive combos and publish their omissions. Catalog refresh invalidates Codex's separate `models_cache.json`.
 Account-scoped discovery transports remain bound to the credential snapshot that supplied the
 token. Devin discovery uses the allowlisted tenant API base URL from that same snapshot rather

@@ -50,6 +50,7 @@ import { enrichProviderFromRegistry } from "../../providers/derive";
 import { ensureCodexEntitlementFreshness } from "../../codex/model-entitlements";
 import { fetchAllModels } from "./shared";
 import { CatalogGatherBusyError, gatherRoutedModels, type GatherRoutedModelsOptions } from "../../codex/catalog/routed-gather";
+import { isProviderDiscoveryInFlight, withProviderDiscoveryInFlight } from "../../codex/catalog/provider-models";
 import { captureModelDiscoveryBaseline, finalizeModelDiscovery } from "../../providers/new-model-policy-runtime";
 import { reconcileSuccessfulModelDiscoveries } from "../../providers/new-model-policy";
 import { initialModelSelectionPending, pendingModelSelectionProviders } from "../../providers/initial-model-selection";
@@ -58,41 +59,30 @@ import { catalogFastRowEligible, fastRowId } from "../fast-row";
 import { knownEffortRowIds } from "../effort-row";
 import { visionSidecarConsumerClassifier } from "../../vision/eligibility";
 
-const providerDiscoveryFlights = new WeakMap<OcxConfig, Map<string, ReturnType<typeof discoverProviderModels>>>();
-
-async function discoverProviderModels(config: OcxConfig, name: string) {
+/** Admit one manual discovery without joining work started by any caller. */
+export async function refreshProviderDiscovery(config: OcxConfig, name: string) {
   const provider = config.providers[name];
   if (!provider || provider.disabled || provider.adapter === "jev-decision") return undefined;
+  if (isProviderDiscoveryInFlight(name)) return "in-progress" as const;
   if (!expireModelCache(name)) return getProviderDiscoveryStatus(name);
-  const baseline = captureModelDiscoveryBaseline(config);
-  const initial = initialModelSelectionPending(provider) ? captureInitialSelectionBaseline(config) : null;
-  const outcomes: NonNullable<GatherRoutedModelsOptions["providerModelOutcomes"]> = [];
-  const revisions = new Map<string, string>();
-  const models = await gatherRoutedModels(config, {
-    onlyProvider: name, providerModelOutcomes: outcomes, providerContentRevisions: revisions,
+  return withProviderDiscoveryInFlight(name, async () => {
+    const baseline = captureModelDiscoveryBaseline(config);
+    const initial = initialModelSelectionPending(provider) ? captureInitialSelectionBaseline(config) : null;
+    const outcomes: NonNullable<GatherRoutedModelsOptions["providerModelOutcomes"]> = [];
+    const revisions = new Map<string, string>();
+    const models = await gatherRoutedModels(config, {
+      onlyProvider: name, providerModelOutcomes: outcomes, providerContentRevisions: revisions,
+    });
+    // A later full gather can start while this action runs. Its publication is not this action's receipt.
+    if (observeModelCacheRevision(name) !== revisions.get(name)) return undefined;
+    const discovery = getProviderDiscoveryStatus(name);
+    if (discovery?.status === "ok" && outcomes.some(outcome => outcome.state === "authoritative")) {
+      if (initial) finalizeInitialModelSelection(config, { ...initial, providers: [name] },
+        uniqueCatalogModelsForPublicList(models), [name]);
+      if (!finalizeModelDiscovery(config, baseline, models, [name], revisions)) throw new CatalogGatherBusyError();
+    }
+    return discovery;
   });
-  const discovery = getProviderDiscoveryStatus(name);
-  if (discovery?.status === "ok" && outcomes.some(outcome => outcome.state === "authoritative")) {
-    if (observeModelCacheRevision(name) !== revisions.get(name)) throw new CatalogGatherBusyError();
-    if (initial) finalizeInitialModelSelection(config, { ...initial, providers: [name] },
-      uniqueCatalogModelsForPublicList(models), [name]);
-    if (!finalizeModelDiscovery(config, baseline, models, [name], revisions)) throw new CatalogGatherBusyError();
-  }
-  return discovery;
-}
-
-/** Join the whole refresh, including the arrival-policy commit, before expiring freshness again. */
-export function refreshProviderDiscovery(config: OcxConfig, name: string) {
-  let flights = providerDiscoveryFlights.get(config);
-  if (!flights) {
-    flights = new Map();
-    providerDiscoveryFlights.set(config, flights);
-  }
-  const existing = flights.get(name);
-  if (existing) return existing;
-  const flight = discoverProviderModels(config, name).finally(() => flights.delete(name));
-  flights.set(name, flight);
-  return flight;
 }
 
 /**

@@ -1081,8 +1081,9 @@ A batch runs up to four checks at a time. Wait for the current check to finish b
 
 Runs the provider's live model discovery now instead of waiting for the next scheduled refresh, and
 prints how many live models it saw and which ones are new. It is the same action as **Discover now**
-under the provider's settings (`POST /api/model-discovery/refresh`). Concurrent requests for the
-same provider share a refresh. For 30 seconds after a failed fetch, the action reports that failure
+under the provider's settings (`POST /api/model-discovery/refresh`). If discovery is already running
+for that provider, the action reports it is in progress (HTTP 409, `discovery_in_progress`) without
+contacting the provider. For 30 seconds after a failed fetch, the action reports that failure
 and keeps the last good list without contacting the provider again. The separate Codex catalog
 sync can pick up the refreshed list. Providers without live discovery report that discovery is off.
 
