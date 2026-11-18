@@ -11,16 +11,46 @@ import { ADVISOR_CONTEXT_SHARING_CONSENT_VERSION } from "./disclosure";
 export { ADVISOR_CONTEXT_SHARING_CONSENT_VERSION };
 
 export type AdvisorPolicy = "manual" | "preflight" | "adaptive";
-export type AdvisorContextMode = "context" | "question-only";
+export type AdvisorContextMode = "context" | "full" | "question-only";
 
 export function isValidAdvisorContextMode(value: unknown): value is AdvisorContextMode {
-  return value === "context" || value === "question-only";
+  return value === "context" || value === "full" || value === "question-only";
 }
 
 export const ADVISOR_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"] as const;
 export type AdvisorEffort = (typeof ADVISOR_EFFORTS)[number];
 
 export const ADVISOR_POLICIES = ["manual", "preflight", "adaptive"] as const;
+
+export const ADVISOR_MCP_CLIENT_IDS = [
+  "workbuddy",
+  "workbuddy-ai",
+  "qoder",
+  "qoder-cn",
+  "commandcode",
+  "cline",
+  "opencode",
+  "claude",
+] as const;
+
+export type AdvisorMcpClientId = (typeof ADVISOR_MCP_CLIENT_IDS)[number];
+
+export function isAdvisorMcpClientId(value: unknown): value is AdvisorMcpClientId {
+  return typeof value === "string" && (ADVISOR_MCP_CLIENT_IDS as readonly string[]).includes(value);
+}
+
+export function normalizeAdvisorMcpClients(value: unknown): AdvisorMcpClientId[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const seen = new Set<AdvisorMcpClientId>();
+  const out: AdvisorMcpClientId[] = [];
+  for (const item of value) {
+    if (isAdvisorMcpClientId(item) && !seen.has(item)) {
+      seen.add(item);
+      out.push(item);
+    }
+  }
+  return out;
+}
 
 export interface AdvisorSettings {
   enabled: boolean;
@@ -36,6 +66,10 @@ export interface AdvisorSettings {
    * `enabled` does not imply this. Only the current version allows data transfer.
    */
   contextSharingConsent: typeof ADVISOR_CONTEXT_SHARING_CONSENT_VERSION | null;
+  /** Whether OpenCodex auto-mounts `opencodex-advisor` MCP for compatible active routes. */
+  autoMountMcp: boolean;
+  /** Optional explicit MCP client allowlist; undefined means follow active routed clients. */
+  mcpClients?: AdvisorMcpClientId[];
   /** Where each resolved value came from, so the GUI/CLI can show real runtime state. */
   sources: {
     enabled: "default" | "configured";
@@ -52,9 +86,10 @@ export const DEFAULT_ADVISOR_SETTINGS: Readonly<AdvisorSettings> = Object.freeze
   effort: "max",
   policy: "manual",
   contextMode: "context",
-  timeoutMs: 120_000,
+  timeoutMs: 600_000,
   maxConsultationsPerTask: 3,
   contextSharingConsent: null,
+  autoMountMcp: true,
   sources: Object.freeze({
     enabled: "default",
     model: "default",
@@ -102,7 +137,7 @@ export function resolveAdvisorSettings(config: Pick<OcxConfig, "advisor">): Advi
   const policy = isValidAdvisorPolicy(raw.policy) ? raw.policy : DEFAULT_ADVISOR_SETTINGS.policy;
   const timeoutRaw = raw.timeoutMs;
   const timeoutMs = typeof timeoutRaw === "number" && Number.isFinite(timeoutRaw) && timeoutRaw >= 1_000
-    ? Math.min(Math.floor(timeoutRaw), 600_000)
+    ? Math.min(Math.floor(timeoutRaw), 1_800_000)
     : DEFAULT_ADVISOR_SETTINGS.timeoutMs;
   // A present but non-current value (stale version, wrong type) resolves as no consent.
   // The stored bytes are left untouched; this reader never writes an upgrade.
@@ -110,6 +145,10 @@ export function resolveAdvisorSettings(config: Pick<OcxConfig, "advisor">): Advi
   const contextSharingConsent = isCurrentAdvisorContextSharingConsent(raw.contextSharingConsent)
     ? raw.contextSharingConsent
     : null;
+  const autoMountMcp = typeof raw.autoMountMcp === "boolean"
+    ? raw.autoMountMcp
+    : DEFAULT_ADVISOR_SETTINGS.autoMountMcp;
+  const mcpClients = normalizeAdvisorMcpClients(raw.mcpClients);
   return {
     enabled,
     model,
@@ -120,6 +159,8 @@ export function resolveAdvisorSettings(config: Pick<OcxConfig, "advisor">): Advi
     maxConsultationsPerTask: isValidAdvisorTaskLimit(raw.maxConsultationsPerTask)
       ? raw.maxConsultationsPerTask : DEFAULT_ADVISOR_SETTINGS.maxConsultationsPerTask,
     contextSharingConsent,
+    autoMountMcp,
+    ...(mcpClients !== undefined ? { mcpClients } : {}),
     sources: {
       enabled: typeof raw.enabled === "boolean" ? "configured" : "default",
       model: typeof raw.model === "string" && raw.model.trim() !== "" ? "configured" : "default",

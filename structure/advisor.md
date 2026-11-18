@@ -472,3 +472,52 @@ No requested value is substituted for missing wire evidence. The activity UI dis
 when unreported and does not claim verification of a provider's internal reasoning.
 
 Translated union combos check the selected hosted Advisor against each candidate’s destination and caller model scope before evaluating image or context capability. Child preparation checks the selected tool again on the settled route.
+
+## Streaming, stability and external MCP / CLI host
+
+`src/server/chat-native-eligibility.ts` and `src/server/messages-native-eligibility.ts`
+(`bridgeOnlyPolicyApplies`, excluding first-party `oauth` when `managedMessagesNativeOAuth` preserves
+native wire fidelity) decline direct native Chat / Messages forwarding when `config.advisor.enabled`
+is true with a non-self advisor model so worker turns enter the Responses sidecar pipeline.
+`advisorPlan.injectWorkerNotice` places a `developer` worker notice ahead of the latest user
+turn (unless a `developer`/`system` advisor notice is already present in `systemPrompt` or inside
+the last `ADVISOR_TAIL_NOTICE_WINDOW` messages, or an external `consult_advisor` MCP tool is
+already present, in which case `advisorPlan.hasExternalMcpTool` skips injecting a duplicate proxy
+`advisor` tool). When long tool loops or repeated errors push an older notice beyond that tail
+window (or when user/assistant compaction summaries merely quote `## Advisor`), old runtime
+`developer` copies are stripped and re-anchored at the tail (`urgentRepair` wording after `>= 2`
+errors or long loops) without splitting `tool_call`/`tool_result` pairs.
+`src/server/chat-completions.ts` derives `advisorSessionIdentity` from `x-opencode-session`,
+`x-session-id`, `x-conversation-id`, W3C `baggage` `codebuddy.session_id`, and `prompt_cache_key`
+internally into `parsed._advisorSessionIdentity` (without mutating upstream `session-id` HTTP headers)
+so `policy: adaptive` retains task identity without altering upstream wire headers.
+
+During intercepted tool calls, `src/server/responses/advisor-slot.ts` (`withAdvisorHeartbeats`)
+yields `{ type: "heartbeat" }` events so the worker SSE stall timer stays alive during long
+expert turns. `src/advisor/consult.ts` sends `stream: true` and uses `createInactivitySignal`
+(resetting the timeout only on real SSE `data:` payloads while ignoring `: ` heartbeat comments;
+default `timeoutMs` is `600_000` ms / 10 min, max `1_800_000` ms / 30 min).
+
+For harnesses whose built-in models bypass the OpenCodex proxy,
+`src/advisor/external-consult.ts` backs `POST /api/advisor/consult` with consent checks,
+adaptive optional task-budget reservation, request dedup, automatic local `.jsonl` session
+transcript attachment across `~/.workbuddy`, `~/.workbuddy-ai`, `~/.qoder`, `~/.qoder-cn`,
+`~/.commandcode`, and explicit-ID `~/.claude/projects` (`loadWorkBuddySessionMessages`), and a
+bounded 32-entry 30-minute consultation store supporting `waitMs` + `202 in_progress` polling via
+`consultationId`. `ocx advisor consult` wraps that endpoint on the CLI, and
+`src/advisor/mcp-server.ts` (`ocx advisor mcp`) exposes `consult_advisor` over stdio MCP with
+`OCX_ADVISOR_MCP_WAIT_MS`-configurable wait chunks (45s default, 240s on long-timeout clients),
+`nextCallArguments` (`{ consultationId, afterElapsedMs }`), and `notifications/progress`
+heartbeats. `contextMode: "full"` expands per-message/transcript bounds (128k/512k chars) and strips
+`<system-reminder>` wrappers before clipping.
+
+`src/advisor/client-mcp.ts` manages per-client `opencodex-advisor` MCP registration, hooks, and
+skills across compatible clients (`workbuddy`, `workbuddy-ai`, `qoder`, `qoder-cn`, `commandcode`,
+`cline` with 900s timeout, `opencode` with 900_000ms timeout and `skills/`, optional `claude`) with
+one-time file backups, live `mcp-approvals.json` trust detection, and clean
+`OwnershipRecord.fileFingerprint` synchronization on shared JSON config files. Bidirectional sync
+links `PUT /api/advisor/settings` (`autoMountMcp` / `mcpClients`) with client route toggles in
+`src/server/management/integration-routes.ts` (loaded dynamically so protected entrypoints never
+eagerly load `src/advisor/`). `gui/src/pages/advisor/AdvisorClientMcpPanel.tsx` and
+`gui/src/pages/integrations/FileIntegrationPage.tsx` surface selection mode, mounted config paths,
+and client-specific trust confirmation steps.

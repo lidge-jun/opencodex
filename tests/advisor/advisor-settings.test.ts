@@ -9,8 +9,9 @@ import {
 } from "../../src/advisor/settings";
 
 describe("resolveAdvisorSettings", () => {
-  test("question-only is opt-in and resolves independently from the policy", () => {
+  test("question-only and full are opt-in and resolve independently from the policy", () => {
     expect(resolveAdvisorSettings({ advisor: { contextMode: "question-only", policy: "adaptive" } }).contextMode).toBe("question-only");
+    expect(resolveAdvisorSettings({ advisor: { contextMode: "full", policy: "manual" } }).contextMode).toBe("full");
     expect(resolveAdvisorSettings({ advisor: { contextMode: "context" } }).contextMode).toBe("context");
   });
 
@@ -106,9 +107,9 @@ describe("resolveAdvisorSettings", () => {
   });
 
   test("timeoutMs is bounded to a sane window", () => {
-    expect(resolveAdvisorSettings({ advisor: { timeoutMs: 100 } }).timeoutMs).toBe(120_000);
+    expect(resolveAdvisorSettings({ advisor: { timeoutMs: 100 } }).timeoutMs).toBe(600_000);
     expect(resolveAdvisorSettings({ advisor: { timeoutMs: 5_000 } }).timeoutMs).toBe(5_000);
-    expect(resolveAdvisorSettings({ advisor: { timeoutMs: 10_000_000 } }).timeoutMs).toBe(600_000);
+    expect(resolveAdvisorSettings({ advisor: { timeoutMs: 10_000_000 } }).timeoutMs).toBe(1_800_000);
   });
 });
 

@@ -513,4 +513,28 @@ describe("createAdvisorGuard — manual advisor() interception", () => {
     expect(recorder.consults).toEqual([{ reason: "manual", question: "how to retry?" }]);
     expect(requests).toHaveLength(1);
   });
+
+  test("emits heartbeat events while a slow advisor consultation is in flight", async () => {
+    const { continuation, queues } = makeContinuation();
+    queues.push([{ type: "text_delta", text: "after heartbeat" }, { type: "done" }]);
+    const slowPlan: AdvisorPlan = {
+      consult: async () => {
+        await Bun.sleep(35);
+        return ADVICE;
+      },
+      formatUnavailable: (kind, error) => `<opencodex_advisor_unavailable>\n${kind}: ${error}\n</opencodex_advisor_unavailable>`,
+    };
+    const guard = createAdvisorGuard(slowPlan, 5);
+    const events = await collect(guard({
+      parsed: baseParsed(),
+      firstEvents: (async function* () {
+        yield* advisorCallEvents("a_slow", { question: "slow model?" });
+        yield { type: "done" };
+      })(),
+      continuation,
+    }));
+    const heartbeats = events.filter(e => e.type === "heartbeat");
+    expect(heartbeats.length).toBeGreaterThanOrEqual(2);
+    expect(events.some(e => e.type === "text_delta" && e.text === "after heartbeat")).toBe(true);
+  });
 });

@@ -216,12 +216,14 @@ export function advisorConversationIdentity(parsed: {
   _cursorConversationId?: string;
   _cursorClientThreadId?: string;
   _reasoningReplayScope?: { clientThreadId?: string };
+  _advisorSessionIdentity?: string;
 }): string | undefined {
   return parsed._codexOwnThreadId
     ?? parsed._clientThreadId
     ?? parsed._cursorConversationId
     ?? parsed._cursorClientThreadId
     ?? parsed._reasoningReplayScope?.clientThreadId
+    ?? parsed._advisorSessionIdentity
     ?? undefined;
 }
 
