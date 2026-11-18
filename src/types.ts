@@ -154,6 +154,8 @@ export type {
   CodexAccount,
   CodexAccountCredentials,
   CodexAccountCredentialRecord,
+  CodexAccountLoginConfig,
+  CodexAuthMethod,
 } from "./types/accounts";
 
 export type { OcxTelemetryConfig, OcxTelemetryDecision } from "./types/telemetry";

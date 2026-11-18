@@ -1079,6 +1079,8 @@ export const clientConnectionSchema = z.object({
  * rejected write rather than a silently ignored key that leaves the operator believing they
  * excluded something.
  */
+export const codexAuthMethodSchema = z.enum(["auto", "device-only"]).optional();
+
 export const codexPoolSchema = z.object({
   excludedPlans: z.array(z.string().trim().min(1)).optional(),
   startIdleWindows: z.boolean().optional(),
