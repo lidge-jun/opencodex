@@ -62,7 +62,7 @@ test("Chat recovery opt-in does not expand another adapter's search iteration ca
 
 
 test("a tools-disabled forced-answer announcement does not trigger continuation", async () => {
-  const result = await checkHostedRecoveryIteration(["search", "", "plan", "plan"]);
+  const result = await checkHostedRecoveryIteration(["search", "", "plan", "plan"], { terminalContinuationGuard: true });
   expect(result.seen).toHaveLength(3);
   expect(result.searches).toBe(1);
   expect(result.seen[2]!.context.tools).toEqual([]);

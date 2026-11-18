@@ -16,6 +16,8 @@ export interface CompletionCase {
   final?: "response.failed" | "response.incomplete";
   errorCode?: string;
   identicalRetry?: boolean;
+  /** The search backend answers 500, so later calls for the same query get the repeat placeholder. */
+  searchFails?: boolean;
 }
 
 // Synthetic full Responses dispatch. No real provider or search requests are sent.
@@ -30,6 +32,7 @@ export async function checkHostedChatCompletion(row: CompletionCase, stream: boo
     globalThis.fetch = async (input: any) => {
       assert.equal(String(input), "https://api.exa.ai/search", "unexpected external request");
       searches++;
+      if (row.searchFails) return new Response("search backend unavailable", { status: 500 });
       return Response.json({ results: [
         { title: "Fixture", url: "https://example.invalid/fixture", text: "Fixture result" },
       ] });
@@ -119,7 +122,10 @@ export async function checkHostedChatCompletion(row: CompletionCase, stream: boo
 
 
 // Exercise iteration policy directly, including live output and the forced-answer request.
-export async function checkHostedRecoveryIteration(frames: string[], live = false) {
+export async function checkHostedRecoveryIteration(
+  frames: string[],
+  { live = false, terminalContinuationGuard = false } = {},
+) {
   const release = acquireOwnedSpendHome();
   const { runWithWebSearch } = await import("../../src/web-search/loop");
   const { buildWebSearchTool } = await import("../../src/web-search/synthetic-tool");
@@ -131,7 +137,7 @@ export async function checkHostedRecoveryIteration(frames: string[], live = fals
   try {
     globalThis.fetch = async () => { searches++; return Response.json({ results: [] }); };
     const response = await runWithWebSearch({
-      terminalContinuationGuard: true, streamRoutedModelOutput: live,
+      emptyCompletionRetry: true, terminalContinuationGuard, streamRoutedModelOutput: live,
       parsed: { modelId: "fixture", stream: true, options: {}, context: {
         messages: [{ role: "user", content: "Please fix the file and test it." }],
         tools: [{ name: "read_fixture", parameters: { type: "object", properties: {} } }, buildWebSearchTool()],

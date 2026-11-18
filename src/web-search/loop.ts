@@ -12,7 +12,7 @@ import type { AttemptRecoveryKind } from "../usage/log";
 import { isTruncatedStopReason } from "../responses/truncated-stop-reason";
 import { bridgeToResponsesSSE } from "../bridge";
 import { guardEmptyToolCatalogStream, type ClientToolCatalogRestriction } from "../lib/empty-tool-catalog";
-import { mergeUsage } from "../server/responses/empty-completion-guard";
+import { emptyCompletionRetryFailedEvent, mergeUsage } from "../server/responses/empty-completion-guard";
 import { analyzeTerminalTurn, buildContinuationRequest } from "../server/responses/terminal-guard";
 import { markSidecarContextOverflow, sidecarLoopTerminalEvent, upstreamErrorCode, type SidecarLoopFailure } from "../server/responses/context-overflow";
 import { markVerifiedModelNotInPlanResponse, MODEL_NOT_IN_PLAN_CODE, UNDECLARED_TOOL_CALL_ERROR_CODE, verifiedPlanRefusalMessage } from "../lib/errors";
@@ -359,6 +359,8 @@ function loopFailure(e: LoopError): SidecarLoopFailure {
  */
 export interface WebSearchLoopDeps {
   parsed: OcxParsedRequest;
+  /** The global emptyCompletionRetry opt-in; the loop applies it only to final openai-chat iterations. */
+  emptyCompletionRetry?: boolean;
   terminalContinuationGuard?: boolean;
   advisor?: AdvisorSidecarStep;
   /** Chat delivery only; never copied into parsed generation options. */
@@ -516,8 +518,12 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
 
   // Hard iteration bound (termination safety net); forceAnswer normally ends the loop sooner.
   // One iteration beyond the forced answer is reserved for its empty-answer recovery below.
+  // An authorized Chat empty-completion retry adds its own iteration (see completionRetries in the
+  // loop bound), so ordinary iterations, including repeat placeholders for a failed query that never
+  // advance searchesExecuted, cannot use up the slot the retry needs.
   const HARD_CAP = maxSearches + 3 + 2 * Number(deps.terminalContinuationGuard === true && adapter.name === "openai-chat") + (deps.advisor ? MAX_ADVISOR_CONTINUATIONS_PER_REQUEST : 0);
   let emptyAnswerRetries = 0;
+  let completionRetries = 0;
   let terminalContinuations = 0;
   // Every iteration re-sends the full context, but only the last one's terminal reaches the bridge.
   // Search-calling passes and the discarded empty forced answer are summed here and added to what
@@ -1170,7 +1176,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   async function* produce(): AsyncGenerator<AdapterEvent> {
     let prepared = firstPrepared;
     try {
-      for (let i = 0; i < HARD_CAP; i++) {
+      for (let i = 0; i < HARD_CAP + completionRetries; i++) {
         const forceAnswer = searchesExecuted >= maxSearches;
         try {
           // First loop turn reuses the eager HEADERS. Subsequent header acquisitions run here.
@@ -1195,9 +1201,19 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             && !split.passthrough.some(event => event.type === "incomplete" || event.type === "error"
               || (event.type === "done" && isTruncatedStopReason(event.stopReason)));
           if (!shouldLoop) {
+            // Validate every final Chat iteration, even when no search was called. Retry
+            // only this model leg: already executed search results stay in messages.
             const final = split.passthrough.find(event => event.type === "done");
+            if (deps.emptyCompletionRetry && !forceAnswer && adapter.name === "openai-chat"
+              && final?.type === "done" && !isTruncatedStopReason(final.stopReason)
+              && !split.passthrough.some(event => event.type === "error" || event.type === "incomplete")
+              && !signal.aborted && !split.hasMalformedToolCall && !split.hasRealToolCall
+              && split.streamedPassthroughCount === 0 && !hasVisibleAssistantText(split.passthrough)) {
+              hiddenUsage = mergeUsage(hiddenUsage, final.usage);
+              if (completionRetries++ === 0) { yield { type: "heartbeat" }; continue; }
+              throw new LoopError(502, "Provider completed without usable output after one retry", emptyCompletionRetryFailedEvent());
+            }
             // Use the existing action/plan classifier and keep all hosted tool results.
-            // A second announcement is a visible failure, never another silent stop.
             const currentParsed = prepared.parsed;
             if (deps.terminalContinuationGuard && adapter.name === "openai-chat"
               && final?.type === "done" && !isTruncatedStopReason(final.stopReason)
