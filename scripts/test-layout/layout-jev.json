@@ -3,6 +3,7 @@
   "server-jev-session-pin-refresh.test.ts": "server",
   "server-jev-session-pin-snapshot.test.ts": "server",
   "server-jev-post-decision-admission.test.ts": "server",
+  "server-jev-admission-snapshot.test.ts": "server",
   "server-jev-refreshed-policy.test.ts": "server",
   "server-jev-session-pin.test.ts": "server",
   "cli-combo-session-pin.test.ts": "cli",

@@ -252,7 +252,11 @@ or an opencodex model route, with the timeout and a Test probe; there is no sepa
 After awaiting a paid decision, the combo reruns ingress admission with the current combo,
 live metered consent, and the original caller's model scope. It compares the allowlisted
 routing and policy metadata in `src/server/responses/combo-admission-snapshot.ts` across the
-async capability check. Credential selection revisions and pool entry identities are
+async capability check. It includes resolved protocol policy, mandatory-tool and reasoning-replay
+capability flags, and account namespace and sidecar admission settings. A stable refresh where
+every enabled target is protocol-ineligible returns the ingress protocol refusal (HTTP 400).
+A change to mandatory-tool support recomputes image eligibility before applying the combo's
+omission or refusal policy. Credential selection revisions and pool entry identities are
 metadata. Credential resolution stays in the routing and sidecar paths. A changed snapshot
 restarts local admission up to twice. Persistent churn returns `503 combo_unavailable`.
 A refusal retains completed decision usage and never sends another decision request.

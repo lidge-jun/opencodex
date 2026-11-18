@@ -967,6 +967,7 @@ export async function executeComboResponses(
           omittingImages = capability.unservable === "image";
           if (previousUnservable !== capability.unservable) warnCapabilityDegradation(capability.unservable);
           currentChoices = eligibleJevComboChoices(config, comboId, jevTargetEligible, Date.now(), pick.cooldownReprobeTargets);
+          if (!currentChoices.length) refreshedRefusal = protocolLanes?.refusal();
         }
         break;
       }

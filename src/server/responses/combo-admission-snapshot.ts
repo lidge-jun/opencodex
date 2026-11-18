@@ -1,4 +1,5 @@
 import { getCombo } from "../../combos";
+import { resolveProtocolSettings } from "../../protocols/settings";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 
 const providerFields = [
@@ -14,6 +15,7 @@ const providerFields = [
   "noReasoningModels", "modelSuppressSyntheticMax", "supportsResponsesCustomTools",
   "dropResponsesReasoningItems", "preserveReasoningContentModels", "allowEncryptedV2AgentTasks", "keyOptional",
   "allowPrivateNetwork", "googleMode", "fastWire", "apiKeySelectionRevision",
+  "autoToolChoiceOnlyModels", "preserveResponsesReasoningContent", "requiresAdjacentResponsesToolResults",
 ] as const satisfies readonly (keyof OcxProviderConfig)[];
 
 /** The capability gate consumes this detached provider view. Credential resolution uses live routing. */
@@ -33,9 +35,14 @@ function pickMetadata<T, K extends keyof T>(value: T, fields: readonly K[]): Pic
 export function snapshotComboAdmission(config: OcxConfig, comboId: string) {
   return {
     combo: getCombo(config, comboId),
+    protocols: resolveProtocolSettings(config),
     routing: pickMetadata(config, [
       "hostname", "port", "unauthenticatedLoopbackListener", "defaultProvider", "defaultModelAliases",
       "cursorEffortRows", "fastRows", "providerContextCaps", "blockedModelRedirects",
+      "codexAccountNamespaces", "codexAccountPickerEnabled", "pausedCodexAccountIds",
+      "codexMainAccountHardLock", "codexMainAccountHardLockThresholds", "codexDesktopAuthless",
+      "codexReserveEnabled", "codexReserveMigration", "runtimeRole", "creditCodexAccountIds",
+      "codexUseRemainingQuotaAccountIds",
     ]),
     providers: Object.fromEntries(Object.entries(config.providers)
       .filter(([, provider]) => provider.adapter !== "jev-decision")

@@ -1,3 +1,4 @@
+import { createProtocolEnvelope } from "../../src/protocols/envelope";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import type { DataPlaneAdmission } from "../../src/server/auth-cors";
@@ -87,8 +88,10 @@ export async function turn(config: OcxConfig, options: {
   effort?: string;
   input?: unknown;
   previousResponseId?: string;
+  bodyFields?: Record<string, unknown>;
+  chatSource?: Record<string, unknown>;
 } = {}): Promise<Response> {
-  const body = { model: "jev-auto", input: options.input ?? "Implement the next step.", stream: false,
+  const body = { model: "jev-auto", input: options.input ?? "Implement the next step.", stream: false, ...options.bodyFields,
     ...(options.previousResponseId ? { previous_response_id: options.previousResponseId } : {}),
     ...(options.effort ? { reasoning: { effort: options.effort } } : {}) };
   const headers: Record<string, string> = { "content-type": "application/json" };
@@ -99,6 +102,14 @@ export async function turn(config: OcxConfig, options: {
   try {
     return await executeComboResponses(request, body, "auto", config, options.log ?? { model: "", provider: "" }, {
       translatorBudget: budget,
+      ...(options.chatSource ? {
+        inboundWire: "chat" as const,
+        protocolSource: {
+          inbound: "chat" as const,
+          envelope: createProtocolEnvelope({ inbound: "chat", body: options.chatSource, translatorBudget: budget }),
+          dispatchNativeChild: async () => { throw new Error("unexpected native dispatch"); },
+        },
+      } : {}),
       ...(options.admission ? { admission: options.admission } : {}),
       ...(options.signal ? { abortSignal: options.signal } : {}),
     }, dispatchers((childBody, complete, childOptions) => {
