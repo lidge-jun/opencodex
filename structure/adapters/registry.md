@@ -270,8 +270,8 @@ Translated Anthropic OAuth requests preserve caller instructions in top-level `s
 Only operator configuration `providers.<name>.anthropicOAuthUserInstructions: true` moves the
 instructions into the first user turn and gives them user-role priority. The adapter adds an
 initial user turn for assistant-leading histories and preserves tool call and result adjacency.
-`src/adapters/anthropic.ts` retains the compatibility identity and proxy-owned tool contract in
-`system`. With prompt caching enabled, the relocated caller prefix receives an explicit
+`src/adapters/anthropic.ts` retains the compatibility identity, proxy-owned tool contract and
+checkpoint continuation guidance in `system`. With prompt caching enabled, the relocated caller prefix receives an explicit
 breakpoint. The option applies only to translated OAuth requests.
 `tests/adapters/anthropic/anthropic-oauth-caller-system-shape.test.ts` covers default and opt-in
 request shapes.

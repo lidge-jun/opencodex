@@ -252,6 +252,9 @@ export interface OcxParsedRequest {
 
 export interface OcxContext {
   systemPrompt?: string[];
+  /** Proxy-authored suffixes in systemPrompt (including any joining separator). Keeping their
+   * provenance lets adapters relocate caller text while preserving the original system layout. */
+  proxySystemPrompt?: { blockIndex: number; suffix: string }[];
   messages: OcxMessage[];
   tools?: OcxTool[];
 }

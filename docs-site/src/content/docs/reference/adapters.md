@@ -420,8 +420,8 @@ MiMo model Command Code serves.
   opt into compatibility placement for translated OAuth requests only. With this option,
   caller system instructions move to the beginning of the first
   user turn. If the history starts with an assistant message, the adapter adds an initial user
-  turn for those instructions. The compatibility identity and OpenCodex tool contract remain in
-  top-level `system`. The relocated instructions no longer have system-role precedence.
+  turn for those instructions. The compatibility identity, OpenCodex tool contract, and checkpoint
+  continuation guidance remain in top-level `system`. Relocated instructions have user-role priority.
   When prompt caching is enabled, the adapter adds an explicit breakpoint to those instructions.
   API-key requests and native Messages passthrough keep their existing instruction placement.
 - Routed Codex compaction keeps the client tool catalog, system prompt and tool-selection

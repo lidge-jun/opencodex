@@ -7,6 +7,8 @@ import { describe, expect, test } from "bun:test";
 import { createAnthropicAdapter } from "../../../src/adapters/anthropic";
 import { CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../../../src/oauth/anthropic";
 import { providerConfigSchema } from "../../../src/config/schema/leaf-validators";
+import { CHECKPOINT_CONTINUATION_NOTE, encodeCompactionSummary, SUMMARY_PREFIX } from "../../../src/responses/compaction";
+import { parseRequest } from "../../../src/responses/parser";
 import type { OcxMessage, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 
 const CALLER_SYSTEM = "You are an AI agent running in OpenCode, a coding agent harness.";
@@ -102,6 +104,39 @@ describe("anthropic oauth caller system shape", () => {
     // The relocated prefix keeps the explicit breakpoint, so requests that share the caller
     // prompt reuse it even when their first user content differs.
     expect(leadBlock(body.messages[0])?.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+  });
+
+  test.each([
+    ["decoded", { type: "compaction", encrypted_content: encodeCompactionSummary("Read-only review is in progress.") }],
+    ["plaintext", { role: "user", content: `${SUMMARY_PREFIX}\n\nRead-only review is in progress.` }],
+  ] as const)("a %s Responses checkpoint keeps its continuation note at system priority", async (format, checkpoint) => {
+    const request = parseRequest({
+      model: "claude-sonnet-4-6",
+      instructions: CALLER_SYSTEM,
+      input: [
+        { role: "system", content: "Workspace instructions" },
+        { role: "user", content: "Start the review." },
+        checkpoint,
+        { role: "user", content: "Continue the review." },
+      ],
+    });
+    const callerText = `${CALLER_SYSTEM}\n\nWorkspace instructions`;
+
+    const body = await bodyOf(request);
+    expect(texts(body.system)).toEqual([CLAUDE_CODE_SYSTEM_INSTRUCTION, CHECKPOINT_CONTINUATION_NOTE]);
+    expect(body.messages[0]?.role).toBe("user");
+    expect(texts(body.messages[0]?.content)[0]).toBe(callerText);
+    expect(JSON.stringify(body.messages)).not.toContain(CHECKPOINT_CONTINUATION_NOTE);
+
+    const baselineSystem = format === "decoded"
+      ? `${callerText}\n\n${CHECKPOINT_CONTINUATION_NOTE}`
+      : [CALLER_SYSTEM, CHECKPOINT_CONTINUATION_NOTE, "Workspace instructions"].join("\n\n");
+    for (const enabled of [undefined, false]) {
+      const baseline = await bodyOf(request, provider({ anthropicOAuthUserInstructions: enabled }));
+      expect(texts(baseline.system)).toEqual([CLAUDE_CODE_SYSTEM_INSTRUCTION, baselineSystem]);
+      expect(JSON.stringify(baseline.messages)).not.toContain(CALLER_SYSTEM);
+      expect(JSON.stringify(baseline.messages)).not.toContain(CHECKPOINT_CONTINUATION_NOTE);
+    }
   });
 
   test("the identity block stays first and is the only top-level system block", async () => {

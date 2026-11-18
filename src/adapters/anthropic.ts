@@ -845,8 +845,17 @@ function messagesToAnthropicFormat(
     undefined,
     tool => toolNames.toWire(namespacedToolName(tool.namespace, tool.name)),
   );
-  const callerParts = parsed.context.systemPrompt ?? [];
-  const systemParts = [...callerParts, ...(relocateCallerSystem ? [] : toolCatalogNudge ? [toolCatalogNudge] : [])];
+  const { systemPrompt = [], proxySystemPrompt = [] } = parsed.context;
+  const promptParts = relocateCallerSystem && proxySystemPrompt.length > 0
+    ? systemPrompt.flatMap((text, blockIndex) => {
+      const owned = proxySystemPrompt.find(part => part.blockIndex === blockIndex);
+      if (!owned) return [text];
+      const caller = text.slice(0, -owned.suffix.length);
+      return caller ? [caller] : [];
+    })
+    : systemPrompt;
+  const toolGuidance = toolCatalogNudge ? [toolCatalogNudge] : [];
+  const systemParts = relocateCallerSystem ? promptParts : [...promptParts, ...toolGuidance];
   // End a block at the caller's cached prefix so its breakpoint skips the per-turn tail.
   const prefix = parsed._anthropicSystemCachePrefix
     ? identifyRoutedModel(parsed._anthropicSystemCachePrefix, parsed.modelId) : undefined;
@@ -856,7 +865,10 @@ function messagesToAnthropicFormat(
     : [systemParts.join("\n\n")];
   const normalized = texts.map(text => identifyRoutedModel(text, parsed.modelId)).filter(Boolean);
   const callerSystem = relocateCallerSystem ? normalized : [];
-  const system = relocateCallerSystem ? (toolCatalogNudge ? [identifyRoutedModel(toolCatalogNudge, parsed.modelId)].filter(Boolean) : []) : normalized;
+  const system = relocateCallerSystem
+    ? [...proxySystemPrompt.map(({ suffix }) => suffix.trimStart()), ...toolGuidance]
+      .map(text => identifyRoutedModel(text, parsed.modelId)).filter(Boolean)
+    : normalized;
   const messages: unknown[] = [];
 
   for (let i = 0; i < parsed.context.messages.length; i++) {
@@ -1091,8 +1103,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       if (isOAuth) {
         // Claude OAuth (Pro/Max) requires the first system block to be the Claude Code identity.
         // A captured OpenCode request was rejected with caller instructions in top-level
-        // system, but accepted with those instructions in user content. Keep the proxy-owned
-        // tool contract in system, matching the existing Codex Responses request shape.
+        // system, but accepted with those instructions in user content. Proxy guidance keeps
+        // system-role priority even when caller instructions move.
         body.system = [
           { type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION },
           ...system.map(text => ({ type: "text", text })),
