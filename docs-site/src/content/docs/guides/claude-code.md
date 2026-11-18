@@ -75,6 +75,21 @@ filesystem behavior must be verified separately; a local test is not cross-platf
 Verify the resolved provider/model in request logs: selecting a tier is not proof of the
 actual model served. This is especially useful for external classifiers requesting Sonnet.
 
+## Weekly subscription reserve
+
+To reserve weekly Claude subscription quota for interactive work, enable
+[`subscriptionReserve`](/reference/configuration/#claude-subscription-reserve) and configure a
+routed destination. Set `x-ocx-priority: background` in your client or wrapper on individual
+`/v1/messages` requests you want to divert when quota is high. An unmarked request is interactive,
+including Haiku turns, subagents, and short requests without tools.
+
+The proxy learns weekly utilization from passthrough replies for the same subscription credential
+and upstream. It only steers requests that would otherwise use that passthrough. Observations expire
+after 30 minutes or when the weekly window resets, whichever comes first, and are cleared on restart.
+Requests already routed through proxy-managed credentials use their normal routing. The alternate
+provider receives marked requests selected for diversion under its own normal routing and billing
+policy.
+
 ## Claude OAuth account pool (experimental)
 
 Native Anthropic subscription passthrough retains recognized, valid `anthropic-ratelimit-*`

@@ -26,6 +26,23 @@ Solo se aplican los ID de nivel explícitamente seleccionados. Un nivel no estab
 
 <a id="claude-oauth-account-pool-experimental"></a>
 
+<a id="weekly-subscription-reserve"></a>
+
+## Reserva semanal de la suscripción
+
+Para reservar cuota semanal de Claude para el trabajo interactivo, activa
+[`subscriptionReserve`](/es/reference/configuration/#claude-subscription-reserve) y configura un
+destino enrutado. Añade `x-ocx-priority: background` en tu cliente o script a cada solicitud
+`/v1/messages` que quieras desviar cuando la utilización sea alta. Las solicitudes sin esa marca se
+consideran interactivas, incluidas las de Haiku, las de subagentes y las breves sin herramientas.
+
+El proxy obtiene la utilización semanal de las respuestas de paso directo de la misma credencial
+de suscripción y del mismo servidor de origen. Solo desvía solicitudes que usarían ese paso directo.
+Las observaciones caducan a los 30 minutos o al reiniciarse la ventana semanal, lo que ocurra primero,
+y se borran al reiniciar el proxy. Las solicitudes que ya usan credenciales administradas por el proxy
+siguen su enrutamiento habitual. El proveedor alternativo recibe las solicitudes marcadas que se
+desvían y aplica sus condiciones habituales de enrutamiento y facturación.
+
 ## Claude Grupo de cuentas OAuth (experimental)
 
 El passthrough nativo de suscripciones Anthropic conserva las observaciones reconocidas y válidas de `anthropic-ratelimit-*`, con valores normalizados, en las respuestas en streaming, JSON y de error del proveedor. Omite los nombres desconocidos y los valores inválidos, y no inventa observaciones ausentes. Las pruebas verifican el contrato de encabezados que consumen los statusLine de Claude Code, incluidas las fracciones de uso y las horas de restablecimiento. La selección de cuenta y los reintentos no cambian.

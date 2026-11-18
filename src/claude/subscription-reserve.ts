@@ -1,79 +1,30 @@
 /**
- * Claude subscription weekly reserve: staged downgrade as the weekly window fills.
+ * Weekly quota steering for caller-forward Claude subscriptions.
+ * Policy comes from the loaded config. Quota observations are process-local and scoped to
+ * the exact upstream and caller credential. A managed route uses its own billing identity.
  *
- * The native Claude passthrough lane (`anthropicNativePassthrough` in `src/server/claude-messages.ts`)
- * terminates Claude Code's TLS (the claude-intercept listener) and so sees the upstream
- * `anthropic-ratelimit-unified-7d-utilization` / `-7d-reset` response headers of the caller's own
- * subscription. Until this module nothing recorded them for that lane. This module records the latest
- * weekly utilization (persisted, so a restart keeps it) and answers one question per request: may this
- * request still use Claude, or should it be served by the configured downgrade targets?
- *
- *   utilization >= soft (default 0.60): background / subagent traffic is downgraded.
- *   utilization >= hard (default 0.80): only interactive traffic may use Claude.
- *
- * Pattern adopted from Hermes-agent (MIT, NousResearch): credential seat order with
- * "reserve for interactive", and a route record (requested -> served, reason) on every downgrade.
- *
- * Opt-in: the policy lives in `<config dir>/subscription-reserve.json`; a missing file means disabled.
- * `targets` must name at least one routed `provider/model` selector, otherwise nothing is downgraded.
- * The traffic class comes from {@link classifyTraffic}; see its comment for the signals that exist.
+ * Pattern adopted from Hermes-agent (MIT, NousResearch): reserve quota for interactive
+ * use and record the request, destination and reason for a downgrade.
  */
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { atomicWriteFile } from "../config/atomic-write";
-import { getConfigDir } from "../config/paths";
+import { SUBSCRIPTION_RESERVE_HARD, SUBSCRIPTION_RESERVE_SOFT } from "../config/schema/subscription-reserve";
+import { previewRouteModel } from "../router";
+import type { OcxConfig } from "../types";
 
-export type TrafficClass = "interactive" | "background";
+export const SUBSCRIPTION_PRIORITY_HEADER = "x-ocx-priority";
+const OBSERVATION_MAX_AGE_MS = 30 * 60_000;
+const OBSERVATION_LIMIT = 128;
 
-export interface ReservePolicy {
-  enabled: boolean;
-  /** Fraction (0-1) at which background traffic is downgraded. */
-  soft: number;
-  /** Fraction (0-1) at which only interactive traffic may use Claude. */
-  hard: number;
-  /** Routed `provider/model` selectors tried in order for downgraded requests. */
-  targets: string[];
-}
-
-export interface WeeklyObservation {
-  /** Fraction 0-1 as reported by the unified header. */
+interface WeeklyObservation {
   utilization: number;
-  /** Epoch ms of the window reset, when reported. */
-  resetAt?: number;
   observedAt: number;
+  resetAt?: number;
 }
 
-export interface ReserveDecision {
-  action: "allow" | "downgrade";
-  traffic: TrafficClass;
-  utilization?: number;
-  tier?: "soft" | "hard";
-  target?: string;
-  reason: string;
-}
+const observations = new WeakMap<OcxConfig, Map<string, WeeklyObservation>>();
 
-const DEFAULT_POLICY: ReservePolicy = { enabled: false, soft: 0.6, hard: 0.8, targets: [] };
-/** An observation older than this is ignored unless its reset time is still in the future. */
-const MAX_OBSERVATION_AGE_MS = 8 * 24 * 60 * 60 * 1000;
-
-let observation: WeeklyObservation | null | undefined;
-
-function policyPath(): string { return join(getConfigDir(), "subscription-reserve.json"); }
-function statePath(): string { return join(getConfigDir(), "subscription-reserve-state.json"); }
-
-export function readReservePolicy(): ReservePolicy {
-  try {
-    const raw = JSON.parse(readFileSync(policyPath(), "utf8")) as Partial<ReservePolicy>;
-    const num = (v: unknown, d: number) => (typeof v === "number" && v > 0 && v <= 1 ? v : d);
-    const soft = num(raw.soft, DEFAULT_POLICY.soft);
-    const hard = Math.max(num(raw.hard, DEFAULT_POLICY.hard), soft);
-    const targets = Array.isArray(raw.targets)
-      ? raw.targets.filter((t): t is string => typeof t === "string" && t.includes("/"))
-      : [];
-    return { enabled: raw.enabled === true, soft, hard, targets };
-  } catch {
-    return { ...DEFAULT_POLICY };
-  }
+export function nativeSubscriptionObservationKey(upstream: string, bearer: string): string | undefined {
+  if (!bearer.startsWith("sk-ant-oat")) return undefined;
+  return Bun.CryptoHasher.hash("sha256", JSON.stringify([upstream, bearer]), "hex");
 }
 
 function finite(value: string | null): number | undefined {
@@ -82,72 +33,55 @@ function finite(value: string | null): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-/** Record the weekly window from an upstream response. Returns the stored observation, if any. */
-export function observeWeeklyHeaders(headers: Headers, now = Date.now()): WeeklyObservation | undefined {
+export function observeWeeklyHeaders(config: OcxConfig, key: string, headers: Headers, now = Date.now()): void {
   const utilization = finite(headers.get("anthropic-ratelimit-unified-7d-utilization"));
-  if (utilization === undefined || utilization < 0 || utilization > 1.5) return undefined;
+  if (utilization === undefined || utilization > 1.5) return;
   const reset = finite(headers.get("anthropic-ratelimit-unified-7d-reset"));
-  const next: WeeklyObservation = {
-    utilization: Math.min(utilization, 1),
-    ...(reset !== undefined && reset > 0 ? { resetAt: reset * 1000 } : {}),
-    observedAt: now,
-  };
-  observation = next;
-  try {
-    mkdirSync(getConfigDir(), { recursive: true });
-    atomicWriteFile(statePath(), JSON.stringify(next));
-  } catch { /* the in-memory value still serves this process */ }
-  return next;
-}
-
-export function currentWeeklyObservation(now = Date.now()): WeeklyObservation | undefined {
-  if (observation === undefined) {
-    try { observation = existsSync(statePath()) ? JSON.parse(readFileSync(statePath(), "utf8")) as WeeklyObservation : null; }
-    catch { observation = null; }
+  let seen = observations.get(config);
+  if (!seen) {
+    seen = new Map();
+    observations.set(config, seen);
   }
-  const o = observation;
-  if (!o || typeof o.utilization !== "number") return undefined;
-  // A weekly window that has reset since the observation starts again from zero.
-  if (o.resetAt !== undefined && o.resetAt <= now) return undefined;
-  if (o.resetAt === undefined && now - o.observedAt > MAX_OBSERVATION_AGE_MS) return undefined;
-  return o;
+  seen.delete(key);
+  if (seen.size >= OBSERVATION_LIMIT) seen.delete(seen.keys().next().value!);
+  seen.set(key, {
+    utilization: Math.min(utilization, 1),
+    observedAt: now,
+    ...(reset !== undefined && reset > 0 ? { resetAt: reset * 1000 } : {}),
+  });
 }
 
-/**
- * Interactive vs background. Signals that exist today, in priority order:
- *  1. `x-ocx-priority: background|interactive` on the request (explicit, set by a wrapper or hook).
- *  2. A Haiku-class model: Claude Code sends titles, summaries and quota probes there.
- *  3. A tiny `max_tokens` (<= 64) with no tools: quota probes and classifier calls.
- * Claude Code does not mark Task-tool subagent turns on the wire, so a subagent running on the main
- * model is classified as interactive until such a marker (or a per-agent header) exists.
- */
-export function classifyTraffic(headers: Headers, body: { model?: unknown; max_tokens?: unknown; tools?: unknown }): TrafficClass {
-  const explicit = headers.get("x-ocx-priority")?.trim().toLowerCase();
-  if (explicit === "background" || explicit === "interactive") return explicit;
-  if (typeof body.model === "string" && /haiku/i.test(body.model)) return "background";
-  const tools = Array.isArray(body.tools) ? body.tools.length : 0;
-  if (typeof body.max_tokens === "number" && body.max_tokens <= 64 && tools === 0) return "background";
-  return "interactive";
+/** Only an explicit caller signal can classify Haiku, subagents or short requests as background. */
+export function isSubscriptionBackground(headers: Headers): boolean {
+  return headers.get(SUBSCRIPTION_PRIORITY_HEADER)?.trim().toLowerCase() === "background";
 }
 
 export function decideReserve(
-  traffic: TrafficClass,
-  policy: ReservePolicy = readReservePolicy(),
+  config: OcxConfig,
+  key: string,
+  preservesSelector: (target: string) => boolean,
   now = Date.now(),
-): ReserveDecision {
-  if (!policy.enabled) return { action: "allow", traffic, reason: "reserve policy disabled" };
-  const seen = currentWeeklyObservation(now);
-  if (!seen) return { action: "allow", traffic, reason: "no weekly utilization observed" };
-  const pct = Math.round(seen.utilization * 100);
-  const tier = seen.utilization >= policy.hard ? "hard" : seen.utilization >= policy.soft ? "soft" : undefined;
-  if (!tier || traffic === "interactive" || policy.targets.length === 0) {
-    return { action: "allow", traffic, utilization: seen.utilization, reason: !tier ? `weekly ${pct}% below reserve` : traffic === "interactive" ? `interactive keeps Claude at ${pct}% weekly` : "no downgrade targets configured" };
-  }
-  return {
-    action: "downgrade", traffic, utilization: seen.utilization, tier, target: policy.targets[0],
-    reason: `weekly Claude ${pct}% >= ${Math.round((tier === "hard" ? policy.hard : policy.soft) * 100)}%: ${traffic} traffic downgraded`,
-  };
-}
+): { target: string; reason: string } | undefined {
+  const policy = config.subscriptionReserve;
+  const seen = observations.get(config)?.get(key);
+  if (policy?.enabled !== true || !seen || seen.observedAt > now || now - seen.observedAt >= OBSERVATION_MAX_AGE_MS
+    || (seen.resetAt !== undefined && seen.resetAt <= now)) return undefined;
 
-/** Test seam. */
-export function resetReserveStateForTests(): void { observation = undefined; }
+  const soft = policy.soft ?? SUBSCRIPTION_RESERVE_SOFT;
+  const hard = policy.hard ?? SUBSCRIPTION_RESERVE_HARD;
+  if (seen.utilization < soft) return undefined;
+  const tier = seen.utilization >= hard ? "hard" : "soft";
+  const threshold = tier === "hard" ? hard : soft;
+  for (const target of policy.targets ?? []) {
+    try {
+      // An unknown prefix can otherwise fall through to the default provider as a literal model.
+      const route = previewRouteModel(config, target);
+      if (route.routeKind !== "explicit-provider" || route.routeReason !== "explicit-provider-namespace"
+        || route.providerName !== target.slice(0, target.indexOf("/")) || !preservesSelector(target)) continue;
+    } catch {
+      continue;
+    }
+    return { target, reason: `weekly Claude ${Math.round(seen.utilization * 100)}% >= ${Math.round(threshold * 100)}% (${tier} reserve)` };
+  }
+  return undefined;
+}

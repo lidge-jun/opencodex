@@ -83,6 +83,21 @@ El enrutamiento tiene sus propias reglas de resolución ordenadas; ver [Enrutami
 Activa `anthropicImageContextRecovery: true` en el proveedor Anthropic. La opción está desactivada por
 defecto. Consulta [el adaptador Anthropic](/es/reference/adapters/#anthropic) para conocer los límites y el posible coste.
 
+<a id="claude-subscription-reserve"></a>
+
+## Reserva de la suscripción a Claude
+
+Configura el bloque opcional `subscriptionReserve` en el nivel superior de `config.json`.
+
+| Clave | Valor predeterminado | Efecto |
+| --- | --- | --- |
+| `subscriptionReserve.enabled` | `false` | Activa el enrutamiento según la cuota semanal para solicitudes de suscripción a Claude marcadas explícitamente. |
+| `subscriptionReserve.soft` | `0.60` | Utilización semanal a partir de la cual pueden cambiar de ruta las solicitudes en segundo plano. |
+| `subscriptionReserve.hard` | `0.80` | Utilización semanal a partir de la cual el cambio se registra como reserva estricta. Las solicitudes interactivas mantienen la suscripción en ambos umbrales. |
+| `subscriptionReserve.targets` | `[]` | Rutas concretas `provider/model` en orden de preferencia. Usa los identificadores de los proveedores configurados. Se selecciona la primera ruta que resuelva al proveedor indicado. Una lista vacía mantiene el enrutamiento por suscripción. |
+
+Los umbrales son fracciones mayores que cero y menores o iguales a uno. El umbral estricto efectivo debe ser igual o superior al umbral inicial efectivo. Una política inválida desactiva la reserva al iniciar y permite cargar los demás ajustes. `ocx config` rechaza escrituras con una política inválida. La [guía de Claude Code](/es/guides/claude-code/#weekly-subscription-reserve) explica cómo marcar las solicitudes.
+
 <a id="configuration-domains"></a>
 
 ## Dominios de configuración

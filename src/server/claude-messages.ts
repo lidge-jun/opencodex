@@ -40,7 +40,7 @@ import { AnthropicRequestError, callerCacheRetention, DesktopModelMappingUnavail
 import { nativeReasoningTag, type NativeReasoningOwner } from "../responses/reasoning-replay-cache";
 import { isKnownDesktop3pModelId, resolveDesktop3pAlias } from "../claude/desktop-3p";
 import { resolveAlias, claudeCodeNativeAlias, legacyAliasForNative } from "../claude/alias";
-import { classifyTraffic, decideReserve, observeWeeklyHeaders } from "../claude/subscription-reserve";
+import { decideReserve, isSubscriptionBackground, nativeSubscriptionObservationKey, observeWeeklyHeaders, SUBSCRIPTION_PRIORITY_HEADER } from "../claude/subscription-reserve";
 import { recordDesktopRequest } from "../claude/desktop-health";
 import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureAdmissionPolicy } from "./capture-admission-policy";
@@ -240,7 +240,7 @@ async function readAnthropicBody(req: Request, budget: TranslatorBudget, maxByte
 const PASSTHROUGH_STRIP_HEADERS = new Set([
   "connection", "keep-alive", "transfer-encoding", "upgrade", "te", "trailer",
   "proxy-authenticate", "proxy-authorization", "host", "content-length",
-  "accept-encoding", "x-opencodex-api-key", "origin",
+  "accept-encoding", "x-opencodex-api-key", "origin", SUBSCRIPTION_PRIORITY_HEADER,
 ]);
 
 function singleCredentialToken(name: "authorization" | "x-api-key", value: string | null): string | null {
@@ -292,6 +292,20 @@ function shouldForwardNativeHeader(name: string, value: string, config: OcxConfi
   if (lowerName !== "authorization" && lowerName !== "x-api-key") return true;
   const token = singleCredentialToken(lowerName, value);
   return !!token && !isProxyAdmissionSecret(token, config);
+}
+
+function nativeAnthropicBaseUrl(config: OcxConfig): string {
+  return (config.claudeCode?.anthropicBaseUrl ?? "https://api.anthropic.com").replace(/\/$/, "");
+}
+
+function callerSubscriptionObservationKey(config: OcxConfig, headers: Headers): string | undefined {
+  if (config.subscriptionReserve?.enabled !== true) return undefined;
+  const authorization = headers.get("authorization");
+  const apiKey = headers.get("x-api-key");
+  if (!authorization || !shouldForwardNativeHeader("authorization", authorization, config)
+    || (apiKey && shouldForwardNativeHeader("x-api-key", apiKey, config))) return undefined;
+  const bearer = singleCredentialToken("authorization", authorization);
+  return bearer ? nativeSubscriptionObservationKey(nativeAnthropicBaseUrl(config), bearer) : undefined;
 }
 
 /** Format a 32-hex cache key as a uuid-shaped session id (version/variant nibbles forced). */
@@ -359,7 +373,7 @@ async function anthropicNativePassthrough(
       overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy), closeReason === "body_stall" ? "body_stall" : closeReason === "body_overflow" ? "body_overflow" : undefined);
   };
 
-  const base = (config.claudeCode?.anthropicBaseUrl ?? "https://api.anthropic.com").replace(/\/$/, "");
+  const base = nativeAnthropicBaseUrl(config);
   const search = new URL(req.url).search;
   // Native passthrough bypasses the anthropic adapter, so the generous image pipeline
   // (devlog/260714_image_normalization_pipeline/040) must run here: tier-normalize then
@@ -377,6 +391,7 @@ async function anthropicNativePassthrough(
   });
   headers.set("content-type", "application/json");
 
+  const reserveKey = callerSubscriptionObservationKey(config, headers);
   const result = await fetchWithHeaderDeadline(
     `${base}${pathname}${search}`,
     { method: "POST", headers, body: JSON.stringify(body) },
@@ -395,7 +410,7 @@ async function anthropicNativePassthrough(
   const upstream = result.upstream;
 
   const contentType = upstream.headers.get("content-type") ?? "application/json";
-  observeWeeklyHeaders(upstream.headers);
+  if (reserveKey) observeWeeklyHeaders(config, reserveKey, upstream.headers);
   const rateLimitHeaders = {
     ...anthropicRateLimitHeaders(upstream.headers),
     ...(pathname === "/v1/messages" ? upstreamMessagesRequestIdHeaders(upstream.headers) : {}),
@@ -718,16 +733,19 @@ async function handleClaudeMessagesWithBudget(
       }
       if (fastRow) anthropicBody.model = fastRow.baseId;
     }
-    // Weekly-reserve downgrade (src/claude/subscription-reserve.ts): once the subscription's weekly
-    // window passes the configured threshold, background traffic for a genuine Claude model is routed
-    // to the downgrade target. `requestedModel` keeps the original, so the request log shows
-    // requested -> served. Interactive traffic and every non-Claude model are untouched.
-    if (isRec(anthropicBody) && typeof anthropicBody.model === "string" && /^(claude|anthropic)/i.test(anthropicBody.model)
-      && resolveInboundModel(anthropicBody.model, cc) === anthropicBody.model) {
-      const reserve = decideReserve(classifyTraffic(req.headers, anthropicBody));
-      if (reserve.action === "downgrade" && reserve.target) {
-        console.warn(`[route] requested=${anthropicBody.model} served=${reserve.target} fallback=yes reason="${reserve.reason}"`);
+    // Only caller-forward subscription requests may act on caller-forward observations.
+    // A selected target deliberately bypasses passthrough, even if its provider starts with "anthropic".
+    let reserveDowngraded = false;
+    if (config.subscriptionReserve?.enabled === true && !effortRow && !fastRow && isRec(anthropicBody)
+      && typeof anthropicBody.model === "string" && !anthropicBody.model.includes("/")
+      && isSubscriptionBackground(req.headers) && wantsNativePassthrough(req, config, requestPolicy, anthropicBody.model, cc)) {
+      const key = callerSubscriptionObservationKey(config, req.headers);
+      const reserve = key && decideReserve(config, key, target => resolveInboundModel(target, cc) === target);
+      if (reserve) {
+        const requested = redactSecretString(clientFacingModelText(clientModelLabel));
+        console.warn(`[route] requested=${requested} served=${redactSecretString(reserve.target)} fallback=yes reason="${reserve.reason}"`);
         anthropicBody.model = reserve.target;
+        reserveDowngraded = true;
       }
     }
     // Debug capture (opt-in allowlist scalars) BEFORE the passthrough branch so
@@ -776,7 +794,7 @@ async function handleClaudeMessagesWithBudget(
     messagesFeatures = sourceEnvelope
       ? () => sourceEnvelope.features()
       : () => (scannedFeatures ??= featuresFromMessagesBody(messagesBody));
-    if (!effortRow && !fastRow && isRec(anthropicBody) && wantsNativePassthrough(req, config, requestPolicy, anthropicBody.model, cc)) {
+    if (!reserveDowngraded && !effortRow && !fastRow && isRec(anthropicBody) && wantsNativePassthrough(req, config, requestPolicy, anthropicBody.model, cc)) {
       markProtocolEntry(logCtx, { inbound: "messages", lane: "native", features: messagesFeatures });
       recordProtocolShadowPlan(logCtx, config, { inbound: "messages", model: requestedModel });
       let projectedBody: Rec;
