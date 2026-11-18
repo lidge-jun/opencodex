@@ -414,6 +414,14 @@ describe("management routes", () => {
     expect(refreshed.json.liveModelCount).toBe(1);
   });
 
+  test("a disabled provider cannot report a successful discovery without a live observation", async () => {
+    const live = config();
+    live.providers.live!.disabled = true;
+    const result = await call(live, "/api/model-discovery/refresh", { provider: "live" });
+    expect(result.status).toBe(503);
+    expect(result.json).toMatchObject({ error: "live model discovery did not produce an observation" });
+  });
+
   test("a refresh whose live fetch fails keeps the last good list as the fallback", async () => {
     clearModelCache();
     const live = config();

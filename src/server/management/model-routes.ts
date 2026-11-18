@@ -322,16 +322,16 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     // Convergence can return before it fetches anything (no Codex catalog to publish, a sibling
     // proxy owns it, a stale snapshot). Discovery must not depend on catalog publication, so a
     // provider still without a status runs the discovery read side, which records arrivals itself.
-    if (getProviderDiscoveryStatus(provider) === undefined) {
-      try { await loadExportModels(config); } catch { /* The status below reports what is known. */ }
-    }
+    if (getProviderDiscoveryStatus(provider) === undefined) await loadExportModels(config);
+    const discovery = getProviderDiscoveryStatus(provider);
+    if (!discovery) return jsonResponse({ error: "live model discovery did not produce an observation" }, 503);
     const cached = getStaleCached(provider) ?? [];
     const recentArrivals = (config.modelDiscovery?.recentArrivals?.[provider] ?? []).map(row => ({
       ...row, state: arrivalState(config, provider, row, cached),
     }));
     return jsonResponse({
       ok: true, provider,
-      discovery: getProviderDiscoveryStatus(provider) ?? null,
+      discovery,
       liveModelCount: getProviderLiveModelCount(provider) ?? null,
       newArrivals: recentArrivals.filter(row => !before.has(arrivalKey(row))),
       recentArrivals,
