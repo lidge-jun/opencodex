@@ -246,7 +246,7 @@ ocx combo set jev-auto --session-pin 20m --session-pin-effort per-turn --json
 { "strategy": "jev", "sessionPin": { "ttlMs": 1200000, "effort": "per-turn" } }
 ```
 
-Si la decisión falla, el turno usa el esfuerzo que leyó al inicio. Otro turno puede actualizar el esfuerzo guardado. Si el destino fijado deja de estar disponible durante la decisión, el combo recurre a un destino apto. Los registros de uso conservan la telemetría de la decisión de esfuerzo y el turno cuenta como una decisión normal. Con `jevEffortMode: "client"`, se omite la decisión y se aplica la política de esfuerzo del cliente. `--session-pin-effort pinned` restaura el valor predeterminado. Cambiar el plazo con `--session-pin` conserva el modo.
+Si la decisión falla, el turno usa el esfuerzo que leyó al inicio. Otro turno puede actualizar el esfuerzo guardado. Si el destino fijado deja de estar disponible durante la decisión, el combo recurre a un destino apto. Los registros de uso conservan la telemetría de la decisión de esfuerzo, incluidos los tokens que el modelo de decisión informa en una respuesta fallida o incompleta. El turno cuenta como una decisión normal. Con `jevEffortMode: "client"`, se omite la decisión y se aplica la política de esfuerzo del cliente. `--session-pin-effort pinned` restaura el valor predeterminado. Cambiar el plazo con `--session-pin` conserva el modo.
 
 Cancelar una solicitud conserva la fijación. Una decisión que usa la alternativa fail-open por tiempo agotado, clave ausente o respuesta inválida no crea una. Las fijaciones viven en memoria, con un máximo de 512 sesiones, y se pierden al reiniciar.
 

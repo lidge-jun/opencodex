@@ -267,6 +267,8 @@ for effort on reused turns when the pinned target offers multiple efforts and JE
 The pinned target is the only candidate. An applied answer sets the effort and updates the pin on completion.
 A failed or unusable decision uses the effort read at the start of the turn and refreshes only the live pin's
 idle window on completion. Both outcomes record the gate, latency and available decision usage.
+The model backend retains bounded, reported token counts from failed and incomplete decision
+terminals in both buffered JSON and SSE. Display estimates are excluded from decision usage.
 After the effort decision, the Combo rechecks eligibility before dispatch. If the pinned target becomes
 ineligible, the Combo uses the first currently eligible JEV target, records the decision telemetry, and leaves
 the turn out of `pinnedRequests`.

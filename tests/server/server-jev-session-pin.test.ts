@@ -378,6 +378,48 @@ describe("JEV session pin per-turn effort", () => {
     expect(log.jevDecision).toMatchObject({ pinned: true, pinReason: "session" });
   });
 
+  test.each([
+    { wire: "JSON", status: "incomplete", gate: "malformed" },
+    { wire: "SSE", status: "incomplete", gate: "malformed" },
+    { wire: "JSON", status: "failed", gate: "http" },
+    { wire: "SSE", status: "failed", gate: "http" },
+  ])("records $wire $status decision usage and keeps the pinned effort", async ({ wire, status, gate }) => {
+    const config = makeConfig("unused", [], true);
+    config.combos!.auto!.sessionPin = { ttlMs: 20 * 60_000, effort: "per-turn" };
+    config.combos!.auto!.decisionModel = "judge/judge-small";
+    config.providers.judge = modelProvider("judge-small");
+    let decisions = 0;
+    const sends: unknown[][] = [];
+    const child: Child = (body, complete, options) => {
+      if (!options?.internalDecisionCall) {
+        sends.push([body.model, effortOf(body)]);
+        return served(body, complete);
+      }
+      if (++decisions === 1) return Response.json({
+        status: "completed",
+        output: [{ type: "message", content: [{ type: "output_text", text: '{"choice":"sol/gpt-5.6-sol:high"}' }] }],
+      });
+      const response = {
+        status,
+        ...(status === "failed" ? { error: { message: "decision failed" } } : {}),
+        usage: { input_tokens: 8, output_tokens: 2, total_tokens: -1 },
+      };
+      return wire === "JSON" ? Response.json(response) : new Response(
+        `data: ${JSON.stringify({ type: `response.${status}`, response })}\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    };
+    expect((await turn(config, { child })).status).toBe(200);
+    const log: RequestLogContext = { model: "", provider: "" };
+    expect((await turn(config, { child, log })).status).toBe(200);
+    expect(decisions).toBe(2);
+    expect(sends).toEqual([["sol/gpt-5.6-sol", "high"], ["sol/gpt-5.6-sol", "high"]]);
+    expect(log.jevDecision).toMatchObject({
+      backend: "model", pinned: true, pinReason: "session_effort", gate,
+      usage: { inputTokens: 8, outputTokens: 2, totalTokens: 10 },
+    });
+  });
+
   test.each(["sol/gpt-5.6-sol:low", "luna/gpt-5.6-luna:low"])("rechecks the pinned target after effort answer %s and keeps its usage on fallback", async (answer) => {
     const payloads: Array<Record<string, unknown>> = [];
     const config = perTurnConfig(["sol/gpt-5.6-sol:high", answer], payloads);
