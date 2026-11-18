@@ -23,11 +23,11 @@ export function WorkspaceSuggestions(props: Props) {
   const exclusions = useSuggestionExclusions(props.apiBase, props.active);
 
   const [conflict, setConflict] = useState(false);
-  const [consentOverrides, setConsentOverrides] = useState<Record<string, boolean>>({});
+  const [consentDenials, setConsentDenials] = useState<ReadonlySet<string>>(new Set());
   const combos = props.combos.map((combo) => {
     const key = JSON.stringify([props.apiBase, combo.id]);
-    return Object.hasOwn(consentOverrides, key)
-      ? { ...combo, allowMeteredTargets: consentOverrides[key] }
+    return consentDenials.has(key)
+      ? { ...combo, allowMeteredTargets: false }
       : combo;
   });
 
@@ -48,8 +48,10 @@ export function WorkspaceSuggestions(props: Props) {
         setConflict(true);
         const body = await response.json().catch(() => null);
         if (typeof body?.policy?.allowMeteredTargets === "boolean" && exclusions.applyPolicy(body.policy)) {
-          const key = JSON.stringify([props.apiBase, item.id]);
-          setConsentOverrides((current) => ({ ...current, [key]: body.policy.allowMeteredTargets }));
+          if (!body.policy.allowMeteredTargets) {
+            const key = JSON.stringify([props.apiBase, item.id]);
+            setConsentDenials((current) => new Set([...current, key]));
+          }
         } else {
           exclusions.retry();
         }

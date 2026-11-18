@@ -75,7 +75,10 @@ export function useSuggestionExclusions(apiBase: string, active = true): Suggest
       const list = parse(policy);
       if (!list) return false;
       generation.current += 1;
-      setLoaded({ base: apiBase, attempt, excluded: list });
+      setLoaded((previous) => {
+        if (previous?.base !== apiBase || previous.attempt !== attempt || !previous.excluded) return previous;
+        return { ...previous, excluded: [...new Set([...previous.excluded, ...list])] };
+      });
       return true;
     },
     save,

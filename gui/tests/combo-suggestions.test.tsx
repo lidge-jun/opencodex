@@ -548,6 +548,9 @@ describe("ComboSuggestions card", () => {
       const originalFetch = globalThis.fetch;
       const name = "kimi-k3-1-pro";
       const existing = combo("opus", [["kimi", name]], { allowMeteredTargets: true });
+      const catalog = models(excluded
+        ? [["kimi", name], ["google-vertex", name], ["xai", name], ["anthropic-apikey", name]]
+        : [["kimi", name], ["google-vertex", name]]);
       let refreshCount = 0;
       globalThis.fetch = (async (url: string) => {
         if (url.endsWith("/api/combo-suggestions/save")) {
@@ -556,21 +559,27 @@ describe("ComboSuggestions card", () => {
             policy: { allowMeteredTargets: excluded, excludedProviders: excluded ? ["google-vertex"] : [] },
           }, { status: 409 });
         }
-        return Response.json({ excludedProviders: [] });
+        return Response.json({ excludedProviders: excluded ? ["anthropic-apikey"] : [] });
       }) as typeof fetch;
       try {
-        await mount(<LanguageProvider><WorkspaceSuggestions
-          active apiBase="/test" combos={[existing]} providers={PROVIDERS}
-          models={models([["kimi", name], ["google-vertex", name]])}
+        const view = (allowMeteredTargets: boolean) => <LanguageProvider><WorkspaceSuggestions
+          active apiBase="/test" combos={[{ ...existing, allowMeteredTargets }]} providers={PROVIDERS}
+          models={catalog}
           quotaReports={null} quotaNow={0} lockedComboId={null}
           onRefresh={() => { refreshCount += 1; }}
-        /></LanguageProvider>);
+        /></LanguageProvider>;
+        await mount(view(true));
         const extension = card("opus");
         expect(extension.textContent).toContain("Vertex");
         await act(async () => { button(extension, "Add to combo").click(); });
         expect(host.querySelector('[role="alert"]')?.textContent).toContain("Suggestion settings changed");
         if (excluded) {
-          expect(host.textContent).not.toContain("Add to combo");
+          expect(card("opus").textContent).not.toContain("Vertex");
+          expect(card("opus").textContent).not.toContain("Anthropic");
+          expect(button(card("opus"), "Add to combo").disabled).toBe(false);
+          await act(async () => { root!.render(view(false)); });
+          expect(button(card("opus"), "Add to combo").disabled).toBe(true);
+          expect(card("opus").textContent).toContain("Enable paid targets on this combo first.");
         } else {
           expect(button(card("opus"), "Add to combo").disabled).toBe(true);
           expect(card("opus").textContent).toContain("Enable paid targets on this combo first.");
