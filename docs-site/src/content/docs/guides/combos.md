@@ -787,6 +787,16 @@ For an Anthropic OAuth or Codex pool, a 429 tied to one account that the pool ha
 not cool the whole combo target. Other accounts behind that target remain available. A 429 with
 no identified, cooled pool account still cools the target, as do provider-wide failures.
 
+After a Responses combo stream commits output, an incomplete terminal can cool that target for the
+next request. `stall_timeout` cools for 60 seconds. `output_limit` cools for 10 minutes when the
+serving attempt reaches the routed model's known output ceiling and the turn is unpaused.
+Devin's preset has no output ceiling, so this output-limit cooldown requires an explicit ceiling
+in the provider configuration. An existing longer cooldown keeps its expiry.
+
+During Responses preflight, the combo can try the next eligible target if a terminal arrives
+within 1 second of the first held reasoning or commentary frame and contains only that prelude.
+A final answer, a tool call, or expiry of the hold commits the stream to the selected target.
+
 ### Last-resort targets
 
 A brief cooldown on a preferred target otherwise routes straight to whatever

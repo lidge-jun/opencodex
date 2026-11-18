@@ -122,7 +122,7 @@ or persisting completion. Eager and tee retain their readers and cancellation ow
 Provider-owned custom calls retain their call-ID-prefix ownership. Hosted effects, unknown items,
 and the local web-search bridge make the verdict non-replayable, including sparse terminal snapshots.
 
-Only this mandatory native contract extends preflight to hold known reasoning frames. It keeps the
+The mandatory native contract holds known reasoning frames during preflight. It keeps the
 existing aggregate byte/chunk caps and a fixed `COMBO_REQUIRED_TOOL_REASONING_HOLD_MS` deadline of
 1,000 ms from the first held reasoning frame in `src/server/responses/combo-stream-preflight.ts`.
 Trickling frames do not reset it. Deadline expiry, text, tools, opaque/unknown events or either cap
@@ -130,9 +130,10 @@ commit this child; expiry releases held bytes and transfers the pending read to 
 preserving its eventual chunk or error exactly once without authorizing replay. A missing-call
 terminal held before commitment becomes the existing 502 combo failure; another
 target remains subject to eligibility, consent and budgets. After commitment the typed failed
-terminal remains with that child. Lifecycle snapshots with output and failed/incomplete snapshots
-with output commit conservatively; only a checked missing-call terminal with harmless text/reasoning
-may be discarded. Cancellation wakes a pending read; every exit clears the hold timer and checks cancellation before parent success.
+terminal remains with that child. Output in a lifecycle or terminal snapshot commits conservatively.
+The checked missing-call terminal and the [degenerate-completion rule](#committed-terminal-cooldown-and-degenerate-completion-failover)
+can discard held prelude under their respective guards. Cancellation wakes a pending read; every exit
+clears the hold timer and checks cancellation before parent success.
 Auto/none, unknown contracts, direct native routes, Chat and runTurn keep their terminal owners.
 Coverage: `tests/server/server-combo-stream-required-tool.test.ts`,
 `tests/server/server-combo-stream-hosted-tool-contract.test.ts` (hosted substitutions, eager/tee),
@@ -216,20 +217,18 @@ caps and the collector's whole-turn ceiling remain in force. That ceiling runs f
 Downstream cancellation or the request's abort signal ends the selection or hold at once, aborts an
 in-flight replacement, and never awaits upstream cleanup.
 
-- a non-control Responses event (apart from the held mandatory-tool reasoning prelude above and the
-  Codex metadata frames) begins client-visible output or a tool/action item, after which the
+- a non-control Responses event (apart from held reasoning or commentary and the Codex metadata
+  frames) begins client-visible output or a tool/action item, after which the
   target is committed and cross-target replay is forbidden;
 - a `response.failed` terminal arrives first, in which case the terminal is converted back through
   the ordinary bounded combo-failure classifier and may advance to the next declared target;
 - a zero-output `response.incomplete` with no reason, `adapter_eof`, `missing_terminal_event`,
   `upstream_stall_timeout`, or an empty-output `max_output_tokens` limit follows the same failure path.
-  The `max_output_tokens` arm needs the evidence `classifyZeroOutputTokenLimit` requires in
-  `src/adapters/run-turn-queue.ts`: `end_turn` must not be `false` and
-  `incomplete_details.retryable` must not be `false`. A translated Anthropic `pause_turn` also
-  reaches the wire as `incomplete/max_output_tokens`, so `src/bridge/sse.ts` records it on the
-  request context (`src/lib/client-error-body.ts`) and this preflight keeps it on its target while
-  the client keeps the same reason and usage. Other explicit semantic or unknown reasons stay
-  terminal;
+  A paused turn, `end_turn: false`, or `incomplete_details.retryable: false` keeps the terminal
+  on its target, including when the reason is absent. Preflight reads incomplete details from the
+  nested response with an event-level fallback. `src/bridge/sse.ts` records translated Anthropic
+  `pause_turn` on the request context (`src/lib/client-error-body.ts`) and preserves the wire reason
+  `max_output_tokens` and usage. Other explicit semantic or unknown reasons stay terminal;
 - a top-level `error` arrives before output, in which case unknown, rate-limit, and server failures
   may advance while errors explicitly classified as non-retryable 4xx remain committed;
   a bare error with no status field of its own but an integral numeric `code` in 400..599 takes
@@ -259,8 +258,8 @@ ladder binding in `finally`. `tests/server/server-combo-zero-output-failover.tes
 accepted stream lifetime, cancellation, and exactly-once attached-lease release.
 Plain admission leases without controller binding do not register or unregister a ladder controller.
 
-Reasonless incomplete snapshots containing output items stay committed; an explicit `reason: null`
-also stays terminal. `tests/routing/combo-stream-preflight.test.ts` pins these conservative boundaries.
+An explicit `reason: null` stays terminal. Reasonless incomplete snapshots with semantic output
+stay committed. `tests/routing/combo-stream-preflight.test.ts` pins these boundaries.
 Hop warnings in `src/server/responses/core-combo.ts` name the status and the closed condition from
 `classifyUpstreamCondition` ([proxy-owned error detail](../data-planes/error-detail.md)); upstream codes,
 messages and bodies stay out. `tests/responses/responses-combo-exhausted-error.test.ts` pins that log boundary.
@@ -360,21 +359,22 @@ When a streaming combo child commits output to the client and then terminates `i
 that target under its configured alias selector (`pick.target`) and writer generation, so future
 picks route around the exhausted target without corrupting the active response. Trigger codes
 are strictly bounded:
-- `output_limit` applies a 10-minute cooldown, but only when the turn is unpaused (`!isPausedTurn`)
-  and the child's delivered output tokens actually reach the target's configured or native output ceiling
-  (`resolveOutputCeiling`). A turn ending within the caller's own smaller allowance or an Anthropic
-  `pause_turn` is preserved without cooling the healthy target.
+- `output_limit` applies a 10-minute cooldown when the turn is unpaused and the serving attempt's
+  output tokens reach the routed provider and model's configured or native ceiling (`resolveOutputCeiling`).
+  `src/server/request-log-committed-terminal.ts` reads the serving attempt's usage. The request row
+  still totals usage across attempts. `src/server/responses/core-combo.ts` carries the child's pause
+  marker to the parent before terminal logging. Devin targets without a configured ceiling are
+  ineligible for this cooldown because the Devin preset does not declare one.
 - `stall_timeout` applies a 60-second cooldown, recording the timeout even if finalization overwrote the
   serving attempt status with a client-facing 5xx code.
 Existing live cooldowns with a later expiration (e.g. upstream Retry-After) are never shortened by a
 committed terminal write.
 
-In `src/server/responses/combo-stream-preflight.ts`, a stream consisting solely of reasoning frames
-or commentary-phase items is held up to `COMBO_REQUIRED_TOOL_REASONING_HOLD_MS` (1,000 ms) before commitment
-to protect time-to-first-token. If the child terminates within that 1-second hold with a commentary-only
-or reasoning prelude and no final answer or tool calls (`degenerate_completion`), preflight discards the
-incomplete output and hops to the next combo target instead of committing a truncated answer to the client.
-Once the 1-second hold expires or semantic output arrives, the stream commits and degenerate failover is
-disallowed.
+Responses combo preflight holds reasoning and commentary frames for up to 1,000 ms from the first
+held frame (`COMBO_REQUIRED_TOOL_REASONING_HOLD_MS`). A terminal within that window can trigger
+`degenerate_completion` if its snapshot contains reasoning or commentary and carries no final answer
+or tool call. Incompletes also require replay eligibility. A terminal-only snapshot can itself supply
+the prelude. The next hop remains subject to the combo's eligibility and send budget. Semantic output,
+an unknown event type, or expiry of the hold commits the original stream.
 Coverage: `tests/routing/combo-committed-terminal-cooldown.test.ts` and `tests/routing/combo-stream-preflight.test.ts`.
 
