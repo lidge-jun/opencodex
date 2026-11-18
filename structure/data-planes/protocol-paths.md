@@ -434,10 +434,10 @@ fails closed. Because the source body is never mutated, each build — including
 re-selection moves to another domain — decides from the full envelope copy the lane was given.
 
 Client identity. `src/adapters/anthropic/client-identity.ts` captures a bounded observed CLI or Desktop Code bundle
-on an opaque request-local handle: recognized CLI/SDK/Desktop Code UA plus valid session UUID, `X-App: cli` (or `cli-bg`, a background session), JS and Node
+on an opaque request-local handle: a well-formed Claude Code UA plus valid session UUID, `X-App: cli` (or `cli-bg`, a background session), JS and Node
 SDK markers are required. Optional allowlisted SDK and request-id fields retain valid scalars.
-The TypeScript Agent SDK's `sdk-ts` entrypoint is accepted alongside `cli`, `sdk-cli` and `sdk`,
-with the same required headers and bounds, so its first-party native feature betas are retained.
+The UA entrypoint is a host-chosen label. Its syntax is validated with the rest of the UA,
+so embedded SDK and Desktop hosts can retain first-party native feature betas as labels evolve.
 Duplicates, oversized/invalid values and headers named by `Connection` cannot gain forwarding
 authority. The handle stores its headers privately in a WeakMap and serializes without them.
 The native builder applies it only for first-party Anthropic, independently of bearer/UUID selection. Operator `provider.headers` names take precedence case-insensitively over the observed

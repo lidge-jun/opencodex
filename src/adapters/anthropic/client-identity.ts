@@ -1,5 +1,5 @@
 /** Request-local compatibility data. Client headers never grant authorization or credential authority. */
-import { DESKTOP_ENTRYPOINTS, interceptEntrypoint } from "../../claude/intercept/client-class";
+import { interceptEntrypoint } from "../../claude/intercept/client-class";
 
 const MAX_IDENTITY_BYTES = 4096;
 const MAX_VALUE_BYTES = 512;
@@ -21,11 +21,9 @@ const bundles = new WeakMap<AnthropicClientIdentity, Readonly<Record<string, str
 
 function valid(name: typeof NAMES[number], value: string): boolean {
   if (!value || Buffer.byteLength(value) > MAX_VALUE_BYTES || /[^\x20-\x7e]/.test(value)) return false;
-  if (name === "User-Agent") {
-    const entrypoint = interceptEntrypoint(value);
-    return entrypoint === "cli" || entrypoint === "sdk-cli" || entrypoint === "sdk" || entrypoint === "sdk-ts"
-      || (DESKTOP_ENTRYPOINTS as readonly string[]).includes(entrypoint ?? "");
-  }
+  // Embedded Claude hosts choose the entrypoint label. Validate the Claude UA
+  // shape here and the rest of the required bundle in captureAnthropicClientIdentity.
+  if (name === "User-Agent") return interceptEntrypoint(value) !== null;
   if (name === "X-App") return CLAUDE_CODE_APPS.has(value);
   if (name === "X-Claude-Code-Session-Id" || name === "x-client-request-id") return UUID.test(value);
   if (name === "X-Stainless-Lang") return value === "js";

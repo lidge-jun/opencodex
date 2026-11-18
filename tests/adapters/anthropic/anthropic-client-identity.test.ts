@@ -61,6 +61,26 @@ describe("observed Claude Code identity", () => {
     expect(built.droppedBetas).toBe(false);
     expect(JSON.parse(built.body).output_config).toEqual(output_config);
   });
+  test.each(["t3-code", "local_projects", "future-host"])("retains native request features for a coherent %s client", (entrypoint) => {
+    const userAgent = `claude-cli/2.1.327 (external, ${entrypoint}, agent-sdk/0.1.0)`;
+    const caller = new Headers({ ...observed, "User-Agent": userAgent });
+    const clientIdentity = captureAnthropicClientIdentity(caller);
+    const betas = ["per-turn-control-2026-07-01", "dangerous-tool-use-2026-09-03"];
+    const output_config = { effort: "high" };
+    const messages = [{ ...body.messages[0], output_config }];
+    const built = buildAnthropicMessagesPassthroughRequest(provider, "m", { ...body, messages }, undefined, {
+      clientIdentity, callerAnthropicBeta: [...betas, "fixture-unlisted-beta"].join(","),
+    });
+    const headers = new Headers(built.headers);
+    expect(headers.get("user-agent")).toBe(userAgent);
+    expect(headers.get("authorization")).toBe("Bearer fixture-a-access");
+    for (const beta of betas) expect(headers.get("anthropic-beta")?.split(",")).toContain(beta);
+    expect(headers.get("anthropic-beta")).not.toContain("fixture-unlisted-beta");
+    expect(JSON.parse(built.body).messages[0].output_config).toEqual(output_config);
+
+    caller.delete("X-Claude-Code-Session-Id");
+    expect(captureAnthropicClientIdentity(caller)).toBeUndefined();
+  });
   test("TypeScript Agent SDK still requires every identity header", () => {
     for (const name of ["User-Agent", "X-App", "X-Claude-Code-Session-Id", "X-Stainless-Lang", "X-Stainless-Runtime"]) {
       const headers = new Headers({ ...observed, "User-Agent": "claude-cli/2.1.296 (external, sdk-ts)" });
@@ -105,9 +125,9 @@ describe("observed Claude Code identity", () => {
     expect(built.get("x-stainless-os")).not.toBe("fixture-os");
     expect(built.get("anthropic-beta")).not.toContain("fixture-unlisted-beta");
   });
-  test("UA alone, unknown clients, malformed, oversized and duplicate required values fall back", () => {
+  test("UA alone, foreign clients, malformed, oversized and duplicate required values fall back", () => {
     expect(captureAnthropicClientIdentity(new Headers({ "User-Agent": UA }))).toBeUndefined();
-    for (const [name, value] of [["User-Agent", "third-party/1.0"], ["User-Agent", "claude-cli/2.1.288 (external, arbitrary-token)"], ["User-Agent", "claude-cli/2.1.282 (external, claude desktop)"],
+    for (const [name, value] of [["User-Agent", "third-party/1.0"], ["User-Agent", "claude-cli/2.1.282 (external, claude desktop)"],
       ["User-Agent", "x".repeat(513)], ["X-App", "web"], ["X-Claude-Code-Session-Id", "fixture-not-uuid"], ["X-Stainless-Runtime", "python"]]) {
       expect(captureAnthropicClientIdentity(new Headers({ ...observed, [name!]: value! }))).toBeUndefined();
     }
