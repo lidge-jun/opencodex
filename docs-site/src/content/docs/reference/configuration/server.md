@@ -588,6 +588,8 @@ models without writing the host catalog, so connected clients receive them on th
 turned off, or instances beside another live proxy, retain opt-in refresh (`"enabled": true`)
 without reading Codex sources.
 
+Catalog downloads still require an existing persisted catalog; without one, the endpoint returns 404. Automatic discovery does not bootstrap a complete client catalog.
+
 ```json
 {
   "catalogAutoRefresh": { "enabled": true, "intervalMinutes": 60 }

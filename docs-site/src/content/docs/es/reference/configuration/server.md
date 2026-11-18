@@ -418,6 +418,8 @@ No hay control de tablero para esto todavía; configúrelo en `config.json` o co
 
 Habilitado de forma predeterminada cuando OpenCodex administra su cliente local Codex o funciona como un concentrador: la sección o `enabled` pueden estar ausentes. La actualización se ejecuta cada 60 minutos, con una inicial unos tres minutos después del inicio. Un concentrador sin cliente local administrado descubre modelos nativos mediante sus cuentas ChatGPT del Pool, sin leer el inicio de sesión nativo del host, inspeccionar su entorno de ejecución ni escribir su catálogo o configuración local de forma predeterminada. Un `"enabled": true` explícito conserva la convergencia del catálogo local después del descubrimiento. Las descargas del catálogo del concentrador incluyen los modelos descubiertos sin escribir el catálogo del host; los clientes conectados los reciben en su próxima sincronización. Las demás instancias con la integración Codex desactivada, o junto a otro proxy activo, mantienen la actualización opcional (`"enabled": true`) sin leer fuentes Codex.
 
+Las descargas requieren un catálogo persistido existente; sin él, el endpoint devuelve 404. El descubrimiento automático no crea un catálogo completo para el cliente.
+
 ```json
 {
   "catalogAutoRefresh": { "enabled": true, "intervalMinutes": 60 }

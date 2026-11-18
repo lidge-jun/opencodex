@@ -126,6 +126,25 @@ describe("catalog revision monitor", () => {
     expect(persisted).toHaveLength(2);
   });
 
+  test("projection keys invalidate unchanged files without disabling stable-read caching", () => {
+    let key = "hub:1";
+    let body = "projected-1";
+    let reads = 0;
+    const monitor = createCatalogRevisionMonitor({ catalogPath: () => "fixture",
+      stat: () => ({ size: 20, mtimeMs: 100 }), projectionKey: () => key,
+      read: () => { reads++; return body; }, load: () => null, persist: () => {} });
+    expect(monitor.current()?.etag).toBe(catalogEtag(body));
+    monitor.current();
+    expect(reads).toBe(1);
+    key = "hub:2"; body = "projected-2";
+    expect(monitor.current()?.etag).toBe(catalogEtag(body));
+    expect(reads).toBe(2);
+    key = "persisted"; body = "persisted";
+    expect(monitor.current()?.etag).toBe(catalogEtag(body));
+    monitor.current();
+    expect(reads).toBe(3);
+  });
+
   test("a stored revision with the same etag is kept and not persisted again", () => {
     const dir = configDir();
     const path = join(dir, "catalog.json");

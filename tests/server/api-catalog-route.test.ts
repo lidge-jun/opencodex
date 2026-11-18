@@ -432,6 +432,15 @@ test("hub catalog downloads project discovered natives without writing the persi
     expect(models.find((row: { slug: string }) => row.slug === future)).toMatchObject({ display_name: "Future download model", context_window: 123000 });
     expect(projected.body).not.toContain("private-fixture");
     expect(projected.body).not.toContain("availability_nux");
+    const pickerConfig = { ...config, codexAccountPickerEnabled: true,
+      codexAccounts: [{ id: "pool-fixture", isMain: false }], codexAccountNamespaces: { work: "pool-fixture" } } as OcxConfig;
+    const picker = JSON.parse((await serializePersistedCatalog(pickerConfig)).body!).models;
+    expect(picker.find((model: { slug: string }) => model.slug === future).visibility).toBe("hide");
+    expect(picker.find((model: { slug: string }) => model.slug === `work/${future}`)).toMatchObject({ visibility: "list", context_window: 123000 });
+    const disabledPicker = JSON.parse((await serializePersistedCatalog({ ...pickerConfig, disabledModels: [`work/${future}`] })).body!).models;
+    expect(disabledPicker.find((model: { slug: string }) => model.slug === `work/${future}`).visibility).toBe("hide");
+    const omittedPicker = JSON.parse((await serializePersistedCatalog({ ...pickerConfig, disabledModels: [future], omitDisabledNativeModels: true })).body!).models;
+    expect(omittedPicker.map((model: { slug: string }) => model.slug)).toEqual(["mock/test-model"]);
     const nativeV1 = await serializePersistedCatalog({ ...config, multiAgentMode: "v2", keepNativeChatGptOnV1: true });
     expect(JSON.parse(nativeV1.body!).models.find((model: { slug: string }) => model.slug === future).multi_agent_version).toBe("v1");
     expect(readFileSync(file, "utf8")).toBe(CATALOG_FIXTURE_BYTES);
@@ -468,5 +477,15 @@ test("hub catalog downloads project discovered natives without writing the persi
       display_name: "User name", supported_reasoning_levels: [{ effort: "low", description: "Clamped" }] }] };
     writeFileSync(file, JSON.stringify(converged));
     expect((await serializePersistedCatalog(config)).body).toBe(JSON.stringify(converged));
+    const filledPicker = JSON.parse((await serializePersistedCatalog(pickerConfig)).body!).models;
+    expect(filledPicker[0]).toEqual(converged.models[0]);
+    expect(filledPicker.some((model: { slug: string }) => model.slug === `work/${future}`)).toBe(true);
+    saveConfig(config);
+    const beforeDiscovery = revision.current()?.etag;
+    recordDiscoveredNativeModels([{ slug: "gpt-9-next-download", display_name: "Next model", supported_reasoning_levels: [], supported_in_api: true, visibility: "list" }], "99.0.0");
+    expect(revision.current()?.etag).not.toBe(beforeDiscovery);
+    expect(revision.current()?.etag).toBe((await serializePersistedCatalog(config)).etag);
+    saveConfig({ ...config, runtimeRole: "standalone" });
+    expect(revision.current()?.etag).toBe((await serializePersistedCatalog({ ...config, runtimeRole: "standalone" })).etag);
   } finally { resetDiscoveredNativeModelsForTests(); }
 });
