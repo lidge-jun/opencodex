@@ -2,7 +2,7 @@ import { windowsDefaultExec, windowsDesktopAppAdapter } from "../desktop-app/win
 import type { DesktopExec } from "../desktop-app/types";
 import type { VerifiedDesktopPackage } from "./installed-build";
 import { activateWindowsCodexCompatibility, validatedCompatibilityPacUrl } from "./windows-package-command";
-export { compatibilityActivationScript, validatedCompatibilityPacUrl } from "./windows-package-command";
+export { validatedCompatibilityPacUrl } from "./windows-package-command";
 
 export interface CompatibilityLaunchIo {
   exec?: DesktopExec;

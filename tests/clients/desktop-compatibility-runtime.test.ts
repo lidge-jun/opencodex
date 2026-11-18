@@ -1,6 +1,6 @@
 import { UsageActivation } from "../../src/codex/desktop-compatibility/usage-activation";
 import { evaluateUsageRewrite } from "../../src/codex/desktop-compatibility/usage-policy";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createCertificateAuthority } from "../../src/claude/intercept/local-ca";
 import { X509Certificate } from "node:crypto";
 import { createDesktopCompatibilityRuntime, type DesktopRuntimeIo } from "../../src/codex/desktop-compatibility/runtime";
@@ -10,6 +10,10 @@ import { desktopPackageObservation } from "../helpers/desktop-package-observatio
 import { UsageRelayController, type UsageIdentity } from "../../src/codex/desktop-compatibility/usage-controller";
 import { desktopCompatibilityRuntimeActive, readDesktopCompatibilityLaunch } from "../../src/codex/desktop-compatibility/runtime-ownership";
 import { captureWindowsCompatibilityContext, assertWindowsCompatibilityContext } from "../../src/codex/desktop-compatibility/windows-package-command";
+import * as packageLauncher from "../../src/codex/desktop-compatibility/windows-package-launch";
+import { windowsDesktopAppAdapter } from "../../src/codex/desktop-app/windows";
+import type { DesktopExec } from "../../src/codex/desktop-app/types";
+import { setTrustedWindowsElevationExecutablesForTests } from "../../src/lib/windows-elevation";
 import { createDesktopCertificateService } from "../../src/codex/desktop-compatibility/certificate-service";
 import { resetOptionalShutdownHooksForTests, runOptionalShutdownHooks } from "../../src/lib/optional-shutdown-hooks";
 import type { DesktopConnectionIdentity, DesktopConnectionStore } from "../../src/codex/desktop-compatibility/connection-store";
@@ -208,6 +212,64 @@ function fixture(trusted = true, connectionStore?: DesktopConnectionStore, build
 
 describe("optional native compatibility runtime", () => {
   const assessedInstall = desktopPackageObservation;
+
+  for (const path of ["direct launch", "managed restart"] as const) {
+    for (const result of ["refused readback", "indeterminate completion"] as const) {
+      test(`${path} fences the connection and revokes the trial after ${result}`, async () => {
+        const install = assessedInstall();
+        const io = fixture(true, undefined, undefined, () => createInstalledBuildProbe(async () => install));
+        await io.runtime.start();
+        const pacUrl = io.runtime.getPacUrl()!;
+        const pac = await fetch(pacUrl).then(response => response.text());
+        const port = /PROXY 127\.0\.0\.1:(\d+)/.exec(pac)![1];
+        const read = () => fetch("https://chatgpt.com/backend-api/wham/usage", {
+          proxy: `http://127.0.0.1:${port}`, tls: { ca: io.authority.certPem },
+        }).then(response => response.json());
+        expect(await read()).toEqual(usage);
+        expect((await io.runtime.apply(true)).accepted).toBe(true);
+        expect((await read()).rate_limit.allowed).toBe(true);
+
+        const calls: string[] = [];
+        const exec: DesktopExec = (_file, args) => {
+          const script = args.at(-1)!;
+          if (!script.includes("OpenCodexPackageActivation")) { calls.push("probe"); return ""; }
+          calls.push("activation");
+          if (result === "indeterminate completion") throw new Error("fixture timeout");
+          return JSON.stringify({ pid: 123, verified: false });
+        };
+        const launch = packageLauncher.launchWindowsCodexCompatibility;
+        setTrustedWindowsElevationExecutablesForTests({ powershell: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" });
+        const launchSpy = spyOn(packageLauncher, "launchWindowsCodexCompatibility")
+          .mockImplementation((url, build) => launch(url, build, { platform: "win32", exec }));
+        try {
+          if (path === "direct launch") {
+            expect(await io.runtime.launch()).toEqual({ status: "refused", reason: "activation_failed" });
+            expect(calls).toEqual(["probe", "activation"]);
+          } else {
+            const shell = { pid: 100, parentPid: 50, createdAt: "fixture", executable: "ChatGPT.exe", commandLine: `ChatGPT.exe --proxy-pac-url=${pacUrl}` };
+            const captured = captureWindowsCompatibilityContext([shell], install);
+            expect(() => windowsDesktopAppAdapter.relaunch(exec, install, captured)).toThrow("desktop_compatibility_activation_unverified");
+            expect(calls).toEqual(["activation"]);
+            expect(io.runtime.status()).toMatchObject({ phase: "stopping", usage: { mode: "observe", outputs: 0 } });
+          }
+          expect(readDesktopCompatibilityLaunch()).toBeNull();
+          await expect(read()).rejects.toThrow();
+          await expect(fetch(pacUrl)).rejects.toThrow();
+          if (path === "managed restart") await io.runtime.stop(); // Join the teardown already started by the adapter.
+          expect(io.runtime.status().phase).toBe("off");
+          await io.runtime.start();
+          expect(io.runtime.getPacUrl()).toBe(pacUrl);
+          expect(await io.runtime.apply(true)).toMatchObject({ accepted: false, reason: "no-fresh-eligible-exhaustion" });
+          expect(await read()).toEqual(usage);
+          expect((await io.runtime.apply(false)).accepted).toBe(false);
+          expect((await io.runtime.apply(true)).accepted).toBe(true);
+        } finally {
+          launchSpy.mockRestore();
+          setTrustedWindowsElevationExecutablesForTests(null);
+        }
+      }, 15_000);
+    }
+  }
 
   for (const completion of ["success", "rejection"] as const) {
     test(`late ${completion} from a replaced runtime cannot invalidate its successor`, async () => {

@@ -581,6 +581,8 @@ El panel también puede informar la última comprobación de compilación comple
 
 En Windows, un reinicio completo de Codex desde OpenCodex conserva el argumento PAC local solo si el proceso actual de OpenCodex controla el servicio de compatibilidad. Un punto final obsoleto o ajeno, una instalación distinta o argumentos de conexión ilegibles o incompatibles impiden el reinicio antes de cerrar Codex. Después del cierre, OpenCodex vuelve a comprobar el servicio y la compilación registrados. Para iniciar la aplicación, Windows debe encontrar el nombre completo del paquete verificado y el mismo SHA-256 del ejecutable. OpenCodex comprueba esa identidad y el argumento de conexión en el proceso iniciado antes de confirmar el resultado. Los inicios normales sin ese argumento conservan su comportamiento habitual.
 
+Si no se puede verificar la activación del paquete mediante **Abrir Codex** o durante un reinicio administrado, OpenCodeX detiene el servicio de compatibilidad y revoca la prueba. Inicia de nuevo la observación, espera a que se registre otro agotamiento apto y confirma una nueva prueba.
+
 <a id="transport-coverage-and-recovery-evidence"></a>
 
 ### Cobertura de transporte y evidencia de recuperación

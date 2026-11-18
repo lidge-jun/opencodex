@@ -50,6 +50,8 @@ loopback URL shape, rechecks the discovered package manifest, activates with
 argument. Normal launches keep the existing AppsFolder route. A standalone compatibility
 launch refuses an already running app; it never quits an app or installs a watcher.
 Activation reads the final non-empty JSON line after trimming a BOM or preceding warnings. Invalid output and executor failures remain unverified, without automatic relaunch retries.
+The process probe and activation each use a fixed PowerShell script. They decode package inputs
+from base64-encoded UTF-8 JSON in the child environment.
 `tests/clients/desktop-compatibility-launch.test.ts` covers restart integration and the
 real Windows parser/COM service without launching the user's app.
 
@@ -252,8 +254,11 @@ The managed restart also checks the captured runtime generation and build revisi
 ladder. Before activation, the command rechecks the live registration and the full proof against
 the approved package while holding the two files open. Windows activates by AUMID. Readback uses
 one process handle to check the exact package full name and kernel-reported image path, then
-checks the PAC argument and the held image file's SHA-256 before returning success. A package change
-at the activation boundary may still result in a process starting and a refused launch result.
+checks the PAC argument and the held image file's SHA-256 before returning success. A refused or
+indeterminate activation unbinds launch ownership, closes the runtime's listeners and sockets,
+and invalidates the account-wide trial and its exhaustion observation. A process may still start.
+The runtime leaves any returned PID alone. A fresh runtime start returns to Observe and requires
+another eligible exhaustion record and explicit Apply consent.
 The checks rely on Windows deployment, filesystem and code-signing trust. The executable hash
 covers the on-disk image, and verification is bounded to the described probe and launch points.
 Each completed check also publishes a `buildAssessment` record on runtime status holding only

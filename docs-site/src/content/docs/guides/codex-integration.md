@@ -1272,6 +1272,10 @@ launched process before reporting success. This does not enable a compatibility 
 or watch and restart the app automatically. Normal launches without that routing argument keep
 their existing behavior.
 
+If package activation through **Open Codex** or a managed restart cannot be verified,
+OpenCodeX stops the compatibility service and revokes the trial. Start observation again,
+wait for a fresh eligible exhaustion snapshot, and confirm a new trial.
+
 ### Transport coverage and recovery evidence
 
 The compatibility panel reports identity-checked JSON/SSE usage responses and currently

@@ -1057,7 +1057,11 @@ identity verification and upgraded sockets. NO_PROXY is honored; failures never 
 An invalid or unsupported setting returns `egress_proxy_invalid`. Start never registers a certificate or changes
 login. Launch refuses an app that is already running. It checks the verified full package name and
 executable SHA-256 before package activation, then checks the process image and routing argument
-before reporting success. An unverified activation is refused.
+before reporting success. A refused or indeterminate package activation stops the compatibility
+runtime, closes its managed connections, and revokes the account-wide trial. This also applies
+to a managed Codex restart. OpenCodeX leaves any PID returned by activation alone. To run another
+trial, start observation again, wait for a fresh eligible exhaustion snapshot, and explicitly
+consent to a new Apply request.
 PAC and CONNECT ports are persisted after successful first binding and reused on restart.
 `connection_unavailable` means binding failed; `connection_invalid` or `connection_changed`
 means stored endpoint identity could not be accepted. These failures never silently rotate

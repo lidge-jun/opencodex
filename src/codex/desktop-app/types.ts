@@ -15,6 +15,7 @@ import { sep } from "node:path";
 export interface DesktopAppExecOptions {
   timeout?: number;
   windowsHide?: boolean;
+  env?: NodeJS.ProcessEnv;
 }
 
 /** Returns stdout. Options are part of the seam so the timeout is testable. */

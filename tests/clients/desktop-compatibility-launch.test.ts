@@ -1,12 +1,12 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmColdSpawn } from "../helpers/cold-spawn-warmup";
-import { compatibilityActivationScript, launchWindowsCodexCompatibility, validatedCompatibilityPacUrl } from "../../src/codex/desktop-compatibility/windows-package-launch";
+import { launchWindowsCodexCompatibility, validatedCompatibilityPacUrl } from "../../src/codex/desktop-compatibility/windows-package-launch";
 import { WINDOWS_ACTIVATION_SOURCE } from "../../src/codex/desktop-compatibility/windows-activation-source";
 import { setTrustedWindowsElevationExecutablesForTests } from "../../src/lib/windows-elevation";
 import type { DesktopExec } from "../../src/codex/desktop-app/types";
 import { windowsDesktopAppAdapter } from "../../src/codex/desktop-app/windows";
-import { activateWindowsCodexCompatibility, captureWindowsCompatibilityContext } from "../../src/codex/desktop-compatibility/windows-package-command";
+import { activateWindowsCodexCompatibility, captureWindowsCompatibilityContext, WINDOWS_COMPATIBILITY_ACTIVATION_SCRIPT } from "../../src/codex/desktop-compatibility/windows-package-command";
 import { acquireDesktopCompatibilityRuntime, bindDesktopCompatibilityLaunch, readDesktopCompatibilityLaunch } from "../../src/codex/desktop-compatibility/runtime-ownership";
 
 import { verifiedDesktopPackage } from "../helpers/desktop-package-observation";
@@ -19,22 +19,50 @@ const releases: (() => void)[] = [];
 afterEach(() => { for (const release of releases.splice(0).reverse()) release(); setTrustedWindowsElevationExecutablesForTests(null); });
 function own(pacUrl = pac, current = () => true, revision = () => 1) {
   const release = acquireDesktopCompatibilityRuntime(); releases.push(release);
-  releases.push(bindDesktopCompatibilityLaunch(pacUrl, () => current() ? { build: install, revision: revision() } : null));
+  releases.push(bindDesktopCompatibilityLaunch(pacUrl, () => current() ? { build: install, revision: revision() } : null, release));
   return { release, generation: readDesktopCompatibilityLaunch()!.generation };
 }
 function executor(options: { running?: string; probeFailure?: boolean; output?: string } = {}) {
   const calls: string[] = [];
+  const environments: Array<NodeJS.ProcessEnv | undefined> = [];
   setTrustedWindowsElevationExecutablesForTests({ powershell });
-  const exec: DesktopExec = (_file, args) => {
+  const exec: DesktopExec = (_file, args, opts) => {
     const script = args.at(-1)!; calls.push(script);
+    environments.push(opts?.env);
     if (script.includes("OpenCodexPackageActivation")) return options.output ?? JSON.stringify({ pid: 123, packageFullName, executableHash, verified: true });
     if (options.probeFailure) throw new Error("probe refused");
     return options.running ?? "";
   };
-  return { calls, exec };
+  return { calls, environments, exec };
 }
 
+const readPayload = (env: NodeJS.ProcessEnv | undefined) =>
+  JSON.parse(Buffer.from(env?.OPENCODEX_DESKTOP_COMMAND_PAYLOAD ?? "", "base64").toString("utf8"));
+
 describe("Codex Desktop compatibility package launch", () => {
+  const punctuatedRoot = `${install.root}\\O'Brien ‘’‚‛ (beta) & [preview]; $edition`;
+
+  test("package activation uses byte-identical PowerShell and round-trips its dynamic inputs", () => {
+    const io = executor();
+    const secondPac = pac.replace(":10102", ":10103");
+    activateWindowsCodexCompatibility(io.exec, install, pac);
+    activateWindowsCodexCompatibility(io.exec, { ...install, root: punctuatedRoot }, secondPac);
+    expect(io.calls[1]).toBe(io.calls[0]);
+    expect(readPayload(io.environments[1])).toEqual({
+      family: install.id, root: punctuatedRoot, pac: secondPac, fullName: install.packageFullName,
+      hash: install.executableHash, manifestHash: install.manifestDigest, ancestryHash: install.ancestryIdentity,
+      thumbprint: install.signerThumbprint, imageIdentity: install.executableIdentity,
+    });
+  });
+
+  test("the pre-launch process probe uses byte-identical PowerShell and round-trips its install path", () => {
+    const io = executor();
+    expect(windowsDesktopAppAdapter.listProcesses(io.exec, install)).toEqual([]);
+    expect(windowsDesktopAppAdapter.listProcesses(io.exec, { ...install, root: punctuatedRoot })).toEqual([]);
+    expect(io.calls[1]).toBe(io.calls[0]);
+    expect(readPayload(io.environments[1])).toEqual({ root: punctuatedRoot });
+  });
+
   test("activation cannot report a different version or executable digest from the verified package", () => {
     const build = install;
     for (const observed of [
@@ -69,7 +97,7 @@ describe("Codex Desktop compatibility package launch", () => {
     expect(context).toEqual({ codexCompatibilityPacUrl: pac, codexCompatibilityGeneration: generation, codexCompatibilityBuildRevision: "1" });
     windowsDesktopAppAdapter.relaunch(io.exec, install, context);
     expect(io.calls.at(-1)).toContain("OpenCodexPackageActivation");
-    expect(io.calls.at(-1)).toContain(pac);
+    expect(readPayload(io.environments.at(-1)).pac).toBe(pac);
   });
 
   test("an explicitly unreadable root command line survives parsing and refuses context capture", () => {
@@ -157,8 +185,7 @@ describe("Codex Desktop compatibility package launch", () => {
     expect(activate).toBeGreaterThan(script.indexOf("$executableHash -cne $hash"));
     expect(script.indexOf("::ImageOf($processHandle,$fullName)")).toBeGreaterThan(activate);
     expect(script.indexOf("$imageHash -cne $hash")).toBeGreaterThan(activate);
-    expect(script).toContain(packageFullName);
-    expect(script).toContain(executableHash);
+    expect(readPayload(io.environments.at(-1))).toMatchObject({ fullName: packageFullName, hash: executableHash });
     expect(script).toContain("Get-AppxPackageManifest");
     expect(script).toContain("Launch arguments or image not observed");
     expect(script).not.toContain("Start-Process");
@@ -188,7 +215,7 @@ describe("Codex Desktop compatibility package launch", () => {
 });
 
 describe.skipIf(process.platform !== "win32")("Codex Desktop compatibility activation on real Windows", () => {
-  const encoded = Buffer.from(compatibilityActivationScript(install, pac), "utf8").toString("base64");
+  const encoded = Buffer.from(WINDOWS_COMPATIBILITY_ACTIVATION_SCRIPT, "utf8").toString("base64");
   const validation = ["$ErrorActionPreference='Stop'",
     `$null=[scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')))`,
     "Add-Type -TypeDefinition @'", WINDOWS_ACTIVATION_SOURCE, "'@",

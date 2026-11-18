@@ -1,4 +1,5 @@
 import type { DesktopAppInstall, DesktopExec, DesktopProcess } from "../desktop-app/types";
+import { READ_WINDOWS_DESKTOP_PAYLOAD, windowsDesktopPayloadEnv } from "../desktop-app/windows-command-payload";
 import { resolveTrustedWindowsPowerShellExe } from "../../lib/windows-elevation";
 import { WINDOWS_ACTIVATION_SOURCE } from "./windows-activation-source";
 import { readDesktopCompatibilityLaunch } from "./runtime-ownership";
@@ -17,19 +18,13 @@ export function validatedCompatibilityPacUrl(value: string): string {
   return url.href;
 }
 
-function literal(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
-
-export function compatibilityActivationScript(build: VerifiedDesktopPackage, pacUrl: string): string {
-  const pac = validatedCompatibilityPacUrl(pacUrl);
-  if (build.id !== CODEX_PACKAGE_FAMILY || build.relaunch !== `${build.id}!App`) {
-    throw new Error("desktop_compatibility_invalid_package");
-  }
-  return [
+export const WINDOWS_COMPATIBILITY_ACTIVATION_SCRIPT = [
     WINDOWS_PACKAGE_PROOF_FUNCTIONS,
+    READ_WINDOWS_DESKTOP_PAYLOAD,
     "Add-Type -TypeDefinition @'", WINDOWS_ACTIVATION_SOURCE, "'@",
-    `$family=${literal(build.id)}; $root=${literal(build.root)}; $pac=${literal(pac)}; $fullName=${literal(build.packageFullName)}`,
-    `$hash=${literal(build.executableHash)}; $manifestHash=${literal(build.manifestDigest)}; $ancestryHash=${literal(build.ancestryIdentity)}; $thumbprint=${literal(build.signerThumbprint)}`,
-    `$imageIdentity=${literal(build.executableIdentity)}`,
+    "$family=$payload.family; $root=$payload.root; $pac=$payload.pac; $fullName=$payload.fullName",
+    "$hash=$payload.hash; $manifestHash=$payload.manifestHash; $ancestryHash=$payload.ancestryHash; $thumbprint=$payload.thumbprint",
+    "$imageIdentity=$payload.imageIdentity",
     "$p=Get-DesktopPackage",
     "if($p.PackageFullName -cne $fullName -or $p.InstallLocation -ine $root){throw 'Verified package changed before launch'}",
     "try {",
@@ -50,7 +45,6 @@ export function compatibilityActivationScript(build: VerifiedDesktopPackage, pac
     "} finally {$processHandle.Dispose()}",
     "} finally {", CLOSE_WINDOWS_PACKAGE_FILES, "}",
   ].join("\n");
-}
 
 function matchesInstall(build: VerifiedDesktopPackage, install: DesktopAppInstall): boolean {
   return build.id === install.id && build.relaunch === install.relaunch && build.root.toLowerCase() === install.root.toLowerCase();
@@ -79,19 +73,26 @@ export function captureWindowsCompatibilityContext(processes: readonly DesktopPr
 }
 
 /** Recheck after the asynchronous stop ladder: identical endpoints can belong to a new runtime. */
-export function assertWindowsCompatibilityContext(context: Record<string, string>, install: DesktopAppInstall): VerifiedDesktopPackage {
+export function assertWindowsCompatibilityContext(context: Record<string, string>, install: DesktopAppInstall) {
   const owner = readDesktopCompatibilityLaunch();
   if (!owner || owner.pacUrl !== context.codexCompatibilityPacUrl || owner.generation !== context.codexCompatibilityGeneration
     || String(owner.revision) !== context.codexCompatibilityBuildRevision || !matchesInstall(owner.build, install)) {
     throw new Error("desktop_compatibility_launch_owner_unverified");
   }
-  return owner.build;
+  return owner;
 }
 
 export function activateWindowsCodexCompatibility(exec: DesktopExec, build: VerifiedDesktopPackage, pacUrl: string): { pid: number; packageFullName: string } {
-  const script = compatibilityActivationScript(build, pacUrl);
+  const pac = validatedCompatibilityPacUrl(pacUrl);
+  if (build.id !== CODEX_PACKAGE_FAMILY || build.relaunch !== `${build.id}!App`) {
+    throw new Error("desktop_compatibility_invalid_package");
+  }
+  const env = windowsDesktopPayloadEnv({ family: build.id, root: build.root, pac, fullName: build.packageFullName,
+    hash: build.executableHash, manifestHash: build.manifestDigest, ancestryHash: build.ancestryIdentity,
+    thumbprint: build.signerThumbprint, imageIdentity: build.executableIdentity });
   let text: string;
-  try { text = exec(resolveTrustedWindowsPowerShellExe(), ["-NoProfile", "-NonInteractive", "-Command", script], { timeout: 15_000, windowsHide: true }); }
+  try { text = exec(resolveTrustedWindowsPowerShellExe(), ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_COMPATIBILITY_ACTIVATION_SCRIPT],
+    { timeout: 15_000, windowsHide: true, env }); }
   catch { throw new Error("desktop_compatibility_activation_unverified"); }
   let result: unknown;
   try { result = JSON.parse(text.trim().split(/\r?\n/).at(-1) ?? ""); }

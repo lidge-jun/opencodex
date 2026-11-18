@@ -174,6 +174,11 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
         if (owned !== launchedBy || phase !== "running" || Date.now() >= deadline || contextFailure) return null;
         const binding = buildProbe?.binding();
         return binding && binding.revision === boundBuild?.revision ? binding : null;
+      }, () => {
+        if (owned !== launchedBy || phase !== "running") return;
+        // The restart adapter is synchronous. stop() revokes the trial and begins closing
+        // listeners and sockets before yielding; failed cleanup stays visible on status.
+        void stop().catch(() => {});
       });
       detach = registerOptionalShutdownHook("codex-desktop-compatibility", () => { void stop().catch(() => {}); });
       return status();
@@ -206,7 +211,9 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
       if (verified.binding && buildProbe?.binding().revision !== verified.binding.revision) {
         throw new Error("desktop_compatibility_build_unverified");
       }
-      return launchWindowsCodexCompatibility(current.pacUrl, verified.binding?.build ?? null);
+      const result = launchWindowsCodexCompatibility(current.pacUrl, verified.binding?.build ?? null);
+      if (result.status === "refused" && result.reason === "activation_failed") await stop();
+      return result;
     },
     /** Internal native launch context; management status never returns the control endpoint. */
     getPacUrl: () => owned?.pacUrl ?? null,
