@@ -163,9 +163,11 @@ same-named custom or hosted selectors grant no manual Advisor permission. This a
 ordinary translated Responses and Messages requests as well as web search. A forbidden call
 is rejected before consultation, worker redispatch, or disclosure of its ID and arguments.
 When translated Messages explicitly selects Anthropic's hosted `advisor`, OpenCodex forwards the
-declaration and named choice on eligible routes. An ambiguous or unavailable choice returns HTTP
-400 locally. OpenCodex skips proxy consultations for either outcome. On other turns, automatic
-preflight and adaptive consultations follow operator policy.
+original declaration and named choice on an eligible route. A combo or routing profile can skip
+incompatible candidates under its fallback policy. OpenCodex returns HTTP 400 locally when
+the selection is ambiguous or all attempted candidates are incompatible. Both outcomes skip
+proxy consultations. On other turns, automatic preflight and adaptive consultations follow
+operator policy.
 
 Automatic preflight keeps the fixed runtime transport instruction in a developer message and
 puts the quoted JSON advice in a separate **user-role advisory message**. Advisor-generated text
@@ -229,9 +231,10 @@ consultation never switches the session's main model.
 - Native OpenAI passthrough turns (ChatGPT-pool workers) do not get the synthetic tool; advisor
   support covers routed (translated) providers. Preflight consultation applies to run-turn
   adapters; the tool does not.
-- Translated `/v1/messages` requests (for example Claude Code routed to a translated provider)
-  get the synthetic tool and preflight like `/v1/responses` and `/v1/chat/completions`. The
-  same `policy` and context-sharing consent rules apply, and the settings are read from the live
+- Translated `/v1/messages` requests can receive the synthetic tool when `tool_choice` permits it
+  and run preflight under the configured policy. An explicit hosted Advisor selection follows
+  the rules in [Authority](#authority) and skips both. Context-sharing consent applies to proxy
+  consultations, and the settings are read from the live
   config, so a consent revocation blocks consultations for requests already in flight that have
   not yet been dispatched. It does not cancel a dispatched consultation or retract context that
   already left the proxy.

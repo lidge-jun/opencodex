@@ -197,7 +197,10 @@ describe("advisor responses wiring (end-to-end)", () => {
     const body = await response.text();
     expect(chatRequests).toHaveLength(0);
     expect(workerBodies).toHaveLength(1);
-    expect(JSON.parse(workerBodies[0]!).tools.map((tool: { function: { name: string } }) => tool.function.name)).toEqual(["work__advisor"]);
+    expect(JSON.parse(workerBodies[0]!)).toMatchObject({
+      tools: [{ function: { name: "work__advisor" } }],
+      tool_choice: { type: "function", function: { name: "work__advisor" } },
+    });
     expect(body).toContain("call_adv_1");
     expect(body).toContain('"namespace":"work"');
     expect(body).not.toContain("undeclared_tool_call");

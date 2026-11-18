@@ -35,17 +35,30 @@ function workerStream(blocks: Record<string, unknown>[], stopReason: string): Re
     { headers: { "content-type": "text/event-stream" } });
 }
 
-async function verifyForcedHostedAdvisorChoice(scenario: string) {
-  const sends: { body: { tools?: Record<string, unknown>[]; tool_choice?: unknown }; beta: string | null }[] = [];
+async function verifyHostedAdvisorChoice(scenario: string, route: "direct" | "combo" | "policy") {
+  const sends: { provider: string; body: { tools?: Record<string, unknown>[]; tool_choice?: unknown }; beta: string | null }[] = [];
   const hostedCall = { type: "server_tool_use", id: "srvtoolu_fixture", name: "advisor", input: {} };
   const hostedResult = { type: "advisor_tool_result", tool_use_id: hostedCall.id,
     content: { type: "advisor_result", text: "Hosted advice.", stop_reason: "end_turn" } };
-  const direct = scenario === "direct encoder refusal";
+  const none = scenario === "direct encoder tool_choice none";
+  const direct = scenario === "direct encoder refusal" || none;
   const scoped = scenario === "out of model scope";
   const optedOut = scenario === "forwarding disabled";
   const ambiguous = scenario === "ambiguous catalog";
-  const tools = [HOSTED_ADVISOR, ...(scoped || optedOut || ambiguous
+  const tools = [...(none ? [] : [HOSTED_ADVISOR]), ...(scoped || optedOut || ambiguous || none
     ? [{ name: ambiguous ? "advisor" : "read_file", input_schema: { type: "object" } }] : [])];
+  const targets = ["blocked", "worker"].map(provider => ({ provider, model: MODEL }));
+  const capture = (provider: string) => (async (_url, init) => {
+    const body = JSON.parse(String(init?.body)) as (typeof sends)[number]["body"];
+    sends.push({ provider, body, beta: new Headers(init?.headers).get("anthropic-beta") });
+    if (sends.length > 1) return workerStream([{ type: "text", text: "Done." }], "end_turn");
+    if (scenario === "hosted exchange" && body.tools?.some(tool => tool.type === HOSTED_ADVISOR.type)) {
+      return workerStream([hostedCall, hostedResult, { type: "text", text: "Done." }], "end_turn");
+    }
+    return workerStream([{ type: "tool_use", id: "toolu_fixture", name: "advisor", input: { question: "fixture_private_question" } }], "tool_use");
+  }) as typeof fetch;
+  const worker = { adapter: "anthropic" as const, authMode: "key" as const, apiKey: "fixture",
+    baseUrl: "https://api.anthropic.com", models: [MODEL], liveModels: false, fetch: capture("worker") };
   const config: OcxConfig = {
     defaultProvider: "worker",
     cacheRetention: "none",
@@ -54,18 +67,12 @@ async function verifyForcedHostedAdvisorChoice(scenario: string) {
     ...(scoped ? { apiKeys: [{ id: "scoped", name: "Scoped fixture", key: "fixture",
       createdAt: "2026-01-01T00:00:00.000Z", allowedModels: [MODEL] }] } : {}),
     webSearchSidecar: { enabled: false },
-    providers: { worker: { adapter: "anthropic", authMode: "key", apiKey: "fixture",
-      baseUrl: "https://api.anthropic.com", models: [MODEL], liveModels: false,
-      ...(optedOut ? { forwardAdvisorTool: false } : {}),
-      fetch: (async (_url, init) => {
-        const body = JSON.parse(String(init?.body)) as (typeof sends)[number]["body"];
-        sends.push({ body, beta: new Headers(init?.headers).get("anthropic-beta") });
-        if (sends.length > 1) return workerStream([{ type: "text", text: "Done." }], "end_turn");
-        if (scenario === "hosted exchange" && body.tools?.some(tool => tool.type === HOSTED_ADVISOR.type)) {
-          return workerStream([hostedCall, hostedResult, { type: "text", text: "Done." }], "end_turn");
-        }
-        return workerStream([{ type: "tool_use", id: "toolu_fixture", name: "advisor", input: { question: "fixture_private_question" } }], "tool_use");
-      }) as typeof fetch } },
+    providers: {
+      worker: { ...worker, ...(optedOut ? { forwardAdvisorTool: false } : {}) },
+      ...(route !== "direct" ? { blocked: { ...worker, forwardAdvisorTool: false, fetch: capture("blocked") } } : {}),
+    },
+    ...(route === "combo" ? { combos: { waterfall: { strategy: "failover", targets } } } : {}),
+    ...(route === "policy" ? { routingProfiles: { waterfall: { candidates: targets } } } : {}),
   };
   let consultations = 0;
   let preflightRuns = 0;
@@ -87,29 +94,39 @@ async function verifyForcedHostedAdvisorChoice(scenario: string) {
     const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
       method: "POST",
       headers: { "content-type": "application/json", "anthropic-beta": BETA },
-      body: JSON.stringify({ model: `worker/${MODEL}`, max_tokens: 64, stream: direct,
-        tools, tool_choice: CHOICE, messages: [{ role: "user", content: "Fixture." }] }),
+      body: JSON.stringify({ model: route === "direct" ? `worker/${MODEL}` : `${route}/waterfall`,
+        max_tokens: 64, stream: direct, thinking: { type: "disabled" },
+        tools, tool_choice: none ? { type: "none" } : CHOICE, messages: [{ role: "user", content: "Fixture." }] }),
     }), config, logCtx, scoped ? { requestId: crypto.randomUUID(), start: Date.now(),
       admission: { kind: "configured", keyId: "scoped", source: "bearer" } } : undefined);
     const body = await response.text();
+    if (route === "policy") expect(logCtx.routeDecision?.selected.provider).toBe("blocked");
+    if (route === "combo") {
+      expect(logCtx.attempts?.map(attempt => attempt.provider)).toEqual(
+        ambiguous ? ["blocked"] : ["blocked", "worker"],
+      );
+    }
+    expect(consultations).toBe(0);
+    if (!none) expect(preflightRuns).toBe(0);
     if (scoped || optedOut || ambiguous) {
-      expect({ status: response.status, workerSends: sends.length, consultations, preflightRuns })
-        .toEqual({ status: 400, workerSends: 0, consultations: 0, preflightRuns: 0 });
+      expect(response.status, body).toBe(400);
+      expect(sends).toHaveLength(0);
       expect(JSON.parse(body)).toMatchObject({ type: "error", error: { type: "invalid_request_error",
         message: expect.stringContaining(ambiguous ? "ambiguous" : "unavailable") } });
       return;
     }
-    expect({
-      advisorTools: sends[0]?.body.tools,
-      choice: sends[0]?.body.tool_choice,
-      hostedBeta: sends[0]?.beta?.split(",").some(beta => beta.trim() === BETA) ?? false,
-      consultations,
-      preflightRuns,
-      workerSends: sends.length,
-    }).toEqual({ advisorTools: [HOSTED_ADVISOR], choice: CHOICE, hostedBeta: true, consultations: 0, preflightRuns: 0, workerSends: 1 });
+    expect(sends.map(send => send.provider)).toEqual(["worker"]);
+    if (!none) {
+      expect(sends[0]?.body).toMatchObject({ tools: [HOSTED_ADVISOR], tool_choice: CHOICE });
+      expect(sends[0]?.beta?.split(",").map(beta => beta.trim())).toContain(BETA);
+    }
     if (scenario === "hosted exchange") {
       expect(response.status).toBe(200);
-      expect(JSON.parse(body).content).toContainEqual(hostedResult);
+      const blocks = JSON.parse(body).content;
+      const resultIndex = blocks.findIndex((block: { type: string }) => block.type === "advisor_tool_result");
+      expect(resultIndex).toBeGreaterThan(0);
+      expect(blocks[resultIndex]).toEqual(hostedResult);
+      expect(blocks[resultIndex - 1]).toMatchObject({ ...hostedCall, id: blocks[resultIndex].tool_use_id });
     } else {
       const error = { type: "error", error: { type: "api_error", code: "undeclared_tool_call" } };
       expect(response.status).toBe(direct ? 200 : 502);
@@ -119,6 +136,7 @@ async function verifyForcedHostedAdvisorChoice(scenario: string) {
         expect(body).not.toContain("event: message_stop\n");
         const frames = body.split("\n").filter(line => line.startsWith("data: ")).map(line => JSON.parse(line.slice(6)));
         expect(frames.at(-1)).toMatchObject(error);
+        expect(frames.some(frame => frame.content_block?.type === "tool_use" && frame.content_block.name === "advisor")).toBe(false);
       } else {
         expect(JSON.parse(body)).toMatchObject(error);
       }
@@ -130,15 +148,21 @@ async function verifyForcedHostedAdvisorChoice(scenario: string) {
   }
 }
 
-test.each(["hosted exchange", "ordinary tool call", "direct encoder refusal", "out of model scope", "forwarding disabled", "ambiguous catalog"])(
-  "translated Messages handles a forced hosted Advisor choice with %s", async scenario => {
+test.each([
+  ["hosted exchange", "direct"], ["ordinary tool call", "direct"], ["direct encoder refusal", "direct"],
+  ["direct encoder tool_choice none", "direct"], ["out of model scope", "direct"],
+  ["forwarding disabled", "direct"], ["ambiguous catalog", "direct"],
+  ["hosted exchange", "combo"], ["forwarding disabled", "combo"], ["ambiguous catalog", "combo"],
+  ["hosted exchange", "policy"], ["forwarding disabled", "policy"], ["ambiguous catalog", "policy"],
+] as const)(
+  "translated Messages handles Advisor with %s (route=%s)", async (scenario, route) => {
     const previousHome = process.env.OPENCODEX_HOME;
     const home = mkdtempSync(join(tmpdir(), "ocx-hosted-advisor-choice-"));
     try {
       process.env.OPENCODEX_HOME = home;
       const release = acquireOwnedSpendHome();
       try {
-        await verifyForcedHostedAdvisorChoice(scenario);
+        await verifyHostedAdvisorChoice(scenario, route);
       } finally {
         release();
       }

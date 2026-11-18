@@ -71,14 +71,18 @@ multi-call pairing, overlap and lifecycle release.
   Linked Messages replay uses the same check. `src/claude/inbound-content-options.ts` identifies
   an explicitly selected hosted Advisor from the original declaration before choice lowering.
   The Responses core validates the original choice against the resolved route and admitted
-  catalog. Duplicate matches or a declaration unavailable on that route return a local HTTP 400
-  before dispatch. An admitted named choice drives Anthropic wire encoding and grants no root
+  catalog. Duplicate matches return a request-wide HTTP 400 before dispatch. A declaration
+  unavailable on the current route or under its model scope refuses that candidate before dispatch.
+  Combo and policy fallback can try another candidate with the original declaration and choice.
+  When all attempted candidates are incompatible, delivery retains the public HTTP 400.
+  An admitted named choice drives Anthropic wire encoding and grants no root
   function permission. Explicit hosted selections skip proxy preflight. Other automatic
   consultations follow operator policy. The translated Messages wire and guard are covered by
   `tests/claude-integration/claude-translated-hosted-advisor-choice.test.ts`.
   A buffered refusal preserves the already-parsed rejected worker leg's terminal usage, merged
   with earlier intercepted legs once. Streaming refusal closes its iterator immediately.
-  The empty-completion retry preserves `undeclared_tool_call` and merges usage from the two sends.
+  The empty-completion retry preserves `undeclared_tool_call` and merges available usage.
+  A streaming refusal can close the retry before that send reports terminal usage.
 - Run-turn adapters: preflight support only — the automatic pre-dispatch consultation attempt
   applies, but the synthetic tool is never injected because the run-turn loop cannot intercept it.
 - Native OpenAI passthrough: no advisor support in PR1. The request path is byte-identical to a

@@ -13,7 +13,7 @@ import { addProtocolEntryReason, markProtocolEntry, protocolMarkFeatures } from 
 import { nativeMessagesToolScopeDenial } from "../messages-native-scope";
 import { ADVISOR_SERVER_TOOL_NAME, advisorServerToolDestination, planAnthropicServerTools } from "../../adapters/anthropic/advisor-tool";
 import { isAntigravityRoute } from "../antigravity-direct-eligibility";
-import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse, MandatoryToolChoiceUnavailableError, mandatoryToolChoiceUnavailableResponse } from "./policy-request-scope";
+import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse, markPolicyCandidateRefusal, MandatoryToolChoiceUnavailableError, mandatoryToolChoiceUnavailableResponse } from "./policy-request-scope";
 import {
   agentTaskRecoveryConfig,
   restoreCachedEncryptedAgentTasks,
@@ -1548,13 +1548,15 @@ export async function prepareResponsesRequest(
     if (advisorServerToolDestination(route.provider)) addProtocolEntryReason(logCtx, "advisor-tool-outside-model-scope");
   }
   if (options.anthropicHostedAdvisorSelection) {
+    if (options.anthropicHostedAdvisorSelection === "ambiguous") {
+      return markProxyError(formatErrorResponse(400, "invalid_request_error",
+        "The hosted Advisor tool_choice is ambiguous because multiple tools are named advisor."));
+    }
     const admittedAdvisor = planAnthropicServerTools(route.provider, scopedServerTools, undefined,
       new Set(parsed.context.tools?.map(tool => tool.name)), false).declared.some(tool => tool.name === ADVISOR_SERVER_TOOL_NAME);
-    const ambiguous = options.anthropicHostedAdvisorSelection === "ambiguous";
-    if (ambiguous || !admittedAdvisor) {
-      return markProxyError(formatErrorResponse(400, "invalid_request_error", ambiguous
-        ? "The hosted Advisor tool_choice is ambiguous because multiple tools are named advisor."
-        : "The selected hosted Advisor tool is unavailable for this route or model scope."));
+    if (!admittedAdvisor) {
+      return markPolicyCandidateRefusal(markProxyError(formatErrorResponse(400, "invalid_request_error",
+        "The selected hosted Advisor tool is unavailable for this route or model scope.")));
     }
   }
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
