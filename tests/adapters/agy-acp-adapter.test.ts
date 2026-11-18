@@ -253,7 +253,7 @@ describe("agy acp turn", () => {
     expect(errorCode(h)).toBe("agy_acp_unavailable");
   });
 
-  test("a valid Windows version probe retains its workspace when taskkill cannot confirm a completed leader", async () => {
+  test.each(["win32", "linux"] as const)("a valid version probe retains its workspace when cleanup is unconfirmed on %s", async platform => {
     const calls: string[] = [];
     const h = await run(script(), {
       deps: {
@@ -273,7 +273,8 @@ describe("agy acp turn", () => {
           return child as unknown as AgyAcpChild;
         },
         reap: child => reapProcessTree(child, {
-          graceMs: 0, reapTimeoutMs: 1_000, platform: "win32",
+          graceMs: 0, reapTimeoutMs: 1_000, platform,
+          signalGroup: () => { throw Object.assign(new Error("fixture group permission denied"), { code: "EPERM" }); },
           warnTreeFailure: () => { calls.push("warning"); },
           killWindowsTree: (_pid, done) => {
             (child as unknown as FakeChild).emit("close", 1);
@@ -286,8 +287,9 @@ describe("agy acp turn", () => {
         },
       },
     });
-    expect(calls).toEqual(["warning", "turn", "remove turn"]);
-    expect(terminal(h)).toEqual([{ type: "done" }]);
+    expect(calls).toEqual(platform === "win32" ? ["warning", "turn", "remove turn"] : ["warning"]);
+    if (platform === "win32") expect(terminal(h)).toEqual([{ type: "done" }]);
+    else expect(errorCode(h)).toBe("agy_acp_unavailable");
   });
 
   test.each(["signal failure", "deadline"])("POSIX retains the workspace when tree cleanup is unconfirmed (%s)", async outcome => {

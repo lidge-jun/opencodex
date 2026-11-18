@@ -30,7 +30,7 @@ import {
   type AcpConfigOption, type AcpSelectValue,
 } from "./options";
 import { AGY_ACP_MIN_VERSION, AGY_INSTALL_HINT, MAX_AGY_VERSION_OUTPUT_LENGTH, probeAgyVersion, resolveAgyBinary, type AgyVersionProbe } from "./binary";
-import { AgyAcpCleanupError, AgyAcpTreeCleanupError, AgyAcpWorkspaceCleanupError, agyExecutableMissing, createTurnWorkspace, defaultAgyAcpSpawn, reapProcessTree, type AgyAcpChild, type AgyAcpSpawn, type TurnWorkspace } from "./process";
+import { AgyAcpCleanupError, AgyAcpTreeCleanupError, agyExecutableMissing, createTurnWorkspace, defaultAgyAcpSpawn, reapProcessTree, type AgyAcpChild, type AgyAcpSpawn, type TurnWorkspace } from "./process";
 import { AcpOutputRedactor } from "./output-redaction";
 import { agyAcpPolicyRefusal } from "./policy";
 
@@ -113,10 +113,10 @@ async function runVersion(
   } catch { /* probe failed */ }
   if (workspace) {
     try { await cleanup(workspace, spawnFailed ? undefined : child); } catch (error) {
-      if (error instanceof AgyAcpWorkspaceCleanupError) return undefined;
+      if (!(error instanceof AgyAcpCleanupError)) throw error;
       // A natural Windows exit can supply a valid version even though taskkill can no
       // longer confirm its tree. The reaper warns and the workspace stays in place.
-      if (!(error instanceof AgyAcpTreeCleanupError)) throw error;
+      if (!(error instanceof AgyAcpTreeCleanupError) || error.platform !== "win32") return undefined;
     } finally {
       child?.stdout.destroy();
       child?.stderr.destroy();

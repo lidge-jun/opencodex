@@ -102,7 +102,8 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   tree taskkill and leader closure. An inconclusive cleanup retains the workspace and logs a fixed warning.
   An inconclusive cleanup fails the turn, except that an existing dispatch refusal keeps its original error.
   If directory removal fails after reaping, cleanup reports a fixed error and keeps its ACL bookkeeping.
-  A version probe that exited zero can still supply its version.
+  A completed Windows version probe can supply its version when the exited leader prevents taskkill from confirming
+  cleanup. A POSIX probe requires group cleanup confirmation before supplying a version.
   The terminal event is published after cleanup settles. Coverage:
   `tests/adapters/agy-acp-{adapter,protocol,policy}.test.ts`, `tests/config/agy-acp-config.test.ts`,
   `tests/server/server-agy-acp.test.ts`.

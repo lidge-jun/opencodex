@@ -99,7 +99,7 @@ function defaultKillWindowsTree(pid: number, completed: (ok: boolean) => void): 
 const GROUP_POLL_MS = 25;
 
 export class AgyAcpTreeCleanupError extends AgyAcpCleanupError {
-  constructor(platform = process.platform) {
+  constructor(readonly platform = process.platform) {
     super(platform === "win32"
       ? "Antigravity ACP could not confirm Windows process tree cleanup."
       : "Antigravity ACP could not confirm POSIX process tree cleanup.");
