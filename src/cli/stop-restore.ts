@@ -59,7 +59,7 @@ export async function assertConnectedClientStopSupported(
   const readPinnedRuntime = () => {
     const current = readRuntimePort(target.pid);
     return current?.pid === runtime.pid && current.port === runtime.port && current.hostname === runtime.hostname
-      && current.attestationSecret === runtime.attestationSecret ? current : null;
+      && current.attestationSecret === runtime.attestationSecret && current.clientLinkOwner === runtime.clientLinkOwner ? current : null;
   };
   const origin = `http://${endpoint.hostname}:${endpoint.port}`;
   const deadline = Date.now() + CONNECTED_STOP_PROBE_MS;
@@ -141,9 +141,10 @@ export async function preflightConnectedClientStop(
     if (!isProcessAlive(target.pid)) throw unsupportedConnectedStop();
     const pinned = readRuntimePort(target.pid);
     const savedLink = connection.kind === "connected" && connection.value.transport === "link";
-    const capability = await assertConnectedClientStopSupported(target, { requireLinkStopFence: savedLink || pinned?.clientLinkOwner !== undefined });
-    if (!capability || (capability.nativeClient && connection.kind === "disconnected" && !capability.linkStopFence)) throw unsupportedConnectedStop();
-    if (savedLink || pinned?.clientLinkOwner !== undefined || capability.linkStopFence) {
+    const publishedLink = pinned?.clientLinkOwner != null;
+    const capability = await assertConnectedClientStopSupported(target, { requireLinkStopFence: savedLink || publishedLink });
+    if (!capability || !Bun.deepEquals(readRuntimePort(target.pid), pinned, true)) throw unsupportedConnectedStop();
+    if (savedLink || publishedLink || capability.linkStopFence) {
       const link = connection.kind === "connected" && linkStopConnectionOwner(connection.value);
       if (!link || pinned?.clientLinkOwner !== link || loadConfig().port !== target.port) throw unsupportedConnectedStop();
       // A native Child has no /api/stop refusal: SIGTERM can escalate to SIGKILL.
@@ -201,6 +202,9 @@ export async function preflightConnectedClientStop(
       } catch (error) {
         throw new ProxyOwnershipRefusedError(`Link Child file routing restore refused: ${error instanceof Error ? error.message : "restoration failed"}. No process was stopped. ${fenced ? "Sync remains fenced; " : ""}repair the client configuration or ownership evidence, then retry ocx stop.`, "link_file_restore_refused");
       }
+    } else if (capability.nativeClient && (connection.kind !== "connected" || pinned?.clientLinkOwner !== null)) {
+      // Older native listeners cannot distinguish Hub from Link once the saved connection drifts.
+      throw unsupportedConnectedStop();
     }
     return null;
   } catch (cause) {

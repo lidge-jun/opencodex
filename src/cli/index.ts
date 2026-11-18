@@ -1130,7 +1130,7 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
   let connectedClientAlreadyStopped = false;
   let linkStop: LinkStopPreflight | undefined;
   if (needsConnectedStopPreflight(connectedClientState, initialRuntime)
-    && (!stoppingSibling || initialRuntime?.clientLinkOwner !== undefined
+    && (!stoppingSibling || initialRuntime?.clientLinkOwner != null
       || connectedClientState.kind === "invalid" || connectedClientState.kind === "mismatched")) {
     const preflight = await preflightConnectedClientStop(snapshot?.approval, onFence, inheritedTeardowns, proof => { linkStop = proof; });
     if (preflight === "already-stopped") connectedClientAlreadyStopped = true;
@@ -1159,7 +1159,7 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
       if (pid !== undefined && pid !== linkStop.target.pid) throw unsupportedConnectedStop();
       if (pid === undefined || isProcessAlive(pid)) linkStop.verify();
     } else if (!stoppingSibling && (state.kind === "connected" && state.value.transport === "link"
-      || readRuntimePort()?.clientLinkOwner !== undefined) && !connectedClientAlreadyStopped) {
+      || readRuntimePort()?.clientLinkOwner != null) && !connectedClientAlreadyStopped) {
       throw unsupportedConnectedStop();
     }
   };

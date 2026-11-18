@@ -345,7 +345,7 @@ export async function startClientRuntime(
   if (state.kind !== "connected") throw new Error(`client runtime refused: client state is ${state.kind}`);
   const config = loadConfig();
   const linkMode = isLinkConnection(state.value);
-  const clientLinkOwner = linkStopConnectionOwner(state.value);
+  const clientLinkOwner = linkMode ? linkStopConnectionOwner(state.value) : null;
   if (linkMode && (!Number.isInteger(config.port) || config.port < 1 || config.port > 65535)) {
     throw new Error("link mode requires a valid local config port");
   }
@@ -426,7 +426,7 @@ export async function startClientRuntime(
         // A new generation per publication: syncs admitted before a failed restart refuse to commit
         // into the runtime that serves again, while syncs admitted from here on proceed.
         writeRuntimePort({ ...clientRuntimeRecord(process.pid, boundPort, attestationSecret), servingGeneration: randomUUID(),
-          ...(clientLinkOwner ? { clientLinkOwner } : {}) });
+          clientLinkOwner });
       };
       if (rollback) withConfigMutationLockSync(publishRecord);
       else publishRecord();

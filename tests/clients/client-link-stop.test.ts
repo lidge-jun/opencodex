@@ -344,6 +344,13 @@ test("ocx stop rechecks Link ownership before forced fallback after an unanswere
   expect(report.fileAfter.pi).not.toContain("127.0.0.1");
 }, 20_000);
 
+test("an older native Child cannot be treated as Hub-owned from saved config alone", async () => {
+  const report = await runStop({ mode: "file-stop", fileClients: ["pi"], oldStopCapability: true,
+    legacyOwnerRecord: true, stopConnectionDrift: "hub", expectedUnsupportedStop: true });
+  expect(report.result).toEqual({ exitCode: 1, calls: { service: 0, killed: 0 }, bound: true, stopping: false });
+  expect(report.fileAfter).toEqual(report.fileOwnedBytes);
+}, 20_000);
+
 for (const mutation of ["connection", "selection", "journal", "process-journal", "unverified", "rotation", "hub"]) {
   test(`Link restore refuses ${mutation} evidence without touching its files`, async () => {
     const report = await runStop({ mode: "helper", mutation });

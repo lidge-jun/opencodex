@@ -164,8 +164,8 @@ export type RuntimePortState = {
   clientStopRequested?: boolean;
   /** This stop's exact deferred-teardown nonce and OS process incarnation. */
   clientStopOwner?: ClientStopOwner;
-  /** Stable fingerprint of the Link connection this process started serving. */
-  clientLinkOwner?: string;
+  /** Stable serving Link fingerprint, or null for a native Hub client. */
+  clientLinkOwner?: string | null;
   /**
    * Fresh for every publication of a client runtime, including the rollback of a failed restart.
    * A sync compares the whole record before each commit, so one captured before a restart cannot

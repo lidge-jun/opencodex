@@ -88,7 +88,7 @@ An explicit `ocx stop` verifies that the running Child still serves the saved Li
 
 Stop the running proxy (by PID), remove the PID file, and restore native Codex for standalone owners. If a managed
 background service is installed, `ocx stop` also stops it first so it cannot respawn the proxy.
-On a connected hub client, `ocx stop` leaves Codex routing, its
+A native client that cannot prove whether it serves a Link or Hub connection refuses to stop. Update and restart older native clients through their supervisor, then retry. On a connected hub client, `ocx stop` leaves Codex routing, its
 model catalog and the Grok config as they are, including after a successful API stop: the connection
 owns them, and `ocx start` serves them again without re-injecting routing. Use `ocx disconnect` to hand Codex back to its own account. If Codex on a connected
 client already reads native routing, `ocx status` names `ocx sync --restart-codex` to point it back.

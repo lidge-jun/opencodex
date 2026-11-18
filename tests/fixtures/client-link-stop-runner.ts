@@ -31,6 +31,7 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   lateFileSync?: boolean;
   deferFileApply?: boolean;
   oldStopCapability?: boolean;
+  legacyOwnerRecord?: boolean;
   stopConnectionDrift?: "invalid" | "mismatched" | "disconnected" | "other-link" | "hub";
   driftDuringFallback?: boolean;
   finishStopBeforeRollback?: boolean;
@@ -376,6 +377,12 @@ if (options.mode === "retry") {
     await ready;
   }
   if (options.mode === "file-stop") {
+    if (options.legacyOwnerRecord) {
+      const path = join(home, "runtime-port.json");
+      const runtime = JSON.parse(readFileSync(path, "utf8"));
+      delete runtime.clientLinkOwner;
+      writeFileSync(path, JSON.stringify(runtime));
+    }
     if (options.stopConnectionDrift) {
       const path = join(home, "config.json");
       const saved = JSON.parse(readFileSync(path, "utf8"));
