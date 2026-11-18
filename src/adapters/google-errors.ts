@@ -73,10 +73,76 @@ const GOOGLE_TRANSIENT_RATE_LIMIT_PATTERNS = [
   "concurrent request limit",
 ];
 
+/** Whether the text names a transient rate limit rather than hard quota exhaustion. */
+export function isGoogleTransientRateLimitText(text: string): boolean {
+  const lower = text.toLowerCase();
+  return GOOGLE_TRANSIENT_RATE_LIMIT_PATTERNS.some(needle => lower.includes(needle));
+}
+
 export function isGoogleQuotaExhaustedText(text: string): boolean {
   const lower = text.toLowerCase();
   if (GOOGLE_TRANSIENT_RATE_LIMIT_PATTERNS.some(needle => lower.includes(needle))) return false;
   return GOOGLE_QUOTA_EXHAUSTED_NEEDLES.some(needle => lower.includes(needle));
+}
+
+/**
+ * `ErrorInfo.reason` values that make a 429 a rate/quota signal the retry ladder may wait out.
+ * Google writes these into `error.details[]`; Cloud Code Assist answers a genuine capacity 429
+ * with `reason: "RATE_LIMIT_EXCEEDED"` and answers a request-shape/policy rejection with no
+ * `details` at all.
+ */
+const GOOGLE_RETRYABLE_429_ERROR_REASONS: Record<string, true> = {
+  RATE_LIMIT_EXCEEDED: true,
+  QUOTA_EXCEEDED: true,
+  RATE_LIMIT_EXCEEDED_MODEL: true,
+};
+
+/** Narrow a JSON value to a plain object without asserting a shape it may not have. */
+function jsonRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** Every `error.details[].reason` in a Google error envelope, in payload order. */
+function googleErrorReasons(payloadText: string): string[] {
+  const trimmed = payloadText.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return [];
+  const parsed = jsonRecord(parseUpstreamJsonPayload(trimmed));
+  if (!parsed) return [];
+  const details = jsonRecord(parsed.error)?.details ?? parsed.details;
+  if (!Array.isArray(details)) return [];
+  const reasons: string[] = [];
+  for (const detail of details) {
+    const reason = safeUpstreamErrorString(jsonRecord(detail)?.reason);
+    if (reason) reasons.push(reason);
+  }
+  return reasons;
+}
+
+/**
+ * Whether a 429 says anything a replay can act on.
+ *
+ * The ladder replays a byte-identical body after 250 ms, doubling to 2 s. That is a sensible
+ * probe for a burst limit that clears, and meaningless for a refusal Google already made on the
+ * request's shape: the same bytes are refused again. Only evidence in the response separates
+ * the two, so this reports whether any exists — a `Retry-After` header, a `RetryInfo.retryDelay`
+ * / `quotaResetDelay` detail, a transient-rate-limit phrase, or a structured
+ * `ErrorInfo.reason`. A 429 with none of them is reported as-is instead of being replayed.
+ *
+ * Observed Cloud Code Assist shapes behind this split (same account, minutes apart):
+ * - capacity: `RESOURCE_EXHAUSTED` / "You have exhausted your capacity on this model. Resets in
+ *   0s." with `details[].reason: "RATE_LIMIT_EXCEEDED"` — already hard-quota classified, and
+ *   evidence-bearing if it ever is not;
+ * - request-shape rejection: `RESOURCE_EXHAUSTED` / "Resource has been exhausted (e.g. check
+ *   quota)." with no `details`, no `Retry-After` — replayed three times per turn, refused three
+ *   times per turn.
+ */
+export function hasGoogle429RetryEvidence(headers: Headers, payloadText: string): boolean {
+  if (headers.get("retry-after")?.trim()) return true;
+  if (extractGoogleRetryAfterSeconds(payloadText) !== undefined) return true;
+  if (isGoogleTransientRateLimitText(payloadText)) return true;
+  return googleErrorReasons(payloadText).some(reason => GOOGLE_RETRYABLE_429_ERROR_REASONS[reason] === true);
 }
 
 
