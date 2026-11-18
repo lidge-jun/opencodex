@@ -13,6 +13,24 @@ opencodex ships 111 built-in presets: 89 key-based, 18 OAuth, three local, and o
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key where the provider can check one, and stores it. Notable entries:
 
+**[OpenDesign Go](https://go.open-design.ai/)** provides subscription model access through a workspace
+API key. To use it:
+
+1. Choose a Go plan on the provider website, then create an API key in the workspace that has
+   access to that plan. See the [official API setup guide](https://open-design.ai/help/cloud-api/).
+2. In the opencodex dashboard, open **Add provider**, find **OpenDesign Go**, and enter that
+   workspace key. The preset uses the `openai-chat` adapter and
+   `https://amr-link.open-design.ai/v1`.
+3. Load the models available to the key and select a discovered model, for example
+   `deepseek-v4.1-flash` when included in your workspace. The routed model name is
+   `opendesign-go/deepseek-v4.1-flash`; opencodex sends the bare model id upstream.
+4. Connect your client using the [client support guide](/reference/client-support/) and send a short
+   request to the selected model.
+
+The catalog is fetched from `/models` with your workspace key; availability and usage limits
+follow your plan. This preset uses Chat Completions through the existing adapter. It does not
+sign in to an OpenDesign account or display subscription allowance windows.
+
 **ClinePass** uses a Cline API key with the [official subscription catalog](https://docs.cline.bot/getting-started/clinepass)
 and [Chat Completions endpoint](https://docs.cline.bot/api/chat-completions), operated by Cline Bot Inc. under
 [Cline's terms](https://cline.bot/tos). A routed id such as `cline-pass/cline-pass/kimi-k3` is
@@ -53,6 +71,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | --- | --- |
 | **OpenAI (API key)** | `https://api.openai.com/v1` |
 | **Anthropic (API key)** | `https://api.anthropic.com` |
+| OpenDesign Go | `https://amr-link.open-design.ai/v1` |
 | **OpenRouter** | `https://openrouter.ai/api/v1` |
 | **Cline** | `https://api.cline.bot/api/v1` |
 | **ClinePass** | `https://api.cline.bot/api/v1` |

@@ -139,6 +139,22 @@ import {
 
 export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
   {
+    id: "opendesign-go",
+    label: "OpenDesign Go",
+    adapter: "openai-chat",
+    baseUrl: "https://amr-link.open-design.ai/v1",
+    authKind: "key",
+    dashboardUrl: "https://go.open-design.ai/",
+    liveModels: true,
+    preserveCustomDestination: true,
+    defaultModel: "deepseek-v4.1-flash",
+    // Catalog access is workspace-scoped; do not seed models absent from the supplied key.
+    // No provider-wide reasoning effort contract is assumed from model names alone.
+    reasoningEfforts: [],
+    modelDiscovery: { path: "models", maxResponseBytes: 256 * 1024, maxModels: 256 },
+    note: "OpenDesign Go subscription with a workspace API key. Models and usage limits depend on the workspace plan. Setup: https://open-design.ai/help/cloud-api/.",
+  },
+  {
     // Verified 2026-09-21: docs.typesafe.ai/introduction/quickstart and /api document the fixed
     // endpoint, Bearer auth, jev-latest, and TYPESAFE_API_KEY; typesafe.ai/legal/mca permits API integration.
     id: "jev",

@@ -1,6 +1,7 @@
 {
   "m365-copilot-security.test.ts": "providers",
   "m365-copilot-executor.test.ts": "providers",
+  "opendesign-go-provider.test.ts": "providers",
   "cursor-auto-tool-result-replay.test.ts": "providers/cursor",
   "provider-alias-template.test.ts": "providers",
   "provider-passive-wire-model.test.ts": "providers",

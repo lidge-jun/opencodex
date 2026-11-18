@@ -345,11 +345,11 @@ decision backends) lives in [JEV Decision Routing](providers/jev-decision.md), i
 
 ## Preset notes
 
-The Crusoe preset uses the fixed-key preset path at `https://api.inference.crusoecloud.com/v1`. Its
-registry-owned policy admits only public rows whose `architecture.modality` is `text` or
+The `opendesign-go` key preset uses the existing Chat adapter at `https://amr-link.open-design.ai/v1`, discovers the workspace-scoped `/models` catalog without a static fallback roster, advertises no unverified reasoning-effort ladder, and preserves older same-named custom destinations.
+
+The Crusoe preset uses the fixed-key preset path at `https://api.inference.crusoecloud.com/v1`. Its registry-owned policy admits only public rows whose `architecture.modality` is `text` or
 `multimodal`, caps the response at 256 KiB and 256 raw rows, and leaves same-named custom
-destinations untouched. Five catalog ids carry explicit text-and-image input metadata;
-`openai/gpt-oss-120b` alone carries a direct low/medium/high `reasoning_effort` ladder.
+destinations untouched. Five catalog ids carry explicit text-and-image input metadata; `openai/gpt-oss-120b` alone carries a direct low/medium/high `reasoning_effort` ladder.
 
 Provider-scoped capability hints remain authoritative when discovery returns an id without
 capabilities. In particular, `src/providers/registry/entries-core.ts` assigns OpenCode Go's live
