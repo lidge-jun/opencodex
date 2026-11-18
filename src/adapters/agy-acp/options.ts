@@ -49,8 +49,10 @@ function selectValues(raw: unknown): AcpSelectValue[] | undefined {
 export function parseConfigOptions(raw: unknown): AcpConfigOption[] | undefined {
   if (!Array.isArray(raw) || raw.length > MAX_OPTIONS) return undefined;
   const out: AcpConfigOption[] = [];
+  const ids = new Set<string>();
   for (const entry of raw) {
-    if (!isRecord(entry) || typeof entry.id !== "string" || typeof entry.type !== "string") return undefined;
+    if (!isRecord(entry) || typeof entry.id !== "string" || !entry.id || ids.has(entry.id) || typeof entry.type !== "string") return undefined;
+    ids.add(entry.id);
     const values = entry.type === "select" ? selectValues(entry.options) : [];
     if (!values) return undefined;
     out.push({
@@ -117,7 +119,8 @@ const EFFORT_LABELS: Record<string, readonly string[]> = {
 };
 
 export function effortLabels(effort: string): readonly string[] | undefined {
-  return EFFORT_LABELS[effort.trim().toLowerCase()];
+  const key = effort.trim().toLowerCase();
+  return Object.hasOwn(EFFORT_LABELS, key) ? EFFORT_LABELS[key] : undefined;
 }
 
 export type ModelPhase = "initial" | "pending" | "selected";

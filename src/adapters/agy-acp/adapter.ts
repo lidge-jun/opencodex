@@ -30,7 +30,7 @@ import {
   type AcpConfigOption, type AcpSelectValue,
 } from "./options";
 import { AGY_ACP_MIN_VERSION, AGY_INSTALL_HINT, MAX_AGY_VERSION_OUTPUT_LENGTH, probeAgyVersion, readAgyExecutable, resolveAgyBinary, type AgyVersionProbe } from "./binary";
-import { AgyAcpCleanupError, AgyAcpTreeCleanupError, agyExecutableMissing, createTurnWorkspace, defaultAgyAcpSpawn, reapProcessTree, type AgyAcpChild, type AgyAcpSpawn, type TurnWorkspace } from "./process";
+import { AgyAcpCleanupError, AgyAcpTreeCleanupError, agySpawnCreatedNoProcess, createTurnWorkspace, defaultAgyAcpSpawn, reapProcessTree, type AgyAcpChild, type AgyAcpSpawn, type TurnWorkspace } from "./process";
 import { AcpTurnOutput } from "./output-redaction";
 import { agyAcpPolicyRefusal } from "./policy";
 
@@ -98,30 +98,30 @@ async function runVersion(
   let version: string | undefined;
   try {
     workspace = await makeWorkspace();
-    if (readAgyExecutable(binary)?.identity !== executable.identity) {
-      const unused = workspace;
-      workspace = undefined;
-      await cleanup(unused);
-      return undefined;
-    }
+    if (readAgyExecutable(binary)?.identity !== executable.identity) throw new Error("Executable changed before the version probe");
     const probe = spawnChild(executable.path, ["--version"], { cwd: workspace.dir, env: childEnv(workspace) });
     child = probe;
     let out: string | undefined = "";
-    probe.stdout.setEncoding("utf8");
-    probe.stdout.on("data", (chunk: string) => {
-      if (out !== undefined) out = out.length + chunk.length <= MAX_AGY_VERSION_OUTPUT_LENGTH ? out + chunk : undefined;
-    });
-    probe.stderr.on("data", () => {});
-    probe.stdin.on("error", () => {});
     const exitCode = await new Promise<number | null | undefined>(resolve => {
       const timer = setTimeout(() => resolve(undefined), VERSION_TIMEOUT_MS);
-      probe.once("close", (code: number | null) => { clearTimeout(timer); resolve(code); });
-      probe.once("error", (error: NodeJS.ErrnoException) => {
-        spawnFailed = agyExecutableMissing(probe, error);
+      probe.on("error", (error: NodeJS.ErrnoException) => {
+        spawnFailed = agySpawnCreatedNoProcess(probe, error);
         clearTimeout(timer);
         resolve(undefined);
       });
-      probe.stdin.end();
+      probe.once("close", (code: number | null) => { clearTimeout(timer); resolve(code); });
+      const { stdin, stdout, stderr } = probe;
+      if (!stdin || !stdout || !stderr) {
+        out = undefined;
+        return; // Wait for the deferred spawn error or closure.
+      }
+      stdout.setEncoding("utf8");
+      stdout.on("data", (chunk: string) => {
+        if (out !== undefined) out = out.length + chunk.length <= MAX_AGY_VERSION_OUTPUT_LENGTH ? out + chunk : undefined;
+      });
+      stderr.on("data", () => {});
+      stdin.on("error", () => {});
+      stdin.end();
     });
     if (exitCode === 0) version = out;
   } catch { /* probe failed */ }
@@ -132,8 +132,8 @@ async function runVersion(
       // longer confirm its tree. The reaper warns and the workspace stays in place.
       if (!(error instanceof AgyAcpTreeCleanupError) || error.platform !== "win32") return undefined;
     } finally {
-      child?.stdout.destroy();
-      child?.stderr.destroy();
+      child?.stdout?.destroy();
+      child?.stderr?.destroy();
     }
   }
   return version;
@@ -256,7 +256,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
     let systemOnSession = false;
     let state: AcpConfigOption[] = [];
     let target: AcpSelectValue | undefined;
-    let thoughtTarget: AcpSelectValue | undefined;
+    const { stdin, stdout, stderr } = child;
     let modelSetterPending = false;
     let prompting = false;
     let usage: OcxUsage | undefined;
@@ -269,7 +269,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
     const finished = new Promise<void>((resolve, reject) => { resolveTurn = resolve; rejectTurn = reject; });
 
     const send = (frame: Record<string, unknown>): void => {
-      if (!child.stdin.destroyed) child.stdin.write(`${JSON.stringify(frame)}\n`);
+      if (stdin && !stdin.destroyed) stdin.write(`${JSON.stringify(frame)}\n`);
     };
     const request = (kind: Pending, build: (id: JsonRpcId) => Record<string, unknown>): void => {
       const id = nextId++;
@@ -293,7 +293,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
         // The reaper warns and retains the workspace. Keep an existing dispatch refusal.
         if (!refusal || !(error instanceof AgyAcpCleanupError)) throw error;
       });
-      try { child.stdout.destroy(); } catch { /* already closed */ }
+      try { stdout?.destroy(); } catch { /* already closed */ }
       void reaped.finally(() => {
         if (!aborted && !incoming.abortSignal?.aborted && terminal) {
           output.flush();
@@ -344,7 +344,6 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
           finish(invalidRequest("agy_acp_effort_not_offered", "The requested reasoning effort is not offered by this Antigravity CLI."));
           return;
         }
-        thoughtTarget = match.value;
         if (currentSelection(found.selector)?.value !== match.value.value) {
           request("set_thought", id => setConfigOptionFrame(id, sessionId!, found.selector.id, match.value.value));
           return;
@@ -353,8 +352,19 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       sendPrompt();
     }
 
+    function checkSelectedThinking(): boolean {
+      if (!thoughtWanted) return true;
+      const thought = findSelector(state, "thought_level");
+      if (thought.ok) {
+        const desired = matchValue(thought.selector.values, thoughtWanted);
+        if (desired.ok && currentSelection(thought.selector)?.value === desired.value.value) return true;
+      }
+      fail("agy_acp_protocol", "thinking level not acknowledged");
+      return false;
+    }
+
     function sendPrompt(): void {
-      if (!checkSelectedModel()) return;
+      if (!checkSelectedModel() || !checkSelectedThinking()) return;
       const refuse = (error: unknown): void => finish(undefined, false, { error });
       try {
         const prompt = buildAcpPrompt(parsed, !systemOnSession);
@@ -365,8 +375,8 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
           try {
             if (settled) return;
             if (incoming.abortSignal?.aborted) return onAbort();
-            if (!checkSelectedModel()) return;
-            if (child.stdin.destroyed || child.stdin.writableEnded) return fail("agy_acp_protocol", "prompt pipe closed");
+            if (!checkSelectedModel() || !checkSelectedThinking()) return;
+            if (!stdin || stdin.destroyed || stdin.writableEnded) return fail("agy_acp_protocol", "prompt pipe closed");
             incoming.beforePhysicalSend?.();
             if (permit && !permit.use()) return refuse(new SendBudgetExhaustedError());
             prompting = true;
@@ -427,8 +437,6 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       }
       if (kind === "set_thought") {
         if (!adoptState(r.configOptions)) return;
-        const thought = findSelector(state, "thought_level");
-        if (!thought.ok || currentSelection(thought.selector)?.value !== thoughtTarget?.value) return fail("agy_acp_protocol", "thinking level not acknowledged");
         return sendPrompt();
       }
       // prompt
@@ -453,7 +461,9 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
         return onReply(kind, frame.result, frame.error);
       }
       if (frame.method !== "session/update") return;
-      const update = (frame.params as { update?: Record<string, unknown> } | undefined)?.update;
+      const params = frame.params as { sessionId?: unknown; update?: Record<string, unknown> } | undefined;
+      if (!sessionId || params?.sessionId !== sessionId) return;
+      const update = params.update;
       if (!update || typeof update !== "object") return;
       if (update.sessionUpdate === "config_option_update") {
         if (!adoptState(update.configOptions)) return;
@@ -486,9 +496,8 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
     }
 
     incoming.abortSignal?.addEventListener("abort", onAbort, { once: true });
-    child.stdin.on("error", () => {});
     child.on("error", (error: NodeJS.ErrnoException) => {
-      spawnFailed = agyExecutableMissing(child, error);
+      spawnFailed = agySpawnCreatedNoProcess(child, error);
       fail("agy_acp_unavailable", AGY_INSTALL_HINT);
     });
     child.on("close", (code: number | null) => {
@@ -496,12 +505,15 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       flush(buffer);
       buffer = "";
       if (settled) return;
+      if (!stdin || !stdout || !stderr) return fail("agy_acp_unavailable", AGY_INSTALL_HINT);
       fail("agy_acp_protocol", `exited before answering${typeof code === "number" ? `, exit code ${code}` : ""}`);
     });
+    if (!stdin || !stdout || !stderr) return finished; // Bun can report spawn errors asynchronously.
+    stdin.on("error", () => {});
     // stderr is drained so the child never blocks, and discarded: it may echo prompt text.
-    child.stderr.on("data", () => {});
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
+    stderr.on("data", () => {});
+    stdout.setEncoding("utf8");
+    stdout.on("data", (chunk: string) => {
       if (settled) return;
       totalBytes += Buffer.byteLength(chunk, "utf8");
       if (totalBytes > MAX_ACP_TOTAL_BYTES) return fail("agy_acp_protocol", "output over the turn limit");
@@ -515,7 +527,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       }
       if (Buffer.byteLength(buffer, "utf8") > MAX_ACP_LINE_BYTES) fail("agy_acp_protocol", "frame over the line limit");
     });
-    child.stdout.on("end", () => {
+    stdout.on("end", () => {
       const tail = buffer;
       buffer = "";
       flush(tail);

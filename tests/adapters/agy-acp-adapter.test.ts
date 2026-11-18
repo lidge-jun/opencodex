@@ -24,7 +24,7 @@ type Frame = Record<string, any>;
 interface AgentApi {
   reply(id: unknown, result: unknown): void;
   error(id: unknown, code: number, message: string): void;
-  notify(update: Record<string, unknown>): void;
+  notify(update: Record<string, unknown>, sessionId?: string): void;
   request(id: unknown, method: string, params?: unknown): void;
   stderr(text: string): void;
   exit(code: number): void;
@@ -70,7 +70,7 @@ function script(onFrame?: (frame: Frame, api: AgentApi, state: { config: Frame[]
     const api: AgentApi = {
       reply: (id, result) => write({ jsonrpc: "2.0", id, result }),
       error: (id, code, message) => write({ jsonrpc: "2.0", id, error: { code, message } }),
-      notify: update => write({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "s1", update } }),
+      notify: (update, sessionId = "s1") => write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update } }),
       request: (id, method, params) => write({ jsonrpc: "2.0", id, method, params }),
       stderr: text => child.stderr.write(text),
       exit: code => { child.exitCode = code; child.stdout.end(); child.emit("close", code); },
@@ -292,15 +292,26 @@ describe("agy acp turn", () => {
     expect(calls).toEqual(confirmed ? ["reap", "remove"] : ["reap"]);
   });
 
-  test.each(["probe", "turn"])("an asynchronous missing executable removes the %s workspace", async phase => {
+  test.each([
+    ["probe", "ENOENT", false], ["turn", "ENOENT", false],
+    ["probe", "EACCES", false], ["turn", "EACCES", false],
+    ["probe", "EMFILE", true], ["turn", "EMFILE", true],
+  ] as const)("deferred %s spawn error %s removes the unused workspace", async (phase, code, noPipes) => {
     let warned = false;
+    let observedHandler = false;
     const h = await run(script(), {
       deps: {
         ...(phase === "probe" ? { probeVersion: undefined } : {}),
         spawn: () => {
           const child = new FakeChild();
           child.pid = undefined;
-          queueMicrotask(() => child.emit("error", Object.assign(new Error("missing executable"), { code: "ENOENT" })));
+          // Catch an otherwise unhandled event on the old implementation and assert listener ownership below.
+          child.on("error", () => {});
+          if (noPipes) Object.assign(child, { stdin: null, stdout: null, stderr: null });
+          queueMicrotask(() => {
+            observedHandler = child.listenerCount("error") > 1;
+            child.emit("error", Object.assign(new Error("fixture spawn failure"), { code }));
+          });
           return child as unknown as AgyAcpChild;
         },
         reap: child => reapProcessTree(child, {
@@ -309,6 +320,7 @@ describe("agy acp turn", () => {
       },
     });
     expect(h.removed).toBe(true);
+    expect(observedHandler).toBe(true);
     expect(warned).toBe(false);
     expect(errorCode(h)).toBe("agy_acp_unavailable");
   });
@@ -684,6 +696,42 @@ describe("agy acp turn", () => {
     expect(h.env.TMPDIR).toBe("/tmp/ocx-agy-acp-test/.tmp");
     expect(Object.values(h.env).join("\n")).not.toContain("admin-secret-should-not-leak");
     expect(h.removed).toBe(true);
+  });
+
+  test("refuses an unsupported effort before starting ACP", async () => {
+    const h = await run(script(), { parsed: parsed({}, "constructor") });
+    expect(h.spawned).toBe(0);
+    expect(errorCode(h)).toBe("agy_acp_effort_not_offered");
+  });
+
+  test.each(["Low", "High"])("checks the label for an opaque thinking selector in the replacement snapshot (%s)", async label => {
+    const initial = [modelOption("gemini-3.8-flash", OFFERED), {
+      ...thoughtOption("t2"), options: [{ value: "t1", name: "Low" }, { value: "t2", name: "High" }],
+    }];
+    const h = await run(script((frame, api) => {
+      if (frame.method !== "session/set_config_option") return;
+      api.reply(frame.id, { configOptions: [initial[0], {
+        ...initial[1], currentValue: "t1", options: [{ value: "t1", name: label }],
+      }] });
+      return true;
+    }, { initial }), { parsed: parsed({}, "low") });
+    expect(methods(h).includes("session/prompt")).toBe(label === "Low");
+    expect(terminal(h)).toEqual(label === "Low"
+      ? [{ type: "done" }]
+      : [expect.objectContaining({ code: "agy_acp_protocol" })]);
+  });
+
+  test("updates from other sessions cannot replace the active model or contribute text", async () => {
+    const h = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      api.notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "unrelated" } }, "other");
+      api.notify({ sessionUpdate: "config_option_update", configOptions: [] }, "other");
+      api.notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "active" } });
+      api.reply(frame.id, { stopReason: "end_turn" });
+      return true;
+    }));
+    expect(h.events.filter(event => event.type === "text_delta")).toEqual([{ type: "text_delta", text: "active" }]);
+    expect(terminal(h)).toEqual([{ type: "done" }]);
   });
 
   test("system text travels on session/new only when the CLI advertises it, never twice", async () => {

@@ -136,15 +136,25 @@ describe("binary and version", () => {
 
 });
 
+test("rejects duplicate config IDs across categories", () => {
+  expect(parseConfigOptions([
+    { id: "shared", category: "model", type: "select", currentValue: "a", options: [{ value: "a", name: "A" }] },
+    { id: "shared", category: "mode", type: "select", currentValue: "b", options: [{ value: "b", name: "B" }] },
+  ])).toBeUndefined();
+});
+
 describe("workspace and reaping", () => {
   test("a private 0700 workspace outside the home, refused when the temp root is inside it", async () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-agy-home-"));
     roots.push(home);
     const workspace = await createTurnWorkspace(home);
-    expect(workspace.dir.startsWith(realpathSync(home))).toBe(false);
-    if (process.platform !== "win32") expect(statSync(workspace.dir).mode & 0o777).toBe(0o700);
-    expect(workspace.tmp.startsWith(workspace.dir)).toBe(true);
-    await workspace.remove();
+    try {
+      expect(workspace.dir.startsWith(realpathSync(home))).toBe(false);
+      if (process.platform !== "win32") expect(statSync(workspace.dir).mode & 0o777).toBe(0o700);
+      expect(workspace.tmp.startsWith(workspace.dir)).toBe(true);
+    } finally {
+      await workspace.remove();
+    }
     await expect(createTurnWorkspace(home, home)).rejects.toThrow(/inside the OpenCodex home/);
   });
 

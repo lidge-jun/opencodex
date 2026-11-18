@@ -7,7 +7,7 @@
  * POSIX signals the child's group and waits for leader exit and group disappearance. Windows
  * requires a successful System32 taskkill /T /F while the leader is alive and leader closure.
  */
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { chmod, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
@@ -64,12 +64,14 @@ export async function createTurnWorkspace(home: string, tempRoot = tmpdir()): Pr
   }
 }
 
-export type AgyAcpChild = Pick<ChildProcessWithoutNullStreams, "stdin" | "stdout" | "stderr" | "pid" | "exitCode" | "signalCode" | "kill" | "on" | "once">;
+export type AgyAcpChild = Pick<ChildProcess, "stdin" | "stdout" | "stderr" | "pid" | "exitCode" | "signalCode" | "kill" | "on" | "once">;
 export type AgyAcpSpawn = (binary: string, args: string[], options: { cwd: string; env: Record<string, string> }) => AgyAcpChild;
 
-/** An asynchronous ENOENT with no assigned PID means spawn never created a process. */
-export function agyExecutableMissing(child: AgyAcpChild, error: NodeJS.ErrnoException): boolean {
-  return child.pid === undefined && error.code === "ENOENT";
+const NO_PROCESS_SPAWN_ERRORS = new Set(["ENOENT", "EACCES", "EPERM", "ENOEXEC", "EMFILE", "ENFILE", "EAGAIN", "ENOMEM"]);
+
+/** A failed spawn with no assigned PID has no owned process to reap. */
+export function agySpawnCreatedNoProcess(child: AgyAcpChild, error: NodeJS.ErrnoException): boolean {
+  return child.pid === undefined && error.code !== undefined && NO_PROCESS_SPAWN_ERRORS.has(error.code);
 }
 
 export const defaultAgyAcpSpawn: AgyAcpSpawn = (binary, args, options) => spawn(binary, args, {
@@ -78,7 +80,7 @@ export const defaultAgyAcpSpawn: AgyAcpSpawn = (binary, args, options) => spawn(
   windowsHide: true,
   shell: false,
   detached: process.platform !== "win32",
-}) as ChildProcessWithoutNullStreams;
+});
 
 export interface ReapOptions {
   graceMs: number;

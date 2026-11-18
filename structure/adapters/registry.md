@@ -92,7 +92,9 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   check before any probe or spawn. Each `session/prompt` reserves and reports one physical inference send from
   the shared request budget, including a retried turn. Model selection is phase-aware and fails closed when the Gemini model is not
   confirmed against the current complete selector, including after a reply that reuses an opaque model ID.
-  Selection rejects oversized snapshots and nested groups. Permission requests are answered `cancelled`.
+  The adapter also proves the requested thinking level against the latest snapshot before dispatch.
+  Selection rejects duplicate setting IDs, oversized snapshots and nested groups. The adapter ignores updates
+  until it has a session ID and accepts updates only for that session. Permission requests are answered `cancelled`.
   Selection errors use fixed text. Answer and reasoning
   deltas each pass through a bounded streaming redactor for minted OpenCodex credentials, Bearer values, and
   token-shaped JWT and API-key strings. Long values stay masked across frames, and buffered chunks still report
@@ -101,7 +103,8 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   code. Probe and turn workspaces are created under the
   system temporary directory outside the OpenCodex home. Windows requires a private NTFS ACL before either
   child can start. Retained workspaces can accumulate when cleanup repeatedly cannot be confirmed.
-  A missing executable that fails to spawn without an assigned PID leaves no process to reap.
+  A confirmed spawn failure without an assigned PID leaves no process to reap. Deferred startup errors
+  are handled even if the child has no pipes.
   The version probe and each turn start with a fresh private workspace containing only an empty temp directory.
   On POSIX, workspace removal follows confirmed leader exit and a group check returning ESRCH after SIGKILL or
   ESRCH. Descendants that deliberately leave the process group are outside that check. Removing the workspace
