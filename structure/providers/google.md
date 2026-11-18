@@ -1,6 +1,6 @@
 # Google Provider
 
-Created: 2026-10-16 | Updated: 2026-11-13 | Version: 1.3 (Vertex model discovery)
+Created: 2026-10-16 | Updated: 2026-11-16 | Version: 1.4 (Vertex discovery destination authority)
 
 ## Streaming input accounting
 
@@ -54,7 +54,14 @@ project. ADC rejects `"auto"`.
 ## Vertex model discovery
 
 `src/providers/google-vertex-model-discovery.ts` lists a non-OAuth Vertex row's models from
-`GET /v1beta1/publishers/google/models?pageSize=300` (300 is the server maximum). It selects the
+`GET /v1beta1/publishers/google/models?pageSize=300` (300 is the server maximum). Before reading a
+key reference or resolving ADC it admits only HTTPS `aiplatform.googleapis.com` or
+`<location>-aiplatform.googleapis.com`, using inference's location-label validator and refusing
+userinfo, nondefault ports and fragments. Request construction attaches credentials only to that
+origin, and every page's send-time guard checks its actual URL against the admitted origin.
+Ambient keys and ADC retain that origin in their credential-authority record. An unapproved
+destination resolves no credential: catalog discovery degrades and the management probe remains
+unverified. It selects the
 discovery credential the way inference does: a `gcp-sa:` marker uses that service account; an
 explicit `keychain:` or `$ENV` reference uses that key alone, and when it cannot be read
 discovery sends nothing and the catalog degrades, matching the routed-config rejection of the same

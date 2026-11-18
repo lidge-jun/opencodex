@@ -23,8 +23,12 @@ import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
 import { watchdogMs } from "../helpers/ci-watchdog";
+import { NETWORK_EGRESS_GUARD_PRELOAD } from "../helpers/network-egress-guard";
 
 const repoRoot = resolveRepoRoot();
+// The children run without tests/preload.ts, and the provider refresh reached
+// api.together.xyz through node:https, which their fetch stubs never see (#8848).
+const EGRESS_GUARD_ARGS = ["--preload", NETWORK_EGRESS_GUARD_PRELOAD];
 const CATALOG_WRITE_SERIALIZATION_IMPORT_PROLOGUE = `
     import { existsSync, writeFileSync } from "node:fs";
     import { withCatalogWriteSerialization } from "./src/codex/catalog-write-serialization.ts";
@@ -169,7 +173,7 @@ async function raceBarrier(result: Promise<ChildResult>, barrier: Promise<void>)
 
 test("barrier diagnostics retain both pipes when the child exits first", async () => {
   const sandbox = makeSandbox("ocx-retained-early-exit-");
-  const child = Bun.spawn([process.execPath, "--eval", `
+  const child = Bun.spawn([process.execPath, ...EGRESS_GUARD_ARGS, "--eval", `
     process.stdout.write("fixture-stdout\\n");
     process.stderr.write("fixture-stderr\\n");
     process.exitCode = 7;
@@ -199,7 +203,7 @@ async function runChild(
   sandbox: Sandbox,
   script: string,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const child = Bun.spawn([process.execPath, ...withOwnedServiceHomePreload(["--eval", script], sandbox.preloadPath)], {
+  const child = Bun.spawn([process.execPath, ...EGRESS_GUARD_ARGS, ...withOwnedServiceHomePreload(["--eval", script], sandbox.preloadPath)], {
     cwd: repoRoot,
     env: sandboxChildEnv(sandbox),
     stdout: "pipe",
@@ -230,7 +234,7 @@ async function holdCatalogLock(sandbox: Sandbox): Promise<{
     }, { intent: "refresh", writer: "test" });
     if (outcome.kind !== "completed") throw new Error(JSON.stringify(outcome));
   `;
-  const child = Bun.spawn([process.execPath, "--eval", script], {
+  const child = Bun.spawn([process.execPath, ...EGRESS_GUARD_ARGS, "--eval", script], {
     cwd: repoRoot,
     env: sandbox.env,
     stdout: "pipe",
@@ -411,7 +415,7 @@ for (const publisher of ["convergence", "retained"] as const) {
     };
     writeFileSync(join(sandbox.opencodexHome, "config.json"), JSON.stringify(config));
     try {
-      const sync = Bun.spawn([process.execPath, ...withOwnedServiceHomePreload(["--eval", `
+      const sync = Bun.spawn([process.execPath, ...EGRESS_GUARD_ARGS, ...withOwnedServiceHomePreload(["--eval", `
         const config = ${JSON.stringify(config)};
         const { handleManagementAPI } = await import("./src/server/management-api.ts");
         const req = new Request("http://localhost/api/sync", { method: "POST", headers: { Host: "localhost" } });
@@ -499,7 +503,7 @@ test("a persisted runtime selection moved by another process during the await bl
     },
   };
 
-  const sync = Bun.spawn([process.execPath, ...withOwnedServiceHomePreload(["--eval", `
+  const sync = Bun.spawn([process.execPath, ...EGRESS_GUARD_ARGS, ...withOwnedServiceHomePreload(["--eval", `
     import { existsSync, writeFileSync } from "node:fs";
     const config = ${JSON.stringify(config)};
     config.providers.together.fetch = async () => {
@@ -559,7 +563,7 @@ test("two processes at the post-approval management seam serialize instead of in
   // Warm the config ownership + mutation database in a single process first.
   // Two cold processes otherwise race to create `.opencodex-owner.json` and both
   // die with EEXIST before approval, which would make this test vacuous.
-  const warm = Bun.spawn([process.execPath, "--eval", `
+  const warm = Bun.spawn([process.execPath, ...EGRESS_GUARD_ARGS, "--eval", `
     const { withConfigMutationLockSync } = await import("./src/config.ts");
     withConfigMutationLockSync(() => undefined);
   `], { cwd: repoRoot, env: sandbox.env, stdout: "pipe", stderr: "pipe" });
@@ -625,7 +629,7 @@ test("two processes at the post-approval management seam serialize instead of in
     writeFileSync(catalogPath, seeded);
 
     const children = (["a", "b"] as const).map(marker => Bun.spawn(
-      [process.execPath, ...withOwnedServiceHomePreload(["--eval", routeScript(marker)], sandbox.preloadPath)],
+      [process.execPath, ...EGRESS_GUARD_ARGS, ...withOwnedServiceHomePreload(["--eval", routeScript(marker)], sandbox.preloadPath)],
       { cwd: repoRoot, env: sandboxChildEnv(sandbox), stdout: "pipe", stderr: "pipe" },
     ));
     for (const child of children) sandbox.children.add(child);

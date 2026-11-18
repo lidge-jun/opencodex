@@ -175,7 +175,9 @@ test.each([true, false, undefined])("fresh recovery and cache-only reparse prese
       const observed = observations[index]!;
       expect(observed.cohort).toBe(cohort);
       expect(observed.thread).toBe(parentThread);
-      expect(observed.replay).toMatchObject({ clientThreadId: parentThread });
+      // A child's own thread-id owns its replay record (#8632); the parent header stays the
+      // routing/cohort identity above and remains the fallback when thread-id is absent.
+      expect(observed.replay).toMatchObject({ clientThreadId: "distinct-child-thread" });
       expect(observed.replay).toEqual(observations[0]!.replay);
       for (const body of [observed.raw, providerBodies[index]!]) {
         expect(body).toContain("Read the affinity assignment.");
