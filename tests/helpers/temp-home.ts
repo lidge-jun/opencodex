@@ -16,7 +16,7 @@ import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { assertRemovalOutsideProtectedTrees } from "../../src/lib/test-home-guard";
-import { removeTreeWithRetry } from "./remove-tree";
+import { removeTreeAfterBackgroundWork, removeTreeWithRetry } from "./remove-tree";
 
 /** Canonical roots this module created and has not yet released. */
 const ownedRoots = new Set<string>();
@@ -32,6 +32,8 @@ export type TempHome = Readonly<{
   path: (...segments: string[]) => string;
   /** Remove the owned tree and restore both environment variables. Idempotent. */
   remove: () => void;
+  /** Settle background work before removing the owned tree and restoring the environment. */
+  removeAfterBackgroundWork: () => Promise<void>;
 }>;
 
 /** The live owned roots, so the guard's own tests can assert registration rather than infer it. */
@@ -81,6 +83,11 @@ export function createTempHome(prefix = "ocx-temp-home-"): TempHome {
   process.env["CODEX_HOME"] = codexHome;
 
   let removed = false;
+  const finishRemoval = () => {
+    ownedRoots.delete(root);
+    restore("OPENCODEX_HOME", previousConfigHome);
+    restore("CODEX_HOME", previousCodexHome);
+  };
   return {
     root,
     configDir: root,
@@ -92,9 +99,16 @@ export function createTempHome(prefix = "ocx-temp-home-"): TempHome {
       try {
         removeTreeWithRetry(root);
       } finally {
-        ownedRoots.delete(root);
-        restore("OPENCODEX_HOME", previousConfigHome);
-        restore("CODEX_HOME", previousCodexHome);
+        finishRemoval();
+      }
+    },
+    removeAfterBackgroundWork: async () => {
+      if (removed) return;
+      removed = true;
+      try {
+        await removeTreeAfterBackgroundWork(root);
+      } finally {
+        finishRemoval();
       }
     },
   };

@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { clearCodexAccountPin } from "../codex/account-priority";
 import { getConfigPath, mutatePersistedConfig, readConfigDiagnostics, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate, withConfigMutationLockSync } from "../config";
+import { MALFORMED_CODEX_AUTH_METHOD_WARNING } from "../config/load-degrade";
 import { readClientConnectionState } from "../client/state";
 import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
 import { readCliConfigForMutation } from "./config-mutation";
@@ -149,7 +150,9 @@ function pathSegments(path: string): string[] {
  * management listener (`hub.managementIngress`)
  * (`LIVE_TOPOLOGY_KEYS`); `corsAllowOrigins` reaches the running config only when some later live
  * save adopts the file. Saying only "Set <path>." left an operator retrying a refused
- * `ocx hub invite` against the old list. Limited to these keys, so the note never claims a restart
+ * `ocx hub invite` against the old list. `codexAuthMethod` (#8082) is read from the running config by the
+ * Codex login route, so a device-only policy set here would not stop a browser login until a restart.
+ * Limited to these keys, so the note never claims a restart
  * that is not needed.
  */
 export function startupOnlyConfigNotes(path: string): string[] {
@@ -159,6 +162,9 @@ export function startupOnlyConfigNotes(path: string): string[] {
   }
   if (segments[0] === "hub" && (segments.length === 1 || segments[1] === "managementPublicOrigin" || segments[1] === "managementIngress")) {
     return [`A running OpenCodex applies ${segments.join(".")} only when it starts; restart it to use the new value.`];
+  }
+  if (segments[0] === "codexAuthMethod") {
+    return ["A running OpenCodex keeps its previous codexAuthMethod for Codex pool account logins until it restarts; restart it to apply the new value now."];
   }
   return [];
 }
@@ -335,13 +341,20 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
     if (action === "validate") {
       const path = args.shift();
       rejectArgs(args, USAGE);
-      const result = path ? validateCandidate(loadInput(path)) : (() => {
-        const diagnostics = readConfigDiagnostics();
-        if (diagnostics.error) return { ok: false as const, error: diagnostics.error };
-        return validateCandidate(diagnostics.config);
-      })();
-      printData(result.ok ? { ok: true, source: path ?? getConfigPath() } : result, wantsJson,
-        [result.ok ? "Config is valid." : `Config is invalid: ${result.error}`]);
+      const diagnostics = path ? undefined : readConfigDiagnostics();
+      const result = diagnostics?.error
+        ? { ok: false as const, error: diagnostics.error }
+        : validateCandidate(path ? loadInput(path) : diagnostics?.config);
+      // General diagnostics can include file contents. Validate emits only the fixed policy warning.
+      const warnings = diagnostics?.warnings?.includes(MALFORMED_CODEX_AUTH_METHOD_WARNING)
+        ? [MALFORMED_CODEX_AUTH_METHOD_WARNING] : [];
+      printData({
+        ...(result.ok ? { ok: true, source: path ?? getConfigPath() } : result),
+        ...(warnings.length ? { warnings } : {}),
+      }, wantsJson, [
+        result.ok ? (warnings.length ? "Config is usable with warnings." : "Config is valid.") : `Config is invalid: ${result.error}`,
+        ...warnings.map(warning => `Warning: ${warning}`),
+      ]);
       if (!result.ok) outcome = 1;
       return;
     }

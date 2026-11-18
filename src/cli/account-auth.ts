@@ -88,6 +88,8 @@ interface LoginStart {
   deviceCode?: string;
   /** Whether the host actually opened a browser. Absent from older proxies. */
   browserLaunch?: "started" | "failed" | "skipped";
+  /** Set when the proxy's `codexAuthMethod: "device-only"` imposed the device grant (#8082). */
+  authMethod?: "device-only";
   method?: "builder-id" | "google" | "github";
   userCode?: string;
   verificationUri?: string;
@@ -113,6 +115,7 @@ function publicLoginStart(value: unknown, kiro = false): LoginStart {
     if (typeof data[key] === "string") out[key] = data[key];
   }
   if (typeof data.browserLaunch === "string" && ["started", "failed", "skipped"].includes(data.browserLaunch)) out.browserLaunch = data.browserLaunch as LoginStart["browserLaunch"];
+  if (data.authMethod === "device-only") out.authMethod = "device-only";
   if (typeof data.method === "string" && ["builder-id", "google", "github"].includes(data.method)) out.method = data.method as LoginStart["method"];
   if (typeof data.state === "string" && ["pending", "done", "failed", "expired", "cancelled"].includes(data.state)) out.state = data.state as string;
   if (typeof data.warning === "string" && ["duplicate_profile_arn", "manual_review_required"].includes(data.warning)) out.warning = data.warning as string;
@@ -219,6 +222,25 @@ async function resolveCode(
   return await readSecretLine(deps, "authorization code");
 }
 
+const CODEX_LOGIN_CANCEL_TIMEOUT_MS = 2_000;
+
+async function cancelStartedCodexLogin(flowId: string | undefined, deps: RuntimeApiDeps): Promise<boolean> {
+  if (!flowId) return false;
+  try {
+    await runtimeRequest("/api/codex-auth/login/cancel", {
+      method: "POST", redirect: "error", body: JSON.stringify({ flowId }),
+      signal: AbortSignal.timeout(CODEX_LOGIN_CANCEL_TIMEOUT_MS),
+    }, deps);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function codexLoginCancelFailure(flowId: string | undefined): string {
+  return `Could not cancel the started login flow.${flowId ? ` Flow: ${terminalSafeText(flowId)}` : ""}`;
+}
+
 async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | void> {
   const args = [...argv];
   const provider = args.shift()?.trim().toLowerCase();
@@ -280,7 +302,9 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
   }
   // Only resolve when --code was actually given: a plain `ocx account login`
   // opens the browser flow and polls, and must not block on stdin.
-  const code = await resolveCode(suppliedCode, deps, false);
+  // Codex resolves a stdin code only after the start answer: under `codexAuthMethod: "device-only"`
+  // a pasted code is refused, and an open stdin with no data must not hold that refusal back (#8082).
+  let code = CODEX_NAMES.has(provider) ? undefined : await resolveCode(suppliedCode, deps, false);
   const pinned = { ...deps, baseUrl: await runtimeBaseUrl(deps) };
 
   if (method) {
@@ -317,12 +341,32 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
         ...(openBrowser === undefined ? {} : { openBrowser }),
       }),
     }, pinned));
+    // `codexAuthMethod: "device-only"` (#8082) imposes the device grant after the request is sent.
+    // A JSON wait prints nothing until the end and a pasted code has no flow to complete, so either
+    // would leave the person without the URL and code: cancel the flow and say what works instead.
+    if (start.authMethod === "device-only" && (suppliedCode !== undefined || (wantsJson && !noWait))) {
+      const cancelled = await cancelStartedCodexLogin(start.flowId, pinned);
+      const advice = suppliedCode !== undefined
+        ? "--code cannot be used; run the login without --code and enter the device code at the returned URL"
+        : "with --json, add --no-wait and complete the login with the returned url and deviceCode";
+      const cleanup = cancelled ? "" : ` ${codexLoginCancelFailure(start.flowId)}`;
+      throw new CliUsageError(`This proxy requires device code login (codexAuthMethod: device-only), so ${advice}.${cleanup}`, USAGE);
+    }
+    try {
+      code = await resolveCode(suppliedCode, deps, false);
+    } catch (error) {
+      if (!await cancelStartedCodexLogin(start.flowId, pinned)) {
+        console.error(codexLoginCancelFailure(start.flowId));
+      }
+      throw error;
+    }
     if (!wantsJson) {
       // One atomic pre-poll block, flushed synchronously so a piped parent
       // reads the URL before the polling window starts (#1007).
       writeLoginInstructions([
         start.url ? `Open this URL to sign in:\n${terminalSafeText(start.url)}` : "",
         start.deviceCode ? `Device code: ${terminalSafeText(start.deviceCode)}` : "",
+        start.authMethod === "device-only" ? "Device code login is required by this proxy (codexAuthMethod: device-only)." : "",
         start.instructions ?? "",
         start.browserLaunch === "failed" ? BROWSER_LAUNCH_FAILED_HINT : "",
         start.flowId ? `Flow: ${terminalSafeText(start.flowId)}` : "",
@@ -345,7 +389,9 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
     // enter the code elsewhere. Match the 15-minute grant instead of giving up
     // at minute five while it is still valid, plus settlement margin for the
     // token exchange and credential write after the final poll.
-    const maxAttempts = device ? 480 : 150;
+    // The proxy may impose the device grant on a request that did not ask for it
+    // (`codexAuthMethod: "device-only"`, #8082), so the returned code counts too.
+    const maxAttempts = device || start.deviceCode ? 480 : 150;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await Bun.sleep(2_000);
       const state = publicLoginStatus(await runtimeRequest<unknown>(

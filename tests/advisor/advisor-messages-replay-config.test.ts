@@ -162,19 +162,28 @@ async function managementActivity(config: OcxConfig) {
 }
 
 /** A real translated /v1/messages turn: worker provider "worker", Advisor routed to "expert". */
-function translatedAdvisorFixture(options: { revokeOnDispatch?: boolean; failExpert?: boolean; throwTransport?: boolean; advice?: string } = {}) {
+function translatedAdvisorFixture(options: { revokeOnDispatch?: boolean; failExpert?: boolean; throwTransport?: boolean; advice?: string; manualToolCall?: boolean } = {}) {
   const root = mkdtempSync(join(tmpdir(), "advisor-messages-fixture-")); roots.push(root);
   const workerBodies: Record<string, unknown>[] = [];
   const expertBodies: { url: string; body: Record<string, unknown> }[] = [];
   let revoked = false;
   const config: OcxConfig = {
     defaultProvider: "worker",
-    advisor: { enabled: true, model: "expert/worker", policy: "preflight", effort: "high", contextSharingConsent: "v1" },
+    advisor: { enabled: true, model: "expert/worker", policy: options.manualToolCall ? "manual" : "preflight", effort: "high", contextSharingConsent: "v1" },
     providers: {
       worker: { adapter: "openai-chat", apiKey: "fixture", models: ["m"], liveModels: false,
         baseUrl: "https://worker.test/v1",
         fetch: (async (_url, init) => {
           workerBodies.push(JSON.parse(String(init?.body)));
+          if (options.manualToolCall && workerBodies.length === 1) {
+            const frames = [
+              { choices: [{ delta: { tool_calls: [{ index: 0, id: "forbidden-messages-advisor", type: "function",
+                function: { name: "advisor", arguments: '{"question":"private-question"}' } }] }, finish_reason: null }] },
+              { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+            ];
+            return new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join("") + "data: [DONE]\n\n",
+              { headers: { "content-type": "text/event-stream" } });
+          }
           return new Response(workerStream, { headers: { "content-type": "text/event-stream" } });
         }) as typeof fetch },
       expert: { adapter: "openai-chat", apiKey: CREDENTIAL, models: ["worker"], liveModels: false,
@@ -220,6 +229,26 @@ function translatedAdvisorFixture(options: { revokeOnDispatch?: boolean; failExp
   activate();
   return { config, workerBodies, expertBodies, revoke, register, activate, revoked: () => revoked };
 }
+
+test.each([true, false])("linked Messages tool_choice:none cannot execute Advisor (stream=%s)", async stream => {
+  const release = acquireOwnedSpendHome();
+  const fixture = translatedAdvisorFixture({ manualToolCall: true });
+  fixture.register();
+  try {
+    const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "worker/m", max_tokens: 100, stream, tool_choice: { type: "none" },
+        tools: [{ name: "shell", input_schema: { type: "object" } }], messages: [{ role: "user", content: "fixture" }] }),
+    }), fixture.config, { model: "", provider: "" }, { requestId: "advisor-messages-forbidden", start: Date.now() });
+    const body = await response.text();
+    expect(fixture.expertBodies).toHaveLength(0);
+    expect(fixture.workerBodies).toHaveLength(1);
+    expect(JSON.stringify(fixture.workerBodies[0])).not.toContain('"advisor"');
+    expect(body).not.toContain("forbidden-messages-advisor");
+    expect(body).not.toContain("private-question");
+    expect(body).not.toContain(ADVICE);
+  } finally { setAdvisorPlanFactory(fixture.config, null); release(); }
+});
 
 /** The real Messages request, with orientation evidence after the latest user turn. */
 function messagesRequest(task = TASK): Request {

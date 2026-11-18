@@ -199,7 +199,7 @@ function visibleTools(parsed: OcxParsedRequest): OcxTool[] {
     return tools.filter(toolChoiceToolPredicate(choice, tools));
   }
   if (choice && typeof choice !== "string") {
-    const selected = resolveToolChoiceWireName(tools, choice.name);
+    const selected = resolveToolChoiceWireName(tools, choice.name, choice);
     return tools.filter(tool => namespacedToolName(tool.namespace, tool.name) === selected);
   }
   return tools;
@@ -213,7 +213,7 @@ function toolChoiceInstruction(parsed: OcxParsedRequest): string | undefined {
   if (choice && typeof choice !== "string" && !isAllowedToolChoice(choice)) {
     // Resolve the forced name (bare, namespace__name, or namespace.name) to the advertised
     // wire name so the instruction names a tool that is actually in the catalog.
-    const wireName = resolveToolChoiceWireName(parsed.context.tools, choice.name);
+    const wireName = resolveToolChoiceWireName(parsed.context.tools, choice.name, choice);
     return `Tool choice is required for this turn. Call the advertised tool named ${wireName} before answering.`;
   }
   return undefined;
