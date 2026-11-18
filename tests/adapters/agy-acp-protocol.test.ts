@@ -1,5 +1,6 @@
 /** Pure ACP framing, option matching, the Gemini proof and process/workspace lifetime (plan 080). */
 import { afterEach, describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import { mkdtempSync, mkdirSync, realpathSync, statSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -133,7 +134,7 @@ describe("workspace and reaping", () => {
     } as unknown as AgyAcpChild;
     const done = reapProcessTree(child, {
       graceMs: 2_000, reapTimeoutMs: 5_000, platform: "win32", setTimeout: set, clearTimeout: clear,
-      warnWindowsTreeFailure: () => { calls.push("tree failure"); },
+      warnTreeFailure: () => { calls.push("tree failure"); },
       killWindowsTree: (pid: number, completed: (ok: boolean) => void) => {
         calls.push(`taskkill ${pid}`);
         treeComplete = completed;
@@ -167,19 +168,35 @@ describe("workspace and reaping", () => {
     }
   });
 
-  test("the group gets TERM, then KILL even when the leader ignores TERM; KILL also follows a normal close", async () => {
+  test.each(["exit-before-grace", "exit-after-grace"])("POSIX checks the group until it vanishes after leader exit (%s)", async order => {
     const timers: Array<() => void> = [];
     const set = ((fn: () => void) => { timers.push(fn); return timers.length as unknown as ReturnType<typeof setTimeout>; }) as unknown as typeof setTimeout;
     const clear = (() => {}) as unknown as typeof clearTimeout;
     const signals: string[] = [];
-    let onClose: (() => void) | undefined;
-    const child = { pid: 99, exitCode: null, signalCode: null, kill: () => true, once: (_: string, fn: () => void) => { onClose = fn; }, on: () => {} } as unknown as AgyAcpChild;
-    const done = reapProcessTree(child, { graceMs: 2000, reapTimeoutMs: 5000, platform: "linux", signalGroup: (pid, sig) => signals.push(`${pid}:${sig}`), setTimeout: set, clearTimeout: clear });
+    let groupExists = true;
+    const child = Object.assign(new EventEmitter(), { pid: 99, exitCode: null, signalCode: null, kill: () => true });
+    let confirmed = false;
+    const done = reapProcessTree(child as unknown as AgyAcpChild, {
+      graceMs: 2000, reapTimeoutMs: 5000, platform: "linux", setTimeout: set, clearTimeout: clear,
+      signalGroup: (pid, signal) => {
+        signals.push(`${pid}:${signal}`);
+        if (signal === 0 && !groupExists) throw Object.assign(new Error(), { code: "ESRCH" });
+      },
+    }).then(() => { confirmed = true; });
     expect(signals).toEqual(["99:SIGTERM"]);
-    timers[0]!(); // grace elapsed: the leader ignored TERM
-    expect(signals).toEqual(["99:SIGTERM", "99:SIGKILL"]);
-    onClose!();
+    if (order === "exit-after-grace") {
+      timers[0]!();
+      expect(signals).toEqual(["99:SIGTERM", "99:SIGKILL"]);
+      await Promise.resolve();
+      expect(confirmed).toBe(false);
+    }
+    child.emit("exit", 0);
+    expect(signals).toEqual(["99:SIGTERM", "99:SIGKILL", "99:0"]);
+    await Promise.resolve();
+    expect(confirmed).toBe(false);
+    groupExists = false;
+    timers[2]!();
     await done;
-    expect(signals).toEqual(["99:SIGTERM", "99:SIGKILL", "99:SIGKILL"]);
+    expect(signals).toEqual(["99:SIGTERM", "99:SIGKILL", "99:0", "99:0"]);
   });
 });

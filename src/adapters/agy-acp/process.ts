@@ -4,10 +4,8 @@
  * Each turn gets a fresh private directory outside the OpenCodex home (mode 0700, resolved through
  * symlinks), with its own temp directory, used as both the spawn cwd and the session cwd. This is the
  * workspace the CLI's request-review permission engine scopes file access to; it is not an OS sandbox.
- * The child runs in its own process group on POSIX and is reaped as a group: SIGTERM, then SIGKILL on
- * a timer that does not depend on the direct child closing, so a descendant that ignores TERM is
- * still killed. Windows starts the absolute System32 taskkill with /T /F while the leader is alive
- * and requires both a successful tree kill and leader closure before removing the workspace.
+ * POSIX signals the child's group and waits for leader exit and group disappearance. Windows
+ * requires a successful System32 taskkill /T /F while the leader is alive and leader closure.
  */
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { chmod, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
@@ -53,9 +51,9 @@ export interface ReapOptions {
   graceMs: number;
   reapTimeoutMs: number;
   platform?: NodeJS.Platform;
-  signalGroup?: (pid: number, signal: NodeJS.Signals) => void;
+  signalGroup?: (pid: number, signal: NodeJS.Signals | 0) => void;
   killWindowsTree?: (pid: number, completed: (ok: boolean) => void) => void;
-  warnWindowsTreeFailure?: () => void;
+  warnTreeFailure?: () => void;
   setTimeout?: typeof setTimeout;
   clearTimeout?: typeof clearTimeout;
 }
@@ -65,35 +63,38 @@ function defaultKillWindowsTree(pid: number, completed: (ok: boolean) => void): 
   execFile(taskkill, ["/PID", String(pid), "/T", "/F"], { windowsHide: true, timeout: 5_000 }, error => completed(!error));
 }
 
-const WINDOWS_TREE_FAILURE = "Antigravity ACP could not confirm Windows process tree cleanup.";
+const GROUP_POLL_MS = 25;
 
 export class AgyAcpTreeCleanupError extends Error {
-  constructor() { super(WINDOWS_TREE_FAILURE); }
+  constructor(platform = process.platform) {
+    super(platform === "win32"
+      ? "Antigravity ACP could not confirm Windows process tree cleanup."
+      : "Antigravity ACP could not confirm POSIX process tree cleanup.");
+  }
 }
 
-/**
- * Terminate the child's tree. Windows rejects if cleanup cannot be confirmed by the deadline.
- * POSIX sends SIGKILL to the group even if the leader has already closed.
- */
+/** Reject unless the owned process tree is confirmed gone within the deadline. */
 export function reapProcessTree(child: AgyAcpChild, options: ReapOptions): Promise<void> {
   const set = options.setTimeout ?? setTimeout;
   const clear = options.clearTimeout ?? clearTimeout;
   const platform = options.platform ?? process.platform;
   const pid = child.pid;
-  const signalGroup = options.signalGroup ?? ((target: number, signal: NodeJS.Signals) => process.kill(-target, signal));
-  const signal = (sig: NodeJS.Signals): void => {
-    if (pid !== undefined && platform !== "win32") {
-      try { signalGroup(pid, sig); return; } catch { /* no group left */ }
-    }
-    try { child.kill(sig); } catch { /* already gone */ }
+  const signalGroup = options.signalGroup ?? ((target: number, signal: NodeJS.Signals | 0) => process.kill(-target, signal));
+  const signalLeader = (sig: NodeJS.Signals): void => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    try { child.kill(sig); } catch { /* best effort only */ }
+  };
+  const unconfirmed = (): AgyAcpTreeCleanupError => {
+    const error = new AgyAcpTreeCleanupError(platform);
+    if (options.warnTreeFailure) options.warnTreeFailure();
+    else console.warn(error.message);
+    return error;
   };
   const leaderGone = child.exitCode !== null || child.signalCode !== null;
+  if (pid === undefined) return Promise.reject(unconfirmed());
+
   if (platform === "win32") {
-    const reportFailure = options.warnWindowsTreeFailure ?? (() => console.warn(WINDOWS_TREE_FAILURE));
-    if (leaderGone || pid === undefined) {
-      reportFailure();
-      return Promise.reject(new AgyAcpTreeCleanupError());
-    }
+    if (leaderGone) return Promise.reject(unconfirmed());
     return new Promise<void>((resolve, reject) => {
       let treeKilled = false;
       let leaderClosed = false;
@@ -106,9 +107,9 @@ export function reapProcessTree(child: AgyAcpChild, options: ReapOptions): Promi
           resolve();
           return;
         }
-        reportFailure();
-        if (!leaderClosed && child.exitCode === null && child.signalCode === null) signal("SIGKILL");
-        reject(new AgyAcpTreeCleanupError());
+        const error = unconfirmed();
+        if (!leaderClosed) signalLeader("SIGKILL");
+        reject(error);
       };
       const deadline = set(() => finish(false), options.reapTimeoutMs);
       child.once("close", () => {
@@ -127,21 +128,56 @@ export function reapProcessTree(child: AgyAcpChild, options: ReapOptions): Promi
     });
   }
 
-  return new Promise<void>(resolve => {
-    signal("SIGTERM");
+  const noSuchGroup = (error: unknown): boolean => (error as NodeJS.ErrnoException | undefined)?.code === "ESRCH";
+  return new Promise<void>((resolve, reject) => {
+    let leaderExited = leaderGone;
+    let groupSignalled = false;
     let settled = false;
-    const finish = (): void => {
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (confirmed: boolean): void => {
       if (settled) return;
       settled = true;
-      clear(killTimer);
-      clear(reapTimer);
-      // Whatever is left of the group (a descendant that ignored TERM or closed its stdio) goes now.
-      signal("SIGKILL");
-      resolve();
+      clear(grace);
+      clear(deadline);
+      if (pollTimer !== undefined) clear(pollTimer);
+      if (confirmed) {
+        resolve();
+      } else {
+        if (!leaderExited) signalLeader("SIGKILL");
+        reject(unconfirmed());
+      }
     };
-    const killTimer = set(() => signal("SIGKILL"), options.graceMs);
-    const reapTimer = set(finish, options.reapTimeoutMs);
-    if (leaderGone) finish();
-    else child.once("close", finish);
+
+    const pollGroup = (): void => {
+      try { signalGroup(pid, 0); } catch (error) { return finish(noSuchGroup(error)); }
+      pollTimer = set(pollGroup, GROUP_POLL_MS);
+    };
+    const killGroup = (): void => {
+      if (settled) return;
+      if (!groupSignalled) {
+        try { signalGroup(pid, "SIGKILL"); } catch (error) {
+          if (!noSuchGroup(error)) return finish(false);
+        }
+        groupSignalled = true;
+      }
+      if (leaderExited) pollGroup();
+    };
+    const onExit = (): void => {
+      if (leaderExited) return;
+      leaderExited = true;
+      clear(grace);
+      killGroup();
+    };
+
+    const grace = set(killGroup, options.graceMs);
+    const deadline = set(() => finish(false), options.reapTimeoutMs);
+    if (leaderExited) {
+      clear(grace);
+      killGroup();
+    } else {
+      child.once("exit", onExit);
+      child.once("close", onExit);
+      try { signalGroup(pid, "SIGTERM"); } catch { signalLeader("SIGTERM"); }
+    }
   });
 }

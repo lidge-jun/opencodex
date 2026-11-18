@@ -83,9 +83,11 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   the shared request budget, including a retried turn. Model selection is phase-aware and fails closed when the Gemini model is not
   confirmed. Permission requests are answered `cancelled`. Selection errors use fixed text. Answer and reasoning
   deltas each pass through a bounded streaming redactor for minted OpenCodex credentials and the shared string
-  redaction rules. Protocol errors may include a numeric code. The workspace stays outside the
-  OpenCodex home. On Windows, a successful tree kill and leader closure are both required within the reap deadline.
-  When either cannot be confirmed, the adapter retains the workspace, emits a fixed warning and fails the turn.
+  redaction rules. Protocol errors may include a numeric code. The workspace stays outside the OpenCodex home.
+  The version probe and the turn remove their workspaces after confirmed tree exit. POSIX requires a successful
+  group SIGKILL or ESRCH, leader exit and a group existence check returning ESRCH. Windows requires successful
+  tree taskkill and leader closure. An inconclusive cleanup retains the workspace and logs a fixed warning.
+  This fails an ACP turn. A version probe that exited zero can still supply its version.
   The terminal event is published after reaping. Coverage:
   `tests/adapters/agy-acp-{adapter,protocol,policy}.test.ts`, `tests/config/agy-acp-config.test.ts`,
   `tests/server/server-agy-acp.test.ts`.

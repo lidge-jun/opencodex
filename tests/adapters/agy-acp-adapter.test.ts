@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { createAgyAcpAdapter, AGY_ACP_ARGS, type AgyAcpDeps } from "../../src/adapters/agy-acp/adapter";
-import { reapProcessTree, type AgyAcpChild } from "../../src/adapters/agy-acp/process";
+import { AgyAcpTreeCleanupError, reapProcessTree, type AgyAcpChild } from "../../src/adapters/agy-acp/process";
 import { runWithRequestPeer } from "../../src/lib/request-peer-scope";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
@@ -134,6 +134,100 @@ const dataKeyShape = "ocx_data_" + "c".repeat(40);
 afterEach(() => { delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN; });
 
 describe("agy acp turn", () => {
+  test.each([true, false])("nonzero version probe exit uses tree confirmation before workspace removal (%s)", async confirmed => {
+    const calls: string[] = [];
+    const h = await run(script(), {
+      deps: {
+        probeVersion: undefined,
+        spawn: (_binary, args) => {
+          expect(args).toEqual(["--version"]);
+          const child = new FakeChild();
+          queueMicrotask(() => {
+            child.stdout.end("1.5.2\n");
+            child.exitCode = 7;
+            child.emit("close", 7);
+          });
+          return child as unknown as AgyAcpChild;
+        },
+        reap: async child => {
+          expect(child.exitCode).toBe(7);
+          calls.push("reap");
+          if (!confirmed) throw new AgyAcpTreeCleanupError();
+        },
+        createWorkspace: async () => ({
+          dir: "/tmp/probe-test", tmp: "/tmp/probe-test/.tmp", remove: async () => { calls.push("remove"); },
+        }),
+      },
+    });
+    expect(errorCode(h)).toBe("agy_acp_unavailable");
+    expect(calls).toEqual(confirmed ? ["reap", "remove"] : ["reap"]);
+  });
+
+  test("a valid Windows version probe retains its workspace when taskkill cannot confirm a completed leader", async () => {
+    const calls: string[] = [];
+    const h = await run(script(), {
+      deps: {
+        probeVersion: undefined,
+        spawn: (_binary, args) => {
+          const child = new FakeChild();
+          if (args[0] === "--version") {
+            queueMicrotask(() => {
+              child.stdout.end("1.5.2\n");
+              child.exitCode = 0;
+              child.emit("close", 0);
+            });
+          } else {
+            calls.push("turn");
+            script()(child, []);
+          }
+          return child as unknown as AgyAcpChild;
+        },
+        reap: child => reapProcessTree(child, {
+          graceMs: 0, reapTimeoutMs: 1_000, platform: "win32",
+          warnTreeFailure: () => { calls.push("warning"); },
+          killWindowsTree: (_pid, done) => {
+            (child as unknown as FakeChild).emit("close", 1);
+            done(true);
+          },
+        }),
+        createWorkspace: async () => {
+          const name = calls.length ? "turn" : "probe";
+          return { dir: "/tmp/" + name, tmp: "/tmp/" + name + "/.tmp", remove: async () => { calls.push("remove " + name); } };
+        },
+      },
+    });
+    expect(calls).toEqual(["warning", "turn", "remove turn"]);
+    expect(terminal(h)).toEqual([{ type: "done" }]);
+  });
+
+  test.each(["signal failure", "deadline"])("POSIX retains the workspace when tree cleanup is unconfirmed (%s)", async outcome => {
+    const signals: (NodeJS.Signals | 0)[] = [];
+    let warnings = 0;
+    const h = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      api.exit(1);
+      return true;
+    }), {
+      deps: {
+        reap: child => reapProcessTree(child, {
+          graceMs: 0, reapTimeoutMs: 30, platform: "linux",
+          warnTreeFailure: () => { warnings++; },
+          signalGroup: (_pid, signal) => {
+            signals.push(signal);
+            if (signal === "SIGKILL" && outcome === "signal failure") throw Object.assign(new Error(), { code: "EPERM" });
+          },
+        }),
+      },
+    });
+    expect(signals).toContain("SIGKILL");
+    if (outcome === "deadline") expect(signals).toContain(0);
+    expect(warnings).toBe(1);
+    expect(h.removed).toBe(false);
+    expect(terminal(h)).toEqual([expect.objectContaining({
+      type: "error", status: 502, message: "Antigravity ACP could not confirm POSIX process tree cleanup.",
+    })]);
+  });
+
   test("redacts whole credentials in answer deltas and flushes the final tail", async () => {
     const h = await run(script((frame, api) => {
       if (frame.method !== "session/prompt") return;
@@ -205,7 +299,7 @@ describe("agy acp turn", () => {
               treeKills++;
               if (outcome === "taskkill failed") complete(false);
             },
-            warnWindowsTreeFailure: () => { warnings++; },
+            warnTreeFailure: () => { warnings++; },
           }),
         },
       });

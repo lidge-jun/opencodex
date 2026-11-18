@@ -78,32 +78,45 @@ export interface AgyAcpDeps {
 }
 
 /** Run `agy --version` with no shell, a scoped env, a private cwd, bounded output and a timeout. */
-async function runVersion(binary: string): Promise<string | undefined> {
+async function runVersion(
+  binary: string,
+  makeWorkspace: () => Promise<TurnWorkspace>,
+  spawnChild: AgyAcpSpawn,
+  cleanup: (workspace: TurnWorkspace, child?: AgyAcpChild) => Promise<void>,
+): Promise<string | undefined> {
   let workspace: TurnWorkspace | undefined;
-  let canRemoveWorkspace = true;
+  let child: AgyAcpChild | undefined;
   try {
-    workspace = await createTurnWorkspace(getConfigDir());
-    const child = defaultAgyAcpSpawn(binary, ["--version"], { cwd: workspace.dir, env: childEnv(workspace) });
-    child.stdin.end();
+    workspace = await makeWorkspace();
+    const probe = spawnChild(binary, ["--version"], { cwd: workspace.dir, env: childEnv(workspace) });
+    child = probe;
     let out: string | undefined = "";
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
+    probe.stdout.setEncoding("utf8");
+    probe.stdout.on("data", (chunk: string) => {
       if (out !== undefined) out = out.length + chunk.length <= MAX_AGY_VERSION_OUTPUT_LENGTH ? out + chunk : undefined;
     });
-    child.stderr.on("data", () => {});
-    child.stdin.on("error", () => {});
+    probe.stderr.on("data", () => {});
+    probe.stdin.on("error", () => {});
     const exitCode = await new Promise<number | null | undefined>(resolve => {
       const timer = setTimeout(() => resolve(undefined), VERSION_TIMEOUT_MS);
-      child.once("close", (code: number | null) => { clearTimeout(timer); resolve(code); });
-      child.once("error", () => { clearTimeout(timer); resolve(undefined); });
+      probe.once("close", (code: number | null) => { clearTimeout(timer); resolve(code); });
+      probe.once("error", () => { clearTimeout(timer); resolve(undefined); });
+      probe.stdin.end();
     });
-    if (exitCode === undefined) await reapProcessTree(child, { graceMs: KILL_GRACE_MS, reapTimeoutMs: REAP_TIMEOUT_MS });
     return exitCode === 0 ? out : undefined;
-  } catch (error) {
-    if (error instanceof AgyAcpTreeCleanupError) canRemoveWorkspace = false;
+  } catch {
     return undefined;
   } finally {
-    if (canRemoveWorkspace) await workspace?.remove();
+    if (workspace) {
+      try { await cleanup(workspace, child); } catch (error) {
+        // A natural Windows exit can supply a valid version even though taskkill can no
+        // longer confirm its tree. The reaper warns and the workspace stays in place.
+        if (!(error instanceof AgyAcpTreeCleanupError)) throw error;
+      } finally {
+        child?.stdout.destroy();
+        child?.stderr.destroy();
+      }
+    }
   }
 }
 
@@ -119,9 +132,13 @@ function wireModelId(modelId: string): string {
 export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDeps = {}): ProviderAdapter {
   const spawnChild = deps.spawn ?? defaultAgyAcpSpawn;
   const resolveBinary = deps.resolveBinary ?? (() => resolveAgyBinary());
-  const probeVersion = deps.probeVersion ?? (binary => probeAgyVersion(binary, runVersion));
   const makeWorkspace = deps.createWorkspace ?? (() => createTurnWorkspace(getConfigDir()));
   const reap = deps.reap ?? (child => reapProcessTree(child, { graceMs: KILL_GRACE_MS, reapTimeoutMs: REAP_TIMEOUT_MS }));
+  async function cleanup(workspace: TurnWorkspace, child?: AgyAcpChild): Promise<void> {
+    if (child) await reap(child);
+    await workspace.remove();
+  }
+  const probeVersion = deps.probeVersion ?? (binary => probeAgyVersion(binary, target => runVersion(target, makeWorkspace, spawnChild, cleanup)));
   const turnTimeoutMs = deps.turnTimeoutMs ?? TURN_TIMEOUT_MS;
 
   return {
@@ -173,15 +190,11 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
         return;
       }
 
-      let canRemoveWorkspace = true;
       try {
         await driveTurn({ binary, workspace, parsed, incoming, emit, requested, thoughtWanted });
       } catch (error) {
         if (!(error instanceof AgyAcpTreeCleanupError)) throw error;
-        canRemoveWorkspace = false;
         emit({ type: "error", status: 502, errorType: "upstream_error", code: "agy_acp_protocol", message: error.message });
-      } finally {
-        if (canRemoveWorkspace) await workspace.remove();
       }
     },
   };
@@ -195,6 +208,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
     try {
       child = spawnChild(turn.binary, [...AGY_ACP_ARGS], { cwd: workspace.dir, env: childEnv(workspace) });
     } catch {
+      await cleanup(workspace);
       emit(failure("agy_acp_unavailable", AGY_INSTALL_HINT));
       return;
     }
@@ -240,13 +254,14 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       settled = true;
       clearTimeout(turnTimer);
       incoming.abortSignal?.removeEventListener("abort", onAbort);
-      const cleanup = reap(child);
+      const reaped = cleanup(workspace, child);
       try { child.stdout.destroy(); } catch { /* already closed */ }
-      void cleanup.then(() => {
+      void reaped.finally(() => {
         if (!aborted && !incoming.abortSignal?.aborted && terminal) {
           for (const [type, redactor] of outputRedactors) emitOutput(type, redactor.flush());
-          emit(terminal);
         }
+      }).then(() => {
+        if (!aborted && !incoming.abortSignal?.aborted && terminal) emit(terminal);
         onReaped();
       }).catch(rejectTurn);
     }
