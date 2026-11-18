@@ -318,6 +318,9 @@ function Invoke-CimMethod {
       "([pscustomobject]@{ User = @{ Value = $script:sid }; Name = 'HOST\\test' })");
   expect(helper).toContain("$service = New-Object -ComObject FixtureScheduler");
   expect(helper).not.toContain("Schedule.Service");
+  // All eight launches share one 60 s window (each capped at the spawn budget), so a hang fails here
+  // with the active scenario named, inside the 120 s Linux batch deadline.
+  const deadline = Date.now() + 60_000;
   for (const [scenario, status, stopped] of [
     ["verified", "ended", "42,43"],
     ["replaced", "unverified-registration", ""],
@@ -334,7 +337,8 @@ function Invoke-CimMethod {
     const script = "$ProgressPreference = 'SilentlyContinue'; $args = @('" + scenario + "'); " + fixture + "\n& {\n" + helper + "\n}\n'Stopped=' + ($script:stopped -join ',')";
     const child = Bun.spawn([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand",
       Buffer.from(script, "utf16le").toString("base64")], {
-      stdio: ["pipe", "pipe", "pipe"], windowsHide: true, timeout: SPAWN_BUDGET_MS,
+      stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
+      timeout: Math.max(1_000, Math.min(SPAWN_BUDGET_MS, deadline - Date.now())),
     });
     child.stdin.write(scenario === "rejected" ? "\n" : "stop\n");
     child.stdin.end();
@@ -344,7 +348,7 @@ function Invoke-CimMethod {
     expect({ scenario, stderr, code, output: stdout.trim().split(/\r?\n/).slice(-2) })
       .toEqual({ scenario, stderr: "", code: 0, output: [status, "Stopped=" + stopped] });
   }
-}, 8 * SPAWN_BUDGET_MS);
+}, 65_000);
 
 describe("Part B port sampler and listener identity", () => {
   test("free, listening, unreadable, and an exited owner's row is cleared", async () => {
