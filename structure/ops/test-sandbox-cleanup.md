@@ -58,12 +58,12 @@ paths, delayed generation transitions, member/release ordering and gate-holder d
 
 ## Sandbox lifecycle
 
-The runner and preload both remove live credentials and `OCX_SERVICE`/`OCX_SERVICE_MANAGED`
-before executing tests. A proxy-launched test process must not inherit service-child authority
-or require its temporary fixture home to own the developer's service. The owner regression in
-`tests/ci-workflows/test-runner.test.ts` checks service identity removal alongside credential removal.
-The runner matches inherited names case-insensitively on Windows, including differently cased
-credential and service keys in a copied environment; POSIX keeps case-sensitive name matching.
+`scripts/test.ts` removes live credential keys, `OCX_SERVICE`, and the markers from
+`src/lib/supervisor-markers.ts` before spawning test processes. Bun 1.4.4 can pass its startup
+environment to children spawned without an explicit environment. When Bun loads `tests/preload.ts`,
+the preload refuses to run tests if any of those keys are present and directs callers to
+`bun run test`. Both paths match names case-insensitively on Windows and case-sensitively on POSIX.
+`tests/ci-workflows/test-runner.test.ts` covers the scrub, bare-run refusal, and child inheritance.
 
 The batch runner's per-process home isolation and live-home/service-manager guards remain active
 because the preload installs them before the lock boundary. `tests/preload.ts` resolves cleanup

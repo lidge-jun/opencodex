@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { SUPERVISOR_MARKER_ENVS } from "../src/lib/supervisor-markers";
 import { gitRepositoryEnvNames, withoutGitRepositoryEnv } from "./git-repository-env";
 import { getTestRunnerBun } from "./lib/test-runner-bun";
 import {
@@ -38,8 +39,15 @@ export const LIVE_INSTALL_ENV = [
   "OCX_API_TOKEN_FILE",
   "OCX_MANAGED_RELEASE",
   "OCX_SERVICE",
-  "OCX_SERVICE_MANAGED",
+  ...SUPERVISOR_MARKER_ENVS,
 ] as const;
+
+export function liveInstallEnvNames(env: NodeJS.ProcessEnv): string[] {
+  return Object.keys(env).filter(name => {
+    const match = process.platform === "win32" ? name.toUpperCase() : name;
+    return LIVE_INSTALL_ENV.some(liveName => liveName === match);
+  });
+}
 
 export function createIsolatedTestEnvironment(
   baseEnv: Record<string, string | undefined> = process.env,
@@ -75,10 +83,7 @@ export function createIsolatedTestEnvironment(
   }
   writeTestTempOwner(root, baseEnv[TEST_RUN_ID_ENV]);
   const inherited = { ...baseEnv };
-  for (const name of Object.keys(inherited)) {
-    const match = process.platform === "win32" ? name.toUpperCase() : name;
-    if (LIVE_INSTALL_ENV.some(liveName => liveName === match)) delete inherited[name];
-  }
+  for (const name of liveInstallEnvNames(inherited)) delete inherited[name];
   // A GIT_DIR/GIT_WORK_TREE inherited from a hook or wrapper re-points every git command the suite
   // spawns, and fixture helpers then init, configure and commit into that repository. Starting the
   // children without them also covers Bun.spawn calls that pass no env (scripts/git-repository-env.ts).
