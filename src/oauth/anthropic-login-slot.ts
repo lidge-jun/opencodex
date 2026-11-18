@@ -6,8 +6,8 @@
  * therefore replaces the row of the same account AND organization; a proven different
  * organization gets its own row instead of overwriting the first one.
  *
- * The organization only scopes a slot. It never proves identity: matching still starts from
- * the same account identity the store always used. When the incoming organization is unknown,
+ * The organization scopes a slot. An email-only login with proven scope can match one row with
+ * the same email and proven scope without establishing account UUID continuity. When the incoming organization is unknown,
  * the login keeps the historical same-account replacement, so a row stored before
  * organizations were recorded is never duplicated by re-login.
  */
@@ -112,7 +112,18 @@ export function findAnthropicLoginSlot(
   accounts: readonly ProviderAccount[], incoming: OAuthCredentials,
   observed: AnthropicSlotOrganizations = new Map(), activeAccountId?: string,
 ): ProviderAccount | undefined {
-  const identity = loginIdentity(incoming);
+  const accountUuid = slotAccountUuid(incoming);
+  const email = incoming.email?.trim().toLowerCase();
+  if (!accountUuid && email) {
+    const organization = anthropicOrganization(incoming);
+    if (organization) {
+      const [match, ambiguous] = accounts.filter(row => row.credential.email?.trim().toLowerCase() === email
+        && slotOrganization(row, observed) === organization);
+      if (ambiguous) throw new Error("Multiple Anthropic login slots match this organization and email. Try signing in again.");
+      if (match) return match;
+    }
+  }
+  const identity = accountUuid ?? incoming.email;
   return pickSlot(accounts, incoming, observed, row => loginIdentity(row.credential) === identity, activeAccountId);
 }
 

@@ -336,6 +336,9 @@ Otherwise, if the existing account's organization stays unknown (expired token, 
 login whose own organization was not reported), the login may replace it, as earlier releases did.
 If Claude reports the new grant's organization during sign-in and the account profile is unavailable,
 the login still preserves an active account whose confirmed organization differs.
+If Claude supplies an email address but no account UUID, sign-in can update the single account
+with that email in the confirmed organization. If several accounts match, sign-in stops and
+asks you to try again.
 If an account changes during organization verification and the writer cannot confirm its current
 organization, retry the login or Claude Code credential import.
 Reauthentication also checks existing accounts through their usable tokens when their organization

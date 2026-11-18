@@ -1035,6 +1035,56 @@ test.each([
   expect(saved.anthropicIdentity).toBeUndefined();
 });
 
+test.each([
+  { scenario: "reuses the unique same-organization slot", organization: ORG_A, ambiguous: false },
+  { scenario: "adds a different-organization slot", organization: ORG_B, ambiguous: false },
+  { scenario: "refuses ambiguous same-organization slots", organization: ORG_A, ambiguous: true },
+])("email-only browser login $scenario when the profile is unavailable", async ({ organization, ambiguous }) => {
+  await saveCredential("anthropic", orgCredential("synthetic-org-a", ORG_A));
+  if (ambiguous) await saveCredential("anthropic", orgCredential("synthetic-other-account", ORG_A, "synthetic-account-b"));
+  const before = getAccountSet("anthropic")!;
+  const original = before.accounts[0]!;
+  if (ambiguous) expect(before.accounts).toHaveLength(2);
+
+  let profileReads = 0;
+  globalThis.fetch = (async (_url, init) => {
+    if (init?.method === "POST") return Response.json({
+      access_token: "synthetic-fresh", refresh_token: "synthetic-fresh-refresh", expires_in: 3600,
+      account: { email_address: " Shared@Example.Test " }, organization: { uuid: organization },
+    });
+    profileReads++;
+    return new Response(null, { status: 503 });
+  }) as typeof fetch;
+  const config = (): OcxConfig => ({ port: 10100, defaultProvider: "openai", openaiProviderTierVersion: 2, providers: {} });
+  let state: string | null = null;
+  const login = runLogin("anthropic", {
+    onAuth: ({ url }) => { state = new URL(url).searchParams.get("state"); },
+    onManualCodeInput: async () => `synthetic-code#${state}`,
+  }, { codeMode: true, forceLogin: true }, { loadConfig: config, saveConfig: () => {} });
+
+  if (ambiguous) {
+    await expect(login).rejects.toThrow("Multiple Anthropic login slots match");
+    expect(getAccountSet("anthropic")).toEqual(before);
+  } else {
+    await login;
+    const after = getAccountSet("anthropic")!;
+    if (organization === ORG_A) {
+      expect(after.accounts).toHaveLength(1);
+      expect(after.activeAccountId).toBe(original.id);
+    } else {
+      expect(after.accounts).toHaveLength(2);
+      expect(after.activeAccountId).not.toBe(original.id);
+      expect(getAccountCredential("anthropic", original.id)).toEqual(original.credential);
+    }
+    const saved = getAccountCredential("anthropic", after.activeAccountId)!;
+    expect(saved.access).toBe("synthetic-fresh");
+    expect(anthropicOrganization(saved)).toBe(organization);
+    expect(saved.accountId).toBeUndefined();
+    expect(saved.anthropicIdentity).toBeUndefined();
+  }
+  expect(profileReads).toBe(1);
+});
+
 test("browser login refuses a conflicting profile organization when the exchange omits the account", async () => {
   await saveCredential("anthropic", orgCredential("synthetic-org-b", ORG_B));
   const before = getAccountSet("anthropic")!;
