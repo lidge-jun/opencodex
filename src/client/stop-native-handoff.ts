@@ -56,9 +56,7 @@ export function readLinkInheritedTeardowns(): OutstandingTeardown[] {
 /** Before a receipt is issued, the bound owner already excludes concurrent recycle. */
 function activeClientStopOwner(runtime: RuntimePortState): ClientStopOwner | undefined {
   const owner = runtime.clientStopOwner;
-  if (runtime.clientStopping && runtime.clientStopRequested && owner && /^[a-f0-9]{32}$/.test(owner.nonce)
-    && typeof owner.startTime === "string" && owner.startTime.length > 0
-    && owner.startTime.length <= 80 && observeClientStopOwner(owner) === "active") return owner;
+  if (runtime.clientStopping && runtime.clientStopRequested && owner && observeClientStopOwner(owner) === "active") return owner;
 }
 
 /** Receipts alone never release a socket still named by native loopback routing. */

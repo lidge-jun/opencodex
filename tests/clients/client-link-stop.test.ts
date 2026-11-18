@@ -99,7 +99,7 @@ for (const mode of ["parent", "signal"]) for (const scheduled of [false, true]) 
   }, 20_000);
 }
 
-for (const mode of ["parent-active", "parent-unverified", "signal-active", "pending", "foreign-owner", "wrong-token", "corrupt-receipt", "missing-config", "new-connection", "pending-connect"]) {
+for (const mode of ["parent-active", "parent-unverified", "parent-malformed", "signal-active", "pending", "foreign-owner", "wrong-token", "corrupt-receipt", "missing-config", "new-connection", "pending-connect"]) {
   test(`retained stop refuses disconnect recycle while ${mode}`, async () => {
     const result = await runRecovery(mode);
     expect(result).toMatchObject({ beforeRecoveryAdmission: 409, recoveryAdmission: 409, role: "client", spawned: 0,

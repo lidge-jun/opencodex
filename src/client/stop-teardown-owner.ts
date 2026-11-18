@@ -59,7 +59,10 @@ export function readClientStopProcessStart(pid: number): string | undefined {
 export type ClientStopOwnerStatus = "active" | "confirmed-stale" | "unverified";
 
 /** Bracket argv with creation/UID reads so a recycled PID cannot inherit the fence. */
-export function observeClientStopOwner({ pid, startTime }: ClientStopOwner): ClientStopOwnerStatus {
+export function observeClientStopOwner({ pid, startTime, nonce }: ClientStopOwner): ClientStopOwnerStatus {
+  if (!Number.isInteger(pid) || pid <= 0 || pid > 0x7fffffff
+    || typeof startTime !== "string" || startTime.length === 0 || startTime.length > 80
+    || typeof nonce !== "string" || !/^[a-f0-9]{32}$/.test(nonce)) return "unverified";
   try { process.kill(pid, 0); }
   catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH" ? "confirmed-stale" : "unverified"; }
   const before = readClientStopProcessStart(pid);
