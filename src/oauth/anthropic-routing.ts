@@ -1054,9 +1054,8 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
 
     const strategy = anthropicPoolStrategy(config);
     // No session identity (Desktop turns without a sticky key): hold the current
-    // active under RR/fill-first instead of treating every turn as a new session.
-    // Round-robin only when there is a real new-session key (or active is unusable).
-    if (!key && (strategy === "round-robin" || strategy === "fill-first")) {
+    // active for new-session rotation strategies while it can still serve the turn.
+    if (!key && (strategy === "round-robin" || strategy === "fill-first" || strategy === "reset-near-weighted")) {
       const activeOk = set.accounts.some(a => a.id === set.activeAccountId && a.needsReauth !== true)
         && !isCooled(set.activeAccountId, now)
         && eligible.includes(set.activeAccountId) && (!model || !anthropicModelExhausted(set.activeAccountId, model));
@@ -1311,11 +1310,12 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     if (current?.accountId !== committed.accountId || current.revision !== committed.revision) return false;
     if (isAnthropicAccountPoolEnabled(options.config)) {
       const rotationStrategy = anthropicPoolStrategy(options.config);
-      if ((rotationStrategy === "round-robin" || rotationStrategy === "reset-near-weighted") && options.reason !== "affinity") {
+      const weighted = rotationStrategy === "reset-near-weighted";
+      if (options.reason !== "affinity" && (rotationStrategy === "round-robin" || (weighted && options.reason !== "active"))) {
         const limit = stickyLimitForPool(options.config);
         const now = Date.now();
         const eligible = routeCandidates(getEligibleAnthropicAccounts(now, options.model), options.routeDecision ?? null);
-        const headroom = options.model ? eligible.filter(id => !anthropicModelExhausted(id, options.model)) : eligible;
+        const headroom = weighted && options.model ? eligible.filter(id => !anthropicModelExhausted(id, options.model)) : eligible;
         const candidates = headroom.length ? headroom : eligible;
         const routing = rotationStrategy === "reset-near-weighted"
           ? machineRoutingWeights("anthropic", candidates, id => getCachedProviderAccountQuota(PROVIDER, id), undefined, now)
