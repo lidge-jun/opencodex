@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { AdapterFetchContext, ProviderAdapter } from "../../src/adapters/base";
 import { parseRequest } from "../../src/responses/parser";
 import { responseWithDeferredRequestLog, type RequestLogEntry } from "../../src/server";
@@ -12,7 +12,9 @@ import { handleResponsesWithPolicyFallback } from "../../src/server/responses/po
 import { PolicyCandidateUnavailableError, policyCandidateRefusalResponse } from "../../src/server/responses/policy-request-scope";
 import { resetStreamedOpaqueBlobLogContext } from "../../src/server/responses/core-opaque-recovery";
 import { recordLocalFailureDetail, upstreamErrorIsLocal } from "../../src/server/request-log-failure-detail";
-import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
+import { clearComboSelectionState, clearComboTargetCooldowns, isComboTargetInCooldown } from "../../src/combos";
+import { handleChatCompletions } from "../../src/server/chat-completions";
+import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { handleResponses } from "../../src/server/responses";
 import { createTempHome } from "../helpers/temp-home";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -105,6 +107,64 @@ describe("T04-b local deadline provenance in the request row", () => {
     expect(JSON.parse(out.wire)).toEqual({ error: { message: headerSentence(HEADER_MS), type: "upstream_error", code: null } });
     expect(out.row).toMatchObject({ status: 504, errorCode: "upstream_server_error", closeReason: "non_stream", failureDetail: { code: "header_timeout", value: HEADER_MS }, failureCause: "upstream-fault" });
     expect(out.row.upstreamCondition).toBeUndefined();
+  }, 2_000);
+
+  test("local deadline suppresses a preexisting upstream condition", async () => {
+    const logCtx: RequestLogContext = {
+      model: "routed/model", provider: "routed", upstreamCondition: "upstream_failed",
+    };
+    recordLocalFailureDetail(logCtx, headerSentence(HEADER_MS), { code: "header_timeout", value: HEADER_MS });
+    const rows: RequestLogEntry[] = [];
+    const response = responseWithDeferredRequestLog(new Response(null, { status: 504 }), "local-condition", Date.now(), logCtx, row => rows.push(row));
+    await response.text();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.upstreamCondition).toBeUndefined();
+  });
+
+  test("a throwing notification preserves the local timeout response", async () => {
+    const out = await run(LEGS.local, {
+      connectTimeoutMs: HEADER_MS,
+      onLocalFailure() { throw new Error("fixture notification failed"); },
+    });
+    expect(out.wireStatus).toBe(504);
+    expect(out.row.failureDetail).toEqual({ code: "header_timeout", value: HEADER_MS });
+  });
+
+  test("a blocked consumer records a local handoff deadline", async () => {
+    const cancelled = Promise.withResolvers<unknown>();
+    const logCtx: RequestLogContext = { model: "routed/model", provider: "routed" };
+    const schedule = globalThis.setTimeout;
+    let handoffs = 0;
+    const timer = spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+      // Expire the second handoff before the stream bridge asks for another event.
+      if (delay === 300_000 && ++handoffs === 2) queueMicrotask(() => callback(...args));
+      return schedule(callback, delay, ...args);
+    });
+    try {
+      const response = await loopOn(logCtx, "local", {
+        adapter: {
+          name: "blocked-consumer", buildRequest: request,
+          fetchResponse: async () => new Response(new ReadableStream<Uint8Array>({
+            pull(controller) { controller.enqueue(new Uint8Array([1])); },
+            cancel(reason) { cancelled.resolve(reason); },
+          }, { highWaterMark: 0 })),
+          async *parseStream(body) {
+            await body.body!.getReader().read();
+            for (let i = 0; i < 20; i++) yield { type: "text_delta", text: "pending output" };
+            yield { type: "done" };
+          },
+          parseResponse: noParseResponse,
+        },
+        streamRoutedModelOutput: true,
+      });
+      const wire = response.text();
+      expect(await cancelled.promise).toMatchObject({ name: "WebSearchConsumerInactivityError" });
+      expect(failedError(await wire)).toMatchObject({
+        message: "Web-search consumer did not accept an event within 300000ms",
+      });
+      expect(logCtx.failureDetail).toEqual({ code: "turn_inactivity", value: 300_000 });
+      expect(upstreamErrorIsLocal(logCtx)).toBe(true);
+    } finally { timer.mockRestore(); }
   }, 2_000);
 
   test("first-iteration body stall: wire unchanged, row carries local generation_timeout and no upstream condition", async () => {
@@ -235,56 +295,87 @@ describe("combo web-search deadline provenance", () => {
   const output = "visible answer prefix";
   const comboStallMs = 120;
 
-  async function comboRun(stallOnBody: boolean): Promise<Outcome> {
+  async function comboRun(stallOnBody: boolean, surface = "responses", upstream = false, stream = true): Promise<Outcome> {
+    let releaseSpendHome: (() => void) | undefined;
+    let warn: ReturnType<typeof spyOn<typeof console, "warn">> | undefined;
     const home = createTempHome("ocx-combo-web-search-deadline-");
-    const releaseSpendHome = acquireOwnedSpendHome();
-    let sends = 0;
-    globalThis.fetch = (async (input, init) => {
-      expect(String(input)).toBe("https://routed.test/v1/chat/completions");
-      sends++;
-      if (!stallOnBody) return hanging({ abortSignal: init?.signal ?? undefined } as AdapterFetchContext);
-      const chunk = { id: "chunk", choices: [{ index: 0, delta: { content: output }, finish_reason: null }] };
-      return new Response(new ReadableStream<Uint8Array>({
-        start(controller) { controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(chunk)}\n\n`)); },
-      }), { headers: { "content-type": "text/event-stream" } });
-    }) as typeof fetch;
-
-    const config: OcxConfig = {
-      port: 0, defaultProvider: "fixture-routed", connectTimeoutMs: HEADER_MS,
-      providers: { "fixture-routed": { adapter: "openai-chat", baseUrl: "https://routed.test/v1", authMode: "key", apiKey: "fixture" } },
-      combos: { [comboId]: { strategy: "failover", targets: [{ provider: "fixture-routed", model: "fixture-model" }] } },
-      webSearchSidecar: {
-        backend: "exa", exaApiKey: "fixture", routedModelStallTimeoutMs: comboStallMs, streamRoutedModelOutput: true,
-      },
-    };
-    const req = new Request("http://localhost/v1/responses", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: `combo/${comboId}`, input: "Search current docs", stream: true, store: false, tools: [{ type: "web_search" }] }),
-    });
-    const logCtx: RequestLogContext = { model: "", provider: "" };
-    const rows: RequestLogEntry[] = [];
     try {
+      warn = spyOn(console, "warn");
+      releaseSpendHome = acquireOwnedSpendHome();
+      let sends = 0;
+      globalThis.fetch = (async (input, init) => {
+        expect(String(input)).toBe("https://routed.test/v1/chat/completions");
+        sends++;
+        if (upstream) return json(504, { error: { message: "gateway timeout", type: "server_error" } });
+        if (!stallOnBody) return hanging({ abortSignal: init?.signal ?? undefined } as AdapterFetchContext);
+        const chunk = { id: "chunk", choices: [{ index: 0, delta: { content: output }, finish_reason: null }] };
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) { controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(chunk)}\n\n`)); },
+        }), { headers: { "content-type": "text/event-stream" } });
+      }) as typeof fetch;
+
+      const config: OcxConfig = {
+        port: 0, defaultProvider: "fixture-routed", connectTimeoutMs: HEADER_MS,
+        providers: { "fixture-routed": { adapter: "openai-chat", baseUrl: "https://routed.test/v1", authMode: "key", apiKey: "fixture" } },
+        combos: { [comboId]: { strategy: "failover", targets: [{ provider: "fixture-routed", model: "fixture-model" }] } },
+        webSearchSidecar: {
+          backend: "exa", exaApiKey: "fixture", routedModelStallTimeoutMs: comboStallMs, streamRoutedModelOutput: true,
+        },
+      };
+      const messages = [{ role: "user", content: "Search current docs" }];
+      const body = surface === "responses" ? { input: messages[0]!.content, store: false }
+        : { messages, ...(surface === "messages" ? { max_tokens: 100 } : {}) };
+      const tools = [surface === "messages" ? { type: "web_search_20250305", name: "web_search" } : { type: "web_search" }];
+      const req = new Request(`http://localhost/v1/${surface}`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...body, model: `combo/${comboId}`, stream, tools }),
+      });
+      const handler = surface === "messages" ? handleClaudeMessages : surface === "chat/completions" ? handleChatCompletions : handleResponses;
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+      const rows: RequestLogEntry[] = [];
       const start = Date.now();
-      const response = await handleResponses(req, config, logCtx);
+      const response = await handler(req, config, logCtx);
       const wire = await responseWithDeferredRequestLog(response, "ocx-combo-deadline", start, logCtx, row => rows.push(row)).text();
       expect(sends).toBe(1);
       expect(rows).toHaveLength(1);
+      if (!stallOnBody) {
+        const target = { provider: "fixture-routed", model: "fixture-model" };
+        expect({
+          cooled: isComboTargetInCooldown(comboId, target),
+          upstreamWarning: warn.mock.calls.some(([line]) => String(line).includes("upstream_failed")),
+        }).toEqual({ cooled: upstream, upstreamWarning: upstream });
+      }
       return { wireStatus: response.status, wire, row: rows[0] as Outcome["row"] };
     } finally {
-      clearComboSelectionState(comboId);
-      clearComboTargetCooldowns(comboId);
-      releaseSpendHome();
-      home.remove();
+      try {
+        warn?.mockRestore();
+        clearComboSelectionState(comboId);
+        clearComboTargetCooldowns(comboId);
+      } finally {
+        try { releaseSpendHome?.(); } finally { home.remove(); }
+      }
     }
   }
 
-  test("exhausted combo adopts a header deadline as local", async () => {
-    const out = await comboRun(false);
-    expect(out.wireStatus).toBe(504);
+  test.each(["responses", "chat/completions", "messages"])("%s combo adopts a header deadline without penalizing the target", async surface => {
+    const out = await comboRun(false, surface);
+    expect(out.wireStatus).toBe(surface === "messages" ? 529 : 504);
     expect(out.row).toMatchObject({
-      provider: "combo", status: 504, failureCause: "upstream-fault",
+      provider: "combo", status: surface === "messages" ? 529 : 504, failureCause: "upstream-fault",
       failureDetail: { code: "header_timeout", value: HEADER_MS },
     });
+    expect(out.row.upstreamCondition).toBeUndefined();
+  });
+
+  test.each(["responses", "chat/completions", "messages"])("%s combo penalizes a genuine upstream 504", async surface => {
+    const out = await comboRun(false, surface, true);
+    expect(out.wireStatus).toBe(surface === "messages" ? 529 : 504);
+  });
+
+  test("buffered Responses keeps a local header deadline out of target penalties", async () => {
+    const out = await comboRun(false, "responses", false, false);
+    expect(out.wireStatus).toBe(504);
+    expect(out.row.failureDetail).toEqual({ code: "header_timeout", value: HEADER_MS });
     expect(out.row.upstreamCondition).toBeUndefined();
   });
 
@@ -314,7 +405,7 @@ const LEGS = {
 };
 type Leg = keyof typeof LEGS | "skip";
 
-function loopOn(logCtx: RequestLogContext, leg: keyof typeof LEGS): Promise<Response> {
+function loopOn(logCtx: RequestLogContext, leg: keyof typeof LEGS, extra: Partial<WebSearchLoopDeps> = {}): Promise<Response> {
   return runWithWebSearch({
     parsed: parseRequest({ model: "routed/model", input: "Search current docs", stream: true, tools: [{ type: "web_search" }] }),
     adapter: LEGS[leg],
@@ -326,6 +417,7 @@ function loopOn(logCtx: RequestLogContext, leg: keyof typeof LEGS): Promise<Resp
     incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget() },
     proxyErrorContext: logCtx,
     connectTimeoutMs: leg === "local" ? HEADER_MS : 1_000,
+    ...extra,
   });
 }
 

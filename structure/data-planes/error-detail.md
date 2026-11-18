@@ -25,9 +25,10 @@ through the disk reader. A row keeps:
   `recordLocalFailureDetail` is not upstream evidence unless the caller passes `upstreamEvidence: true`
   (the Messages passthrough restating an upstream status and closed type); `upstreamErrorIsLocal` keeps
   it out of the final row's evidence, including the upstream code/type diagnostics of the failed frame the
-  proxy wrote itself. The web-search loop records its own header and body deadlines this way
-  (`header_timeout`, `generation_timeout`), recording the local deadline in `failureDetail` and omitting
-  `upstreamCondition`. A body stall retains `failureCause: upstream-fault` and `terminalSource: upstream`.
+  proxy wrote itself and any condition already stored on the context. The web-search loop records its
+  header deadline, routed-model byte stall and downstream handoff deadline as `header_timeout`,
+  `generation_timeout` and `turn_inactivity` respectively. The row keeps the bounded
+  `failureDetail` and omits `upstreamCondition`. A body stall retains `failureCause: upstream-fault` and `terminalSource: upstream`.
   A context reused across attempts drops the previous attempt's local verdict at the attempt
   boundary (`takeLocalFailureState` in policy fallback, compaction recovery and the opaque-blob reset) and
   puts it back only when that attempt is rolled back without dispatching (`restoreLocalFailureState`).

@@ -416,7 +416,7 @@ export interface WebSearchLoopDeps {
   connectTimeoutMs?: number;
   /** Continuous routed-model response-body raw-byte inactivity deadline. Default 200000ms. */
   routedModelStallTimeoutMs?: number;
-  /** Notify the request owner once a local deadline is recorded, before publishing it. */
+  /** Best-effort notification before publication. Observer exceptions leave the timeout response intact. */
   onLocalFailure?: () => void;
   /**
    * Effective bridge stall deadline for this turn (seconds). Computed by planWebSearch
@@ -516,7 +516,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   const recordLocalLoopFailure = (e: unknown): void => {
     if (!(e instanceof LoopError) || !e.localFailure || !deps.proxyErrorContext) return;
     recordLocalFailureDetail(deps.proxyErrorContext as { upstreamError?: string; failureDetail?: FailureDetail }, e.message, e.localFailure);
-    deps.onLocalFailure?.();
+    try { deps.onLocalFailure?.(); } catch { /* Keep the original timeout response. */ }
   };
   let allTools = adapter.name === "anthropic" ? anthropicDeclaredTools(parsed) : parsed.context.tools ?? [];
   let activeToolChoice = parsed.options.toolChoice;
@@ -944,7 +944,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       if (error instanceof LoopError) throw error;
       if (error instanceof RoutedModelInactivityError) throw new LoopError(504, error.message, undefined, undefined,
         { code: "generation_timeout", value: error.timeoutMs });
-      if (error instanceof WebSearchConsumerInactivityError) throw new LoopError(504, error.message);
+      if (error instanceof WebSearchConsumerInactivityError) throw new LoopError(504, error.message, undefined, undefined,
+        { code: "turn_inactivity", value: error.timeoutMs });
       if (error instanceof WebSearchStreamProtocolError) throw new LoopError(502, error.message);
       throw new LoopError(502, `Provider stream error: ${error instanceof Error ? error.message : String(error)}`);
     } finally { releaseCapture(); }
