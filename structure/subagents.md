@@ -278,7 +278,7 @@ and `tests/server/server-native-catalog-priority.test.ts`.
 
 When account selectors are active, one featured bare native id expands into a complete selector row
 group. Catalog priorities use the selector count as a stride so each group stays together without
-widening Codex's five-row advertisement window. Fresh defaults are Astra, GPT-6.1 Sol and Luna
+widening Codex's five-row advertisement window. Fresh defaults are GPT-6.2 Astra, GPT-6.2 Sol and GPT-6 Luna
 (`DEFAULT_SUBAGENT_MODELS`). Startup upgrades unmarked rosters once: prepend `gpt-6-astra`, retain the first four unique
 non-Astra choices, then move retained bare `gpt-5.5` last. The old fifth choice is dropped;
 an unmarked empty list becomes Astra only, and an unset list receives the fresh defaults.
@@ -287,7 +287,8 @@ and drops every other bare `gpt-5.5`/`gpt-5.6` id; ids with a `/` are untouched,
 empty by the cleanup receives the defaults.
 A third one-time step (version 3) rewrites bare `gpt-6-sol` to `gpt-6.1-sol` in place without
 duplicating it; routed and account-qualified ids keep their spelling, and GPT-6 Sol re-added later
-stays. `subagentModelsVersion: 3` records completion, so later user edits (including an empty list or
+stays. Version 4 replaces bare `gpt-6-astra` and `gpt-6.1-sol` in place with their GPT-6.2 successors and deduplicates while keeping qualified IDs.
+`subagentModelsVersion: 4` records completion, so later user edits (including an empty list or
 removing Astra) persist. The migration rebases on the latest disk config under the existing
 mutation lock; failed persistence degrades to an in-memory roster for that run without a stale
 whole-config overwrite. Existing disabled-model visibility rules remain unchanged.
