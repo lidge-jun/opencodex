@@ -11,6 +11,7 @@ import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 import { AGY_ACP_PROVIDER_ID, agyAcpConfigIssues, selectorCandidateProviders } from "../../src/config/schema/agy-acp-references";
 import { AGY_ACP_DEFAULT_MODEL, AGY_ACP_SEED_MODELS } from "../../src/providers/registry/agy-acp-models";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+import { AGY_ACP_MIN_VERSION } from "../../src/adapters/agy-acp/binary";
 import type { OcxConfig } from "../../src/types";
 import { repoPath } from "../helpers/repo-root";
 
@@ -290,5 +291,10 @@ describe("antigravity-acp configuration", () => {
     expect(messages(validateConfigCandidate(config({ subagentModelFallback: ["Flash-ACP"] }, { "antigravity-acp": { ...acp, modelAliases: { "gemini-3.8-flash": "flash-acp" } } })))).toContain("cannot be a subagent fallback");
     // A model only google lists, with the seeded canonical row present, stays allowed.
     expect(validateConfigCandidate(config({ subagentModelFallback: ["gemini-9-google-only"] }, { google: { ...google, models: ["gemini-9-google-only"] } })).ok).toBe(true);
+  });
+
+  test("the provider catalog advertises the runtime ACP CLI minimum", () => {
+    const row = PROVIDER_REGISTRY.find(entry => entry.id === AGY_ACP_PROVIDER_ID);
+    expect(row?.note).toContain(AGY_ACP_MIN_VERSION.join(".") + " or newer");
   });
 });
