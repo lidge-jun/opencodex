@@ -1635,7 +1635,7 @@ function writeFinalRequestLog(
   // Keyed by the live attempt objects, not the detached copies above.
   const protocolTrace = protocolTraceForRequest(logCtx, logCtx.attempts);
   // Projected before any writer (an injected one too): the row keeps only proxy-owned error facts.
-  reportCommittedTerminalCooldown(logCtx, meta, attempts, effectiveStatus, loggedUsage?.outputTokens);
+  reportCommittedTerminalCooldown(logCtx, meta, attempts, effectiveStatus);
   addLog(projectErrorDetail({
     requestId,
     ...(isLogicalRequestId(logicalRequestId) ? { logicalRequestId } : {}),

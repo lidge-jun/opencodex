@@ -8,13 +8,17 @@ import {
   targetKey,
 } from "../../src/combos";
 import {
+  comboTargetCooldownExpiry,
+  comboTargetCooldownStatus,
   coolComboTargetForCommittedTerminal,
 } from "../../src/combos/failover";
 import {
   addFinalRequestLog,
   beginRequestAttempt,
+  finishRequestAttempt,
   registerCommittedTerminalCooldownHandler,
   type RequestLogContext,
+  type RequestLogEntry,
 } from "../../src/server/request-log";
 import { rememberPausedTurn } from "../../src/lib/client-error-body";
 import { executeComboResponses } from "../../src/server/responses/core-combo";
@@ -188,6 +192,8 @@ describe("committed-terminal combo cooldown", () => {
     });
     // output_limit caps at 10 minutes; the original 1h server Retry-After expiry
     // and its 429 status must both survive the committed-terminal report.
+    expect(comboTargetCooldownExpiry("free", first, now)).toBe(now + 3_600_000);
+    expect(comboTargetCooldownStatus("free", first, now)).toBe(429);
     expect(isComboTargetInCooldown("free", first, now + 11 * 60_000)).toBe(true);
     expect(isComboTargetInCooldown("free", first, now + 59 * 60_000)).toBe(true);
     expect(isComboTargetInCooldown("free", first, now + 61 * 60_000)).toBe(false);
@@ -334,6 +340,63 @@ describe("committed-terminal combo cooldown", () => {
       addFinalRequestLog("ocx-test-unpaused", Date.now(), unpausedParentLog, 200, { terminalStatus: "incomplete" }, () => {});
       expect(isComboTargetInCooldown("aliasCombo", { provider: "a", model: "m-alias" })).toBe(true);
     } finally {
+      registerCommittedTerminalCooldownHandler(undefined);
+    }
+  });
+
+  test.each([[1024, false], [4096, true]] as const)("uses %i serving output tokens for cooldown and preserves aggregate accounting", (outputTokens, cooled) => {
+    registerCommittedTerminalCooldownHandler(coolComboTargetForCommittedTerminal);
+    try {
+      const earlier = beginRequestAttempt(1, "b", "m2", "openai-responses");
+      finishRequestAttempt(earlier, 502, 10, { inputTokens: 100, outputTokens: 3500 });
+      const serving = beginRequestAttempt(2, "a", "m1", "openai-responses");
+      const logCtx: RequestLogContext = {
+        model: "m1", provider: "a", providerAdapter: "openai-responses",
+        comboId: "free", comboTarget: first, comboTargetOutputCeiling: 4096,
+        failureDetail: { code: "output_limit" },
+        attempts: [earlier, serving], activeAttempt: serving,
+        usage: { inputTokens: 100, outputTokens },
+      };
+      const rows: RequestLogEntry[] = [];
+      addFinalRequestLog("ocx-test-output-limit", Date.now(), logCtx, 200, { terminalStatus: "incomplete" }, row => rows.push(row));
+      expect(rows[0]?.usage?.outputTokens).toBe(3500 + outputTokens);
+      expect(rows[0]?.attempts?.at(-1)?.usage?.outputTokens).toBe(outputTokens);
+      expect(isComboTargetInCooldown("free", first)).toBe(cooled);
+    } finally {
+      registerCommittedTerminalCooldownHandler(undefined);
+    }
+  });
+
+  test("uses the redirected provider ceiling but cools the configured combo target", async () => {
+    registerCommittedTerminalCooldownHandler(coolComboTargetForCommittedTerminal);
+    const cfg = comboConfig();
+    cfg.providers.a!.defaultMaxOutputTokens = 1024;
+    cfg.providers.b!.defaultMaxOutputTokens = 4096;
+    cfg.blockedModelRedirects = { "a/m1": "b/m2" };
+    const budget = createTranslatorBudget();
+    try {
+      const payload = { model: "combo/free", stream: true };
+      const req = new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+      });
+      const logCtx: RequestLogContext = { model: "free", provider: "combo", comboId: "free" };
+      const response = await executeComboResponses(req, payload, "free", cfg, logCtx, { translatorBudget: budget }, {
+        handleComboResponses: async () => { throw new Error("not expected"); },
+        handleResponses: async (_req, _cfg, childLog, opts) => {
+          childLog.usage = { inputTokens: 100, outputTokens: 4096 };
+          opts.onFirstOutput?.();
+          return new Response("ok");
+        },
+      });
+
+      expect(await response.text()).toBe("ok");
+      expect(logCtx.comboTargetOutputCeiling).toBe(4096);
+      logCtx.failureDetail = { code: "output_limit" };
+      addFinalRequestLog("ocx-test-redirect", Date.now(), logCtx, 200, { terminalStatus: "incomplete" }, () => {});
+      expect(isComboTargetInCooldown("free", first)).toBe(true);
+      expect(isComboTargetInCooldown("free", { provider: "b", model: "m2" })).toBe(false);
+    } finally {
+      budget.dispose();
       registerCommittedTerminalCooldownHandler(undefined);
     }
   });

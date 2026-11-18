@@ -1157,8 +1157,8 @@ export async function executeComboResponses(
     try {
     comboTargetsDispatched += 1;
     const targetOutputCeiling = resolveOutputCeiling(
-      config.providers[pick.target.provider]!,
-      pick.target.provider,
+      targetRoute.provider,
+      targetRoute.providerName,
       targetRoute.modelId,
     );
     const childLog: RequestLogContext = {

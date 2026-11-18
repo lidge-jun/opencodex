@@ -26,9 +26,9 @@ export function reportCommittedTerminalCooldown(
   meta: Pick<RequestLogEntry, "terminalStatus" | "closeReason"> | undefined,
   attempts: PersistedUsageAttempt[] | undefined,
   effectiveStatus: number,
-  outputTokens?: number,
 ): void {
   const servingAttempt = attempts?.at(-1);
+  const outputTokens = servingAttempt?.usage?.outputTokens;
   try {
     committedTerminalCooldownHandler?.({
       ...(logCtx.comboId !== undefined ? { comboId: logCtx.comboId } : {}),
