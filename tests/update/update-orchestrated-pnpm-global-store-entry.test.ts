@@ -87,7 +87,7 @@ test.skipIf(process.platform === "win32")("orchestrated pnpm update of a global 
       "else if(a[0]==='root') console.log(e.OCX_FIXTURE_GROUP);",
       "else if(a[0]==='bin') console.log(e.OCX_FIXTURE_BIN);",
       "else if(a[0]==='config') console.log(a[2]==='global-bin-dir'?e.OCX_FIXTURE_BIN:'undefined');",
-      "else if(a[0]==='store'&&a[1]==='path'&&a.length===3&&a[2]==='--dir='+e.PNPM_HOME) console.log(childStore?e.OCX_FIXTURE_CHILD_STORE:e.OCX_FIXTURE_STORE);",
+      "else if(a[0]==='store'&&a[1]==='path'&&a.length===3&&a[2]==='--dir='+e.PNPM_HOME) console.log(childStore?e.OCX_FIXTURE_CHILD_STORE:(e.pnpm_config_store_dir?p.join(e.pnpm_config_store_dir,'v11'):e.OCX_FIXTURE_STORE));",
       "else if(a[0]==='view') console.log(a.includes('dist.integrity')?'sha512-YWJj':'2.1.0');",
       // The updated tree also gains an in-store node_modules link, so it satisfies the released verifier as
       // well; the parent's readback must still re-prove the pinned store owner instead of demoting it.
@@ -101,6 +101,12 @@ test.skipIf(process.platform === "win32")("orchestrated pnpm update of a global 
     const parent = (extraEnv: Record<string, string> = {}) => spawnSync(node, [join(exposed, "bin/ocx.mjs"), "update", "--yes", "--json"],
       { cwd: root, env: { ...env, ...extraEnv }, encoding: "utf8", timeout: 60000 });
     const adds = () => existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(call => call.args[0] === "add") : [];
+
+    const plan = spawnSync(node, [join(exposed, "bin/ocx.mjs"), "update", "--plan", "--json", "--tag", "latest"],
+      { cwd: root, env, encoding: "utf8", timeout: 60000 });
+    expect({ status: plan.status, stderr: plan.stderr }).toMatchObject({ status: 0 });
+    expect(JSON.parse(plan.stdout)).toMatchObject({ installer: "pnpm", canApply: true, targetVersion: "2.1.0" });
+    expect(adds()).toEqual([]);
 
     // The child sees a different store than the parent proved: refused before any pnpm add.
     const otherStore = join(root, "other-pnpm", "store", "v11"); mkdirSync(otherStore, { recursive: true });
