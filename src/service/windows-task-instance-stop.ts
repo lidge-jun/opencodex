@@ -18,7 +18,7 @@ try {
   $sid = $identity.User.Value
   if (!$sid) { 'unverified-registration'; return }
   $account = $null
-  try { $account = $identity.Name } catch { }
+  try { $account = $identity.Name } catch { $account = $null } # optional: proof falls back to the SID alone
   $service = Microsoft.PowerShell.Utility\New-Object -ComObject Schedule.Service
   $service.Connect()
   $folder = $service.GetFolder('\')
