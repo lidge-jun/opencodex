@@ -28,6 +28,8 @@ import {
 import { CATALOG_INACTIVE_REASON_FIELD, SPAWN_PRIORITY_FIELD } from "./subagent-roster";
 import { OCX_NATIVE_SOURCE_PRIORITY_FIELD } from "./native-priority";
 import { applyRoutedDescription } from "./ownership";
+import { applyRoutedCatalogDefaults } from "./routed-defaults";
+import type { RoutedCatalogDefaults } from "../../config/schema/routed-catalog-defaults";
 
 export function finishUpstreamNativeEntry(clone: RawEntry, priority: number, contextCap?: NativeContextLimitsInput): RawEntry {
   if (priority !== 9) clone.priority = priority;
@@ -99,6 +101,8 @@ function preservePinnedNativeCustomReasoning(model?: CatalogModel): boolean {
  * Cria uma entrada nativa ou roteada a partir do snapshot upstream, de um clone
  * do template ou de campos mínimos. Aplica os metadados e limites pertinentes
  * sem alterar o template nem herdar sua marca de nome ou histórico de prioridade.
+ * `routedDefaults` (#6872) only reaches ordinary routed rows, between routed normalization
+ * and provider/model metadata; native rows and Codex-forward native aliases ignore it.
  */
 export function deriveEntry(
   template: RawEntry | null,
@@ -108,6 +112,7 @@ export function deriveEntry(
   model?: CatalogModel,
   exactComboSlugs: ReadonlySet<string> = new Set(),
   contextCap?: NativeContextLimitsInput,
+  routedDefaults?: Readonly<RoutedCatalogDefaults>,
 ): RawEntry {
   const preserveExact = isExactComboCatalogModel(model, exactComboSlugs);
   // Go exposes model-specific upstream enums; synthetic tiers mislead subagent overrides.
@@ -173,6 +178,7 @@ export function deriveEntry(
       // native tool/search/responses-lite contract while preserving the routed slug and wire id.
       if (!codexForwardNativeCapabilityAlias) {
         normalizeRoutedCatalogEntry(e, model?.parallelToolCalls === true, model?.codexToolMode);
+        applyRoutedCatalogDefaults(e, routedDefaults);
       } else if (model?.codexToolMode !== undefined) {
         applyRoutedCodexToolMode(e, model.codexToolMode);
       }
@@ -218,6 +224,7 @@ export function deriveEntry(
   applyRoutedDescription(entry, desc, model);
   if (isRouted) {
     applyRoutedCodexToolMode(entry, model?.codexToolMode);
+    if (model?.codexForwardNativeCapabilityAlias !== true) applyRoutedCatalogDefaults(entry, routedDefaults);
     applyReasoningLevels(
       entry,
       model?.reasoningEfforts,

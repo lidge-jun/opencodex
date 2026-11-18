@@ -209,3 +209,91 @@ enabled; entries disabled in the tray or Task Manager stay disabled.
 
 The macOS tray item and the macOS side of this migration judge the login item the way Startup
 safety does; see [Desktop Start at Login](../desktop-start-at-login.md).
+
+## Headless Windows Desktop update
+
+`ocx update --desktop` (`src/desktop-update/`) updates a Windows Desktop installation from an
+elevated non-interactive session (SSH, a Session 0 service) where the tray updater cannot run.
+`install.ts` admits only the compiled `ocx.exe` beside `opencodex-desktop.exe`; anything else
+exits 64, and the npm/pnpm Node launcher refuses `--desktop` before any package update.
+`src/cli/dispatch.ts` routes the flag to `cli.ts` before the orchestrated grammar sees `--json`, and
+`src/cli/preflight-exemptions.ts` skips the shim repair for it. `cli.ts` binds `headless.ts` to the network,
+filesystem, Windows Installer, the runtime record and the terminal. Every dependency of
+`headless.ts` is injected; the tests drive it with fixture keys, fake timers and fake runners.
+
+Trust is the GUI updater's. `trust.ts` restates `plugins.updater.pubkey` and its endpoint from
+`desktop/src-tauri/tauri.conf.json`, and `tests/update/update-desktop-headless-release.test.ts` fails when
+they differ. `release.ts` takes the feed's `windows-x86_64` entry (a differing
+`windows-x86_64-msi` entry refuses), requires the exact
+`github.com/lidge-jun/opencodex/releases/download/v<version>/OpenCodex-<version>-windows-x64.msi`
+asset, and verifies through the strict prehashed path of `src/update/minisign.mjs`: both
+signatures over the exact trusted-comment bytes, a signed `version:` equal to the announced one
+when present (the pinned plugin's check), and a signed `file:` naming this version's x64 MSI with the full
+version, prerelease included. The bytes must open with the OLE compound-file signature.
+Only a version strictly newer than the running CLI's own is installed.
+
+`acquire.ts` admits a first hop only on `github.com` under `/lidge-jun/opencodex/releases/` and
+at most three manual redirects to that prefix, `release-assets.githubusercontent.com` or
+`objects.githubusercontent.com`; it refuses non-HTTPS, userinfo and non-default ports, sends no
+credentials, caps the feed at 256 KiB and the installer at 1 GiB counting before each chunk is
+kept, and applies 10-second connect, 30-second idle-read and 20-minute total deadlines.
+Content-Length only refuses early. The transport is injected; no production setting reaches a
+loopback mock.
+
+`headless.ts` holds the home's sync/update mutex for an apply (`--check` only reads), writes the
+verified bytes (`wx`) into a fresh staging directory, reads them back and verifies again.
+`staging.ts` places that directory: for an elevated token (`TokenElevation`; an unreadable token
+counts as elevated) it is `<GetSystemDirectory parent>\Temp\ocx-desktop-update-<random>`, created by
+`CreateDirectoryW` with `D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;RC;;;OW)`, so no non-elevated
+process of the same user can swap the package, plant a link at the log path, or move the directory
+away before the elevated msiexec opens them (Users cannot delete another account's entry in
+`Windows\Temp`); a creation failure refuses. A token that is not elevated keeps `mkdtemp` in its own
+TEMP, because its msiexec has no more rights than a process that could change the file there.
+`image.ts` then copies its own running `ocx.exe` to `ocx.exe.<pid>-<ms>.update-new`, renames the running
+file to `ocx.exe.<pid>-<ms>.update-old` and the copy to `ocx.exe` (Windows allows renaming a running
+image; otherwise the installer's Restart Manager closes this process and its console and the install
+rolls back). The installed name is empty only between those two renames and while Windows
+Installer's major upgrade removes and rewrites the file, and the installer finishes or rolls back
+its own transaction, so a killed command (Ctrl+C, closed console, dropped SSH session) leaves
+nothing to restore (observed on Windows: after `taskkill /F` mid-install the service completed and
+`ocx.exe` ran). It then runs `msiexec.exe /i <msi> /qn /norestart /l*v <log>`
+from `trustedWindowsSystemDirectory()`
+(`src/service/desktop-supervision.mjs`) and waits for its exit code (`msi.ts`). 0 is installed,
+3010 and 1641 installed with a reboot pending, 1618 busy, 1602 cancelled, anything else a
+rolled-back failure whose log is kept (the moved image is renamed back only if the installed path is
+empty). An installer still running after 15 minutes is left alone with its whole staging directory
+and the outcome is uncertain (exit 3). The installed `ocx.exe --version` must then equal the target;
+a 3010 install still reporting the old version asks for a reboot (exit 2), and a mismatch reports
+where the moved image is. Only after a matching read-back is the moved image scheduled for deletion
+at restart; each apply first deletes earlier `.update-old`/`.update-new` files no process still maps.
+Removing the staging directory is best effort and never changes the outcome.
+
+`runtime.ts` starts no runtime when none of this home's answered before the install (`installed-stopped`:
+the command finds the proxy through the invoking account's home, so it has to run as the account that
+owns the proxy; a service, SYSTEM task or other account sees none) and
+leaves one already serving the target alone. It acts only on a runtime this home attests
+(`source: "runtime"` with a pid) that is older than the target and whose Win32 image
+(`windowsProcessPair`) is this installation's `ocx.exe` or an image this updater moved aside there, by asking it for its bound in-place
+restart through `requestBoundSystemRestart` with `respawnRunsInstalledImage`. That option lets a
+CLI-newer skew proceed because every respawn runs the installed bytes: a Desktop child exits 75
+and the app starts its sibling `ocx.exe`, a service child exits for its manager, and a detached
+runtime relaunches its own image. The request carries a deadline wide enough for a connected
+client's own restart budget. A connected client kept by its service answers 409
+`restart_supervised_service`, and the installed `ocx service restart` (which confirms a different
+serving pid or exits 1) is the owner path it names; an unproven service owner is left alone. A
+connected-client runtime under the app answers 409 `restart_supervised_desktop` instead; only when `inspectDesktopSupervision` proves this
+installation's `opencodex-desktop.exe` supervises exactly that pid does `drain.ts` run the installed
+`ocx stop --json` with `OCX_STOP_DEADLINE_MS`, as the app's own update drain does, accepting the
+`ocx-stop/1` result only when it and the exit code agree the runtime is down (or exit 79); the
+app's supervisor then starts its sibling `ocx.exe` after its backoff. Success is a different pid in
+this home's attested runtime record, on the replaced runtime's port, answering `/healthz` with the
+target version within 240 seconds; a proxy found on the configured port without this home's record
+(another home's, for example) neither counts as the runtime before the install nor as its
+replacement. Another image, an unattested or newer runtime, an unknown version, a
+refused restart, an unconfirmed drain or service restart, or a timeout is reported with the restart command and exit 2; nothing else is
+stopped. The Desktop shell process keeps its pre-update image until it is relaunched.
+
+`ocx status` on such an installation, for a proxy this home's runtime record attests
+(`source: "runtime"`), replaces the CLI-newer version warning with the installed
+and serving versions and `"<dir>\ocx.exe" update --desktop` (`withDesktopSkewAdvice` in
+`install.ts`, applied in `src/cli/status.ts`).

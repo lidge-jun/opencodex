@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,7 @@ import { writeLinkStore, type LinkStore } from "../../src/link/store";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { LinkWireClient, frameType } from "../helpers/link-ws-client";
+import * as linkTurn from "../../src/server/link-turn";
 import { failLinkTurnExpansion, markLinkTurnMissing, observeLinkTurnExpansion, type LinkTurnLogFields } from "../../src/server/link-turn";
 
 // Lane T5e1: the request-log fields of design 9.1 (transport, continuation, threadRef, turnRef), written only for
@@ -153,6 +154,21 @@ describe("through a real Home", () => {
     const row = h.nextRow();
     expect(await relayHttp(h.port, request())).toBe(200);
     expect(await row).not.toHaveProperty("link");
+  });
+
+  // #8601 owner decision: paced upstream reads apply to every relayed turn; only the log fields wait for the switch.
+  test.each([false, true])("a relayed HTTP turn reads its upstream only as its client drains (feature on: %p)", async featureOn => {
+    const paces = spyOn(linkTurn, "linkTurnPacesReads");
+    try {
+      const h = await home({ featureOn });
+      const row = h.nextRow();
+      expect(await relayHttp(h.port, request())).toBe(200);
+      const entry = await row;
+      // The delivery asked once for this turn's context, and the turn is paced.
+      expect(paces.mock.results.map(result => result.value)).toEqual([true]);
+      if (featureOn) expect(entry.link).toMatchObject({ transport: "http" });
+      else expect(entry).not.toHaveProperty("link");
+    } finally { paces.mockRestore(); }
   });
 });
 describe("the seam (src/server/link-turn.ts)", () => {

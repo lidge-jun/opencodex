@@ -47,4 +47,4 @@ bound. Rewritten responses preserve tool ownership.
 `tests/responses/empty-completion-core.test.ts` and `tests/responses/empty-completion-hardening.test.ts`
 cover integration and replay barriers. Other destinations and translated retry defaults are unchanged.
 
-The separate [Responses include normalization](../transports/responses-wire-shapes.md) is gated to xAI and Meta; it does not change this projection or its destination boundary. Shared dispatch also maps Meta catalog validation failures to a client 400 before sending upstream.
+The separate [Responses include normalization](../transports/responses-wire-shapes.md) follows its own destination policy; it does not change this projection or its destination boundary. Shared dispatch also maps Meta catalog validation failures to a client 400 before sending upstream.

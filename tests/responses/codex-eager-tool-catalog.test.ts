@@ -5,10 +5,13 @@ import {
   EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD,
   WARNED_SESSION_LIMIT,
   eagerCodexMcpToolCount,
+  eagerCodexToolCatalogSurface,
   warnEagerCodexToolCatalog,
 } from "../../src/server/responses/codex-tool-catalog";
+import * as codeModeSurface from "../../src/server/responses/code-mode-collab-surface";
 import type { OcxConfig } from "../../src/types";
 import { clearResponseStateForTests, rememberResponseState } from "../../src/responses/state";
+import { markHistoricalItem, REPLAY_HISTORICAL_ITEM } from "../../src/responses/item-provenance";
 import { createTempHome } from "../helpers/temp-home";
 import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
 
@@ -24,6 +27,7 @@ let home: ReturnType<typeof createTempHome>;
 let upstream: ReturnType<typeof Bun.serve>;
 let server: ReturnType<typeof startServer>;
 let upstreamCalls = 0;
+let upstreamTools: unknown;
 let warn: ReturnType<typeof spyOn<Console, "warn">>;
 let sessionCounter = 0;
 
@@ -73,12 +77,15 @@ function liteFirstTurn(tools: unknown[]): unknown[] {
 beforeEach(() => {
   home = createTempHome("ocx-codex-tool-catalog-");
   upstreamCalls = 0;
+  upstreamTools = undefined;
   warn = spyOn(console, "warn");
   upstream = Bun.serve({
     port: 0,
     async fetch(req) {
       upstreamCalls += 1;
-      const streamed = (await req.json() as { stream?: unknown }).stream === true;
+      const body = await req.json() as { stream?: unknown; tools?: unknown };
+      upstreamTools = body.tools;
+      const streamed = body.stream === true;
       if (streamed) {
         const chunk = (delta: Record<string, unknown>, finish: string | null) => `data: ${JSON.stringify({
           id: "chatcmpl_fixture", object: "chat.completion.chunk", model: "model",
@@ -146,6 +153,26 @@ describe("an eagerly expanded Codex MCP catalog is forwarded with a one-time dia
     }
     expect(upstreamCalls).toBe(3);
     expect(catalogWarnings()).toHaveLength(2);
+  });
+
+  test("a catalog beyond the diagnostic budget is still forwarded in full", async () => {
+    const tools = mcpTools(false, 4_096);
+    const result = await send("/v1/responses", tools, codexHeaders());
+    expect(result.status, result.text).toBe(200);
+    expect(upstreamCalls).toBe(1);
+    expect(upstreamTools).toHaveLength(tools[0]!.tools.length);
+    expect((upstreamTools as { function: { name: string } }[]).map(tool => tool.function.name))
+      .toEqual(tools[0]!.tools.map(tool => `mcp__fixture__${tool.name}`));
+    expect(catalogWarnings()).toHaveLength(0);
+  });
+
+  test("an oversized compaction catalog skips the diagnostic before ordinary model validation", async () => {
+    const tools = [{ ...mcpTools(false, 256)[0]!, name: "mcp__" + "x".repeat(16_384) }];
+    const result = await send("/v1/responses/compact", tools, codexHeaders(), { model: undefined });
+    expect(result.status, result.text).toBe(400);
+    expect(result.text).toContain("compaction request requires a model");
+    expect(upstreamCalls).toBe(0);
+    expect(catalogWarnings()).toHaveLength(0);
   });
 
   test("flattened MCP declarations are diagnosed with Codex turn metadata alone", async () => {
@@ -324,6 +351,107 @@ describe("an eagerly expanded Codex MCP catalog is forwarded with a one-time dia
 describe("the eager catalog count stays a bounded, side-effect-free diagnostic", () => {
   const headers = new Headers({ originator: "codex_cli_rs" });
 
+  test.each([false, true])("the diagnostic budget precedes namespace expansion and Set insertion (duplicates: %s)", duplicates => {
+    const body = { tools: [{ type: "namespace", name: "mcp__" + "x".repeat(16_384),
+      tools: Array.from({ length: 256 }, (_, index) => ({ type: "function", name: duplicates ? "same" : `tool_${index}` })),
+    }] };
+    const original = JSON.stringify(body);
+    const add = Set.prototype.add;
+    let addedCharacters = 0;
+    // Bound the failing implementation too: no timing assertion or large allocation is needed.
+    const additions = spyOn(Set.prototype, "add").mockImplementation(function (this: Set<unknown>, value: unknown) {
+      if (typeof value === "string" && value.startsWith("mcp__")) {
+        addedCharacters += value.length;
+        if (addedCharacters > 1 << 20) throw new Error("diagnostic canonical name budget exceeded");
+      }
+      return add.call(this, value);
+    });
+    let count: number;
+    try { count = eagerCodexMcpToolCount(body, headers); } finally { additions.mockRestore(); }
+    expect(count).toBe(0);
+    expect(addedCharacters).toBeGreaterThan(0);
+    expect(addedCharacters).toBeLessThanOrEqual(1 << 20);
+    expect(JSON.stringify(body)).toBe(original);
+  });
+
+  test.each(["top-level", "namespace", "additional_tools"])("the diagnostic budget rejects oversized %s arrays before visiting entries", location => {
+    const tools = new Proxy(new Array(4_097), {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^\d+$/.test(key)) throw new Error("oversized catalog was visited");
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const body = location === "top-level" ? { tools }
+      : location === "namespace" ? { tools: [{ type: "namespace", name: "mcp__fixture", tools }] }
+        : { input: [{ type: "additional_tools", tools }] };
+    expect(eagerCodexMcpToolCount(body, headers)).toBe(0);
+  });
+
+  test("the diagnostic budget is shared across duplicate additional_tools groups", () => {
+    const tool = { type: "function", name: "mcp__fixture__same" };
+    const input = Array.from({ length: 100 }, () => ({ type: "additional_tools", tools: Array(50).fill(tool) }));
+    expect(eagerCodexMcpToolCount({ input }, headers)).toBe(0);
+  });
+
+  test("the diagnostic budget checks input length before replay scans or copies and skips compact history", () => {
+    const input = new Proxy(new Array(4_097), {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^\d+$/.test(key)) throw new Error("oversized input was visited");
+        return Reflect.get(target, key, receiver);
+      },
+      has() { throw new Error("oversized input was scanned"); },
+    });
+    const body = { tools: mcpTools(), input };
+    expect(eagerCodexToolCatalogSurface(body, undefined)).toBe("responses");
+    expect(eagerCodexMcpToolCount(body, headers, "responses", 1)).toBe(0);
+    expect(eagerCodexMcpToolCount(body, headers, "compact", 1)).toBe(EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD);
+  });
+
+  test("a bounded replay view neither enumerates unrelated body fields nor loses provenance", () => {
+    const input = [
+      { type: "additional_tools", tools: mcpTools(false, 3), [REPLAY_HISTORICAL_ITEM]: false },
+      markHistoricalItem({ type: "additional_tools", tools: mcpTools() }),
+    ];
+    const body = new Proxy({ input }, { ownKeys() { throw new Error("unrelated body fields were copied"); } });
+    // Provenance wins over a stale numeric prefix, even if history follows live declarations.
+    expect(eagerCodexMcpToolCount(body, headers, "responses", input.length)).toBe(3);
+    expect(input).toHaveLength(2);
+    expect(input[0]![REPLAY_HISTORICAL_ITEM]).toBe(false);
+    expect(input[1]![REPLAY_HISTORICAL_ITEM]).toBe(true);
+  });
+
+  test("the diagnostic budget covers repeated Code Mode parsing before any parser call", () => {
+    const exec = renderedExec(mcpTools()[0]!.tools.map(tool => `mcp__fixture__${tool.name}`));
+    exec.description += "\n" + "x".repeat(64 * 1024);
+    const body = { tools: Array(20).fill(exec) };
+    const parse = codeModeSurface.codeModeRenderedToolNames;
+    let parsedCharacters = 0;
+    const parser = spyOn(codeModeSurface, "codeModeRenderedToolNames").mockImplementation((name, description) => {
+      if (typeof description === "string") {
+        parsedCharacters += description.length;
+        if (parsedCharacters > 1 << 20) throw new Error("diagnostic description budget exceeded");
+      }
+      return parse(name, description);
+    });
+    let count: number;
+    try { count = eagerCodexMcpToolCount(body, headers); } finally { parser.mockRestore(); }
+    expect(count).toBe(0);
+    expect(parsedCharacters).toBeGreaterThan(0);
+    expect(parsedCharacters).toBeLessThanOrEqual(1 << 20);
+  });
+
+  test("exhausting the diagnostic budget emits no partial warning or anonymous dedup entry", () => {
+    const tools = [...mcpTools(), { ...mcpTools(false, 256)[0]!, name: "mcp__" + "x".repeat(16_384) }];
+    const body = { tools };
+    const original = JSON.stringify(body);
+    const logicalRequest = {};
+    for (let retry = 0; retry < 2; retry += 1) warnEagerCodexToolCatalog(body, headers, { logicalRequest });
+    expect(catalogWarnings()).toHaveLength(0);
+    expect(JSON.stringify(body)).toBe(original);
+    for (let retry = 0; retry < 2; retry += 1) warnEagerCodexToolCatalog({ tools: mcpTools() }, headers, { logicalRequest });
+    expect(catalogWarnings()).toHaveLength(1);
+  });
+
   test.each([
     ["a tool call and its output", [
       { type: "function_call", call_id: "call_1", name: "mcp__fixture__tool_0", arguments: "{}" },
@@ -410,6 +538,13 @@ describe("the eager catalog count stays a bounded, side-effect-free diagnostic",
     // The same tools carried both inside `functions` and as a top-level group count once.
     expect(eagerCodexMcpToolCount({ input: "hello", tools: [...tools, ...mcpTools()] }, headers))
       .toBe(EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD);
+  });
+
+  test.each(["mcp", "mcp_", "mcp__fixture"])("the namespace separator participates in the MCP prefix for %s", namespace => {
+    const name = `${namespace}__tool`;
+    const tool = { type: "function", name: "tool" };
+    const tools = [{ type: "namespace", name: namespace, tools: [tool] }, { ...tool, name }];
+    expect(eagerCodexMcpToolCount({ tools }, headers)).toBe(1);
   });
 
   test("each sessionless logical request is warned, and one request is warned once", () => {

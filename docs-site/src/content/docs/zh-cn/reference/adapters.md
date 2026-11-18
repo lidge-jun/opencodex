@@ -124,7 +124,9 @@ interface ProviderAdapter {
 表单中填写，或由代理主机上的 `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` 和
 `GOOGLE_CLOUD_LOCATION` 提供。添加 provider 不代表凭据或权限已验证。API key 未指定
 项目时使用 Vertex express 模式。
-仪表盘预设使用以配置的默认模型为起点的静态目录；连接测试不会验证 Vertex 凭据或权限。
+仪表盘预设使用以配置的默认模型为起点的静态目录。使用 ADC 时，连接测试会换取一次访问令牌，
+能证明凭据可用，但不证明 Vertex 权限；代理用当前 ADC 来源换到过令牌后，provider 显示为已验证。
+静态目录下的 API key 不做测试。
 已有 Vertex 配置省略 `liveModels` 时会保留通过通用发现端点进行实时发现的原有行为。
 设置 `liveModels: false` 使用静态目录，也可在设置页面切换这两种模式。
 
@@ -158,9 +160,10 @@ token。
   能接受更大请求的账户，并不能让过大的目录变得安全。
 - 移除 Kiro 校验器拒绝的 JSON Schema 关键字（`pattern`、`minLength`、`maximum`、
   `additionalProperties` 等 29 个），但保留探针在对应模型上实测通过的关键字。
-  `claude-opus-4.5` 全部保留；`claude-opus-5.5` 与 `claude-sonnet-5.5` 只保留
-  `pattern`、`maximum`，其余仍然移除，
-  因为没有探针向这两个模型发送过其他关键字。包括其余 Claude id 在内的其他 Kiro 模型全部移除。
+  `claude-opus-4.5` 全部保留；`claude-opus-5.5` 保留 Claude Desktop 与 Claude Code 目录使用的 12 个
+  （`$schema`、`additionalProperties`、`pattern`、`format`、`minLength`、`maxLength`、`minimum`、`maximum`、`exclusiveMinimum`、`minItems`、`maxItems`、`propertyNames`），已在生产流量中实测；
+  `claude-sonnet-5.5` 只保留 `pattern`、`maximum`。其余仍然移除，
+  因为没有请求向这两个模型发送过其他关键字。包括其余 Claude id 在内的其他 Kiro 模型全部移除。
   例外按模型和关键字划分，是因为这条 wire 在 reasoning effort 上已经区分 Claude 模型，而 Kiro
   拒绝的关键字不只是丢掉提示，还会让整个请求失败。
 ### 完成与原生 stop reason
