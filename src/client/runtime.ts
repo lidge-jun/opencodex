@@ -555,7 +555,11 @@ export async function startClientRuntime(
     if (shuttingDown) return;
     shuttingDown = true;
     clientStopping = true;
-    if (recycleTimer) { clearTimeout(recycleTimer); recycleTimer = undefined; }
+    if (recycleTimer) {
+      clearTimeout(recycleTimer);
+      recycleTimer = undefined;
+      recycleScheduled = false;
+    }
     const fenceSync = () => {
       if (!linkMode) return true;
       try { markClientRuntimeStopping({ pid: process.pid, port: servedPort, attestationSecret }); return true; }

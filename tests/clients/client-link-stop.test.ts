@@ -100,6 +100,12 @@ test("a parent stop admitted before a recovery timer fires prevents the schedule
   expect(result).toMatchObject({ role: "client", spawned: 0, state: "disconnected", phase: "complete", marker: true, runtimePresent: true });
 }, 20_000);
 
+test("a refused signal stop can reschedule a canceled recycle after disconnect recovery", async () => {
+  const result = await runRecovery("signal-pending-recycle");
+  expect(result).toMatchObject({ firstRecycleTimers: 1, beforeRecoveryAdmission: 409, recoveryRecycleTimers: 1,
+    role: "standalone", spawned: 1, file: { userSetting: "keep" }, state: "disconnected", phase: "complete", runtimePresent: false });
+}, 20_000);
+
 test("Link signal drains Home-created Pi and OpenCode routes before listener release", async () => {
   const report = await runStop({ mode: "runtime", fileClients: ["pi", "opencode"], fileOnly: true, osSignal: process.platform !== "win32" });
   expect(report.result).toEqual({ atListenerStop: true });

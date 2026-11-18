@@ -1,5 +1,5 @@
 /** Real file recovery and bound restart; only replacement process launch is a loopback fixture. */
-import { mock } from "bun:test";
+import { mock, spyOn } from "bun:test";
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getDefaultConfig, saveConfig } from "../../src/config";
@@ -80,6 +80,14 @@ async function main() {
   } }));
   const { startClientRuntime, scheduleStandaloneRecycle } = await import("../../src/client/runtime");
   await startClientRuntime({ block: false }, { restartSupervisor: async () => null });
+  const pendingRecycle = options.mode === "signal-pending-recycle";
+  const scheduleAndCountTimers = () => {
+    const timer = spyOn(globalThis, "setTimeout");
+    try {
+      scheduleStandaloneRecycle(expected.tokenFingerprint);
+      return timer.mock.calls.filter(([, delay]) => delay === 50).length;
+    } finally { timer.mockRestore(); }
+  };
   const restart = async () => {
     const runtime = readRuntimePort(process.pid)!;
     const nonce = createLocalAttestationChallenge();
@@ -91,6 +99,8 @@ async function main() {
   };
   let finishStop: () => Promise<void> = async () => {};
   if (options.mode.startsWith("signal")) {
+    // Queue and signal in one turn so the first timer is still pending at shutdown.
+    if (pendingRecycle) observations.firstRecycleTimers = scheduleAndCountTimers();
     process.emit("SIGTERM", "SIGTERM");
     await (options.mode === "signal-active" ? entered : refused);
   } else {
@@ -116,7 +126,14 @@ async function main() {
   if (options.mode === "missing-config") unlinkSync(join(home, "config.json"));
   if (options.mode === "new-connection") { config.client!.connectedAt = "2026-11-16T01:00:00.000Z"; saveConfig(config); }
   if (options.mode === "pending-connect") markClientConnectPending("b".repeat(64));
-  if (options.mode === "timer-parent-active") {
+  if (pendingRecycle) {
+    observations.recoveryRecycleTimers = scheduleAndCountTimers();
+    if (observations.recoveryRecycleTimers === 0) {
+      const health = await (await fetch(`http://127.0.0.1:${config.port}/healthz`)).json() as { role: string };
+      await report(health.role); process.exit(0);
+    }
+    return; // The scheduled replacement reports after binding the released listener's port.
+  } else if (options.mode === "timer-parent-active") {
     scheduleStandaloneRecycle(expected.tokenFingerprint);
     const runtime = readRuntimePort(process.pid)!;
     (await import("../../src/client/sync-runtime")).markClientRuntimeStopping({ pid: process.pid, port: config.port, attestationSecret: runtime.attestationSecret! }, { explicitStop: true });
