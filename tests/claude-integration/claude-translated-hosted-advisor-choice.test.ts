@@ -5,6 +5,7 @@ import { apiKeyAccountLogLabel } from "../../src/codex/account-label";
 import { validateConfigCandidate } from "../../src/config/diagnostics";
 import { registerUpstreamRewriter } from "../../src/plugins/upstream-hooks";
 import { messagesToResponsesTranslation } from "../../src/protocols/codecs/messages";
+import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { protocolTraceForRequest } from "../../src/protocols/trace";
 import type { RequestLogContext } from "../../src/server/request-log";
@@ -18,6 +19,7 @@ import { workflowBudgetSnapshot } from "../../src/lib/workflow-budget";
 import { admitHttpWorkflowTurn } from "../../src/server/workflow-refusal";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS } from "../helpers/remove-tree";
 import { createTempHome } from "../helpers/temp-home";
 
 const MODEL = "claude-opus-5";
@@ -214,7 +216,8 @@ test.each([
   ["first candidate capped", "policy", "counted core"], ["all candidates capped", "policy", "counted core"],
 ] as const)(
   "translated Messages handles Advisor with %s (route=%s, entry=%s)", (scenario, route, entry) =>
-    withHostedAdvisorSpendHome(() => verifyHostedAdvisorChoice(scenario, route, entry === "counted core")));
+    withHostedAdvisorSpendHome(() => verifyHostedAdvisorChoice(scenario, route, entry === "counted core")),
+  BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
 
 async function withHostedAdvisorSpendHome(run: () => Promise<void>): Promise<void> {
   const home = createTempHome("ocx-hosted-advisor-choice-");
@@ -222,7 +225,11 @@ async function withHostedAdvisorSpendHome(run: () => Promise<void>): Promise<voi
     const release = acquireOwnedSpendHome();
     try { await run(); }
     finally { release(); }
-  } finally { home.remove(); }
+  } finally {
+    // Policy health scoring opens the index and can start an integrity worker.
+    try { closeRequestHistoryIndex(); }
+    finally { await home.removeAfterBackgroundWork(); }
+  }
 }
 
 test.each([
@@ -275,7 +282,7 @@ test.each([
       }
       expect(log.accountLogLabel).toBeUndefined();
     }
-  }));
+  }), BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
 
 test.each([
   ["explicit", "conflicting credential"], ["optional", "conflicting credential"],
@@ -369,7 +376,7 @@ test.each([
       unregister();
       if (workflow?.admitted) workflow.lease.release();
     }
-  }));
+  }), BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
 
 test.each(["default", "inherited"] as const)("translated preflight honors the %s budget's captured pool policy", budget =>
   withHostedAdvisorSpendHome(async () => {
@@ -407,7 +414,7 @@ test.each(["default", "inherited"] as const)("translated preflight honors the %s
     });
     expect(response.status, await response.text()).toBe(budget === "default" ? 200 : 429);
     expect(toolsAtWire).toEqual(budget === "default" ? [[HOSTED_ADVISOR]] : []);
-  }));
+  }), BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
 
 test.each([
   ["policy", "key", "optional"], ["policy", "local", "optional"], ["policy", "local", "explicit"],
@@ -466,4 +473,4 @@ test.each([
       expect(wire.headers.get("anthropic-beta") ?? "").not.toContain(BETA);
       expect(JSON.stringify(wire.body)).not.toContain(ciphertext);
     }
-  }));
+  }), BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
