@@ -209,6 +209,8 @@ describe("ocx account login against a device-only proxy", () => {
   let requests: Array<{ method: string; path: string; body?: unknown }> = [];
   let deviceOnly = true;
   let cancelStatus = 200;
+  let stallCancelBody = false;
+  let deviceFlowId = "flow-device";
   let server: ReturnType<typeof Bun.serve>;
   let errors: string[] = [];
   let logs: string[] = [];
@@ -218,6 +220,8 @@ describe("ocx account login against a device-only proxy", () => {
     requests = [];
     deviceOnly = true;
     cancelStatus = 200;
+    stallCancelBody = false;
+    deviceFlowId = "flow-device";
     errors = [];
     logs = [];
     server = Bun.serve({
@@ -229,10 +233,17 @@ describe("ocx account login against a device-only proxy", () => {
         requests.push({ method: req.method, path: url.pathname, body });
         if (url.pathname === "/api/codex-auth/login") {
           return Response.json(deviceOnly
-            ? { url: "https://auth.openai.com/codex/device", deviceCode: "ABCD-EFGH", flowId: "flow-device", authMethod: "device-only" }
+            ? { url: "https://auth.openai.com/codex/device", deviceCode: "ABCD-EFGH", flowId: deviceFlowId, authMethod: "device-only" }
             : { url: "https://auth.openai.com/oauth/authorize", flowId: "flow-browser" });
         }
-        if (url.pathname === "/api/codex-auth/login/cancel") return Response.json({ ok: cancelStatus === 200 }, { status: cancelStatus });
+        if (url.pathname === "/api/codex-auth/login/cancel") {
+          if (stallCancelBody) {
+            return new Response(new ReadableStream({
+              start(controller) { controller.enqueue(new TextEncoder().encode('{"ok":')); },
+            }));
+          }
+          return Response.json({ ok: cancelStatus === 200 }, { status: cancelStatus });
+        }
         if (url.pathname === "/api/codex-auth/login/code") return Response.json({ ok: true, accepted: true });
         if (url.pathname === "/api/codex-auth/login-status") return Response.json({ status: "done", email: "operator@example.test" });
         return Response.json({ error: "unhandled" }, { status: 404 });
@@ -289,10 +300,40 @@ describe("ocx account login against a device-only proxy", () => {
 
   test("a failed cancel is reported instead of hidden", async () => {
     cancelStatus = 500;
+    deviceFlowId = "flow-device\x1b";
     const code = await cmdAccount(["login", "openai", "--json"], deps());
     expect(code).toBe(2);
-    expect(errors.join("\n")).toContain("Could not cancel the started login flow.");
+    const message = errors.join("\n");
+    expect(message).toContain("Could not cancel the started login flow. Flow: flow-device\\x1b");
+    expect(message).not.toContain("\x1b");
+    expect(message).not.toContain("ABCD-EFGH");
+    expect(message).not.toContain("https://auth.openai.com/codex/device");
   });
+
+  test("an incomplete cancel response cannot hide the original stdin error", async () => {
+    deviceOnly = false;
+    stallCancelBody = true;
+    let cancelSignal: AbortSignal | null | undefined;
+    const stdin = Object.assign(Readable.from([""]), { isTTY: false }) as AccountStdin & Readable;
+    try {
+      const code = await cmdAccount(["login", "openai", "--code", "-"], {
+        ...deps(),
+        stdinImpl: stdin,
+        fetchImpl: (input, init) => {
+          if (!String(input).endsWith("/login/cancel")) return fetch(input, init);
+          cancelSignal = init?.signal;
+          const testDeadline = AbortSignal.timeout(4_000);
+          return fetch(input, { ...init, signal: cancelSignal ? AbortSignal.any([cancelSignal, testDeadline]) : testDeadline });
+        },
+      });
+      expect(cancelSignal?.aborted).toBe(true);
+      expect(code).toBe(2);
+      expect(errors.join("\n")).toContain("Could not cancel the started login flow. Flow: flow-browser");
+      expect(errors.join("\n")).toContain("authorization code input was empty");
+    } finally {
+      stdin.destroy();
+    }
+  }, 8_000);
 
   test.each(["already-ended EOF", "empty EOF", "timeout"])("auto login cancels its flow when stdin reaches %s", async (failure) => {
     deviceOnly = false;

@@ -294,12 +294,12 @@ await the callback through completion, including publication; aborting their wai
 Successful refresh publishes access and refresh tokens and advances the credential mutation epoch before clearing
 grant rejection and applicable reauth quarantine, then throws the caller's abort reason if cancelled.
 Snapshot and identity checks still refuse to overwrite an external auth writer, including when the caller also cancelled.
-If publication is refused after an exchange, only that request receives the new access token. The other writer's auth.json stays intact and the old grant keeps its rejection status (#2999).
+If publication is refused after an exchange, the active request alone receives the new access token, or throws its abort reason if the caller cancelled. The other writer's auth.json stays intact, the exchanged grant is not stored, and the old grant keeps its rejection status (#2999).
 Same-identity device reauth obtains a new login grant and keeps its pre-publication fence.
 
 ## Pool login policy and cancellation
 
-For ChatGPT/Codex pool logins, `codexAuthMethod` applies at proxy startup. With `"device-only"`, `src/codex/auth-api/login-flow.ts` forces a device grant and returns `authMethod: "device-only"`. `src/cli/account-auth.ts` cancels that flow when the caller supplies `--code` or requests a JSON wait without `--no-wait`. The policy covers only pool login.
+For ChatGPT/Codex pool logins, `codexAuthMethod` applies at proxy startup. With `"device-only"`, `src/codex/auth-api/login-flow.ts` forces a device grant and returns `authMethod: "device-only"`. `src/cli/account-auth.ts` attempts to cancel that flow when the caller supplies `--code` or requests a JSON wait without `--no-wait`. The policy covers only pool login.
 The pool poller requires success for its exact flow id and receives that flow's persisted credential through the OAuth lifecycle callback. Automatic OAuth cleanup retains that exact outcome while the pool login is starting or pending. It rechecks ownership immediately before writing. Pool cancellation remains available through identity and eligibility checks, including after OAuth settles. After publication starts, cancellation is refused while the catalog result settles.
 
 ## Native-main refresh ownership

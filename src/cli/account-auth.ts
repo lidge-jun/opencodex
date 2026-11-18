@@ -222,16 +222,23 @@ async function resolveCode(
   return await readSecretLine(deps, "authorization code");
 }
 
+const CODEX_LOGIN_CANCEL_TIMEOUT_MS = 2_000;
+
 async function cancelStartedCodexLogin(flowId: string | undefined, deps: RuntimeApiDeps): Promise<boolean> {
   if (!flowId) return false;
   try {
     await runtimeRequest("/api/codex-auth/login/cancel", {
       method: "POST", redirect: "error", body: JSON.stringify({ flowId }),
+      signal: AbortSignal.timeout(CODEX_LOGIN_CANCEL_TIMEOUT_MS),
     }, deps);
     return true;
   } catch {
     return false;
   }
+}
+
+function codexLoginCancelFailure(flowId: string | undefined): string {
+  return `Could not cancel the started login flow.${flowId ? ` Flow: ${terminalSafeText(flowId)}` : ""}`;
 }
 
 async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | void> {
@@ -342,14 +349,14 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
       const advice = suppliedCode !== undefined
         ? "--code cannot be used; run the login without --code and enter the device code at the returned URL"
         : "with --json, add --no-wait and complete the login with the returned url and deviceCode";
-      throw new CliUsageError(`This proxy requires device code login (codexAuthMethod: device-only), so ${advice}.${cancelled ? "" : " Could not cancel the started login flow."}`, USAGE);
+      const cleanup = cancelled ? "" : ` ${codexLoginCancelFailure(start.flowId)}`;
+      throw new CliUsageError(`This proxy requires device code login (codexAuthMethod: device-only), so ${advice}.${cleanup}`, USAGE);
     }
     try {
       code = await resolveCode(suppliedCode, deps, false);
     } catch (error) {
       if (!await cancelStartedCodexLogin(start.flowId, pinned)) {
-        const flow = start.flowId ? ` Flow: ${terminalSafeText(start.flowId)}` : "";
-        console.error(`Could not cancel the started login flow.${flow}`);
+        console.error(codexLoginCancelFailure(start.flowId));
       }
       throw error;
     }
