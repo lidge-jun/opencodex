@@ -1248,6 +1248,11 @@ export async function executeComboResponses(
         if (childLog.terminalIncompleteReason !== undefined) logCtx.terminalIncompleteReason = childLog.terminalIncompleteReason;
         if (childLog.terminalErrorCode !== undefined) logCtx.terminalErrorCode = childLog.terminalErrorCode;
         if (childLog.upstreamError !== undefined) logCtx.upstreamError = childLog.upstreamError;
+        // Raw usage may arrive after the commit copy. Publish it before spend is finalized.
+        if (childLog.usage !== undefined) {
+          logCtx.usage = childLog.usage;
+          logCtx.usageWireParsed = childLog.usageWireParsed;
+        }
         // A committed stream that ends failed is a target failure too; incomplete is an answer.
         if (status === "failed") jevPin?.forget();
         options.onNativePassthroughTerminal?.(status);

@@ -17,7 +17,7 @@ import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import type { RequestFailureStage } from "../../lib/request-failure-model";
 import type { RequestLogContext } from "../request-log";
 import { carryResponseToolOwnership } from "./response-tool-ownership";
-import { createSseInspector } from "../relay";
+import { createSseInspector, isNativePassthroughSseResponse } from "../relay";
 import { sseDataPayload } from "../sse-payload-rewrite";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 import { REQUIRED_TOOL_CONTRACT_CODE } from "../../lib/errors";
@@ -658,6 +658,8 @@ export async function preflightComboStreamResponse(
   let holdDeadline: Promise<"hold-expired"> | undefined;
   const inspector = createSseInspector({
     logCtx,
+    // Native delivery already inspects raw usage; these bytes may contain display estimates.
+    collectUsage: !isNativePassthroughSseResponse(response),
     onFrame: frame => {
       if (terminalStatus === undefined && !outputCommitted && !retryableTerminalPayload
         && ambiguousSseFrame(frame)) outputCommitted = true;

@@ -8,6 +8,7 @@ import type { RequestLogContext } from "../../src/server/request-log";
 import { spendLedgerOwnerSnapshot } from "../../src/lib/spend-ledger-owner";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { markEgressTransparentExecutor } from "../../src/lib/provider-egress";
 
 // #7427: a per-provider opt-in adds estimated usage when the provider omits it. The estimate is
 // marked by a response header and never reaches the request log, spend or quota accounting.
@@ -50,7 +51,10 @@ function sse(body: Record<string, unknown>, terminal = "response.completed"): Re
 
 async function send(cfg: OcxConfig, stream: boolean, upstream: Response, options: HandleResponsesOptions = {}) {
   release ??= acquireOwnedSpendHome();
-  globalThis.fetch = (async () => upstream) as unknown as typeof fetch;
+  globalThis.fetch = markEgressTransparentExecutor((async () => upstream) as unknown as typeof fetch);
+  // This fixture owns the wire even when the test host has an inherited SOCKS proxy.
+  cfg.providers.fixture!.fetch = globalThis.fetch;
+  cfg.providers.fixture!.proxy = "direct";
   const log = { model: "", provider: "" } as RequestLogContext;
   const response = await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST", headers: { "content-type": "application/json" },

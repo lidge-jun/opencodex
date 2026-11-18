@@ -268,6 +268,7 @@ the combo sets `usageFromBridge` and `usage` on its own context; a binding that 
 for the commit, and a child that fails or never commits forwards nothing. Without that, the row
 and the settlement would read the usage back off the bridged Responses wire, which carries no
 `providerCredits` and derives its input count from the context checkpoint.
+Native Responses children publish raw usage and `usageWireParsed` through the committed terminal callback before parent settlement, including terminals arriving after the commit copy. Their client-facing preflight leaves usage collection to the original inspector; display-only estimates cannot settle or reduce a missing-usage reservation. `tests/responses/responses-combo-estimated-usage-spend.test.ts` covers both relay modes, early and late terminals, actual usage, the durable journal and the next HTTP admission.
 
 Unconfigured requests preserve the legacy counter observer: reservations increment the send
 counter, refunds decrement it, and named reports reconcile prepaid sends. Enforced requests use

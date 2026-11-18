@@ -1168,6 +1168,8 @@ export type SseInspector = {
 export type SseInspectorHandlers = {
   onTerminal?: (status: ResponsesTerminalStatus, httpStatusOverride?: number) => void;
   logCtx?: RequestLogContext;
+  /** Client-side reinspection leaves usage to the native raw-body observer. */
+  collectUsage?: boolean;
   onCompletedResponse?: (response: { id?: unknown; output?: unknown; status?: unknown }) => void;
   /** A reconstructed snapshot for any valid terminal kind; unlike persistence, includes failures. */
   onTerminalResponse?: (
@@ -1393,7 +1395,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
       }
     }
     if (!reported && handlers.logCtx) {
-      inspectResponseLogSsePayloadParsed(handlers.logCtx, payload, parsed);
+      inspectResponseLogSsePayloadParsed(handlers.logCtx, payload, parsed, handlers.collectUsage);
     }
     // Before any terminal handling: a consumer deciding on the whole turn must observe this
     // payload even when the terminal snapshot that follows no longer mentions it.

@@ -1021,7 +1021,7 @@ export function catalogModelSupportsServiceTier(modelId: string, serviceTier: st
   }
 }
 
-export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unknown): void {
+export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unknown, collectUsage = true): void {
   if (!payload || typeof payload !== "object") return;
   if (logCtx.observedTerminalStatus === undefined) {
     const eventType = (payload as { type?: unknown }).type;
@@ -1052,7 +1052,7 @@ export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unk
   } else if (Object.prototype.hasOwnProperty.call(source, "service_tier")) {
     logCtx.activeTierMetadata?.observeResponseServiceTier(serviceTier);
   }
-  const usage = usageFromResponsesPayload((source as { usage?: unknown }).usage);
+  const usage = collectUsage ? usageFromResponsesPayload((source as { usage?: unknown }).usage) : undefined;
   if (usage && !logCtx.usageFromBridge && !logCtx.usageEstimatedForClient) {
     if (!recordKeyWireAttemptUsage(logCtx, usage)) {
       logCtx.usage = usage;
@@ -1167,12 +1167,13 @@ export function inspectResponseLogSsePayloadParsed(
   logCtx: RequestLogContext,
   payload: string | null,
   parsed: unknown | undefined,
+  collectUsage = true,
 ): void {
   if (!payload || payload.trim() === "[DONE]") return;
   const debugEnabled = isUsageDebugEnabled();
   const sseAlreadyMarked = logCtx.usageDebugBodyKind === "sse";
   if (parsed !== undefined) recordGenerationEvent(logCtx, (parsed as { type?: unknown } | null)?.type);
-  if (parsed !== undefined) applyResponseLogMetadata(logCtx, parsed);
+  if (parsed !== undefined) applyResponseLogMetadata(logCtx, parsed, collectUsage);
   else logCtx.activeTierMetadata?.markResponseUnparseable();
   captureUpstreamErrorParsed(logCtx, payload, parsed, true);
   if (debugEnabled) {
