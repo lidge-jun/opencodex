@@ -400,9 +400,7 @@ El JSON generado usa el ámbito de configuración de la línea de comandos de Cl
 
 Al omitir el JSON con cualquiera de esas opciones, el lanzador conserva la variable `CLAUDE_CODE_AUTO_COMPACT_WINDOW` si el contexto automático la establece. Exportarla explícitamente también omite la generación y conserva su valor. Claude Code da prioridad a un valor válido de esta variable sobre `--autocompact` y la configuración de compactación guardada. Para usar la política de compactación de un archivo, configura `claudeCode.autoContext` como `false` para desactivar la inyección automática, elimina cualquier valor exportado de `CLAUDE_CODE_AUTO_COMPACT_WINDOW` y pasa `--settings <file>`. Consulta el [orden de precedencia de la compactación automática de Claude Code](https://code.claude.com/docs/en/model-config#set-the-auto-compact-window).
 
-La configuración generada por modelo se aplica a las sesiones enrutadas mediante `ocx claude`. El comando `remote-control` y sus alias `rc`, `bridge` y `remote` conservan sus argumentos y su entorno de lanzamiento. El campo `modelUsage.contextWindow` puede diferir de la ventana de compactación que muestra `/context`.
-
-Los ajustes de sesión generados mediante `--settings` tienen prioridad sobre `autoCompactWindow` y `modelSettings` en los archivos de configuración del usuario o del proyecto. Pasa el archivo con `--settings <file>` para conservar su política de compactación.
+La configuración generada por modelo se aplica a las sesiones enrutadas mediante `ocx claude`. El lanzador la omite cuando el comando tras las opciones globales es `remote-control`, `rc`, `bridge`, `remote` o `sync`. La opción de sesión `--remote-control` admite la configuración generada. El campo `modelUsage.contextWindow` puede diferir de la ventana de compactación que muestra `/context`.
 
 Tres estados de configuración:
 

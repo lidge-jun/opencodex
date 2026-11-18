@@ -170,8 +170,19 @@ describe("ocx claude per-model compact settings", () => {
     expect(settings(build(positional).args).modelSettings["mock/mid"].autoCompactWindow).toBe(497_800);
   });
 
-  test.each(["remote-control", "rc", "bridge", "remote"])("preserves argv and env for %s", verb => {
-    const args = [verb, "--help"];
+  test.each([
+    [["remote-control", "--help"]],
+    [["rc", "--help"]],
+    [["bridge", "--help"]],
+    [["remote", "--help"]],
+    [["sync", "--help"]],
+    [["--verbose", "remote-control", "--help"]],
+    [["--model", "mock/mid", "remote-control", "--help"]],
+    [["--model=mock/mid", "rc", "--help"]],
+    [["--debug", "hooks", "--verbose", "bridge", "--help"]],
+    [["--append-system-prompt", "rc", "remote", "--help"]],
+    [["--settings", "{}", "remote-control", "--help"]],
+  ])("preserves Remote Control argv and env for %j", args => {
     const result = build(args);
     expect(result.args).toBe(args);
     expect(result.env).toBe(env);
@@ -179,9 +190,18 @@ describe("ocx claude per-model compact settings", () => {
 
   test.each([
     [["--remote-control"]],
+    [["--remote-control", "rc"]],
+    [["--remote-control=rc"]],
     [["--print", "remote-control"]],
+    [["--verbose", "-p", "rc"]],
     [["--", "remote-control"]],
     [["--model", "remote-control"]],
+    [["--model", "rc"]],
+    [["--append-system-prompt", "rc"]],
+    [["--debug", "rc"]],
+    [["--tools", "Read", "rc"]],
+    [["--verbose", "explain remote-control"]],
+    [["--verbose", "explain", "remote-control"]],
   ])("still injects session settings for %j", args => {
     const result = build(args);
     expect(settings(result.args).modelSettings["mock/mid"].autoCompactWindow).toBe(497_800);

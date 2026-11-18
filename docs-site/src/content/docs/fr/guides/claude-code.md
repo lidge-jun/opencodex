@@ -501,7 +501,7 @@ Le JSON généré relève de la configuration en ligne de commande de Claude Cod
 
 Quand l’une de ces options désactive la génération du JSON, le lanceur conserve `CLAUDE_CODE_AUTO_COMPACT_WINDOW` si le contexte automatique la définit. Une valeur exportée explicitement est aussi conservée et désactive la génération du JSON. Dans Claude Code, une valeur valide de cette variable prévaut sur `--autocompact` et les réglages de compactage enregistrés. Pour utiliser les réglages de compactage d’un fichier, définissez `claudeCode.autoContext` sur `false` pour désactiver l’injection automatique, retirez toute valeur exportée de `CLAUDE_CODE_AUTO_COMPACT_WINDOW` et passez `--settings <file>`. Voir [l’ordre de priorité du compactage automatique de Claude Code](https://code.claude.com/docs/en/model-config#set-the-auto-compact-window).
 
-La commande Remote Control `remote-control` et ses alias `rc`, `bridge` et `remote` conservent leurs arguments et leur environnement de lancement.
+La commande Remote Control `remote-control` et ses alias `rc`, `bridge`, `remote` et `sync` conservent leurs arguments et leur environnement de lancement.
 
 Trois états de configuration :
 

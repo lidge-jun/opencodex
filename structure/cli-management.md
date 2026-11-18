@@ -181,6 +181,8 @@ The operating guide's eight-domain workflow table is navigation rather than pari
 
 ## ocx command selection
 
+`src/cli/claude-context-settings.ts` skips generated per-model compact settings when the first positional after Claude global options and their values is `remote-control`, `rc`, `bridge`, `remote`, or `sync`. These commands keep their original arguments and launch environment. The `--remote-control` session option still supports generated settings.
+
 `capabilities --contracts` and `update` remain on the invoked package path even when a Desktop command record is present.
 All `capabilities` calls, sync calls and update calls carrying orchestration flags skip root automatic Codex shim repair, including malformed calls. Sync holds a separate home-scoped sync/update mutex for its work and performs eligible shim repair only after acquiring it.
 The CLI discovery registry exposes the orchestrated plan/apply grammar and exit codes, and `capabilities --contracts` reports the versioned update contract. Sync reports `update-in-flight` and exits 7 when an update holds its mutex, the mutex is unavailable, or an update marker is active; a sync holder produces `sync-in-progress` and exit 1. A guarded `--json` refusal prints one fan-out document with a skipped Home, the refusal reason, and no Children. A missing home is observed as free and is created with private permissions when sync acquires its guard; an unresolved home symlink remains uncertain.

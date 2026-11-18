@@ -405,7 +405,7 @@ v1 別名按字面解碼（歷史上 model ID 中包含的兩字元序列 `~s` /
 
 使用任一選項略過 JSON 產生步驟時，如果自動上下文設定了 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`，啟動器會保留這個環境變數。明確匯出這個變數也會略過 JSON 產生步驟並保留其值。在 Claude Code 中，這個變數的有效值優先於 `--autocompact` 和已儲存的壓縮設定。若要使用檔案中的壓縮設定，請將 `claudeCode.autoContext` 設為 `false` 以關閉自動注入，取消匯出的 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`，再傳入 `--settings <file>`。請參閱 [Claude Code 自動壓縮設定的優先順序](https://code.claude.com/docs/en/model-config#set-the-auto-compact-window)。
 
-Remote Control 的 `remote-control` 命令及其別名 `rc`、`bridge` 和 `remote` 會保留原有的引數和啟動環境。
+Remote Control 的 `remote-control` 命令及其別名 `rc`、`bridge`、`remote` 和 `sync` 會保留原有的引數和啟動環境。
 
 設定有三種狀態：
 
