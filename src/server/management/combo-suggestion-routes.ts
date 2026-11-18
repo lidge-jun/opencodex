@@ -14,6 +14,7 @@ import type { ManagementContext } from "./context";
 import { jsonResponse } from "../auth-cors";
 import { mutatePersistedConfig } from "../../config";
 import { managementBodyTooLargeResponse, readManagementJsonBody } from "./body";
+import { hasHumanDashboardSession } from "./consent-session";
 import { isPlainRecord } from "./shared";
 
 const MAX_PROVIDERS = 256;
@@ -40,16 +41,14 @@ function view(ctx: ManagementContext): Response {
 
 export async function handleComboSuggestionRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url } = ctx;
-  if (url.pathname === "/api/combo-suggestions/save" && req.method === "POST") {
-    return await saveSuggestion(ctx);
+  const exclusions = url.pathname === "/api/combo-suggestions" && (req.method === "GET" || req.method === "PUT");
+  const save = url.pathname === "/api/combo-suggestions/save" && req.method === "POST";
+  if (!exclusions && !save) return null;
+  if (!hasHumanDashboardSession(ctx)) {
+    return jsonResponse({ error: "dashboard session required" }, 403, req, ctx.config);
   }
-  if (url.pathname === "/api/combo-suggestions" && req.method === "GET") {
-    return view(ctx);
-  }
-  if (url.pathname === "/api/combo-suggestions" && req.method === "PUT") {
-    return await writeExcluded(ctx);
-  }
-  return null;
+  if (save) return await saveSuggestion(ctx);
+  return req.method === "GET" ? view(ctx) : await writeExcluded(ctx);
 }
 
 async function writeExcluded(ctx: ManagementContext): Promise<Response> {
