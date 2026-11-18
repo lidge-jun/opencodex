@@ -894,7 +894,9 @@ The read-only data-plane endpoint is `GET /v1/usage`, using `x-opencodex-api-key
 
 Use `GET /v1/usage/windows` on the hub's data listener to read cached subscription quota for one upstream account. Send a configured client key in `x-opencodex-api-key` or `Authorization: Bearer`. Give the key exactly one allowed provider and leave its model allowlist empty. The route rejects other credentials with `401`, including the shared instance token and admin tokens. An eligible key gets `404 usage_windows_not_a_hub` on standalone and client installs.
 
-A provider with multiple registered accounts yields `403 usage_windows_account_scope_required`. Disabled providers and accounts without a current reading yield an empty `windows` list. Each row gives the used percentage, its own limit status and the reset time in epoch milliseconds. The OpenAI provider can expose the sole registered ChatGPT pool account. Remote Link serves `/v1/usage` and excludes `/v1/usage/windows`.
+A provider with multiple registered accounts yields `403 usage_windows_account_scope_required`. Disabled providers and accounts without a reading verified for the current OAuth credential yield an empty `windows` list. After a restart, a cached reading without ownership evidence stays hidden until a verified reading is available. Each row gives the used percentage, its own limit status and the reset time in epoch milliseconds.
+
+The OpenAI provider can expose the sole registered ChatGPT pool account. Its labels are `ChatGPT Weekly`, `ChatGPT Monthly` and either `ChatGPT 5-hour` when the matching observation reports 18,000 seconds or `ChatGPT Short window` for other or unknown short durations. Remote Link serves `/v1/usage` and excludes `/v1/usage/windows`.
 
 Client usage credentials are sent only over HTTPS or loopback HTTP. Both the request and response disable caching.
 

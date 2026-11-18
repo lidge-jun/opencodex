@@ -1,11 +1,14 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, jest, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
-import { accountCacheKey, accountQuotaCache, clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota/account-cache";
-import { getAccountSet, saveCredential } from "../../src/oauth/store";
+import { accountCacheKey, accountQuotaCache, clearAccountQuotaCache,
+  getCachedProviderAccountQuota, persistAccountQuotaCache } from "../../src/providers/quota/account-cache";
+import { settleAccountQuotaPersistForTests, readPersistedAccountQuotas } from "../../src/providers/account-quota-disk";
+import { fetchProviderAccountQuotas } from "../../src/providers/quota";
+import { credentialGeneration, getAccountCredential, getAccountSet, saveCredential } from "../../src/oauth/store";
 import { capturePoolQuotaWriter, readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountQuota, setAccountQuotaFromParsed, updateAccountQuota } from "../../src/codex/quota";
 import { linkRouteAllowed } from "../../src/link/routes";
@@ -53,7 +56,7 @@ function config(overrides: Partial<Pick<OcxConfig, "runtimeRole" | "providers" |
   };
 }
 
-// The route reads through getAccountSet + getCachedProviderAccountQuota, so a test needs a
+// The route reads through the account set and its credential-owned quota, so a test needs a
 // live account row in the auth store, not just a cache key the route never visits. Login goes
 // before boot (the boot reconcile keeps rows for live accounts); quota seeding goes AFTER
 // boot, because a boot with no configured accounts reconciles disk quota rows away and the
@@ -64,7 +67,14 @@ async function login(provider: string, email: string): Promise<string> {
 }
 
 function seedQuota(provider: string, accountId: string, quota: Record<string, unknown>): void {
-  setCachedProviderAccountQuotaForTests(provider, accountId, quota as never);
+  const generation = credentialGeneration(getAccountCredential(provider, accountId)!);
+  accountQuotaCache.set(accountCacheKey(provider, accountId), {
+    ts: Date.now(), quota: quota as never,
+    quotaOwnerIsCurrent: () => {
+      const credential = getAccountCredential(provider, accountId);
+      return !!credential && credentialGeneration(credential) === generation;
+    },
+  });
 }
 
 beforeEach(() => {
@@ -143,9 +153,76 @@ test("provider resolution preserves the configured name under normalized scope m
   ] });
 });
 
+test("restarting after same-slot OAuth replacement withholds hydrated quota until a live probe", async () => {
+  const now = Date.now();
+  const resetsAt = now + 86_400_000;
+  const account = await login("cursor", "replacement@example.test");
+  const localFetch = globalThis.fetch;
+  const probe = spyOn(globalThis, "fetch").mockResolvedValueOnce(
+    Response.json({ planUsage: { totalPercentUsed: 63 }, billingCycleEnd: resetsAt }),
+  ).mockResolvedValueOnce(
+    Response.json({ planUsage: { totalPercentUsed: 27 }, billingCycleEnd: resetsAt }),
+  );
+  const headers = { "x-opencodex-api-key": SCOPED_KEY };
+  try {
+    server = startServer(0);
+    const readWindows = async () => {
+      const response = await localFetch(new URL("/v1/usage/windows", server!.url), { headers });
+      expect(response.status).toBe(200);
+      return response.json();
+    };
+    await fetchProviderAccountQuotas("cursor", true);
+    expect(await readWindows()).toEqual({ windows: [
+      { label: "Cursor Monthly", provider: "Cursor", percent: 63, limited: false, resetsAt },
+    ] });
+
+    jest.useFakeTimers();
+    try {
+      persistAccountQuotaCache();
+      jest.advanceTimersByTime(1_000);
+    } finally {
+      jest.useRealTimers();
+    }
+    await settleAccountQuotaPersistForTests();
+    expect(readPersistedAccountQuotas().get(accountCacheKey("cursor", account))?.monthlyPercent).toBe(63);
+    await server.stop(true);
+    server = undefined;
+    clearAccountQuotaCache();
+    await saveCredential("cursor", { access: "fixture-replacement", refresh: "fixture-refresh-new",
+      expires: now + 3_600_000 });
+    expect(getAccountSet("cursor")?.accounts.map(row => row.id)).toEqual([account]);
+    server = startServer(0);
+
+    const restoredWindows = await readWindows();
+    expect(getCachedProviderAccountQuota("cursor", account)?.monthlyPercent).toBe(63);
+    expect(restoredWindows).toEqual({ windows: [] });
+    await fetchProviderAccountQuotas("cursor", true);
+    expect(await readWindows()).toEqual({ windows: [
+      { label: "Cursor Monthly", provider: "Cursor", percent: 27, limited: false, resetsAt },
+    ] });
+  } finally {
+    probe.mockRestore();
+  }
+});
+
 test("Remote Link's route allowlist excludes usage windows", () => {
   const req = new Request("https://hub.example.test/v1/usage/windows");
   expect(linkRouteAllowed(new URL(req.url), req)).toBe(false);
+});
+
+test("the Authorization fallback requires Bearer and honors dedicated-header precedence", async () => {
+  server = startServer(0);
+  const url = new URL("/v1/usage/windows", server.url);
+  for (const [headers, status] of [
+    [{ Authorization: SCOPED_KEY }, 401],
+    [{ Authorization: `bEaReR ${SCOPED_KEY}` }, 200],
+    [{ Authorization: `Bearer ${SCOPED_KEY}`, "x-opencodex-api-key": "unknown-key" }, 401],
+    [{ Authorization: "bare-unknown-key", "x-opencodex-api-key": SCOPED_KEY }, 200],
+  ] as const) {
+    const response = await fetch(url, { headers });
+    expect(response.status).toBe(status);
+    await response.body?.cancel();
+  }
 });
 
 test("absent, unknown and x-api-key-presented credentials are refused", async () => {
@@ -244,6 +321,24 @@ function seedPoolQuota(id: string, raw: NonNullable<Parameters<typeof setAccount
   const writer = capturePoolQuotaWriter(id, { ...record.credential!, generation: record.generation })!;
   setAccountQuotaFromParsed(id, raw, undefined, undefined, null, { writer, observedAt: Date.now(), source: "wham", raw });
 }
+
+test.each([
+  [10_800, "Short window"],
+  [undefined, "Short window"],
+  [18_000, "5-hour"],
+] as const)("ChatGPT labels a short observation with duration %s as %s", async (shortWindowSeconds, label) => {
+  configurePool("pool-account");
+  server = startServer(0);
+  const resetsAt = Date.now() + 3_600_000;
+  seedPoolQuota("pool-account", { shortPercent: 31, shortResetAt: resetsAt, shortWindowSeconds });
+  const response = await fetch(new URL("/v1/usage/windows", server.url), {
+    headers: { "x-opencodex-api-key": OPENAI_KEY },
+  });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ windows: [
+    { label: `ChatGPT ${label}`, provider: "ChatGPT", percent: 31, limited: false, resetsAt },
+  ] });
+});
 
 test("the scoped OpenAI key reads the sole ChatGPT pool account with per-window limits and millisecond resets", async () => {
   const now = Date.now();

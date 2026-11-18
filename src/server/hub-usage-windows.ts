@@ -1,6 +1,6 @@
 import type { OcxConfig } from "../types";
-import { authorizationCredential } from "../lib/authorization-scheme";
-import { getCachedProviderAccountQuota, hydrateAccountQuotaCache } from "../providers/quota/account-cache";
+import { parseAuthorizationScheme } from "../lib/authorization-scheme";
+import { getCredentialOwnedAccountQuota } from "../providers/quota/account-cache";
 import { getAccountSet } from "../oauth/store";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers-destination";
 import { isSelectableCodexPoolAccount } from "../codex/account-id";
@@ -52,7 +52,7 @@ function collectWindow(
 }
 
 const CODEX_WINDOW_LABELS = [
-  ["short", "5-hour"], ["weekly", "Weekly"], ["monthly", "Monthly"],
+  ["short", "Short window"], ["weekly", "Weekly"], ["monthly", "Monthly"],
 ] as const;
 
 function collectCodexWindows(windows: Map<string, UsageWindow>, id: string): void {
@@ -69,7 +69,7 @@ function collectCodexWindows(windows: Map<string, UsageWindow>, id: string): voi
     const resetMs = resetAtToMs(reset);
     const observed = newestFirst.find(window => window.family === "account" && window.window === slot);
     if (observed?.usedPercent === percent && observed.resetAtMs === resetMs) {
-      collectWindow(windows, "ChatGPT", label, percent, resetMs);
+      collectWindow(windows, "ChatGPT", slot === "short" && observed.windowSeconds === 18_000 ? "5-hour" : label, percent, resetMs);
     }
   }
 }
@@ -81,7 +81,8 @@ export function handleHubUsageWindows(req: Request, config: OcxConfig, policy: R
   }), req, policy);
   const error = (code: string, message: string, status: number) => reply({ error: { code, message } }, status);
   const dedicated = req.headers.get("x-opencodex-api-key")?.trim();
-  const token = dedicated || authorizationCredential(req.headers) || "";
+  const authorization = parseAuthorizationScheme(req.headers.get("authorization"));
+  const token = dedicated || (authorization.kind === "bearer" ? authorization.token : "");
   const admission = resolveDataPlaneAdmissionSecret(token, config, dedicated ? "dedicated" : "bearer", {
     linkIngress: policy.linkIngress?.allowedKeyIds,
   });
@@ -115,8 +116,7 @@ export function handleHubUsageWindows(req: Request, config: OcxConfig, policy: R
     if (accounts.length > 1) return ambiguousAccount();
     const account = accounts[0];
     if (!account) return reply({ windows: [] });
-    hydrateAccountQuotaCache();
-    const quota = getCachedProviderAccountQuota(providerName, account.id);
+    const quota = getCredentialOwnedAccountQuota(providerName, account.id);
     if (!quota) return reply({ windows: [] });
     const name = providerName.charAt(0).toUpperCase() + providerName.slice(1);
     collectWindow(windows, name, "5-hour", quota.fiveHourPercent, quota.fiveHourResetAt);

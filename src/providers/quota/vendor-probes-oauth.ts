@@ -380,7 +380,10 @@ export async function fetchAnthropicQuota(provider: string, config: OcxConfig = 
   if (probedAccountId && probedAccountKey) {
     const stillOwnsToken = getAccountCredential(instance, probedAccountId)?.access === accessToken;
     if (stillOwnsToken && anthropicCurrent?.() && mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
-      accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota, isCurrent: anthropicCurrent }); anthropicPublish?.();
+      accountQuotaCache.set(probedAccountKey, {
+        ts: Date.now(), quota, isCurrent: anthropicCurrent, quotaOwnerIsCurrent: anthropicCurrent,
+      });
+      anthropicPublish?.();
     }
   }
   const pooledReport = anthropicPoolReport(provider, instance, config, probedAccountId, quota);

@@ -76,6 +76,7 @@ export async function fetchAnthropicAccountQuota(
     const isCurrent = result?.isCurrent ?? flightCurrent;
     const entry: AccountQuotaCacheEntry = {
       ts: Date.now(), quota: normalizeAnthropicQuota(result?.quota ?? retained?.quota, Date.now()),
+      quotaOwnerIsCurrent: result?.isCurrent ?? retained?.quotaOwnerIsCurrent,
       ...(!result ? { unavailable: true as const } : {}), isCurrent,
       ...(!result && failure ? { quotaFailure: failure, quotaFailureIsCurrent: isCurrent } : {}),
     };
