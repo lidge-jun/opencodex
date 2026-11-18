@@ -529,6 +529,9 @@ export async function prepareResponsesRequest(
     // produced them with an empty conversation; the conversation itself comes straight from the
     // client body. Inside this try so a decode error answers exactly like a parse error.
     if (options.directRequest) parsed = options.directRequest.decode(parsed);
+    if (options.advisorInternal || options.internalSidecarCall || options.internalDecisionCall) {
+      parsed._proxyOwnedSystemPrompt = true;
+    }
     parsed._nativeReasoningRetention = resolveNativeReasoningRetention(config);
     // Capture before route rewrites or hosted sidecars can add tools; replayed catalogs are history.
     // Direct decoders already own current function names (including legacy Chat functions).
@@ -1233,6 +1236,7 @@ export async function prepareResponsesRequest(
             "_nativeReasoningRetention",
             "_cursorIsolateConversation",
             "_codexNewHistory",
+            "_proxyOwnedSystemPrompt",
           ];
           for (const key of kept) {
             if (parsed[key] !== undefined) {

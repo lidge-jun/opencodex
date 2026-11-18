@@ -1,5 +1,6 @@
 {
   "anthropic-oauth-caller-system-shape.test.ts": "adapters/anthropic",
+  "anthropic-oauth-internal-system-wire.test.ts": "adapters/anthropic",
   "anthropic-per-message-effort.test.ts": "adapters/anthropic",
   "anthropic-active-limit-routing.test.ts": "adapters/anthropic",
   "anthropic-output-cap-by-model.test.ts": "adapters/anthropic",

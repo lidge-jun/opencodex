@@ -322,11 +322,12 @@ export interface HandleResponsesOptions {
    * Terminal advisor marker: true when the inbound request IS the advisor sidecar's own loopback
    * consultation. The advisor planner then never plans a consultation — a depth cap of 1 that
    * keeps Worker → Advisor → Advisor recursion impossible (same structure as
-   * {@linkcode visionDescribeTerminal}). The Chat surface detects the raw
-   * `x-opencodex-advisor-internal` header before its bridge rebuilds headers and carries the
-   * fact through this flag.
+   * {@linkcode visionDescribeTerminal}). The Chat surface validates the capability and registered
+   * policy before its bridge rebuilds headers and carries the fact through this flag.
    */
   advisorInternal?: boolean;
+  /** A local Chat helper authenticated through its registered process capability. */
+  internalSidecarCall?: boolean;
   /**
    * Set only by the Chat and Messages ingresses when `protocols.rollout.directEncoders` is on and
    * the settled route is one non-Responses target. Adapter delivery then encodes the adapter
