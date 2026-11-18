@@ -112,6 +112,22 @@ test("dashboard connectivity probe uses live account metadata and never treats a
   expect(await failed.json()).toMatchObject({ ok: false });
 });
 
+test("connectivity probe refuses a superseded web session before fetch", async () => {
+  const name = "m365-copilot";
+  const initial = credential();
+  await saveCredential(name, initial);
+  const snapshot = await getValidAccessTokenSnapshot(name);
+  await saveCredential(name, { ...initial, m365: { ...initial.m365, cookie: "OhpAuth=rotated" } });
+  let sends = 0;
+  const provider = { ...OAUTH_PROVIDERS[name]!.providerConfig, fetch: (async () => {
+    sends++;
+    return new Response(html());
+  }) as typeof fetch };
+  const response = await probeM365CopilotProvider(name, provider, snapshot, new AbortController().signal);
+  expect(sends).toBe(0);
+  expect(await response.json()).toMatchObject({ ok: false });
+});
+
 test("keeps the M365 web cookie out of account summaries, management responses and discovery logs", async () => {
   const name = "m365-copilot";
   const logged: string[] = [];

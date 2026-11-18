@@ -78,12 +78,16 @@ export function createM365CopilotAdapter(provider: OcxProviderConfig, deps: { tu
         // A rebuilt conversation replays its whole history in one turn; ChatHub caps a turn at four images, so keep only
         // the newest four historical images and mark the skipped ones as sent so a retry never re-uploads them.
         if (rebuilt && imageUrls.length > MAX_IMAGES && messages.some(message => message.role === "assistant")) state.sentImages = imageUrls.length - MAX_IMAGES;
-        const images = await uploadM365Images(imageUrls.slice(state.sentImages), token, parsed.modelId, state.conversation.conversationId, provider, incoming.abortSignal, incoming.translatorBudget, incoming.beforePhysicalSend);
+        const images = await uploadM365Images(imageUrls.slice(state.sentImages), token, parsed.modelId, state.conversation.conversationId, provider, incoming.abortSignal, incoming.translatorBudget, () => {
+          incoming.beforeCredentialSend?.();
+          incoming.beforePhysicalSend?.();
+        });
         const answer = await (deps.turn ?? runM365CopilotTurn)({ token, model: parsed.modelId, text, images, conversation: state.conversation, signal: incoming.abortSignal, budget: incoming.translatorBudget,
-          route,
+          route, beforeConnect: incoming.beforeCredentialSend,
           onText: delta => { if (!toolMode) emit({ type: "text_delta", text: delta }); },
           onThinking: thinking => { if (!thinking) return; thinkingText += thinking; emit({ type: "thinking_delta", thinking }); },
           beforeSend: () => {
+            incoming.beforeCredentialSend?.();
             incoming.beforePhysicalSend?.();
             const admission = incoming.sendBudget?.reserveDispatch({ sendClass: "initial", targetKey: "m365-copilot|" + parsed.modelId + "|" + digest(claims.oid + claims.tid) });
             if (admission && !admission.allowed || admission?.allowed && !admission.permit.use()) throw new SendBudgetExhaustedError(providerErrorDestinationLabel("m365-copilot"));

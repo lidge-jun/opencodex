@@ -323,6 +323,42 @@ describe("Microsoft 365 Copilot adapter", () => {
     } finally { budget.dispose(); }
   });
 
+  test("rotation while queued prevents a socket upgrade with the old credential", async () => {
+    let current = true;
+    let active!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { active = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let turns = 0;
+    let dials = 0;
+    const adapter = createM365CopilotAdapter(provider(), { turn: async options => {
+      if (++turns === 1) { active(); await held; return "fixture"; }
+      return runM365CopilotTurn({ ...options, createSocket: () => { dials++; throw new Error("Fixture dial"); } });
+    } });
+    const budget = createTranslatorBudget();
+    const parsed = request();
+    parsed._reasoningReplayScope = { clientThreadId: "thread", clientPrincipalId: "caller" };
+    const check = () => { if (!current) throw new Error("fixture credential was rotated"); };
+    const incoming = { headers: new Headers({ session_id: "thread" }), translatorBudget: budget, beforePhysicalSend: check, beforeCredentialSend: check };
+    try {
+      const first = adapter.runTurn!(parsed, incoming, () => {});
+      await entered;
+      const next = request();
+      next._reasoningReplayScope = parsed._reasoningReplayScope;
+      next.context.messages.push({ role: "user", content: "Follow up", timestamp: 1 });
+      const second = adapter.runTurn!(next, incoming, () => {});
+      const outcome = second.then(() => undefined, (error: unknown) => error);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(dials).toBe(0);
+      current = false;
+      release();
+      await first;
+      const error = await outcome;
+      expect(dials).toBe(0);
+      expect(error).toEqual(new Error("fixture credential was rotated"));
+    } finally { release(); budget.dispose(); }
+  });
+
   test("preserves client tool calls and uses the returned tool result on the same conversation", async () => {
     const turns: any[] = [];
     const adapter = createM365CopilotAdapter(provider(), { turn: async options => {

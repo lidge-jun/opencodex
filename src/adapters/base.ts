@@ -29,6 +29,8 @@ export interface IncomingMeta {
   providerFetch?: typeof globalThis.fetch;
   /** Synchronous selection fence for adapter-owned sends; call after async setup, before dispatch. */
   beforePhysicalSend?: () => void;
+  /** Recheck credential authority without recording a physical dispatch. */
+  beforeCredentialSend?: () => void;
   /**
    * Image-normalization ladder bias for upstream-413 tightened retries: every image
    * starts one tier lower (devlog/260714_image_normalization_pipeline/030). Consumed by

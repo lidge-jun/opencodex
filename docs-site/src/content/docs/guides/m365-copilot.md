@@ -21,6 +21,8 @@ This window does not reuse your regular browser profile. Microsoft's existing M3
 
 ## Models and requests
 
+OpenCodex checks the selected credential again before opening ChatHub and before sending the connectivity probe. A queued turn or probe cannot send credentials that have been replaced while it waited.
+
 ChatHub inference honors provider HTTP(S) proxies and bypass settings, including inherited global proxy settings. SOCKS proxies and custom provider fetch executors are unsupported for this WebSocket transport and stop the turn with a configuration error before dialing. An opaque request-scoped fetch executor is refused before preparing or uploading images; only the built-in executor's explicit socket route can authorize native dialing. Use an HTTP(S) proxy, or explicitly configure direct access or a matching bypass rule if your network policy allows it.
 
 The provider reads available model choices directly from your account's Microsoft Copilot chat picker, including Claude/GPT submenus. The Live models switch enables refresh through the shared five-minute catalog cache. New choices follow OpenCodex's existing new-model policy and your saved selections; a new Microsoft selector does not require an OpenCodex release. The default selector is `Magic` (Auto). Discovered choices are listed as `M365 Copilot ` plus Microsoft's own name, so they are easy to tell apart from the same model on another provider; the selector ID stays Microsoft's and is what the request uses. Quota-disabled choices can remain listed because Microsoft still grants access after the quota resets.

@@ -63,7 +63,7 @@ export function m365ChatFrame(text: string, model: string, conversation: M365Con
 export interface M365TurnOptions {
   images?: M365ImageAnnotation[];
   token: string; model: string; text: string; conversation: M365Conversation; signal?: AbortSignal;
-  onText(text: string): void; onThinking?(text: string): void; beforeSend?(): void; budget?: TranslatorBudget;
+  onText(text: string): void; onThinking?(text: string): void; beforeConnect?(): void; beforeSend?(): void; budget?: TranslatorBudget;
   createSocket?: (url: string, headers: Record<string, string>) => WebSocket;
   /** Provider egress fields; the ChatHub socket follows the same route as discovery and uploads. */
   route?: Pick<OcxProviderConfig, "proxy" | "noProxy"> & { fetch?: unknown; providerFetch?: typeof globalThis.fetch };
@@ -116,6 +116,7 @@ export function runM365CopilotTurn(options: M365TurnOptions): Promise<string> {
     let socket: WebSocket;
     // lib.dom hides Bun's documented constructor extension when both type libraries are enabled.
     const NativeSocket = WebSocket as unknown as { new(url: string, options: M365SocketDialOptions): WebSocket };
+    options.beforeConnect?.();
     try { socket = options.createSocket ? options.createSocket(url, headers) : new NativeSocket(url, dial); }
     catch { reject(new M365CopilotTurnError("Microsoft 365 Copilot connection failed")); return; }
     socket.binaryType = "arraybuffer";

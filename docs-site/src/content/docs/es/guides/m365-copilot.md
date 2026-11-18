@@ -21,6 +21,8 @@ La ventana usa un perfil temporal. El registro M365 Chat Client de Microsoft rec
 
 ## Modelos y solicitudes
 
+OpenCodex vuelve a comprobar la credencial seleccionada antes de abrir ChatHub y antes de enviar la prueba de conexión. Un turno o una prueba en espera no puede enviar credenciales que se hayan sustituido durante la espera.
+
 ChatHub admite proxies HTTP(S) y reglas de exclusión del proveedor, incluidas las heredadas de la configuración global. Un proxy SOCKS o un ejecutor de solicitudes personalizado produce un error de configuración antes de abrir el WebSocket. OpenCodex rechaza los ejecutores sin una ruta de socket explícita también antes de preparar o subir imágenes. Usa un proxy HTTP(S), una conexión directa o una regla de exclusión aplicable si tu política de red lo permite.
 
 El proveedor lee las opciones disponibles directamente del selector de chat de la cuenta, incluidos los submenús de Claude y GPT. El interruptor de modelos en vivo habilita la actualización mediante la caché compartida de cinco minutos. Las opciones nuevas se rigen por la política de OpenCodex para modelos nuevos y por tus selecciones guardadas. El selector predeterminado es `Magic` (Auto). En la lista se muestra el prefijo `M365 Copilot ` seguido del nombre de Microsoft. La solicitud usa el identificador de selector de Microsoft. Las opciones que han agotado su cuota pueden seguir visibles si vuelven a estar disponibles al renovarse la cuota.
