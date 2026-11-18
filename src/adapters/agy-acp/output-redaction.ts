@@ -11,11 +11,13 @@ const OAUTH_LABELS = ["access_token", "refresh_token", "id_token", "access-token
 const OAUTH_BOUNDARY = /(?<![A-Za-z0-9_-])/;
 const OAUTH_KEY_END = /["']?[ \t]{0,64}/;
 const BARE_OAUTH_CHAR = /[^\s"'`,;{}\[\]<>]/;
-const OAUTH_ASSIGNMENT = OAUTH_BOUNDARY.source + "(?:" + OAUTH_LABELS.join("|") + ")" + OAUTH_KEY_END.source + "[:=]";
+const OAUTH_LABEL = "(?:" + OAUTH_LABELS.join("|") + ")";
+const OAUTH_JSON_KEY = '(?<=")' + OAUTH_LABEL + '"';
+const OAUTH_ASSIGNMENT = OAUTH_BOUNDARY.source + OAUTH_LABEL + OAUTH_KEY_END.source + "[:=]";
 const JSON_WHITESPACE = /^[ \t\r\n]*/;
 const INLINE_WHITESPACE = /^[ \t]*/;
 const TOKEN_PATTERN = new RegExp(
-  `${OPEN_CODEX_CREDENTIAL_PATTERN.source}|(${BEARER.source})|(${JWT.source}|${API_KEY.source})|(${OAUTH_ASSIGNMENT})`,
+  `${OPEN_CODEX_CREDENTIAL_PATTERN.source}|(${BEARER.source})|(${JWT.source}|${API_KEY.source})|(${OAUTH_JSON_KEY})|(${OAUTH_ASSIGNMENT})`,
   "gi",
 );
 const BEARER_CONTINUATION = /^[A-Za-z0-9._~+/=-]*/;
@@ -23,7 +25,7 @@ const KEY_CONTINUATION = /^[A-Za-z0-9._-]*/;
 const OAUTH_LABEL_PREFIXES = new Set(OAUTH_LABELS.flatMap(label =>
   Array.from({ length: label.length - 1 }, (_, index) => label.slice(0, index + 1))));
 const INCOMPLETE_OAUTH = new RegExp(OAUTH_BOUNDARY.source
-  + "(?:" + [...OAUTH_LABEL_PREFIXES].join("|") + "|(?:" + OAUTH_LABELS.join("|") + ")"
+  + "(?:" + [...OAUTH_LABEL_PREFIXES].join("|") + "|(?!" + OAUTH_JSON_KEY + ")" + OAUTH_LABEL
   + OAUTH_KEY_END.source + ")");
 
 // A short suffix that could start or complete a supported credential in a later frame.
@@ -35,6 +37,7 @@ const INCOMPLETE_TOKEN = new RegExp(`(?:${[
   INCOMPLETE_OAUTH,
 ].map(pattern => pattern.source).join("|")})$`, "i");
 type ConsumeSpan = (raw: string, replacement?: string) => void;
+type OAuthSeparator = { phase: "delimiter" | "json-value" | "inline-value"; exhausted: boolean };
 type OAuthValue = { quote?: string; escaped: boolean; masked: boolean };
 
 /** Bound lookahead, then discard a recognized long token's remaining characters as they arrive. */
@@ -42,7 +45,7 @@ class AcpOutputRedactor {
   private pending = "";
   private previous = "";
   private continuation?: RegExp;
-  private oauthSeparator?: RegExp;
+  private oauthSeparator?: OAuthSeparator;
   private oauthValue?: OAuthValue;
 
   constructor(private readonly consume: ConsumeSpan) {}
@@ -59,12 +62,27 @@ class AcpOutputRedactor {
     this.drain("final");
   }
 
-  private consumeOAuthAssignment(raw: string, start: number, whitespace: RegExp): number {
-    const separator = whitespace.exec(raw.slice(start))![0];
-    this.consume(separator);
-    const valueStart = start + separator.length;
-    this.oauthSeparator = valueStart === raw.length ? whitespace : undefined;
-    if (this.oauthSeparator) return valueStart;
+  private consumeOAuthSeparator(raw: string, start: number, separator: OAuthSeparator, final: boolean): number {
+    const pattern = separator.phase === "inline-value" ? INLINE_WHITESPACE : JSON_WHITESPACE;
+    const whitespace = pattern.exec(raw.slice(start))![0];
+    const valueStart = start + whitespace.length;
+    separator.exhausted ||= whitespace.length >= TAIL_CHARS;
+    this.oauthSeparator = !final && valueStart === raw.length ? separator : undefined;
+    if (this.oauthSeparator && !separator.exhausted) return start;
+
+    // Once the lookahead fills, stream the whitespace and remember the value is still pending.
+    this.consume(whitespace);
+    if (valueStart === raw.length) return valueStart;
+    if (separator.phase === "delimiter") {
+      const delimiter = raw.charAt(valueStart);
+      if (delimiter === ":" || (delimiter === "=" && (separator.exhausted || !/[\r\n]/.test(whitespace)))) {
+        this.consume(delimiter);
+        const phase = delimiter === ":" || separator.exhausted ? "json-value" : "inline-value";
+        return this.consumeOAuthSeparator(raw, valueStart + 1, { phase, exhausted: false }, final);
+      }
+      if (!separator.exhausted) return valueStart;
+    }
+
     const char = raw.charAt(valueStart);
     const quote = char === '"' || char === "'" ? char : undefined;
     if (quote) this.consume(quote);
@@ -98,7 +116,7 @@ class AcpOutputRedactor {
     const final = mode === "final";
     if (this.oauthSeparator || this.oauthValue) {
       const consumed = this.oauthSeparator
-        ? this.consumeOAuthAssignment(this.pending, 0, this.oauthSeparator)
+        ? this.consumeOAuthSeparator(this.pending, 0, this.oauthSeparator, final)
         : this.consumeOAuthValue(this.pending, 0, this.oauthValue!);
       if (consumed) this.previous = this.pending.charAt(consumed - 1);
       this.pending = this.pending.slice(consumed);
@@ -126,12 +144,16 @@ class AcpOutputRedactor {
     let match: RegExpExecArray | null;
     while ((match = TOKEN_PATTERN.exec(raw)) !== null && match.index < cut) {
       const end = match.index + match[0].length;
-      const [, bearer, bearerPrefix, key, assignment] = match;
-      if (assignment) {
+      const [, bearer, bearerPrefix, key, jsonKey, assignment] = match;
+      if (jsonKey || assignment) {
         this.consume(raw.slice(cursor, end));
-        // A quoted JSON key can span lines. Keep prose and shell assignments on their own line.
-        const jsonField = raw[match.index - 1] === '"' && /"[ \t]*:$/.test(assignment);
-        cursor = this.consumeOAuthAssignment(raw, end, jsonField ? JSON_WHITESPACE : INLINE_WHITESPACE);
+        const phase = jsonKey ? "delimiter" : "inline-value";
+        cursor = this.consumeOAuthSeparator(raw, end, { phase, exhausted: false }, final);
+        if (this.oauthSeparator) {
+          // Keep the unresolved separator for the next drain.
+          cut = cursor;
+          break;
+        }
         // An overlapping match can start inside the OAuth value and extend beyond it.
         TOKEN_PATTERN.lastIndex = cursor;
         continue;

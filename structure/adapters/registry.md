@@ -101,7 +101,9 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   Selection errors use fixed text. Answer and reasoning
   deltas each pass through a bounded streaming redactor for minted OpenCodex credentials, Bearer values,
   OAuth token fields, and token-shaped JWT and API-key strings. Long values stay masked across frames.
-  For quoted JSON OAuth fields, the redactor streams separator whitespace before masking the value. Scanning resumes at the first unconsumed character after the value.
+  For quoted JSON OAuth fields, `src/adapters/agy-acp/output-redaction.ts` recognizes JSON whitespace on both sides
+  of the colon across frames. It retains an unfinished separator up to the lookahead limit, then releases the
+  whitespace and keeps the next value masked even if the colon is missing. Scanning resumes after the value.
   The redactor publishes safe prefixes on each update and reports buffered activity to the streaming
   watchdog. It preserves ACP arrival order across channels. If an uncertain suffix holds up a full queue,
   it masks that suffix and continues scanning for its continuation in the original channel. Protocol errors may include a numeric
