@@ -276,9 +276,9 @@ function observeNativeMessagesChunks(
 const MODEL_ECHO_SCAN_BYTES = 64 * 1024;
 
 /** The `message_start` frame with `message.model` set to `model`, or undefined for any other frame. */
-function messageStartWithModel(frame: string, model: string, renameError: boolean): string | undefined {
-  const data = frame
-    .split(/\r\n|\r|\n/)
+function messageStartWithModel(frame: string, model: string): { text: string; canonicalError: boolean } | undefined {
+  const lines = frame.split(/\r\n|\r|\n/);
+  const data = lines
     .map(line => sseFieldValue(line, "data"))
     .filter((value): value is string => value !== null)
     .join("\n");
@@ -288,15 +288,20 @@ function messageStartWithModel(frame: string, model: string, renameError: boolea
   if (!isRec(parsed) || parsed.type !== "message_start" || !isRec(parsed.message)) return undefined;
   parsed.message.model = model;
   const replacement = `data: ${JSON.stringify(parsed)}`;
-  if (renameError) return `event: message_start\n${replacement}\n\n`;
+  // Keep the original canonical framing for error-tagged starts. The final filter
+  // separately determines whether the upstream error tag qualifies for normalization.
+  if (lines.some(line => sseFieldValue(line, "event") === "error")) {
+    return { text: `event: message_start\n${replacement}\n\n`, canonicalError: true };
+  }
   let replaced = false;
-  return frame.replace(/[^\r\n]*(?:\r\n|\r|\n)/g, line => {
+  const text = frame.replace(/[^\r\n]*(?:\r\n|\r|\n)/g, line => {
     const ending = line.match(/(?:\r\n|\r|\n)$/)![0];
     if (sseFieldValue(line.slice(0, -ending.length), "data") === null) return line;
     if (replaced) return "";
     replaced = true;
     return replacement + ending;
   });
+  return { text, canonicalError: false };
 }
 
 /**
@@ -382,13 +387,12 @@ export function echoRequestedModel(body: ReadableStream<Uint8Array>, model: stri
           start = end;
           index = end;
           const decoded = decoder.decode(frame);
-          const renameError = messagesSseEchoRenamedError(decoded);
-          const rewritten = messageStartWithModel(decoded, model, renameError);
+          const rewritten = messageStartWithModel(decoded, model);
           // A bare CR completes the frame now. A later LF belongs to that same delimiter.
           if (endsOnCr) {
             if (end - carried === value.byteLength) {
-              pendingLf = rewritten !== undefined && renameError ? "drop" : "relay";
-            } else if (rewritten !== undefined && renameError && value[end - carried] === 10) {
+              pendingLf = rewritten?.canonicalError ? "drop" : "relay";
+            } else if (rewritten?.canonicalError && value[end - carried] === 10) {
               start += 1;
             }
           }
@@ -396,8 +400,8 @@ export function echoRequestedModel(body: ReadableStream<Uint8Array>, model: stri
             controller.enqueue(frame);
             continue;
           }
-          const bytes = encoder.encode(rewritten);
-          if (renameError) frames.register(bytes, { echoRenamedError: true });
+          const bytes = encoder.encode(rewritten.text);
+          if (rewritten.canonicalError && messagesSseEchoRenamedError(decoded)) frames.register(bytes, { echoRenamedError: true });
           controller.enqueue(bytes);
           scanning = false;
           break;

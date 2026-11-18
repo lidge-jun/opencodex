@@ -514,7 +514,7 @@ at most 64 KiB of raw bytes, including any LF continuation within the window. A 
 `message_start` ending at the limit can be rewritten. Frames that need bytes beyond the
 limit are relayed unchanged, regardless of upstream chunk boundaries. The echo joins SSE
 data fields with LF before parsing JSON and replaces those fields while retaining control
-lines and their original endings. Eligible renamed error frames retain their canonical form.
+lines and their original endings. Error-tagged starts retain their canonical form.
 The native Messages tap
 refreshes its pending-read stall deadline on each nonempty raw chunk before frame buffering.
 The single pre-echo flag authorizes owned data under the
