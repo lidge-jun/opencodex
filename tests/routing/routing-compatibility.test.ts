@@ -102,6 +102,19 @@ test("a negotiated Chat subject ignores a static Responses override for Fast", (
   expect(overridden?.subjectId).toBe(plain?.subjectId);
 });
 
+test("matching xAI Responses adapter preserves policy service-tier behavior and subject", () => {
+  const model = "grok-4.20-multi-agent-0309";
+  const configured: OcxConfig["providers"][string] = {
+    adapter: "openai-chat", authMode: "oauth", baseUrl: "https://api.x.ai/v1", models: [model],
+  };
+  const config = baseConfig({ providers: { xai: configured } });
+  const policySubject = resolvePolicyRouteSubject(config, "xai", model, configured, home);
+  const production = resolveProductionRouteSubject(config, "xai", model, configured, "responses", home, "openai-responses");
+  expect(policySubject?.routeContext.behaviorValues["responses.serviceTier"]?.value).toBe(false);
+  expect(production?.routeContext.behaviorValues["responses.serviceTier"]?.value).toBe(false);
+  expect(production?.subjectId).toBe(policySubject?.subjectId);
+});
+
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "ocx-cl06-"));
   readInstallationSalt(home);

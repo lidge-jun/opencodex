@@ -5,6 +5,8 @@ import { writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { Readable, Writable } from "node:stream";
 import type { ChildProcess } from "node:child_process";
+import { createCodeBuddyAdapter } from "../../src/adapters/codebuddy/adapter";
+import { createClaudeCliAdapter } from "../../src/adapters/claude-cli/adapter";
 import { createQoderAdapter } from "../../src/adapters/qoder/adapter";
 import { clearQoderBinaryCache } from "../../src/adapters/qoder/profiles";
 import type { IncomingMeta } from "../../src/adapters/base";
@@ -18,6 +20,14 @@ import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { createTempHome } from "../helpers/temp-home";
 import { saveConfig } from "../../src/config";
+
+test.each([
+  ["codebuddy", createCodeBuddyAdapter],
+  ["claude-cli", createClaudeCliAdapter],
+  ["qoder", createQoderAdapter],
+] as const)("%s declares ownership of the shared CLI runner's physical sends", (adapter, create) => {
+  expect(create({ adapter, baseUrl: "https://example.invalid" }).reportsPhysicalSends).toBe(true);
+});
 
 function completedChild(refused = false): ChildProcess {
   const child = new EventEmitter() as ChildProcess;
@@ -33,20 +43,40 @@ function completedChild(refused = false): ChildProcess {
   return child;
 }
 
-test("Qoder's replacement spawn has one post-permit attempt receipt with the key recovery", async () => {
+test.each([false, true])("Qoder records only admitted spawns after a 401 (deny replacement=%s)", async denyReplacement => {
   const home = createTempHome("ocx-qoder-spawn-receipt-");
   const release = acquireOwnedSpendHome();
   const log: RequestLogContext = {};
   let spawns = 0;
   const receipts: unknown[] = [];
-  using adapter = spyOn(ADAPTER_REGISTRY.qoder, "create").mockImplementation(provider =>
-    createQoderAdapter(provider, {
+  let denied = 0;
+  using adapter = spyOn(ADAPTER_REGISTRY.qoder, "create").mockImplementation(provider => {
+    const qoder = createQoderAdapter(provider, {
       which: () => "/synthetic/qoder",
       spawn: () => {
         receipts.push(log.attempts?.map(attempt => [attempt.sendCount, [...attempt.recoveryKinds]]));
         return completedChild(++spawns === 1);
       },
-    }));
+    });
+    const runTurn = qoder.runTurn!;
+    qoder.runTurn = (parsed, incoming, emit) => {
+      const budget = incoming.sendBudget;
+      if (denyReplacement && spawns === 1 && budget) {
+        incoming = {
+          ...incoming,
+          sendBudget: {
+            ...budget,
+            reserveDispatch() {
+              denied++;
+              return { allowed: false, reason: "total-exhausted" };
+            },
+          },
+        };
+      }
+      return runTurn(parsed, incoming, emit);
+    };
+    return qoder;
+  });
   try {
     const keyA = "synthetic-qoder-first";
     const keyB = "synthetic-qoder-second";
@@ -59,9 +89,17 @@ test("Qoder's replacement spawn has one post-permit attempt receipt with the key
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: "qoder/Qwen3.8-Max", input: "hello", stream: false }),
     }), config, log);
-    expect(spawns, await response.text()).toBe(2);
+    const body = await response.text();
+    expect(log.attempts?.[0]).toMatchObject({ status: 401, sendCount: 1, failureCause: "credential-rejected" });
+    if (denyReplacement) {
+      expect(denied).toBe(1);
+      expect(spawns, body).toBe(1);
+      expect(receipts).toEqual([[[1, []]]]);
+      expect(log.attempts).toHaveLength(1);
+      return;
+    }
+    expect(spawns, body).toBe(2);
     expect(receipts).toEqual([[[1, []]], [[1, []], [1, ["key-401"]]]]);
-    expect(log.attempts?.[0]).toMatchObject({ status: 401, failureCause: "credential-rejected" });
     expect(log.attempts?.[0]?.accountLogLabel).not.toBe(log.attempts?.[1]?.accountLogLabel);
   } finally {
     release();

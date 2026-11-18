@@ -6,7 +6,7 @@ import { withUpstreamHttpVersionValue } from "../../lib/upstream-http-version";
 import { isPreConnectReachabilityError } from "../../lib/upstream-reachability";
 import { BidiRequestIdSchema } from "./gen/agent_pb";
 import { consumeConnectFrames, encodeConnectFrame } from "./framing";
-import { fetchWithPhysicalSendReceipt } from "../physical-send";
+import { fetchWithPhysicalSendReceipt } from "../../lib/executor-physical-send-receipt";
 
 const CURSOR_RUN_SSE_PATH = "/agent.v1.AgentService/RunSSE";
 const CURSOR_BIDI_APPEND_PATH = "/aiserver.v1.BidiService/BidiAppend";

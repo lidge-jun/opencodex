@@ -1265,11 +1265,12 @@ describe("Copilot Auto through the Responses pipeline", () => {
     expect(text).not.toContain("gpt-5.4");
     expect(sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(1);
   });
-  test("OAuth 429 during terminal continuation preserves the scope refusal", async () => {
+  test.each([false, true])("OAuth 429 during terminal continuation preserves the scope refusal (paced=%s)", async paced => {
     await accounts();
     const { config, sent } = fixture({ rotate: true, rotateAt: 2, replyText: "I will modify the file now." });
     globalThis.fetch = config.providers["github-copilot"]!.fetch as typeof fetch;
     config.providers["github-copilot"]!.terminalContinuationGuard = true;
+    if (paced) config.providers["github-copilot"]!.requestPacing = { enabled: true, maxConcurrentRequests: 1 };
     const admission = scopedAdmission(config, ["github-copilot/auto", "gpt-4o"]);
     const log: RequestLogContext = {};
     const response = await handleResponses(request("Modify the file now."), config, log, { admission });

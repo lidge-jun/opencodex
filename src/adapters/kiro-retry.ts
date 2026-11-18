@@ -1,5 +1,5 @@
 import type { AdapterFetchContext, AdapterRequest } from "./base";
-import { fetchWithPhysicalSendReceipt } from "./physical-send";
+import { fetchWithPhysicalSendReceipt } from "../lib/executor-physical-send-receipt";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { classifyKiroHttpError, safeKiroHttpErrorMessage } from "./kiro-errors";
 import { normalizeUpstreamHttpErrorResponse } from "./upstream-http-error";

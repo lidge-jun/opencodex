@@ -124,6 +124,7 @@ import {
   recordKeyAttemptFailure,
   recordKeyAttemptUsage,
   rebindCacheDiagnosticBody,
+  type RequestLogContext,
 } from "../request-log";
 import { sealCredentialRefusal } from "../credential-recovery-attempt";
 import { sealedCredentialRefusals } from "../request-log-attempt-recovery";
@@ -132,6 +133,14 @@ import { bindAttemptDeliveryRecorder } from "../../usage/attempt-delivery";
 import { resolvePassiveRouteSubjectId } from "../passive-route-linker";
 import { anthropicPoolCooldownResponse, clientCancelledResponse } from "./core-errors";
 import { acquireAccountLease, KIRO_ACCOUNT_WAIT_MS } from "../../oauth/kiro-account-load";
+
+type CopilotInferenceReceipt = {
+  attempt: NonNullable<RequestLogContext["activeAttempt"]>;
+  ordinal: number;
+  sendCount: number;
+};
+const copilotInferenceReceipts = new WeakMap<Response, CopilotInferenceReceipt>();
+registerProviderResponseProvenance(copilotInferenceReceipts);
 
 /** Return a renewed Chat wire to the native owner before sending inference. */
 export class CopilotAutoAdapterHandoff extends Error {
@@ -679,12 +688,11 @@ export async function prepareResponsesTransport(
     };
   };
   let credentialReplayHandoff: ReturnType<typeof createCredentialReplayAttempt> | undefined;
-  const copilotInferenceReceipts = new WeakMap<Response, { ordinal: number; sendCount: number }>();
   const isCurrentInferenceResponse = (response: Response): boolean => {
     if (route.providerName !== "github-copilot" || route.provider.authMode === "forward") return true;
     const receipt = copilotInferenceReceipts.get(response);
     const attempt = logCtx.activeAttempt;
-    return receipt !== undefined && attempt !== undefined
+    return receipt !== undefined && receipt.attempt === attempt
       && receipt.ordinal === attempt.ordinal && receipt.sendCount === attempt.sendCount;
   };
   const bindKeyUsageFromBridge = (usage: OcxUsage | undefined): void => {
@@ -1127,7 +1135,7 @@ export async function prepareResponsesTransport(
           const observeAutoPause = captureAccountAutoPauseAttempt(route.providerName, binding?.kind === "api-key" ? binding.provider : route.provider,
             { config, oauth: binding?.kind === "oauth" ? binding.snapshot : undefined }, new Headers(dispatchInit.headers));
           let response: Response | undefined;
-          let copilotReceipt: { ordinal: number; sendCount: number } | undefined;
+          let copilotReceipt: CopilotInferenceReceipt | undefined;
           let physicalOwner: AnthropicPhysicalSendOwnership | null = null;
           try {
             requireAnthropicAdmission();
@@ -1160,7 +1168,7 @@ export async function prepareResponsesTransport(
                 } : undefined,
                 deferredCopilotNote ? () => {
                   const attempt = logCtx.activeAttempt;
-                  if (attempt?.sendCount) copilotReceipt = { ordinal: attempt.ordinal, sendCount: attempt.sendCount };
+                  if (attempt?.sendCount) copilotReceipt = { attempt, ordinal: attempt.ordinal, sendCount: attempt.sendCount };
                 } : undefined),
                 ...(pinned || recoveryOwner || vertexAuthority || advisorCredential || stripAdvisorBeta ? physicalSendGuardInit((finalTarget, finalHeaders) => {
                     if (pinned && (!pinned.current() || !pinned.matches(finalTarget, finalHeaders))) {

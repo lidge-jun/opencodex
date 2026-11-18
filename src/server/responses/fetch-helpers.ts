@@ -36,7 +36,7 @@ import { redactSecretString } from "../../lib/redact";
 import { outboundCredentials } from "../../lib/outbound-credential-registry";
 import { compressUpstreamRequestBody, isCanonicalCodexResponsesUrl } from "./request-compression";
 import { redeemOutboundTurnState, TURN_STATE_BINDING_INIT, turnStateBinding } from "../turn-state-handles";
-import { EXECUTOR_PHYSICAL_SEND_RECEIPT, markPhysicalSendReceiptExecutor } from "../../adapters/physical-send";
+import { EXECUTOR_PHYSICAL_SEND_RECEIPT, markPhysicalSendReceiptExecutor } from "../../lib/executor-physical-send-receipt";
 
 export { withUpstreamHttpVersion };
 

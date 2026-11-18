@@ -211,6 +211,8 @@ function expectRuntimeImportBoundary(source: string): string[] {
 describe("Responses fetch-helper import boundary", () => {
   test("loads only transport-owned runtime dependencies", () => {
     expect(expectRuntimeImportBoundary(readFileSync(helperPath, "utf8"))).toEqual([
+      // Import-free receipt shared with adapter-owned dispatch.
+      "../../lib/executor-physical-send-receipt",
       // Import-free sent-header registry read by the request log (#6911).
       "../../lib/outbound-credential-registry",
       // Import-free proof that the executor preserves destination and credentials.
@@ -230,6 +232,10 @@ describe("Responses fetch-helper import boundary", () => {
       "./request-compression",
       "./ws-upstream",
     ]);
+  });
+
+  test("the physical-send receipt is an import-free runtime leaf", () => {
+    expect(expectRuntimeImportBoundary(readFileSync(resolve(repoRoot, "src/lib/executor-physical-send-receipt.ts"), "utf8"))).toEqual([]);
   });
 
   test("the passive key transport proof is an import-free runtime leaf", () => {

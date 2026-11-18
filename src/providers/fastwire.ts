@@ -204,13 +204,11 @@ export function resolveFastPolicy(
   inbound: InboundWire = "responses",
   effectiveAdapter?: string,
 ): ResolvedFastPolicy {
-  const { adapter, hardPinned, forwardCallerServiceTier } = effectiveAdapter !== undefined
-    ? { adapter: effectiveAdapter, hardPinned: false, forwardCallerServiceTier: undefined }
-    : resolvePolicyAdapter(
-    authority,
-    modelId,
-    inbound,
-  );
+  const policyAdapter = resolvePolicyAdapter(authority, modelId, inbound);
+  const { adapter, hardPinned, forwardCallerServiceTier } =
+    effectiveAdapter === undefined || effectiveAdapter === policyAdapter.adapter
+      ? policyAdapter
+      : { adapter: effectiveAdapter, hardPinned: false, forwardCallerServiceTier: undefined };
   const exactCapability = exactModelValue(authority.capability.models, modelId);
   const capability = authority.capability.provider === false
     ? false
