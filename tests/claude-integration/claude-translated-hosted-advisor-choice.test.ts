@@ -2,11 +2,15 @@ import { expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { declaredAnthropicServerTools, hostedAdvisorSelection } from "../../src/claude/inbound-content-options";
+import { messagesToResponsesTranslation } from "../../src/protocols/codecs/messages";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { protocolTraceForRequest } from "../../src/protocols/trace";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { setAdvisorPlanFactory } from "../../src/server/responses/advisor-plan-slot";
 import { createAdvisorGuard } from "../../src/server/responses/advisor-slot";
+import { handleResponses as runResponsesCore } from "../../src/server/responses/core";
+import { handleResponsesWithPolicyFallback } from "../../src/server/responses/policy-fallback";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -35,7 +39,7 @@ function workerStream(blocks: Record<string, unknown>[], stopReason: string): Re
     { headers: { "content-type": "text/event-stream" } });
 }
 
-async function verifyHostedAdvisorChoice(scenario: string, route: "direct" | "combo" | "policy") {
+async function verifyHostedAdvisorChoice(scenario: string, route: "direct" | "combo" | "policy", countPreparation = false) {
   const sends: { provider: string; body: { tools?: Record<string, unknown>[]; tool_choice?: unknown }; beta: string | null }[] = [];
   const hostedCall = { type: "server_tool_use", id: "srvtoolu_fixture", name: "advisor", input: {} };
   const hostedResult = { type: "advisor_tool_result", tool_use_id: hostedCall.id,
@@ -91,12 +95,38 @@ async function verifyHostedAdvisorChoice(scenario: string, route: "direct" | "co
   }));
   try {
     const logCtx: RequestLogContext = { model: "", provider: "" };
+    const requestBody = { model: route === "direct" ? `worker/${MODEL}` : `${route}/waterfall`,
+      max_tokens: 64, stream: direct, thinking: { type: "disabled" }, tools,
+      tool_choice: none ? { type: "none" } : CHOICE, messages: [{ role: "user", content: "Fixture." }] };
+    if (countPreparation) {
+      const preparations: string[] = [];
+      const response = await handleResponsesWithPolicyFallback(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json", "anthropic-beta": BETA },
+        body: JSON.stringify({ ...messagesToResponsesTranslation(requestBody).body, stream: true }),
+      }), config, logCtx, {
+        inboundWire: "anthropic",
+        anthropicServerTools: declaredAnthropicServerTools(requestBody),
+        anthropicHostedAdvisorSelection: hostedAdvisorSelection(requestBody),
+      }, {
+        runCore: (req, candidateConfig, context, options) => {
+          preparations.push(options?.policyFallbackCandidate?.provider ?? "initial");
+          return runResponsesCore(req, candidateConfig, context, options);
+        },
+      });
+      const body = await response.text();
+      expect(preparations).toEqual(ambiguous ? ["initial"] : ["initial", "worker"]);
+      expect(logCtx.routeDecision?.selected.provider).toBe("blocked");
+      expect(sends.map(send => send.provider)).toEqual(ambiguous ? [] : ["worker"]);
+      expect(response.status, body).toBe(ambiguous ? 400 : 200);
+      if (ambiguous) expect(body).toContain("ambiguous");
+      expect(consultations).toBe(0);
+      expect(preflightRuns).toBe(0);
+      return;
+    }
     const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
       method: "POST",
       headers: { "content-type": "application/json", "anthropic-beta": BETA },
-      body: JSON.stringify({ model: route === "direct" ? `worker/${MODEL}` : `${route}/waterfall`,
-        max_tokens: 64, stream: direct, thinking: { type: "disabled" },
-        tools, tool_choice: none ? { type: "none" } : CHOICE, messages: [{ role: "user", content: "Fixture." }] }),
+      body: JSON.stringify(requestBody),
     }), config, logCtx, scoped ? { requestId: crypto.randomUUID(), start: Date.now(),
       admission: { kind: "configured", keyId: "scoped", source: "bearer" } } : undefined);
     const body = await response.text();
@@ -149,20 +179,23 @@ async function verifyHostedAdvisorChoice(scenario: string, route: "direct" | "co
 }
 
 test.each([
-  ["hosted exchange", "direct"], ["ordinary tool call", "direct"], ["direct encoder refusal", "direct"],
-  ["direct encoder tool_choice none", "direct"], ["out of model scope", "direct"],
-  ["forwarding disabled", "direct"], ["ambiguous catalog", "direct"],
-  ["hosted exchange", "combo"], ["forwarding disabled", "combo"], ["ambiguous catalog", "combo"],
-  ["hosted exchange", "policy"], ["forwarding disabled", "policy"], ["ambiguous catalog", "policy"],
+  ...([
+    ["hosted exchange", "direct"], ["ordinary tool call", "direct"], ["direct encoder refusal", "direct"],
+    ["direct encoder tool_choice none", "direct"], ["out of model scope", "direct"],
+    ["forwarding disabled", "direct"], ["ambiguous catalog", "direct"],
+    ["hosted exchange", "combo"], ["forwarding disabled", "combo"], ["ambiguous catalog", "combo"],
+    ["hosted exchange", "policy"], ["forwarding disabled", "policy"], ["ambiguous catalog", "policy"],
+  ] as const).map(([scenario, route]) => [scenario, route, "Messages"] as const),
+  ["ambiguous catalog", "policy", "counted core"], ["hosted exchange", "policy", "counted core"],
 ] as const)(
-  "translated Messages handles Advisor with %s (route=%s)", async (scenario, route) => {
+  "translated Messages handles Advisor with %s (route=%s, entry=%s)", async (scenario, route, entry) => {
     const previousHome = process.env.OPENCODEX_HOME;
     const home = mkdtempSync(join(tmpdir(), "ocx-hosted-advisor-choice-"));
     try {
       process.env.OPENCODEX_HOME = home;
       const release = acquireOwnedSpendHome();
       try {
-        await verifyHostedAdvisorChoice(scenario, route);
+        await verifyHostedAdvisorChoice(scenario, route, entry === "counted core");
       } finally {
         release();
       }

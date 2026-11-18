@@ -30,7 +30,7 @@ import type {
   OcxToolResultMessage,
   OcxUsage,
 } from "../../types";
-import { toolChoiceToolPredicate } from "../../types";
+import { createToolChoiceResolver, toolChoiceToolPredicate } from "../../types";
 import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "../../lib/errors";
 import { jsonStringPartsUtf8Bytes, jsonUtf8Bytes } from "../../lib/json-byte-size";
 import { isTranslatorBudgetExceededError, releaseTranslatedEvent, TRANSLATOR_MAX_CALL_ARGUMENT_BYTES, TranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
@@ -46,6 +46,16 @@ export function advisorToolAllowed(
   const { explicitRootFunctionChoices, toolChoice } = parsed.options;
   if (explicitRootFunctionChoices && !explicitRootFunctionChoices.includes(advisorTool.name)) return false;
   return toolChoiceToolPredicate(toolChoice, [...(parsed.context.tools ?? []), advisorTool])(advisorTool);
+}
+
+export function callerAdvisorToolPredicate(parsed: OcxParsedRequest): (tool: OcxTool) => boolean {
+  const { explicitClientToolChoices, toolChoice } = parsed.options;
+  const catalog = parsed.context.tools ?? [];
+  const effectiveChoiceAllows = toolChoiceToolPredicate(toolChoice, catalog);
+  const resolver = explicitClientToolChoices?.length ? createToolChoiceResolver(catalog) : undefined;
+  return tool => !tool.advisor && tool.name === ADVISOR_TOOL_NAME && effectiveChoiceAllows(tool)
+    && (explicitClientToolChoices === undefined || explicitClientToolChoices.some(choice =>
+      choice.type === (tool.freeform ? "custom" : "function") && resolver?.selects(tool, choice.name)));
 }
 
 /** Hard bound on advisor consultations per worker request (recursion guard). */
@@ -256,10 +266,9 @@ export function createAdvisorGuard(plan: AdvisorPlan): NonNullable<OcxParsedRequ
       // A continuation or reused guard may have a narrower choice than the original turn.
       const catalog = parsed.context.tools ?? [];
       const advisorAllowed = advisorToolAllowed(parsed);
-      const callerToolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice, catalog);
       // The bridge restores a unique authorized namespaced tool's bare echo. When no
       // synthetic Advisor was permitted, that alias still belongs to the caller's tool.
-      const callerAdvisorOwners = new Set(catalog.filter(tool => !tool.advisor && tool.name === ADVISOR_TOOL_NAME && callerToolAllowed(tool))
+      const callerAdvisorOwners = new Set(catalog.filter(callerAdvisorToolPredicate(parsed))
         .map(tool => tool.namespace ?? ""));
       const callerOwnsAdvisorAlias = !advisorAllowed && callerAdvisorOwners.size === 1;
       const held: HeldAdvisorCall[] = [];

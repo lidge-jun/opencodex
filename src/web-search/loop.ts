@@ -40,6 +40,7 @@ import { newSidecarSearchCellId, rememberSidecarSearch, restoreSidecarSearchResu
 import {
   ADVISOR_TOOL_NAME,
   advisorToolAllowed,
+  callerAdvisorToolPredicate,
   MAX_ADVISOR_CONTINUATIONS_PER_REQUEST,
   parseAdvisorQuestionArgs,
   type AdvisorSidecarStep,
@@ -718,9 +719,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         }
         bindAnthropicRejectionResponse(request, response);
         const iterTools = iterParsed.context.tools ?? [];
-        const toolAllowed = toolChoiceToolPredicate(iterParsed.options.toolChoice, iterTools);
-        const clientAdvisorAllowed = iterTools.some(tool => !tool.advisor && !tool.namespace
-          && tool.name === ADVISOR_TOOL_NAME && toolAllowed(tool));
+        const callerAdvisorAllowed = callerAdvisorToolPredicate(iterParsed);
+        const clientAdvisorAllowed = iterTools.some(tool => !tool.namespace && callerAdvisorAllowed(tool));
         const declaredAdvisor = iterTools.find(tool => tool.advisor && tool.name === ADVISOR_TOOL_NAME);
         // Exhaustion removes the declaration, but its paired limit result still belongs
         // to the sidecar. A tools-disabled recovery revokes that permission too.

@@ -63,9 +63,12 @@ multi-call pairing, overlap and lifecycle release.
   Client catalog checks wrap the Advisor guard, so synthetic calls are consumed internally before
   final worker output is checked against current client declarations, including direct encoders.
   Synthetic injection requires the request's effective `tool_choice` to permit Advisor. For an
-  explicit selector or allowlist, `src/responses/parser-tools.ts` retains the selected root function
-  names before provider translation. Only a matching function selector permits synthetic Advisor.
-  A forced hosted search or a same-named custom or hosted selector grants no Advisor permission.
+  explicit selector or allowlist, `src/responses/parser-tools.ts` retains typed client selectors
+  and the selected root function names before provider translation. Only a matching function
+  selector permits synthetic Advisor. A caller-owned `advisor` can pass through when its declared
+  kind and name match the original selector and the effective choice permits it. With `auto`
+  or `required`, caller-owned tools follow the effective choice alone. A forced hosted search
+  excludes a caller-owned `advisor` even when the worker receives `auto`.
   The guard rechecks the caller's selection and effective tool choice on each worker leg and
   refuses a forbidden call before consultation, continuation, or disclosure of its ID and arguments.
   Linked Messages replay uses the same check. `src/claude/inbound-content-options.ts` identifies
@@ -92,9 +95,10 @@ multi-call pairing, overlap and lifecycle release.
   calls alongside `web_search`, fulfills them in worker order, and replays paired results without
   exposing the synthetic call to the client. The synthetic tool and scanner are enabled only when
   the caller's selection and effective `tool_choice` permit Advisor. The same check runs on each
-  search iteration and leaves the search tool's outbound translation intact. Without an active Advisor sidecar,
-  an emitted `advisor` call is refused before its ID or arguments reach the client unless that
-  iteration declares and permits it as an ordinary client tool. Partial calls are refused at
+  search iteration and leaves the search tool's outbound translation intact. A caller-owned
+  `advisor` must be declared and permitted by both the original selector and current iteration's
+  effective choice. The loop refuses other unauthorized calls before their IDs or arguments
+  reach the client. Partial calls are refused at
   their start, and the terminal refusal retains worker usage. Synthetic permission is also
   iteration-scoped: tools-disabled empty-answer recovery refuses Advisor even when the original
   turn installed the sidecar; ordinary exhausted-Advisor iterations retain paired limit handling.

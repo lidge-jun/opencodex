@@ -4,17 +4,20 @@ import { WEB_SEARCH_TOOL_NAME } from "../web-search/synthetic-tool";
 import { buildImageTool, IMAGE_GEN_TOOL_NAME } from "../images/synthetic-tool";
 import { toolSearchDescription, toolSearchParameters } from "./tool-search-compat";
 
-/** Keep the function identities an explicit selector can authorize before wire lowering. */
-export function explicitRootFunctionChoices(value: unknown): string[] | undefined {
-  if (!isObj(value)) return undefined;
+/** Capture the function and custom selectors from the original request before wire lowering. */
+export function explicitToolChoices(value: unknown): Pick<OcxRequestOptions, "explicitRootFunctionChoices" | "explicitClientToolChoices"> {
+  if (!isObj(value)) return {};
   const selectors = value.type === "allowed_tools" && Array.isArray(value.tools) ? value.tools : [value];
-  const names = new Set<string>();
+  const rootFunctions = new Set<string>();
+  const clientTools: NonNullable<OcxRequestOptions["explicitClientToolChoices"]>[number][] = [];
   for (const selector of selectors) {
-    if (!isObj(selector) || selector.type !== "function" || typeof selector.name !== "string" || !selector.name) continue;
-    const namespace = selector.namespace;
-    if (namespace === undefined || namespace === "" || namespace === "functions") names.add(selector.name);
+    if (!isObj(selector) || typeof selector.name !== "string" || !selector.name) continue;
+    const { type, name, namespace } = selector;
+    if (type !== "function" && type !== "custom") continue;
+    clientTools.push({ type, name });
+    if (type === "function" && (namespace === undefined || namespace === "" || namespace === "functions")) rootFunctions.add(name);
   }
-  return [...names];
+  return { explicitRootFunctionChoices: [...rootFunctions], explicitClientToolChoices: clientTools };
 }
 
 export function mapToolChoice(value: unknown): OcxRequestOptions["toolChoice"] {
