@@ -56,11 +56,10 @@ billed the same way — one credit attempt beside a token-priced one, or two cre
 would produce a number that matches no price. The Combo attempt table shows the USD estimate for each attempt and the calculation for each credit-priced attempt.
 The management API exposes the billing basis in the optional `billing` field on cost estimates.
 
-A credit charge is exact for the configured price, so it never makes a total a lower bound — and it
-never hides one either. When a mixed Combo's token-priced attempt is a floor under an unresolved
-Priority rate, the combined total still prints `≥`, because `credits × price + ≥token` is itself
-`≥` the true total. A credits-only total stays exact, and a mixed total whose token attempt resolved
-its standard rate prints no `≥`.
+A credit charge is exact at the configured price. A mixed Combo displays `≥` when at least one
+token-priced attempt has a known lower bound and every token-priced attempt is exact or has a
+known lower bound. An estimated token charge without a known lower bound makes the combined
+amount an ordinary estimate.
 
 ### Bounds and unrepresentable values
 

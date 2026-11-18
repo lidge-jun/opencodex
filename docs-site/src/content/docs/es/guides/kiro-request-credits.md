@@ -61,11 +61,10 @@ y por tokens, o incluye dos precios por crédito, el panel muestra un total comb
 La tabla del Combo muestra el costo estimado en USD de cada intento y el cálculo de los intentos con precio por crédito.
 La API de administración expone la base del cálculo en el campo opcional `billing` de la estimación.
 
-El cargo por créditos es exacto para el precio configurado. Si un intento cobrado por tokens tiene
-un costo mínimo porque no se pudo resolver la tarifa Priority, el Combo mixto conserva el símbolo
-`≥`, ya que `credits × price + ≥token` también marca un mínimo para el costo real. El total es
-exacto si todos los intentos se cobraron por créditos o si los intentos por tokens resolvieron
-su tarifa.
+El cargo por créditos es exacto para el precio configurado. Un Combo mixto muestra `≥` cuando al
+menos un intento cobrado por tokens tiene un costo mínimo conocido y todos los intentos cobrados
+por tokens tienen un costo exacto o un mínimo conocido. Si un cargo estimado por tokens carece de
+un mínimo conocido, el importe combinado se muestra como una estimación ordinaria.
 
 ### Límites y valores no representables
 

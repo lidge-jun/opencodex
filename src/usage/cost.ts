@@ -126,7 +126,7 @@ export interface CostEstimate {
   contextTier?: ContextTierName;
   /** At least one request/attempt selected the user threshold rates. */
   customThresholdApplied?: true;
-  /** The aggregate is a known floor because every priced attempt is a lower bound. */
+  /** The aggregate satisfies the lower-bound rule for its billing basis. */
   priorityLowerBound?: boolean;
   /**
    * Billing basis for the aggregate. `provider-credits` means every priced attempt shared one
@@ -805,29 +805,18 @@ function comboBilling(estimates: readonly AttemptCostEstimate[], total: number):
 }
 
 /**
- * Whether the summed total is a known lower bound.
- *
- * A credit charge is `credits x price`, exact for the configured price, so it can never be the
- * reason a total is a floor — and it must not veto one either. A mixed combo of an exact credit
- * leg beside a token leg under an unresolved Priority rate still sums to `>=` the true total:
- * `exact + >=token`. Consulting any token-priced lower bound keeps that floor, while a credit leg whose
- * own catalog rate happened to be a floor contributes nothing, because that rate priced neither
- * the leg nor the total.
- *
- * The token-only rule is unchanged: a combo is a floor only when every attempt is one. That is
- * more conservative than the sum requires (`exact + >=token` is also a floor there), but it is
- * the documented behavior for a single-basis total and not what this path fixes.
+ * A token-only Combo requires every attempt to be a floor. Credit charges are exact at the
+ * configured price. With credit billing, at least one token-priced attempt must be a floor,
+ * and every other token-priced attempt must be exact or a known floor.
  */
 function comboIsLowerBound(
   estimates: readonly AttemptCostEstimate[],
   billing: CreditBilling | undefined,
 ): boolean {
-  const pricedFromTokens = billing
-    ? estimates.filter(est => est.billing === undefined)
-    : estimates;
-  return billing
-    ? pricedFromTokens.some(est => est.priorityLowerBound === true)
-    : pricedFromTokens.length > 0 && pricedFromTokens.every(est => est.priorityLowerBound === true);
+  if (!billing) return estimates.length > 0 && estimates.every(est => est.priorityLowerBound === true);
+  const pricedFromTokens = estimates.filter(est => est.billing === undefined);
+  return pricedFromTokens.some(est => est.priorityLowerBound === true)
+    && pricedFromTokens.every(est => est.priorityLowerBound === true || !est.estimated);
 }
 
 /**

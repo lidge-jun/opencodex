@@ -78,13 +78,11 @@ Credit estimates require a model price match and measured usage status. An inval
 breakdown leaves `tokens: null` on a valid credit estimate and does not affect its amount.
 The credit amount's estimated flag follows usage provenance alone.
 
-`priorityLowerBound` follows the rate that produced each amount, and a Combo's total is a floor
-when the applicable token-priced legs are. A credit charge is exact for its configured price, so it never
-sets the marker and never vetoes one: `credits x price + >=token` is still `>=` the true total, so
-a mixed Combo keeps the floor any token leg earned. A credit leg's own catalog rate contributes
-nothing, because that rate priced neither the leg nor the total. A credits-only Combo is exact and
-reports no floor. `gui/src/pages/logs-cost-format.ts` applies the same rule to a row seeded by an
-older build or served by an older proxy, where the marker and reasons were already persisted.
+`priorityLowerBound` follows the rate that produced each amount. A token-only Combo requires
+every attempt to be a floor. A mixed Combo requires at least one token-priced floor and every
+token-priced attempt to be exact or a known floor. Credit charges are exact at the configured
+price, so credit-only totals carry no floor marker. `gui/src/pages/logs-cost-format.ts` uses the
+proxy's mixed-row marker and suppresses stale token-price markers and reasons on credit-only rows.
 In a token-only conversation, every priced row must be a floor for the total to show `≥`.
 When credit pricing participates, all included rows must have an exact amount or a known floor,
 and at least one must have a known floor. A credit-priced row whose count or price
