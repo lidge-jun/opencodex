@@ -16,6 +16,7 @@ interface Fixture {
 
 const fixture: Fixture = JSON.parse(readFileSync(process.env.OCX_POLICY_STARTUP_FIXTURE!, "utf8"));
 let upstreamCalls = 0;
+let usageReads = 0;
 const unexpectedNetwork: string[] = [];
 // Install before product imports. Every response is synthetic; no endpoint can escape the fixture.
 globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -27,6 +28,16 @@ globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: Request
       id: "resp_policy_startup", object: "response", status: "completed", created_at: 1,
       model: "gpt-5.6-sol", output: [], usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 },
     });
+  }
+  // A refusal resting on the restored, hours-old reading earns one fresh usage read (#8113). It
+  // still reports the block, so the refusal under test stands.
+  if (url.hostname === "chatgpt.com" && url.pathname === "/backend-api/wham/usage") {
+    usageReads++;
+    const resetAt = Math.floor(Date.now() / 1000) + 3_600;
+    return Response.json({ plan_type: "plus", rate_limit: {
+      primary_window: { used_percent: 99, limit_window_seconds: 18_000, reset_at: resetAt },
+      secondary_window: { used_percent: 99, limit_window_seconds: 604_800, reset_at: resetAt },
+    } });
   }
   unexpectedNetwork.push(`${url.hostname}${url.pathname}`);
   throw new Error("Unexpected network request in startup policy fixture");
@@ -286,7 +297,7 @@ try {
     thresholds: { global: config.autoSwitchThreshold, mainOverride: config.codexAccountAutoSwitchThresholds?.[MAIN_CODEX_ACCOUNT_ID] ?? null },
     retainedUnknown, validReplacement,
     settled, after, settledAdmission, response, beforePrimaryUpstreamCalls, primaryUpstreamCalls, originalResponse,
-    unexpectedNetwork,
+    unexpectedNetwork, usageReads,
     policyReadsPinned: tokenReads.every(path => path === manager.context.authPath),
   }));
 } finally {

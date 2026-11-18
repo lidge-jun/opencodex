@@ -520,6 +520,15 @@ describe("qoder adapter", () => {
     expect(args).not.toContain("--dangerously-skip-permissions");
   });
 
+  test.each(["https://qoder.com", "https://qoder.cn"])("disables MCP lazy loading so discovery wrappers never replace catalog tools (%s, #8704)", baseUrl => {
+    const args = buildQoderArgs(parsed(), provider({ baseUrl }));
+    const settings = args.indexOf("--settings");
+    expect(settings).toBeGreaterThan(-1);
+    expect(JSON.parse(args[settings + 1]!)).toEqual({ mcp: { lazyLoad: false } });
+    // Inline settings are an explicit flag, so the empty setting sources still exclude every file.
+    expect(args[args.indexOf("--setting-sources") + 1]).toBe("");
+  });
+
   test("passes system and developer prompts only in the scoped child environment", async () => {
     const secretSystem = "private system instructions";
     const secretDeveloper = "private developer context";
@@ -1185,7 +1194,8 @@ describe("qoder authoritative tool-turn completion", () => {
     expect(events.some(e => e.type === "done")).toBe(false);
   });
 
-  test.each(["mcp__opencodex__undeclared", "excluded"])("undeclared tool before authoritative stop fails closed (%s)", async name => {
+  // mcp_get/mcp_call/mcp_list are Qoder's lazy-load discovery wrappers (#8704); they stay undeclared.
+  test.each(["mcp__opencodex__undeclared", "excluded", "mcp_get", "mcp_call", "mcp_list"])("undeclared tool before authoritative stop fails closed (%s)", async name => {
     const { spawned, clock, parked, adapter } = setupParkedQoder();
     const events: AdapterEvent[] = [];
     const request = toolRequest(["probe_echo", "excluded"]);

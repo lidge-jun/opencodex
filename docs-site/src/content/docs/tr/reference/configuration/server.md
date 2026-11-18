@@ -265,6 +265,7 @@ Hedefin çözümlendiği sağlayıcıyı devre dışı bırakmak (`disabled: tru
 | --- | --- | --- | --- |
 | `provider?` | `string` | otomatik OpenAI seçimi | `/v1/images/generations` ve `/v1/images/edits` için açık özel API anahtarlı `openai-responses` sağlayıcısı. Kayıt defteri tarafından yönetilen kimlikler reddedilir. |
 | `timeoutMs?` | `number` | `300000` | Tek bir bağımsız Görseller isteği için tüm istek zaman aşımı. |
+| `videoProvider?` | `string` | xAI | Tur içi `video_gen` köprüsünü kendi `baseUrl` ve anahtarıyla karşılayan API anahtarlı sağlayıcı. `xai`, `https://api.x.ai/v1` adresine sabitlenir; diğer kayıt kimlikleri reddedilir. Kullanılamayan bir değer her `video_gen` çağrısına hatasını döndürür ve hiçbir şey göndermez. Bkz. [Video Köprüsü](/tr/guides/video-bridge/#video-sağlayıcısını-seçme). |
 
 Açık seçim sağlayıcı eksik, devre dışı, uyumsuz olduğunda veya kullanılabilir
 bir anahtardan yoksun olduğunda kapalı olarak başarısız olur; asla başka bir

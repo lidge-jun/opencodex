@@ -22,8 +22,11 @@ export {
 export {
   advanceComboAfterFailure,
   clearComboSelectionState,
+  comboExclusion,
   comboExclusionReasons,
+  comboTargetUnavailableCause,
   comboTargetSkipTrigger,
+  comboUnavailableDiagnostics,
   NoAvailableComboTargetsError,
   noteComboFailure,
   noteComboSuccess,
@@ -34,7 +37,9 @@ export {
   snapshotComboQuotaCooldowns,
   tryPickComboModel,
   UnknownComboError,
+  type ComboExclusion,
   type ComboPick,
+  type ComboUnavailableDiagnostics,
   type QuotaInactiveReason,
 } from "./resolve";
 export {

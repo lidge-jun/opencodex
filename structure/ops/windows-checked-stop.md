@@ -126,8 +126,12 @@ asynchronous `schtasks` and `sc.exe` calls through `execFile` (a deadline-derive
 floored to whole milliseconds and one that floors to 0 spawns nothing, because `execFile` reads 0
 as no timeout), the evidence snapshot `windowsProcessSnapshot` for every bind, the checked
 terminate, the exit watch, the Part B port sampler and the listener identity. The task's running
-state is read from `schtasks /query /fo CSV`, falling back to `Get-ScheduledTask` inside the same
-1 s cap when the status word is localized. A running WinSW service is only this home's manager
+state is read from `schtasks /query /fo CSV`. The status words observed from shipped zh-CN and
+ko-KR resources are recognized there (#8863), because a cold `Get-ScheduledTask` takes 1.6 s to
+4.9 s and cannot finish inside the 1 s cap; any other localized word still falls back to it. A
+`schtasks /end` that fails with a localized message is `not-running` only when the same CSV read,
+inside the end command's own cap, shows the task idle; a zh-CN or ko-KR access denial stays
+`denied` without that read. A running WinSW service is only this home's manager
 when `sc qc` shows a `BINARY_PATH_NAME` naming this installation's WinSW executable, the same
 proof the guarded manager path uses: the service ID is fixed, so a successful `sc query` alone
 would let Part A stop another installation's service. An unreadable registration is `unknown`

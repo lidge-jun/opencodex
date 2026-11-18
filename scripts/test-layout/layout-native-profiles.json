@@ -10,5 +10,6 @@
   "native-profile-stage-lifecycle.test.ts": "codex-integration",
   "native-profile-startup-release.test.ts": "codex-integration",
   "native-profile-startup.test.ts": "codex-integration",
-  "native-profile-store.test.ts": "codex-integration"
+  "native-profile-store.test.ts": "codex-integration",
+  "native-main-credentials-retention.test.ts": "codex-integration"
 }
