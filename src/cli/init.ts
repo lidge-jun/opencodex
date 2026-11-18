@@ -5,6 +5,7 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { injectCodexConfig } from "../codex/inject";
 import { classifyOpenAiTierBackup, ConfigMutationLockError, getConfigPath, getDefaultConfig, initializePersistedConfigIfMissing, isValidProviderName, observeInitialConfigState, preserveOpenAiTierRollbackSnapshot } from "../config";
 import { InitialConfigPublicationError } from "../config/initialize";
+import { isAgyAcpProvider } from "../config/schema/agy-acp-references";
 import { redactUserPath } from "../lib/redact";
 import { enrichProviderFromCatalog } from "../oauth/key-providers";
 import { deriveInitProviders } from "../providers/derive";
@@ -161,7 +162,8 @@ export async function runInit(): Promise<void> {
         providerConfig = { adapter: p.adapter, baseUrl: p.baseUrl, authMode: "oauth", ...(p.defaultModel ? { defaultModel: p.defaultModel } : {}) };
         oauthHint = true;
       } else {
-        if (p.adapter === "agy-acp") {
+        const isAgyAcp = isAgyAcpProvider(p.id, p);
+        if (isAgyAcp) {
           console.log("   Sign in on the proxy host with: agy acp --login");
           if (p.dashboardUrl) console.log(`   CLI setup: ${p.dashboardUrl}`);
         } else if (!p.keyOptional && p.dashboardUrl) {
@@ -179,13 +181,13 @@ export async function runInit(): Promise<void> {
         }
         const env = envKeyFor(p.id);
         const hint = p.kind === "local" ? "API key (usually blank — press Enter): " : `API key (paste, or env var $${env}): `;
-        const apiKey = p.keyOptional ? "" : (await prompt.ask(`\n${hint}`)).trim();
+        const apiKey = isAgyAcp ? "" : (await prompt.ask(`\n${hint}`)).trim();
         const modelChoice = (await prompt.ask(`Default model${p.defaultModel ? ` [${p.defaultModel}]` : " (optional)"}: `)).trim();
         const defaultModel = modelChoice || p.defaultModel;
         providerConfig = {
           adapter: p.adapter,
           baseUrl,
-          ...(p.kind === "key" && !p.keyOptional ? { apiKey: apiKey || `\${${env}}` } : apiKey ? { apiKey } : {}),
+          ...(p.kind === "key" && !isAgyAcp ? { apiKey: apiKey || `\${${env}}` } : apiKey ? { apiKey } : {}),
           ...(defaultModel ? { defaultModel } : {}),
         };
         // Apply the catalog's models / vision classification (same enrichment as the GUI).

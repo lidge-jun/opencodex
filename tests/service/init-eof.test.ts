@@ -124,6 +124,41 @@ describe("ocx init piped stdin (#754)", () => {
     }
   }, 30_000);
 
+  test.each([
+    ["", "${LITELLM_API_KEY}"],
+    ["fixture-init-key", "fixture-init-key"],
+  ])("the LiteLLM preset prompts for and saves a key (%j)", async (answer, apiKey) => {
+    const home = makeHome();
+    const proc = launch(home);
+    const stderr = new Response(proc.stderr).text();
+    try {
+      const menu = await waitForOutput(proc.stdout, "Select default provider (number):");
+      const index = /^\s*(\d+)\.\s+LiteLLM \(self-hosted\)/m.exec(menu)?.[1];
+      expect(index).toBeDefined();
+      proc.stdin.write(index + "\n");
+      await proc.stdin.flush();
+
+      const prompt = await waitForOutput(proc.stdout, /API key \(|Default model \(/);
+      expect(prompt).toContain("API key (paste, or env var $LITELLM_API_KEY):");
+      proc.stdin.write(answer + "\n");
+      await proc.stdin.flush();
+      await waitForOutput(proc.stdout, "Default model (optional):");
+      proc.stdin.write("\n");
+      await proc.stdin.flush();
+      await waitForOutput(proc.stdout, "Proxy port [10100]:");
+      proc.stdin.write("\n");
+      await proc.stdin.flush();
+      await waitForOutput(proc.stdout, "Inject into Codex config.toml? [Y/n]:");
+      const stored = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
+      expect(stored.defaultProvider).toBe("litellm");
+      expect(stored.providers.litellm.apiKey).toBe(apiKey);
+      proc.stdin.end();
+    } finally {
+      await stop(proc);
+      await stderr;
+    }
+  }, 30_000);
+
   test("exits cleanly when stdin closes before the first prompt answer", async () => {
     const home = makeHome();
     const proc = launch(home);
