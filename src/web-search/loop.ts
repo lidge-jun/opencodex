@@ -518,10 +518,9 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
 
   // Hard iteration bound (termination safety net); forceAnswer normally ends the loop sooner.
   // One iteration beyond the forced answer is reserved for its empty-answer recovery below.
-  // An authorized Chat empty-completion retry adds its own iteration (see completionRetries in the
-  // loop bound), so ordinary iterations, including repeat placeholders for a failed query that never
-  // advance searchesExecuted, cannot use up the slot the retry needs.
-  const HARD_CAP = maxSearches + 3 + 2 * Number(deps.terminalContinuationGuard === true && adapter.name === "openai-chat") + (deps.advisor ? MAX_ADVISOR_CONTINUATIONS_PER_REQUEST : 0);
+  // Each authorized Chat recovery adds its own iteration. Ordinary iterations, including repeat
+  // placeholders for a failed query, cannot use up either recovery's slot.
+  const HARD_CAP = maxSearches + 3 + (deps.advisor ? MAX_ADVISOR_CONTINUATIONS_PER_REQUEST : 0);
   let emptyAnswerRetries = 0;
   let completionRetries = 0;
   let terminalContinuations = 0;
@@ -1176,7 +1175,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   async function* produce(): AsyncGenerator<AdapterEvent> {
     let prepared = firstPrepared;
     try {
-      for (let i = 0; i < HARD_CAP + completionRetries; i++) {
+      for (let i = 0; i < HARD_CAP + completionRetries + terminalContinuations; i++) {
         const forceAnswer = searchesExecuted >= maxSearches;
         try {
           // First loop turn reuses the eager HEADERS. Subsequent header acquisitions run here.
@@ -1220,11 +1219,12 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               && !signal.aborted && !split.hasMalformedToolCall && split.calls.length === 0
               && analyzeTerminalTurn(currentParsed, split.passthrough).decision === "continue") {
               hiddenUsage = mergeUsage(hiddenUsage, final.usage);
-              if (terminalContinuations++ > 0) {
+              if (terminalContinuations > 0) {
                 throw new LoopError(502, "Provider announced work again without calling a tool", {
                   type: "error", status: 502, code: "terminal_continuation_failed",
                   message: "Provider announced work again without calling a tool", errorType: "server_error" });
               }
+              terminalContinuations++;
               const continuation = buildContinuationRequest(currentParsed, split.passthrough);
               messages.splice(0, messages.length, ...continuation.context.messages);
               yield { type: "assistant_boundary" };

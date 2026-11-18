@@ -14,6 +14,12 @@ const cases: CompletionCase[] = [
   { name: "refusal", frames: ["refusal"], sends: 1, final: "response.incomplete" },
   { name: "truncated", frames: ["truncated"], sends: 1, final: "response.incomplete" },
   { name: "search-then-plan", frames: ["search", "plan", "tool"], sends: 3, searches: 1 },
+  { name: "failed-search-repeats-keep-ordinary-cap-with-both-guards", empty: true, searchFails: true,
+    frames: ["search", "search", "search", "search", "search", "search", "Fixed."], sends: 6, searches: 1,
+    final: "response.failed" },
+  { name: "last-iteration-empty-then-repeated-plan", empty: true, searchFails: true,
+    frames: ["search", "search", "search", "search", "search", "", "plan", "plan"], sends: 8, searches: 1,
+    final: "response.failed", errorCode: "terminal_continuation_failed" },
 ];
 
 for (const row of cases) {
