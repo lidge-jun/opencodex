@@ -104,8 +104,11 @@ export async function consumeComboFailure(
     }
     if (body.displaySafe && !body.truncated) {
       if (isXaiPrivacyModeRefusal(response) || (grokOAuth && isXaiLegacyPrivacyError(response.status, body.text))) {
+        const refusal = xaiPrivacyModeRefusal(logCtx);
+        if (nonReplayable) markResponseNonReplayable(refusal);
         return {
-          response: xaiPrivacyModeRefusal(logCtx),
+          response: refusal,
+          ...(nonReplayable ? { nonReplayable: true } : {}),
           classificationText: XAI_LEGACY_PRIVACY_MESSAGE,
           upstreamMessage: XAI_LEGACY_PRIVACY_MESSAGE,
           upstreamType: "permission_error",

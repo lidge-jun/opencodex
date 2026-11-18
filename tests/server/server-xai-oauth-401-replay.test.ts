@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleProviderCommand } from "../../src/cli/provider";
 import { fetchProviderModels } from "../../src/codex/catalog/provider-models";
+import { isComboTargetInCooldown } from "../../src/combos/failover";
 import { fetchProviderQuotaReports } from "../../src/providers/quota";
 import { saveConfig } from "../../src/config";
 import { XAI_OAUTH_DISCOVERY_URL } from "../../src/oauth/xai";
@@ -437,7 +438,9 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
   const marker = "[WKE=privacy-mode:legacy]";
   const privateDetail = "upstream-only fixture detail";
 
-  function refuseAt(upstreamPath: string, error = `${privateDetail} ${marker}`): string[] {
+  const privacyError = `${privateDetail} ${marker}`;
+
+  function refuseAt(upstreamPath: string, error = privacyError, fallback?: (init?: RequestInit) => Response): string[] {
     const sends: string[] = [];
     globalThis.fetch = (async (input, init) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
@@ -451,6 +454,10 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
         if (path === "/v1/models") return Response.json({ data: [{ id: "grok-4.5" }] });
       }
       if (url.protocol === "http:" && url.hostname === "127.0.0.1") return originalFetch(input, init);
+      if (url.href === "https://fixture.invalid/v1/chat/completions" && fallback) {
+        sends.push(url.href);
+        return fallback(init);
+      }
       throw new Error("unexpected outbound request in xAI privacy settings fixture");
     }) as typeof fetch;
     return sends;
@@ -502,15 +509,29 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
     }
   });
 
-  test("a Grok privacy refusal ends a combo before dispatching another target", async () => {
+  test.each(["healthy", "disabled", "denied"])("Grok privacy refusal uses combo eligibility with a %s fallback", async fallback => {
     await seedOAuth();
     const config = xaiConfig();
-    config.providers.fixture = { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key", models: ["fallback"] };
+    config.providers.fixture = {
+      adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key",
+      models: ["fallback"], disabled: fallback === "disabled",
+    };
+    const primary = { provider: "xai", model: "grok-4.5" };
     config.combos = { gated: { strategy: "failover", targets: [
-      { provider: "xai", model: "grok-4.5" }, { provider: "fixture", model: "fallback" },
+      primary, { provider: "fixture", model: "fallback" },
     ] } };
     saveConfig(config);
-    const sends = refuseAt("/v1/responses");
+    const sends = refuseAt("/v1/responses", privacyError, init => {
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        model: "fallback",
+        messages: [{ role: "user", content: "hello" }],
+      });
+      if (fallback === "denied") return Response.json({ error: { message: "permission denied" } }, { status: 403 });
+      return Response.json({
+        id: "chat-fallback", object: "chat.completion", model: "fallback",
+        choices: [{ index: 0, message: { role: "assistant", content: "fallback answered" }, finish_reason: "stop" }],
+      });
+    });
     const server = startServer(0);
     try {
       const result = await originalFetch(new URL("/v1/responses", server.url), {
@@ -518,10 +539,17 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: "combo/gated", input: "hello", stream: false }),
       });
-      expect(result.status).toBe(403);
-      expect((await result.json()).error?.message).toBe(guidance);
-      expect(sends).toEqual(["/v1/responses"]);
-      expect(readUsageEntries().at(-1)?.attempts).toHaveLength(1);
+      if (fallback === "healthy") {
+        expect(result.status).toBe(200);
+        expect(JSON.stringify(await result.json())).toContain("fallback answered");
+      } else {
+        expect(result.status).toBe(403);
+        expect((await result.json()).error?.message).toBe(guidance);
+        expect(readUsageEntries().at(-1)?.failureCause).toBe("policy-refusal");
+      }
+      expect(sends).toEqual(fallback === "disabled" ? ["/v1/responses"] : ["/v1/responses", "https://fixture.invalid/v1/chat/completions"]);
+      expect(isComboTargetInCooldown("gated", primary)).toBe(false);
+      expect(readUsageEntries().at(-1)?.attempts).toHaveLength(fallback === "disabled" ? 1 : 2);
     } finally {
       await server.stop(true);
     }

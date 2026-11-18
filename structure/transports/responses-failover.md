@@ -137,6 +137,10 @@ combo whose remaining eligible targets use other providers.
 
 > Decision record: [ADR-0070](../decisions/ADR-0070-same-provider-combo-quota-fallback.md)
 
+The [xAI Legacy privacy refusal](../providers/xai-grok.md#legacy-privacy-mode-403) uses normal
+403 failover eligibility with no cooldown. If the ladder exhausts its members, it returns the
+fixed privacy 403 and adopts that child's failure attribution.
+
 ## Single-target cooldown retry ownership
 
 `src/combos/failover.ts` reports whether the current failure actually records a cooldown. An ordinary local `CodexAccountCooldownError` mapped by `mapCodexAuthContextErrorToResponse` (`src/server/responses/codex-auth-error.ts`) carries process-local Response identity in `src/codex/account-cooldown-response.ts`. `core-lifetime.ts` carries it through the translator-budget and account-lease wrappers (retained compaction delivers through the latter), and `core-combo-failure.ts` carries it through error reconstruction; `core-combo.ts` omits its restated retry/reset metadata only when recording combo target cooldowns. The target retains the existing capped local backoff, while the client's Retry-After, account quota/health, probe leases and admission policy remain authoritative. Main hard-lock, credit, Reserve and transient-policy subclasses do not receive this provenance. Copied bodies or headers cannot grant it; genuine upstream Retry-After retains the 24-hour ceiling. Coverage: `tests/server/server-combo-cooldown-recording.test.ts`.

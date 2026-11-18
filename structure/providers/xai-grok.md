@@ -77,8 +77,9 @@ Regression coverage: `tests/providers/xai/grok-47-build-fast-metadata.test.ts`.
 `[WKE=privacy-mode:legacy]` marker in a bounded JSON error from the built-in xAI OAuth lane.
 The fixed guidance tells the user to switch from Legacy (no storage) to Privacy Mode.
 Chat and Responses preserve the 403 permission envelope and record an upstream account-policy
-refusal. The refusal keeps the same account, leaves pause and reauthentication state intact, and
-ends the combo turn before another member is sent. Wrapped, bare-string and provider-test error
+refusal. The refusal leaves pause and reauthentication state intact. Responses combos use their
+existing HTTP 403 failover eligibility with no cooldown from the account's privacy setting. A
+combo that exhausts eligible members returns the fixed guidance. Wrapped, bare-string and provider-test error
 bodies all use proxy-owned copy when the marker matches. Catalog discovery logs the guidance
 alongside its normal fallback. The billing probe logs the same guidance, drops the stale quota
 row and stops before the monthly fallback when the weekly endpoint proves the account setting.

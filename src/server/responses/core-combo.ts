@@ -973,10 +973,15 @@ export async function executeComboResponses(
   let quotaFailure: Response | undefined;
   let quotaFailedChildLog: RequestLogContext | undefined;
   let contextFailure: { response: Response; childLog: RequestLogContext } | undefined;
+  let xaiPrivacyFailure: { response: Response; childLog: RequestLogContext } | undefined;
   // Snapshotted before dispatch: a 401/403 inside this ladder cools its own provider, and that
   // fresh cooldown is not a reason the request found no target.
   const quotaCooldownSnapshot = snapshotComboQuotaCooldowns(config, comboId);
   const exhaustedFailure = (targetsExhausted = false): Response => {
+    if (xaiPrivacyFailure) {
+      adoptFailedChildLog(xaiPrivacyFailure.childLog);
+      return xaiPrivacyFailure.response;
+    }
     if (contextFailure) {
       adoptFailedChildLog(contextFailure.childLog);
       return contextFailure.response;
@@ -1491,7 +1496,7 @@ export async function executeComboResponses(
     }
     // A non-replayable failure (the answer to a spent ambiguous-reset replacement) may follow a
     // send that already ran the turn, so no later target may receive it, whatever its status says.
-    const failureDecision = failure.nonReplayable || spentReplacement || isXaiPrivacyModeRefusal(failure.response)
+    const failureDecision = failure.nonReplayable || spentReplacement
       ? "stop"
       : isPolicyCandidateRefusal(failure.response) ? "hop"
       : comboFailureDecision(failure.response.status, failure.classificationText, {
@@ -1554,6 +1559,8 @@ export async function executeComboResponses(
       }
       return lastFailure;
     }
+    const xaiPrivacyRefusal = isXaiPrivacyModeRefusal(failure.response);
+    if (xaiPrivacyRefusal) xaiPrivacyFailure = { response: failure.response, childLog };
     // Retain a confirmed target context refusal when later retryable failures exhaust the ladder.
     // Hard stops above still return their own verdict, and every attempt keeps its own usage.
     if (!contextFailure && failure.response.status === 400 && isDefiniteContextOverflow(400, failure.classificationText)) {
@@ -1577,7 +1584,8 @@ export async function executeComboResponses(
     );
     const failureNow = Date.now();
     const attemptedTargets = pick.attempted;
-    const failureCooldownScope = isPolicyCandidateRefusal(failure.response) ? "none" : comboFailureCooldownScope(failure.response.status, failure.classificationText, {
+    // Legacy privacy mode is specific to the serving account.
+    const failureCooldownScope = xaiPrivacyRefusal || isPolicyCandidateRefusal(failure.response) ? "none" : comboFailureCooldownScope(failure.response.status, failure.classificationText, {
       code: failure.upstreamCode,
       malformedResponseFormat: failure.malformedResponseFormat,
       openRouterOpaque400: failure.openRouterOpaque400,
@@ -1667,7 +1675,7 @@ export async function executeComboResponses(
     if (!pick) {
       if (options.abortSignal?.aborted) return clientCancelledResponse();
       if (onlyReplayIncompatibleTargetsRemain(attemptedTargets)) {
-        if (contextFailure) return exhaustedFailure();
+        if (contextFailure || xaiPrivacyFailure) return exhaustedFailure();
         adoptFailedChildLog(childLog);
         return targetIncompatibleResponse();
       }

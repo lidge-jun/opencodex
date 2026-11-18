@@ -82,6 +82,8 @@ abre los ajustes de privacidad de xAI/Grok y selecciona **Privacy Mode**. Despu�
 ejecutar `ocx provider test xai`. Este ajuste también bloquea la detección de modelos y las
 consultas de cuota. El registro del servicio OpenCodex muestra las mismas indicaciones. Puedes
 seguir usando la sesión OAuth actual.
+Si el modelo Grok forma parte de un combo de Responses, el combo puede probar otro modelo
+elegible. Si se agotan los modelos elegibles, el combo devuelve la indicación sobre Privacy Mode.
 
 ## Receta manual (sin registro automático)
 
