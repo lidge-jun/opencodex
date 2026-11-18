@@ -18,6 +18,7 @@ import type { ExportModel } from "../../src/clients/config-export";
 import { GATEWAY_CLIENTS, connectGatewayClient } from "../../src/integrations/gateway-clients";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { initializeConfigOwnership, removeOwnedConfigState } from "../../src/lib/config-ownership";
+import { setUninstallElevationProbeForTests } from "../../src/lib/config-ownership-removal";
 import { createIntegrationStateStore } from "../../src/integrations/store";
 import { applyIntegration, disableIntegrationCoordinated } from "../../src/integrations/writer";
 import type { OcxConfig } from "../../src/types";
@@ -870,6 +871,14 @@ describe("uninstall restores recorded third-party integrations before deleting r
     return { settings, profile, oldSettings, oldProfile };
   }
 
+  function removeGatewayFixtureConfig(configDir: string) {
+    if (process.platform !== "win32") return removeOwnedConfigState(configDir);
+    // These fixtures exercise owned-state cleanup independently of the runner's elevation.
+    setUninstallElevationProbeForTests(() => false);
+    try { return removeOwnedConfigState(configDir); }
+    finally { setUninstallElevationProbeForTests(null); }
+  }
+
   test("uninstall disconnects every recorded gateway client before deleting config", async () => {
     const f = await fixture({ gatewayOnly: true });
     try {
@@ -879,7 +888,7 @@ describe("uninstall restores recorded third-party integrations before deleting r
         expect(readFileSync(profile, "utf8")).toBe(oldProfile);
         const reconnect = connectGatewayClient("agy", f.deps.gatewayContext(), config, config.port);
         expect(reconnect).toMatchObject({ ok: false, code: "io-error" });
-        return removeOwnedConfigState(f.configDir);
+        return removeGatewayFixtureConfig(f.configDir);
       };
       expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
         .toEqual({ status: "removed", residualPaths: [] });
@@ -892,7 +901,7 @@ describe("uninstall restores recorded third-party integrations before deleting r
     try {
       expect(initializeConfigOwnership(f.configDir)).toBe(true);
       mkdirSync(join(f.configDir, "gateway-clients"));
-      f.deps.remove = () => removeOwnedConfigState(f.configDir);
+      f.deps.remove = () => removeGatewayFixtureConfig(f.configDir);
       expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
         .toEqual({ status: "removed", residualPaths: [] });
     } finally { rmSync(f.root, { recursive: true, force: true }); }
@@ -905,7 +914,7 @@ describe("uninstall restores recorded third-party integrations before deleting r
       const dir = join(f.configDir, "gateway-clients");
       const unknown = join(dir, "user-file");
       writeFileSync(unknown, "keep\n");
-      f.deps.remove = () => removeOwnedConfigState(f.configDir);
+      f.deps.remove = () => removeGatewayFixtureConfig(f.configDir);
       expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
         .toMatchObject({ status: "partial", residualPaths: [dir] });
       expect(readFileSync(unknown, "utf8")).toBe("keep\n");
