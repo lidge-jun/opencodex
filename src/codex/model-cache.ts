@@ -96,8 +96,19 @@ interface DiscoveryFailure {
 const failureAt = new Map<string, DiscoveryFailure>();
 const discoveryStatus = new Map<string, {
   observation: ProviderModelDiscoveryStatus;
+  observationOrder?: number;
   warningCondition?: ProviderModelDiscoveryWarningCondition;
 }>();
+let nextDiscoveryObservationOrder = 0;
+
+/** Stamp a discovery at headers, before reading a body that may finish out of order. */
+export function captureProviderDiscoveryObservation(): number {
+  return ++nextDiscoveryObservationOrder;
+}
+
+export function isProviderDiscoveryObservationCurrent(provider: string, order?: number): boolean {
+  return order === undefined || order > (discoveryStatus.get(provider)?.observationOrder ?? 0);
+}
 /**
  * How many models the last successful discovery actually returned, before any configured-alias
  * augmentation or custom-model merge. Consumers cannot recover this by subtracting known custom
@@ -117,8 +128,10 @@ export function markModelsFetchFailure(
 
 /** `liveModelCount` is required so a caller that forgets to pass it fails typecheck instead of
  * silently recording zero and misclassifying the provider as having no live catalog. */
-export function markProviderDiscoveryOk(provider: string, liveModelCount: number): void {
-  discoveryStatus.set(provider, { observation: { status: "ok" } });
+export function markProviderDiscoveryOk(provider: string, liveModelCount: number, observationOrder?: number): void {
+  discoveryStatus.set(provider, { observation: { status: "ok" }, observationOrder });
+  // Ordered discovery can succeed after an earlier failure started a cooldown in flight.
+  if (observationOrder !== undefined) failureAt.delete(provider);
   liveModelCounts.set(provider, Math.max(0, Math.floor(liveModelCount)));
 }
 
@@ -126,8 +139,9 @@ export function markProviderDiscoveryFailed(
   provider: string,
   failure: ProviderModelDiscoveryFailure,
   warningCondition?: ProviderModelDiscoveryWarningCondition,
+  observationOrder?: number,
 ): void {
-  discoveryStatus.set(provider, { observation: { status: "failed", ...failure }, warningCondition });
+  discoveryStatus.set(provider, { observation: { status: "failed", ...failure }, warningCondition, observationOrder });
 }
 
 /**

@@ -10,7 +10,7 @@ import { saveConfig } from "../../src/config";
 import { isNonReplayableResponse } from "../../src/lib/upstream-retry";
 import { XAI_OAUTH_DISCOVERY_URL } from "../../src/oauth/xai";
 import { getAccountSet, saveCredential } from "../../src/oauth/store";
-import { clearModelCache, getProviderDiscoveryStatus, markModelsFetchFailure, MODELS_FETCH_FAILURE_COOLDOWN_MS } from "../../src/codex/model-cache";
+import { clearModelCache, getProviderDiscoveryStatus, isModelsFetchCoolingDown, markModelsFetchFailure, MODELS_FETCH_FAILURE_COOLDOWN_MS } from "../../src/codex/model-cache";
 import { XAI_GROK_CLI_BASE_URL } from "../../src/providers/xai-transport";
 import { readUsageEntries, usageLogPath } from "../../src/usage/log";
 import { startServer } from "../../src/server";
@@ -692,6 +692,49 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
         expect(warnings.filter(line => String(line).includes(guidance))).toHaveLength(expectedWarnings);
       }
     } finally {
+      warn.mockRestore();
+      clearModelCache("xai");
+    }
+  });
+
+  test("a held xAI discovery 403 body cannot replace a newer discovery success", async () => {
+    await seedOAuth();
+    const config = withStubbedProviderFetch(xaiConfig());
+    saveConfig(config);
+    clearModelCache("xai");
+    const reading = Promise.withResolvers<void>();
+    const releaseBody = Promise.withResolvers<void>();
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    let sends = 0;
+    globalThis.fetch = (async input => {
+      expect(new URL(input instanceof Request ? input.url : String(input)).pathname).toBe("/v1/models");
+      if (++sends !== 1) return Response.json({ data: [{ id: "grok-new-discovery" }] });
+      return new Response(new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          reading.resolve();
+          await releaseBody.promise;
+          controller.enqueue(new TextEncoder().encode(JSON.stringify({ error: privacyError })));
+          controller.close();
+        },
+      }, { highWaterMark: 0 }), { status: 403, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const discover = () => fetchProviderModels("xai", config.providers.xai!, 0);
+    const older = discover();
+    try {
+      await reading.promise;
+      expect((await discover()).map(model => model.id)).toContain("grok-new-discovery");
+      expect(getProviderDiscoveryStatus("xai")).toEqual({ status: "ok" });
+      releaseBody.resolve();
+      expect((await older).map(model => model.id)).toContain("grok-new-discovery");
+      expect({
+        status: getProviderDiscoveryStatus("xai"), cooling: isModelsFetchCoolingDown("xai"),
+      }).toEqual({ status: { status: "ok" }, cooling: false });
+      expect(warn.mock.calls.flat().join("\n")).not.toContain(guidance);
+      await discover();
+      expect(sends).toBe(3);
+    } finally {
+      releaseBody.resolve();
+      await older;
       warn.mockRestore();
       clearModelCache("xai");
     }
