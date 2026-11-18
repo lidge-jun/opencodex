@@ -34,7 +34,7 @@ describe("optional shutdown hooks", () => {
     const receipt = Promise.withResolvers<void>();
     registerAsyncOptionalShutdownHook("pending", () => receipt.promise);
     try {
-      expect(await runOptionalShutdownHooks(5)).toBe(false);
+      expect(await runOptionalShutdownHooks({ deadlineMs: Date.now() + 5 })).toBe(false);
     } finally {
       receipt.resolve();
     }

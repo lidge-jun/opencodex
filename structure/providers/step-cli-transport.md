@@ -44,15 +44,17 @@ closes until termination is confirmed; shutdown drains those receipts and propag
 Closing handles refuse replacement. Session close is idempotent and clears held-request timers.
 Termination gets at most two attempts; a second failure permanently quarantines that handle in the
 pool and preserves both errors as the cleanup failure's cause. Repeated closes return that failure
-without restarting the retry budget. Windows teardown uses the
-shared `src/adapters/coding-agent/process-tree.ts` helper (`taskkill /T /F`, bounded to five seconds)
-before releasing the wrapper. POSIX cleanup sends TERM to the detached process group, escalates
+without restarting the retry budget. Windows teardown awaits the asynchronous helper in
+`src/adapters/coding-agent/process-tree.ts` (`taskkill /T /F`, up to five seconds per attempt)
+before releasing the wrapper. Up to four session cleanups run concurrently across pools, including
+idle and late-opening sessions. POSIX cleanup sends TERM to the detached process group, escalates
 to KILL if the group survives the grace period, and retains ownership until a bounded group probe
 returns ESRCH, including when the wrapper has already exited. On Windows the OS PID check also
 handles Bun retaining null child exit fields after an external tree kill.
 Explicit registry clears await every pool and retain failed pools, so clearing state cannot bypass
 quarantine. Graceful proxy shutdown awaits the same clear through the bounded asynchronous
-optional-shutdown hook and reports incomplete cleanup as a shutdown failure.
+optional-shutdown hook and reports incomplete cleanup as a shutdown failure. Its receipt deadline
+uses the [proxy stop budget](../runtime.md#lifecycle), including time already spent draining.
 
 ## Tools arrive as inline SDK tools, not an MCP catalog
 
@@ -142,5 +144,5 @@ and the single release of a tool result are all asserted without a real CLI or a
 Caller/query/catalog isolation is covered by `tests/adapters/step-cli-ownership.test.ts` and
 `tests/adapters/step-cli-query-race.test.ts`; shutdown races and a real dispatcher/descendant fixture
 are covered by `tests/adapters/step-cli-process-lifecycle.test.ts`. Cleanup failure, bounded recovery,
-handle quarantine and already-started shutdown drains are covered by
+handle quarantine, already-started shutdown drains, the async receipt deadline and the concurrency cap are covered by
 `tests/adapters/step-cli-cleanup-ownership.test.ts`.

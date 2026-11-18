@@ -9,6 +9,7 @@ import {
 import { abortRestoreTrashJobAsync } from "../storage/restore-job";
 import { stopStorageCleanupScheduler } from "../storage/policy-scheduler";
 import { runDrainStartHooks, runOptionalShutdownHooks } from "../lib/optional-shutdown-hooks";
+import { OPTIONAL_SHUTDOWN_GRACE_MS } from "../lib/shutdown-budget";
 import { stopStateStoreSweeper } from "../lib/state-store-sweeper";
 import {
   cancelQueuedStorageWorkerSpawns,
@@ -575,7 +576,7 @@ export async function drainAndShutdown(
     // Optional subsystems (Compatibility Lab today, anything added later) tear themselves
     // down through hooks registered at activation. A process that never activated one runs
     // nothing here and never loads its module graph.
-    if (!(await runOptionalShutdownHooks())) shutdownSucceeded = false;
+    if (!(await runOptionalShutdownHooks({ deadlineMs: deadline + OPTIONAL_SHUTDOWN_GRACE_MS }))) shutdownSucceeded = false;
     stopStateStoreSweeper();
     // The overlay reconciler is owner-scoped: the startServer stop override
     // releases THIS server's lease through runListenerShutdown →

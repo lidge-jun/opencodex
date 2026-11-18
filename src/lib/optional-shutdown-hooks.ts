@@ -18,11 +18,12 @@
  * See devlog/_fin/260814_lab_core_decoupling/010_lifecycle_shutdown_registry.md
  */
 
+import { OPTIONAL_SHUTDOWN_GRACE_MS } from "./shutdown-budget";
+
 type ShutdownHook = () => void;
 
 const hooks = new Map<string, ShutdownHook>();
 const asyncHooks = new Map<string, () => Promise<void>>();
-const OPTIONAL_SHUTDOWN_JOIN_TIMEOUT_MS = 20_000;
 let hooksRan = false;
 
 /**
@@ -59,7 +60,9 @@ export function didRunOptionalShutdownHooks(): boolean {
 }
 
 /** Run every teardown, reporting whether the asynchronous work completed successfully. */
-export async function runOptionalShutdownHooks(timeoutMs = OPTIONAL_SHUTDOWN_JOIN_TIMEOUT_MS): Promise<boolean> {
+export async function runOptionalShutdownHooks(
+  { deadlineMs = Date.now() + OPTIONAL_SHUTDOWN_GRACE_MS }: { deadlineMs?: number } = {},
+): Promise<boolean> {
   hooksRan = true;
   for (const [key, hook] of [...hooks]) {
     try {
@@ -74,11 +77,10 @@ export async function runOptionalShutdownHooks(timeoutMs = OPTIONAL_SHUTDOWN_JOI
   if (asyncHooks.size === 0) return true;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const deadline = new Promise<false>(resolve => {
-      timer = setTimeout(() => {
-        console.warn("[shutdown] optional subsystem teardown timed out");
-        resolve(false);
-      }, timeoutMs);
+    const deadline = new Promise<null>(resolve => {
+      const remainingMs = deadlineMs - Date.now();
+      if (remainingMs <= 0) resolve(null);
+      else timer = setTimeout(() => resolve(null), remainingMs);
     });
     const cleanup = Promise.all([...asyncHooks].map(async ([key, hook]) => {
       try {
@@ -89,7 +91,12 @@ export async function runOptionalShutdownHooks(timeoutMs = OPTIONAL_SHUTDOWN_JOI
         return false;
       }
     }));
-    return await Promise.race([cleanup.then(results => results.every(Boolean)), deadline]);
+    const results = await Promise.race([deadline, cleanup]);
+    if (results === null || Date.now() >= deadlineMs) {
+      console.warn("[shutdown] optional subsystem teardown timed out");
+      return false;
+    }
+    return results.every(Boolean);
   } finally {
     clearTimeout(timer);
   }

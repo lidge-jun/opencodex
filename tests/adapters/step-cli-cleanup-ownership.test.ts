@@ -1,4 +1,5 @@
-import { beforeAll, expect, test } from "bun:test";
+import { beforeAll, expect, spyOn, test } from "bun:test";
+import * as childProcess from "node:child_process";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
@@ -6,8 +7,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { promisify } from "node:util";
+import { killWindowsProcessTreeAsync } from "../../src/adapters/coding-agent/process-tree";
 import { StepSessionPool } from "../../src/adapters/step-cli/session-pool";
 import type { StepSessionDeps, StepSessionOptions } from "../../src/adapters/step-cli/session";
+import {
+  registerAsyncOptionalShutdownHook,
+  resetOptionalShutdownHooksForTests,
+  runOptionalShutdownHooks,
+} from "../../src/lib/optional-shutdown-hooks";
 import { fixturePath } from "../helpers/repo-root";
 import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
@@ -91,10 +98,11 @@ async function nativePool(recover: boolean) {
       exits.push(new Promise<void>(resolve => { child.once("exit", () => resolve()); }));
       return child;
     },
-    killWindowsProcessTree: pid => {
+    killWindowsProcessTree: async pid => {
       attempts++;
       if (!recover || attempts === 1) throw Object.assign(new Error("injected tree termination ETIMEDOUT"), { code: "ETIMEDOUT" });
-      terminateNativeFixture(pid);
+      if (process.platform === "win32") await killWindowsProcessTreeAsync(pid);
+      else terminateNativeFixture(pid);
     },
   });
   const ref = { handle: "same-owned-caller", sessionId: "" };
@@ -215,6 +223,86 @@ test("a closing handle refuses replacement until cleanup is confirmed", async ()
     await expect(fixture.pool.open(fixture.ref)).rejects.toThrow(/cleanup|closing/i);
   } finally { fixture.child.emit("close", 0, "SIGTERM"); await cleanup; await fixture.pool.closeAll(); }
   expect(released).toBe(true);
+});
+
+async function mockedWindowsPool(count: number, terminate: () => Promise<void>) {
+  const cwd = await mkdtemp(join(tmpdir(), "ocx-step-async-cleanup-"));
+  const children = Array.from({ length: count }, () => Object.assign(new EventEmitter(), {
+    // Only the PID's liveness is probed. The injected taskkill never signals the test runner.
+    pid: process.pid, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+    exitCode: null, signalCode: null,
+  }));
+  let spawned = 0;
+  let killed = 0;
+  const pool = new StepSessionPool({ openCodexHome: cwd, idleTimeoutMs: 60_000,
+    buildOptions: () => options(cwd) }, { onEvent: () => {} }, {
+    platform: "win32",
+    spawn: () => children[spawned++] as unknown as ChildProcess,
+    killWindowsProcessTree: () => {
+      // The wrapper can close before taskkill confirms that its descendants are gone.
+      children[killed++]!.emit("close", 0, null);
+      return terminate();
+    },
+  });
+  for (let i = 0; i < count; i++) await pool.open({ handle: String(i), sessionId: "" });
+  return { pool, killed: () => killed };
+}
+
+test("the async Windows helper bounds taskkill and rejects a failed tree receipt", async () => {
+  type Complete = (error: Error | null) => void;
+  let complete!: Complete;
+  const exec = spyOn(childProcess, "execFile").mockImplementation((
+    (_file: string, _args: string[], _options: object, callback: Complete) => {
+      complete = callback;
+      return new EventEmitter() as ChildProcess;
+    }
+  ) as typeof execFile);
+  try {
+    const result = killWindowsProcessTreeAsync(4_294_967_295);
+    expect(exec).toHaveBeenCalledWith(
+      expect.stringMatching(/\\System32\\taskkill\.exe$/i),
+      ["/PID", "4294967295", "/T", "/F"],
+      { windowsHide: true, timeout: 5_000, killSignal: "SIGKILL" },
+      expect.any(Function),
+    );
+    const failure = new Error("taskkill fixture timed out");
+    complete(failure);
+    await expect(result).rejects.toBe(failure);
+  } finally {
+    exec.mockRestore();
+  }
+});
+
+test("the shutdown hook times out while a Windows tree termination receipt is pending", async () => {
+  const receipt = Promise.withResolvers<void>();
+  const { pool, killed } = await mockedWindowsPool(1, () => receipt.promise);
+  resetOptionalShutdownHooksForTests();
+  registerAsyncOptionalShutdownHook("step-cli-fixture", () => pool.closeAll());
+  try {
+    expect(await runOptionalShutdownHooks({ deadlineMs: Date.now() + 5 })).toBe(false);
+    expect(killed()).toBe(1);
+    expect(pool.size).toBe(1);
+  } finally {
+    receipt.resolve();
+    await pool.closeAll();
+    resetOptionalShutdownHooksForTests();
+  }
+  expect(pool.size).toBe(0);
+});
+
+test("shutdown starts multiple Windows tree kills with bounded parallelism", async () => {
+  const release = Promise.withResolvers<void>();
+  const { pool, killed } = await mockedWindowsPool(6, () => release.promise);
+  const closing = pool.closeAll();
+  try {
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(killed()).toBe(4);
+  } finally {
+    release.resolve();
+    await closing;
+  }
+  expect(killed()).toBe(6);
+  expect(pool.size).toBe(0);
 });
 
 const registryFixture = fixturePath("step-cli-cleanup-registry.ts");

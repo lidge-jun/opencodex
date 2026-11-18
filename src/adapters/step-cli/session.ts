@@ -3,7 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import { commandInvocation } from "../../lib/win-exec";
-import { killWindowsProcessTree } from "../coding-agent/process-tree";
+import { killWindowsProcessTreeAsync } from "../coding-agent/process-tree";
 import type { WhichFn } from "../coding-agent/profile";
 import { buildStepCliEnv } from "./env";
 import { classifyStepChildError, StepSessionError } from "./errors";
@@ -36,8 +36,25 @@ export type StepSpawnFn = (command: string, args: readonly string[], options: Sp
  */
 const REQUIRED_CAPABILITIES = ["streaming-input", "sdk-tools"] as const;
 const CLEANUP_ATTEMPTS = 2;
+const MAX_PARALLEL_CLEANUPS = 4;
 const KILL_CONFIRMATION_MS = 2_000;
 const PROCESS_GROUP_POLL_MS = 20;
+
+// Share slots across pools and all close paths, including idle and late-opening sessions.
+let activeCleanups = 0;
+const cleanupWaiters: Array<() => void> = [];
+
+async function withCleanupSlot(cleanup: () => Promise<void>): Promise<void> {
+  if (activeCleanups < MAX_PARALLEL_CLEANUPS) activeCleanups++;
+  else await new Promise<void>(resolve => cleanupWaiters.push(resolve));
+  try {
+    await cleanup();
+  } finally {
+    const next = cleanupWaiters.shift();
+    if (next) next();
+    else activeCleanups--;
+  }
+}
 
 function processIsGone(pid: number): boolean {
   try {
@@ -58,7 +75,7 @@ export interface StepSessionDeps {
   now?: () => number;
   /** Test seam for Windows command-shim invocation. */
   platform?: NodeJS.Platform;
-  killWindowsProcessTree?: (pid: number) => void;
+  killWindowsProcessTree?: (pid: number) => Promise<void>;
 }
 
 export interface StepSessionOptions {
@@ -602,27 +619,23 @@ export class StepCliSession {
     // receipt for close()/pool shutdown, while observing it here to avoid an unhandled rejection.
     void this.#closePromise.catch(() => {});
     const terminate = async (): Promise<void> => {
-      const failures: unknown[] = [];
-      if (child) {
-        for (let attempt = 0; attempt < CLEANUP_ATTEMPTS; attempt++) {
-          try { await this.#terminate(child); break; }
-          catch (error) {
-            failures.push(error);
-            if (attempt + 1 === CLEANUP_ATTEMPTS) {
-              throw Object.assign(new StepSessionError(
-                "StepCode process cleanup failed; conversation handle is quarantined.", "step_cli_cleanup_failed",
-              ), { cause: new AggregateError(failures, "StepCode tree termination attempts failed.") });
-            }
-          }
-        }
-      }
+      if (child) await withCleanupSlot(() => this.#terminateWithRetry(child));
       this.#cleanupComplete = true;
       this.#announceExit();
     };
-    // Start synchronously, as before: injected timers and child event handlers can observe the
-    // first termination attempt immediately, without racing publication of the shared receipt.
     void terminate().then(receipt.resolve, receipt.reject);
     return this.#closePromise;
+  }
+
+  async #terminateWithRetry(child: ChildProcess): Promise<void> {
+    const failures: unknown[] = [];
+    for (let attempt = 0; attempt < CLEANUP_ATTEMPTS; attempt++) {
+      try { await this.#terminate(child); return; }
+      catch (error) { failures.push(error); }
+    }
+    throw Object.assign(new StepSessionError(
+      "StepCode process cleanup failed; conversation handle is quarantined.", "step_cli_cleanup_failed",
+    ), { cause: new AggregateError(failures, "StepCode tree termination attempts failed.") });
   }
 
   async #terminate(child: ChildProcess): Promise<void> {
@@ -692,7 +705,7 @@ export class StepCliSession {
     };
     try {
       if (child.pid !== undefined) {
-        (this.#deps.killWindowsProcessTree ?? killWindowsProcessTree)(child.pid);
+        await (this.#deps.killWindowsProcessTree ?? killWindowsProcessTreeAsync)(child.pid);
         // Bun on Windows can retain null exit/signal fields after taskkill has reaped the tree.
         // Verify with the OS before releasing the process and its stdio handles.
         if (gone()) return;
