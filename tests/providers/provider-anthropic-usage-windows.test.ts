@@ -169,6 +169,62 @@ for (const [tier, plan] of [["default_claude_ultra", "ultra"], ["claude_ultra", 
   });
 }
 
+test("profile prefers known organization_type over unfamiliar rate_limit_tier for Enterprise", async () => {
+  globalThis.fetch = (async () => Response.json({
+    account: { uuid: "synthetic-account" },
+    organization: { rate_limit_tier: "default_claude_ai", organization_type: "claude_enterprise" },
+  })) as typeof fetch;
+  expect((await resolveAnthropicAccountIdentity("synthetic-profile-bearer"))?.plan).toBe("enterprise");
+});
+
+test("Enterprise extra_usage fallback extracts monthlyPercent when 5h and weekly windows are null", async () => {
+  const withUtilization = await parse({
+    five_hour: null,
+    seven_day: null,
+    seven_day_sonnet: null,
+    seven_day_opus: null,
+    extra_usage: {
+      is_enabled: true,
+      monthly_limit: 50000,
+      used_credits: 794,
+      utilization: 1.59,
+      resets_at: weeklyReset,
+    },
+  });
+  expect(withUtilization).toMatchObject({
+    monthlyPercent: 1.59,
+    monthlyResetAt: Date.parse(weeklyReset),
+  });
+  expect(withUtilization?.fiveHourPercent).toBeUndefined();
+  expect(withUtilization?.weeklyPercent).toBeUndefined();
+
+  const computedFromCredits = await parse({
+    five_hour: null,
+    seven_day: null,
+    extra_usage: {
+      is_enabled: true,
+      monthly_limit: 50000,
+      used_credits: 12500,
+      utilization: null,
+    },
+  });
+  expect(computedFromCredits).toMatchObject({
+    monthlyPercent: 25,
+  });
+
+  const disabledExtraUsage = await parse({
+    five_hour: null,
+    seven_day: null,
+    extra_usage: {
+      is_enabled: false,
+      monthly_limit: 50000,
+      used_credits: 12500,
+      utilization: 25,
+    },
+  });
+  expect(disabledExtraUsage).toBeNull();
+});
+
 test("no-grant and future ineligibility reasons remain displayable and refuse spending", () => {
   for (const reason of ["no_grant", "future_reason"]) {
     const status = parseAnthropicResetGrantStatus({ ...noResetGrant, ineligible_reason: reason });

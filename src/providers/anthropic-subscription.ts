@@ -4,11 +4,12 @@ import { normalizeOAuthPlan } from "../oauth/plan";
 const knownPlans = ["pro", "max_5x", "max_20x", "team", "enterprise", "ultra"] as const;
 
 /** Canonicalize known aliases only; retain an unfamiliar validated tier verbatim. */
-export function normalizeAnthropicPlan(value: unknown): string | undefined {
+export function normalizeAnthropicPlan(value: unknown, onlyKnown = false): string | undefined {
   const raw = normalizeOAuthPlan(value === "Ultra" ? "ultra" : value);
   if (!raw) return undefined;
   const short = raw.replace(/^(?:default_)?claude_/, "");
-  return knownPlans.some(plan => plan === short) ? short : raw;
+  if (knownPlans.some(plan => plan === short)) return short;
+  return onlyKnown ? undefined : raw;
 }
 
 export function anthropicSubscriptionLabel(value: unknown): string | undefined {

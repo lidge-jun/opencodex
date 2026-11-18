@@ -67,6 +67,7 @@ for (const [organization, plan] of [
   [{ rate_limit_tier: " default_claude_max_5x " }, "max_5x"],
   [{ organization_type: "claude_pro" }, "pro"],
   [{ rate_limit_tier: "invalid tier", organization_type: "claude_pro" }, "pro"],
+  [{ rate_limit_tier: "default_claude_ai", organization_type: "claude_enterprise" }, "enterprise"],
 ] as const) {
   test(`Anthropic profile extracts and stores ${plan}`, async () => {
     anthropicFetch(organization);

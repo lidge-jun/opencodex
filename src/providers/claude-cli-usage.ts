@@ -7,7 +7,8 @@ import { CLAUDE_CLI_USER_AGENT } from "./claude-cli-identity";
 import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS } from "./quota-wire";
 import type { ProviderQuota, ProviderQuotaWindow, QuotaFailureCode } from "./quota-types";
 import { httpQuotaFailure } from "./quota/failure-codes";
-const hasQuotaRows = (q: ProviderQuota) => q.fiveHourPercent !== undefined || q.weeklyPercent !== undefined || Boolean(q.customWindows?.length);
+const hasQuotaRows = (q: ProviderQuota) =>
+  q.fiveHourPercent !== undefined || q.weeklyPercent !== undefined || q.monthlyPercent !== undefined || Boolean(q.customWindows?.length);
 
 const FAMILY_LABELS: Partial<Record<AnthropicUsageBucket["window"], string>> = { fable: "Fable", opus: "Opus", sonnet: "Sonnet" };
 
@@ -71,6 +72,24 @@ export async function probeAnthropicUsageQuota(accessToken: string): Promise<Ant
     }
   }
   const displayWindows = displayBuckets.flatMap(bucket => familyWindow(bucket) ?? []);
+  if (shared.fiveHourPercent === undefined && shared.weeklyPercent === undefined && customWindows.length === 0) {
+    const extraUsage = asRecord(body.extra_usage);
+    if (extraUsage && extraUsage.is_enabled === true) {
+      let monthlyPercent = normalizePercent(extraUsage.utilization);
+      if (monthlyPercent === undefined) {
+        const usedCredits = typeof extraUsage.used_credits === "number" ? extraUsage.used_credits : undefined;
+        const monthlyLimit = typeof extraUsage.monthly_limit === "number" ? extraUsage.monthly_limit : undefined;
+        if (usedCredits !== undefined && monthlyLimit !== undefined && Number.isFinite(usedCredits) && Number.isFinite(monthlyLimit) && monthlyLimit > 0) {
+          monthlyPercent = normalizePercent((usedCredits / monthlyLimit) * 100);
+        }
+      }
+      if (monthlyPercent !== undefined) {
+        shared.monthlyPercent = monthlyPercent;
+        const monthlyResetAt = normalizeResetAt(extraUsage.resets_at ?? extraUsage.reset_at);
+        if (monthlyResetAt !== undefined) shared.monthlyResetAt = monthlyResetAt;
+      }
+    }
+  }
   const quota: ProviderQuota = {
     ...shared,
     ...(customWindows.length > 0 ? { customWindows } : {}),
