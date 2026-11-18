@@ -104,6 +104,27 @@ test("an unreadable database reads as unknown, never as absent", async () => {
   expect(await inspectPickerTrustLinux(root.sha1, nss([entry(root)], { broken: true }).run, home())).toBe("unknown");
 });
 
+test("an NSS directory stat failure reads as unknown without invoking certutil", async () => {
+  const root = pickerRoot();
+  const db = nss();
+  const inaccessibleHome = join(home(false), "h".repeat(512));
+  expect(await inspectPickerTrustLinux(root.sha1, db.run, inaccessibleHome)).toBe("unknown");
+  expect(db.calls).toEqual([]);
+});
+
+test("confirmed NSS directory absence skips certutil for inspection and removal", async () => {
+  const root = pickerRoot();
+  const db = nss();
+  const missing = home(false);
+  const blockedByFile = home(false);
+  writeFileSync(join(blockedByFile, ".pki"), "");
+  for (const h of [missing, blockedByFile]) {
+    expect(await inspectPickerTrustLinux(root.sha1, db.run, h)).toBe("untrusted");
+    expect(await untrustPickerCaLinux(root.sha1, db.run, h)).toEqual({ ok: true });
+  }
+  expect(db.calls).toEqual([]);
+});
+
 test("an absent certutil reports unsupported", async () => {
   const root = pickerRoot();
   const missing: LinuxTrustRunner = async () => ({ code: null, stdout: "", stderr: "certutil_missing" });

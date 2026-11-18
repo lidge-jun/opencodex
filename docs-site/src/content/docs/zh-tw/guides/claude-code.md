@@ -148,7 +148,7 @@ unknown 表示 opencodex 無法確定設定是否仍指向自己的代理。外�
 
 ### Picker 模式：在第一方 Code 分頁顯示 opencodex 模型
 
-Picker 模式是第一方模式的一部分。在 macOS 和 Windows 上選擇第一方時預設開啟；設定
+Picker 模式是第一方模式的一部分。在 macOS、Windows 和 Linux 上選擇第一方時預設開啟；設定
 `claudeCode.intercept.picker: false` 後會保持關閉。它會修改第一方 Desktop 的 Code 分頁模型選擇器，
 依名稱列出可用的 opencodex 模型。首次開啟時，macOS 可能會要求你在登入鑰匙圈中、Windows 可能會要求你在目前使用者根存放區中信任本機憑證授權單位。
 該授權單位限制為 `claude.ai` 及其子網域。可匯出的簽章身分由 OS 認證資料儲存區保護，一般重新啟動會重用相同的憑證與金鑰。
@@ -159,8 +159,7 @@ OpenCodex 設定目錄不會儲存明文 Picker 簽章金鑰。受限 CA 的完�
 
 從舊身分進行一次性移轉時，清除原有信任可能需要同意。清理未完成時，Picker 無法使用，已套用的設定檔
 會使用不解密的中繼。macOS 也可能另外要求解鎖鑰匙圈或核准應用程式存取憑證，重新啟動或升級時也可能出現這些提示。Windows 上明確執行 `on` 或 `trust` 可能顯示新增根的確認。
-Linux 仍不支援 Picker，不會啟動 Picker CA、認證資料儲存區或代理作業。主要 Claude 攔截功能仍可用，
-其本機 CA 檔案受到擁有者、符號連結、檔案權限及 Windows ACL 檢查保護。
+在 Linux 上明確啟用 Picker 時，`certutil` 會將受限的 Picker CA 加入使用者的 NSS 資料庫（`~/.pki/nssdb`）並設為受信任。
 
 Picker 模式開啟期間，Claude Desktop 會透過 OpenCodex 存取網路。如果 OpenCodex 停止，Desktop 會離線，
 直到你完全重新啟動 Desktop 或關閉 Picker 模式。使用 `ocx claude desktop picker status` 查看狀態，

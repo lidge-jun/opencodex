@@ -260,7 +260,7 @@ name constraints permitting only `claude.ai` and excluding every IPv4 and IPv6 a
 signing identity is protected by the OS credential store and scoped to the canonical config directory;
 normal restarts reuse the same validated certificate and key. No plaintext picker signing key is
 stored in that directory; public certificates and non-secret identity metadata remain under
-`<OPENCODEX_HOME>/claude-picker/`. Every unbound intercept startup attempt makes a best-effort cleanup of legacy `ca.key` before eligibility checks, including client role, disabled routing/interception, and ephemeral public ports; cleanup failures do not block startup. See the [runtime lifecycle contract](../runtime.md#claude-intercept-pair). Linux, like Windows, constructs the picker CA, credential store and proxy only with picker intent or an applied profile requiring recovery; otherwise the main intercept pair alone starts. Each Linux picker root has its own NSS nickname (`opencodex Claude Desktop Picker CA <SHA-1>`), so removing a rotated-out root never deletes the current one, and absence is concluded only from a successful read of the whole database: `certutil` also exits 255 when it cannot open it.
+`<OPENCODEX_HOME>/claude-picker/`. Every unbound intercept startup attempt makes a best-effort cleanup of legacy `ca.key` before eligibility checks, including client role, disabled routing/interception, and ephemeral public ports; cleanup failures do not block startup. See the [runtime lifecycle contract](../runtime.md#claude-intercept-pair). Linux, like Windows, constructs the picker CA, credential store and proxy only with picker intent or an applied profile requiring recovery; otherwise the main intercept pair alone starts. Each Linux picker root has its own NSS nickname (`opencodex Claude Desktop Picker CA <SHA-1>`), so removing a rotated-out root never deletes the current one. For an existing NSS database, confirming absence requires a successful read of the whole database.
 On restart the lifecycle keeps the applied profile and restores through the controller with
 `allowTrustPrompt: false`. An unchanged approved identity with an available credential store needs
 no macOS Certificate Trust Settings add/remove operation. Missing, revoked or unknown trust leaves the picker pending; restart and status never install trust. Explicit `on`, `trust`, or first-party apply completes the trust step, including the Windows current-user Root confirmation when needed.
@@ -275,7 +275,7 @@ predecessor before writing the credential, verifies readback, then commits metad
 it removes the journal last. Recovery requires matching journal/store identity; missing initialized
 credentials, unavailable storage or inconsistent metadata fail closed without publishing a replacement.
 Gateway/off startup does not read or initialize an OS picker credential unless an applied picker
-profile needs recovery. Both macOS and Windows retain a dormant runtime/controller for explicit activation;
+profile needs recovery. macOS, Windows and Linux retain a dormant runtime/controller for explicit activation;
 Windows and Linux without picker intent or an applied profile defer relay binding and refresh. Activation uses the same persistent authority path.
 On macOS trust is added without a policy string: Chromium
 skips host-scoped trust settings, so `inspectPickerTrust` treats a current CA whose exported user
@@ -291,11 +291,11 @@ During legacy migration, before a replacement changes `ca.pem`, the outgoing cer
 SHA-1/SHA-256 go to `pending-untrust.json` (mode 0600, no key material); only one such record may
 exist, and a default `ensurePickerCa` call (the controller's enable/trust path) refuses while it
 does. Activation (`runtime.ts` and the controller via `picker-ca-startup.ts` and `picker-ca-cleanup.ts`) drains that record before and after
-migration: it defers without calling `security` while the recorded certificate is still published by
-a live owner, untrusts a private temporary copy of the public PEM otherwise, and acknowledges the
-exact record only after a confirmed removal, so a failure survives process replacement and is
-retried by the next start. While the drain is incomplete and a Desktop picker profile is applied, the
-lifecycle binds a blind-only CONNECT relay (`interceptHosts: []`, every tunnel blind) on the
+migration. When a live owner still publishes the recorded certificate, the drain defers. Otherwise it
+untrusts a private copy of the public PEM and acknowledges the exact record after confirmed removal or
+absence. On Linux an NSS directory stat showing `ENOENT` or `ENOTDIR` confirms absence. Other stat
+failures leave trust unknown and keep the record for retry on the next start. While the drain is
+incomplete and a profile is applied, the lifecycle binds a blind-only CONNECT relay on the
 profile's recorded `egressProxyUrl` port instead of the picker: Desktop keeps its network path, no
 TLS is terminated, no trust is added, and the profile row, its previous selection and the retry
 intent stay untouched. A port held by another process is not taken over; the relay start fails with

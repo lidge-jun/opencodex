@@ -190,7 +190,7 @@ unknown, ayarların hâlâ opencodex vekiline işaret edip etmediğinin belirlen
 
 ### Picker modu: first-party Code sekmesinde opencodex modelleri
 
-Picker modu first-party modunun bir parçasıdır. macOS ve Windows'ta first-party seçildiğinde varsayılan olarak
+Picker modu first-party modunun bir parçasıdır. macOS, Windows ve Linux'ta first-party seçildiğinde varsayılan olarak
 açıktır; `claudeCode.intercept.picker: false` ayarlanırsa kapalı kalır. First-party Desktop'ın Code
 sekmesindeki model seçiciyi değiştirerek kullanılabilir opencodex modellerini adlarıyla listeler.
 İlk etkinleştirmede macOS, giriş anahtar zincirinde, Windows ise geçerli kullanıcının kök deposunda yerel bir sertifika yetkilisine güvenmenizi isteyebilir.
@@ -205,9 +205,8 @@ güven eksik, iptal edilmiş veya bilinmiyorsa picker beklemede kalır. Güven v
 Eski bir kimlikten bir defalık geçişte önceki güveni kaldırmak için onay gerekebilir. Temizlik tamamlanana
 kadar picker kullanılamaz ve uygulanmış profil şifre çözmeyen bir aktarma kullanır. macOS ayrıca anahtar
 zincirinin kilidini açmanızı veya uygulamanın kimlik bilgilerine erişimini onaylamanızı isteyebilir;
-bu istemler yeniden başlatma veya güncelleme sonrasında da çıkabilir. Windows'ta açık `on` veya `trust` kök ekleme onayını gösterebilir. Linux'ta picker desteklenmez:
-picker CA, kimlik bilgisi deposu veya proxy işlemleri başlatılmaz. Ana Claude yakalama işlevi kullanılabilir;
-yerel CA dosyaları için sahiplik, sembolik bağlantı, dosya izinleri ve Windows ACL denetimleri uygulanır.
+bu istemler yeniden başlatma veya güncelleme sonrasında da çıkabilir. Windows'ta açık `on` veya `trust` kök ekleme onayını gösterebilir.
+Linux'ta picker açıkça etkinleştirildiğinde, `certutil` kısıtlı picker CA'sını kullanıcının NSS veritabanına (`~/.pki/nssdb`) güvenilen bir CA olarak ekler.
 
 Picker modu açıkken Claude Desktop ağa OpenCodex üzerinden çıkar. OpenCodex durursa Desktop, tamamen yeniden
 başlatılana veya picker modu kapatılana kadar çevrimdışı kalır. Durumu `ocx claude desktop picker status`

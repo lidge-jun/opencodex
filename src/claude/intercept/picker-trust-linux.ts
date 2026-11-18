@@ -1,5 +1,5 @@
 import { X509Certificate, createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { PICKER_CA_COMMON_NAME } from "./picker-ca";
@@ -31,6 +31,16 @@ export function linuxPickerNickname(sha1: string): string {
 
 function nssDb(home?: string): string {
   return `sql:${linuxNssDbDir(home)}`;
+}
+
+function nssDbPresence(home?: string): "present" | "absent" | "unknown" {
+  try {
+    statSync(linuxNssDbDir(home));
+    return "present";
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR" ? "absent" : "unknown";
+  }
 }
 
 /** certutil runner with a bounded runtime and output, code null when the executable is absent. */
@@ -126,7 +136,9 @@ export async function inspectPickerTrustLinux(
 ): Promise<PickerTrustState> {
   const sha1 = normalizeSha1(caSha1);
   if (!sha1) return "untrusted";
-  if (!existsSync(linuxNssDbDir(home))) return "untrusted";
+  const presence = nssDbPresence(home);
+  if (presence === "absent") return "untrusted";
+  if (presence === "unknown") return "unknown";
   try {
     const found = await lookup(run, sha1, home);
     switch (found.kind) {
@@ -180,7 +192,8 @@ export async function untrustPickerCaLinux(
 ): Promise<{ ok: boolean }> {
   const sha1 = normalizeSha1(fingerprintSha1);
   if (!sha1) return { ok: false };
-  if (!existsSync(linuxNssDbDir(home))) return { ok: true };
+  const presence = nssDbPresence(home);
+  if (presence !== "present") return { ok: presence === "absent" };
   try {
     const before = await lookup(run, sha1, home);
     if (before.kind === "absent") return { ok: true };

@@ -538,6 +538,29 @@ test("on Linux a truncated NSS listing keeps the pending record byte-for-byte in
   expect(readFileSync(path)).toEqual(before);
 });
 
+test("on Linux an NSS directory stat failure keeps the pending removal record", async () => {
+  const dir = tempDir();
+  try {
+    ensurePickerCa(dir);
+    writeFileSync(pickerCaCertPath(dir), mintPickerCa().certPem);
+    ensurePickerCa(dir, { rotation: "startup" });
+    const path = pickerCaPendingUntrustPath(dir);
+    const before = readFileSync(path);
+    // An overlong path component fails stat even when the tests run as root.
+    const home = join(dir, "h".repeat(512));
+    const calls: string[][] = [];
+    const drained = await drainPendingPickerCaUntrust(dir, async args => {
+      calls.push([...args]);
+      return { code: 0, stdout: "", stderr: "" };
+    }, "linux", home);
+    expect(drained).toBe(false);
+    expect(calls).toEqual([]);
+    expect(readFileSync(path)).toEqual(before);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("cached ensure repairs a missing owner so a peer cannot rotate a live CA", async () => {
   const dir = tempDir();
   const ready = join(dir, "ready");
