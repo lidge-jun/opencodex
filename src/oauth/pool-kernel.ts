@@ -44,11 +44,11 @@ export function parseAccountPoolStrategy(raw: unknown): OcxAccountPoolRotationSt
 }
 
 /** Codex alone supports ordering by the next shared quota reset. */
-export function parseCodexAccountPoolStrategy(raw: unknown): OcxAccountPoolRotationStrategy | "reset-first" | null {
-  return raw === "reset-first" ? raw : parseAccountPoolStrategy(raw);
+export function parseCodexAccountPoolStrategy(raw: unknown): OcxAccountPoolRotationStrategy | "reset-first" | "preserve-long-quota" | null {
+  return raw === "reset-first" || raw === "preserve-long-quota" ? raw : parseAccountPoolStrategy(raw);
 }
 
-export function normalizeCodexAccountPoolStrategy(raw: unknown): OcxAccountPoolRotationStrategy | "reset-first" {
+export function normalizeCodexAccountPoolStrategy(raw: unknown): OcxAccountPoolRotationStrategy | "reset-first" | "preserve-long-quota" {
   return parseCodexAccountPoolStrategy(raw) ?? DEFAULT_STRATEGY;
 }
 

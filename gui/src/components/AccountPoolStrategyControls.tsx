@@ -10,6 +10,7 @@ import { HelpButton, HelpRegion } from "./v2-accounts/surface";
 import { useHelp } from "./v2-accounts/use-help";
 
 const STRATEGY_LABEL_KEYS = {
+  "preserve-long-quota": "accountPool.strategyPreserveLongQuota",
   "reset-first": "accountPool.strategyResetFirst",
   "reset-near-weighted": "accountPool.strategyResetNearWeighted",
   quota: "accountPool.strategyQuota",
@@ -18,6 +19,7 @@ const STRATEGY_LABEL_KEYS = {
 } as const;
 
 const STRATEGY_HINT_KEYS = {
+  "preserve-long-quota": "accountPool.strategyHintPreserveLongQuota",
   "reset-first": "accountPool.strategyHintResetFirst",
   "reset-near-weighted": "accountPool.strategyHintResetNearWeighted",
   quota: "accountPool.strategyHintQuota",
@@ -61,7 +63,7 @@ export default function AccountPoolStrategyControls({
 }: AccountPoolStrategyControlsProps) {
   const t = useT();
   const help = useHelp();
-  const strategyOptions = ACCOUNT_POOL_STRATEGIES.filter(value => codex || value !== "reset-first").map((value) => ({
+  const strategyOptions = ACCOUNT_POOL_STRATEGIES.filter(value => codex || (value !== "reset-first" && value !== "preserve-long-quota")).map((value) => ({
     value,
     label: t(STRATEGY_LABEL_KEYS[value]),
   }));
@@ -74,6 +76,9 @@ export default function AccountPoolStrategyControls({
     if (threshold > 0) {
       if (strategy === "fill-first") {
         return t("accountPool.drainAtThreshold", { threshold: String(threshold) });
+      }
+      if (strategy === "preserve-long-quota") {
+        return t("accountPool.preserveBelowThreshold", { threshold: String(threshold) });
       }
       if (strategy === "reset-first") {
         return t("accountPool.resetBelowThreshold", { threshold: String(threshold) });

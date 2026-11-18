@@ -8,6 +8,10 @@ import PoolSettingsDisclosure from "./PoolSettingsDisclosure";
 export type AutoSwitchFeedback = { tone: "ok" | "err"; message: string } | null;
 
 const AUTO_SWITCH_DESCRIPTION_KEYS = {
+  "preserve-long-quota": {
+    on: "accountPool.strategyHintPreserveLongQuota",
+    off: "codexAuth.autoSwitchQuotaOffDesc",
+  },
   "reset-first": {
     on: "accountPool.strategyHintResetFirst",
     off: "codexAuth.autoSwitchQuotaOffDesc",

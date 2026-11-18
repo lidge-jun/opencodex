@@ -1346,7 +1346,7 @@ export interface OcxConfig extends OcxLinkHomeConfig, CodexAccountLoginConfig {
   /** Prefer other identities, reserving the current native sign-in as pool fallback. */
   codexPreserveSignedInAccount?: boolean;
   /** New-session account rotation strategy for the Codex pool. Default quota (today's behaviour). */
-  accountPoolStrategy?: OcxAccountPoolRotationStrategy | "reset-first";
+  accountPoolStrategy?: OcxAccountPoolRotationStrategy | "reset-first" | "preserve-long-quota";
   /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
   accountPoolStickyLimit?: number;
   /** Consecutive non-2xx upstream responses before switching future new threads. Default 3. 0 = disabled. */

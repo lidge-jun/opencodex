@@ -2361,6 +2361,9 @@ export const de: Record<TKey, string> = {
 
   "accountPool.strategy": "Rotationsstrategie",
   "accountPool.strategyDesc": "Wie OpenCodex einer neuen/ungebundenen Aufgabe ein Konto zuweist.",
+  "accountPool.strategyPreserveLongQuota": "Langfristiges Kontingent schonen",
+  "accountPool.strategyHintPreserveLongQuota": "Zuerst Konten mit nachweislich nur kurzem Zeitfenster, dann Wochen- und Monatskontingente. Je Gruppe zählt die früheste Rücksetzung des längsten Fensters. Unbekannte Fenster bleiben Reserve. Gebundene Aufgaben behalten die Affinitätsregel; unabhängige Modellkontingente nutzen die Kontingentreihenfolge.",
+  "accountPool.preserveBelowThreshold": "langfristiges Kontingent unter {threshold}% schonen",
   "accountPool.strategyResetFirst": "Nächste Rücksetzung zuerst",
   "accountPool.strategyResetNearWeighted": "Gewichtet nach nächster Rücksetzung",
   "accountPool.strategyHintResetFirst": "Unterhalb der Nutzungsschwelle wird die nächste 5-Stunden- oder Wochenrücksetzung bevorzugt. Gebundene Aufgaben folgen der konfigurierten Affinitätsregel. Unabhängige Modellkontingente werden nach Nutzung geordnet.",

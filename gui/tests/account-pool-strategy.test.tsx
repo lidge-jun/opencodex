@@ -760,6 +760,27 @@ describe("CodexPoolStrategySetting optimistic strategy select", () => {
 });
 
 
+test("preserve-long-quota survives read/write without normalization to quota", async () => {
+  expect(normalizeAccountPoolStrategy("preserve-long-quota")).toBe("preserve-long-quota");
+  const read = await getPoolSettings("", "openai", async () => Response.json({ provider: "openai", kind: "codex", strategy: "preserve-long-quota", stickyLimit: 1 }));
+  expect(read?.strategy).toBe("preserve-long-quota");
+  const written = await putPoolSettings("", "openai", { strategy: "preserve-long-quota" }, async (_url, init) => {
+    expect(JSON.parse(String(init?.body))).toMatchObject({ provider: "openai", strategy: "preserve-long-quota" });
+    return Response.json({});
+  });
+  expect(written?.strategy).toBe("preserve-long-quota");
+});
+
+test("preserve-long-quota renders its explanation only for Codex", () => {
+  const controls = (codex: boolean) => renderToStaticMarkup(
+    <LanguageProvider><AccountPoolStrategyControls codex={codex} strategy={codex ? "preserve-long-quota" : "quota"}
+      stickyDraft="1" threshold={80} onStrategyChange={() => {}} onStickyDraftChange={() => {}} onStickyCommit={() => {}} /></LanguageProvider>,
+  );
+  expect(controls(true)).toContain("Preserve long-term quota");
+  expect(controls(true)).toContain("short-only");
+  expect(controls(false)).not.toContain("Preserve long-term quota");
+});
+
 test("canonical reset-first settings survive a read and an empty successful write", async () => {
   const read = await getPoolSettings("", "openai", async () => Response.json({ provider: "openai", kind: "codex", strategy: "reset-first", stickyLimit: 1 }));
   expect(read?.strategy).toBe("reset-first");

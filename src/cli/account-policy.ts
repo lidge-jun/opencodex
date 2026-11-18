@@ -94,6 +94,7 @@ async function pool(args: string[], json: boolean, deps: RuntimeApiDeps): Promis
     const strategies = ["quota", "round-robin", "fill-first"];
     if (!isAnthropicInstanceId(provider)) strategies.push("reset-first");
     if (provider === "openai" || isAnthropicInstanceId(provider)) strategies.push("reset-near-weighted");
+    if (provider === "openai") strategies.push("preserve-long-quota");
     if (provider === "kiro") strategies.push("least-loaded");
     if (!strategies.includes(strategy)) usage();
     patch.strategy = strategy;

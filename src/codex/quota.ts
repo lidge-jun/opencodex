@@ -41,6 +41,8 @@ type QuotaDiskFile = {
 type MainPolicyQuota = { identityKey: string; quota: StoredAccountQuota };
 /** Fresh WHAM topology proof is consumed by the merge, never retained in a cache or DTO. */
 type MainPolicyQuotaObservation = Omit<StoredAccountQuota, "updatedAt"> & { shortWindowAbsent?: true; monthlyWindowAbsent?: true };
+// Служебная топология не меняет публичную форму policy observation.
+const shortOnlyTopology = new WeakMap<object, boolean>();
 let mainPolicyQuota: MainPolicyQuota | null = null;
 /**
  * When each main policy usage window was last measured in this process (#8113). A window's time
@@ -94,6 +96,14 @@ const WEEKLY_WINDOW_MIN_MINUTES = WEEKLY_WINDOW_MIN_SECONDS / 60;
 export { resetAtToMs };
 
 const accountQuota = new Map<string, StoredAccountQuota>();
+// Доказательство принадлежит incarnation credential, не одному лишь ID слота; не пишется на диск.
+type ShortOnlyProof = { observedAt: number; mainWriter?: MainQuotaWriter; poolIdentity?: string };
+const shortOnlyProofs = new Map<string, ShortOnlyProof>();
+function shortOnlyProofIsLive(accountId: string, proof: ShortOnlyProof): boolean {
+  return accountId === MAIN_CODEX_ACCOUNT_ID
+    ? proof.mainWriter !== undefined && isMainQuotaWriterLive(proof.mainWriter)
+    : proof.poolIdentity !== undefined && poolQuotaHistoryIdentity(accountId) === proof.poolIdentity;
+}
 const quotaHistory = new CodexQuotaHistory();
 let lastReconciledGeneration = 0;
 let liveAccountIds = new Set<string>();
@@ -410,6 +420,7 @@ export function setAccountQuotaFromParsed(
   // Advisory publication is explicit opt-in evidence: display or policy data never becomes it by default.
   decisionRaw: Omit<StoredAccountQuota, "updatedAt"> | null = null,
 ): void {
+  const shortOnlyObservation = policyQuota && shortOnlyTopology.get(policyQuota);
   quota = withoutRetiredCodexQuota(quota);
   policyQuota = withoutRetiredCodexQuota(policyQuota);
   if (!quota || (!snapshotHasUsage(quota) && !snapshotHasCredits(quota))) return;
@@ -443,6 +454,16 @@ export function setAccountQuotaFromParsed(
     ...(mayRetireShort && policyQuota?.monthlyWindowAbsent === true ? { monthlyWindowAbsent: true as const } : {}),
   };
   const next = mergeAccountQuota(displayQuota, legacyExisting, updatedAt);
+  // Противоречащая топология отменяет proof, даже если usage длинного окна не распарсился.
+  const proof = shortOnlyProofs.get(accountId);
+  if (snapshotHasWeekly(next) || snapshotHasMonthly(next) || snapshotHasCustom(next)
+    || shortOnlyObservation === false) {
+    shortOnlyProofs.delete(accountId);
+  } else if (mayRetireShort && shortOnlyObservation === true) {
+    shortOnlyProofs.set(accountId, { observedAt: updatedAt,
+      ...(isMain ? { mainWriter } : { poolIdentity: poolQuotaHistoryIdentity(accountId) }),
+    });
+  } else if (proof && !shortOnlyProofIsLive(accountId, proof)) shortOnlyProofs.delete(accountId);
   accountQuota.set(accountId, next);
   if (isMain) {
     if (mainWriter && policyQuota && snapshotHasUsage(policyQuota)) {
@@ -973,7 +994,12 @@ function schedulePersistAccountQuotas(): void {
 
 export function getAccountQuota(accountId: string): StoredAccountQuota | null {
   hydrateAccountQuotasFromDisk();
-  return accountQuota.get(accountId) ?? null;
+  const quota = accountQuota.get(accountId);
+  if (!quota) return null;
+  const proof = shortOnlyProofs.get(accountId);
+  if (proof && shortOnlyProofIsLive(accountId, proof)) return { ...quota, shortOnlyObservedAt: proof.observedAt };
+  // Сохранённый snapshot сам по себе не доказывает текущую credential identity.
+  return quota.shortOnlyObservedAt === undefined ? quota : { ...quota, shortOnlyObservedAt: undefined };
 }
 
 /** No physical-auth reads; unrelated legacy quota consumers cannot mutate this evidence. */
@@ -1049,12 +1075,14 @@ export function clearAccountQuota(accountId?: string): void {
   if (accountId) {
     hydrateAccountQuotasFromDisk();
     accountQuota.delete(accountId);
+    shortOnlyProofs.delete(accountId);
     if (accountId === MAIN_CODEX_ACCOUNT_ID) { mainPolicyQuota = null; mainPolicyUsageObservation = undefined; }
     schedulePersistAccountQuotas();
     forgetCodexQuotaBaseline(accountId);
     return;
   }
   accountQuota.clear();
+  shortOnlyProofs.clear();
   forgetCodexQuotaBaseline();
   { mainPolicyQuota = null; mainPolicyUsageObservation = undefined; }
   diskHydrated = false;
@@ -1079,6 +1107,7 @@ export function reconcileCodexQuotaAccounts(context: GenerationContext): number 
   for (const accountId of accountQuota.keys()) {
     if (context.codexAccountIds.has(accountId)) continue;
     accountQuota.delete(accountId);
+    shortOnlyProofs.delete(accountId);
     removed += 1;
   }
   liveAccountIds = new Set(context.codexAccountIds);
@@ -1114,7 +1143,7 @@ export function parseMainPolicyUsageQuota(data: WhamUsageResponse): MainPolicyQu
     || parseGroupUsagePercent(individualLimit?.used_percent) === null) return null;
   const quota = filterMainPolicyMonthlyQuota(parseUsageQuota(data), isThirtyDayOnlyCodexPlan(data.plan_type));
   // #8596: a complete, allowed main read retires a carried monthly tuple under the pool proof (#8067).
-  return quota ? withWhamMonthlyWindowAbsence(data, withWhamShortWindowAbsence(data, quota)) : null;
+  return quota ? withWhamLongWindowAbsence(data, withWhamMonthlyWindowAbsence(data, withWhamShortWindowAbsence(data, quota))) : null;
 }
 
 /** Derive absence from complete WHAM topology without changing the display quota. */
@@ -1148,8 +1177,11 @@ export function poolWhamPolicyObservation(
   data: WhamUsageResponse, quota: Omit<StoredAccountQuota, "updatedAt"> | null,
 ): MainPolicyQuotaObservation | null {
   if (!quota || !isValidWhamHistoryObservation(data)) return null;
-  if (data.rate_limit?.allowed === false || hasMalformedWhamReading(data)) return quota;
-  return withWhamMonthlyWindowAbsence(data, withWhamShortWindowAbsence(data, quota));
+  if (data.rate_limit?.allowed === false || hasMalformedWhamReading(data)) {
+    shortOnlyTopology.set(quota, false);
+    return quota;
+  }
+  return withWhamLongWindowAbsence(data, withWhamMonthlyWindowAbsence(data, withWhamShortWindowAbsence(data, quota)));
 }
 
 /** Retirement releases a block, so a present reading that does not parse is not "unknown". */
@@ -1183,6 +1215,24 @@ function withWhamMonthlyWindowAbsence(
   return !isExplicitMonthlyWindow(primary) && !isExplicitMonthlyWindow(secondary) && tertiary == null
     ? { ...observation, monthlyWindowAbsent: true }
     : observation;
+}
+
+function withWhamLongWindowAbsence(data: WhamUsageResponse, quota: MainPolicyQuotaObservation): MainPolicyQuotaObservation {
+  const rate = data.rate_limit;
+  const additional = data.additional_rate_limits;
+  if (rate?.allowed === true && isExplicitShortWindow(rate.primary_window)
+    && normalizeUsagePercent(rate.primary_window?.used_percent) !== undefined
+    && rate.secondary_window === null && rate.tertiary_window === null
+    && (additional === undefined || (Array.isArray(additional) && additional.length === 0))) {
+    shortOnlyTopology.set(quota, true);
+    return quota;
+  }
+  if (rate?.allowed === false || isExplicitLongWindow(rate?.primary_window)
+    || rate?.secondary_window != null || rate?.tertiary_window != null
+    || (additional !== undefined && (!Array.isArray(additional) || additional.length > 0))) {
+    shortOnlyTopology.set(quota, false);
+  }
+  return quota;
 }
 
 function isMeasuredLongWindow(window: WhamUsageWindow | null | undefined): boolean {
