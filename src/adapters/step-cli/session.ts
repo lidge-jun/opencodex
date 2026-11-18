@@ -6,6 +6,7 @@ import { commandInvocation } from "../../lib/win-exec";
 import { killWindowsProcessTree } from "../coding-agent/process-tree";
 import type { WhichFn } from "../coding-agent/profile";
 import { buildStepCliEnv } from "./env";
+import { classifyStepChildError, StepSessionError } from "./errors";
 import {
   findStepCliBinary,
   stepCliSessionDir,
@@ -90,16 +91,7 @@ interface HeldReverseRequest {
   answered: boolean;
 }
 
-/** A transport-level failure, as opposed to a model or CLI failure reported in-band. */
-export class StepSessionError extends Error {
-  readonly code: string;
-
-  constructor(message: string, code = "step_cli_session_failed") {
-    super(message);
-    this.name = "StepSessionError";
-    this.code = code;
-  }
-}
+export { StepSessionError } from "./errors";
 
 /**
  * What the adapter needs to hear while a session is live.
@@ -338,7 +330,7 @@ export class StepCliSession {
     pending.answered = true;
     this.#clearTimer(pending.timer as never);
     if (frame.error) {
-      pending.reject(new StepSessionError(frame.error.message, frame.error.code));
+      pending.reject(classifyStepChildError(frame.error));
       return;
     }
     pending.resolve(frame);
@@ -366,7 +358,7 @@ export class StepCliSession {
     if (this.#closed) return Promise.reject(new StepSessionError("StepCode session is closed."));
     let pending!: PendingRequest;
     const timer = this.#setTimer(() => {
-      if (this.#pending.delete(id)) pending.reject(new StepSessionError(`StepCode did not answer ${method} in time.`));
+      if (this.#pending.delete(id)) pending.reject(new StepSessionError(`StepCode did not answer ${method} in time.`, "timeout"));
     }, timeoutMs ?? this.#options.requestTimeoutMs);
     const promise = new Promise<StepFrame>((resolve, reject) => {
       pending = { method, timer, resolve, reject, answered: false };

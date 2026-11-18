@@ -222,12 +222,7 @@ async function startQueryWithBusyRetry(
     try {
       return await session.startQuery(options);
     } catch (error) {
-      // Deliberately message-based rather than `instanceof StepSessionError`: a retry predicate that
-      // silently stops firing when an error class changes would turn a handover race into a hard
-      // failure, which is exactly the failure this retry exists to remove.
-      const busy = /one query at a time|SESSION_BUSY/i.test(
-        error instanceof Error ? error.message : String(error),
-      );
+      const busy = error instanceof StepSessionError && error.code === "step_cli_session_busy";
       if (!busy || attempt >= STEP_CLI_QUERY_RETRY_DELAYS_MS.length) throw error;
       await delay(STEP_CLI_QUERY_RETRY_DELAYS_MS[attempt]!);
       attempt += 1;

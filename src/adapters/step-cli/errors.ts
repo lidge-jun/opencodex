@@ -1,5 +1,42 @@
 import type { AdapterEvent } from "../../types";
-import { StepSessionError } from "./session";
+import type { StepProtocolErrorPayload } from "./stdio-frames";
+
+type StepSessionErrorCode =
+  | "step_cli_session_failed"
+  | "step_cli_session_busy"
+  | "step_cli_binary_missing"
+  | "step_cli_capability_missing"
+  | "step_cli_protocol_violation"
+  | "step_cli_cleanup_failed"
+  | "step_cli_not_logged_in"
+  | "step_cli_subscription_cooldown"
+  | "timeout";
+
+export class StepSessionError extends Error {
+  constructor(message: string, readonly code: StepSessionErrorCode = "step_cli_session_failed") {
+    super(message);
+    this.name = "StepSessionError";
+  }
+}
+
+const SESSION_FAILURE = "StepCode could not complete the request.";
+
+/** Child diagnostics are classifier input only. The resulting error is safe to publish. */
+export function classifyStepChildError({ code, message }: StepProtocolErrorPayload): StepSessionError {
+  if (code === "SESSION_BUSY") {
+    return new StepSessionError("StepCode is still finishing its previous query.", "step_cli_session_busy");
+  }
+  if (/not signed in|please run \/login|未登录/i.test(message)) {
+    return new StepSessionError("StepCode is not signed in. Run `step login` once and retry.", "step_cli_not_logged_in");
+  }
+  if (/quota|credit|429|rate limit/i.test(message)) {
+    return new StepSessionError("StepCode subscription temporarily rate limited or out of quota.", "step_cli_subscription_cooldown");
+  }
+  if (/did not answer .* in time|timed out/i.test(message)) {
+    return new StepSessionError("StepCode timed out while processing the request.", "timeout");
+  }
+  return new StepSessionError(SESSION_FAILURE);
+}
 
 /**
  * Failure text for this route.
@@ -19,73 +56,20 @@ export function refusal(
   return { type: "error", message, status, errorType, code, retryable };
 }
 
-/**
- * Refuse image input the way the Qoder and Claude Code rows do.
- *
- * `query.input` does carry an image block to the model, but this route publishes text-only models,
- * and an image the harness silently drops produces a confident answer to the wrong question. An
- * operator with the vision sidecar on the request path still gets pictures captioned into text.
- */
-
 /** Translate a transport failure into the actionable error an operator can act on. */
 export function mapSessionFailure(error: unknown): AdapterEvent {
-  if (!(error instanceof StepSessionError)) {
-    return {
-      type: "error",
-      message: error instanceof Error ? error.message : String(error),
-      retryable: true,
-    };
+  const failure = error instanceof StepSessionError ? error : new StepSessionError(SESSION_FAILURE);
+  switch (failure.code) {
+    case "step_cli_binary_missing":
+    case "step_cli_capability_missing":
+      return refusal(failure.message, 400, failure.code);
+    case "step_cli_not_logged_in":
+      return refusal(failure.message, 401, failure.code, "authentication_error");
+    case "step_cli_subscription_cooldown":
+      return refusal(failure.message, 429, failure.code, "rate_limit_error");
+    case "timeout":
+      return refusal(failure.message, 504, failure.code, "upstream_error", true);
+    default:
+      return refusal(failure.message, 502, failure.code, "upstream_error", true);
   }
-  if (error.code === "step_cli_binary_missing" || error.code === "step_cli_capability_missing") {
-    return refusal(error.message, 400, error.code);
-  }
-  if (/not signed in|please run \/login|未登录/i.test(error.message)) {
-    return {
-      type: "error",
-      message:
-        "StepCode is not signed in, so this subscription provider has no account to spend. " +
-        `Run \`step login\` once and retry. CLI reported: ${error.message}`,
-      status: 401,
-      errorType: "authentication_error",
-      code: "step_cli_not_logged_in",
-      retryable: false,
-    };
-  }
-  if (/quota|credit|429|rate limit/i.test(error.message)) {
-    return {
-      type: "error",
-      message: error.message,
-      status: 429,
-      errorType: "rate_limit_error",
-      code: "step_cli_subscription_cooldown",
-      retryable: false,
-    };
-  }
-  if (/did not answer .* in time|timed out/i.test(error.message)) {
-    return {
-      type: "error",
-      message: error.message,
-      status: 504,
-      errorType: "upstream_error",
-      code: "timeout",
-      retryable: true,
-    };
-  }
-  return {
-    type: "error",
-    message: error.message,
-    status: 502,
-    errorType: "upstream_error",
-    code: error.code,
-    retryable: true,
-  };
 }
-
-/**
- * Run Codex turns against a StepCode subscription.
- *
- * One StepCode process serves one conversation, and this adapter never executes a tool itself: it
- * declares the client's catalog as StepCode SDK tools, allows the permission check the client's own
- * request already implies, and holds the tool call open so the result the client computes on its next
- * request is delivered back into the query the model is running.
- */

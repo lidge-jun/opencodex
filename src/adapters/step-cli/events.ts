@@ -204,7 +204,7 @@ export function handleRuntimeEvent(session: StepConversationSession, frame: Step
   if (type === "permission_denied") {
     turn.emit({
       type: "error",
-      message: `StepCode refused a tool call: ${typeof message.message === "string" ? message.message : "denied"}`,
+      message: "StepCode refused a tool call.",
       status: 400,
       errorType: "invalid_request_error",
       code: "step_cli_permission_denied",

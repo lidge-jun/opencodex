@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { createStepCliAdapter } from "../../src/adapters/step-cli/adapter";
 import { withConversationLock } from "../../src/adapters/step-cli/conversation";
 import { handleReverseRequest, handleRuntimeEvent } from "../../src/adapters/step-cli/events";
+import { classifyStepChildError } from "../../src/adapters/step-cli/errors";
 import { latestToolResult, projectToolResultContent } from "../../src/adapters/step-cli/projection";
 import type {
   StepConversationHost,
@@ -519,7 +520,7 @@ describe("StepCode query start retries", () => {
     session.startQuery = async options => {
       attempts += 1;
       if (attempts < 3) {
-        throw new Error("the runtime serves one query at a time");
+        throw classifyStepChildError({ code: "SESSION_BUSY", message: "the runtime serves one query at a time" });
       }
       return original(options);
     };
@@ -539,7 +540,7 @@ describe("StepCode query start retries", () => {
     let attempts = 0;
     session.startQuery = async () => {
       attempts += 1;
-      throw new Error("handshake refused: some other problem");
+      throw new Error("synthetic child diagnostic");
     };
     const adapter = createStepCliAdapter(provider(), { openSession: host(session) });
     const events: AdapterEvent[] = [];
@@ -549,7 +550,20 @@ describe("StepCode query start retries", () => {
       event => events.push(event),
     );
     expect(attempts).toBe(1);
-    expect(events.some(event => event.type === "error")).toBe(true);
+    expect(events).toMatchObject([{
+      type: "error", code: "step_cli_session_failed", message: "StepCode could not complete the request.",
+    }]);
+  });
+
+  test("a child permission-denial event emits only the local description", async () => {
+    const session = new FakeSession();
+    const adapter = createStepCliAdapter(provider(), { openSession: host(session) });
+    const events: AdapterEvent[] = [];
+    session.stream = [eventFrame({ type: "permission_denied", message: "synthetic child permission detail" })];
+    await adapter.runTurn!(parsed(USER_ASK), THREAD_META, event => events.push(event));
+    expect(events).toMatchObject([{
+      type: "error", code: "step_cli_permission_denied", message: "StepCode refused a tool call.",
+    }]);
   });
 });
 

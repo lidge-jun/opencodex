@@ -133,6 +133,24 @@ async function openSession(fake: FakeStep, deps: StepSessionDeps = {}) {
 }
 
 describe("StepCode session", () => {
+  test.each([
+    ["CONFIG_INVALID", "please run /login: synthetic child diagnostic", "step_cli_not_logged_in", /Run `step login`/],
+    ["CONFIG_INVALID", "429 rate limit: synthetic child diagnostic", "step_cli_subscription_cooldown", /subscription temporarily/],
+    ["synthetic-child-code", "synthetic child diagnostic", "step_cli_session_failed", /could not complete the request/],
+  ])("classifies child error %s without retaining its text or arbitrary code", async (code, message, expectedCode, expectedMessage) => {
+    const fake = new FakeStep();
+    fake.scripted = false;
+    const { session } = await openSession(fake);
+    try {
+      const handshake = session.handshake();
+      fake.emit({ kind: "response", id: "res_1", replyTo: fake.written[0]!.id, error: { code, message } });
+      await expect(handshake).rejects.toMatchObject({ code: expectedCode, message: expect.stringMatching(expectedMessage) });
+      await expect(handshake).rejects.not.toThrow(/synthetic child diagnostic/);
+    } finally {
+      await session.close();
+    }
+  });
+
   test("negotiates the protocol and rejects a runtime without sdk-tools", async () => {
     const fake = new FakeStep();
     const { session } = await openSession(fake);

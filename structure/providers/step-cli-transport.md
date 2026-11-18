@@ -33,6 +33,10 @@ that query's declared catalog. Other permissions are denied. A
 Changing the catalog while returning a held result closes the session. Abandoning a held call
 detaches its owner, interrupts it and confirms its input end before registering a replacement turn.
 
+Child response errors are classified at the transport boundary. The adapter emits locally defined
+error codes and messages for login failures, subscription limits, busy queries, timeouts and
+permission denials.
+
 `session-pool.ts` latches shutdown before awaiting sessions and in-flight opens. Late opens close
 their process before shutdown settles, and new opens and pool creation during proxy drain are
 refused. The pool retains entries and tracks cleanup receipts from adapter, idle-timer and sweep
