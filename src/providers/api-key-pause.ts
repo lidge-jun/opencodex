@@ -1,4 +1,4 @@
-import { accountAutoPauseFenceMatchesDisk, type AccountAutoPauseFence } from "../config/account-auto-pause-revisions";
+import { accountAutoPauseFenceMatchesDisk, effectiveAccountAutoPause, type AccountAutoPauseFence } from "../config/account-auto-pause-revisions";
 import { randomUUID } from "node:crypto";
 import { clearModelCache } from "../codex/model-cache";
 import type { OcxConfig } from "../types";
@@ -38,7 +38,7 @@ export function setProviderApiKeyPausedWithResult(config: OcxConfig, name: strin
     };
     const entry = pool.find(e => e.id === id);
     if (!entry || automatic && (entry.disabled || entry.key !== automatic.selection.reference || entry.pauseRevision !== automatic.pauseRevision
-      || provider.accountAutoPause?.enabled !== true || resolveProviderApiKey(entry.key) !== automatic.resolvedKey)) {
+      || !effectiveAccountAutoPause(provider) || resolveProviderApiKey(entry.key) !== automatic.resolvedKey)) {
       return { changed: false, value: resultForCurrentSelection(false) };
     }
     const beforeApiKey = provider.apiKey;
