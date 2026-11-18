@@ -72,7 +72,7 @@ export async function fetchAnthropicHelper(
   const writer = captureConfigGeneration();
   const response = await fetch(url, init);
   if (anthropicPhysicalSendOwnershipIsCurrent(owner)) {
-    recordAnthropicAccountQuotaFromHeadersForInstance(instance, snapshot.accountId, response.headers, writer, response.status, model);
+    recordAnthropicAccountQuotaFromHeadersForInstance(instance, owner.accountId, response.headers, writer, response.status, model, owner.generation);
     bindAnthropicRefusalCredentialForSend(response, owner);
   }
   return response;
