@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -254,6 +254,47 @@ describe("authenticated native discovery", () => {
 
 describe("discovery-only roster", () => {
   const credential = { accountId: "future-test", accessToken: "fixture-token", chatgptAccountId: "", credentialIdentity: "fixture-generation" };
+
+  test("pool-only discovery skips native-main admission and publishes the Pool row", async () => {
+    const admission = await import("../../src/codex/native-main-admission");
+    const lease = spyOn(admission, "withNativeMainCredentialAdmission");
+    const calls: string[] = [];
+    try {
+      const outcome = await discoverCodexNativeRoster({}, {
+        poolOnly: true,
+        credentials: [{ ...credential, accountId: "__main__", accessToken: "native-fixture" }, credential],
+        fetcher: ((_url: string | URL, init?: RequestInit) => {
+          calls.push(new Headers(init?.headers).get("authorization") ?? "");
+          return Promise.resolve(Response.json({ models: [row()] }));
+        }) as typeof fetch,
+      });
+      expect(outcome).toBe("recorded");
+      expect(calls).toEqual(["Bearer fixture-token"]);
+      expect(lease).not.toHaveBeenCalled();
+      expect(persisted().models.map(model => model.slug)).toEqual([FUTURE]);
+      expect(SUPPORTED_NATIVE_OPENAI_SLUGS.has(FUTURE)).toBe(true);
+    } finally { lease.mockRestore(); }
+  });
+
+  test("pool-only production selection never reads native credentials, even with no Pool accounts", async () => {
+    const main = await import("../../src/codex/main-account");
+    const accounts = await import("../../src/codex/account-store");
+    const mainRead = spyOn(main, "getValidMainAccountToken");
+    const poolRead = spyOn(accounts, "getValidCodexToken").mockResolvedValue({
+      accessToken: "pool-fixture", chatgptAccountId: "", generation: 1,
+    } as Awaited<ReturnType<typeof accounts.getValidCodexToken>>);
+    const fetcher = (() => Promise.resolve(Response.json({ models: [row()] }))) as typeof fetch;
+    try {
+      expect(await discoverCodexNativeRoster({}, { poolOnly: true, fetcher })).toBe("unavailable");
+      expect(poolRead).not.toHaveBeenCalled();
+      expect(await discoverCodexNativeRoster({ codexAccounts: [
+        { id: "pool-fixture", isMain: false }, { id: "__main__", isMain: true },
+      ] } as Pick<OcxConfig, "codexAccounts">, { poolOnly: true, fetcher })).toBe("recorded");
+      expect(poolRead).toHaveBeenCalledTimes(1);
+      expect(poolRead).toHaveBeenCalledWith("pool-fixture");
+      expect(mainRead).not.toHaveBeenCalled();
+    } finally { mainRead.mockRestore(); poolRead.mockRestore(); }
+  });
 
   test("asks as a newer client, records an unpinned row, and leaves the entitlement cache alone", async () => {
     resetCodexNativeRosterDiscoveryForTests();

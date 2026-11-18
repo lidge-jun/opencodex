@@ -230,13 +230,13 @@ async function tick(): Promise<void> {
     // and the unref'd timer is left running so flipping the minutes back on is
     // picked up without a process restart.
     if (configured === 0) return;
-    // The default-on case belongs to installs whose local Codex client this proxy manages. With
-    // the integration off (or on a hub or sibling), an absent section keeps the old opt-in
-    // meaning: no background converge may write the native Codex home unasked. An explicit
-    // `enabled: true` still refreshes, as it did before the default flipped.
+    // Hubs refresh their own Pool roster independently of local-client ownership. A sibling
+    // still leaves discovery to the live owner; other unmanaged installs remain opt-in.
     const { shouldSyncCodexOnStart } = await import("./desired-state");
+    const { siblingOfLivePort } = await import("./sibling-start");
     const codexManaged = shouldSyncCodexOnStart(config);
-    if (!codexManaged && config.catalogAutoRefresh?.enabled !== true) return;
+    const hubDiscovery = config.runtimeRole === "hub" && !codexManaged && siblingOfLivePort() === null;
+    if (!codexManaged && !hubDiscovery && config.catalogAutoRefresh?.enabled !== true) return;
     // A stop or restart landed while the config resolved: this tick no longer owns the timer,
     // so it must neither count as a refresh nor adopt a cadence for a generation that is gone.
     if (entryGeneration !== generation) return;
@@ -244,6 +244,15 @@ async function tick(): Promise<void> {
     // callee at all. Only while this tick still owns the timer.
     restartIfCadenceChanged(configured);
     tickCount += 1;
+    if (hubDiscovery) {
+      const { refreshHubNativeRoster } = await import("./catalog-auto-refresh-sources");
+      if (entryGeneration !== generation) return;
+      await refreshHubNativeRoster(config, () => entryGeneration === generation);
+      if (entryGeneration !== generation) return;
+      // Default-on hub discovery publishes only the registry and OpenCodex store. Preserve
+      // existing opt-in convergence: writing CODEX_HOME still requires explicit enablement.
+      if (config.catalogAutoRefresh?.enabled !== true) return;
+    }
     // Config-surface healing precedes catalog work: a desktop app rewrite that stripped the
     // injected routing keys leaves the catalog file untouched, so the converge below would
     // report "no change" while Codex serves its native model picker. Re-injecting through the

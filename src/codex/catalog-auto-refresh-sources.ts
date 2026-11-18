@@ -54,6 +54,19 @@ export async function refreshCatalogAutoRefreshSources(
   });
 }
 
+/** Hub discovery owns only the OpenCodex pool/store, never the host's native Codex home. */
+export async function refreshHubNativeRoster(
+  config: OcxConfig,
+  current: () => boolean,
+): Promise<void> {
+  await bestEffortSource(async (active, signal) => {
+    const { discoverCodexNativeRoster } = await import("./model-entitlements");
+    if (active() && current()) await discoverCodexNativeRoster(config, {
+      poolOnly: true, signal, isCurrent: () => active() && current(),
+    });
+  });
+}
+
 /** Observation only: running sessions own static copies and require an operator restart. */
 export async function catalogAutoRefreshReloadRequired(changed = true): Promise<boolean> {
   try {

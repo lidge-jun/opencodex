@@ -578,11 +578,14 @@ There is no dashboard control for this yet; set it in `config.json` or with
 
 ## Catalog auto-refresh (`catalogAutoRefresh`)
 
-Enabled by default when OpenCodex manages your local Codex client: the section or `enabled`
-may be absent. The proxy refreshes its model catalog every 60 minutes, with one initial refresh
-about three minutes after startup. When the Codex integration is turned off, or the instance
-runs as a hub or beside another live proxy, background refresh runs only with an explicit
-`"enabled": true`, and it never reads Codex sources.
+Enabled by default when OpenCodex manages your local Codex client or runs as a hub:
+the section or `enabled` may be absent. Refresh runs every 60 minutes, with one initial refresh
+about three minutes after startup. A hub without a managed local client discovers native models
+using its stored ChatGPT Pool accounts, without reading the host's native Codex login, probing
+its runtime, or writing its local client catalog/config by default. Explicit `"enabled": true`
+keeps the existing local catalog convergence after discovery. Other instances with the Codex integration
+turned off, or instances beside another live proxy, retain opt-in refresh (`"enabled": true`)
+without reading Codex sources.
 
 ```json
 {
@@ -595,7 +598,7 @@ runs as a hub or beside another live proxy, background refresh runs only with an
 | `enabled` | `true` | Set to `false` to disable automatic refresh. |
 | `intervalMinutes` | `60` | Refresh cadence; positive values below 15 are clamped to 15. `0` disables refresh. |
 
-Each refresh observes the selected Codex runtime's bundled catalog, then warms authenticated
+For a managed local client, each refresh observes the selected Codex runtime's bundled catalog, then warms authenticated
 Codex model rosters before converging the served list. Source failures use existing evidence
 and retry on a later tick. Cadence and enablement edits take effect on a subsequent tick.
 
