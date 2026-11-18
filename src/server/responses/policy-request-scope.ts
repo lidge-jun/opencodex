@@ -43,16 +43,17 @@ export function mandatoryToolChoiceUnavailableResponse(): Response {
 const localRefusals = new WeakSet<Response>();
 const mandatoryToolRefusals = new WeakSet<Response>();
 
-export function policyCandidateRefusalResponse(error: unknown): Response | undefined {
-  if (!(error instanceof PolicyCandidateUnavailableError)) return undefined;
-  const response = formatErrorResponse(409, "policy_candidate_unavailable", error.message);
-  markPolicyCandidateRefusal(response);
-  if (error instanceof MandatoryToolChoiceUnavailableError) mandatoryToolRefusals.add(response);
+/** Attach candidate-local provenance without changing the HTTP envelope. */
+export function markPolicyCandidateRefusal(response: Response): Response {
+  localRefusals.add(response);
   return response;
 }
 
-export function markPolicyCandidateRefusal(response: Response): void {
-  localRefusals.add(response);
+export function policyCandidateRefusalResponse(error: unknown): Response | undefined {
+  if (!(error instanceof PolicyCandidateUnavailableError)) return undefined;
+  const response = formatErrorResponse(409, "policy_candidate_unavailable", error.message);
+  if (error instanceof MandatoryToolChoiceUnavailableError) mandatoryToolRefusals.add(response);
+  return markPolicyCandidateRefusal(response);
 }
 
 /** Upstream text or a matching error code cannot authorize another policy attempt. */

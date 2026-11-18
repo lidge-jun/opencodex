@@ -62,6 +62,34 @@ multi-call pairing, overlap and lifecycle release.
   `tests/advisor/advisor-responses-wiring.test.ts` exercises real streaming and buffered delivery.
   Client catalog checks wrap the Advisor guard, so synthetic calls are consumed internally before
   final worker output is checked against current client declarations, including direct encoders.
+  Synthetic injection requires the request's effective `tool_choice` to permit Advisor. For an
+  explicit selector or allowlist, `src/responses/parser-tools.ts` retains typed client selectors
+  and the selected root function names before provider translation. An unqualified function
+  selector can permit synthetic Advisor. An explicit root selector using the reserved `functions`
+  namespace also permits synthetic Advisor when no caller declaration owns the root name.
+  A caller-owned `advisor` can pass through when its
+  declared kind, name and any explicit namespace match the original selector and the effective choice permits it. With `auto`
+  or `required`, caller-owned tools follow the effective choice alone. A forced hosted search
+  excludes a caller-owned `advisor` even when the worker receives `auto`.
+  The guard resolves worker call names against the caller catalog, including flattened, dotted,
+  and compatible bare or reserved `functions` echoes. It checks the declaration against
+  the original typed selector and checks the effective choice on each worker leg. A forbidden call
+  is refused before consultation, continuation, or disclosure of its ID and arguments.
+  Linked Messages replay uses the same check. `src/claude/inbound-content-options.ts` identifies
+  an explicitly selected hosted Advisor from the original declaration before choice lowering.
+  The Responses core validates the original choice against the resolved route and admitted
+  catalog. Duplicate matches return a request-wide HTTP 400 before dispatch. A declaration
+  unavailable on the current route or under its model scope refuses that candidate before dispatch.
+  Combo and policy fallback can try another candidate with the original declaration and choice.
+  When all attempted candidates are incompatible, delivery retains the public HTTP 400.
+  An admitted named choice drives Anthropic wire encoding and grants no root
+  function permission. Explicit hosted selections skip proxy preflight. Other automatic
+  consultations follow operator policy. The translated Messages wire and guard are covered by
+  `tests/claude-integration/claude-translated-hosted-advisor-choice.test.ts`.
+  A buffered refusal preserves the already-parsed rejected worker leg's terminal usage, merged
+  with earlier intercepted legs once. Streaming refusal closes its iterator immediately.
+  The empty-completion retry preserves `undeclared_tool_call` and merges available usage.
+  A streaming refusal can close the retry before that send reports terminal usage.
 - Run-turn adapters: preflight support only — the automatic pre-dispatch consultation attempt
   applies, but the synthetic tool is never injected because the run-turn loop cannot intercept it.
 - Native OpenAI passthrough: no advisor support in PR1. The request path is byte-identical to a
@@ -70,10 +98,11 @@ multi-call pairing, overlap and lifecycle release.
   consultation and continuation bounds with the normal guard. The search scanner consumes advisor
   calls alongside `web_search`, fulfills them in worker order, and replays paired results without
   exposing the synthetic call to the client. The synthetic tool and scanner are enabled only when
-  the request's effective `tool_choice` permits Advisor; an `allowed_tools` scope that permits only
-  web search cannot be widened into an expert consultation. Without an active Advisor sidecar,
-  an emitted `advisor` call is refused before its ID or arguments reach the client unless that
-  iteration declares and permits it as an ordinary client tool. Partial calls are refused at
+  the caller's selection and effective `tool_choice` permit Advisor. The same call resolver runs on each
+  search iteration and leaves the search tool's outbound translation intact. A caller-owned
+  `advisor` must be declared and permitted by both the original selector and current iteration's
+  effective choice. The loop refuses other unauthorized calls before their IDs or arguments
+  reach the client. Partial calls are refused at
   their start, and the terminal refusal retains worker usage. Synthetic permission is also
   iteration-scoped: tools-disabled empty-answer recovery refuses Advisor even when the original
   turn installed the sidecar; ordinary exhausted-Advisor iterations retain paired limit handling.

@@ -117,6 +117,7 @@ import {
   createGrokResponsesTimestampBlockRewrite,
 } from "../grok-responses-control-frame";
 import { createGrokResponsesSparseTerminalBlockRewrite } from "../grok-responses-snapshot-repair";
+import { isXaiGrokOAuth, isXaiLegacyPrivacyError, xaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
 import { isXaiResponsesDestination } from "../../providers/xai-transport";
 import {
   createGrokUpstreamEnvelopeEchoBlockRewrite,
@@ -643,7 +644,8 @@ export async function deliverPassthroughResponse(
     // masquerade as a pre-connection failure after the credential was seen.
     // The numeric outcome above already classified it neutral — no streak.
     if (isNonReplayableResponse(upstreamResponse) && !isReplayRefusalResponse(upstreamResponse) && !wasPermanentAccountRefusal(upstreamResponse)) {
-      return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal);
+      return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal,
+        isXaiGrokOAuth(route.providerName, route.provider) ? logCtx : undefined);
     }
     if (upstreamResponse.status >= 300 && upstreamResponse.status < 400) {
       return new Response(upstreamResponse.body, {
@@ -653,6 +655,7 @@ export async function deliverPassthroughResponse(
       });
     }
     if (!upstreamResponse.ok) {
+      const grokOAuth = isXaiGrokOAuth(route.providerName, route.provider);
       if (options.comboAttempt) {
         // No pre-read guard here: `consumeComboFailure` -> `readBoundedResponseBody` reads
         // `response.body` itself and already threads the abort signal through its own read,
@@ -660,10 +663,10 @@ export async function deliverPassthroughResponse(
         // "captures passthrough failed usage from its original bounded body exactly once").
         // Attaching a guard would be a second `.body` access and break that contract for no
         // gain, since the bounded reader owns settlement on this path.
-        // Only the plan-refusal cause is carried to this leg's row (#8352); a throwaway holder
+        // Only the plan or account-policy refusal cause is carried to this leg's row (#8352); a throwaway holder
         // keeps the other diagnostics this path has never recorded off it.
         const comboCause: Pick<typeof logCtx, "causeHint"> = {};
-        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, undefined, comboCause);
+        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, undefined, comboCause, false, grokOAuth);
         if (comboCause.causeHint) logCtx.causeHint = comboCause.causeHint;
         options.onConsumedComboFailure?.(failure);
         return failure.response;
@@ -671,6 +674,7 @@ export async function deliverPassthroughResponse(
       // The bounded reader owns the original body, deadline, abort settlement, and lock.
       // Unsafe partial data falls back to #452's non-empty status-only JSON.
       const errorText = await readDisplaySafeErrorText(upstreamResponse, upstream.signal, "");
+      if (grokOAuth && isXaiLegacyPrivacyError(upstreamResponse.status, errorText)) return xaiPrivacyModeRefusal(logCtx);
       if (upstreamResponse.status === 413) {
         if (options.clientModelLabel) projectLocalModelRefusalLog(logCtx, options.clientModelLabel);
         return clientRequestedStream

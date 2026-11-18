@@ -502,6 +502,8 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
   is Google's — the proxy does not route around it.
 - System prompt → `systemInstruction`; messages → `contents[]` (assistant → `model`); tools →
   `functionDeclarations`. Data-URL images → `inline_data`.
+- Vertex AI and Antigravity retry a `429` only when the response carries retry evidence, such as a
+  valid `Retry-After` header, and surface hard quota exhaustion immediately.
 - The shared tool-catalog guidance uses wording verified with Antigravity Gemini 3.8 Flash to
   avoid a prompt-triggered `429 RESOURCE_EXHAUSTED`. The available tools, argument constraints,
   and Codex code-mode helper rules stay the same. This does not suppress real quota errors.

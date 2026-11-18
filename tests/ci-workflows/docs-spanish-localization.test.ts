@@ -7,6 +7,14 @@ import { codeBlockLocale } from "../../docs-site/src/data/code-block-locale";
 
 const root = repoPath("docs-site/src/content/docs");
 const source = (path: string): string => readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+
+test("Google adapter references document 429 retry evidence in English and Spanish", () => {
+  for (const locale of ["", "es/"]) {
+    const google = source(join(root, locale, "reference/adapters.md")).split("## `google`\n")[1]?.split("\n## ")[0];
+    expect(google).toMatch(/`429`[^.]*`Retry-After`/);
+  }
+});
+
 const config = source(repoPath("docs-site/astro.config.mjs"));
 // Use the configured locale directories rather than freezing today's page count.
 const localeFolders = new Set([...config.matchAll(/^\s*["']?([a-z]{2}(?:-[a-z]{2})?)["']?:\s*\{\s*label:/gm)]
@@ -156,6 +164,33 @@ describe("Spanish documentation localization", () => {
     expect(hasA6apiQuotaTargets("~~~html\n<!--\n~~~\n" + a6apiHeading, spanish)).toBe(true);
     expect(codeBlocks("<!--\n~~~\n-->\n")).toEqual([]);
     expect(codeBlocks("~~~html\n<!--\n~~~\n")).toEqual(["<!--\n"]);
+  });
+
+  test.each([
+    ["en", /routing policy aliases.*combo aliases/],
+    ["es", /alias de políticas de enrutamiento.*alias de combos/],
+    ["fr", /alias de politique de routage.*alias de combos/],
+    ["ja", /ルーティングポリシーのエイリアス.*コンボのエイリアス/],
+    ["ko", /라우팅 정책 별칭.*콤보 별칭/],
+    ["ru", /псевдонимы политик маршрутизации.*псевдонимы комбо/],
+    ["tr", /yönlendirme politikası takma adları.*kombo takma adları/],
+    ["zh-cn", /路由策略别名.*组合别名/],
+    ["zh-tw", /路由政策別名.*組合別名/],
+  ] as const)("Claude guide %s documents router aliases before provider fallback", (locale, aliases) => {
+    const guide = source(join(root, locale === "en" ? "" : locale, "guides/claude-code.md"));
+    const paragraph = guide.split(/\n\s*\n/).find(text =>
+      text.includes("`ocx claude config set --native-passthrough off`") && text.includes("`defaultModel`"));
+    expect(paragraph).toBeDefined();
+    expect(paragraph!.split("`defaultModel`")[0]!.replace(/\s+/g, " ")).toMatch(aliases);
+  });
+
+  test("the canonical Claude passthrough guide distinguishes ingress aliases from router aliases", () => {
+    const guide = source(join(root, "guides/claude-code.md"));
+    const passthrough = guide.slice(guide.indexOf("`ocx claude config set --native-passthrough off`"),
+      guide.indexOf("**Rate limits on passthrough.**")).replace(/\s+/g, " ");
+    expect(passthrough).toMatch(/Claude picker and Desktop ingress aliases resolve before `modelMap`/);
+    expect(passthrough).toMatch(/a `modelMap` entry keyed by a raw model ID.+(?:either|both) /i);
+    expect(passthrough).toMatch(/router.+provider-model alias/);
   });
 
   test("code spans keep a trailing backslash literal without swallowing later identifiers", () => {
@@ -361,6 +396,16 @@ describe("Spanish documentation localization", () => {
       const examples = codeBlocks(source(join(root, locale, "guides/combos.md"))).join("\n");
       expect(examples, `${locale || "en"} JEV CLI reference`).toContain("--api-key '${TYPESAFE_API_KEY}'");
     }
+  });
+
+  test("the Spanish Grok Build manual recipe link lands at the recipe heading", () => {
+    const anchor = "manual-recipe-without-auto-registration";
+    const english = source(join(root, "guides/grok-build.md"));
+    const spanish = source(join(root, "es/guides/grok-build.md"));
+    expect(english).toContain(`](#${anchor})`);
+    expect(english).toContain("## Manual recipe (without auto-registration)");
+    expect(spanish).toContain(`](#${anchor})`);
+    expect(spanish).toContain(`<a id="${anchor}"></a>\n\n## Receta manual (sin registro automático)`);
   });
 
   test("remote credential examples require a protected transport in every locale", () => {

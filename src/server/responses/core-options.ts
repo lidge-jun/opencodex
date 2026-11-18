@@ -1,4 +1,5 @@
 import type { ClientFacingModelLabel } from "../../lib/error-destination";
+import type { HostedAdvisorSelection } from "../../claude/inbound-content-options";
 import type { CodexAccountModelRefusal } from "../../combos/failover";
 import type { NativeResponseControl } from "./native-response-control";
 import type { AdapterEvent, OcxUsage, OcxProviderContinuationState, OcxConfig } from "../../types";
@@ -216,6 +217,8 @@ export interface HandleResponsesOptions {
   nativeReasoningMint?: { owner?: NativeReasoningOwner };
   /** The Claude client's typed `web_search_*` / `web_fetch_*` declarations; kept only for `inboundWire: "anthropic"`. */
   anthropicServerTools?: readonly Record<string, unknown>[];
+  /** The original Messages choice names a typed hosted Advisor, possibly with a duplicate name. */
+  anthropicHostedAdvisorSelection?: HostedAdvisorSelection;
   /** The Claude client's replayable server-tool exchanges (`replayedAnthropicServerBlocks`); same scope. */
   anthropicServerReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>;
   /** The caller's cached system prefix (`systemCachePrefix`); same scope. */

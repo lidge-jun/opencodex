@@ -11,9 +11,9 @@ import type { PolicyRequestEvidence } from "../../routing/evaluator";
 import type { RequestLogContext } from "../request-log";
 import { addProtocolEntryReason, markProtocolEntry, protocolMarkFeatures } from "../../protocols/trace";
 import { nativeMessagesToolScopeDenial } from "../messages-native-scope";
-import { advisorServerToolDestination } from "../../adapters/anthropic/advisor-tool";
+import { ADVISOR_SERVER_TOOL_NAME, advisorServerToolDestination, planAnthropicServerTools } from "../../adapters/anthropic/advisor-tool";
 import { isAntigravityRoute } from "../antigravity-direct-eligibility";
-import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse, MandatoryToolChoiceUnavailableError, mandatoryToolChoiceUnavailableResponse } from "./policy-request-scope";
+import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse, markPolicyCandidateRefusal, MandatoryToolChoiceUnavailableError, mandatoryToolChoiceUnavailableResponse } from "./policy-request-scope";
 import {
   agentTaskRecoveryConfig,
   restoreCachedEncryptedAgentTasks,
@@ -549,6 +549,11 @@ export async function prepareResponsesRequest(
       parsed._nativeReasoningReplay = options.nativeReasoningReplay;
       parsed._nativeReasoningMint = options.nativeReasoningMint;
       parsed._anthropicServerTools = options.anthropicServerTools;
+      // The lowered named choice serves the wire builder but grants no client or synthetic tool permission.
+      if (options.anthropicHostedAdvisorSelection) {
+        parsed.options.explicitRootFunctionChoices = [];
+        parsed.options.explicitClientToolChoices = [];
+      }
       parsed._anthropicServerReplay = options.anthropicServerReplay;
       parsed._anthropicSystemCachePrefix = options.anthropicSystemCachePrefix;
       parsed._anthropicInbound = true;
@@ -1513,7 +1518,7 @@ export async function prepareResponsesRequest(
   try {
     assertPolicyNormalizedRoute(policyScope, admittedPolicyRoute, route);
     const copilotNegotiationPending = route.providerName === "github-copilot" && route.provider.authMode !== "forward";
-    if (!copilotNegotiationPending && route.provider.adapter === "openai-chat"
+    if (!options.anthropicHostedAdvisorSelection && !copilotNegotiationPending && route.provider.adapter === "openai-chat"
       && !chatCanPreserveMandatoryToolChoice(parsed._rawBody, route.provider, route.modelId, parsed.context.tools ?? [])) {
       // Combo children carry the refusal's local identity too, so a compatible sibling target
       // can still be tried; a direct request keeps the client-facing 400 below.
@@ -1542,14 +1547,26 @@ export async function prepareResponsesRequest(
   if (!routeAllowedByScope(admissionScope, scopedDestination)) {
     return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(new AdmissionModelDeniedError(inboundSelector, scopedDestination), logCtx));
   }
-  // A typed Advisor runs its own model server-side on this provider (#8448). The native lane refuses
-  // a declaration outside the caller's scope; the Advisor is optional here, so it is not forwarded.
+  // A typed Advisor runs its own model server-side on this provider (#8448). An out-of-scope
+  // declaration is withheld. A named selection also needs that declaration on the final route.
   const serverTools = parsed._anthropicServerTools;
   const scopedServerTools = serverTools?.filter(tool =>
     !nativeMessagesToolScopeDenial(admissionScope, route.providerName, route.modelId, { tools: [tool] }));
   if (serverTools && scopedServerTools && scopedServerTools.length !== serverTools.length) {
     parsed._anthropicServerTools = scopedServerTools;
     if (advisorServerToolDestination(route.provider)) addProtocolEntryReason(logCtx, "advisor-tool-outside-model-scope");
+  }
+  if (options.anthropicHostedAdvisorSelection) {
+    if (options.anthropicHostedAdvisorSelection === "ambiguous") {
+      return markProxyError(formatErrorResponse(400, "invalid_request_error",
+        "The hosted Advisor tool_choice is ambiguous because multiple tools are named advisor."));
+    }
+    const admittedAdvisor = planAnthropicServerTools(route.provider, scopedServerTools, undefined,
+      new Set(parsed.context.tools?.map(tool => tool.name)), false).declared.some(tool => tool.name === ADVISOR_SERVER_TOOL_NAME);
+    if (!admittedAdvisor) {
+      return markPolicyCandidateRefusal(markProxyError(formatErrorResponse(400, "invalid_request_error",
+        "The selected hosted Advisor tool is unavailable for this route or model scope.")));
+    }
   }
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.
