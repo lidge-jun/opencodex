@@ -8,7 +8,10 @@ export interface AccountPauseDetails {
   pausedAt: number;
 }
 export interface AccountAutoPausePolicy {
-  /** Explicit opt-in. Omitted and false both leave account eligibility unchanged. */
+  /**
+   * Explicit opt-in to pause on any permanent account refusal. With no policy at all, only a Cloud
+   * Code Assist provider pauses, on the first Terms of Service account ban. `false` opts out of both.
+   */
   enabled?: boolean;
   /** Consecutive permanent refusals; defaults to 2. */
   consecutiveFailures?: number;

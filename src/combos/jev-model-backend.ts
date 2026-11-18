@@ -17,7 +17,11 @@ import {
 } from "./jev";
 
 export class JevModelInvokeError extends Error {
-  constructor(readonly gate: "http" | "network" | "malformed" | "missing_key", message?: string) {
+  constructor(
+    readonly gate: "http" | "network" | "malformed" | "missing_key",
+    message?: string,
+    readonly usage?: Record<string, number>,
+  ) {
     super(message);
     this.name = "JevModelInvokeError";
   }
@@ -125,14 +129,15 @@ export async function resolveJevModelDecision(
     if (result.quotaOmitted) candidates = candidates.map(({ quota: _quota, ...row }) => row);
     if (options.signal?.aborted) throw options.signal.reason;
     if (timeoutSignal.aborted) return failed("timeout");
+    const usage = jevUsage({ usage: result.usage });
     let choice: string;
     try {
       choice = parseJevModelChoice(result.text, new Set(routeOptions.map(option => option.key)));
     } catch (error) {
-      return failed(error instanceof JevModelInvokeError ? error.gate : "invalid");
+      const decision = failed(error instanceof JevModelInvokeError ? error.gate : "invalid");
+      return usage ? { ...decision, usage } : decision;
     }
     const selected = routeOptions.find(option => option.key === choice)!;
-    const usage = jevUsage({ usage: result.usage });
     if (options.signal?.aborted) throw options.signal.reason;
     return withJevQuotaSummary({
       backend: "model",
@@ -145,6 +150,9 @@ export async function resolveJevModelDecision(
   } catch (error) {
     if (options.signal?.aborted) throw options.signal.reason;
     if (timeoutSignal.aborted || (error instanceof Error && error.name === "TimeoutError")) return failed("timeout");
-    return failed(error instanceof JevModelInvokeError ? error.gate : "network");
+    if (!(error instanceof JevModelInvokeError)) return failed("network");
+    const decision = failed(error.gate);
+    const usage = jevUsage({ usage: error.usage });
+    return usage ? { ...decision, usage } : decision;
   }
 }
