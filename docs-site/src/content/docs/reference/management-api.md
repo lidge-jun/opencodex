@@ -247,7 +247,7 @@ completes.
 | --- | --- | --- |
 | `GET /api/combos` | List normalized combos and their public model ids | Catalog work can return `catalog_busy` |
 | `PUT /api/combos` | Create, replace, or rename one combo | 400 invalid id, target, config, rename, or ordinary collision (a combo validation 400 also names the first invalid top-level field in `field`, for example `targets` or `decisionProvider`); 409 Codex-account namespace collision |
-| `POST /api/combo-suggestions/save` | Save suggested provider/model pairs using `{ id, mode: "create" or "append", targets }` | 400 invalid request; 409 when consent, exclusions, provider availability, or combo state prevents the save. A target classified as paid in either the active or persisted config requires existing combo consent and is saved as metered. |
+| `POST /api/combo-suggestions/save` | Save suggested provider/model pairs using `{ id, mode: "create" or "append", targets }` | 400 invalid request; 409 when consent, exclusions, provider availability, or combo state prevents the save. A target classified as paid in either the active or persisted config requires existing combo consent and is saved as metered. When appending suggestions, the server uses the more costly tier from the active and saved configurations. It treats existing targets explicitly marked as metered as pay-per-use and preserves the relative order of existing targets. |
 | `DELETE /api/combos?id=...` | Delete one combo and clear its selection/cooldown state | 400 missing id; 404 unknown combo |
 
 See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and routing failures.

@@ -5,7 +5,7 @@
  */
 import { clearComboSelectionState, clearComboTargetCooldowns, comboPublicModelId } from "../../combos";
 import { comboConfigIssues } from "../../combos/types";
-import { channelTier, isMeteredTier, TIER_RANK } from "../../combos/suggestion-channel";
+import { channelTier, TIER_RANK } from "../../combos/suggestion-channel";
 import { codexAccountNamespaceForModel } from "../../codex/account-namespace-match";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import type { OcxComboConfig, OcxConfig } from "../../types";
@@ -128,6 +128,8 @@ async function saveSuggestion(ctx: ManagementContext): Promise<Response> {
       const current = providerFor(snapshot, provider);
       return current ? channelTier({ ...current, name: provider }, model) : "metered";
     };
+    // A provider can have different billing in the running and saved config.
+    const rankOf = (target: Target) => Math.max(TIER_RANK[tierOf(persisted, target)], TIER_RANK[tierOf(config, target)]);
     for (const target of targets) {
       if (nextTargets.some(({ provider, model }) => provider.trim() === target.provider && model.trim() === target.model)) continue;
       const provider = providerFor(persisted, target.provider);
@@ -135,11 +137,11 @@ async function saveSuggestion(ctx: ManagementContext): Promise<Response> {
         return rejected("suggestion_provider_unavailable");
       }
       if (persisted.comboSuggestionExcludedProviders?.includes(target.provider)) return rejected("suggestion_provider_excluded");
-      const tier = tierOf(persisted, target);
-      const liveTier = tierOf(config, target);
-      const metered = isMeteredTier(tier) || isMeteredTier(liveTier);
+      const rank = rankOf(target);
+      const metered = rank >= TIER_RANK.vertex;
       if (metered && previous?.allowMeteredTargets !== true) return rejected("suggestion_consent_required");
-      const at = create ? -1 : nextTargets.findIndex(existing => TIER_RANK[tierOf(persisted, existing)] > TIER_RANK[tier]);
+      const at = create ? -1 : nextTargets.findIndex(existing =>
+        (existing.metered === true ? TIER_RANK.metered : rankOf(existing)) > rank);
       nextTargets.splice(at < 0 ? nextTargets.length : at, 0, { ...target, ...(metered ? { metered: true } : {}) });
     }
 

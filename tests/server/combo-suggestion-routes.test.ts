@@ -155,10 +155,16 @@ for (const paidSide of ["live", "persisted"] as const) {
   test(`suggestion requires consent and marks the target metered when only ${paidSide} is paid`, async () => {
     const live = seedPaidSuggestion();
     const persisted = loadConfig();
-    const freeProvider = { ...live.providers.paid!, baseUrl: "https://example.com/v1", authMode: "forward" as const };
+    const freeProvider = { ...live.providers.paid!, baseUrl: "https://generativelanguage.googleapis.com/v1", authMode: "forward" as const };
     const paidProvider = { ...freeProvider, authMode: "api-key" as const };
     live.providers.paid = paidSide === "live" ? paidProvider : freeProvider;
     persisted.providers.paid = paidSide === "persisted" ? paidProvider : freeProvider;
+    const subscription = { provider: "mock", model: "m" };
+    const explicitlyMetered = { provider: "paid", model: "previous", metered: true };
+    live.providers.mock!.authMode = "forward";
+    persisted.providers.mock!.authMode = "forward";
+    live.combos!.mix!.targets = [subscription, explicitlyMetered];
+    persisted.combos!.mix!.targets = [subscription, explicitlyMetered];
     delete live.combos!.mix!.allowMeteredTargets;
     delete persisted.combos!.mix!.allowMeteredTargets;
     saveConfig(persisted);
@@ -180,7 +186,24 @@ for (const paidSide of ["live", "persisted"] as const) {
     const response = await saveSuggestion(live, { id: "mix", mode: "append", targets });
     expect(response.status).toBe(200);
     for (const config of [live, loadConfig()]) {
-      expect(config.combos?.mix?.targets).toContainEqual({ ...paidTarget, metered: true });
+      expect(config.combos?.mix?.targets).toEqual([subscription, explicitlyMetered, { ...paidTarget, metered: true }]);
     }
   });
 }
+
+test("append inserts a subscription before explicitly metered targets without reordering them", async () => {
+  const live = seedPaidSuggestion();
+  live.providers.mock!.authMode = "forward";
+  const existing = [
+    { provider: "mock", model: "first", metered: true },
+    { provider: "mock", model: "second", metered: true },
+  ];
+  live.combos!.mix!.targets = existing;
+  saveConfig(live);
+  const target = { provider: "mock", model: "m" };
+  const response = await saveSuggestion(live, { id: "mix", mode: "append", targets: [target] });
+  expect(response.status).toBe(200);
+  for (const config of [live, loadConfig()]) {
+    expect(config.combos?.mix?.targets).toEqual([target, ...existing]);
+  }
+});
