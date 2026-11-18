@@ -10,6 +10,8 @@ export interface IncomingMeta {
   headers: Headers;
   /** Client ingress transport, carried from the Responses bridge. */
   inboundTransport?: "websocket";
+  /** Internal ACP refusal signal from the original HTTP turn. */
+  agyAcpUnattendedHttpTurn?: boolean;
   /** Canonical routed provider identity for provider-specific wire fields. */
   providerName?: string;
   /** Trusted caller has durable structural replay ownership for earlier completed tools. */

@@ -33,6 +33,7 @@ import { parseRequest } from "../../responses/parser";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
 import { applyReasoningRetention, appendRetentionNotice, type ReasoningRetentionResult } from "../../responses/reasoning-retention";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
+import { isUnattendedAgyAcpHttpTurn } from "../../adapters/agy-acp/policy";
 import { repairUrlCitationAnnotations, stripProviderInputItemMetadata } from "../../adapters/openai-responses/request-strips";
 import { expandPreviousResponseInput, previousResponseProviderState, rememberResponseState } from "../../responses/state";
 import { repairLegacyDottedToolCallNames } from "../../responses/legacy-dotted-tool-name-repair";
@@ -1823,6 +1824,7 @@ export async function handleResponsesCompact(
       stream: isCanonicalOpenAiForwardProvider(route.provider) || accountGatedCompactWireModel || route.combo ? true : false,
       input: [...inputItems, { type: "compaction_trigger" }],
     };
+    const agyAcpUnattendedHttpTurn = isUnattendedAgyAcpHttpTurn(req.headers, raw);
     const internalHeaders = new Headers({ "content-type": "application/json" });
     for (const name of FORWARD_HEADERS) {
       const value = req.headers.get(name);
@@ -1840,7 +1842,12 @@ export async function handleResponsesCompact(
     // fallback spend four more.
     // internalReq keeps only FORWARD_HEADERS, so the caller principal is resolved from req.
     const replayPrincipal = { clientPrincipalId: resolveContextPrincipal(req, config, admission) };
-    const response = await handleResponses(internalReq, config, logCtx, { clientModelLabel: options.clientModelLabel, abortSignal: req.signal, turnAdmissionLease, sendBudget, compactionRecoveryKind: "compaction-v1", compactionRoutingOverride: options.compactionRoutingOverride, advisorAdmissionPolicy: options.advisorAdmissionPolicy, replayPrincipal, ...(admission ? { admission } : {}) });
+    const response = await handleResponses(internalReq, config, logCtx, {
+      clientModelLabel: options.clientModelLabel, abortSignal: req.signal, turnAdmissionLease, sendBudget,
+      compactionRecoveryKind: "compaction-v1", compactionRoutingOverride: options.compactionRoutingOverride,
+      advisorAdmissionPolicy: options.advisorAdmissionPolicy, replayPrincipal, agyAcpUnattendedHttpTurn,
+      ...(admission ? { admission } : {}),
+    });
     if (req.signal.aborted) {
       void response.body?.cancel(req.signal.reason).catch(() => undefined);
       return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");

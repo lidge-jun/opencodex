@@ -21,6 +21,8 @@ export interface AgyAcpPolicySignals {
   /** The request body, for the frame's own copy of Codex's turn metadata (WebSocket turns carry it there). */
   body?: unknown;
   inboundTransport?: "websocket";
+  /** HTTP ingress already saw an unattended turn label before translating the request. */
+  unattendedHttpTurn?: boolean;
   comboAttempt?: boolean;
   subagentFallback?: boolean;
   /** A combo's internal decision call (JEV): combo machinery, refused like a combo member. */
@@ -86,10 +88,15 @@ function isUnattendedCodexTurn({ headers, body, inboundTransport }: AgyAcpPolicy
   return detectMemoryModelPhase(body, headers, { transport: "websocket" }) !== null;
 }
 
+/** Classify the original HTTP request before a bridge replaces its headers or body. */
+export function isUnattendedAgyAcpHttpTurn(headers: Headers, body?: unknown): boolean {
+  return isUnattendedCodexTurn({ headers, body });
+}
+
 /** The refusal for a turn this provider must not serve, or undefined when it may run. */
 export function agyAcpPolicyRefusal(signals: AgyAcpPolicySignals): AgyAcpPolicyRefusal | undefined {
   if (signals.headers.has("x-codex-parent-thread-id") || signals.comboAttempt === true || signals.internalDecisionCall === true
-    || signals.subagentFallback === true || isUnattendedCodexTurn(signals)) {
+    || signals.subagentFallback === true || signals.unattendedHttpTurn === true || isUnattendedCodexTurn(signals)) {
     return { status: 403, errorType: "permission_error", code: AGY_ACP_INTERACTIVE_ONLY, message: INTERACTIVE_MESSAGE };
   }
   const local = signals.local ?? currentRequestIsLocal();

@@ -100,6 +100,7 @@ function script(onFrame?: (frame: Frame, api: AgentApi, state: { config: Frame[]
 
 async function run(agent: ReturnType<typeof script>, opts: {
   parsed?: OcxParsedRequest; headers?: Headers; comboAttempt?: boolean; subagentFallback?: boolean; internalDecisionCall?: boolean; local?: boolean;
+  agyAcpUnattendedHttpTurn?: boolean;
   deps?: Partial<AgyAcpDeps>; abort?: AbortController; beforeRun?: (child: FakeChild) => void;
   sendAccounting?: Pick<IncomingMeta, "sendBudget" | "beforePhysicalSend" | "onPhysicalSend">;
 } = {}): Promise<Harness> {
@@ -120,6 +121,7 @@ async function run(agent: ReturnType<typeof script>, opts: {
   });
   const go = () => adapter.runTurn!(opts.parsed ?? parsed(), {
     headers: opts.headers ?? new Headers(),
+    agyAcpUnattendedHttpTurn: opts.agyAcpUnattendedHttpTurn,
     translatorBudget: undefined as never,
     ...(opts.comboAttempt ? { comboAttempt: true } : {}),
     ...(opts.subagentFallback ? { subagentFallback: true } : {}),
@@ -798,12 +800,13 @@ describe("agy acp turn", () => {
 });
 
 describe("agy acp use policy at runTurn", () => {
-  test("subagent, combo, combo-decision, subagent-fallback and non-local turns are refused before any probe or spawn", async () => {
+  test("disallowed turns are refused before any probe or spawn", async () => {
     const cases: Array<[Parameters<typeof run>[1], string]> = [
       [{ headers: new Headers({ "x-codex-parent-thread-id": "" }) }, "agy_acp_interactive_only"],
       [{ comboAttempt: true }, "agy_acp_interactive_only"],
       [{ internalDecisionCall: true }, "agy_acp_interactive_only"],
       [{ subagentFallback: true }, "agy_acp_interactive_only"],
+      [{ agyAcpUnattendedHttpTurn: true }, "agy_acp_interactive_only"],
       [{ local: false }, "agy_acp_local_only"],
     ];
     for (const [opts, code] of cases) {

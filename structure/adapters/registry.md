@@ -70,6 +70,9 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   precedence for bare native OpenAI IDs when the OpenAI row is enabled. The use policy
   (`src/adapters/agy-acp/policy.ts`) refuses subagent turns (`x-codex-parent-thread-id`), turns Codex labels as spawned threads (`isThreadSpawnRequest`) or as
   its memory pipeline (`detectMemoryModelPhase`, `x-openai-subagent: memory_consolidation`, `x-openai-memgen-request`), or as automatic compaction (`request_kind: "compaction"` with `trigger: "auto"`; manual compaction runs).
+  Chat Completions and routed Compact classify the original HTTP headers and body before bridging them to Responses.
+  Responses captures its own HTTP header classification at ingress. The policy carries that decision as a typed
+  flag to preflight and `runTurn`, independently of the upstream header allowlist and body serialization.
   A spawn label in the WebSocket frame body is sufficient. Explicit user-turn metadata there supersedes a stale spawn
   label from the upgrade's turn metadata. A connection labeled `collab_spawn` still refuses every frame. A spawn
   label in the upgrade's turn metadata still refuses frames without explicit user provenance. An HTTP memory label in the header is sufficient even
@@ -107,7 +110,7 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   cleanup. A POSIX probe requires group cleanup confirmation before supplying a version.
   The terminal event is published after cleanup settles. Coverage:
   `tests/adapters/agy-acp-{adapter,protocol,policy}.test.ts`, `tests/config/agy-acp-config.test.ts`,
-  `tests/server/server-agy-acp.test.ts`.
+  `tests/server/server-agy-acp.test.ts` covers all three HTTP surfaces and frame-local automatic compaction.
 - `devin` is direct for a related reason. It streams Cognition's
   `ApiServerService/GetChatMessage` over Connect-RPC from `runTurn` with hand-written protobuf
   framing, so like Cursor it never travels the `buildRequest`/`parseStream` path. Login is

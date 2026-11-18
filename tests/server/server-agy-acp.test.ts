@@ -60,7 +60,19 @@ function config(): OcxConfig {
   } as OcxConfig;
 }
 
-const body = JSON.stringify({ model: "antigravity-acp/gemini-4-argon", stream: true, input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }] });
+const model = "antigravity-acp/gemini-4-argon";
+const responsesBody = { model, stream: true, input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }] };
+const body = JSON.stringify(responsesBody);
+const turnMetadata = "x-codex-turn-metadata";
+const memoryMetadata = JSON.stringify({ request_kind: "memory" });
+const spawnMetadata = JSON.stringify({ subagent_kind: "thread_spawn" });
+const compactionMetadata = (trigger: "auto" | "manual") => JSON.stringify({ request_kind: "compaction", compaction: { trigger } });
+const interactiveOnlyError = { error: { type: "permission_error", code: "agy_acp_interactive_only" } };
+
+function recordedLaunches(): string[][] {
+  if (!existsSync(argsFile)) return [];
+  return readFileSync(argsFile, "utf8").trim().split("\n").map(line => JSON.parse(line).args);
+}
 
 describe.skipIf(process.platform === "win32")("antigravity-acp through the server", () => {
   test.each([
@@ -173,6 +185,85 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
       expect(response.status).toBe(403);
       expect(await response.json()).toMatchObject({ error: { type: "permission_error", code: "agy_acp_interactive_only" } });
       expect(existsSync(argsFile)).toBe(false);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  for (const path of ["/v1/chat/completions", "/v1/responses/compact", "/v1/responses"]) {
+    const cases: Array<[string, { headers?: Record<string, string>; metadata?: string }]> = [
+      ["memgen header", { headers: { "x-openai-memgen-request": "true" } }],
+      ["memory-consolidation subagent header", { headers: { "x-openai-subagent": "memory_consolidation" } }],
+      ["memory metadata header", { headers: { [turnMetadata]: memoryMetadata } }],
+      ["thread-spawn metadata header", { headers: { [turnMetadata]: spawnMetadata } }],
+      ["automatic-compaction metadata header", { headers: { [turnMetadata]: compactionMetadata("auto") } }],
+      ["memory metadata in the body", { metadata: memoryMetadata }],
+      ["thread-spawn metadata in the body", { metadata: spawnMetadata }],
+      ["automatic-compaction metadata in the body", { metadata: compactionMetadata("auto") }],
+    ];
+    test.each(cases)(`${path} refuses unattended turns before starting agy (%s)`, async (_name, { headers, metadata }) => {
+      saveConfig(config());
+      const server = startServer(0);
+      try {
+        const payload = path === "/v1/chat/completions"
+          ? { model, messages: [{ role: "user", content: "hello" }] }
+          : responsesBody;
+        const response = await fetch(new URL(path, server.url), {
+          method: "POST",
+          headers: { "content-type": "application/json", ...headers },
+          body: JSON.stringify({ ...payload, ...(metadata ? { client_metadata: { [turnMetadata]: metadata } } : {}) }),
+        });
+        const responseBody = await response.text();
+        expect({ status: response.status, launches: recordedLaunches() }).toEqual({ status: 403, launches: [] });
+        expect(JSON.parse(responseBody)).toMatchObject(interactiveOnlyError);
+      } finally {
+        await server.stop(true);
+      }
+    });
+  }
+
+  test("Responses WebSocket refuses frame-local automatic compaction before starting agy", async () => {
+    saveConfig({ ...config(), websockets: true } as OcxConfig);
+    const server = startServer(0);
+    const socket = new WebSocket(new URL("/v1/responses", server.url).href.replace(/^http/, "ws"));
+    try {
+      const frame = await new Promise<unknown>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("no terminal frame")), 8_000);
+        socket.onopen = () => socket.send(JSON.stringify({
+          ...responsesBody,
+          type: "response.create",
+          input: [...responsesBody.input, { type: "compaction_trigger" }],
+          client_metadata: { [turnMetadata]: compactionMetadata("auto") },
+        }));
+        socket.onerror = () => { clearTimeout(timer); reject(new Error("websocket error")); };
+        socket.onmessage = event => {
+          const value = JSON.parse(String(event.data));
+          if (["error", "response.failed", "response.completed"].includes(value.type)) {
+            clearTimeout(timer);
+            resolve(value);
+          }
+        };
+      });
+      expect(frame).toMatchObject({ type: "error", status: 403, ...interactiveOnlyError });
+      expect(recordedLaunches()).toEqual([]);
+    } finally {
+      socket.close();
+      await server.stop(true);
+    }
+  }, 10_000);
+
+  test("routed manual compaction runs and returns the ACP summary", async () => {
+    saveConfig(config());
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/responses/compact", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json", [turnMetadata]: compactionMetadata("manual") },
+        body,
+      });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("fake acp answer");
+      expect(recordedLaunches()).toEqual([["--version"], ["acp", "--sandbox"]]);
     } finally {
       await server.stop(true);
     }

@@ -1029,7 +1029,9 @@ Protocol v1 (newline-delimited JSON-RPC on stdio).
 - `end_turn` completes; `max_tokens` and `refusal` complete as truncated and content-filtered; `max_turn_requests`, an
   unrequested `cancelled` and an unknown stop reason fail the turn.
 - Refuses subagent, spawned-thread, Codex memory and automatic compaction turns, combo members and combo decision calls, and
-  subagent-fallback routing. OpenCodex determines locality from the observed connection and refuses requests carrying
+  subagent-fallback routing. Chat Completions, Responses and Responses Compact return `403 agy_acp_interactive_only`
+  for labeled unattended turns. Responses WebSocket applies the automatic compaction check to each frame. Manual
+  compaction remains available. OpenCodex determines locality from the observed connection and refuses requests carrying
   recognized forwarding headers. A loopback relay or SSH port forward that adds none can still appear local.
   On the public listener, declare the reverse proxy in `dashboardTrustedProxy` or keep this port out of the relay.
   See the [API-key catalog](/guides/api-key-catalog/#antigravity-cli-acp-local).

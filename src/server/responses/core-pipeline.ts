@@ -53,7 +53,7 @@ export async function handleResponsesInner(
       adapterName: transportState.runTurnAdapter.name, requestHeaders: req.headers,
       forwardHeaders: requestState.selectedForwardHeaders, body: requestState.parsed._rawBody, comboAttempt: options.comboAttempt === true,
       internalDecisionCall: options.internalDecisionCall === true, subagentFallback: requestState.subagentFallbackSelected,
-      inboundTransport: options.inboundTransport, logCtx,
+      inboundTransport: options.inboundTransport, unattendedHttpTurn: options.agyAcpUnattendedHttpTurn, logCtx,
     });
     if (agyAcpRefusal) return agyAcpRefusal;
     if (transportState.runTurnAdapter.name === "claude-cli") {
