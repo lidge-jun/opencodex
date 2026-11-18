@@ -21,12 +21,14 @@ let previousArgsFile: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 let argsFile = "";
 
+const shellLiteral = (value: string): string => "'" + value.replaceAll("'", "'\"'\"'") + "'";
+
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   previousBin = process.env.OPENCODEX_AGY_BIN;
   previousArgsFile = process.env.AGY_FAKE_ARGS_FILE;
   isolatedCodexHome = installIsolatedCodexHome("ocx-agy-acp-codex-");
-  testDir = mkdtempSync(join(tmpdir(), "ocx-agy-acp-server-"));
+  testDir = mkdtempSync(join(tmpdir(), "ocx-agy-acp-server-$fixture' space-"));
   process.env.OPENCODEX_HOME = join(testDir, "home");
   argsFile = join(testDir, "args.jsonl");
   // The child gets a scoped environment, so the launch log path is baked into the wrapper; a variable
@@ -34,7 +36,7 @@ beforeEach(() => {
   process.env.AGY_FAKE_ARGS_FILE = "must-not-reach-the-child";
   const wrapper = join(testDir, "agy");
   writeFileSync(wrapper, `#!/bin/sh
-AGY_FAKE_ARGS_FILE="${argsFile}" AGY_FAKE_VERSION_FILE="${join(testDir, "version.json")}" exec "${process.execPath}" "${fixturePath("agy-acp/fake-agy.ts")}" "$@"
+AGY_FAKE_ARGS_FILE=${shellLiteral(argsFile)} AGY_FAKE_VERSION_FILE=${shellLiteral(join(testDir, "version.json"))} exec ${shellLiteral(process.execPath)} ${shellLiteral(fixturePath("agy-acp/fake-agy.ts"))} "$@"
 `);
   chmodSync(wrapper, 0o755);
   process.env.OPENCODEX_AGY_BIN = wrapper;
@@ -74,6 +76,37 @@ function recordedLaunches(): string[][] {
   return readFileSync(argsFile, "utf8").trim().split("\n").map(line => JSON.parse(line).args);
 }
 
+const WEBSOCKET_FRAME_TIMEOUT_MS = 15_000;
+const WEBSOCKET_TEST_TIMEOUT_MS = 20_000;
+const terminalFrameTypes = ["response.completed", "response.failed", "error"];
+
+async function responsesWebSocketTurn(base: string | URL, payload: unknown, headers: Record<string, string> = {}) {
+  const socket = new WebSocket(new URL("/v1/responses", base).href.replace(/^http/, "ws"), { headers } as unknown as string[]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let text = "";
+  try {
+    return await new Promise<{ text: string; terminal: { type: string } }>((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error("no terminal frame")), WEBSOCKET_FRAME_TIMEOUT_MS);
+      socket.onerror = () => reject(new Error("websocket error"));
+      socket.onclose = () => reject(new Error("websocket closed before terminal frame"));
+      socket.onopen = () => {
+        try { socket.send(JSON.stringify(payload)); } catch (error) { reject(error); }
+      };
+      socket.onmessage = event => {
+        try {
+          const raw = String(event.data);
+          text += raw;
+          const terminal = JSON.parse(raw) as { type: string };
+          if (terminalFrameTypes.includes(terminal.type)) resolve({ text, terminal });
+        } catch (error) { reject(error); }
+      };
+    });
+  } finally {
+    clearTimeout(timer);
+    socket.close();
+  }
+}
+
 describe.skipIf(process.platform === "win32")("antigravity-acp through the server", () => {
   test.each([
     ["old version", "1.5.2\n", 0, "found 1.5.2"],
@@ -103,7 +136,7 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
       const response = await fetch(new URL("/v1/responses", server.url), { method: "POST", headers: { "content-type": "application/json" }, body });
       expect(response.status).toBe(200);
       const text = await response.text();
-      expect(text).toContain("fake acp answer");
+      expect(text).toContain("fake acp answer for gemini-4-argon");
       expect(text).toContain("response.completed");
       const launches = readFileSync(argsFile, "utf8").trim().split("\n").map(line => JSON.parse(line) as { args: string[]; cwd: string });
       expect(launches.map(l => l.args)).toEqual([["--version"], ["acp", "--sandbox"]]);
@@ -141,37 +174,24 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
     saveConfig({ ...config(), websockets: true } as OcxConfig);
     const server = startServer(0);
     try {
-      const socket = new WebSocket(new URL("/v1/responses", server.url).href.replace(/^http/, "ws"), {
-        headers: stale ? { "x-codex-turn-metadata": spawnMetadata } : {},
-      } as unknown as string[]);
-      let received = "";
-      const completed = new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("no terminal frame")), 15_000);
-        socket.onmessage = event => {
-          received += String(event.data);
-          const frame = JSON.parse(String(event.data)) as { type?: string };
-          if (frame.type === "response.completed" || frame.type === "response.failed" || frame.type === "error") { clearTimeout(timer); resolve(); }
-        };
-      });
-      await new Promise<void>((resolve, reject) => { socket.onopen = () => resolve(); socket.onerror = () => reject(new Error("websocket error")); });
       const clientMetadata = spawned
         ? { "x-codex-turn-metadata": spawnMetadata }
         : stale ? { "x-codex-turn-metadata": JSON.stringify({ request_kind: "turn", thread_source: "user" }) } : undefined;
-      socket.send(JSON.stringify({ ...JSON.parse(body), type: "response.create", client_metadata: clientMetadata }));
-      await completed;
-      socket.close();
+      const { text: received } = await responsesWebSocketTurn(server.url, {
+        ...responsesBody, type: "response.create", client_metadata: clientMetadata,
+      }, stale ? { "x-codex-turn-metadata": spawnMetadata } : {});
       if (spawned) {
         expect(received).toContain("agy_acp_interactive_only");
         expect(existsSync(argsFile)).toBe(false);
       } else {
-        expect(received).toContain("fake acp answer");
+        expect(received).toContain("fake acp answer for gemini-4-argon");
         expect(received).toContain("response.completed");
         expect(received).not.toContain("agy_acp_local_only");
       }
     } finally {
       await server.stop(true);
     }
-  });
+  }, WEBSOCKET_TEST_TIMEOUT_MS);
 
   test("a subagent turn is refused with a 403 before the CLI starts", async () => {
     saveConfig(config());
@@ -225,32 +245,19 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
   test("Responses WebSocket refuses frame-local automatic compaction before starting agy", async () => {
     saveConfig({ ...config(), websockets: true } as OcxConfig);
     const server = startServer(0);
-    const socket = new WebSocket(new URL("/v1/responses", server.url).href.replace(/^http/, "ws"));
     try {
-      const frame = await new Promise<unknown>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("no terminal frame")), 8_000);
-        socket.onopen = () => socket.send(JSON.stringify({
-          ...responsesBody,
-          type: "response.create",
-          input: [...responsesBody.input, { type: "compaction_trigger" }],
-          client_metadata: { [turnMetadata]: compactionMetadata("auto") },
-        }));
-        socket.onerror = () => { clearTimeout(timer); reject(new Error("websocket error")); };
-        socket.onmessage = event => {
-          const value = JSON.parse(String(event.data));
-          if (["error", "response.failed", "response.completed"].includes(value.type)) {
-            clearTimeout(timer);
-            resolve(value);
-          }
-        };
+      const { terminal } = await responsesWebSocketTurn(server.url, {
+        ...responsesBody,
+        type: "response.create",
+        input: [...responsesBody.input, { type: "compaction_trigger" }],
+        client_metadata: { [turnMetadata]: compactionMetadata("auto") },
       });
-      expect(frame).toMatchObject({ type: "error", status: 403, ...interactiveOnlyError });
+      expect(terminal).toMatchObject({ type: "error", status: 403, ...interactiveOnlyError });
       expect(recordedLaunches()).toEqual([]);
     } finally {
-      socket.close();
       await server.stop(true);
     }
-  }, 10_000);
+  }, WEBSOCKET_TEST_TIMEOUT_MS);
 
   test("an unattended ACP Compact refusal never opens its reasoning archive", async () => {
     saveConfig({ ...config(), reasoningRetention: { enabled: true, maxTokens: 1 } });
@@ -301,7 +308,7 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
         body,
       });
       expect(response.status).toBe(200);
-      expect(await response.text()).toContain("fake acp answer");
+      expect(await response.text()).toContain("fake acp answer for gemini-4-argon");
       expect(recordedLaunches()).toEqual([["--version"], ["acp", "--sandbox"]]);
     } finally {
       await server.stop(true);
@@ -318,27 +325,16 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
       expect(response.status).toBe(403);
       expect(await response.json()).toMatchObject({ error: { type: "permission_error", code: "agy_acp_local_only" } });
 
-      const socket = new WebSocket(new URL("/v1/responses", server.url).href.replace(/^http/, "ws"));
-      let received = "";
-      const ended = new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("no terminal frame")), 15_000);
-        socket.onmessage = event => {
-          received += String(event.data);
-          const frame = JSON.parse(String(event.data)) as { type?: string };
-          if (frame.type === "response.completed" || frame.type === "response.failed" || frame.type === "error") { clearTimeout(timer); resolve(); }
-        };
+      const { text: received } = await responsesWebSocketTurn(server.url, {
+        ...responsesBody, type: "response.create",
       });
-      await new Promise<void>((resolve, reject) => { socket.onopen = () => resolve(); socket.onerror = () => reject(new Error("websocket error")); });
-      socket.send(JSON.stringify({ type: "response.create", model: "antigravity-acp/gemini-4-argon", input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }] }));
-      await ended;
-      socket.close();
       expect(received).toContain("agy_acp_local_only");
       expect(received).not.toContain("fake acp answer");
       expect(existsSync(argsFile)).toBe(false);
     } finally {
       await server.stop(true);
     }
-  });
+  }, WEBSOCKET_TEST_TIMEOUT_MS);
 
   test("a same-machine reverse proxy's forwarding headers make a loopback request remote: HTTP and WebSocket", async () => {
     saveConfig({ ...config(), websockets: true } as OcxConfig);
@@ -349,24 +345,13 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
         expect(response.status).toBe(403);
         expect(await response.json()).toMatchObject({ error: { code: "agy_acp_local_only" } });
       }
-      const socket = new WebSocket(new URL("/v1/responses", server.url).href.replace(/^http/, "ws"), { headers: { "CF-Connecting-IP": "203.0.113.9" } } as unknown as string[]);
-      let received = "";
-      const ended = new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("no terminal frame")), 15_000);
-        socket.onmessage = event => {
-          received += String(event.data);
-          const frame = JSON.parse(String(event.data)) as { type?: string };
-          if (frame.type === "response.completed" || frame.type === "response.failed" || frame.type === "error") { clearTimeout(timer); resolve(); }
-        };
-      });
-      await new Promise<void>((resolve, reject) => { socket.onopen = () => resolve(); socket.onerror = () => reject(new Error("websocket error")); });
-      socket.send(JSON.stringify({ type: "response.create", model: "antigravity-acp/gemini-4-argon", input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }] }));
-      await ended;
-      socket.close();
+      const { text: received } = await responsesWebSocketTurn(server.url, {
+        ...responsesBody, type: "response.create",
+      }, { "CF-Connecting-IP": "203.0.113.9" });
       expect(received).toContain("agy_acp_local_only");
       expect(existsSync(argsFile)).toBe(false);
     } finally {
       await server.stop(true);
     }
-  });
+  }, WEBSOCKET_TEST_TIMEOUT_MS);
 });

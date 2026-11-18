@@ -38,7 +38,7 @@ process.stdin.on("data", (chunk: string) => {
         update("agent_thought_chunk", "short thought");
         update("agent_message_chunk", "answer ".repeat(200));
       } else {
-        update("agent_message_chunk", "fake acp answer");
+        update("agent_message_chunk", `fake acp answer for ${config[0]!.currentValue}`);
       }
       write({ jsonrpc: "2.0", id: frame.id, result: { stopReason: "end_turn" } });
     }

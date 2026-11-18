@@ -20,41 +20,61 @@ function pages(directory: string, canonical = false): string[] {
       : /\.mdx?$/.test(entry.name) ? [entry.name] : [];
   }).sort();
 }
-/** Locate quoted or indented fences; a close needs the same marker and at least its opening length. */
-function fencedBlocks(markdown: string): { start: number; end: number; content: string }[] {
+type MarkdownRange = { start: number; end: number };
+
+/** Locate fenced examples and HTML comments without interpreting markers inside either region. */
+function markdownRanges(markdown: string) {
   const lines = [...markdown.matchAll(/[^\n]*(?:\n|$)/g)].filter(line => line[0].length);
-  const blocks: { start: number; end: number; content: string }[] = [];
+  const fences: (MarkdownRange & { content: string })[] = [];
+  const comments: MarkdownRange[] = [];
+  let commentStart: number | undefined;
   const unquote = (line: string): string => line.replace(/^(?:[ \t]*>[ \t]?)+/, "");
   const quoteDepth = (line: string): number => (line.match(/^(?:[ \t]*>[ \t]?)+/)?.[0].match(/>/g) ?? []).length;
   for (let i = 0; i < lines.length; i++) {
-    const depth = quoteDepth(lines[i]![0]);
-    const opening = /^[ \t]*(`{3,}|~{3,})([^\n]*)\n?$/.exec(unquote(lines[i]![0]));
-    if (!opening || (opening[1]![0] === "`" && opening[2]!.includes("`"))) continue;
-    const start = lines[i]!.index!;
-    const contentStart = start + lines[i]![0].length;
+    const { 0: line, index: start = 0 } = lines[i]!;
+    const opening = commentStart === undefined ? /^[ \t]*(`{3,}|~{3,})([^\n]*)\n?$/.exec(unquote(line)) : null;
+    if (!opening || (opening[1]![0] === "`" && opening[2]!.includes("`"))) {
+      for (const marker of line.matchAll(/<!--|-->/g)) {
+        const at = start + marker.index;
+        if (marker[0] === "<!--") commentStart ??= at;
+        else if (commentStart !== undefined) {
+          comments.push({ start: commentStart, end: at + marker[0].length });
+          commentStart = undefined;
+        }
+      }
+      continue;
+    }
+    const depth = quoteDepth(line);
+    const contentStart = start + line.length;
     let closing = i + 1;
     for (; closing < lines.length; closing++) {
-      if (quoteDepth(lines[closing]![0]) !== depth) continue;
-      const fence = /^[ \t]*(`+|~+)[ \t]*\n?$/.exec(unquote(lines[closing]![0]))?.[1];
+      const closeLine = lines[closing]![0];
+      if (quoteDepth(closeLine) !== depth) continue;
+      const fence = /^[ \t]*(`+|~+)[ \t]*\n?$/.exec(unquote(closeLine))?.[1];
       if (fence?.[0] === opening[1]![0] && fence.length >= opening[1]!.length) break;
     }
     const contentEnd = lines[closing]?.index ?? markdown.length;
     const end = closing < lines.length ? contentEnd + lines[closing]![0].length : markdown.length;
-    blocks.push({ start, end, content: markdown.slice(contentStart, contentEnd) });
+    fences.push({ start, end, content: markdown.slice(contentStart, contentEnd) });
     i = closing;
   }
-  return blocks;
+  if (commentStart !== undefined) comments.push({ start: commentStart, end: markdown.length });
+  return { fences, comments };
 }
+
 /** Preserve fenced example bytes so translations cannot silently change executable commands. */
 function codeBlocks(markdown: string): string[] {
-  return fencedBlocks(markdown).map(block => block.content);
+  return markdownRanges(markdown).fences.map(block => block.content);
 }
-/** Remove the same detected fence ranges before checking identifiers in translated prose. */
-function withoutFencedCode(markdown: string): string {
+
+/** Remove fenced code and optionally hide HTML comments for visible-heading checks. */
+function withoutFencedCode(markdown: string, hideComments = false): string {
+  const { fences, comments } = markdownRanges(markdown);
+  const omit = hideComments ? [...fences, ...comments].sort((a, b) => a.start - b.start) : fences;
   let prose = "", previous = 0;
-  for (const block of fencedBlocks(markdown)) {
-    prose += markdown.slice(previous, block.start) + "\n";
-    previous = block.end;
+  for (const range of omit) {
+    prose += markdown.slice(previous, range.start) + "\n";
+    previous = range.end;
   }
   return prose + markdown.slice(previous);
 }
@@ -107,7 +127,7 @@ const spanishA6apiHeading = "## Cuota de crédito A6API";
 const a6apiAnchor = '<a id="a6api-credit-quota"></a>';
 
 function hasA6apiQuotaTargets(english: string, spanish: string): boolean {
-  const visibleLines = (markdown: string) => withoutFencedCode(markdown).replace(/<!--[\s\S]*?(?:-->|$)/g, "\n").split("\n");
+  const visibleLines = (markdown: string) => withoutFencedCode(markdown, true).split("\n");
   const lines = visibleLines(spanish);
   const anchor = lines.indexOf(a6apiAnchor);
   return visibleLines(english).includes(a6apiHeading)
@@ -128,6 +148,14 @@ describe("Spanish documentation localization", () => {
     expect(hasA6apiQuotaTargets(a6apiHeading, hidden(spanishSection))).toBe(false);
     expect(hasA6apiQuotaTargets(hidden(a6apiHeading), spanishSection)).toBe(false);
     expect(hasA6apiQuotaTargets(a6apiHeading, hidden(spanishSection) + "\n\n" + spanishSection)).toBe(true);
+  });
+
+  test("a marker inside a comment or fenced example cannot hide the visible A6API section", () => {
+    const spanish = a6apiAnchor + "\n\n" + spanishA6apiHeading;
+    expect(hasA6apiQuotaTargets("<!--\n~~~\n-->\n" + a6apiHeading, spanish)).toBe(true);
+    expect(hasA6apiQuotaTargets("~~~html\n<!--\n~~~\n" + a6apiHeading, spanish)).toBe(true);
+    expect(codeBlocks("<!--\n~~~\n-->\n")).toEqual([]);
+    expect(codeBlocks("~~~html\n<!--\n~~~\n")).toEqual(["<!--\n"]);
   });
 
   test("code spans keep a trailing backslash literal without swallowing later identifiers", () => {
