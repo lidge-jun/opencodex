@@ -1069,6 +1069,9 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
   const initialRuntime = readRuntimePort();
   const siblingOfPort = initialRuntime?.siblingOfPort;
   const stoppingSibling = siblingOfPort !== undefined;
+  if (stoppingSibling && snapshot && snapshot.manager.kind !== "absent") {
+    return approvalChanged("the sibling runtime record conflicts with the approved service manager");
+  }
   const connectedClientState = readClientConnectionState();
   let connectedClientSkip = stoppingSibling ? null : connectedClientStopSkipLine(connectedClientState);
   // Deferring shared teardown to this process is an obligation, so record it on disk
@@ -1142,7 +1145,7 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
     verifyStandaloneRecord?.();
   };
   const claimTeardown = (endpoint: { hostname: string; port: number }, endpointSource: "exact" | "guessed") => {
-    if (teardownNonce || (!linkStop && (stoppingSibling || connectedClientSkip))) return;
+    if (teardownNonce || stoppingSibling || (!linkStop && connectedClientSkip)) return;
     try {
       teardownNonce = claimPendingTeardown(endpoint, endpointSource, process.pid, handoverRequested ? "update-restart" : undefined, windowsPartAReceiptRecord(), linkStop?.owner, linkStop?.inheritedTeardownDigest).nonce;
     } catch (err) {

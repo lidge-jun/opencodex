@@ -16,6 +16,7 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   status?: number;
   /** #7563: run the stop as a connected client of this transport. */
   clientTransport?: "hub" | "link";
+  siblingRecord?: "standalone" | "link";
   serverTeardown?: boolean;
   json?: boolean;
   clientServer?: "legacy" | "unknown" | "wrong-pid" | "malformed" | "oversized" | "unauthorized" | "redirect" | "body-timeout";
@@ -156,7 +157,7 @@ mock.module("../../src/client/lifecycle-lock", () => ({ ...lifecycle,
 }));
 const endpoint = { hostname: "127.0.0.1", port: 10100 };
 const fakePid = 4242;
-const calls = { killed: 0, native: 0, grok: 0, cleared: 0, exited: 0, service: 0, lifecycle: 0, partB: 0, reclaim: 0 };
+const calls = { killed: 0, native: 0, grok: 0, cleared: 0, exited: 0, service: 0, lifecycle: 0, partB: 0, reclaim: 0, systemEnv: 0 };
 const signals: string[] = [];
 /** The timeout each reclaimListenPort call asked for; #7771 makes a skipped 15 s wait visible. */
 const reclaimTimeouts: number[] = [];
@@ -238,8 +239,9 @@ const readRuntime = state.readRuntimePort;
 if ((!options.alreadyStopped || options.staleRuntimeRecord) && !options.noRuntimeRecord) {
   const { linkStopConnectionOwner, readClientConnectionState } = await import("../../src/client/state");
   const connection = readClientConnectionState();
-  const clientLinkOwner = connection.kind === "connected" ? linkStopConnectionOwner(connection.value) ?? null : undefined;
-  const record = { ...endpoint, pid: fakePid };
+  const clientLinkOwner = connection.kind === "connected" && options.siblingRecord !== "standalone"
+    ? linkStopConnectionOwner(connection.value) ?? null : undefined;
+  const record = { ...endpoint, pid: fakePid, ...(options.siblingRecord ? { siblingOfPort: 10101 } : {}) };
   writeFileSync(join(home, "runtime-port.json"), JSON.stringify(options.standaloneRecord === "legacy"
     || options.standaloneRecord === "wrong-home" || options.standaloneRecord === "wrong-port" ? record : {
       ...record, attestationSecret: ATTESTATION_SECRET, clientLinkOwner,
@@ -259,7 +261,7 @@ mock.module("../../src/config/process-state", () => ({
   readProcessCommandLine: (pid: number) => pid === fakePid && alive ? "ocx start" : undefined,
   readRuntimePort: (pid?: number) => (options.alreadyStopped && !options.staleRuntimeRecord) || options.noRuntimeRecord ? null : readRuntime(pid),
   removePid() {},
-  removeRuntimePort() {},
+  removeRuntimePort: options.siblingRecord ? state.removeRuntimePort : () => {},
 }));
 const service = await import("../../src/service");
 mock.module("../../src/service", () => ({ ...service, stopServiceIfInstalledDetailed: () => {
@@ -333,7 +335,7 @@ mock.module("../../src/grok/inject", () => ({
   },
 }));
 const systemEnv = await import("../../src/server/system-env");
-mock.module("../../src/server/system-env", () => ({ ...systemEnv, revertSystemEnv() {} }));
+mock.module("../../src/server/system-env", () => ({ ...systemEnv, revertSystemEnv() { calls.systemEnv++; } }));
 const portReclaim = await import("../../src/server/port-reclaim");
 mock.module("../../src/server/port-reclaim", () => ({ ...portReclaim,
   inspectIpv4LoopbackListener: async () => ({ kind: options.standaloneRecord === "wrong-port" ? "mismatch" : "match", elapsedMs: 0 }),
@@ -359,8 +361,8 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
     if (url.endsWith("/healthz")) {
       if (options.standaloneRecord) throw new Error("fixture listener cannot answer health");
       return Response.json({ service: "opencodex", version: "2.93.0", pid: fakePid,
-        ...(options.clientTransport === "link" ? { linkStopFence: true } : {}),
-        ...(options.clientTransport && !options.serverTeardown && !options.clientServer ? { role: "client" } : {}) }, { headers });
+        ...(options.clientTransport === "link" && options.siblingRecord !== "standalone" ? { linkStopFence: true } : {}),
+        ...(options.clientTransport && options.siblingRecord !== "standalone" && !options.serverTeardown && !options.clientServer ? { role: "client" } : {}) }, { headers });
     }
     if (!url.endsWith("/api/stop")) return unexpected(`GET ${url}`);
     if (options.clientServer === "unknown") throw new Error("fixture probe unavailable");

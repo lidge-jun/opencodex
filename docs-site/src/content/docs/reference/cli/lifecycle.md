@@ -61,7 +61,10 @@ Grok and Claude stay pointed at the proxy that was already running. With a separ
 `OPENCODEX_HOME`, startup checks the default home's runtime record and managed Grok and
 Codex loopback destinations for a live opencodex owner before syncing. A custom home with
 no live owner still syncs normally; explicit `ocx sync` and `ocx grok apply` remain available.
-Stopping that sibling with `ocx stop` or a signal leaves their configuration alone as well. While it runs, the proxy also
+Stopping that sibling with `ocx stop` or a signal leaves their configuration alone as well.
+If the runtime record identifies a sibling but the stop also finds conflicting Link or service
+manager ownership, `ocx stop` leaves the process running and reports an ownership refusal.
+While it runs, the proxy also
 keeps Codex pointed at itself: when the opencodex routing in `~/.codex/config.toml` names another
 local port where no opencodex has answered for about 20 seconds (an instance that re-pointed it and
 then died, for example), the proxy re-points Codex at its own port and prints one warning. Codex

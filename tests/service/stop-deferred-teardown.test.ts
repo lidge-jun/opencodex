@@ -67,6 +67,7 @@ function connectClient(transport: "hub" | "link", port?: number) {
 
 async function runParentStop(options: {
   receipt: boolean; response: unknown; restore: CodexNativeRestoreResult; status?: number; clientTransport?: "hub" | "link";
+  siblingRecord?: "standalone" | "link";
   serverTeardown?: boolean; json?: boolean;
   clientServer?: "legacy" | "unknown" | "wrong-pid" | "malformed" | "oversized" | "unauthorized" | "redirect" | "body-timeout";
   managerCascades?: boolean; managerBound?: boolean; discoveryMiss?: boolean; guarded?: boolean; orphan?: boolean; exitCleanup?: boolean;
@@ -93,7 +94,7 @@ async function runParentStop(options: {
   const reportPath = join(home, "parent-stop-result.json");
   expect(existsSync(reportPath), child.stderr).toBe(true);
   const report = JSON.parse(readFileSync(reportPath, "utf8")) as {
-    calls: { killed: number; native: number; grok: number; cleared: number; exited: number; service: number };
+    calls: { killed: number; native: number; grok: number; cleared: number; exited: number; service: number; systemEnv: number };
     probes: string[]; absenceProbes: number[]; signals: string[];
     urls: string[]; transports: string[]; nonce?: string; receiptExists: boolean; unexpectedIo: string[];
   };
@@ -101,7 +102,7 @@ async function runParentStop(options: {
   const refusedWithoutReceipt = !options.receipt && (options.windowsStopWiring === true || options.clientTransport === "link");
   const changedBeforeLinkFence = options.clientTransport === "link" && options.connectDuringDiscovery;
   const stoppedByManager = options.managerCascades && options.deadPidReadsNull;
-  if (!options.standaloneRecord) expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup || options.alreadyStopped || options.noRuntimeRecord || stoppedByManager || refusedWithoutReceipt || changedBeforeLinkFence ? 0 : 1);
+  if (!options.standaloneRecord && !options.siblingRecord) expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup || options.alreadyStopped || options.noRuntimeRecord || stoppedByManager || refusedWithoutReceipt || changedBeforeLinkFence ? 0 : 1);
   return { ...report, exitCode: child.status, stderr: child.stderr, stdout: child.stdout };
 }
 
@@ -663,6 +664,32 @@ describe("parent CLI shared teardown completion", () => {
   // Checked Windows stop refuses all of these receipt failures before POST, including
   // cases an ordinary POSIX stop can still complete.
   const notOwned = { success: true, sharedTeardown: "not-owned" } as const;
+  test("a standalone sibling stop with a saved Link skips the manager and shared teardown", async () => {
+    const outcome = await runParentStop({ receipt: true, clientTransport: "link", siblingRecord: "standalone", json: true,
+      response: notOwned, restore: restoreResult(true) });
+    expect(outcome.exitCode, outcome.stderr).toBe(0);
+    expect(outcome.urls).toEqual(["http://127.0.0.1:10100/api/stop"]);
+    expect(outcome.nonce).toBeUndefined();
+    expect(outcome.calls).toMatchObject({ service: 0, killed: 0, native: 0, grok: 0, systemEnv: 0 });
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ runtimeDown: true, service: "absent", sharedTeardown: "skipped" });
+    expect(existsSync(join(home, "runtime-port.json"))).toBe(false);
+  });
+
+  for (const conflict of ["Link", "guarded manager"] as const) {
+    test(`a sibling stop refuses conflicting ${conflict} ownership before mutation`, async () => {
+      const outcome = await runParentStop({ receipt: true, json: true, response: notOwned, restore: restoreResult(true),
+        ...(conflict === "Link" ? { clientTransport: "link", siblingRecord: "link" } : { siblingRecord: "standalone", guarded: true }) });
+      expect(outcome.nonce).toBeUndefined();
+      expect(outcome.urls).toEqual([]);
+      expect(outcome.calls).toMatchObject({ service: 0, killed: 0, native: 0, grok: 0, systemEnv: 0 });
+      expect(outcome.exitCode, outcome.stderr).toBe(1);
+      expect(JSON.parse(outcome.stdout)).toMatchObject({ runtimeDown: false, sharedTeardown: "skipped" });
+      const record = JSON.parse(readFileSync(join(home, "runtime-port.json"), "utf8"));
+      expect(record.siblingOfPort).toBe(10101);
+      expect(record.clientStopping).toBeUndefined();
+    });
+  }
+
   for (const [name, scenario] of [
     ["a Link Child not-owned answer", { clientTransport: "link", json: true, response: notOwned }],
     ["a connection committed during orphan discovery", { orphan: true, connectDuringDiscovery: true, serverTeardown: true, json: true, response: null }],

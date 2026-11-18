@@ -344,6 +344,8 @@ export async function preflightConnectedClientStop(
       throw legacyLinkStopRefusal();
     }
     if (savedLink || publishedLink || capability.linkStopFence) {
+      // A sibling cannot authorize Link file cleanup or its native teardown handoff.
+      if (siblingOfPort !== undefined || pinned?.siblingOfPort !== undefined) throw unsupportedConnectedStop();
       if (!capability.linkStopFence || !targetStart) throw unsupportedConnectedStop();
       const link = connection.kind === "connected" && linkStopConnectionOwner(connection.value);
       if (!link || pinned?.clientLinkOwner !== link || loadConfig().port !== target.port) throw unsupportedConnectedStop();
