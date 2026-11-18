@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { startServer } from "../../src/server";
+import { clearRequestLogsForTests, getRequestLogEntries } from "../../src/server/request-log";
 import {
   REPLAY_REFUSAL_NO_RETRY_HEADER,
   REPLAY_REFUSAL_NO_RETRY_VALUE,
@@ -36,6 +37,7 @@ let isolatedCodexHome: IsolatedCodexHome | null = null;
 beforeEach(() => {
   clearComboSelectionState();
   clearComboTargetCooldowns();
+  clearRequestLogsForTests();
   previousHome = process.env.OPENCODEX_HOME;
   isolatedCodexHome = installIsolatedCodexHome("ocx-replay-refusal-");
   testDir = mkdtempSync(join(tmpdir(), "ocx-replay-refusal-"));
@@ -170,6 +172,28 @@ test("every HTTP surface answers an ambiguous reset with one send and no client 
       expect(response.headers.get("Retry-After")).toBeNull();
       expect(response.headers.get(REPLAY_REFUSAL_NO_RETRY_HEADER)).toBe(REPLAY_REFUSAL_NO_RETRY_VALUE);
     }
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("translated Chat logs a replay refusal as a transport failure", async () => {
+  saveConfig(parityConfig());
+  const sends = countingUpstream(preHeaderReset);
+  const server = startServer(0);
+  try {
+    const { response, json } = await sendWithClientRetries(new URL("/v1/chat/completions", server.url), {
+      model: "bridged/model", ...CHAT_TURN,
+    });
+    expect(sends()).toBe(1);
+    expect(response.status).toBe(429);
+    expect(json.error?.code).toBe("upstream_reset_replay_refused");
+    expect(getRequestLogEntries()).toHaveLength(1);
+    expect(getRequestLogEntries()[0]).toMatchObject({
+      errorCode: "upstream_reset_replay_refused",
+      failureCause: "transport-ambiguous",
+      upstreamCondition: "upstream_failed",
+    });
   } finally {
     await server.stop(true);
   }

@@ -4,7 +4,7 @@
  * claimed is skipped on both sides rather than renamed, so the result does not depend on roster
  * order. Nothing here writes configuration.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { aliasTemplateError, expandAliasTemplate, modelBasename } from "../../src/providers/alias-template";
 import { effectiveModelAliases, templateAliasPlan } from "../../src/providers/default-aliases";
 import { routeModel } from "../../src/router";
@@ -54,6 +54,31 @@ describe("alias template grammar", () => {
 });
 
 describe("template aliases in the effective alias view", () => {
+  test.each(["template", "builtin"])("colliding %s aliases accumulate without repeatedly copying prior candidates", kind => {
+    const basename = kind === "builtin" ? "claude-opus-5-fixture" : "beam";
+    const ids = Array.from({ length: 128 }, (_, index) => `vendor${index}/${basename}`);
+    const c = config(ids, { defaultAliases: kind === "builtin", aliasTemplate: kind === "builtin" ? undefined : TEMPLATE });
+    const bucketKey = kind === "builtin" ? "opus" : "cc-beam";
+    const set = Map.prototype.set;
+    let replacedElements = 0;
+    let observedBuckets = 0;
+    // A bounded operation check: rebuilding a growing bucket charges all of its prior rows.
+    // The 128-row fixture is small even on the old implementation and needs no timing limit.
+    const writes = spyOn(Map.prototype, "set").mockImplementation(function (this: Map<unknown, unknown>, key: unknown, value: unknown) {
+      if (key === bucketKey && Array.isArray(value)) {
+        observedBuckets += 1;
+        const previous = this.get(key);
+        if (Array.isArray(previous) && previous !== value) replacedElements += previous.length;
+      }
+      return set.call(this, key, value);
+    });
+    let actual: ReturnType<typeof effectiveModelAliases>;
+    try { actual = effectiveModelAliases(c, c.providers.cc!, ids, "cc"); } finally { writes.mockRestore(); }
+    expect(actual.size).toBe(0);
+    expect(observedBuckets).toBeGreaterThan(0);
+    expect(replacedElements).toBeLessThanOrEqual(ids.length);
+  });
+
   test("every unaliased model gets a template alias with its own source", () => {
     expect(aliases(config(["reflection/beam:free", "reflection/ray"]))).toEqual({
       "reflection/beam:free": "CC-beam-free:template",
