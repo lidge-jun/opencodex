@@ -3,6 +3,7 @@ import { providerAffinityGenerationIsCurrent } from "../../providers/api-key-sel
 import { clientFacingModelText } from "../../lib/error-destination";
 import { createAnthropicImageRecovery, recoverAdapterImageContext, retainAdapterFailureResponse } from "./image-context-recovery";
 import { responsesSpendTarget } from "./request-spend-target";
+import { bindAdapterResponseSpend } from "./request-spend";
 import { markProxyError, isProxyError } from "../../lib/client-error-body";
 import { adapterBuildRefusal } from "./passthrough-build-error";
 import { createAutoPauseRefreshErrorMapper, recoverAutoPausedAccount } from "./account-auto-pause-recovery";
@@ -112,9 +113,7 @@ import { streamingContextOverflowResponse, jsonContextOverflowResponse, lateAttr
 import { OllamaLateAttributionBudgetError } from "../../adapters/ollama-native";
 import { isFixedCodexAccount } from "./core-codex-account";
 import { recordSubagentQuotaFailureForThreadSpawn } from "../../codex/subagent-model-fallback";
-import {
-  CYBER_POLICY_ERROR_CODE,
-} from "../../lib/errors";
+import { CYBER_POLICY_ERROR_CODE } from "../../lib/errors";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { cancelBodyOnAbort } from "../../lib/abort";
 import { createCodexAuthDispatchGuard, releaseCodexAuthContextProbeLease, unwrapUpstreamRetryEvidenceError } from "../../codex/auth-context";
@@ -380,11 +379,6 @@ export async function prepareAdapterExchange(
   transportState.sameTargetRequest = builtInitialRequest;
   transportState.sameTargetParsed = parsed;
   transportState.sameTargetToken = transportState.transportToken;
-  /**
-   * Invalidate the same-target request cache. Every credential/adapter/parsed mutation MUST
-   * go through here: the cache keys on `parsed` REFERENCE identity, so an in-place mutation
-   * is invisible to it and a missed bump would replay a request built with a stale key.
-   */
 
   const initialRecovery = route.providerName === "github-copilot"
     ? sendBudgetState.pendingHopPermit?.sendClass === "auth-recovery" ? "oauth-account-429"
@@ -543,7 +537,10 @@ export async function prepareAdapterExchange(
             }
             : {}),
         },
-      ); } finally { compactPrepaid?.release(); }
+      );
+        bindAdapterResponseSpend(upstreamResponse,
+          sendBudgetState.adapterSendBudget?.spendEnforced ? initialReporter.recordUsage : undefined);
+      } finally { compactPrepaid?.release(); }
     }
   } catch (err) {
     cleanupUpstreamAbort();
@@ -771,7 +768,7 @@ export async function prepareAdapterExchange(
           const deferredRefetch = refetchReporter && (shouldDeferGenericSend(retryRequest) || options.comboAttempt) ? deferPhysicalSendReporter(refetchReporter) : undefined;
           const pendingKeyMetadata = deferredRefetch && transportState.attemptSendDeferred();
           try {
-            return await refetchWithPolicy(
+            const response = await refetchWithPolicy(
               recoveryKind => {
                 sendBudgetState.adapterSendBudget?.startRequest?.(responsesSpendTarget(logCtx, route.providerName));
                 // Prepare key metadata before the guarded transport commits its attempt;
@@ -818,6 +815,9 @@ export async function prepareAdapterExchange(
                   : {}),
               },
             );
+            bindAdapterResponseSpend(response,
+              sendBudgetState.adapterSendBudget?.spendEnforced ? refetchReporter?.recordUsage : undefined);
+            return response;
           } finally {
             // Refund only a reservation whose send never reached its admission boundary.
             // A used or externally settled permit ignores this.

@@ -118,6 +118,59 @@ for (const stream of [false, true]) {
       expect.objectContaining({ kind: "settle", send: resend!.send, tokens: 33 }),
     ]);
   });
+
+  test(`metered image-context recovery settles a fourth continuation receipt (stream=${stream})`, async () => {
+    const result = await fixture({ enabled: true, maxOutputTokens: 256, spendCeiling: 100_000,
+      terminalContinuation: true, sendAllowance: 4, stream,
+      handle: (_wire, index) => {
+        if (index === 1) return Response.json({
+          type: "error", error: { type: "request_too_large" }, usage: { input_tokens: 0, output_tokens: 0 },
+        }, { status: 413 });
+        if (index === 2) return completion("Metered summary", false, 20, 2);
+        if (index === 3) return completion("I will modify the file now.", stream, 30, 3);
+        return completion("Metered continuation", stream, 40, 4);
+      } });
+    expect(result.response.status).toBe(200);
+    expect(result.text).toContain("Metered continuation");
+    expect(result.sent).toHaveLength(4);
+    expect(result.spendDispatchCount).toBe(4);
+    const records = result.spendRecords!;
+    const dispatched = records.filter(record => record?.kind === "dispatch");
+    const receipts = records.filter(record => record?.kind === "settle" || record?.kind === "lost");
+    expect(receipts).toEqual([0, 22, 33, 44].map((tokens, index) =>
+      expect.objectContaining({ kind: "settle", send: dispatched[index]!.send, tokens })));
+  });
+
+  test(`ordinary terminal continuation settles each journal receipt (stream=${stream})`, async () => {
+    const result = await fixture({ image: "none", maxOutputTokens: 256, spendCeiling: 100_000,
+      terminalContinuation: true, stream,
+      handle: (_wire, index) => index === 1 ? completion("I will modify the file now.", stream, 30, 3)
+        : completion("Metered continuation", stream, 40, 4),
+    });
+    expect(result.text).toContain("Metered continuation");
+    expect(result.sent).toHaveLength(2);
+    const dispatched = result.spendRecords!.filter(record => record?.kind === "dispatch");
+    const receipts = result.spendRecords!.filter(record => record?.kind === "settle" || record?.kind === "lost");
+    expect(dispatched).toHaveLength(2);
+    expect(receipts).toEqual([33, 44].map((tokens, index) =>
+      expect.objectContaining({ kind: "settle", send: dispatched[index]!.send, tokens })));
+  });
+
+  test(`a continuation without usage cannot reuse earlier measured tokens (stream=${stream})`, async () => {
+    const result = await fixture({ image: "none", maxOutputTokens: 256, spendCeiling: 100_000,
+      terminalContinuation: true, stream,
+      handle: (_wire, index) => index === 1 ? completion("I will modify the file now.", stream, 30, 3)
+        : Response.json({ type: "error", error: { type: "invalid_request_error" } }, { status: 400 }),
+    });
+    expect(result.text).toContain("Provider continuation error 400");
+    const dispatched = result.spendRecords!.filter(record => record?.kind === "dispatch");
+    const receipts = result.spendRecords!.filter(record => record?.kind === "settle" || record?.kind === "lost");
+    expect(dispatched).toHaveLength(2);
+    expect(receipts).toEqual([
+      expect.objectContaining({ kind: "settle", send: dispatched[0]!.send, tokens: 33 }),
+      expect.objectContaining({ kind: "lost", send: dispatched[1]!.send }),
+    ]);
+  });
 }
 
 test("first-party Opus 5.5 keeps adaptive thinking on the original and resend only", async () => {

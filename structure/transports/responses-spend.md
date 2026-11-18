@@ -454,10 +454,10 @@ Legacy direct charges still infer dispatch from a later charge and leave their n
 open. Report order updates terminal attribution; unrelated pending reservations remain independent.
 `tests/lib/spend-pool-continuity.test.ts` covers reversed child reports and exact-pool cancellation.
 
-Settlement follows what the request learned. Image-context recovery settles each metered
-physical send from its own receipt, even when request logs aggregate usage for the same key.
-The final request usage is the fallback for the last routed send when its receipt does not own
-usage. A dispatched send with unknown usage remains unresolved. A pre-output Grok/Devin 429
+Direct image-context recovery and ordinary generic HTTP continuations record raw usage against
+each send's receipt before the terminal guard and request log aggregate usage. The last routed send
+can use final request usage when it lacks measured usage and the total cannot overlap tokens on
+other receipts. A dispatched send with unknown usage remains unresolved. A pre-output Grok/Devin 429
 binds usage carried by its error event before returning the HTTP refusal, just as the ordinary
 streaming and buffered bridges bind terminal usage. If deferred settlement reaches a tracker with reserved sends after its ledger lease ends, only `SPEND_LEDGER_OWNER_NOT_HELD` is dropped with the discarded ledger. Other owner and storage failures propagate with pending send IDs intact so settlement can be retried.
 

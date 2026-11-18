@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { RequestSendObserver } from "../../lib/request-execution-budget";
+import type { AdapterEvent } from "../../types";
 import { sharedSpendLedger, sharedSpendPolicy, type SpendReservationLedger, type SpendScopes, type SpendSeed, type SpendReservationProof, type SpendAdmissionPolicy } from "../../lib/spend-reservation-ledger";
 import { SpendLedgerOwnerError } from "../../lib/spend-ledger-owner";
 import { markLocalRequestLogRefusal, type RequestLogContext } from "../request-log";
@@ -10,6 +11,23 @@ import { currentWorkflowBudgetPolicy } from "../../lib/workflow-budget-config";
 export interface TerminalSpendUsage {
   inputTokens?: number;
   outputTokens?: number;
+}
+
+type RecordSendUsage = (usage: TerminalSpendUsage) => void;
+const adapterResponseSpend = new WeakMap<Response, RecordSendUsage>();
+
+/** Bind the serving response after its retry ladder has finished reporting sends. */
+export function bindAdapterResponseSpend(response: Response, record: RecordSendUsage | undefined): void {
+  if (response.ok && record) adapterResponseSpend.set(response, record);
+}
+
+/** Observe raw adapter events before guards and bridges merge usage across sends. */
+export function adapterResponseSpendObserver(response: Response): ((event: AdapterEvent) => void) | undefined {
+  const record = adapterResponseSpend.get(response);
+  if (!record) return;
+  return event => {
+    if ("usage" in event && event.usage && adapterResponseSpend.delete(response)) record(event.usage);
+  };
 }
 
 /** Settles one request's durable spend entries once its terminal usage is known. */
@@ -69,8 +87,8 @@ export function captureRequestSpendPolicy(policy: SpendAdmissionPolicy = sharedS
  * forget to book, which is how the previous wiring attempt ended up with no caller at all.
  *
  * Physical receipts with their own usage settle independently. Request-level terminal usage is
- * the fallback for the last routed send that does not own its usage. Any other dispatched receipt
- * without reported usage remains unresolved because the provider may still have billed it.
+ * the fallback for the last routed send if no earlier receipt has separately measured usage
+ * that could overlap it. Dispatched sends with unknown usage remain unresolved.
  */
 export function createRequestSpendTracker(
   logCtx: Pick<
@@ -132,10 +150,12 @@ export function createRequestSpendTracker(
     // All starts are booked before producers close. Ordinal, never callback order, owns usage.
     const entries = [...physical.entries()].sort((a, b) => a[0] - b[0]);
     const terminal = entries.findLast(([, entry]) => entry.sendId && !auxiliarySendIds.has(entry.sendId))?.[1].sendId;
+    const overlapsFallback = entries.some(([, entry]) => entry.sendId !== terminal
+      && ((entry.usage?.inputTokens ?? 0) > 0 || (entry.usage?.outputTokens ?? 0) > 0));
     const ids: string[] = [];
     for (const [, entry] of entries) {
       if (!entry.sendId) return false;
-      const usage = entry.usage === undefined && entry.sendId === terminal ? finalUsage : entry.usage;
+      const usage = entry.usage === undefined && entry.sendId === terminal && !overlapsFallback ? finalUsage : entry.usage;
       const reported = typeof usage?.inputTokens === "number" || typeof usage?.outputTokens === "number";
       if (!resolvedSendIds.has(entry.sendId)) {
         const ok = reported ? ledger().settle(entry.sendId, { inputTokens: usage?.inputTokens ?? 0, outputTokens: usage?.outputTokens ?? 0 })

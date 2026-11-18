@@ -2,6 +2,8 @@ import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses } from "../../src/server/responses/core";
+import { attachRequestSpendTracker } from "../../src/server/responses/request-spend";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { configureSharedSpendLedger, parseSpendJournalRecord, SPEND_LEDGER_JOURNAL_FILENAME, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "./owned-spend-home";
@@ -31,6 +33,8 @@ export async function fixture(options: {
   reasoningDefault?: boolean;
   instructionRole?: "developer" | "system";
   spendCeiling?: number;
+  terminalContinuation?: boolean;
+  sendAllowance?: number;
   handle: (request: WireSend, index: number, config: OcxConfig) => Response | Promise<Response>;
   requestOptions?: Parameters<typeof handleResponses>[3];
 }) {
@@ -61,6 +65,9 @@ export async function fixture(options: {
       configureSharedSpendLedger(spendPolicyFromConfig({ pool: { maxTokens: options.spendCeiling } }, undefined, [providerName]));
     }
     const tools = [];
+    if (options.terminalContinuation) {
+      tools.push({ type: "function", name: "exec_command", parameters: { type: "object" } });
+    }
     if (options.lane === "search") {
       config.webSearchSidecar = { backend: "exa", exaApiKey: "synthetic-unused-search-key" };
       tools.push({ type: "web_search" });
@@ -95,16 +102,21 @@ export async function fixture(options: {
           ...(!["none", "newest-only"].includes(options.image ?? "") ? [image] : [])] },
         { type: "message", role: "assistant", content: [{ type: "output_text", text: "Read the older screenshot" }] },
         { type: "message", role: "user", content: [
-          { type: "input_text", text: `Keep the newest screenshot. ${"Recent context. ".repeat(200)}` },
+          { type: "input_text", text: `${options.terminalContinuation ? "Fix the code. " : ""}Keep the newest screenshot. ${"Recent context. ".repeat(200)}` },
           ...(options.image !== "none" ? [image] : []),
         ] },
       ],
     };
     const logCtx: Parameters<typeof handleResponses>[2] = { model: "", provider: "" };
-    const upstream = await handleResponses(new Request("http://localhost/v1/responses", {
+    const request = new Request("http://localhost/v1/responses", {
       method: "POST", headers: { "content-type": "application/json", "thread-id": "fixture-image-turn" },
       body: JSON.stringify(raw), signal: options.requestOptions?.abortSignal,
-    }), config, logCtx, options.requestOptions);
+    });
+    const sendBudget = options.sendAllowance === undefined ? options.requestOptions?.sendBudget
+      : createRequestExecutionBudget({ maxTotalModelSends: options.sendAllowance, baseSendAllowance: options.sendAllowance,
+        finalRecoveryAllowance: 0, maxAlternateTargetSends: 0, maxTargetTransitions: 0 },
+      undefined, attachRequestSpendTracker(request, logCtx));
+    const upstream = await handleResponses(request, config, logCtx, { ...options.requestOptions, sendBudget });
     const text = await upstream.text();
     logCtx.spendTracker?.settle(logCtx.usage);
     const journal = Bun.file(join(home, SPEND_LEDGER_JOURNAL_FILENAME));
