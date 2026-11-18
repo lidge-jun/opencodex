@@ -586,10 +586,9 @@ Responses captures the routing-reset generation before credential resolution and
 While a live JEV combo enables quota signals, auth-store load/persist and accepted quota producer
 boundaries hand bounded secret-free rosters/windows to the core slot `src/lib/decision-quota-sink.ts`,
 which forwards them to the activation-owned snapshot; otherwise those calls are no-ops
-([activation](jev-decision.md#loaded-advisory-quota)). These owner-observed generations
-are separate from display caches and serving-account selection. Request decisions consume only
+([activation](jev-decision.md#loaded-advisory-quota)). These owner-observed generations are separate from display caches and serving-account selection. Request decisions consume only
 loaded evidence; cold or mismatched generations remain unknown. Usability, partial-window clocks
-and late-writer fences follow [loaded advisory quota](jev-decision.md#loaded-advisory-quota). Only the primary `anthropic` pool publishes; `anthropic2` is excluded and stays unknown.
+and late-writer fences follow [loaded advisory quota](jev-decision.md#loaded-advisory-quota). Only the primary `anthropic` pool publishes. The `anthropic2` pool stays unknown.
 
 ## Permanent refusal auto-pause
 

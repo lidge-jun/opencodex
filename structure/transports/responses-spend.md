@@ -97,32 +97,12 @@ another owner's pending booking. Cleanup cannot refund real work. Detached judge
 `tests/responses/responses-first-send-reservation.test.ts` and
 `tests/responses/responses-dispatch-receipt.test.ts` pin these boundaries.
 
-`src/server/responses/sidecar-send-budget.ts` binds hosted search/image/video inference to this same
-child-owned booking. Each generic HTTP/WS send settles at the final physical-dispatch receipt,
-including direct sends, connection-reset retries and later tool rounds. The receipt consumes its
-prepaid permit when present or reserves a fresh send against the shared ledger, refusing dispatch
-when the allowance is exhausted. Cancellation at the final HTTP boundary leaves an unused booking
-refundable. The default guarded policy starts with three base sends and one recovery-only send.
-Before the first direct hosted-search send, ingress sizes the base allowance from
-the loop's iteration limit (including the forced answer and its retry), the optional empty-completion
-retry, request-wide 429 retries and applicable thinking-signature recovery. Each dispatch gets its
-transport’s bounded send count, including adapter-owned retries where applicable. Direct adapter-owned
-media loops size their allowance from their round and retry bounds as well. The separate credential recovery reserve still applies.
-Explicit and Combo budgets retain their supplied limits. Adapter-owned
-`fetchResponse`/`runTurn` receives the live budget and observers instead, never both charge paths.
-Receipt selection follows the actual iteration adapter after rotation. Hosted tool execution does
-not itself settle the model's booking. Direct adapter-owned sidecars receive the same live request
-ledger even without a prepaid Combo send. The hosted reservation, producer and WS regression siblings in `tests/responses/`
-assert real synthetic inference, explicit durable settlement and unsent release without widening caps.
-`tests/responses/responses-sidecar-usage.test.ts` covers direct generic HTTP search and image reset
-retries with one- and two-send caps.
-Hosted credential hops stay open in this owner and the live pending-hop view until physical dispatch;
-generic receipts consume that exact permit, adapters claim it through the view, and fetch-iteration
-cleanup releases an unsent hop once, except while an asynchronous runTurn producer still owns it.
-Producer settlement performs that release instead, clearing only the matching pending-hop reference.
-Direct adapter-owned fetch sidecars also hold the credential hop until guarded dispatch. The
-adapter claims and settles the permit. The executor publishes the first attempt send, and the
-adapter observer adds subsequent physical sends to that attempt.
+`src/server/responses/sidecar-send-budget.ts` binds hosted search, image and video model sends to the shared request ledger. Generic HTTP/WS receipts settle a prepaid permit or reserve a fresh send, including for reset retries and later tool rounds. A refusal or cancellation before dispatch leaves the booking refundable.
+The default guarded policy starts with three base sends and one recovery-only send. Before the first direct hosted model send, ingress sizes the base allowance from bounded model rounds, request-wide 429 retries and the transport’s per-dispatch retry bound. Search also includes its forced-answer retry, optional empty-completion retry and applicable thinking-signature recovery. Explicit and Combo caps and the separate credential recovery reserve still apply.
+Adapter-owned `fetchResponse` and `runTurn` receive the live ledger and report their own sends. The current iteration adapter determines who settles the send after rotation. Hosted tool execution itself leaves the model booking untouched.
+A credential hop stays pending until guarded dispatch. Generic receipts consume its permit, while adapters claim it through their budget view. Iteration cleanup releases an unsent hop once. If an asynchronous runTurn producer still owns the hop, producer settlement releases it and clears its matching pending reference.
+For adapter-owned fetch sidecars, the guarded inference executor publishes the first send. The adapter reports subsequent sends. Zed account lookup and token exchange use a separate provider-policy executor. Only admitted completions publish an attempt and charge a send.
+`tests/responses/responses-sidecar-usage.test.ts` covers one- and two-send caps for generic hosted search and media. The reservation, producer and WS tests in `tests/responses/` cover settlement and release without expanding explicit caps.
 
 The optional Anthropic-hosted Advisor on translated Messages turns is withheld from the first
 send whose selected target has an applicable captured root, identity or pool token ceiling or has

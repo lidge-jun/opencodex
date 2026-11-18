@@ -29,6 +29,7 @@ import { createRequestExecutionBudget } from "../../src/lib/request-execution-bu
 import { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY } from "../../src/lib/spend-reservation-ledger";
 import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
 import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
+import { providerFetch } from "../../src/server/responses/fetch-helpers";
 
 const originalFetch = globalThis.fetch;
 
@@ -224,18 +225,25 @@ describe("Zed Hosted AI provider", () => {
     expect(body.provider_request).toMatchObject({ model: "gpt-5.6", stream: true });
 
     let completionRequest: Request | undefined;
+    globalThis.fetch = (async (input, init) => {
+      completionRequest = new Request(input, init);
+      return new Response([
+        `data: ${JSON.stringify({ type: "response.completed", response: { output: [] } })}`,
+        "data: [DONE]",
+        "",
+      ].join("\n"), {
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    }) as typeof globalThis.fetch;
+    const budget = createRequestExecutionBudget();
+    const usedAtPublication: number[] = [];
     const response = await adapter.fetchResponse!(request, {
-      executor: (async (input, init) => {
-        completionRequest = new Request(input, init);
-        return new Response([
-          `data: ${JSON.stringify({ type: "response.completed", response: { output: [] } })}`,
-          "data: [DONE]",
-          "",
-        ].join("\n"), {
-          headers: { "Content-Type": "text/event-stream" },
-        });
-      }) as typeof globalThis.fetch,
+      executor: providerFetch(provider, undefined, {
+        onPhysicalDispatch: () => { usedAtPublication.push(budget.used); },
+      }),
+      sendBudget: budget,
     });
+    expect(usedAtPublication).toEqual([1]);
     expect(response.ok).toBe(true);
     expect(completionRequest?.url).toBe("https://cloud.zed.dev/completions");
     expect(completionRequest?.headers.get("authorization")).toBe("Bearer llm-token-1");
@@ -1063,3 +1071,45 @@ describe("Zed OAuth identity", () => {
       .toBe("zed-user-7 zed-access-token");
   });
 });
+
+for (const cancel of [false, true]) {
+  test(`Zed preparation does not publish an inference receipt (cancel=${cancel})`, async () => {
+    const preparation = [
+      jsonResponse({ default_organization_id: "org-1" }),
+      jsonResponse({ token: "llm-token-1" }),
+      jsonResponse({ models: [{ id: "gpt-5.6", provider: "open_ai" }] }),
+    ];
+    globalThis.fetch = (async () => preparation.shift()!) as typeof globalThis.fetch;
+    const provider: OcxProviderConfig = { adapter: "zed", baseUrl: "https://cloud.zed.dev", authMode: "oauth", apiKey: "access-token" };
+    const parsed = parseRequest({ model: "gpt-5.6", input: "hello", stream: true });
+    parsed._zedAuthContext = { userId: "user-1" };
+    const adapter = withTestTranslatorBudget(createZedAdapter(provider));
+    const request = await adapter.buildRequest(parsed);
+    clearZedCaches();
+
+    const abort = new AbortController();
+    const paths: string[] = [];
+    globalThis.fetch = (async (input) => {
+      const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+      paths.push(path);
+      if (path === "/client/users/me" && cancel) {
+        abort.abort();
+        return jsonResponse({ default_organization_id: "org-1" });
+      }
+      return new Response("denied", { status: 403 });
+    }) as typeof globalThis.fetch;
+    let published = 0;
+    const budget = createRequestExecutionBudget();
+    let charged = 0;
+    await expect(adapter.fetchResponse!(request, {
+      executor: providerFetch(provider, undefined, { onPhysicalDispatch: () => { published++; } }),
+      abortSignal: abort.signal,
+      sendBudget: budget,
+      onPhysicalSend: () => { charged++; },
+    })).rejects.toThrow();
+    expect(paths).toEqual(["/client/users/me"]);
+    expect(charged).toBe(0);
+    expect(budget.used).toBe(0);
+    expect(published).toBe(0);
+  });
+}

@@ -345,7 +345,7 @@ reintentos y las rondas posteriores de herramientas. Si se rechaza un envío al 
 `sendCount` no aumenta. En la búsqueda web alojada directa, el presupuesto
 predeterminado cubre las rondas acotadas del modelo, incluido el reintento de respuesta forzada y los
 reintentos habilitados de recuperación, por límite de frecuencia o por reinicio de la conexión.
-Los límites explícitos de envíos siguen vigentes.
+En los turnos directos de imagen y vídeo alojados, el presupuesto predeterminado cubre las rondas configuradas, los reintentos por 429 en el mismo destino y los intentos de envío acotados del transporte. Los límites explícitos de envíos siguen vigentes.
 
 Cada intento conserva el uso que el proxy registra para ese envío. El reintento de Responses con OAuth de xAI
 descarta el cuerpo de la respuesta 401, por lo que el uso de ese cuerpo queda sin registrar. Si el proveedor

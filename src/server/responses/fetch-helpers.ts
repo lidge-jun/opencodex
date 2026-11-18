@@ -36,7 +36,7 @@ import { redactSecretString } from "../../lib/redact";
 import { outboundCredentials } from "../../lib/outbound-credential-registry";
 import { compressUpstreamRequestBody, isCanonicalCodexResponsesUrl } from "./request-compression";
 import { redeemOutboundTurnState, TURN_STATE_BINDING_INIT, turnStateBinding } from "../turn-state-handles";
-import { EXECUTOR_PHYSICAL_SEND_RECEIPT, markPhysicalSendReceiptExecutor } from "../../lib/executor-physical-send-receipt";
+import { EXECUTOR_PHYSICAL_SEND_RECEIPT, markPhysicalSendReceiptExecutor, registerAdapterSupportExecutor } from "../../lib/executor-physical-send-receipt";
 
 export { withUpstreamHttpVersion };
 
@@ -519,6 +519,13 @@ export function providerFetch(
   });
   markEgressTransparentExecutor(paceAware as unknown as typeof globalThis.fetch);
   if (customExecutor === undefined && transport === base && !options.dispatchOverride) bindProviderSocketRoute(paceAware, providerName, provider);
+  const { onPhysicalDispatch, dispatchOverride, beforeDispatch, accountAutoPause, ...supportOptions } = options;
+  if (onPhysicalDispatch || dispatchOverride || beforeDispatch || accountAutoPause) {
+    let support: ProviderFetch | undefined;
+    const getSupport = () => support ??= providerFetch(provider, runtime, { ...supportOptions, httpOnly: true });
+    registerAdapterSupportExecutor(paceAware as ProviderFetch, getSupport);
+    registerAdapterSupportExecutor(paceAware.unpacedFetch, () => getSupport().unpacedFetch ?? getSupport());
+  }
   return markPhysicalSendReceiptExecutor(paceAware as ProviderFetch);
 }
 

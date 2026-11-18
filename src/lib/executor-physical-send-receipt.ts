@@ -19,3 +19,14 @@ export function fetchWithPhysicalSendReceipt(
   receipt();
   return executor(input, init);
 }
+
+const supportExecutors = new WeakMap<typeof globalThis.fetch, () => typeof globalThis.fetch>();
+
+export function registerAdapterSupportExecutor(executor: typeof globalThis.fetch, support: () => typeof globalThis.fetch): void {
+  supportExecutors.set(executor, support);
+}
+
+/** Keep the provider's transport and pacing policy for auxiliary HTTP calls. */
+export function adapterSupportExecutor(executor: typeof globalThis.fetch): typeof globalThis.fetch {
+  return supportExecutors.get(executor)?.() ?? executor;
+}
