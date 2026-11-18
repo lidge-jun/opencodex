@@ -38,6 +38,14 @@ import {
   waitForLoginSettled,
 } from "../../oauth";
 import { OAuthMutationBusyError, removeCredential } from "../../oauth/store";
+import { isOAuthCredentialSiblingOf, oauthCredentialSiblingsOf, oauthCredentialSlot } from "../../oauth/credential-siblings";
+import {
+  ANTIGRAVITY_RISK_PROVIDER,
+  ANTIGRAVITY_RISK_REFUSAL_CODE,
+  antigravityRiskRefusalBody,
+  hasAntigravityRiskAcknowledgement,
+  requiresAntigravityRiskAcknowledgement,
+} from "../../oauth/antigravity-risk";
 import { cancelKiroDeviceLogin, kiroDeviceConfigBaseline, selectKiroDeviceProfile, startKiroDeviceLogin, statusKiroDeviceLogin, type KiroDeviceMethod } from "../../oauth/kiro-device-login";
 import { parseKiroIamOptions } from "../../oauth/kiro-iam-identity-center";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
@@ -265,9 +273,18 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // the provider's loopback callback server (inside this process) captures the redirect in the
   // background, then the credential is persisted. The GUI opens the URL and polls /api/oauth/status.
   if (url.pathname === "/api/oauth/login" && req.method === "POST") {
-    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown; method?: unknown; mode?: unknown; device?: unknown; startUrl?: unknown; region?: unknown; flowId?: unknown; profileArn?: unknown };
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; row?: unknown; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown; method?: unknown; mode?: unknown; device?: unknown; startUrl?: unknown; region?: unknown; flowId?: unknown; profileArn?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    // `row`: the sibling provider row this login publishes (Kimi (Responses) through the Kimi login).
+    if (body.row !== undefined && (typeof body.row !== "string" || !isOAuthCredentialSiblingOf(body.row, provider))) {
+      return jsonResponse({ error: "row must be a provider that shares this login" }, 400);
+    }
+    // Antigravity sign-in can get the Google account disabled. Every client asks first; this is
+    // the check none of them can skip, and it runs before any flow state is created.
+    if (requiresAntigravityRiskAcknowledgement(provider) && !hasAntigravityRiskAcknowledgement(body)) {
+      return jsonResponse(antigravityRiskRefusalBody(), 403);
+    }
     // Omitted mode is the localhost-callback flow this route has always run.
     if (body.mode !== undefined && body.mode !== "callback" && body.mode !== "code") {
       return jsonResponse({ error: "mode must be \"callback\" or \"code\"" }, 400);
@@ -340,6 +357,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         ...(accountId ? { reauthAccountId: accountId } : {}),
         ...(codeMode ? { codeMode: true } : {}),
         ...(device ? { flow: "device" as const } : {}),
+        ...(typeof body.row === "string" ? { publishRow: body.row } : {}),
       }, {
         ...(flowId ? { flowId } : {}),
         // startLoginFlow returns the authorization URL before background persistence completes.
@@ -467,7 +485,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   }
 
   if (url.pathname === "/api/oauth/status" && req.method === "GET") {
-    const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
+    const provider = oauthCredentialSlot((url.searchParams.get("provider") ?? "").trim().toLowerCase());
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (provider === "kiro" && url.searchParams.has("flowId")) {
       const flowId = url.searchParams.get("flowId") ?? "";
@@ -488,7 +506,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   }
 
   if (url.pathname === "/api/oauth/logout" && req.method === "POST") {
-    const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
+    // A sibling row (kimi-responses) has no login of its own: logging out of it removes the
+    // active account of the shared slot, exactly as the neighbouring account routes map it.
+    const provider = oauthCredentialSlot((url.searchParams.get("provider") ?? "").trim().toLowerCase());
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     await removeCredential(provider);
     reconcileLiveStateStores();
@@ -496,6 +516,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { clearModelCache } = await import("../../codex/model-cache");
     const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
     clearModelCache(provider);
+    for (const row of oauthCredentialSiblingsOf(provider)) clearModelCache(row);
     clearGatherRoutedModelsInflight();
     // Drop cached/last-good quota rows tied to the removed credential.
     clearQuotaCachesAfterAccountMutation(provider, true);
@@ -512,7 +533,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // one, or remove one. Emails and accountLabel follow privacy.maskEmails, maskedLabel is always
   // masked, and tokens never leave the store.
   if (url.pathname === "/api/oauth/accounts" && req.method === "GET") {
-    const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
+    const provider = oauthCredentialSlot((url.searchParams.get("provider") ?? "").trim().toLowerCase());
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     const quotaMode = providerOAuthAccountQuotaMode(provider);
     const quotaProvider = config.providers[provider];
@@ -606,7 +627,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   }
   if (url.pathname === "/api/oauth/accounts/active" && req.method === "PUT") {
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; accountId?: string };
-    const provider = (body.provider ?? "").trim().toLowerCase();
+    const provider = oauthCredentialSlot((body.provider ?? "").trim().toLowerCase());
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (provider === "anthropic2" && !configuredAnthropicInstance(config, provider)) return jsonResponse({ error: "Anthropic pool instance is not configured" }, 409);
     if (!body.accountId) return jsonResponse({ error: "missing accountId" }, 400);
@@ -633,6 +654,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { clearModelCache } = await import("../../codex/model-cache");
     const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
     clearModelCache(provider);
+    // A shared-login row (kimi-responses) caches its roster under its own name.
+    for (const row of oauthCredentialSiblingsOf(provider)) clearModelCache(row);
     clearGatherRoutedModelsInflight();
     clearQuotaCachesAfterAccountMutation(provider, false);
     if (affinityReset && !await affinityReset) {
@@ -647,7 +670,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   if (url.pathname === "/api/oauth/accounts/pause" && req.method === "PUT") {
     const body = await readManagementJsonBodyOr(req, {});
     if (!isPlainRecord(body)) return jsonResponse({ error: "body must be an object" }, 400);
-    const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
+    const provider = oauthCredentialSlot(typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "");
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (typeof body.accountId !== "string" || body.accountId.length === 0) {
       return jsonResponse({ error: "missing accountId" }, 400);
@@ -715,6 +738,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const { clearModelCache } = await import("../../codex/model-cache");
       const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
       clearModelCache(provider);
+      for (const row of oauthCredentialSiblingsOf(provider)) clearModelCache(row);
       clearGatherRoutedModelsInflight();
       clearQuotaCachesAfterAccountMutation(provider, false);
     }
@@ -1072,6 +1096,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       if (!isPlainRecord(rawBody)) return jsonResponse({ code: "invalid_document" }, 400);
       const provider = typeof rawBody.provider === "string" ? rawBody.provider : "";
       const format = typeof rawBody.format === "string" ? rawBody.format : "";
+      // An imported Antigravity credential carries the same account risk as a fresh login. Import
+      // admits only the exact provider id, so the gate matches it exactly too; other spellings
+      // keep their unsupported_provider answer.
+      if (provider === ANTIGRAVITY_RISK_PROVIDER && !hasAntigravityRiskAcknowledgement(rawBody)) {
+        return jsonResponse({ code: ANTIGRAVITY_RISK_REFUSAL_CODE }, 403);
+      }
       const { importAccounts } = await import("../../oauth/account-import");
       const imported = await importAccounts({
         provider,
@@ -1100,7 +1130,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
 
   if (url.pathname === "/api/oauth/accounts/alias" && req.method === "PUT") {
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: unknown; accountId?: unknown; alias?: unknown };
-    const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
+    const provider = oauthCredentialSlot(typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "");
     const accountId = typeof body.accountId === "string" ? body.accountId.trim() : "";
     const alias = typeof body.alias === "string" ? body.alias.trim() : "";
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
@@ -1113,7 +1143,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     return jsonResponse({ ok: true, provider, accountId, alias: alias || null });
   }
   if (url.pathname === "/api/oauth/accounts" && req.method === "DELETE") {
-    const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
+    const provider = oauthCredentialSlot((url.searchParams.get("provider") ?? "").trim().toLowerCase());
     const id = url.searchParams.get("id") ?? "";
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (!id) return jsonResponse({ error: "missing id" }, 400);
@@ -1140,6 +1170,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { clearModelCache } = await import("../../codex/model-cache");
     const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
     clearModelCache(provider);
+    for (const row of oauthCredentialSiblingsOf(provider)) clearModelCache(row);
     clearGatherRoutedModelsInflight();
     clearQuotaCachesAfterAccountMutation(provider, true);
     // Same reasoning as logout. Removing the last account for a provider used to

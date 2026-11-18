@@ -175,6 +175,48 @@ function uninstallElsewhere(dir: string): string {
   return Bun.spawnSync([process.execPath, "-e", script]).stdout.toString().trim();
 }
 
+/**
+ * Hold a racing uninstall to the guarantee whatever its outcome (#8379). A child that recorded its
+ * path (exit 0) had it removed, or the run stopped before removing it: refused before writing
+ * anything, or partial with its tombstoned manifest left. The home then still lists the path, and
+ * the rerun a user starts once the race is over removes it. A child that recorded nothing is
+ * reported as a residual path by the run that retired the ownership metadata. Returns that run.
+ */
+function settleRacingUninstall(
+  dir: string,
+  names: readonly string[],
+  codes: readonly number[],
+  first: ConfigRemovalResult,
+  beforeRerun?: () => void,
+): ConfigRemovalResult {
+  const context = JSON.stringify({ first, codes });
+  const manifestPath = join(dir, CONFIG_UNINSTALL_MANIFEST);
+  let result = first;
+  if (first.status === "refused") {
+    // A refused run wrote nothing: no tombstone, and it reports the whole home.
+    expect(first.residualPaths, context).toEqual([dir]);
+    expect(manifest(dir).uninstallStartedAt, context).toBeUndefined();
+  }
+  if (existsSync(manifestPath)) {
+    expect(first.status, context).not.toBe("removed");
+    const listed = manifest(dir).paths;
+    names.forEach((name, i) => {
+      if (codes[i] === 0 && existsSync(join(dir, name))) expect(listed, context).toContain(name);
+    });
+    beforeRerun?.();
+    result = removeOwnedConfigState(dir);
+  }
+  const settled = JSON.stringify({ first, result, codes });
+  expect(["removed", "partial"], settled).toContain(result.status);
+  expect(existsSync(manifestPath), settled).toBe(false);
+  names.forEach((name, i) => {
+    const path = join(dir, name);
+    if (codes[i] === 0) expect(existsSync(path), settled).toBe(false);
+    else expect(result.residualPaths, settled).toContain(path);
+  });
+  return result;
+}
+
 function withHome(fn: (dir: string) => void | Promise<void>) {
   return async () => {
     const parent = mkdtempSync(join(tmpdir(), "ocx-ownership-record-"));
@@ -205,6 +247,9 @@ describe("serialized ownership manifest (#8093)", () => {
 
   // The children keep contending for the lock after the barrier releases it, so an uninstall can lose
   // that contention and be refused as busy (macOS CI, dev run 43832690786). The second case forces it.
+  // A run can also end refused for another reason (on Windows, opening the manifest while a child
+  // renames over it fails) or partial; settleRacingUninstall accepts each such outcome only with the
+  // racing registrations still listed for the rerun (#8379, Windows dev run 44072572278).
   test.each([
     ["the barrier lock released", false],
     ["its first run finding the lock still held", true],
@@ -231,13 +276,8 @@ describe("serialized ownership manifest (#8093)", () => {
       result = uninstallRetryingBusyLock(dir, () => { busyRuns += 1; releaseOnce(); });
     } finally { releaseOnce(); }
     const codes = await Promise.all(children.map(child => child.exited));
-    expect(codes.every(code => code === 0 || code === 2 || code === 3)).toBe(true);
-    names.forEach((name, i) => {
-      const path = join(dir, name);
-      if (codes[i] === 0) expect(existsSync(path)).toBe(false);
-      else expect(result.residualPaths).toContain(path);
-    });
-    expect(result.status).not.toBe("refused");
+    expect(codes.every(code => code === 0 || code === 2 || code === 3), JSON.stringify({ result, codes })).toBe(true);
+    settleRacingUninstall(dir, names, codes, result);
     if (busyFirst) expect(busyRuns).toBeGreaterThan(0);
     expect(existsSync(join(dir, CONFIG_OWNERSHIP_LOCK))).toBe(false);
   })(), 60_000);
@@ -315,6 +355,74 @@ describe("serialized ownership manifest (#8093)", () => {
     removeTreeWithRetry(join(dir, CONFIG_OWNERSHIP_LOCK));
     expect(removeOwnedConfigState(dir).status).toBe("refused");
     expect(existsSync(join(dir, CONFIG_OWNERSHIP_LOCK))).toBe(false);
+  }));
+});
+
+// Each outcome settleRacingUninstall accepts, forced in order instead of left to scheduling (#8379).
+describe("a racing uninstall's outcomes, each forced (#8379)", () => {
+  const record = (dir: string, name: string) => Bun.spawnSync([process.execPath, "-e", childScript(dir, name)]).exitCode;
+  const unprivilegedPosix = process.platform !== "win32" && process.getuid?.() !== 0;
+
+  test("registrations before, during and after the run are removed, refused and reported", withHome(dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    const names = ["before", "during", "after"];
+    for (const name of names) writeFileSync(join(dir, name), name);
+    const codes = [record(dir, "before")];
+    let during = -1;
+    // Inside the run's lock hold, after the tombstone and the snapshot removal.
+    setUninstallStepHookForTests(step => { if (step === "snapshot-removed") during = record(dir, "during"); });
+    let result: ConfigRemovalResult;
+    try { result = removeOwnedConfigState(dir); } finally { setUninstallStepHookForTests(undefined); }
+    codes.push(during, record(dir, "after"));
+    expect(codes).toEqual([0, 3, 2]);
+    expect(result.status).toBe("partial");
+    settleRacingUninstall(dir, names, codes, result);
+  }));
+
+  /** The run is refused before it writes anything; the registration that follows it succeeds. */
+  function recordAfterRefusal(dir: string, obstruct: () => () => void, reason: RegExp): void {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    writeFileSync(join(dir, "late"), "late");
+    const clear = obstruct();
+    let first: ConfigRemovalResult;
+    try { first = removeOwnedConfigState(dir); } finally { clear(); }
+    expect(first.status).toBe("refused");
+    expect(first.reason).toMatch(reason);
+    const code = record(dir, "late");
+    expect(code).toBe(0);
+    expect(existsSync(join(dir, "late"))).toBe(true);
+    expect(settleRacingUninstall(dir, ["late"], [code], first)).toEqual({ status: "removed", residualPaths: [] });
+  }
+
+  test("a registration after an uninstall refused by a busy lock is kept and removed by the rerun",
+    withHome(dir => recordAfterRefusal(dir, () => holdLock(dir), /busy/)));
+
+  // An unreadable manifest stands in for Windows, where opening it while a registration renames over
+  // it fails transiently and the unlocked check refuses the home as invalid.
+  test.skipIf(!unprivilegedPosix)("a registration after an uninstall refused by unreadable metadata is kept and removed by the rerun",
+    withHome(dir => {
+      const manifestPath = join(dir, CONFIG_UNINSTALL_MANIFEST);
+      recordAfterRefusal(dir, () => { chmodSync(manifestPath, 0o000); return () => chmodSync(manifestPath, 0o600); }, /missing or invalid/);
+    }));
+
+  test.skipIf(!unprivilegedPosix)("a registration behind a removal that stopped stays listed and the rerun removes it", withHome(dir => {
+    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+    writeFileSync(join(dir, "late"), "late");
+    const code = record(dir, "late");
+    expect(code).toBe(0);
+    // "artifacts" is an initially owned path listed before "late"; an unwritable directory stops removal there.
+    const artifacts = join(dir, "artifacts");
+    mkdirSync(artifacts);
+    writeFileSync(join(artifacts, "image.png"), "png");
+    chmodSync(artifacts, 0o500);
+    const unblock = () => { if (existsSync(artifacts)) chmodSync(artifacts, 0o700); };
+    try {
+      const first = removeOwnedConfigState(dir);
+      expect(first).toEqual({ status: "partial", reason: expect.stringContaining("artifacts"), residualPaths: [artifacts] });
+      // That run neither removed nor named "late"; its tombstoned manifest still lists it.
+      expect(existsSync(join(dir, "late"))).toBe(true);
+      expect(settleRacingUninstall(dir, ["late"], [code], first, unblock)).toEqual({ status: "removed", residualPaths: [] });
+    } finally { unblock(); }
   }));
 });
 

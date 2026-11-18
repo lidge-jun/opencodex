@@ -39,6 +39,12 @@ export const MAX_HELD_TOOL_TEXT_BYTES = 64 * 1024;
 export interface CommandCodeDeclaredTool {
   freeform: boolean;
   schema: Record<string, unknown>;
+  /**
+   * The caller's original schema when `schema` is a normalized wire view of it. The wire view
+   * flattens root alternatives lossily, so restored arguments must satisfy both; a declared
+   * schema the restored-value validator cannot evaluate (a `$ref`, say) fails closed.
+   */
+  declaredSchema?: Record<string, unknown>;
 }
 export type CommandCodeDeclaredTools = ReadonlyMap<string, CommandCodeDeclaredTool>;
 
@@ -226,7 +232,9 @@ export function salvagedArguments(markup: ToolCallMarkup, tool: CommandCodeDecla
     output[key] = decoded;
   }
   if (required.some(key => !Object.hasOwn(output, key))) return undefined;
-  return validatesRestoredValue(output, tool.schema) ? JSON.stringify(output) : undefined;
+  if (!validatesRestoredValue(output, tool.schema)) return undefined;
+  if (tool.declaredSchema !== undefined && !validatesRestoredValue(output, tool.declaredSchema)) return undefined;
+  return JSON.stringify(output);
 }
 
 interface TextBlock {

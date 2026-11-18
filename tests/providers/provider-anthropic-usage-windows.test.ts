@@ -6,7 +6,7 @@ import { anthropicModelPercents, anthropicModelRankPercent, anthropicModelWeekly
 import { resolveAnthropicAccountIdentity } from "../../src/oauth/anthropic-identity";
 import { providerQuotaWindows } from "../../src/quota-pool/assemble";
 import { pooledWindows } from "../../src/quota-pool/pooled";
-import { anthropicResetGrantBlocker, parseAnthropicResetGrantStatus } from "../../src/providers/anthropic-reset-grants";
+import { AnthropicResetGrantUnknownOutcome, anthropicResetGrantBlocker, claimAnthropicResetGrant, fetchAnthropicOrganizationUuid, fetchAnthropicResetGrantStatus, parseAnthropicResetGrantStatus } from "../../src/providers/anthropic-reset-grants";
 import { normalizeAnthropicQuota } from "../../src/providers/quota/account-cache";
 import { earliestQuotaResetAt } from "../../src/combos/reset-window";
 import type { ProviderQuota } from "../../src/providers/quota-types";
@@ -312,4 +312,39 @@ test("cached quota windows drop a weekly share outside (0, 100] and keep the row
   const valid = { label: "Fable", scope: "model" as const, percent: 4, resetAt: future, weeklyAllowancePercent: 50 };
   expect(normalizeAnthropicQuota({ weeklyPercent: 40, weeklyResetAt: future, updatedAt: now, displayWindows: [valid] }, now)?.displayWindows)
     .toEqual([valid]);
+});
+
+test("every Anthropic bearer request refuses redirects, like the profile probe", async () => {
+  const seen: Array<RequestRedirect | undefined> = [];
+  const fetchFn = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+    seen.push(init?.redirect);
+    return Response.json({}, { status: 500 });
+  }) as typeof fetch;
+  globalThis.fetch = fetchFn;
+  await probeAnthropicUsageQuota("synthetic-usage-bearer");
+  const options = { accessToken: "synthetic-usage-bearer", fetchFn };
+  await fetchAnthropicResetGrantStatus(options).catch(() => {});
+  await claimAnthropicResetGrant({ ...options, organizationUuid: "00000000-0000-4000-8000-000000000000",
+    grantId: "synthetic-grant", requestId: "synthetic-request" }).catch(() => {});
+  expect(seen).toEqual(["error", "error", "error"]);
+});
+
+test("a redirected reset-grant read or claim never reaches the redirect target", async () => {
+  let targetHits = 0;
+  const target = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => { targetHits++; return Response.json({}, { status: 500 }); } });
+  const origin = Bun.serve({ port: 0, hostname: "127.0.0.1",
+    fetch: req => new Response(null, { status: 307, headers: { location: `http://127.0.0.1:${target.port}${new URL(req.url).pathname}` } }) });
+  try {
+    const options = { accessToken: "synthetic-usage-bearer", origin: `http://127.0.0.1:${origin.port}` };
+    for (const read of [fetchAnthropicResetGrantStatus, fetchAnthropicOrganizationUuid]) {
+      const error = await read(options).then(() => null, (failure: unknown) => failure);
+      expect(error).toMatchObject({ name: "AnthropicResetGrantError", code: "upstream" });
+    }
+    await expect(claimAnthropicResetGrant({ ...options, organizationUuid: "00000000-0000-4000-8000-000000000000",
+      grantId: "synthetic-grant", requestId: "synthetic-request" })).rejects.toBeInstanceOf(AnthropicResetGrantUnknownOutcome);
+    expect(targetHits).toBe(0);
+  } finally {
+    origin.stop(true);
+    target.stop(true);
+  }
 });

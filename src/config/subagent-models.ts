@@ -4,15 +4,17 @@ import {
   NATIVE_GPT6_LUNA_MODEL,
   NATIVE_GPT6_SOL_MODEL,
   NATIVE_GPT61_SOL_MODEL,
+  NATIVE_GPT62_ASTRA_MODEL,
+  NATIVE_GPT62_SOL_MODEL,
 } from "../codex/catalog/native-models";
 
-export const SUBAGENT_MODELS_VERSION = 3;
+export const SUBAGENT_MODELS_VERSION = 4;
 
 /**
- * Native featured defaults: Astra, the current Sol (GPT-6.1) and Luna. Codex advertises at most
- * five picker-visible rows. Only Sol received a 6.1 release, so Astra and Luna stay on GPT-6.
+ * Native featured defaults: GPT-6.2 Astra, GPT-6.2 Sol and GPT-6 Luna. Codex advertises at most
+ * five picker-visible rows.
  */
-export const DEFAULT_SUBAGENT_MODELS = [NATIVE_GPT6_ASTRA_MODEL, NATIVE_GPT61_SOL_MODEL, NATIVE_GPT6_LUNA_MODEL];
+export const DEFAULT_SUBAGENT_MODELS = [NATIVE_GPT62_ASTRA_MODEL, NATIVE_GPT62_SOL_MODEL, NATIVE_GPT6_LUNA_MODEL];
 
 /** Bare native families the version-2 upgrade removes from a roster. */
 const RETIRED_ROSTER_FAMILY = /^gpt-5\.[56](?:-|$)/;
@@ -45,13 +47,16 @@ function upgradeRetiredRosterRows(models: readonly string[]): string[] {
  * moves; a routed or account-qualified id keeps its exact spelling. GPT-6 Sol stays a supported
  * model, so a user who adds it back afterwards keeps it.
  */
-function upgradeSolTo61(models: readonly string[]): string[] {
-  const upgraded: string[] = [];
-  for (const model of models) {
-    const next = model === NATIVE_GPT6_SOL_MODEL ? NATIVE_GPT61_SOL_MODEL : model;
-    if (!upgraded.includes(next)) upgraded.push(next);
-  }
-  return upgraded;
+const ROSTER_V3_SUCCESSORS = new Map([[NATIVE_GPT6_SOL_MODEL, NATIVE_GPT61_SOL_MODEL]]);
+
+// V4 replaces the prior bare defaults. Qualified targets and earlier user re-selections keep their ids.
+const ROSTER_V4_SUCCESSORS = new Map([
+  [NATIVE_GPT6_ASTRA_MODEL, NATIVE_GPT62_ASTRA_MODEL],
+  [NATIVE_GPT61_SOL_MODEL, NATIVE_GPT62_SOL_MODEL],
+]);
+
+function upgradeRosterRows(models: readonly string[], successors: ReadonlyMap<string, string>): string[] {
+  return [...new Set(models.map(model => successors.get(model) ?? model))];
 }
 
 /** One-time upgrades; later user edits (including removing Astra) remain authoritative. */
@@ -71,7 +76,10 @@ export function migrateSubagentModels(config: OcxConfig): boolean {
   if (version < 2 && config.subagentModels !== undefined) {
     config.subagentModels = upgradeRetiredRosterRows(config.subagentModels);
   }
-  if (config.subagentModels !== undefined) config.subagentModels = upgradeSolTo61(config.subagentModels);
+  if (config.subagentModels !== undefined) {
+    if (version < 3) config.subagentModels = upgradeRosterRows(config.subagentModels, ROSTER_V3_SUCCESSORS);
+    config.subagentModels = upgradeRosterRows(config.subagentModels, ROSTER_V4_SUCCESSORS);
+  }
   config.subagentModelsVersion = SUBAGENT_MODELS_VERSION;
   return true;
 }

@@ -32,13 +32,13 @@ const routed = { baseUrl: "https://api.anthropic.com", authMode: "key", apiKey: 
 describe("images.videoProvider selection", () => {
   test("unset keeps the pinned xAI destination even when the xai row overrides baseUrl", async () => {
     const plan = await planVideoBridge(config({ xai: xai({ baseUrl: "https://elsewhere.example/v1" }) }), parsed(), routed);
-    expect(plan?.auth).toEqual({ baseUrl: "https://api.x.ai/v1", token: XAI_KEY });
+    expect(plan?.auth).toEqual({ baseUrl: "https://api.x.ai/v1", token: XAI_KEY, providerName: "xai" });
     expect(plan?.unavailable).toBeUndefined();
   });
 
   test("a named custom provider uses only its own baseUrl and key", async () => {
     const plan = await planVideoBridge(config({ xai: xai(), "my-bridge": bridge() }, "my-bridge"), parsed(), routed);
-    expect(plan?.auth).toEqual({ baseUrl: "https://video.example.com/v1", token: BRIDGE_KEY });
+    expect(plan?.auth).toEqual({ baseUrl: "https://video.example.com/v1", token: BRIDGE_KEY, providerName: "my-bridge" });
     expect(plan?.unavailable).toBeUndefined();
   });
 
@@ -50,12 +50,17 @@ describe("images.videoProvider selection", () => {
     const allowed = await planVideoBridge(
       config({ "my-bridge": { ...local, allowPrivateNetwork: true } }, "my-bridge"), parsed(), routed,
     );
-    expect(allowed?.auth).toEqual({ baseUrl: "http://127.0.0.1:8790/v1", token: BRIDGE_KEY });
+    expect(allowed?.auth).toEqual({
+      baseUrl: "http://127.0.0.1:8790/v1", token: BRIDGE_KEY, providerName: "my-bridge", allowPrivateNetwork: true,
+    });
   });
 
   test("explicit xai stays pinned to the registry host", async () => {
-    const plan = await planVideoBridge(config({ xai: xai({ baseUrl: "https://elsewhere.example/v1" }) }, "xai"), parsed(), routed);
-    expect(plan?.auth).toEqual({ baseUrl: "https://api.x.ai/v1", token: XAI_KEY });
+    // The row's private-network opt-in does not follow the key to the pinned registry host.
+    const plan = await planVideoBridge(config({
+      xai: xai({ baseUrl: "https://elsewhere.example/v1", allowPrivateNetwork: true }),
+    }, "xai"), parsed(), routed);
+    expect(plan?.auth).toEqual({ baseUrl: "https://api.x.ai/v1", token: XAI_KEY, providerName: "xai" });
   });
 
   test.each([
@@ -91,7 +96,7 @@ describe("images.videoProvider selection", () => {
 
   test("a custom row on api.x.ai may use its own xAI key", async () => {
     const plan = await planVideoBridge(config({ xai: xai(), "grok-direct": bridge({ baseUrl: "https://api.x.ai/v1", apiKey: XAI_KEY }) }, "grok-direct"), parsed(), routed);
-    expect(plan?.auth).toEqual({ baseUrl: "https://api.x.ai/v1", token: XAI_KEY });
+    expect(plan?.auth).toEqual({ baseUrl: "https://api.x.ai/v1", token: XAI_KEY, providerName: "grok-direct" });
   });
 
   test.each([

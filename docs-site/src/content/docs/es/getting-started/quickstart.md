@@ -157,7 +157,7 @@ ocx integration client enable --client <id>
 
 ## Elegir modelos de subagentes, opcional
 
-Una configuración nueva incluye `gpt-6-astra`, `gpt-6.1-sol` y `gpt-6-luna` en el selector de subagentes de Codex. Abra `ocx gui` para sustituirlos o reordenar hasta cinco modelos nativos o enrutados. El panel también permite elegir un modelo preferido de subagentes y su esfuerzo de razonamiento. Consulte [Interfaz de subagentes](/es/guides/sub-agent-surface/) para elegir v1/base/v2 y conocer cuándo se aplican las instrucciones, los valores nativos predeterminados y las alternativas.
+Una configuración nueva incluye `gpt-6.2-astra`, `gpt-6.2-sol` y `gpt-6-luna` en el selector de subagentes de Codex. Abra `ocx gui` para sustituirlos o reordenar hasta cinco modelos nativos o enrutados. El panel también permite elegir un modelo preferido de subagentes y su esfuerzo de razonamiento. Consulte [Interfaz de subagentes](/es/guides/sub-agent-surface/) para elegir v1/base/v2 y conocer cuándo se aplican las instrucciones, los valores nativos predeterminados y las alternativas.
 
 <a id="logging-in-instead-of-pasting-a-key"></a>
 

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { parseSidecarSSE } from "../../src/web-search/parse";
 import {
   MAX_WEB_SEARCH_SOURCE_BYTES,
@@ -101,6 +101,62 @@ describe("sidecar final citation metadata", () => {
       { url: "https://example.test/a", title: "A" },
       { url: "https://example.test/b", title: "B" },
     ]);
+  });
+
+  test("invalid duplicate titles do not reserialize the retained source list", async () => {
+    const initial = Array.from({ length: MAX_WEB_SEARCH_SOURCES }, (_, index) => ({
+      type: "url_citation", url: `https://duplicate-title.test/${index}/${"a".repeat(400)}`,
+    }));
+    const invalid = ["", "   ", "bad\u0001title", 42, "x".repeat(MAX_WEB_SEARCH_TITLE_BYTES + 1)];
+    const duplicates = Array.from({ length: 40 }, (_, index) => ({
+      type: "url_citation", url: initial[0]!.url, title: invalid[index % invalid.length],
+    }));
+    const measure = async (annotations: unknown[]) => {
+      const response = sourceResponse([completedSources(annotations)]);
+      const stringify = spyOn(JSON, "stringify");
+      try {
+        const result = await parseSidecarSSE(response);
+        const serializations = stringify.mock.calls.filter(([value]) => value !== null
+          && typeof value === "object" && "url" in value).length;
+        return { result, serializations };
+      } finally { stringify.mockRestore(); }
+    };
+    const baseline = await measure(initial);
+    const repeated = await measure([...initial, ...duplicates]);
+    expect(repeated.result).toEqual(baseline.result);
+    expect(repeated.result.sources).toHaveLength(MAX_WEB_SEARCH_SOURCES);
+    expect(repeated.serializations).toBe(baseline.serializations);
+    const filled = await parseSidecarSSE(sourceResponse([completedSources([
+      ...initial, ...duplicates, { type: "url_citation", url: initial[0]!.url, title: "Later valid title" },
+    ])]));
+    expect(filled.sources[0]).toEqual({ url: initial[0]!.url, title: "Later valid title" });
+    expect(filled.sources.slice(1)).toEqual(baseline.result.sources.slice(1));
+  });
+
+  test("title replacement checks the exact UTF-8 byte delta without dropping other sources", async () => {
+    const first = { url: "https://title-delta.test/first" };
+    const sources = [first, ...Array.from({ length: 7 }, (_, index) => ({
+      url: `https://title-delta.test/${index}/${"a".repeat(2002)}`,
+    }))];
+    const title = "😀";
+    const delta = byteLength(JSON.stringify({ ...first, title })) - byteLength(JSON.stringify(first));
+    const tail = { url: "https://title-delta.test/tail/" };
+    const used = [...sources, tail].reduce((sum, source) => sum + byteLength(JSON.stringify(source)), 0);
+    tail.url += "a".repeat(MAX_WEB_SEARCH_SOURCE_BYTES - delta - used);
+    sources.push(tail);
+    expect(byteLength(tail.url)).toBeLessThanOrEqual(MAX_WEB_SEARCH_URL_BYTES);
+    const initial = sources.map(source => ({ type: "url_citation", ...source }));
+    const rejected = await parseSidecarSSE(sourceResponse([completedSources([
+      ...initial, { type: "url_citation", url: first.url, title: `${title}a` },
+    ])]));
+    expect(rejected.sources).toEqual(sources);
+    const accepted = await parseSidecarSSE(sourceResponse([completedSources([
+      ...initial, { type: "url_citation", url: first.url, title: `${title}a` },
+      { type: "url_citation", url: first.url, title },
+    ])]));
+    expect(accepted.sources).toEqual([{ ...first, title }, ...sources.slice(1)]);
+    expect(accepted.sources.reduce((sum, source) => sum + byteLength(JSON.stringify(source)), 0))
+      .toBe(MAX_WEB_SEARCH_SOURCE_BYTES);
   });
 
   test("final citations retain their order without exceeding the source cap", async () => {

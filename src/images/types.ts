@@ -1,4 +1,5 @@
 import type { OcxProviderConfig } from "../types";
+import type { VideoProviderAuth } from "./xai-video-client";
 
 export interface ImageBridgePlan {
   provider: OcxProviderConfig;
@@ -41,7 +42,7 @@ interface VideoBridgePlanBase {
  * instead of reaching any upstream; it carries no provider and no credential.
  */
 export type VideoBridgePlan = VideoBridgePlanBase & (
-  | { provider: OcxProviderConfig; auth: { baseUrl: string; token: string }; unavailable?: undefined }
+  | { provider: OcxProviderConfig; auth: VideoProviderAuth; unavailable?: undefined }
   | { provider?: undefined; auth?: undefined; unavailable: string }
 );
 
