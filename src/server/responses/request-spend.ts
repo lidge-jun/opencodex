@@ -16,7 +16,7 @@ export interface TerminalSpendUsage {
 type RecordSendUsage = (usage: TerminalSpendUsage) => void;
 const adapterResponseSpend = new WeakMap<Response, RecordSendUsage>();
 
-/** Bind the serving response after its retry ladder has finished reporting sends. */
+/** Bind an image-recovery response after its retry ladder has finished reporting sends. */
 export function bindAdapterResponseSpend(response: Response, record: RecordSendUsage | undefined): void {
   if (response.ok && record) adapterResponseSpend.set(response, record);
 }
@@ -86,9 +86,9 @@ export function captureRequestSpendPolicy(policy: SpendAdmissionPolicy = sharedS
  * so one entry per increment is one entry per send -- and a dispatch path added later cannot
  * forget to book, which is how the previous wiring attempt ended up with no caller at all.
  *
- * Physical receipts with their own usage settle independently. Request-level terminal usage is
- * the fallback for the last routed send if no earlier receipt has separately measured usage
- * that could overlap it. Dispatched sends with unknown usage remain unresolved.
+ * Image-recovery receipts carry their own usage, or null if usage is unknown. For an ordinary
+ * request the last routed send keeps the aggregate terminal usage. Other unknown sends remain
+ * unresolved at their reservation estimates.
  */
 export function createRequestSpendTracker(
   logCtx: Pick<
@@ -150,12 +150,11 @@ export function createRequestSpendTracker(
     // All starts are booked before producers close. Ordinal, never callback order, owns usage.
     const entries = [...physical.entries()].sort((a, b) => a[0] - b[0]);
     const terminal = entries.findLast(([, entry]) => entry.sendId && !auxiliarySendIds.has(entry.sendId))?.[1].sendId;
-    const overlapsFallback = entries.some(([, entry]) => entry.sendId !== terminal
-      && ((entry.usage?.inputTokens ?? 0) > 0 || (entry.usage?.outputTokens ?? 0) > 0));
     const ids: string[] = [];
     for (const [, entry] of entries) {
       if (!entry.sendId) return false;
-      const usage = entry.usage === undefined && entry.sendId === terminal && !overlapsFallback ? finalUsage : entry.usage;
+      // Recovery pins set null at dispatch to opt this receipt out of the aggregate fallback.
+      const usage = entry.usage === undefined && entry.sendId === terminal ? finalUsage : entry.usage;
       const reported = typeof usage?.inputTokens === "number" || typeof usage?.outputTokens === "number";
       if (!resolvedSendIds.has(entry.sendId)) {
         const ok = reported ? ledger().settle(entry.sendId, { inputTokens: usage?.inputTokens ?? 0, outputTokens: usage?.outputTokens ?? 0 })

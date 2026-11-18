@@ -7,6 +7,7 @@ export interface AnthropicImageRecoveryPin {
   owner: OcxProviderContinuationOwner;
   request: AdapterRequest;
   isCurrent(): boolean;
+  recordRefusalSpend?: () => void;
   dispatchOverride(request: AdapterRequest, parsed: OcxParsedRequest): NonNullable<ProviderFetchOptions["dispatchOverride"]>;
 }
 

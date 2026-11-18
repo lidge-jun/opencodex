@@ -113,7 +113,7 @@ export function createAnthropicImageRecovery(
           dispatchOverride: pin.dispatchOverride(wire, input),
           onPhysicalDispatch: () => {
             if (remaining() < minimum || !receipt.beforeDispatch()) throw new SendBudgetExhaustedError();
-            physical.recordUsage?.(null);
+            if (input._anthropicImageSummary) pin.recordRefusalSpend?.();
             transport.noteRoutedAttemptSend(undefined, "image-413");
           },
         }));

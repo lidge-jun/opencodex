@@ -10,6 +10,18 @@ import { normalizeUsageEntryForTest } from "../../src/usage/log";
 import { formatAnthropicProviderForLog } from "../../src/oauth/anthropic-routing";
 
 describe("key attempt accounting", () => {
+  test("recovery can measure an HTTP failure without attributing it to a key attempt", async () => {
+    const active = beginRequestAttempt(1, "test", "model", "anthropic");
+    const ctx: RequestLogContext = { provider: "test", model: "model", activeAttempt: active };
+    const payload = { usage: { input_tokens: 5000, output_tokens: 4 } };
+    const failed = Response.json(payload, { status: 400 });
+    expect(await recordKeyAttemptFailure(ctx, failed)).toBeUndefined();
+    expect(await recordKeyAttemptFailure(ctx, failed, undefined, true)).toMatchObject({ inputTokens: 5000, outputTokens: 4 });
+    expect(active).toMatchObject({ status: 0, usageStatus: "unreported" });
+    expect(active.usage).toBeUndefined();
+    expect(await failed.json()).toEqual(payload);
+  });
+
   test("a combo parent copied before streaming rotation cannot overwrite the final key's usage", () => {
     const active = beginRequestAttempt(1, "test", "model", "openai-chat");
     const child: RequestLogContext = { provider: "test", model: "model", comboId: "stream",

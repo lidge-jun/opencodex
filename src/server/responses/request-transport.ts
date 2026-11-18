@@ -10,7 +10,7 @@ import { isOpenCodeGoResponsesUrl } from "../../adapters/opencode-go-additional-
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
 import { anthropicBillingPhysicalFetch } from "../../providers/anthropic-billing-ownership";
 import { passiveKeyPhysicalFetch } from "../../providers/passive-key-observation";
-import { rebindPhysicalSend, recordCurrentPhysicalSendUsage } from "../../lib/request-execution-budget";
+import { captureCurrentPhysicalSendUsage, rebindPhysicalSend, recordCurrentPhysicalSendUsage } from "../../lib/request-execution-budget";
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
 import { anthropicRatePolicyFor } from "../../oauth/anthropic-rate-limit-policy";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
@@ -1076,7 +1076,11 @@ export async function prepareResponsesTransport(
               passiveKeyPhysicalFetch(distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider), route.providerName, route.provider, target), config, route.providerName, route.provider),
               input,
               { ...physicalInit, redirect: "manual",
-                ...physicalSendObserverInit(observeAutoPause, target, deferAttemptNote ? commitKeyAttemptSend : undefined),
+                ...physicalSendObserverInit(observeAutoPause, target, deferAttemptNote ? () => {
+                  commitKeyAttemptSend();
+                  // A pinned receipt keeps its estimate until this send reports usage.
+                  if (pinned) recordCurrentPhysicalSendUsage(null);
+                } : undefined),
                 ...(pinned || recoveryOwner || vertexAuthority || advisorCredential || stripAdvisorBeta ? physicalSendGuardInit((finalTarget, finalHeaders) => {
                     if (pinned && (!pinned.current() || !pinned.matches(finalTarget, finalHeaders))) {
                       throw new Error("Anthropic image recovery destination or credential changed before dispatch");
@@ -1120,12 +1124,15 @@ export async function prepareResponsesTransport(
             } catch { /* best-effort observation cannot fail the response */ }
           }
           if (response) {
+            const recoveryRefusal = !pinned && response.status === 413 && binding && imageOwnerMatched
+              && recoveryOwner && carriesSelectedKey;
+            const recordFailureSpend = !response.ok && (pinned || recoveryRefusal) ? captureCurrentPhysicalSendUsage() : undefined;
             const failureUsage = response.ok ? undefined
-              : await recordKeyAttemptFailure(logCtx, response, dispatchInit.signal ?? options.abortSignal);
-            if (failureUsage && pinned) recordCurrentPhysicalSendUsage(failureUsage);
+              : await recordKeyAttemptFailure(logCtx, response, dispatchInit.signal ?? options.abortSignal,
+                recordFailureSpend !== undefined);
+            if (failureUsage && pinned) recordFailureSpend?.(failureUsage);
             if (observeAutoPause) response = await observeAutoPause(response);
-            if (!pinned && response.status === 413 && binding && imageOwnerMatched && recoveryOwner
-              && carriesSelectedKey) {
+            if (recoveryRefusal && response.status === 413) {
               const immutableRequest = { ...wireRequest, headers: { ...wireRequest.headers } };
               const bindImageHistory = (wire: AdapterRequest): ImageDispatchPin => ({
                 current: () => recoveryCurrent() && requestBindings.get(wire) === binding
@@ -1136,12 +1143,12 @@ export async function prepareResponsesTransport(
                 owner: recoveryOwner,
                 request: immutableRequest,
                 isCurrent: recoveryCurrent,
+                recordRefusalSpend: recordFailureSpend && (() => recordFailureSpend(failureUsage ?? null)),
                 dispatchOverride: (wire, input) => oauthDispatch(wire, input, "adapter", bindImageHistory(wire))!,
               };
               imageHistoryPins.set(recoveryOwner, bindImageHistory);
               capturedImagePins.add(pin);
               imageRefusals.set(response, imageRefusals.has(response) ? null : pin);
-              if (failureUsage) recordCurrentPhysicalSendUsage(failureUsage);
             }
             return response;
           }

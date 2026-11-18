@@ -1814,11 +1814,13 @@ export function beginRequestAttempt(
   };
 }
 
-/** Preserve metered JSON failures before key recovery consumes/cancels their body. */
-export async function recordKeyAttemptFailure(logCtx: RequestLogContext, response: Response, signal?: AbortSignal): Promise<OcxUsage | undefined> {
+/** Preserve metered JSON failures before recovery consumes/cancels their body. */
+export async function recordKeyAttemptFailure(logCtx: RequestLogContext, response: Response, signal?: AbortSignal,
+  includeUnattributed = false): Promise<OcxUsage | undefined> {
   const attempt = logCtx.activeAttempt;
-  if (!attempt || !KEY_ACCOUNT_LOG_LABEL_RE.test(attempt.accountLogLabel ?? "")) return;
-  attempt.status = response.status;
+  const keyAttempt = attempt && KEY_ACCOUNT_LOG_LABEL_RE.test(attempt.accountLogLabel ?? "") ? attempt : undefined;
+  if (!keyAttempt && !includeUnattributed) return;
+  if (keyAttempt) keyAttempt.status = response.status;
   const cancelOriginal = (): void => { try { void response.body?.cancel().catch(() => {}); } catch { /* closed */ } };
   signal?.addEventListener("abort", cancelOriginal, { once: true });
   try {
@@ -1827,7 +1829,7 @@ export async function recordKeyAttemptFailure(logCtx: RequestLogContext, respons
     if (body.truncated || body.oversized) return;
     const value = JSON.parse(body.text);
     const usage = usageFromResponsesPayload(value?.usage ?? value?.response?.usage);
-    if (usage) recordKeyWireAttemptUsage(logCtx, usage);
+    if (usage && keyAttempt) recordKeyWireAttemptUsage(logCtx, usage);
     return usage;
   } catch { /* Absent/malformed usage remains unknown; recovery still owns the response. */ }
   finally { signal?.removeEventListener("abort", cancelOriginal); }

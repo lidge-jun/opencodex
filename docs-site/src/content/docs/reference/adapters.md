@@ -431,7 +431,9 @@ MiMo model Command Code serves.
   signal. The proxy returns the refusal if the proposed cut covers a developer instruction,
   a recovery leg cannot reserve spend under an enforced ceiling, or the account or endpoint changes. This option
   defaults to off and applies to routed requests through this adapter, including search and media
-  bridges when their send accounting can admit recovery.
+  bridges when their send accounting can admit recovery. Under an enforced spend ceiling, each
+  send in the recovery flow uses its own reported usage, including HTTP errors. When the provider
+  reports no usage, the send's reservation estimate continues to count toward the limit.
 - Translated Anthropic Messages reasoning replay shares the request translation budget, including
   encoding/decoding copy overhead. Requests exceeding it return HTTP 413 with
   `translation_buffer_limit`; signatures and opaque reasoning data are never truncated to fit.

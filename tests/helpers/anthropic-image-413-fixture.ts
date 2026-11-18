@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { handleResponses } from "../../src/server/responses/core";
 import { attachRequestSpendTracker } from "../../src/server/responses/request-spend";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
-import { configureSharedSpendLedger, parseSpendJournalRecord, SPEND_LEDGER_JOURNAL_FILENAME, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
+import { configureSharedSpendLedger, parseSpendJournalRecord, sharedSpendLedger, SPEND_LEDGER_JOURNAL_FILENAME, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "./owned-spend-home";
 import { removeTreeWithRetry } from "./remove-tree";
@@ -124,6 +124,7 @@ export async function fixture(options: {
       ? (await journal.text()).trim().split("\n").map(parseSpendJournalRecord)
       : undefined;
     return { sent, response: upstream, text, spendRecords,
+      spendSnapshot: spendRecords && sharedSpendLedger().snapshot("pool", providerName),
       spendDispatchCount: spendRecords?.filter(record => record?.kind === "dispatch").length };
   } finally {
     try { release(); } finally {

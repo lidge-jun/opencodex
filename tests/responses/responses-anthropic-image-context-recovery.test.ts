@@ -141,36 +141,43 @@ for (const stream of [false, true]) {
       expect.objectContaining({ kind: "settle", send: dispatched[index]!.send, tokens })));
   });
 
-  test(`ordinary terminal continuation settles each journal receipt (stream=${stream})`, async () => {
-    const result = await fixture({ image: "none", maxOutputTokens: 256, spendCeiling: 100_000,
-      terminalContinuation: true, stream,
-      handle: (_wire, index) => index === 1 ? completion("I will modify the file now.", stream, 30, 3)
-        : completion("Metered continuation", stream, 40, 4),
+  for (const metered of [false, true]) {
+    test(`image-context recovery continuation HTTP 400 settles its own usage (metered=${metered}, stream=${stream})`, async () => {
+      const result = await fixture({ enabled: true, maxOutputTokens: 256, spendCeiling: 100_000,
+        terminalContinuation: true, sendAllowance: 4, stream,
+        handle: (_wire, index) => {
+          if (index === 1) return Response.json({
+            type: "error", error: { type: "request_too_large" }, usage: { input_tokens: 0, output_tokens: 0 },
+          }, { status: 413 });
+          if (index === 2) return completion("Metered summary", false, 20, 2);
+          if (index === 3) return completion("I will modify the file now.", stream, 30, 3);
+          return Response.json({ type: "error", error: { type: "invalid_request_error" },
+            ...(metered ? { usage: { input_tokens: 5000, output_tokens: 4 } } : {}),
+          }, { status: 400 });
+        },
+      });
+      expect(result.text).toContain("Provider continuation error 400");
+      const records = result.spendRecords!;
+      const dispatched = records.filter(record => record?.kind === "dispatch");
+      const receipts = records.filter(record => record?.kind === "settle" || record?.kind === "lost");
+      expect(dispatched).toHaveLength(4);
+      const continuation = dispatched[3]!.send;
+      const booking = records.find(record => record?.kind === "reserve" && record.send === continuation);
+      if (booking?.kind !== "reserve") throw new Error("Missing continuation reservation");
+      expect(booking.tokens).toBeGreaterThan(0);
+      expect(result.spendSnapshot).toMatchObject({
+        settled: metered ? 5059 : 55,
+        unresolved: metered ? 0 : booking.tokens,
+      });
+      expect(receipts).toEqual([
+        ...[0, 22, 33].map((tokens, index) =>
+          expect.objectContaining({ kind: "settle", send: dispatched[index]!.send, tokens })),
+        expect.objectContaining(metered
+          ? { kind: "settle", send: continuation, tokens: 5004 }
+          : { kind: "lost", send: continuation }),
+      ]);
     });
-    expect(result.text).toContain("Metered continuation");
-    expect(result.sent).toHaveLength(2);
-    const dispatched = result.spendRecords!.filter(record => record?.kind === "dispatch");
-    const receipts = result.spendRecords!.filter(record => record?.kind === "settle" || record?.kind === "lost");
-    expect(dispatched).toHaveLength(2);
-    expect(receipts).toEqual([33, 44].map((tokens, index) =>
-      expect.objectContaining({ kind: "settle", send: dispatched[index]!.send, tokens })));
-  });
-
-  test(`a continuation without usage cannot reuse earlier measured tokens (stream=${stream})`, async () => {
-    const result = await fixture({ image: "none", maxOutputTokens: 256, spendCeiling: 100_000,
-      terminalContinuation: true, stream,
-      handle: (_wire, index) => index === 1 ? completion("I will modify the file now.", stream, 30, 3)
-        : Response.json({ type: "error", error: { type: "invalid_request_error" } }, { status: 400 }),
-    });
-    expect(result.text).toContain("Provider continuation error 400");
-    const dispatched = result.spendRecords!.filter(record => record?.kind === "dispatch");
-    const receipts = result.spendRecords!.filter(record => record?.kind === "settle" || record?.kind === "lost");
-    expect(dispatched).toHaveLength(2);
-    expect(receipts).toEqual([
-      expect.objectContaining({ kind: "settle", send: dispatched[0]!.send, tokens: 33 }),
-      expect.objectContaining({ kind: "lost", send: dispatched[1]!.send }),
-    ]);
-  });
+  }
 }
 
 test("first-party Opus 5.5 keeps adaptive thinking on the original and resend only", async () => {

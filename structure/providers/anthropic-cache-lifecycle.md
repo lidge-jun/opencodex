@@ -28,8 +28,9 @@ Both legs share the original send, translation, and cancellation limits. Cancell
 while retaining the refusal takes the client-cancellation path. Live search and media
 iterations feed the SSE stall watchdog while recovery is pending.
 Under an enforced spend ceiling, direct recovery reserves each leg against
-the original spend scopes before physical dispatch. The summary and resend each
-settle their own reported usage under the [spend contract](../transports/responses-spend.md).
+the original spend scopes before physical dispatch. The refused send, summary, resend, and any
+continuation on the recovered history each settle their own reported usage, including HTTP
+failures, under the [spend contract](../transports/responses-spend.md).
 A denied reservation
 returns the original 413. Sidecar recovery under enforced spend requires
 authoritative accounting for earlier sends. The proxy accepts only a bounded,

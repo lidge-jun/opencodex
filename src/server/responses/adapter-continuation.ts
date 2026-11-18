@@ -336,7 +336,7 @@ export function createAdapterContinuations(
               : {}),
           },
         );
-        if (sendBudgetState.adapterSendBudget?.spendEnforced) {
+        if (nextParsed._anthropicImageOwner && sendBudgetState.adapterSendBudget?.spendEnforced) {
           bindAdapterResponseSpend(continuationResponse, continuationReporter.recordUsage);
         }
         return continuationResponse;

@@ -377,6 +377,7 @@ export function reportDispatchSends(
   } else budget.used += count - prepaid;
 }
 
+type RecordPhysicalSendUsage = (usage: Partial<SpendUsage> | null) => void;
 /** A helper owns its starts and can never consume another helper's receipts. */
 export type PhysicalSendReporter = ((sends: number) => void) & {
   beforeSend?: () => boolean;
@@ -384,11 +385,16 @@ export type PhysicalSendReporter = ((sends: number) => void) & {
   execute?: <T>(run: () => Promise<T>) => Promise<T>;
   bind?: (target: SpendScopes & { targetKey?: string }) => boolean;
   /** Null gives this send exclusive ownership of its usage, even if none arrives. */
-  recordUsage?: (usage: Partial<SpendUsage> | null) => void;
+  recordUsage?: RecordPhysicalSendUsage;
+  captureUsageRecorder?: () => RecordPhysicalSendUsage | undefined;
 };
 const activePhysicalReporters = new AsyncLocalStorage<PhysicalSendReporter>();
-export function recordCurrentPhysicalSendUsage(usage: Partial<SpendUsage>): void {
+export function recordCurrentPhysicalSendUsage(usage: Partial<SpendUsage> | null): void {
   activePhysicalReporters.getStore()?.recordUsage?.(usage);
+}
+/** Retain the receipt of this exact dispatch across a later recovery decision. */
+export function captureCurrentPhysicalSendUsage(): RecordPhysicalSendUsage | undefined {
+  return activePhysicalReporters.getStore()?.captureUsageRecorder?.();
 }
 /** Selection owners rebind this helper's current start before invoking the executor. */
 export function rebindPhysicalSend(budget: TransientSendBudget | undefined, target: SpendScopes & { targetKey?: string }): boolean {
@@ -467,6 +473,11 @@ export function createPhysicalSendReporter(
   };
   report.recordUsage = (usage) => {
     if (currentOrdinal !== undefined) producer?.recordUsage?.(currentOrdinal, usage);
+  };
+  report.captureUsageRecorder = () => {
+    const ordinal = currentOrdinal;
+    const owner = producer;
+    if (ordinal !== undefined && owner) return usage => owner.recordUsage?.(ordinal, usage);
   };
   report.close = () => {
     if (closed) return;

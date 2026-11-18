@@ -537,10 +537,7 @@ export async function prepareAdapterExchange(
             }
             : {}),
         },
-      );
-        bindAdapterResponseSpend(upstreamResponse,
-          sendBudgetState.adapterSendBudget?.spendEnforced ? initialReporter.recordUsage : undefined);
-      } finally { compactPrepaid?.release(); }
+      ); } finally { compactPrepaid?.release(); }
     }
   } catch (err) {
     cleanupUpstreamAbort();
@@ -815,8 +812,9 @@ export async function prepareAdapterExchange(
                   : {}),
               },
             );
-            bindAdapterResponseSpend(response,
-              sendBudgetState.adapterSendBudget?.spendEnforced ? refetchReporter?.recordUsage : undefined);
+            if (parsed._anthropicImageOwner && sendBudgetState.adapterSendBudget?.spendEnforced) {
+              bindAdapterResponseSpend(response, refetchReporter?.recordUsage);
+            }
             return response;
           } finally {
             // Refund only a reservation whose send never reached its admission boundary.
