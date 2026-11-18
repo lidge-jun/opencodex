@@ -401,7 +401,15 @@ function copyComboAdmissionState<T>(value: T): T {
   if (Array.isArray(value)) return value.map(copyComboAdmissionState) as T;
   if (value && typeof value === "object" && (Object.getPrototypeOf(value) === Object.prototype
     || Object.getPrototypeOf(value) === null)) {
-    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, copyComboAdmissionState(entry)])) as T;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    return Object.fromEntries(Object.keys(value).map(key => {
+      const descriptor = descriptors[key]!;
+      // Lazy decision credentials lie outside inference admission. Reading one here
+      // would bypass the decision service's scope check.
+      const entry = key === "apiKey" && descriptors.adapter?.value === "jev-decision" && descriptor.get
+        ? undefined : Reflect.get(value, key);
+      return [key, copyComboAdmissionState(entry)];
+    })) as T;
   }
   return value;
 }
@@ -975,7 +983,7 @@ export async function executeComboResponses(
         const routes = captureRoutes(admissionConfig);
         const result = await admitCombo(routes);
         if (options.abortSignal?.aborted) return clientCancelledResponse();
-        if (!Bun.deepEquals(admissionConfig, config) || !Bun.deepEquals(routes, captureRoutes(config))) continue;
+        if (!Bun.deepEquals(admissionConfig, copyComboAdmissionState(config)) || !Bun.deepEquals(routes, captureRoutes(config))) continue;
         if (result instanceof Response) {
           refreshedRefusal = result;
         } else {
