@@ -1388,6 +1388,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       chatRawReasoningVisible: deps.chatRawReasoningVisible,
       hideRawReasoning: parsed.options.hideRawReasoning,
+      rawReasoningAsSummary: parsed.options.rawReasoningAsSummary,
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
       ...(deps.onUsage ? { onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(mergeUsage(countersOnly(hiddenUsage), usage)) } : {}),

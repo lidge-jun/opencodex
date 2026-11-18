@@ -148,11 +148,17 @@ The sole-key policy fingerprint stays private; multiple-key/current-account repo
 pool evidence. Root/generation changes and account deletion retire rows. No timer or refresher is
 activated by evidence reads. Credential changes become visible through existing owners.
 
-`src/providers/quota-decision-publication.ts` projects subscription windows. Anthropic raw
+`src/providers/quota-decision-publication.ts` projects measured quota windows. Anthropic raw
 usage/header projections and Codex raw reset validity/producer clocks stay separate from unchanged display and hard-policy parsing; scoped family
 windows require producer-validated structure. Captured generations and cooldown/family fences
-reject late observations. Partial responses retain omitted windows with their own original clocks;
-authoritative enumerations replace them. Codex pool writers require dispatched live provenance;
+reject late observations. Partial responses retain omitted windows with their own original clocks,
+except for Anthropic’s monthly fallback, which each accepted observation replaces. A recognized Anthropic
+plan row with no usable meter or an explicit extra-usage disable retires the monthly fallback while retaining
+all other advisory windows and their clocks. A monthly-only observation replaces older plan evidence. Serving
+headers, including those from a validated sidecar send, publish under the sending credential generation.
+Monthly-only probes yield to plan evidence committed after physical dispatch, and older probes yield to a newer
+accepted monthly dispatch, including when readers share a probe. Authoritative enumerations replace all windows.
+Codex pool writers require dispatched live provenance;
 native-main writer objects bind the observed bearer generation. Display-only and disk-carried
 rows cannot republish advisory evidence. Producer/store bounds overflow to unknown, not a
 truncated supposedly exhaustive pool.
@@ -176,7 +182,9 @@ window per account, then the best usable pool tier in stable order. Observations
 healthy; all usable accounts must be known nearly exhausted before the pool can be. Existing
 Anthropic model routes restrict the loaded roster; Codex pause/reauth/terminal validation and
 main usability observations exclude unusable rows. Reserve without its own bars is unknown.
-Credits, API, USD, Spark and unscoped display bars never contribute. Sole-key reports reuse each
+Anthropic’s enabled extra-usage cap can supply an undated monthly signal when the usage payload
+contains no recognized plan window. It contributes only to advisory ranking. API, USD, Spark,
+other credit bars and unscoped display bars are excluded. Sole-key reports reuse each
 producer's existing 0-100 normalized bars (the provider quota guard's inputs); Anthropic/Codex raw
 observations outside 0-100 are ignored rather than clamped. Sole-key evidence is dropped when the
 ordinary key resolver next observes a changed credential, including its observe-only quiet variant; advisory quota evidence reads never resolve keys.
