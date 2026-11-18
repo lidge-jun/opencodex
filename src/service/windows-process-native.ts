@@ -37,6 +37,8 @@ const SERVICE_RUNNING = 4;
 const SERVICE_STATUS_PROCESS_BYTES = 36;
 const SERVICE_STATUS_STATE_OFFSET = 4;
 const SERVICE_STATUS_PID_OFFSET = 28;
+/** 100 ns intervals between 0001-01-01 (.NET) and 1601-01-01 (FILETIME). */
+const FILETIME_DOTNET_EPOCH = 504_911_232_000_000_000n;
 /** 100 ns intervals between 1601-01-01 and 1970-01-01. */
 const FILETIME_UNIX_EPOCH = 116_444_736_000_000_000n;
 const TERMINATE_EXIT_CODE = 1;
@@ -61,7 +63,7 @@ export type WindowsProcessWatch =
 export interface WindowsProcessNativeApi {
   /** Creation time in epoch ms (FILETIME truncated to ms), or null when unreadable. */
   creationTime(pid: number): number | null;
-  terminate(pid: number, boundStartTime: number): WindowsTerminateResult;
+  terminate(pid: number, boundStartTime: number | bigint): WindowsTerminateResult;
   openWatch(pid: number, boundStartTime: number): WindowsProcessWatch;
   /** PID of the running Task Scheduler service host, or null when it cannot be read. */
   scheduleServicePid(): number | null;
@@ -160,11 +162,15 @@ function loadNativeApi(): WindowsProcessNativeApi | null {
     closeHandle: token => { k.CloseHandle(token); },
   });
 
-  const handleCreationTime = (handle: Handle): number | null => {
+  const handleFileTime = (handle: Handle): bigint | null => {
     const times = new BigUint64Array(4);
     const base = ptr(times);
     const ok = k.GetProcessTimes(handle, base, base + 8, base + 16, base + 24);
-    return ok ? fileTimeToEpochMs(times[0]!) : null;
+    return ok && times[0]! > FILETIME_UNIX_EPOCH ? times[0]! : null;
+  };
+  const handleCreationTime = (handle: Handle): number | null => {
+    const ticks = handleFileTime(handle);
+    return ticks === null ? null : fileTimeToEpochMs(ticks);
   };
   // true = exited, false = running, null = unreadable.
   const handleExited = (handle: Handle): boolean | null => {
@@ -196,8 +202,11 @@ function loadNativeApi(): WindowsProcessNativeApi | null {
       const handle = k.OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid);
       if (!handle) return { status: openFailure() };
       try {
-        const created = handleCreationTime(handle);
-        if (created === null) return { status: "unavailable" };
+        const fileTime = handleFileTime(handle);
+        if (fileTime === null) return { status: "unavailable" };
+        // The same-user CIM observation exposes .NET ticks at microsecond precision.
+        const created = typeof boundStartTime === "number" ? fileTimeToEpochMs(fileTime)
+          : (fileTime + FILETIME_DOTNET_EPOCH) / 10n * 10n;
         if (created !== boundStartTime) return { status: "reused" };
         const before = handleExited(handle);
         if (before === true) return { status: "gone" };

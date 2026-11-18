@@ -13,6 +13,17 @@ interface KeyResponseOwner {
 const owners = new WeakMap<Response, KeyResponseOwner | null>();
 registerProviderResponseProvenance(owners);
 
+/** Any key-auth header besides the one written by the credential owner makes attribution ambiguous. */
+export function hasConflictingApiKeyHeaders(
+  names: Iterable<string>, ownedHeader?: "authorization" | "x-api-key",
+): boolean {
+  for (const name of names) {
+    const header = name.toLowerCase();
+    if (header !== ownedHeader && (header === "authorization" || header === "x-api-key" || header === "api-key")) return true;
+  }
+  return false;
+}
+
 /** Capture the credential after connection-policy rewrites, immediately before fetch. */
 export function distributedKeyPhysicalFetch(
   physicalFetch: typeof globalThis.fetch, providerName: string, provider: OcxProviderConfig, target: string,
@@ -22,10 +33,9 @@ export function distributedKeyPhysicalFetch(
   const wrapped = (async (input, init) => {
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
     const destination = input instanceof Request ? input.url : String(input);
-    const ownsCredential = destination === target && !headers.has("api-key")
-      && (authHeader === "authorization"
-        ? headers.get("authorization") === `Bearer ${provider.apiKey}` && !headers.has("x-api-key")
-        : headers.get("x-api-key") === provider.apiKey && !headers.has("authorization"));
+    const expected = authHeader === "authorization" ? `Bearer ${provider.apiKey}` : provider.apiKey;
+    const ownsCredential = destination === target && headers.get(authHeader) === expected
+      && !hasConflictingApiKeyHeaders(headers.keys(), authHeader);
     const owner: KeyResponseOwner | null = provider._apiKeyAttempt?.distributed && ownsCredential
       ? Object.freeze({ providerName, provider: Object.freeze({ ...provider,
         _apiKeyAttempt: Object.freeze({ ...provider._apiKeyAttempt }) }) }) : null;

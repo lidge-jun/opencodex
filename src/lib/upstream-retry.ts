@@ -408,7 +408,7 @@ export function isConnectionResetError(err: unknown): boolean {
     || msg.includes("connection reset by peer");
 }
 
-function retryAfterDelayMs(headers: Headers): number | undefined {
+export function retryAfterDelayMs(headers: Headers): number | undefined {
   const raw = headers.get("retry-after")?.trim();
   if (!raw) return undefined;
   const seconds = Number(raw);

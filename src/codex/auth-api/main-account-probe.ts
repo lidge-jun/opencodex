@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { parseCodexCredits, rememberCodexCredits } from "../credits";
+import { rememberCodexCredits } from "../credits";
 import { fetchCodexUsage } from "../quota-query-backoff";
 import type { CodexUsageOwner } from "../quota-query-backoff";
 import { loadConfig } from "../../config";
@@ -8,7 +8,7 @@ import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../.
 import { providerCodexAccountMode } from "../../providers/registry";
 import { isSelectableCodexPoolAccount } from "../account-id";
 import type { OcxConfig } from "../../types";
-import { isValidWhamHistoryObservation, parseMainPolicyUsageQuota, parseUsageQuota, setAccountQuotaFromParsed } from "../quota";
+import { isValidWhamHistoryObservation, parseMainPolicyUsageQuota, parseUsageQuota, parseWhamCredits, setAccountQuotaFromParsed } from "../quota";
 import type { StoredAccountQuota, WhamUsageResponse } from "../quota";
 import { reconcileMainCodexAccountRuntimeState } from "../account-lifecycle";
 import { getMainChatgptAccountId, readCodexTokensResult } from "../auth-collision";
@@ -424,7 +424,7 @@ export async function fetchMainAccountInfoWhileOwned(
       // Tag the count with the identity it was read from, so a later response that omits the
       // summary can restore the badge without ever crossing an account boundary.
       rememberMainResetCredits(requestAccountId, freshResetCredits);
-      if (requestAccountId !== null) rememberCodexCredits(MAIN_CODEX_ACCOUNT_ID, requestAccountId, parseCodexCredits(data.credits));
+      if (requestAccountId !== null) rememberCodexCredits(MAIN_CODEX_ACCOUNT_ID, requestAccountId, parseWhamCredits(usage));
       setMainAccountInfoCache(result);
       // Only an explicit refresh may retract a reauth quarantine. A 200 from
       // /wham/usage proves the token authenticates to the usage endpoint; it does not
