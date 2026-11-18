@@ -5,9 +5,8 @@
  *
  * - when was this process created (GetProcessTimes), so a PID that was reused between
  *   bind and terminate is told apart from the process that was bound;
- * - terminate exactly the bound process: OpenProcess, read the creation time on THAT
- *   handle, compare, TerminateProcess on the same handle, close. There is no gap between
- *   the identity check and the kill in which the PID could be reused;
+ * - terminate exactly the bound process: verify its creation time and token user on
+ *   the same handle passed to TerminateProcess, so PID reuse cannot redirect the stop;
  * - has a bound process exited (WaitForSingleObject with a zero timeout on a handle
  *   opened at bind time), so the wait needs neither an enumeration nor PowerShell;
  * - which process hosts the Task Scheduler service (QueryServiceStatusEx on "Schedule"),
@@ -17,10 +16,7 @@
  * (every importer loads this module on every platform), the DLLs load from the
  * GetSystemDirectoryW path so the search order cannot substitute them, a failed load is
  * cached as null, and every handle is closed in a finally. Windows ARM64 and every other
- * platform get null here; src/service/windows-process-evidence.ts then uses the spawned
- * fallbacks. A test that simulates a platform never reaches the real kernel.
- *
- * Nothing calls this module yet; the stop paths move to it in a later change.
+ * platform get null here. A test that simulates a platform never reaches the real kernel.
  */
 import { join } from "node:path";
 
@@ -46,14 +42,13 @@ const FILETIME_UNIX_EPOCH = 116_444_736_000_000_000n;
 const TERMINATE_EXIT_CODE = 1;
 
 /** Result of one checked terminate. Only "terminated" means this call ended the process. */
-export type WindowsTerminateStatus = "terminated" | "gone" | "reused" | "denied" | "unavailable";
+export type WindowsTerminateStatus = "terminated" | "gone" | "reused" | "denied" | "unavailable" | "owner-unverified";
 
 export interface WindowsTerminateResult {
   status: WindowsTerminateStatus;
   /**
-   * True when the primitive itself observed the process exit after terminating it. The
-   * x64 primitive does not wait (the checked stop waits on its bind-time handles); the
-   * ARM64 fallback reads the exit back inside its script and reports it here.
+   * True when the primitive itself observed the process exit after terminating it.
+   * The native primitive leaves exit confirmation to the bind-time watch.
    */
   exited?: boolean;
 }
@@ -121,12 +116,13 @@ function loadNativeApi(): WindowsProcessNativeApi | null {
   if (nativeApi !== undefined) return nativeApi;
   nativeApi = null;
   if (process.platform !== "win32" || process.arch !== "x64") return null;
-  let ptr: typeof import("bun:ffi").ptr;
+  let ffi: typeof import("bun:ffi");
+  let readWindowsCurrentSid: typeof import("../codex/windows-current-sid").readWindowsCurrentSid;
   let kernel32;
   let advapi32;
   try {
-    const ffi = require("bun:ffi") as typeof import("bun:ffi");
-    ptr = ffi.ptr;
+    ffi = require("bun:ffi") as typeof import("bun:ffi");
+    ({ readWindowsCurrentSid } = require("../codex/windows-current-sid") as typeof import("../codex/windows-current-sid"));
     const systemDirectory = resolveTrustedWindowsSystemDirectory();
     kernel32 = ffi.dlopen(join(systemDirectory, "kernel32.dll"), {
       OpenProcess: { args: ["u32", "i32", "u32"], returns: "u64" },
@@ -135,18 +131,34 @@ function loadNativeApi(): WindowsProcessNativeApi | null {
       TerminateProcess: { args: ["u64", "u32"], returns: "i32" },
       WaitForSingleObject: { args: ["u64", "u32"], returns: "u32" },
       GetLastError: { args: [], returns: "u32" },
+      GetCurrentProcess: { args: [], returns: "u64" },
+      LocalFree: { args: ["ptr"], returns: "ptr" },
     }).symbols;
     advapi32 = ffi.dlopen(join(systemDirectory, "advapi32.dll"), {
       OpenSCManagerW: { args: ["ptr", "ptr", "u32"], returns: "u64" },
       OpenServiceW: { args: ["u64", "ptr", "u32"], returns: "u64" },
       QueryServiceStatusEx: { args: ["u64", "i32", "ptr", "u32", "ptr"], returns: "i32" },
       CloseServiceHandle: { args: ["u64"], returns: "i32" },
+      OpenProcessToken: { args: ["u64", "u32", "ptr"], returns: "i32" },
+      GetTokenInformation: { args: ["u64", "u32", "ptr", "u32", "ptr"], returns: "i32" },
+      ConvertSidToStringSidW: { args: ["ptr", "ptr"], returns: "i32" },
     }).symbols;
   } catch {
     return null;
   }
   const k = kernel32;
   const a = advapi32;
+  const { ptr, read } = ffi;
+
+  const handleUserSid = (handle: Handle): string => readWindowsCurrentSid({
+    openProcessToken: (access, token) => a.OpenProcessToken(handle, access, ptr(token)),
+    getTokenInformation: (token, kind, buffer, length) =>
+      a.GetTokenInformation(token, kind, ptr(buffer), buffer.byteLength, ptr(length)),
+    convertSidToStringSid: (sid, output) => a.ConvertSidToStringSidW(sid as import("bun:ffi").Pointer, ptr(output)),
+    readCodeUnit: (address, offset) => read.u16(address as import("bun:ffi").Pointer, offset),
+    localFree: address => { k.LocalFree(address as import("bun:ffi").Pointer); },
+    closeHandle: token => { k.CloseHandle(token); },
+  });
 
   const handleCreationTime = (handle: Handle): number | null => {
     const times = new BigUint64Array(4);
@@ -190,6 +202,11 @@ function loadNativeApi(): WindowsProcessNativeApi | null {
         const before = handleExited(handle);
         if (before === true) return { status: "gone" };
         if (before === null) return { status: "unavailable" };
+        try {
+          if (handleUserSid(handle) !== handleUserSid(k.GetCurrentProcess())) return { status: "owner-unverified" };
+        } catch {
+          return { status: handleExited(handle) === true ? "gone" : "owner-unverified" };
+        }
         if (k.TerminateProcess(handle, TERMINATE_EXIT_CODE)) return { status: "terminated" };
         const error = Number(k.GetLastError()) >>> 0;
         // TerminateProcess on a process that exited meanwhile also fails with access denied.
