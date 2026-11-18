@@ -11,6 +11,10 @@ const AUTO_SWITCH_DESCRIPTION_KEYS = {
     on: "accountPool.strategyHintResetFirst",
     off: "codexAuth.autoSwitchQuotaOffDesc",
   },
+  "reset-near-weighted": {
+    on: "accountPool.strategyHintResetNearWeighted",
+    off: "accountPool.strategyHintResetNearWeighted",
+  },
   quota: {
     on: "codexAuth.autoSwitchQuotaDesc",
     off: "codexAuth.autoSwitchQuotaOffDesc",

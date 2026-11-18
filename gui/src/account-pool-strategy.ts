@@ -1,11 +1,12 @@
-export type AccountPoolStrategy = "quota" | "round-robin" | "fill-first" | "reset-first";
-
-export const ACCOUNT_POOL_STRATEGIES: readonly AccountPoolStrategy[] = [
+export const ACCOUNT_POOL_STRATEGIES = [
   "quota",
   "round-robin",
   "fill-first",
   "reset-first",
+  "reset-near-weighted",
 ] as const;
+
+export type AccountPoolStrategy = typeof ACCOUNT_POOL_STRATEGIES[number];
 
 /** Which cached usage bar the `quota` strategy scores. Mirrors `OcxAccountPoolQuotaWindow`. */
 export type AccountPoolQuotaWindow = "five-hour" | "weekly" | "max-utilization";
