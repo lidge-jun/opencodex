@@ -55,7 +55,7 @@ describe.skipIf(process.platform === "win32")("Codex CLI private-prefix POSIX ap
     const f = fixture();
     const entry = join(f.root, "codex");
     writeFileSync(entry, 'process.stdout.write("READY\\n"); process.stdin.resume();\n');
-    const child = spawn(f.node, [entry], { cwd: f.root, env: f.env, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(f.node, [entry], { argv0: "node", cwd: f.root, env: f.env, stdio: ["pipe", "pipe", "pipe"] });
     const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(resolve => {
       child.once("close", (code, signal) => resolve({ code, signal }));
     });

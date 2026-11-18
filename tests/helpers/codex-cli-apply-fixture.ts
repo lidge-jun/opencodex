@@ -19,7 +19,8 @@ export function resolveCodexCliFixtureNode(): string {
     .find(candidate => candidate && ["node", "nodejs"].includes(basename(realpathSync.native(candidate))))
     ?? firstOnPath;
   const probe = spawnSync(launcher, ["-p", "process.execPath"], {
-    encoding: "utf8", timeout: 10_000, env: { HOME: process.env.HOME, PATH: process.env.PATH },
+    encoding: "utf8", timeout: 10_000,
+    env: { HOME: process.env.HOME, PATH: process.env.PATH, VOLTA_HOME: process.env.VOLTA_HOME },
   });
   const path = probe.stdout?.trim();
   if (probe.status !== 0 || !path || !isAbsolute(path)) throw new Error("fixture Node runtime unavailable");
@@ -54,8 +55,10 @@ export function privateNpm(root: string, args: string[]) {
   const posix = process.platform !== "win32";
   const node = posix ? resolveCodexCliFixtureNode() : undefined;
   const bin = node ? resolveFixtureNpm(node) : target.bin;
+  // npm's env shebang needs the selected runtime under the name "node".
+  if (node) symlinkSync(node, join(work, "node"));
   const env = node
-    ? { PATH: [dirname(node), "/usr/bin", "/bin"].join(":"), NODE_COMPILE_CACHE: isolation.env.NODE_COMPILE_CACHE }
+    ? { PATH: [work, dirname(node), "/usr/bin", "/bin"].join(":"), NODE_COMPILE_CACHE: isolation.env.NODE_COMPILE_CACHE }
     : isolation.env;
   const result = spawnSync(bin, target.args, { ...target.options, encoding: "utf8", timeout: 60_000,
     env: { ...env, HOME: root, TMPDIR: root } });
