@@ -1,4 +1,4 @@
-/** Producer projection: only measured subscription windows reach advisory snapshots. */
+/** Producer projections for measured advisory quota windows. */
 import type { ProviderQuota } from "./quota-types";
 import type { StoredAccountQuota } from "../codex/quota-types";
 import { resetAtToMs } from "../codex/quota-types";
