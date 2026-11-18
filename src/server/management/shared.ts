@@ -40,7 +40,8 @@ import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap
 import { resolveCodexHomeDir } from "../../codex/home";
 import { isKnownRequestFailureCause, isKnownRequestFailureStage, readUsageEntries } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
-import { cacheObservationFromUsage, parseRange, parseUsageSurface, summarizeUsage } from "../../usage/summary";
+import { cacheObservationFromUsage } from "../../usage/cache-provenance";
+import { parseRange, parseUsageSurface, summarizeUsage } from "../../usage/summary";
 import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
 import { getProviderRegistryEntry, providerMatchesRegistryTransport } from "../../providers/registry";
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
@@ -235,8 +236,13 @@ export function unavailableCostReason(entry: MetricSource): MetricUnavailableRea
 /** Display-time cost estimate for one log entry (or its attempt list), including the reasons that qualify the estimate. */
 export function costResult(entry: MetricSource): CostResult {
   const tier = serviceTierContext(entry);
-  const estimate = entry.attempts?.length
-    ? estimateComboCost(entry.attempts.map(attempt => ({ ...attempt, ...usageModelPriceOptions(entry, attempt) })), undefined, tier)
+  const attempts = entry.attempts?.map(attempt => ({
+    ...attempt,
+    ...usageModelPriceOptions(entry, attempt),
+    cacheProvenance: attempt.cacheProvenance ?? entry.cacheProvenance,
+  }));
+  const estimate = attempts?.length
+    ? estimateComboCost(attempts, undefined, tier)
     : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus, serviceTier: tier, ...usageModelPriceOptions(entry, entry) });
   if (!estimate) return { kind: "unavailable", reason: unavailableCostReason(entry) };
   // Provenance follows the basis that produced the amount. A credit charge is
@@ -250,7 +256,7 @@ export function costResult(entry: MetricSource): CostResult {
   // estimate roster lines up with the stored one and the persisted cache provenance stays reachable.
   const tokenPricedLegs = estimate.billing?.source === "mixed"
     ? (estimate.attempts ?? [])
-      .map((attempt, index) => ({ attempt, source: entry.attempts?.[index] }))
+      .map((attempt, index) => ({ attempt, source: attempts?.[index] }))
       .filter(leg => leg.attempt.billing === undefined)
     : undefined;
   // A cost estimate is qualified by cache detail it can TRUST. A detail object that exists only
@@ -261,7 +267,7 @@ export function costResult(entry: MetricSource): CostResult {
     ? false
     : tokenPricedLegs
       ? tokenPricedLegs.some(leg =>
-        cacheObservationFromUsage(leg.source?.usage, leg.source?.cacheProvenance ?? entry.cacheProvenance).provenance !== "observed")
+        cacheObservationFromUsage(leg.source?.usage, leg.source?.cacheProvenance).provenance !== "observed")
       : !!entry.usage && cacheObservationFromUsage(entry.usage, entry.cacheProvenance).provenance !== "observed";
   const priceSources = creditOnly
     ? []

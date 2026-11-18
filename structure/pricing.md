@@ -80,7 +80,9 @@ The credit amount's estimated flag follows usage provenance alone.
 
 `priorityLowerBound` follows the rate that produced each amount. A token-only Combo requires
 every attempt to be a floor. A mixed Combo requires at least one token-priced floor and every
-token-priced attempt to be exact or a known floor. Credit charges are exact at the configured
+token-priced attempt to be exact or a known floor. An exact token leg requires a non-estimated
+amount and observed cache detail. `src/usage/cache-provenance.ts` supplies the same observation
+check to the estimator and Logs DTO. Credit charges are exact at the configured
 price, so credit-only totals carry no floor marker. `gui/src/pages/logs-cost-format.ts` uses the
 proxy's mixed-row marker and suppresses stale token-price markers and reasons on credit-only rows.
 In a token-only conversation, every priced row must be a floor for the total to show `≥`.
@@ -94,7 +96,8 @@ after output with no terminal emits the existing `adapter_eof` incomplete outcom
 Locally answered and unsent request-log attempts do not participate in credit completeness.
 A token-priced row whose
 normalized token count exceeds the bound is `invalid_usage`.
-`tests/usage/usage-provider-credit-price.test.ts`, `tests/server/management-api-logs-metrics.test.ts`
+`tests/usage/usage-provider-credit-price.test.ts`, `tests/usage/usage-credit-ledger-regressions.test.ts`,
+`tests/server/management-api-logs-metrics.test.ts`
 and `gui/tests/logs-cost-credit-billing.test.tsx` cover the bounds, the mixed aggregation and the
 rendered detail.
 

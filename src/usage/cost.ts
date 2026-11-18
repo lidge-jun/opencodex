@@ -20,6 +20,7 @@ import { canonicalFastTierMarker } from "../providers/fastwire";
 import { CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { baseProviderLabel } from "../providers/label";
 import type { PersistedUsageAttempt, UsageStatus } from "./log";
+import { cacheObservationFromUsage } from "./cache-provenance";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
 import { activeAccountPricingProviders, activeConfiguredProviders, activeCreditPrices, activeUserCostOverlays, userCostOverlayVersion } from "./user-cost-overlays";
 import { costTokensWithinBound, isValidCreditPriceBound, isRepresentableCreditCount, type CreditBilling } from "./credit-billing";
@@ -47,7 +48,7 @@ export interface PriceResolutionOptions {
   allowModelLevelFallback?: boolean;
 }
 
-type AttemptCostInput = Pick<PersistedUsageAttempt, "ordinal" | "provider" | "model" | "usage" | "usageStatus" | "tierOutcome"> & PriceResolutionOptions;
+type AttemptCostInput = Pick<PersistedUsageAttempt, "ordinal" | "provider" | "model" | "usage" | "usageStatus" | "tierOutcome" | "cacheProvenance"> & PriceResolutionOptions;
 
 /**
  * Service-tier provenance. `effectiveServiceTier()` collapses these with `??`,
@@ -807,16 +808,21 @@ function comboBilling(estimates: readonly AttemptCostEstimate[], total: number):
 /**
  * A token-only Combo requires every attempt to be a floor. Credit charges are exact at the
  * configured price. With credit billing, at least one token-priced attempt must be a floor,
- * and every other token-priced attempt must be exact or a known floor.
+ * and every other token-priced attempt must be a known floor or use non-estimated pricing
+ * and usage with observed cache detail.
  */
 function comboIsLowerBound(
+  attempts: readonly AttemptCostInput[],
   estimates: readonly AttemptCostEstimate[],
   billing: CreditBilling | undefined,
 ): boolean {
   if (!billing) return estimates.length > 0 && estimates.every(est => est.priorityLowerBound === true);
-  const pricedFromTokens = estimates.filter(est => est.billing === undefined);
-  return pricedFromTokens.some(est => est.priorityLowerBound === true)
-    && pricedFromTokens.every(est => est.priorityLowerBound === true || !est.estimated);
+  return estimates.some(est => est.billing === undefined && est.priorityLowerBound === true)
+    && estimates.every((est, index) => {
+      if (est.billing || est.priorityLowerBound) return true;
+      const { usage, cacheProvenance } = attempts[index]!;
+      return !est.estimated && cacheObservationFromUsage(usage, cacheProvenance).provenance === "observed";
+    });
 }
 
 /**
@@ -868,7 +874,7 @@ export function estimateComboCost(
       : {}),
     ...(estimates.some(est => est.contextTier) ? { contextTier: "long" as const } : {}),
     ...(estimates.some(est => est.customThresholdApplied) ? { customThresholdApplied: true as const } : {}),
-    ...(comboIsLowerBound(estimates, billing) ? { priorityLowerBound: true as const } : {}),
+    ...(comboIsLowerBound(attempts, estimates, billing) ? { priorityLowerBound: true as const } : {}),
   };
 }
 
