@@ -72,7 +72,7 @@ async function runParentStop(options: {
   managerCascades?: boolean; guarded?: boolean; orphan?: boolean; exitCleanup?: boolean;
   nativeSignal?: boolean; apiFailure?: boolean; stopBodyFailure?: boolean;
   alreadyStopped?: boolean; absence?: "dead" | "unknown" | "live"; managerState?: "inactive" | "active" | "unknown";
-  configuredPort?: number; staleRuntimeRecord?: boolean;
+  configuredPort?: number; staleRuntimeRecord?: boolean; noRuntimeRecord?: boolean; deadPidReadsNull?: boolean;
   disconnectDuringProbe?: boolean; connectDuringDiscovery?: boolean; connectDuringPost?: boolean; lifecycleBusy?: boolean;
   connectAfterBoundary?: boolean; pendingAfterBoundary?: boolean; connectDuringRestore?: boolean;
   connectAfterExitInspection?: boolean; pendingAfterExitInspection?: boolean; pendingAfterGrok?: boolean; receiptClearBusy?: boolean;
@@ -99,7 +99,8 @@ async function runParentStop(options: {
   expect(report.unexpectedIo, child.stderr).toEqual([]);
   const refusedWithoutReceipt = !options.receipt && (options.windowsStopWiring === true || options.clientTransport === "link");
   const changedBeforeLinkFence = options.clientTransport === "link" && options.connectDuringDiscovery;
-  expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup || options.alreadyStopped || refusedWithoutReceipt || changedBeforeLinkFence ? 0 : 1);
+  const stoppedByManager = options.managerCascades && options.deadPidReadsNull;
+  expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup || options.alreadyStopped || stoppedByManager || refusedWithoutReceipt || changedBeforeLinkFence ? 0 : 1);
   return { ...report, exitCode: child.status, stderr: child.stderr, stdout: child.stdout };
 }
 
@@ -150,6 +151,22 @@ describe("API stop through process exit cleanup", () => {
 });
 
 describe("parent CLI shared teardown completion", () => {
+  test("an already-down standalone stop restores even when the user manager is unreadable", async () => {
+    const outcome = await runParentStop({ receipt: true, alreadyStopped: true, managerState: "unknown",
+      json: true, response: null, restore: restoreResult(true) });
+    expect(outcome.exitCode, outcome.stderr).toBe(0);
+    expect(outcome.calls).toMatchObject({ service: 1, killed: 0, native: 1, grok: 1 });
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ runtimeDown: true, sharedTeardown: "restored" });
+  });
+
+  test("a standalone service can stop through its manager without a runtime record", async () => {
+    const outcome = await runParentStop({ receipt: true, managerCascades: true, deadPidReadsNull: true, noRuntimeRecord: true,
+      json: true, response: null, restore: restoreResult(true) });
+    expect(outcome.exitCode, outcome.stderr).toBe(0);
+    expect(outcome.calls).toMatchObject({ service: 1, killed: 0, native: 1, grok: 1 });
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ runtimeDown: true, service: "stopped", sharedTeardown: "restored" });
+  });
+
   for (const staleRuntimeRecord of [true, false]) {
     test(`an ephemeral-port Link stop requires a concrete recorded endpoint (record=${staleRuntimeRecord})`, async () => {
       const outcome = await runParentStop({ receipt: true, clientTransport: "link", alreadyStopped: true,

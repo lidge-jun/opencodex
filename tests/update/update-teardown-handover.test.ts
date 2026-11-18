@@ -245,11 +245,10 @@ describe("ocx stop under an update handover", () => {
     expect(JSON.parse(run.stdout)).toMatchObject({ sharedTeardown: "restored", exitCode: 0 });
   });
 
-  test("a tracked runtime without a runtime record refuses stop before handover or manager mutation", () => {
+  test("without a runtime record the stop restores instead of handing over a guessed receipt", () => {
     const run = runStop(true, { noRuntimeRecord: true, nativeSignal: true });
-    expect(run.exitCode, run.stderr).toBe(1);
-    expect(run.calls).toMatchObject({ native: 0, grok: 0, service: 0, killed: 0 });
-    expect(JSON.parse(run.stdout)).toMatchObject({ proxy: "ownership-refused", sharedTeardown: "skipped" });
+    expect(run.exitCode, run.stderr).toBe(0);
+    expect(run.calls).toMatchObject({ native: 1, grok: 1 });
     expect(receiptNames()).toEqual([]);
   });
 

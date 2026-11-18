@@ -253,11 +253,10 @@ test("parent preflight retries a busy config lock before fencing the exact runti
   expect(report.fileAfter.pi).not.toContain("127.0.0.1");
 }, 20_000);
 
-test("restart rollback keeps its rebound listener while the config lock is busy", async () => {
-  const report = await runStop({ mode: "file-restart-control", preserve: "restart-rollback", fileClients: ["pi"], busyRollbackPublication: true });
-  expect(report.result).toEqual({ rolledBack: true, bound: true, stopping: false, explicitStop: false, sync: "accepted",
-    observerStarts: [false, false], replacementAttempts: 1 });
-  expect(report.fileAfter).toEqual(report.fileOwnedBytes);
+test("restart rollback closes its unpublished listener in the binding turn when the config lock is busy", async () => {
+  const report = await runStop({ mode: "file-restart-overlap", preserve: "restart-rollback", fileClients: ["pi"], busyRollbackPublication: true });
+  expect(report.result).toEqual({ preflight: null, closedBeforeYield: true, published: false, replacementAttempts: 1 });
+  expect(report.fileAfter.pi).not.toContain("127.0.0.1");
 }, 20_000);
 
 test("ordinary restart rollback keeps file routes and admits fresh sync", async () => {

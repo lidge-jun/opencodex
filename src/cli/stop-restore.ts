@@ -9,7 +9,8 @@ import { StopRestoreOwnershipError, type RestoreBoundaryOwnership } from "../cli
 export type { RestoreBoundaryOwnership } from "../client/restore-ownership";
 import { inspectStopRestoreOwnership, stopRestoreWriteGuard } from "./stop-restore-guard";
 export { clearRestoredStopReceipts, settleUnrestoredStopBoundary } from "./stop-restore-guard";
-import { readAlivePid, readPid, readRuntimePort, type ClientStopOwner } from "../config/process-state";
+import { readAlivePid, readPid, readRuntimePort, type ClientStopOwner, type RuntimePortState } from "../config/process-state";
+import type { OutstandingTeardown } from "../config/pending-teardown";
 import type { LinkInheritedTeardown } from "../client/stop-native-handoff";
 import { loadConfig } from "../config";
 import { readBoundedResponseBody } from "../lib/bounded-body";
@@ -62,6 +63,40 @@ export function verifyConnectedStopTarget(
   if (proof && isProcessAlive(proof.target.pid)) proof.verify();
   const currentPid = readAlivePid();
   if (currentPid !== null && currentPid !== proof?.target.pid) throw unsupportedConnectedStop();
+}
+
+/** A failed discovery or ordinary standalone health is not a client-stop refusal. */
+export async function hasConnectedClientStopEvidence(
+  connection: ClientConnectionState, runtime: RuntimePortState | null, receipts: readonly OutstandingTeardown[],
+): Promise<boolean> {
+  const sibling = runtime?.siblingOfPort;
+  if (connection.kind === "connected" && (connection.value.transport === "link" || sibling === undefined)) return true;
+  if (connection.kind === "mismatched" || receipts.some(read => read.state === "valid" && read.receipt.ownerStartTime !== undefined)) return true;
+  const { readRouteIntentReceipt } = await import("../integrations/route-intent-state");
+  if (readRouteIntentReceipt()?.linkId !== undefined) return true;
+  if (runtime && isProcessAlive(runtime.pid)) {
+    if (runtime.clientLinkOwner !== undefined || runtime.servingGeneration !== undefined) return true;
+    if (runtime.attestationSecret) {
+      const capability = await assertConnectedClientStopSupported(runtime, { healthOnly: true }).catch(() => null);
+      if (capability) return capability.linkStopFence || capability.nativeClient;
+    }
+  }
+  // Classification needs only the reported role. The preflight must verify identity itself.
+  const live = await findLiveProxy({ attempts: 1, verifyPidFn: () => null }).catch(() => null);
+  return live?.role === "client" && live.port !== sibling;
+}
+
+// A guessed endpoint can name a standalone teardown obligation but cannot direct POST.
+export function configuredStopEndpoint(): { hostname: string; port: number } {
+  try {
+    const config = loadConfig();
+    return {
+      hostname: config.hostname ?? "127.0.0.1",
+      port: typeof config.port === "number" && config.port > 0 ? config.port : 10100,
+    };
+  } catch {
+    return { hostname: "127.0.0.1", port: 10100 };
+  }
 }
 
 // Only a definitive "nothing is answering" authorizes finishing somebody else's

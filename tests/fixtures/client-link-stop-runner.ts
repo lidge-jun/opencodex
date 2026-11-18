@@ -222,10 +222,10 @@ const snapshot = (result: unknown) => ({
 });
 const report = (result: unknown) => writeFileSync(join(home, "result.json"), JSON.stringify(snapshot(result)));
 process.on("exit", () => writeFileSync(join(home, "exit.json"), JSON.stringify(snapshot(null))));
-function holdConfigLock(released?: () => void) {
+function holdConfigLock() {
   const db = new Database(prepareConfigMutationDatabasePathForWrite());
   db.exec("BEGIN IMMEDIATE");
-  setTimeout(() => { db.close(); released?.(); }, 120);
+  setTimeout(() => db.close(), 120);
 }
 let receiptOwner: ClientStopOwner | undefined;
 if (options.preserve === "service") process.env.OCX_SERVICE = "1";
@@ -343,15 +343,8 @@ if (options.mode === "retry") {
     } }));
   }
   let replacementAttempts = 0;
-  let rollbackLockHeld = false;
-  const observerStarts: boolean[] = [];
-  if (options.busyRollbackPublication) {
-    const observation = await import("../../src/local-credentials/runtime-observation");
-    mock.module("../../src/local-credentials/runtime-observation", () => ({ ...observation, observeLocalCredentials: () => {
-      observerStarts.push(rollbackLockHeld);
-      return { stop() {} };
-    } }));
-  }
+  let observeRollback!: (closed: boolean) => void;
+  const rollbackTurn = new Promise<boolean>(resolve => { observeRollback = resolve; });
   let restartSettled: (() => Promise<void>) | undefined;
   const replaceSavedConnection = () => {
     config.client!.connectedAt = "2026-11-17T00:00:00.000Z";
@@ -389,8 +382,15 @@ if (options.mode === "retry") {
     const server = startMachineListener(port, options.oldStopCapability && deps?.restart
       ? { ...deps, restart: { ...deps.restart, linkStopFence: undefined } } : deps);
     if (options.busyRollbackPublication && replacementAttempts === 1) {
-      rollbackLockHeld = true;
-      holdConfigLock(() => { rollbackLockHeld = false; });
+      const lock = new Database(prepareConfigMutationDatabasePathForWrite());
+      lock.exec("BEGIN IMMEDIATE");
+      const stop = server.stop.bind(server);
+      let closed = false;
+      server.stop = ((force: boolean) => { const result = stop(force); closed = force; return result; }) as typeof server.stop;
+      // The bind and failed admission complete before the next event-loop turn. Keep C
+      // held until the observation, so a retry cannot publish in the meantime.
+      setImmediate(() => { observeRollback(closed); lock.close(); });
+      return server;
     }
     const stop = server.stop.bind(server);
     server.stop = ((close: boolean) => {
@@ -415,6 +415,11 @@ if (options.mode === "retry") {
       if (options.finishStopBeforeRollback) await finishStop();
       releaseRestartStop();
     }
+    if (options.busyRollbackPublication) {
+      const closedBeforeYield = await rollbackTurn;
+      report({ preflight, closedBeforeYield, published: readRuntimePort(process.pid)?.servingGeneration !== before.servingGeneration, replacementAttempts });
+      process.exit(0);
+    }
     if (options.failedRollback) {
       await restartSettled!();
       report({ preflight, replacementAttempts, runtimePresent: readRuntimePort(process.pid) !== null,
@@ -428,13 +433,9 @@ if (options.mode === "retry") {
     let sync = "accepted";
     try { clientSyncRuntimeGuard()(); } catch (error) { sync = (error as { code: string }).code; }
     const admission = options.mode === "file-restart-overlap" ? await requestRestart() : undefined;
-    const health = await fetch(`http://127.0.0.1:${config.port}/healthz`).catch(error => {
-      if (!options.busyRollbackPublication) throw error;
-      return null;
-    });
-    report({ preflight, rolledBack: after.servingGeneration !== before.servingGeneration, bound: health?.ok ?? false,
+    const health = await fetch(`http://127.0.0.1:${config.port}/healthz`);
+    report({ preflight, rolledBack: after.servingGeneration !== before.servingGeneration, bound: health.ok,
       stopping: after.clientStopping === true, explicitStop: after.clientStopRequested === true,
-      ...(options.busyRollbackPublication ? { observerStarts, replacementAttempts } : {}),
       ...(options.finishStopBeforeRollback ? { retainedStop: after.clientStopRequested === false } : {}), sync, admission });
     process.exit(0);
   }

@@ -239,15 +239,15 @@ describe("Grok fence lifecycle wiring", () => {
     // The deferral is an obligation, so it is claimed on disk BEFORE it is requested and
     // released only after THIS process has restored the shared config itself. A bare
     // query flag could not survive the parent dying mid-stop.
-    const claimAt = stopFn.indexOf('claimTeardown(exact, "exact");');
+    const claimAt = stopFn.indexOf('claimTeardown(exact ?? configuredStopEndpoint(), exact ? "exact" : "guessed");');
     expect(claimAt).toBeGreaterThan(-1);
     expect(claimAt).toBeLessThan(stopFn.indexOf("deferSharedTeardownNonce: teardownNonce"));
-    // Both the receipt and POST use the target attested before the manager step.
+    // Connected stops pin the attested endpoint. Standalone stops resolve the endpoint
+    // once as well, and a guessed receipt never directs the POST.
     const stopWithDeferral = sliceFn(stopFn, "const stopWithDeferral = ", "const approvedEndpoint");
-    expect(stopWithDeferral).toContain("const exact = stopTarget && endpointOf(stopTarget.target);");
-    expect(stopWithDeferral).toContain("if (!exact) throw unsupportedConnectedStop();");
-    expect(stopWithDeferral).toContain("runtimeEndpoint: exact");
-    expect(stopWithDeferral).not.toContain("readRuntimePort(");
+    expect(stopWithDeferral).toContain("const exact = connectedStop ? endpointOf(stopTarget?.target ?? null) : discovered ?? endpointOf(readRuntimePort(pid));");
+    expect(stopWithDeferral).toContain("if (connectedStop && !exact) throw unsupportedConnectedStop();");
+    expect(stopWithDeferral).toContain("runtimeEndpoint: exact ?? undefined");
     // Nor may it authorize a later recovery: "the configured port refuses" is not proof
     // that a proxy on an explicit --port is down.
     expect(stopFn).toContain('if (read.receipt.endpointSource === "guessed")');
@@ -310,8 +310,10 @@ describe("Grok fence lifecycle wiring", () => {
     // proxy clears only its own and older obligations accumulate forever.
     expect(stopFn).toContain("if (inheritedTeardowns.length > 0 && !ownershipBlocked)");
     expect(stopFn).toContain("teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces");
-    // Orphan discovery supplies a PID to the same stop path, where it must match preflight.
-    expect(stopFn).toContain("nativeRestoreHandledByProxy = await stopWithDeferral(live.pid);");
+    // Orphan discovery supplies an endpoint for standalone stop. Connected stop still
+    // verifies the PID against preflight and uses the attested endpoint.
+    expect(stopFn).toContain('nativeRestoreHandledByProxy = await stopWithDeferral(live.pid, { hostname: live.hostname ?? "127.0.0.1", port: live.port });');
+    expect(sliceFn(stopFn, "const stopWithDeferral = ", "const approvedEndpoint")).toContain("verifyStopTarget(pid);");
     expect(stopFn).toContain("verifyStopTarget(pid);");
     expect(STOP_RESTORE_SOURCE).toContain("pid !== proof?.target.pid");
     // A live proxy with no killable pid is not "no proxy found": purging state and

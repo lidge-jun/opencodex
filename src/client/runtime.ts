@@ -37,7 +37,7 @@ import { createLinkParityReporter, type LinkParityReporter } from "./link-parity
 import { restoreLinkClientRoutingBeforeExit } from "./stop-routing";
 import { observeClientStopOwner } from "./stop-teardown-owner";
 import { SUPERVISOR_MARKER_ENVS } from "../lib/supervisor-markers";
-import { markClientRuntimeStopping, markClientRuntimeStoppingWithRetry, retryClientConfigMutation } from "./sync-runtime";
+import { markClientRuntimeStopping, markClientRuntimeStoppingWithRetry } from "./sync-runtime";
 import { startRouteIntentTick, type RouteIntentTick } from "../integrations/route-intent-tick";
 import { startRouteIntentWatch, type RouteIntentRuntimeWatch } from "./route-intent-watch";
 
@@ -439,13 +439,17 @@ export async function startClientRuntime(
       activate();
       return true;
     }
-    // Recheck ownership under L then C on every attempt. Yield for C contention without
-    // releasing the rebound listener or starting any of its observers.
-    const published = await retryClientConfigMutation(() => withClientLifecycleSync(() => withConfigMutationLockSync(() => {
+    // Admission and publication are synchronous after bind. A busy lock must close the
+    // rebound listener before yielding. Link takes C to preserve an explicit stop fence.
+    const publishIfOwned = () => {
       if (clientRestartRollbackAction(state.value, readClientConnectionState()) === "recycle") return false;
       publishRecord();
       return true;
-    })));
+    };
+    let published = false;
+    try {
+      published = withClientLifecycleSync(() => linkMode ? withConfigMutationLockSync(publishIfOwned) : publishIfOwned());
+    } catch { /* failed admission */ }
     if (published) activate();
     else {
       try { await server.stop(true); } catch { /* never published */ }
