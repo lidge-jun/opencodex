@@ -788,8 +788,10 @@ not cool the whole combo target. Other accounts behind that target remain availa
 no identified, cooled pool account still cools the target, as do provider-wide failures.
 
 After a Responses combo stream commits output, an incomplete terminal can cool that target for the
-next request. `stall_timeout` cools for 60 seconds. `output_limit` cools for 10 minutes when the
-serving attempt reaches the routed model's known output ceiling and the turn is unpaused.
+next request. The reason can appear on the terminal event or its `response` snapshot. A refusal on
+either carrier takes precedence. `upstream_stall_timeout` cools for 60 seconds. `max_output_tokens`
+cools for 10 minutes when the serving attempt reaches the routed model's known output ceiling and
+the turn is unpaused.
 Devin's preset has no output ceiling, so this output-limit cooldown requires an explicit ceiling
 in the provider configuration. An existing longer cooldown keeps its expiry.
 

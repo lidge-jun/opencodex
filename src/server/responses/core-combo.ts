@@ -1310,6 +1310,7 @@ export async function executeComboResponses(
         // Undefined child fields must preserve metadata already inspected by WS.
         if (childLog.terminalHttpStatus !== undefined) logCtx.terminalHttpStatus = childLog.terminalHttpStatus;
         if (childLog.terminalIncompleteReason !== undefined) logCtx.terminalIncompleteReason = childLog.terminalIncompleteReason;
+        if (childLog.committedIncompleteReason !== undefined) logCtx.committedIncompleteReason = childLog.committedIncompleteReason;
         if (childLog.terminalErrorCode !== undefined) logCtx.terminalErrorCode = childLog.terminalErrorCode;
         if (childLog.upstreamError !== undefined) logCtx.upstreamError = childLog.upstreamError;
         // Raw usage may arrive after the commit copy. Publish it before spend is finalized.

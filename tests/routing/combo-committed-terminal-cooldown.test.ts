@@ -16,6 +16,7 @@ import {
   addFinalRequestLog,
   beginRequestAttempt,
   finishRequestAttempt,
+  inspectResponseLogSsePayloadParsed,
   registerCommittedTerminalCooldownHandler,
   type RequestLogContext,
   type RequestLogEntry,
@@ -53,6 +54,11 @@ function comboConfig(): OcxConfig {
   };
 }
 
+function inspectIncomplete(logCtx: RequestLogContext, reason: string): void {
+  const terminal = { type: "response.incomplete", response: { incomplete_details: { reason } } };
+  inspectResponseLogSsePayloadParsed(logCtx, JSON.stringify(terminal), terminal);
+}
+
 describe("committed-terminal combo cooldown", () => {
   const committed = { provider: "a", model: "m1", status: 200 };
   const first = { provider: "a", model: "m1" };
@@ -66,7 +72,7 @@ describe("committed-terminal combo cooldown", () => {
     coolComboTargetForCommittedTerminal({
       comboId: "free",
       terminalStatus: "incomplete",
-      failureDetailCode: "output_limit",
+      terminalReason: "max_output_tokens",
       servingAttempt: committed,
       httpStatus: 200,
       outputTokens: 4096,
@@ -90,7 +96,7 @@ describe("committed-terminal combo cooldown", () => {
     coolComboTargetForCommittedTerminal({
       comboId: "free",
       terminalStatus: "incomplete",
-      failureDetailCode: "output_limit",
+      terminalReason: "max_output_tokens",
       servingAttempt: committed,
       httpStatus: 200,
       outputTokens: 1024,
@@ -103,7 +109,7 @@ describe("committed-terminal combo cooldown", () => {
     coolComboTargetForCommittedTerminal({
       comboId: "free",
       terminalStatus: "incomplete",
-      failureDetailCode: "output_limit",
+      terminalReason: "max_output_tokens",
       servingAttempt: committed,
       httpStatus: 200,
       outputTokens: 4096,
@@ -116,7 +122,7 @@ describe("committed-terminal combo cooldown", () => {
     coolComboTargetForCommittedTerminal({
       comboId: "free",
       terminalStatus: "incomplete",
-      failureDetailCode: "output_limit",
+      terminalReason: "max_output_tokens",
       servingAttempt: committed,
       httpStatus: 200,
       outputTokens: 4096,
@@ -130,7 +136,7 @@ describe("committed-terminal combo cooldown", () => {
     coolComboTargetForCommittedTerminal({
       comboId: "free",
       terminalStatus: "incomplete",
-      failureDetailCode: "stall_timeout",
+      terminalReason: "upstream_stall_timeout",
       servingAttempt: { ...committed, status: 502 },
       httpStatus: 502,
     });
@@ -139,27 +145,24 @@ describe("committed-terminal combo cooldown", () => {
     expect(isComboTargetInCooldown("free", first, now + 61_000)).toBe(false);
   });
 
-  test("completed, failed, and non-capacity incompletes cool nothing", () => {
+  test("completed, failed, and incompletes without a cooldown reason cool nothing", () => {
     for (const terminalStatus of ["completed", "failed"] as const) {
       coolComboTargetForCommittedTerminal({
         comboId: "free",
         terminalStatus,
-        failureDetailCode: "output_limit",
+        terminalReason: "max_output_tokens",
         servingAttempt: committed,
         httpStatus: 200,
         outputTokens: 4096,
         outputCeiling: 4096,
       });
     }
-    for (const code of ["content_filter", "adapter_eof", "provider_error", "stream_failed"]) {
-      coolComboTargetForCommittedTerminal({
-        comboId: "free",
-        terminalStatus: "incomplete",
-        failureDetailCode: code,
-        servingAttempt: committed,
-        httpStatus: 502,
-      });
-    }
+    coolComboTargetForCommittedTerminal({
+      comboId: "free",
+      terminalStatus: "incomplete",
+      servingAttempt: committed,
+      httpStatus: 502,
+    });
     expect(isComboTargetInCooldown("free", first, Date.now() + 1)).toBe(false);
   });
 
@@ -167,7 +170,7 @@ describe("committed-terminal combo cooldown", () => {
     const base = {
       comboId: "free",
       terminalStatus: "incomplete",
-      failureDetailCode: "output_limit",
+      terminalReason: "max_output_tokens" as const,
       httpStatus: 200,
       outputTokens: 4096,
       outputCeiling: 4096,
@@ -184,7 +187,7 @@ describe("committed-terminal combo cooldown", () => {
     coolComboTargetForCommittedTerminal({
       comboId: "free",
       terminalStatus: "incomplete",
-      failureDetailCode: "output_limit",
+      terminalReason: "max_output_tokens",
       servingAttempt: committed,
       httpStatus: 200,
       outputTokens: 4096,
@@ -206,7 +209,7 @@ describe("committed-terminal combo cooldown", () => {
     coolComboTargetForCommittedTerminal({
       comboId: "aliasCombo",
       terminalStatus: "incomplete",
-      failureDetailCode: "output_limit",
+      terminalReason: "max_output_tokens",
       target: aliasTarget,
       servingAttempt: physicalAttempt,
       httpStatus: 200,
@@ -247,6 +250,7 @@ describe("committed-terminal combo cooldown", () => {
       // Case 1: child receives pause_turn after commit -> carried child -> parent -> no cooldown
       let childLogCaptured: RequestLogContext | undefined;
       let terminalRecorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined;
+      let nativeTerminal: ((status: ResponsesTerminalStatus) => void) | undefined;
       const pausedParentLog: RequestLogContext = {
         model: "m-alias",
         provider: "combo",
@@ -273,6 +277,7 @@ describe("committed-terminal combo cooldown", () => {
             handleComboResponses: async () => { throw new Error("not expected"); },
             handleResponses: async (_req, _cfg, childLog, opts) => {
               childLogCaptured = childLog;
+              nativeTerminal = opts.onNativePassthroughTerminal;
               childLog.usage = { inputTokens: 100, outputTokens: 4096 };
               if (childLog.activeAttempt) childLog.activeAttempt.usage = childLog.usage;
               opts.onFirstOutput?.();
@@ -288,7 +293,9 @@ describe("committed-terminal combo cooldown", () => {
       expect(childLogCaptured).toBeDefined();
       rememberPausedTurn(childLogCaptured!);
       // Terminal arrives: trigger terminal recorder and simulate final log write
-      pausedParentLog.failureDetail = { code: "output_limit" };
+      inspectIncomplete(childLogCaptured!, "max_output_tokens");
+      expect(nativeTerminal).toBeDefined();
+      nativeTerminal!("incomplete");
       terminalRecorder?.("incomplete");
       addFinalRequestLog("ocx-test-paused", Date.now(), pausedParentLog, 200, { terminalStatus: "incomplete" }, () => {});
       expect(isComboTargetInCooldown("aliasCombo", { provider: "a", model: "m-alias" })).toBe(false);
@@ -322,6 +329,7 @@ describe("committed-terminal combo cooldown", () => {
             handleComboResponses: async () => { throw new Error("not expected"); },
             handleResponses: async (_req, _cfg, childLog, opts) => {
               unpausedChildLog = childLog;
+              nativeTerminal = opts.onNativePassthroughTerminal;
               childLog.usage = { inputTokens: 100, outputTokens: 4096 };
               if (childLog.activeAttempt) childLog.activeAttempt.usage = childLog.usage;
               opts.onFirstOutput?.();
@@ -335,7 +343,9 @@ describe("committed-terminal combo cooldown", () => {
 
       expect(unpausedChildLog).toBeDefined();
       // Unpaused: child is NOT marked with rememberPausedTurn
-      unpausedParentLog.failureDetail = { code: "output_limit" };
+      inspectIncomplete(unpausedChildLog!, "max_output_tokens");
+      expect(nativeTerminal).toBeDefined();
+      nativeTerminal!("incomplete");
       unpausedTerminalRecorder?.("incomplete");
       addFinalRequestLog("ocx-test-unpaused", Date.now(), unpausedParentLog, 200, { terminalStatus: "incomplete" }, () => {});
       expect(isComboTargetInCooldown("aliasCombo", { provider: "a", model: "m-alias" })).toBe(true);
@@ -353,10 +363,10 @@ describe("committed-terminal combo cooldown", () => {
       const logCtx: RequestLogContext = {
         model: "m1", provider: "a", providerAdapter: "openai-responses",
         comboId: "free", comboTarget: first, comboTargetOutputCeiling: 4096,
-        failureDetail: { code: "output_limit" },
         attempts: [earlier, serving], activeAttempt: serving,
         usage: { inputTokens: 100, outputTokens },
       };
+      inspectIncomplete(logCtx, "max_output_tokens");
       const rows: RequestLogEntry[] = [];
       addFinalRequestLog("ocx-test-output-limit", Date.now(), logCtx, 200, { terminalStatus: "incomplete" }, row => rows.push(row));
       expect(rows[0]?.usage?.outputTokens).toBe(3500 + outputTokens);
@@ -391,7 +401,7 @@ describe("committed-terminal combo cooldown", () => {
 
       expect(await response.text()).toBe("ok");
       expect(logCtx.comboTargetOutputCeiling).toBe(4096);
-      logCtx.failureDetail = { code: "output_limit" };
+      inspectIncomplete(logCtx, "max_output_tokens");
       addFinalRequestLog("ocx-test-redirect", Date.now(), logCtx, 200, { terminalStatus: "incomplete" }, () => {});
       expect(isComboTargetInCooldown("free", first)).toBe(true);
       expect(isComboTargetInCooldown("free", { provider: "b", model: "m2" })).toBe(false);
@@ -411,13 +421,57 @@ describe("committed-terminal combo cooldown", () => {
       const logCtx: RequestLogContext = {
         model: "m1", provider: "a", providerAdapter: "openai-responses",
         comboId: "free",
-        failureDetail: { code: "stall_timeout" },
         attempts: [attempt],
         activeAttempt: attempt,
       };
+      inspectIncomplete(logCtx, "upstream_stall_timeout");
       addFinalRequestLog("ocx-test-stall", Date.now(), logCtx, 502, { terminalStatus: "incomplete" }, () => {});
       expect(attempt.status).toBe(502);
       expect(isComboTargetInCooldown("free", first, Date.now() + 30_000)).toBe(true);
+    } finally {
+      registerCommittedTerminalCooldownHandler(undefined);
+    }
+  });
+
+  test.each([
+    { eventReason: "upstream_stall_timeout", cooled: true },
+    { responseReason: "upstream_stall_timeout", message: "Provider stream stopped", cooled: true },
+    { eventReason: "max_output_tokens", message: "Provider reached its output limit", cooled: true },
+    { responseReason: "max_output_tokens", message: "Provider reached its output limit", cooled: true },
+    { eventReason: "content_filter", responseReason: "upstream_stall_timeout", cooled: false },
+    { eventReason: "refusal", responseReason: "max_output_tokens", cooled: false },
+    { eventReason: "max_output_tokens", responseReason: "refusal", cooled: false },
+    { eventReason: "upstream_stall_timeout", responseReason: "content_filter", cooled: false },
+    { responseReason: "max_output_tokens", eventCode: "content_policy_violation", cooled: false },
+    { eventReason: "upstream_stall_timeout", responseCode: "content_filter", cooled: false },
+    ...["content_filter", "adapter_eof", "provider_error", "stream_failed"].map(responseReason => ({
+      eventReason: undefined, responseReason, cooled: false,
+    })),
+  ])("reports cooldown from terminal reasons independently of display copy (%j)", row => {
+    const { eventReason, responseReason, message, eventCode, responseCode, cooled } = row;
+    registerCommittedTerminalCooldownHandler(coolComboTargetForCommittedTerminal);
+    try {
+      const attempt = beginRequestAttempt(1, "a", "m1", "openai-responses");
+      const logCtx: RequestLogContext = {
+        model: "m1", provider: "a", providerAdapter: "openai-responses",
+        comboId: "free", comboTarget: first, comboTargetOutputCeiling: 4096,
+        attempts: [attempt], activeAttempt: attempt,
+        usage: { inputTokens: 100, outputTokens: 4096 },
+      };
+      const terminal = {
+        type: "response.incomplete",
+        ...(eventReason ? { incomplete_details: { reason: eventReason } } : {}),
+        ...(eventCode ? { error: { code: eventCode } } : {}),
+        response: {
+          status: "incomplete",
+          ...(responseReason ? { incomplete_details: { reason: responseReason } } : {}),
+          ...(message || responseCode ? { error: { message, code: responseCode } } : {}),
+        },
+      };
+      inspectResponseLogSsePayloadParsed(logCtx, JSON.stringify(terminal), terminal);
+      if (message) expect(logCtx.upstreamError).toBe(message);
+      addFinalRequestLog("ocx-test-terminal-reason", Date.now(), logCtx, 200, { terminalStatus: "incomplete" }, () => {});
+      expect(isComboTargetInCooldown("free", first)).toBe(cooled);
     } finally {
       registerCommittedTerminalCooldownHandler(undefined);
     }

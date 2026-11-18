@@ -336,13 +336,15 @@ export function coolComboTarget(
  * post-commit `incomplete` terminals that path never sees, so without this
  * the next request picks the same target and burns the same budget again.
  */
-const COMMITTED_TERMINAL_COOLDOWN_MS: Readonly<Record<string, number>> = {
+export type CommittedIncompleteReason = "max_output_tokens" | "upstream_stall_timeout";
+
+const COMMITTED_TERMINAL_COOLDOWN_MS: Readonly<Record<CommittedIncompleteReason, number>> = {
   // The target cannot emit more than its output ceiling; a request that
   // exhausted it will exhaust it again, so this uses the local cooldown cap.
-  output_limit: MAX_COOLDOWN_MS,
+  max_output_tokens: MAX_COOLDOWN_MS,
   // Upstream went silent mid-stream after committing output — a health
   // signal, but transient, so the standard short cooldown applies.
-  stall_timeout: DEFAULT_COOLDOWN_MS,
+  upstream_stall_timeout: DEFAULT_COOLDOWN_MS,
 };
 
 export interface CommittedTerminalServingAttempt {
@@ -355,7 +357,7 @@ export interface CommittedTerminalServingAttempt {
 export interface CommittedTerminalCooldownFacts {
   comboId?: string;
   terminalStatus?: string;
-  failureDetailCode?: string;
+  terminalReason?: CommittedIncompleteReason;
   servingAttempt?: CommittedTerminalServingAttempt;
   httpStatus?: number;
   target?: Pick<OcxComboTarget, "provider" | "model">;
@@ -373,11 +375,11 @@ export interface CommittedTerminalCooldownFacts {
  */
 export function coolComboTargetForCommittedTerminal(facts: CommittedTerminalCooldownFacts): void {
   if (!facts.comboId || facts.terminalStatus !== "incomplete") return;
-  const cooldownMs = facts.failureDetailCode === undefined
+  const cooldownMs = facts.terminalReason === undefined
     ? undefined
-    : COMMITTED_TERMINAL_COOLDOWN_MS[facts.failureDetailCode];
+    : COMMITTED_TERMINAL_COOLDOWN_MS[facts.terminalReason];
   if (cooldownMs === undefined) return;
-  if (facts.failureDetailCode === "output_limit") {
+  if (facts.terminalReason === "max_output_tokens") {
     // Reaching the caller's own allowance (routine for Claude Code) or an Anthropic pause_turn
     // must not cool a healthy target. Cool only when the turn was unpaused, the target's own
     // ceiling is known, and the output actually reached that ceiling.

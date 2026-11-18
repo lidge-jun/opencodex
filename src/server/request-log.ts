@@ -37,6 +37,7 @@ import { UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../lib/upstream-retry";
 import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
 export { registerCommittedTerminalCooldownHandler } from "./request-log-committed-terminal";
 import { reportCommittedTerminalCooldown } from "./request-log-committed-terminal";
+import type { CommittedIncompleteReason } from "../combos/failover";
 import type { UpstreamCondition } from "../lib/upstream-condition";
 import { boundedServiceTier, errorDetailFor, projectErrorDetail } from "../usage/error-detail";
 import { incompleteReasonDetail, upstreamErrorIsLocal, type FailureDetail } from "./request-log-failure-detail";
@@ -286,6 +287,7 @@ export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequest
   errorCode?: string;
   /** Structured reason from `response.incomplete`; internal-only input to log classification. */
   terminalIncompleteReason?: string;
+  committedIncompleteReason?: CommittedIncompleteReason | null;
   affinity?: CodexAffinityMove;
   /** Why the binding was kept, moved, or released (#4546). */
   affinityReason?: CodexAffinityReason;

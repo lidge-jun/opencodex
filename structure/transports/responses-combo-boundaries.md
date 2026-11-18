@@ -358,15 +358,17 @@ Coverage: `tests/responses/chat-native-spend.test.ts` and `tests/responses/respo
 When a streaming combo child commits output to the client and then terminates `incomplete`,
 `coolComboTargetForCommittedTerminal` in `src/combos/failover.ts` records a bounded cooldown for
 that target under its configured alias selector (`pick.target`) and writer generation, so future
-picks route around the exhausted target without corrupting the active response. Trigger codes
-are strictly bounded:
-- `output_limit` applies a 10-minute cooldown when the turn is unpaused and the serving attempt's
+picks route around it. `src/server/request-log-terminal-status.ts` captures a closed reason from the
+first incomplete terminal, checking both the event and its response snapshot. A refusal in either
+carrier takes precedence. Display diagnostics and error messages do not select the cooldown.
+
+- `max_output_tokens` applies a 10-minute cooldown when the turn is unpaused and the serving attempt's
   output tokens reach the routed provider and model's configured or native ceiling (`resolveOutputCeiling`).
   `src/server/request-log-committed-terminal.ts` reads the serving attempt's usage. The request row
-  still totals usage across attempts. `src/server/responses/core-combo.ts` carries the child's pause
-  marker to the parent before terminal logging. Devin targets without a configured ceiling are
+  still totals usage across attempts. `src/server/responses/core-combo.ts` carries the committed child's
+  pause marker and late native terminal reason to the parent. Devin targets without a configured ceiling are
   ineligible for this cooldown because the Devin preset does not declare one.
-- `stall_timeout` applies a 60-second cooldown, recording the timeout even if finalization overwrote the
+- `upstream_stall_timeout` applies a 60-second cooldown, recording the timeout even if finalization overwrote the
   serving attempt status with a client-facing 5xx code.
 Existing live cooldowns with a later expiration (e.g. upstream Retry-After) are never shortened by a
 committed terminal write.

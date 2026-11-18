@@ -1,9 +1,31 @@
-import type { CommittedTerminalCooldownFacts } from "../combos/failover";
+import type { CommittedIncompleteReason, CommittedTerminalCooldownFacts } from "../combos/failover";
 import { isPausedTurn } from "../lib/client-error-body";
+import { isTerminalRefusalCode } from "../lib/errors";
 import type { PersistedUsageAttempt } from "../usage/log";
 import type { RequestLogContext, RequestLogEntry } from "./request-log";
+import type { UpstreamErrorPayload } from "./request-log-terminal-status";
 
 let committedTerminalCooldownHandler: ((facts: CommittedTerminalCooldownFacts) => void) | undefined;
+
+function isRefusal(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const code = value.trim();
+  return code === "content_filter" || code === "refusal" || code === "moderation_refusal"
+    || code === "content_policy_violation" || isTerminalRefusalCode(code);
+}
+
+/** Recognize closed capacity/health reasons independently of the text printed for the turn. */
+export function committedIncompleteReason(payload: UpstreamErrorPayload): CommittedIncompleteReason | null {
+  const response = payload.response;
+  const reasons = [payload.incomplete_details?.reason, response?.incomplete_details?.reason];
+  const errors = [payload.error, payload.last_error, response?.error, response?.last_error];
+  if (reasons.some(isRefusal) || isRefusal(payload.code) || errors.some(error => isRefusal(error?.code) || isRefusal(error?.type))) {
+    return null;
+  }
+  const normalized = reasons.map(reason => typeof reason === "string" ? reason.trim() : undefined);
+  if (normalized.includes("max_output_tokens")) return "max_output_tokens";
+  return normalized.includes("upstream_stall_timeout") ? "upstream_stall_timeout" : null;
+}
 
 /**
  * Composition-root hook: the combos layer registers its committed-terminal
@@ -33,7 +55,7 @@ export function reportCommittedTerminalCooldown(
     committedTerminalCooldownHandler?.({
       ...(logCtx.comboId !== undefined ? { comboId: logCtx.comboId } : {}),
       ...(meta?.terminalStatus !== undefined ? { terminalStatus: meta.terminalStatus } : {}),
-      ...(logCtx.failureDetail?.code !== undefined ? { failureDetailCode: logCtx.failureDetail.code } : {}),
+      ...(logCtx.committedIncompleteReason ? { terminalReason: logCtx.committedIncompleteReason } : {}),
       ...(servingAttempt ? {
         servingAttempt: {
           provider: servingAttempt.provider,
