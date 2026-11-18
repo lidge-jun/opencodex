@@ -156,6 +156,92 @@ describe("ACP output streaming", () => {
     expect(seen.join("")).toBe("refresh_token=[REDACTED]; {\"access_token\": \"[REDACTED]\", \"id_token\": '[REDACTED]'}");
   });
 
+  const outputTypes = ["text_delta", "thinking_delta"] as const;
+  const separators = [
+    ["pre-colon LF", "\n", ""],
+    ["pre-colon CRLF", "\r\n", " "],
+    ["pre-colon 65 spaces", " ".repeat(65), ""],
+    ["mixed whitespace", " \t\r\n ", "\r\n\t "],
+    ["oversized separators", " ".repeat(1100) + "\r\n", "\t" + " ".repeat(1100)],
+  ] as const;
+
+  function renderChunks(type: typeof outputTypes[number], chunks: string[]): string {
+    const seen: string[] = [];
+    const output = new AcpTurnOutput((_type, text) => seen.push(text));
+    for (const chunk of chunks) output.push(type, chunk);
+    output.flush();
+    return seen.join("");
+  }
+
+  for (const type of outputTypes) {
+    test.each(separators)("masks JSON OAuth values at every separator split (%s) in " + type, (_name, before, after) => {
+      const key = '{"refresh_token';
+      const separator = '"' + before + ":" + after;
+      const input = key + separator + '"fixture.opaque-value"} then resume.';
+      const expected = key + separator + '"[REDACTED]"} then resume.';
+      for (let split = key.length; split <= key.length + separator.length + 1; split++) {
+        expect(renderChunks(type, [input.slice(0, split), input.slice(split)]) === expected).toBe(true);
+      }
+    });
+
+    test("masks JSON OAuth values with seeded frame splits in " + type, () => {
+      let state = 0xa9c0;
+      const random = (limit: number) => {
+        state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+        return (state >>> 16) % limit;
+      };
+      const whitespace = ["", " ", "\t", "\r", "\n", " \r\n\t", " ".repeat(513)];
+      for (const key of ["access_token", "refresh_token", "idToken"]) {
+        for (const before of whitespace) {
+          for (const after of whitespace) {
+            const prefix = '{"' + key + '"' + before + ":" + after + '"';
+            const suffix = '"} safe.';
+            const input = prefix + 'fixture.opaque\\"suffix' + suffix;
+            const chunks: string[] = [];
+            for (let offset = 0; offset < input.length;) {
+              const end = offset + 1 + random(23);
+              chunks.push(input.slice(offset, end));
+              offset = end;
+            }
+            expect(renderChunks(type, chunks) === prefix + "[REDACTED]" + suffix).toBe(true);
+          }
+        }
+      }
+    });
+
+    test("fails closed after an oversized unfinished OAuth separator in " + type, () => {
+      const key = '{"refresh_token"';
+      const whitespace = " \t\r\n".repeat(512);
+      const seen: [string, string][] = [];
+      const output = new AcpTurnOutput((channel, text) => seen.push([channel, text]));
+      const other = type === "text_delta" ? "thinking_delta" : "text_delta";
+      output.push(type, key);
+      for (let offset = 0; offset < whitespace.length; offset += 16) {
+        output.push(type, whitespace.slice(offset, offset + 16));
+        output.push(other, "Progress. ");
+      }
+      expect(seen.filter(([channel]) => channel === other).map(([, text]) => text).join("")).toBe("Progress. ".repeat(128));
+      output.push(type, "fixture.");
+      output.push(type, "opaque-value} done.");
+      output.flush();
+      const actual = seen.filter(([channel]) => channel === type).map(([, text]) => text).join("");
+      expect(actual.includes("fixture.") || actual.includes("opaque-value")).toBe(false);
+      expect(actual).toEndWith("[REDACTED]} done.");
+    });
+
+    test("preserves prose and quoted OAuth labels used as code strings in " + type, () => {
+      const chunks = [
+        "Authorization: required for write requests.\n",
+        'const label = "refresh_token"',
+        " \r\n  ",
+        '+ " setting";\n',
+        "About refresh_token:",
+        "\nCreate one in settings.",
+      ];
+      expect(renderChunks(type, chunks)).toBe(chunks.join(""));
+    });
+  }
+
   test("publishes short safe text before the terminal reply", () => {
     const seen: string[] = [];
     const output = new AcpTurnOutput((_type, text) => seen.push(text));

@@ -563,6 +563,30 @@ describe("agy acp turn", () => {
     expect(h.events.at(-1)).toEqual({ type: "done" });
   });
 
+  test.each(["agent_message_chunk", "agent_thought_chunk"] as const)(
+    "redacts a split JSON OAuth key and separator in %s",
+    async sessionUpdate => {
+      const key = '{"refresh_token"';
+      const whitespace = " ".repeat(65);
+      const h = await run(script((frame, api) => {
+        if (frame.method !== "session/prompt") return;
+        for (const text of [key, " \r", "\n", whitespace, "\t", ":", "\r", '\n "fixture.', 'opaque-value"}']) {
+          api.notify({ sessionUpdate, content: { type: "text", text } });
+        }
+        api.reply(frame.id, { stopReason: "end_turn" });
+        return true;
+      }));
+      const output = h.events.flatMap(event => {
+        if (sessionUpdate === "agent_message_chunk" && event.type === "text_delta") return [event.text];
+        if (sessionUpdate === "agent_thought_chunk" && event.type === "thinking_delta") return [event.thinking];
+        return [];
+      }).join("");
+      expect(output === key + " \r\n" + whitespace + '\t:\r\n "[REDACTED]"}').toBe(true);
+      expect(h.events).toContainEqual({ type: "heartbeat" });
+      expect(h.events.at(-1)).toEqual({ type: "done" });
+    },
+  );
+
   test.each([
     ["answer", "single frame"],
     ["answer", "split frames"],
