@@ -147,10 +147,8 @@ export function deriveComboCatalogModel(
   const advertisedLadders = combo.reasoningEffortMode === "adaptive"
     ? knownLadders.filter(ladder => ladder.length > 0)
     : knownLadders;
-  // A JEV combo in the default `decide` mode sets the effort itself: the decision overrides the
-  // caller on a turn's first request and its tool-loop continuations keep that effort. An effort
-  // control on the row would be one the proxy discards, so the row advertises none. `client`
-  // leaves effort to the caller and keeps the ladder.
+  // The JEV decision owns effort in decide mode, so the picker has no effort control.
+  // Client mode keeps the ladder from ordinary Combo policy.
   const decisionOwnsEffort = combo.strategy === "jev" && combo.jevEffortMode !== "client";
   const reasoningEfforts = decisionOwnsEffort || advertisedLadders.length === 0
     ? []

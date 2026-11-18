@@ -638,6 +638,7 @@
   "codex-catalog-admission.test.ts": "codex-integration", "codex-catalog-exclusions.test.ts": "codex-integration",
   "codex-catalog-golden.test.ts": "codex-integration", "codex-catalog-identity-neutral.test.ts": "codex-integration",
   "codex-catalog-ladders.test.ts": "codex-integration", "codex-catalog-model-picker-order.test.ts": "codex-integration",
+  "codex-catalog-jev-effort.test.ts": "codex-integration",
   "codex-catalog-refresh-status.test.ts": "codex-integration", "codex-catalog-restore.test.ts": "codex-integration",
   "codex-catalog-sync-hardening.test.ts": "codex-integration",
   "codex-catalog-routed-removal.test.ts": "codex-integration", "codex-catalog-intent.test.ts": "codex-integration",

@@ -692,6 +692,10 @@ precedence unless `defaultEffortMode` is `"force"`. Without one, the Combo's `de
 when set, and the provider default applies otherwise. A continuation of a turn that a fallback target
 answered follows the same policy.
 
+In `decide` mode, the Combo's catalog row advertises no reasoning effort levels, so the Codex
+model picker hides its effort control. In `client` mode, the row keeps the shared target ladder
+under ordinary Combo policy.
+
 After the Combo has served requests, open **Models → Combos → jev-auto → Stats** to inspect JEV's
 picks without replacing the normal model picker or Usage page. The tab separates backend-reported decision
 tokens from tokens reported by physical model sends, and shows decision gates, fail-open picks,
