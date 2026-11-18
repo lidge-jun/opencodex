@@ -87,7 +87,7 @@ test.skipIf(process.platform === "win32")("orchestrated pnpm update of a global 
       "else if(a[0]==='root') console.log(e.OCX_FIXTURE_GROUP);",
       "else if(a[0]==='bin') console.log(e.OCX_FIXTURE_BIN);",
       "else if(a[0]==='config') console.log(a[2]==='global-bin-dir'?e.OCX_FIXTURE_BIN:'undefined');",
-      "else if(a[0]==='store'&&a[1]==='path'&&a.length===3&&a[2]==='--dir='+e.PNPM_HOME) console.log(childStore?e.OCX_FIXTURE_CHILD_STORE:e.OCX_FIXTURE_STORE);",
+      "else if(a[0]==='store'&&a[1]==='path'&&a.length===3&&a[2]==='--dir='+e.PNPM_HOME) console.log(childStore?e.OCX_FIXTURE_CHILD_STORE:(e.pnpm_config_store_dir?p.join(e.pnpm_config_store_dir,'v11'):e.OCX_FIXTURE_STORE));",
       "else if(a[0]==='view') console.log(a.includes('dist.integrity')?'sha512-YWJj':'2.1.0');",
       // The updated tree also gains an in-store node_modules link, so it satisfies the released verifier as
       // well; the parent's readback must still re-prove the pinned store owner instead of demoting it.
@@ -95,12 +95,21 @@ test.skipIf(process.platform === "win32")("orchestrated pnpm update of a global 
       "else process.exit(90);",
     ].join("\n") + "\n");
     chmodSync(join(bin, "pnpm"), 0o755);
-    const env = { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: join(root, "codex"), PNPM_HOME: pnpmHome,
+    const storeEnvKeys = new Set(["npm_config_store_dir", "pnpm_config_store_dir"]);
+    const inheritedEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !storeEnvKeys.has(key.toLowerCase())));
+    const env = { ...inheritedEnv, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: join(root, "codex"), PNPM_HOME: pnpmHome,
+      npm_config_store_dir: dirname(store), pnpm_config_store_dir: dirname(store),
       OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(), OCX_UPDATE_ORCHESTRATED_CHILD: "0", OPENCODEX_BUN_PATH: process.execPath,
       PATH: bin, OCX_FIXTURE_LOG: log, OCX_FIXTURE_REAL: real, OCX_FIXTURE_EXPOSED: exposed, OCX_FIXTURE_GROUP: group, OCX_FIXTURE_BIN: bin, OCX_FIXTURE_STORE: store };
     const parent = (extraEnv: Record<string, string> = {}) => spawnSync(node, [join(exposed, "bin/ocx.mjs"), "update", "--yes", "--json"],
       { cwd: root, env: { ...env, ...extraEnv }, encoding: "utf8", timeout: 60000 });
     const adds = () => existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(call => call.args[0] === "add") : [];
+
+    const plan = spawnSync(node, [join(exposed, "bin/ocx.mjs"), "update", "--plan", "--json", "--tag", "latest"],
+      { cwd: root, env, encoding: "utf8", timeout: 60000 });
+    expect({ status: plan.status, stderr: plan.stderr }).toMatchObject({ status: 0 });
+    expect(JSON.parse(plan.stdout)).toMatchObject({ installer: "pnpm", canApply: true, targetVersion: "2.1.0" });
+    expect(adds()).toEqual([]);
 
     // The child sees a different store than the parent proved: refused before any pnpm add.
     const otherStore = join(root, "other-pnpm", "store", "v11"); mkdirSync(otherStore, { recursive: true });

@@ -5,7 +5,7 @@
  * answer; that fallback must not run while a forward candidate is configured, and must not
  * spend a different paid backend than the one the operator named.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync} from "node:fs";
 import { join } from "node:path";
 import { encodeMessage, encodeString } from "../../src/adapters/devin/cloud-direct/wire";
@@ -30,6 +30,9 @@ import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { SERVER_BUDGET_MS } from "../helpers/test-budget";
+
+setDefaultTimeout(SERVER_BUDGET_MS);
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -543,7 +546,7 @@ test("routes every Devin model family through the native search RPC without a se
   expect(requests.every(request => !request.body.includes(Buffer.from("claude-sonnet-5"))
     && !request.body.includes(Buffer.from("grok-4-7"))
     && !request.body.includes(Buffer.from("swe-2")))).toBe(true);
-});
+}, 5_000);
 
 test("native search route preview does not claim a round-robin combo turn", async () => {
   await saveCredential("devin", {
@@ -588,7 +591,7 @@ test("native search route preview does not claim a round-robin combo turn", asyn
   } finally {
     clearComboSelectionState();
   }
-});
+}, 5_000);
 
 test("falls back to a configured exa sidecar when no ChatGPT forward provider exists", async () => {
   const captured: CapturedExaRequest[] = [];
@@ -616,7 +619,7 @@ test("falls back to a configured exa sidecar when no ChatGPT forward provider ex
   expect(captured[0].url).toBe("https://api.exa.ai/search");
   expect(captured[0].headers.get("x-api-key")).toBe("exa-test-key");
   expect(captured[0].body).toMatchObject({ query: "OpenAI news" });
-});
+}, 5_000);
 
 test("a ChatGPT forward provider still wins over a configured web-search sidecar", async () => {
   const captured: CapturedRequest[] = [];
@@ -671,7 +674,7 @@ test("an openai webSearchSidecar backend cannot serve alpha/search without ChatG
   expect(json.error.message).toContain("ChatGPT forward provider");
   expect(json.error.message).toContain("webSearchSidecar");
   expect(captured).toHaveLength(0);
-});
+}, 5_000);
 
 test("a webSearchSidecar backend with no credential does not fall through to another paid backend", async () => {
   const captured: CapturedExaRequest[] = [];
@@ -690,7 +693,7 @@ test("a webSearchSidecar backend with no credential does not fall through to ano
   expect(json.error.message).not.toContain("ChatGPT forward provider");
   expect(json.error.message).toContain("not sent to any other backend");
   expect(captured).toHaveLength(0);
-});
+}, 5_000);
 
 test("a disabled web-search sidecar cannot serve alpha/search either", async () => {
   const captured: CapturedExaRequest[] = [];
@@ -704,7 +707,7 @@ test("a disabled web-search sidecar cannot serve alpha/search either", async () 
   const json = await response.json() as { error: { message: string } };
   expect(json.error.message).toContain("ChatGPT forward provider");
   expect(captured).toHaveLength(0);
-});
+}, 5_000);
 
 test("an alpha/search sidecar failure names the backend instead of asking for ChatGPT auth", async () => {
   const key = "exa-secret-key-123";
@@ -727,7 +730,7 @@ test("an alpha/search sidecar failure names the backend instead of asking for Ch
   expect(json.error.message).toContain("502");
   expect(json.error.message).not.toContain("ChatGPT");
   expect(json.error.message).not.toContain(key);
-});
+}, 5_000);
 
 test("an eligible sidecar still 400s when the search body has no query", async () => {
   const captured: CapturedExaRequest[] = [];
@@ -742,7 +745,7 @@ test("an eligible sidecar still 400s when the search body has no query", async (
   expect(json.error.message.toLowerCase()).toContain("query");
   expect(json.error.message).not.toContain("ChatGPT");
   expect(captured).toHaveLength(0);
-});
+}, 5_000);
 
 test("relays search upstream error status and body verbatim", async () => {
   const captured: CapturedRequest[] = [];
@@ -878,7 +881,7 @@ test("a search body that stalls after headers retains the total 504 deadline", a
   } finally {
     await server.stop(true);
   }
-}, 5_000);
+});
 
 test("a client abort during search body reading maps to 499 and cancels upstream", async () => {
   let markBodyStarted: (() => void) | undefined;
@@ -913,7 +916,7 @@ test("a client abort during search body reading maps to 499 and cancels upstream
   const response = await reading;
   expect(response.status).toBe(499);
   expect(upstreamCanceled).toBe(true);
-});
+}, 5_000);
 
 test("a client abort before the search reader attaches cancels the untouched upstream body", async () => {
   const parent = new AbortController();
@@ -944,7 +947,7 @@ test("a client abort before the search reader attaches cancels the untouched ups
   const response = await handleSearch(request, forwardConfig(), { model: "", provider: "" });
   expect(response.status).toBe(499);
   expect(upstreamCanceled).toBe(true);
-});
+}, 5_000);
 
 test("a hung search upstream times out with 504 after config.search.timeoutMs", async () => {
   const upstream = Bun.serve({
@@ -986,7 +989,7 @@ test("a hung search upstream times out with 504 after config.search.timeoutMs", 
     await server.stop(true);
     await upstream.stop(true);
   }
-}, 5_000);
+});
 
 test("a short connectTimeoutMs does NOT cut a slow search (total deadline is search.timeoutMs)", async () => {
   // Regression: alpha/search is non-streaming, so its headers arrive only when the search
@@ -1029,7 +1032,7 @@ test("a short connectTimeoutMs does NOT cut a slow search (total deadline is sea
     await server.stop(true);
     await upstream.stop(true);
   }
-}, 5_000);
+});
 
 test("GET /v1/alpha/search still falls through to the JSON 404 guard", async () => {
   saveConfig(forwardConfig("https://chatgpt.example/backend-api/codex"));
