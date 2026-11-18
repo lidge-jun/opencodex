@@ -71,7 +71,7 @@ export function createPhysicalReplayGuard(providerExecuted: () => boolean) {
 
 /** Input items a client owns end to end: replaying them re-runs nothing but the model. */
 const CLIENT_INPUT_ITEM_TYPES: ReadonlySet<string> = new Set([
-  "message", "reasoning", "compaction", "compaction_trigger", "compaction_summary", "context_compaction",
+  "message", "reasoning", "compaction",
   "function_call", "function_call_output",
   "custom_tool_call", "custom_tool_call_output",
   "tool_search_call",

@@ -247,7 +247,7 @@ export async function prepareAdapterExchange(
   const claimPreHeaderResend = (): boolean => authorizeResendForRecovery(
     "pre-header", "connection-reset",
     ambiguousResendAllowanceFor(route.provider, requestIsSelfContained, claimAmbiguousResend),
-  ).allowed; const isReplaySafe = (): boolean => (parsed._compactionRequest === true && (parsed._rawBody as { store?: unknown } | null | undefined)?.store === false) || requestIsSelfContained();
+  ).allowed;
   const upstream = new AbortController();
   const cleanupUpstreamAbort = linkAbortSignal(upstream, options.abortSignal);
   /** Contain replacement negotiation before adapter admission and release its upstream abort link. */
@@ -524,7 +524,7 @@ export async function prepareAdapterExchange(
         {
           abortSignal: upstream.signal,
           label: safeHostLabel(builtInitialRequest.url), destination: errorDestinationLabel(builtInitialRequest.url),
-          claimAmbiguousResend: claimPreHeaderResend, replaySafe: isReplaySafe(),
+          claimAmbiguousResend: claimPreHeaderResend,
           offlineWait: options.comboAttempt ? undefined : createProviderOfflineResendWait(route.providerName, route.provider, builtInitialRequest.url, config.offlineResendWaitSec),
           ...(sendBudgetState.workflowRootId || sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
             || anthropicInstance || billingPoolRequest || autoPauseEnabled
@@ -810,7 +810,7 @@ export async function prepareAdapterExchange(
               {
                 abortSignal: upstream.signal,
                 label: safeHostLabel(retryRequest.url), destination: errorDestinationLabel(retryRequest.url),
-                claimAmbiguousResend: claimPreHeaderResend, replaySafe: isReplaySafe(),
+                claimAmbiguousResend: claimPreHeaderResend,
                 ...(refetchAllowance
                   ? {
                     attempts: refetchAllowance.attempts,

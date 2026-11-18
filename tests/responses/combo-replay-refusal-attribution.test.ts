@@ -4,7 +4,7 @@ import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { createWebsocketHandler } from "../../src/server/index/websocket-handler";
 import type { ServeOptionsContext } from "../../src/server/index/serve-options";
-import { clearRequestLogsForTests, getRequestLogEntries } from "../../src/server/request-log";
+import { clearRequestLogsForTests, getRequestLogEntries, noteAttemptSend, type RequestLogContext } from "../../src/server/request-log";
 import type { WsData } from "../../src/server/ws-bridge";
 import type { OcxConfig } from "../../src/types";
 import { clearComboSelectionState, clearComboTargetCooldowns, isComboTargetInCooldown } from "../../src/combos";
@@ -12,8 +12,9 @@ import { clearCodexUpstreamHealth, clearThreadAccountMap, getCodexUpstreamHealth
 import { clearAccountQuota, updateAccountQuota } from "../../src/codex/auth-api";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { resendPermission } from "../../src/lib/request-failure-model";
-import { isReplayRefusalResponse, retainReplayRefusal } from "../../src/lib/upstream-retry";
-import { selfContainedResponsesBody } from "../../src/server/responses/reset-replay";
+import { isReplayRefusalResponse, markResponseNonReplayable, retainReplayRefusal } from "../../src/lib/upstream-retry";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import { executeComboResponses } from "../../src/server/responses/core-combo";
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
 import { runOptionalShutdownHooks } from "../../src/lib/optional-shutdown-hooks";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -156,6 +157,64 @@ test("combo rebuild carries a replay-refusal marker even without a parseable err
   expect((await failure.response.json()).error.code).toBe("upstream_reset_replay_refused");
 });
 
+test.each([
+  { kind: "synthetic replay refusal", status: 429, code: "upstream_reset_replay_refused", selected: 401 },
+  { kind: "non-replayable upstream 429", status: 429, code: "rate_limit_exceeded", selected: 429 },
+  { kind: "non-replayable upstream 402", status: 402, code: "insufficient_quota", selected: 402 },
+])("exhausted combo attributes quota by provenance for a $kind", async ({ status, code, selected }) => {
+  const providers = Object.fromEntries(["primary", "fallback"].map(name => [name, {
+    adapter: "openai-responses" as const, authMode: "key" as const, apiKey: "synthetic-fixture",
+    baseUrl: `https://${name}.invalid/v1`,
+  }]));
+  const config: OcxConfig = { defaultProvider: "primary", providers, combos: {
+    fixture: { strategy: "failover", waitForCooldownMs: 0, targets: [
+      { provider: "primary", model: "model-a" },
+      { provider: "fallback", model: "model-b" },
+    ] },
+  } };
+  const body = { model: "combo/fixture", input: "fixture" };
+  const req = new Request("http://localhost/v1/responses", { method: "POST", body: JSON.stringify(body) });
+  const log: RequestLogContext = { model: "", provider: "" };
+  const budget = createTranslatorBudget();
+  const fallbackCode = "invalid_api_key";
+  const dispatched: string[] = [];
+  try {
+    const result = await executeComboResponses(req, body, "fixture", config, log, { translatorBudget: budget }, {
+      async handleComboResponses() { throw new Error("Unexpected nested combo"); },
+      async handleResponses(childReq, _config, childLog, options) {
+        const { model } = await childReq.json() as { model: string };
+        dispatched.push(model);
+        noteAttemptSend(childLog.activeAttempt, undefined);
+        const primary = model === "primary/model-a";
+        const childCode = primary ? code : fallbackCode;
+        const response = Response.json({ error: { code: childCode, message: primary ? "Primary fixture" : "Fallback credential rejected" } },
+          { status: primary ? status : 401 });
+        childLog.errorCode = childCode;
+        if (!primary) return response;
+        if (code === "upstream_reset_replay_refused") retainReplayRefusal(response);
+        else markResponseNonReplayable(response);
+        const failure = await consumeComboFailure(response);
+        // Exercise the exhaustion policy through the child-failure seam. A real refusal stops
+        // before the fallback via replay metadata, which this fixture omits from the hop decision.
+        options!.onConsumedComboFailure!({ ...failure, nonReplayable: undefined, upstreamCode: undefined });
+        return failure.response;
+      },
+    });
+    expect(dispatched).toEqual(["primary/model-a", "fallback/model-b"]);
+    expect(result.status).toBe(selected);
+    const selectedCode = selected === 401 ? fallbackCode : code;
+    expect((await result.json()).error.code).toBe(selectedCode);
+    expect(log.errorCode).toBe(selectedCode);
+    expect(log.attempts).toMatchObject([
+      { provider: "primary", status, sendCount: 1 },
+      { provider: "fallback", status: 401, sendCount: 1 },
+    ]);
+    if (code === "upstream_reset_replay_refused") expect(log.attempts?.[0]?.errorCode).toBe(code);
+  } finally {
+    budget.dispose();
+  }
+});
+
 for (const ingress of ["HTTP", "WebSocket"] as const) {
   for (const pool of [false, true]) {
     test(`${ingress} combo ${pool ? "pool" : "gateway"} reset keeps synthetic replay-refusal attribution`, async () => {
@@ -183,132 +242,3 @@ for (const ingress of ["HTTP", "WebSocket"] as const) {
     });
   }
 }
-
-test("selfContainedResponsesBody recognises compaction item types as client input", () => {
-  expect(selfContainedResponsesBody({ store: false, input: [{ type: "compaction_trigger" }] })).toBe(true);
-  expect(selfContainedResponsesBody({ store: false, input: [{ type: "compaction_summary" }] })).toBe(true);
-  expect(selfContainedResponsesBody({ store: false, input: [{ type: "context_compaction" }] })).toBe(true);
-  expect(selfContainedResponsesBody({ store: true, input: [{ type: "compaction_trigger" }] })).toBe(false);
-});
-
-test("compaction request on combo hops past connection-reset target to succeeding target", async () => {
-  const config = {
-    port: 0,
-    defaultProvider: "fixture-a",
-    websockets: false,
-    providers: {
-      "fixture-a": { adapter: "openai-responses", baseUrl: "https://combo-fixture-a.invalid/v1", authMode: "key", apiKey: "key-a" },
-      "fixture-b": { adapter: "openai-responses", baseUrl: "https://combo-fixture-b.invalid/v1", authMode: "key", apiKey: "key-b" },
-    },
-    combos: {
-      compactionCombo: {
-        alias: "chain/compactor",
-        strategy: "failover",
-        targets: [
-          { provider: "fixture-a", model: "model-a" },
-          { provider: "fixture-b", model: "model-b" },
-        ],
-      },
-    },
-  } as unknown as OcxConfig;
-  saveConfig(config);
-  const server = startServer(0);
-  finishClient = async () => { await server.stop(true); };
-
-  const targetCalls: string[] = [];
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = input instanceof Request ? input.url : String(input);
-    if (new URL(url).hostname === "127.0.0.1" || new URL(url).hostname === "localhost") {
-      return originalFetch(input, init);
-    }
-    if (url.includes("combo-fixture-a")) {
-      targetCalls.push("fixture-a");
-      throw Object.assign(new Error("connection reset by peer"), { code: "ECONNRESET" });
-    }
-    if (url.includes("combo-fixture-b")) {
-      targetCalls.push("fixture-b");
-      return Response.json({
-        id: "resp_test",
-        status: "completed",
-        output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "summary" }] }],
-      });
-    }
-    return originalFetch(input, init);
-  }) as typeof fetch;
-
-  const response = await originalFetch(new URL("/v1/responses", server.url), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      model: "chain/compactor",
-      store: false,
-      input: [{ type: "message", role: "user", content: "hello" }, { type: "compaction_trigger" }],
-    }),
-  });
-
-  expect(targetCalls).toEqual(["fixture-a", "fixture-b"]);
-  expect(response.status).toBe(200);
-  const json = await response.json() as { id: string; status: string };
-  expect(json.status).toBe("completed");
-});
-
-test("stored compaction request with store: true does not hop past connection-reset target", async () => {
-  const config = {
-    port: 0,
-    defaultProvider: "fixture-a",
-    websockets: false,
-    providers: {
-      "fixture-a": { adapter: "openai-responses", baseUrl: "https://combo-fixture-a.invalid/v1", authMode: "key", apiKey: "key-a" },
-      "fixture-b": { adapter: "openai-responses", baseUrl: "https://combo-fixture-b.invalid/v1", authMode: "key", apiKey: "key-b" },
-    },
-    combos: {
-      compactionCombo: {
-        alias: "chain/compactor",
-        strategy: "failover",
-        targets: [
-          { provider: "fixture-a", model: "model-a" },
-          { provider: "fixture-b", model: "model-b" },
-        ],
-      },
-    },
-  } as unknown as OcxConfig;
-  saveConfig(config);
-  const server = startServer(0);
-  finishClient = async () => { await server.stop(true); };
-
-  const targetCalls: string[] = [];
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = input instanceof Request ? input.url : String(input);
-    if (new URL(url).hostname === "127.0.0.1" || new URL(url).hostname === "localhost") {
-      return originalFetch(input, init);
-    }
-    if (url.includes("combo-fixture-a")) {
-      targetCalls.push("fixture-a");
-      throw Object.assign(new Error("connection reset by peer"), { code: "ECONNRESET" });
-    }
-    if (url.includes("combo-fixture-b")) {
-      targetCalls.push("fixture-b");
-      return Response.json({
-        id: "resp_test",
-        status: "completed",
-        output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "summary" }] }],
-      });
-    }
-    return originalFetch(input, init);
-  }) as typeof fetch;
-
-  const response = await originalFetch(new URL("/v1/responses", server.url), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      model: "chain/compactor",
-      store: true,
-      input: [{ type: "message", role: "user", content: "hello" }, { type: "compaction_trigger" }],
-    }),
-  });
-
-  expect(targetCalls).toEqual(["fixture-a"]);
-  expect(response.status).toBe(429);
-  const json = await response.json() as { error: { code: string } };
-  expect(json.error.code).toBe("upstream_reset_replay_refused");
-});

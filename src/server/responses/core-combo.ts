@@ -141,7 +141,7 @@ import {
   streamingIncompleteResponse,
 } from "./context-overflow";
 import { mandatoryResponsesReasoningReplayUnavailable } from "./core-replay";
-import { isNonReplayableResponse, isReplayRefusalResponse, settleOperatorReplacement, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../lib/upstream-retry";
+import { isReplayRefusalResponse, settleOperatorReplacement, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../lib/upstream-retry";
 import { attributeFinalRequest } from "../request-log-failure-attribution";
 import { createComboProtocolLanes, dispatchNativeComboChild } from "./core-combo-native";
 import { createJevModelInvoker } from "./jev-model-invoke";
@@ -1451,7 +1451,8 @@ export async function executeComboResponses(
       Date.now() - segmentStartedAt(),
       failure.usage ?? childLog.usage,
     );
-    if (isReplayRefusalResponse(failure.response)) {
+    const replayRefusal = isReplayRefusalResponse(failure.response);
+    if (replayRefusal) {
       // Numeric 429 is a client replay policy here, not an upstream quota observation.
       childLog.causeHint = "transport-ambiguous";
       childLog.terminalSource = "synthetic";
@@ -1469,7 +1470,7 @@ export async function executeComboResponses(
     toolChoiceRefusalsOnly = (toolChoiceRefusalsOnly ?? true) && isMandatoryToolChoiceRefusal(failure.response);
     // A real target failure ends the session pin; the next turn is decided afresh (#7525).
     jevPin?.forget();
-    if (!quotaFailure && !isNonReplayableResponse(lastFailure) && !isReplayRefusalResponse(lastFailure) && (lastFailure.status === 429 || lastFailure.status === 402)) {
+    if (!quotaFailure && !replayRefusal && (lastFailure.status === 429 || lastFailure.status === 402)) {
       quotaFailure = lastFailure;
       quotaFailedChildLog = childLog;
     }
