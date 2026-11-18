@@ -121,6 +121,7 @@ import {
 import type { CodexAuthContext } from "../../codex/auth-context";
 import type { ResponsesTerminalStatus } from "../../bridge";
 import { beginRequestAttempt, sealRequestAttemptIdentity, finishRequestAttempt } from "../request-log";
+import { sealedCredentialRefusals } from "../request-log-attempt-recovery";
 import { recallComboTurnEffortForLane, rememberComboForLane, type ComboTurnEffort } from "./combo-session-recall";
 import { COMBO_TOOL_LOOP_PIN_REASON, toolLoopPinnedPick } from "./combo-tool-loop-pin";
 import { JEV_SESSION_PIN_ROUTE_REASON, jevSessionPinScope } from "./jev-session-pin";
@@ -1334,7 +1335,7 @@ export async function executeComboResponses(
         ...(options.turnAdmissionLease ? { turnAdmissionLease: options.turnAdmissionLease } : {}),
         // Attempt-relative TTFT, recorded here for the same reason as the bridge child below.
         onFirstOutput: () => {
-          if (attempt.firstOutputMs === undefined) {
+          if (!sealedCredentialRefusals.has(attempt) && attempt.firstOutputMs === undefined) {
             attempt.firstOutputMs = Math.max(0, Date.now() - segmentStartedAt());
           }
           options.onFirstOutput?.();
@@ -1369,7 +1370,7 @@ export async function executeComboResponses(
         // Attempt-relative TTFT is recorded HERE (not via childLog.firstOutputMs — a later
         // Object.assign(logCtx, childLog) would overwrite the request-relative value).
         onFirstOutput: () => {
-          if (attempt.firstOutputMs === undefined) {
+          if (!sealedCredentialRefusals.has(attempt) && attempt.firstOutputMs === undefined) {
             attempt.firstOutputMs = Math.max(0, Date.now() - segmentStartedAt());
           }
           options.onFirstOutput?.();
@@ -1517,7 +1518,8 @@ export async function executeComboResponses(
       // Numeric 429 is a client replay policy here, not an upstream quota observation.
       childLog.causeHint = "transport-ambiguous";
       childLog.terminalSource = "synthetic";
-      childLog.errorCode = attempt.errorCode = UPSTREAM_RESET_REPLAY_REFUSED_CODE;
+      childLog.errorCode = UPSTREAM_RESET_REPLAY_REFUSED_CODE;
+      if (!sealedCredentialRefusals.has(attempt)) attempt.errorCode = childLog.errorCode;
     }
     if (failure.upstreamCode === "input_admission_refused" && attempt.sendCount === 0) {
       attempt.errorCode = failure.upstreamCode;

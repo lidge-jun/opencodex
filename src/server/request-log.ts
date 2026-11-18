@@ -845,7 +845,7 @@ export function recordFirstOutput(
 /** Snapshot target-specific requested effort even for runTurn adapters with no AdapterRequest. */
 export function recordAttemptRequestedEffort(logCtx: RequestLogContext): void {
   const attempt = logCtx.activeAttempt;
-  if (!attempt) return;
+  if (!attempt || sealedCredentialRefusals.has(attempt)) return;
   delete attempt.requestedEffort;
   try {
     if (typeof logCtx.requestedEffort === "string" && logCtx.requestedEffort) {
@@ -1875,12 +1875,9 @@ export function noteProviderAttemptSend(
       finishRequestAttempt(attempt, attempt.status >= 100 ? attempt.status
         : recoveryStatus ?? (recovery === "rate-limit-429" ? 429 : 502),
       Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()), attempt.usage);
+      // Finalization sees only the live segment, so attribute this refusal before snapshotting it.
+      attributeSealedAttempt(attempt, recovery);
     }
-    // This attempt is being sealed because a NAMED recovery rejected it, so the recovery kind
-    // is direct evidence here rather than an inference from history. Without this the sealed
-    // attempt would reach the ledger with no attribution at all: the finalization seam below
-    // only ever sees the last attempt of the request.
-    attributeSealedAttempt(attempt, recovery);
     const completed = { ...attempt, recoveryKinds: [...attempt.recoveryKinds],
       ...(attempt.usage ? { usage: { ...attempt.usage } } : {}),
       ...(attempt.deliverySummary ? { deliverySummary: { ...attempt.deliverySummary } } : {}),
@@ -1923,7 +1920,7 @@ export function recordAttemptCredentialSource(
   provider: Pick<OcxProviderConfig, "authMode" | "baseUrl" | "adapter">,
   adapterName: string = provider.adapter,
 ): void {
-  if (!attempt) return;
+  if (!attempt || sealedCredentialRefusals.has(attempt)) return;
   // Rebinding an attempt to an unrecognized route must not retain its previous attribution.
   delete attempt.credentialSource;
   if (providerName !== "xai"
@@ -1971,6 +1968,7 @@ export function finishRequestAttempt(
   durationMs: number,
   usage?: OcxUsage,
 ): PersistedUsageAttempt {
+  if (sealedCredentialRefusals.has(attempt)) return attempt;
   const finalized = finalizedUsage(
     attempt.adapter,
     usage ?? attempt.usage,

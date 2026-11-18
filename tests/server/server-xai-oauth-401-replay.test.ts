@@ -293,6 +293,43 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
     }
   });
 
+  test.each(["openai-responses", "openai-chat"] as const)("a combo preserves the %s refusal when replacement pacing rejects", async adapter => {
+    await seedOAuth();
+    const config = xaiConfig();
+    const model = adapter === "openai-chat" ? "grok-3" : "grok-4.5";
+    config.providers.xai!.models = [model];
+    config.providers.xai!.modelAdapters = { [model]: adapter };
+    config.combos = { retry: { alias: "chain/retry", strategy: "failover", targets: [{ provider: "xai", model }] } };
+    saveConfig(config);
+    const observed = installOAuthFetch([401, 200]);
+    const server = startServer(0);
+    const wait = requestPacing.waitForProviderRequestSlot;
+    let refusals = 0;
+    const pacing = spyOn(requestPacing, "waitForProviderRequestSlot").mockImplementation((name, provider, ...rest) => {
+      if (name === "xai" && provider.apiKey === "fresh-access") {
+        refusals += 1;
+        return Promise.reject(new requestPacing.RequestPacingQueueOverloadError("xai", "queue_full", 1));
+      }
+      return wait(name, provider, ...rest);
+    });
+    try {
+      const response = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "chain/retry", input: "hello", stream: false }),
+      });
+      await response.text();
+      expect(refusals).toBe(1);
+      expect(observed.counts.refresh).toBe(1);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
+      const entry = readUsageEntries().at(-1);
+      expect(entry?.status).toBe(response.status);
+      expect(entry?.attempts?.map(attempt => [attempt.adapter, attempt.status, attempt.sendCount])).toEqual([[adapter, 401, 1]]);
+    } finally {
+      pacing.mockRestore();
+      await server.stop(true);
+    }
+  });
+
   test("the production passive linker uses the refreshed routed base URL", async () => {
     await seedOAuth();
     const config = xaiConfig();
