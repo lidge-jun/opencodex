@@ -12,7 +12,7 @@ import { clearKeyCooldowns } from "../../src/providers/key-failover";
 // global value on routed adapter sends, while a provider without an override keeps the global.
 
 function fixtureConfig(globals: Partial<OcxConfig>, overrides: Partial<OcxProviderConfig>): OcxConfig {
-  return { defaultProvider: "fixture", ...globals, providers: { fixture: {
+  return { port: 10100, defaultProvider: "fixture", ...globals, providers: { fixture: {
     adapter: "openai-chat", authMode: "key", apiKey: "fixture-key", baseUrl: "https://gateway.example/v1",
     models: ["fixture-model"], ...overrides,
   } } };
@@ -143,4 +143,3 @@ test("management writes reject malformed provider budgets and accept 0 or a posi
     expect(providerManagementConfigError("fixture", { ...provider, connectTimeoutMs: value, stallTimeoutSec: value === 120_000 ? 600 : value })).toBeNull();
   }
 });
-

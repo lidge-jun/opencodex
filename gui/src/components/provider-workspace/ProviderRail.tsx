@@ -10,6 +10,7 @@ import {
   binProviderStatus,
   isFreeProvider,
   usesUnverifiedVertexCredentials,
+  isVertexProvider,
   type WorkspaceItem,
   type WorkspaceProvider,
 } from "../../provider-workspace/catalog";
@@ -29,7 +30,8 @@ export function statusLabel(p: WorkspaceProvider, t: TFn): string {
 }
 
 export function authModeLabel(item: WorkspaceItem, t: TFn): string {
-  if (usesUnverifiedVertexCredentials(item)) return t("pws.vertexHostAuth");
+  // A verified ADC row still authenticates with host credentials, not an API key.
+  if (usesUnverifiedVertexCredentials(item) || (item.vertexCredentialVerified === true && isVertexProvider(item))) return t("pws.vertexHostAuth");
   // Configured with authMode "key" (the registry's authKind), but no key is ever used.
   if (isSubscriptionCliProvider(item)) return t("modal.badge.subscriptionCli");
   switch (item.authMode) {

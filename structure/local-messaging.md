@@ -60,7 +60,10 @@ guarantee that a session stays loaded after discovery.
 `src/messaging/budget.ts` supplies one maximum 30-second operation deadline and
 parent cancellation. Callers create and dispose that budget around input, home
 selection, connection, discovery, revalidation and submission. Individual RPCs
-are also capped at 10 seconds. Modules allocate no resources at import time.
+are also capped at 10 seconds. A connect or request timer that the remaining
+deadline cut short, or that fires at or after the deadline, ends the operation
+with `operation_timeout` rather than a connection or RPC timeout, whichever timer
+the event loop runs first. Modules allocate no resources at import time.
 The loaded-session path launches no subprocess. SIGINT/SIGTERM cancel only command-owned work;
 no recipient, daemon or proxy is stopped.
 

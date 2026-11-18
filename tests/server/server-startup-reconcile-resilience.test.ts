@@ -73,8 +73,8 @@ test.skipIf(SKIP_LISTENER)("startServer persists the legacy roster upgrade to th
   const server = startServer(0);
   try {
     const saved = loadConfig();
-    expect(saved.subagentModels).toEqual(["gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"]);
-    expect(saved.subagentModelsVersion).toBe(3);
+    expect(saved.subagentModels).toEqual(["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-luna"]);
+    expect(saved.subagentModelsVersion).toBe(4);
   } finally {
     await server.stop(true);
   }

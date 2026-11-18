@@ -144,8 +144,9 @@ API 키를 비우고 `GOOGLE_CLOUD_API_KEY`가 설정되지 않았다면 **프�
 `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` 및 `GOOGLE_CLOUD_LOCATION`으로 설정합니다.
 provider를 추가했다고 자격증명이나 권한의 유효성이 검증되는 것은 아닙니다. API 키에
 프로젝트를 지정하지 않으면 Vertex express 모드를 사용합니다.
-대시보드 프리셋은 설정한 기본 모델로 시작하는 정적 목록을 사용하며, 연결 테스트는 Vertex
-자격증명이나 권한을 검증하지 않습니다.
+대시보드 프리셋은 설정한 기본 모델로 시작하는 정적 목록을 사용합니다. ADC를 쓰면 연결 테스트가
+액세스 토큰을 한 번 발급받아 자격증명을 확인하지만 Vertex 권한까지 확인하지는 않습니다. 프록시가
+현재 ADC 소스로 토큰을 발급받은 뒤에는 provider가 검증됨으로 표시됩니다. 정적 목록의 API 키는 테스트하지 않습니다.
 기존 Vertex 항목에서 `liveModels`를 생략하면 일반 검색 엔드포인트를 통한 기존 실시간 검색이 유지됩니다.
 `liveModels: false`는 정적 목록을 사용하며 설정 화면에서 두 모드를 전환할 수 있습니다.
 
@@ -182,8 +183,9 @@ provider를 추가했다고 자격증명이나 권한의 유효성이 검증되�
 - Kiro 검증기가 거부하는 JSON Schema 키워드(`pattern`, `minLength`, `maximum`,
   `additionalProperties` 등 29개)를 툴과 구조화 출력 스키마에서 제거하되, 프로브가 해당
   모델에서 통과를 확인한 키워드는 남깁니다. `claude-opus-4.5`는 전부 남습니다.
-  `claude-opus-5.5`와 `claude-sonnet-5.5`는 `pattern`, `maximum`만 남고 나머지는 제거된 상태로 남습니다. 그 두 모델에
-  다른 키워드를 보낸 프로브가 없기 때문입니다. 나머지 Claude id를 포함한 다른 Kiro 모델은
+  `claude-opus-5.5`는 Claude Desktop과 Claude Code 카탈로그가 쓰는 12개(`$schema`, `additionalProperties`, `pattern`, `format`, `minLength`, `maxLength`, `minimum`, `maximum`, `exclusiveMinimum`, `minItems`, `maxItems`, `propertyNames`)가 남으며, 프로덕션 트래픽에서
+  확인되었습니다. `claude-sonnet-5.5`는 `pattern`, `maximum`만 남습니다. 나머지는 제거된 상태로 남습니다. 그 두 모델에
+  다른 키워드를 보낸 요청이 없기 때문입니다. 나머지 Claude id를 포함한 다른 Kiro 모델은
   전부 제거합니다. 예외를 모델별·키워드별로 두는 이유는 이 wire가 이미 reasoning effort에서
   Claude 모델을 나누기 때문이며, Kiro가 거부하는 키워드는 힌트를 잃는 데 그치지 않고 요청
   전체를 실패시킵니다.

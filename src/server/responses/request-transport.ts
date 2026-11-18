@@ -36,6 +36,7 @@ import type { AnthropicAccountSelectionReason } from "../../oauth/anthropic-rout
 import { resolveAnthropicModelRouteForInstance, routeCandidates, type AnthropicRouteDecision } from "../../oauth/anthropic-model-routes";
 import {
   anthropicRoutingFor,
+  ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
   AnthropicAccountCooldownError,
   formatAnthropicProviderForLog,
 } from "../../oauth/anthropic-routing";
@@ -1425,10 +1426,17 @@ export async function prepareResponsesTransport(
   ]).size : 0;
   const fundedAccounts = Math.min(genericRosterSize, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST);
   const genericFailoverLimit = Math.max(GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST, fundedAccounts - 1);
-  if (fundingAccountId) expandInferenceOAuthSendBudget(options.sendBudget, fundedAccounts);
+  const anthropicRosterSize = anthropicRouting && anthropicPoolAccountId ? new Set([
+    anthropicPoolAccountId,
+    ...anthropicRouting.getEligibleAnthropicAccounts(Date.now(), route.modelId),
+  ]).size : 0;
+  const anthropicFundedAccounts = Math.min(anthropicRosterSize, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST);
+  const anthropicFailoverLimit = Math.max(ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST, anthropicFundedAccounts - 1);
+  if (fundingAccountId || anthropicPoolAccountId)
+    expandInferenceOAuthSendBudget(options.sendBudget, Math.max(fundedAccounts, anthropicFundedAccounts));
 
   return {
-    genericFailoverLimit,
+    genericFailoverLimit, anthropicFailoverLimit,
     isOAuth401ReplayProvider,
     get sentOAuthSnapshot(): OAuthAccessSnapshot | undefined {
       return sentOAuthSnapshot;

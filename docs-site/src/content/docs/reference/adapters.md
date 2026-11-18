@@ -319,6 +319,14 @@ request before inference. `reasoning.encrypted_content` and other include entrie
 intact, so stateless reasoning replay is preserved. The same exact-entry normalization
 applies to xAI and to Kimi Code at its exact HTTPS Responses endpoint
 (`https://api.kimi.com/coding/v1/responses`); unrelated Responses destinations keep their original include list.
+The exact [OpenCode Go Responses endpoint](https://opencode.ai/zen/go/v1/responses) uses the same
+output-include cleanup across its models because some backends reject the field. This preserves
+`reasoning.encrypted_content` and other include entries, and the cleanup itself does not drop encrypted
+reasoning history. When `authMode` is not `forward`, a provider that lists the model in
+`arkKimiResponsesModels` still runs the separate Ark Kimi strip first. It removes `encrypted_content` only
+from an unreferenced reasoning item with an empty summary and no other fields, when the item follows a
+user message or a matched function call and its output, and precedes a user message or, after such a
+tool pair, a developer message.
 
 These request-shape fixes do not change account entitlements. Meta limits Muse Code
 subscription credentials to the Muse Code client; other clients require a separately
@@ -476,8 +484,12 @@ that environment key takes precedence. ADC also needs a project and location, su
 form or by `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` on the proxy
 host. Adding the provider does not verify that credentials or permissions are usable. A key
 without an explicit project uses Vertex express mode.
-The dashboard preset uses a static catalog seeded by the configured default model; its connection
-test does not verify Vertex credentials or permissions.
+The dashboard preset uses a static catalog seeded by the configured default model. With ADC its
+connection test mints a new access token on every run, never reusing a cached one, which proves the
+credential but not Vertex permissions; the provider shows as verified once the proxy has minted a
+token from the current ADC source, and only while ADC is the credential the row uses. A keyless row
+with `GOOGLE_CLOUD_API_KEY` set sends that key, so it is never shown as verified from ADC. An API
+key on a static catalog is not tested.
 Existing Vertex rows without `liveModels` retain live discovery through the generic discovery endpoint.
 Use `liveModels: false` for a static catalog; Settings can switch between the two modes.
 
@@ -490,6 +502,9 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
   is Google's — the proxy does not route around it.
 - System prompt → `systemInstruction`; messages → `contents[]` (assistant → `model`); tools →
   `functionDeclarations`. Data-URL images → `inline_data`.
+- The shared tool-catalog guidance uses wording verified with Antigravity Gemini 3.8 Flash to
+  avoid a prompt-triggered `429 RESOURCE_EXHAUSTED`. The available tools, argument constraints,
+  and Codex code-mode helper rules stay the same. This does not suppress real quota errors.
 - Tool-call ids are synthesized when Gemini omits them. Vertex and Antigravity preserve and replay
   opaque `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
   The signature cache is snapshotted to the config directory, so continuations also survive proxy
@@ -590,8 +605,9 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
 - Strips the JSON Schema keywords Kiro's validator rejects (`pattern`, `minLength`, `maximum`,
   `additionalProperties` and 25 others) from tool and structured-output schemas, except the
   keywords a probe measured a model taking. `claude-opus-4.5` keeps all of them. `claude-opus-5.5`
-  and `claude-sonnet-5.5` keep `pattern` and `maximum`; their other keywords stay stripped, because no
-  probe sent them to those models. Every other Kiro
+  keeps the twelve keywords the Claude Desktop and Claude Code catalogs carry (`$schema`, `additionalProperties`, `pattern`, `format`, `minLength`, `maxLength`, `minimum`, `maximum`, `exclusiveMinimum`, `minItems`, `maxItems`, `propertyNames`),
+  measured on production traffic; `claude-sonnet-5.5` keeps `pattern` and `maximum`. Their other keywords
+  stay stripped, because nothing sent them to those models. Every other Kiro
   model, including the other Claude ids, keeps the full strip. The exception is per model and per
   keyword because this wire already separates Claude models on reasoning effort, and a keyword
   Kiro rejects fails the whole request rather than just costing the model a hint.
@@ -891,7 +907,17 @@ configuration that names the old id is rewritten at startup.
 - Tool definitions are encoded in the request and tool-call events are decoded from the response
   stream. Cognition enforces a per-tool-description length limit (6,998 chars) and an exact-phrase
   blocklist; the adapter sanitizes known triggers and truncates over-long descriptions before
-  encoding.
+  encoding. Known trigger rewrites also apply to the leading system prompt (request field #2).
+- `OPENCODEX_DEVIN_SANITIZE_DATA_SURFACES` is off by default and enables only for the exact value
+  `"1"`; an unset variable or any other value leaves history data outside the sanitizer. When
+  enabled, it also rewrites joined message text (#3), tool-call `arguments_json` (#6.3), image
+  captions (#10.3), and replayed thinking (#11). Tool names, tool-call IDs, and image bytes remain
+  untouched. This changes literal history received by the model, including quoted file content
+  and tool arguments. If a rewrite changes thinking, that prompt sends the rewritten #11 text
+  without its original #12 signature or #18 signature type. Unchanged thinking preserves both
+  signature fields byte-for-byte, even when another data field changes; signature-only replay
+  also remains intact. Rewritten thinking therefore uses unsigned replay, which can weaken
+  signed reasoning continuity for that turn. This option does not guarantee upstream acceptance.
 - Devin/Cognition API keys have no refresh endpoint. If Cognition rejects a stored key with 401,
   OpenCodex marks that account for reauthentication and can use another signed-in account for
   the turn. Run `ocx login devin` again for a revoked browser-login key. A CLI-imported account
