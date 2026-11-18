@@ -154,6 +154,10 @@ Aşağıdakiler iç Responses köprüsünü kullanmaya devam eder veya kapsam d�
   Başlıklar tek başına istek yetkisi veya resmi destek sağlamaz. TypeScript Agent
   SDK'nın `sdk-ts` user-agent giriş noktası da aynı zorunlu kimlik başlıklarıyla
   tanınır; birinci taraf Anthropic isteklerinde izin listeli yerel betalarını korur.
+  Claude bulut projelerinin alt oturumları, user-agent giriş noktası tam olarak
+  `local_projects` olduğunda ve aynı zorunlu başlıkları gönderdiğinde gözlenen
+  kimliği ve izin listeli yerel özellik betalarını korur. Bu istekler mevcut
+  giriş yönlendirme kurallarına uyar.
 - OAuth üzerinden yerel Chat planlanmıyor. Anthropic OAuth ile yerel Messages,
   aynı uygunluk ve kimlik bilgisi kurallarıyla hesap havuzlarını da kapsar.
 - Yönetilen yerel Messages, çağıranın `anthropic-beta` değerlerinden yalnızca kısa
