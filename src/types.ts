@@ -11,6 +11,7 @@ export {
   isCodeModeMcpDirectName,
   toolChoiceAliases,
   createToolChoiceResolver,
+  isQualifiedToolChoiceName,
   toolChoiceCandidates,
   toolAllowedByChoice,
   resolveToolChoiceWireName,

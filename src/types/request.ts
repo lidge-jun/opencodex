@@ -417,6 +417,10 @@ export interface OcxRequestOptions {
   topP?: number;
   stopSequences?: string[];
   toolChoice?: OcxToolChoice;
+  /** Root functions explicitly selected by the caller. An empty list permits no synthetic root function. */
+  explicitRootFunctionChoices?: readonly string[];
+  /** Caller-owned function and custom selectors before hosted tools are lowered for the provider. */
+  explicitClientToolChoices?: readonly { type: "function" | "custom"; name: string; namespace?: string }[];
   parallelToolCalls?: boolean;
   reasoning?: string;
   /**
