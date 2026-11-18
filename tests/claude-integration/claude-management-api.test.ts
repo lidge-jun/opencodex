@@ -133,6 +133,32 @@ test.each([
   }
 });
 
+test.skipIf(process.platform === "win32")("GET /api/claude-code stays within budget when the Fable version probe times out", async () => {
+  const config = loadConfig();
+  config.claudeCode = { authMode: "subscription" };
+  saveConfig(config);
+  writeFileSync(join(testDir, "claude"), '#!/bin/sh\ntrap "" TERM\nprintf "probe\\n" >> "$0.calls"\nexec /bin/sleep 4\n', { mode: 0o755 });
+  const previousPath = process.env.PATH;
+  const server = startServer(0);
+  try {
+    process.env.PATH = [testDir, previousPath].filter(Boolean).join(delimiter);
+    const url = new URL("/api/claude-code", server.url);
+    const started = performance.now();
+    for (let i = 0; i < 2; i++) {
+      const response = await fetch(url);
+      expect(response.status).toBe(200);
+      const body = await response.json() as { effectiveModelEnv: Record<string, string> };
+      expect(body.effectiveModelEnv.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("claude-fable-5-1[1m]");
+      expect(Math.round(performance.now() - started)).toBeLessThan(2100);
+    }
+    expect(readFileSync(join(testDir, "claude.calls"), "utf8")).toBe("probe\n");
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    await server.stop(true);
+  }
+});
+
 test("CLI first-party rejects mixed bodies before saving", async () => {
   const server = startServer(0);
   try {

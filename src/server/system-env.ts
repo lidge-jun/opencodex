@@ -179,7 +179,7 @@ function rollbackInjectedKeys(port: number, injectedKeys: string[], tracked?: Tr
  * Without the map, configured selectors still work and automatic tier fills are omitted.
  */
 async function computeEffectiveModelEnv(config: OcxConfig, auto?: AutoContextMode): Promise<{ modelEnv: Record<string, string>; windows: Record<string, number> }> {
-  const { boundedContextWindows, buildClaudeContextWindows, effectiveModelEnv, probeClaudeCodeVersionForTierFill } = await import("../claude/context-windows");
+  const { boundedContextWindows, buildClaudeContextWindows, effectiveModelEnv } = await import("../claude/context-windows");
   const windows = (await boundedContextWindows(async () => {
     const { gatherRoutedModels, nativeContextLimits, visibleNativeSlugs } = await import("../codex/catalog");
     try {
@@ -191,8 +191,10 @@ async function computeEffectiveModelEnv(config: OcxConfig, auto?: AutoContextMod
       throw error;
     }
   })) ?? {};
-  const claudeCodeVersion = await probeClaudeCodeVersionForTierFill(config.claudeCode, windows);
-  return { modelEnv: effectiveModelEnv(config.claudeCode, windows, auto, claudeCodeVersion), windows };
+  const modelEnv = effectiveModelEnv(config.claudeCode, windows, auto);
+  // A system-wide default would look like a user override to a launcher on a different PATH.
+  if (config.claudeCode?.tierModels?.fable === undefined) delete modelEnv.ANTHROPIC_DEFAULT_FABLE_MODEL;
+  return { modelEnv, windows };
 }
 
 export async function injectSystemEnv(

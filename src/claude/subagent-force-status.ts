@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { claudeConfigDir } from "./gateway-cache";
 import { commandInvocation } from "../lib/win-exec";
 
+const VERSION_PROBE_TIMEOUT_MS = 1_500;
+const VERSION_PROBE_CACHE_MS = 30_000;
+let cachedProbe: { key: string; expiresAt: number; result: Promise<string | null> } | undefined;
+
 export interface SubagentForceStatus {
   targetValid: boolean;
   version: string | null;
@@ -20,12 +24,27 @@ export function subagentForceSupport(version: string | null): SubagentForceStatu
 }
 
 export function probeInstalledClaudeCodeVersion(): Promise<string | null> {
+  // Reuse the in-flight or recent result (including unknown) within the same executable lookup context.
+  const { PATH, PATHEXT, ComSpec } = process.env;
+  const key = JSON.stringify([process.platform, process.cwd(), PATH, PATHEXT, ComSpec]);
+  const now = performance.now();
+  if (cachedProbe?.key === key && cachedProbe.expiresAt > now) return cachedProbe.result;
+
   const invocation = commandInvocation("claude", ["--version"]);
-  return new Promise(resolve => {
-    execFile(invocation.file, invocation.args, { ...invocation.options, timeout: 1500, maxBuffer: 4096 }, (error, stdout) => {
+  const result = new Promise<string | null>(resolve => {
+    const child = execFile(invocation.file, invocation.args, { ...invocation.options, maxBuffer: 4096 }, (error, stdout) => {
+      clearTimeout(deadline);
       resolve(error ? null : /^\s*(\d+\.\d+\.\d+)(?:\s|$)/.exec(String(stdout))?.[1] ?? null);
     });
-  });
+    const deadline = setTimeout(() => {
+      resolve(null);
+      try { child.kill("SIGKILL"); } catch { /* child already exited */ }
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    }, VERSION_PROBE_TIMEOUT_MS);
+  }).catch(() => null);
+  cachedProbe = { key, expiresAt: now + VERSION_PROBE_CACHE_MS, result };
+  return result;
 }
 
 /** Server-local observation only: never returns settings values or modifies settings. */
