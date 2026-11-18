@@ -38,6 +38,7 @@ import {
   journalOwner,
   restoreJournalState,
 } from "../codex/journal";
+import { ConfigWriteContentChanged } from "../codex/config-write-lock";
 import { readCodexHomeJournal } from "../codex/codex-home-owner";
 import { DEFAULT_CATALOG_PATH, getCodexHome } from "../codex/paths";
 import {
@@ -894,8 +895,15 @@ async function connectClientUnlocked(
   } catch (error) {
     const rollbackFailures: string[] = [];
     if (injectionCommitted) {
-      const restored = restoreJournalState();
-      if (!restored.complete) rollbackFailures.push("Codex journal restore was partial");
+      try {
+        const restored = restoreJournalState();
+        if (!restored.complete) rollbackFailures.push("Codex journal restore was partial");
+      } catch (restoreError) {
+        // A concurrent config.toml write refuses the restore and keeps the journal; report it as a
+        // partial rollback instead of abandoning the rest of the rollback.
+        if (!(restoreError instanceof ConfigWriteContentChanged)) throw restoreError;
+        rollbackFailures.push("Codex journal restore deferred: config.toml changed during rollback");
+      }
     }
     try {
       withClientLifecycleSync(() => withConfigMutationLockSync(() => {

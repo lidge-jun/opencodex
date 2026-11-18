@@ -1446,6 +1446,10 @@ sends exactly the same request bytes as before. This does not guarantee cache hi
 Code receives a wrapper call's arguments when the call completes; that is how every tool call on a
 translated Chat route arrives, so the option changes nothing there.
 
+An `allowed_callers` list other than exactly `["direct"]` on any tool preserves the original
+catalog, and the Chat route rejects the request before sending it upstream because it cannot
+carry that restriction. Tools with no caller list or only `["direct"]` remain eligible.
+
 #### Claude models behind a gateway that also serves GPT
 
 `appendOnlyToolLoadingModels` cannot fix Claude models that are routed through a Responses

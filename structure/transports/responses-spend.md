@@ -166,7 +166,7 @@ budget before it knows whether a rotation is even possible, because the reservat
 `reserveDispatch` spends, `permit.use()` only confirms which leg sent, and `permit.release()` is
 idempotent and a no-op once used. Every ladder therefore owes the budget an answer on every exit.
 
-Generic OAuth snapshots the eligible roster at request ingress before dispatch. Its rotation ceiling
+Generic OAuth and Anthropic OAuth snapshot the eligible roster before dispatch. Their rotation ceiling
 is `max(3, min(eligibleCount, 6) - 1)`; live selection still removes accounts in cooldown, so the snapshot
 sets the number of possible moves without making a cooled account selectable. Only the ingress-owned
 default execution budget expands when at least two accounts are eligible: its base and total ceilings

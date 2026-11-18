@@ -71,7 +71,7 @@ function isOutdatedVersion(parts: readonly number[]): boolean {
 }
 
 export async function probe(ctx: ManagementContext, state: LinkRouteState): Promise<Response> {
-  const split = splitRouteRequest(await readManagementJsonBodyOr(ctx.req, null));
+  const split = splitRouteRequest(await readManagementJsonBodyOr(ctx.req, null), ctx);
   if ("error" in split) return split.error;
   const keyRefusal = identityFileRefusal(split.route.explicitRoute);
   if (keyRefusal) return keyRefusal;
@@ -151,7 +151,7 @@ export async function probe(ctx: ManagementContext, state: LinkRouteState): Prom
 }
 
 export async function confirmHost(ctx: ManagementContext, state: LinkRouteState): Promise<Response> {
-  const split = splitRouteRequest(await readManagementJsonBodyOr(ctx.req, null));
+  const split = splitRouteRequest(await readManagementJsonBodyOr(ctx.req, null), ctx);
   if ("error" in split) return split.error;
   const keyRefusal = identityFileRefusal(split.route.explicitRoute);
   if (keyRefusal) return keyRefusal;
@@ -255,7 +255,7 @@ function parsePort(stdout: string): number | null {
 }
 
 export async function apply(ctx: ManagementContext, state: LinkRouteState): Promise<Response> {
-  const split = splitRouteRequest(await readManagementJsonBodyOr(ctx.req, null));
+  const split = splitRouteRequest(await readManagementJsonBodyOr(ctx.req, null), ctx);
   if ("error" in split) return split.error;
   const value = split.body, wanted = split.route;
   const body = isRecord(value) && Object.keys(value).every(key => APPLY_KEYS.has(key)) ? value : null;

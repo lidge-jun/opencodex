@@ -963,6 +963,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     noVisionModels: ALIBABA_TOKEN_PLAN_NO_VISION,
     // The gateway accepts prompt_cache_key on every Token Plan chat model (probed 260902).
     promptCacheKey: true,
+    // DashScope compatible-mode answers `400 developer is not one of ['system','assistant','user','tool','function']`
+    // (#5664, #8864). The native /v1/chat/completions passthrough folds only on an explicit record.
+    foldDeveloperRoleToSystem: true,
   },
   {
     id: "alibaba-token-plan-intl",
@@ -1010,6 +1013,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     noReasoningModels: ["kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5", "glm-5.1", "glm-5", "MiniMax-M2.5"],
     modelDefaultReasoningEfforts: { ...Object.fromEntries(QWEN38_FAMILY.map(id => [id, "xhigh"])), "deepseek-v4.1-flash-1017": "high" },
     promptCacheKey: true,
+    // DashScope compatible-mode answers `400 developer is not one of ['system','assistant','user','tool','function']`
+    // (#5664, #8864). The native /v1/chat/completions passthrough folds only on an explicit record.
+    foldDeveloperRoleToSystem: true,
   },
   // NEEDS_HUMAN 2026-07-10: kept for config compatibility, but this is a dashboard URL,
   // no /models endpoint is documented, and tools are silently ignored upstream per docs.parallel.ai.
