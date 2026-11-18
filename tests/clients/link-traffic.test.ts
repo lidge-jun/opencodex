@@ -152,6 +152,33 @@ describe("link traffic counters (#3023)", () => {
     expect(h.relayHealth()).toMatchObject({ delivery: "degraded", recentInterruptions: 3 });
   });
 
+  test("three upstream read errors after an SSE chunk degrade relay delivery", async () => {
+    const first = encoder.encode("data: first\n\n");
+    const h = home(async req => {
+      await req.arrayBuffer();
+      const failure = interrupt;
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(first); },
+        async pull(controller) {
+          await failure.promise;
+          controller.error(new Error("upstream transport closed"));
+        },
+      }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } });
+    });
+    let interrupt = gate();
+    for (let i = 0; i < 3; i++) {
+      interrupt = gate();
+      const response = await relayLinkDataRequest(chunkedRequest([10]), target(h.port), { tunnel: HOME_INITIATED_LINK_TUNNEL });
+      expect(response.status).toBe(200);
+      const reader = response.body!.getReader();
+      expect(await reader.read()).toEqual({ value: first, done: false });
+      interrupt.resolve();
+      await expect(reader.read()).rejects.toThrow();
+    }
+    expect(h.relayHealth()).toMatchObject({ delivery: "degraded", relayAuthentication: "observed", recentInterruptions: 3 });
+    expect(h.activity.snapshot(linkId, Date.now()).httpDelivery?.recentCancellations).toBe(0);
+  });
+
   test("a Home request without Content-Length is counted as uncounted, not guessed", async () => {
     const h = home(async req => Response.json({ bytes: (await req.arrayBuffer()).byteLength }));
     const child = createLinkTrafficBook("relayed");

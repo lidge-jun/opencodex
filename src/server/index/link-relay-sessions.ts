@@ -264,7 +264,6 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         if (!response.body || req.method === "HEAD") { endFlow(true, "observed"); release(); return response; }
         const reader = response.body.getReader();
         const relayError = endDelivery ? observeRelayError(response) : undefined;
-        let hasResponseData = false;
         const catalogHash = options.catalogServed && req.method === "GET" && url.pathname === "/v1/catalog" && url.search === ""
           && response.status === 200 ? createHash("sha256") : null;
         const catalogKeyId = sessionLink === null ? response.headers.get("x-opencodex-key-id") : null;
@@ -302,20 +301,26 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         const body = new ReadableStream<Uint8Array>({
           async pull(controller) {
             stopWaiting();
+            let next;
             try {
-              const next = await reader.read();
+              next = await reader.read();
+            } catch (error) {
+              endFlow(false, cancelled || req.signal.aborted ? "client_cancelled" : "upstream_failure");
+              finish(); controller.error(error);
+              return;
+            }
+            try {
               if (next.done) {
+                controller.close();
                 endFlow(!cancelled, cancelled ? "client_cancelled" : relayError?.failed() ? "upstream_failure" : "observed");
-                finish(); controller.close(); if (!cancelled) reportCatalog();
+                finish(); if (!cancelled) reportCatalog();
               } else {
-                if (next.value.byteLength > 0) hasResponseData = true;
                 relayError?.append(next.value);
                 catalogHash?.update(next.value); flow?.fromHome(next.value.byteLength); controller.enqueue(next.value);
                 if (waitObserver && !ended) { waiting = true; tellWaiting(true); }
               }
             } catch (error) {
-              const outcome = cancelled || req.signal.aborted ? "client_cancelled" : hasResponseData ? "observed" : "upstream_failure";
-              endFlow(false, outcome); finish(); controller.error(error);
+              endFlow(false, "client_cancelled"); finish(); controller.error(error);
             }
           },
           cancel,
