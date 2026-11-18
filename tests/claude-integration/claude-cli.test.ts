@@ -170,6 +170,25 @@ describe("ocx claude per-model compact settings", () => {
     expect(settings(build(positional).args).modelSettings["mock/mid"].autoCompactWindow).toBe(497_800);
   });
 
+  test.each(["remote-control", "rc", "bridge", "remote"])("preserves argv and env for %s", verb => {
+    const args = [verb, "--help"];
+    const result = build(args);
+    expect(result.args).toBe(args);
+    expect(result.env).toBe(env);
+  });
+
+  test.each([
+    [["--remote-control"]],
+    [["--print", "remote-control"]],
+    [["--", "remote-control"]],
+    [["--model", "remote-control"]],
+  ])("still injects session settings for %j", args => {
+    const result = build(args);
+    expect(settings(result.args).modelSettings["mock/mid"].autoCompactWindow).toBe(497_800);
+    expect(result.args.slice(2)).toEqual(args);
+    expect(result.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
+  });
+
   test("injected options precede variadic client options and the positional prompt", () => {
     const input = ["--mcp-config", '{"mcpServers":{}}', "/context"];
     const result = build(input);

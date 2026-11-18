@@ -392,6 +392,12 @@ v1 別名按字面解碼（歷史上 model ID 中包含的兩字元序列 `~s` /
    使對話在該位置自動進行摘要。透過代理執行 `ocx claude` 時，如果模型目錄中有更小的視窗，
    啟動器可以透過 `--settings` 為各模型設定壓縮閾值。引數超出啟動器的長度限制時，仍使用環境變數。
 
+產生的 JSON 屬於 Claude Code 的命令列設定，優先順序高於本機、專案及使用者設定檔，低於受管理的設定。傳入 `--settings <file>` 或 `--autocompact` 會略過 JSON 產生步驟。啟動器會原樣傳遞明確指定的 `--settings` 引數，並由 Claude Code 處理檔案。
+
+使用任一選項略過 JSON 產生步驟時，如果自動上下文設定了 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`，啟動器會保留這個環境變數。明確匯出這個變數也會略過 JSON 產生步驟並保留其值。在 Claude Code 中，這個變數的有效值優先於 `--autocompact` 和已儲存的壓縮設定。若要使用檔案中的壓縮設定，請將 `claudeCode.autoContext` 設為 `false` 以關閉自動注入，取消匯出的 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`，再傳入 `--settings <file>`。請參閱 [Claude Code 自動壓縮設定的優先順序](https://code.claude.com/docs/en/model-config#set-the-auto-compact-window)。
+
+Remote Control 的 `remote-control` 命令及其別名 `rc`、`bridge` 和 `remote` 會保留原有的引數和啟動環境。
+
 設定有三種狀態：
 
 - **缺省 / `true`：**啟用（預設）

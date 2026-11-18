@@ -5,6 +5,7 @@ import type { ClaudeLaunchEnv } from "./claude";
 
 // cmd.exe allows 8,191 characters. Reserve room for the shim path and shell wrapper.
 const WINDOWS_CLAUDE_ARGV_BUDGET = 7_000;
+const REMOTE_CONTROL_VERBS = new Set(["remote-control", "rc", "bridge", "remote"]);
 
 /** Session-only compact windows: the current model selects its setting after /model switches. */
 export function withClaudeContextSettings(
@@ -16,6 +17,8 @@ export function withClaudeContextSettings(
   options: { selectors?: readonly string[]; platform?: NodeJS.Platform } = {},
 ): { args: string[]; env: ClaudeLaunchEnv } {
   const unchanged = { args, env };
+  // Remote Control dispatches a leading verb and expects its own options after that verb.
+  if (args[0] && REMOTE_CONTROL_VERBS.has(args[0])) return unchanged;
   // An operator's env/CLI policy remains authoritative. Native launches never call this helper.
   if (base.CLAUDE_CODE_AUTO_COMPACT_WINDOW) return unchanged;
   const auto = resolveAutoContext(config.claudeCode);

@@ -407,6 +407,12 @@ Claude Code는 알 수 없는 모델의 컨텍스트를 200k 토큰으로 계산
    있으면 `--settings`로 모델별 압축 임곗값을 설정할 수 있어요. 인수가 런처의 길이 제한을 넘으면
    환경 변수를 사용해요.
 
+생성된 JSON은 Claude Code의 명령줄 설정 범위에 적용돼요. 로컬, 프로젝트, 사용자 설정 파일보다 우선하며 관리 설정보다는 우선순위가 낮아요. `--settings <file>`이나 `--autocompact`를 지정하면 JSON 생성을 건너뛰어요. 런처는 명시한 `--settings` 인수를 그대로 전달하고, 파일 처리는 Claude Code에 맡겨요.
+
+두 옵션 중 하나로 JSON 생성을 건너뛰면, 자동 컨텍스트가 설정한 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`는 그대로 전달돼요. 이 환경 변수를 직접 내보내도 JSON 생성이 생략되고 값은 유지돼요. Claude Code에서 이 변수의 유효한 값은 `--autocompact`와 저장된 압축 설정보다 우선해요. 파일의 압축 설정을 사용하려면 `claudeCode.autoContext`를 `false`로 설정해 자동 주입을 끄고, 내보낸 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`를 해제한 뒤 `--settings <file>`을 지정하세요. [Claude Code의 자동 압축 설정 우선순위](https://code.claude.com/docs/en/model-config#set-the-auto-compact-window)를 참고하세요.
+
+Remote Control의 `remote-control` 명령과 별칭 `rc`, `bridge`, `remote`에는 기존 인수와 실행 환경이 그대로 전달돼요.
+
 설정 상태는 세 가지예요.
 
 - **없음 / `true`:** 사용(기본값)

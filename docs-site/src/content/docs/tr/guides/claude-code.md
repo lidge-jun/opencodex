@@ -540,6 +540,12 @@ Claude Code, tanımadığı herhangi bir model için 200k token hesabı yapar.
    katalogda daha küçük pencereler olduğunda `--settings` ile her model için ayrı
    eşik ayarlayabilir. Bağımsız değişkenler uzunluk sınırını aşarsa ortam değişkeni kullanılır.
 
+Oluşturulan JSON, Claude Code'un komut satırı ayarları kapsamında uygulanır. Bu kapsam yerel, proje ve kullanıcı ayar dosyalarından daha yüksek, yönetilen ayarlardan daha düşük önceliğe sahiptir. `--settings <file>` veya `--autocompact` verildiğinde JSON oluşturulmaz. Başlatıcı, açıkça verilen `--settings` argümanlarını olduğu gibi iletir ve dosyaları Claude Code işler.
+
+Bu seçeneklerden biri JSON oluşturmayı atladığında başlatıcı, otomatik bağlamın ayarladığı `CLAUDE_CODE_AUTO_COMPACT_WINDOW` değerini korur. Değişkeni açıkça dışa aktarmak da JSON oluşturmayı atlar ve değeri korur. Claude Code, bu değişkenin geçerli bir değerine `--autocompact` seçeneğinden ve kaydedilmiş sıkıştırma ayarlarından daha yüksek öncelik verir. Bir dosyanın sıkıştırma ayarlarını kullanmak için `claudeCode.autoContext` değerini `false` yaparak otomatik eklemeyi kapatın, dışa aktarılmış `CLAUDE_CODE_AUTO_COMPACT_WINDOW` değişkenini kaldırın ve `--settings <file>` seçeneğini verin. [Claude Code'un otomatik sıkıştırma önceliğine](https://code.claude.com/docs/en/model-config#set-the-auto-compact-window) bakın.
+
+Remote Control komutu `remote-control` ve `rc`, `bridge`, `remote` takma adları, özgün argümanlarını ve başlatma ortamını korur.
+
 Üç yapılandırma durumu:
 
 - **yok / `true`:** etkin (varsayılan)

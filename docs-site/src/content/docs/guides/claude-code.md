@@ -825,18 +825,23 @@ default) fixes that:
    characters on Windows or 32,000 elsewhere. On Windows it also falls back if the escaped
    arguments together exceed 7,000 characters, leaving room for the command shim and shell wrapper.
 
-An explicitly exported `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `--autocompact`, or `--settings`
-keeps precedence and disables generated per-model settings. Existing `--settings` JSON/file
-arguments, including repeated options and invalid inputs, are forwarded unchanged for Claude
-Code to interpret; the launcher neither reads nor rewrites those files. This applies only to routed
-`ocx claude` launches, not native fallback, Desktop, or plain `claude` launches. The
-`modelUsage.contextWindow` accounting field can still differ from the working compact window
-shown by `/context`.
+Generated JSON uses Claude Code's command-line settings scope, above local, project, and user
+files and below managed settings. Passing `--settings <file>` or `--autocompact` skips the
+generated JSON. The launcher forwards explicit `--settings` arguments as supplied and leaves
+file handling to Claude Code.
 
-Generated session-only `--settings` take precedence over `autoCompactWindow` and
-`modelSettings` in user/project settings files. The files are not read by this launcher helper.
-To retain a file's compact policy, explicitly pass it with `--settings <file>` (which skips
-injection), or supply `--autocompact` or an explicit compact environment variable.
+When either flag skips JSON generation, the launcher keeps the legacy
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` if auto-context supplies it. An explicitly exported value
+also skips generation and stays in the launch environment. Claude Code gives a usable
+value of this variable precedence over `--autocompact` and saved compact settings.
+To use the compact policy from a file, set `claudeCode.autoContext` to `false` to stop automatic
+injection, unset any exported `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, and pass `--settings <file>`.
+See [Claude Code's auto-compact precedence](https://code.claude.com/docs/en/model-config#set-the-auto-compact-window).
+
+Generated per-model settings apply to routed `ocx claude` sessions. Remote Control's
+`remote-control` verb and its `rc`, `bridge`, and `remote` aliases keep their original arguments
+and launch environment. The `modelUsage.contextWindow` accounting field can still differ from
+the working compact window shown by `/context`.
 
 Three config states:
 
