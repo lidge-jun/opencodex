@@ -3,7 +3,7 @@
  * paths against the injected base_url, so the proxy must relay them to an OpenAI-family upstream
  * instead of the /v1/* JSON-404 guard.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync} from "node:fs";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
@@ -21,6 +21,9 @@ import { ANTIGRAVITY_REQUEST_UA } from "../../src/adapters/google-antigravity-wi
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { SERVER_BUDGET_MS } from "../helpers/test-budget";
+
+setDefaultTimeout(SERVER_BUDGET_MS);
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -157,7 +160,7 @@ test("image response byte reader enforces the stream cap when Content-Length is 
   expect(canceled).toBe(true);
   // One queued chunk may be prefetched; cancellation must stop later draining.
   expect(tailPulled).toBe(false);
-});
+}, 5_000);
 
 function xaiBridgeConfig(): OcxConfig {
   return {
@@ -1131,7 +1134,7 @@ test.each([
   expect(selection.keyed).toBeUndefined();
   expect(selection.forwardCandidates).toHaveLength(0);
   expect(selection.error).toContain(expectedError);
-});
+}, 5_000);
 
 test("keyed baseUrl with a /v1 suffix is normalized (no double /v1)", async () => {
   const captured: CapturedRequest[] = [];
@@ -1483,7 +1486,7 @@ test("an image body that stalls after headers retains the 504 deadline", async (
   } finally {
     await server.stop(true);
   }
-}, 5_000);
+});
 
 test("a client abort during image body reading maps to 499 and cancels upstream", async () => {
   let markReaderAttached: (() => void) | undefined;
@@ -1528,7 +1531,7 @@ test("a client abort during image body reading maps to 499 and cancels upstream"
   const response = await reading;
   expect(response.status).toBe(499);
   expect(upstreamCanceled).toBe(true);
-});
+}, 5_000);
 
 test("a client abort before the image reader attaches cancels the untouched upstream body", async () => {
   const parent = new AbortController();
@@ -1558,7 +1561,7 @@ test("a client abort before the image reader attaches cancels the untouched upst
   const response = await handleImages(request, forwardConfig(), "generations", { model: "", provider: "" });
   expect(response.status).toBe(499);
   expect(upstreamCanceled).toBe(true);
-});
+}, 5_000);
 
 test("a hung upstream times out with 504 after config.images.timeoutMs", async () => {
   const upstream = Bun.serve({
@@ -1600,7 +1603,7 @@ test("a hung upstream times out with 504 after config.images.timeoutMs", async (
     await server.stop(true);
     await upstream.stop(true);
   }
-}, 5_000);
+});
 
 test("GET /v1/images/generations still falls through to the JSON 404 guard", async () => {
   saveConfig(forwardConfig("https://chatgpt.example/backend-api/codex"));
@@ -2061,7 +2064,7 @@ test("CCA fetch network failure returns 502 without leaking the timeout timer", 
   } finally {
     await server.stop(true);
   }
-}, 5_000);
+});
 
 test("CCA body-read timeout returns 504 when upstream stalls after sending headers", async () => {
   // Mock: CCA returns 200 OK headers immediately but the body stream never
@@ -2115,24 +2118,22 @@ test("CCA body-read timeout returns 504 when upstream stalls after sending heade
   } finally {
     await server.stop(true);
   }
-}, 5_000);
+});
 
 test("CCA body-read client cancellation returns 499, not 504", async () => {
-  // Regression for Wibias R4 finding 1: when the client aborts during the body-read
-  // phase, both the parent signal and the linked signal are aborted (parent abort
-  // propagates into the linked signal). The body-read catch must check the PARENT
-  // signal first (499) before the linked signal (504), otherwise client cancellation
-  // is misreported as an upstream timeout.
+  // Client cancellation aborts both the parent and linked signals during body read.
+  // The handler must check the parent first to report 499.
   //
   // We call handleImages directly (not via server fetch) because a client-side
   // fetch abort tears down the connection before the server response can be read.
-  const { handleImages } = await import("../../src/server/images");
+  const bodyStarted = Promise.withResolvers<void>();
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const url = new URL(requestUrl);
     if (url.hostname === "daily-cloudcode-pa.googleapis.com") {
       const fetchSignal = init?.signal;
       const stalledBody = new ReadableStream<Uint8Array>({
+        pull() { bodyStarted.resolve(); },
         start(controller) {
           const abortError = new DOMException("The operation was aborted.", "AbortError");
           if (fetchSignal) {
@@ -2140,7 +2141,7 @@ test("CCA body-read client cancellation returns 499, not 504", async () => {
             else fetchSignal.addEventListener("abort", () => controller.error(abortError), { once: true });
           }
         },
-      });
+      }, { highWaterMark: 0 });
       return new Response(stalledBody, { status: 200, headers: { "content-type": "application/json" } });
     }
     return originalFetch(input, init);
@@ -2159,11 +2160,10 @@ test("CCA body-read client cancellation returns 499, not 504", async () => {
     signal: ctrl.signal,
   });
   const logCtx = { model: "", provider: "" } as never;
-
-  // Start the handler — it enters the body-read loop and stalls on the mocked body.
   const responsePromise = handleImages(req, cfg, "generations", logCtx);
-  // Abort the parent signal after the body read has started.
-  setTimeout(() => ctrl.abort(), 100);
+  const earlyResponse = await Promise.race([bodyStarted.promise, responsePromise]);
+  if (earlyResponse) throw new Error(`Image handler returned HTTP ${earlyResponse.status} before reading the body`);
+  ctrl.abort();
   const response = await responsePromise;
   expect(response.status).toBe(499);
   const json = await response.json() as { error: { message: string } };
@@ -2324,11 +2324,12 @@ const CCA_CREDENTIAL_EXPIRED = {
  * all other hosts pass through to the real network stack (they should never be
  * reached during these tests).
  */
-function hungOauthFetchMock() {
+function hungOauthFetchMock(onRefresh?: () => void) {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const url = new URL(requestUrl);
     if (url.hostname === "oauth2.googleapis.com") {
+      onRefresh?.();
       // Never resolve until the fetch signal aborts (just like production).
       return new Promise<Response>((_resolve, reject) => {
         const sig = init?.signal;
@@ -2346,8 +2347,8 @@ test("CCA client abort during OAuth preflight returns 499, not a hung response",
   // Regression for finding2-oauth-signal: when the client disconnects while
   // getValidAccessToken is refreshing the token, the request must return 499
   // promptly, not hang waiting for the refresh HTTP call to complete.
-  const { handleImages } = await import("../../src/server/images");
-  hungOauthFetchMock();
+  const refreshStarted = Promise.withResolvers<void>();
+  hungOauthFetchMock(refreshStarted.resolve);
 
   // Long timeout so the deadline does NOT fire — only the client abort triggers.
   const cfg = { ...ccaConfig(), images: { timeoutMs: 30_000 } } as OcxConfig;
@@ -2362,11 +2363,10 @@ test("CCA client abort during OAuth preflight returns 499, not a hung response",
     signal: ctrl.signal,
   });
   const logCtx = { model: "", provider: "" } as never;
-
-  // Start the handler — it enters getValidAccessToken which hangs on the token refresh.
   const responsePromise = handleImages(req, cfg, "generations", logCtx);
-  // Abort the parent signal after the OAuth preflight has started.
-  setTimeout(() => ctrl.abort(), 100);
+  const earlyResponse = await Promise.race([refreshStarted.promise, responsePromise]);
+  if (earlyResponse) throw new Error(`Image handler returned HTTP ${earlyResponse.status} before starting OAuth refresh`);
+  ctrl.abort();
   const response = await responsePromise;
   expect(response.status).toBe(499);
   const json = await response.json() as { error: { message: string } };
@@ -2377,7 +2377,6 @@ test("CCA deadline expiry during OAuth preflight returns 504, not a hung respons
   // Regression for finding2-oauth-signal: when the deadline fires while
   // getValidAccessToken is refreshing the token, the request must return 504
   // promptly, not hang waiting for the refresh HTTP call to complete.
-  const { handleImages } = await import("../../src/server/images");
   hungOauthFetchMock();
 
   // Short timeout so the deadline fires during the hung OAuth refresh.
