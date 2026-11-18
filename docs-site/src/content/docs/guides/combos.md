@@ -1209,7 +1209,7 @@ cooldown set by a 401 or 403), `transient` (any other cooldown), `unsupported` (
 request, including a mandatory `tool_choice` no target preserves) and `unavailable` (provider missing or
 disabled). `targets` counts the configured targets, `attempted` the targets dispatched to a child attempt (a child may refuse before any upstream send), and `causes`
 how many targets fell in each class. The object never names the combo, a provider, a model or upstream text.
-The code stays `combo_unavailable`; the Claude Messages and Chat Completions listeners keep their own error
+Claude Messages and Chat Completions also return HTTP 503 with `combo_unavailable` in their own error
 shapes.
 For cooldowns, follow an observed `Retry-After` value first;
 Codex reset headers also take precedence over `cooldownMs`.

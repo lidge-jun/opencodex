@@ -863,16 +863,16 @@ export async function executeComboResponses(
   let jevDecision: JevDecision | undefined;
   let failedPinEffortDecision: JevDecision | undefined;
   if (combo.strategy === "jev" && !toolLoopPin) {
-    const jevTargetEligible = (target: (typeof combo.targets)[number]): boolean => {
+    const jevTargetEligible = (scope: typeof admissionScope) => (target: (typeof combo.targets)[number]): boolean => {
       if (!targetEligible(target)) return false;
-      if (!admissionScope) return true;
+      if (!scope) return true;
       try {
-        return routeAllowedByScope(admissionScope, routeConcreteModel(config, `${target.provider}/${target.model}`));
+        return routeAllowedByScope(scope, routeConcreteModel(config, `${target.provider}/${target.model}`));
       } catch {
         return false;
       }
     };
-    const choices = eligibleJevComboChoices(liveConfig, comboId, jevTargetEligible, Date.now(), pick.cooldownReprobeTargets);
+    const choices = eligibleJevComboChoices(liveConfig, comboId, jevTargetEligible(currentAdmissionScope()), Date.now(), pick.cooldownReprobeTargets);
     const first = choices[0];
     if (!first) {
       return comboUnavailable(comboId, undefined, comboExclusion(config, comboId, target =>
@@ -891,14 +891,15 @@ export async function executeComboResponses(
       choices.map(choice => choice.candidate),
       combo.decisionQuotaSignals === true ? { config, tiers: combo.decisionQuotaTiers } : undefined,
     );
-    const decide = (candidates: JevCandidate[], fallbackDecision: Pick<JevDecision, "targetKey" | "effort">) =>
-      resolveJevComboDecision({
+    const decide = (candidates: JevCandidate[], fallbackDecision: Pick<JevDecision, "targetKey" | "effort">) => {
+      const decisionScope = currentAdmissionScope();
+      return resolveJevComboDecision({
         body,
         candidates,
         fallback: fallbackDecision,
         config,
         isDestinationAllowed: (providerName, modelId) => routeAllowedByScope(
-          admissionScope, { providerName, modelId },
+          decisionScope, { providerName, modelId },
         ),
         ...(combo.decisionQuotaSignals === true ? { decisionQuotaSignals: true, decisionQuotaTiers: combo.decisionQuotaTiers } : {}),
         ...(combo.decisionProvider ? { decisionProvider: combo.decisionProvider } : {}),
@@ -908,7 +909,7 @@ export async function executeComboResponses(
             invokeModel: createJevModelInvoker({
               req,
               config,
-              options: { ...options, admissionScope },
+              options: { ...options, admissionScope: decisionScope },
               handleResponses: requestDispatchers.handleResponses,
             }),
           }
@@ -916,6 +917,7 @@ export async function executeComboResponses(
         ...(combo.decisionTimeoutMs !== undefined ? { timeoutMs: combo.decisionTimeoutMs } : {}),
         signal: options.abortSignal,
       });
+    };
     let decision: JevDecision;
     let awaitedPinEffort = false;
     if (pinReuse?.decision) {
@@ -1011,7 +1013,7 @@ export async function executeComboResponses(
             capability = result;
             omittingImages = capability.unservable === "image";
             if (previousUnservable !== capability.unservable) warnCapabilityDegradation(capability.unservable);
-            currentChoices = eligibleJevComboChoices(liveConfig, comboId, jevTargetEligible, Date.now(), pick.cooldownReprobeTargets);
+            currentChoices = eligibleJevComboChoices(liveConfig, comboId, jevTargetEligible(admissionScope), Date.now(), pick.cooldownReprobeTargets);
             if (!currentChoices.length) refreshedRefusal = protocolLanes?.refusal();
           }
           break;

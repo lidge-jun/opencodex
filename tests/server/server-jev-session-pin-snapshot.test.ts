@@ -101,3 +101,26 @@ test("readmission applies a narrower configured-key scope after the decision", a
   expect(payloads).toHaveLength(1);
   expect(models).toEqual([`${LUNA.provider}/${LUNA.model}`]);
 });
+
+test("scope narrowed during capability admission blocks the paid JEV decision", async () => {
+  const payloads: Record<string, unknown>[] = [];
+  const config = perTurnConfig(["sol/gpt-5.6-sol:high"], payloads);
+  config.combos!.auto!.capabilityPolicy = "union";
+  const key = {
+    id: "scoped", name: "Scope fixture", key: "fixture",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    allowedModels: ["jev/jev-latest", SOL.model, LUNA.model],
+  };
+  config.apiKeys = [key];
+  afterCapabilityGate(() => { key.allowedModels = [LUNA.model]; });
+  const models: string[] = [];
+  const log: RequestLogContext = { model: "", provider: "" };
+  const response = await turn(config, {
+    models, log,
+    admission: { kind: "configured", source: "bearer", keyId: key.id, contextPrincipalId: "scope-fixture" },
+  });
+  expect(payloads).toHaveLength(0);
+  expect(log.jevDecision?.usage).toBeUndefined();
+  expect(response.status).toBe(200);
+  expect(models).toEqual([`${LUNA.provider}/${LUNA.model}`]);
+});

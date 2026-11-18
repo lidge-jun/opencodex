@@ -84,8 +84,10 @@ test.each([
         body: JSON.stringify({ model: "jev-auto", stream: false,
           ...(endpoint === "responses" ? { input: messages } : { messages, max_tokens: 64 }) }),
       });
-      expect(response.status).toBe(endpoint === "messages" ? 529 : 503);
-      expect(await response.text()).not.toContain(details);
+      expect(response.status).toBe(503);
+      const text = await response.text();
+      expect(JSON.parse(text).error.code).toBe("combo_unavailable");
+      expect(text).not.toContain(details);
       expect(decisions).toBe(revokeConsent ? 0 : 1);
       expect(children).toBe(0);
       if (revokeConsent) {

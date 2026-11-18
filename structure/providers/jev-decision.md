@@ -262,6 +262,7 @@ metadata. The snapshot copies own data descriptors at every level and skips acce
 invoking them. The gate computes every member’s route and capability verdict before it
 awaits image planning. Credential resolution stays in the routing and sidecar paths. A change
 in the snapshot or the persisted configuration generation restarts local admission up to twice. Persistent churn returns `503 combo_unavailable`.
+Before forming JEV candidates and authorizing a decision backend, the combo intersects the ingress scope with the configured key’s current scope. A denied decision destination yields an unbilled local fallback.
 The parent records completed decision usage before taking the snapshot or awaiting readmission.
 A stable refresh updates selection attribution on that same record. Refusal, cancellation, and
 readmission exceptions retain the usage without dispatching a child or repeating the decision.

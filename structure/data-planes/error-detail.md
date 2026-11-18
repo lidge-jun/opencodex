@@ -270,6 +270,7 @@ profile id to the message or request row. Command Code plan refusals use fixed w
 the adapter request contains the resolved wire model. Local model refusals project their request
 rows to client or catalog model identities and validated provider ids, omitting an untrusted routing decision. `projectAdmissionModelDeniedLog` in `src/server/admission-model-scope.ts` applies that bound before any Chat, Claude or native Messages final-log write, and before returning late guard, compact and sidecar refusals. The response builder only builds the owned envelope. The projected original selector (or fixed placeholder) is recorded explicitly even when compact routing has not initialized the context. Input-admission projection runs before either buffered or streaming delivery. Input-only ceilings are named as input limits; the actual shared context window remains separate in both direct refusals and combo-exhaustion wording. No provider diagnostic
 is interpolated into those local messages. No serialized flag, code or header mints identity.
+Locally generated combo exhaustion retains HTTP 503 and `combo_unavailable` through the Chat Completions and Messages error projections.
 The shared builders live in `src/combos/resolve.ts`, `src/server/admission-model-scope.ts`,
 `src/server/responses/input-admission.ts` and `src/oauth/generic-account-failover.ts`.
 `src/lib/upstream-retry.ts` owns the retry constructors. For a transient 5xx, `fetchWithTransientRetry`
