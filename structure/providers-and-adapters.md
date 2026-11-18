@@ -330,7 +330,7 @@ rows. A supplied key scopes the catalog to its model permissions and delivery po
 anonymous catalog does not establish authentication. Newly promoted preset collision protection
 preserves an older same-named custom destination. `tests/providers/tokenlab-provider.test.ts`
 covers derived entry points, scoped discovery, destination preservation and model routing.
-GPT-6.1 Terra's preemptive seed uses OpenAI API limits and GPT-6.1 Sol's wire; GPT-5.6 Terra stays selectable and default. `tests/providers/gpt61-terra-provider-rows.test.ts` covers its limits and wires.
+GPT-6.2 Sol and Astra share the public OpenAI API limits of 1,050,000 context, 922,000 input and 128,000 output tokens and the `low` through `max` API ladder. The OpenRouter catalog lists both exact qualified IDs with 1,050,000 context. `src/usage/expected-prices.ts` records their provider-specific rates and long-context boundaries. Coverage: `tests/codex-integration/gpt62-rows.test.ts`. Kiro, CodeBuddy, Devin (dashed `gpt-6-2-*` uids), TokenLab, Modelflare and GitHub Copilot carry preemptive GPT-6.2 seeds that mirror each provider's GPT-6.1 Sol metadata and wire, and OpenRouter opts both routes into Fast; `tests/providers/gpt62-provider-rows.test.ts` covers them. GPT-6.1 Terra's preemptive seed uses OpenAI API limits and GPT-6.1 Sol's wire; GPT-5.6 Terra stays selectable and default. `tests/providers/gpt61-terra-provider-rows.test.ts` covers its limits and wires.
 Per-model wires follow TokenLab's declared `accepted_request_formats`: registry
 `modelWireDefaults` send the Responses-capable GPT-6, Grok, DeepSeek, Kimi and GLM ids over
 Responses for Responses inbound only, and an endpoint-bound `claude-` prefix pin in

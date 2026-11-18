@@ -695,7 +695,7 @@ Copilot karma hatlı bir katalog sunar: modeller (`gpt-5.3-codex`, `gpt-5.4`,
 `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) ajan
 trafiği için `/chat/completions`'ı reddeder, bu nedenle opencodex yerleşik
 varsayılan olarak bu modelleri Responses API üzerinden yönlendirirken diğer tüm
-Copilot modelleri sohbet tamamlamalarında kalır. Öncelik sırası: sabit hat
+Copilot modelleri sohbet tamamlamalarında kalır. `gpt-6-sol`, `gpt-6-luna`, `gpt-6.2-sol`, `gpt-6.2-astra` da önleyici yerleşik varsayılan olarak Responses kullanır; bunlar için ret gözlemlenmedi ve GPT-6.2 modellerinin Copilot'ta listelenmesi doğrulanmadı. Öncelik sırası: sabit hat
 sabitlemesi → açık [`modelAdapters`](/tr/reference/configuration/providers/)
 girdiniz → kayıt defteri varsayılanı → sağlayıcı genelinde adaptör. Yerleşik
 varsayılanı olmayan bir modeli (örneğin `gpt-5.4-nano`) Responses'a dahil etmek
