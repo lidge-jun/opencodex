@@ -10,11 +10,27 @@
  */
 import { credentialDomainFor } from "../../protocols/opaque-state";
 import type { OcxProviderConfig } from "../../types";
+import type { AdapterRequest } from "../base";
 
 type Rec = Record<string, unknown>;
 
 export const ADVISOR_TOOL_BETA = "advisor-tool-2026-03-01";
 export const ADVISOR_SERVER_TOOL_NAME = "advisor";
+
+/** The serializer's admitted auth, before operator or plugin header rewrites. */
+export const hostedAdvisorCredentials = new WeakMap<AdapterRequest, {
+  readonly header: "authorization" | "x-api-key";
+  readonly value: string;
+}>();
+
+/** Keep unrelated betas when a rewriter restores the withheld hosted Advisor beta. */
+export function stripHostedAdvisorBeta(headers: Headers): void {
+  const betas = headers.get("anthropic-beta")?.split(",").map(beta => beta.trim());
+  if (!betas?.includes(ADVISOR_TOOL_BETA)) return;
+  const kept = betas.filter(beta => beta && beta !== ADVISOR_TOOL_BETA);
+  if (kept.length) headers.set("anthropic-beta", kept.join(","));
+  else headers.delete("anthropic-beta");
+}
 
 function isPlainRecord(value: unknown): value is Rec {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
@@ -100,21 +116,39 @@ function runHasOtherServerTool(run: readonly Rec[]): boolean {
   return run.some(block => block.type === "server_tool_use" && block.name !== ADVISOR_SERVER_TOOL_NAME);
 }
 
-/**
- * Withhold the caller's Advisor for a turn the proxy Advisor joins: its declaration and every
- * replayed run that contains an Advisor call. The synthetic `advisor` owns the name for the whole
- * turn, so a later leg that drops the synthetic tool (consultations exhausted) must not bring the
- * history or the beta back and change the prompt mid-turn. Returns whether a declaration was withheld.
- */
-export function withholdAdvisorServerTools(parsed: {
+type AdvisorServerToolState = {
   _anthropicServerTools?: readonly Rec[];
   _anthropicServerReplay?: ReadonlyMap<string, readonly Rec[]>;
-}): boolean {
+};
+
+/** A declaration or completed replay can enable the hosted Advisor on this turn. */
+export function hasAdvisorServerTools(parsed: AdvisorServerToolState): boolean {
+  if (hasAdvisorDeclaration(parsed._anthropicServerTools)) return true;
+  for (const run of parsed._anthropicServerReplay?.values() ?? []) {
+    if (runHasAdvisor(run)) return true;
+  }
+  return false;
+}
+
+/**
+ * Withhold the caller's hosted Advisor: its declaration and its call/result blocks in validated
+ * replay runs. Keep other completed exchanges at their original anchor. Later legs must not
+ * restore Advisor history or beta, whether a ceiling withheld it or the proxy owns its name.
+ * Returns whether a declaration was withheld.
+ */
+export function withholdAdvisorServerTools(parsed: AdvisorServerToolState): boolean {
   const declared = hasAdvisorDeclaration(parsed._anthropicServerTools);
   if (declared) parsed._anthropicServerTools = parsed._anthropicServerTools!.filter(tool => !isAdvisorServerToolType(tool.type));
   const replay = parsed._anthropicServerReplay;
   if (replay && [...replay.values()].some(runHasAdvisor)) {
-    const kept = new Map([...replay].filter(([, run]) => !runHasAdvisor(run)));
+    const kept = new Map<string, readonly Rec[]>();
+    for (const [anchor, run] of replay) {
+      // Validation pairs every call/result by ID, including interleaved exchanges. Removing
+      // both Advisor block types preserves the remaining complete pairs and their order.
+      const remaining = runHasAdvisor(run) ? run.filter(block => block.type !== "advisor_tool_result"
+        && !(block.type === "server_tool_use" && block.name === ADVISOR_SERVER_TOOL_NAME)) : run;
+      if (remaining.length > 0) kept.set(anchor, remaining);
+    }
     if (kept.size > 0) parsed._anthropicServerReplay = kept;
     else delete parsed._anthropicServerReplay;
   }
