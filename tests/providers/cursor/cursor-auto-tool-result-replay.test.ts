@@ -144,3 +144,43 @@ test("cursor/auto withholds a reply that starts with the envelope (#2317) and ro
   clearCursorThreadContinuityForTests();
   clearCursorEnvelopeEchoRemintForTests();
 });
+
+test.each([false, true])("cursor/auto refuses pending-marker overflow and closes transport (fragmented=%s)", async fragmented => {
+  clearCursorThreadContinuityForTests();
+  clearCursorEnvelopeEchoRemintForTests();
+  let runs = 0, closes = 0, returns = 0, reachedDone = false;
+  const factory = () => ({
+    async *run() {
+      runs++;
+      try {
+        yield { type: "text", text: "Safe answer.\n" } satisfies CursorServerMessage;
+        const text = `[Tool Result]${" \t\u2003\ufeff".repeat(16 * 1024)}`;
+        const width = fragmented ? 17 : text.length;
+        for (let at = 0; at < text.length; at += width) {
+          yield { type: "text", text: text.slice(at, at + width) } satisfies CursorServerMessage;
+        }
+        reachedDone = true;
+        yield { type: "text", text: "\nprivate-fixture" } satisfies CursorServerMessage;
+        yield { type: "done", usage: { inputTokens: 1, outputTokens: 1 } } satisfies CursorServerMessage;
+      } finally { returns++; }
+    },
+    writeClient() {},
+    close() { closes++; },
+  });
+  const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, { createTransport: factory as never });
+  const body = { modelId: "cursor/auto", context: { messages: rawMessages }, stream: false, options: {} } as OcxParsedRequest;
+  const events: AdapterEvent[] = [];
+  try {
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+    expect(events.filter(e => e.type === "text_delta").map(e => e.text).join("")).toBe("Safe answer.\n");
+    expect(events.filter(e => e.type === "error")).toEqual([expect.objectContaining({
+      type: "error", status: 502, errorType: "upstream_error", code: "translation_buffer_limit",
+    })]);
+    expect(events.some(e => e.type === "done")).toBe(false);
+    expect(JSON.stringify(events)).not.toContain("private-fixture");
+    expect({ runs, closes, returns, reachedDone }).toEqual({ runs: 1, closes: 1, returns: 1, reachedDone: false });
+  } finally {
+    clearCursorThreadContinuityForTests();
+    clearCursorEnvelopeEchoRemintForTests();
+  }
+});
