@@ -283,6 +283,36 @@ describe("hosted Advisor under the request's token spend policy", () => {
       .toContain("advisor-tool-shadowed-by-proxy-advisor");
   });
 
+  for (const name of ["web_search", "web_fetch"] as const) for (const mode of ["spend", "proxy", "unlimited", "gateway"] as const) {
+    test(`mixed ${name} replay keeps its completed exchange when Advisor is withheld (${mode})`, async () => {
+      const webUse = { type: "server_tool_use", id: "srvtoolu_web", name,
+        input: name === "web_search" ? { query: "fixture result" } : { url: "https://example.com/fixture" } };
+      const webResult = { type: `${name}_tool_result`, tool_use_id: webUse.id, content: name === "web_search"
+        ? [{ type: "web_search_result", url: "https://example.com/fixture", title: "Fixture", encrypted_content: "fixture-search-ciphertext" }]
+        : { type: "web_fetch_result", url: "https://example.com/fixture", retrieved_at: "2026-11-18T00:00:00Z",
+          content: { type: "document", title: "Fixture", source: { type: "text", media_type: "text/plain", data: "Fixture result." } } } };
+      const advisorUse = { type: "server_tool_use", id: "srvtoolu_adv1", name: "advisor", input: {} };
+      const advisorResult = { type: "advisor_tool_result", tool_use_id: advisorUse.id, content: REDACTED };
+      // Both calls complete before one unique anchor; completion order is deliberately interleaved.
+      const run = [webUse, advisorUse, advisorResult, webResult];
+      const anchor = { type: "text", text: "Earlier mixed answer." };
+      const messages = followUp([...run, anchor]);
+      expect(replayedAnthropicServerBlocks({ messages })?.get(`text:${anchor.text}`)).toHaveLength(4);
+      const result = await claudeTurn({ model: `anth/${MODEL}`, messages,
+        ...(mode === "spend" || mode === "gateway" ? { spend: { pool: limit } } : {}),
+        ...(mode === "proxy" ? { proxyAdvisor: true } : {}),
+        ...(mode === "gateway" ? { baseUrl: GATEWAY, provider: { forwardAdvisorTool: true } } : {}) });
+      expect(result.status, result.body).toBe(200);
+      expect(result.body).toContain("ok");
+      expect(result.wires).toHaveLength(1);
+      const wire = result.wires[0]!;
+      const assistant = (wire.body.messages as Rec[]).find(message => message.role === "assistant")!;
+      expect(assistant.content).toEqual([...(mode === "unlimited" ? run : mode === "gateway" ? [] : [webUse, webResult]), anchor]);
+      expect(betas(wire).includes(BETA)).toBe(mode === "unlimited");
+      if (mode !== "unlimited") expect(JSON.stringify(wire.body)).not.toContain(CIPHERTEXT);
+    });
+  }
+
   test("history alone cannot restore the Advisor beta under an enforced ceiling", async () => {
     const result = await claudeTurn({ model: `anth/${MODEL}`, spend: { pool: limit }, messages: replay, tools: [READ] });
     expect(result.status, result.body).toBe(200);
@@ -650,6 +680,30 @@ describe("a shadowed turn stays shadowed on every leg", () => {
     expect(plan.replay).toBeUndefined();
     expect(plan.betas).toEqual([]);
     expect(withholdAdvisorServerTools(parsed)).toBe(false);
+  });
+
+  test("mixed replay filtering preserves source containers, complete web pairs and repeat-call semantics", () => {
+    const web: Rec[] = [
+      { type: "server_tool_use", id: "srvtoolu_web", name: "web_search", input: { query: "fixture" } },
+      { type: "web_search_tool_result", tool_use_id: "srvtoolu_web", content: [{ encrypted_content: "fixture-web-ciphertext" }] },
+    ];
+    const mixed = [web[0]!, run[0]!, run[1]!, web[1]!];
+    const original = new Map([["text:advisor", run], ["text:mixed", mixed], ["text:web", web]]);
+    const parsed = { _anthropicServerTools: [ADVISOR], _anthropicServerReplay: original as ReadonlyMap<string, readonly Rec[]> };
+    expect(withholdAdvisorServerTools(parsed)).toBe(true);
+    const kept = parsed._anthropicServerReplay;
+    expect(kept).not.toBe(original);
+    expect(kept.has("text:advisor")).toBe(false);
+    expect(kept.get("text:mixed")).toEqual(web);
+    expect(kept.get("text:web")).toBe(web);
+    expect(original.size).toBe(3);
+    expect(original.get("text:mixed")).toBe(mixed);
+    expect(mixed).toEqual([web[0]!, run[0]!, run[1]!, web[1]!]);
+    expect(withholdAdvisorServerTools(parsed)).toBe(false);
+    expect(parsed._anthropicServerReplay).toBe(kept);
+    const plan = planAnthropicServerTools(provider, parsed._anthropicServerTools, kept, new Set(), true);
+    expect(plan.replay?.get("text:mixed")).toEqual(web);
+    expect(plan.betas).toEqual([]);
   });
 });
 

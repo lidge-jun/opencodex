@@ -146,6 +146,8 @@ existing OAuth label function. Same-ID accounts in the two instances stay separa
 selection change cannot replace the request's identity until the normal credential admission
 accepts a new snapshot. Provider display tags and generic account log fields remain unchanged.
 Both declaration and Advisor replay are removed, so neither can restore the beta.
+Other completed server-tool exchanges in the same validated run retain their original anchor,
+order and destination restrictions.
 The main turn proceeds, other tools keep their contracts, and requests without an applicable ceiling
 keep destination-based forwarding. `tests/claude-integration/claude-translated-advisor-tool.test.ts`
 checks the wire, unchanged main accounting, admitted identity and captured-policy changes. The separately budgeted

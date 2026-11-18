@@ -116,6 +116,8 @@ to admitted replacement identities before serialization, including sidecar copie
 reselection. Credential rebuilding may restore a provider-wide adapter, so eligibility follows this
 builder's effective wire instead. Once withheld, the hosted tool and replay stay withheld for the
 rest of this turn even if a later identity is unlimited; earlier unlimited sends are unaffected.
+Removing Advisor blocks from a validated mixed replay run preserves the other completed search
+or fetch exchanges at their original unique anchor, subject to the existing destination checks.
 After the final tool catalog is known, a named `advisor` choice whose hosted tool was withheld
 becomes `auto` only when no ordinary or proxy function owns that selection. Other choices and
 allow-lists stay unchanged. The delivery maps are rebuilt and charged for newly usable tools;

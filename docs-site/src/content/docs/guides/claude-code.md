@@ -1111,6 +1111,8 @@ request and returns a `server_tool_use` block named `advisor` followed by an
   ceiling for the current send's selected target, the hosted Advisor declaration, completed history
   and beta are withheld from that send onward. The main turn
   continues. On directly routed requests the log records `advisor-tool-withheld-by-spend-policy`.
+  Completed search or fetch exchanges beside the Advisor history remain available to destinations
+  that already permit them.
   A forced choice of the withheld `advisor` becomes `auto`, unless an ordinary client tool or
   the OpenCodex Advisor owns that name. Other tool choices remain unchanged.
   This uses the policy captured for that request, including

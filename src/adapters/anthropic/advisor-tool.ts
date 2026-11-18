@@ -115,16 +115,24 @@ export function hasAdvisorServerTools(parsed: AdvisorServerToolState): boolean {
 }
 
 /**
- * Withhold the caller's hosted Advisor for the whole turn: its declaration and every replayed run
- * that contains an Advisor call. Later legs must not restore its history or beta, whether a spend
- * ceiling withheld it or the proxy Advisor owns its name. Returns whether a declaration was withheld.
+ * Withhold the caller's hosted Advisor: its declaration and its call/result blocks in validated
+ * replay runs. Keep other completed exchanges at their original anchor. Later legs must not
+ * restore Advisor history or beta, whether a ceiling withheld it or the proxy owns its name.
+ * Returns whether a declaration was withheld.
  */
 export function withholdAdvisorServerTools(parsed: AdvisorServerToolState): boolean {
   const declared = hasAdvisorDeclaration(parsed._anthropicServerTools);
   if (declared) parsed._anthropicServerTools = parsed._anthropicServerTools!.filter(tool => !isAdvisorServerToolType(tool.type));
   const replay = parsed._anthropicServerReplay;
   if (replay && [...replay.values()].some(runHasAdvisor)) {
-    const kept = new Map([...replay].filter(([, run]) => !runHasAdvisor(run)));
+    const kept = new Map<string, readonly Rec[]>();
+    for (const [anchor, run] of replay) {
+      // Validation pairs every call/result by ID, including interleaved exchanges. Removing
+      // both Advisor block types preserves the remaining complete pairs and their order.
+      const remaining = runHasAdvisor(run) ? run.filter(block => block.type !== "advisor_tool_result"
+        && !(block.type === "server_tool_use" && block.name === ADVISOR_SERVER_TOOL_NAME)) : run;
+      if (remaining.length > 0) kept.set(anchor, remaining);
+    }
     if (kept.size > 0) parsed._anthropicServerReplay = kept;
     else delete parsed._anthropicServerReplay;
   }
