@@ -64,19 +64,32 @@ const onDisk = () => JSON.parse(readFileSync(join(home, "config.json"), "utf8"))
 
 test("excluded providers round-trip through config.json, and an empty list removes the key", async () => {
   const live = loadConfig();
-  expect(await call(live, "GET")).toEqual({ status: 200, body: { excludedProviders: [] } });
+  expect(await call(live, "GET")).toEqual({ status: 200, body: { meteredComboIds: [], excludedProviders: [] } });
 
-  expect(await call(live, "PUT", { excludedProviders: [" cursor ", "cursor", "trae"] }))
-    .toEqual({ status: 200, body: { excludedProviders: ["cursor", "trae"] } });
+  expect((await call(live, "PUT", { provider: " cursor ", excluded: true })).status).toBe(200);
+  expect((await call(live, "PUT", { provider: "cursor", excluded: true })).status).toBe(200);
+  expect(await call(live, "PUT", { provider: "trae", excluded: true }))
+    .toEqual({ status: 200, body: { meteredComboIds: [], excludedProviders: ["cursor", "trae"] } });
   expect(onDisk().comboSuggestionExcludedProviders).toEqual(["cursor", "trae"]);
-  // The running server reads the in-memory config, so the write must land there too.
   expect(live.comboSuggestionExcludedProviders).toEqual(["cursor", "trae"]);
-  expect(loadConfig().comboSuggestionExcludedProviders).toEqual(["cursor", "trae"]);
-  expect(await call(loadConfig(), "GET")).toEqual({ status: 200, body: { excludedProviders: ["cursor", "trae"] } });
+  expect(await call(loadConfig(), "GET")).toEqual({ status: 200, body: { meteredComboIds: [], excludedProviders: ["cursor", "trae"] } });
 
-  expect(await call(live, "PUT", { excludedProviders: [] })).toEqual({ status: 200, body: { excludedProviders: [] } });
+  expect((await call(live, "PUT", { provider: "cursor", excluded: false })).status).toBe(200);
+  expect(await call(live, "PUT", { provider: "trae", excluded: false }))
+    .toEqual({ status: 200, body: { meteredComboIds: [], excludedProviders: [] } });
   expect("comboSuggestionExcludedProviders" in onDisk()).toBe(false);
   expect(live.comboSuggestionExcludedProviders).toBeUndefined();
+});
+
+test("a stale dashboard excluding a second provider preserves a removal elsewhere", async () => {
+  const first = seedPaidSuggestion();
+  const second = loadConfig();
+  expect((await call(second, "PUT", { provider: "paid", excluded: true })).status).toBe(200);
+  expect((await saveSuggestion(first, { id: "mix", mode: "append", targets: [paidTarget] })).status).toBe(409);
+  expect((await call(first, "GET")).body.excludedProviders).toEqual(["paid"]);
+  expect((await call(second, "PUT", { provider: "paid", excluded: false })).status).toBe(200);
+  expect((await call(first, "PUT", { provider: "other", excluded: true })).status).toBe(200);
+  expect(onDisk().comboSuggestionExcludedProviders).toEqual(["other"]);
 });
 
 test("a malformed write is refused and changes nothing", async () => {
@@ -142,7 +155,7 @@ test("config DTO computes forward eligibility before redacting provider URLs", a
 
 test.each([
   ["GET", "/api/combo-suggestions", undefined],
-  ["PUT", "/api/combo-suggestions", { excludedProviders: ["other"] }],
+  ["PUT", "/api/combo-suggestions", { provider: "other", excluded: true }],
   ["POST", "/api/combo-suggestions/save", { id: "mix", mode: "append", targets: [paidTarget] }],
   ["POST", "/api/combo-suggestions/save", { id: "draft", mode: "create", targets: [paidTarget], allowMeteredTargets: true }],
 ] as const)("%s %s requires a dashboard session", async (method, path, body) => {
@@ -167,10 +180,11 @@ for (const code of ["suggestion_consent_required", "suggestion_provider_excluded
     setPersistedConfigMutationBeforeCommitForTests(changePolicy);
     const response = await saveSuggestion(live, { id: "mix", mode: "append", targets: [paidTarget] });
     expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({
-      code,
-      policy: {
-        allowMeteredTargets: code !== "suggestion_consent_required",
+    expect(await response.json()).toMatchObject({ code });
+    expect(await call(live, "GET")).toEqual({
+      status: 200,
+      body: {
+        meteredComboIds: code === "suggestion_consent_required" ? [] : ["mix"],
         excludedProviders: code === "suggestion_provider_excluded" ? ["paid"] : [],
       },
     });

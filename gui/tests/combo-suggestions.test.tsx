@@ -16,7 +16,7 @@ import {
 } from "../src/combo-suggestions";
 import { isValidComboId, toPutBody, type ComboItem } from "../src/combo-workspace-data";
 import { ComboSuggestions, type ComboSuggestionsProps } from "../src/components/route-board/ComboSuggestions";
-import { useSuggestionExclusions, type SuggestionExclusions } from "../src/components/route-board/use-suggestion-exclusions";
+import { useSuggestionExclusions } from "../src/components/route-board/use-suggestion-exclusions";
 import { WorkspaceSuggestions } from "../src/components/route-board/WorkspaceSuggestions";
 import { LanguageProvider } from "../src/i18n/provider";
 
@@ -301,7 +301,7 @@ describe("ComboSuggestions card", () => {
   });
 
   const saved: Array<{ kind: string; item: ComboItem }> = [];
-  const exclusionWrites: string[][] = [];
+  const exclusionWrites: Array<[string, boolean]> = [];
   async function render(combos: ComboItem[] = [], excluded?: string[]) {
     saved.length = 0;
     const { createRoot } = await import("react-dom/client");
@@ -323,7 +323,7 @@ describe("ComboSuggestions card", () => {
             onExtend={async (item) => { saved.push({ kind: "extend", item }); return { ok: true }; }}
             {...(excluded ? {
               excludedProviders: excluded,
-              onExcludedChange: async (next: readonly string[]) => { exclusionWrites.push([...next]); return true; },
+              onExcludedChange: async (provider: string, excluded: boolean) => { exclusionWrites.push([provider, excluded]); return true; },
             } : {})}
           />
         </LanguageProvider>,
@@ -397,7 +397,7 @@ describe("ComboSuggestions card", () => {
     const panel = host.querySelector<HTMLElement>(".rb-suggest-exclude-panel")!;
     const xai = panel.querySelector<HTMLInputElement>("input[type=checkbox]:checked")!;
     await act(async () => { xai.click(); });
-    expect(exclusionWrites).toEqual([[]]);
+    expect(exclusionWrites).toEqual([["xai", false]]);
   });
 
   test("excluding a provider while its draft is open drops it from the draft", async () => {
@@ -500,12 +500,12 @@ describe("ComboSuggestions card", () => {
       if (init?.method === "PUT") {
         const body = JSON.parse(String(init.body));
         puts.push(body);
-        return new Response(JSON.stringify(body));
+        return Response.json({ excludedProviders: ["relay", body.provider], meteredComboIds: [] });
       }
       return new Promise<Response>((resolve) => pending.push((body) => resolve(new Response(JSON.stringify(body)))));
     }) as typeof fetch;
     try {
-      let state: SuggestionExclusions | null = null;
+      let state: ReturnType<typeof useSuggestionExclusions> | null = null;
       const Probe = ({ base }: { base: string }) => {
         const exclusions = useSuggestionExclusions(base);
         useEffect(() => { state = exclusions; }, [exclusions]);
@@ -513,17 +513,17 @@ describe("ComboSuggestions card", () => {
       };
       await mount(<Probe base="" />);
       expect(state!.ready).toBe(false);
-      await act(async () => { pending.shift()!({ excludedProviders: ["kimi"] }); });
+      await act(async () => { pending.shift()!({ excludedProviders: ["kimi"], meteredComboIds: [] }); });
       expect([state!.ready, state!.excluded]).toEqual([true, ["kimi"]]);
 
       await act(async () => { root!.render(<Probe base="/x" />); });
       expect([state!.ready, state!.excluded]).toEqual([false, []]);
-      expect(await state!.save(["xai"])).toBe(false);
+      expect(await state!.save("xai", true)).toBe(false);
       expect(puts).toEqual([]);
-      await act(async () => { pending.shift()!({ excludedProviders: ["relay"] }); });
-      await act(async () => { await state!.save(["xai"]); });
-      expect(puts).toEqual([{ excludedProviders: ["xai"] }]);
-      expect(state!.excluded).toEqual(["xai"]);
+      await act(async () => { pending.shift()!({ excludedProviders: ["relay"], meteredComboIds: [] }); });
+      await act(async () => { await state!.save("xai", true); });
+      expect(puts).toEqual([{ provider: "xai", excluded: true }]);
+      expect(state!.excluded).toEqual(["relay", "xai"]);
     } finally {
       globalThis.fetch = realFetch;
     }
@@ -552,14 +552,18 @@ describe("ComboSuggestions card", () => {
         ? [["kimi", name], ["google-vertex", name], ["xai", name], ["anthropic-apikey", name]]
         : [["kimi", name], ["google-vertex", name]]);
       let refreshCount = 0;
+      let persistedConsent = true;
+      let persistedExclusions = excluded ? ["anthropic-apikey"] : [];
       globalThis.fetch = (async (url: string) => {
         if (url.endsWith("/api/combo-suggestions/save")) {
-          return Response.json({
-            code: excluded ? "suggestion_provider_excluded" : "suggestion_consent_required",
-            policy: { allowMeteredTargets: excluded, excludedProviders: excluded ? ["google-vertex"] : [] },
-          }, { status: 409 });
+          persistedConsent = excluded;
+          if (excluded) persistedExclusions = ["google-vertex"];
+          return Response.json({ policy: {
+            allowMeteredTargets: excluded,
+            excludedProviders: excluded ? ["google-vertex"] : [],
+          } }, { status: 409 });
         }
-        return Response.json({ excludedProviders: excluded ? ["anthropic-apikey"] : [] });
+        return Response.json({ excludedProviders: persistedExclusions, meteredComboIds: persistedConsent ? ["opus"] : [] });
       }) as typeof fetch;
       try {
         const view = (allowMeteredTargets: boolean) => <LanguageProvider><WorkspaceSuggestions
@@ -575,8 +579,15 @@ describe("ComboSuggestions card", () => {
         expect(host.querySelector('[role="alert"]')?.textContent).toContain("Suggestion settings changed");
         if (excluded) {
           expect(card("opus").textContent).not.toContain("Vertex");
-          expect(card("opus").textContent).not.toContain("Anthropic");
+          const filter = host.querySelector<HTMLButtonElement>(".rb-suggest-exclude-toggle")!;
+          expect(filter.textContent).toContain("Vertex");
+          expect(filter.textContent).not.toContain("Anthropic");
+          await act(async () => { filter.click(); });
+          const selectedProviders = [...host.querySelectorAll('input[type="checkbox"]:checked')]
+            .map((input) => input.closest("label")?.textContent);
+          expect(selectedProviders).toEqual([expect.stringContaining("Vertex")]);
           expect(button(card("opus"), "Add to combo").disabled).toBe(false);
+          persistedConsent = false;
           await act(async () => { root!.render(view(false)); });
           expect(button(card("opus"), "Add to combo").disabled).toBe(true);
           expect(card("opus").textContent).toContain("Enable paid targets on this combo first.");
@@ -584,6 +595,9 @@ describe("ComboSuggestions card", () => {
           expect(button(card("opus"), "Add to combo").disabled).toBe(true);
           expect(card("opus").textContent).toContain("Enable paid targets on this combo first.");
         }
+        persistedConsent = true;
+        await act(async () => { root!.render(view(true)); });
+        expect(button(card("opus"), "Add to combo").disabled).toBe(false);
         expect(refreshCount).toBe(1);
       } finally {
         globalThis.fetch = originalFetch;
@@ -607,7 +621,7 @@ describe("ComboSuggestions card", () => {
       expect(visibleButtons()).not.toContain("Generate");
       expect(host.querySelector('[role="alert"]')?.textContent).toContain("Could not load");
       await act(async () => { button(host, "Retry").click(); });
-      await act(async () => { pending.shift()!(Response.json({ excludedProviders: [] })); });
+      await act(async () => { pending.shift()!(Response.json({ excludedProviders: [], meteredComboIds: [] })); });
       expect(visibleButtons()).toContain("Generate");
     } finally {
       globalThis.fetch = originalFetch;
@@ -622,7 +636,7 @@ describe("ComboSuggestions card", () => {
     expect(host.querySelectorAll(".rb-suggest-card")).toHaveLength(0);
     await act(async () => { button(host, "Exclude providers…").click(); });
     await act(async () => { host.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click(); });
-    expect(exclusionWrites[0]).toHaveLength(1);
+    expect(exclusionWrites[0]?.[1]).toBe(true);
   });
 
   test("without an exclusion handler there is no exclude control", async () => {

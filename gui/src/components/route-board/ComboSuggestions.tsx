@@ -47,7 +47,7 @@ export interface ComboSuggestionsProps {
   onExtend: (item: ComboItem) => Promise<SaveResult>;
   /** Providers left out of suggestions (config.json); with `onExcludedChange`, offers to change them. */
   excludedProviders?: readonly string[];
-  onExcludedChange?: (next: readonly string[]) => Promise<boolean>;
+  onExcludedChange?: (provider: string, excluded: boolean) => Promise<boolean>;
   /** A combo with unsaved workspace edits; adding to it would reset that draft, so it is held. */
   lockedComboId?: string | null;
 }

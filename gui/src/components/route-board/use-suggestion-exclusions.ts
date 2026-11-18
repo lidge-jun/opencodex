@@ -3,28 +3,28 @@
  * (`comboSuggestionExcludedProviders`, `GET|PUT /api/combo-suggestions`) so the choice follows
  * the operator across browsers.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { ComboItem } from "../../combo-workspace-data";
 
-export interface SuggestionExclusions {
-  excluded: readonly string[];
-  /** True once the stored list is known; a save before that would replace it with a partial one. */
-  ready: boolean;
-  failed: boolean;
-  retry: () => void;
-  applyPolicy: (policy: unknown) => boolean;
-  /** Saves the whole list; resolves false when the proxy did not take it (the list stays as it was). */
-  save: (next: readonly string[]) => Promise<boolean>;
+interface SuggestionPolicy {
+  excludedProviders: string[];
+  meteredComboIds: string[];
 }
 
-function parse(body: unknown): string[] | null {
-  if (!body || typeof body !== "object" || !("excludedProviders" in body)) return null;
-  const list = (body as { excludedProviders: unknown }).excludedProviders;
-  return Array.isArray(list) && list.every((name) => typeof name === "string") ? list : null;
+function isStringList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
-export function useSuggestionExclusions(apiBase: string, active = true): SuggestionExclusions {
+function parse(body: unknown): SuggestionPolicy | null {
+  if (!body || typeof body !== "object" || !("excludedProviders" in body) || !("meteredComboIds" in body)) return null;
+  const { excludedProviders, meteredComboIds } = body;
+  return isStringList(excludedProviders) && isStringList(meteredComboIds) ? { excludedProviders, meteredComboIds } : null;
+}
+
+export function useSuggestionExclusions(apiBase: string, active = true, combos?: readonly ComboItem[]) {
+  const retry = () => setAttempt((value) => value + 1);
   const [attempt, setAttempt] = useState(0);
-  const [loaded, setLoaded] = useState<{ base: string; attempt: number; excluded: string[] | null }>();
+  const [loaded, setLoaded] = useState<{ base: string; attempt: number; policy: SuggestionPolicy | null }>();
   const current = active && loaded?.base === apiBase && loaded.attempt === attempt ? loaded : undefined;
   // Bumped by every save, so a read that started earlier cannot overwrite what was saved.
   const generation = useRef(0);
@@ -38,49 +38,44 @@ export function useSuggestionExclusions(apiBase: string, active = true): Suggest
       .then((body) => {
         const list = parse(body);
         if (controller.signal.aborted || generation.current !== started) return;
-        setLoaded({ base: apiBase, attempt, excluded: list });
+        setLoaded({ base: apiBase, attempt, policy: list });
       })
       .catch(() => {
         if (!controller.signal.aborted && generation.current === started) {
-          setLoaded({ base: apiBase, attempt, excluded: null });
+          setLoaded({ base: apiBase, attempt, policy: null });
         }
       });
     return () => controller.abort();
-  }, [apiBase, active, attempt]);
+  }, [apiBase, active, attempt, combos]);
 
-  const save = useCallback(async (next: readonly string[]) => {
-    if (!current?.excluded) return false;
+  const save = async (provider: string, excluded: boolean) => {
+    if (!current?.policy) return false;
     const started = ++generation.current;
     try {
       const response = await fetch(`${apiBase}/api/combo-suggestions`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ excludedProviders: next }),
+        body: JSON.stringify({ provider, excluded }),
       });
+      if (response.status === 409 && generation.current === started) {
+        setAttempt((value) => value + 1);
+        return false;
+      }
       const list = response.ok ? parse(await response.json()) : null;
       if (!list || generation.current !== started) return false;
-      setLoaded({ base: apiBase, attempt, excluded: list });
+      setLoaded({ base: apiBase, attempt, policy: list });
       return true;
     } catch {
       return false;
     }
-  }, [apiBase, attempt, current]);
+  };
 
   return {
-    excluded: current?.excluded ?? [],
-    ready: current?.excluded != null,
-    failed: current?.excluded === null,
-    retry: () => setAttempt((value) => value + 1),
-    applyPolicy: (policy) => {
-      const list = parse(policy);
-      if (!list) return false;
-      generation.current += 1;
-      setLoaded((previous) => {
-        if (previous?.base !== apiBase || previous.attempt !== attempt || !previous.excluded) return previous;
-        return { ...previous, excluded: [...new Set([...previous.excluded, ...list])] };
-      });
-      return true;
-    },
+    excluded: current?.policy?.excludedProviders ?? [],
+    meteredComboIds: current?.policy?.meteredComboIds ?? [],
+    ready: current?.policy != null,
+    failed: current?.policy === null,
+    retry,
     save,
   };
 }

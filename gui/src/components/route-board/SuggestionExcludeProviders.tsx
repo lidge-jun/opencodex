@@ -16,7 +16,7 @@ export function SuggestionExcludeProviders({
   /** Provider names that can be left out, in display order. */
   providers: readonly string[];
   excluded: readonly string[];
-  onChange: (next: readonly string[]) => Promise<boolean>;
+  onChange: (provider: string, excluded: boolean) => Promise<boolean>;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -31,8 +31,7 @@ export function SuggestionExcludeProviders({
   const toggle = async (name: string, exclude: boolean) => {
     setBusy(true);
     setFailed(false);
-    const next = exclude ? [...excluded, name] : excluded.filter((entry) => entry !== name);
-    const ok = await onChange(next);
+    const ok = await onChange(name, exclude);
     setBusy(false);
     if (!ok) setFailed(true);
   };

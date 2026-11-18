@@ -12,6 +12,7 @@ import type { OcxComboConfig, OcxConfig } from "../../types";
 import { normalizeDecisionModelSelector, decisionModelRouteError } from "./decision-model-validation";
 import type { ManagementContext } from "./context";
 import { jsonResponse } from "../auth-cors";
+import { readConfigFileSnapshot } from "../../config/diagnostics";
 import { mutatePersistedConfig } from "../../config";
 import { managementBodyTooLargeResponse, readManagementJsonBody } from "./body";
 import { hasHumanDashboardSession } from "./consent-session";
@@ -33,8 +34,17 @@ export function parseExcludedProviders(value: unknown): string[] | null {
   return out;
 }
 
-function view(ctx: ManagementContext): Response {
-  const response = jsonResponse({ excludedProviders: ctx.config.comboSuggestionExcludedProviders ?? [] }, 200, ctx.req, ctx.config);
+function suggestionPolicy(config: OcxConfig) {
+  return {
+    excludedProviders: config.comboSuggestionExcludedProviders ?? [],
+    meteredComboIds: Object.entries(config.combos ?? {})
+      .filter(([, combo]) => combo.allowMeteredTargets === true)
+      .map(([id]) => id),
+  };
+}
+
+function view(ctx: ManagementContext, policy: ReturnType<typeof suggestionPolicy>): Response {
+  const response = jsonResponse(policy, 200, ctx.req, ctx.config);
   response.headers.set("cache-control", "no-store");
   return response;
 }
@@ -47,7 +57,11 @@ export async function handleComboSuggestionRoutes(ctx: ManagementContext): Promi
     return allowed ? await saveSuggestion(ctx) : denied();
   }
   if (url.pathname === "/api/combo-suggestions" && req.method === "GET") {
-    return allowed ? view(ctx) : denied();
+    if (!allowed) return denied();
+    const { diagnostics } = readConfigFileSnapshot();
+    return diagnostics.source === "file"
+      ? view(ctx, suggestionPolicy(diagnostics.config))
+      : jsonResponse({ error: "suggestion policy unavailable", code: "config_unavailable" }, 409, req, ctx.config);
   }
   if (url.pathname === "/api/combo-suggestions" && req.method === "PUT") {
     return allowed ? await writeExcluded(ctx) : denied();
@@ -64,24 +78,30 @@ async function writeExcluded(ctx: ManagementContext): Promise<Response> {
     return managementBodyTooLargeResponse(error, req, config)
       ?? jsonResponse({ error: "invalid JSON body", code: "invalid_request" }, 400, req, config);
   }
-  const excluded = isPlainRecord(body) && Object.keys(body).every(key => key === "excludedProviders")
-    ? parseExcludedProviders(body.excludedProviders)
-    : null;
-  if (!excluded) {
-    return jsonResponse({ error: "excludedProviders must be a list of provider names", code: "invalid_request" }, 400, req, config);
+  if (!isPlainRecord(body) || Object.keys(body).some(key => key !== "provider" && key !== "excluded")
+    || typeof body.excluded !== "boolean") {
+    return jsonResponse({ error: "expected a provider and exclusion state", code: "invalid_request" }, 400, req, config);
   }
+  const provider = parseExcludedProviders([body.provider])?.[0];
+  if (!provider) return jsonResponse({ error: "invalid provider name", code: "invalid_request" }, 400, req, config);
+  const { excluded } = body;
   const outcome = mutatePersistedConfig(persisted => {
-    const before = JSON.stringify(persisted.comboSuggestionExcludedProviders ?? []);
-    if (excluded.length === 0) delete persisted.comboSuggestionExcludedProviders;
-    else persisted.comboSuggestionExcludedProviders = excluded;
-    return { changed: before !== JSON.stringify(excluded), value: excluded };
+    const before = persisted.comboSuggestionExcludedProviders ?? [];
+    if (before.includes(provider) === excluded) return { changed: false, value: suggestionPolicy(persisted) };
+    const next = excluded ? [...before, provider] : before.filter(name => name !== provider);
+    if (next.length > MAX_PROVIDERS) return { changed: false, value: null };
+    if (next.length === 0) delete persisted.comboSuggestionExcludedProviders;
+    else persisted.comboSuggestionExcludedProviders = next;
+    return { changed: true, value: suggestionPolicy(persisted) };
   });
   if (outcome.status === "unavailable") {
     return jsonResponse({ error: `config.json is ${outcome.reason}; excluded providers were not saved`, code: "config_unavailable" }, 409, req, config);
   }
-  if (excluded.length === 0) delete config.comboSuggestionExcludedProviders;
-  else config.comboSuggestionExcludedProviders = excluded;
-  return view(ctx);
+  if (!outcome.value) return jsonResponse({ error: "too many excluded providers", code: "invalid_request" }, 400, req, config);
+  const { excludedProviders } = outcome.value;
+  if (excludedProviders.length === 0) delete config.comboSuggestionExcludedProviders;
+  else config.comboSuggestionExcludedProviders = excludedProviders;
+  return view(ctx, outcome.value);
 }
 
 type Target = Pick<OcxComboConfig["targets"][number], "provider" | "model">;
@@ -103,7 +123,7 @@ function parseTargets(value: unknown): Target[] | null {
 }
 
 type SuggestionSaveResult =
-  | { code: string; status: number; policy?: { allowMeteredTargets: boolean; excludedProviders: string[] } }
+  | { code: string; status: number }
   | { combos: NonNullable<OcxConfig["combos"]> };
 
 async function saveSuggestion(ctx: ManagementContext): Promise<Response> {
@@ -127,13 +147,7 @@ async function saveSuggestion(ctx: ManagementContext): Promise<Response> {
 
   const outcome = mutatePersistedConfig<SuggestionSaveResult>(persisted => {
     const previous = Object.hasOwn(persisted.combos ?? {}, id) ? persisted.combos![id] : undefined;
-    const policy = {
-      allowMeteredTargets: previous?.allowMeteredTargets === true,
-      excludedProviders: persisted.comboSuggestionExcludedProviders ?? [],
-    };
-    const rejected = (code: string, status = 409) => ({
-      changed: false, value: { code, status, policy: status === 409 ? policy : undefined },
-    });
+    const rejected = (code: string, status = 409) => ({ changed: false, value: { code, status } });
     if (create ? previous : !previous) return rejected("suggestion_combo_changed");
 
     if (create && consent !== undefined && typeof consent !== "boolean") return rejected("invalid_request", 400);
@@ -187,7 +201,7 @@ async function saveSuggestion(ctx: ManagementContext): Promise<Response> {
     return jsonResponse({ error: "suggestion could not be saved", code: "config_unavailable" }, 409, req, config);
   }
   if ("code" in outcome.value) {
-    return jsonResponse({ error: "suggestion could not be saved", code: outcome.value.code, policy: outcome.value.policy }, outcome.value.status, req, config);
+    return jsonResponse({ error: "suggestion could not be saved", code: outcome.value.code }, outcome.value.status, req, config);
   }
   config.combos = outcome.value.combos;
   reconcileLiveStateStores();

@@ -20,16 +20,14 @@ type Props = Pick<ComboWorkspaceProps, "combos" | "models" | "providers"> & {
 
 export function WorkspaceSuggestions(props: Props) {
   const t = useT();
-  const exclusions = useSuggestionExclusions(props.apiBase, props.active);
+  const exclusions = useSuggestionExclusions(props.apiBase, props.active, props.combos);
 
   const [conflict, setConflict] = useState(false);
-  const [consentDenials, setConsentDenials] = useState<ReadonlySet<string>>(new Set());
-  const combos = props.combos.map((combo) => {
-    const key = JSON.stringify([props.apiBase, combo.id]);
-    return consentDenials.has(key)
-      ? { ...combo, allowMeteredTargets: false }
-      : combo;
-  });
+  const meteredComboIds = new Set(exclusions.meteredComboIds);
+  const combos = props.combos.map((combo) => ({
+    ...combo,
+    allowMeteredTargets: meteredComboIds.has(combo.id),
+  }));
 
   const saveSuggestion = async (item: ComboItem, isCreate: boolean) => {
     setConflict(false);
@@ -46,15 +44,7 @@ export function WorkspaceSuggestions(props: Props) {
       });
       if (response.status === 409) {
         setConflict(true);
-        const body = await response.json().catch(() => null);
-        if (typeof body?.policy?.allowMeteredTargets === "boolean" && exclusions.applyPolicy(body.policy)) {
-          if (!body.policy.allowMeteredTargets) {
-            const key = JSON.stringify([props.apiBase, item.id]);
-            setConsentDenials((current) => new Set([...current, key]));
-          }
-        } else {
-          exclusions.retry();
-        }
+        exclusions.retry();
         props.onRefresh();
         return { ok: false, error: "" };
       }
