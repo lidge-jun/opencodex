@@ -104,6 +104,17 @@ test.each([
   await expectCommitted(created, added, terminal);
 });
 
+test.each(["completed", "incomplete"].flatMap(status => ["event", "response"].map(carrier => ({ status, carrier }))))(
+  "a commentary $status terminal preserves a structured error on the $carrier", async ({ status, carrier }) => {
+    const error = { type: "invalid_request_error", code: "content_policy_violation", message: "Request refused" };
+    await expectCommitted(created, added, {
+      type: `response.${status}`,
+      ...(carrier === "event" ? { error } : {}),
+      response: { ...completed.response, status, ...(carrier === "response" ? { error } : {}) },
+    });
+  },
+);
+
 test.each([
   { eventReason: "content_filter", responseReason: "upstream_stall_timeout" },
   { eventReason: "upstream_stall_timeout", responseReason: "content_filter" },

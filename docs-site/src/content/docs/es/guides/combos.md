@@ -515,8 +515,9 @@ posterior, ese vencimiento se conserva.
 Durante la comprobación previa de Responses, el combo puede probar el siguiente destino
 elegible si recibe un evento terminal que permite reintentar, contiene únicamente texto de
 razonamiento o comentarios y llega en el primer segundo a partir del primer evento
-almacenado en el búfer, incluido `response.created`. El contenido de rechazo fija el destino del
-stream. Un motivo de rechazo como `content_filter` en `incomplete_details.reason` también lo fija,
+almacenado en el búfer, incluido `response.created`. El contenido de rechazo o un error en el
+evento terminal o en su instantánea fija el destino del stream y conserva el veredicto del proveedor.
+Un motivo de rechazo como `content_filter` en `incomplete_details.reason` también lo fija,
 tanto si aparece en el evento terminal como en su instantánea `response`. Cualquiera de los dos
 puede impedir el reintento con `end_turn: false` o `incomplete_details.retryable: false`. Estos vetos
 también se aplican si el stream termina sin la llamada exigida por `tool_choice`. Una

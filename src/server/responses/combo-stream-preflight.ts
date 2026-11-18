@@ -272,6 +272,7 @@ function isDegenerateStreamTerminal(payload: unknown, context?: object): boolean
   const event = recordValue(payload);
   if (!event || (event.type !== "response.completed" && event.type !== "response.incomplete")) return false;
   const response = recordValue(event.response);
+  if (event.error != null || event.last_error != null || response?.error != null || response?.last_error != null) return false;
   // Output limits have a separate zero-output recovery contract. With prelude output they commit.
   if (incompleteCarriersVetoReplay(event, response)
     || classifyIncompleteReplayReason(event, response) !== "retryable"

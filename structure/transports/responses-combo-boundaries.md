@@ -375,7 +375,8 @@ Responses combo preflight holds reasoning and commentary for up to 1,000 ms from
 client-visible event, including `response.created`. A terminal within that window can trigger
 `degenerate_completion` when its output contains only reasoning and commentary text. A terminal-only
 snapshot can itself supply the prelude. Refusals and other non-prelude content commit the original
-stream whether they arrive in a separate frame or only in a terminal snapshot. An explicit
+stream whether they arrive in a separate frame or only in a terminal snapshot. A terminal error on
+either carrier preserves the upstream verdict instead of becoming a synthetic degenerate failure. An explicit
 `end_turn: false`, `incomplete_details.retryable: false`, or semantic reason such as `content_filter`
 on either the terminal event or the response snapshot vetoes degenerate and zero-output replay.
 When both carriers allow replay, `max_output_tokens` on either carrier takes the zero-output limit
