@@ -35,7 +35,7 @@ import { withClientLifecycleSync } from "./lifecycle-lock";
 import { clientConnectionEnded, clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, LEGACY_FLAG_RESTART_OWNER, restartOwnerEvidence, type ClientRestartController, type RecordedRestartOwner, type RestartOwner } from "./runtime-restart";
 import { createLinkParityReporter, type LinkParityReporter } from "./link-parity-reporter";
 import { restoreLinkClientRoutingBeforeExit } from "./stop-routing";
-import { activeClientStopOwner } from "./stop-native-handoff";
+import { observeClientStopOwner } from "./stop-teardown-owner";
 import { SUPERVISOR_MARKER_ENVS } from "../lib/supervisor-markers";
 import { markClientRuntimeStopping, markClientRuntimeStoppingWithRetry } from "./sync-runtime";
 import { startRouteIntentTick, type RouteIntentTick } from "../integrations/route-intent-tick";
@@ -375,9 +375,9 @@ export async function startClientRuntime(
       explicitClientStopRequested = current.clientStopRequested;
       explicitClientStopOwner = current.clientStopOwner;
       clientStopping = true;
-      return activeClientStopOwner(current) !== undefined;
     }
-    return false;
+    return explicitClientStopRequested === true
+      && (!explicitClientStopOwner || observeClientStopOwner(explicitClientStopOwner) !== "confirmed-stale");
   };
   // Returns false only for a rollback whose connection changed while it was binding: the new
   // listener is then closed unpublished and the caller recycles.
@@ -539,7 +539,7 @@ export async function startClientRuntime(
     },
     resume: async () => {
       const recycleAfterRollback = () => {
-        if (!shuttingDown && !observeExplicitStop()) return recycleStandalone(state.value.tokenFingerprint);
+        if (standaloneRecycleAllowed()) return recycleStandalone(state.value.tokenFingerprint);
       };
       // The connection may have changed while the replacement was starting (`ocx disconnect`, a
       // new connect). Serving the old one again would be a stale runtime nothing recycles; hand

@@ -172,8 +172,12 @@ export async function preflightConnectedClientStop(
             ...(config.port === 0 || config.port === siblingOfPort ? [] : [{ port: config.port, hostname: config.hostname }])];
           const clientMayRemain = connection.kind !== "disconnected" || runtime?.clientLinkOwner !== undefined
             || runtime?.servingGeneration !== undefined;
+          const manager = await observeGuardedManagerStopped({ kind: "absent" });
+          const offlineForegroundLink = manager === "unknown" && process.platform === "linux"
+            && connection.kind === "connected" && connection.value.transport === "link"
+            && (await import("../service/systemd")).systemdInstallationAbsent();
           if ((clientMayRemain && endpoints.length === 0)
-            || await observeGuardedManagerStopped({ kind: "absent" }) !== "inactive") throw unsupportedConnectedStop();
+            || (manager !== "inactive" && !offlineForegroundLink)) throw unsupportedConnectedStop();
           for (const endpoint of endpoints) {
             if (await probeEndpointLiveness(endpoint) !== "dead") throw unsupportedConnectedStop();
           }

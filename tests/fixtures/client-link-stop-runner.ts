@@ -13,7 +13,7 @@ import type { ClientStopOwner } from "../../src/config/process-state";
 import { randomBytes } from "node:crypto";
 
 const options = JSON.parse(readFileSync(0, "utf8")) as {
-  mode: "runtime" | "helper" | "api" | "parent" | "guard" | "retry" | "file-preflight" | "file-stop" | "file-cycle" | "file-restart-overlap" | "file-restart-control";
+  mode: "runtime" | "helper" | "api" | "parent" | "guard" | "retry" | "file-preflight" | "file-stop" | "file-cycle" | "file-restart-overlap" | "file-restart-control" | "offline-stop" | "termination";
   transport?: "link" | "hub";
   signal?: NodeJS.Signals;
   osSignal?: boolean;
@@ -38,6 +38,10 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   stopConnectionDrift?: "invalid" | "mismatched" | "disconnected" | "other-link" | "hub";
   driftDuringFallback?: boolean;
   finishStopBeforeRollback?: boolean;
+  unverifiedStopOwner?: boolean;
+  receiptWriteFails?: boolean;
+  installedUnit?: boolean;
+  terminationPlatform?: "linux" | "darwin";
   removeToken?: boolean;
   finalizeFailure?: boolean;
   repairFileRefusal?: boolean;
@@ -304,7 +308,8 @@ if (options.mode === "retry") {
     // Exercise parent preflight and Child restart in one synthetic process.
     const owner = await import("../../src/client/stop-teardown-owner");
     mock.module("../../src/client/stop-teardown-owner", () => ({ ...owner,
-      isLiveClientStopOwner: (proof: ClientStopOwner) => owner.readClientStopProcessStart(proof.pid) === proof.startTime,
+      observeClientStopOwner: (proof: ClientStopOwner) => options.unverifiedStopOwner ? "unverified"
+        : owner.readClientStopProcessStart(proof.pid) === proof.startTime ? "active" : "confirmed-stale",
     }));
   }
   if (options.fileOnly) {
@@ -423,6 +428,12 @@ if (options.mode === "retry") {
     await ready;
   }
   if (options.mode === "file-stop") {
+    if (options.receiptWriteFails) {
+      const pending = await import("../../src/config/pending-teardown");
+      mock.module("../../src/config/pending-teardown", () => ({ ...pending, claimPendingTeardown: () => {
+        throw new Error("fixture receipt write denied");
+      } }));
+    }
     if (options.missingStopRecord) {
       const path = join(home, "runtime-port.json");
       if (options.missingStopRecord === "absent") unlinkSync(path);
@@ -614,6 +625,54 @@ if (options.mode === "retry") {
     process.emit(options.signal ?? "SIGTERM", options.signal ?? "SIGTERM");
   } else if (options.osSignal) writeFileSync(join(home, "ready"), "ready");
   else process.emit(options.signal ?? "SIGTERM", options.signal ?? "SIGTERM");
+} else if (options.mode === "termination") {
+  const control = await import("../../src/lib/process-control");
+  const linux = await import("../../src/service/health-sentinel-linux");
+  const { terminateAttestedClient } = await import("../../src/cli/stop-client-process");
+  mock.module("../../src/lib/process-control", () => ({ ...control, waitForExit: () => false }));
+  mock.module("../../src/service/health-sentinel-linux", () => ({ ...linux,
+    openVerifiedPidfd: () => ({ kind: "unsupported", reason: "fixture kernel without pidfd" }),
+  }));
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const kill = process.kill;
+  const signals: Array<number | string> = [];
+  let message = "";
+  try {
+    Object.defineProperty(process, "platform", { ...platform, value: options.terminationPlatform });
+    process.kill = ((pid: number, signal?: number | NodeJS.Signals) => {
+      if (signal === 0) return kill(pid, signal);
+      signals.push(signal ?? "SIGTERM");
+      return true;
+    }) as typeof process.kill;
+    terminateAttestedClient(process.pid, "fixture", () => {});
+  } catch (error) {
+    message = (error as Error).message;
+  } finally {
+    process.kill = kill;
+    Object.defineProperty(process, "platform", platform);
+  }
+  report({ signals, message });
+} else if (options.mode === "offline-stop") {
+  const { unitPath } = await import("../../src/service/systemd");
+  if (options.installedUnit) {
+    mkdirSync(dirname(unitPath()), { recursive: true });
+    writeFileSync(unitPath(), "[Service]\n");
+  }
+  const manager = await import("../../src/service/guarded-manager-target");
+  mock.module("../../src/service/guarded-manager-target", () => ({ ...manager,
+    observeGuardedManagerStopped: async () => "unknown",
+  }));
+  const dispatch = await import("../../src/cli/dispatch");
+  const command = dispatch.dispatchCommand;
+  mock.module("../../src/cli/dispatch", () => ({ ...dispatch, dispatchCommand: async (...args: Parameters<typeof command>) => {
+    const exitCode = await command(...args);
+    report({ exitCode });
+    return exitCode;
+  } }));
+  mock.module("../../src/cli/codex-shim-autorestore", () => ({ async maybeAutoRestoreCodexShimAsync() {} }));
+  Object.defineProperty(process, "platform", { value: "linux" });
+  process.argv = [process.execPath, "ocx", "stop", "--json"];
+  await import("../../src/cli/index");
 } else if (options.mode === "file-cycle") {
   const { restoreLinkFileRouting } = await import("../../src/client/stop-file-routing");
   const first = await restoreLinkFileRouting(expected);

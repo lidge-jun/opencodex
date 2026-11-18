@@ -7,7 +7,7 @@ import { isLikelyOcxProcess, type ClientStopOwner, type RuntimePortState } from 
 import { readBoundedRegularFileSync } from "../lib/bounded-file-read";
 import { isProcessAlive } from "../lib/process-control";
 import { readSyncRuntime } from "./sync-runtime";
-import { isLiveClientStopOwner, readClientStopProcessStart } from "./stop-teardown-owner";
+import { observeClientStopOwner, readClientStopProcessStart } from "./stop-teardown-owner";
 
 export type LinkStopRuntime = Required<Pick<RuntimePortState, "pid" | "port" | "attestationSecret">>;
 export type NativeTeardownDecision = "restore" | "defer" | "refuse";
@@ -43,18 +43,22 @@ export function readLinkInheritedTeardowns(): OutstandingTeardown[] {
     if (read.state === "valid" && read.receipt.ownerStartTime) {
       const { ownerPid: pid, ownerStartTime: startTime, nonce } = read.receipt;
       const ours = pid === process.pid && readClientStopProcessStart(pid) === startTime;
-      return ours || isLiveClientStopOwner({ pid, startTime, nonce }) ? [] : [read];
+      if (ours) return [];
+      const status = observeClientStopOwner({ pid, startTime, nonce });
+      if (status === "active") return [];
+      if (status === "unverified") return [{ state: "unscannable", detail: "the pending-teardown receipt's stop owner could not be verified" }];
+      return [read];
     }
     return isPendingTeardownAbandoned(read, pid => isProcessAlive(pid) && isLikelyOcxProcess(pid)) ? [read] : [];
   });
 }
 
 /** Before a receipt is issued, the bound owner already excludes concurrent recycle. */
-export function activeClientStopOwner(runtime: RuntimePortState): ClientStopOwner | undefined {
+function activeClientStopOwner(runtime: RuntimePortState): ClientStopOwner | undefined {
   const owner = runtime.clientStopOwner;
   if (runtime.clientStopping && runtime.clientStopRequested && owner && /^[a-f0-9]{32}$/.test(owner.nonce)
     && typeof owner.startTime === "string" && owner.startTime.length > 0
-    && owner.startTime.length <= 80 && isLiveClientStopOwner(owner)) return owner;
+    && owner.startTime.length <= 80 && observeClientStopOwner(owner) === "active") return owner;
 }
 
 /** Receipts alone never release a socket still named by native loopback routing. */

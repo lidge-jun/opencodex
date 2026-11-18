@@ -56,23 +56,35 @@ export function readClientStopProcessStart(pid: number): string | undefined {
   } catch { /* unreadable ownership cannot authorize a native restoration handoff */ }
 }
 
+export type ClientStopOwnerStatus = "active" | "confirmed-stale" | "unverified";
+
 /** Bracket argv with creation/UID reads so a recycled PID cannot inherit the fence. */
-export function isLiveClientStopOwner({ pid, startTime }: ClientStopOwner): boolean {
-  if (pid === process.pid || readClientStopProcessStart(pid) !== startTime) return false;
+export function observeClientStopOwner({ pid, startTime }: ClientStopOwner): ClientStopOwnerStatus {
+  try { process.kill(pid, 0); }
+  catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH" ? "confirmed-stale" : "unverified"; }
+  const before = readClientStopProcessStart(pid);
+  if (before === undefined) return "unverified";
+  if (before !== startTime) return "confirmed-stale";
+  if (pid === process.pid) return "unverified";
   try {
     let stop: boolean;
     if (process.platform === "linux") {
       // /proc exposes argv, not a quoted command line. Preserve NUL boundaries:
       // install paths and approval values can legitimately contain spaces.
       const raw = new TextDecoder("utf8", { fatal: true }).decode(readBoundedRegularFileSync(`/proc/${pid}/cmdline`, 64 * 1024));
-      stop = raw.endsWith("\0") && isClientStopArgv(raw.slice(0, -1).split("\0"));
+      if (raw.length <= 1 || !raw.endsWith("\0")) return "unverified";
+      stop = isClientStopArgv(raw.slice(0, -1).split("\0"));
     } else if (process.platform === "darwin") {
       const argv = readDarwinStopArgv(pid);
-      stop = argv !== undefined && isClientStopArgv(argv);
+      if (!argv?.length) return "unverified";
+      stop = isClientStopArgv(argv);
     } else {
       const commandLine = readProcessCommandLine(pid);
-      stop = commandLine !== undefined && isClientStopCommandLine(commandLine);
+      if (!commandLine?.trim() || commandLine.length > 64 * 1024) return "unverified";
+      stop = isClientStopCommandLine(commandLine);
     }
-    return stop && readClientStopProcessStart(pid) === startTime;
-  } catch { return false; }
+    const after = readClientStopProcessStart(pid);
+    if (after === undefined) return "unverified";
+    return after === startTime && stop ? "active" : "confirmed-stale";
+  } catch { return "unverified"; }
 }

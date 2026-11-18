@@ -1068,7 +1068,7 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
   const siblingOfPort = initialRuntime?.siblingOfPort;
   const stoppingSibling = siblingOfPort !== undefined;
   const connectedClientState = readClientConnectionState();
-  const connectedClientSkip = stoppingSibling ? null : connectedClientStopSkipLine(connectedClientState);
+  let connectedClientSkip = stoppingSibling ? null : connectedClientStopSkipLine(connectedClientState);
   // Deferring shared teardown to this process is an obligation, so record it on disk
   // before asking for it (#3008). A parent that dies mid-stop would otherwise leave the
   // client config routed at a proxy that is already gone, with nothing to find later.
@@ -1098,7 +1098,7 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
   let linkStop: LinkStopPreflight | undefined;
   let stopTarget: StopTargetProof | undefined;
   const preflight = await preflightConnectedClientStop(snapshot?.approval, onFence, inheritedTeardowns,
-    proof => { linkStop = proof; }, proof => { stopTarget = proof; }, siblingOfPort);
+    proof => { linkStop = proof; connectedClientSkip = null; }, proof => { stopTarget = proof; }, siblingOfPort);
   const connectedClientAlreadyStopped = preflight === "already-stopped";
   if (preflight && preflight !== "already-stopped") return preflight;
   // Structured twin of the human lines below, for `ocx stop --json`: one document the
@@ -1120,12 +1120,12 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
   const verifyStopTarget = (pid?: number) =>
     verifyConnectedStopTarget(stopTarget, linkStop, pid);
   const claimTeardown = (endpoint: { hostname: string; port: number }, endpointSource: "exact" | "guessed") => {
-    if (teardownNonce || stoppingSibling) return;
-    if (connectedClientSkip) return;
+    if (teardownNonce || (!linkStop && (stoppingSibling || connectedClientSkip))) return;
     try {
       teardownNonce = claimPendingTeardown(endpoint, endpointSource, process.pid, handoverRequested ? "update-restart" : undefined, windowsPartAReceiptRecord(), linkStop?.owner).nonce;
     } catch (err) {
-      // Windows wrappers can relaunch the proxy, so an undeferred stop is unsafe.
+      // A Link Child can exit before native restoration. Record that obligation first.
+      if (linkStop) throw new ProxyOwnershipRefusedError(`Link Child stop refused: could not record the deferred-teardown receipt (${err instanceof Error ? err.message : String(err)}). Repair the OpenCodex home's storage and retry ocx stop.`, "link_teardown_receipt_failed");
       if (windowsStopRequiresReceipt()) { ownershipBlocked = true; stopFailed = true; throw err; }
       console.warn(`⚠️  Could not record the deferred-teardown receipt: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -1211,11 +1211,11 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
     ownershipBlocked = windowsPartAHolds(record) || ownershipBlocked; // #7771: no POST and no shared teardown.
   } catch (err) {
     record.service = "error";
-    if (err instanceof ProxyOwnershipRefusedError || isServiceOwnershipError(err) || windowsChildStopHeld() || (linkStop && ownershipBlocked)) {
+    if (err instanceof ProxyOwnershipRefusedError || isServiceOwnershipError(err) || windowsChildStopHeld()) {
       ownershipBlocked = true;
       stopFailed = true;
       console.error(`❌ ${err instanceof Error ? err.message : String(err)}`);
-      console.error("   Skipping shared teardown (native Codex restore, Grok config): the installed service is still running.");
+      console.error("   Skipping shared teardown (native Codex restore, Grok config) because the stop could not be verified.");
     } else {
       console.error(`⚠️  Service manager stop failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -1247,8 +1247,7 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
       // the proxy's shutdown handlers actually run; taskkill /F is the fallback inside.
       // Shared teardown is deferred to this process: it happens after the respawn
       // verification below, so a survivor does not get its client config pulled first.
-      // The receipt goes down first; Windows refuses if it cannot be recorded.
-      // Other platforms retain the existing undeferred fallback.
+      // Link Child stops and checked Windows stops both require the receipt.
       nativeRestoreHandledByProxy = await stopWithDeferral(pid);
       console.log(`✅ Proxy (PID ${pid}) stopped.`);
       removePid(pid);

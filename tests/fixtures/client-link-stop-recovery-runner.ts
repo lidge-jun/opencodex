@@ -82,7 +82,8 @@ async function main() {
   // with the real process's creation identity, preserving stale-proof detection.
   const owner = await import("../../src/client/stop-teardown-owner");
   mock.module("../../src/client/stop-teardown-owner", () => ({ ...owner,
-    isLiveClientStopOwner: (proof: ClientStopOwner) => owner.readClientStopProcessStart(proof.pid) === proof.startTime,
+    observeClientStopOwner: (proof: ClientStopOwner) => options.mode === "parent-unverified" ? "unverified"
+      : owner.readClientStopProcessStart(proof.pid) === proof.startTime ? "active" : "confirmed-stale",
   }));
   const { startClientRuntime, scheduleStandaloneRecycle } = await import("../../src/client/runtime");
   await startClientRuntime({ block: false }, { restartSupervisor: async () => null });
@@ -119,7 +120,7 @@ async function main() {
       const disk = JSON.parse(readFileSync(runtimePath, "utf8"));
       disk.clientStopOwner = { pid: process.pid, nonce: "b".repeat(32), startTime: "darwin:0:0" };
       writeFileSync(runtimePath, JSON.stringify(disk));
-    } else if (options.mode !== "parent-active") await finishStop();
+    } else if (!["parent-active", "parent-unverified"].includes(options.mode)) await finishStop();
   }
   observations.beforeRecoveryAdmission = await restart();
   observations.finishedMarker = readRuntimePort(process.pid)?.clientStopRequested;

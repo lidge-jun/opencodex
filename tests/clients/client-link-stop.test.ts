@@ -33,6 +33,12 @@ async function runStop(options: Record<string, unknown>) {
     } else if (options.expectedUnownedFileRecovery) {
       expect(exit, stdout).toBe(0);
       expect(stderr).toContain("Link Child file routing restore failed");
+    } else if (options.receiptWriteFails) {
+      expect(exit, stdout).toBe(1);
+      expect(stderr).toContain("fixture receipt write denied");
+    } else if (options.mode === "offline-stop") {
+      expect(exit, stderr).toBe(0);
+      expect(JSON.parse(stdout)).toMatchObject({ runtimeDown: true, sharedTeardown: "restored" });
     } else if (options.expectedNativePreflightRefusal) {
       expect(exit, stdout).toBe(1);
       expect(stderr).toContain("Link Child native teardown preflight refused");
@@ -93,12 +99,12 @@ for (const mode of ["parent", "signal"]) for (const scheduled of [false, true]) 
   }, 20_000);
 }
 
-for (const mode of ["parent-active", "signal-active", "pending", "foreign-owner", "wrong-token", "corrupt-receipt", "missing-config", "new-connection", "pending-connect"]) {
+for (const mode of ["parent-active", "parent-unverified", "signal-active", "pending", "foreign-owner", "wrong-token", "corrupt-receipt", "missing-config", "new-connection", "pending-connect"]) {
   test(`retained stop refuses disconnect recycle while ${mode}`, async () => {
     const result = await runRecovery(mode);
     expect(result).toMatchObject({ beforeRecoveryAdmission: 409, recoveryAdmission: 409, role: "client", spawned: 0,
       file: { userSetting: "keep" }, token: "absent", runtimePresent: true });
-    if (mode === "parent-active") expect(result.marker).toBe(true);
+    if (mode.startsWith("parent-")) expect(result.marker).toBe(true);
   }, 20_000);
 }
 
@@ -198,12 +204,42 @@ test("a parent stop remains fenced through an already-admitted restart rollback"
 }, 20_000);
 
 for (const failedRollback of ["before-rebind", "during-rebind"]) {
-  test(`failed rollback (${failedRollback}) cannot recycle over an active parent stop`, async () => {
-    const report = await runStop({ mode: "file-restart-overlap", preserve: "restart-rollback", fileClients: ["pi"], failedRollback });
+  for (const unverifiedStopOwner of [false, true]) test(`failed rollback (${failedRollback}) cannot recycle over an ${unverifiedStopOwner ? "unverified" : "active"} parent stop`, async () => {
+    const report = await runStop({ mode: "file-restart-overlap", preserve: "restart-rollback", fileClients: ["pi"], failedRollback, unverifiedStopOwner });
     expect(report.result).toEqual({ preflight: null, replacementAttempts: 1, runtimePresent: true, explicitStop: true });
     expect(report.fileAfter.pi).not.toContain("127.0.0.1");
   }, 20_000);
 }
+
+test.skipIf(process.platform === "win32")("Link stop requires its recovery receipt before attempting any stop action", async () => {
+  const report = await runStop({ mode: "file-stop", fileClients: ["pi"], receiptWriteFails: true });
+  expect(report.result).toEqual({ exitCode: 1, calls: { service: 0, killed: 0 }, bound: true, stopping: true });
+  expect(report.after).toBe(report.before);
+  expect(report.protectedUnchanged).toBe(true);
+}, 20_000);
+
+test("Linux Link forced stop refuses an unavailable pidfd without sending a numeric signal", async () => {
+  const report = await runStop({ mode: "termination", terminationPlatform: "linux" });
+  expect(report.result).toMatchObject({ signals: [], message: expect.stringContaining("pidfd") });
+}, 20_000);
+
+test("macOS Link stop sends only an orderly signal when the attested Child remains live", async () => {
+  const report = await runStop({ mode: "termination", terminationPlatform: "darwin" });
+  expect(report.result).toMatchObject({ signals: ["SIGTERM"], message: expect.stringContaining("foreground terminal") });
+}, 20_000);
+
+test("offline Link cleanup preserves the connection on Linux without a user manager or unit", async () => {
+  const report = await runStop({ mode: "offline-stop", fileClients: ["pi"] });
+  expect(report.result).toEqual({ exitCode: 0 });
+  expect(report.fileAfter.pi).not.toContain("127.0.0.1");
+  expect(report.protectedUnchanged).toBe(true);
+}, 20_000);
+
+test("offline Link cleanup refuses an installed Linux unit when its manager is unreadable", async () => {
+  const report = await runStop({ mode: "offline-stop", fileClients: ["pi"], installedUnit: true, expectedUnsupportedStop: true });
+  expect(report.result).toEqual({ exitCode: 1 });
+  expect(report.fileAfter).toEqual(report.fileOwnedBytes);
+}, 20_000);
 
 test("ordinary restart rollback keeps file routes and admits fresh sync", async () => {
   const report = await runStop({ mode: "file-restart-control", preserve: "restart-rollback", fileClients: ["pi"] });

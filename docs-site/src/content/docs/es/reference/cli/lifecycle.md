@@ -50,11 +50,13 @@ Un Child de Remote Link sin supervisor que recibe una señal de apagado restaura
 
 Durante el apagado por señal sin supervisor, si se rechaza la limpieza de archivos o la restauración de Codex nativo o Grok, incluso por titularidad no verificable, el listener permanece abierto y la sincronización queda pausada; repara la configuración o la evidencia de titularidad indicada y vuelve a ejecutar `ocx stop`. Para salir del Home después de una parada rechazada, `ocx disconnect --recover-config --yes` completa la recuperación de la configuración y reinicia el Child retenido como OpenCodex independiente. Una parada o recuperación todavía en curso sigue rechazando el reinicio. Una parada explícita comprueba que el Child sigue atendiendo la conexión Link guardada y admite el bloqueo de parada. Después elimina las integraciones de archivos creadas por el Link antes de detener el proceso o el servicio. Si la conexión guardada no es válida, ha cambiado de titular o se rechaza la limpieza de archivos, repara la conexión o las pruebas de titularidad indicadas y vuelve a intentarlo. La parada también se rechaza antes de terminar el proceso si un registro de recuperación anterior impediría la restauración nativa. En una parada explícita con `ocx stop`, la restauración nativa se intenta después de que el Child haya terminado; un rechazo informa de la restauración incompleta y conserva las pruebas de recuperación, pero el listener ya está detenido.
 
+La orden debe guardar su recibo de recuperación antes de pedir al gestor del servicio o al proceso que se detenga. En Linux, la terminación directa requiere que el kernel admita pidfd. En macOS, la parada directa envía un solo SIGTERM. Si falla la parada directa, consulta el motivo en el terminal o supervisor del Child, corrige el problema indicado y vuelve a ejecutar `ocx stop`.
+
 Si un Child de Remote Link sigue ejecutando una versión sin el bloqueo de parada, como v2.100.4, la CLI actual rechaza detenerlo. Para conservar la conexión guardada con el Home:
 
 1. Cierra Codex, Grok y los demás clientes que usan el Child antes de liberar su puerto.
 2. Detén el entorno antiguo desde su supervisor original. Pulsa Ctrl+C en su terminal si está en primer plano, usa Stop y cierra la aplicación Desktop si lo supervisa, o ejecuta `ocx stop` desde la **instalación antigua** si es un servicio en segundo plano, incluido el Programador de tareas de Windows.
-3. Una vez detenido, ejecuta `ocx stop` desde la **instalación actual**, con el mismo `OPENCODEX_HOME` y los mismos directorios de los clientes. Así se completa la limpieza de las rutas de archivos y se conserva la conexión. Mantén cerrados los clientes y resuelve los errores de restauración antes de continuar.
+3. Una vez detenido, ejecuta `ocx stop` desde la **instalación actual**, con el mismo `OPENCODEX_HOME` y los mismos directorios de los clientes. Así se completa la limpieza de las rutas de archivos y se conserva la conexión. Mantén cerrados los clientes y resuelve los errores de restauración antes de continuar. En Linux también funciona sin acceso al gestor de usuario de systemd si no existen la unidad instalada ni los registros de instalación del servicio y los endpoints locales conocidos están inactivos.
 4. Inicia el entorno actual con `ocx start`, con `ocx service start` si hay un servicio instalado o con la aplicación Desktop actualizada si esta lo administra. Una vez que el Child esté activo, ejecuta `ocx sync --restart-codex`.
 
 Un cliente nativo que no pueda demostrar si atiende una conexión Link o Hub rechaza la parada. Actualiza y reinicia los clientes nativos antiguos mediante su supervisor y vuelve a intentarlo. En un entorno independiente, el comando detiene el proxy en ejecución por su PID, elimina el archivo PID y restaura Codex nativo. Si hay un servicio administrado, `ocx stop` lo detiene primero para impedir que vuelva a iniciar el proxy.
@@ -84,7 +86,8 @@ Los entornos antiguos o no verificados se rechazan antes de actuar. Actualiza o 
 mediante su supervisor y reinténtalo. Usa `ocx disconnect` solo si quieres liberar las integraciones
 de la conexión. Si el cliente ya está detenido, otra parada verifica que el gestor del servicio esté
 inactivo y que no haya listeners en los endpoints locales conocidos antes de devolver el resultado
-habitual de proceso ausente. Con el puerto configurado en `0`, se comprueba el puerto concreto
+habitual de proceso ausente. Para un Child de Link en Linux sin servicio instalado, se aplica la
+comprobación de ausencia descrita arriba. Con el puerto configurado en `0`, se comprueba el puerto concreto
 guardado en el registro del entorno. Sin ese endpoint registrado, se rechaza la parada porque
 no se puede demostrar que el entorno esté ausente.
 
