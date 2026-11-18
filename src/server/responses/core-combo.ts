@@ -45,7 +45,6 @@ import {
   pickComboTargetWithWait,
   targetKey,
   concreteComboRequestBody,
-  comboDefaultEffort,
   isComboTargetInCooldown,
   snapshotComboQuotaCooldowns,
   comboExclusion,
@@ -76,6 +75,7 @@ import { hasUnreadableEncryptedAgentTask } from "./encrypted-payload";
 import { eagerCodexToolCatalogSurface, warnEagerCodexToolCatalog } from "./codex-tool-catalog";
 import { clampComboCallerEffort, comboCapabilityGate } from "../../combos/request-capability";
 import { comboAdvertisesEffortUnion } from "../../combos/capability-policy";
+import { snapshotComboAdmission, snapshotComboAdmissionProvider } from "./combo-admission-snapshot";
 import { canDescribeComboImages } from "./request-sidecar-auth";
 import { captureRouteStaticPolicy, routeConcreteModel, comboRouteDecisionTrace } from "../../router";
 import { memoryModelRouteReason } from "./memory-models";
@@ -396,24 +396,6 @@ function eligibleJevComboChoices(
 
 
 /** Dispatch a Responses combo within its shared send budget and preserve terminal child failures. */
-/** Detach config and resolved routes while retaining injected function identities. */
-function copyComboAdmissionState<T>(value: T): T {
-  if (Array.isArray(value)) return value.map(copyComboAdmissionState) as T;
-  if (value && typeof value === "object" && (Object.getPrototypeOf(value) === Object.prototype
-    || Object.getPrototypeOf(value) === null)) {
-    const descriptors = Object.getOwnPropertyDescriptors(value);
-    return Object.fromEntries(Object.keys(value).map(key => {
-      const descriptor = descriptors[key]!;
-      // Lazy decision credentials lie outside inference admission. Reading one here
-      // would bypass the decision service's scope check.
-      const entry = key === "apiKey" && descriptors.adapter?.value === "jev-decision" && descriptor.get
-        ? undefined : Reflect.get(value, key);
-      return [key, copyComboAdmissionState(entry)];
-    })) as T;
-  }
-  return value;
-}
-
 export async function executeComboResponses(
   req: Request,
   rawBody: unknown,
@@ -462,15 +444,6 @@ export async function executeComboResponses(
     targets,
   });
   let protocolLanes = buildProtocolLanes(config, combo.targets);
-  let admissionConfig = config;
-  // The ladder's own scope, derived from what this combo DECLARES. It shares the request-wide
-  // counter with the holder that arrived on options -- a combo child already inherited that
-  // counter, but nothing read it as a limit across targets -- while its transition and
-  // alternate-target ledgers come from the target list rather than from the single-target
-  // account-move profile (#4546).
-  const comboSendScope = isRequestExecutionBudget(options.sendBudget)
-    ? deriveSendBudgetScope(options.sendBudget, comboExecutionBudgetPolicy(combo.targets.length))
-    : undefined;
   // Expand previous_response_id before image policy and child dispatch so a
   // continuation that only references prior images still fails closed when
   // imageInput is disabled (and so targets see the full replayed input).
@@ -534,7 +507,7 @@ export async function executeComboResponses(
   });
   const reasoningReplayEligible = (target: (typeof combo.targets)[number]): boolean => {
     try {
-      const route = routeConcreteModel(admissionConfig, `${target.provider}/${target.model}`);
+      const route = routeConcreteModel(config, `${target.provider}/${target.model}`);
       const unavailable = mandatoryResponsesReasoningReplayUnavailable({
         body,
         clientThreadId: reasoningReplayConversationId,
@@ -590,10 +563,10 @@ export async function executeComboResponses(
     (body as { input?: unknown } | undefined)?.input,
   );
   const canDecryptUnreadableAgentTask = (target: (typeof combo.targets)[number]): boolean => {
-    const provider = admissionConfig.providers[target.provider];
+    const provider = config.providers[target.provider];
     if (!provider || provider.disabled === true) return false;
     try {
-      const route = routeConcreteModel(admissionConfig, `${target.provider}/${target.model}`);
+      const route = routeConcreteModel(config, `${target.provider}/${target.model}`);
       return isCanonicalOpenAiForwardProvider(route.provider);
     } catch {
       return false;
@@ -605,8 +578,8 @@ export async function executeComboResponses(
   const museToolEligible = (target: (typeof combo.targets)[number]): boolean => {
     if (!hasMandatoryToolChoice(body)) return true;
     try {
-      const selector = `${target.provider}/${target.model}`, { fastRow, effortRow } = parseSyntheticRowId(selector, admissionConfig);
-      const route = routeConcreteModel(admissionConfig, fastRow?.baseId ?? effortRow?.baseId ?? selector);
+      const selector = `${target.provider}/${target.model}`, { fastRow, effortRow } = parseSyntheticRowId(selector, config);
+      const route = routeConcreteModel(config, fastRow?.baseId ?? effortRow?.baseId ?? selector);
       const modelId = resolveOpenAiVirtualModel(route.providerName, route.modelId)?.wireModelId ?? route.modelId;
       const inboundWire = options.inboundWire ?? "responses";
       const policy = captureRouteStaticPolicy(route.providerName, modelId, route.provider,
@@ -644,9 +617,7 @@ export async function executeComboResponses(
       return { ...route, provider };
     } catch { return undefined; }
   };
-  const captureRoutes = (config: OcxConfig) => new Map(combo.targets.map(target =>
-    [targetKey(target), copyComboAdmissionState(resolveCapabilityRoute(config, target))]));
-  const admitCombo = async (routes?: ReturnType<typeof captureRoutes>) => {
+  const admitCombo = async () => {
     if (combo.imageInput === "disabled" && unresolvedPrevious) {
       markLinkTurnMissing(logCtx);
       return formatErrorResponse(
@@ -658,11 +629,17 @@ export async function executeComboResponses(
     if (combo.imageInput === "disabled" && comboRequestHasImageInput(body)) {
       return formatErrorResponse(400, "invalid_request_error", "This combo does not accept image input");
     }
-    meteredAllowed = admissionMayUseMeteredComboTargets(admissionConfig, options.admission, combo);
-    const capability = await comboCapabilityGate(admissionConfig, combo, body,
-      target => routes ? routes.get(targetKey(target)) : resolveCapabilityRoute(admissionConfig, target),
+    meteredAllowed = admissionMayUseMeteredComboTargets(config, options.admission, combo);
+    const capability = await comboCapabilityGate(config, combo, body,
+      target => {
+        const route = resolveCapabilityRoute(config, target);
+        return route && {
+          providerName: route.providerName, modelId: route.modelId, codexAccountId: route.codexAccountId,
+          provider: snapshotComboAdmissionProvider(route.provider),
+        };
+      },
       (target, route) => capabilityCandidate(target) && (!admissionScope || !!route && routeAllowedByScope(admissionScope, route)),
-      (route, parsed) => canDescribeComboImages({ config: admissionConfig, req, options: { ...options, admissionScope } }, route, parsed));
+      (route, parsed) => canDescribeComboImages({ config, req, options: { ...options, admissionScope } }, route, parsed));
     if (capability.unservable === "audio") {
       return formatErrorResponse(400, "invalid_request_error", "No target of this combo can accept audio input");
     }
@@ -873,7 +850,7 @@ export async function executeComboResponses(
       if (!targetEligible(target)) return false;
       if (!admissionScope) return true;
       try {
-        return routeAllowedByScope(admissionScope, routeConcreteModel(admissionConfig, `${target.provider}/${target.model}`));
+        return routeAllowedByScope(admissionScope, routeConcreteModel(config, `${target.provider}/${target.model}`));
       } catch {
         return false;
       }
@@ -975,28 +952,28 @@ export async function executeComboResponses(
       let currentChoices: typeof choices = [];
       // Retry admission locally. A paid decision can never be replayed here.
       for (let attempt = 0; attempt < 3; attempt++) {
-        admissionConfig = copyComboAdmissionState(config);
-        const currentCombo = getCombo(admissionConfig, comboId);
+        const snapshot = snapshotComboAdmission(config, comboId);
+        const currentCombo = snapshot.combo;
         if (!currentCombo) break;
         combo = currentCombo;
-        protocolLanes = buildProtocolLanes(admissionConfig, combo.targets);
-        const routes = captureRoutes(admissionConfig);
-        const result = await admitCombo(routes);
+        protocolLanes = buildProtocolLanes(config, combo.targets);
+        const result = await admitCombo();
         if (options.abortSignal?.aborted) return clientCancelledResponse();
-        if (!Bun.deepEquals(admissionConfig, copyComboAdmissionState(config)) || !Bun.deepEquals(routes, captureRoutes(config))) continue;
+        if (!Bun.deepEquals(snapshot, snapshotComboAdmission(config, comboId))) continue;
         if (result instanceof Response) {
           refreshedRefusal = result;
         } else {
           capability = result;
           omittingImages = capability.unservable === "image";
           if (previousUnservable !== capability.unservable) warnCapabilityDegradation(capability.unservable);
-          currentChoices = eligibleJevComboChoices(admissionConfig, comboId, jevTargetEligible, Date.now(), pick.cooldownReprobeTargets);
+          currentChoices = eligibleJevComboChoices(config, comboId, jevTargetEligible, Date.now(), pick.cooldownReprobeTargets);
         }
         break;
       }
-      admissionConfig = config;
-      combo = previousCombo;
-      if (!currentChoices.length) protocolLanes = previousProtocolLanes;
+      if (!currentChoices.length) {
+        combo = previousCombo;
+        protocolLanes = previousProtocolLanes;
+      }
       const current = currentChoices.find(choice => choice.candidate.key === decision.targetKey
         && (decision.effort === null ? choice.candidate.reasoningEfforts.length === 0
           : choice.candidate.reasoningEfforts.includes(decision.effort)));
@@ -1060,6 +1037,14 @@ export async function executeComboResponses(
         targetEligible(target) && target.provider !== JEV_PROVIDER_ID && jevChoiceEfforts(config, target, false) !== undefined));
     }
   }
+  // The ladder's own scope, derived from what this combo DECLARES. It shares the request-wide
+  // counter with the holder that arrived on options -- a combo child already inherited that
+  // counter, but nothing read it as a limit across targets -- while its transition and
+  // alternate-target ledgers come from the target list rather than from the single-target
+  // account-move profile (#4546).
+  const comboSendScope = isRequestExecutionBudget(options.sendBudget)
+    ? deriveSendBudgetScope(options.sendBudget, comboExecutionBudgetPolicy(combo.targets.length))
+    : undefined;
   // One immutable combo selection trace, before any child dispatch; child
   // adoption below must never replace it with a concrete child route trace.
   const decision = comboRouteDecisionTrace(config, comboId, pick, responseModel);
@@ -1285,7 +1270,8 @@ export async function executeComboResponses(
     // `client` keeps the decision's target but not its tier: the caller and the target ladder
     // own the wire effort, so a provider whose effort swaps the upstream model id is never
     // re-tiered mid-session and its prompt cache survives the turn.
-    const jevEffortApplies = turnEffort !== undefined && combo.jevEffortMode !== "client";
+    // The JEV effort owner is fixed when the turn starts so its wire effort and label agree.
+    const jevEffortApplies = turnEffort !== undefined && ingressCombo.jevEffortMode !== "client";
     const childInput = options.droidDefaultEffort && isPlainObject(body) ? { ...body } : body;
     applyDroidResponsesReasoningDefault(childInput, options.droidDefaultEffort, {
       provider: targetRoute.provider,
@@ -1294,7 +1280,7 @@ export async function executeComboResponses(
     const childBody = concreteComboRequestBody(
       childInput,
       pick.target,
-      jevEffortApplies ? turnEffort.effort : comboDefaultEffort(config, comboId),
+      jevEffortApplies ? turnEffort.effort : combo.defaultEffort,
       jevEffortApplies && turnEffort.effort === null ? [] : targetReasoningEfforts,
       combo.reasoningEffortMode,
       jevEffortApplies

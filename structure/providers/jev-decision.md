@@ -249,13 +249,16 @@ or an opencodex model route, with the timeout and a Test probe; there is no sepa
 
 ## Session pin
 
-After awaiting a paid decision, the combo reruns ingress admission against a request-local
-snapshot of the full configuration and the resolved capability routes. This includes the
-image policy and unresolved-continuation rule, audio, the unservable policy, live metered
-consent, and target eligibility under the original caller's model scope. The combo validates
-the configuration and resolved routes again after admission awaits. A changed snapshot
+After awaiting a paid decision, the combo reruns ingress admission with the current combo,
+live metered consent, and the original caller's model scope. It compares the allowlisted
+routing and policy metadata in `src/server/responses/combo-admission-snapshot.ts` across the
+async capability check. Credential selection revisions and pool entry identities are
+metadata. Credential resolution stays in the routing and sidecar paths. A changed snapshot
 restarts local admission up to twice. Persistent churn returns `503 combo_unavailable`.
 A refusal retains completed decision usage and never sends another decision request.
+Dispatch uses the admitted combo policy, including the refusal or omission rule if a required
+image description fails. The turn captures JEV effort ownership at ingress so the
+wire effort and its request log label follow the same mode.
 
 `sessionPin: { ttlMs }` is an opt-in, JEV-only Combo field (#7525); `src/combos/jev-session-pin-config.ts`
 owns its 60000..86400000 ms range, the CLI duration grammar and the closed `pinReason` vocabulary.
