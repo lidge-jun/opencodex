@@ -83,6 +83,7 @@ interface TurnOptions {
   messages?: unknown[]; tools?: unknown[]; frames?: Rec[]; gptFirst?: boolean; gptOnly?: boolean; nativeRollout?: boolean; requestId?: string;
   spend?: OcxConfig["spend"]; rootId?: string; policyDuringPlan?: OcxConfig["spend"]; proxyAdvisor?: boolean;
   toolChoice?: Rec;
+  visionPort?: number;
 }
 
 async function claudeTurn(options: TurnOptions = {}): Promise<{ wires: Wire[]; status: number; body: string; logCtx: RequestLogContext }> {
@@ -105,7 +106,7 @@ async function claudeTurn(options: TurnOptions = {}): Promise<{ wires: Wire[]; s
   const anth = { provider: providerName, model: MODEL };
   const gpt = { provider: "gpt", model: "g" };
   const config = {
-    port: 0, defaultProvider: providerName,
+    port: options.visionPort ?? 0, defaultProvider: providerName,
     spend: options.spend,
     claudeCode: { nativePassthrough: false },
     webSearchSidecar: { enabled: false },
@@ -116,7 +117,10 @@ async function claudeTurn(options: TurnOptions = {}): Promise<{ wires: Wire[]; s
         ...(options.proactiveKeySelection ? { apiKeyPool: [{ id: "0", key: "sk-ant-fixture" }, { id: "1", key: "sk-ant-other-fixture" }],
           requestPacing: { enabled: true, keySelection: "round-robin" } } : {}), ...options.provider },
       gpt: { adapter: "openai-chat", baseUrl: "https://gpt.invalid/v1", authMode: "key", apiKey: "sk-fixture", models: ["g"], fetch: capture("gpt") },
+      ...(options.visionPort ? { vision: { adapter: "openai-chat", baseUrl: "https://vision.invalid/v1",
+        models: ["vlm"], modelInputModalities: { vlm: ["text", "image"] } } } : {}),
     },
+    ...(options.visionPort ? { visionSidecar: { enabled: true, backend: "routed", model: "vision/vlm" } } : {}),
     combos: { waterfall: { strategy: "failover", targets: options.gptOnly ? [gpt] : options.gptFirst ? [gpt, anth] : [anth, gpt] } },
   } as unknown as OcxConfig;
   configureSharedSpendLedger(spendPolicyFromConfig(config.spend));
@@ -177,6 +181,27 @@ describe("hosted Advisor under the request's token spend policy", () => {
     { type: "advisor_tool_result", tool_use_id: "srvtoolu_adv1", content: REDACTED },
     { type: "text", text: "Earlier answer." },
   ]);
+
+  test("a capped explicit selection refuses before sending any image or text to the vision backend", async () => {
+    let visionSends = 0;
+    const vision = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+      visionSends++;
+      return Response.json({ choices: [{ message: { content: "Fixture image caption" } }] });
+    } });
+    try {
+      const result = await claudeTurn({ model: `anth/${MODEL}`, provider: { noVisionModels: [MODEL] },
+        visionPort: vision.port, spend: { identity: limit }, toolChoice: { type: "tool", name: "advisor" },
+        messages: [{ role: "user", content: [{ type: "text", text: "Describe the fixture" },
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "aGVsbG8taW1hZ2UtYnl0ZXM=" } }] }],
+      });
+      expect(result.status, result.body).toBe(400);
+      expect(result.body).toContain("token spend ceiling");
+      expect(result.wires).toHaveLength(0);
+      expect(visionSends).toBe(0);
+    } finally {
+      vision.stop(true);
+    }
+  });
   for (const scope of ["root", "identity", "pool"] as const) for (const stream of [false, true]) {
     test(`${scope} ceiling withholds the optional declaration, replay and beta (stream=${stream})`, async () => {
       const rootId = `advisor-spend-${scope}-${stream}`;

@@ -11,8 +11,8 @@ import {
 import { currentWorkflowBudgetPolicy } from "../../lib/workflow-budget-config";
 import { poolContinuityRefusalReason, workflowRefusalResponse } from "../workflow-refusal";
 import type { AttemptRecoveryKind, AttemptRecoveryWithheld } from "../../usage/log";
-import { noteAttemptRecoveryWithheld, noteAttemptSend } from "../request-log";
-import { TRANSIENT_RETRY_MAX_ATTEMPTS, SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { noteAttemptRecoveryWithheld, noteAttemptSend, type RequestLogContext } from "../request-log";
+import { TRANSIENT_RETRY_MAX_ATTEMPTS, SendBudgetExhaustedError, type TransientSendBudget } from "../../lib/upstream-retry";
 import type { SpendScopes } from "../../lib/spend-reservation-ledger";
 import { estimateTokens } from "../../lib/token-estimate";
 import type {
@@ -46,6 +46,20 @@ export function transientSendCapFor(
   return Math.max(0, configuredAttempts - Math.max(0, sendsUsed));
 }
 
+/** Read the admitted target's ceilings without claiming a send or a prepaid proof. */
+export function responsesHasCapturedSpendCeiling(
+  sendBudget: TransientSendBudget,
+  req: Pick<Request, "headers">,
+  logCtx: RequestLogContext,
+  target: SpendScopes,
+): boolean {
+  return requestHasCapturedSpendCeiling(sendBudget, {
+    rootId: req.headers.get("x-codex-parent-thread-id")?.trim() || undefined,
+    identityId: target.identityId ?? logCtx.accountLogLabel,
+    poolId: target.poolId ?? logCtx.spendPoolId ?? logCtx.provider,
+  });
+}
+
 /** Owns the shared request send counter and recovery permits. */
 export function createResponsesSendBudget(
   requestContext: Pick<ResponsesRequestContext, "options" | "req" | "logCtx">,
@@ -59,7 +73,7 @@ export function createResponsesSendBudget(
   // fresh default of 3. It is now a holder carried on options, so a combo child inherits the
   // parent's spend instead of starting over per target -- both halves of the measured
   // amplification in #4546.
-  const sendBudget = options.sendBudget ?? createInferenceSendBudget(req, logCtx);
+  const sendBudget = options.sendBudget ?? createInferenceSendBudget(req, logCtx, options.hostedAdvisorSpendScope?.ceilings);
   // The root workflow is the user-visible task. A per-request cap cannot bound a fan-out that
   // sends once per child seven hundred times, so every send charged to the request is charged
   // to the root as well (#4546).
@@ -190,11 +204,7 @@ export function createResponsesSendBudget(
   // typed as the narrow holder so a caller that predates this can still pass one, so narrow it
   // once here rather than asserting at each adapter call site.
   const adapterSendBudget = isRequestExecutionBudget(sendBudget) ? sendBudget : undefined;
-  const hasCapturedSpendCeiling = (target: SpendScopes = {}): boolean => requestHasCapturedSpendCeiling(sendBudget, {
-    rootId: workflowRootId,
-    identityId: target.identityId ?? logCtx.accountLogLabel,
-    poolId: target.poolId ?? logCtx.spendPoolId ?? logCtx.provider,
-  });
+  const hasCapturedSpendCeiling = (target: SpendScopes = {}): boolean => responsesHasCapturedSpendCeiling(sendBudget, req, logCtx, target);
   /**
    * Records an adapter's OWN inner retries against this attempt.
    *

@@ -135,20 +135,21 @@ through the Responses core.
 Translated turns evaluate the current send's selected identity and effective wire. An applicable
 root, identity or pool token ceiling withholds the optional hosted declaration, completed Advisor
 history and beta from that send onward, while the main model and other tools continue. An explicit
-Messages selection of the hosted Advisor refuses the capped target before it sends, including on
-replacement credentials. The client receives HTTP 400 if no compatible route serves the request
+Messages selection refuses the capped target before vision preprocessing or worker dispatch. An
+eligible fallback candidate can still fulfill the selection. The client receives HTTP 400 if no compatible route serves the request
 before response streaming starts. During streaming, a refused continuation emits a terminal error.
-`sidecar-execution.ts` uses the transport's `initialAdapterProvider` to check the actual authenticated
-target's captured ceilings before optional planning without starting main-model accounting;
-an already captured Combo policy stays fixed. The budget's read-only
+`hosted-advisor-spend.ts` and `sidecar-execution.ts` use the transport's `initialAdapterProvider`
+to check the actual authenticated target's ceilings without starting main-model accounting. The
+original translated turn owns the numeric ceiling snapshot and shares it with the default policy
+candidate and translated Combo trackers. The budget's read-only
 `hasCapturedSpendCeiling` checks the original numeric ceilings against that target, including an
 identity selected after Combo prepayment. It does not change the initial accounting mode or reread
 live config. Its hosted-only identity binding leaves ordinary accounting scopes unchanged.
 The physical adapter builder supplies its own resolved provider when reapplying the same query
 to admitted replacement identities before serialization, including sidecar copies and dispatch-time
 reselection. Credential rebuilding may restore a provider-wide adapter, so eligibility follows this
-builder's effective wire instead. Once withheld, the hosted tool and replay stay withheld for the
-rest of this turn even if a later identity is unlimited; earlier unlimited sends are unaffected.
+builder's effective wire instead. Once withheld, the optional hosted tool and replay stay withheld
+across later credentials, policy candidates and translated Combo children in the same turn.
 Removing Advisor blocks from a validated mixed replay run preserves the other completed search
 or fetch exchanges at their original unique anchor, subject to the existing destination checks.
 For a choice without an explicit hosted selection, after the final tool catalog is known, an

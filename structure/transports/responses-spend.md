@@ -319,14 +319,13 @@ the seed and physical-start protocol below across Responses, native Messages and
 Each transport claims immediately before inference I/O and retains a producer through completion.
 
 A request fixes its enforcement mode and physical-send limit L at its first actual spend admission
-or start. Numeric token ceilings are captured once: at an earlier hosted-Advisor preflight when
-present, otherwise at that admission/start. Configuration changes after capture do not replace the
-snapshot. An in-flight request keeps its captured policy until completion, including when an operator enables, disables, raises or
-lowers a ceiling. Changing policy never resets that request's physical-send allowance. A request
-that starts observe-only keeps the existing observe-only path throughout its lifetime.
-Constructing a budget or reading its ordinary enforcement preview does not capture policy. An early
-hosted-Advisor ceiling query captures only the numeric snapshot; accounting mode, reservations and L
-are still decided at actual admission/start. Generic Responses paths that
+or start. Translated turns carrying hosted Advisor tools or replay capture numeric ceilings at
+outer Responses ingress and pass them to default trackers for policy candidates and translated Combo
+children. Other trackers capture ceilings at first spend admission/start or an earlier hosted-Advisor
+query. Configuration changes leave captured ceilings and the physical-send allowance fixed.
+A request that starts observe-only stays observe-only for that tracker. Constructing a budget or
+reading its ordinary enforcement preview does not capture policy. Hosted-Advisor capture fixes only
+the numeric ceilings; accounting mode, reservations and L are decided at admission/start. Generic Responses paths that
 omit retry reporters still invoke that same capture before the wire. Re-entry's token-ceiling
 preflight and exact seed admission use the same frozen numeric policy and prepaid proof;
 pool continuity validation and shared tracking-capacity safeguards remain active.

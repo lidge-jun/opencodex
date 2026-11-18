@@ -49,6 +49,11 @@ export interface RequestSpendTracker extends RequestSendObserver, RequestSpendSe
   requestFinalSettlement(usage: TerminalSpendUsage | undefined): void;
 }
 
+/** Freeze only the numeric ceilings. Accounting mode is chosen at physical spend admission. */
+export function captureRequestSpendPolicy(policy: SpendAdmissionPolicy = sharedSpendPolicy()): SpendAdmissionPolicy {
+  return Object.freeze({ root: Object.freeze({ ...policy.root }), identity: Object.freeze({ ...policy.identity }), pool: Object.freeze({ ...policy.pool }) });
+}
+
 /**
  * One request's entries in the durable spend ledger (#4707).
  *
@@ -75,6 +80,7 @@ export function createRequestSpendTracker(
   > & Partial<Pick<RequestLogContext, "localTerminalReason" | "terminalSource" | "errorCode" | "spendRefusalDetail">>,
   rootId: string | undefined,
   injected?: SpendReservationLedger,
+  capturedPolicy?: SpendAdmissionPolicy,
 ): RequestSpendTracker {
   // Resolved on the first CHARGE, not when the request is built. The shared ledger opens a
   // journal under the OpenCodex home, and a request that never dispatches -- refused at
@@ -83,12 +89,7 @@ export function createRequestSpendTracker(
   let ledgerRef: SpendReservationLedger | undefined = injected;
   const ledger = (): SpendReservationLedger => (ledgerRef ??= sharedSpendLedger());
   let admissionPolicy: SpendAdmissionPolicy | undefined;
-  let capturedPolicy: SpendAdmissionPolicy | undefined;
-  const capturePolicy = (): SpendAdmissionPolicy => {
-    if (capturedPolicy) return capturedPolicy;
-    const policy = ledgerRef?.policy ?? sharedSpendPolicy();
-    return capturedPolicy = Object.freeze({ root: Object.freeze({ ...policy.root }), identity: Object.freeze({ ...policy.identity }), pool: Object.freeze({ ...policy.pool }) });
-  };
+  const capturePolicy = (): SpendAdmissionPolicy => capturedPolicy ??= captureRequestSpendPolicy(ledgerRef?.policy);
   let initialEnforced: boolean | undefined;
   // Outstanding entries; exact dispatch reports move their reservation to the end.
   const live: string[] = [];
@@ -530,13 +531,12 @@ export function attachRequestSpendTracker(
   req: Pick<Request, "headers">,
   logCtx: RequestLogContext,
   ledger?: SpendReservationLedger,
+  capturedPolicy?: SpendAdmissionPolicy,
 ): RequestSpendTracker {
   const existing = logCtx.spendTracker as RequestSpendTracker | undefined;
   if (existing && trackerRequests.get(existing) === req) return existing;
   const rootId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
-  const tracker = ledger === undefined
-    ? createRequestSpendTracker(logCtx, rootId)
-    : createRequestSpendTracker(logCtx, rootId, ledger);
+  const tracker = createRequestSpendTracker(logCtx, rootId, ledger, capturedPolicy);
   logCtx.spendTracker = tracker;
   trackerRequests.set(tracker, req);
   return tracker;

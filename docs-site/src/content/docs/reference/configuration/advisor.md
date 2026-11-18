@@ -168,11 +168,14 @@ The original selection also governs client tools named `advisor` in any namespac
 hosted search, both those tools and manual proxy consultations are excluded.
 When translated Messages explicitly selects Anthropic's hosted `advisor`, OpenCodex forwards the
 original declaration and named choice on an eligible route. A captured token spend ceiling makes
-the selected target ineligible for that choice. A combo or routing profile can skip
+the selected target ineligible before image preprocessing or model dispatch. A combo or routing profile can skip
 incompatible candidates under its fallback policy. OpenCodex returns HTTP 400 locally when
 the selection is ambiguous or all attempted candidates are incompatible. Both outcomes skip
 proxy consultations. On other turns, automatic preflight and adaptive consultations follow
 operator policy.
+
+If a spend ceiling withholds optional hosted Advisor, the declaration, replay and beta stay withheld
+throughout the translated turn, including when a fallback candidate uses a different credential.
 
 Automatic preflight keeps the fixed runtime transport instruction in a developer message and
 puts the quoted JSON advice in a separate **user-role advisory message**. Advisor-generated text

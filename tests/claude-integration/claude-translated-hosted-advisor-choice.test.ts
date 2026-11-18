@@ -1,8 +1,6 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { declaredAnthropicServerTools, hostedAdvisorSelection } from "../../src/claude/inbound-content-options";
+import { clearComboTargetCooldowns } from "../../src/combos";
 import { messagesToResponsesTranslation } from "../../src/protocols/codecs/messages";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { protocolTraceForRequest } from "../../src/protocols/trace";
@@ -12,9 +10,10 @@ import { createAdvisorGuard } from "../../src/server/responses/advisor-slot";
 import { handleResponses as runResponsesCore } from "../../src/server/responses/core";
 import { handleResponsesWithPolicyFallback } from "../../src/server/responses/policy-fallback";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
+import { configureSharedSpendLedger, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { createTempHome } from "../helpers/temp-home";
 
 const MODEL = "claude-opus-5";
 const HOSTED_ADVISOR = { type: "advisor_20260301", name: "advisor", model: "claude-opus-4-8", max_uses: 2 };
@@ -204,20 +203,76 @@ test.each([
   ["first candidate capped", "combo", "counted core"], ["all candidates capped", "combo", "counted core"],
   ["first candidate capped", "policy", "counted core"], ["all candidates capped", "policy", "counted core"],
 ] as const)(
-  "translated Messages handles Advisor with %s (route=%s, entry=%s)", async (scenario, route, entry) => {
-    const previousHome = process.env.OPENCODEX_HOME;
-    const home = mkdtempSync(join(tmpdir(), "ocx-hosted-advisor-choice-"));
-    try {
-      process.env.OPENCODEX_HOME = home;
-      const release = acquireOwnedSpendHome();
-      try {
-        await verifyHostedAdvisorChoice(scenario, route, entry === "counted core");
-      } finally {
-        release();
+  "translated Messages handles Advisor with %s (route=%s, entry=%s)", (scenario, route, entry) =>
+    withHostedAdvisorSpendHome(() => verifyHostedAdvisorChoice(scenario, route, entry === "counted core")));
+
+async function withHostedAdvisorSpendHome(run: () => Promise<void>): Promise<void> {
+  const home = createTempHome("ocx-hosted-advisor-choice-");
+  try {
+    const release = acquireOwnedSpendHome();
+    try { await run(); }
+    finally { release(); }
+  } finally { home.remove(); }
+}
+
+test.each([
+  ["policy", "key", "optional"], ["policy", "local", "optional"], ["policy", "local", "explicit"],
+  ["policy", "key", "snapshot only"], ["combo", "local", "optional"], ["combo", "local", "explicit"],
+] as const)("default Messages %s fallback to %s preserves hosted Advisor admission (%s)", (route, nextAuth, mode) =>
+  withHostedAdvisorSpendHome(async () => {
+    clearComboTargetCooldowns();
+    const explicit = mode === "explicit";
+    const sends: { provider: string; body: Record<string, unknown>; headers: Headers }[] = [];
+    const provider = (name: string, authMode: "key" | "local") => ({
+      adapter: "anthropic" as const, authMode, apiKey: "sk-ant-fixture",
+      baseUrl: `https://${name}.invalid`, models: [MODEL], liveModels: false,
+      forwardAdvisorTool: name === "worker" || mode !== "snapshot only",
+      fetch: (async (_url: unknown, init?: RequestInit) => {
+        sends.push({ provider: name, body: JSON.parse(String(init?.body)), headers: new Headers(init?.headers) });
+        if (name === "worker") return workerStream([{ type: "text", text: "Done." }], "end_turn");
+        // Reload after the first candidate's request has already been serialized and sent.
+        configureSharedSpendLedger(spendPolicyFromConfig({}));
+        return Response.json({ type: "error", error: { type: "rate_limit_error", message: "Fixture throttled" } }, { status: 429 });
+      }) as typeof fetch,
+    });
+    const targets = ["capped", "worker"].map(name => ({ provider: name, model: MODEL }));
+    const config: OcxConfig = {
+      port: 0, defaultProvider: "capped", spend: { identity: { maxTokens: 100_000 } },
+      claudeCode: { nativePassthrough: false }, protocols: { rollout: { managedMessagesNative: false } },
+      webSearchSidecar: { enabled: false }, providers: { capped: provider("capped", "key"), worker: provider("worker", nextAuth) },
+      ...(route === "policy" ? { routingProfiles: { waterfall: { candidates: targets } } }
+        : { combos: { waterfall: { strategy: "failover", targets } } }),
+    };
+    configureSharedSpendLedger(spendPolicyFromConfig(config.spend));
+    const ciphertext = "EqQBCkYIBRgCIiQ5ZjE0-fixture-ciphertext";
+    const messages = [
+      { role: "user", content: "Fixture." },
+      { role: "assistant", content: [
+        { type: "server_tool_use", id: "srvtoolu_fixture", name: "advisor", input: {} },
+        { type: "advisor_tool_result", tool_use_id: "srvtoolu_fixture",
+          content: { type: "advisor_redacted_result", encrypted_content: ciphertext } },
+        { type: "text", text: "Earlier answer." },
+      ] },
+      { role: "user", content: "Continue." },
+    ];
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
+      method: "POST", headers: { "content-type": "application/json", "anthropic-beta": BETA },
+      body: JSON.stringify({ model: `${route}/waterfall`, max_tokens: 64, stream: false, tools: [{ name: "Read", input_schema: { type: "object" } }, HOSTED_ADVISOR],
+        tool_choice: explicit ? CHOICE : undefined, messages }),
+    }), config, logCtx, { requestId: crypto.randomUUID(), start: Date.now() });
+    expect(response.status, await response.text()).toBe(200);
+    expect(logCtx.attempts?.map(attempt => attempt.provider)).toEqual(["capped", "worker"]);
+    expect(sends.map(send => send.provider)).toEqual(explicit ? ["worker"] : ["capped", "worker"]);
+    for (const wire of sends) {
+      const tools = wire.body.tools as { type?: string }[];
+      if (explicit) {
+        expect(tools).toContainEqual(expect.objectContaining(HOSTED_ADVISOR));
+        expect(wire.body.tool_choice).toMatchObject(CHOICE);
+      } else {
+        expect(tools.map(tool => tool.type ?? "function"), wire.provider).toEqual(["function"]);
       }
-    } finally {
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
-      removeTreeWithRetry(home);
+      expect(wire.headers.get("anthropic-beta")?.split(",").map(beta => beta.trim()).includes(BETA) ?? false).toBe(explicit);
+      expect(JSON.stringify(wire.body).includes(ciphertext)).toBe(explicit);
     }
-  });
+  }));

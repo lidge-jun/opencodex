@@ -195,29 +195,31 @@ export async function executeResponsesSidecars(
   // Hosted Advisor usage is not independently accounted by the main model's terminal usage.
   // Read the actual authenticated target's captured ceilings before an optional plan can await;
   // this query never starts or changes the main-model accounting mode.
-  let hostedAdvisorWithheld = false;
+  const hostedAdvisorSpendScope = options.hostedAdvisorSpendScope ?? { optionalWithheld: false };
+  let hostedAdvisorSpendRefused = false;
   const explicitlySelectedHostedAdvisor = options.anthropicHostedAdvisorSelection === "selected";
   const withholdHostedAdvisorBySpend = (request: OcxParsedRequest, provider: OcxProviderConfig) => {
-    if (!hostedAdvisorWithheld && advisorServerToolDestination(provider)
+    if (!hostedAdvisorSpendScope.optionalWithheld && !hostedAdvisorSpendRefused && advisorServerToolDestination(provider)
       && (hasAdvisorServerTools(parsed) || hasAdvisorServerTools(request))
       && sendBudgetState.hasCapturedSpendCeiling(responsesHostedAdvisorSpendTarget(logCtx, route.providerName))) {
-      hostedAdvisorWithheld = true;
+      if (explicitlySelectedHostedAdvisor) hostedAdvisorSpendRefused = true;
+      else hostedAdvisorSpendScope.optionalWithheld = true;
       addProtocolEntryReason(logCtx, "advisor-tool-withheld-by-spend-policy");
     }
-    if (hostedAdvisorWithheld) {
+    if (hostedAdvisorSpendScope.optionalWithheld) {
       withholdAdvisorServerTools(parsed);
       if (request !== parsed) withholdAdvisorServerTools(request);
     }
   };
   withholdHostedAdvisorBySpend(parsed, transportState.initialAdapterProvider);
-  if (hostedAdvisorWithheld && explicitlySelectedHostedAdvisor) {
+  if (hostedAdvisorSpendRefused) {
     releaseSearchProbeLease();
     return new HostedAdvisorSpendRefusal().response();
   }
   const normalizeWithheldAdvisorChoice = (request = parsed) => {
     const choice = request.options.toolChoice;
     // Wait for the final catalog: a client function or the later proxy Advisor may own this name.
-    if (!hostedAdvisorWithheld || typeof choice !== "object" || choice === null || !("name" in choice)
+    if (!hostedAdvisorSpendScope.optionalWithheld || typeof choice !== "object" || choice === null || !("name" in choice)
       || choice.name !== ADVISOR_TOOL_NAME || toolChoiceCandidates(request.context.tools, choice.name).length !== 0) return;
     request.options = { ...request.options, toolChoice: "auto" };
     // The unmatched named choice authorized no earlier map entries. Charge the newly usable
@@ -230,7 +232,7 @@ export async function executeResponsesSidecars(
   // Withholding is monotonic across all later identities/copies.
   transportState.hostedAdvisorSpendGuard = (request, provider) => {
     withholdHostedAdvisorBySpend(request, provider);
-    if (hostedAdvisorWithheld && explicitlySelectedHostedAdvisor) throw new HostedAdvisorSpendRefusal();
+    if (hostedAdvisorSpendRefused) throw new HostedAdvisorSpendRefusal();
     normalizeWithheldAdvisorChoice();
     if (request !== parsed) normalizeWithheldAdvisorChoice(request);
   };
@@ -308,7 +310,7 @@ export async function executeResponsesSidecars(
   };
   const sidecarScopeRefusal = (response: Response): Response | undefined => {
     if (response.ok) return undefined;
-    const hostedSpendRefusal = response.status === 400 && hostedAdvisorWithheld && explicitlySelectedHostedAdvisor;
+    const hostedSpendRefusal = response.status === 400 && hostedAdvisorSpendRefused;
     if (!sidecarScopeDenial && !hostedSpendRefusal) return undefined;
     void response.body?.cancel().catch(() => {});
     releaseSearchProbeLease();
