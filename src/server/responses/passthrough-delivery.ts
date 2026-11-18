@@ -34,7 +34,7 @@ import {
   relayWithAbort,
 } from "../relay";
 import { isUsageDebugEnabled } from "../../usage/debug";
-import { isNonReplayableResponse, isReplayRefusalResponse } from "../../lib/upstream-retry";
+import { isNonReplayableResponse, isReplayRefusalResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
 import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 import { sliceChunks, teeWithBoundedInspection } from "../inspection-tee";
 import { markPacedStream } from "../../lib/paced-stream";
@@ -1075,9 +1075,12 @@ export async function deliverPassthroughResponse(
           };
           const failureHeaders = sanitizePassthroughHeaders(headers, passthroughHeaderOptions);
           failureHeaders.set("content-type", "application/json");
-          return markPreinspectedJsonResponse(formatPassthroughUpstreamError(
+          const response = markPreinspectedJsonResponse(formatPassthroughUpstreamError(
             status, JSON.stringify({ error: clientError }), { headers: failureHeaders },
           ));
+          // The provider already ended the turn before this JSON projection chose an HTTP status.
+          markResponseNonReplayable(response);
+          return response;
         };
         const failBufferedTurn = (
           message: string,

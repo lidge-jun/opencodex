@@ -1581,8 +1581,8 @@ export async function executeComboResponses(
         return settled;
       }
     }
-    // A non-replayable failure (the answer to a spent ambiguous-reset replacement) may follow a
-    // send that already ran the turn, so no later target may receive it, whatever its status says.
+    // A non-replayable failure can come from a committed provider terminal or a send whose
+    // outcome is ambiguous. Neither permits another target, regardless of the HTTP status.
     const failureDecision = failure.nonReplayable || spentReplacement
       ? "stop"
       : localDeadline || isPolicyCandidateRefusal(failure.response) ? "hop"

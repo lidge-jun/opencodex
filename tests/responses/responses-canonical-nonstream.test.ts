@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, jest, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
+import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { getDefaultConfig } from "../../src/config";
 import { CODEX_FORWARD_BASE_URL } from "../../src/providers/openai-tiers";
 import { handleResponses } from "../../src/server/responses";
@@ -238,16 +239,51 @@ describe("canonical ChatGPT transport for non-streaming Responses callers (#6162
     });
   }
 
-  test("buffered quota verdict on a completed frame settles usage and skips continuation writes", async () => {
+  test.each([false, true])("buffered quota verdict on a completed frame settles usage without replay (pooled combo=%s)", async pooledCombo => {
     const log: RequestLogContext = { model: "", provider: "" };
-    const id = "resp_buffered_quota_completion";
+    const id = `resp_buffered_quota_completion_${pooledCombo}`;
     const error = { type: "rate_limit_error", code: "rate_limit_exceeded", message: "Fixture quota failure" };
     const completed = { id, status: "completed", error, output: [],
       usage: { input_tokens: 13, output_tokens: 7, total_tokens: 20 } };
-    globalThis.fetch = (async () => new Response(sseEvent("response.completed", { response: completed }), {
-      headers: { "content-type": "text/event-stream" },
-    })) as typeof fetch;
-    const resp = await call(requestBody(false, true), {}, config, log);
+    const model = "gpt-5.6-sol";
+    const backupModel = "fixture-backup";
+    const sent: string[] = [];
+    globalThis.fetch = (async (_input, init) => {
+      const outboundModel = JSON.parse(String(init?.body)).model as string;
+      sent.push(outboundModel);
+      if (outboundModel === backupModel) {
+        return Response.json({ id: "resp_backup", status: "completed", output: [] });
+      }
+      return new Response(sseEvent("response.completed", { response: completed }), {
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as typeof fetch;
+    const request = requestBody(false, true);
+    let requestConfig = config;
+    if (pooledCombo) {
+      const accountId = "buffered-quota-fixture";
+      saveCodexAccountCredential(accountId, {
+        accessToken: "fixture-pool-access", refreshToken: "fixture-pool-refresh",
+        expiresAt: Date.now() + 300_000, chatgptAccountId: "fixture-pool-account",
+      });
+      request.model = "combo/buffered-quota";
+      requestConfig = {
+        ...config,
+        codexAccounts: [{ id: accountId, email: "pool@example.test", isMain: false }],
+        activeCodexAccountId: accountId,
+        autoSwitchThreshold: 0,
+        providers: {
+          openai: { ...provider, codexAccountMode: "pool" },
+          backup: { adapter: "openai-responses", baseUrl: "https://backup.example.test/v1",
+            authMode: "key", apiKey: "fixture-backup-key" },
+        },
+        combos: { "buffered-quota": { strategy: "failover", targets: [
+          { provider: "openai", model }, { provider: "backup", model: backupModel },
+        ] } },
+      };
+    }
+    const resp = await call(request, {}, requestConfig, log);
+    expect({ status: resp.status, sent }).toEqual({ status: 429, sent: [model] });
     const body = await resp.json();
     const settle = spyOn(log.spendTracker!, "settle");
     try {

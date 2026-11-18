@@ -119,7 +119,8 @@ When either carrier has meaningful `error` or `last_error` evidence, HTTP/SSE an
 retain the provider's completion frame while terminal accounting reports failure. Empty placeholders
 preserve a clean completion. A failed completion cannot publish local continuation state, update
 success affinity, or clear a combo reprobe cooldown. The buffered JSON path returns the mapped
-provider error and settles the send using the reported terminal usage.
+provider error and settles the send using the reported terminal usage. Its in-process
+non-replayable marker prevents a second combo dispatch even when the mapped status is retryable.
 The client rewrite judges restored calls before continuation observers and hosted-image display.
 The raw inspector and client guard resolve selectors and observed calls through the same authorized
 Muse/namespace alias maps, authorized self-named scrub and catalog-aware default-namespace normalization.
