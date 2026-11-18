@@ -35,6 +35,8 @@ import {
 } from "../request-log";
 import { captureRouteStaticPolicy, routeConcreteModel } from "../../router";
 import { comboDefaultEffort, concreteComboRequestBody, getCombo, type JevDecision } from "../../combos";
+import { comboAdvertisesEffortUnion } from "../../combos/capability-policy";
+import { clampComboCallerEffort } from "../../combos/request-capability";
 import { supportedLadderFor } from "../effort-policy";
 import { applyDroidReasoningDefault } from "../droid-reasoning-default";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
@@ -351,11 +353,12 @@ function applyComboEffort(
     // The parser reads a nested effort only when it is a level it knows; anything else is no effort.
     : typeof nested === "string" && OUTPUT_CONFIG_EFFORTS.has(nested) ? nested
     : hadEffort ? body.reasoning_effort : undefined;
+  const ladder = supportedLadderFor({ provider: targetRoute.provider, modelId: targetRoute.modelId });
   const shaped = concreteComboRequestBody(
     callerEffort !== undefined || hadEffort ? { reasoning: { effort: callerEffort } } : {},
     target,
     comboDefaultEffort(config, comboId),
-    supportedLadderFor({ provider: targetRoute.provider, modelId: targetRoute.modelId }),
+    ladder,
     combo.reasoningEffortMode,
     combo.defaultEffortMode,
   );
@@ -366,6 +369,9 @@ function applyComboEffort(
   }
   const effort = (reasoning as { effort?: unknown }).effort;
   if (typeof effort === "string") body.reasoning_effort = effort;
+  if (comboAdvertisesEffortUnion(combo.capabilityPolicy, combo.reasoningEffortMode)) {
+    clampComboCallerEffort(body, ladder, target);
+  }
 }
 
 /** The combo's child callbacks, gated so a discarded attempt never reaches the parent. */

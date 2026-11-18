@@ -33,6 +33,10 @@ const imageBody = {
   input: [{ role: "user", content: [{ type: "input_text", text: "what is this" }, { type: "input_image", image_url: "data:image/png;base64,AA==" }] }],
 };
 const textBody = { model: "combo/x", input: "hello" };
+const audioBody = {
+  model: "combo/x",
+  input: [{ role: "user", content: [{ type: "input_audio", audio_url: "data:audio/wav;base64,AA==" }] }],
+};
 const first = union.targets[0]!;
 const second = union.targets[1]!;
 
@@ -62,6 +66,18 @@ describe("combo capabilityPolicy: request filtering", () => {
   test("a request without an image never filters", () => {
     const cfg = config({ visionSidecar: { enabled: false } });
     expect(comboCapabilityGate(cfg, union, textBody, router(cfg)).eligible(first)).toBe(true);
+  });
+
+  test("audio stays with a capable member and is refused if none can take it", () => {
+    const audio: OcxProviderConfig = { ...vision, modelCapabilities: { "vision-model": { inputModalities: ["text", "audio"] } } };
+    const cfg = config({ providers: { sub: textOnly, key: audio } });
+    const gate = comboCapabilityGate(cfg, union, audioBody, router(cfg));
+    expect(gate.unservable).toBe(false);
+    expect(gate.eligible(first)).toBe(false);
+    expect(gate.eligible(second)).toBe(true);
+
+    const noAudio = config();
+    expect(comboCapabilityGate(noAudio, union, audioBody, router(noAudio)).unservable).toBe("audio");
   });
 
   test("every enabled member unable opens the gate and reports unservable", () => {

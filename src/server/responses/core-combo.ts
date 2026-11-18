@@ -75,6 +75,7 @@ import {
 import { hasUnreadableEncryptedAgentTask } from "./encrypted-payload";
 import { eagerCodexToolCatalogSurface, warnEagerCodexToolCatalog } from "./codex-tool-catalog";
 import { clampComboCallerEffort, comboCapabilityGate } from "../../combos/request-capability";
+import { comboAdvertisesEffortUnion } from "../../combos/capability-policy";
 import { captureRouteStaticPolicy, routeConcreteModel, comboRouteDecisionTrace } from "../../router";
 import { memoryModelRouteReason } from "./memory-models";
 import { baseProviderLabel, poolAccountProviderLabel } from "../../providers/label";
@@ -493,9 +494,15 @@ export async function executeComboResponses(
   if (combo.imageInput === "disabled" && comboRequestHasImageInput(body)) {
     return formatErrorResponse(400, "invalid_request_error", "This combo does not accept image input");
   }
+  const meteredAllowed = admissionMayUseMeteredComboTargets(config, options.admission, combo);
+  const mayUseTarget = (target: (typeof combo.targets)[number]): boolean =>
+    (meteredAllowed || !target.metered) && (combo.strategy !== "jev" || target.provider !== JEV_PROVIDER_ID);
   const capability = comboCapabilityGate(config, combo, body, target => {
     try { return routeConcreteModel(config, `${target.provider}/${target.model}`); } catch { return undefined; }
-  });
+  }, mayUseTarget);
+  if (capability.unservable === "audio") {
+    return formatErrorResponse(400, "invalid_request_error", "No target of this combo can accept audio input");
+  }
   if (capability.unservable && combo.onUnservable === "reject") {
     return formatErrorResponse(400, "invalid_request_error", capability.unservable === "context"
       ? "No target of this combo has a context window large enough for this request"
@@ -597,7 +604,6 @@ export async function executeComboResponses(
   let comboPayloadReadable = false;
   const payloadEligible = (target: (typeof combo.targets)[number]): boolean =>
     comboPayloadReadable || !unreadableEncryptedAgentTask || canDecryptUnreadableAgentTask(target);
-  const meteredAllowed = admissionMayUseMeteredComboTargets(config, options.admission, combo);
   const museToolEligible = (target: (typeof combo.targets)[number]): boolean => {
     if (!hasMandatoryToolChoice(body)) return true;
     try {
@@ -626,9 +632,8 @@ export async function executeComboResponses(
     combo.targets.map(target => comboTargetUnavailableCause(config, comboId, target, museToolEligible) ?? "unsupported"));
   // Recovery can replace unreadable encrypted input, but cannot relax other admission checks.
   const recoveryEligible = (target: (typeof combo.targets)[number]): boolean =>
-    (meteredAllowed || !target.metered)
+    mayUseTarget(target)
     && capability.eligible(target)
-    && (combo.strategy !== "jev" || target.provider !== JEV_PROVIDER_ID)
     && museToolEligible(target)
     && reasoningReplayEligible(target)
     && (protocolLanes?.pickable(target) ?? true);
@@ -1203,7 +1208,7 @@ export async function executeComboResponses(
         ? (turnEffort.effort === null ? "fallback" : "force")
         : combo.defaultEffortMode,
     );
-    if (combo.capabilityPolicy === "union" && combo.reasoningEffortMode === "adaptive") {
+    if (comboAdvertisesEffortUnion(combo.capabilityPolicy, combo.reasoningEffortMode)) {
       clampComboCallerEffort(childBody, targetReasoningEfforts, pick.target);
     }
     if (turnEffort) {

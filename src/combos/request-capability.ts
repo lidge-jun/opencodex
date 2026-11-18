@@ -1,11 +1,13 @@
 import { nativeContextLimits } from "../codex/catalog/metadata";
+import { getModelMetadataCaseInsensitive, resolveMetadataProvider } from "../generated/model-metadata";
 import { errorDestinationText, providerErrorDestinationLabel } from "../lib/error-destination";
-import { isCodexReasoningEffort, resolveEffortAtOrBelow } from "../reasoning-effort";
+import { isCodexReasoningEffort, modelRecordValue, resolveEffortAtOrBelow } from "../reasoning-effort";
 import { parseRequest } from "../responses/parser";
 import { checkComboTargetInputAdmission } from "../server/responses/input-admission";
 import type { OcxComboTarget, OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { requiresVisionPreprocessing } from "../vision/plan";
-import { comboRequestHasImageInput } from "./request";
+import { customRowInputModalities } from "../vision/eligibility";
+import { comboRequestHasAudioInput, comboRequestHasImageInput } from "./request";
 import { targetKey, type NormalizedComboConfig } from "./types";
 
 /**
@@ -40,8 +42,19 @@ export function comboTargetImageService(
   return config.visionSidecar?.enabled === false ? "unable" : "degraded";
 }
 
-/** What no enabled member could serve: an image nobody can take, or an input nobody can hold. */
-export type ComboUnservable = false | "image" | "context";
+function comboTargetAcceptsAudio(config: OcxConfig, route: ComboTargetRoute | undefined): boolean {
+  if (!route) return false;
+  const { provider, providerName, modelId } = route;
+  const declared = Object.hasOwn(provider.modelCapabilities ?? {}, modelId)
+    ? provider.modelCapabilities?.[modelId]?.inputModalities : undefined;
+  const modalities = declared ?? customRowInputModalities(config, providerName, modelId)
+    ?? modelRecordValue(provider.modelInputModalities, modelId) ?? provider.inputModalities
+    ?? getModelMetadataCaseInsensitive(resolveMetadataProvider(providerName) ?? providerName, modelId)?.input;
+  return modalities?.includes("audio") === true;
+}
+
+/** What the admitted members cannot serve. */
+export type ComboUnservable = false | "audio" | "image" | "context";
 
 export interface ComboCapabilityGate {
   /** Selection filter: false only for a member that cannot serve this request. */
@@ -94,11 +107,12 @@ function parsedForContext(body: unknown): OcxParsedRequest | undefined {
 /**
  * Request-side half of `capabilityPolicy: "union"`. The catalog advertises the union of member
  * capabilities and the largest member window, so a request may need something only some members
- * have. Two needs are checked: image input and input size. Members that can degrade an image stay
+ * have. Audio requires a member that accepts it. Members that can degrade an image stay
  * eligible (keeping the subscription order and the prompt cache); members that cannot take the
  * image, or whose window cannot hold the input, are filtered.
  *
- * When no enabled member can serve, the gate reports why and never strands the request on a 503:
+ * When no enabled, admitted member can serve, the gate reports why:
+ * - `"audio"`: no member declares audio input. The caller refuses without discarding audio.
  * - `"context"`: no member can hold the input. Only the members with the largest known window stay
  *   eligible; the caller sends there with the loose direct-request admission (`onUnservable:
  *   "degrade"`) or refuses before any send (`"reject"`).
@@ -110,29 +124,34 @@ export function comboCapabilityGate(
   combo: Pick<NormalizedComboConfig, "capabilityPolicy" | "targets">,
   body: unknown,
   route: ComboTargetRouter,
+  isAdmitted: (target: NormalizedComboConfig["targets"][number]) => boolean = () => true,
 ): ComboCapabilityGate {
   if (combo.capabilityPolicy !== "union") return OPEN_GATE;
   const hasImage = comboRequestHasImageInput(body);
+  const hasAudio = comboRequestHasAudioInput(body);
   const parsed = parsedForContext(body);
-  if (!hasImage && !parsed) return OPEN_GATE;
-  const enabled = combo.targets.filter(target => config.providers[target.provider]?.disabled !== true);
+  if (!hasImage && !hasAudio && !parsed) return OPEN_GATE;
+  const enabled = combo.targets.filter(target => config.providers[target.provider]?.disabled !== true && isAdmitted(target));
+  if (enabled.length === 0) return OPEN_GATE;
   const judged = new Map<string, { image: ComboTargetService; context: ContextFit }>();
   for (const target of enabled) {
     const key = targetKey(target);
     if (judged.has(key)) continue;
     const resolved = route(target);
+    if (hasAudio && !comboTargetAcceptsAudio(config, resolved)) continue;
     judged.set(key, {
       image: hasImage ? comboTargetImageService(config, resolved) : "native",
       context: comboTargetContextFit(config, parsed, resolved),
     });
   }
   const verdicts = [...judged.values()];
+  if (verdicts.length === 0) return { eligible: () => false, unservable: "audio" };
   const filter = (keep: (verdict: { image: ComboTargetService; context: ContextFit }) => boolean): ComboCapabilityGate["eligible"] =>
     target => {
       const verdict = judged.get(targetKey(target));
-      return verdict === undefined || keep(verdict);
+      return verdict !== undefined && keep(verdict);
     };
-  if (verdicts.length === 0 || verdicts.some(v => v.context.fits && v.image !== "unable")) {
+  if (verdicts.some(v => v.context.fits && v.image !== "unable")) {
     return { eligible: filter(v => v.context.fits && v.image !== "unable"), unservable: false };
   }
   if (verdicts.some(v => v.context.fits)) {

@@ -173,6 +173,42 @@ async function send(config: OcxConfig, body: Rec, options: {
 }
 
 describe("native Chat candidates in a combo", () => {
+  test.each([
+    [{ reasoning_effort: "xhigh" }],
+    [{ reasoning: { effort: "xhigh" } }],
+  ])("union/adaptive clamps native caller effort from %j", async effort => {
+    const a = upstream(() => twoChoiceCompletion());
+    const config = comboConfig({ a: provider("openai-chat", a.baseUrl, { reasoningEfforts: ["low", "high"] }) },
+      [{ provider: "a", model: "m1" }], NATIVE_ON);
+    config.combos!.pair!.capabilityPolicy = "union";
+    config.combos!.pair!.reasoningEffortMode = "adaptive";
+    const { response, rows } = await send(config, { stream: false, ...effort });
+    expect(response.status).toBe(200);
+    expect(rows[0]!.protocolTrace!.attempts![0]!.mode).toBe("native");
+    expect(a.bodies).toHaveLength(1);
+    expect(a.bodies[0]!.reasoning_effort).toBe("high");
+  });
+
+  test("union image degradation only considers targets with metered consent", async () => {
+    const text = upstream(() => chatStream("degraded"));
+    const image = upstream(() => chatStream("metered"));
+    const config = comboConfig({
+      a: provider("openai-chat", text.baseUrl, { modelCapabilities: { m1: { inputModalities: ["text"] } } }),
+      b: provider("openai-chat", image.baseUrl, { modelCapabilities: { m2: { inputModalities: ["text", "image"] } } }),
+    }, [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }]);
+    config.combos!.pair!.capabilityPolicy = "union";
+    config.combos!.pair!.targets[1]!.metered = true;
+    config.visionSidecar = { enabled: false };
+    const { response } = await send(config, {
+      stream: false,
+      messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: "data:image/png;base64,AA==" } }] }],
+    });
+    expect(response.status).toBe(200);
+    expect(text.bodies).toHaveLength(1);
+    expect(JSON.stringify(text.bodies[0])).not.toContain("data:image");
+    expect(image.bodies).toHaveLength(0);
+  });
+
   test("distributed 401 recovery stays bounded and avoids the failed key on subsequent requests", async () => {
     const keys: string[] = [];
     const a = upstream((_body, hit, headers) => {
