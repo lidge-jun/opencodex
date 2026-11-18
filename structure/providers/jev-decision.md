@@ -268,7 +268,8 @@ The pinned target is the only candidate. An applied answer sets the effort and u
 A failed or unusable decision uses the effort read at the start of the turn and refreshes only the live pin's
 idle window on completion. Both outcomes record the gate, latency and available decision usage.
 After the effort decision, the Combo rechecks eligibility before dispatch. If the pinned target becomes
-ineligible, the Combo uses the first currently eligible JEV target and retains the completed decision's usage.
+ineligible, the Combo uses the first currently eligible JEV target, records the decision telemetry, and leaves
+the turn out of `pinnedRequests`.
 When the turn uses the pinned target, these decisions persist `pinned: true` with `pinReason: "session_effort"`.
 Cancellation during the decision returns the client-cancelled response. A single-effort target or
 `jevEffortMode: "client"` skips the decision. The CLI sets the mode with `--session-pin-effort <pinned|per-turn>`.

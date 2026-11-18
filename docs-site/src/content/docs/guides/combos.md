@@ -355,7 +355,8 @@ When the pinned target offers multiple efforts, a reused turn sends one decision
 only that target and its efforts. If JEV picks one of those efforts, the turn uses it and the pin
 keeps it. A failed or unusable decision uses the effort the turn read from the pin. A concurrent
 turn can still update the stored effort. If the pinned target becomes unavailable during the decision,
-the Combo falls back to an eligible target. A single-effort target skips the decision.
+the Combo falls back to an eligible target. Usage records retain the effort decision telemetry, and
+the turn counts as a regular decision. A single-effort target skips the decision.
 With `jevEffortMode: "client"`, reused turns follow the client effort policy
 and skip the decision. `--session-pin-effort pinned` restores the default. Changing the idle window
 with `--session-pin` keeps the mode.

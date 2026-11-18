@@ -378,9 +378,9 @@ describe("JEV session pin per-turn effort", () => {
     expect(log.jevDecision).toMatchObject({ pinned: true, pinReason: "session" });
   });
 
-  test("rechecks the pinned target after the effort decision and keeps its usage on fallback", async () => {
+  test.each(["sol/gpt-5.6-sol:low", "luna/gpt-5.6-luna:low"])("rechecks the pinned target after effort answer %s and keeps its usage on fallback", async (answer) => {
     const payloads: Array<Record<string, unknown>> = [];
-    const config = perTurnConfig(["sol/gpt-5.6-sol:high", "sol/gpt-5.6-sol:low"], payloads);
+    const config = perTurnConfig(["sol/gpt-5.6-sol:high", answer], payloads);
     expect((await turn(config)).status).toBe(200);
 
     const decisionStarted = Promise.withResolvers<void>();
@@ -408,6 +408,7 @@ describe("JEV session pin per-turn effort", () => {
       usage: { inputTokens: 8, outputTokens: 2, totalTokens: 10 },
     });
     expect(log.jevDecision?.pinned).toBeUndefined();
+    expect(log.jevDecision?.pinReason).toBeUndefined();
   });
 
   test("a late completion after a failed effort decision preserves a newer pinned effort", async () => {

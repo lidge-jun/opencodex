@@ -844,15 +844,16 @@ export async function executeComboResponses(
     let decision: JevDecision;
     let awaitedPinEffort = false;
     if (pinReuse?.decision) {
-      decision = pinReuse.decision;
+      const pinned = pinReuse.decision;
+      decision = pinned;
       // `effort: "per-turn"` keeps the pinned target and asks only for its effort, offering the
       // pinned target alone. Anything but an applied answer for that target keeps the pinned effort.
-      const pinned = decision;
       const pinnedChoice = combo.sessionPin?.effort === "per-turn" && combo.jevEffortMode !== "client"
         ? choices.find(choice => choice.candidate.key === pinned.targetKey)
         : undefined;
       if (pinnedChoice && pinnedChoice.candidate.reasoningEfforts.length > 1) {
         awaitedPinEffort = true;
+        decision = { ...pinned, pinReason: "session_effort" };
         const fallback = { targetKey: pinned.targetKey, effort: pinned.effort };
         try {
           const effortDecision = await decide([pinnedChoice.candidate], fallback);
@@ -860,7 +861,7 @@ export async function executeComboResponses(
             decision = { ...effortDecision, pinned: true, pinReason: "session_effort" };
           } else {
             failedPinEffortDecision = {
-              ...effortDecision, ...fallback, pinned: true, pinReason: "session_effort",
+              ...effortDecision, ...fallback,
               gate: effortDecision.gate === "apply" ? "invalid" : effortDecision.gate,
             };
           }
@@ -868,7 +869,7 @@ export async function executeComboResponses(
           if (options.abortSignal?.aborted) return clientCancelledResponse();
           failedPinEffortDecision = {
             ...fallback, backend: jevDecisionBackendFor(combo), gate: "network",
-            latencyMs: Math.max(0, Date.now() - decisionStartedAt), pinned: true, pinReason: "session_effort",
+            latencyMs: Math.max(0, Date.now() - decisionStartedAt),
           };
         }
       }
@@ -910,7 +911,7 @@ export async function executeComboResponses(
     if (pinReuse?.released) decision = { ...decision, pinReason: pinReuse.released };
     jevDecision = decision;
     pick = { ...selected.pick, attempted: [targetKey(selected.pick.target)] };
-    // Failed effort decisions are counted while dispatch uses the reused effort.
+    // Keep effort-call telemetry and take pin attribution from the final selection.
     const observedDecision = failedPinEffortDecision ?? decision;
     logCtx.jevDecision = !options.clientModelLabel || requestedModel === responseModel ? normalizePersistedJevDecision({
       version: 1,
@@ -929,8 +930,8 @@ export async function executeComboResponses(
         : {}),
       ...(observedDecision.usage ? { usage: observedDecision.usage } : {}),
       ...(observedDecision.quota ? { quota: observedDecision.quota } : {}),
-      ...(observedDecision.pinned ? { pinned: true } : {}),
-      ...(observedDecision.pinReason ? { pinReason: observedDecision.pinReason } : {}),
+      ...(decision.pinned ? { pinned: true } : {}),
+      ...(decision.pinReason ? { pinReason: decision.pinReason } : {}),
     }) : undefined;
     console.debug("[combo] JEV decision", {
       backend: observedDecision.backend,
@@ -938,7 +939,7 @@ export async function executeComboResponses(
       effort: decision.effort,
       gate: observedDecision.gate,
       latencyMs: observedDecision.latencyMs,
-      ...(observedDecision.pinReason ? { pinReason: observedDecision.pinReason } : {}),
+      ...(decision.pinReason ? { pinReason: decision.pinReason } : {}),
       ...(observedDecision.confidence !== undefined ? { confidence: observedDecision.confidence } : {}),
       ...(observedDecision.chosenProbability !== undefined
         ? { chosenProbability: observedDecision.chosenProbability }
