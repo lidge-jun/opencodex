@@ -61,10 +61,10 @@ import {
   SendBudgetExhaustedError, errorDestinationLabel,
   UpstreamRetryEvidenceError,
   prepareSameTarget429Wait,
-  sleepWithAbort,
+  sleepWithAbort, RESET_RETRY_MAX_ATTEMPTS,
 } from "../../lib/upstream-retry";
 import { describeUpstreamConnectFailure } from "./upstream-error";
-import { createOfflineResendWait, resolveOfflineResendWaitMs } from "../../lib/offline-resend";
+import { createProviderOfflineResendWait } from "../../lib/offline-resend";
 import type { OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import type { OAuthAccessSnapshot } from "../../oauth";
@@ -82,7 +82,6 @@ import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { bindRouteReasoningReplayScope } from "./core-replay";
 import {
   AnthropicAccountCooldownError,
-  ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
   anthropicRoutingFor,
   formatAnthropicProviderForLog,
 } from "../../oauth/anthropic-routing";
@@ -123,8 +122,10 @@ import { chargeWorkflowSends } from "../../lib/workflow-budget";
 import { hasWorkflowSendObserver } from "../../lib/request-execution-budget";
 import { isAntigravityAccessDeniedRefusal, isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
 import { createAntigravityModelDenialRecovery, recoverAntigravityAccount } from "./antigravity-model-denial-recovery";
+import { isAntigravityFaultRotatable } from "./antigravity-fault-rotation";
 import { adapterSendBudgetRefusal } from "../workflow-refusal";
 import { AdmissionModelDeniedError, admissionModelDeniedResponse, projectAdmissionModelDeniedLog } from "../admission-model-scope";
+import { rejectAnthropicPerMessageEffort } from "../../adapters/anthropic/per-message-effort";
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function prepareAdapterExchange(
   requestContext: Pick<ResponsesRequestContext, "options" | "config" | "logCtx" | "req">,
@@ -170,7 +171,7 @@ export async function prepareAdapterExchange(
     | "commitResolvedOAuthSelection"
     | "genericFailoverAccountId"
     | "genericFailovers"
-    | "genericFailoverLimit"
+    | "genericFailoverLimit" | "anthropicFailoverLimit"
     | "applyFailoverSnapshot"
     | "noteRoutedAttemptSend" | "attemptSendDeferred" | "deferPhysicalAttribution"
   >,
@@ -404,7 +405,7 @@ export async function prepareAdapterExchange(
   let billingRecoveryActive = false;
   const genericRefetchCountsSends = () => !!sendBudgetState.workflowRootId || options.comboAttempt === true || sendBudgetState.adapterSendBudget?.spendEnforced === true
     || transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null
-    || billingPoolRequest || billingRecoveryActive || autoPauseEnabled;
+    || !!anthropicInstance || billingPoolRequest || billingRecoveryActive || autoPauseEnabled;
   let handoffPermit: ResponsesSendBudget["pendingHopPermit"];
   try {
     if (transportState.activeAdapter.fetchResponse) {
@@ -473,7 +474,8 @@ export async function prepareAdapterExchange(
         || (options.comboAttempt && route.provider.adapter === "google")
         ? transientSendCapFor(transientPolicy?.attempts,
           (options.comboAttempt || compactPrepaid) ? 0 : sendBudgetState.sendsUsed)
-        : 1;
+        // Anthropic sends are counted for the funded roster, not narrowed: keep the reset ladder.
+        : anthropicInstance && !options.comboAttempt && !compactPrepaid && !autoPauseEnabled ? RESET_RETRY_MAX_ATTEMPTS : 1;
       const fetchWithRetryPolicy = (route.provider.adapter === "google" || transientPolicy)
         ? fetchWithTransientRetry
         : fetchWithResetRetry;
@@ -523,12 +525,12 @@ export async function prepareAdapterExchange(
           abortSignal: upstream.signal,
           label: safeHostLabel(builtInitialRequest.url), destination: errorDestinationLabel(builtInitialRequest.url),
           claimAmbiguousResend: claimPreHeaderResend,
-          offlineWait: options.comboAttempt ? undefined : createOfflineResendWait(builtInitialRequest.url, resolveOfflineResendWaitMs(config.offlineResendWaitSec)),
+          offlineWait: options.comboAttempt ? undefined : createProviderOfflineResendWait(route.providerName, route.provider, builtInitialRequest.url, config.offlineResendWaitSec),
           ...(sendBudgetState.workflowRootId || sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
-            || billingPoolRequest || autoPauseEnabled
+            || anthropicInstance || billingPoolRequest || autoPauseEnabled
             ? {
               // A pending compaction permit already booked this leg's first physical send.
-              ...(transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt || autoPauseEnabled
+              ...(transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt || anthropicInstance || autoPauseEnabled
                 ? {
                   attempts: Math.min(initialSendCap,
                     sendBudgetState.initialSendAllowance(initialSendCap) + (compactPrepaid ? 1 : 0)),
@@ -615,6 +617,8 @@ export async function prepareAdapterExchange(
     let oauth401ReplayAttempted = transportState.oauth401ReplayAttempted;
     let antigravityAuthRotationAttempted = false;
     let antigravityFaultRotationAttempted = false;
+    const antigravityFaultRotatable = (response: Response) => isAntigravityFaultRotatable(route.providerName, response,
+      transportState, antigravityPoolActivated, antigravityFaultRotationAttempted);
     // Direct requests get one reasoning-effort downgrade. Combo candidates may walk down the
     // published ladder one refused rung at a time; the request send budget bounds those retries.
     const reasoningEffortDowngradeGuard: { attempted: boolean } = { attempted: false };
@@ -935,6 +939,7 @@ export async function prepareAdapterExchange(
 
       // Preserve the terminal verdict through adapter and combo error formatting.
       // This also covers a reset reached by a 401/429/413 recovery refetch.
+      await rejectAnthropicPerMessageEffort(parsed, upstreamResponse, upstream.signal);
       if (isNonReplayableResponse(upstreamResponse)) {
         try {
           return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal);
@@ -1092,14 +1097,8 @@ export async function prepareAdapterExchange(
         if (rotated) { upstreamResponse = rotated; continue recovery; }
       }
 
-      // A 502/503/504 that outlived the same-account ladder is replayed once on a live sibling: the
-      // failing account is cooled briefly (not marked), and one extra ladder bounds the load a
-      // pool-wide outage can add to a request.
-      if (route.providerName === "google-antigravity" && [502, 503, 504].includes(upstreamResponse.status)
-        && transportState.activeAdapter.name === "google"
-        && antigravityPoolActivated && !antigravityFaultRotationAttempted
-        && !isNonReplayableResponse(upstreamResponse)
-        && transportState.genericFailovers < transportState.genericFailoverLimit) {
+      // A 502/503/504 that outlived the same-account ladder replays once on a live sibling.
+      if (antigravityFaultRotatable(upstreamResponse)) {
         antigravityFaultRotationAttempted = true;
         const rotated = await rotateAntigravityAuth(upstreamResponse, "transient-5xx", sent =>
           rotateAntigravityAccountOnUpstreamFault(antigravityPoolActivated, sent.accountId, sent.generation, route.modelId));
@@ -1388,7 +1387,7 @@ export async function prepareAdapterExchange(
             model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, currentDecision: currentAnthropicRouteDecision, signal: upstream.signal,
             // A denied reservation must not rotate on base headroom its bounds cannot see.
             canRetry: hop.allowed && (hop.permit !== undefined || !sendBudgetExhausted())
-              && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
+              && transportState.anthropicPoolFailovers < transportState.anthropicFailoverLimit,
           });
         } catch (rotationError) {
           hop.permit?.release();
@@ -1650,8 +1649,9 @@ export async function prepareAdapterExchange(
           }
          upstreamResponse = result;
           // The hop's permit is already settled by the dispatch boundary above; continuing
-          // only skips the remaining arms, it does not abandon a reservation.
-          if (isNonReplayableResponse(upstreamResponse)) continue recovery;
+          // only skips the remaining arms, it does not abandon a reservation. A replacement's
+          // surviving 502/503/504 re-enters recovery so the one-hop fault rotation can run.
+          if (isNonReplayableResponse(upstreamResponse) || antigravityFaultRotatable(upstreamResponse)) continue recovery;
        } catch (err) {
           // A local admission denial is terminal for the whole request: rotating to another
           // account cannot re-scope the key, so the refusal answers in place of the 429.
@@ -1764,7 +1764,7 @@ export async function prepareAdapterExchange(
           transportState.genericFailovers += 1;
           try { void failedResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
           upstreamResponse = result;
-          if (isNonReplayableResponse(upstreamResponse)) continue recovery;
+          if (isNonReplayableResponse(upstreamResponse) || antigravityFaultRotatable(upstreamResponse)) continue recovery;
         } catch {
           hop.permit?.release();
           break;

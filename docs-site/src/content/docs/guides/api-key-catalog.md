@@ -1065,7 +1065,7 @@ For named selections, Copilot fronts a mixed-wire catalog: the following models 
 `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) reject
 `/chat/completions` for agent traffic, so opencodex routes those models over the
 Responses API by built-in default while every other Copilot model stays on chat
-completions. The precedence is: hard wire pin → your explicit
+completions. `gpt-6-sol`, `gpt-6-luna`, `gpt-6.2-sol`, `gpt-6.2-astra` also default to Responses as a preemptive built-in default; no rejection was observed for them and the Copilot listing of the GPT-6.2 models is unverified. The precedence is: hard wire pin → your explicit
 [`modelAdapters`](/reference/configuration/providers/) entry → registry default →
 provider-wide adapter. To opt a model without a built-in default (for example
 `gpt-5.4-nano`) into Responses, set `"modelAdapters": { "gpt-5.4-nano": "openai-responses" }`.

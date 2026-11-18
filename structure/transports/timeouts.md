@@ -47,8 +47,9 @@ keeping the Response object and its relay markers. The canonical JSON fold keeps
 whole-turn deadlines. Reset selection in `src/server/responses/passthrough-completion.ts` already
 guards the bodies it publishes with the resolved budget and marks them
 (`markResponseBodyInactivityGuarded`), so they get no second clock. Guards armed by the explicit budget (delivery, continuation legs, and reset
-selection when the field is set) raise `ExplicitBodyStallError`, which `buildFailedTailPayload` in `src/server/relay.ts` reports
-as `upstream_stall_timeout`; a guard on a default budget keeps the earlier `upstream_reset` tail. Native steering and
+selection when the field is set) raise `ExplicitBodyStallError`, which `buildFailedTailPayload` in `src/server/relay.ts` and the
+leg read catch in `src/web-search/passthrough-bridge.ts` report as `upstream_stall_timeout` (the bridge keeps
+`web_search_bridge_failed` for every other leg read failure); a guard on a default budget keeps the earlier `upstream_reset` tail on the relay path, while a default-budget stall during a bridge leg read reaches that catch as an ordinary read failure and reports `web_search_bridge_failed`. Native steering and
 injection chains (`isNativeControlResponse`) stay unguarded: between responses they wait for the client's continuation,
 which a byte-silence clock cannot tell from upstream silence, and they keep their own timeliness checks. `tests/responses/responses-native-sse-stall.test.ts` covers explicit
 local and public expiry and the unset and `0` cases.
@@ -56,8 +57,11 @@ local and public expiry and the unset and `0` cases.
 ## Offline wait and resend
 
 `offlineResendWaitSec` (#7958) is off unless set to a positive number of seconds, capped at 300 by
-`resolveOfflineResendWaitMs` in `src/lib/offline-resend.ts`. `createOfflineResendWait` returns one
-single-use waiter per request, or none for an IP-literal destination. The initial sends in
+`resolveOfflineResendWaitMs` in `src/lib/offline-resend.ts`. `createProviderOfflineResendWait` returns one
+single-use waiter per request, probing the name the send resolves (`offlineResendProbeUrl`: the provider's
+own `proxy`/`noProxy` route, else the global proxy unless `NO_PROXY` exempts the URL, else the provider URL, as
+`configuredOutboundFetch` routes it), or none for an IP-literal probe target or a caller-supplied `fetch` executor; OpenCodex's own xAI and Mistral
+wrappers carry `isEgressTransparentExecutor` and keep the wait. The initial sends in
 `src/server/responses/passthrough-dispatch.ts` and `src/server/responses/adapter-dispatch.ts` hand it to
 `fetchWithTransientRetry` / `fetchWithResetRetry` as `offlineWait`, except on a combo attempt, which fails over
 to its next member instead of waiting once per target. `fetchWithTransientRetry` gives the waiter to the first
@@ -65,12 +69,18 @@ send only; later transient-5xx legs never wait. Only a DNS resolution failure (`
 `ENOTFOUND` or `EAI_AGAIN` through a bounded cause chain, never message text, and never retry-evidence errors)
 qualifies, because DNS answering again is the evidence that failure lacked; refused or unreachable connections
 would resend into the same failure, and with an outbound proxy a direct reachability probe would not test the
-request's path. The waiter polls the destination's DNS once a second until it resolves or the wait ends; each
+request's path. The waiter polls that name's DNS once a second until it resolves or the wait ends; each
 probe races the remaining budget and client cancellation, and a success after the deadline does not count. The
 first send's slow-attempt clock restarts when the wait resumes. Adapters with their own `fetchResponse` transport
-(google Vertex and Cloud Code Assist, kiro, cursor) are not wired; direct Google AI Studio is. One resend then
+(google Vertex and Cloud Code Assist, kiro, cursor, zed, command-code, mimo-free) are not wired; direct Google AI Studio is. One resend then
 follows inside the request's existing `attempts` budget and send accounting; no budget, a second DNS failure, an
 exhausted wait or any other failure returns the original error.
+A client cancel during the wait or a probe makes the waiter answer `false` instead of rejecting with the abort
+reason, so `fetchWithResetRetry` rethrows the original DNS error and a Codex pool send keeps the host-wide
+`connect_neutral` class in `classifyTransportFailureKind`. The resend's send carries its own recovery kind,
+`offline-resend` (cause `transport-unsent`, a localized Logs label), never `connection-reset`; like a reset
+retry it opts out of keep-alive in `applyUpstreamRecoveryInit`, because sockets pooled before the outage
+belong to the network that went away.
 `tests/responses/responses-offline-resend.test.ts` drives the probe and clock through
 `setOfflineResendDependenciesForTests`.
 

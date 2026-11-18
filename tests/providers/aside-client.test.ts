@@ -72,6 +72,10 @@ describe("Aside client config", () => {
    * prove nothing. Key ORDER also differs from the hand-written file, which is
    * fine because Aside parses this file rather than diffing it. What must hold
    * is the key SET and the field vocabulary.
+   *
+   * `compat` is the one key the hand-written file lacked: Aside's Pi runtime sends
+   * its system prompt as `developer` unless told otherwise, and DashScope rejects
+   * that role with a 400 (#8864).
    */
   test("matches the provider shape observed in a real Aside catalog", () => {
     const document = buildClientConfig("aside", context()) as PiGeneratedConfig;
@@ -79,7 +83,8 @@ describe("Aside client config", () => {
     expect(Object.keys(document.providers)).toEqual([OPENCODE_PROVIDER_ID]);
 
     const provider = document.providers[OPENCODE_PROVIDER_ID]!;
-    expect(new Set(Object.keys(provider))).toEqual(new Set(["baseUrl", "apiKey", "api", "models"]));
+    expect(new Set(Object.keys(provider))).toEqual(new Set(["baseUrl", "apiKey", "api", "compat", "models"]));
+    expect(provider.compat).toEqual({ supportsDeveloperRole: false });
     expect(provider.baseUrl).toBe("http://127.0.0.1:10100/v1");
     expect(provider.api).toBe("openai-completions");
     expect(provider.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);

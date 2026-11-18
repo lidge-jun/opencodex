@@ -44,8 +44,8 @@ import { noteKiroMonthlyRefusal, noteKiroServedSuccess } from "../../providers/k
 import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
 import { anthropicPoolCooldownResponse, readDisplaySafeErrorText } from "./core-errors";
 import { sidecarContextOverflowResponse } from "./context-overflow";
+import { emptyCompletionRetryEnabled } from "./empty-completion-guard";
 import {
-  ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
   anthropicRoutingFor,
   formatAnthropicProviderForLog,
 } from "../../oauth/anthropic-routing";
@@ -62,6 +62,7 @@ import { trackStreamLifetime } from "../lifecycle";
 import { isAntigravityRawValidationRefusal } from "./antigravity-validation-refusal";
 import { createSidecarSendBudget } from "./sidecar-send-budget";
 import { stripReplayedSearchPairs } from "../../web-search/sidecar-search-replay";
+import { settleAnthropicPerMessageEffort, shareAnthropicPerMessageEffortTurn } from "../../adapters/anthropic/per-message-effort";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function executeResponsesSidecars(
@@ -86,7 +87,7 @@ export async function executeResponsesSidecars(
     | "adapter"
     | "genericFailoverAccountId"
     | "genericFailovers"
-    | "genericFailoverLimit"
+    | "genericFailoverLimit" | "anthropicFailoverLimit"
     | "replayOAuthCredentialSnapshot"
     | "applyFailoverSnapshot"
     | "anthropicInstance"
@@ -110,7 +111,7 @@ export async function executeResponsesSidecars(
     | "notifyResponseComplete"
     | "cancelResponseCompletion"
   >,
-  sendBudgetState: Pick<ResponsesSendBudget, "sendBudgetExhausted" | "reserveCredentialHop" | "refundableAdapterDispatchBudget" | "adapterDispatchBudget" | "noteInitialDispatch" | "noteAdapterPhysicalSend" | "noteAdapterRecoveryWithheld" | "pendingHopPermit" | "dispatchSidecarSend">,
+  sendBudgetState: Pick<ResponsesSendBudget, "initialSendAllowance" | "sendBudgetExhausted" | "reserveCredentialHop" | "refundableAdapterDispatchBudget" | "adapterDispatchBudget" | "noteInitialDispatch" | "noteAdapterPhysicalSend" | "noteAdapterRecoveryWithheld" | "pendingHopPermit" | "dispatchSidecarSend">,
 ) {
   const { config, options, logCtx } = requestContext;
   const antigravityPoolActivated = requestState.route.providerName === "google-antigravity"
@@ -239,6 +240,8 @@ export async function executeResponsesSidecars(
   // Replayed search pairs call the synthetic web_search tool only the sidecar declares (#7269).
   if (!wsPlan) stripReplayedSearchPairs(parsed);
   const vidPlan = !routedCompaction ? await planVideoBridge(config, parsed, route.provider) : undefined;
+  // Hosted loops rebuild per iteration from spread copies; they share one per-message effort turn (#6895).
+  if (wsPlan || imgPlan || vidPlan) shareAnthropicPerMessageEffortTurn(parsed);
   const canRunWebSearch = !!wsPlan && !transportState.adapter.runTurn;
   let sidecarOutputStarted = false;
   const sidecarHasCommittedOutput = () => sidecarOutputStarted
@@ -420,7 +423,7 @@ export async function executeResponsesSidecars(
           config, accountId: transportState.anthropicPoolAccountId, sessionKey: anthropicSessionKey,
           model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, currentDecision: currentAnthropicRouteDecision, signal: options.abortSignal,
           allow429Recovery: !sidecarHasCommittedOutput(), allowAccountRefusal: !sidecarHasCommittedOutput(),
-          canRetry: hop.allowed && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
+          canRetry: hop.allowed && transportState.anthropicPoolFailovers < transportState.anthropicFailoverLimit,
         });
       if (!nextAccountId) {
         hop.permit?.release();
@@ -501,6 +504,7 @@ export async function executeResponsesSidecars(
         if (existing) existing();
         else {
           const prepaid = sendBudgetState.pendingHopPermit;
+          if (anthropicInstance && !prepaid && sendBudgetState.initialSendAllowance(1) === 0) throw new SendBudgetExhaustedError();
           sendBudgetState.pendingHopPermit = undefined;
           sendBudgetState.noteInitialDispatch(prepaid);
         }
@@ -628,6 +632,7 @@ export async function executeResponsesSidecars(
       escapeMemoryCitationTags: inboundWire !== "chat" && inboundWire !== "anthropic",
       onCompletedResponse: (response, providerState) => {
         if (!options.abortSignal?.aborted) thinkingRecovery.rememberSuccess(response);
+        settleAnthropicPerMessageEffort(parsed, response, transportState.adapter.name);
         const served = transportState.replayOAuthCredentialSnapshot;
         if (route.providerName === "kiro" && response.status === "completed" && served
           && noteKiroServedSuccess(served.accountId, served.generation)) persistKiroAccountState();
@@ -701,6 +706,7 @@ export async function executeResponsesSidecars(
         ...sidecarBudget.fetchOptions(transportState.adapter),
       })(input, init)) as typeof globalThis.fetch;
     const loopResponse = await runWithWebSearch({
+      emptyCompletionRetry: emptyCompletionRetryEnabled(config) && !options.comboAttempt && !routedCompaction,
       dispatchSidecarSend: sendBudgetState.dispatchSidecarSend,
       parsed, adapter: transportState.adapter,
       ...(webSearchAdvisor ? { advisor: createAdvisorSidecarStep(webSearchAdvisor as Parameters<typeof createAdvisorSidecarStep>[0]) } : {}),
@@ -773,6 +779,7 @@ export async function executeResponsesSidecars(
       retryOn429Policy: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro")
         ? null : rateLimitRetryPolicyFor(route.provider),
       onCompletedResponse: response => {
+        settleAnthropicPerMessageEffort(parsed, response, transportState.adapter.name);
         const served = transportState.replayOAuthCredentialSnapshot;
         if (route.providerName === "kiro" && response.status === "completed" && served
           && noteKiroServedSuccess(served.accountId, served.generation)) persistKiroAccountState();

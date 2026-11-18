@@ -1479,6 +1479,8 @@ describe("the reported turn, end to end through handleResponses", () => {
         expect(legs).toBe(2);
         expect(body).toContain("response.failed");
         expect(body).toContain("stalled for 1000ms");
+        expect(body).toContain('"code":"upstream_stall_timeout"');
+        expect(body).not.toContain(WEB_SEARCH_BRIDGE_ERROR_CODE);
       } finally {
         releaseSpendHome();
       }

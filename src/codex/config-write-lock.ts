@@ -41,7 +41,7 @@
  */
 import { atomicWriteFileStreamed, type AtomicWriteHooks } from "../config/atomic-write";
 import { lstatSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import { release, stillHeld, tryAcquire, type AcquireResult, type LockHandle } from "./prompt-lock";
 
@@ -146,15 +146,51 @@ export function publishConfigWrite<T>(configPath: string, held: LockHandle, run:
   return run(canonical, {
     validateBeforeRename: () => { assertConfigWriteDestination(configPath, held); },
     afterRename: () => {
+      const payloadKnown = payloadDigestPending.delete(held);
       const recovery = recoveries.get(held);
       if (recovery?.canonical === canonical) recovery.identity = canonicalFileIdentity(canonical);
       const after = destination(configPath);
       if (!stillHeld(held) || after.canonical !== canonical) throw new Error("Codex configuration destination changed; recovery evidence was preserved.");
       destinations.set(held, after);
+      // A payload-aware publisher records the digest of what it wrote; this re-read only
+      // covers writers whose bytes this process never sees (a native child, the empty file).
+      // Known limit for a native child: the `codex` CLI renames its own file and exits, and this
+      // re-read runs after it exits, so a write by a non-OpenCodex process (the Codex app, an
+      // editor) landing between the child's rename and this line is recorded as OpenCodex's and a
+      // later compensation in the same section could revert it. The child cannot report its bytes.
+      if (!payloadKnown) publishedConfigDigests.set(held, fileDigest(canonical));
       const watched = targets.get(held);
       if (watched) for (const [path, expected] of watched) if (expected.canonical === canonical) watched.set(path, after);
     },
   });
+}
+/** config.toml no longer holds the bytes a writer decided from; nothing was written. */
+export class ConfigWriteContentChanged extends Error {
+  readonly retryable = true;
+  constructor() {
+    super("Codex config.toml changed while OpenCodex was writing it; nothing was overwritten. Retry the command.");
+  }
+}
+/**
+ * The digest of the config.toml bytes this lock section last published, `null` for a removal,
+ * `undefined` when it published none. Compensation reverts only a file still holding them.
+ */
+const publishedConfigDigests = new WeakMap<LockHandle, string | null>();
+const payloadDigestPending = new WeakSet<LockHandle>();
+export function publishedConfigDigest(held: LockHandle): string | null | undefined {
+  return publishedConfigDigests.get(held);
+}
+/** Called by a publisher that knows its payload, before the rename's afterRename hook runs. */
+export function recordPublishedConfigDigest(held: LockHandle, digest: string | null): void {
+  publishedConfigDigests.set(held, digest);
+  payloadDigestPending.add(held);
+}
+export function configDigest(bytes: string | null): string | null {
+  return bytes === null ? null : createHash("sha256").update(bytes).digest("hex");
+}
+function fileDigest(path: string): string | null {
+  try { return createHash("sha256").update(readFileSync(path)).digest("hex"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
 }
 /** Native children use the acquisition witness, never a fresh home resolution. */
 export class ConfigWriteDestinationChanged extends Error {
@@ -212,6 +248,8 @@ export function withConfigWriteRecovery<T>(
     assertConfigWriteDestination(configPath, held);
     return value;
   } catch (error) {
+    // Refused before this scope published anything: there is nothing to recover.
+    if (error instanceof ConfigWriteContentChanged && recovery.identity === identity) throw error;
     let changed = error instanceof ConfigWriteDestinationChanged;
     try { assertConfigWriteDestination(configPath, held); } catch { changed = true; }
     try {

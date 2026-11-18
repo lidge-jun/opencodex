@@ -57,6 +57,7 @@ import {
   acquireConfigWriteLock,
   releaseConfigWriteLock,
   configWriteLockFailureMessage, withConfigWriteLockHeld,
+  ConfigWriteContentChanged,
 } from "../config-write-lock";
 import type { LockHandle } from "../config-write-lock";
 import { shouldInjectApiAuthHeader } from "../loopback-target";
@@ -523,7 +524,10 @@ function restoreCodexConfigInlineImpl(
       : { state: "failed", changed: false, action: "failed", message: restored.message };
   } catch (error) {
     if (error instanceof CodexHomeOwnerRefusal) throw error;
-    return { state: "failed", changed: false, action: "failed", message: error instanceof Error ? error.message : String(error) };
+    return {
+      state: "failed", changed: false, action: "failed", message: error instanceof Error ? error.message : String(error),
+      ...(error instanceof ConfigWriteContentChanged ? { retryable: true } : {}),
+    };
   }
 }
 

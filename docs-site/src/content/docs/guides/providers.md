@@ -35,8 +35,8 @@ rows are re-enabled without replacing saved mode or model settings, and noncanon
 rows are not offered that recovery path.
 
 Luna Reserve compatibility is a ChatGPT account capability on the canonical OpenAI forward path,
-not an OpenAI API-key entitlement. Its manual stored-main selector requires effective local authless
-Desktop mode and current credential-bound upstream permission; a catalog entry alone does not
+not an OpenAI API-key entitlement. Its manual stored-main selector requires the `codexReserveEnabled`
+setting on a loopback, non-client proxy and current credential-bound upstream permission; a catalog entry alone does not
 authorize a request. See [Luna Reserve alongside routed models](/reference/cli/providers-accounts/#luna-reserve-alongside-routed-models)
 for setup, restart order, authorization requirements, and unsupported helpers.
 
@@ -257,6 +257,17 @@ Cursor, Kiro, Zed Hosted AI and Nous Portal are login-only and have no API-key e
 login-only too: `ocx login google-antigravity` signs in with your Google account over the Cloud Code
 Assist wire, and the `google` preset beside it is the AI Studio Gemini API — a different product
 reached with its own key, not a key mode for the same login.
+
+:::danger[Google can disable Gemini and Antigravity on the Google account]
+The Antigravity login is meant for Google's own Antigravity app. Users of third-party tools have
+reported Gemini and Antigravity access on their Google accounts being disabled with "This service has been disabled in this account
+for violation of Terms of Service." The ban covers that account's Gemini Code Assist and Antigravity
+access, and restoring it depends on Google's appeal process. Sign in only with a separate Google
+account you can afford to lose, never a main, personal, school or work account; a Gemini API key is
+the safer path. OpenCodex asks for an explicit acknowledgement before every Antigravity login,
+reauthentication or import: a checkbox in the dashboard, a `y` answer or `--accept-antigravity-risk`
+in the CLI.
+:::
 If Antigravity login cannot discover a Cloud Code Assist project, the failure includes a sanitized
 summary for `loadCodeAssist` and the last `onboardUser` response: HTTP status, response category,
 completion/error presence and known project-field types. It distinguishes HTTP refusal, unusable
@@ -380,7 +391,7 @@ ocx logout <provider>
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth uses the separate Grok CLI subscription gateway. The API-key override uses `https://api.x.ai/v1` and may inject Priority Processing. Live-first Grok catalog; `grok-4.5` is the fallback default. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude models; live model list fetched from `/v1/models`. |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code Plan coding models. Defaults to the stable `kimi-for-coding` alias (currently K2.8 Preview): 1M-token context window, adjustable `low`/`high`/`max` thinking (default `max`), text + image input. `k3.1-pro` and `k3.1-pro-highspeed` (K3.1 Pro) are also listed: 1M-token context, thinking-only on the same ladder (default `max`). Retired `kimi-k2.x` selections are migrated to the alias on upgrade. |
-| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | Same Kimi account login (reuses the `kimi` OAuth credential) over the OpenAI Responses wire. Same model roster and capabilities as `kimi`; thinking content stays encrypted server-side, tool calls and results stay visible. |
+| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | Same Kimi account login (reuses the `kimi` OAuth credential) over the OpenAI Responses wire. Same model roster and capabilities as `kimi`; thinking content stays encrypted server-side, tool calls and results stay visible. Add it from the dashboard **Add provider** picker (**Kimi (Responses)**) or with `ocx provider add kimi-responses --live`. It has no login of its own: adding it while signed in to Kimi needs no second login, and signing in from its picker entry creates only this row, leaving any `kimi` row as it is. Logging out of either row (`ocx logout kimi` or `ocx logout kimi-responses`, local or `--live`, or **Logout** on either dashboard row) removes the active Kimi account for both rows and says so; if another Kimi account is stored, it becomes active for both rows; neither row uses it while it is paused, and if it needs re-login, log in to it again. Deleting one row from the dashboard (or with `--live`) keeps the login while the other row still uses it, and deleting the last one removes it; a local `ocx provider remove` leaves stored logins in place, as for other providers. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research subscription gateway (same backend Hermes Agent uses). Device-grant login against `portal.nousresearch.com`; the access token is the per-request inference JWT. Mixed paid + `:free` model catalog (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...) discovered live from the signed-in account. Refresh tokens are single-use and rotated on every refresh. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | The dashboard Login and Add account buttons offer AWS IAM Identity Center, Builder ID, Google, GitHub device login, or Kiro CLI. Native device login adds an account without signing `kiro-cli` out. The Kiro CLI choice imports or starts a CLI session; its Add account workflow temporarily switches the CLI account and restores it on cancellation or failure. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. Live discovery uses CCA's authenticated `v1internal:fetchAvailableModels` endpoint and publishes the agent models available to the signed-in account; the maintained catalog remains the fallback. |

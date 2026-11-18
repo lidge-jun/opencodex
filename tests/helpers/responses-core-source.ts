@@ -106,6 +106,7 @@ export const RESPONSES_CORE_MODULES = [
   "adapter-failure-message.ts",
   "antigravity-validation-refusal.ts",
   "antigravity-model-denial-recovery.ts",
+  "antigravity-fault-rotation.ts",
   "adapter-continuation.ts",
   "adapter-delivery.ts",
   "anthropic-thinking-recovery.ts",

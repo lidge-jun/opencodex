@@ -139,7 +139,7 @@ import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upst
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { codexFailureWindowOutcomeMeta, recordCodexUpstreamOutcome } from "../../codex/routing";
 import { describeUpstreamConnectFailure } from "./upstream-error";
-import { createOfflineResendWait, resolveOfflineResendWaitMs } from "../../lib/offline-resend";
+import { createProviderOfflineResendWait } from "../../lib/offline-resend";
 import type { OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
 import {
   rateLimitRetryPolicyFor,
@@ -1049,7 +1049,7 @@ export async function preparePassthroughExchange(
           ...(receiptMode ? {} : { onSendsConsumed: initialAccounting.report }),
           claimAmbiguousResend: claimPreHeaderResend,
           // A combo fails over to another member instead of waiting once per target.
-          offlineWait: options.comboAttempt ? undefined : createOfflineResendWait(request.url, resolveOfflineResendWaitMs(config.offlineResendWaitSec)),
+          offlineWait: options.comboAttempt ? undefined : createProviderOfflineResendWait(route.providerName, route.provider, request.url, config.offlineResendWaitSec),
         },
       );
     } catch (err) {

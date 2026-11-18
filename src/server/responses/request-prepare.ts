@@ -190,6 +190,7 @@ import {
 
 import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
 import { eagerCodexToolCatalogSurface, warnEagerCodexToolCatalog } from "./codex-tool-catalog";
+import { codexTurnStartsNewHistory } from "../../adapters/anthropic/per-message-effort";
 
 /** Policy-routing evidence. The direct lane's settings-only body has no conversation to scan. */
 function routeEvidence(options: Pick<HandleResponsesOptions, "directRequest">, parsed: OcxParsedRequest): PolicyRequestEvidence {
@@ -553,6 +554,8 @@ export async function prepareResponsesRequest(
       parsed._anthropicInbound = true;
       if (parsed.options.textFormat?.type === "json_schema") parsed._structuredOutputConformance = true;
     }
+    // Codex's own "new" turn metadata, for the experimental Anthropic perMessageEffort option (#6895).
+    parsed._codexNewHistory = codexTurnStartsNewHistory(body, req.headers, options.inboundTransport);
     parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort;
     // The body may have been rebuilt since the inbound observation (previous-response
     // expansion); alias the parsed raw body to the same draft so the outbound
@@ -1204,6 +1207,7 @@ export async function prepareResponsesRequest(
             "_reasoningReplayScope",
             "_nativeReasoningRetention",
             "_cursorIsolateConversation",
+            "_codexNewHistory",
           ];
           for (const key of kept) {
             if (parsed[key] !== undefined) {

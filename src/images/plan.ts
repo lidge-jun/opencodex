@@ -8,6 +8,7 @@ import { getValidAccessToken } from "../oauth/index";
 import { getProviderRegistryEntry } from "../providers/registry";
 import { providerDestinationConfigError } from "../lib/destination-policy";
 import { IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME, isVideoGenName } from "./synthetic-tool";
+import type { VideoProviderAuth } from "./xai-video-client";
 
 const DEFAULT_MODEL = "grok-imagine-image-quality";
 /** Absolute ceiling for `images.timeoutMs` (matches /v1/images relay budget). */
@@ -146,8 +147,19 @@ function isXaiCredential(config: OcxConfig, reference: string | undefined, token
 }
 
 export type VideoProviderSelection =
-  | { ok: true; providerName: string; provider: OcxProviderConfig; auth: { baseUrl: string; token: string } }
+  | { ok: true; providerName: string; provider: OcxProviderConfig; auth: VideoProviderAuth }
   | { ok: false; error: string };
+
+/** The pinned xAI destination: registry host, no private-network opt-in, the row's egress route. */
+function pinnedXaiVideoAuth(provider: OcxProviderConfig, token: string): VideoProviderAuth {
+  return {
+    baseUrl: pinnedXaiBaseUrl(),
+    token,
+    providerName: "xai",
+    ...(provider.proxy !== undefined ? { proxy: provider.proxy } : {}),
+    ...(provider.noProxy !== undefined ? { noProxy: provider.noProxy } : {}),
+  };
+}
 
 /**
  * Resolve an explicit `images.videoProvider`. Returns undefined when the setting is absent, which
@@ -204,7 +216,20 @@ export function selectVideoProvider(config: OcxConfig): VideoProviderSelection |
   if (!isXai && !isTrustedXaiOrigin(baseUrl) && isXaiCredential(config, provider.apiKey, token)) {
     return { ok: false, error: `${label} uses an xAI API key; an xAI API key is only sent to xAI over HTTPS` };
   }
-  return { ok: true, providerName, provider, auth: { baseUrl, token } };
+  // The literal check above runs at plan time; the outbound transport repeats it on the resolved
+  // addresses at connect time, so a hostname that resolves to loopback or private space needs the
+  // same allowPrivateNetwork opt-in.
+  const auth: VideoProviderAuth = isXai
+    ? pinnedXaiVideoAuth(provider, token)
+    : {
+      baseUrl,
+      token,
+      providerName,
+      ...(provider.allowPrivateNetwork === true ? { allowPrivateNetwork: true } : {}),
+      ...(provider.proxy !== undefined ? { proxy: provider.proxy } : {}),
+      ...(provider.noProxy !== undefined ? { noProxy: provider.noProxy } : {}),
+    };
+  return { ok: true, providerName, provider, auth };
 }
 
 /**
@@ -265,5 +290,5 @@ export async function planVideoBridge(
   const token = resolveXaiImageApiKey(found.provider);
   if (!token) return undefined;
   // Pin the baseUrl to the registry entry, ignoring any config-level baseUrl override.
-  return { ...common, provider: found.provider, auth: { baseUrl: pinnedXaiBaseUrl(), token } };
+  return { ...common, provider: found.provider, auth: pinnedXaiVideoAuth(found.provider, token) };
 }
