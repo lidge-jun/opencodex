@@ -150,7 +150,10 @@ test.each([
     let flowId: string | undefined;
     let unregisterOAuthFlowStore: (() => void) | undefined;
     async function deleteUnrelatedAccount() {
-      unregisterOAuthFlowStore = registerStateStore(STATE_STORE_REGISTRATIONS.find(row => row.name === "oauth-flow-state")!);
+      // A distinct name: re-registering "oauth-flow-state" would replace the process-wide entry, and
+      // the cleanup unregister would then delete it for every later test in this process.
+      const production = STATE_STORE_REGISTRATIONS.find(row => row.name === "oauth-flow-state")!;
+      unregisterOAuthFlowStore = registerStateStore({ ...production, name: "oauth-flow-state:cancel-ownership-fixture" });
       setLiveStateStoreConfig(config);
       const url = new URL(`http://127.0.0.1/api/codex-auth/accounts?id=${unrelatedId}`);
       const deleted = await handleCodexAuthAPI(new Request(url, { method: "DELETE" }), url, config);
