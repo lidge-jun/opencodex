@@ -515,9 +515,10 @@ Retrying only the same ID cannot recover missing state.
 `usage.jsonl` records the selected ChatGPT provider and model with
 `errorCode: "previous_response_not_found"`. If preparation made no inference send, the row has
 `failureCause: "local-refusal"` and the request uses no model quota. Opt-in encrypted-task
-recovery can send an inference request before native fallback is selected. The row records that
-attempt, which may use quota. A client resend with the full context is logged separately and can
-use quota.
+recovery can send an inference request before native fallback is selected. The Usage summary
+includes reported recovery tokens under the recovery model. If a recovery send loses its
+connection before headers, the request's full cost remains unknown even if a retry reports
+tokens. A client resend with the full context is logged separately and can use quota.
 
 The same refusal applies when the referenced state belongs to a different client task scope,
 including when the new request appears to carry complete input. The proxy cannot prove that input
