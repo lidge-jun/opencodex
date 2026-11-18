@@ -504,6 +504,20 @@ se aplica siempre que no se pueda utilizar de origen `Retry-After` o Codex seña
 
 Para un grupo OAuth o Codex Anthropic, un 429 vinculado a una cuenta que el grupo se ha enfriado no enfría todo el objetivo combinado. Otras cuentas detrás de ese objetivo siguen disponibles. Un 429 sin una cuenta de grupo refrigerada identificada aún enfría el objetivo, al igual que los fallos de todo el proveedor.
 
+Una vez que el combo se compromete a entregar la salida de un stream de Responses, un evento
+terminal incompleto puede poner ese destino en enfriamiento para la siguiente solicitud.
+`stall_timeout` aplica un enfriamiento de 60 segundos. `output_limit` aplica uno de 10 minutos
+si el intento alcanza el límite de salida conocido del modelo y el turno termina sin pausa.
+El preajuste de Devin requiere que el límite de salida se configure explícitamente en el
+proveedor para aplicar este enfriamiento. Si ya hay un enfriamiento con un vencimiento
+posterior, ese vencimiento se conserva.
+
+Durante la comprobación previa de Responses, el combo puede probar el siguiente destino
+elegible si recibe un evento terminal que permite reintentar, contiene únicamente texto de
+razonamiento o comentarios y llega en el primer segundo a partir del primer evento
+almacenado en el búfer, incluido `response.created`. Un rechazo, una respuesta final,
+una llamada a una herramienta o el vencimiento de la espera fija el destino del stream.
+
 <a id="last-resort-targets"></a>
 
 ### Objetivos de último recurso
