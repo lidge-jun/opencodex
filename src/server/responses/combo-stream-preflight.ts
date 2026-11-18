@@ -28,8 +28,8 @@ import { ProtocolPreOutputEof } from "../../lib/upstream-retry";
 import { carryPacedStream, pacedQueuingStrategy } from "../../lib/paced-stream";
 
 const COMBO_STREAM_PREFLIGHT_MAX_BYTES = MAX_CLIENT_SSE_FRAME_BYTES;
-// Required-tool reasoning may delay delivery, but never for an unbounded/trickling prelude.
-const COMBO_REQUIRED_TOOL_REASONING_HOLD_MS = 1_000;
+// Bound the prelude hold from its first client-visible event, even if upstream goes quiet.
+const COMBO_STREAM_PRELUDE_HOLD_MS = 1_000;
 const RESET_PREFLIGHT_HEARTBEAT_MS = 15_000;
 // Keep retained object count proportional to the same byte budget used by the
 // shared SSE framer. Tiny or empty upstream reads must not bypass the byte cap.
@@ -205,14 +205,23 @@ const MESSAGE_CONTENT_EVENTS = new Set([
   "response.output_text.delta",
   "response.output_text.done",
   "response.output_text.annotation.added",
-  "response.refusal.delta",
-  "response.refusal.done",
 ]);
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
+}
+
+function hasOnlyPreludeParts(parts: unknown, type: "output_text" | "reasoning_text" | "summary_text"): boolean {
+  return parts === undefined || (Array.isArray(parts) && parts.every(part => recordValue(part)?.type === type));
+}
+
+function isDegeneratePreludeItem(item: Record<string, unknown>): boolean {
+  if (item.type === "reasoning") {
+    return hasOnlyPreludeParts(item.content, "reasoning_text") && hasOnlyPreludeParts(item.summary, "summary_text");
+  }
+  return item.type === "message" && item.phase === "commentary" && hasOnlyPreludeParts(item.content, "output_text");
 }
 
 /**
@@ -225,21 +234,22 @@ function recordValue(value: unknown): Record<string, unknown> | undefined {
 function comboStreamDegeneratePrelude(payload: unknown, commentaryItemIds: Set<string>): boolean {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
   const event = payload as Record<string, unknown>;
-  if (requiredToolReasoningPrelude(payload)) return true;
   if (event.type === "response.output_item.added" || event.type === "response.output_item.done") {
     const item = recordValue(event.item);
-    if (!item) return false;
-    if (item.type === "reasoning") return true;
-    if (item.type === "message" && item.phase === "commentary") {
-      if (typeof item.id === "string") commentaryItemIds.add(item.id);
-      return true;
-    }
-    return false;
+    if (!item || !isDegeneratePreludeItem(item)) return false;
+    if (item.type === "message" && typeof item.id === "string") commentaryItemIds.add(item.id);
+    return true;
   }
   if (typeof event.type === "string" && MESSAGE_CONTENT_EVENTS.has(event.type)) {
+    if ((event.type === "response.content_part.added" || event.type === "response.content_part.done")
+      && recordValue(event.part)?.type !== "output_text") return false;
     return typeof event.item_id === "string" && commentaryItemIds.has(event.item_id);
   }
-  return false;
+  return requiredToolReasoningPrelude(payload);
+}
+
+function incompleteCarrierVetoesReplay(carrier: Record<string, unknown> | undefined): boolean {
+  return carrier?.end_turn === false || recordValue(carrier?.incomplete_details)?.retryable === false;
 }
 
 /**
@@ -261,11 +271,8 @@ function isDegenerateStreamTerminal(payload: unknown, context?: object): boolean
     for (const item of carrier) {
       const record = recordValue(item);
       if (!record) return false;
-      if (record.type === "reasoning" || (record.type === "message" && record.phase === "commentary")) {
-        preludeItems++;
-        continue;
-      }
-      return false;
+      if (!isDegeneratePreludeItem(record)) return false;
+      preludeItems++;
     }
   }
   if (preludeItems === 0) return false;
@@ -278,11 +285,7 @@ function isDegenerateStreamTerminal(payload: unknown, context?: object): boolean
   const reason = details?.reason;
   if (reason !== undefined
     && (typeof reason !== "string" || !RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(reason))) return false;
-  if (isPausedTurn(context)) return false;
-  const endTurn = response?.end_turn ?? event.end_turn;
-  if (endTurn === false) return false;
-  if (details?.retryable === false) return false;
-  return true;
+  return !isPausedTurn(context) && !incompleteCarrierVetoesReplay(event) && !incompleteCarrierVetoesReplay(response);
 }
 
 export function explicitErrorEventStatus(payload: unknown): number | undefined {
@@ -480,11 +483,9 @@ function retryableZeroOutputTerminal(payload: unknown, context?: object): boolea
   const isIncomplete = event.type === "response.incomplete" || event.status === "incomplete";
   if (!isIncomplete) return false;
   if (!emptyOutput) return false;
-  const details = recordValue(target.incomplete_details ?? event.incomplete_details);
   // A pause or explicit replay restriction takes precedence even when the reason is absent.
-  const endTurn = target.end_turn ?? event.end_turn;
-  if (isPausedTurn(context) || endTurn === false || details?.retryable === false) return false;
-  const reason = details?.reason;
+  if (isPausedTurn(context) || incompleteCarrierVetoesReplay(event) || incompleteCarrierVetoesReplay(target)) return false;
+  const reason = recordValue(target.incomplete_details ?? event.incomplete_details)?.reason;
   if (reason === undefined || reason === "max_output_tokens") return true;
   return typeof reason === "string" && RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(reason);
 }
@@ -764,10 +765,11 @@ export async function preflightComboStreamResponse(
           && !Array.isArray(payload) && (payload as { type?: unknown }).type === "error";
         // A zero-output bare error is terminal evidence. Explicit client errors stay
         // committed; unknown and retryable upstream failures may advance the combo.
-        const heldReasoning = (options?.requiredToolPrelude && requiredToolReasoningPrelude(payload))
-          || (options?.degeneratePrelude === true && comboStreamDegeneratePrelude(payload, commentaryItemIds));
-        if (heldReasoning) holdDeadline ??= new Promise(resolve => {
-          holdTimer = setTimeout(() => resolve("hold-expired"), COMBO_REQUIRED_TOOL_REASONING_HOLD_MS);
+        const heldReasoning = options?.degeneratePrelude === true
+          ? comboStreamDegeneratePrelude(payload, commentaryItemIds)
+          : options?.requiredToolPrelude && requiredToolReasoningPrelude(payload);
+        if (options?.degeneratePrelude || options?.requiredToolPrelude) holdDeadline ??= new Promise(resolve => {
+          holdTimer = setTimeout(() => resolve("hold-expired"), COMBO_STREAM_PRELUDE_HOLD_MS);
         });
         const degenerateTerminal = options?.degeneratePrelude === true
           && isDegenerateStreamTerminal(payload, logCtx);

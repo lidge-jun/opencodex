@@ -793,9 +793,10 @@ serving attempt reaches the routed model's known output ceiling and the turn is 
 Devin's preset has no output ceiling, so this output-limit cooldown requires an explicit ceiling
 in the provider configuration. An existing longer cooldown keeps its expiry.
 
-During Responses preflight, the combo can try the next eligible target if a terminal arrives
-within 1 second of the first held reasoning or commentary frame and contains only that prelude.
-A final answer, a tool call, or expiry of the hold commits the stream to the selected target.
+During Responses preflight, the combo can try the next eligible target if a replayable terminal
+contains only reasoning or commentary text and arrives within 1 second of the first buffered
+event, including `response.created`. A refusal, final answer, tool call, or expiry of the hold
+commits the stream to the selected target.
 
 ### Last-resort targets
 

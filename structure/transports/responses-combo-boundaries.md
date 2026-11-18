@@ -123,8 +123,8 @@ Provider-owned custom calls retain their call-ID-prefix ownership. Hosted effect
 and the local web-search bridge make the verdict non-replayable, including sparse terminal snapshots.
 
 The mandatory native contract holds known reasoning frames during preflight. It keeps the
-existing aggregate byte/chunk caps and a fixed `COMBO_REQUIRED_TOOL_REASONING_HOLD_MS` deadline of
-1,000 ms from the first held reasoning frame in `src/server/responses/combo-stream-preflight.ts`.
+existing aggregate byte/chunk caps and a fixed `COMBO_STREAM_PRELUDE_HOLD_MS` deadline of
+1,000 ms from the first buffered client-visible event in `src/server/responses/combo-stream-preflight.ts`.
 Trickling frames do not reset it. Deadline expiry, text, tools, opaque/unknown events or either cap
 commit this child; expiry releases held bytes and transfers the pending read to the existing relay,
 preserving its eventual chunk or error exactly once without authorizing replay. A missing-call
@@ -370,11 +370,14 @@ are strictly bounded:
 Existing live cooldowns with a later expiration (e.g. upstream Retry-After) are never shortened by a
 committed terminal write.
 
-Responses combo preflight holds reasoning and commentary frames for up to 1,000 ms from the first
-held frame (`COMBO_REQUIRED_TOOL_REASONING_HOLD_MS`). A terminal within that window can trigger
-`degenerate_completion` if its snapshot contains reasoning or commentary and carries no final answer
-or tool call. Incompletes also require replay eligibility. A terminal-only snapshot can itself supply
-the prelude. The next hop remains subject to the combo's eligibility and send budget. Semantic output,
-an unknown event type, or expiry of the hold commits the original stream.
-Coverage: `tests/routing/combo-committed-terminal-cooldown.test.ts` and `tests/routing/combo-stream-preflight.test.ts`.
+Responses combo preflight holds reasoning and commentary for up to 1,000 ms from the first buffered
+client-visible event, including `response.created`. A terminal within that window can trigger
+`degenerate_completion` when its output contains only reasoning and commentary text. A terminal-only
+snapshot can itself supply the prelude. Refusals and other non-prelude content commit the original
+stream whether they arrive in a separate frame or only in a terminal snapshot. Incomplete terminals
+require replay eligibility. An explicit `end_turn: false` or `incomplete_details.retryable: false` on
+either the event or the response snapshot vetoes both degenerate and zero-output replay.
+Hold expiry commits the original stream. The next hop remains subject to eligibility and send budget.
+Coverage: `tests/routing/combo-committed-terminal-cooldown.test.ts`, `tests/routing/combo-stream-preflight.test.ts`,
+and `tests/routing/combo-stream-prelude-guards.test.ts`.
 
