@@ -34,6 +34,7 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   finalizeFailure?: boolean;
   repairFileRefusal?: boolean;
   observeFileRefusal?: boolean;
+  observeNativeRefusal?: boolean;
   preserve?: "service" | "desktop" | "receipt" | "sibling" | "restart" | "restart-rollback" | "recycle-pending" | "restart-rollback-recycle";
   mutation?: "connection" | "journal" | "process-journal" | "config" | "profile" | "unverified" | "selection" | "oversized" | "nonregular" | "rotation" | "hub" | "catalog" | "prior-catalog" | "api-key" | "token" | "management" | "link-id";
 };
@@ -362,17 +363,18 @@ if (options.mode === "retry") {
     // The test owns this synthetic runtime and disposes it after observing the preflight.
     process.exit(0);
   }
-  if (options.repairFileRefusal || options.observeFileRefusal) {
+  if (options.repairFileRefusal || options.observeFileRefusal || options.observeNativeRefusal) {
     const printError = console.error;
     console.error = (...args: unknown[]) => {
       printError(...args);
-      if (!args.some(value => String(value).includes("The listener remains bound"))) return;
+      if (!args.some(value => String(value).includes(options.observeNativeRefusal
+        ? "Link Child Codex routing restore refused" : "The listener remains bound"))) return;
       void (async () => {
         const health = await fetch(`http://127.0.0.1:${config.port}/healthz`);
         const { readRuntimePort } = await import("../../src/config/process-state");
         fileRefusal = { bound: health.ok, stopping: readRuntimePort(process.pid)?.clientStopping === true,
           before: Object.fromEntries(Object.entries(filePaths).map(([id, path]) => [id, readFileSync(path, "utf8")])) };
-        if (options.observeFileRefusal) {
+        if (options.observeFileRefusal || options.observeNativeRefusal) {
           report({ refused: true, bound: fileRefusal.bound, stopping: fileRefusal.stopping });
           // Dispose only this synthetic process after observing that production kept it bound.
           process.exit(0);

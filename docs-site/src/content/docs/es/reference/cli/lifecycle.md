@@ -48,7 +48,7 @@ ocx start --socks5-off
 
 Un Child de Remote Link sin supervisor que recibe una señal de apagado restaura Codex nativo y Grok administrado antes de liberar su listener, comprobando de nuevo la conexión atendida antes de cada escritura. La supervisión de servicio o Desktop, la propiedad de otra instancia, los traspasos de reinicio o reciclaje y los recibos pendientes de parada del padre conservan las integraciones. Durante el apagado se rechaza un reinicio vinculado con `409 runtime_stopping`. Una terminación forzada puede omitir los manejadores de señales; sigue siendo necesaria la restauración del `ocx stop` del padre. Para volver a enrutar Codex por el Home, inicia primero el Child con `ocx start`, o `ocx service start` si está instalado como servicio, y después ejecuta `ocx sync --restart-codex`. Iniciar por sí solo no restablece el enrutamiento. Sincronizar con el Child detenido también lo restablece, pero apuntaría a un listener que no está ejecutándose: inicia primero el Child.
 
-Si la limpieza de archivos se rechaza por un conflicto o porque no se puede verificar su titularidad, el listener permanece abierto y la sincronización queda pausada; repara la configuración o la evidencia de titularidad indicada y vuelve a ejecutar `ocx stop`. Para salir del Home después de una parada rechazada, `ocx disconnect --recover-config --yes` completa la recuperación de la configuración y reinicia el Child retenido como OpenCodex independiente. Una parada o recuperación todavía en curso sigue rechazando el reinicio.
+Si se rechaza la limpieza de archivos o la restauración de Codex nativo o Grok, incluso por titularidad no verificable, el listener permanece abierto y la sincronización queda pausada; repara la configuración o la evidencia de titularidad indicada y vuelve a ejecutar `ocx stop`. Para salir del Home después de una parada rechazada, `ocx disconnect --recover-config --yes` completa la recuperación de la configuración y reinicia el Child retenido como OpenCodex independiente. Una parada o recuperación todavía en curso sigue rechazando el reinicio.
 
 Detiene el proxy en ejecución por su PID, elimina el archivo PID y restaura Codex nativo cuando el entorno es independiente. Si hay un servicio administrado, `ocx stop` lo detiene primero para impedir que vuelva a iniciar el proxy.
 
@@ -77,7 +77,9 @@ Los entornos antiguos o no verificados se rechazan antes de actuar. Actualiza o 
 mediante su supervisor y reinténtalo. Usa `ocx disconnect` solo si quieres liberar las integraciones
 de la conexión. Si el cliente ya está detenido, otra parada verifica que el gestor del servicio esté
 inactivo y que no haya listeners en los endpoints locales conocidos antes de devolver el resultado
-habitual de proceso ausente.
+habitual de proceso ausente. Con el puerto configurado en `0`, se comprueba el puerto concreto
+guardado en el registro del entorno. Sin ese endpoint registrado, se rechaza la parada porque
+no se puede demostrar que el entorno esté ausente.
 
 Mientras OpenCodex Desktop esté abierto, `ocx stop` no mantiene detenido el proxy: la aplicación lo trata como una salida inesperada y lo inicia de nuevo, en segundos si lo había iniciado ella o en aproximadamente un minuto si solo se había conectado a él. Usa **Stop proxy** en su bandeja, para un proxy iniciado por la aplicación, o **Quit** para mantenerlo detenido. Por esa misma razón, el botón **Stop** del dashboard rechaza la acción con `desktop_supervised` sin cambios cuando el proxy pertenece a la aplicación. En otros entornos, ejecuta `POST /api/stop`, salvo con el Programador de tareas de Windows: allí un contenedor puede reiniciar el proxy después de terminar la tarea. El dashboard responde `respawnable_service`, no cambia nada y pide ejecutar `ocx stop` desde fuera del proxy para verificar que no reaparezca antes de restaurar los ajustes del cliente.
 

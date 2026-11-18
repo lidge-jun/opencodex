@@ -30,8 +30,12 @@ export async function restoreLinkClientRoutingBeforeExit(
   expected: OcxClientConnectionConfig, options: { syncFenced: boolean },
 ): Promise<LinkRoutingRestoreResult> {
   expected = structuredClone(expected);
+  const retainOnRefusal = (result: LinkRoutingRestoreResult): LinkRoutingRestoreResult => result.success ? result : {
+    ...result, retainListener: true,
+    message: `${result.message} The listener remains bound; repair the reported evidence, then retry ocx stop.`,
+  };
   if (siblingOfLivePort() !== null || !isLinkConnection(expected) || preserveRouting()) {
-    return restoreLinkClientRouting(expected, options);
+    return retainOnRefusal(restoreLinkClientRouting(expected, options));
   }
   try {
     const { restoreLinkFileRouting } = await import("./stop-file-routing");
@@ -43,7 +47,7 @@ export async function restoreLinkClientRoutingBeforeExit(
     return { success: false, restored: false, retainListener: true,
       message: `Link Child file routing restore refused: ${error instanceof Error ? error.message : "restoration failed"}. The listener remains bound; repair the client configuration or ownership evidence, then retry ocx stop.` };
   }
-  return restoreLinkClientRouting(expected, options);
+  return retainOnRefusal(restoreLinkClientRouting(expected, options));
 }
 
 /** Unsupervised signal cleanup; explicit parent stop and restart retain their own restoration. */

@@ -113,8 +113,9 @@ export async function preflightConnectedClientStop(
           target = { ...live, pid: live.pid };
         } else {
           const config = loadConfig();
-          const endpoints = [...(runtime ? [runtime] : []), { port: config.port, hostname: config.hostname }];
-          if (endpoints.some(endpoint => !Number.isInteger(endpoint.port) || endpoint.port <= 0 || endpoint.port > 65535)
+          const endpoints = [...(runtime ? [runtime] : []),
+            ...(config.port === 0 ? [] : [{ port: config.port, hostname: config.hostname }])];
+          if (endpoints.length === 0 || endpoints.some(endpoint => !Number.isInteger(endpoint.port) || endpoint.port <= 0 || endpoint.port > 65535)
             || await observeGuardedManagerStopped({ kind: "absent" }) !== "inactive") throw unsupportedConnectedStop();
           for (const endpoint of endpoints) {
             if (await probeEndpointLiveness(endpoint) !== "dead") throw unsupportedConnectedStop();

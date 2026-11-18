@@ -32,6 +32,7 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   stopBodyFailure?: boolean;
   proxyProbePort?: number;
   alreadyStopped?: boolean;
+  staleRuntimeRecord?: boolean;
   absence?: "dead" | "unknown" | "live";
   managerState?: "inactive" | "active" | "unknown";
   /** Commit a disconnect while the capability probe is in flight. */
@@ -123,6 +124,7 @@ const { Database } = await import("bun:sqlite");
 const { prepareConfigMutationDatabasePathForWrite } = await import("../../src/config");
 const urls: string[] = [];
 const probes: string[] = [];
+const absenceProbes: number[] = [];
 const transports: string[] = [];
 let viaDirect = false;
 const unexpectedIo: string[] = [];
@@ -158,7 +160,7 @@ if (options.windowsStopWiring) (await import("../../src/cli/stop-windows-checked
 process.on("exit", () => {
   receiptBlocker?.close();
   writeFileSync(join(home, "parent-stop-result.json"), JSON.stringify({
-    calls, reclaimTimeouts, urls, probes, transports, unexpectedIo, nonce, postPartA,
+    calls, reclaimTimeouts, urls, probes, absenceProbes, transports, unexpectedIo, nonce, postPartA,
     receiptExists: nonce !== undefined && existsSync(receipts.pendingTeardownPathFor(nonce)),
   }));
 });
@@ -177,13 +179,13 @@ mock.module("../../src/config/pending-teardown", () => ({
 
 const state = await import("../../src/config/process-state");
 const readRuntime = state.readRuntimePort;
-if (!options.alreadyStopped && !options.noRuntimeRecord) {
+if ((!options.alreadyStopped || options.staleRuntimeRecord) && !options.noRuntimeRecord) {
   writeFileSync(join(home, "runtime-port.json"), JSON.stringify({ ...endpoint, pid: fakePid, attestationSecret: ATTESTATION_SECRET }));
 }
 mock.module("../../src/config/process-state", () => ({
   ...state,
   readPid: () => options.orphan || options.alreadyStopped || (options.deadPidReadsNull && !alive) ? null : fakePid,
-  readRuntimePort: (pid?: number) => options.alreadyStopped || options.noRuntimeRecord ? null : readRuntime(pid),
+  readRuntimePort: (pid?: number) => (options.alreadyStopped && !options.staleRuntimeRecord) || options.noRuntimeRecord ? null : readRuntime(pid),
   removePid() {},
   removeRuntimePort() {},
 }));
@@ -218,7 +220,7 @@ if (options.orphan || options.alreadyStopped) {
       return alive ? { ...endpoint, pid: fakePid, source: "config" } : null;
     },
     proveLiveProxyOwnedByHome: async () => "proven",
-    probeEndpointLiveness: async () => options.absence ?? "dead",
+    probeEndpointLiveness: async (target: { port: number }) => { absenceProbes.push(target.port); return options.absence ?? "dead"; },
   }));
 }
 if (options.alreadyStopped) {

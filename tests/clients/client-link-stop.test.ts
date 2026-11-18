@@ -287,6 +287,21 @@ test("native Link signal refuses a connection swapped after runtime publication"
   expect(report.protectedUnchanged).toBe(true);
 }, 20_000);
 
+for (const mutation of ["journal", "process-journal", "unverified"]) {
+  test(`native Codex refusal retains the Link listener after file cleanup (${mutation})`, async () => {
+    const report = await runStop({ mode: "runtime", mutation, fileClients: ["pi"], observeNativeRefusal: true, expectedRefusal: true });
+    expect(report.result).toEqual({ refused: true, bound: true, stopping: true });
+    expect(report.after).toBe(report.before);
+    expect(report.profileAfter).toBe(report.profileBefore);
+    expect(report.journalRetained).toBe(true);
+    expect(report.protectedUnchanged).toBe(true);
+    expect(report.catalogAfter).toEqual(JSON.parse(report.catalogBefore));
+    expect(report.grokAfter).toBe(report.grokBefore);
+    expect(report.fileAfter.pi).not.toContain("127.0.0.1");
+    expect(JSON.parse(report.fileAfter.pi)).toMatchObject({ fixtureUserSetting: "keep" });
+  }, 20_000);
+}
+
 test("owned Link full restore is idempotent and retains connection credentials", async () => {
   const report = await runStop({ mode: "helper", repeat: true });
   expect(report.result.first).toMatchObject({ success: true, restored: true });

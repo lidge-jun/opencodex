@@ -53,11 +53,11 @@ function restoreResult(success: boolean): CodexNativeRestoreResult {
   } as unknown as CodexNativeRestoreResult;
 }
 
-function connectClient(transport: "hub" | "link") {
+function connectClient(transport: "hub" | "link", port?: number) {
   const token = `ocx_data_${"c".repeat(40)}`;
   writeFileSync(join(home, "service-api-token"), token);
   const serverUrl = transport === "link" ? "http://127.0.0.1:10200" : "https://hub.example.test";
-  writeFileSync(join(home, "config.json"), JSON.stringify({ runtimeRole: "client", providers: {}, defaultProvider: "openai", client: {
+  writeFileSync(join(home, "config.json"), JSON.stringify({ port, runtimeRole: "client", providers: {}, defaultProvider: "openai", client: {
     serverUrl, managementUrl: serverUrl, managementTransport: "direct", transport,
     ...(transport === "link" ? { link: { tunnelPort: 10200, linkId: "lnk_0123456789abcdef" } } : {}),
     selectedClients: ["codex"], tokenEnv: "OPENCODEX_API_AUTH_TOKEN", apiKeyId: "fixture-client",
@@ -72,12 +72,13 @@ async function runParentStop(options: {
   managerCascades?: boolean; guarded?: boolean; orphan?: boolean; exitCleanup?: boolean;
   nativeSignal?: boolean; apiFailure?: boolean; stopBodyFailure?: boolean;
   alreadyStopped?: boolean; absence?: "dead" | "unknown" | "live"; managerState?: "inactive" | "active" | "unknown";
+  configuredPort?: number; staleRuntimeRecord?: boolean;
   disconnectDuringProbe?: boolean; connectDuringDiscovery?: boolean; connectDuringPost?: boolean; lifecycleBusy?: boolean;
   connectAfterBoundary?: boolean; pendingAfterBoundary?: boolean; connectDuringRestore?: boolean;
   connectAfterExitInspection?: boolean; pendingAfterExitInspection?: boolean; pendingAfterGrok?: boolean; receiptClearBusy?: boolean;
   windowsStopWiring?: boolean;
 }) {
-  if (options.clientTransport) connectClient(options.clientTransport);
+  if (options.clientTransport) connectClient(options.clientTransport, options.configuredPort);
   const child = spawnSync(process.execPath, [fixturePath("parent-stop-runner.ts")], {
     cwd: repoPath(),
     env: { ...process.env, OPENCODEX_HOME: home },
@@ -92,7 +93,7 @@ async function runParentStop(options: {
   expect(existsSync(reportPath), child.stderr).toBe(true);
   const report = JSON.parse(readFileSync(reportPath, "utf8")) as {
     calls: { killed: number; native: number; grok: number; cleared: number; exited: number; service: number };
-    probes: string[];
+    probes: string[]; absenceProbes: number[];
     urls: string[]; transports: string[]; nonce?: string; receiptExists: boolean; unexpectedIo: string[];
   };
   expect(report.unexpectedIo, child.stderr).toEqual([]);
@@ -152,6 +153,17 @@ describe("API stop through process exit cleanup", () => {
 });
 
 describe("parent CLI shared teardown completion", () => {
+  for (const staleRuntimeRecord of [true, false]) {
+    test(`an ephemeral-port Link stop requires a concrete recorded endpoint (record=${staleRuntimeRecord})`, async () => {
+      const outcome = await runParentStop({ receipt: true, clientTransport: "link", alreadyStopped: true,
+        configuredPort: 0, staleRuntimeRecord, json: true, response: null, restore: restoreResult(true) });
+      expect(outcome.exitCode, outcome.stderr).toBe(staleRuntimeRecord ? 0 : 1);
+      expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: staleRuntimeRecord, runtimeDown: staleRuntimeRecord });
+      expect(outcome.calls).toMatchObject({ service: 0, killed: 0 });
+      expect(outcome.absenceProbes).toEqual(staleRuntimeRecord ? [ENDPOINT.port] : []);
+      expect(existsSync(join(home, "runtime-port.json"))).toBe(false);
+    });
+  }
   test("consecutive connected stops preserve configuration and the stopped managed client remains update-eligible", async () => {
     const first = await runParentStop({ receipt: true, clientTransport: "hub", serverTeardown: true, json: true,
       response: null, restore: restoreResult(true) });
