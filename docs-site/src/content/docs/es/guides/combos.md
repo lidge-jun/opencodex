@@ -518,7 +518,8 @@ razonamiento o comentarios y llega en el primer segundo a partir del primer even
 almacenado en el búfer, incluido `response.created`. El contenido de rechazo fija el destino del
 stream. Un motivo de rechazo como `content_filter` en `incomplete_details.reason` también lo fija,
 tanto si aparece en el evento terminal como en su instantánea `response`. Cualquiera de los dos
-puede impedir el reintento con `end_turn: false` o `incomplete_details.retryable: false`. Una
+puede impedir el reintento con `end_turn: false` o `incomplete_details.retryable: false`. Estos vetos
+también se aplican si el stream termina sin la llamada exigida por `tool_choice`. Una
 respuesta final, una llamada a una herramienta o el vencimiento de la espera también fijan el destino.
 
 <a id="last-resort-targets"></a>

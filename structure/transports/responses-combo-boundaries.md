@@ -129,7 +129,8 @@ Trickling frames do not reset it. Deadline expiry, text, tools, opaque/unknown e
 commit this child; expiry releases held bytes and transfers the pending read to the existing relay,
 preserving its eventual chunk or error exactly once without authorizing replay. A missing-call
 terminal held before commitment becomes the existing 502 combo failure; another
-target remains subject to eligibility, consent and budgets. After commitment the typed failed
+target remains subject to eligibility, consent and budgets. A replay veto on either terminal
+carrier still applies after the native missing-call rewrite. After commitment the typed failed
 terminal remains with that child. Output in a lifecycle or terminal snapshot commits conservatively.
 The checked missing-call terminal and the [degenerate-completion rule](#committed-terminal-cooldown-and-degenerate-completion-failover)
 can discard held prelude under their respective guards. Cancellation wakes a pending read; every exit

@@ -173,6 +173,32 @@ describe("native streaming combo mandatory tools (#7456)", () => {
     expect(text).not.toContain("held reasoning");
     expect(text).toContain("call_backup");
   });
+  test.each(["event", "response"].flatMap(carrier => [
+    { end_turn: false },
+    { incomplete_details: { retryable: false } },
+    { incomplete_details: { reason: "content_filter" } },
+    { incomplete_details: { reason: "refusal" } },
+  ].map(veto => ({ carrier, veto }))))("required-tool rewrite preserves the $carrier replay veto $veto", async ({ carrier, veto }) => {
+    const sent: Array<Record<string, unknown>> = [];
+    const config = configFor(() => sse({
+      type: "response.completed",
+      ...(carrier === "event" ? veto : {}),
+      response: { ...completed("m1"), ...(carrier === "response" ? veto : {}) },
+    }), sent);
+    const text = await (await request(config, "required")).text();
+    expect(sent.map(body => [body.model, body.tool_choice])).toEqual([["m1", "required"]]);
+    // The Responses wire normalizes "refusal" to "content_filter".
+    const clientVeto = veto.incomplete_details?.reason === "refusal"
+      ? { incomplete_details: { reason: "content_filter" } } : veto;
+    expect(terminal(text)).toMatchObject([{
+      type: "response.failed",
+      ...(carrier === "event" ? clientVeto : {}),
+      response: {
+        model: "m1", error: { code: "required_tool_contract_unsatisfied" },
+        ...(carrier === "response" ? clientVeto : {}),
+      },
+    }]);
+  });
   for (const prefix of [
     { type: "response.output_text.delta", delta: "visible text" },
     { type: "response.output_item.added", output_index: 0, item: { type: "web_search_call", id: "hosted", status: "in_progress" } },

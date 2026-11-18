@@ -248,8 +248,9 @@ function comboStreamDegeneratePrelude(payload: unknown, commentaryItemIds: Set<s
   return requiredToolReasoningPrelude(payload);
 }
 
-function incompleteCarrierVetoesReplay(carrier: Record<string, unknown> | undefined): boolean {
-  return carrier?.end_turn === false || recordValue(carrier?.incomplete_details)?.retryable === false;
+function incompleteCarriersVetoReplay(...carriers: Array<Record<string, unknown> | undefined>): boolean {
+  return carriers.some(carrier => carrier?.end_turn === false
+    || recordValue(carrier?.incomplete_details)?.retryable === false);
 }
 
 function classifyIncompleteReplayReason(
@@ -272,7 +273,7 @@ function isDegenerateStreamTerminal(payload: unknown, context?: object): boolean
   if (!event || (event.type !== "response.completed" && event.type !== "response.incomplete")) return false;
   const response = recordValue(event.response);
   // Output limits have a separate zero-output recovery contract. With prelude output they commit.
-  if (incompleteCarrierVetoesReplay(event) || incompleteCarrierVetoesReplay(response)
+  if (incompleteCarriersVetoReplay(event, response)
     || classifyIncompleteReplayReason(event, response) !== "retryable"
     || (event.type === "response.incomplete" && isPausedTurn(context))) return false;
   // Both carriers count: an item that exists only at event level is still client-visible
@@ -463,7 +464,9 @@ function retryableZeroOutputTerminal(payload: unknown, context?: object): boolea
     // so held text and reasoning are not evidence of anything sent; it keeps the retryability it
     // carries. Any other output item (a tool call, an action) still commits it.
     if (code === REQUIRED_TOOL_CONTRACT_CODE) {
-      return error?.retryable !== false && (emptyOutput || heldOnlyOutput(target.output, event.output));
+      return error?.retryable !== false && !incompleteCarriersVetoReplay(event, response)
+        && classifyIncompleteReplayReason(event, response) !== "veto"
+        && (emptyOutput || heldOnlyOutput(target.output, event.output));
     }
     if (!emptyOutput) return false;
     return !(typeof code === "string" && NON_REPLAYABLE_FAILED_CODES.has(code));
@@ -472,7 +475,7 @@ function retryableZeroOutputTerminal(payload: unknown, context?: object): boolea
   if (!isIncomplete) return false;
   if (!emptyOutput) return false;
   // A pause or explicit replay restriction takes precedence even when the reason is absent.
-  if (isPausedTurn(context) || incompleteCarrierVetoesReplay(event) || incompleteCarrierVetoesReplay(response)) return false;
+  if (isPausedTurn(context) || incompleteCarriersVetoReplay(event, response)) return false;
   return classifyIncompleteReplayReason(event, response) !== "veto";
 }
 
