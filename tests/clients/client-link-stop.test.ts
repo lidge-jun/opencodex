@@ -223,6 +223,15 @@ test("Linux Link forced stop refuses an unavailable pidfd without sending a nume
   expect(report.result).toMatchObject({ signals: [], message: expect.stringContaining("pidfd") });
 }, 20_000);
 
+test.each(["stopping", "different-generation"] as const)("Linux Link sibling escalation after TERM with %s", async siblingEscalation => {
+  const { result } = await runStop({ mode: "runtime", preserve: "sibling", siblingEscalation });
+  expect(result).toEqual({
+    signals: siblingEscalation === "stopping" ? [[73, 15], [73, 9]] : [[73, 15]],
+    openedExactlyOnceForTarget: true, closed: [73], stopping: true,
+    ...(siblingEscalation === "different-generation" ? { refusal: expect.stringContaining("Connected-client stop refused") } : {}),
+  });
+}, 20_000);
+
 test("macOS Link stop sends only an orderly signal when the attested Child remains live", async () => {
   const report = await runStop({ mode: "termination", terminationPlatform: "darwin" });
   expect(report.result).toMatchObject({ signals: ["SIGTERM"], message: expect.stringContaining("foreground terminal") });

@@ -331,8 +331,10 @@ export async function preflightConnectedClientStop(
     if ((savedLink || clientRecord) && !targetStart) throw unsupportedConnectedStop();
     const capability = await assertConnectedClientStopSupported(target, { healthOnly: connection.kind === "disconnected" || standaloneSibling });
     const sameStart = () => targetStart === undefined || readClientStopProcessStart(stopTarget.pid) === targetStart;
-    const checkPinnedTarget = () => {
-      if (!Bun.deepEquals(readRuntimePort(stopTarget.pid), pinned, true) || !sameStart()) throw unsupportedConnectedStop();
+    const checkPinnedTarget = (afterTerm?: RuntimePortState) => {
+      const current = readRuntimePort(stopTarget.pid);
+      if ((!Bun.deepEquals(current, pinned, true) && !(afterTerm && Bun.deepEquals(current, afterTerm, true)))
+        || !sameStart()) throw unsupportedConnectedStop();
     };
     checkPinnedTarget();
     if (!capability) throw unsupportedConnectedStop();
@@ -351,8 +353,9 @@ export async function preflightConnectedClientStop(
         if (siblingOfPort === undefined || pinned.siblingOfPort !== siblingOfPort || !capability.nativeClient
           || !pinned.servingGeneration) throw unsupportedConnectedStop();
         const { terminateAttestedClient } = await import("./stop-client-process");
-        const verify = () => {
-          checkPinnedTarget();
+        const stopping = { ...pinned, clientStopping: true as const };
+        const verify = (phase?: "after-term") => {
+          checkPinnedTarget(phase === "after-term" ? stopping : undefined);
           const current = readClientConnectionState();
           if (current.kind !== "connected" || linkStopConnectionOwner(current.value) !== link) throw unsupportedConnectedStop();
         };

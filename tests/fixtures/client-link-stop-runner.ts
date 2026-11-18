@@ -11,6 +11,7 @@ import { ensureCatalogBackup } from "../../src/codex/catalog/parsing";
 import { takeDesktopSupervisedMarker } from "../../src/lib/system-restart-contract";
 import { claimPendingTeardown, pendingTeardownOutstanding, pendingTeardownPathFor, quarantinePendingTeardown } from "../../src/config/pending-teardown";
 import type { ClientStopOwner } from "../../src/config/process-state";
+import type { StopTargetProof } from "../../src/cli/stop-restore";
 import { randomBytes } from "node:crypto";
 
 const options = JSON.parse(readFileSync(0, "utf8")) as {
@@ -46,6 +47,7 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   busyStopFence?: boolean;
   busyRollbackPublication?: boolean;
   terminationPlatform?: "linux" | "darwin";
+  siblingEscalation?: "stopping" | "different-generation";
   removeToken?: boolean;
   finalizeFailure?: boolean;
   repairFileRefusal?: boolean;
@@ -456,6 +458,69 @@ if (options.mode === "retry") {
       modelsReady(); await release; return Response.json({ data: [{ id: "fixture/late-home-model" }] });
     }) as typeof fetch }).then(() => { fileLateResult = "unexpected completion"; }, error => { fileLateResult = error.message; });
     await ready;
+  }
+  if (options.siblingEscalation) {
+    const { preflightConnectedClientStop } = await import("../../src/cli/stop-restore");
+    const { readRuntimePort, writeRuntimePort } = await import("../../src/config/process-state");
+    const { markClientRuntimeStopping } = await import("../../src/client/sync-runtime");
+    const runtime = readRuntimePort(process.pid)!;
+    const control = await import("../../src/lib/process-control");
+    const owner = await import("../../src/client/stop-teardown-owner");
+    const linux = await import("../../src/service/health-sentinel-linux");
+    const state = await import("../../src/client/state");
+    const readConnection = state.readClientConnectionState;
+    const readStart = owner.readClientStopProcessStart;
+    const open = linux.openVerifiedPidfd;
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const setPlatform = (value: string) => Object.defineProperty(process, "platform", { ...platform, value });
+    const native = <T>(action: () => T): T => {
+      const previous = process.platform;
+      setPlatform(platform.value);
+      try { return action(); } finally { setPlatform(previous); }
+    };
+    const signals: Array<[fd: number, signal: number]> = [];
+    const closed: number[] = [];
+    const opened: number[] = [];
+    mock.module("../../src/lib/process-control", () => ({ ...control, waitForExit: () => signals.some(([, signal]) => signal === 9) }));
+    mock.module("../../src/client/stop-teardown-owner", () => ({ ...owner, readClientStopProcessStart: (pid: number) => native(() => readStart(pid)) }));
+    mock.module("../../src/client/state", () => ({ ...state, readClientConnectionState: () => native(readConnection) }));
+    mock.module("../../src/service/health-sentinel-linux", () => ({ ...linux,
+      openVerifiedPidfd: (pid: number, verify: () => boolean) => open(pid, verify, { load: () => ({
+        open: target => {
+          opened.push(target);
+          return { value: 73, errno: 0 };
+        },
+        signal: (fd, signal) => {
+          if (signal !== 0) signals.push([fd, signal]);
+          if (signal === 15) native(() => {
+            markClientRuntimeStopping({ pid, port: runtime.port, attestationSecret: runtime.attestationSecret! });
+            if (options.siblingEscalation === "different-generation") {
+              writeRuntimePort({ ...readRuntimePort(pid)!, servingGeneration: randomBytes(16).toString("hex") });
+            }
+          });
+          return { value: 0, errno: 0 };
+        },
+        close: fd => { closed.push(fd); },
+        dispose: () => {},
+      }) }),
+    }));
+    let proof: StopTargetProof | undefined;
+    const outcome = await preflightConnectedClientStop(runtime, () => {
+      throw new Error("a sibling must not acquire the shared stop fence");
+    }, undefined, undefined, value => { proof = value; }, 10100);
+    if (outcome !== null || !proof?.terminateSibling) throw new Error("fixture sibling preflight did not admit termination");
+    let refusal: string | undefined;
+    try {
+      setPlatform("linux");
+      proof.terminateSibling();
+    } catch (error) {
+      refusal = (error as Error).message;
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+    report({ signals, openedExactlyOnceForTarget: Bun.deepEquals(opened, [process.pid]), closed, refusal,
+      stopping: readRuntimePort(process.pid)?.clientStopping });
+    process.exit(0);
   }
   if (options.mode === "file-stop") {
     if (options.receiptWriteFails) {

@@ -4,7 +4,7 @@ import { windowsProcessNative } from "../service/windows-process-native";
 import { unsupportedConnectedStop } from "./stop-restore";
 
 /** Terminate the attested Child only, including at the escalation and port-reclaim boundaries. */
-export function terminateAttestedClient(pid: number, start: string, verify: () => void): void {
+export function terminateAttestedClient(pid: number, start: string, verify: (phase?: "after-term") => void): void {
   if (!isProcessAlive(pid)) return;
   verify();
   if (process.platform === "linux") {
@@ -19,7 +19,7 @@ export function terminateAttestedClient(pid: number, start: string, verify: () =
     try {
       for (const signal of [15, 9] as const) {
         if (!isProcessAlive(pid)) return;
-        verify();
+        verify(signal === 9 ? "after-term" : undefined);
         const result = handle.terminate(signal);
         if (result === "not_target") return;
         if (result !== "terminated") throw unsupportedConnectedStop();
@@ -43,7 +43,7 @@ export function terminateAttestedClient(pid: number, start: string, verify: () =
   // orderly signal path, with no numeric-PID escalation after the wait.
   process.kill(pid, "SIGTERM");
   if (waitForExit(pid, 5000)) return;
-  verify();
+  verify("after-term");
   throw new ProxyOwnershipRefusedError(
     "Link Child did not exit after SIGTERM. Inspect its foreground terminal for the shutdown refusal or check its supervisor, repair the reported evidence, then retry ocx stop.",
     "connected_client_stop_unsupported",

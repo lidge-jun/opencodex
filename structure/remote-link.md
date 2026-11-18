@@ -4,7 +4,9 @@ An attested standalone sibling can stop even when its home has a saved Link conn
 If the sibling itself serves the saved Link, stop requires attested native Link health,
 a matching Link owner and serving generation in the pinned record, and a verified process
 incarnation. The CLI rechecks the record, Link owner and incarnation at termination and
-stops only that process. The service manager, teardown receipts and shared routing are
+stops only that process. After TERM, the recheck also accepts the exact record with
+`clientStopping: true`, which the Child publishes during shutdown. Linux uses the same
+bound pidfd for TERM and KILL. The service manager, teardown receipts and shared routing are
 outside this stop's authority. Unverified Link ownership or conflicting manager approval refuses the stop.
 
 Signal fencing uses the configuration mutation lock (`C`), yielding 50 ms between at most 20 attempts only when `ConfigMutationLockError` wraps `SQLITE_BUSY` or `SQLITE_LOCKED`; identity, storage and other failures refuse immediately. Restoration callers must explicitly supply their sync-fence verdict. `tests/clients/client-link-stop.test.ts` covers a real cross-process C transaction, retry exhaustion and non-contention errors.
