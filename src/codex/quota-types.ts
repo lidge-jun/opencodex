@@ -109,7 +109,7 @@ export type StoredAccountQuota = {
   /** Local short-usage observation time; partial/credit updates do not refresh it. */
   shortObservedAt?: number;
   shortWindowSeconds?: number;
-  /** Runtime-проекция identity-bound WHAM-доказательства отсутствия длинных окон. */
+  /** Runtime projection of identity-bound WHAM evidence that no long windows exist. */
   shortOnlyObservedAt?: number;
   customWindows?: Array<{ label: string; percent: number; resetAt?: number }>;
   resetCredits?: number;
