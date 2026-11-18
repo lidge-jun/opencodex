@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { OAUTH_ACCOUNT_LOG_LABEL_RE } from "../../src/codex/account-label";
 import * as configModule from "../../src/config";
 import { forceRefreshOAuthAccessSnapshot, getValidAccessTokenSnapshot } from "../../src/oauth";
 import { credentialGeneration, getAccountSet, getAuthStorePath, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
@@ -971,7 +972,8 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
       const attempts = readUsageEntries().at(-1)?.attempts;
       expect(attempts?.map(attempt => ({ status: attempt.status, sendCount: attempt.sendCount })))
         .toEqual([{ status: 401, sendCount: 1 }, { status: 200, sendCount: 1 }]);
-      expect(attempts?.[1].accountLogLabel).toBe(attempts?.[0].accountLogLabel);
+      expect(attempts?.[0]?.accountLogLabel ?? "").toMatch(OAUTH_ACCOUNT_LOG_LABEL_RE);
+      expect(attempts?.[1]?.accountLogLabel).toBe(attempts?.[0]?.accountLogLabel);
       expect(attempts?.[1].recoveryKinds).toContain("oauth-401");
     } finally { await server.stop(true); }
   });
