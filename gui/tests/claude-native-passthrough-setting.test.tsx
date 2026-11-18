@@ -1,6 +1,6 @@
 /**
  * The native passthrough switch lives under the Claude account pool: it reads the global Claude Code
- * setting, saves only that one field, and keeps the shown state when a save fails.
+ * setting, saves only that one field, and reconciles with the runtime after an ambiguous save.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
@@ -48,7 +48,10 @@ afterEach(async () => {
   await testWindow.happyDOM?.close?.();
 });
 
-function stubClaudeCode(get: { nativePassthrough?: boolean } | "fail", put?: number | { nativePassthrough?: boolean }): { puts: Record<string, unknown>[] } {
+function stubClaudeCode(
+  get: { nativePassthrough?: boolean } | "fail" | (() => Response | Promise<Response>),
+  put?: number | { nativePassthrough?: boolean },
+): { puts: Record<string, unknown>[] } {
   const calls = { puts: [] as Record<string, unknown>[] };
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (!String(input).endsWith("/api/claude-code")) throw new Error("unexpected fetch");
@@ -58,6 +61,7 @@ function stubClaudeCode(get: { nativePassthrough?: boolean } | "fail", put?: num
       if (typeof put === "number") return new Response(null, { status: put });
       return Response.json({ enabled: true, ...(put ?? body) });
     }
+    if (typeof get === "function") return get();
     if (get === "fail") return new Response(null, { status: 500 });
     return Response.json({ enabled: true, ...get });
   }) as typeof fetch;
@@ -82,8 +86,27 @@ async function mount(): Promise<HTMLElement> {
 }
 
 const toggleOf = (host: HTMLElement) => host.querySelector<HTMLButtonElement>("button.toggle")!;
+const retryOf = (host: HTMLElement) => [...host.querySelectorAll<HTMLButtonElement>("button")]
+  .find(button => button.textContent === DICTS.en["common.retry"])!;
 
 describe("Claude native passthrough setting", () => {
+  test.each(Object.entries(DICTS))("%s copy puts Claude picker and Desktop aliases ahead of modelMap", (locale, dict) => {
+    const descriptions: Record<string, RegExp> = {
+      de: /Modellauswahl.*Claude Desktop.*vor modelMap/,
+      en: /Claude picker.*Claude Desktop.*before modelMap/,
+      fr: /sélecteur.*Claude Desktop.*avant modelMap/,
+      ja: /モデルピッカー.*Claude Desktop.*modelMap より先/,
+      ko: /모델 선택기.*Claude Desktop.*modelMap보다 먼저/,
+      pt: /seletor.*Claude Desktop.*antes de modelMap/,
+      ru: /выбора моделей.*Claude Desktop.*до modelMap/,
+      tr: /model seçici.*Claude Desktop.*modelMap öncesinde/,
+      vi: /bộ chọn.*Claude Desktop.*trước modelMap/,
+      zh: /模型选择器.*Claude Desktop.*先于 modelMap/,
+      "zh-TW": /模型選擇器.*Claude Desktop.*先於 modelMap/,
+    };
+    expect(dict["claude.nativePassthroughDesc"]).toMatch(descriptions[locale]!);
+  });
+
   test("a runtime that omits nativePassthrough leaves the switch disabled and reports a load error", async () => {
     const calls = stubClaudeCode({});
     const host = await mount();
@@ -106,12 +129,39 @@ describe("Claude native passthrough setting", () => {
     expect(toggleOf(host).getAttribute("aria-pressed")).toBe("true");
   });
 
-  test.each([500, {}, { nativePassthrough: true }])("a failed or unconfirmed save (%j) keeps the shown state and reports it", async put => {
-    stubClaudeCode({ nativePassthrough: true }, put);
+  test.each([500, {}, { nativePassthrough: true }])("a failed or unconfirmed save (%j) disables the switch until a live read", async put => {
+    const live = Promise.withResolvers<Response>();
+    let reads = 0;
+    const calls = stubClaudeCode(() => ++reads === 1 ? Response.json({ nativePassthrough: true }) : live.promise, put);
     const host = await mount();
     await act(async () => { toggleOf(host).click(); await flush(); });
-    expect(toggleOf(host).getAttribute("aria-pressed")).toBe("true");
+    expect(toggleOf(host).disabled).toBe(true);
+    expect(toggleOf(host).hasAttribute("aria-pressed")).toBe(false);
+    expect(reads).toBe(2);
     expect(host.querySelector('[role="alert"]')?.textContent).toBe(DICTS.en["claude.saveFailed"]);
+    await act(async () => { toggleOf(host).click(); await flush(); });
+    expect(calls.puts).toEqual([{ nativePassthrough: false }]);
+    await act(async () => { live.resolve(Response.json({ nativePassthrough: false })); await flush(); });
+    expect(toggleOf(host).disabled).toBe(false);
+    expect(toggleOf(host).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  test("Retry reads again after a failed reconciliation and restores the live value", async () => {
+    let reads = 0;
+    const calls = stubClaudeCode(() => {
+      reads += 1;
+      if (reads === 2) return new Response(null, { status: 503 });
+      return Response.json({ nativePassthrough: reads === 1 });
+    }, 500);
+    const host = await mount();
+    await act(async () => { toggleOf(host).click(); await flush(); });
+    expect(toggleOf(host).disabled).toBe(true);
+    expect(host.textContent).toContain(DICTS.en["claude.nativePassthroughLoadFailed"]);
+    await act(async () => { retryOf(host).click(); await flush(); });
+    expect(toggleOf(host).disabled).toBe(false);
+    expect(toggleOf(host).getAttribute("aria-pressed")).toBe("false");
+    expect(reads).toBe(3);
+    expect(calls.puts).toEqual([{ nativePassthrough: false }]);
   });
 
   test("a failed load disables the switch, says why, and Retry loads it again", async () => {
@@ -120,8 +170,7 @@ describe("Claude native passthrough setting", () => {
     expect(host.querySelector<HTMLButtonElement>("button.toggle")!.disabled).toBe(true);
     expect(host.textContent).toContain(DICTS.en["claude.nativePassthroughLoadFailed"]);
     stubClaudeCode({ nativePassthrough: false });
-    const retry = [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === DICTS.en["common.retry"])!;
-    await act(async () => { retry.click(); await flush(); });
+    await act(async () => { retryOf(host).click(); await flush(); });
     expect(toggleOf(host).disabled).toBe(false);
     expect(toggleOf(host).getAttribute("aria-pressed")).toBe("false");
   });

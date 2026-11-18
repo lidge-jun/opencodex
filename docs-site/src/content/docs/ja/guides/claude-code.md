@@ -130,7 +130,8 @@ hook を削除します。Claude Desktop は独立した profile を使用し、
 `claudeCode.anthropicBaseUrl` で別のアドレスを指定できます。Claude のモデル選択画面と Claude Desktop の受信時エイリアスは、`modelMap` より先に解決されます。
 エイリアスではないモデル ID をキーにした `modelMap` エントリは、パススルーのオン・オフにかかわらず、
 指定された別のプロバイダーのモデルへリクエストを送ります。パススルーをオフにすると、マッピングのない
-Claude のモデル ID はルーターに渡されます。ルーターは、その ID を `defaultModel` にした有効なプロバイダー、
+Claude のモデル ID はルーターに渡されます。ルーターはまずルーティングポリシーのエイリアスを確認し、次にコンボのエイリアスを確認します。
+どちらにも一致しない場合は、その ID を `defaultModel` にした有効なプロバイダー、
 有効な `anthropic` または `anthropic-*` プロバイダー、その ID をモデル一覧に含むプロバイダー、
 プロバイダー側のモデルエイリアス、最後に既定のプロバイダーの順に確認します。
 ルートが Anthropic OAuth プロバイダーの場合は OpenCodex に保存した Anthropic アカウントが処理し、2 つ目の

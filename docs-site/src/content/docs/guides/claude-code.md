@@ -650,10 +650,11 @@ or the **Native Claude passthrough** switch under the Claude account pool in Pro
 Claude → Accounts; point elsewhere
 with `claudeCode.anthropicBaseUrl`. Claude picker and Desktop ingress aliases resolve before
 `modelMap`. A `modelMap` entry keyed by a raw model ID routes to its cross-provider target in either
-state. With passthrough off, an unmapped raw Claude model ID proceeds to the router. The router
-checks, in order, an enabled provider whose `defaultModel` is that ID, an enabled `anthropic` or
-`anthropic-*` provider, a provider whose model list includes the ID, a provider-model alias, and
-finally the default provider. When the route is an Anthropic OAuth provider, the Anthropic accounts stored in OpenCodex serve the request; a second
+state. With passthrough off, an unmapped raw Claude model ID proceeds to the router. The router first
+checks for routing policy aliases, then combo aliases. If neither matches, it checks, in order,
+an enabled provider whose `defaultModel` is that ID, an enabled `anthropic` or `anthropic-*`
+provider, a provider whose model list includes the ID, a provider-model alias, and finally the
+default provider. When the route is an Anthropic OAuth provider, the Anthropic accounts stored in OpenCodex serve the request; a second
 stored account adds 429 failover, and the proactive
 [Claude OAuth account pool](#claude-oauth-account-pool-experimental) applies once `anthropicAccountPool.enabled` is on. Routing follows
 the setting from the next request; relaunch Claude Code sessions that are already running so their

@@ -530,6 +530,7 @@ State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
+| GET | `/api/claude-code` |
 | PUT | `/api/claude-code` |
 
 | Flag | Value | Meaning |
@@ -554,6 +555,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--json` | boolean | Emit the result as JSON. |
 
 - At least one setting is required. --first-party must be set alone and writes Claude settings immediately.
+- --native-passthrough checks support on the running proxy before sending the settings update.
 - Clear both helper model and backend with - to restore inheritance. Preserve shared_proxy_retained warnings.
 
 ### `ocx claude desktop show`

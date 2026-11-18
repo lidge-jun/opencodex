@@ -373,7 +373,8 @@ panodaki Providers → Anthropic Claude → Accounts bölümünde Claude hesap h
 `claudeCode.anthropicBaseUrl` ile başka bir yeri işaret edin. Claude model seçicisinden ve Claude Desktop'tan gelen takma adlar `modelMap` öncesinde
 çözümlenir. Anahtarı ham model kimliği olan bir `modelMap` girdisi, geçiş açıkken de kapalıyken de
 isteği diğer sağlayıcıdaki hedef modele gönderir. Geçiş kapalıyken eşlemesi olmayan ham bir Claude
-model kimliği yönlendiriciye gider. Yönlendirici sırasıyla `defaultModel` değeri bu kimlik olan
+model kimliği yönlendiriciye gider. Yönlendirici önce yönlendirme politikası takma adlarına,
+sonra kombo takma adlarına bakar. Eşleşme yoksa sırasıyla `defaultModel` değeri bu kimlik olan
 etkin bir sağlayıcıya, etkin bir `anthropic` veya `anthropic-*` sağlayıcısına, model listesinde bu
 kimliği içeren bir sağlayıcıya, sağlayıcı tarafındaki model takma adına ve son olarak varsayılan
 sağlayıcıya bakar. Rota bir Anthropic OAuth sağlayıcısıysa isteği OpenCodex'te kayıtlı Anthropic

@@ -332,8 +332,8 @@ groupe de comptes Claude dans Providers → Anthropic Claude → Accounts du tab
 `claudeCode.anthropicBaseUrl`. Les alias d'entrée du sélecteur de modèles Claude et de Claude Desktop sont résolus avant
 `modelMap`. Une entrée `modelMap` dont la clé est un identifiant de modèle brut dirige la demande
 vers le modèle cible chez l'autre fournisseur, que le relais soit activé ou désactivé. Relais
-désactivé, un identifiant brut de modèle Claude sans correspondance passe au routeur. Celui-ci
-examine dans l'ordre un fournisseur activé dont le `defaultModel` est cet identifiant, un
+désactivé, un identifiant brut de modèle Claude sans correspondance passe au routeur. Celui-ci vérifie d'abord
+les alias de politique de routage, puis les alias de combos. Sans correspondance, il examine dans l'ordre un fournisseur activé dont le `defaultModel` est cet identifiant, un
 fournisseur `anthropic` ou `anthropic-*` activé, un fournisseur dont la liste de modèles contient
 l'identifiant, un alias de modèle du fournisseur, puis le fournisseur par défaut. Quand la route est un fournisseur OAuth
 Anthropic, les comptes Anthropic enregistrés dans OpenCodex servent la requête ; un deuxième compte

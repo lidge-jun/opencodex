@@ -250,7 +250,8 @@ Anthropic。若任一供應商標頭含有代理許可密鑰，該密鑰會被�
 或關閉儀表板 Providers → Anthropic Claude → Accounts 中 Claude 帳號池下方的 **Claude 原生透傳** 開關來停用；也可以透過
 `claudeCode.anthropicBaseUrl` 指向其他位置。Claude 模型選擇器與 Claude Desktop 傳入的別名會先於 `modelMap` 解析。以原始模型 ID 為鍵的
 `modelMap` 項目，無論透傳開啟或關閉，都會將請求送至其他提供者的目標模型。關閉透傳後，沒有對應項目的
-原始 Claude 模型 ID 會交給路由器。路由器依序檢查：`defaultModel` 為該 ID 的已啟用提供者、已啟用的
+原始 Claude 模型 ID 會交給路由器。路由器先檢查路由政策別名，再檢查組合別名。
+兩者皆不相符時，依序檢查：`defaultModel` 為該 ID 的已啟用提供者、已啟用的
 `anthropic` 或 `anthropic-*` 提供者、模型清單包含該 ID 的提供者、提供者端的模型別名，最後是預設提供者。
 當路由是 Anthropic OAuth 提供者時，由 OpenCodex 中儲存的 Anthropic 帳號處理請求；再儲存一個帳號即可在
 429 時容錯移轉，而主動的 [Claude OAuth 帳號池](#claude-oauth-帳號池實驗性) 需要開啟 `anthropicAccountPool.enabled` 才會生效。

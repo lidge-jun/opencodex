@@ -1,8 +1,8 @@
 /**
  * Claude Code's native passthrough (`claudeCode.nativePassthrough`, default on), shown under the
  * Claude account pool because it decides whether Claude Code's own traffic can reach the pool at
- * all: while it is on, a bare Claude id that arrives with Claude Code's own login goes straight to
- * Anthropic and never meets these accounts. It is one global setting, saved immediately through
+ * all: while it is on, a bare Claude id unclaimed by an alias or model map goes straight to
+ * Anthropic when Claude Code sends its own login. It is one global setting, saved immediately through
  * the Claude Code settings patch, which changes only the field it is sent.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -29,20 +29,19 @@ export default function ClaudeNativePassthroughSetting({ apiBase, targetKey }: {
   useEffect(() => {
     let cancelled = false;
     const ac = new AbortController();
-    void Promise.resolve()
-      .then(() => fetch(`${apiBase}/api/claude-code`, { signal: ac.signal }))
+    void targetFetch(capture, `${apiBase}/api/claude-code`, { signal: ac.signal, cache: "no-store" })
       .then(response => {
         if (!response.ok) throw new Error("load");
         return response.json() as Promise<{ nativePassthrough?: unknown }>;
       })
       .then(json => {
-        if (cancelled) return;
+        if (cancelled || !isApiTargetCaptureCurrent(capture)) return;
         if (typeof json?.nativePassthrough !== "boolean") throw new Error("load");
         setEnabled(json.nativePassthrough);
         setLoadFailed(false);
       })
       .catch(() => {
-        if (cancelled || ac.signal.aborted) return;
+        if (cancelled || ac.signal.aborted || !isApiTargetCaptureCurrent(capture)) return;
         setEnabled(null);
         setLoadFailed(true);
       });
@@ -50,7 +49,7 @@ export default function ClaudeNativePassthroughSetting({ apiBase, targetKey }: {
       cancelled = true;
       ac.abort();
     };
-  }, [apiBase, reloadVersion]);
+  }, [apiBase, capture, reloadVersion]);
 
   const toggle = async () => {
     if (enabled === null || saving) return;
@@ -70,7 +69,11 @@ export default function ClaudeNativePassthroughSetting({ apiBase, targetKey }: {
       if (json?.nativePassthrough !== requested) throw new Error("save");
       setEnabled(json.nativePassthrough);
     } catch {
-      if (mountedRef.current && isApiTargetCaptureCurrent(capture)) setSaveFailed(true);
+      if (mountedRef.current && isApiTargetCaptureCurrent(capture)) {
+        setEnabled(null);
+        setSaveFailed(true);
+        setReloadVersion(version => version + 1);
+      }
     } finally {
       if (mountedRef.current) setSaving(false);
     }

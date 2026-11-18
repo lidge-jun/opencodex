@@ -5,6 +5,7 @@ import {
   printData,
   rejectArgs,
   runCliAction,
+  runtimeBaseUrl,
   runtimeRequest,
   summaryLines,
   takeBooleanOption,
@@ -130,8 +131,20 @@ export async function handleClaudeConfigCommand(argv: string[], deps: RuntimeApi
       body.cliFirstParty = firstParty;
     }
     if (Object.keys(body).length === 0) throw new CliUsageError("at least one Claude setting is required", CLAUDE_USAGE);
+    let writeDeps = deps;
+    if (nativePassthrough !== undefined) {
+      writeDeps = { ...deps, baseUrl: await runtimeBaseUrl(deps) };
+      const current = await runtimeRequest<{ nativePassthrough?: unknown }>(
+        "/api/claude-code", { redirect: "error" }, writeDeps,
+      );
+      if (typeof current?.nativePassthrough !== "boolean") {
+        throw new Error("The running proxy does not report support for --native-passthrough. Upgrade the proxy and retry. No settings were sent.");
+      }
+    }
     const result = await runtimeRequest<{ nativePassthrough?: unknown; warnings?: unknown }>(
-      "/api/claude-code", { method: "PUT", body: JSON.stringify(body) }, deps,
+      "/api/claude-code",
+      { method: "PUT", body: JSON.stringify(body), redirect: nativePassthrough === undefined ? undefined : "error" },
+      writeDeps,
     );
     if (nativePassthrough !== undefined && result?.nativePassthrough !== nativePassthrough) {
       throw new Error("The running proxy did not confirm --native-passthrough. Check the setting with `ocx claude config status`.");

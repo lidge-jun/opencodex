@@ -3296,7 +3296,7 @@ export const ja: Record<TKey, string> = {
   "claude.injectAgents": "サブエージェントを自動登録",
   "claude.injectAgentsDesc": "サブエージェントタブで選んだモデル(と現在のデフォルトモデル)をディスパッチ可能な Claude Code エージェント(ocx-*)として登録します。次回セッションから適用されます。",
   "claude.nativePassthrough": "Claude ネイティブパススルー",
-  "claude.nativePassthroughDesc": "オン(既定): モデルマッピングのない Claude モデルは、Claude Code が自身のログイン資格情報を送るとき、そのログインで Anthropic に直接送ります。それ以外のリクエストはルーティングされます。オフ: これらのモデルも OpenCodex の通常のモデルルーティングに従います。ルーティング先が Anthropic OAuth プロバイダーなら保存したアカウントが処理し、Claude アカウントプールを有効にしていればプールが適用されます。マッピングされたモデルはどちらの場合もマッピング先に送られます。実行中の Claude Code セッションは再起動が必要です。",
+  "claude.nativePassthroughDesc": "オン(既定): エイリアスもマッピングもない Claude のモデル IDは、Claude Code が自身のログイン資格情報を送るとき、そのログインで Anthropic に直接送ります。それ以外のリクエストはルーティングされます。オフ: これらのモデルも OpenCodex の通常のモデルルーティングに従います。ルーティング先が Anthropic OAuth プロバイダーなら保存したアカウントが処理し、Claude アカウントプールを有効にしていればプールが適用されます。Claude のモデルピッカーと Claude Desktop のエイリアスは modelMap より先に解決されます。modelMap に登録された元のモデル ID は、どちらのモードでもマッピング先に送られます。実行中の Claude Code セッションは再起動が必要です。",
   "claude.nativePassthroughLoadFailed": "パススルー設定を読み込めませんでした。",
   "claude.webSearchSidecar": "ウェブ検索サイドカーの上書き",
   "claude.webSearchSidecarHint": "Claude Code リクエストのメインウェブ検索サイドカーを上書きします。",

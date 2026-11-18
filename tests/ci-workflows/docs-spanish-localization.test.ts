@@ -103,6 +103,24 @@ function missingInlineIdentifiers(english: string, spanish: string): string[] {
 }
 
 describe("Spanish documentation localization", () => {
+  test.each([
+    ["en", /routing policy aliases.*combo aliases/],
+    ["es", /alias de políticas de enrutamiento.*alias de combos/],
+    ["fr", /alias de politique de routage.*alias de combos/],
+    ["ja", /ルーティングポリシーのエイリアス.*コンボのエイリアス/],
+    ["ko", /라우팅 정책 별칭.*콤보 별칭/],
+    ["ru", /псевдонимы политик маршрутизации.*псевдонимы комбо/],
+    ["tr", /yönlendirme politikası takma adları.*kombo takma adları/],
+    ["zh-cn", /路由策略别名.*组合别名/],
+    ["zh-tw", /路由政策別名.*組合別名/],
+  ] as const)("Claude guide %s documents router aliases before provider fallback", (locale, aliases) => {
+    const guide = source(join(root, locale === "en" ? "" : locale, "guides/claude-code.md"));
+    const paragraph = guide.split(/\n\s*\n/).find(text =>
+      text.includes("`ocx claude config set --native-passthrough off`") && text.includes("`defaultModel`"));
+    expect(paragraph).toBeDefined();
+    expect(paragraph!.split("`defaultModel`")[0]!.replace(/\s+/g, " ")).toMatch(aliases);
+  });
+
   test("the canonical Claude passthrough guide distinguishes ingress aliases from router aliases", () => {
     const guide = source(join(root, "guides/claude-code.md"));
     const passthrough = guide.slice(guide.indexOf("`ocx claude config set --native-passthrough off`"),

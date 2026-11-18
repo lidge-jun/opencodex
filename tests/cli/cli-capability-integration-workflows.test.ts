@@ -30,13 +30,13 @@ afterEach(() => {
   removeTreeWithRetry(home);
 });
 type Recorded = { path: string; method: string; body: unknown };
-function runtime(response: unknown = { ok: true }, status = 200) {
+function runtime(response: unknown = { ok: true }, status = 200, readResponse: unknown = response) {
   const requests: Recorded[] = [];
   const deps: RuntimeApiDeps = { baseUrl: "http://fixture.invalid", findLiveProxy: async () => null,
     fetchImpl: (async (input, init) => {
       const url = new URL(String(input));
       requests.push({ path: url.pathname + url.search, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : null });
-      return Response.json(response, { status });
+      return Response.json(init?.method === "PUT" ? response : readResponse, { status });
     }) as typeof fetch,
   };
   return { requests, deps };
@@ -111,9 +111,12 @@ describe("declared integration workflows", () => {
   test("native passthrough is a declared on/off flag, and status prints its line", async () => {
     expect(leaf("claude config set").flags.find(f => f.name === "--native-passthrough")?.value).toBe("string");
     for (const [value, expected] of [["off", false], ["on", true]] as const) {
-      const { requests, deps } = runtime({ ok: true, nativePassthrough: expected });
+      const { requests, deps } = runtime({ ok: true, nativePassthrough: expected }, 200, { nativePassthrough: !expected });
       expect(await handleClaudeConfigCommand(["set", "--native-passthrough", value, "--json"], deps)).toBe(0);
-      expect(requests).toEqual([{ path: "/api/claude-code", method: "PUT", body: { nativePassthrough: expected } }]);
+      expect(requests).toEqual([
+        { path: "/api/claude-code", method: "GET", body: null },
+        { path: "/api/claude-code", method: "PUT", body: { nativePassthrough: expected } },
+      ]);
     }
     const invalid = runtime();
     expect(await handleClaudeConfigCommand(["set", "--native-passthrough", "maybe"], invalid.deps)).toBe(2);
@@ -123,10 +126,53 @@ describe("declared integration workflows", () => {
     expect(output.mock.calls.map(call => String(call[0]))).toContain("nativePassthrough: false");
   });
 
+  test.each([undefined, "false"])("a legacy passthrough capability (%j) leaves fast mode untouched", async nativePassthrough => {
+    let fastMode = false;
+    const methods: string[] = [];
+    const deps: RuntimeApiDeps = {
+      baseUrl: "http://fixture.invalid",
+      fetchImpl: async (input, init) => {
+        expect(String(input)).toBe("http://fixture.invalid/api/claude-code");
+        methods.push(init?.method ?? "GET");
+        if (init?.method === "PUT") fastMode = JSON.parse(String(init.body)).fastMode;
+        return Response.json({ fastMode, nativePassthrough });
+      },
+    };
+    expect(await handleClaudeConfigCommand(["set", "--native-passthrough", "off", "--fast-mode", "on"], deps)).toBe(1);
+    expect(fastMode).toBe(false);
+    expect(methods).toEqual(["GET"]);
+    expect(output.mock.calls).toHaveLength(0);
+    expect(errors.mock.calls.flat().join(" ")).toContain("does not report support for --native-passthrough");
+  });
+
+  test("a supported mixed passthrough write uses the runtime that answered the preflight", async () => {
+    let resolutions = 0;
+    const calls: Array<{ url: string; method: string; body: unknown }> = [];
+    const deps: RuntimeApiDeps = {
+      findLiveProxy: async () => ({ hostname: "127.0.0.1", pid: null, port: 15100 + ++resolutions, source: "runtime" }),
+      fetchImpl: async (input, init) => {
+        expect(init?.redirect).toBe("error");
+        const method = init?.method ?? "GET";
+        const body = init?.body ? JSON.parse(String(init.body)) : null;
+        calls.push({ url: String(input), method, body });
+        return Response.json(method === "GET" ? { nativePassthrough: true, fastMode: false } : body);
+      },
+    };
+    expect(await handleClaudeConfigCommand(["set", "--native-passthrough", "off", "--fast-mode", "on"], deps)).toBe(0);
+    expect(resolutions).toBe(1);
+    expect(calls).toEqual([
+      { url: "http://127.0.0.1:15101/api/claude-code", method: "GET", body: null },
+      { url: "http://127.0.0.1:15101/api/claude-code", method: "PUT", body: { nativePassthrough: false, fastMode: true } },
+    ]);
+  });
+
   test.each([{}, { nativePassthrough: true }])("native passthrough rejects unconfirmed updates (%j)", async acknowledgement => {
-    const { requests, deps } = runtime({ ok: true, ...acknowledgement });
+    const { requests, deps } = runtime({ ok: true, ...acknowledgement }, 200, { nativePassthrough: false });
     expect(await handleClaudeConfigCommand(["set", "--native-passthrough", "off", "--json"], deps)).toBe(1);
-    expect(requests).toEqual([{ path: "/api/claude-code", method: "PUT", body: { nativePassthrough: false } }]);
+    expect(requests).toEqual([
+      { path: "/api/claude-code", method: "GET", body: null },
+      { path: "/api/claude-code", method: "PUT", body: { nativePassthrough: false } },
+    ]);
     expect(output.mock.calls).toHaveLength(0);
     expect(errors.mock.calls.flat().join(" ")).toContain("did not confirm --native-passthrough");
   });
