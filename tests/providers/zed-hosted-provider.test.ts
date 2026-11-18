@@ -1,3 +1,4 @@
+import { waitForProviderRequestSlot, withProviderRequestSlot } from "../../src/providers/request-pacing";
 import { pacingHeaderDeadline } from "../../src/web-search/header-deadline";
 import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
@@ -1074,7 +1075,7 @@ describe("Zed OAuth identity", () => {
 });
 
 for (const [transport, outcome] of [
-  ["direct", "denied"], ["direct", "cancelled"],
+  ["direct", "denied"], ["direct", "cancelled"], ["direct", "completed"],
   ["search", "denied"], ["search", "cancelled"], ["search", "completed"],
   ["media", "denied"], ["media", "cancelled"], ["media", "completed"],
 ] as const) {
@@ -1085,7 +1086,8 @@ for (const [transport, outcome] of [
       jsonResponse({ models: [{ id: "gpt-5.6", provider: "open_ai" }] }),
     ];
     globalThis.fetch = (async () => preparation.shift()!) as typeof globalThis.fetch;
-    const provider: OcxProviderConfig = { adapter: "zed", baseUrl: "https://cloud.zed.dev", authMode: "oauth", apiKey: "access-token" };
+    const provider: OcxProviderConfig = { adapter: "zed", baseUrl: "https://cloud.zed.dev", authMode: "oauth", apiKey: "access-token",
+      requestPacing: transport === "direct" ? { enabled: true, maxConcurrentRequests: 1 } : undefined };
     const parsed = parseRequest({ model: "gpt-5.6", input: "hello", stream: true });
     parsed._zedAuthContext = { userId: "user-1" };
     const adapter = withTestTranslatorBudget(createZedAdapter(provider));
@@ -1111,28 +1113,69 @@ for (const [transport, outcome] of [
     let published = 0;
     const budget = createRequestExecutionBudget();
     let charged = 0;
-    const providerExecutor = providerFetch(provider, undefined, { onPhysicalDispatch: () => { published++; } });
-    const deadline = pacingHeaderDeadline(200_000, abort.signal);
-    const executor = transport === "search" ? deadline.pacedFetch(providerExecutor)
-      : transport === "media" ? providerExecutor.unpacedFetch! : providerExecutor;
-    try {
-      const response = adapter.fetchResponse!(request, {
-        executor,
-        abortSignal: transport === "search" ? deadline.signal : abort.signal,
-        sendBudget: budget,
-        onPhysicalSend: () => { charged++; },
+    const providerName = `zed-prep-${outcome}`;
+    const run = async (slot?: Awaited<ReturnType<typeof waitForProviderRequestSlot>>) => {
+      const release = slot && spyOn(slot, "release");
+      const competitorAbort = new AbortController();
+      let competitorAdmitted = false;
+      let competitor: Promise<void> | undefined;
+      const send = globalThis.fetch;
+      globalThis.fetch = (async (input, init) => {
+        const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+        if (slot && path === (outcome === "completed" ? "/client/llm_tokens" : "/client/users/me")) {
+          competitor = waitForProviderRequestSlot(providerName, provider, undefined, competitorAbort.signal)
+            .then(next => {
+              competitorAdmitted = true;
+              next.release();
+            }, error => {
+              if (!competitorAbort.signal.aborted) throw error;
+            });
+        }
+        if (path === "/completions") {
+          expect(slot?.released ?? false).toBe(false);
+          expect(competitorAdmitted).toBe(false);
+        }
+        return send(input, init);
+      }) as typeof globalThis.fetch;
+      const providerExecutor = providerFetch(provider, undefined, {
+        providerName, pacingSlotAcquired: !!slot, pacingSlot: slot,
+        onPhysicalDispatch: () => { published++; },
       });
-      if (outcome === "completed") {
-        expect(await (await response).text()).toBe("completed");
-        expect(paths).toEqual(["/client/users/me", "/client/llm_tokens", "/completions"]);
-        expect([charged, budget.used, published]).toEqual([1, 1, 1]);
-      } else {
-        await expect(response).rejects.toThrow();
-        expect(paths).toEqual(["/client/users/me"]);
-        expect([charged, budget.used, published]).toEqual([0, 0, 0]);
+      const deadline = pacingHeaderDeadline(200_000, abort.signal);
+      const executor = transport === "search" ? deadline.pacedFetch(providerExecutor)
+        : transport === "media" ? providerExecutor.unpacedFetch! : providerExecutor;
+      try {
+        const response = adapter.fetchResponse!(request, {
+          executor,
+          abortSignal: transport === "search" ? deadline.signal : abort.signal,
+          sendBudget: budget,
+          onPhysicalSend: () => { charged++; },
+        });
+        if (outcome === "completed") {
+          const upstream = await response;
+          expect(competitorAdmitted).toBe(false);
+          expect(release?.mock.calls.length ?? 0).toBe(0);
+          expect(await upstream.text()).toBe("completed");
+          expect(paths).toEqual(["/client/users/me", "/client/llm_tokens", "/completions"]);
+          expect([charged, budget.used, published]).toEqual([1, 1, 1]);
+        } else {
+          await expect(response).rejects.toThrow();
+          expect(paths).toEqual(["/client/users/me"]);
+          expect([charged, budget.used, published]).toEqual([0, 0, 0]);
+        }
+      } finally {
+        deadline.clear();
+        if (outcome === "completed" && !slot?.released) competitorAbort.abort();
       }
-    } finally {
-      deadline.clear();
+      return { competitor, release, admitted: () => competitorAdmitted };
+    };
+    if (transport === "direct") {
+      const result = await withProviderRequestSlot(providerName, provider, undefined, abort.signal, run);
+      await result.competitor;
+      expect(result.admitted()).toBe(true);
+      expect(result.release).toHaveBeenCalledTimes(1);
+    } else {
+      await run();
     }
   });
 }

@@ -475,7 +475,7 @@ export function providerFetch(
       // Cursor RunSSE and BidiAppend can overlap. The runTurn owner releases this slot when
       // the whole turn finishes; transferring it to RunSSE's body would admit another turn
       // while a BidiAppend from this one is still active.
-      return options.turnScopedPacing ? undefined : options.pacingSlot;
+      if (!options.pacingSlot?.released) return options.turnScopedPacing ? undefined : options.pacingSlot;
     }
     if (options.providerName) {
       return waitForProviderRequestSlot(options.providerName, provider, options.modelId, signal,
@@ -522,7 +522,13 @@ export function providerFetch(
   const { onPhysicalDispatch, dispatchOverride, beforeDispatch, accountAutoPause, ...supportOptions } = options;
   if (onPhysicalDispatch || dispatchOverride || beforeDispatch || accountAutoPause) {
     let support: ProviderFetch | undefined;
-    const getSupport = () => support ??= providerFetch(provider, runtime, { ...supportOptions, httpOnly: true });
+    const getSupport = () => support ??= providerFetch(provider, runtime, {
+      ...supportOptions,
+      httpOnly: true,
+      // Preparation can borrow a live lease across several sends. Only inference can
+      // transfer the attempt's lease to a body; attempt cleanup owns unsent leases.
+      turnScopedPacing: options.turnScopedPacing || !!options.pacingSlot,
+    });
     registerAdapterSupportExecutor(paceAware as ProviderFetch, getSupport);
     registerAdapterSupportExecutor(paceAware.unpacedFetch, () => getSupport().unpacedFetch ?? getSupport());
   }
