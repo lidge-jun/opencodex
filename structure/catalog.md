@@ -197,12 +197,10 @@ Nothing in the catalog validates Codex's own root `model` pin against this expos
 `readConfiguredDefaultModel` in `src/codex/catalog/parsing.ts` reads the pin, and `ocx doctor`
 reports it (see [Runtime](runtime.md)).
 
-Manual model discovery expires the chosen provider’s cached freshness and failure cooldown while retaining its last known rows. A failed live read can still serve those rows through the existing authority checks.
-
 Provider live-model lists are cached with a configured TTL (`src/codex/model-cache.ts`). Adding,
-deleting, or editing a provider's shape clears that per-provider cache; a disabled-only change
-deliberately does not, because a disabled provider is already excluded from the catalog gather
-instead. Codex's own `models_cache.json` is a different cache, invalidated by catalog refresh.
+deleting, or editing a provider's shape clears that cache. Disabled-only edits exclude the provider from gathering.
+Manual discovery expires freshness and clears the failure cooldown, preserving rows for the authority-checked
+fallback. Catalog refresh invalidates Codex's separate `models_cache.json`.
 Account-scoped discovery transports remain bound to the credential snapshot that supplied the
 token. Devin discovery uses the allowlisted tenant API base URL from that same snapshot rather
 than pairing a durable account key with the provider registry's default host. The same holds for
