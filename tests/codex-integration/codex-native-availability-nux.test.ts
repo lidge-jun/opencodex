@@ -3,7 +3,8 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { captureCatalogAdmissionSnapshot } from "../../src/codex/catalog-admission";
 import { loadBundledCodexCatalog, resetCatalogRuntimeStateForTests, syncCatalogModels } from "../../src/codex/catalog";
-import { applyNativeAccessPrograms } from "../../src/codex/catalog/access-programs";
+import { applyNativeAccessPrograms, applyNativeRosterMetadata } from "../../src/codex/catalog/access-programs";
+import { buildCodexModelList } from "../../src/server/codex-model-list";
 import { CODEX_ACCOUNT_BOUND_CATALOG_KIND } from "../../src/codex/catalog/account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "../../src/codex/catalog/kinds";
 import type { RawCatalog, RawEntry } from "../../src/codex/catalog/parsing";
@@ -122,6 +123,42 @@ test("hidden rows and failed or unlisted main rosters cannot retain a prompt", a
 });
 
 let home: TempHome | undefined;
+
+test("exact native capabilities respect configured limits and exclude routed and alias rows", async () => {
+  const luna = "gpt-6-luna";
+  const daybreak = "gpt-daybreak-blue-latest";
+  const result = await snapshot([
+    { ...rosterRow(luna, { message: "Local account notice" }), supports_reasoning_effort_updates: true, supports_experimental_context: true },
+    { ...rosterRow(daybreak), max_context_window: 872_000 },
+  ]);
+  const lunaRow: RawEntry = { slug: luna, context_window: 272_000 };
+  const blueRow: RawEntry = { slug: daybreak, context_window: 272_000, max_context_window: 922_000 };
+  const routed: RawEntry[] = [
+    { slug: `other/${luna}` }, { slug: luna, owned_by: "combo" },
+    { slug: luna, opencodex_catalog_kind: CODEX_NATIVE_ALIAS_CATALOG_KIND },
+  ];
+  applyNativeRosterMetadata([lunaRow, blueRow, ...routed], result, new Map(), {
+    providerWindow: 900_000, modelWindows: { [daybreak]: 860_000 }, cap: 840_000,
+    modelAutoCompactTokenLimits: { [daybreak]: 111_000 },
+  });
+  expect(lunaRow).toMatchObject({ supports_reasoning_effort_updates: true, supports_experimental_context: true });
+  expect(blueRow).toMatchObject({ context_window: 840_000, max_context_window: 840_000, auto_compact_token_limit: 111_000 });
+  for (const row of routed) {
+    expect(row).not.toHaveProperty("supports_reasoning_effort_updates");
+    expect(row).not.toHaveProperty("supports_experimental_context");
+  }
+  applyNativeRosterMetadata([blueRow], result, new Map(), { providerWindow: 1_000_000 });
+  expect(blueRow).toMatchObject({ context_window: 872_000, max_context_window: 872_000 });
+
+  const live = buildCodexModelList({
+    config: writerConfig(), nativeSlugs: [luna, daybreak], availableAccountNativeSlugs: [], accountNativeSlugs: [],
+    accountNativeSlugsBySelector: new Map(), goOrdered: [], exactComboSlugs: new Set(), accountSelectors: [],
+    suppressedBareNativeSlugs: new Set(), disabledModels: new Set(), roster: { snapshot: result, accountTargets: new Map() },
+  });
+  expect(live.models.find(row => row.slug === luna)).toMatchObject({ supports_reasoning_effort_updates: true, supports_experimental_context: true });
+  expect(live.models.find(row => row.slug === daybreak)?.max_context_window).toBe(872_000);
+  expect(JSON.stringify(live)).not.toContain("Local account notice");
+});
 let previousCliPath: string | undefined;
 let previousFetch: typeof fetch;
 let mainPrompt: unknown;
@@ -178,7 +215,15 @@ async function writeWith(writer: "retained" | "convergence", config: OcxConfig):
   return writtenRows();
 }
 
-test.each(["retained", "convergence"] as const)("%s writes and later clears main-only NUX in the on-disk catalog", async writer => {
+test.each(["retained", "convergence"] as const)("%s projects fresh per-account roster metadata into the on-disk catalog", async writer => {
+  let mainCapabilities: Record<string, unknown> = {
+    supports_reasoning_effort_updates: true, supports_experimental_context: true,
+    context_window: 300_000, max_context_window: 872_000,
+  };
+  const poolCapabilities = {
+    supports_reasoning_effort_updates: false, supports_experimental_context: false,
+    context_window: 200_000, max_context_window: 600_000,
+  };
   previousCliPath = process.env.CODEX_CLI_PATH;
   previousFetch = globalThis.fetch;
   home = createTempHome("ocx-native-nux-");
@@ -194,8 +239,11 @@ test.each(["retained", "convergence"] as const)("%s writes and later clears main
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input : input.url);
     if (url.hostname === "chatgpt.com" && url.pathname.endsWith("/models")) {
       const id = new Headers(init?.headers).get("chatgpt-account-id");
-      return Response.json({ models: [rosterRow(WRITER_MODEL,
-        id === "synthetic-main-account" ? mainPrompt : poolPrompt)] });
+      const isMain = id === "synthetic-main-account";
+      return Response.json({ models: [{
+        ...rosterRow(WRITER_MODEL, isMain ? mainPrompt : poolPrompt),
+        ...(isMain ? mainCapabilities : poolCapabilities),
+      }] });
     }
     return previousFetch(input, init);
   }) as typeof fetch;
@@ -210,14 +258,23 @@ test.each(["retained", "convergence"] as const)("%s writes and later clears main
     }));
     const config = writerConfig();
     let rows = await writeWith(writer, config);
+    for (const slug of [WRITER_MODEL, `desktop/${WRITER_MODEL}`]) {
+      expect(rows.find(row => row.slug === slug)).toMatchObject({ ...mainCapabilities, auto_compact_token_limit: 270_000 });
+    }
+    expect(rows.find(row => row.slug === `team/${WRITER_MODEL}`))
+      .toMatchObject({ ...poolCapabilities, auto_compact_token_limit: 180_000 });
     expect(rows.find(row => row.slug === WRITER_MODEL)?.availability_nux).toEqual({ message: "Main trial" });
     expect(JSON.stringify(rows)).not.toContain("Pool trial");
     for (const slug of [`desktop/${WRITER_MODEL}`, `team/${WRITER_MODEL}`]) {
       expect(rows.find(row => row.slug === slug)).not.toHaveProperty("availability_nux");
     }
     mainPrompt = undefined;
+    mainCapabilities = { max_context_window: -1, supports_experimental_context: "true" };
     resetCodexModelEntitlementCacheForTests();
     rows = await writeWith(writer, config);
+    const fallback = rows.find(row => row.slug === WRITER_MODEL);
+    expect(fallback).toMatchObject({ context_window: 272_000, max_context_window: 922_000 });
+    expect(fallback?.supports_experimental_context).not.toBe(true);
     expect(rows.find(row => row.slug === WRITER_MODEL)?.availability_nux).toBeNull();
     for (const slug of [`desktop/${WRITER_MODEL}`, `team/${WRITER_MODEL}`]) {
       expect(rows.find(row => row.slug === slug)).not.toHaveProperty("availability_nux");

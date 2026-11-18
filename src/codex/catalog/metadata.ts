@@ -255,6 +255,13 @@ const PINNED_NATIVE_CAPABILITY_ENTRIES: Map<string, RawEntry> = new Map(
   }),
 );
 
+export function pinnedNativeCapabilityFlag(
+  slug: string, flag: "supports_reasoning_effort_updates" | "supports_experimental_context",
+): boolean | undefined {
+  const value = PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)?.[flag];
+  return typeof value === "boolean" ? value : undefined;
+}
+
 /**
  * The user-owned levers that set a native window, carried together.
  *
