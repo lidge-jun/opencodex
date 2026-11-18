@@ -229,8 +229,8 @@ describe("GPT-6.1 Sol pricing and defaults", () => {
     expect(gpt6?.cost4.cacheRead).toBe(0.2);
   });
 
-  test("the subagent default takes GPT-6.1 Sol in Sol's slot; GPT-6 Sol stays supported", () => {
-    expect(DEFAULT_SUBAGENT_MODELS).toEqual(["gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"]);
+  test("the newer roster retains support for earlier Sol models", () => {
+    expect(DEFAULT_SUBAGENT_MODELS).toEqual(["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-luna"]);
     expect(NATIVE_OPENAI_MODELS).toContain(NATIVE_GPT6_SOL_MODEL);
   });
 });
