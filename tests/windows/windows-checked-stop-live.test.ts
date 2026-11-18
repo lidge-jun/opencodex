@@ -5,6 +5,7 @@
  * command is spawned and no FFI is loaded.
  */
 import { describe, expect, spyOn, test } from "bun:test";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -333,7 +334,7 @@ function Invoke-CimMethod {
     const script = "$ProgressPreference = 'SilentlyContinue'; $args = @('" + scenario + "'); " + fixture + "\n& {\n" + helper + "\n}\n'Stopped=' + ($script:stopped -join ',')";
     const child = Bun.spawn([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand",
       Buffer.from(script, "utf16le").toString("base64")], {
-      stdio: ["pipe", "pipe", "pipe"], windowsHide: true, timeout: 5_000,
+      stdio: ["pipe", "pipe", "pipe"], windowsHide: true, timeout: SPAWN_BUDGET_MS,
     });
     child.stdin.write(scenario === "rejected" ? "\n" : "stop\n");
     child.stdin.end();
@@ -343,7 +344,7 @@ function Invoke-CimMethod {
     expect({ scenario, stderr, code, output: stdout.trim().split(/\r?\n/).slice(-2) })
       .toEqual({ scenario, stderr: "", code: 0, output: [status, "Stopped=" + stopped] });
   }
-}, 20_000);
+}, 8 * SPAWN_BUDGET_MS);
 
 describe("Part B port sampler and listener identity", () => {
   test("free, listening, unreadable, and an exited owner's row is cleared", async () => {
