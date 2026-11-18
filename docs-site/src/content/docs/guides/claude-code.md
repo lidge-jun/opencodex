@@ -648,9 +648,12 @@ The one change to the body is tool-call ids. A `tool_use.id` or `tool_result.too
 Disable with `claudeCode.nativePassthrough: false`, `ocx claude config set --native-passthrough off`,
 or the **Native Claude passthrough** switch under the Claude account pool in Providers → Anthropic
 Claude → Accounts; point elsewhere
-with `claudeCode.anthropicBaseUrl`. With passthrough off, a Claude model without an alias or
-`modelMap` entry is routed like any other model. The router checks, in order, an enabled provider whose `defaultModel` is that id, an enabled `anthropic` or `anthropic-*` provider, a provider whose model list includes it, an alias, and finally the default provider. A `modelMap` entry that points at another provider's model goes there in either state. When the route
-is an Anthropic OAuth provider, the Anthropic accounts stored in OpenCodex serve the request; a second
+with `claudeCode.anthropicBaseUrl`. Claude picker and Desktop ingress aliases resolve before
+`modelMap`. A `modelMap` entry keyed by a raw model ID routes to its cross-provider target in either
+state. With passthrough off, an unmapped raw Claude model ID proceeds to the router. The router
+checks, in order, an enabled provider whose `defaultModel` is that ID, an enabled `anthropic` or
+`anthropic-*` provider, a provider whose model list includes the ID, a provider-model alias, and
+finally the default provider. When the route is an Anthropic OAuth provider, the Anthropic accounts stored in OpenCodex serve the request; a second
 stored account adds 429 failover, and the proactive
 [Claude OAuth account pool](#claude-oauth-account-pool-experimental) applies once `anthropicAccountPool.enabled` is on. Routing follows
 the setting from the next request; relaunch Claude Code sessions that are already running so their

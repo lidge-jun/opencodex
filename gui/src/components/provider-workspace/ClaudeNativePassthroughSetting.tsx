@@ -37,12 +37,13 @@ export default function ClaudeNativePassthroughSetting({ apiBase, targetKey }: {
       })
       .then(json => {
         if (cancelled) return;
-        // Default-on like the server: a server without the field reads as on.
-        setEnabled(json.nativePassthrough !== false);
+        if (typeof json?.nativePassthrough !== "boolean") throw new Error("load");
+        setEnabled(json.nativePassthrough);
         setLoadFailed(false);
       })
       .catch(() => {
         if (cancelled || ac.signal.aborted) return;
+        setEnabled(null);
         setLoadFailed(true);
       });
     return () => {
@@ -64,11 +65,12 @@ export default function ClaudeNativePassthroughSetting({ apiBase, targetKey }: {
       });
       if (!mountedRef.current || !isApiTargetCaptureCurrent(capture)) return;
       if (!response.ok) throw new Error("save");
-      const json = await response.json().catch(() => null) as { nativePassthrough?: unknown } | null;
-      if (!mountedRef.current) return;
-      setEnabled(typeof json?.nativePassthrough === "boolean" ? json.nativePassthrough : requested);
+      const json = await response.json() as { nativePassthrough?: unknown } | null;
+      if (!mountedRef.current || !isApiTargetCaptureCurrent(capture)) return;
+      if (json?.nativePassthrough !== requested) throw new Error("save");
+      setEnabled(json.nativePassthrough);
     } catch {
-      if (mountedRef.current) setSaveFailed(true);
+      if (mountedRef.current && isApiTargetCaptureCurrent(capture)) setSaveFailed(true);
     } finally {
       if (mountedRef.current) setSaving(false);
     }

@@ -111,7 +111,7 @@ describe("declared integration workflows", () => {
   test("native passthrough is a declared on/off flag, and status prints its line", async () => {
     expect(leaf("claude config set").flags.find(f => f.name === "--native-passthrough")?.value).toBe("string");
     for (const [value, expected] of [["off", false], ["on", true]] as const) {
-      const { requests, deps } = runtime();
+      const { requests, deps } = runtime({ ok: true, nativePassthrough: expected });
       expect(await handleClaudeConfigCommand(["set", "--native-passthrough", value, "--json"], deps)).toBe(0);
       expect(requests).toEqual([{ path: "/api/claude-code", method: "PUT", body: { nativePassthrough: expected } }]);
     }
@@ -121,6 +121,14 @@ describe("declared integration workflows", () => {
     const status = runtime({ enabled: true, nativePassthrough: false });
     expect(await handleClaudeConfigCommand(["status"], status.deps)).toBe(0);
     expect(output.mock.calls.map(call => String(call[0]))).toContain("nativePassthrough: false");
+  });
+
+  test.each([{}, { nativePassthrough: true }])("native passthrough rejects unconfirmed updates (%j)", async acknowledgement => {
+    const { requests, deps } = runtime({ ok: true, ...acknowledgement });
+    expect(await handleClaudeConfigCommand(["set", "--native-passthrough", "off", "--json"], deps)).toBe(1);
+    expect(requests).toEqual([{ path: "/api/claude-code", method: "PUT", body: { nativePassthrough: false } }]);
+    expect(output.mock.calls).toHaveLength(0);
+    expect(errors.mock.calls.flat().join(" ")).toContain("did not confirm --native-passthrough");
   });
 
   test("Grok include reads existing exclusions; apply returns its skipped receipt", async () => {

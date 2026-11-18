@@ -48,15 +48,15 @@ afterEach(async () => {
   await testWindow.happyDOM?.close?.();
 });
 
-/** GET answers with the stored value (or fails); PUT answers per the supplied status. */
-function stubClaudeCode(get: { nativePassthrough?: boolean } | "fail", putStatus = 200): { puts: Record<string, unknown>[] } {
+function stubClaudeCode(get: { nativePassthrough?: boolean } | "fail", put?: number | { nativePassthrough?: boolean }): { puts: Record<string, unknown>[] } {
   const calls = { puts: [] as Record<string, unknown>[] };
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (!String(input).endsWith("/api/claude-code")) throw new Error("unexpected fetch");
     if (init?.method === "PUT") {
       const body = JSON.parse(String(init.body)) as Record<string, unknown>;
       calls.puts.push(body);
-      return putStatus === 200 ? Response.json({ enabled: true, ...body }) : new Response(null, { status: putStatus });
+      if (typeof put === "number") return new Response(null, { status: put });
+      return Response.json({ enabled: true, ...(put ?? body) });
     }
     if (get === "fail") return new Response(null, { status: 500 });
     return Response.json({ enabled: true, ...get });
@@ -81,15 +81,18 @@ async function mount(): Promise<HTMLElement> {
   return host as unknown as HTMLElement;
 }
 
-const toggleOf = (host: HTMLElement) => host.querySelector<HTMLButtonElement>("button[aria-pressed]")!;
+const toggleOf = (host: HTMLElement) => host.querySelector<HTMLButtonElement>("button.toggle")!;
 
 describe("Claude native passthrough setting", () => {
-  test("reads the stored value, defaulting a missing field to on", async () => {
-    stubClaudeCode({});
+  test("a runtime that omits nativePassthrough leaves the switch disabled and reports a load error", async () => {
+    const calls = stubClaudeCode({});
     const host = await mount();
-    expect(toggleOf(host).getAttribute("aria-pressed")).toBe("true");
+    expect(toggleOf(host).disabled).toBe(true);
+    expect(toggleOf(host).hasAttribute("aria-pressed")).toBe(false);
     expect(host.textContent).toContain(DICTS.en["claude.nativePassthrough"]);
-    expect(host.textContent).toContain(DICTS.en["claude.nativePassthroughDesc"]);
+    expect(host.textContent).toContain(DICTS.en["claude.nativePassthroughLoadFailed"]);
+    await act(async () => { toggleOf(host).click(); await flush(); });
+    expect(calls.puts).toHaveLength(0);
   });
 
   test("a click saves only the passthrough field and shows the saved value", async () => {
@@ -103,8 +106,8 @@ describe("Claude native passthrough setting", () => {
     expect(toggleOf(host).getAttribute("aria-pressed")).toBe("true");
   });
 
-  test("a failed save keeps the shown state and reports it", async () => {
-    stubClaudeCode({ nativePassthrough: true }, 500);
+  test.each([500, {}, { nativePassthrough: true }])("a failed or unconfirmed save (%j) keeps the shown state and reports it", async put => {
+    stubClaudeCode({ nativePassthrough: true }, put);
     const host = await mount();
     await act(async () => { toggleOf(host).click(); await flush(); });
     expect(toggleOf(host).getAttribute("aria-pressed")).toBe("true");

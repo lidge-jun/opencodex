@@ -168,8 +168,11 @@ hook을 제거해요. Claude Desktop은 별도 profile을 사용하며 shell hoo
 `claudeCode.nativePassthrough: false`, `ocx claude config set --native-passthrough off`, 또는
 대시보드 Providers → Anthropic Claude → Accounts의 Claude 계정 풀 아래에 있는
 **Claude 네이티브 패스스루** 토글로 끌 수 있고,
-`claudeCode.anthropicBaseUrl`로 다른 주소를 지정할 수 있어요. 패스스루를 끄면 별칭이나 `modelMap`
-항목이 없는 Claude 모델도 다른 모델처럼 라우팅되고, 라우터는 그 ID를 `defaultModel`로 둔 활성 공급자, 활성화된 `anthropic` 또는 `anthropic-*` 공급자, 모델 목록에 포함한 공급자, 별칭, 마지막으로 기본 공급자 순서로 확인해요. 다른 공급자의 모델을 가리키는 `modelMap` 항목은 두 상태 모두 그쪽으로 가요. 경로가 Anthropic OAuth 공급자이면 OpenCodex에
+`claudeCode.anthropicBaseUrl`로 다른 주소를 지정할 수 있어요. Claude 모델 선택기와 Claude Desktop의 요청에 들어온 별칭은 `modelMap`보다 먼저 해석해요.
+별칭이 아닌 모델 ID를 키로 쓰는 `modelMap` 항목은 패스스루가 켜져 있든 꺼져 있든 요청을 지정된 다른 공급자의 모델로 보내요.
+패스스루를 끄면 매핑이 없는 Claude 모델 ID는 라우터로 넘어가요. 라우터는 그 ID를 `defaultModel`로 둔 활성 공급자,
+활성화된 `anthropic` 또는 `anthropic-*` 공급자, 모델 목록에 해당 ID를 포함한 공급자, 공급자 쪽 모델 별칭,
+마지막으로 기본 공급자 순서로 확인해요. 경로가 Anthropic OAuth 공급자이면 OpenCodex에
 저장한 Anthropic 계정이 요청을 처리하고, 계정을 하나 더 저장해 두면 429 장애 조치가 더해져요. 능동적인
 Claude OAuth 계정 풀은 `anthropicAccountPool.enabled`를 켜야 적용돼요. 라우팅은 다음 요청부터
 바뀌어요. 이미 실행 중인 Claude Code 세션은 모델 슬롯과 컨텍스트 창이 맞도록 다시 실행하세요.

@@ -329,8 +329,13 @@ La seule modification du corps concerne les identifiants d'appel d'outil. Un `to
 Désactivez ce comportement avec `claudeCode.nativePassthrough: false`,
 `ocx claude config set --native-passthrough off` ou l'interrupteur **Relais Claude natif** sous le
 groupe de comptes Claude dans Providers → Anthropic Claude → Accounts du tableau de bord ; définissez une autre destination avec
-`claudeCode.anthropicBaseUrl`. Relais désactivé, un modèle Claude sans alias ni entrée `modelMap` est
-routé comme les autres : le routeur examine, dans l'ordre : un fournisseur activé dont le `defaultModel` est cet identifiant, un fournisseur `anthropic` ou `anthropic-*` activé, un fournisseur dont la liste de modèles le contient, un alias, et enfin le fournisseur par défaut. Une entrée `modelMap` qui pointe vers le modèle d'un autre fournisseur y va dans les deux cas. Quand la route est un fournisseur OAuth
+`claudeCode.anthropicBaseUrl`. Les alias d'entrée du sélecteur de modèles Claude et de Claude Desktop sont résolus avant
+`modelMap`. Une entrée `modelMap` dont la clé est un identifiant de modèle brut dirige la demande
+vers le modèle cible chez l'autre fournisseur, que le relais soit activé ou désactivé. Relais
+désactivé, un identifiant brut de modèle Claude sans correspondance passe au routeur. Celui-ci
+examine dans l'ordre un fournisseur activé dont le `defaultModel` est cet identifiant, un
+fournisseur `anthropic` ou `anthropic-*` activé, un fournisseur dont la liste de modèles contient
+l'identifiant, un alias de modèle du fournisseur, puis le fournisseur par défaut. Quand la route est un fournisseur OAuth
 Anthropic, les comptes Anthropic enregistrés dans OpenCodex servent la requête ; un deuxième compte
 enregistré ajoute la bascule sur 429, et le [groupe de comptes OAuth Claude](#groupe-de-comptes-oauth-claude-expérimental) proactif s'applique
 dès que `anthropicAccountPool.enabled` est activé. Le routage suit le réglage dès la requête suivante ;

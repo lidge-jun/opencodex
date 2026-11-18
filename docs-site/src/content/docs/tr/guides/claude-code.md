@@ -370,8 +370,13 @@ bir kimlikle yeniden yazılır. Uygun kimlikler değiştirilmeden gönderilir, b
 `claudeCode.nativePassthrough: false`, `ocx claude config set --native-passthrough off` veya
 panodaki Providers → Anthropic Claude → Accounts bölümünde Claude hesap havuzunun altında bulunan
 **Yerel Claude geçişi** anahtarıyla devre dışı bırakın;
-`claudeCode.anthropicBaseUrl` ile başka bir yeri işaret edin. Geçiş kapalıyken takma adı veya
-`modelMap` girdisi olmayan bir Claude modeli de diğer modeller gibi yönlendirilir. Yönlendirici sırasıyla şunlara bakar: `defaultModel` değeri bu kimlik olan etkin bir sağlayıcı, etkin bir `anthropic` veya `anthropic-*` sağlayıcısı, model listesinde bu kimliği içeren bir sağlayıcı, bir takma ad ve son olarak varsayılan sağlayıcı. Başka bir sağlayıcının modelini gösteren bir `modelMap` girdisi her iki durumda da oraya gider. Rota bir Anthropic OAuth sağlayıcısıysa isteği OpenCodex'te kayıtlı Anthropic
+`claudeCode.anthropicBaseUrl` ile başka bir yeri işaret edin. Claude model seçicisinden ve Claude Desktop'tan gelen takma adlar `modelMap` öncesinde
+çözümlenir. Anahtarı ham model kimliği olan bir `modelMap` girdisi, geçiş açıkken de kapalıyken de
+isteği diğer sağlayıcıdaki hedef modele gönderir. Geçiş kapalıyken eşlemesi olmayan ham bir Claude
+model kimliği yönlendiriciye gider. Yönlendirici sırasıyla `defaultModel` değeri bu kimlik olan
+etkin bir sağlayıcıya, etkin bir `anthropic` veya `anthropic-*` sağlayıcısına, model listesinde bu
+kimliği içeren bir sağlayıcıya, sağlayıcı tarafındaki model takma adına ve son olarak varsayılan
+sağlayıcıya bakar. Rota bir Anthropic OAuth sağlayıcısıysa isteği OpenCodex'te kayıtlı Anthropic
 hesapları karşılar; kayıtlı ikinci bir hesap 429 durumunda yedeğe geçiş ekler ve proaktif
 [Claude OAuth hesap havuzu](#claude-oauth-hesap-havuzu-deneysel) `anthropicAccountPool.enabled` açık olduğunda uygulanır. Yönlendirme
 bir sonraki istekten itibaren ayarı izler; model yuvalarının ve bağlam pencerelerinin eşleşmesi için

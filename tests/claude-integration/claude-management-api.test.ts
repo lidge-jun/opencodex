@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig, saveConfigPreservingClaudeCode } from "../../src/config";
+import * as configModule from "../../src/config";
 import { startServer as startServerImpl } from "../../src/server";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { writeDesktop3pConfig, removeDesktop3pStandardPivot } from "../../src/claude/desktop-3p";
@@ -17,6 +18,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { desktopFirstPartyTarget } from "../../src/claude/desktop-first-party";
 import { isolateClientLifecycleLock } from "../helpers/client-lifecycle-lock";
 import { claudeKeychainReader } from "../../src/oauth/claude-keychain-read";
+import { WindowsSecretAclSettleTimeoutError } from "../../src/lib/windows-secret-acl";
 
 let keychainProbe: ReturnType<typeof spyOn>;
 
@@ -994,10 +996,14 @@ test("PUT/GET round-trips nativePassthrough; true drops the key, a non-boolean i
   const get = async () => (await fetch(new URL("/api/claude-code", server.url)).then(r => r.json()) as Record<string, unknown>).nativePassthrough;
   try {
     expect(await get()).toBe(true);
-    expect((await put(false)).status).toBe(200);
+    const off = await put(false);
+    expect(off.status).toBe(200);
+    expect(await off.json()).toMatchObject({ nativePassthrough: false });
     expect(loadConfig().claudeCode?.nativePassthrough).toBe(false);
     expect(await get()).toBe(false);
-    expect((await put(true)).status).toBe(200);
+    const on = await put(true);
+    expect(on.status).toBe(200);
+    expect(await on.json()).toMatchObject({ nativePassthrough: true });
     expect(loadConfig().claudeCode?.nativePassthrough).toBeUndefined();
     expect(await get()).toBe(true);
     const bad = await put("off");
@@ -1008,6 +1014,34 @@ test("PUT/GET round-trips nativePassthrough; true drops the key, a non-boolean i
     expect(applySpy).not.toHaveBeenCalled();
   } finally {
     applySpy.mockRestore();
+    await server.stop(true);
+  }
+});
+
+test("PUT leaves live native passthrough and fast mode unchanged when the save fails before publication", async () => {
+  const initial = loadConfig();
+  initial.fastMode = false;
+  initial.claudeCode = { nativePassthrough: false, authModeMigratedAt: "2026-11-18T00:00:00.000Z" };
+  saveConfig(initial);
+  const server = startServer(0);
+  const save = spyOn(configModule, "saveConfigPreservingClaudeCode").mockImplementation(() => {
+    throw new WindowsSecretAclSettleTimeoutError();
+  });
+  const url = new URL("/api/claude-code", server.url);
+  try {
+    const response = await fetch(url, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nativePassthrough: true, fastMode: true }),
+    });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({ code: "write_failed" });
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(loadConfig()).toMatchObject({ claudeCode: { nativePassthrough: false }, fastMode: false });
+    const live = await fetch(url);
+    expect(live.status).toBe(200);
+    expect(await live.json()).toMatchObject({ nativePassthrough: false, fastMode: false });
+  } finally {
+    save.mockRestore();
     await server.stop(true);
   }
 });

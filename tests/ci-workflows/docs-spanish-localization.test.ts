@@ -103,6 +103,15 @@ function missingInlineIdentifiers(english: string, spanish: string): string[] {
 }
 
 describe("Spanish documentation localization", () => {
+  test("the canonical Claude passthrough guide distinguishes ingress aliases from router aliases", () => {
+    const guide = source(join(root, "guides/claude-code.md"));
+    const passthrough = guide.slice(guide.indexOf("`ocx claude config set --native-passthrough off`"),
+      guide.indexOf("**Rate limits on passthrough.**")).replace(/\s+/g, " ");
+    expect(passthrough).toMatch(/Claude picker and Desktop ingress aliases resolve before `modelMap`/);
+    expect(passthrough).toMatch(/a `modelMap` entry keyed by a raw model ID.+(?:either|both) /i);
+    expect(passthrough).toMatch(/router.+provider-model alias/);
+  });
+
   test("code spans keep a trailing backslash literal without swallowing later identifiers", () => {
     const english = "Paths `~\\` and `~/` keep `models` unchanged.";
     const spanish = "Las rutas `~\\` y `~/` conservan `models`.";

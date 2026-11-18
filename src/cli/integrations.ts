@@ -130,8 +130,13 @@ export async function handleClaudeConfigCommand(argv: string[], deps: RuntimeApi
       body.cliFirstParty = firstParty;
     }
     if (Object.keys(body).length === 0) throw new CliUsageError("at least one Claude setting is required", CLAUDE_USAGE);
-    const result = await runtimeRequest("/api/claude-code", { method: "PUT", body: JSON.stringify(body) }, deps);
-    const warnings = (result as { warnings?: unknown }).warnings;
+    const result = await runtimeRequest<{ nativePassthrough?: unknown; warnings?: unknown }>(
+      "/api/claude-code", { method: "PUT", body: JSON.stringify(body) }, deps,
+    );
+    if (nativePassthrough !== undefined && result?.nativePassthrough !== nativePassthrough) {
+      throw new Error("The running proxy did not confirm --native-passthrough. Check the setting with `ocx claude config status`.");
+    }
+    const { warnings } = result;
     const retained = Array.isArray(warnings) && warnings.includes("shared_proxy_retained");
     printData(result, wantsJson, [
       "Claude Code settings updated.",
