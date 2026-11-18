@@ -49,9 +49,11 @@ export interface PermanentAccountRefusalEvidence extends AccountPauseEvidence {
   reason: AccountPauseReason;
 }
 
-/** Redact before capping the normalized message so the cap cannot split a secret. */
+/** Preserve line breaks for the first redaction pass, then redact again before capping. */
 export function pauseEvidenceMessage(raw: string): string {
-  return sanitizeUpstreamErrorText(raw.replace(/\s+/g, " ").trim()).slice(0, 300);
+  const redacted = sanitizeUpstreamErrorText(raw);
+  const normalized = redacted.replace(/\s+/g, " ").trim();
+  return sanitizeUpstreamErrorText(normalized).slice(0, 300);
 }
 
 /** `conclusiveOnly` admits only {@link isConclusiveAccountBan}, the Cloud Code Assist default. */

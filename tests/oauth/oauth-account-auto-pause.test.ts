@@ -86,7 +86,8 @@ describe("permanent account refusal classification", () => {
     expect(await permanentAccountRefusalEvidence(refusal(401))).toMatchObject({ statusCode: 401 });
     expect(await permanentAccountRefusalEvidence(Response.json(payload("Your quota resets tomorrow"), { status: 403 }))).toBeUndefined();
     expect(await permanentAccountRefusalEvidence(Response.json(payload("Your quota resets tomorrow"), { status: 429 }))).toBeUndefined();
-    expect(await permanentAccountRefusalEvidence(new Response("x".repeat(20_000), { status: 403 }))).toBeUndefined();
+    const oversizedBody = " ".repeat(16_385) + JSON.stringify(payload());
+    expect(await permanentAccountRefusalEvidence(new Response(oversizedBody, { status: 403 }))).toBeUndefined();
   });
   test("stored sentence is one line, redacted, and capped at 300 characters", async () => {
     const ban = { error: { code: 403, status: "PERMISSION_DENIED", message: "  This service has been disabled in this account for violation of Terms of Service.\n   Please submit an appeal to continue using this product.  " } };
@@ -100,6 +101,11 @@ describe("permanent account refusal classification", () => {
     const capped = pauseEvidenceMessage(`${"x".repeat(270)} Authorization: Bearer secret-token-abcdef`);
     expect(capped).toHaveLength(300);
     expect(capped).not.toContain("secret");
+  });
+  test("stored sentence redacts multipart credentials before flattening line breaks", () => {
+    const header = 'Content-Disposition: form-data; name="authorization"';
+    const redacted = pauseEvidenceMessage(`${header}\r\n\r\nsynthetic-multipart-value`);
+    expect(redacted).toBe(`${header} [REDACTED]`);
   });
   test("default off, default threshold two, strict schema", () => {
     const row = { adapter: "openai-chat" };

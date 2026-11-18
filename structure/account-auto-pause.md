@@ -40,8 +40,8 @@ the policy and allowlisted reason/timestamp DTO. OAuth pause metadata is stored 
 auth row; Codex metadata/revision fences use `codexAccountPauseState`; key pools retain
 `disabled`, `pauseDetails` and `pauseRevision` per entry. Both explicit and implicit OAuth
 auto-pauses store a sibling `pauseEvidence` with the decisive refusal's HTTP `statusCode`
-and optional message. The message comes from `error.message`, with whitespace collapsed
-and redaction applied before the 300-character cap. A Cloud Code Assist appeal sentence
+and optional message. The message comes from `error.message`, with redaction applied before
+and after collapsing whitespace, followed by the 300-character cap. A Cloud Code Assist appeal sentence
 survives when the qualifying message contains it. Structured metadata such as `appeal_url`
 is outside the evidence contract. Older builds can still read the strict `pauseDetails`.
 Runtime counters are process-local. Manual resume clears the pause metadata and changes
