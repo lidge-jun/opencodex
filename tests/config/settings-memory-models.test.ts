@@ -97,6 +97,23 @@ describe("/api/settings memoryModels", () => {
     }
   });
 
+  test("an ACP memory target rejects the complete settings write before publication", async () => {
+    const config = baseConfig();
+    config.providers["antigravity-acp"] = { adapter: "agy-acp", baseUrl: "https://antigravity.google/docs/cli/acp" };
+    config.memoryModels = { extract: { model: "gateway/cheap" } };
+    saveConfig(config);
+    const before = readFileSync(getConfigPath(), "utf8");
+    const response = await settings(config, {
+      memoryModels: { extract: { model: "antigravity-acp/gemini-3.8-flash" } },
+      showCodexCredits: true,
+    });
+    expect(response!.status).toBe(400);
+    expect((await response!.json()).error).toContain("memoryModels.extract.model");
+    expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
+    expect(config.memoryModels).toEqual({ extract: { model: "gateway/cheap" } });
+    expect(config.showCodexCredits).not.toBe(true);
+  });
+
   test.each(["merged defaults", "salvaged profile"])("warns about a degraded phase after %s", route => {
     const raw: Record<string, unknown> = { ...baseConfig(), memoryModels: { extract: { model: " " } } };
     if (route === "merged defaults") delete raw.defaultProvider;
