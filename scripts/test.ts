@@ -431,6 +431,9 @@ export const SERIAL_FULL_SUITE_FILES = [
   "cli/cli-update-restart-home.test.ts",
   "codex-integration/native-codex-toggle.test.ts",
   "codex-integration/native-grok-toggle.test.ts",
+  // Linux run 44341425326 (test 4/5, batch 15) hit the 120s batch deadline.
+  // This subprocess-heavy file passed alone in 99s; the 11 neighbours also passed alone.
+  "clients/client-link-stop.test.ts",
   // Each compiles native/ocx-child (without, then with the link-ws-test-gate feature) and runs one Cargo
   // test set; a cold build can take a minute, so each runs alone rather than inside a 12-file batch.
   "clients/link-ocx-child-ws-gate.test.ts",
@@ -454,6 +457,8 @@ const SERIAL_LANE_TIMEOUT_MS: Partial<Record<SerialLaneBasename, number>> = {
   // This file intentionally exercises 33 complete release-script subprocess trees.
   // It is ~90s on an idle machine and measured at ~170s under unrelated host load.
   "release-helper.test.ts": 5 * 60 * 1000,
+  // The Link stop subprocesses took 229s on a busy local macOS host.
+  "client-link-stop.test.ts": 5 * 60 * 1000,
   // Both Cargo bounds plus 30 s for Bun startup and the file's other cases.
   "link-ocx-child-conformance.test.ts": OCX_CHILD_CONFORMANCE_BUILD_MS + OCX_CHILD_CONFORMANCE_RUN_MS + 30_000,
 };
