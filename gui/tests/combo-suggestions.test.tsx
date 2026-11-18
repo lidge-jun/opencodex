@@ -14,7 +14,7 @@ import {
   type SuggestionInput,
   type SuggestionProvider,
 } from "../src/combo-suggestions";
-import { isValidComboId, toPutBody, type ComboItem } from "../src/combo-workspace-data";
+import { isValidComboId, type ComboItem } from "../src/combo-workspace-data";
 import { ComboSuggestions, type ComboSuggestionsProps } from "../src/components/route-board/ComboSuggestions";
 import { useSuggestionExclusions } from "../src/components/route-board/use-suggestion-exclusions";
 import { WorkspaceSuggestions } from "../src/components/route-board/WorkspaceSuggestions";
@@ -758,12 +758,11 @@ test("another model on the same provider does not hide a missing channel", () =>
   expect(suggestion?.members.map(({ provider, model }) => [provider, model])).toEqual([["xai", name]]);
 });
 
-test("only consented extensions serialize paid targets, without writing consent", () => {
+test("only consented extension previews mark added targets metered", () => {
   const member = { provider: "google-vertex", model: "kimi-k3-1-pro", tier: "vertex" } as const;
   expect(suggestionDraft("opus", [member])).toMatchObject({ allowMeteredTargets: true, targets: [{ metered: true }] });
   const current = combo("opus", [["kimi", member.model]]);
   expect(extendedCombo(current, [member], () => "own-subscription").targets).toEqual(current.targets);
-  const body = toPutBody(extendedCombo({ ...current, allowMeteredTargets: true }, [member], () => "own-subscription")).combo;
-  expect(body.targets.map(({ metered }) => metered)).toEqual([undefined, true]);
-  expect(body).not.toHaveProperty("allowMeteredTargets");
+  const extension = extendedCombo({ ...current, allowMeteredTargets: true }, [member], () => "own-subscription");
+  expect(extension.targets.map(({ metered }) => metered)).toEqual([undefined, true]);
 });

@@ -549,7 +549,6 @@ export function toPutBody(
       targets: item.targets.map((target) => ({
         provider: target.provider.trim(),
         model: target.model.trim(),
-        ...(target.metered === true ? { metered: true } : {}),
         ...(weighted ? { weight: target.weight ?? 1 } : {}),
         ...(target.reasoningEfforts !== undefined
           ? { reasoningEfforts: [...target.reasoningEfforts] }
