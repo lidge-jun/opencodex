@@ -2,13 +2,15 @@
  * A fake `agy` for tests: `--version` prints 1.5.3; `acp` serves a minimal ACP v1 session over stdio.
  * It records the argv it was started with into AGY_FAKE_ARGS_FILE when that is set.
  */
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
 if (process.env.AGY_FAKE_ARGS_FILE) appendFileSync(process.env.AGY_FAKE_ARGS_FILE, JSON.stringify({ args, cwd: process.cwd() }) + "\n");
 if (args[0] === "--version") {
-  process.stdout.write("agy 1.5.3\n");
-  process.exit(0);
+  const file = process.env.AGY_FAKE_VERSION_FILE;
+  const version = file && existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : { stdout: "1.5.3\n", exitCode: 0 };
+  process.stdout.write(version.stdout);
+  process.exit(version.exitCode);
 }
 if (args[0] !== "acp") process.exit(2);
 

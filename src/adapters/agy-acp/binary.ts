@@ -11,6 +11,7 @@ import { isAbsolute } from "node:path";
 
 /** 1.5.1 ensures session/update notifications precede the session/prompt reply. */
 export const AGY_ACP_MIN_VERSION: readonly [number, number, number] = [1, 5, 1];
+export const MAX_AGY_VERSION_OUTPUT_LENGTH = 4096;
 export const AGY_BIN_ENV = "OPENCODEX_AGY_BIN";
 export const AGY_INSTALL_HINT = `Install the Antigravity CLI (agy) ${AGY_ACP_MIN_VERSION.join(".")} or newer and sign in with \`agy acp --login\`, or set OPENCODEX_AGY_BIN to its absolute path.`;
 
@@ -21,9 +22,10 @@ export function resolveAgyBinary(env: NodeJS.ProcessEnv = process.env, which: (n
   return which("agy") ?? undefined;
 }
 
-/** The first x.y.z in the probe output, or undefined. */
+/** agy --version prints a single line containing the numeric version. */
 export function parseAgyVersion(output: string): [number, number, number] | undefined {
-  const match = /\b(\d{1,4})\.(\d{1,4})\.(\d{1,4})\b/.exec(output.slice(0, 4096));
+  if (output.length > MAX_AGY_VERSION_OUTPUT_LENGTH) return undefined;
+  const match = /^(\d{1,4})\.(\d{1,4})\.(\d{1,4})$/.exec(output.trim());
   return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : undefined;
 }
 

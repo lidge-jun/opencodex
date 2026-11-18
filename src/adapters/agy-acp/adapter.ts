@@ -29,7 +29,7 @@ import {
   currentSelection, effortLabels, findSelector, matchValue, parseConfigOptions, proveModel, safeOfferedValues,
   type AcpConfigOption, type AcpSelectValue,
 } from "./options";
-import { AGY_ACP_MIN_VERSION, AGY_INSTALL_HINT, probeAgyVersion, resolveAgyBinary, type AgyVersionProbe } from "./binary";
+import { AGY_ACP_MIN_VERSION, AGY_INSTALL_HINT, MAX_AGY_VERSION_OUTPUT_LENGTH, probeAgyVersion, resolveAgyBinary, type AgyVersionProbe } from "./binary";
 import { AgyAcpTreeCleanupError, createTurnWorkspace, defaultAgyAcpSpawn, reapProcessTree, type AgyAcpChild, type AgyAcpSpawn, type TurnWorkspace } from "./process";
 import { agyAcpPolicyRefusal } from "./policy";
 
@@ -85,18 +85,20 @@ async function runVersion(binary: string): Promise<string | undefined> {
     workspace = await createTurnWorkspace(getConfigDir());
     const child = defaultAgyAcpSpawn(binary, ["--version"], { cwd: workspace.dir, env: childEnv(workspace) });
     child.stdin.end();
-    let out = "";
+    let out: string | undefined = "";
     child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => { if (out.length < 4096) out += chunk; });
+    child.stdout.on("data", (chunk: string) => {
+      if (out !== undefined) out = out.length + chunk.length <= MAX_AGY_VERSION_OUTPUT_LENGTH ? out + chunk : undefined;
+    });
     child.stderr.on("data", () => {});
     child.stdin.on("error", () => {});
-    const closed = await new Promise<boolean>(resolve => {
-      const timer = setTimeout(() => resolve(false), VERSION_TIMEOUT_MS);
-      child.once("close", () => { clearTimeout(timer); resolve(true); });
-      child.once("error", () => { clearTimeout(timer); resolve(false); });
+    const exitCode = await new Promise<number | null | undefined>(resolve => {
+      const timer = setTimeout(() => resolve(undefined), VERSION_TIMEOUT_MS);
+      child.once("close", (code: number | null) => { clearTimeout(timer); resolve(code); });
+      child.once("error", () => { clearTimeout(timer); resolve(undefined); });
     });
-    if (!closed) await reapProcessTree(child, { graceMs: KILL_GRACE_MS, reapTimeoutMs: REAP_TIMEOUT_MS });
-    return closed ? out : undefined;
+    if (exitCode === undefined) await reapProcessTree(child, { graceMs: KILL_GRACE_MS, reapTimeoutMs: REAP_TIMEOUT_MS });
+    return exitCode === 0 ? out : undefined;
   } catch (error) {
     if (error instanceof AgyAcpTreeCleanupError) canRemoveWorkspace = false;
     return undefined;

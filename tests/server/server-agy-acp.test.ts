@@ -34,7 +34,7 @@ beforeEach(() => {
   process.env.AGY_FAKE_ARGS_FILE = "must-not-reach-the-child";
   const wrapper = join(testDir, "agy");
   writeFileSync(wrapper, `#!/bin/sh
-AGY_FAKE_ARGS_FILE="${argsFile}" exec "${process.execPath}" "${fixturePath("agy-acp/fake-agy.ts")}" "$@"
+AGY_FAKE_ARGS_FILE="${argsFile}" AGY_FAKE_VERSION_FILE="${join(testDir, "version.json")}" exec "${process.execPath}" "${fixturePath("agy-acp/fake-agy.ts")}" "$@"
 `);
   chmodSync(wrapper, 0o755);
   process.env.OPENCODEX_AGY_BIN = wrapper;
@@ -63,6 +63,27 @@ function config(): OcxConfig {
 const body = JSON.stringify({ model: "antigravity-acp/gemini-4-argon", stream: true, input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }] });
 
 describe.skipIf(process.platform === "win32")("antigravity-acp through the server", () => {
+  test.each([
+    ["old version", "1.5.0\n", 0, "found 1.5.0"],
+    ["unparseable version", "unknown\n", 0, "version could not be read"],
+    ["version embedded in other text", "dependency 9.9.9\n", 0, "version could not be read"],
+    ["nonzero exit", "1.5.10\n", 1, "version could not be read"],
+  ])("refuses %s before launching ACP", async (_case, stdout, exitCode, diagnostic) => {
+    writeFileSync(join(testDir, "version.json"), JSON.stringify({ stdout, exitCode }));
+    saveConfig(config());
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/responses", server.url), { method: "POST", headers: { "content-type": "application/json" }, body });
+      const text = await response.text();
+      const launches = readFileSync(argsFile, "utf8").trim().split("\n").map(line => JSON.parse(line).args);
+      expect(launches).toEqual([["--version"]]);
+      expect(text).toContain("agy_acp_unavailable");
+      expect(text).toContain(diagnostic);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("a loopback interactive turn streams the CLI's answer", async () => {
     saveConfig(config());
     const server = startServer(0);

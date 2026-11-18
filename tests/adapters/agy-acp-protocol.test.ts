@@ -71,7 +71,10 @@ describe("config options and the Gemini proof", () => {
 
 describe("binary and version", () => {
   test("version parsing and comparison", () => {
-    expect(parseAgyVersion("agy version 1.5.2 (abc)")).toEqual([1, 5, 2]);
+    expect(parseAgyVersion("1.5.2\n")).toEqual([1, 5, 2]);
+    expect(parseAgyVersion("1.5.10\r\n")).toEqual([1, 5, 10]);
+    expect(parseAgyVersion("1.5.2-beta\n")).toBeUndefined();
+    expect(parseAgyVersion("1.5.2\n9.9.9\n")).toBeUndefined();
     expect(versionAtLeast([1, 5, 0], [1, 5, 0])).toBe(true);
     expect(versionAtLeast([1, 4, 9], [1, 5, 0])).toBe(false);
     expect(resolveAgyBinary({ OPENCODEX_AGY_BIN: "relative/agy" }, () => "/usr/bin/agy")).toBeUndefined();
