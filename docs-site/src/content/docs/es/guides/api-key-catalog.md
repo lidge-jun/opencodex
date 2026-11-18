@@ -363,8 +363,6 @@ OpenCodex puede gastar una suscripción de Claude a través del propio arnés de
 
 > **Términos:** este preajuste gasta su suscripción Claude a través del propio CLI de Anthropic. Si conducir ese arnés sin cabeza desde un proxy se ajusta a los términos de su plan es una pregunta entre usted y Anthropic. OpenCodex no convierte el inicio de sesión en una clave API y no reproduce la identidad CLI de HTTP.
 
-<a id="a6api-credit-quota"></a>
-
 ## Antigravity CLI (ACP, local)
 
 OpenCodex puede usar una suscripción de Google Antigravity a través de la propia CLI de Google en lugar de reproducir una credencial de Antigravity. El preajuste `antigravity-acp` inicia la Antigravity CLI oficial como `agy acp --sandbox` una vez por turno y se comunica con ella mediante el Agent Client Protocol por stdin y stdout:
@@ -388,6 +386,8 @@ OpenCodex puede usar una suscripción de Google Antigravity a través de la prop
 - **Espacio de trabajo y permisos:** cada turno se ejecuta en un directorio privado nuevo y vacío fuera del directorio de OpenCodex. El motor de permisos de la CLI pregunta antes de cada comando y antes de acceder a archivos fuera de ese directorio, y OpenCodex rechaza todas esas solicitudes. `--sandbox` pide a la CLI que ejecute sus comandos de terminal en su sandbox del sistema; Google documenta que no tiene efecto donde ese sandbox no está disponible (por ejemplo Windows 10 o algunos contenedores Linux), así que es un refuerzo adicional, no una garantía. Las reglas de permiso que configures en tus propios ajustes de agy siguen aplicándose sin preguntar.
   En Windows, si OpenCodex no puede confirmar que el árbol de procesos se haya detenido, el turno falla y se conserva el espacio de trabajo.
 - **Solo texto:** los prompts de ACP llevan texto, así que las herramientas de función del cliente y las imágenes no se ofrecen al modelo, y el uso de herramientas propio de la CLI queda dentro de la CLI.
+
+<a id="a6api-credit-quota"></a>
 
 ## Cuota de crédito A6API
 

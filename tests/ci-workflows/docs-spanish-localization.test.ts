@@ -103,6 +103,16 @@ function missingInlineIdentifiers(english: string, spanish: string): string[] {
 }
 
 describe("Spanish documentation localization", () => {
+  test("the A6API credit quota fragment leads to the A6API section in both languages", () => {
+    const english = source(join(root, "guides/api-key-catalog.md"));
+    const spanish = source(join(root, "es/guides/api-key-catalog.md"));
+    const anchor = '<a id="a6api-credit-quota"></a>';
+    expect(english).toMatch(/^## A6API credit quota$/m);
+    const sections = spanish.split(anchor);
+    expect(sections).toHaveLength(2);
+    expect(sections[1]?.trimStart().split("\n")[0]).toBe("## Cuota de crédito A6API");
+  });
+
   test("code spans keep a trailing backslash literal without swallowing later identifiers", () => {
     const english = "Paths `~\\` and `~/` keep `models` unchanged.";
     const spanish = "Las rutas `~\\` y `~/` conservan `models`.";
