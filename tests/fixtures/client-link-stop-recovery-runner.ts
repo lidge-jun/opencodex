@@ -13,6 +13,7 @@ import { createSystemRestartCapability, SYSTEM_RESTART_CAPABILITY_HEADER, SYSTEM
   SYSTEM_RESTART_NONCE_HEADER, SYSTEM_RESTART_PATH } from "../../src/lib/system-restart-contract";
 
 const options = JSON.parse(readFileSync(0, "utf8")) as { mode: string; scheduled?: boolean };
+let phase = "fixture setup";
 const home = process.env.OPENCODEX_HOME!;
 mkdirSync(home, { recursive: true });
 const lifecycle = await import("../../src/client/lifecycle-lock");
@@ -26,7 +27,7 @@ mock.module("../../src/client/lifecycle-lock", () => ({ ...lifecycle,
 async function main() {
   const token = `ocx_data_${"c".repeat(40)}`;
   const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
-  const config = getDefaultConfig(); config.port = probe.port!; await probe.stop(true);
+  const config = getDefaultConfig(); config.port = probe.port!;
   config.runtimeRole = "client";
   config.client = { serverUrl: "http://127.0.0.1:34567", managementUrl: "http://127.0.0.1:34567", managementTransport: "direct", transport: "link",
     link: { tunnelPort: 34567, linkId: "lnk_0123456789abcdef" }, selectedClients: ["pi"], tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
@@ -75,8 +76,12 @@ async function main() {
     // A successful bind proves the real Child listener released its port. No native coordinator,
     // provider request or external process participates in this replacement seam.
     const server = Bun.serve({ hostname: "127.0.0.1", port: request.port, fetch: () => Response.json({ role: "standalone" }) });
-    const health = await (await fetch(new URL("/healthz", server.url))).json() as { role: string };
-    await report(health.role); await server.stop(true);
+    try {
+      const health = await (await fetch(new URL("/healthz", server.url), { headers: { Connection: "close" } })).json() as { role: string };
+      await report(health.role);
+    } finally {
+      await server.stop(true);
+    }
   } }));
   // This fixture runs CLI preflight and the Child together. Model the CLI incarnation
   // with the real process's creation identity, preserving stale-proof detection.
@@ -90,6 +95,9 @@ async function main() {
     },
   }));
   const { startClientRuntime, scheduleStandaloneRecycle } = await import("../../src/client/runtime");
+  phase = "starting the Child listener";
+  // Keep the selected port reserved while preparing the fixture and loading the runtime.
+  await probe.stop(true);
   await startClientRuntime({ block: false }, { restartSupervisor: async () => null });
   const pendingRecycle = options.mode === "signal-pending-recycle";
   const scheduleAndCountTimers = () => {
@@ -103,12 +111,14 @@ async function main() {
     const runtime = readRuntimePort(process.pid)!;
     const nonce = createLocalAttestationChallenge();
     const response = await fetch(`http://127.0.0.1:${config.port}${SYSTEM_RESTART_PATH}`, { method: "POST", headers: {
+      Connection: "close",
       [SYSTEM_RESTART_EXPECTED_PID_HEADER]: String(process.pid), [SYSTEM_RESTART_NONCE_HEADER]: nonce,
       [SYSTEM_RESTART_CAPABILITY_HEADER]: createSystemRestartCapability(runtime.attestationSecret!, nonce, "POST", SYSTEM_RESTART_PATH, process.pid, config.port),
     } });
     await response.arrayBuffer(); return response.status;
   };
   let finishStop: () => Promise<void> = async () => {};
+  phase = "observing the refused stop";
   if (options.mode.startsWith("signal")) {
     // Queue and signal in one turn so the first timer is still pending at shutdown.
     if (pendingRecycle) observations.firstRecycleTimers = scheduleAndCountTimers();
@@ -131,6 +141,7 @@ async function main() {
   }
   observations.beforeRecoveryAdmission = await restart();
   observations.finishedMarker = readRuntimePort(process.pid)?.clientStopRequested;
+  phase = "disconnecting the Child";
   const { disconnectClient } = await import("../../src/client/connect");
   await disconnectClient({ recoverConfig: true }, { lifecycleLockDeps });
   const receiptPath = storePaths().disconnect;
@@ -145,6 +156,7 @@ async function main() {
   if (options.mode === "missing-config") unlinkSync(join(home, "config.json"));
   if (options.mode === "new-connection") { config.client!.connectedAt = "2026-11-16T01:00:00.000Z"; saveConfig(config); }
   if (options.mode === "pending-connect") markClientConnectPending("b".repeat(64));
+  phase = "observing restart or recycle after disconnect";
   if (pendingRecycle) {
     observations.recoveryRecycleTimers = scheduleAndCountTimers();
     if (observations.recoveryRecycleTimers === 0) {
@@ -153,16 +165,20 @@ async function main() {
     }
     return; // The scheduled replacement reports after binding the released listener's port.
   } else if (options.mode === "timer-parent-active") {
-    scheduleStandaloneRecycle(expected.tokenFingerprint);
+    const { markClientRuntimeStopping } = await import("../../src/client/sync-runtime");
     const runtime = readRuntimePort(process.pid)!;
     const startTime = owner.readClientStopProcessStart(process.pid);
     if (!startTime) throw new Error("fixture stop creation identity unavailable");
-    (await import("../../src/client/sync-runtime")).markClientRuntimeStopping(
+    // Queue the recycle and publish the stop in the same turn. Loading the
+    // marker module after scheduling could yield to the timer on a busy runner.
+    if (scheduleAndCountTimers() !== 1) throw new Error("fixture did not schedule the pre-stop recycle");
+    markClientRuntimeStopping(
       { pid: process.pid, port: config.port, attestationSecret: runtime.attestationSecret! },
       { pid: process.pid, startTime, nonce: "b".repeat(32) },
     );
-  } else if (options.scheduled) scheduleStandaloneRecycle(expected.tokenFingerprint);
-  else observations.recoveryAdmission = await restart();
+  } else if (options.scheduled) {
+    if (scheduleAndCountTimers() !== 1) throw new Error("fixture did not schedule the post-disconnect recycle");
+  } else observations.recoveryAdmission = await restart();
   if (["parent", "signal"].includes(options.mode) && !options.scheduled && observations.recoveryAdmission !== 202) {
     const health = await (await fetch(`http://127.0.0.1:${config.port}/healthz`)).json() as { role: string };
     await report(health.role); process.exit(0);
@@ -177,6 +193,6 @@ async function main() {
   }
 }
 
-const deadline = setTimeout(() => { console.error("recovery fixture timed out"); process.exit(1); }, 10_000);
+const deadline = setTimeout(() => { console.error(`recovery fixture timed out (${options.mode}: ${phase})`); process.exit(1); }, 10_000);
 deadline.unref();
 try { await main(); } catch (error) { console.error(error); process.exit(1); }

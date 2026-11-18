@@ -10,12 +10,38 @@ import { isClientStopArgv, isClientStopCommandLine, observeClientStopOwner, read
 async function runStop(options: Record<string, unknown>) {
   const root = mkdtempSync(join(tmpdir(), "ocx-link-stop-"));
   const home = join(root, "ocx");
-  const child = Bun.spawn([process.execPath, fixturePath("client-link-stop-runner.ts")], {
-    cwd: repoPath(), stdin: new Blob([JSON.stringify(options)]), stdout: "pipe", stderr: "pipe",
-    env: { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: join(root, "codex"), OCX_SERVICE: "", OCX_SERVICE_MANAGED: "0" },
-  });
-  const timeout = setTimeout(() => child.kill(), 15_000);
+  const env = { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home,
+    CODEX_HOME: join(root, "codex"), OCX_SERVICE: "", OCX_SERVICE_MANAGED: "0" };
+  let owner: Bun.Subprocess<"pipe", "pipe", "ignore"> | undefined;
+  let child: Bun.Subprocess<Blob, "pipe", "pipe"> | undefined;
+  const timeout = setTimeout(() => {
+    if (child?.exitCode === null) child.kill("SIGKILL");
+    if (owner?.exitCode === null) owner.kill("SIGKILL");
+  }, 15_000);
   try {
+    const receiptState = options.receiptState;
+    if (options.preserve === "receipt" && typeof receiptState === "string" && receiptState.startsWith("parent")) {
+      // Own the inert stop process here so a killed runtime cannot orphan it. EOF
+      // also releases it if the test process itself is killed by the batch watchdog.
+      const path = join(home, process.platform === "linux" || receiptState === "parent-spaced"
+        ? "fixture owner" : "fixture-owner", "src", "cli", "index.ts");
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, 'console.log("ready"); await Bun.stdin.text();');
+      const verb = receiptState === "parent-start" ? "start" : receiptState === "parent-status" ? "status" : "stop";
+      owner = Bun.spawn([process.execPath, path, `--ocx-internal-launch-proof=${"a".repeat(43)}`, verb, "--json"],
+        { env, stdin: "pipe", stdout: "pipe", stderr: "ignore" });
+      const reader = owner.stdout.getReader();
+      try {
+        const ready = await reader.read();
+        if (ready.done) throw new Error("fixture owner did not start");
+      } finally {
+        reader.releaseLock();
+      }
+    }
+    child = Bun.spawn([process.execPath, fixturePath("client-link-stop-runner.ts")], {
+      cwd: repoPath(), stdin: new Blob([JSON.stringify({ ...options, receiptOwnerPid: owner?.pid })]),
+      stdout: "pipe", stderr: "pipe", env,
+    });
     if (options.osSignal) {
       const deadline = Date.now() + 10_000;
       while (!existsSync(join(home, "ready")) && child.exitCode === null && Date.now() < deadline) await Bun.sleep(10);
@@ -63,7 +89,9 @@ async function runStop(options: Record<string, unknown>) {
     return { ...report, fileLateResult: atExit.fileLateResult };
   } finally {
     clearTimeout(timeout);
-    if (child.exitCode === null) { child.kill(); await child.exited; }
+    if (child?.exitCode === null) child.kill("SIGKILL");
+    if (owner?.exitCode === null) owner.kill("SIGKILL");
+    await Promise.all([child?.exited, owner?.exited]);
     removeTreeWithRetry(root);
   }
 }

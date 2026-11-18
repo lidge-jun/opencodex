@@ -49,6 +49,7 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   terminationPlatform?: "linux" | "darwin";
   siblingEscalation?: "stopping" | "different-generation";
   removeToken?: boolean;
+  receiptOwnerPid?: number;
   finalizeFailure?: boolean;
   repairFileRefusal?: boolean;
   observeFileRefusal?: boolean;
@@ -239,18 +240,8 @@ if (options.preserve === "receipt") {
     await owner.exited; ownerPid = owner.pid;
   }
   if (options.receiptState?.startsWith("parent")) {
-    // An owned, inert process supplies real argv/UID/liveness observations. It never
-    // runs the CLI; the fixture sets the real exact-runtime stop marker below.
-    const path = join(home, process.platform === "linux" || options.receiptState === "parent-spaced" ? "fixture owner" : "fixture-owner", "src", "cli", "index.ts");
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, 'console.log("ready"); setInterval(() => {}, 1000);');
-    const verb = options.receiptState === "parent-start" ? "start" : options.receiptState === "parent-status" ? "status" : "stop";
-    const owner = Bun.spawn([process.execPath, path, `--ocx-internal-launch-proof=${"a".repeat(43)}`, verb, "--json"], { stdout: "pipe", stderr: "ignore" });
-    process.on("exit", () => owner.kill("SIGKILL"));
-    const reader = owner.stdout.getReader();
-    const ready = await reader.read(); reader.releaseLock();
-    if (!ready.value || !new TextDecoder().decode(ready.value).includes("ready")) throw new Error("fixture owner did not start");
-    ownerPid = owner.pid;
+    if (options.receiptOwnerPid === undefined) throw new Error("fixture stop owner missing");
+    ownerPid = options.receiptOwnerPid;
     const { readClientStopProcessStart } = await import("../../src/client/stop-teardown-owner");
     const observedStart = readClientStopProcessStart(ownerPid);
     if (!observedStart) throw new Error("fixture stop process creation identity unavailable");
