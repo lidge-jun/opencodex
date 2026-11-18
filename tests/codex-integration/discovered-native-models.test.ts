@@ -276,6 +276,20 @@ describe("discovery-only roster", () => {
     } finally { lease.mockRestore(); }
   });
 
+  test("an aborted discovery does not start another authenticated roster request", async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const options = {
+      poolOnly: true, signal: controller.signal,
+      credentials: [credential, { ...credential, accountId: "second", credentialIdentity: "second" }],
+      fetcher: (() => { calls++; controller.abort(); return Promise.reject(new Error("aborted")); }) as typeof fetch,
+    };
+    expect(await discoverCodexNativeRoster({}, options)).toBe("unavailable");
+    expect(calls).toBe(1);
+    expect(await discoverCodexNativeRoster({}, options)).toBe("unavailable");
+    expect(calls).toBe(1);
+  });
+
   test("pool-only production selection never reads native credentials, even with no Pool accounts", async () => {
     const main = await import("../../src/codex/main-account");
     const accounts = await import("../../src/codex/account-store");

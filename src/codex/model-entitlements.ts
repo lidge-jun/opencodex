@@ -871,6 +871,7 @@ async function fetchDiscoveryRoster(
   fetcher: typeof fetch,
   options: Pick<CodexNativeRosterDiscoveryOptions, "signal" | "now" | "isCurrent">,
 ): Promise<CodexNativeRosterDiscoveryOutcome> {
+  if (options.signal?.aborted || options.isCurrent?.() === false) return "unavailable";
   const controller = new AbortController();
   const abort = () => controller.abort(options.signal?.reason);
   options.signal?.addEventListener("abort", abort, { once: true });
