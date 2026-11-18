@@ -5,7 +5,7 @@
  * answer; that fallback must not run while a forward candidate is configured, and must not
  * spend a different paid backend than the one the operator named.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync} from "node:fs";
 import { join } from "node:path";
 import { encodeMessage, encodeString } from "../../src/adapters/devin/cloud-direct/wire";
@@ -30,6 +30,9 @@ import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { SERVER_BUDGET_MS } from "../helpers/test-budget";
+
+setDefaultTimeout(SERVER_BUDGET_MS);
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -878,7 +881,7 @@ test("a search body that stalls after headers retains the total 504 deadline", a
   } finally {
     await server.stop(true);
   }
-}, 5_000);
+});
 
 test("a client abort during search body reading maps to 499 and cancels upstream", async () => {
   let markBodyStarted: (() => void) | undefined;
@@ -986,7 +989,7 @@ test("a hung search upstream times out with 504 after config.search.timeoutMs", 
     await server.stop(true);
     await upstream.stop(true);
   }
-}, 5_000);
+});
 
 test("a short connectTimeoutMs does NOT cut a slow search (total deadline is search.timeoutMs)", async () => {
   // Regression: alpha/search is non-streaming, so its headers arrive only when the search
@@ -1029,7 +1032,7 @@ test("a short connectTimeoutMs does NOT cut a slow search (total deadline is sea
     await server.stop(true);
     await upstream.stop(true);
   }
-}, 5_000);
+});
 
 test("GET /v1/alpha/search still falls through to the JSON 404 guard", async () => {
   saveConfig(forwardConfig("https://chatgpt.example/backend-api/codex"));
