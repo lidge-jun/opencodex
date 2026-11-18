@@ -19,7 +19,7 @@
  */
 import type { OcxConfig } from "../types";
 import { localInferenceDestination, selfFetchAdmissionToken, type LocalInferenceDestination } from "../lib/local-destinations";
-import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
+import { cancelBodyOnAbort } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import {
   ADVISOR_INTERNAL_CAPABILITY_HEADER,
@@ -88,23 +88,109 @@ function advisorDestination(
   return localInferenceDestination(config, port);
 }
 
-function extractContent(payload: unknown): string | undefined {
-  if (!payload || typeof payload !== "object") return undefined;
-  const choices = (payload as { choices?: unknown }).choices;
-  if (!Array.isArray(choices) || choices.length === 0) return undefined;
-  const message = (choices[0] as { message?: unknown })?.message;
-  if (!message || typeof message !== "object") return undefined;
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string" && content.trim().length > 0) return content;
+/** Hard ceiling multiplier so an endlessly trickling stream cannot hang forever. */
+const HARD_CEILING_MULTIPLIER = 4;
+const HARD_CEILING_MIN_MS = 600_000;
+
+interface InactivitySignal {
+  signal: AbortSignal;
+  readonly timedOut: boolean;
+  touch(): void;
+  cleanup(): void;
+}
+
+/**
+ * Inactivity timeout signal with a generous hard ceiling: `touch()` resets the idle timer while
+ * real SSE data arrives so actively streaming/reasoning advisors are not killed at a fixed
+ * wall-clock mark, while a hung upstream still times out at `idleTimeoutMs`.
+ */
+function createInactivitySignal(idleTimeoutMs: number, abortSignal?: AbortSignal): InactivitySignal {
+  const controller = new AbortController();
+  let timedOut = false;
+  let cleaned = false;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  let ceilingTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const fireTimeout = () => {
+    if (cleaned || controller.signal.aborted) return;
+    timedOut = true;
+    const err = new Error("advisor inactivity timeout");
+    err.name = "TimeoutError";
+    controller.abort(err);
+  };
+
+  const resetIdle = () => {
+    if (cleaned || controller.signal.aborted) return;
+    if (idleTimer !== undefined) clearTimeout(idleTimer);
+    idleTimer = setTimeout(fireTimeout, idleTimeoutMs);
+  };
+
+  const onCallerAbort = () => {
+    if (!controller.signal.aborted) controller.abort(abortSignal?.reason);
+  };
+
+  if (abortSignal) {
+    if (abortSignal.aborted) {
+      onCallerAbort();
+    } else {
+      abortSignal.addEventListener("abort", onCallerAbort, { once: true });
+    }
+  }
+
+  if (!controller.signal.aborted) {
+    resetIdle();
+    const hardCeilingMs = Math.max(idleTimeoutMs * HARD_CEILING_MULTIPLIER, HARD_CEILING_MIN_MS);
+    ceilingTimer = setTimeout(fireTimeout, hardCeilingMs);
+  }
+
+  return {
+    signal: controller.signal,
+    get timedOut() { return timedOut; },
+    touch: resetIdle,
+    cleanup() {
+      cleaned = true;
+      if (idleTimer !== undefined) clearTimeout(idleTimer);
+      if (ceilingTimer !== undefined) clearTimeout(ceilingTimer);
+      if (abortSignal) abortSignal.removeEventListener("abort", onCallerAbort);
+    },
+  };
+}
+
+function textFromField(content: unknown, allowWhitespaceOnly = false): string | undefined {
+  if (typeof content === "string") {
+    return allowWhitespaceOnly ? (content.length > 0 ? content : undefined) : (content.trim().length > 0 ? content : undefined);
+  }
   if (Array.isArray(content)) {
     const joined = content
       .map(part => (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string"
         ? (part as { text: string }).text
         : ""))
       .join("");
-    if (joined.trim().length > 0) return joined;
+    return allowWhitespaceOnly ? (joined.length > 0 ? joined : undefined) : (joined.trim().length > 0 ? joined : undefined);
   }
   return undefined;
+}
+
+function extractContent(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const choices = (payload as { choices?: unknown }).choices;
+  if (!Array.isArray(choices) || choices.length === 0) return undefined;
+  const message = (choices[0] as { message?: unknown })?.message;
+  if (!message || typeof message !== "object") return undefined;
+  return textFromField((message as { content?: unknown }).content);
+}
+
+function extractDeltaContent(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const choices = (payload as { choices?: unknown }).choices;
+  if (!Array.isArray(choices) || choices.length === 0) return undefined;
+  const delta = (choices[0] as { delta?: unknown })?.delta;
+  if (!delta || typeof delta !== "object") return undefined;
+  return textFromField((delta as { content?: unknown }).content, true);
+}
+
+function extractStreamError(payload: unknown): boolean {
+  return Boolean(payload && typeof payload === "object" && "error" in payload && (payload as { error?: unknown }).error);
 }
 
 function extractUsage(payload: unknown): AdvisorConsultationResult["usage"] {
@@ -171,7 +257,7 @@ export async function consultAdvisor(
 
   const requestBody = {
     model: input.advisorModel,
-    stream: false,
+    stream: true,
     reasoning_effort: effort,
     messages: [
       { role: "system", content: input.contextMode === "question-only" ? ADVISOR_QUESTION_ONLY_INSTRUCTION : ADVISOR_SYSTEM_INSTRUCTION },
@@ -179,7 +265,7 @@ export async function consultAdvisor(
     ],
   };
 
-  const linkedSignal = signalWithTimeout(timeoutMs, abortSignal);
+  const linkedSignal = createInactivitySignal(timeoutMs, abortSignal);
   const sidecarExit = sidecarEnter("advisor");
   if (abortSignal?.aborted) {
     sidecarExit();
@@ -200,24 +286,94 @@ export async function consultAdvisor(
     });
     const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
     try {
+      const contentType = (res.headers.get("content-type") ?? "").toLowerCase();
+      const isSse = contentType.includes("text/event-stream");
+      if (res.ok) linkedSignal.touch();
+
       // Bounded read: count bytes per chunk and cancel the reader the moment the bound is
       // exceeded, instead of materializing the full body before the length check.
       let raw = "";
+      let sseBuffer = "";
+      let streamedText = "";
+      let fallbackMessageText: string | undefined;
+      let streamUsage: AdvisorConsultationResult["usage"] | undefined;
+      let streamError = false;
+      let sawMalformedSseJson = false;
+      let sawAnySseData = false;
+      let sawDone = false;
+
+      const processSseLine = (line: string) => {
+        const trimmed = line.trim();
+        if (trimmed === "" || trimmed.startsWith(":")) return;
+        if (!trimmed.startsWith("data:")) return;
+        linkedSignal.touch();
+        sawAnySseData = true;
+        const dataStr = trimmed.slice(5).trim();
+        if (dataStr === "" || dataStr === "[DONE]") {
+          if (dataStr === "[DONE]") sawDone = true;
+          return;
+        }
+        let chunk: unknown;
+        try {
+          chunk = JSON.parse(dataStr);
+        } catch {
+          sawMalformedSseJson = true;
+          return;
+        }
+        if (extractStreamError(chunk)) {
+          streamError = true;
+          return;
+        }
+        const delta = extractDeltaContent(chunk);
+        if (delta) streamedText += delta;
+        const fullMsg = extractContent(chunk);
+        if (fullMsg) fallbackMessageText = fullMsg;
+        const chunkUsage = extractUsage(chunk);
+        if (chunkUsage) streamUsage = chunkUsage;
+      };
+
       let totalBytes = 0;
       const reader = res.body?.getReader();
       if (reader) {
+        const cancelLockedReader = () => { void reader.cancel().catch(() => {}); };
+        if (linkedSignal.signal.aborted) cancelLockedReader();
+        else linkedSignal.signal.addEventListener("abort", cancelLockedReader, { once: true });
         const decoder = new TextDecoder();
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          totalBytes += value.byteLength;
-          if (totalBytes > MAX_ADVISOR_RESPONSE_BYTES) {
-            try { await reader.cancel(); } catch { /* body already closing */ }
-            return { ok: false, advice: "", advisorModel: input.advisorModel, error: "advisor response exceeded byte bound", durationMs: Date.now() - t0 };
+        try {
+          for (;;) {
+            if (linkedSignal.signal.aborted) {
+              throw linkedSignal.signal.reason ?? new Error("advisor aborted");
+            }
+            const { done, value } = await reader.read();
+            if (linkedSignal.signal.aborted) {
+              throw linkedSignal.signal.reason ?? new Error("advisor aborted");
+            }
+            if (done) break;
+            totalBytes += value.byteLength;
+            if (totalBytes > MAX_ADVISOR_RESPONSE_BYTES) {
+              try { await reader.cancel(); } catch { /* body already closing */ }
+              return { ok: false, advice: "", advisorModel: input.advisorModel, error: "advisor response exceeded byte bound", durationMs: Date.now() - t0 };
+            }
+            const decoded = decoder.decode(value, { stream: true });
+            if (isSse) {
+              sseBuffer += decoded;
+              const lines = sseBuffer.split(/\r?\n/);
+              sseBuffer = lines.pop() ?? "";
+              for (const line of lines) processSseLine(line);
+            } else {
+              raw += decoded;
+            }
           }
-          raw += decoder.decode(value, { stream: true });
+          const flushed = decoder.decode();
+          if (isSse) {
+            sseBuffer += flushed;
+            if (sseBuffer.length > 0) processSseLine(sseBuffer);
+          } else {
+            raw += flushed;
+          }
+        } finally {
+          linkedSignal.signal.removeEventListener("abort", cancelLockedReader);
         }
-        raw += decoder.decode();
       }
       const durationMs = Date.now() - t0;
       if (!res.ok) {
@@ -229,11 +385,35 @@ export async function consultAdvisor(
           durationMs,
         };
       }
-      let payload: unknown;
-      try { payload = JSON.parse(raw); } catch {
-        return { ok: false, advice: "", advisorModel: input.advisorModel, error: "advisor returned non-JSON", durationMs };
+      let content: string | undefined;
+      let usage: AdvisorConsultationResult["usage"] | undefined;
+      const parseAsSse = isSse || raw.trimStart().startsWith("data:") || raw.trimStart().startsWith(":");
+      if (parseAsSse) {
+        if (!isSse) {
+          for (const line of raw.split(/\r?\n/)) processSseLine(line);
+        }
+        if (streamError) {
+          return { ok: false, advice: "", advisorModel: input.advisorModel, error: "advisor HTTP 502", durationMs };
+        }
+        if (sawMalformedSseJson && !sawDone && streamedText.trim().length === 0 && !fallbackMessageText) {
+          return { ok: false, advice: "", advisorModel: input.advisorModel, error: "advisor returned non-JSON", durationMs };
+        }
+        if (!sawAnySseData && raw.trim().length > 0 && !isSse) {
+          return { ok: false, advice: "", advisorModel: input.advisorModel, error: "advisor returned non-JSON", durationMs };
+        }
+        content = streamedText.trim().length > 0 ? streamedText : fallbackMessageText;
+        usage = streamUsage;
+      } else {
+        let payload: unknown;
+        try { payload = JSON.parse(raw); } catch {
+          return { ok: false, advice: "", advisorModel: input.advisorModel, error: "advisor returned non-JSON", durationMs };
+        }
+        if (extractStreamError(payload)) {
+          return { ok: false, advice: "", advisorModel: input.advisorModel, error: "advisor HTTP 502", durationMs };
+        }
+        content = extractContent(payload);
+        usage = extractUsage(payload);
       }
-      const content = extractContent(payload);
       if (!content) {
         return { ok: false, advice: "", advisorModel: input.advisorModel, error: "advisor returned no text", durationMs };
       }
@@ -243,7 +423,7 @@ export async function consultAdvisor(
         advisorModel: input.advisorModel,
         durationMs,
         effectiveEffort: readAdvisorReasoning(res.headers),
-        ...(extractUsage(payload) ? { usage: extractUsage(payload) } : {}),
+        ...(usage ? { usage } : {}),
       };
     } finally {
       detachBodyGuard();
@@ -255,7 +435,7 @@ export async function consultAdvisor(
     if (abortSignal?.aborted) {
       return { ok: false, cancelled: true, advice: "", advisorModel: input.advisorModel, error: "advisor cancelled by the caller", durationMs };
     }
-    const kind = e instanceof Error && e.name === "TimeoutError" ? "timeout" : "connect_error";
+    const kind = linkedSignal.timedOut || (e instanceof Error && e.name === "TimeoutError") ? "timeout" : "connect_error";
     return {
       ok: false, advice: "", advisorModel: input.advisorModel,
       error: `advisor ${kind}`,

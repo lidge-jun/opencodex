@@ -34,7 +34,13 @@ import {
   historyHasManualAdvisorResult,
   type AdvisorPreflightLedger,
 } from "./state";
-import { formatAdvisorAdvice, advisorPreflightMessages, formatAdvisorUnavailable } from "./context";
+import {
+  formatAdvisorAdvice,
+  advisorPreflightMessages,
+  formatAdvisorUnavailable,
+  hasExternalAdvisorMcpTool,
+  injectAdvisorWorkerNotice,
+} from "./context";
 import { advisorActivityStore, type AdvisorActivityStore, type AdvisorTrigger } from "./activity";
 import { advisorPlanRootConfig } from "../server/responses/advisor-plan-slot";
 import { createAdvisorTaskBudget, type AdvisorTaskBudget } from "./budget";
@@ -77,6 +83,8 @@ export interface AdvisorRuntimePlan extends AdvisorPlan {
   readonly policy: AdvisorPolicy;
   readonly toolEnabled: boolean;
   readonly tool: import("../types").OcxTool;
+  injectWorkerNotice(parsed: OcxParsedRequest): boolean;
+  hasExternalMcpTool(parsed: OcxParsedRequest): boolean;
   /**
    * The automatic preflight pass. Returns true when advice was injected. A cancelled
    * consultation injects nothing and leaves the task eligible for a later attempt.
@@ -384,6 +392,8 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
     shouldCountManualConsultation: plan.shouldCountManualConsultation,
     consult: plan.consult,
     formatUnavailable: plan.formatUnavailable,
+    injectWorkerNotice: (parsed: OcxParsedRequest) => injectAdvisorWorkerNotice(parsed),
+    hasExternalMcpTool: (parsed: OcxParsedRequest) => hasExternalAdvisorMcpTool(parsed),
     preflightInject,
     attachGuard: parsed => {
       parsed._advisorGuard = createAdvisorGuard(plan);

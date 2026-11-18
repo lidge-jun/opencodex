@@ -9,6 +9,7 @@
  * Design of record: devlog/_fin/260802_client_toggle_api/040_wp4_management_api.md.
  */
 import { readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { LinkApplyBusyError, withLinkApply } from "../../client/link-home";
 import { saveConfigPreservingClaudeCode } from "../../config";
 import { listAsideProfileStates, type AsideProfilesInput } from "../../integrations/aside-profiles";
@@ -94,8 +95,8 @@ export interface IntegrationStateListEnvelope {
 }
 
 export type IntegrationToggleEnvelope =
-  | ({ clientId: IntegrationClientId } & ApplyResult)
-  | ({ clientId: IntegrationClientId } & DisableResult);
+  | ({ clientId: IntegrationClientId; advisorMcp?: unknown } & ApplyResult)
+  | ({ clientId: IntegrationClientId; advisorMcp?: unknown } & DisableResult);
 
 export type IntegrationRestoreEnvelope = {
   clientId: IntegrationClientId;
@@ -1302,7 +1303,33 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
           const stale = guard?.response();
           if (stale) return stale;
           if (!result.ok) return writerFailureResponse(requestedClient, result, ctx);
-          const toggled = jsonResponse(result satisfies IntegrationToggleEnvelope, 200, req, ctx.config);
+          let advisorMcp: unknown;
+          if (!integrationMutationTestHooks?.io && !hermesRequestScope(req)) {
+            const advisor = ctx.config.advisor;
+            const autoMount = advisor?.autoMountMcp !== false;
+            const explicitList = Array.isArray(advisor?.mcpClients) ? advisor.mcpClients : null;
+            const { isAdvisorMcpClientId, mountAdvisorMcpForClient, unmountAdvisorMcpForClient } =
+              await import("../../advisor/client-mcp");
+            if (isAdvisorMcpClientId(requestedClient)) {
+              const overrides = pathOverrides();
+              const customStore = integrationMutationTestHooks?.store;
+              const mcpOptions = {
+                ...(overrides.home ? { homeDir: overrides.home } : {}),
+                ...(overrides.env ? { env: overrides.env } : {}),
+                ...(customStore ? { configDir: dirname(customStore.root) } : {}),
+              };
+              if (parsed.enabled === true && advisor?.enabled === true && autoMount
+                && (explicitList === null || explicitList.includes(requestedClient))) {
+                advisorMcp = mountAdvisorMcpForClient(requestedClient, mcpOptions);
+              } else if (!parsed.enabled && autoMount && explicitList === null) {
+                advisorMcp = unmountAdvisorMcpForClient(requestedClient, mcpOptions);
+              }
+            }
+          }
+          const envelope: IntegrationToggleEnvelope = advisorMcp === undefined
+            ? (result satisfies IntegrationToggleEnvelope)
+            : { ...(result satisfies IntegrationToggleEnvelope), advisorMcp };
+          const toggled = jsonResponse(envelope, 200, req, ctx.config);
           return recordsDecision ? recordHomeIntegrationDecision(ctx, requestedClient, toggled, () => ({ enabled: parsed.enabled === true,
             ...(modelNames !== undefined && (requestedClient === "hermes" || requestedClient === "commandcode") ? { modelNames } : {}) })) : toggled;
         };

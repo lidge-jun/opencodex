@@ -92,6 +92,12 @@ function bridgeOnlyPolicyApplies(
 ): boolean {
   if (resolvePinnedEffort(route, selector.routeSelector, config) !== undefined) return true;
   if (anthropicBodyElidesBlockedSkill(body, selector.claudeCode ?? config.claudeCode)) return true;
+  const advisorModel = typeof config.advisor?.model === "string" ? config.advisor.model.trim() : "";
+  const isSelfAdvisorRoute = advisorModel !== ""
+    && (advisorModel === route.modelId || advisorModel === `${route.providerName}/${route.modelId}`);
+  // Preserve explicit managedMessagesNativeOAuth first-party OAuth wire fidelity; only decline
+  // native Messages for advisor on API-key / local routes (OAuth default already uses the bridge).
+  if (route.provider.authMode !== "oauth" && config.advisor?.enabled === true && advisorModel !== "" && !isSelfAdvisorRoute) return true;
   return selector.webSearchBackendAvailable !== false && webSearchSidecarMayEngage(body, config);
 }
 

@@ -3,6 +3,8 @@ import { useDataSurface } from "../../data-surface";
 import { DataSurfaceSkeleton } from "../../components/data-surface";
 import { useT, type TKey } from "../../i18n/shared";
 import { Notice, Switch } from "../../ui";
+import type { AdvisorDto } from "../Advisor";
+import type { AdvisorMcpClientStatusDto } from "../advisor/AdvisorClientMcpPanel";
 import ClientMark from "../../components/ClientMark";
 import { markFor } from "../../components/integration-marks";
 import IntegrationStateBadge from "./IntegrationStateBadge";
@@ -157,6 +159,44 @@ function FileIntegrationControls({
     values: Record<string, string>;
   } | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const isAdvisorMcpCapable = client === "workbuddy" || client === "workbuddy-ai"
+    || client === "qoder" || client === "qoder-cn" || client === "commandcode"
+    || client === "cline" || client === "opencode";
+  const fetchAdvisorMcp = useCallback(async (signal: AbortSignal): Promise<AdvisorDto | null> => {
+    try {
+      const res = await fetch(`${apiBase}/api/advisor/settings`, { signal });
+      if (!res.ok) return null;
+      return (await res.json()) as AdvisorDto;
+    } catch {
+      // Optional advisory hint: never break integration controls when offline or unmocked.
+      return null;
+    }
+  }, [apiBase]);
+  const advisorMcpResource = useDataSurface<AdvisorDto | null>(
+    `integration-advisor-mcp:${apiBase}:${client}`,
+    [apiBase, client],
+    fetchAdvisorMcp,
+    {
+      isEmpty: data => data === null,
+      enabled: active && isAdvisorMcpCapable,
+    },
+  );
+  const advisorDto = active && isAdvisorMcpCapable ? advisorMcpResource.state.data ?? null : null;
+  const visibleAdvisorMcpInfo: {
+    client: FileIntegrationClientId;
+    enabled: boolean;
+    autoMountMcp: boolean;
+    mcpClients?: readonly string[] | null;
+    entry?: AdvisorMcpClientStatusDto;
+  } | null = advisorDto
+    ? {
+        client,
+        enabled: advisorDto.settings.enabled,
+        autoMountMcp: advisorDto.settings.autoMountMcp ?? true,
+        mcpClients: advisorDto.settings.mcpClients,
+        entry: advisorDto.mcpClients?.find(item => item.clientId === client),
+      }
+    : null;
   const [restoring, setRestoring] = useState<IntegrationJournalRow | null>(null);
   /* The row awaiting delete confirmation. */
   const [deleting, setDeleting] = useState<IntegrationJournalRow | null>(null);
@@ -315,6 +355,7 @@ function FileIntegrationControls({
       });
       setPlannedMutation(null);
       if (client === "droid") setDroidReasoningDraft(null);
+      if (isAdvisorMcpCapable) void advisorMcpResource.refresh();
     } catch (error) {
       refresh();
       if (error instanceof IntegrationApiError && error.stalePlan) throw error;
@@ -439,6 +480,30 @@ function FileIntegrationControls({
 
       <p className="page-sub">{t(SEMANTICS_KEY[client])}</p>
       <p className="integration-path">{status.configPath}</p>
+      {visibleAdvisorMcpInfo?.enabled && (() => {
+        const entry = visibleAdvisorMcpInfo.entry;
+        const path = entry?.configPath ?? "";
+        const manualList = Array.isArray(visibleAdvisorMcpInfo.mcpClients) ? visibleAdvisorMcpInfo.mcpClients : null;
+        const note = entry ? t(`advisor.mcp.note.${entry.clientId}` as TKey) : "";
+        if (entry?.mounted) {
+          return (
+            <Notice tone={entry.trustStatus === "action_required" ? "warn" : "ok"}>
+              {t("advisor.mcp.routeNoticeMounted", { path })}{note ? ` ${note}` : ""}
+            </Notice>
+          );
+        }
+        if (manualList && !manualList.includes(client)) {
+          return <Notice tone="warn">{t("advisor.mcp.routeNoticeManual")}</Notice>;
+        }
+        if (visibleAdvisorMcpInfo.autoMountMcp && (entry?.defaultAutoMount !== false || manualList?.includes(client))) {
+          return (
+            <Notice tone="warn">
+              {t("advisor.mcp.routeNoticeWillMount", { path })}{note ? ` ${note}` : ""}
+            </Notice>
+          );
+        }
+        return null;
+      })()}
       {status.reason === "candidate-conflict" && status.conflictPaths?.map(path => (
         <Notice key={path} tone="err">{t("integrations.status.candidateConflict", { path })}</Notice>
       ))}

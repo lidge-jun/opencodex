@@ -307,6 +307,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   // server/management/advisor-routes
   { method: "GET", path: "/api/advisor/settings", module: "server/management/advisor-routes", mutates: false },
   { method: "GET", path: "/api/advisor/activity", module: "server/management/advisor-routes", mutates: false },
+  { method: "POST", path: "/api/advisor/consult", module: "server/management/advisor-routes", mutates: true },
   { method: "PUT", path: "/api/advisor/settings", module: "server/management/advisor-routes", mutates: true },
   // server/management/companion-routes
   { method: "POST", path: "/api/companion/open-in-browser", module: "server/management/companion-routes", mutates: true, exempt: { reason: "browser-navigation", why: "Opens the companion's current view in the system browser under normal management admission; the CLI reads the underlying settings and usage directly." } },

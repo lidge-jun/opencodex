@@ -676,6 +676,9 @@ export async function prepareResponsesRequest(
       parsed._memoryModelPhase = options.memoryModelPhase;
       parsed._cursorIsolateConversation = true;
     }
+    if (options.advisorSessionIdentity) {
+      parsed._advisorSessionIdentity = options.advisorSessionIdentity;
+    }
   } catch (err) {
     if (isTranslatorBudgetExceededError(err)) {
       return markProxyError(formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {

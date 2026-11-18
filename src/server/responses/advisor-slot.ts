@@ -278,12 +278,46 @@ function advisorToolResult(
   };
 }
 
+const HEARTBEAT_INTERVAL_MS = 1_000;
+
+/**
+ * Emit `heartbeat` adapter events while an expert consultation promise is in flight so
+ * `bridge/sse.ts` resets its stall timer during slow reasoning models instead of killing the
+ * worker stream at DEFAULT_STALL_TIMEOUT_SEC.
+ */
+async function* withAdvisorHeartbeats<T>(
+  promise: Promise<T>,
+  intervalMs = HEARTBEAT_INTERVAL_MS,
+): AsyncGenerator<AdapterEvent, T, void> {
+  type Settled = { kind: "done"; value: T } | { kind: "err"; error: unknown };
+  const outcome: Promise<Settled> = promise.then(
+    value => ({ kind: "done" as const, value }),
+    error => ({ kind: "err" as const, error }),
+  );
+  while (true) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = new Promise<"tick">(resolve => {
+      timer = setTimeout(() => resolve("tick"), intervalMs);
+    });
+    const winner = await Promise.race([outcome, tick]);
+    if (timer !== undefined) clearTimeout(timer);
+    if (winner === "tick") {
+      yield { type: "heartbeat" };
+      continue;
+    }
+    if (winner.kind === "err") throw winner.error;
+    return winner.value;
+  }
+}
+
 export interface AdvisorGuardOptions {
   parsed: OcxParsedRequest;
   plan: AdvisorPlan;
   firstEvents: AsyncIterable<AdapterEvent>;
   /** Independent guard ownership within the optional shared request budget. */
   translatorBudget?: TranslatorBudget;
+  /** Override heartbeat cadence (ms) for slow-consult tests. */
+  heartbeatIntervalMs?: number;
   /** One bounded worker continuation re-dispatch (same machinery as the terminal guard). */
   continuation: (parsed: OcxParsedRequest) => AsyncIterable<AdapterEvent> | Promise<AsyncIterable<AdapterEvent>>;
 }
@@ -293,10 +327,13 @@ export interface AdvisorGuardOptions {
  * `_advisorGuard` by the sidecar planner; adapter delivery applies it when present.
  */
 export function createAdvisorStreamGuard(options: AdvisorGuardOptions): AsyncGenerator<AdapterEvent> {
-  const guard = createAdvisorGuard(options.plan);
+  const guard = createAdvisorGuard(options.plan, options.heartbeatIntervalMs);
   return guard(options);
 }
-export function createAdvisorGuard(plan: AdvisorPlan): NonNullable<OcxParsedRequest["_advisorGuard"]> {
+export function createAdvisorGuard(
+  plan: AdvisorPlan,
+  heartbeatIntervalMs?: number,
+): NonNullable<OcxParsedRequest["_advisorGuard"]> {
   // Shared across invocations of this request's guard, including an empty-completion retry.
   const sidecar = createAdvisorSidecarStep(plan);
   return async function* guardAdvisorStream(options: Omit<AdvisorGuardOptions, "plan">): AsyncGenerator<AdapterEvent> {
@@ -454,7 +491,7 @@ export function createAdvisorGuard(plan: AdvisorPlan): NonNullable<OcxParsedRequ
           ...parsed,
           context: { ...parsed.context, messages },
         };
-        const consulted = await sidecar.consultCall(consultParsed, call);
+        const consulted = yield* withAdvisorHeartbeats(sidecar.consultCall(consultParsed, call), heartbeatIntervalMs);
         messages.push(retention.history(jsonUtf8Bytes(consulted.outcome) + jsonUtf8Bytes(call.id) + 256, () => consulted.message)!);
       }
 

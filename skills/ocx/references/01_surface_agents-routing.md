@@ -229,19 +229,28 @@ State-changing: yes. JSON mode: `payload`.
 |---|---|
 | GET | `/api/advisor/settings` |
 | GET | `/api/advisor/activity` |
+| POST | `/api/advisor/consult` |
 | PUT | `/api/advisor/settings` |
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--json` | boolean | Emit advisor settings as JSON. |
-| `--context-mode` | string | With set: context (default) or question-only; question-only pauses automatic consultations. |
+| `--json` | boolean | Emit advisor settings or consultation result as JSON. |
+| `--question` | string | With consult: focused question for the advisor model. |
+| `--context` | string | With consult: optional background summary or failing evidence. |
+| `--worker-model` | string | With consult: caller model label for activity attribution. |
+| `--task-id` | string | With consult: optional task id used by adaptive budget. |
+| `--consultation-id` | string | With consult: poll an in-progress consultation. |
+| `--wait-ms` | number | With consult: bound each long-poll round trip (0-300000 ms). |
+| `--context-mode` | string | With set: context (default), full (expanded message/transcript caps and client session transcripts), or question-only. |
+| `--auto-mount-mcp` | string | With set: on (default) or off to auto-mount opencodex-advisor MCP for compatible active routes. |
+| `--mcp-clients` | string | With set: comma-separated client ids, auto (follow active routes), or none. |
 
-- `status` (the default) reads the resolved settings; `on`/`off` toggle the sidecar; `consent` records or revokes context-sharing consent; `set` updates model, effort, policy, context mode, task limit, or timeout.
+- `status` (the default) reads the resolved settings; `consult` queries the advisor via `POST /api/advisor/consult` (supports `waitMs` + `202` `consultationId` polling); `mcp` serves `consult_advisor` over stdio MCP for external harnesses; `on`/`off` toggle the sidecar; `consent` records or revokes context-sharing consent; `set` updates model, effort, policy, context mode, task limit, MCP linkage, or timeout.
 - `on` does not grant consent. Without current consent it refuses and prints the disclosure. `on --ack-context-sharing` records consent v1 and enables. `consent --revoke` removes consent: consultations not yet dispatched are blocked, but it cannot cancel a dispatched consultation or retract task context already sent.
 - The advisor model may be any routable model string: a bare native model, an explicit `provider/model`, or an account-qualified native model.
 - `policy: preflight` makes OpenCodex attempt one automatic consultation per task with a stable conversation identity once the task shows orientation evidence (an assistant tool call or a tool result after the latest user message). Without a stable identity, each eligible request may trigger another consultation. `policy: manual` consults only when the worker calls the synthetic `advisor` tool. Neither path sends task context without current context-sharing consent.
 - `policy: adaptive` adds evidence-based failed-repair consultation after the same validation fails, a file edit completes, and validation fails again. Automatic calls require a stable conversation identity. `set --max-consultations <1-3>` caps adaptive task attempts, including manual calls, in a durable 24-hour budget. No semantic stuck detection is claimed.
-- `set --context-mode question-only` sends only a fixed instruction and a required, self-contained worker question (up to 2,000 retained characters plus a truncation notice). No task history, tools, worker identity or repair evidence is attached. Automatic preflight and adaptive repair calls are paused; manual calls, consent and existing limits still apply. `set --context-mode context` restores the default context-sharing behavior and selected policy.
+- `set --context-mode question-only` sends only a fixed instruction and a required, self-contained worker question (up to 2,000 retained characters plus a truncation notice). No task history, tools, worker identity or repair evidence is attached. Automatic preflight and adaptive repair calls are paused; manual calls, consent and existing limits still apply. `set --context-mode full` expands per-message/transcript caps (128k/512k chars) and strips harness `<system-reminder>` wrappers. `set --context-mode context` restores the default context-sharing behavior.
 - `activity` reads up to 100 recent consultation metadata records (trigger, status, models, requested and mapped effort, duration, reported tokens); no task or advice content is retained. Records are process-local and expire after 24 hours. Missing mapped effort means unreported, not successful application.
 
 ### `ocx message enable`
