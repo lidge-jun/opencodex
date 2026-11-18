@@ -224,8 +224,6 @@ ocx combo set jev-auto --session-pin 20m --json
 
 La primera solicitud se decide normalmente. Cuando el destino aplicado por JEV completa una respuesta, las solicitudes siguientes reutilizan ese destino y, por defecto, el mismo esfuerzo sin otra llamada de decisión. `ttlMs`, entre un minuto y 24 horas, es un plazo de inactividad: cada turno completado en el destino fijado, incluidas las continuaciones de herramientas, lo reinicia. Si la sesión permanece inactiva más tiempo, se decide de nuevo.
 
-`sessionPin.effort: "per-turn"` (`--session-pin-effort per-turn`) pide a JEV que vuelva a elegir el esfuerzo en cada turno fijado si el destino admite varios niveles. Si la decisión falla, se conserva el esfuerzo fijado. Con `jevEffortMode: "client"`, se omite la decisión y se aplica la política de esfuerzo del cliente.
-
 La identidad combina el encabezado de sesión del cliente (`thread-id`, `session_id` o `session-id`, `x-codex-parent-thread-id`, o un `x-session-id` promovido), la clave API que admitió la solicitud y el combo. No se fijan solicitudes sin encabezado de sesión, `prompt_cache_key` nunca sirve como identidad de sesión y dos claves API nunca comparten una fijación.
 
 JEV decide de nuevo y sustituye la fijación cuando:
@@ -235,6 +233,20 @@ JEV decide de nuevo y sustituye la fijación cuando:
 - `decisionQuotaSignals` está activo y la evidencia de cuota indica que el destino está casi agotado.
 - Falla cualquier envío de la sesión fijada; esa solicitud conserva la recuperación habitual mediante otros destinos.
 - La configuración cambió después de guardar la fijación.
+
+#### Elección del esfuerzo en cada turno fijado
+
+`effort: "per-turn"` pide a JEV que vuelva a elegir el esfuerzo en cada turno fijado si el destino admite varios niveles.
+
+```bash
+ocx combo set jev-auto --session-pin 20m --session-pin-effort per-turn --json
+```
+
+```json
+{ "strategy": "jev", "sessionPin": { "ttlMs": 1200000, "effort": "per-turn" } }
+```
+
+Si la decisión falla, se conserva el esfuerzo fijado. Con `jevEffortMode: "client"`, se omite la decisión y se aplica la política de esfuerzo del cliente. `--session-pin-effort pinned` restaura el valor predeterminado. Cambiar el plazo con `--session-pin` conserva el modo.
 
 Cancelar una solicitud conserva la fijación. Una decisión que usa la alternativa fail-open por tiempo agotado, clave ausente o respuesta inválida no crea una. Las fijaciones viven en memoria, con un máximo de 512 sesiones, y se pierden al reiniciar.
 
