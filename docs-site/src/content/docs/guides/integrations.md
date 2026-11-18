@@ -1243,7 +1243,8 @@ ocx disconnect antigravity             # or: ocx disconnect agy
 
 Connect records what it replaced. Disconnect puts the original bytes back when the file is unchanged, and
 otherwise reverts only OpenCodex's own entries and keeps your other edits. The marked `agy` block in a
-shell profile is removed whole, including any edit made inside it. Restart Antigravity, or open a new
+shell profile is removed whole, including any edit made inside it. Symlinks are supported when they
+resolve to a regular file in the expected settings or profile directory under your home. Restart Antigravity, or open a new
 terminal for `agy`, to apply a change. `ocx uninstall` disconnects clients with saved restore records
 before removing configuration. If a client cannot be restored, uninstall stops and keeps its record.
 

@@ -3,9 +3,9 @@ import {
   closeSync, existsSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, realpathSync,
   rmSync, rmdirSync, statSync, unlinkSync, writeFileSync,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
-  atomicWriteFileNoFollowStreamed, isMissingPathError, nextAtomicTempSequence, resolveWriteTarget, syncParentDirectory,
+  atomicWriteFileNoFollowStreamed, isMissingPathError, nextAtomicTempSequence, syncParentDirectory,
 } from "../../config/atomic-write";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import { readBoundedRegularFileSync } from "../../lib/bounded-file-read";
@@ -27,44 +27,74 @@ export interface ClientFile {
   hash: string;
 }
 
-export function readClientFile(path: string): ClientFile | null {
-  try {
-    const target = realpathSync(path);
-    const bytes = readBoundedRegularFileSync(target, MAX_CLIENT_BYTES);
-    return { target, bytes, hash: sha256(bytes) };
-  } catch (error) {
-    if (!isMissingPathError(error)) throw error;
-    // A missing entry is allowed. A dangling link must never be mistaken for an absent file.
-    resolveWriteTarget(path);
-    return null;
+/** Resolve the existing prefix even when a new client file or directory is needed. */
+function resolveClientPath(path: string): string {
+  try { return realpathSync(path); }
+  catch (error) {
+    const parent = dirname(path);
+    if (!isMissingPathError(error) || parent === path) throw error;
+    if (lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      throw new Error(`Refusing an unresolvable gateway client symlink: ${path}`);
+    }
+    return join(resolveClientPath(parent), basename(path));
   }
 }
 
+function underCanonicalHome(ctx: GatewayClientContext, path: string): string {
+  const subpath = relative(ctx.home, path);
+  if (subpath === ".." || subpath.startsWith(`..${sep}`) || isAbsolute(subpath)) {
+    throw new Error(`Gateway client path is outside the home directory: ${path}`);
+  }
+  return join(realpathSync(ctx.home), subpath);
+}
+
+/** The connector supplies a fixed settings/profile path. Only its own directory may hold the target. */
+function clientDestination(ctx: GatewayClientContext, path: string): string {
+  const parent = dirname(path);
+  const allowed = underCanonicalHome(ctx, parent);
+  const target = resolveClientPath(path);
+  if (relative(allowed, dirname(target)) !== "" || relative(allowed, resolveClientPath(parent)) !== "") {
+    throw new Error(`Gateway client file resolves outside the allowed client directory: ${path}`);
+  }
+  return target;
+}
+
+function readClientDestination(target: string, ignoreUnreadable: boolean = false): ClientFile | null {
+  try {
+    const bytes = readBoundedRegularFileSync(target, MAX_CLIENT_BYTES);
+    return { target, bytes, hash: sha256(bytes) };
+  } catch (error) {
+    if (ignoreUnreadable || isMissingPathError(error)) return null;
+    throw error;
+  }
+}
+
+export function readClientFile(ctx: GatewayClientContext, path: string, ignoreUnreadable = false): ClientFile | null {
+  return readClientDestination(clientDestination(ctx, path), ignoreUnreadable);
+}
+
 /** Status can still report the client when a file exists but cannot be read. */
-export function inspectClientFile(path: string): ClientFile | null | undefined {
-  try { return readClientFile(path); } catch { return undefined; }
+export function inspectClientFile(ctx: GatewayClientContext, path: string): ClientFile | null | undefined {
+  try { return readClientFile(ctx, path); } catch { return undefined; }
 }
 
 export function assertClientSize(bytes: Uint8Array): void {
   if (bytes.length > MAX_CLIENT_BYTES) throw new Error("Gateway client file would exceed the 4 MiB limit");
 }
 
-export function clientDestination(path: string, original: ClientFile | null): string {
-  return original?.target ?? join(realpathSync(dirname(path)), basename(path));
-}
-
-function assertClientUnchanged(path: string, original: ClientFile | null, destination: string): void {
-  const current = readClientFile(path);
-  const target = clientDestination(path, current);
-  if (original?.hash !== current?.hash || destination !== target) {
+export function checkedClientDestination(ctx: GatewayClientContext, path: string, original: ClientFile | null, destination = original?.target): string {
+  const target = clientDestination(ctx, path);
+  const current = readClientDestination(target);
+  if (original?.hash !== current?.hash || (destination !== undefined && destination !== target)) {
     throw new Error(`Gateway client file changed before update: ${path}`);
   }
+  return target;
 }
 
 /** Replace the resolved client file using the directory's inherited Windows ACL. */
-export function writeClientFile(path: string, original: ClientFile | null, bytes: Uint8Array): void {
+export function writeClientFile(ctx: GatewayClientContext, path: string, original: ClientFile | null, bytes: Uint8Array): void {
   assertClientSize(bytes);
-  const target = clientDestination(path, original);
+  const target = checkedClientDestination(ctx, path, original);
   const dir = dirname(target);
   assertNotRealHomeUnderTest(dir);
   assertNotRealCodexHomeUnderTest(dir);
@@ -78,7 +108,7 @@ export function writeClientFile(path: string, original: ClientFile | null, bytes
       fsyncSync(fd);
     } finally { closeSync(fd); }
     renameAtomicFile(temp, target, undefined, "config", {
-      validateBeforeRename: destination => assertClientUnchanged(path, original, destination),
+      validateBeforeRename: destination => { checkedClientDestination(ctx, path, original, destination); },
     });
   } catch (error) {
     try { unlinkSync(temp); } catch (cleanup) {
@@ -89,9 +119,9 @@ export function writeClientFile(path: string, original: ClientFile | null, bytes
   syncParentDirectory(target);
 }
 
-export function removeCreatedClientFile(path: string, original: ClientFile): void {
+export function removeCreatedClientFile(ctx: GatewayClientContext, path: string, original: ClientFile): void {
   if (lstatSync(path).isSymbolicLink()) throw new Error(`Refusing to remove a symlinked gateway client file: ${path}`);
-  assertClientUnchanged(path, original, original.target);
+  checkedClientDestination(ctx, path, original);
   assertNotRealHomeUnderTest(dirname(original.target));
   assertNotRealCodexHomeUnderTest(dirname(original.target));
   unlinkSync(original.target);
@@ -116,9 +146,12 @@ export function mkdirTracked(dir: string): string[] {
 }
 
 /** Remove the directories this connector created, deepest first, only while empty. */
-export function rmdirsIfEmpty(dirs: readonly string[]): void {
+export function rmdirsIfEmpty(ctx: GatewayClientContext, dirs: readonly string[]): void {
   for (const dir of [...dirs].reverse()) {
-    try { rmdirSync(dir); } catch { /* gone or not empty */ }
+    try {
+      const allowed = underCanonicalHome(ctx, dir);
+      if (relative(allowed, realpathSync(dir)) === "") rmdirSync(allowed);
+    } catch { /* gone or not empty */ }
   }
 }
 
@@ -179,7 +212,7 @@ export function isRestoreFile(home: string, path: string, record: {
   originalBytes: unknown; createdDirs: unknown; resolvedPath?: unknown;
 }): boolean {
   const allowedDirs: string[] = [];
-  for (let dir = dirname(path); dir !== home && dir !== dirname(dir); dir = dirname(dir)) allowedDirs.push(dir);
+  for (let dir = dirname(path); relative(home, dir) !== "" && dir !== dirname(dir); dir = dirname(dir)) allowedDirs.push(dir);
   return (record.originalBytes === null || typeof record.originalBytes === "string")
     && (record.resolvedPath === undefined || typeof record.resolvedPath === "string")
     && Array.isArray(record.createdDirs) && record.createdDirs.every(dir => allowedDirs.includes(dir));
@@ -206,10 +239,12 @@ export function adminGatewayOverride(ctx: GatewayClientContext): GatewayOverride
   let gateway: unknown;
   try {
     // A missing file is no override; EACCES or a parse failure is an unknown one, never a thrown status.
-    const bytes = readClientFile(path)?.bytes;
-    if (!bytes) return null;
+    const bytes = readBoundedRegularFileSync(resolveClientPath(path), MAX_CLIENT_BYTES);
     gateway = (parseJsonc(bytes.toString("utf8")) as { gateway?: unknown } | null)?.gateway;
-  } catch { return { source: "admin_settings", code: "admin-unreadable", detail: "admin_settings.json exists but could not be read, so its gateway settings are unknown" }; }
+  } catch (error) {
+    if (isMissingPathError(error)) return null;
+    return { source: "admin_settings", code: "admin-unreadable", detail: "admin_settings.json exists but could not be read, so its gateway settings are unknown" };
+  }
   if (!gateway || typeof gateway !== "object" || Object.keys(gateway).length === 0) return null;
   return { source: "admin_settings", code: "admin-gateway", detail: "organization admin_settings.json sets the gateway and wins over the user settings and AGY_LLM_GATEWAY_* variables" };
 }

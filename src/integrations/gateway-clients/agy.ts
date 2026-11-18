@@ -5,7 +5,7 @@
 import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
-  adminGatewayOverride, assertClientSize, clientDestination, clientRefusal, dropStash, envGatewayOverride,
+  adminGatewayOverride, assertClientSize, checkedClientDestination, clientRefusal, dropStash, envGatewayOverride,
   inspectClientFile, inspectStashPresence, isRestoreFile, mkdirTracked, mutateClient, readClientFile, readStash,
   removeCreatedClientFile, rmdirsIfEmpty, sha256, writeClientFile, writeStash, type ClientFile,
 } from "./io";
@@ -151,7 +151,7 @@ function status(ctx: GatewayClientContext, target?: GatewayTarget): GatewayClien
   let unreadable = false;
   const rows: GatewayClientStatus["files"] = [];
   for (const { path, kind } of files) {
-    const file = inspectClientFile(path);
+    const file = inspectClientFile(ctx, path);
     const decoded = file ? decode(file.bytes) : null;
     unreadable ||= file === undefined || (file !== null && decoded === null);
     const block = decoded ? blockIn(decoded.text) : null;
@@ -177,7 +177,7 @@ function connect(ctx: GatewayClientContext, target: GatewayTarget): GatewayClien
   const staged: { entry: Entry; file: ClientFile | null; out: Buffer }[] = [];
   for (const profile of targets(ctx)) {
     const { path, kind } = profile;
-    const file = readClientFile(path);
+    const file = readClientFile(ctx, path);
     const prev = entries.get(path);
     assertSameTarget(prev, file?.target);
     const decoded = file ? decode(file.bytes) : { text: "", encoding: "utf8" as const };
@@ -198,15 +198,15 @@ function connect(ctx: GatewayClientContext, target: GatewayTarget): GatewayClien
   }
   try {
     for (const { entry, file } of staged) {
-      entry.createdDirs = [...entry.createdDirs, ...mkdirTracked(dirname(entry.path))];
-      entry.resolvedPath = clientDestination(entry.path, file);
+      entry.resolvedPath = checkedClientDestination(ctx, entry.path, file);
       assertSameTarget(entries.get(entry.path), entry.resolvedPath);
+      entry.createdDirs = [...entry.createdDirs, ...mkdirTracked(dirname(entry.path))];
       entries.set(entry.path, entry);
     }
     writeStash(ctx, ID, { version: 1, files: [...entries.values()] } satisfies Stash);
     for (const { entry, file, out } of staged) {
       if (file?.hash === entry.pendingSha256) continue;
-      writeClientFile(entry.path, file, out);
+      writeClientFile(ctx, entry.path, file, out);
       changedFiles.push(entry.path);
     }
   } catch (error) {
@@ -231,7 +231,7 @@ function disconnect(ctx: GatewayClientContext): GatewayClientResult {
   const createdDirs: string[] = [];
   let pathWise = false;
   for (const [path, entry] of paths) {
-    const file = entry ? readClientFile(path) : inspectClientFile(path);
+    const file = readClientFile(ctx, path, entry === undefined);
     assertSameTarget(entry, file?.target);
     if (!file) {
       if (entry) createdDirs.push(...entry.createdDirs);
@@ -239,19 +239,19 @@ function disconnect(ctx: GatewayClientContext): GatewayClientResult {
     }
     if (entry && !entry.pathWiseOnly && recordedHash(entry, file.hash)) {
       if (entry.originalBytes === null) {
-        changes.push({ path, apply: () => removeCreatedClientFile(path, file) });
+        changes.push({ path, apply: () => removeCreatedClientFile(ctx, path, file) });
         createdDirs.push(...entry.createdDirs);
       } else {
         const bytes = Buffer.from(entry.originalBytes, "base64");
         assertClientSize(bytes);
-        if (!bytes.equals(file.bytes)) changes.push({ path, apply: () => writeClientFile(path, file, bytes) });
+        if (!bytes.equals(file.bytes)) changes.push({ path, apply: () => writeClientFile(ctx, path, file, bytes) });
       }
       continue;
     }
     const decoded = decode(file.bytes);
     if (!decoded && entry) return clientRefusal(`${path} uses an unsupported encoding. The restore record was kept.`, "unsupported-file");
     if (!decoded || blockIn(decoded.text) === null) continue;
-    changes.push({ path, apply: () => writeClientFile(path, file, encode(withoutBlock(decoded.text), decoded.encoding)) });
+    changes.push({ path, apply: () => writeClientFile(ctx, path, file, encode(withoutBlock(decoded.text), decoded.encoding)) });
     pathWise = true;
   }
 
@@ -261,7 +261,7 @@ function disconnect(ctx: GatewayClientContext): GatewayClientResult {
       apply();
       changedFiles.push(path);
     }
-    rmdirsIfEmpty(createdDirs);
+    rmdirsIfEmpty(ctx, createdDirs);
     if (stash) dropStash(ctx, ID);
   } catch (error) {
     return clientRefusal(`Could not restore the shell profiles: ${(error as Error).message}`, "io-error", changedFiles);

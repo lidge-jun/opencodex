@@ -5,7 +5,7 @@
 import { join } from "node:path";
 import {
   GATEWAY_PLACEHOLDER_KEY, adminGatewayOverride, dropStash, envGatewayOverride, mkdirTracked, normalizeUrl,
-  assertClientSize, clientDestination, clientRefusal, inspectClientFile, inspectStashPresence, isRestoreFile, mutateClient,
+  assertClientSize, checkedClientDestination, clientRefusal, inspectClientFile, inspectStashPresence, isRestoreFile, mutateClient,
   readClientFile, readStash, removeCreatedClientFile, rmdirsIfEmpty, sha256, writeClientFile, writeStash,
 } from "./io";
 import { GATEWAY_NOTE_TEXT, gatewayNote, type GatewayClientConnector, type GatewayClientContext, type GatewayClientResult, type GatewayClientStatus, type GatewayNoteCode, type GatewayTarget } from "./types";
@@ -72,7 +72,7 @@ function ours(gw: unknown, target?: GatewayTarget): "match" | "other-url" | "no"
 
 function status(ctx: GatewayClientContext, target?: GatewayTarget): GatewayClientStatus {
   const path = settingsPath(ctx);
-  const file = inspectClientFile(path);
+  const file = inspectClientFile(ctx, path);
   const parsed = parseSettings(file?.bytes ?? null);
   const gw = typeof parsed === "string" ? undefined : parsed.doc.gateway;
   const hasRecord = inspectStashPresence(ctx, ID);
@@ -107,7 +107,7 @@ function assertSameTarget(stash: Stash | null, target: string | undefined): void
 
 function connect(ctx: GatewayClientContext, target: GatewayTarget): GatewayClientResult {
   const path = settingsPath(ctx);
-  const file = readClientFile(path);
+  const file = readClientFile(ctx, path);
   const bytes = file?.bytes ?? null;
   const parsed = parseSettings(bytes);
   if (typeof parsed === "string") return clientRefusal(GATEWAY_NOTE_TEXT[parsed], "unsupported-file");
@@ -118,9 +118,9 @@ function connect(ctx: GatewayClientContext, target: GatewayTarget): GatewayClien
   const onDisk = keep && file ? statesOf(stash!).find(st => st.writtenSha256 === file.hash) : undefined;
   const models = isObj(doc.models) ? doc.models : undefined;
   const dir = join(ctx.home, ".antigravity");
-  const newDirs = mkdirTracked(dir);
-  const resolvedPath = clientDestination(path, file);
+  const resolvedPath = checkedClientDestination(ctx, path, file);
   assertSameTarget(stash, resolvedPath);
+  const newDirs = mkdirTracked(dir);
   if (!keep) {
     stash = {
       version: 1, path, resolvedPath, originalBytes: bytes ? bytes.toString("base64") : null, createdDirs: [...(stash?.createdDirs ?? []), ...newDirs],
@@ -154,7 +154,7 @@ function connect(ctx: GatewayClientContext, target: GatewayTarget): GatewayClien
   const applied: Written = { written: { gateway, defaultModelId: target.defaultModel ?? (keep ? next.written.defaultModelId : null) }, writtenSha256: outSha };
   assertClientSize(out);
   writeStash(ctx, ID, { ...next, pending: applied });
-  writeClientFile(path, file, out);
+  writeClientFile(ctx, path, file, out);
   // The settings are applied; if this promotion fails, the journaled pending state still describes them.
   try { writeStash(ctx, ID, { ...next, ...applied }); } catch { /* pending stays recognisable */ }
   const unchanged = file?.hash === outSha;
@@ -165,7 +165,7 @@ function disconnect(ctx: GatewayClientContext): GatewayClientResult {
   const path = settingsPath(ctx);
   const stash = checkedStash(ctx, path);
   if (!stash) return { ok: true, changed: false, changedFiles: [], restore: "none", message: "Not connected by OpenCodex; nothing was changed.", notes: [] };
-  const file = readClientFile(path);
+  const file = readClientFile(ctx, path);
   assertSameTarget(stash, file?.target);
   const done = (restore: "exact" | "path-wise" | "none", message: string, files: string[]): GatewayClientResult => {
     try { dropStash(ctx, ID); }
@@ -174,8 +174,8 @@ function disconnect(ctx: GatewayClientContext): GatewayClientResult {
   };
   const states = statesOf(stash);
   if (file && !stash.pathWiseOnly && states.some(st => st.writtenSha256 === file.hash)) {
-    if (stash.originalBytes === null) { removeCreatedClientFile(path, file); rmdirsIfEmpty(stash.createdDirs); }
-    else writeClientFile(path, file, Buffer.from(stash.originalBytes, "base64"));
+    if (stash.originalBytes === null) { removeCreatedClientFile(ctx, path, file); rmdirsIfEmpty(ctx, stash.createdDirs); }
+    else writeClientFile(ctx, path, file, Buffer.from(stash.originalBytes, "base64"));
     return done("exact", "Antigravity settings restored byte for byte.", [path]);
   }
   if (!file) return done("none", "The settings file is already gone; the restore record was cleared.", []);
@@ -200,7 +200,7 @@ function disconnect(ctx: GatewayClientContext): GatewayClientResult {
   }
   const finalModels = isObj(doc.models) ? doc.models : undefined;
   if (finalModels && Object.keys(finalModels).length === 0 && !stash.prior.modelsPresent) delete doc.models;
-  writeClientFile(path, file, serialize(parsed));
+  writeClientFile(ctx, path, file, serialize(parsed));
   return done("path-wise", `The file changed after OpenCodex wrote it, so only the gateway, models.defaultModelId and models.list entries were restored; your other edits were kept.${kept.length ? ` Left as you had them: ${kept.join(", ")}.` : ""}`, [path]);
 }
 

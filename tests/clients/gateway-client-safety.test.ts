@@ -80,8 +80,20 @@ test("both connector mutations obey the shared config lock", () => {
   } finally { db.close(); }
 });
 
-test.skipIf(process.platform === "win32")("a symlinked profile is read, written and restored without replacing the link", () => {
+test.skipIf(process.platform === "win32")("agy refuses a symlinked profile outside the home", () => {
   const actual = join(root, "dotfiles-zshrc");
+  writeFileSync(actual, originals.agy);
+  symlinkSync(actual, profile());
+  expect(GATEWAY_CLIENTS.agy.connect(ctx, target)).toMatchObject({
+    ok: false, changed: false, message: expect.stringContaining("outside the allowed client directory"),
+  });
+  expect(read(actual)).toBe(originals.agy);
+  expect(lstatSync(profile()).isSymbolicLink()).toBe(true);
+  expect(existsSync(recordPath("agy"))).toBe(false);
+});
+
+test.skipIf(process.platform === "win32")("an in-home profile symlink is written and restored without replacing the link", () => {
+  const actual = join(ctx.home, "dotfiles-zshrc");
   writeFileSync(actual, originals.agy);
   symlinkSync(actual, profile());
   expect(GATEWAY_CLIENTS.agy.connect(ctx, target).ok).toBe(true);
@@ -93,8 +105,8 @@ test.skipIf(process.platform === "win32")("a symlinked profile is read, written 
 });
 
 test.skipIf(process.platform === "win32")("restore refuses a profile symlink retargeted after connect", () => {
-  const first = join(root, "dotfiles-zshrc");
-  const second = join(root, "other-zshrc");
+  const first = join(ctx.home, "dotfiles-zshrc");
+  const second = join(ctx.home, "other-zshrc");
   writeFileSync(first, originals.agy);
   symlinkSync(first, profile());
   expect(GATEWAY_CLIENTS.agy.connect(ctx, target).ok).toBe(true);
@@ -106,6 +118,30 @@ test.skipIf(process.platform === "win32")("restore refuses a profile symlink ret
   expect(read(first)).toBe(connected);
   expect(read(second)).toBe(connected);
   expect(existsSync(recordPath("agy"))).toBe(true);
+});
+
+test.skipIf(process.platform === "win32")("Antigravity refuses settings outside its own directory even inside the home", () => {
+  const actual = join(ctx.home, "other-settings.json");
+  writeFileSync(actual, originals.antigravity);
+  symlinkSync(actual, settings());
+  expect(GATEWAY_CLIENTS.antigravity.connect(ctx, target)).toMatchObject({
+    ok: false, changed: false, message: expect.stringContaining("outside the allowed client directory"),
+  });
+  expect(read(actual)).toBe(originals.antigravity);
+  expect(existsSync(recordPath("antigravity"))).toBe(false);
+});
+
+test.skipIf(process.platform === "win32")("Antigravity refuses to create settings through a redirected directory", () => {
+  const dir = dirname(settings());
+  rmSync(dir, { recursive: true });
+  const outside = join(root, "other-settings-dir");
+  mkdirSync(outside);
+  symlinkSync(outside, dir, "dir");
+  expect(GATEWAY_CLIENTS.antigravity.connect(ctx, target)).toMatchObject({
+    ok: false, changed: false, message: expect.stringContaining("outside the allowed client directory"),
+  });
+  expect(existsSync(join(outside, "settings.json"))).toBe(false);
+  expect(existsSync(recordPath("antigravity"))).toBe(false);
 });
 
 test("client reads refuse an oversized profile and a non-regular settings file", () => {
