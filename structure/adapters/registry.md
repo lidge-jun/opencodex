@@ -66,7 +66,8 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   read drops an ACP memory phase and ACP subagent fallback entries or disables an ACP shadow-call target while
   retaining other settings. Per-model fallback chains emptied by the repair are removed individually. File diagnostics
   report the repairs. Candidate writes reject those selectors, including
-  matches from an ACP provider's model alias template. The use policy
+  matches from an ACP provider's built-in aliases or model alias template. Canonical OpenAI model routing retains
+  precedence for bare native OpenAI IDs when the OpenAI row is enabled. The use policy
   (`src/adapters/agy-acp/policy.ts`) refuses subagent turns (`x-codex-parent-thread-id`), turns Codex labels as spawned threads (`isThreadSpawnRequest`) or as
   its memory pipeline (`detectMemoryModelPhase`, `x-openai-subagent: memory_consolidation`, `x-openai-memgen-request`).
   A spawn label in the WebSocket frame body is sufficient. Explicit user-turn metadata there supersedes a stale spawn

@@ -10,12 +10,14 @@ import { AGY_ACP_DEFAULT_MODEL, AGY_ACP_SEED_MODELS } from "../../providers/regi
 import { aliasTemplateError, expandAliasTemplate } from "../../providers/alias-template";
 import { isBareOpenAiFamilyModel } from "../../codex/control-plane-models";
 import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers-destination";
+import { effectiveModelAliases } from "../../providers/default-aliases";
 
 export const AGY_ACP_PROVIDER_ID = "antigravity-acp";
 export const AGY_ACP_ADAPTER = "agy-acp";
 
 type ProviderLike = {
   disabled?: unknown;
+  defaultAliases?: unknown;
   adapter?: unknown; apiKey?: unknown; apiKeyPool?: unknown; authMode?: unknown; models?: unknown; defaultModel?: unknown;
   modelAliases?: unknown; alias?: unknown; aliasTemplate?: unknown; oauthAccountFailover?: unknown;
   anthropicAccountPool?: unknown; codexAccountMode?: unknown;
@@ -24,6 +26,7 @@ type ComboLike = { alias?: unknown; targets?: unknown; decisionModel?: unknown }
 export interface ConfigLike {
   providers?: Record<string, unknown>;
   defaultProvider?: unknown;
+  defaultModelAliases?: unknown;
   combos?: unknown;
   customModels?: unknown;
   subagentModelFallback?: unknown;
@@ -114,12 +117,17 @@ export function selectorCandidateProviders(config: ConfigLike, selector: string)
   for (const [name, provider] of providers) {
     const known = staticKnownIds(config, name, provider);
     const manual = isRecord(provider.modelAliases) ? provider.modelAliases : {};
-    const aliases = new Set(Object.values(manual).filter((a): a is string => typeof a === "string").map(a => a.toLowerCase()));
+    const modelAliases = Object.fromEntries(Object.entries(manual)
+      .filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+    const assigned = effectiveModelAliases({ defaultModelAliases: config.defaultModelAliases === true }, {
+      modelAliases, defaultAliases: typeof provider.defaultAliases === "boolean" ? provider.defaultAliases : undefined,
+    }, known);
+    const aliases = new Set([...assigned.values()].map(({ alias }) => alias.toLowerCase()));
     const template = provider.aliasTemplate;
     if (typeof template === "string" && !aliasTemplateError(template)) {
       const providerAlias = typeof provider.alias === "string" ? provider.alias.trim() || undefined : undefined;
       for (const modelId of known) {
-        if (Object.hasOwn(manual, modelId)) continue;
+        if (assigned.has(modelId)) continue;
         const expanded = expandAliasTemplate(template, providerAlias, modelId);
         // The structural check reserves potential matches even if the live roster has a collision.
         if ("alias" in expanded) aliases.add(expanded.alias.toLowerCase());

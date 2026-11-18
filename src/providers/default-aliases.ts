@@ -68,12 +68,13 @@ function builtinRule(id: string): { match: RegExp; alias: string } | undefined {
   return DEFAULT_MODEL_ALIASES.find(rule => rule.match.test(id) || rule.match.test(tail));
 }
 
-export function defaultAliasesEnabled(config: Pick<OcxConfig, "defaultModelAliases">, provider: OcxProviderConfig): boolean {
+export function defaultAliasesEnabled(config: Pick<OcxConfig, "defaultModelAliases">, provider: Pick<OcxProviderConfig, "defaultAliases">): boolean {
   return provider.defaultAliases ?? config.defaultModelAliases ?? false;
 }
 
 /** The parts of the config an alias view reads; `providers` and `combos` only matter to templates. */
 export type AliasViewConfig = Pick<OcxConfig, "defaultModelAliases"> & Partial<Pick<OcxConfig, "providers" | "combos">>;
+type AliasViewProvider = Pick<OcxProviderConfig, "defaultAliases" | "modelAliases" | "aliasTemplate" | "alias">;
 
 /**
  * Manual aliases, then built-in ones (when enabled), then the provider's opt-in template (#7705).
@@ -82,7 +83,7 @@ export type AliasViewConfig = Pick<OcxConfig, "defaultModelAliases"> & Partial<P
  */
 export function effectiveModelAliases(
   config: AliasViewConfig,
-  provider: OcxProviderConfig,
+  provider: AliasViewProvider,
   knownIds: Iterable<string>,
   providerName?: string,
 ): Map<string, EffectiveModelAlias> {
@@ -133,7 +134,7 @@ export interface TemplateAliasPlan {
  */
 export function templateAliasPlan(
   config: AliasViewConfig,
-  provider: OcxProviderConfig,
+  provider: Pick<AliasViewProvider, "aliasTemplate" | "alias">,
   providerName: string,
   knownIds: readonly string[],
   existing: ReadonlyMap<string, EffectiveModelAlias>,

@@ -160,6 +160,31 @@ describe("antigravity-acp configuration", () => {
       await removeTreeAfterBackgroundWork(home);
     }
   });
+
+  test("built-in aliases are refused and repaired only when they select an ACP row", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-agy-acp-builtin-alias-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    const codexHome = installIsolatedCodexHome("ocx-agy-acp-alias-codex-");
+    process.env.OPENCODEX_HOME = home;
+    try {
+      const raw = config({ subagentModelFallback: ["g3f", "google/gemini-4-argon"] }, {
+        "custom-agy": { ...acp, defaultAliases: true },
+      });
+      expect(messages(validateConfigCandidate(raw))).toContain("subagentModelFallback.0");
+      writeFileSync(getConfigPath(), JSON.stringify(raw));
+      expect(readConfigDiagnostics().config.subagentModelFallback).toEqual(["google/gemini-4-argon"]);
+      raw.providers["custom-agy"]!.defaultAliases = false;
+      raw.providers.google!.defaultAliases = true;
+      expect(validateConfigCandidate(raw).ok).toBe(true);
+      writeFileSync(getConfigPath(), JSON.stringify(raw));
+      expect(readConfigDiagnostics().config.subagentModelFallback).toEqual(raw.subagentModelFallback);
+    } finally {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      codexHome.restore();
+      await removeTreeAfterBackgroundWork(home);
+    }
+  });
   test("a keyless Gemini row is valid, and the same Gemini model on google stays usable everywhere", () => {
     expect(validateConfigCandidate(config()).ok).toBe(true);
     expect(validateConfigCandidate(config({
@@ -241,6 +266,7 @@ describe("antigravity-acp configuration", () => {
       'import { aliasTemplateError, expandAliasTemplate } from "../../providers/alias-template";',
       'import { isBareOpenAiFamilyModel } from "../../codex/control-plane-models";',
       'import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers-destination";',
+      'import { effectiveModelAliases } from "../../providers/default-aliases";',
     ]);
     const metadata = readFileSync(repoPath("src/providers/registry/agy-acp-models.ts"), "utf8");
     expect(metadata).not.toMatch(/^\s*import\s/m);
