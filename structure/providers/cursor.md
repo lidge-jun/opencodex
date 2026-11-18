@@ -379,6 +379,11 @@ marker and remaining echo tail. A harmless partial suffix is flushed on normal c
 a distinctive truncated marker at end is dropped. `CursorMidstreamEchoObserver` still
 records findings, and eligible non-isolated turns remint the conversation id for the NEXT
 turn. The current send is never retried because leading prose may already have escaped.
+The unresolved marker uses the shared [pending-line bound](../transports/byte-accounting.md#stream-buffer-accounting),
+including trailing whitespace. Overflow terminates the turn with 502 `translation_buffer_limit`
+and closes the transport; it does not release the held candidate or emit a successful terminal.
+`tests/providers/cursor/cursor-auto-tool-result-replay.test.ts` exercises this through the Auto
+adapter with a tool result in history and an injected transport, without an upstream resend.
 Markers inside a Markdown fenced code block are quoted examples. Fences follow CommonMark: an
 opener is a run of at least three backticks or tildes indented at most three spaces, and only a run
 of the same character, at least as long and followed by nothing but whitespace, closes it. A marker
