@@ -7,7 +7,7 @@ Esta página contiene la sección 3 de la guía de [Proveedores](/es/guides/prov
 con clave API incluidos y las notas específicas de cada proveedor. Los modos de autenticación, los inicios de sesión
 de cuentas y los proveedores locales siguen en esa página.
 
-opencodex incluye 108 preajustes integrados: 87 con clave, 17 OAuth, tres locales y uno predeterminado de reenvío a ChatGPT. El selector **Añadir proveedor** abre el formulario del proveedor con clave, valida la credencial y la guarda; cada proveedor tiene su propia validación. Entre ellos:
+opencodex incluye 109 preajustes integrados: 88 con clave, 17 OAuth, tres locales y uno predeterminado de reenvío a ChatGPT. El selector **Añadir proveedor** abre el formulario del proveedor con clave, valida la credencial y la guarda; cada proveedor tiene su propia validación. Entre ellos:
 
 **ClinePass** utiliza una clave API de Cline con el [catálogo oficial de suscripción](https://docs.cline.bot/getting-started/clinepass) y el [punto final de Chat Completions](https://docs.cline.bot/api/chat-completions), operados por Cline Bot Inc. bajo [los términos de Cline](https://cline.bot/tos). Un id enrutado como `cline-pass/cline-pass/kimi-k3` es intencional: el primer segmento selecciona el proveedor de opencodex, mientras que `cline-pass/kimi-k3` es el identificador de modelo completo que se envía aguas arriba. La cuota de ClinePass se comparte por cuenta entre límites rotativos de 5 horas, semanales y mensuales. Una sonda en vivo del 2026-08-13 verificó que todos los modelos estáticos de ClinePass aceptan `low`, `medium`, `high`, `xhigh` y `max` en el límite de entrada de la pasarela. opencodex conserva los niveles solicitados; cualquier normalización específica del backend sigue siendo responsabilidad de ClinePass.
 
@@ -72,6 +72,7 @@ opencodex incluye 108 preajustes integrados: 87 con clave, 17 OAuth, tres locale
 | TokenLab | `https://api.tokenlab.sh/v1` |
 | Modelflare | `https://modelflare.dev/v1` |
 | AI Stupid Level | `https://aistupidlevel.info/v1` |
+| AI/ML API | `https://api.aimlapi.com/v1` |
 | cheapaimodel | `https://api.cheapaimodel.ai/v1` |
 | OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
@@ -489,6 +490,16 @@ Ollama Cloud es un servidor (no local) Ollama. Configure en `https://ollama.com/
 Ollama actualmente documenta salidas estructuradas como no compatibles en Ollama Cloud. Para canónica `ollama-cloud`, opencodex por lo tanto rechaza las solicitudes de salida estructuradas (`text.format`) con un error claro en lugar de devolver silenciosamente prosa sin restricciones; los endpoints locales y personalizados `ollama-native` conservan el comportamiento nativo de `format` de Ollama.
 
 ## Cambios del catálogo y cuotas
+
+**AI/ML API**, operado por Boiler Labs FZ-LLC conforme a sus [condiciones del servicio](https://aimlapi.com/terms-and-conditions),
+es una pasarela compatible con OpenAI en `https://api.aimlapi.com/v1`. Crea una [clave de API](https://aimlapi.com/app/keys)
+y selecciona **AI/ML API** en `ocx init` o en **Añadir proveedor**, o ejecuta `ocx provider add aimlapi`.
+Introduce la clave directamente o como referencia `${AIMLAPI_API_KEY}`. El preajuste usa Chat Completions
+y conserva los prefijos de proveedor de los modelos, como `openai/gpt-5.6-terra` (el predeterminado).
+La detección de modelos filtra el catálogo público de `GET /v1/models` para incluir las entradas de
+Chat Completions. El catálogo público no permite validar las claves de API.
+Las solicitudes al destino del preajuste incluyen las cabeceras de atribución `X-AIMLAPI-Source` y
+`X-AIMLAPI-Partner-ID`. Estas cabeceras se eliminan si el preajuste se configura con otro origen.
 
 **cheapaimodel** es una pasarela de pago por token para modelos abiertos DeepSeek, GLM y Kimi, y Grok, operada por LINKOVA PTE. LTD. Crea una [clave API](https://console.cheapaimodel.ai/keys) con saldo prepago USD y elige el preajuste en init/dashboard u `ocx provider add cheapaimodel`, con clave o `${CHEAPAIMODEL_API_KEY}`. Usa `https://api.cheapaimodel.ai/v1` y [Chat Completions](https://cheapaimodel.ai/docs/api/create-chat-completion) para todos los clientes, no sus rutas Responses/Messages. Descubre por [`GET /v1/models`](https://cheapaimodel.ai/docs/api/list-models), que devuelve 401 sin clave válida. Incluye `deepseek-v4-1-flash`, predeterminado, `glm-5.3`, `glm-5.3-flash`, `kimi-k3` y `grok-4.7`. GLM 5.3 es solo texto; sus imágenes van al sidecar. Kimi K3 usa muestreo propio y no recibe `temperature` ni `top_p`. Se aplican sus [términos](https://cheapaimodel.ai/terms) y [privacidad](https://cheapaimodel.ai/privacy).
 
