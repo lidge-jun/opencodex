@@ -110,6 +110,50 @@ cleanup releases an unsent hop once, except while an asynchronous runTurn produc
 Producer settlement performs that release instead, clearing only the matching pending-hop reference.
 Direct callers retain their prior hop reporting contract.
 
+The optional Anthropic-hosted Advisor on translated Messages turns is withheld from the first
+send whose selected target has an applicable captured root, identity or pool token ceiling or has
+[ambiguous credential ownership](../advisor.md#claude-codes-typed-advisor-server-tool).
+Its secondary model usage has no independent reservation and settlement contract. Before optional planning,
+`src/server/responses/sidecar-execution.ts` queries the policy with the actual authenticated spend
+target if a destination-eligible Advisor declaration or replay is present. Destination eligibility
+uses the transport's resolved `initialAdapterProvider`, including proactive key selection and model wire overrides.
+The query captures original ceilings without starting accounting, reserving a seed or choosing its mode; an already started budget
+keeps its policy. `request-spend.ts` retains the original frozen ceilings even when Combo prepayment
+selected observe-only accounting before its child had an identity. `hasCapturedSpendCeiling` on
+`src/lib/request-execution-budget.ts` and its derived/adapter views checks that snapshot against the
+actual target without changing enforcement mode, effective admission policy, physical limits or
+reservations. The Responses owner exposes that query separately from its adapter budget and supplies
+the actual request root, never a target-supplied root. An observer's query is authoritative even when
+it returns false. Without that query, enforced spend still withholds optional work, and otherwise
+`requestHasCapturedSpendCeiling` checks the holder's published `spendAdmissionPolicy`. If the holder
+has no snapshot, the query lazily freezes shared numeric ceilings for the factory ledger or
+legacy/foreign holder. Derived scopes and adapter views retain the same query owner and snapshot.
+Querying does not install a spend observer, promote a holder or change main-model accounting.
+`tests/responses/responses-first-send-spend-policy.test.ts` covers these holder forms, that separation and
+live policy changes in both directions. Its key-rotation wire cases also cover target-dependent
+authoritative queries on main, web-search and named-tool turns: replacement ceilings withhold the
+hosted tool, replay and beta; an earlier withholding is never undone by an unlimited replacement.
+The request-owned `hostedAdvisorSpendGuard` runs inside every selected adapter's `buildRequest`
+wrapper after credential admission, including sidecar copies and dispatch-time reselection. The
+builder supplies its own effective provider so a rebuilt credential route's default adapter cannot
+override the selected wire's eligibility. It reuses the same captured policy. Explicit hosted
+Messages selections refuse capped targets before dispatch. Optional turns can normalize a newly
+unmatched named choice and rebuild the outer delivery maps once. Both paths preserve main-model
+accounting. The hosted-only target binding in `src/server/responses/request-transport.ts`
+uses the effective Anthropic serializer to identify the admitted key, including on local-mode
+gateways, and verifies the binding on final headers [before the send receipt](../advisor.md#claude-codes-typed-advisor-server-tool).
+`request-spend-target.ts` keeps that binding separate from ordinary main-model accounting.
+For Anthropic OAuth it hashes the admitted serving snapshot's provider and account ID with the
+existing OAuth label function. Same-ID accounts in the two instances stay separate; an ambient
+selection change cannot replace the request's identity until the normal credential admission
+accepts a new snapshot. Provider display tags and generic account log fields remain unchanged.
+Withholding removes both declaration and Advisor replay. Other completed exchanges in the same
+validated run retain their original anchor, order and destination restrictions.
+Optional turns proceed with their other tools. The separately budgeted
+[proxy Advisor](../advisor.md#claude-codes-typed-advisor-server-tool) remains available.
+`tests/claude-integration/claude-translated-advisor-tool.test.ts` checks the wire, accounting,
+admitted identity and captured-policy changes.
+
 ## Auxiliary search inference
 
 Anthropic web-search helpers in Responses, RunTurn and the passthrough bridge reserve an `auxiliary`
@@ -274,15 +318,17 @@ counter, refunds decrement it, and named reports reconcile prepaid sends. Enforc
 the seed and physical-start protocol below across Responses, native Messages and native Chat.
 Each transport claims immediately before inference I/O and retains a producer through completion.
 
-A request fixes its enforcement mode, token ceilings and physical-send limit L when it actually
-starts. Configuration changes apply to requests that start afterward. An in-flight request keeps
-its starting policy until completion, including when an operator enables, disables, raises or
-lowers a ceiling. Changing policy never resets that request's physical-send allowance. A request
-that starts observe-only keeps the existing observe-only path throughout its lifetime.
-The shared tracker captures once at the first actual spend admission or start; constructing a
-budget or reading its enforcement preview does not capture policy. Generic Responses paths that
-omit retry reporters still invoke that same capture before the wire. Re-entry's token-ceiling
-preflight and exact seed admission use the same frozen numeric policy and prepaid proof;
+A request fixes its enforcement mode and physical-send limit L at its first actual spend admission
+or start. Translated turns carrying hosted Advisor tools or replay capture numeric ceilings at
+outer Responses ingress and pass them to default trackers for policy candidates and translated Combo
+children. Other trackers capture ceilings at first spend admission/start or an earlier hosted-Advisor
+query. Configuration changes leave captured ceilings and the physical-send allowance fixed.
+A request that starts observe-only stays observe-only for that tracker. Constructing a budget or
+reading its ordinary enforcement preview does not capture policy. Hosted-Advisor capture fixes only
+the numeric ceilings; accounting mode, reservations and L are decided at admission/start. Generic Responses paths that
+omit retry reporters still invoke that same capture before the wire. Root and pool preflight read
+an already captured numeric policy before accounting starts. Later preflight and exact seed
+admission use the effective accounting policy and the same prepaid proof;
 pool continuity validation and shared tracking-capacity safeguards remain active.
 
 Provider-pool accounting uses the canonical routed provider identity, not the mutable display label

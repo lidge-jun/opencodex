@@ -125,6 +125,7 @@ generation; native also checks its UUID. The header writer's numeric config
 generation is separate from the credential-generation string and preserves the
 existing live-roster exception. Explicit combos retain their declared targets;
 direct Pool 2 account recovery never selects the primary pool.
+Translated Responses [hosted Advisor ceiling checks](../transports/responses-spend.md#prepaid-initial-sends) use the admitted credential snapshot's provider and account ID, independently of display tags and the ambient active account; equal account IDs in different instances retain separate identities. Every selected adapter builder checks the captured hosted-work policy again after an admitted account replacement, including sidecar request copies; an earlier withholding remains in force for the turn. This read-only binding does not change ordinary main-model accounting scopes.
 
 `src/oauth/anthropic-send-ownership.ts` captures the account incarnation and
 login identity before the physical fetch. Header publication and refusal binding
