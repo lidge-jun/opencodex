@@ -664,7 +664,7 @@ export function bridgeToResponsesSSE(
           ...indices, part: { type: "summary_text", text: rawText },
         });
         // Keep replay independent of the display channel: clients may omit visible summaries.
-        const encrypted = asSummary ? encodeReasoningEnvelope({ txt: rawText }, budget) : undefined;
+        const encrypted = asSummary ? encodeReasoningEnvelope({ txt: rawText, rawSummary: true }, budget) : undefined;
         const item = {
           type: "reasoning", id: currentRawReasoning.itemId,
           summary: asSummary ? [{ type: "summary_text", text: rawText }] : [],

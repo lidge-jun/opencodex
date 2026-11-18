@@ -334,7 +334,7 @@ function buildResponseJSONWithBudget(
     pushOutput({
       type: "reasoning", id: `rs_${uuid()}`,
       summary: asSummary ? [{ type: "summary_text", text: rawText }] : [],
-      ...(asSummary ? { encrypted_content: encodeReasoningEnvelope({ txt: rawText }, budget) }
+      ...(asSummary ? { encrypted_content: encodeReasoningEnvelope({ txt: rawText, rawSummary: true }, budget) }
         : { content: [{ type: "reasoning_text", text: rawText }] }),
     }, currentRawReasoning.bytes, "reasoning");
     currentRawReasoning = emptyChunks();

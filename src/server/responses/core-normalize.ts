@@ -132,6 +132,24 @@ export async function resolveSubagentFallbackModelEligibility(args: {
 }
 
 
+/** Apply display preferences for the adapter that will produce the upstream reply. */
+export function applyReasoningDisplayPolicy(
+  parsed: OcxParsedRequest,
+  provider: OcxProviderConfig,
+  inboundWire: InboundWire,
+): void {
+  const summary = (parsed._rawBody as { reasoning?: { summary?: unknown } } | undefined)?.reasoning?.summary;
+  parsed.options.rawReasoningAsSummary = inboundWire === "responses"
+    && provider.adapter === "openai-chat" && provider.rawReasoningAsSummary === true
+    && summary !== "none";
+  if (inboundWire === "responses" && parsed._rawBody) {
+    parsed.options.hideThinkingSummary = summary === "none"
+      || (!summary && !hasValidatedActiveReasoningEffort(parsed.options)
+        && provider.showThinkingSummary !== true && !parsed.options.rawReasoningAsSummary);
+  }
+  parsed.options.hideRawReasoning = provider.hideRawReasoning === true;
+}
+
 /**
  * Apply every route-dependent request mutation against the final selected route.
  * Must run only after subagent fallback has settled the model/provider.
@@ -202,21 +220,7 @@ export async function applyFinalRouteRequestNormalization(args: {
     requestBody: parsed._rawBody,
   });
   if (parsed._plaintextV2AgentMessages) parsed._plaintextV2EverPrepared = true;
-  // Recompute from the original wire preference on every route, including fallback.
-  // Only an explicit Chat-to-Responses compatibility opt-in relabels raw reasoning.
-  const summary = (parsed._rawBody as { reasoning?: { summary?: unknown } } | undefined)?.reasoning?.summary;
-  parsed.options.rawReasoningAsSummary = inboundWire === "responses"
-    && route.provider.adapter === "openai-chat" && route.provider.rawReasoningAsSummary === true
-    && summary !== "none";
-  if (inboundWire === "responses" && parsed._rawBody) {
-    parsed.options.hideThinkingSummary = summary === "none"
-      || (!summary && !hasValidatedActiveReasoningEffort(parsed.options)
-        && route.provider.showThinkingSummary !== true && !parsed.options.rawReasoningAsSummary);
-  }
-  // Provider policy, recomputed per final route like the summary default above so a fallback
-  // cannot inherit the previous target's choice. Raw content-channel reasoning is suppressed;
-  // provider-authored summaries stay on the summary channel and remain visible.
-  parsed.options.hideRawReasoning = route.provider.hideRawReasoning === true;
+  applyReasoningDisplayPolicy(parsed, route.provider, inboundWire);
   if (preserveAnthropicResponseModel) parsed._responseModelId = responseModelId;
   logCtx.model = virtualModel?.selectedModelId ?? route.modelId;
   logCtx.provider = route.providerName;

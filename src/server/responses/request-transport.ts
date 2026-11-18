@@ -90,6 +90,7 @@ import {
 } from "../../providers/api-key-selection";
 import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../../providers/api-key-pause";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
+import { applyReasoningDisplayPolicy } from "./core-normalize";
 import { codexWsExecutorBinding, fetchWithHeaderTimeout, physicalSendGuardInit, physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
 import { resolveConnectTimeoutMs } from "../../stall-timeout";
 import { isLocalUpstream } from "../../lib/local-upstream";
@@ -461,6 +462,7 @@ export async function prepareResponsesTransport(
     copilotAutoAdapter = autoAdapter;
     for (const target of new Set([parsed, requestParsed])) {
       target.modelId = selected.modelId;
+      applyReasoningDisplayPolicy(target, negotiatedWire, inboundWire);
       if (target._rawBody && typeof target._rawBody === "object")
         (target._rawBody as { model?: string }).model = selected.modelId;
       target.context = renameRoutedIdentityInContext(target.context, selected.modelId);

@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { bridgeToResponsesSSE, buildResponseJSON } from "../../src/bridge";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
-import { decodeReasoningEnvelope } from "../../src/responses/reasoning-envelope";
+import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
+import { decodeReasoningEnvelope, encodeReasoningEnvelope } from "../../src/responses/reasoning-envelope";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { parseRequest } from "../../src/responses/parser";
 import { routeModel } from "../../src/router";
 import { applyFinalRouteRequestNormalization } from "../../src/server/responses/core-normalize";
@@ -61,7 +63,7 @@ describe("Chat rawReasoningAsSummary compatibility opt-in", () => {
       const item = output.find((o: any) => o.type === "reasoning");
       expect(item.summary).toEqual([{ type: "summary_text", text: RAW }]);
       expect(item.content).toBeUndefined();
-      expect(decodeReasoningEnvelope(item.encrypted_content)?.txt).toBe(RAW);
+      expect(decodeReasoningEnvelope(item.encrypted_content)).toEqual({ txt: RAW, rawSummary: true });
       expect(output.find((o: any) => o.type === "message").content[0].text).toBe("OK");
       if (stream) {
         const events = frames(text);
@@ -83,6 +85,34 @@ describe("Chat rawReasoningAsSummary compatibility opt-in", () => {
       }
     });
 
+    test(`${stream}: echoed raw summaries obey the native destination's plaintext replay policy`, async () => {
+      const upstreamSummary = { type: "reasoning", summary: [{ type: "summary_text", text: "provider summary" }] };
+      for (const preserve of [false, true]) {
+        const native = createResponsesPassthroughAdapter(provider({
+          adapter: "openai-responses", preserveResponsesReasoningContent: preserve,
+        }));
+        for (const enabled of [false, true]) {
+          const { output } = await dispatch(stream, { rawReasoningAsSummary: enabled }, { summary: "auto" });
+          const parsed = parseRequest({ model: "reasoner", input: [output[0], upstreamSummary, {
+            role: "user", content: "continue",
+          }] });
+          parsed._stripReasoningEncryptedContent = true;
+          parsed._dropForeignReasoningItemIds = true;
+          const translatorBudget = createTranslatorBudget();
+          let items;
+          try {
+            items = JSON.parse(native.buildRequest(parsed, { headers: new Headers(), translatorBudget }).body).input;
+          } finally {
+            translatorBudget.dispose();
+          }
+          expect(items[0]).toEqual({
+            type: "reasoning", summary: [], content: preserve ? [{ type: "reasoning_text", text: RAW }] : [],
+          });
+          expect(items[1]).toEqual(upstreamSummary);
+        }
+      }
+    });
+
     test(`${stream}: summary none and hideRawReasoning override opt-in`, async () => {
       for (const hidden of [false, true]) {
         const { text, output } = await dispatch(stream, { rawReasoningAsSummary: true, hideRawReasoning: hidden },
@@ -94,6 +124,24 @@ describe("Chat rawReasoningAsSummary compatibility opt-in", () => {
       }
     });
   }
+
+  test("native replay recognizes an older display copy and preserves signed provider summaries", () => {
+    const makeItem = (encrypted_content: string) => ({
+      type: "reasoning", summary: [{ type: "summary_text", text: RAW }], encrypted_content,
+    });
+    const parsed = parseRequest({ model: "reasoner", input: [
+      makeItem(encodeReasoningEnvelope({ txt: RAW })),
+      makeItem(encodeReasoningEnvelope({ sig: "fixture-signature", txt: RAW })),
+    ] });
+    const native = createResponsesPassthroughAdapter(provider({ adapter: "openai-responses" }));
+    const translatorBudget = createTranslatorBudget();
+    try {
+      const { input } = JSON.parse(native.buildRequest(parsed, { headers: new Headers(), translatorBudget }).body);
+      expect(input.map((item: any) => item.summary)).toEqual([[], [{ type: "summary_text", text: RAW }]]);
+    } finally {
+      translatorBudget.dispose();
+    }
+  });
 
   test("renormalizing one request resets opt-in on fallback, other adapters and inbound wires", async () => {
     const config = { providers: { on: provider({ rawReasoningAsSummary: true }), off: provider(),

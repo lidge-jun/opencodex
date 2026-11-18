@@ -272,8 +272,8 @@ resend verdict they imply is never stored — `/api/logs` computes `resendPermis
 a row written by an older build cannot assert a permission the current tables refuse. An attempt also
 carries `deliverySummary`: adapter events, relayed frames, semantic bytes, side effects and terminal
 frames, counted where each event is delivered rather than where it is read, so the gap between the
-first two is the loss signal. Provider debug formats one ring line per finalized attempt from those
-counts and writes no second record. `GET /api/usage?failures=1` groups failed rows by a versioned
+first two is the loss signal. Both delivery modes count reasoning summary text as semantic bytes.
+Provider debug formats one ring line per attempt from those counts. `GET /api/usage?failures=1` groups failed rows by a versioned
 fingerprint over closed vocabularies only, rebuilt through the same cooperative scanner and
 inheriting its bounds, so deleting a ledger row removes it from the grouping.
 `usageLedgerMaxBytes` is unset by default; when set, an append that crosses it publishes the newest whole rows byte for byte through the shared atomic writer, refuses the rename unless the source is the exact revision that was copied, and then discards the Logs ring, the retained aggregates and the request-history index so no surface serves rows the ledger no longer has.
