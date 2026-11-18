@@ -177,7 +177,8 @@ operator policy.
 
 Before the worker send, OpenCodex verifies that upstream plugin rewrites preserve the admitted
 credential without adding a conflicting credential header. A failed check makes that target
-ineligible for an explicit hosted Advisor selection.
+ineligible for an explicit hosted Advisor selection. A worker send refused by this check uses no
+slot from the workflow's send budget, including on an empty-completion retry.
 
 If a spend ceiling or a failed credential check withholds optional hosted Advisor, the declaration, replay and beta stay withheld
 throughout the translated turn, including when a fallback candidate uses a different credential.

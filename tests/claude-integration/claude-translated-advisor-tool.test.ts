@@ -7,6 +7,9 @@ import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { getRequestLogEntries } from "../../src/server/request-log";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { configureSharedSpendLedger, sharedSpendLedger, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
+import { workflowBudgetSnapshot } from "../../src/lib/workflow-budget";
+import { registerUpstreamRewriter } from "../../src/plugins/upstream-hooks";
+import { admitHttpWorkflowTurn } from "../../src/server/workflow-refusal";
 import { setAdvisorPlanFactory } from "../../src/server/responses/advisor-plan-slot";
 import { clearComboRecallForTests } from "../../src/server/responses/combo-session-recall";
 import { handleResponses } from "../../src/server/responses/core";
@@ -844,6 +847,52 @@ async function oauthAdvisorTurn(f: AnthropicInstanceFixture, instance: Anthropic
     return { status: response.status, body: await response.text(), wires, logCtx };
   } finally { setAdvisorPlanFactory(f.config, null); }
 }
+
+for (const forwardAdvisorTool of [true, false]) test(`OAuth empty-completion accounting follows serialized Advisor (forwarding=${forwardAdvisorTool})`, () =>
+  withAdvisorOAuthFixture(false, async f => {
+    f.config.emptyCompletionRetry = true;
+    configureSharedSpendLedger(spendPolicyFromConfig(f.config.spend));
+    const root = `advisor-empty-${crypto.randomUUID()}`;
+    const headers = new Headers({ "content-type": "application/json", "anthropic-beta": BETA,
+      "x-codex-parent-thread-id": root });
+    const wires: Wire[] = [];
+    const sendsAtRewrite: (number | undefined)[] = [];
+    Object.assign(f.config.providers.anthropic!, { models: [f.model], forwardAdvisorTool,
+      fetch: (async (_input: unknown, init?: RequestInit) => {
+        wires.push({ body: JSON.parse(String(init?.body)), headers: new Headers(init?.headers) });
+        return sse(wires.length === 1 ? [START, ...end()] : OK_TURN);
+      }) as typeof fetch,
+    });
+    const workflow = admitHttpWorkflowTurn(headers);
+    const unregister = registerUpstreamRewriter("fixture-advisor-empty-completion", target => {
+      if (target.url !== `${FIRST_PARTY}/v1/messages`) return;
+      sendsAtRewrite.push(workflowBudgetSnapshot(root)?.sends);
+      if (forwardAdvisorTool && wires.length === 1) target.headers.set("x-api-key", "fixture-conflicting-key");
+    });
+    try {
+      expect(workflow?.admitted).toBe(true);
+      const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
+        method: "POST", headers,
+        body: JSON.stringify({ model: `anthropic/${f.model}`, max_tokens: 64, stream: true,
+          tools: [READ, ADVISOR], tool_choice: forwardAdvisorTool ? { type: "tool", name: "advisor" } : undefined,
+          messages: [{ role: "user", content: "Fixture." }],
+        }),
+      }), f.config, { model: "", provider: "" }, { requestId: crypto.randomUUID(), start: Date.now() });
+      const body = await response.text();
+      expect(response.status, body).toBe(200);
+      expect(wires).toHaveLength(forwardAdvisorTool ? 1 : 2);
+      for (const wire of wires) {
+        expect(wire.headers.get("authorization")?.startsWith("Bearer ")).toBe(true);
+        expect(JSON.stringify(wire.body.tools).includes(ADVISOR.type)).toBe(forwardAdvisorTool);
+      }
+      expect(workflowBudgetSnapshot(root)?.sends).toBe(wires.length);
+      expect(sendsAtRewrite).toEqual(forwardAdvisorTool ? [0, 1] : [1, 2]);
+      expect(body).toContain(forwardAdvisorTool ? "event: error" : "text_delta");
+    } finally {
+      unregister();
+      if (workflow?.admitted) workflow.lease.release();
+    }
+  }));
 
 describe("hosted Advisor with admitted Anthropic OAuth identities", () => {
   for (const ingress of ["messages", "responses"] as const) for (const instance of ["anthropic", "anthropic2"] as const)

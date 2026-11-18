@@ -1,6 +1,7 @@
 import { carryProxyError, proxyErrorPresentation, isProxyError, rememberProxyErrorMessage } from "../../lib/client-error-body";
 import { providerAffinityGenerationIsCurrent } from "../../providers/api-key-selection";
 import { bindAnthropicRejectionResponse } from "../../adapters/anthropic-rejection-memo";
+import { hostedAdvisorCredentials } from "../../adapters/anthropic/advisor-tool";
 import { deferPhysicalSendReporter } from "./deferred-send-reporter";
 import { responsesSpendTarget } from "./request-spend-target";
 import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
@@ -289,8 +290,10 @@ export function createAdapterContinuations(
           ? fetchWithTransientRetry
           : fetchWithResetRetry;
         const continuationReporter = transientSendReporter();
-        const deferredContinuation = (continuationTransientPolicy || sendBudgetState.adapterSendBudget?.spendEnforced)
-          && route.providerName === "github-copilot" && route.provider.authMode !== "forward"
+        const countsContinuationSends = continuationTransientPolicy || anthropicInstance || sendBudgetState.adapterSendBudget?.spendEnforced;
+        const deferredContinuation = countsContinuationSends && (hostedAdvisorCredentials.has(builtContinuationRequest)
+          || ((continuationTransientPolicy || sendBudgetState.adapterSendBudget?.spendEnforced)
+            && route.providerName === "github-copilot" && route.provider.authMode !== "forward"))
           ? deferPhysicalSendReporter(continuationReporter) : undefined;
         return await fetchContinuationWithRetryPolicy(
           recovery => {
@@ -322,7 +325,7 @@ export function createAdapterContinuations(
             // Same request-scoped budget as the initial send and the 429/rotation refetches:
             // a terminal-guard continuation is another leg of ONE request, so handing it a
             // fresh `attempts` would let one request exceed the configured total-send ceiling.
-            ...(continuationTransientPolicy || anthropicInstance || sendBudgetState.adapterSendBudget?.spendEnforced
+            ...(countsContinuationSends
               ? {
                 attempts: Math.min(continuationTransientPolicy?.attempts ?? 1,
                   remainingTransientSendBudget(continuationTransientPolicy?.attempts ?? 1)

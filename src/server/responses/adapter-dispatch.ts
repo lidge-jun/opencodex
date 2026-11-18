@@ -1,14 +1,14 @@
-import { recordUpstreamProviderErrorDetail } from "../request-log-failure-detail";
+import { projectLocalModelRefusalLog, recordUpstreamProviderErrorDetail } from "../request-log-failure-detail";
 import { providerAffinityGenerationIsCurrent } from "../../providers/api-key-selection";
 import { clientFacingModelText } from "../../lib/error-destination";
 import { responsesSpendTarget } from "./request-spend-target";
-import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
 import { markProxyError, carryProxyError, isProxyError } from "../../lib/client-error-body";
 import { adapterBuildRefusal } from "./passthrough-build-error";
 import { createAutoPauseRefreshErrorMapper, recoverAutoPausedAccount } from "./account-auto-pause-recovery";
 import { wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { effectiveAccountAutoPause } from "../../config/account-auto-pause-revisions";
 import { bindAnthropicRejectionResponse } from "../../adapters/anthropic-rejection-memo";
+import { hostedAdvisorCredentials } from "../../adapters/anthropic/advisor-tool";
 import { deferPhysicalSendReporter } from "./deferred-send-reporter";
 import { usesApiKeyAccount } from "../../providers/label";
 import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
@@ -16,8 +16,7 @@ import { classifyAnthropic429 } from "../../oauth/anthropic-rate-limit-policy";
 import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
 import { authorizeResendForRecovery } from "../../lib/request-resend-gate";
 import { ambiguousResendAllowanceFor, selfContainedResponsesBody } from "./reset-replay";
-import { transientSendCapFor } from "./request-send-budget";
-import { isNonReplayableResponse, isSameTargetRetryHold } from "../../lib/upstream-retry";
+import { transientSendCapFor, type ResponsesSendBudget } from "./request-send-budget";
 import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 import { isLocalUpstream } from "../../lib/local-upstream";
 import { resolveConnectTimeoutMs, resolveStallTimeoutMs } from "../../stall-timeout";
@@ -25,7 +24,6 @@ import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-op
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
 import type { ResponsesEffects } from "./response-effects";
-import type { ResponsesSendBudget } from "./request-send-budget";
 import { linkAbortSignal } from "./core-lifetime";
 import type { AdapterRequest } from "../../adapters/base";
 import type { AdapterEvent } from "../../types";
@@ -58,6 +56,7 @@ import {
 import {
   fetchWithTransientRetry,
   fetchWithResetRetry,
+  isNonReplayableResponse, isSameTargetRetryHold,
   applyUpstreamRecoveryInit,
   SendBudgetExhaustedError, errorDestinationLabel,
   UpstreamRetryEvidenceError,
@@ -404,8 +403,9 @@ export async function prepareAdapterExchange(
   const autoPauseEnabled = effectiveAccountAutoPause(config.providers[route.providerName]) !== undefined;
   const billingPoolRequest = isAnthropicBillingKeyPool(route.provider);
   // Hosted Advisor revalidates the credential after the upstream rewrite, before the receipt.
-  const shouldDeferGenericSend = () => billingPoolRequest || (route.providerName === "github-copilot" && route.provider.authMode !== "forward")
-    || (options.hostedAdvisorSpendScope?.optionalWithheld === false && transportState.activeAdapter.name === "anthropic");
+  const shouldDeferGenericSend = (request: AdapterRequest) => billingPoolRequest
+    || (route.providerName === "github-copilot" && route.provider.authMode !== "forward")
+    || hostedAdvisorCredentials.has(request);
   let billingRecoveryActive = false;
   const genericRefetchCountsSends = () => !!sendBudgetState.workflowRootId || options.comboAttempt === true || sendBudgetState.adapterSendBudget?.spendEnforced === true
     || transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null
@@ -484,7 +484,7 @@ export async function prepareAdapterExchange(
         ? fetchWithTransientRetry
         : fetchWithResetRetry;
       const initialReporter = transientSendReporter(compactPrepaid ?? options.comboDispatchPermit);
-      const deferredInitial = !receiptMode && shouldDeferGenericSend() ? deferPhysicalSendReporter(initialReporter) : undefined;
+      const deferredInitial = !receiptMode && shouldDeferGenericSend(builtInitialRequest) ? deferPhysicalSendReporter(initialReporter) : undefined;
       try { upstreamResponse = await fetchWithRetryPolicy(
         recovery => {
           // Unconfigured generic sends may omit the counting reporter. Capture policy
@@ -773,7 +773,7 @@ export async function prepareAdapterExchange(
             : undefined;
           let refetchPermitUsed = false;
           const refetchReporter = refetchAllowance ? transientSendReporter(refetchAllowance.permit) : undefined;
-          const deferredRefetch = refetchReporter && (shouldDeferGenericSend() || options.comboAttempt) ? deferPhysicalSendReporter(refetchReporter) : undefined;
+          const deferredRefetch = refetchReporter && (shouldDeferGenericSend(retryRequest) || options.comboAttempt) ? deferPhysicalSendReporter(refetchReporter) : undefined;
           const pendingKeyMetadata = deferredRefetch && transportState.attemptSendDeferred();
           try {
             return await refetchWithPolicy(
