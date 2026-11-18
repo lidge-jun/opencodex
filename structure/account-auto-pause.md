@@ -29,9 +29,12 @@ counters. Their transport and lifetime follow the [Responses image replay contra
 
 `providers.<name>.accountAutoPause` is optional, default off, with an integer
 `consecutiveFailures` in 1–100 (default 2). The one default (#8752): a row with no
-`accountAutoPause` key, `adapter: "google"` and `googleMode: "cloud-code-assist"` resolves to
+`accountAutoPause` key, `adapter: "google"`, `googleMode: "cloud-code-assist"`, `authMode: "oauth"`
+and a first-party Cloud Code Assist `baseUrl` (`isCanonicalAntigravityUrl`) resolves to
 threshold 1 with `conclusiveOnly`, so only `isConclusiveAccountBan` (the Terms of Service account ban
-in `src/oauth/account-auto-pause-policy.ts`) counts. Any present key, including `{}` or
+in `src/oauth/account-auto-pause-policy.ts`) counts. The observer checks the sending provider and
+the final-send destination against the same host allowlist, so a custom `baseUrl` or a rewritten
+dial never gains the default's authority; such a route pauses only with an explicit opt-in. Any present key, including `{}` or
 `enabled: false`, replaces the default; `enabled: true` counts every permanent refusal as before. `src/config/schema/account-auto-pause.ts` validates
 the policy and allowlisted reason/timestamp DTO. OAuth pause metadata is stored with the
 auth row; Codex metadata/revision fences use `codexAccountPauseState`; key pools retain

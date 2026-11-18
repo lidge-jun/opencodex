@@ -20,6 +20,9 @@ such as `google-antigravity`) with no `accountAutoPause` key at all is the one e
 pauses the sending account on the **first** Terms of Service account ban, the refusal Google
 itself marks permanent and account-wide (`This service has been disabled in this account for
 violation of Terms of Service.`). Without an explicit opt-in no other refusal counts for it.
+The default applies only to OAuth accounts sent to Google's own Cloud Code Assist hosts
+(`cloudcode-pa.googleapis.com` or `daily-cloudcode-pa.googleapis.com` over HTTPS); with a custom
+`baseUrl` an intermediary could relay the refusal, so such a provider needs `enabled: true`.
 Any `accountAutoPause` value replaces this default, including an empty object: set `enabled` to
 `false` to keep such an account selectable after a ban, or to `true` to count every refusal listed
 below against `consecutiveFailures`. After a successful appeal, resume the account as below.

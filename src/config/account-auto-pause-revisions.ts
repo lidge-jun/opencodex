@@ -2,6 +2,7 @@ import * as z from "zod/v4";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { OcxConfig } from "../types";
+import { isCanonicalAntigravityUrl } from "../lib/provider-tls-profile";
 import { getConfigPath } from "./paths";
 
 type PolicyConfig = { providers?: unknown; accountAutoPausePolicyRevisions?: unknown };
@@ -42,14 +43,17 @@ function route(row: Record<string, unknown> | undefined): string {
 /**
  * The policy a provider row actually runs. An explicit opt-in counts every permanent account
  * refusal against its threshold. A row with no policy at all pauses only on a refusal the upstream
- * itself marks permanent and account-wide, and only where one exists: a Cloud Code Assist provider
- * pauses the sending account on the first Terms of Service ban (#8752). `enabled: false` opts out.
+ * itself marks permanent and account-wide, and only where one exists: a Cloud Code Assist OAuth
+ * provider on a first-party Google destination pauses the sending account on the first Terms of
+ * Service ban (#8752). A custom `baseUrl` could relay any refusal, so it needs the explicit opt-in.
+ * `enabled: false` opts out.
  */
 export function effectiveAccountAutoPause(row: unknown): EffectiveAccountAutoPause | undefined {
   const p = record(row);
   if (!p) return;
   if (p.accountAutoPause === undefined) {
-    return p.adapter === "google" && p.googleMode === "cloud-code-assist" ? { threshold: 1, conclusiveOnly: true } : undefined;
+    return p.adapter === "google" && p.googleMode === "cloud-code-assist" && p.authMode === "oauth"
+      && typeof p.baseUrl === "string" && isCanonicalAntigravityUrl(p.baseUrl) ? { threshold: 1, conclusiveOnly: true } : undefined;
   }
   const policy = record(p.accountAutoPause);
   if (policy?.enabled !== true) return;

@@ -368,9 +368,10 @@ test("manual idempotent resume on an enabled key fences in-flight account auto-p
 });
 
 // #8752: a Cloud Code Assist provider with no policy still pauses on Google's own permanent verdict.
-const ccaRow = { adapter: "google", googleMode: "cloud-code-assist" };
-const ccaProvider = (config: OcxConfig, name: string, accountAutoPause?: OcxConfig["providers"][string]["accountAutoPause"]) => {
-  config.providers[name] = { ...config.providers[name]!, ...ccaRow, baseUrl: "https://cloudcode.example.test" } as OcxConfig["providers"][string];
+const ccaRow = { adapter: "google", googleMode: "cloud-code-assist", authMode: "oauth", baseUrl: "https://daily-cloudcode-pa.googleapis.com" };
+const relayBaseUrl = "https://cloudcode-relay.example.test";
+const ccaProvider = (config: OcxConfig, name: string, accountAutoPause?: OcxConfig["providers"][string]["accountAutoPause"], baseUrl = ccaRow.baseUrl) => {
+  config.providers[name] = { ...config.providers[name]!, ...ccaRow, baseUrl } as OcxConfig["providers"][string];
   if (accountAutoPause === undefined) delete config.providers[name]!.accountAutoPause;
   else config.providers[name]!.accountAutoPause = accountAutoPause;
 };
@@ -381,9 +382,17 @@ test("a Cloud Code Assist provider with no policy defaults to pausing on the fir
   expect(effectiveAccountAutoPause({ ...ccaRow, accountAutoPause: { enabled: false } })).toBeUndefined();
   expect(effectiveAccountAutoPause({ ...ccaRow, accountAutoPause: {} })).toBeUndefined();
   expect(effectiveAccountAutoPause({ ...ccaRow, accountAutoPause: { enabled: true, consecutiveFailures: 3 } })).toEqual({ threshold: 3, conclusiveOnly: false });
-  for (const row of [{ adapter: "google", googleMode: "vertex" }, { adapter: "google" }, { adapter: "openai-chat", googleMode: "cloud-code-assist" }]) {
+  expect(effectiveAccountAutoPause({ ...ccaRow, baseUrl: "https://cloudcode-pa.googleapis.com" })).toEqual({ threshold: 1, conclusiveOnly: true });
+  for (const row of [{ ...ccaRow, googleMode: "vertex" }, { ...ccaRow, googleMode: undefined }, { ...ccaRow, adapter: "openai-chat" }]) {
     expect(effectiveAccountAutoPause(row)).toBeUndefined();
   }
+  // The default needs OAuth on a first-party Cloud Code Assist destination; anything else may relay a refusal.
+  for (const baseUrl of [relayBaseUrl, "http://daily-cloudcode-pa.googleapis.com", "https://daily-cloudcode-pa.googleapis.com:8443",
+    "https://daily-cloudcode-pa.googleapis.com.example.test", undefined]) {
+    expect(effectiveAccountAutoPause({ ...ccaRow, baseUrl })).toBeUndefined();
+  }
+  for (const authMode of ["key", "forward", undefined]) expect(effectiveAccountAutoPause({ ...ccaRow, authMode })).toBeUndefined();
+  expect(effectiveAccountAutoPause({ ...ccaRow, baseUrl: relayBaseUrl, accountAutoPause: { enabled: true } })).toEqual({ threshold: 2, conclusiveOnly: false });
   expect(isConclusiveAccountBan(403, googleEnvelope(ccaTosContact))).toBe(true);
   expect(isConclusiveAccountBan(403, googleEnvelope("Your subscription is inactive"))).toBe(false);
   expect(isConclusiveAccountBan(403, payload())).toBe(false);
@@ -401,6 +410,32 @@ test("a Cloud Code Assist account with no policy is paused by its first Terms of
   expect(set.accounts[0]!.paused).toBe(true);
   expect(set.accounts[0]!.pauseDetails?.reason).toBe("account_permission_denied");
   expect(set.activeAccountId).toBe(f.ids[1]!);
+});
+
+test("a Cloud Code Assist account behind a custom baseUrl pauses on a ban only with the explicit opt-in", async () => {
+  const f = await oauthFixture("google-antigravity", config => ccaProvider(config, "google-antigravity", undefined, relayBaseUrl));
+  expect(f.capture()).toBeUndefined();
+  expect(getAccountSet("google-antigravity")!.accounts[0]!.paused).not.toBe(true);
+
+  f.config.providers["google-antigravity"]!.accountAutoPause = { enabled: true, consecutiveFailures: 1 };
+  saveConfig(f.config);
+  const response = await f.capture()(ccaBan());
+  expect(wasAccountAutoPaused(response)).toBe(true);
+  expect(getAccountSet("google-antigravity")!.accounts[0]!.paused).toBe(true);
+});
+
+test("the Cloud Code Assist default counts a ban only from a first-party final destination", async () => {
+  const f = await oauthFixture("google-antigravity", config => ccaProvider(config, "google-antigravity"));
+  const wire = new Headers({ authorization: `Bearer ${f.snapshot.accessToken}` });
+  const relayed = f.capture();
+  relayed.physical(true, wire, `${relayBaseUrl}/v1internal:streamGenerateContent`);
+  expect(wasAccountAutoPaused(await relayed(ccaBan()))).toBe(false);
+  expect(getAccountSet("google-antigravity")!.accounts[0]!.paused).not.toBe(true);
+
+  const direct = f.capture();
+  direct.physical(true, wire, `${ccaRow.baseUrl}/v1internal:streamGenerateContent`);
+  expect(wasAccountAutoPaused(await direct(ccaBan()))).toBe(true);
+  expect(getAccountSet("google-antigravity")!.accounts[0]!.paused).toBe(true);
 });
 
 test("without a policy, other permanent refusals never pause a Cloud Code Assist account", async () => {

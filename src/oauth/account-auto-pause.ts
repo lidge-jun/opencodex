@@ -16,6 +16,7 @@ import { AccountRefusalStreaks, permanentAccountRefusal } from "./account-auto-p
 import { clearThreadAccountMapForAccount, reconcileCodexActiveAfterExclusion } from "../codex/routing";
 import { isNonReplayableResponse } from "../lib/upstream-retry";
 import { hasUpstreamRewriters, upstreamRewriterEpoch } from "../plugins/upstream-hooks";
+import { isCanonicalAntigravityUrl } from "../lib/provider-tls-profile";
 
 const streaks = new WeakMap<OcxConfig, AccountRefusalStreaks>();
 export { wasAccountAutoPaused, wasPermanentAccountRefusal } from "../lib/account-auto-pause-response";
@@ -29,7 +30,7 @@ export interface AccountAutoPauseBinding {
 /** Capture before transport. A later response cannot acquire authority over a newer login/resume. */
 export type AccountAutoPauseObserver = ((response: Response) => Promise<Response>) & {
   /** Final-send report: only a response whose wire credential and destination match is counted. */
-  physical: (sameDestination: boolean, headers: Headers) => void;
+  physical: (sameDestination: boolean, headers: Headers, destination: string) => void;
 };
 const CREDENTIAL_HEADERS = ["authorization", "x-api-key", "x-goog-api-key", "api-key"] as const;
 const CODEX_SELECTOR_HEADERS = ["openai-organization", "openai-project"] as const;
@@ -45,6 +46,9 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
   const effective = effectiveAccountAutoPause(config.providers[name]);
   if (!effective) return;
   const { threshold, conclusiveOnly } = effective;
+  // The implicit default trusts only Google's own answer: an OAuth send to a first-party Cloud Code
+  // Assist host, checked on the sending provider here and on the final destination in `physical`.
+  if (conclusiveOnly && (provider.authMode !== "oauth" || !isCanonicalAntigravityUrl(provider.baseUrl))) return;
   const samePolicy = (row: unknown) => {
     const live = effectiveAccountAutoPause(row);
     return live?.threshold === threshold && live.conclusiveOnly === conclusiveOnly;
@@ -171,6 +175,8 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
     }
     return response;
   }) as AccountAutoPauseObserver;
-  observer.physical = (sameDestination, wire) => { wireOwned = sameDestination && owns(wire); };
+  observer.physical = (sameDestination, wire, destination) => {
+    wireOwned = sameDestination && owns(wire) && (!conclusiveOnly || isCanonicalAntigravityUrl(destination));
+  };
   return observer;
 }
