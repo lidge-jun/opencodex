@@ -16,6 +16,8 @@ import { captureOAuthAccountSelection, credentialGeneration, getAccountCredentia
 import { readKiroAccountModels, kiroObservedContextWindow } from "../../providers/kiro-model-catalog";
 import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readRootTomlString, resolveCodexConfigPath } from "../paths";
 import {
+  canPublishModelDiscovery,
+  captureModelDiscoveryGeneration,
   clearModelCache,
   clearProviderDiscoveryStatus,
   captureModelCacheGeneration,
@@ -137,7 +139,7 @@ import { workBuddyCatalogIdentity } from "../../providers/workbuddy";
 import { fetchM365CopilotCatalog } from "./m365-copilot-models";
 import { QUIET_AUTHORITATIVE_CATALOG_PROVIDERS, applyConfigHintsToCachedModels, applyProviderConfigHints, boundedOwnedBy, catalogHintsFromModelsApiItem, catalogHintsFromProviderConfig, withVisionSidecarInput } from "./model-hints";
 import { mergeConfiguredModelsIntoLiveCatalog, shouldExposeProviderModel, warnDroppedConfiguredIdsOnce } from "./model-visibility";
-import { captureModelsRequest, captureProviderGather, materializeCapturedHeaders } from "./gather-capture";
+import { captureModelsRequest, captureProviderGather, materializeCapturedHeaders, providerDiscoveryFlightKey } from "./gather-capture";
 
 
 /** Observed Kiro ids advertised in the public catalog: plain ids that need no router decoding. */
@@ -191,29 +193,120 @@ export function observedModelsAuthResolver(
     },
   };
 }
+const providerDiscoveryFlights = new Map<string, Promise<ProviderModelsResult>>();
+
+export function clearProviderDiscoveryFlights(): void {
+  providerDiscoveryFlights.clear();
+}
+
 /** Project provider evidence without synthetic sidecar image input, which belongs to each gather. */
 export async function fetchProviderModelsWithAuth(
   captured: CapturedProviderGather,
   ttlMs: number,
   contextCap: number | undefined,
   resolveAuth: ModelsAuthResolver,
+  options?: { shareDiscovery: boolean },
 ): Promise<ProviderModelsResult> {
+  const { name, provider: prov } = captured;
+  // Capture before credential refresh. Account changes revoke cache authority, and newer
+  // discoveries that publish first also fence out this discovery's eventual write.
+  const cacheGeneration = captureModelCacheGeneration(name);
+  const discoveryGeneration = captureModelDiscoveryGeneration();
+  const startingRevision = observeModelCacheRevision(name);
+  const anthropicSelection = isAnthropicOAuthInstance(name) && prov.authMode === "oauth" && mayResolveModelsOAuth(name, prov)
+    ? captureOAuthAccountSelection(name) : null;
+  const skipAuth = prov.authMode === "forward" || prov.liveModels === false;
+  // One Vertex deadline covers ADC, the first request and every follow-up page.
+  const vertexDeadline = !skipAuth && effectiveGoogleMode(name, prov) === "vertex" ? vertexDiscoveryDeadline() : undefined;
+  let vertexAuth: VertexDiscoveryAuth | undefined;
+  const auth: ModelsAuthResolution = skipAuth || (prov.authMode === "oauth" && !mayResolveModelsOAuth(name, prov))
+    ? { apiKey: undefined, observed: resolveAuth.kind === "observed" }
+    : captured.resolvedAuth ?? (resolveAuth.kind === "refreshing"
+    ? prov.authMode === "oauth"
+      ? await getModelsOAuthAccessSnapshot(name, prov)
+        .then(snapshot => ({
+          apiKey: snapshot.accessToken,
+          observed: false,
+          oauthAccountId: snapshot.accountId,
+          oauthGeneration: snapshot.generation,
+          ...(snapshot.workbuddy ? { workbuddy: snapshot.workbuddy } : {}),
+          ...(snapshot.m365 ? { m365: snapshot.m365 } : {}),
+          ...(snapshot.providerUserId ? { oauthProviderUserId: snapshot.providerUserId } : {}),
+          ...(snapshot.apiBaseUrl ? { oauthApiBaseUrl: snapshot.apiBaseUrl } : {}),
+          ...(snapshot.projectId ? { oauthProjectId: snapshot.projectId } : {}),
+        }))
+        .catch(() => ({ apiKey: undefined, observed: false }))
+      : {
+        apiKey: vertexDeadline
+          ? (vertexAuth = await resolveVertexDiscoveryAuth(prov, vertexDeadline))?.token
+          : await resolveModelsAuthToken(name, prov),
+        observed: false,
+      }
+    : resolveAuth.resolve(name, prov));
+  vertexAuth ??= auth.vertexAuth;
+  // Refreshing gathers keep a refreshed token and its destination together.
+  const request = !skipAuth && resolveAuth.kind === "refreshing" && name !== "anthropic2"
+    ? captureModelsRequest(name, prov, auth.oauthApiBaseUrl, auth.workbuddy)
+    : captured.request;
+  const admitAntigravitySiblings = resolveAuth.kind === "refreshing" && name === "google-antigravity"
+    && prov.authMode === "oauth";
+  const fetchModels = (finish?: () => void) => fetchProviderModelsUncached(captured, ttlMs, contextCap, {
+    auth, request, cacheGeneration, discoveryGeneration, startingRevision, anthropicSelection,
+    vertexDeadline, vertexAuth, admitAntigravitySiblings, finish,
+  });
+  if (!options?.shareDiscovery || skipAuth) return fetchModels();
+
+  const key = providerDiscoveryFlightKey(captured, {
+    auth: { ...auth, vertexAuth }, request, cacheGeneration, ttlMs, contextCap,
+    admitAntigravitySiblings, anthropicSelection,
+  });
+  const existing = providerDiscoveryFlights.get(key);
+  if (existing) return existing;
+  const finish = () => {
+    if (providerDiscoveryFlights.get(key) === flight) providerDiscoveryFlights.delete(key);
+  };
+  const flight = Promise.resolve().then(() => fetchModels(finish)).finally(finish);
+  providerDiscoveryFlights.set(key, flight);
+  return flight;
+}
+
+async function fetchProviderModelsUncached(
+  captured: CapturedProviderGather,
+  ttlMs: number,
+  contextCap: number | undefined,
+  admission: {
+    auth: ModelsAuthResolution;
+    request: CapturedProviderGather["request"];
+    cacheGeneration: string;
+    discoveryGeneration: number;
+    startingRevision: string;
+    anthropicSelection: ReturnType<typeof captureOAuthAccountSelection>;
+    vertexDeadline?: AbortSignal;
+    vertexAuth?: VertexDiscoveryAuth;
+    admitAntigravitySiblings: boolean;
+    finish?: () => void;
+  },
+): Promise<ProviderModelsResult> {
+  const { auth, request, cacheGeneration, discoveryGeneration, startingRevision, anthropicSelection,
+    vertexDeadline, vertexAuth, admitAntigravitySiblings } = admission;
   const { name, provider: prov, discovery, metadataModelIdCaseFold, metadataConfigDir } = captured;
   const azureMetadata = isAzureModelMetadataDestination(prov.baseUrl);
   const observed = (
     models: CatalogModel[],
     state: CatalogGatherProviderModelOutcome["state"],
-  ): ProviderModelsResult => ({
-    models,
-    outcome: { provider: name, state },
-    contentRevision: observeModelCacheRevision(name),
-  });
-  // Capture before any credential refresh or outbound await. OAuth account changes clear this
-  // generation, so a request started with the former account cannot later publish its result.
-  const cacheGeneration = captureModelCacheGeneration(name);
+  ): ProviderModelsResult => {
+    // Stop admitting joiners as soon as the rows are chosen. A manual refresh that
+    // expires these rows before the aggregate settles needs its own observation.
+    admission.finish?.();
+    return { models, outcome: { provider: name, state }, contentRevision: observeModelCacheRevision(name) };
+  };
   const isCurrentCacheGeneration = () => isModelCacheGenerationCurrent(name, cacheGeneration);
-  const anthropicSelection = isAnthropicOAuthInstance(name) && prov.authMode === "oauth" && mayResolveModelsOAuth(name, prov)
-    ? captureOAuthAccountSelection(name) : null;
+  const canPublish = () => isCurrentCacheGeneration() && canPublishModelDiscovery(name, discoveryGeneration);
+  const publishCache = (models: CatalogModel[], authority?: string) =>
+    setCached(name, models, Date.now(), cacheGeneration, authority, discoveryGeneration);
+  const superseded = (models: CatalogModel[]): ProviderModelsResult => ({
+    ...observed(models, "degraded"), contentRevision: startingRevision,
+  });
   if (prov.authMode === "forward") return observed([], "authoritative"); // ChatGPT backend has no /models
   if (azureMetadata) await refreshAzureModelMetadata(prov.baseUrl, metadataConfigDir);
   const seedVertexDefault = prov.adapter === "google"
@@ -292,40 +385,11 @@ export async function fetchProviderModelsWithAuth(
     }
     return observed(configured, "authoritative");
   }
-  // One Vertex deadline covers ADC, the first request and every follow-up page.
-  const vertexDeadline = effectiveGoogleMode(name, prov) === "vertex" ? vertexDiscoveryDeadline() : undefined;
-  let vertexAuth: VertexDiscoveryAuth | undefined;
-  const auth: ModelsAuthResolution = prov.authMode === "oauth" && !mayResolveModelsOAuth(name, prov)
-    ? { apiKey: undefined, observed: resolveAuth.kind === "observed" }
-    : captured.observedAuth ?? (resolveAuth.kind === "refreshing"
-    ? prov.authMode === "oauth"
-      ? await getModelsOAuthAccessSnapshot(name, prov)
-        .then(snapshot => ({
-          apiKey: snapshot.accessToken,
-          observed: false,
-          oauthAccountId: snapshot.accountId,
-          oauthGeneration: snapshot.generation,
-          ...(snapshot.workbuddy ? { workbuddy: snapshot.workbuddy } : {}),
-          ...(snapshot.m365 ? { m365: snapshot.m365 } : {}),
-          ...(snapshot.providerUserId ? { oauthProviderUserId: snapshot.providerUserId } : {}),
-          ...(snapshot.apiBaseUrl ? { oauthApiBaseUrl: snapshot.apiBaseUrl } : {}),
-          ...(snapshot.projectId ? { oauthProjectId: snapshot.projectId } : {}),
-        }))
-        .catch(() => ({ apiKey: undefined, observed: false }))
-      : {
-        apiKey: effectiveGoogleMode(name, prov) === "vertex"
-          ? (vertexAuth = await resolveVertexDiscoveryAuth(prov, vertexDeadline))?.token
-          : await resolveModelsAuthToken(name, prov),
-        observed: false,
-      }
-    : resolveAuth.resolve(name, prov));
   const apiKey = auth.apiKey;
   if (prov.adapter === "m365-copilot") {
     const result = await fetchM365CopilotCatalog(captured, auth, ttlMs, contextCap, isCurrentCacheGeneration);
     return observed(result.models, result.state);
   }
-  // A passive gather's Vertex credential (always an API key) arrives already bound to its authority.
-  vertexAuth ??= auth.vertexAuth;
   const vertexSendGuard = vertexDeadline !== undefined && prov.authMode !== "oauth";
   if ((prov.authMode === "oauth" && !apiKey) || isProviderApiKeyPaused(prov)) {
     return observed(configured, "degraded");
@@ -340,14 +404,14 @@ export async function fetchProviderModelsWithAuth(
         id: model.id, provider: name,
         ...catalogHintsFromModelsApiItem(name, model as ProviderModelsApiItem),
       }, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, undefined, false));
-      if (!isCurrentCacheGeneration()) return observed(configured, "degraded");
+      if (!canPublish()) return observed(configured, "degraded");
       markProviderDiscoveryOk(name, picker.length);
       // Retain callable manual/combo selectors, but do not advertise named selection
       // for an Auto-only account even when its saved configuration still contains it.
       return observed(copilotRequiresAuto(prov, models)
         ? picker : withConfiguredRetention(picker, { warnDrops: true }), "authoritative");
     } catch {
-      if (isCurrentCacheGeneration()) markProviderDiscoveryFailed(name, { reason: "provider" });
+      if (canPublish()) markProviderDiscoveryFailed(name, { reason: "provider" });
       return observed(configured, "degraded");
     }
   }
@@ -408,13 +472,13 @@ export async function fetchProviderModelsWithAuth(
         ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false),
       }));
       const forCache = withConfiguredRetention(discovered, { retainComboTargets: false });
-      if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
+      if (!publishCache(forCache, authorityIdentity)) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
       markProviderDiscoveryOk(name, live.models.length);
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     }
-    if (isCurrentCacheGeneration()) {
+    if (canPublish()) {
       markModelsFetchFailure(name, undefined, authorityIdentity);
       markProviderDiscoveryFailed(name, { reason: "provider" });
       console.warn(`[opencodex] CodeBuddy model discovery failed [${live.error}]${live.status === undefined ? "" : ` status=${live.status}`}; using stale/static catalog degradation.`);
@@ -465,13 +529,13 @@ export async function fetchProviderModelsWithAuth(
         } as CatalogModel;
       });
       const forCache = withConfiguredRetention(discovered, { retainComboTargets: false });
-      if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
+      if (!publishCache(forCache, authorityIdentity)) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
       markProviderDiscoveryOk(name, live.models.length);
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     } catch {
-      if (isCurrentCacheGeneration()) {
+      if (canPublish()) {
         markModelsFetchFailure(name, undefined, authorityIdentity);
         markProviderDiscoveryFailed(name, { reason: "provider" });
       }
@@ -516,14 +580,14 @@ export async function fetchProviderModelsWithAuth(
         ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false),
       }));
       const forCache = withConfiguredRetention(discovered, { retainComboTargets: false });
-      if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
+      if (!publishCache(forCache, authorityIdentity)) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
       markQoderDiscoveryCommitted(profile, apiKey, discoveryScope);
       markProviderDiscoveryOk(name, live.models.length);
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     }
-    if (isCurrentCacheGeneration()) {
+    if (canPublish()) {
       markModelsFetchFailure(name);
       markProviderDiscoveryFailed(name, { reason: "provider" });
       console.warn(`[opencodex] Qoder model discovery for "${name}" failed [${live.error}]${live.detail ? `: ${live.detail}` : ""}; using stale/static catalog degradation.`);
@@ -599,13 +663,13 @@ export async function fetchProviderModelsWithAuth(
         } as CatalogModel;
       });
       const forCache = withConfiguredRetention(result, { retainComboTargets: false });
-      if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
+      if (!publishCache(forCache, authorityIdentity)) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
       markProviderDiscoveryOk(name, liveResult.models.length);
       return observed(withConfiguredRetention(forCache), "authoritative");
     }
-    if (isCurrentCacheGeneration()) {
+    if (canPublish()) {
       markModelsFetchFailure(name, undefined, authorityIdentity);
       markProviderDiscoveryFailed(name, { reason: liveResult.error === "auth" ? "provider" : "invalid_response" });
     }
@@ -658,7 +722,7 @@ export async function fetchProviderModelsWithAuth(
       // Cache the discovery-filtered roster without combo retention so a later
       // gather can re-apply the current capture's retain set on read.
       const forCache = withConfiguredRetention(result, { retainComboTargets: false });
-      if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
+      if (!publishCache(forCache, authorityIdentity)) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
       // Publish roster-derived state only for a discovery the cache accepted: a stale
@@ -672,7 +736,7 @@ export async function fetchProviderModelsWithAuth(
       markProviderDiscoveryOk(name, liveResult.models.length);
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     }
-    if (isCurrentCacheGeneration()) {
+    if (canPublish()) {
       markModelsFetchFailure(name, undefined, authorityIdentity);
       markProviderDiscoveryFailed(name, { reason: "provider" });
       console.warn(
@@ -718,11 +782,6 @@ export async function fetchProviderModelsWithAuth(
   if (effectiveGoogleMode(name, prov) === "vertex" && !apiKey) {
     return observed(withConfiguredRetention(withVertexDefaultSeed(configured)), "degraded");
   }
-  // The captured request predates any refresh, so a refreshing gather rebuilds it
-  // from the auth it resolved: the token and its origin, together.
-  const request = resolveAuth.kind === "refreshing" && name !== "anthropic2"
-    ? captureModelsRequest(name, prov, auth.oauthApiBaseUrl, auth.workbuddy)
-    : captured.request;
   const url = request.url;
   let headers = materializeCapturedHeaders(request, apiKey);
   // One Ollama authority contract: for canonical ollama-cloud/ollama-native rows, discovery
@@ -765,7 +824,7 @@ export async function fetchProviderModelsWithAuth(
     // Decide logging BEFORE recording the new status, so we can compare against the prior one and
     // suppress an identical repeated failure (#395 log flood). The failure stays observable via the
     // discovery-status API regardless.
-    if (!canPublishDiscovery()) return { ...discoveryFallbackRows(), shouldLog: false };
+    if (!canPublish() || !canPublishDiscovery()) return { ...discoveryFallbackRows(), shouldLog: false };
     const shouldLog = shouldLogDiscoveryFailure(name, failure, warningCondition);
     markModelsFetchFailure(name, undefined, catalogAuthority);
     markProviderDiscoveryFailed(name, failure, warningCondition, discoveryObservation);
@@ -854,10 +913,9 @@ export async function fetchProviderModelsWithAuth(
     if (antigravity) {
       if (getConfigDir() !== metadataConfigDir) return observed(withConfiguredRetention(configured), "degraded");
       // A needsReauth/replacement of the active account stops every later sibling refresh and send.
-      const activeCurrent = () => isCurrentCacheGeneration() && (!auth.oauthAccountId
+      const activeCurrent = () => canPublish() && (!auth.oauthAccountId
         || antigravityActiveAccountCurrent(name, auth.oauthAccountId, apiKey, auth.oauthGeneration));
-      const admitSiblings = resolveAuth.kind === "refreshing" && name === "google-antigravity"
-        && prov.authMode === "oauth" && auth.oauthAccountId
+      const admitSiblings = admitAntigravitySiblings && auth.oauthAccountId
         ? await discoverAntigravitySiblings(name, prov, auth.oauthAccountId, request, discovery.maxResponseBytes, discovery.maxModels, metadataConfigDir, activeCurrent)
         : () => [];
       if (!activeCurrent() || getConfigDir() !== metadataConfigDir) return observed(withConfiguredRetention(configured), "degraded");
@@ -879,7 +937,7 @@ export async function fetchProviderModelsWithAuth(
       }));
       const live = applyConfigHintsToCachedModels(name, prov, upstream, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false);
       const forCache = azureMetadata ? upstream : withConfiguredRetention(live, { retainComboTargets: false });
-      if (!isCurrentCacheGeneration()) {
+      if (!canPublish()) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
       // Save exact family routes before publishing synthetic IDs. These synchronous writes
@@ -891,7 +949,7 @@ export async function fetchProviderModelsWithAuth(
       // Entitlement is per account (Claude 4.6 vs 5.5, Argon): remember what THIS account
       // lists so account selection can prefer one that serves the requested model.
       if (auth.oauthAccountId) recordAntigravityAccountRoster(name, auth.oauthAccountId, antigravity, Date.now(), antigravityObservation);
-      if (!setCached(name, forCache, Date.now(), cacheGeneration, catalogAuthority)) {
+      if (!publishCache(forCache, catalogAuthority)) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
       markProviderDiscoveryOk(name, live.length);
@@ -998,9 +1056,9 @@ export async function fetchProviderModelsWithAuth(
       return observed(withConfiguredRetention(configured), "degraded");
     }
     if (!canPublishDiscovery()) return observed(discoveryFallbackRows().models, "degraded");
-    if (!setCached(name, forCache, Date.now(), cacheGeneration, catalogAuthority)) {
-      return observed(withConfiguredRetention(configured), "degraded");
-    }
+    // The original caller can inspect its own rows, but their old revision
+    // prevents a sync or arrival-policy writer from adopting a superseded result.
+    if (!publishCache(forCache, catalogAuthority)) return superseded(returned);
     markProviderDiscoveryOk(name, liveModelCount, discoveryObservation);
     return observed(returned, "authoritative");
   } catch (error) {

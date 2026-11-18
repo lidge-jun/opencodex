@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { antigravityCliUserAgent } from "../../src/adapters/client-fingerprint";
 import { handleModelsRuntimeCommand } from "../../src/cli/models-runtime";
+import { gatherRoutedModels, getLastComboCatalogOmissions } from "../../src/codex/catalog";
+import { gatherRoutedModelsForCatalogGather } from "../../src/codex/catalog/routed-gather";
 import { clearModelCache, getStaleCached } from "../../src/codex/model-cache";
 import { cmdAccountProbe } from "../../src/cli/account-probe";
 import { pinnedHttpPost } from "../../src/lib/pinned-http";
@@ -542,6 +544,97 @@ describe("management routes", () => {
     } finally {
       release.resolve();
       clearModelCache();
+    }
+  });
+
+  test.each(["refreshing", "observed"] as const)("manual refresh joins a held %s full gather", async mode => {
+    clearModelCache();
+    const live = config();
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let sends = 0;
+    (live.providers.live as { fetch?: typeof fetch }).fetch = (async () => {
+      sends++;
+      started.resolve();
+      await release.promise;
+      return new Response("rate-limited", { status: 429 });
+    }) as typeof fetch;
+    const full = mode === "refreshing" ? gatherRoutedModels(live)
+      : gatherRoutedModelsForCatalogGather(live, { authStoreBuffer: null });
+    try {
+      await started.promise;
+      const manual = call(live, "/api/model-discovery/refresh", { provider: "live" });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      release.resolve();
+      const [, result] = await Promise.all([full, manual]);
+      expect(result.status).toBe(200);
+      expect(result.json.discovery).toEqual({ status: "failed", reason: "http", httpStatus: 429 });
+      expect(sends).toBe(1);
+    } finally {
+      release.resolve();
+      await full;
+      clearModelCache();
+    }
+  });
+
+  test("a late full gather preserves the newer manual roster after credential rotation", async () => {
+    clearModelCache();
+    const live = config();
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const credentials: Array<string | null> = [];
+    const provider = live.providers.live! as OcxConfig["providers"][string] & { fetch: typeof fetch };
+    provider.apiKey = "fixture-previous-key";
+    provider.fetch = (async (_input, init) => {
+      const credential = new Headers(init?.headers).get("authorization");
+      credentials.push(credential);
+      if (credential === "Bearer fixture-previous-key") {
+        started.resolve();
+        await release.promise;
+        return Response.json({ data: [{ id: "old-model" }] });
+      }
+      return Response.json({ data: [{ id: "new-model" }] });
+    }) as typeof fetch;
+    const full = gatherRoutedModels(live);
+    try {
+      await started.promise;
+      live.providers.live = { ...provider, apiKey: "fixture-current-key" };
+      const manual = await call(live, "/api/model-discovery/refresh", { provider: "live" });
+      expect(manual.status).toBe(200);
+      expect(manual.json.discovery).toEqual({ status: "ok" });
+      expect(getStaleCached("live")?.map(row => row.id)).toEqual(["new-model"]);
+      release.resolve();
+      await full;
+      expect(getStaleCached("live")?.map(row => row.id)).toEqual(["new-model"]);
+      expect((await gatherRoutedModels(live)).filter(row => row.provider === "live").map(row => row.id))
+        .toEqual(["new-model"]);
+      expect(credentials).toEqual(["Bearer fixture-previous-key", "Bearer fixture-current-key"]);
+    } finally {
+      release.resolve();
+      await full;
+      clearModelCache();
+    }
+  });
+
+  test("a scoped refresh preserves full-gather omissions and skips sibling combos", async () => {
+    clearModelCache();
+    const live = config();
+    const combo = { strategy: "failover", stickyLimit: 1, defaultEffort: "medium", alias: null } as const;
+    live.combos = {
+      healthy: { ...combo, targets: [{ provider: "vendor", model: "known", weight: 1 }] },
+      unavailable: { ...combo, targets: [{ provider: "missing", model: "unknown", weight: 1 }] },
+    };
+    try {
+      await gatherRoutedModels(live);
+      const published = getLastComboCatalogOmissions();
+      expect(published.map(item => item.id)).toEqual(["unavailable"]);
+      const scoped: Array<(typeof published)[number]> = [];
+      await gatherRoutedModels(live, { onlyProvider: "live", comboOmissions: scoped });
+      expect(scoped).toEqual([]);
+      expect(getLastComboCatalogOmissions()).toEqual(published);
+    } finally {
+      clearModelCache();
+      await gatherRoutedModels({ ...live, providers: {}, combos: {} });
     }
   });
 

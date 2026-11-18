@@ -105,7 +105,7 @@ import type { CatalogGatherProviderAuthOutcome, CatalogGatherProviderModelOutcom
 import { applyProviderConfigHints, configuredAutoCompactTokenLimit, configuredMaxInputTokens, configuredModelDisplayName, configuredReasoningSummarySupport, copyReasoningHintSource, modelInputModalities, routedMaxOutputTokens, withVisionSidecarInput } from "./model-hints";
 import { resolveComboCatalogMember } from "./combo-member";
 import { captureGatherFlight, captureTrustedOpenAiApiPolicy, gatherFlightKey, keyedGatherBytesIdentity, withCanonicalOpenAiForwardAuthDefault } from "./gather-capture";
-import { fetchProviderModelsWithAuth, observedModelsAuthResolver, refreshingModelsAuthResolver } from "./provider-models";
+import { clearProviderDiscoveryFlights, fetchProviderModelsWithAuth, observedModelsAuthResolver, refreshingModelsAuthResolver } from "./provider-models";
 
 export interface GatherRoutedModelsOptions {
   comboOmissions?: ComboCatalogOmission[];
@@ -148,7 +148,7 @@ interface GatherInflightEntry {
    * Now REDUNDANT with `providerGraphIdentity`, which hashes the whole provider
    * row and therefore covers `apiKey` too: removing this term alone leaves the
    * credential regression green. It is kept deliberately, for two reasons. It
-   * covers what the graph cannot — the RESOLVED auth (`observedAuth`) and the
+   * covers what the graph cannot — the resolved auth and the
    * final materialized headers, which are derived rather than stored, so an
    * OAuth token that changes while the row is byte-identical still separates
    * admissions. And it states the credential rule where a reader looks for it,
@@ -189,6 +189,7 @@ export function catalogGatherAdmissionMetrics(): AdmissionMetrics {
 /** Drop in-flight gather so tests / full cache clears do not reuse a stale promise. */
 export function clearGatherRoutedModelsInflight(): void {
   gatherInflight.clear();
+  clearProviderDiscoveryFlights();
 }
 export async function gatherRoutedModels(
   config: OcxConfig,
@@ -196,7 +197,7 @@ export async function gatherRoutedModels(
 ): Promise<CatalogModel[]> {
   return gatherRoutedModelsWithAuth(
     config,
-    `refreshing:${gatherFlightKey(config)}`,
+    `refreshing:${JSON.stringify([gatherFlightKey(config), options?.onlyProvider])}`,
     () => refreshingModelsAuthResolver,
     options,
     options?.onlyProvider,
@@ -246,7 +247,7 @@ async function gatherRoutedModelsWithAuth(
     // Claim the slot synchronously before any await so same-key callers join this flight.
     // Distinct authorities retain separate entries even when their legacy bucket matches.
     let ownedEntry!: GatherInflightEntry;
-    const flight = gatherRoutedModelsUncached(config, capture).finally(() => {
+    const flight = gatherRoutedModelsUncached(config, capture, onlyProvider).finally(() => {
       const current = gatherInflight.get(key);
       const index = current?.indexOf(ownedEntry) ?? -1;
       if (current && index >= 0) current.splice(index, 1);
@@ -325,6 +326,7 @@ function boundCustomNativeReasoning(
 async function gatherRoutedModelsUncached(
   config: OcxConfig,
   capture: GatherFlightCapture,
+  onlyProvider?: string,
 ): Promise<GatherFlightResult> {
   // Flight-local list: joiners copy from the resolved promise, not a process-global last write.
   const localOmissions: ComboCatalogOmission[] = [];
@@ -347,6 +349,7 @@ async function gatherRoutedModelsUncached(
       ttlMs,
       providerContextCap(config, provider.name),
       resolveAuth,
+      { shareDiscovery: true },
     )),
   );
   const lists = providerResults.map(result => result.models);
@@ -410,14 +413,15 @@ async function gatherRoutedModelsUncached(
   //   힌트(modelContextWindows 등)로 native 모델의 context window를 오버라이드한 경우
   //   반영되지 않음. 하지만 nativeOpenAiContextWindow가 이미 config 오버라이드를
   //   우선시하므로 실제 충돌 가능성은 낮음.
-  if (!hasComboTargets(config)) {
+  const comboIds = onlyProvider === undefined ? listComboIds(config) : [];
+  if (comboIds.length === 0 || !hasComboTargets(config)) {
     // Skip the native slug injection entirely when no combos are configured — avoids
     // calling nativeOpenAiSlugs() (which reads the live Codex catalog from disk) for
     // configs that will never need it.
   } else {
     const disabled = disabledNativeSlugs(config);
     const openaiContextCap = nativeContextLimits(config);
-    const requiredNativeComboTargets = new Set(listComboIds(config).flatMap(id => {
+    const requiredNativeComboTargets = new Set(comboIds.flatMap(id => {
       const combo = getCombo(config, id);
       return combo?.targets.flatMap(target => (
         target.provider === "openai" ? [target.model] : []
@@ -467,7 +471,7 @@ async function gatherRoutedModelsUncached(
   //   catalog production and warning behavior, while this map is already private to combo input.
   // - 장점, 단점 및 영향: custom context/modality/reasoning/tool-mode declarations now constrain
   //   their combos without widening unrelated rows; omitted fields retain provider/native limits.
-  for (const custom of config.customModels ?? []) {
+  for (const custom of comboIds.length > 0 ? config.customModels ?? [] : []) {
     const key = `${custom.provider}/${custom.modelId}`;
     const inherited = memberByKey.get(key) ?? {
       provider: custom.provider,
@@ -489,7 +493,7 @@ async function gatherRoutedModelsUncached(
       ...(custom.codexToolMode !== undefined ? { codexToolMode: custom.codexToolMode } : {}),
     });
   }
-  for (const id of listComboIds(config)) {
+  for (const id of comboIds) {
     const combo = getCombo(config, id);
     if (!combo) continue;
     const comboNativeLimits = nativeContextLimits(config);
@@ -542,7 +546,7 @@ async function gatherRoutedModelsUncached(
     }
     else warnUncataloguedComboOnce(id, combo, members, localOmissions);
   }
-  replaceLastComboCatalogOmissions(localOmissions);
+  if (onlyProvider === undefined) replaceLastComboCatalogOmissions(localOmissions);
   // Preserve declaratively ordered discovery (and cold-start seed order); other presets
   // retain their historical alphabetical order. Renamed/custom transport scoping still applies.
   // Read the captured discovery policy, never the live registry: a flight must keep the

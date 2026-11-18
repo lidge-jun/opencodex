@@ -266,6 +266,18 @@ export function isModelCacheGenerationCurrent(provider: string, generation: stri
 const providerCacheRevisions = new Map<string, number>();
 let globalContentRevision = 0;
 
+// The publication watermark survives row eviction while a delayed flight can still finish.
+const publishedDiscoveryGenerations = new Map<string, number>();
+let nextDiscoveryGeneration = 0;
+
+export function captureModelDiscoveryGeneration(): number {
+  return ++nextDiscoveryGeneration;
+}
+
+export function canPublishModelDiscovery(provider: string, generation: number): boolean {
+  return generation >= (publishedDiscoveryGenerations.get(provider) ?? 0);
+}
+
 function bumpProviderCacheRevision(provider: string): void {
   providerCacheRevisions.set(provider, (providerCacheRevisions.get(provider) ?? 0) + 1);
 }
@@ -279,9 +291,7 @@ export function observeModelCacheRevision(provider: string): string {
 }
 
 /**
- * Store a live result unless the cache was cleared while that asynchronous discovery was running.
- * The optional generation keeps existing direct cache writers unchanged while discovery callers can
- * prevent a previous OAuth account from repopulating the current account's cache.
+ * Store a live result if cache authority still holds and no newer discovery has published.
  */
 export function setCached(
   provider: string,
@@ -289,8 +299,10 @@ export function setCached(
   now = Date.now(),
   generation?: string,
   authorityIdentity?: string,
+  discoveryGeneration?: number,
 ): boolean {
   if (generation !== undefined && !isModelCacheGenerationCurrent(provider, generation)) return false;
+  if (discoveryGeneration !== undefined && !canPublishModelDiscovery(provider, discoveryGeneration)) return false;
   deleteCachedProvider(provider);
   const sizeBytes = modelCacheEncoder.encode(provider).byteLength
     + modelCacheEncoder.encode(JSON.stringify(models)).byteLength;
@@ -303,6 +315,7 @@ export function setCached(
   enforceAppOwnedMemoryBudget();
   // Published and accepted, so anything derived from this provider's rows is now out of date.
   bumpProviderCacheRevision(provider);
+  if (discoveryGeneration !== undefined) publishedDiscoveryGenerations.set(provider, discoveryGeneration);
   return true;
 }
 
@@ -328,13 +341,17 @@ export function clearModelCache(
   if (provider) {
     if (revokesInFlightDiscovery) {
       providerCacheGenerations.set(provider, (providerCacheGenerations.get(provider) ?? 0) + 1);
+      publishedDiscoveryGenerations.delete(provider);
     }
     deleteCachedProvider(provider);
     failureAt.delete(provider);
     discoveryStatus.delete(provider);
     liveModelCounts.delete(provider);
   } else {
-    if (revokesInFlightDiscovery) globalCacheGeneration += 1;
+    if (revokesInFlightDiscovery) {
+      globalCacheGeneration += 1;
+      publishedDiscoveryGenerations.clear();
+    }
     cache.clear();
     // A wholesale clear changes every provider's content at once, and clearing the map means no
     // per-provider counter can record it. Advancing the global term retires every derived roster
@@ -359,6 +376,7 @@ export function reconcileModelCacheProviders(
   const trackedProviders = new Set([
     ...providerCacheGenerations.keys(),
     ...providerCacheRevisions.keys(),
+    ...publishedDiscoveryGenerations.keys(),
     ...failureAt.keys(),
     ...discoveryStatus.keys(),
     ...liveModelCounts.keys(),
@@ -386,6 +404,7 @@ export function reconcileModelCacheProviders(
     // longer has must not keep an entry alive for the life of the process merely because nothing
     // cleared the whole cache. The global epoch advanced above, so the removal is not an ABA.
     providerCacheRevisions.delete(provider);
+    publishedDiscoveryGenerations.delete(provider);
     removedProviders.add(provider);
   }
   lastReconciledGeneration = generation;

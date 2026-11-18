@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   captureModelCacheGeneration,
+  captureModelDiscoveryGeneration,
   clearModelCache,
   expireModelCache,
   getProviderDiscoveryStatus,
@@ -42,6 +43,16 @@ describe("model-cache provider reconciliation", () => {
 
     expect(setCached(provider, [{ provider, id: "late-model" }], Date.now(), captured)).toBe(true);
     expect(getStaleCached(provider)).toEqual([{ provider, id: "late-model" }]);
+  });
+
+  test("eviction retains the publication fence against a superseded flight", () => {
+    const authority = captureModelCacheGeneration(provider);
+    const older = captureModelDiscoveryGeneration();
+    const newer = captureModelDiscoveryGeneration();
+    expect(setCached(provider, [{ provider, id: "new-model" }], Date.now(), authority, undefined, newer)).toBe(true);
+    clearModelCache(provider, "eviction");
+    expect(setCached(provider, [{ provider, id: "old-model" }], Date.now(), authority, undefined, older)).toBe(false);
+    expect(getStaleCached(provider)).toBeNull();
   });
 
   test.each([

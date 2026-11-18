@@ -339,7 +339,7 @@ describe("gatherRoutedModels single-flight", () => {
     expect(filterCatalogVisibleModels(withSelModels, withSel).map(m => m.id)).toEqual(["keep-me"]);
   });
 
-  test("disabledModels-only config changes do not share a flight", async () => {
+  test("disabledModels-only config changes share discovery and retain their own visibility", async () => {
     let fetchCount = 0;
     let release!: () => void;
     const gate = new Promise<void>(resolve => {
@@ -373,10 +373,9 @@ describe("gatherRoutedModels single-flight", () => {
 
     const first = gatherRoutedModels(base);
     const second = gatherRoutedModels(withDisabled);
-    await Promise.resolve();
-    expect(fetchCount).toBe(2);
     release();
     const [all, withDisabledModels] = await Promise.all([first, second]);
+    expect(fetchCount).toBe(1);
     expect(all.map(m => m.id).sort()).toEqual(["drop-me", "keep-me"]);
     expect(withDisabledModels.map(m => m.id).sort()).toEqual(["drop-me", "keep-me"]);
     expect(filterCatalogVisibleModels(all, base).map(m => m.id).sort()).toEqual(["drop-me", "keep-me"]);
