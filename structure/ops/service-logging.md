@@ -16,7 +16,7 @@ combo aliases, model ids and URLs. JEV effort decision lines retain failed gates
 if the pinned target becomes unavailable before dispatch. The pin reason reflects the final selection.
 `src/combos/request.ts` effort diagnostics retain the
 validated provider and closed effort/capability fields, with no model field. The `capabilityPolicy: "union"`
-effort clamp in `src/combos/request-capability.ts` logs a debug line with the same validated provider
+effort clamp in `src/combos/request-capability.ts` logs a debug line on bridge and native Chat children with the same validated provider
 label and the requested and sent rungs only; the unservable-image and no-window-fits warnings in `core-combo.ts` name no
 combo, target or model. Operational
 selection and cooldown keys remain internal. `tests/responses/chat-error-body-normalization.test.ts`

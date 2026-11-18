@@ -183,9 +183,11 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 | `cooldownWaitPolicy?` | `"before-last-resort"` | unset | Defers targets marked `lastResort`: they are used only when no normal target is available, for every strategy. `waitForCooldownMs` only adds the wait for a cooling normal target, so at its `0` default nothing waits and the last resort is used as soon as no normal target is available. The deferral and the ordinary wait share one `waitForCooldownMs` budget per selection attempt. Only that exact string opts in; `lastResort` is inert without it. |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | `defaultEffort` fills an absent `reasoning.effort` in fallback mode, or overrides valid caller effort in explicit force mode when the combo has a non-null default and the selected target has a known, nonempty supported ladder. If the target supports the configured value, it is retained; otherwise the highest supported rung at or below it is used, or the lowest supported rung when none is lower. Unknown or empty ladders omit the default. |
 | `defaultEffortMode?` | `"fallback" \| "force"` | `"fallback"` | Preserves caller precedence by default. Explicit force requires a valid non-null default, respects target capability and can increase cost and latency. `reasoningEffortMode` remains independent. |
-| `reasoningEffortMode?` | `"strict" \| "adaptive"` | `"strict"` | `"strict"` intersects all known target ladders, including empty ones; `"adaptive"` excludes empty ladders. Unknown ladders are catalog wildcards in both modes. At dispatch, explicit empty ladders remove effort/thinking controls in both modes; unknown ladders do so only in adaptive. `reasoning.summary` is preserved. Known nonempty targets retain their effort resolution, and target selection/order is unchanged. |
+| `reasoningEffortMode?` | `"strict" \| "adaptive"` | `"strict"` | `"strict"` intersects all known target ladders, including empty ones; `"adaptive"` excludes empty ladders, then publishes the intersection or union of the remaining ladders according to `capabilityPolicy`. Unknown ladders are catalog wildcards in both modes. At dispatch, explicit empty ladders remove effort/thinking controls in both modes; unknown ladders do so only in adaptive. `reasoning.summary` is preserved. Union with adaptive effort maps unsupported caller effort to the highest supported rung at or below it, or to the lowest rung when the request is below the entire ladder. |
 | `jevEffortMode?` | `"decide" \| "client"` | `"decide"` | JEV only. `"decide"` applies the decision's effort to the first child and to that turn's tool-call continuations while the target still offers it, overriding the caller. `"client"` keeps the decision's target and leaves effort to ordinary Combo policy: caller effort, the target ladder, and `defaultEffort`/`defaultEffortMode` (`"force"` still overrides the caller). Only `"client"` is stored. See [Shared limits, state, and statistics](/guides/combos/#shared-limits-state-and-statistics). |
-| `imageInput?` | `"auto" \| "disabled"` | `"auto"` | `"auto"` publishes image only when every target supports images; `"disabled"` forces text-only (drops image from published modalities and rejects image-bearing requests before dispatch). |
+| `capabilityPolicy?` | `"intersection" \| "union"` | `"intersection"` | `"intersection"` publishes shared capabilities and the minimum target context window. `"union"` publishes combined capabilities and the maximum window. Both publish the minimum `maxOutputTokens` only when every target declares a positive limit. |
+| `onUnservable?` | `"degrade" \| "reject"` | `"degrade"` | Union only. `"degrade"` can omit images or try the largest compatible window. `"reject"` returns HTTP 400 in those cases. Both settings reject audio when no target accepts it. |
+| `imageInput?` | `"auto" \| "disabled"` | `"auto"` | `"auto"` publishes image when all targets support it under `"intersection"` or any target supports it under `"union"`. `"disabled"` drops image support and rejects image requests before dispatch. |
 | `alias?` | `string` | — | Optional public model id in place of the canonical picker slug. |
 | `nativeAlias?` | `boolean` | `false` | Let a currently supported bare native id take precedence only for that unqualified id. Bare `gpt-5.6-*` ids use Codex Pool/Direct credentials. Account-qualified routes remain distinct. Provider-qualified routes such as `openai-apikey/gpt-5.6-*` use their configured API-key route and never fall through to the native alias. |
 | `displayName?` | `string` | — | Display-only catalog label, required and non-empty for a native alias. |
@@ -380,7 +382,7 @@ candidate ineligible. Per-request route-decision traces are recorded when a poli
 ### Catalog eligibility
 
 A combo remains directly routable even when it cannot be listed. `ocx sync`, `/v1/models`, and the
-Codex picker list it only when every target exposes capabilities that can be intersected:
+Codex picker require the following evidence to list it:
 
 - a positive `contextWindow`, from live metadata, registry hints, provider
   `modelContextWindows` / `contextWindow`, a known positive `maxInputTokens` on the member row,
@@ -390,9 +392,9 @@ Codex picker list it only when every target exposes capabilities that can be int
   A combo with `capabilityPolicy: "union"` uses the union instead, so disjoint modalities do not
   remove it; see [Union capabilities](/guides/combos/#union-capabilities-capabilitypolicy).
 
-A target on a disabled provider (even with a complete discovery row), on an unknown provider with
-no discovery row, or targets with disjoint modalities, removes the combo from the catalog. Sync
-emits a summary warning and the dashboard marks it **Needs attention**. Add context metadata,
+A target on a disabled provider (even with a complete discovery row) or on an unknown provider
+with no discovery row removes the combo from the catalog. Disjoint modalities exclude only
+intersection combos. Sync emits a summary warning and the dashboard marks it **Needs attention**. Add context metadata,
 align modalities, or target models with discoverable compatible capabilities.
 
 ## Request history and routing analytics

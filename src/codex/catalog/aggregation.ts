@@ -164,8 +164,8 @@ export function deriveComboCatalogModel(
   const hasLimitingContextCapMetadata = limitingMembers.some(
     member => typeof member.contextCapped === "boolean",
   );
-  // A combo is cap-limited only when every member defining its effective minimum was
-  // itself reduced by a provider cap. An uncapped member at the same minimum means the
+  // A combo is cap-limited only when every member defining its effective window was
+  // itself reduced by a provider cap. An uncapped member at the same window means the
   // combo would have the same window even without the cap.
   const contextCapped = limitingMembers.every(member => member.contextCapped === true);
   const maxInputTokens = Math.min(

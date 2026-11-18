@@ -925,14 +925,14 @@ The target's advertised ladder remains authoritative. An exact supported value i
 
 ### Mixed-capability groups (`reasoningEffortMode`)
 
-The effort levels a combo advertises are the intersection of what its targets advertise. A target
+In `"strict"` mode, a combo advertises the intersection of its known target ladders. A target
 that explicitly advertises **no** effort control takes part in that intersection, so a single
 no-effort backup empties the effort picker for the whole combo — including for the targets that do
 support tuning.
 
-Set `reasoningEffortMode: "adaptive"` to exclude those empty ladders from the published
-intersection instead. The picker then shows the levels the remaining targets share, and the
-no-effort target stays eligible for routing. Targets whose ladder is simply *unknown* are treated
+Set `reasoningEffortMode: "adaptive"` to exclude empty ladders from the published ladder. The
+picker shows the intersection of the remaining ladders with `capabilityPolicy: "intersection"`
+and their union with `"union"`. A target with no effort control stays eligible for routing. Targets whose ladder is simply *unknown* are treated
 as wildcards in both modes.
 
 ```json
@@ -960,10 +960,10 @@ combo's Capabilities section.
 ## Image / multimodal capability
 
 By default a combo publishes the **intersection** of its targets' input modalities (image is
-enabled only when every target advertises it). Set `imageInput: "disabled"` to force text-only
-even when every target supports images — the catalog drops `image` from `inputModalities`, and
-image-bearing requests are rejected with HTTP 400 before any target is called. `"auto"` (or
-omitting the field) keeps the automatic intersection.
+enabled when every target advertises it). A `capabilityPolicy: "union"` combo can advertise image
+input when any target supports it. `imageInput: "auto"` uses the selected capability policy.
+`imageInput: "disabled"` drops `image` from `inputModalities` and rejects image requests with HTTP 400
+before any target is called.
 
 In the dashboard, the **Image / multimodal** switch can be enabled whenever every target has
 known image or text input capabilities. Native image members stay unchanged; text-only members are
@@ -993,10 +993,10 @@ and have the combo pick per request instead:
 - **Catalog.** `inputModalities` is the union of the targets' modalities, so one text-only backup no
   longer hides image input. With `reasoningEffortMode: "adaptive"` the effort ladder is the union of
   the non-empty target ladders, ordered by rank; `"strict"` keeps the intersection, because strict
-  promises every target serves the advertised rung as is. `contextWindow`, `maxInputTokens` and
-  `autoCompactTokenLimit` are the **largest** target's, so the client keeps the conversation going
-  until the biggest window is full. `maxOutputTokens` stays the minimum, because it bounds every
-  response and a request rarely says how much output it needs. `imageInput: "disabled"` still
+  promises every target serves the advertised rung as is. `"intersection"` publishes the smallest
+  target `contextWindow`, and `"union"` publishes the largest. `"union"` uses the largest input and
+  auto-compaction limits, bounded by the published window and input limit where applicable. Both
+  policies publish the smallest `maxOutputTokens` when every target declares one and omit it otherwise. `imageInput: "disabled"` still
   removes image.
 - **Images.** For an image-bearing request each target is native (accepts images), degraded
   (proven text-only, and the [Vision Sidecar](/guides/sidecars/) is enabled, so it describes the
@@ -1004,13 +1004,16 @@ and have the combo pick per request instead:
   their configured order, so a degraded subscription target still serves before a later native
   one; only unable targets are skipped. A target whose image capability is unknown counts as native,
   the same pass-through the target applies on its own.
+- **Audio.** Only targets that declare audio input are eligible when the request includes audio. If
+  none can take it, the proxy returns HTTP 400 without dropping the audio.
 - **Context.** Before picking, the proxy estimates the request's input tokens with the same estimator
   its context admission uses (it overcounts slightly on purpose) and skips a target whose input limit
-  cannot hold them. A target with no known window is never skipped. Compaction turns are never
-  filtered.
-- **Effort.** Under `"adaptive"`, a caller effort that a target's known ladder lacks is lowered to
+  cannot hold them. A target with an unknown window remains eligible on context. Compaction turns
+  are exempt from the context check. The proxy evaluates these limits after checking metered consent.
+- **Effort.** Under `"adaptive"`, a caller effort that a target's known ladder lacks maps to
   that target's highest rung at or below it (`xhigh` on a low/medium/high target is sent as `high`).
-- **Order of degradation.** A text-only target first gets the sidecar's description of the image. Images are dropped only when no description is possible, and that is logged as a warning. Effort drops to the target's nearest supported rung, logged at debug level with the requested and sent rungs.
+  A request below the entire ladder uses the lowest supported rung.
+- **Order of degradation.** A text-only target first gets the sidecar's description of the image. Images are dropped only when no description is possible, and that is logged as a warning. Effort adjustments are logged at debug level with the requested and sent rungs.
 - **Nothing can serve.** When no target's window can hold the input, `onUnservable: "degrade"` (the
   default) sends it to the target with the largest window, under the same loose admission a direct
   request gets, and logs a warning. When targets can hold it but every one is unable to take its
@@ -1168,11 +1171,11 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 | `cooldownWaitPolicy` | No | unset | `"before-last-resort"` defers targets marked `lastResort`: they are used only when no normal target is available, for every strategy, and `waitForCooldownMs` only adds the wait for a cooling normal target, so at its `0` default nothing waits and the last resort is used as soon as no normal target is available. Only that exact string opts in. The deferral wait and the ordinary wait share one `waitForCooldownMs` budget per selection attempt. |
 | `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; resolved against each target's advertised ladder. |
 | `defaultEffortMode` | No | `"fallback"` | `"fallback"` preserves explicit caller effort. `"force"` overrides valid caller effort, requires a valid non-null default, and can increase cost and latency. |
-| `reasoningEffortMode` | No | `"strict"` | `"strict"` intersects every known target ladder, so one target advertising no effort control empties the combo's picker. `"adaptive"` excludes those empty ladders from the published intersection. At dispatch, explicit empty or adaptive unknown ladders remove unsupported effort/thinking controls while preserving supported non-effort reasoning fields such as `reasoning.summary`; known non-empty targets keep existing effort resolution. |
+| `reasoningEffortMode` | No | `"strict"` | `"strict"` intersects every known target ladder, so one target advertising no effort control empties the combo's picker. `"adaptive"` publishes the intersection of non-empty ladders under `"intersection"` and their union under `"union"`. At dispatch, explicit empty or adaptive unknown ladders remove unsupported effort/thinking controls while preserving supported non-effort reasoning fields such as `reasoning.summary`; known non-empty targets keep existing effort resolution. |
 | `jevEffortMode` | No | `"decide"` | JEV combos only. `"decide"` applies the decision effort and lets it override the caller. `"client"` keeps the decision target choice but leaves effort to the caller and the target ladder, so a provider that swaps its upstream model id per tier is not re-tiered by JEV. `defaultEffortMode: "force"` still overrides caller effort in client mode. Cache reuse still needs a stable caller effort, target and prompt prefix, and depends on the provider and account. |
-| `capabilityPolicy` | No | `"intersection"` | `"intersection"` advertises only what every target serves. `"union"` advertises what any target serves (image input, and with `"adaptive"` the effort ladder), advertises the largest context window and input limit, skips targets that cannot take the request's image or hold its input, and lowers an unsupported caller effort per target. Max output stays the minimum. See [Union capabilities](#union-capabilities-capabilitypolicy). |
+| `capabilityPolicy` | No | `"intersection"` | `"intersection"` advertises shared capabilities and the smallest context window. `"union"` advertises combined capabilities and the largest context window, and filters targets by request compatibility. Both publish the smallest declared max output only if every target declares one. See [Union capabilities](#union-capabilities-capabilitypolicy). |
 | `onUnservable` | No | `"degrade"` | `"union"` combos only. When no target's window can hold the input, `"degrade"` sends to the largest window with a warning; when no enabled target can take the image, it dispatches and omits the images with a warning. `"reject"` answers HTTP 400 in both cases. |
-| `imageInput` | No | `"auto"` | `"auto"` or `"disabled"`. `"auto"` publishes image support only when every target supports images; `"disabled"` forces text-only (drops image from published modalities and rejects image-bearing requests before dispatch). |
+| `imageInput` | No | `"auto"` | `"auto"` or `"disabled"`. `"auto"` publishes image support when every target supports it under `"intersection"`, and when any target supports it under `"union"`. `"disabled"` drops image support and rejects image requests before dispatch. |
 | `alias` | No | none | Optional trimmed public model id; use the alias rules above. An empty value is stored as no alias. |
 | `nativeAlias` | No | `false` | Explicitly permit a currently supported bare native `alias` to take routing and catalog precedence. Never inferred from the alias. |
 | `displayName` | No | none | Bounded display-only catalog label. Required and non-empty when `nativeAlias` is true. |

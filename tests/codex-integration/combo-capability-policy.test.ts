@@ -102,6 +102,11 @@ describe("combo capabilityPolicy: catalog", () => {
     expect(row?.autoCompactTokenLimit).toBeLessThanOrEqual(100_000);
   });
 
+  test.each(["intersection", "union"] as const)("%s omits max output if one member lacks a positive limit", capabilityPolicy => {
+    const row = deriveComboCatalogModel("x", combo({ capabilityPolicy }), [imageMember, { ...textMember, maxOutputTokens: undefined }]);
+    expect(row?.maxOutputTokens).toBeUndefined();
+  });
+
   test("unionEfforts sorts known rungs by rank and keeps unknown rungs last in first-seen order", () => {
     expect(unionEfforts([["high", "custom-b"], ["low", "max", "custom-a"], ["medium"]]))
       .toEqual(["low", "medium", "high", "max", "custom-b", "custom-a"]);
