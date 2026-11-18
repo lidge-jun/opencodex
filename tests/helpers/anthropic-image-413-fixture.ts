@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses } from "../../src/server/responses/core";
+import { configureSharedSpendLedger, SPEND_LEDGER_JOURNAL_FILENAME, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "./owned-spend-home";
 import { removeTreeWithRetry } from "./remove-tree";
@@ -24,9 +25,13 @@ export async function fixture(options: {
   enabled?: boolean;
   lane?: Lane;
   image?: "large" | "normal" | "none" | "newest-only";
+  maxOutputTokens?: number;
+  reasoningDefault?: boolean;
+  instructionRole?: "developer" | "system";
+  spendCeiling?: number;
   handle: (request: WireSend, index: number, config: OcxConfig) => Response | Promise<Response>;
   requestOptions?: Parameters<typeof handleResponses>[3];
-}): Promise<{ sent: WireSend[]; response: Response; text: string }> {
+}): Promise<{ sent: WireSend[]; response: Response; text: string; spendDispatchCount?: number }> {
   const home = mkdtempSync(join(tmpdir(), "ocx-image-recovery-"));
   const previousHome = process.env.OPENCODEX_HOME;
   const previousFetch = globalThis.fetch;
@@ -41,11 +46,15 @@ export async function fixture(options: {
         [providerName]: {
           adapter: "anthropic", baseUrl: target, authMode: "key", apiKey: credential, proxy: "direct",
           models: [model],
+          ...(options.reasoningDefault ? { modelDefaultReasoningEfforts: { [model]: "high" } } : {}),
           ...(options.enabled === undefined ? {} : { anthropicImageContextRecovery: options.enabled }),
           requestPacing: { enabled: true, maxConcurrentRequests: 1 },
         },
       },
     } as OcxConfig;
+    if (options.spendCeiling !== undefined) {
+      configureSharedSpendLedger(spendPolicyFromConfig({ pool: { maxTokens: options.spendCeiling } }, undefined, [providerName]));
+    }
     const tools = [];
     if (options.lane === "search") {
       config.webSearchSidecar = { backend: "exa", exaApiKey: "synthetic-unused-search-key" };
@@ -70,7 +79,12 @@ export async function fixture(options: {
     const image = { type: "input_image", image_url: `data:image/png;base64,${imageData}` };
     const raw = {
       model: `${providerName}/${model}`, stream: options.lane !== undefined && options.lane !== "direct",
-      store: false, tools, input: [
+      store: false, tools,
+      max_output_tokens: options.maxOutputTokens,
+      reasoning: options.reasoningDefault ? { effort: "none" } : undefined,
+      input: [
+        ...(options.instructionRole ? [{ type: "message", role: options.instructionRole,
+          content: "Retain this instruction verbatim." }] : []),
         { type: "message", role: "user", content: [{ type: "input_text", text: `Older screenshot. ${"Archived context. ".repeat(120)}` },
           ...(!["none", "newest-only"].includes(options.image ?? "") ? [image] : [])] },
         { type: "message", role: "assistant", content: [{ type: "output_text", text: "Read the older screenshot" }] },
@@ -84,7 +98,12 @@ export async function fixture(options: {
       method: "POST", headers: { "content-type": "application/json", "thread-id": "fixture-image-turn" },
       body: JSON.stringify(raw), signal: options.requestOptions?.abortSignal,
     }), config, { model: "", provider: "" }, options.requestOptions);
-    return { sent, response: upstream, text: await upstream.text() };
+    const text = await upstream.text();
+    const journal = Bun.file(join(home, SPEND_LEDGER_JOURNAL_FILENAME));
+    const spendDispatchCount = options.spendCeiling !== undefined && await journal.exists()
+      ? (await journal.text()).trim().split("\n").filter(line => JSON.parse(line).kind === "dispatch").length
+      : undefined;
+    return { sent, response: upstream, text, spendDispatchCount };
   } finally {
     try { release(); } finally {
       globalThis.fetch = previousFetch;

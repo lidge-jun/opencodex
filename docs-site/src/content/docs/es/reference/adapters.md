@@ -176,10 +176,13 @@ El proveedor con clave API `commandcode` usa Chat Completions para la mayoría d
 - Convierte mensajes a bloques de contenido Anthropic (texto, imagen base64, `tool_use`, `thinking`).
 - La compactación enrutada de Codex conserva el catálogo de herramientas, el prompt de sistema y las opciones de selección para mantener el prefijo de caché. Las solicitudes de resumen deshabilitan los sidecars de búsqueda y medios. Las herramientas alojadas por el proveedor conservan sus declaraciones con `tool_choice: none`, igual que una elección de herramienta obligatoria, sin cambiar el catálogo anunciado. Si la solicitud anuncia una herramienta de búsqueda sidecar, como Exa, la compactación sí cambia ese prefijo de herramientas. Un resumen que intenta llamar a una herramienta falla sin publicar la llamada ni reemplazar el historial. Un resumen correcto devuelve exactamente un elemento de compactación. Con la recuperación de contexto desactivada, se conservan la normalización de imágenes y el único reintento con reducción adicional después de HTTP 413.
 - `anthropicImageContextRecovery: true` habilita un intento de recuperación tras un HTTP 413 del proveedor por contexto con imágenes.
-  El proxy resume una parte anterior y completa de la conversación con las herramientas deshabilitadas y reenvía
-  una solicitud más pequeña que conserva la imagen más reciente y el turno actual. Ambos envíos usan la credencial,
-  la URL de Messages, los presupuestos de envíos y gasto y la señal de cancelación originales. El proveedor puede
-  cobrar el resumen. Si cambia la cuenta o el endpoint, el proxy devuelve el rechazo. La opción está desactivada
+  El proxy resume una parte anterior y completa de la conversación con las herramientas y el razonamiento
+  deshabilitados y reenvía una solicitud más pequeña que conserva la imagen más reciente y el turno actual.
+  El proveedor puede cobrar el resumen, cuyo límite de salida es de 1.024 tokens o el límite enviado en
+  la solicitud original, el que sea menor. Ambos envíos usan la credencial, la URL de Messages, los presupuestos
+  de envíos y gasto y la señal de cancelación originales. El proxy devuelve el rechazo si el tramo propuesto
+  incluye una instrucción de desarrollador, si un envío de recuperación no puede reservar gasto con un límite
+  activo o si cambia la cuenta o el endpoint. La opción está desactivada
   por defecto y se aplica a las solicitudes enrutadas por este adaptador, incluidos los puentes de búsqueda y medios
   cuando su contabilidad de envíos permite la recuperación.
 - El razonamiento de la repetición Anthropic Messages comparte el presupuesto de traducción de la solicitud, incluida la sobrecarga de codificación/decodificación de copias. Las peticiones que la superan devuelven HTTP 413 con `translation_buffer_limit`; las firmas y los datos de razonamiento opacos nunca se truncan para encajar. Native Anthropic passthrough utiliza su contrato de tamaño de cuerpo separado.

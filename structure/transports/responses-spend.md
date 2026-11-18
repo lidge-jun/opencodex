@@ -313,10 +313,10 @@ for the commit, and a child that fails or never commits forwards nothing. Withou
 and the settlement would read the usage back off the bridged Responses wire, which carries no
 `providerCredits` and derives its input count from the context checkpoint.
 
-Unconfigured requests preserve the legacy counter observer: reservations increment the send
-counter, refunds decrement it, and named reports reconcile prepaid sends. Enforced requests use
-the seed and physical-start protocol below across Responses, native Messages and native Chat.
-Each transport claims immediately before inference I/O and retains a producer through completion.
+Unconfigured requests keep the legacy counter observer. Reservations increment the send counter,
+refunds decrement it, and named reports reconcile prepaid sends. Enforced Responses, native Messages
+and native Chat sends claim immediately before inference I/O and retain a producer through completion.
+Direct [Anthropic image-context recovery](../providers/anthropic-cache-lifecycle.md) uses a separate seed for each leg.
 
 A request fixes its enforcement mode and physical-send limit L at its first actual spend admission
 or start. Translated turns carrying hosted Advisor tools or replay capture numeric ceilings at

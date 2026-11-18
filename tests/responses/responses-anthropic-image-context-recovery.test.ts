@@ -3,6 +3,7 @@ import { createRequestExecutionBudget } from "../../src/lib/request-execution-bu
 import { registerUpstreamRewriter } from "../../src/plugins/upstream-hooks";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { markResponseNonReplayable } from "../../src/lib/upstream-retry";
+import { sharedSpendLedger } from "../../src/lib/spend-reservation-ledger";
 import { completion, credential, fixture, image413, providerName, target } from "../helpers/anthropic-image-413-fixture";
 
 for (const lane of ["direct", "search", "media"] as const) {
@@ -54,6 +55,74 @@ test("image-context recovery needs budget for both summary and resend before it 
   expect(result.response.status).toBe(413);
   expect(result.sent).toHaveLength(1);
   expect(budget.used).toBe(1);
+});
+
+test("direct image-context recovery reserves and records each leg before using more pool spend", async () => {
+  const reservedAtDispatch: number[] = [];
+  const handle: Parameters<typeof fixture>[0]["handle"] = (_wire, index) => {
+    reservedAtDispatch.push(sharedSpendLedger().snapshot("pool", providerName)?.reserved ?? 0);
+    return index === 1 ? image413() : completion(index === 2 ? "Old image summary" : "Recovered fixture response");
+  };
+  const ample = await fixture({ enabled: true, maxOutputTokens: 256, spendCeiling: 100_000, handle });
+  expect(ample.response.status).toBe(200);
+  expect(ample.text).toContain("Recovered fixture response");
+  expect(ample.sent).toHaveLength(3);
+  expect(ample.spendDispatchCount).toBe(3);
+
+  const [initial, summary, resend] = reservedAtDispatch;
+  expect(initial).toBeGreaterThan(0);
+  for (const [ceiling, sends] of [[initial!, 1], [summary!, 2]] as const) {
+    reservedAtDispatch.length = 0;
+    const tight = await fixture({ enabled: true, maxOutputTokens: 256, spendCeiling: ceiling, handle });
+    expect(tight.response.status).toBe(413);
+    expect(tight.text).toContain("context_length_exceeded");
+    expect(tight.sent).toHaveLength(sends);
+    expect(tight.spendDispatchCount).toBe(sends);
+  }
+  expect(summary! - initial!).toBeGreaterThan(256);
+  expect(resend! - summary!).toBeGreaterThan(256);
+});
+
+test("image-context recovery declines a captured pool ceiling without a spend observer", async () => {
+  const budget = createRequestExecutionBudget();
+  const result = await fixture({ enabled: true, spendCeiling: 100_000, requestOptions: { sendBudget: budget },
+    handle: (_wire, index) => index === 1 ? image413() : completion("Unexpected recovery") });
+  expect(result.response.status).toBe(413);
+  expect(result.sent).toHaveLength(1);
+  expect(budget.used).toBe(1);
+});
+
+for (const maxOutputTokens of [256, 2048]) {
+  test(`image-context summary honors the wire output limit ${maxOutputTokens} with configured default reasoning`, async () => {
+    const result = await fixture({ enabled: true, maxOutputTokens, reasoningDefault: true,
+      handle: (_wire, index) => index === 1 ? image413() : completion(index === 2 ? "Old image summary" : "Recovered fixture response") });
+    expect(result.response.status).toBe(200);
+    expect(result.sent).toHaveLength(3);
+    const [original, summary, resend] = result.sent.map(send => JSON.parse(send.body));
+    expect(original.max_tokens).toBe(maxOutputTokens);
+    expect(summary.max_tokens).toBe(Math.min(1024, original.max_tokens));
+    expect(summary.thinking?.type ?? "disabled").toBe("disabled");
+    expect(resend.max_tokens).toBe(maxOutputTokens);
+  });
+}
+
+test("image-context recovery declines a cut containing a developer instruction", async () => {
+  const result = await fixture({ enabled: true, instructionRole: "developer",
+    handle: (_wire, index) => index === 1 ? image413() : completion("Fixture summary omitting the instruction") });
+  expect(result.sent[0]!.body).toContain("Retain this instruction verbatim.");
+  expect(result.response.status).toBe(413);
+  expect(result.sent).toHaveLength(1);
+});
+
+test("image-context recovery preserves separate system instructions verbatim", async () => {
+  const result = await fixture({ enabled: true, instructionRole: "system",
+    handle: (_wire, index) => index === 1 ? image413() : completion("Fixture summary") });
+  expect(result.response.status).toBe(200);
+  expect(result.sent).toHaveLength(3);
+  const system = result.sent.map(send => JSON.parse(send.body).system);
+  expect(JSON.stringify(system[0])).toContain("Retain this instruction verbatim.");
+  expect(system[1]).toEqual(system[0]);
+  expect(system[2]).toEqual(system[0]);
 });
 
 for (const cancelAt of [1, 2]) {

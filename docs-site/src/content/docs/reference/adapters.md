@@ -424,10 +424,12 @@ MiMo model Command Code serves.
   history. A successful summary returns exactly one compaction item. With image-context recovery off, requests
   continue to use the existing image normalization and single tighter-image retry after HTTP 413.
 - `anthropicImageContextRecovery: true` enables one recovery after an upstream image-context HTTP 413.
-  The proxy summarizes an older complete part of the conversation with tools disabled, then makes
-  one smaller resend that retains the newest image and the current turn. Both sends use the
-  original credential, Messages URL, send and spend budgets, and cancellation signal. The summary
-  may be billed. If the account or endpoint changes, the proxy returns the refusal. This option
+  The proxy summarizes an older complete part of the conversation with tools and reasoning disabled,
+  then makes one smaller resend that retains the newest image and the current turn. The billable
+  summary is limited to 1,024 output tokens or the original wire limit, whichever is lower.
+  Both sends use the original credential, Messages URL, send and spend budgets, and cancellation
+  signal. The proxy returns the refusal if the proposed cut covers a developer instruction,
+  a recovery leg cannot reserve spend under an enforced ceiling, or the account or endpoint changes. This option
   defaults to off and applies to routed requests through this adapter, including search and media
   bridges when their send accounting can admit recovery.
 - Translated Anthropic Messages reasoning replay shares the request translation budget, including

@@ -35,5 +35,9 @@ export function splitAnthropicImageContext(messages: OcxMessage[]): {
     }
     sawImage ||= inlineImage(message);
   }
-  if (cut > 0) return { history: messages.slice(0, cut), retained: messages.slice(cut) };
+  if (cut === 0) return;
+  const history = messages.slice(0, cut);
+  // Only conversational turns can be replaced. Instruction roles have to stay verbatim.
+  if (history.some(({ role }) => role !== "user" && role !== "assistant" && role !== "toolResult")) return;
+  return { history, retained: messages.slice(cut) };
 }

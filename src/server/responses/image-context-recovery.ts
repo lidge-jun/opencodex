@@ -20,6 +20,12 @@ import { transientRetryPolicyFor } from "../../providers/key-failover";
 type RecoveryBudget = Pick<ResponsesSendBudget, "remainingTransientSendBudget" | "targetSendsUsed" | "imageRecoverySendReporter">;
 type ImageRecoveryTransport = Pick<ResponsesTransport, "pinAnthropicImageRecovery" | "noteRoutedAttemptSend">;
 type RecoveredExchange = { response: Response; request?: AdapterRequest };
+const SUMMARY_MAX_TOKENS = 1024;
+
+function wireOutputLimit({ body }: AdapterRequest): number | undefined {
+  const { max_tokens } = JSON.parse(body) as { max_tokens: number };
+  return Number.isSafeInteger(max_tokens) && max_tokens > 0 ? max_tokens : undefined;
+}
 
 export type AnthropicImageRecovery = (
   response: Response, parsed: OcxParsedRequest, adapter: ProviderAdapter, signal: AbortSignal,
@@ -91,10 +97,10 @@ export function createAnthropicImageRecovery(
     const originalBytes = Buffer.byteLength(pin.request.body, "utf8");
     const incoming: IncomingMeta = { headers: selectedForwardHeaders, completedToolBlocks,
       providerName: route.providerName, translatorBudget, abortSignal: signal };
-    const send = async (wire: AdapterRequest, input: OcxParsedRequest, minimum: number): Promise<Response> => {
+    const send = async (wire: AdapterRequest, input: OcxParsedRequest, minimum: number, outputLimit: number): Promise<Response> => {
       signal.throwIfAborted();
       if (!pin.isCurrent() || remaining() < minimum) throw new SendBudgetExhaustedError();
-      const receipt = deferPhysicalSendReporter(budget.imageRecoverySendReporter(wire.body, (JSON.parse(wire.body) as { max_tokens: number }).max_tokens));
+      const receipt = deferPhysicalSendReporter(budget.imageRecoverySendReporter(wire.body, outputLimit));
       try {
         const run = () => fetchWithHeaderTimeout(wire.url, {
           method: wire.method, headers: wire.headers, body: wire.body,
@@ -116,12 +122,13 @@ export function createAnthropicImageRecovery(
     try {
       signal.throwIfAborted();
       if (!pin.isCurrent()) return { response: retained };
-      const { max_tokens } = JSON.parse(pin.request.body) as { max_tokens: number };
-      if (!Number.isSafeInteger(max_tokens) || max_tokens <= 0) return { response: retained };
+      const originalLimit = wireOutputLimit(pin.request);
+      if (originalLimit === undefined) return { response: retained };
+      const summaryLimit = Math.min(originalLimit, SUMMARY_MAX_TOKENS);
       const summaryInput: OcxParsedRequest = {
         ...parsed, stream: false, _anthropicImageOwner: owner,
         _anthropicServerTools: undefined, _anthropicServerReplay: undefined,
-        options: { toolChoice: "none", maxOutputTokens: Math.min(max_tokens, 1024) },
+        options: { toolChoice: "none", reasoning: "none", thinkingEnabled: false, maxOutputTokens: summaryLimit },
         context: { ...parsed.context, tools: undefined, messages: [...split.history, {
           role: "user", timestamp: 0,
           content: `${COMPACT_PROMPT}\n\nReturn only the handoff summary. Do not call tools or continue the task.`,
@@ -131,7 +138,9 @@ export function createAnthropicImageRecovery(
       let summaryResponse: Response;
       try {
         if (!fits(summaryRequest) || !summaryRequest.body.includes('"type":"image"')) return { response: retained };
-        summaryResponse = await send(summaryRequest, summaryInput, 2);
+        const outputLimit = wireOutputLimit(summaryRequest);
+        if (outputLimit === undefined || outputLimit > summaryLimit) return { response: retained };
+        summaryResponse = await send(summaryRequest, summaryInput, 2, outputLimit);
       } finally { summaryRequest.releaseBodyObservation?.(); }
       if (!summaryResponse.ok) {
         void summaryResponse.body?.cancel().catch(() => {});
@@ -164,7 +173,9 @@ export function createAnthropicImageRecovery(
       const request = await adapter.buildRequest(successor, incoming);
       try {
         if (!fits(request)) return { response: retained };
-        const replacement = await send(request, successor, 1);
+        const outputLimit = wireOutputLimit(request);
+        if (outputLimit === undefined) return { response: retained };
+        const replacement = await send(request, successor, 1, outputLimit);
         if (replacement.ok) {
           parsed.context.messages = successor.context.messages;
           parsed._anthropicImageOwner = owner;
