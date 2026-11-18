@@ -627,7 +627,7 @@ export async function executeComboResponses(
     markProxyError(formatErrorResponse(400, "invalid_request_error", "No target of this combo can accept image input"));
   const warnComboImageOmission = (): void =>
     console.warn("[opencodex] combo has no image-capable target; images will be omitted");
-  const readCapability = () => comboCapabilityGate(config, combo, body, target => {
+  const readCapability = (currentCombo = combo) => comboCapabilityGate(config, currentCombo, body, target => {
     try {
       const route = routeConcreteModel(config, `${target.provider}/${target.model}`);
       const provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, options.inboundWire);
@@ -635,11 +635,11 @@ export async function executeComboResponses(
     } catch { return undefined; }
   }, (target, route) => capabilityCandidate(target) && (!route || routeAllowedByScope(admissionScope, route)),
   (route, parsed) => canDescribeComboImages({ config, req, options }, route, parsed));
-  const capabilityRefusal = (capability: Awaited<ReturnType<typeof readCapability>>): Response | undefined => {
+  const capabilityRefusal = (capability: Awaited<ReturnType<typeof readCapability>>, currentCombo = combo): Response | undefined => {
     if (capability.unservable === "audio") {
       return formatErrorResponse(400, "invalid_request_error", "No target of this combo can accept audio input");
     }
-    if (capability.unservable && combo.onUnservable === "reject") {
+    if (capability.unservable && currentCombo.onUnservable === "reject") {
       return capability.unservable === "context"
         ? formatErrorResponse(400, "invalid_request_error", "No target of this combo has a context window large enough for this request")
         : unservableImageResponse();
@@ -932,15 +932,18 @@ export async function executeComboResponses(
     let selectionUnavailable = false;
     let refreshedRefusal: Response | undefined;
     if ((pick.cooldownReprobeTargets || awaitedPinEffort) && !options.abortSignal?.aborted) {
-      // Another request can cool the target while the decision is awaited. Recheck current
-      // availability, request eligibility and any original reprobe reservation.
+      // Keep capability and selection on the same live combo even if the vision probe yields.
+      const rawCombo = Object.hasOwn(config.combos ?? {}, comboId) ? config.combos?.[comboId] : undefined;
+      const combos = rawCombo ? { [comboId]: { ...rawCombo, targets: rawCombo.targets.map(target => ({ ...target })) } } : {};
+      const selectionConfig = { ...config, combos };
+      const currentCombo = getCombo(selectionConfig, comboId);
       const previousUnservable = capability.unservable;
-      capability = await readCapability();
+      if (currentCombo) capability = await readCapability(currentCombo);
       if (options.abortSignal?.aborted) return clientCancelledResponse();
-      refreshedRefusal = capabilityRefusal(capability);
+      refreshedRefusal = currentCombo && capabilityRefusal(capability, currentCombo);
       omittingImages = capability.unservable === "image";
       if (!refreshedRefusal && previousUnservable !== capability.unservable) warnCapabilityDegradation(capability.unservable);
-      const currentChoices = refreshedRefusal ? [] : eligibleJevComboChoices(config, comboId, targetEligible, Date.now(), pick.cooldownReprobeTargets);
+      const currentChoices = refreshedRefusal ? [] : eligibleJevComboChoices(selectionConfig, comboId, targetEligible, Date.now(), pick.cooldownReprobeTargets);
       const current = currentChoices.find(choice => choice.candidate.key === decision.targetKey
         && (decision.effort === null ? choice.candidate.reasoningEfforts.length === 0
           : choice.candidate.reasoningEfforts.includes(decision.effort)));

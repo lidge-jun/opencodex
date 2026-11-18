@@ -13,7 +13,7 @@ diagnostic fields. Windows service-wrapper messages retain their wrapper format.
 position in configuration and targets by position plus the validated provider-id label from
 `src/lib/error-destination.ts`. Failure, cooldown-wait, reprobe and JEV debug lines omit raw
 combo aliases, model ids and URLs. JEV effort decision lines retain failed gates and decision usage
-if the pinned target becomes unavailable before dispatch. After a paid pinned effort call, the combo refreshes target capabilities before selecting a dispatch route. The pin reason reflects the final selection.
+if the pinned target becomes unavailable before dispatch. After a paid pinned effort call, the combo refreshes target capabilities and enumerates candidates from the same live combo snapshot, with the original request admission scope. The pin reason reflects the final selection.
 `src/combos/request.ts` effort diagnostics retain the
 validated provider and closed effort/capability fields, with no model field. The `capabilityPolicy: "union"`
 effort clamp in `src/combos/request-capability.ts` logs a debug line on bridge and native Chat children with the same validated provider
