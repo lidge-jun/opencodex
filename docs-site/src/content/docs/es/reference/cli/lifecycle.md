@@ -89,14 +89,18 @@ Una salida proxy sola no confirma que la restauración compartida Codex / Grok t
 
 En Windows, `ocx stop` detiene una tarea registrada del Programador de tareas o un servicio nativo WinSW mediante una parada verificada. Primero finaliza la tarea y después solo los procesos envoltorios `wscript.exe` y `cmd.exe` que puede vincular a esta instalación (el lanzador o script de servicio de este directorio, una cadena de procesos padres que conduce al proxy o al servicio del Programador de tareas, y una hora de inicio registrada), y espera a que terminen. Solo entonces detiene el proxy de forma controlada. Después confirma que el puerto permanezca libre unos seis segundos y que ningún envoltorio se haya reiniciado, para impedir que un bucle de reinicio vuelva a iniciar el proxy tras una parada exitosa.
 
-OpenCodex solo finaliza una tarea programada si verifica que inicia esta instalación y se ejecuta
-con tu cuenta de Windows. Si no puede comprobarlo, revisa el lanzador y la cuenta de ejecución
-en el Programador de tareas y detén la tarea desde la sesión de esa cuenta.
+OpenCodex verifica que la tarea programada inicie esta instalación con tu cuenta de Windows
+y comprueba la cuenta de cada instancia en ejecución antes de detenerla. Si la comprobación falla,
+revisa el lanzador y la cuenta de ejecución en el Programador de tareas y detén la tarea desde
+la sesión de esa cuenta.
 
 OpenCodex solo finaliza directamente un envoltorio si comprueba que pertenece a tu cuenta.
 Ignora los envoltorios que pertenecen a otro usuario. Si no puede verificar el propietario
 de un envoltorio que debe finalizar, detenlo desde la sesión de su propietario con el
 Administrador de tareas y vuelve a intentarlo.
+Si OpenCodex no puede confirmar que un envoltorio terminó porque no dispone de un identificador
+de objeto de proceso (handle), como puede ocurrir en ARM64, compruébalo en el Administrador de tareas desde la sesión
+de su propietario, detenlo si sigue en ejecución y vuelve a intentarlo.
 
 Si no puede demostrarse que el servicio se detuvo, `ocx stop` no envía una solicitud de parada al proxy, deja intacta la configuración del cliente y falla. Con `--json`, el resumen conserva `outcome: "failed"` y `proxy: "unknown"`, y añade `serviceStopReason`:
 

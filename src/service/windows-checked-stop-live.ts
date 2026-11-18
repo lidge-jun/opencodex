@@ -21,16 +21,15 @@ import { join } from "node:path";
 import { inspectOcxStartProcessIdentity, readPid, verifyPidIdentity, type OcxStartIdentityObservation } from "../config/process-state";
 import { isProcessAlive } from "../lib/process-control";
 import { isTestHomeGuardArmed } from "../lib/test-home-guard";
-import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsSchtasksExe, resolveTrustedWindowsSystemDirectory, toWindowsSchtasksError } from "../lib/windows-elevation";
-import { resolveCurrentWindowsPrincipalAsync } from "../lib/windows-user-principal";
+import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsSchtasksExe, resolveTrustedWindowsSystemDirectory } from "../lib/windows-elevation";
 import { WINSW_SERVICE_ID, winswExePath, type WinswStatus } from "../lib/winsw";
 import { decodeWindowsTextBytes } from "../lib/windows-text";
 import { parseScQcBinaryPathName, scBinaryPathNamesExecutable } from "../service-manager-probe";
 import { parseListenPidsFromNetstat, type ListenPidScan } from "../server/port-reclaim";
 import { dropWindowsTcpRowsForLocalPort } from "../server/windows-tcp-drop";
 import { TASK, windowsLauncherVbsPath, windowsServiceScriptPath } from "./state";
-import { ancestorWrapperPids, windowsTaskRegistrationIsOurs } from "./windows-guarded-manager";
-import type { WindowsCheckedStopDeps, WindowsTaskEndResult, WindowsWinswScmState, WindowsWinswStopResult } from "./windows-checked-stop";
+import { ancestorWrapperPids } from "./windows-guarded-manager";
+import type { WindowsCheckedStopDeps, WindowsWinswScmState, WindowsWinswStopResult } from "./windows-checked-stop";
 import {
   openWindowsProcessWatch,
   readScheduleServicePid,
@@ -41,7 +40,7 @@ import {
 import { windowsProcessNative, type WindowsProcessNativeApi, type WindowsTerminateResult } from "./windows-process-native";
 import type { WindowsListenerIdentity, WindowsPortSample, WindowsStopConfirmDeps } from "./windows-stop-confirm";
 import { windowsSchedulerCsvIncludesTask } from "./windows-scheduler";
-import { cachedWindowsTaskUserIds, windowsTaskActionMatches, windowsTaskPrincipalMatches } from "./windows-taskxml";
+import { WINDOWS_TASK_INSTANCE_STOP_SCRIPT, verifyWindowsTaskStopProof } from "./windows-task-instance-stop";
 
 export interface WindowsStopCommandResult {
   status: number | null;
@@ -55,6 +54,7 @@ export type WindowsStopCommandRunner = (
   program: "schtasks" | "sc" | "powershell",
   args: string[],
   timeoutMs: number,
+  authorizeProof?: (line: string) => boolean,
 ) => Promise<WindowsStopCommandResult>;
 
 function programPath(program: "schtasks" | "sc" | "powershell"): string {
@@ -65,7 +65,7 @@ function programPath(program: "schtasks" | "sc" | "powershell"): string {
   return file;
 }
 
-export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, args, timeoutMs) => new Promise(resolve => {
+export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, args, timeoutMs, authorizeProof) => new Promise(resolve => {
   // execFile reads a 0 timeout as "no timeout": a deadline-derived fraction is floored, and a
   // timeout that floors to 0 spawns nothing.
   const timeout = Math.floor(timeoutMs);
@@ -75,9 +75,9 @@ export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, 
   }
   // Task Scheduler and the SCM are machine-global: an armed test process may only observe.
   // `sc query` and `sc qc` only read the SCM row and its registration.
-  const mutating = program === "schtasks"
+  const mutating = authorizeProof !== undefined || (program === "schtasks"
     ? args[0]?.toLowerCase() !== "/query"
-    : program === "sc" && !["query", "qc"].includes((args[0] ?? "").toLowerCase());
+    : program === "sc" && !["query", "qc"].includes((args[0] ?? "").toLowerCase()));
   if (isTestHomeGuardArmed() && mutating) {
     resolve({ status: null, stdout: "", stderr: "refusing a machine-global service mutation from an armed test process", timedOut: false });
     return;
@@ -89,7 +89,7 @@ export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, 
     resolve({ status: null, stdout: "", stderr: error instanceof Error ? error.message : String(error), timedOut: false });
     return;
   }
-  execFile(file, args, { encoding: "buffer", timeout, windowsHide: true, maxBuffer: 1024 * 1024 },
+  const helper = execFile(file, args, { encoding: "buffer", timeout, windowsHide: true, maxBuffer: 1024 * 1024 },
     (error, stdout, stderr) => {
       const text = (value: Buffer | string | undefined): string =>
         value === undefined ? "" : typeof value === "string" ? value : decodeWindowsTextBytes(value);
@@ -101,17 +101,23 @@ export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, 
         timedOut: !!failure?.killed && failure.signal !== null,
       });
     });
+  if (authorizeProof) {
+    let pending = "";
+    const onProof = (chunk: Buffer): void => {
+      pending += chunk.toString("latin1");
+      const end = pending.indexOf("\n");
+      if (end < 0) return;
+      helper.stdout?.off("data", onProof);
+      let approved = false;
+      try {
+        approved = authorizeProof(pending.slice(0, end).replace(/\r$/, ""));
+      } catch { /* An authorizer failure leaves stdin unapproved. */ }
+      helper.stdin?.end(approved ? "stop\n" : "\n");
+    };
+    helper.stdin?.on("error", () => { /* execFile reports the helper's exit or timeout. */ });
+    helper.stdout?.on("data", onProof);
+  }
 });
-
-/** schtasks /end, mapped: already stopped is not-running; access denied is denied. */
-export function classifyTaskEnd(result: WindowsStopCommandResult): WindowsTaskEndResult {
-  if (result.timedOut) return "failed";
-  if (result.status === 0) return "ended";
-  const error = Object.assign(new Error(result.stderr || result.stdout), { status: result.status, stderr: result.stderr, stdout: result.stdout });
-  const detail = (result.stderr + "\n" + result.stdout).toLowerCase();
-  if (detail.includes("no running instance") || detail.includes("not currently running") || detail.includes("0x41330")) return "not-running";
-  return toWindowsSchtasksError(error, ["/end", "/tn", TASK]).reason === "access-denied" ? "denied" : "failed";
-}
 
 /**
  * Status words of `schtasks /query /fo CSV /nh`. schtasks localizes the column from its .mui
@@ -122,8 +128,6 @@ export function classifyTaskEnd(result: WindowsStopCommandResult): WindowsTaskEn
  */
 const TASK_CSV_RUNNING = new Set(["running", "正在运行", "실행 중"]);
 const TASK_CSV_NOT_RUNNING = new Set(["ready", "disabled", "queued", "就绪", "已禁用", "已排队", "준비"]);
-/** ERROR_ACCESS_DENIED in the locales whose status words are read above (zh-CN, ko-KR). */
-const LOCALIZED_ACCESS_DENIED = /拒绝访问|액세스가 거부/;
 
 export function parseTaskCsvState(csv: string): "running" | "not-running" | "unknown" {
   for (const line of csv.split(/\r?\n/)) {
@@ -218,21 +222,9 @@ export interface WindowsCheckedStopLiveOptions {
    * executable. Defaults to the capped runner; tests inject it.
    */
   scQcRun?: (timeoutMs: number) => Promise<WindowsStopCommandResult>;
-  /** Capped effective-account lookup for the task's exported run-as principal. */
-  taskUserIds?: (timeoutMs: number) => Promise<readonly string[] | null>;
   /** Checked before every manager command (the route's cap, the updater's authorizer). */
   gate?: () => boolean;
   snapshot?: (timeoutMs: number) => Promise<readonly WindowsStopProcessEntry[] | null>;
-}
-
-async function currentTaskUserIds(timeoutMs: number): Promise<readonly string[] | null> {
-  if (process.platform !== "win32") return null;
-  try {
-    await resolveCurrentWindowsPrincipalAsync(timeoutMs);
-    return cachedWindowsTaskUserIds();
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -304,29 +296,19 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
     async endTask(timeoutMs) {
       if (!gate()) return "failed";
       const deadline = performance.now() + timeoutMs;
-      const [definition, userIds] = await Promise.all([
-        run("schtasks", ["/query", "/tn", TASK, "/xml"], timeoutMs),
-        (options.taskUserIds ?? currentTaskUserIds)(timeoutMs),
-      ]);
       const launcher = windowsLauncherVbsPath();
-      if (definition.status !== 0 || definition.timedOut || userIds === null
-        || !windowsTaskRegistrationIsOurs(definition.stdout, userIds, launcher)
-        || !windowsTaskActionMatches(definition.stdout, launcher)
-        || !windowsTaskPrincipalMatches(definition.stdout, userIds)) return "unverified-registration";
-      const endTimeout = wholeTimeoutMs(deadline - performance.now());
-      if (endTimeout === null || !gate()) return "unverified-registration";
-      const ended = await run("schtasks", ["/end", "/tn", TASK], endTimeout);
-      const verdict = classifyTaskEnd(ended);
-      // schtasks localizes "no running instance" as well (#8863). After a real nonzero exit, an
-      // idle task is not-running only when its own CSV state says so; a running or unreadable
-      // state, a timeout, or an /end that never ran keeps the failure. A localized denial stays a
-      // denial: Part A stops at it whatever the task's state.
-      if (verdict !== "failed" || ended.timedOut || ended.status === null) return verdict;
-      if (LOCALIZED_ACCESS_DENIED.test(ended.stderr + "\n" + ended.stdout)) return "denied";
-      const left = Math.floor(deadline - performance.now());
-      if (left < 1) return "failed";
-      const csv = await run("schtasks", ["/query", "/tn", TASK, "/fo", "CSV", "/nh"], left);
-      return csv.status === 0 && !csv.timedOut && parseTaskCsvState(csv.stdout) === "not-running" ? "not-running" : "failed";
+      const script = Buffer.from(WINDOWS_TASK_INSTANCE_STOP_SCRIPT, "utf16le").toString("base64");
+      let approved = false;
+      const ended = await run("powershell", ["-NoProfile", "-NoLogo", "-NonInteractive", "-EncodedCommand", script], timeoutMs,
+        line => {
+          approved = verifyWindowsTaskStopProof(line, launcher) && performance.now() < deadline && gate();
+          return approved;
+        });
+      if (ended.timedOut || ended.status !== 0) return "failed";
+      const verdict = ended.stdout.trim().split(/\r?\n/).at(-1);
+      if (verdict === "unverified-registration" || verdict === "denied") return verdict;
+      if (approved && (verdict === "ended" || verdict === "not-running")) return verdict;
+      return "failed";
     },
     async taskState(timeoutMs) {
       const started = Date.now();

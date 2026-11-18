@@ -90,22 +90,29 @@ describe("checked Windows stop, part A", () => {
     expect(describeWindowsPartA(result)).toContain("Task Manager");
   });
 
-  test("a foreign run-as principal refuses /end even when the task action and triggers match", async () => {
+  test("a foreign run-as principal refuses the task stop even when the action and triggers match", async () => {
     const xml = buildWindowsTaskXml(undefined, windowsLauncherVbsPath(), undefined, userSid)
       .replace('<Principal id="Author">', '<Principal id="Author"><UserId>S-1-5-21-100-200-300-1002</UserId>');
+    const proof = Buffer.from(JSON.stringify({ xml, sid: userSid }), "utf8").toString("base64");
     const commands: string[] = [];
-    const run: WindowsStopCommandRunner = async (program, args) => {
-      commands.push(program + " " + args.join(" "));
-      return { status: 0, stdout: xml, stderr: "", timedOut: false };
+    const run: WindowsStopCommandRunner = async (program, args, _timeout, authorizeProof) => {
+      commands.push(program + " " + args[0]);
+      expect(authorizeProof?.(proof)).toBe(false);
+      return { status: 0, stdout: "unverified-registration", stderr: "", timedOut: false };
     };
-    const identity = { taskUserIds: async () => [userSid] };
-    const { endTask } = windowsCheckedStopLiveDeps({ run, ...identity });
+    const { endTask } = windowsCheckedStopLiveDeps({ run });
     const h = harness({ endTask }, []);
     const result = await stopWindowsServiceChecked(h.deps);
-    expect(commands).toEqual(["schtasks /query /tn opencodex-proxy /xml"]);
+    expect(commands).toEqual(["powershell -NoProfile"]);
     expect(result).toMatchObject({ outcome: "unknown", reason: "evidence-unreadable", changed: false });
     expect(describeWindowsPartA(result)).toContain("run-as account");
     expect(describeWindowsPartA(result)).toContain("Task Scheduler");
+  });
+
+  test("a verified idle task with no wrappers needs no mutation", async () => {
+    const h = harness({ endTask: () => "not-running" }, []);
+    const result = await stopWindowsServiceChecked(h.deps);
+    expect(result).toMatchObject({ outcome: "stopped", changed: false });
   });
 
   test.each([false, true])("another user's path-only wrapper cannot veto the stop (registered=%s)", async registered => {

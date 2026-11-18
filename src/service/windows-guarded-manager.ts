@@ -34,7 +34,7 @@ import { probeWindowsSchedulerTask, querySchtasks, type WindowsSchedulerTaskProb
 import { windowsWscript } from "./windows-wscript";
 import { windowsTaskRegistrationHealthy, windowsTaskRegistrationRefreshableLegacy } from "./windows-taskxml";
 import { commandLineHasPathToken } from "./windows-command-line-token";
-import { parseWindowsProcessSnapshot, WINDOWS_PROCESS_SNAPSHOT_SCRIPT } from "./windows-process-evidence";
+import { parseWindowsProcessSnapshot, windowsProcessSnapshotScript } from "./windows-process-evidence";
 
 // Re-exported for existing importers; the function lives in a leaf module to keep the binding rule
 // (windows-stop-binding.ts) free of an import cycle with this inspection.
@@ -120,7 +120,7 @@ export function windowsProcessList(): WindowsProcessEntry[] | null {
   try {
     // Share owner evidence, but do not add creation-time/terminate authority to this
     // inspection-only table. Part A still requires windowsProcessSnapshot's native overlay.
-    return parseWindowsProcessSnapshot(runPowerShell(WINDOWS_PROCESS_SNAPSHOT_SCRIPT))
+    return parseWindowsProcessSnapshot(runPowerShell(windowsProcessSnapshotScript()))
       ?.map(({ pid, parentPid, name, commandLine, foreignOwner }) => ({ pid, parentPid, name, commandLine, foreignOwner })) ?? null;
   } catch {
     return null;

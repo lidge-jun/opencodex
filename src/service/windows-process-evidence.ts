@@ -20,6 +20,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsSystemDirectory } from "../lib/windows-elevation";
+import { windowsLauncherVbsPath, windowsServiceScriptPath } from "./state";
 import type { WindowsProcessEntry } from "./windows-guarded-manager";
 import {
   windowsProcessNative,
@@ -92,31 +93,42 @@ function powershellArgs(script: string): string[] {
 /**
  * Owner enrichment admits at most 32 candidates within 1.5 s; individual CIM calls also
  * have a 1 s operation cap. Unqueried owners stay unknown and every process row survives.
- * Owner reads only cover possible wrapper candidates. The
- * fixed basename prefix covers the guarded path's image-independent matches too, without
- * embedding a home path in this helper's own command line. A fresh CIM read after GetOwnerSid
- * binds that owner to the original creation time; a reused PID cannot prove a foreign owner.
+ * Owner reads prioritize this home's complete launcher/script tokens before other possible
+ * wrapper candidates. A fresh CIM read after GetOwnerSid binds that owner to the original
+ * creation time; a reused PID cannot prove a foreign owner.
  */
-export const WINDOWS_PROCESS_SNAPSHOT_SCRIPT = [
-  "$currentSid = $null; try { $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch { $currentSid = $null };",
-  "$ownerBudget = @{ Remaining = 32; Clock = $null };",
-  "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,",
-  "@{Name='CreationDate';Expression={ if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { $null } }},",
-  "@{Name='CurrentUserSid';Expression={ $currentSid }},",
-  "@{Name='Owner';Expression={",
-  "  if ($null -eq $ownerBudget.Clock) { $ownerBudget.Clock = [Diagnostics.Stopwatch]::StartNew() };",
-  "  if ($currentSid -and $ownerBudget.Remaining -gt 0 -and $ownerBudget.Clock.ElapsedMilliseconds -lt 1500 -and (($_.Name -match '^(wscript|cscript|cmd)\\.exe$') -or (-not $_.Name) -or ($_.CommandLine -like '*opencodex-service*'))) {",
-  "    $ownerBudget.Remaining--;",
-  "    try {",
-  "      $owner = Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -OperationTimeoutSec 1 -ErrorAction Stop;",
-  "      if ($ownerBudget.Clock.ElapsedMilliseconds -ge 1500) { return $null };",
-  "      $after = Get-CimInstance -InputObject $_ -OperationTimeoutSec 1 -ErrorAction Stop;",
-  "      @{ Sid = $owner.Sid; ReturnValue = $owner.ReturnValue;",
-  "         CreationDate = if ($after.CreationDate) { $after.CreationDate.ToUniversalTime().ToString('o') } else { $null } }",
-  "    } catch { $null }",
-  "  } else { $null }",
-  "}} | ConvertTo-Json -Depth 3 -Compress",
-].join(" ");
+export function windowsProcessSnapshotScript(): string {
+  // The helper's own command line must not contain either installation path as a token.
+  const paths = [windowsLauncherVbsPath(), windowsServiceScriptPath()]
+    .map(path => Buffer.from(path, "utf8").toString("base64"));
+  return [
+    "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false);",
+    "$currentSid = $null; try { $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch { $currentSid = $null };",
+    "$tokens = @('" + paths.join("','") + "') | ForEach-Object { [regex]::Escape([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_))) };",
+    "$homePath = '(?:^|[\\s\\x22\\x27])(?:' + ($tokens -join '|') + ')(?=$|[\\s\\x22\\x27])';",
+    "$rows = @(Get-CimInstance Win32_Process -ErrorAction Stop);",
+    "$priority = @($rows | Where-Object { $_.CommandLine -match $homePath });",
+    "$fallback = @($rows | Where-Object { $_.CommandLine -notmatch $homePath -and",
+    "  (($_.Name -match '^(wscript|cscript|cmd)\\.exe$') -or (-not $_.Name) -or ($_.CommandLine -like '*opencodex-service*')) });",
+    "$ownerBudget = @{ Remaining = 32; Clock = [Diagnostics.Stopwatch]::StartNew() };",
+    "$owners = @{};",
+    "foreach ($process in ($priority + $fallback)) {",
+    "  if (!$currentSid -or $ownerBudget.Remaining -le 0 -or $ownerBudget.Clock.ElapsedMilliseconds -ge 1500) { break };",
+    "  $ownerBudget.Remaining--;",
+    "  try {",
+    "    $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -OperationTimeoutSec 1 -ErrorAction Stop;",
+    "    if ($ownerBudget.Clock.ElapsedMilliseconds -ge 1500) { break };",
+    "    $after = Get-CimInstance -InputObject $process -OperationTimeoutSec 1 -ErrorAction Stop;",
+    "    $owners[$process.ProcessId] = @{ Sid = $owner.Sid; ReturnValue = $owner.ReturnValue;",
+    "      CreationDate = if ($after.CreationDate) { $after.CreationDate.ToUniversalTime().ToString('o') } else { $null } };",
+    "  } catch { continue }",
+    "};",
+    "$rows | Select-Object ProcessId,ParentProcessId,Name,CommandLine,",
+    "@{Name='CreationDate';Expression={ if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { $null } }},",
+    "@{Name='CurrentUserSid';Expression={ $currentSid }},",
+    "@{Name='Owner';Expression={ $owners[$_.ProcessId] }} | ConvertTo-Json -Depth 3 -Compress",
+  ].join(" ");
+}
 
 const SID_PATTERN = /^S-1-\d+(?:-\d+){1,15}$/i;
 const USER_ACCOUNT_SID_PATTERN = /^S-1-(?:5-21|12-1)(?:-\d{1,10}){4}$/i;
@@ -199,7 +211,7 @@ export async function windowsProcessSnapshot(options: WindowsEvidenceOptions): P
   try {
     entries = parseWindowsProcessSnapshot(await run({
       program: "powershell",
-      args: powershellArgs(WINDOWS_PROCESS_SNAPSHOT_SCRIPT),
+      args: powershellArgs(windowsProcessSnapshotScript()),
       timeoutMs: options.timeoutMs,
       maxBufferBytes: SNAPSHOT_MAX_BUFFER,
     }));

@@ -30,12 +30,12 @@ lazily, caches a failed load as unavailable, and closes every handle in a `final
 
 Windows ARM64, other platforms and any test that simulates a platform get no native API.
 `src/service/windows-process-evidence.ts` is the facade the operations use. Its process snapshot is
-one capped PowerShell snapshot that emits `CreationDate` as an ISO UTC string. It reads owner
-SIDs only for wrapper images, unreadable images, and command lines containing the fixed
-`opencodex-service` basename prefix (the guarded path also considers other images). Owner
-enrichment admits at most 32 candidates while its 1.5 s budget remains, with a 1 s
-operation timeout on each owner/refresh call. Exhaustion retains every row with unknown ownership.
-The budget starts with row projection, after the initial enumeration; the refresh is skipped if
+one capped PowerShell snapshot that emits UTF-8 JSON and uses ISO UTC for `CreationDate`.
+It reads owner SIDs for command lines carrying this home's launcher or service script as complete
+tokens first, then other wrapper images, unreadable images, and command lines containing the fixed
+`opencodex-service` basename prefix. Owner enrichment admits at most 32 candidates within
+1.5 s after enumeration and prioritization, with a 1 s operation timeout on each owner or refresh
+call. Every row is retained and skipped owners remain unknown. The refresh is skipped if
 the owner query spends the budget. Owner verification requires a successful `GetOwnerSid`,
 valid local/domain or Entra ID SIDs, and a fresh CIM read reporting the original creation time.
 Matching SIDs prove the current account. Different supported SIDs prove a foreign account.
@@ -75,13 +75,13 @@ process enumeration, including when WinSW is stopped, so ancestry and stray-wrap
 are checked before a stop can be confirmed. Admission then compares the time left on the
 caller's deadline, which already excludes these first steps, with the worst case still to come,
 and returns `unverified-budget` without changing anything when it does not fit. It binds, ends
-the task (definition, principal, and `schtasks /end` share 2 s) or stops WinSW (a
+the task's verified running instances (2 s for proof and stop together) or stops WinSW (a
 2 s stop command and an SCM poll capped at `<stoptimeout>` + 2 s), terminates bound survivors
 deepest first, waits on the bind-time watches (terminates and wait share 3 s), and reads the
 manager state once (1 s). Denied stops every further step. A cap overrun is `unknown`. A wrapper or
 manager still running is `survived` (`unbound-wrapper` when the survivor was never bound). WinSW
 is `survived` while the proxy is still alive after the service reports stopped. The authorizer
-variant `guardedStopWindowsServiceChecked` runs its authorizer at entry, before each manager stop (/end, the WinSW stop) and before each terminate and
+variant `guardedStopWindowsServiceChecked` runs its authorizer at entry, before each manager stop and before each terminate and
 reports a refusal as `WindowsCheckedStopRefusedError` with what had already happened.
 
 Each step that asks the machine runs under a cap that races a timer and rechecks the elapsed time
@@ -114,17 +114,31 @@ window.
 asynchronous `schtasks` and `sc.exe` calls through `execFile` (a deadline-derived timeout is
 floored to whole milliseconds and one that floors to 0 spawns nothing, because `execFile` reads 0
 as no timeout), the evidence snapshot `windowsProcessSnapshot` for every bind, the checked
-terminate, the exit watch, the Part B port sampler and the listener identity. Before `/end`,
-the live adapter reads the registered XML and checks the recognized task shape, exact launcher
-path, and the single run-as principal against the current Windows account. Trigger user IDs
-are checked separately from the principal. Failed proof returns `evidence-unreadable` with
-instructions to verify the task in Task Scheduler and stop it from its owning session. The
-proof and the name-based end are separate scheduler commands. The task's running state is read from `schtasks /query /fo CSV`. The status words observed from shipped zh-CN and
+terminate, the exit watch, the Part B port sampler and the listener identity.
+`src/service/windows-task-instance-stop.ts` keeps the root registration and its running instances
+in one Task Scheduler COM session. It passes the registered XML and the helper's current account as
+base64 UTF-8 to preserve Unicode through the console. The live adapter checks the recognized task
+shape, the exact launcher, and the single run-as principal. Trigger user IDs are checked separately.
+The helper requires a successful same-account SID check for every `EnginePID`, with the process
+creation time re-read after the owner lookup. After approval it re-reads the registration XML and
+refreshes every captured instance to verify that its GUID, engine PID and running state still agree.
+It stops each captured `IRunningTask` by instance GUID. An empty collection counts as idle only if
+the task is ready or disabled. Failed proof returns `evidence-unreadable` with instructions to
+verify the task in Task Scheduler and stop it from its owning session.
+
+The Scheduler exposes current registration XML separately from instance identity. An instance
+already running under the same account from an earlier definition can still be visible under that
+path. Changing the registered definition requires task write access, normally held by the task
+owner, Administrators and SYSTEM. Those principals can already stop tasks they own or administer.
+A replacement launched after capture has a separate GUID and cannot be stopped by the captured
+objects. The final manager-state probe checks whether the task is still running.
+[Task Scheduler permissions](https://learn.microsoft.com/en-us/windows/win32/taskschd/security-contexts-for-running-tasks)
+[Instance stop protocol](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-tsch/b3572584-8727-441f-83e6-9b02101ea7f4)
+
+The task's running state is read from `schtasks /query /fo CSV`. The status words observed from shipped zh-CN and
 ko-KR resources are recognized there (#8863), because a cold `Get-ScheduledTask` takes 1.6 s to
-4.9 s and cannot finish inside the 1 s cap; any other localized word still falls back to it. A
-`schtasks /end` that fails with a localized message is `not-running` only when the same CSV read,
-inside the end command's own cap, shows the task idle; a zh-CN or ko-KR access denial stays
-`denied` without that read. A running WinSW service is only this home's manager
+4.9 s and cannot finish inside the 1 s cap. Any other localized word still falls back to it.
+The instance stop maps an access-denied HRESULT to `denied`. A running WinSW service is only this home's manager
 when `sc qc` shows a `BINARY_PATH_NAME` naming this installation's WinSW executable, the same
 proof the guarded manager path uses: the service ID is fixed, so a successful `sc query` alone
 would let Part A stop another installation's service. An unreadable registration is `unknown`
@@ -267,16 +281,17 @@ commands, install and switch) refuses.
 
 The terminate primitive requires a native process handle. On ARM64, or if the native API
 cannot load on x64, `terminateWindowsProcessBound` returns `unavailable` without spawning a
-helper. If a wrapper survives the manager stop, Part A returns `unknown` / `evidence-unreadable`
-with instructions to use Task Manager from the owning session.
+helper. If the manager stop leaves a wrapper running or its exit cannot be confirmed, Part A
+returns `unknown` / `evidence-unreadable`. The operator can check the wrapper from its owning
+session in Task Manager, stop it if it is still running, then retry.
 
 ## Tests
 
 `tests/windows/windows-stop-binding.test.ts`, `tests/windows/windows-checked-stop.test.ts`,
-`tests/windows/windows-stop-confirm.test.ts` and `tests/windows/windows-process-evidence.test.ts` are
-hermetic: injected deps, a virtual clock and simulated platforms, and no real `schtasks`,
-PowerShell or FFI call. The FFI primitive itself is exercised only by the cases gated on real
-Windows x64.
+`tests/windows/windows-stop-confirm.test.ts` and `tests/windows/windows-process-evidence.test.ts`
+use injected deps, a virtual clock and simulated platforms. The owner-budget and Scheduler stop
+script tests run PowerShell against stubbed CIM and COM objects. Live CIM and FFI tests require
+Windows and the FFI cases require x64.
 
 The callers are covered by `tests/windows/windows-checked-stop-live.test.ts` (adapters, ARM64
 strict, whole-millisecond timeouts, the ancestry check, the bounded port sampler and the tri-state
@@ -286,5 +301,4 @@ two origins and the receipt record), `tests/windows/windows-stop-callers.test.ts
 service commands, the guarded order, `bound-stray`, the orphan-discovery cap and the bind on the
 evidence snapshot), `tests/windows/windows-guarded-manager.test.ts` (the not-running promotion
 behind its registration proof) and `tests/windows/windows-stop-ocx-stop.test.ts` (plain `ocx stop`
-through the real CLI with the platform simulated). None of them reaches `schtasks`, PowerShell or
-FFI.
+through the real CLI with the platform simulated).

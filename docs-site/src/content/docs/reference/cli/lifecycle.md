@@ -151,13 +151,15 @@ exit. Only then does it stop the proxy gracefully. Afterwards it confirms that t
 for about six seconds and that no wrapper started again, so a wrapper's restart loop cannot bring
 the proxy back behind a successful stop.
 
-Windows ends a scheduled task only after verifying that it launches this installation and runs
-as your Windows account. If that proof is missing, confirm the launcher and run-as account in
-Task Scheduler and stop the task from its owning session.
+OpenCodex verifies that the scheduled task launches this installation under your Windows account
+and checks the account for each running instance before stopping it. If verification fails,
+check the launcher and run-as account in Task Scheduler and stop the task from its owning session.
 
 OpenCodex terminates a wrapper directly only after verifying that it belongs to your account.
 It ignores wrappers proven to belong to another user. If it cannot verify the owner of a wrapper
 eligible for termination, stop it from its owning Windows session using Task Manager and retry.
+If OpenCodex cannot confirm a wrapper's exit without a process handle, as can happen on ARM64,
+check it in Task Manager from its owning session, stop it if it is still running, and retry.
 
 When the service cannot be proven stopped, `ocx stop` sends no stop request to the proxy, leaves
 your client configuration alone, and fails. With `--json` the summary keeps `outcome: "failed"`

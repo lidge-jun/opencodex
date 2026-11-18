@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 
 import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsSystemDirectory } from "../../src/lib/windows-elevation";
+import { windowsLauncherVbsPath } from "../../src/service/state";
 import {
   decodeServiceStatusProcess,
   fileTimeToEpochMs,
@@ -14,7 +15,7 @@ import {
   type WindowsProcessNativeApi,
 } from "../../src/service/windows-process-native";
 import {
-  WINDOWS_PROCESS_SNAPSHOT_SCRIPT,
+  windowsProcessSnapshotScript,
   openWindowsProcessWatch,
   overlayNativeCreationTimes,
   parseScQueryexPid,
@@ -167,11 +168,12 @@ describe("Windows process evidence: facades", () => {
     });
     expect(commands).toHaveLength(1);
     expect(commands[0]).toMatchObject({ program: "powershell", timeoutMs: 5_000 });
-    expect(commands[0]!.args.at(-1)).toBe(WINDOWS_PROCESS_SNAPSHOT_SCRIPT);
+    const script = windowsProcessSnapshotScript();
+    expect(commands[0]!.args.at(-1)).toBe(script);
     // Owner queries only cover potential candidates, and re-read identity AFTER the SID.
-    expect(WINDOWS_PROCESS_SNAPSHOT_SCRIPT).toContain("-like '*opencodex-service*'");
-    expect(WINDOWS_PROCESS_SNAPSHOT_SCRIPT.indexOf("Get-CimInstance -InputObject $_"))
-      .toBeGreaterThan(WINDOWS_PROCESS_SNAPSHOT_SCRIPT.indexOf("-MethodName GetOwnerSid"));
+    expect(script).toContain("-like '*opencodex-service*'");
+    expect(script.indexOf("Get-CimInstance -InputObject $process"))
+      .toBeGreaterThan(script.indexOf("-MethodName GetOwnerSid"));
     expect(snapshot?.map(row => [row.pid, row.startTime])).toEqual([[20, cim], [4, null]]);
     expect(await windowsProcessSnapshot({ timeoutMs: 5_000, run: async () => { throw new Error("timeout"); } })).toBeNull();
   });
@@ -202,8 +204,12 @@ describe("Windows process evidence: facades", () => {
 
 const liveX64 = process.platform !== "win32" || process.arch !== "x64";
 
-for (const budget of ["available", "expired", "expires-during-owner"] as const) test.skipIf(process.platform !== "win32")("owner enrichment retains every row (budget=" + budget + ")", async () => {
-  const script = WINDOWS_PROCESS_SNAPSHOT_SCRIPT.replace(
+const portablePowerShell = Bun.which("pwsh");
+
+for (const budget of ["available", "expired", "expires-during-owner"] as const) test.skipIf(process.platform !== "win32" && !portablePowerShell)("owner enrichment prioritizes this home and retains every row (budget=" + budget + ")", async () => {
+  const powershell = process.platform === "win32" ? resolveTrustedWindowsPowerShellExe() : portablePowerShell!;
+  const launcher = Buffer.from(windowsLauncherVbsPath(), "utf8").toString("base64");
+  const script = windowsProcessSnapshotScript().replace(
     "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value", "'S-1-5-21-100-200-300-1001'",
   ).replace("[Diagnostics.Stopwatch]::StartNew()", "[pscustomobject]@{ ElapsedMilliseconds = " + (budget === "expired" ? 1500 : 0) + " }");
   const prelude = [
@@ -211,14 +217,15 @@ for (const budget of ["available", "expired", "expires-during-owner"] as const) 
     "function Get-CimInstance { param($ClassName, $InputObject, $ErrorAction, $OperationTimeoutSec)",
     "  if ($InputObject) { $script:refreshReads++; return $InputObject };",
     "  1..40 | ForEach-Object { [pscustomobject]@{ ProcessId = $_; ParentProcessId = 900; Name = 'cmd.exe';",
-    "    CommandLine = 'cmd.exe'; CreationDate = [datetime]'2026-11-12T01:02:03Z' } } };",
+    "    CommandLine = if ($_ -eq 40) { 'wscript.exe \"' + [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + launcher + "')) + '\"' } else { 'cmd.exe' };",
+    "    CreationDate = [datetime]'2026-11-12T01:02:03Z' } } };",
     "function Invoke-CimMethod { param($InputObject, $MethodName, $ErrorAction, $OperationTimeoutSec)",
     "  $script:ownerReads++; " + (budget === "expires-during-owner" ? "$ownerBudget.Clock.ElapsedMilliseconds = 1500; " : "")
       + "@{ Sid = $currentSid; ReturnValue = 0 } };",
     "$rows = & { " + script + " };",
     "[pscustomobject]@{ Snapshot = $rows; OwnerReads = $script:ownerReads; RefreshReads = $script:refreshReads } | ConvertTo-Json -Compress",
   ].join(" ");
-  const child = Bun.spawn([resolveTrustedWindowsPowerShellExe(), "-NoProfile", "-NonInteractive", "-Command", prelude], {
+  const child = Bun.spawn([powershell, "-NoProfile", "-NonInteractive", "-Command", prelude], {
     stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: 5_000,
   });
   const [output, errors, exitCode] = await Promise.all([
@@ -233,8 +240,10 @@ for (const budget of ["available", "expired", "expires-during-owner"] as const) 
   expect(result.OwnerReads).toBe(budget === "available" ? 32 : budget === "expired" ? 0 : 1);
   const refreshed = budget === "available" ? 32 : 0;
   expect(result.RefreshReads).toBe(refreshed);
-  expect(rows.slice(0, refreshed).every(row => row.foreignOwner === false)).toBe(true);
-  expect(rows.slice(refreshed).every(row => row.foreignOwner === null)).toBe(true);
+  expect(rows[39]!.foreignOwner).toBe(budget === "available" ? false : null);
+  const ordinaryRefreshed = Math.max(0, refreshed - 1);
+  expect(rows.slice(0, ordinaryRefreshed).every(row => row.foreignOwner === false)).toBe(true);
+  expect(rows.slice(ordinaryRefreshed, 39).every(row => row.foreignOwner === null)).toBe(true);
 }, 10_000);
 
 test.skipIf(process.platform !== "win32")("the live capped snapshot reads and refreshes a wrapper child's owner", async () => {
@@ -248,8 +257,8 @@ test.skipIf(process.platform !== "win32")("the live capped snapshot reads and re
     // Scope the real CIM input to our child: enrichment is intentionally bounded, so a
     // busy machine's unrelated wrappers may use up a full snapshot's optional budget.
     const snapshot = await windowsProcessSnapshot({ timeoutMs: 5_000, run: async command => {
-      const args = command.args.map(arg => arg.replace("Get-CimInstance Win32_Process |",
-        "Get-CimInstance Win32_Process -Filter 'ProcessId = " + child.pid + "' |"));
+      const args = command.args.map(arg => arg.replace("Get-CimInstance Win32_Process -ErrorAction Stop",
+        "Get-CimInstance Win32_Process -Filter 'ProcessId = " + child.pid + "' -ErrorAction Stop"));
       const helper = Bun.spawn([resolveTrustedWindowsPowerShellExe(), ...args], {
         stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: command.timeoutMs,
       });

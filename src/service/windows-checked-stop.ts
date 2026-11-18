@@ -12,7 +12,7 @@
  *    With a task registered or a stray sweep running, the Schedule host PID is read (2 s).
  *    Admission runs here, after the probe and before anything changes.
  * 2. Bind (src/service/windows-stop-binding.ts) and open an exit watch per wrapper.
- * 3. Ask the manager: schtasks /end (2 s); WinSW a non-waiting stop (2 s) and an SCM poll
+ * 3. Ask the manager: verified Task Scheduler instances (2 s); WinSW a non-waiting stop (2 s) and an SCM poll
  *    capped at <stoptimeout> + 2 s. Denied is denied; an overrun is unknown; neither goes on.
  * 4. Terminate the bound survivors through the checked primitive, deepest first.
  * 5. Wait on the bind-time watches (steps 4 and 5 share 3 s), then read the manager state
@@ -98,7 +98,7 @@ export interface WindowsCheckedStopOptions {
   /** A snapshot that already ran (guarded: revalidateManager's), reused for the bind. */
   bindSnapshot?: readonly WindowsStopProcessEntry[];
   admission?: WindowsStopAdmission;
-  /** Throws to refuse. Runs at entry, before each manager stop (/end, the WinSW stop) and before each terminate. */
+  /** Throws to refuse. Runs at entry, before each manager stop and before each terminate. */
   authorize?: () => MaybePromise<void>;
 }
 
@@ -309,9 +309,9 @@ export async function stopWindowsServiceChecked(
       const ended = await runCapped(clock, C.taskEnd, deps.endTask);
       if (ended.ok && ended.value === "unverified-registration") {
         return finish("unknown", "evidence-unreadable",
-          "the scheduled task's launcher and run-as account could not be verified for this installation and Windows account. Confirm them in Task Scheduler and stop the task from its owning Windows session");
+          "the scheduled task's launcher, run-as account, or running instances could not be verified for this installation and Windows account. Confirm them in Task Scheduler and stop the task from its owning Windows session");
       }
-      result.changed = true;
+      result.changed = !ended.ok || ended.value !== "not-running";
       if (!ended.ok) return finish("unknown", "evidence-unreadable", "the task end command did not answer within its cap");
       if (ended.value === "denied") return finish("denied", "access-denied", "ending the task was denied");
       if (ended.value === "failed") return finish("unknown", "evidence-unreadable", "the task end command failed");
@@ -353,7 +353,7 @@ export async function stopWindowsServiceChecked(
       if (status === "owner-unverified") return finish("unknown", "evidence-unreadable", WRAPPER_OWNER_REFUSAL);
       if (status === "unavailable") {
         return finish("unknown", "evidence-unreadable",
-          "the wrapper could not be terminated with a verified process handle. Stop it from its owning Windows session using Task Manager, then retry");
+          "the wrapper's exit could not be confirmed without a verified process handle. Check it from its owning Windows session using Task Manager, stop it if it is still running, then retry");
       }
       if (status === "terminated") {
         result.terminated.push(wrapper.pid);
