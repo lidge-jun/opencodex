@@ -119,11 +119,11 @@ export function comboCatalogOmissionReason(
   return null;
 }
 
-/** Video has no per-member dispatch gate, so it is advertised only when common. */
+/** Union dispatch cannot verify video support on the selected wire. */
 function comboInputModalities(combo: NormalizedComboConfig, members: readonly CatalogModel[]): string[] {
   const lists = members.map(member => member.inputModalities ?? ["text"]);
   return combo.capabilityPolicy === "union"
-    ? unionStrings(lists).filter(modality => modality !== "video" || lists.every(list => list.includes("video")))
+    ? unionStrings(lists).filter(modality => modality !== "video")
     : intersectStrings(lists);
 }
 

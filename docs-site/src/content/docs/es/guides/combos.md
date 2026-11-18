@@ -611,7 +611,7 @@ mirar la solicitud. Establece `capabilityPolicy: "union"` para anunciar lo que *
 servir y que el combo elija por solicitud:
 
 - **Catálogo.** `inputModalities` es la unión de las modalidades de los destinos, así que un único respaldo
-  de solo texto ya no oculta la entrada de imagen. El vídeo solo se anuncia si todos los destinos lo declaran. Con `reasoningEffortMode: "adaptive"`, la escala de
+  de solo texto ya no oculta la entrada de imagen. El catálogo de unión omite el vídeo porque el proxy no puede comprobar que el protocolo seleccionado lo conserve. Con `reasoningEffortMode: "adaptive"`, la escala de
   esfuerzo es la unión de las escalas no vacías de los destinos, ordenada por rango; `"strict"` mantiene la
   intersección. `"intersection"` publica el menor `contextWindow` de los destinos y `"union"` el mayor.
   `"union"` usa los mayores límites `maxInputTokens` y `autoCompactTokenLimit`, sujetos a la ventana y al
@@ -635,15 +635,13 @@ servir y que el combo elija por solicitud:
 - **Esfuerzo.** Con `"adaptive"`, un esfuerzo del llamador que falta en la escala conocida de un destino
   se baja al nivel más alto de ese destino que no lo supere (`xhigh` en un destino low/medium/high se
   envía como `high`). Un esfuerzo inferior a toda la escala usa el nivel admitido más bajo.
-- **Orden de degradación.** Un destino de solo texto recibe primero la descripción de la imagen del
-  sidecar. Las imágenes solo se descartan cuando no es posible ninguna descripción, y eso se registra
-  como advertencia. El registro de depuración muestra los niveles de esfuerzo solicitado y enviado.
+- **Orden de degradación.** El filtro de capacidades solo considera destinos que cumplen el consentimiento para el uso medido, el alcance de modelos, la selección obligatoria de herramientas y los requisitos del protocolo. Si falla una descripción necesaria, el combo omite ese envío y prueba los demás destinos elegibles que pueden procesar las imágenes. Aplica `onUnservable` cuando se agotan esas opciones. El proxy registra la omisión de imágenes como advertencia y escribe los niveles de esfuerzo solicitado y enviado en el registro de depuración.
 - **Nada puede servir.** Cuando la ventana de ningún destino puede contener la entrada,
   `onUnservable: "degrade"` (el valor predeterminado) la envía al destino con la ventana más grande, con
   la misma admisión flexible que recibe una solicitud directa, y registra una advertencia. Cuando hay
   destinos que pueden contenerla pero ninguno puede tomar su imagen, `"degrade"` la despacha igualmente:
   el destino reemplaza cada imagen con una nota de omisión y el proxy registra una advertencia.
-  `onUnservable: "reject"` responde HTTP 400 antes de llamar a cualquier destino en ambos casos.
+  `onUnservable: "reject"` responde HTTP 400 si la solicitud supera los límites de contexto o si no es posible procesar las imágenes.
 
 ```json
 {

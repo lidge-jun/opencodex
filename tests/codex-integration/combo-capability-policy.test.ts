@@ -45,12 +45,13 @@ describe("combo capabilityPolicy: catalog", () => {
     expect(row?.inputModalities).toEqual(["text", "image"]);
   });
 
-  test("union advertises video only when it is common to all members", () => {
+  test("union omits video until dispatch can verify the wire, even with unanimous declarations", () => {
     const video = { ...imageMember, inputModalities: ["text", "image", "video"] };
     const policy = combo({ capabilityPolicy: "union" });
     expect(deriveComboCatalogModel("x", policy, [video, textMember])?.inputModalities).toEqual(["text", "image"]);
     const secondVideo = { ...textMember, inputModalities: ["text", "video"] };
-    expect(deriveComboCatalogModel("x", policy, [video, secondVideo])?.inputModalities).toContain("video");
+    expect(deriveComboCatalogModel("x", policy, [video, secondVideo])?.inputModalities).toEqual(["text", "image"]);
+    expect(deriveComboCatalogModel("x", combo(), [video, secondVideo])?.inputModalities).toContain("video");
   });
 
   test("union does not omit a combo whose modalities do not intersect", () => {

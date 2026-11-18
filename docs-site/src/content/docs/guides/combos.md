@@ -991,7 +991,7 @@ looking at the request. Set `capabilityPolicy: "union"` to advertise what **any*
 and have the combo pick per request instead:
 
 - **Catalog.** `inputModalities` is the union of the targets' modalities, so one text-only backup no
-  longer hides image input. Video remains advertised only when every target declares it. With `reasoningEffortMode: "adaptive"` the effort ladder is the union of
+  longer hides image input. Union catalogs omit video because dispatch cannot verify that the selected wire preserves it. With `reasoningEffortMode: "adaptive"` the effort ladder is the union of
   the non-empty target ladders, ordered by rank; `"strict"` keeps the intersection, because strict
   promises every target serves the advertised rung as is. `"intersection"` publishes the smallest
   target `contextWindow`, and `"union"` publishes the largest. `"union"` uses the largest input and
@@ -1014,13 +1014,12 @@ and have the combo pick per request instead:
 - **Effort.** Under `"adaptive"`, a caller effort that a target's known ladder lacks maps to
   that target's highest rung at or below it (`xhigh` on a low/medium/high target is sent as `high`).
   A request below the entire ladder uses the lowest supported rung.
-- **Order of degradation.** A text-only target first gets the sidecar's description of the image. Images are dropped only when no description is possible, and that is logged as a warning. Effort adjustments are logged at debug level with the requested and sent rungs.
+- **Order of degradation.** Capability filtering considers only targets that meet metered consent, model scope, mandatory tool selection, and protocol requirements. If a required description fails, the combo skips that send and tries the remaining eligible image-serving targets. It applies `onUnservable` when those choices are exhausted. The proxy logs image omission as a warning and effort adjustments at debug level with the requested and sent rungs.
 - **Nothing can serve.** When no target's window can hold the input, `onUnservable: "degrade"` (the
   default) sends it to the target with the largest window, under the same loose admission a direct
   request gets, and logs a warning. When targets can hold it but every one is unable to take its
   image, `"degrade"` dispatches anyway: the target replaces each image with an omission note and the
-  proxy logs a warning. `onUnservable: "reject"` answers HTTP 400 before any target is called in
-  both cases.
+  proxy logs a warning. `onUnservable: "reject"` answers HTTP 400 when the request cannot fit or the images cannot be served.
 
 ```json
 {

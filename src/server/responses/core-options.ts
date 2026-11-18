@@ -271,6 +271,8 @@ export interface HandleResponsesOptions {
   comboContextDegraded?: boolean;
   /** A union combo admitted this image-bearing child through a dispatchable vision plan. */
   comboRequiresVisionPlan?: boolean;
+  /** The union combo exhausted its image-serving targets and selected omission. */
+  comboOmitImages?: boolean;
   /**
    * Set by the combo loop for each child. A child logs into its own context, which the combo
    * copies once when the child commits, and the bridge reports usage after that, at the terminal

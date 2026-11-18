@@ -215,6 +215,34 @@ describe("native Chat candidates in a combo", () => {
     if (!metered) expect(image.bodies[0]!.messages).toEqual(messages);
   });
 
+  test.each(["native", "reject", "degrade"] as const)("union handles failed required descriptions with %s", async outcome => {
+    const blind = upstream(() => chatStream("blind"));
+    const image = upstream(() => twoChoiceCompletion());
+    const helper = upstream(() => Response.json({ error: { message: "fixture describe failure" } }, { status: 502 }));
+    const config = comboConfig({
+      a: provider("openai-chat", blind.baseUrl, { inputModalities: ["text"] }),
+      b: provider("openai-chat", image.baseUrl, { inputModalities: ["text", "image"] }),
+      helper: provider("openai-chat", helper.baseUrl, { inputModalities: ["text", "image"] }),
+    }, [{ provider: "a", model: "m1" }, ...(outcome === "native" ? [{ provider: "b", model: "m2" }] : [])], NATIVE_ON);
+    config.port = Number(new URL(helper.baseUrl).port);
+    config.visionSidecar = { enabled: true, backend: "routed", model: "helper/vlm" };
+    config.combos!.pair!.capabilityPolicy = "union";
+    config.combos!.pair!.onUnservable = outcome === "degrade" ? "degrade" : "reject";
+    const url = "data:image/png;base64,AA==";
+    const messages = [{ role: "user", content: [{ type: "image_url", image_url: { url } }] }];
+    const { response, text } = await send(config, { stream: false, messages });
+    expect(helper.bodies).toHaveLength(1);
+    expect(response.status, text).toBe(outcome === "reject" ? 400 : 200);
+    expect(blind.bodies).toHaveLength(outcome === "degrade" ? 1 : 0);
+    expect(image.bodies).toHaveLength(outcome === "native" ? 1 : 0);
+    if (outcome === "native") expect(image.bodies[0]!.messages).toEqual(messages);
+    if (outcome === "reject") expect(text).toContain("No target of this combo can accept image input");
+    if (outcome === "degrade") {
+      expect(JSON.stringify(blind.bodies[0])).toContain("omitted");
+      expect(JSON.stringify(blind.bodies[0])).not.toContain(url);
+    }
+  });
+
   test.each([["empty", []], ["unknown", undefined]] as const)("native adaptive Chat strips unsupported effort controls with ladder %s", (_label, ladder) => {
     const target = { provider: "a", model: "m1" };
     const config = comboConfig({

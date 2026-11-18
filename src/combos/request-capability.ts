@@ -66,10 +66,13 @@ export interface ComboCapabilityGate {
   unservable: ComboUnservable;
   /** The child must still have a plan if it needs to describe images before sending. */
   requiresVisionPlan: ComboCapabilityGate["eligible"];
+  /** Members that fit and can serve the turn once the combo permits omission. */
+  imageDegradationEligible: ComboCapabilityGate["eligible"];
 }
 
 const OPEN_GATE: ComboCapabilityGate = {
   eligible: () => true, unservable: false, requiresVisionPlan: () => false,
+  imageDegradationEligible: () => false,
 };
 
 interface ContextFit {
@@ -167,6 +170,7 @@ export async function comboCapabilityGate(
       eligible: filter(v => v.context.fits && v.image !== "unable"),
       unservable: false,
       requiresVisionPlan: filter(v => v.image === "degraded"),
+      imageDegradationEligible: filter(v => v.context.fits && v.image !== "native"),
     };
   }
   if (verdicts.some(v => v.context.fits)) {

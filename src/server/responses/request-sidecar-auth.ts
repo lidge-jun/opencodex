@@ -4,7 +4,9 @@ import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
 import type { OcxParsedRequest } from "../../types";
 import type { ComboTargetRoute } from "../../combos/request-capability";
-import { PolicyCandidateUnavailableError, policyCandidateRefusalResponse } from "./policy-request-scope";
+import { ComboVisionDescriptionUnavailableError, policyCandidateRefusalResponse } from "./policy-request-scope";
+import { intersectAdmissionModelScopes, resolveAdmissionModelScope } from "../admission-model-scope";
+import { captureAdmissionPolicy } from "../capture-admission-policy";
 import type { ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactionTrigger } from "../../providers/openai-tiers";
 import { omitEarlierCompactionImages } from "../../responses/compaction-images";
@@ -104,10 +106,23 @@ function responsesVisionPlan(
   parsed: OcxParsedRequest,
   openAiSidecar: ResolvedOpenAiForwardSidecar | undefined,
 ) {
-  return planVisionSidecar(config, provider, modelId, parsed, openAiSidecar, {
+  const admissionScope = visionAdmissionScope(config, options);
+  const plan = planVisionSidecar(config, provider, modelId, parsed, openAiSidecar, {
     admission: options.admission, codexAuthPolicy: options.codexAuthPolicy, providerName,
-    advisorAdmissionPolicy: options.advisorAdmissionPolicy,
+    admissionScope,
   });
+  if (plan?.backend === "routed") {
+    const callerPolicy = options.advisorAdmissionPolicy ?? captureAdmissionPolicy(config, options.admission, admissionScope);
+    plan.advisorAdmissionPolicy = { ...callerPolicy, modelScope: admissionScope ?? callerPolicy.modelScope };
+  }
+  return plan;
+}
+
+function visionAdmissionScope(config: SidecarRequestContext["config"], options: SidecarRequestContext["options"]) {
+  return intersectAdmissionModelScopes(
+    options.admissionScope ?? resolveAdmissionModelScope(config, options.admission),
+    options.advisorAdmissionPolicy?.modelScope,
+  );
 }
 
 /** Use the child's real planner and auth rules, then return any unused recovery probe. */
@@ -117,7 +132,8 @@ export async function canDescribeComboImages(
   parsed: OcxParsedRequest,
 ): Promise<boolean> {
   if (context.options.visionDescribeTerminal) return false;
-  const openAiSidecar = shouldResolveOpenAiVisionSidecar(context.config, route.provider, route.modelId, parsed, route.providerName)
+  const openAiSidecar = shouldResolveOpenAiVisionSidecar(context.config, route.provider, route.modelId, parsed, route.providerName,
+    visionAdmissionScope(context.config, context.options))
     ? await resolveResponsesOpenAiSidecar(context, route) : undefined;
   try {
     const plan = responsesVisionPlan(context, route, parsed, openAiSidecar);
@@ -146,12 +162,14 @@ export async function prepareResponsesSidecarAuth(
 
   let openAiSidecar: ResolvedOpenAiForwardSidecar | undefined;
   const visionDescribeTerminal = options.visionDescribeTerminal === true;
+  const skipVision = visionDescribeTerminal || options.comboOmitImages === true;
   const routedCompaction = parsed._compactionRequest === true
     && (!supportsNativeResponsesCompactionTrigger(route.provider) || parsed._portableCompaction === true);
   const preserveCompactionPrefix = routedCompaction && transportState.adapter.name === "anthropic";
   if (routedCompaction) parsed.context.messages = omitEarlierCompactionImages(parsed.context.messages);
-  const needsOpenAiVision = !visionDescribeTerminal
-    && shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed, route.providerName);
+  const needsOpenAiVision = !skipVision
+    && shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed, route.providerName,
+      visionAdmissionScope(config, options));
   // LOCAL PATCH (runturn-websearch): runTurn adapters can run the web-search
   // sidecar through src/web-search/run-turn-loop.ts, so resolve the helper
   // credential for them too. The passthrough bridge stays fetch-only.
@@ -171,20 +189,26 @@ export async function prepareResponsesSidecarAuth(
   // call must never plan another describe. The flag arrives from the Chat
   // surface (whose bridge rebuilds headers) or as the raw header for native
   // Responses callers. Marked + text-only routed model → strip, depth cap 1.
-  const visionPlan = visionDescribeTerminal
+  const visionPlan = skipVision
     ? undefined
     : responsesVisionPlan(requestContext, route, parsed, openAiSidecar);
   const recordSidecarOutcome = openAiSidecar?.recordOutcome;
   if (visionPlan && (!options.comboRequiresVisionPlan || visionPlan.maxDescriptionsPerTurn > 0)) {
     try {
-      await describeImagesInPlace(
+      const complete = await describeImagesInPlace(
         parsed,
         visionPlan,
         openAiSidecar?.headers ?? requestState.selectedForwardHeaders,
         options.abortSignal,
         recordSidecarOutcome,
         translatorBudget,
+        options.comboRequiresVisionPlan,
       );
+      if (!complete && options.comboRequiresVisionPlan) {
+        openAiSidecar?.releaseProbeLease?.();
+        openAiSidecar = undefined;
+        return policyCandidateRefusalResponse(new ComboVisionDescriptionUnavailableError())!;
+      }
     } finally {
       // Local validation can reject every image before the sidecar fetch records an outcome.
       // Vision-only turns must hand that unused cooldown probe back; when a fetch did run the
@@ -196,7 +220,7 @@ export async function prepareResponsesSidecarAuth(
     // Never forward raw image bytes to an unverified upstream.
     if (options.comboRequiresVisionPlan) {
       openAiSidecar?.releaseProbeLease?.();
-      return policyCandidateRefusalResponse(new PolicyCandidateUnavailableError())!;
+      return policyCandidateRefusalResponse(new ComboVisionDescriptionUnavailableError())!;
     }
     stripImagesInPlace(parsed, translatorBudget);
     if (!needsOpenAiSearch) openAiSidecar?.releaseProbeLease?.();

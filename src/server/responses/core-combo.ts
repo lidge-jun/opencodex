@@ -10,7 +10,7 @@ import { effectiveAzureOutputBudget } from "../../adapters/azure";
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
 import { isMetaAiResponsesDestination } from "../../responses/muse-tool-name-alias";
 import { chatCanPreserveMandatoryToolChoice, hasMandatoryToolChoice } from "./combo-required-tool-contract";
-import { isPolicyCandidateRefusal, isMandatoryToolChoiceRefusal } from "./policy-request-scope";
+import { isComboVisionDescriptionRefusal, isPolicyCandidateRefusal, isMandatoryToolChoiceRefusal } from "./policy-request-scope";
 import { isCodexAccountCooldownResponse } from "../../codex/account-cooldown-response";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { parseSyntheticRowId } from "../fast-row";
@@ -498,24 +498,6 @@ export async function executeComboResponses(
   const meteredAllowed = admissionMayUseMeteredComboTargets(config, options.admission, combo);
   const mayUseTarget = (target: (typeof combo.targets)[number]): boolean =>
     (meteredAllowed || !target.metered) && (combo.strategy !== "jev" || target.provider !== JEV_PROVIDER_ID);
-  const capability = await comboCapabilityGate(config, combo, body, target => {
-    try {
-      const route = routeConcreteModel(config, `${target.provider}/${target.model}`);
-      const provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, options.inboundWire);
-      return { ...route, provider };
-    } catch { return undefined; }
-  }, (target, route) => mayUseTarget(target) && (!route || routeAllowedByScope(admissionScope, route)),
-  (route, parsed) => canDescribeComboImages({ config, req, options }, route, parsed));
-  if (capability.unservable === "audio") {
-    return formatErrorResponse(400, "invalid_request_error", "No target of this combo can accept audio input");
-  }
-  if (capability.unservable && combo.onUnservable === "reject") {
-    return formatErrorResponse(400, "invalid_request_error", capability.unservable === "context"
-      ? "No target of this combo has a context window large enough for this request"
-      : "No target of this combo can accept image input");
-  }
-  if (capability.unservable === "image") console.warn("[opencodex] combo has no image-capable target; images will be omitted");
-  if (capability.unservable === "context") console.warn("[opencodex] combo has no target whose context window fits; sending to the largest");
   // The combo ladder owns the whole logical request, so the catalog diagnostic is counted here for
   // combo-routed turns; children run as concrete selections and would otherwise never report it.
   // Counting after the replay expansion keeps restored history out of the tally.
@@ -636,13 +618,42 @@ export async function executeComboResponses(
   // (provider state, quota, live cooldowns) keeps precedence, exactly as in the readable reasons.
   const unsupportedToolChoice = (attempted: number) => comboUnavailableDiagnostics(combo.targets.length, attempted,
     combo.targets.map(target => comboTargetUnavailableCause(config, comboId, target, museToolEligible) ?? "unsupported"));
-  // Recovery can replace unreadable encrypted input, but cannot relax other admission checks.
-  const recoveryEligible = (target: (typeof combo.targets)[number]): boolean =>
+  const capabilityCandidate = (target: (typeof combo.targets)[number]): boolean =>
     mayUseTarget(target)
-    && capability.eligible(target)
     && museToolEligible(target)
     && reasoningReplayEligible(target)
     && (protocolLanes?.pickable(target) ?? true);
+  const unservableImageResponse = (): Response =>
+    markProxyError(formatErrorResponse(400, "invalid_request_error", "No target of this combo can accept image input"));
+  const warnComboImageOmission = (): void =>
+    console.warn("[opencodex] combo has no image-capable target; images will be omitted");
+  const capability = await comboCapabilityGate(config, combo, body, target => {
+    try {
+      const route = routeConcreteModel(config, `${target.provider}/${target.model}`);
+      const provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, options.inboundWire);
+      return { ...route, provider };
+    } catch { return undefined; }
+  }, (target, route) => capabilityCandidate(target) && (!route || routeAllowedByScope(admissionScope, route)),
+  (route, parsed) => canDescribeComboImages({ config, req, options }, route, parsed));
+  if (capability.unservable === "audio") {
+    return formatErrorResponse(400, "invalid_request_error", "No target of this combo can accept audio input");
+  }
+  if (capability.unservable && combo.onUnservable === "reject") {
+    return capability.unservable === "context"
+      ? formatErrorResponse(400, "invalid_request_error", "No target of this combo has a context window large enough for this request")
+      : unservableImageResponse();
+  }
+  if (capability.unservable === "image") warnComboImageOmission();
+  if (capability.unservable === "context") console.warn("[opencodex] combo has no target whose context window fits; sending to the largest");
+  const visionRejectedTargets = new Set<string>();
+  let omittingImages = capability.unservable === "image";
+  const useImageDegradation = (target: (typeof combo.targets)[number]): boolean =>
+    payloadEligible(target) && capabilityCandidate(target) && capability.imageDegradationEligible(target);
+  // Recovery can replace unreadable encrypted input, but cannot relax other admission checks.
+  const recoveryEligible = (target: (typeof combo.targets)[number]): boolean =>
+    capabilityCandidate(target) && (omittingImages && capability.unservable !== "image"
+      ? capability.imageDegradationEligible(target)
+      : !visionRejectedTargets.has(targetKey(target)) && capability.eligible(target));
   const targetEligible = (target: (typeof combo.targets)[number]): boolean =>
     payloadEligible(target) && recoveryEligible(target);
   const onlyReplayIncompatibleTargetsRemain = (excluded: Iterable<string> = []): boolean => {
@@ -1380,7 +1391,8 @@ export async function executeComboResponses(
         // parent arrived with.
         sendBudget: targetSendBudget,
         comboAttempt: true,
-        ...(capability.requiresVisionPlan(pick.target) ? { comboRequiresVisionPlan: true } : {}),
+        ...(omittingImages ? { comboOmitImages: true }
+          : capability.requiresVisionPlan(pick.target) ? { comboRequiresVisionPlan: true } : {}),
         ...(capability.unservable === "context" ? { comboContextDegraded: true } : {}),
         comboInitialSend: initialSend,
         comboDispatchPermit: hopDecision?.allowed ? hopDecision.permit : undefined,
@@ -1540,6 +1552,8 @@ export async function executeComboResponses(
       Date.now() - segmentStartedAt(),
       failure.usage ?? childLog.usage,
     );
+    const visionDescriptionRefused = isComboVisionDescriptionRefusal(failure.response);
+    if (visionDescriptionRefused) visionRejectedTargets.add(targetKey(pick.target));
     const replayRefusal = isReplayRefusalResponse(failure.response);
     if (replayRefusal) {
       // Numeric 429 is a client replay policy here, not an upstream quota observation.
@@ -1778,6 +1792,23 @@ export async function executeComboResponses(
       }
       // Waiting or recovery may have observed cancellation after the check above.
       if (options.abortSignal?.aborted) return clientCancelledResponse();
+      if (visionRejectedTargets.size > 0 && !omittingImages) {
+        if (combo.onUnservable !== "reject") {
+          // These children refused before sending the primary turn, so they can still serve it
+          // with omission. Keep exclusions for every target that did attempt the primary turn.
+          pick = await pickWithWait({
+            exclude: attemptedTargets.filter(key => !visionRejectedTargets.has(key)),
+            eligible: useImageDegradation,
+            cooldownReprobeTargets: carriedReprobe ? Object.entries(carriedReprobe) : undefined,
+          });
+          if (options.abortSignal?.aborted) return clientCancelledResponse();
+          if (pick) {
+            omittingImages = true;
+            warnComboImageOmission();
+          }
+        }
+        if (!pick && visionDescriptionRefused) return unservableImageResponse();
+      }
     }
     } finally {
       // External receipts make release a no-op after real work. runTurn owns its asynchronous
