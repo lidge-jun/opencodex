@@ -433,8 +433,10 @@ the per-account usage summaries. A provider without that suffix, such as a pool-
 request, has no tag. Older rows and malformed values omit the field.
 
 Key selection is recorded after queued requests have been rebuilt for the current selection.
-When a retry changes keys, `attempts` retains a separate record for the preceding key, including
-reported usage from failed responses. Missing usage remains unreported. Routed adapter terminals
+When a retry changes keys, `attempts` retains a separate record for the preceding key. A retry
+after credential recovery also records the refusal and replacement separately, even if both use
+the same account label. Each record retains the usage reported by that attempt. Missing usage
+remains unreported. Routed adapter terminals
 are observed before image/search loops or continuation guards combine their usage. Consumers
 sum the flat attempts by provider/account and do not add the parent combo total again. These
 records identify usage; provider quota percentages remain separate upstream observations.
