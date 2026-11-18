@@ -209,6 +209,53 @@ describe("connection test (#7910)", () => {
   });
 });
 
+describe("Vertex connection-test destination authority", () => {
+  const originalFetch = globalThis.fetch;
+  const ambientKey = process.env.GOOGLE_CLOUD_API_KEY;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    if (ambientKey === undefined) delete process.env.GOOGLE_CLOUD_API_KEY;
+    else process.env.GOOGLE_CLOUD_API_KEY = ambientKey;
+  });
+
+  async function probe(baseUrl: string): Promise<{ ok: boolean; models?: number }> {
+    useHome();
+    const cfg = withStubbedProviderFetch({ ...config("127.0.0.1"), providers: {
+      "google-vertex": { adapter: "google", googleMode: "vertex", authMode: "key", baseUrl, liveModels: true },
+    } });
+    const url = new URL("http://127.0.0.1/api/providers/test?name=google-vertex");
+    const response = await handleManagementAPI(new ManagementRequest(url, { method: "POST" }), url, cfg);
+    if (!response) throw new Error("route missing");
+    return await response.json() as { ok: boolean; models?: number };
+  }
+
+  test("an untrusted Vertex destination fails without resolving or sending ambient credentials", async () => {
+    process.env.GOOGLE_CLOUD_API_KEY = "ambient-probe-fixture";
+    let sends = 0;
+    globalThis.fetch = (async () => { sends++; return Response.json({ publisherModels: [] }); }) as typeof fetch;
+    expect((await probe("https://collector.example")).ok).toBe(false);
+    expect(sends).toBe(0);
+  });
+
+  test("an approved regional destination sends every page to that origin", async () => {
+    process.env.GOOGLE_CLOUD_API_KEY = "ambient-probe-fixture";
+    const urls: URL[] = [];
+    const headers: Headers[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      urls.push(new URL(String(input)));
+      headers.push(new Headers(init?.headers));
+      return Response.json({
+        publisherModels: [{ name: `publishers/google/models/gemini-page-${urls.length}` }],
+        ...(urls.length === 1 ? { nextPageToken: "https://collector.example/next" } : {}),
+      });
+    }) as typeof fetch;
+    expect(await probe("https://us-central1-aiplatform.googleapis.com")).toMatchObject({ ok: true, models: 2 });
+    expect(urls.map(url => url.origin)).toEqual(Array(2).fill("https://us-central1-aiplatform.googleapis.com"));
+    expect(urls[1]!.searchParams.get("pageToken")).toBe("https://collector.example/next");
+    expect(headers.map(header => header.get("x-goog-api-key"))).toEqual(Array(2).fill("ambient-probe-fixture"));
+  });
+});
+
 describe("live reconciliation (#7910)", () => {
   test("a hand edit adding the block on disk reaches the live config", () => {
     useHome();

@@ -30,6 +30,9 @@ export const KIRO_NATIVE_EFFORT_FIELDS: Record<string, "reasoning" | "output_con
   "gpt-6.1-sol": "reasoning",
   // 261027 preemptive: GPT-6.1 Terra (mirrors GPT-6.1 Sol; see kiro-models.ts).
   "gpt-6.1-terra": "reasoning",
+  // 261118 preemptive: GPT-6.2 Sol and Astra (mirror GPT-6.1 Sol; see kiro-models.ts).
+  "gpt-6.2-sol": "reasoning",
+  "gpt-6.2-astra": "reasoning",
   // Claude models whose output_config.effort was accepted by a live probe on 2026-11-07, at every
   // ladder rung except xhigh on the 4.6 pair. Haiku 4.5, Opus 4.5 and Sonnet 4.5 reject the field
   // (HTTP 400). The probe covered these nine ids individually; no other Claude id was measured, so

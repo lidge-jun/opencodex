@@ -121,14 +121,25 @@ export function classifyTaskEnd(result: WindowsStopCommandResult): WindowsTaskEn
   return toWindowsSchtasksError(error, ["/end", "/tn", TASK]).reason === "access-denied" ? "denied" : "failed";
 }
 
-/** schtasks /query /fo CSV /nh status column. Localized values fall back to PowerShell. */
+/**
+ * Status words of `schtasks /query /fo CSV /nh`. schtasks localizes the column from its .mui
+ * resources, and the PowerShell fallback cannot start inside Part A's 1 s manager-state cap on a
+ * cold machine (#8863), so the words observed from shipped resources are read here: zh-CN from
+ * System32\zh-CN\schtasks.exe.mui, ko-KR from two machines. Any other word stays unknown and
+ * falls back to Get-ScheduledTask's locale-independent State enum.
+ */
+const TASK_CSV_RUNNING = new Set(["running", "正在运行", "실행 중"]);
+const TASK_CSV_NOT_RUNNING = new Set(["ready", "disabled", "queued", "就绪", "已禁用", "已排队", "준비"]);
+/** ERROR_ACCESS_DENIED in the locales whose status words are read above (zh-CN, ko-KR). */
+const LOCALIZED_ACCESS_DENIED = /拒绝访问|액세스가 거부/;
+
 export function parseTaskCsvState(csv: string): "running" | "not-running" | "unknown" {
   for (const line of csv.split(/\r?\n/)) {
     if (!windowsSchedulerCsvIncludesTask(line, TASK)) continue;
     const fields = [...line.matchAll(/"([^"]*)"/g)].map(match => match[1]!.trim());
-    const status = fields[fields.length - 1] ?? "";
-    if (/^running$/i.test(status)) return "running";
-    if (/^(ready|disabled|queued)$/i.test(status)) return "not-running";
+    const status = (fields[fields.length - 1] ?? "").normalize("NFC").toLowerCase();
+    if (TASK_CSV_RUNNING.has(status)) return "running";
+    if (TASK_CSV_NOT_RUNNING.has(status)) return "not-running";
     return "unknown";
   }
   return "unknown";
@@ -291,7 +302,19 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
     },
     async endTask(timeoutMs) {
       if (!gate()) return "failed";
-      return classifyTaskEnd(await run("schtasks", ["/end", "/tn", TASK], timeoutMs));
+      const started = Date.now();
+      const ended = await run("schtasks", ["/end", "/tn", TASK], timeoutMs);
+      const verdict = classifyTaskEnd(ended);
+      // schtasks localizes "no running instance" as well (#8863). After a real nonzero exit, an
+      // idle task is not-running only when its own CSV state says so; a running or unreadable
+      // state, a timeout, or an /end that never ran keeps the failure. A localized denial stays a
+      // denial: Part A stops at it whatever the task's state.
+      if (verdict !== "failed" || ended.timedOut || ended.status === null) return verdict;
+      if (LOCALIZED_ACCESS_DENIED.test(ended.stderr + "\n" + ended.stdout)) return "denied";
+      const left = Math.floor(timeoutMs - (Date.now() - started));
+      if (left < 1) return "failed";
+      const csv = await run("schtasks", ["/query", "/tn", TASK, "/fo", "CSV", "/nh"], left);
+      return csv.status === 0 && !csv.timedOut && parseTaskCsvState(csv.stdout) === "not-running" ? "not-running" : "failed";
     },
     async taskState(timeoutMs) {
       const started = Date.now();
