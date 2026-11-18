@@ -250,7 +250,7 @@ completes.
 | `POST /api/combo-suggestions/save` | Save suggested provider/model pairs using `{ id, mode, targets }` with mode `"create"` or `"append"` | 400 invalid request; 403 without an eligible dashboard session; 409 when consent, exclusions, provider availability, or combo state prevents the save. A target classified as paid in either the active or persisted config requires existing combo consent and is saved as metered. When appending suggestions, the server uses the more costly tier from the active and saved configurations. It treats existing targets explicitly marked as metered as pay-per-use and preserves the relative order of existing targets. |
 | `DELETE /api/combos?id=...` | Delete one combo and clear its selection/cooldown state | 400 missing id; 404 unknown combo |
 
-All three suggestion operations (`GET /api/combo-suggestions`, `PUT /api/combo-suggestions`, and `POST /api/combo-suggestions/save`) require a dashboard session issued through local bootstrap or pairing. Admin credentials and remembered sessions receive a 403.
+All three suggestion operations (`GET /api/combo-suggestions`, `PUT /api/combo-suggestions`, and `POST /api/combo-suggestions/save`) require a dashboard session issued through local bootstrap, verified Tailscale identity, or pairing. Admin credentials and remembered sessions receive a 403.
 
 See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and routing failures.
 

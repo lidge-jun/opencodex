@@ -221,7 +221,7 @@ Las instantáneas de sesión incluyen `resumable`. Se vuelve cierto sólo despu�
 | `POST /api/combo-suggestions/save` | Guarda pares de proveedor y modelo sugeridos con `{ id, mode, targets }` y modo `"create"` o `"append"` | 400 solicitud inválida; 403 si falta una sesión de panel válida; 409 si el consentimiento, las exclusiones, la disponibilidad o el estado del combo impiden guardar. Si la configuración activa o la guardada clasifica un destino como de pago, se requiere el consentimiento existente del combo y el destino se guarda como medido. Al añadir sugerencias, el servidor aplica el nivel de mayor coste entre la configuración activa y la guardada. Trata los destinos existentes marcados explícitamente como medidos como destinos de pago por uso y conserva el orden relativo de los destinos existentes. |
 | `DELETE /api/combos?id=...` | Eliminar un combo y borrar su estado de selección/enfriamiento | 400 id ausente; 404 combo desconocido |
 
-Las tres operaciones de sugerencias (`GET /api/combo-suggestions`, `PUT /api/combo-suggestions` y `POST /api/combo-suggestions/save`) requieren una sesión de panel iniciada mediante el acceso local o el emparejamiento. Las credenciales de administrador y las sesiones recordadas reciben un 403.
+Las tres operaciones de sugerencias (`GET /api/combo-suggestions`, `PUT /api/combo-suggestions` y `POST /api/combo-suggestions/save`) requieren una sesión de panel iniciada mediante el acceso local, una identidad de Tailscale verificada o el emparejamiento. Las credenciales de administrador y las sesiones recordadas reciben un 403.
 
 Consulte [Combos](/es/guides/combos/) para conocer las estrategias de destino, los tiempos de reutilización, los alias y los fallos de enrutamiento.
 
