@@ -144,8 +144,43 @@ test("create rejects paid Vertex and never accepts consent from the request", as
   expect(loadConfig().combos?.draft).toBeUndefined();
 
   const current = loadConfig();
+  live.providers.mock!.authMode = "forward";
   current.providers.mock!.authMode = "forward";
   saveConfig(current);
   expect((await saveSuggestion(live, { ...draft, targets: [{ provider: "mock", model: "m" }] })).status).toBe(200);
   expect(loadConfig().combos?.draft?.allowMeteredTargets).toBeUndefined();
 });
+
+for (const paidSide of ["live", "persisted"] as const) {
+  test(`suggestion requires consent and marks the target metered when only ${paidSide} is paid`, async () => {
+    const live = seedPaidSuggestion();
+    const persisted = loadConfig();
+    const freeProvider = { ...live.providers.paid!, baseUrl: "https://example.com/v1", authMode: "forward" as const };
+    const paidProvider = { ...freeProvider, authMode: "api-key" as const };
+    live.providers.paid = paidSide === "live" ? paidProvider : freeProvider;
+    persisted.providers.paid = paidSide === "persisted" ? paidProvider : freeProvider;
+    delete live.combos!.mix!.allowMeteredTargets;
+    delete persisted.combos!.mix!.allowMeteredTargets;
+    saveConfig(persisted);
+
+    const configPath = join(home, "config.json");
+    const beforeDisk = readFileSync(configPath, "utf8");
+    const beforeLive = structuredClone(live.combos);
+    const targets = [paidTarget];
+    for (const request of [{ id: "draft", mode: "create", targets }, { id: "mix", mode: "append", targets }]) {
+      const response = await saveSuggestion(live, request);
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: "suggestion_consent_required" });
+      expect(readFileSync(configPath, "utf8")).toBe(beforeDisk);
+      expect(live.combos).toEqual(beforeLive);
+    }
+
+    persisted.combos!.mix!.allowMeteredTargets = true;
+    saveConfig(persisted);
+    const response = await saveSuggestion(live, { id: "mix", mode: "append", targets });
+    expect(response.status).toBe(200);
+    for (const config of [live, loadConfig()]) {
+      expect(config.combos?.mix?.targets).toContainEqual({ ...paidTarget, metered: true });
+    }
+  });
+}

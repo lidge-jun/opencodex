@@ -122,22 +122,24 @@ async function saveSuggestion(ctx: ManagementContext): Promise<Response> {
     if (create ? previous : !previous) return rejected("suggestion_combo_changed");
 
     const nextTargets = [...(previous?.targets ?? [])];
-    const providerFor = (name: string) => Object.hasOwn(persisted.providers, name) ? persisted.providers[name] : undefined;
-    const tierOf = ({ provider, model }: Target) => {
-      const current = providerFor(provider);
+    const providerFor = (snapshot: OcxConfig, name: string) =>
+      Object.hasOwn(snapshot.providers, name) ? snapshot.providers[name] : undefined;
+    const tierOf = (snapshot: OcxConfig, { provider, model }: Target) => {
+      const current = providerFor(snapshot, provider);
       return current ? channelTier({ ...current, name: provider }, model) : "metered";
     };
     for (const target of targets) {
       if (nextTargets.some(({ provider, model }) => provider.trim() === target.provider && model.trim() === target.model)) continue;
-      const provider = providerFor(target.provider);
+      const provider = providerFor(persisted, target.provider);
       if (!provider || provider.disabled || provider.adapter === "jev-decision") {
         return rejected("suggestion_provider_unavailable");
       }
       if (persisted.comboSuggestionExcludedProviders?.includes(target.provider)) return rejected("suggestion_provider_excluded");
-      const tier = tierOf(target);
-      const metered = isMeteredTier(tier);
+      const tier = tierOf(persisted, target);
+      const liveTier = tierOf(config, target);
+      const metered = isMeteredTier(tier) || isMeteredTier(liveTier);
       if (metered && previous?.allowMeteredTargets !== true) return rejected("suggestion_consent_required");
-      const at = create ? -1 : nextTargets.findIndex(existing => TIER_RANK[tierOf(existing)] > TIER_RANK[tier]);
+      const at = create ? -1 : nextTargets.findIndex(existing => TIER_RANK[tierOf(persisted, existing)] > TIER_RANK[tier]);
       nextTargets.splice(at < 0 ? nextTargets.length : at, 0, { ...target, ...(metered ? { metered: true } : {}) });
     }
 
