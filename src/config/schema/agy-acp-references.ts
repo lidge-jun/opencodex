@@ -8,11 +8,14 @@
  */
 import { AGY_ACP_DEFAULT_MODEL, AGY_ACP_SEED_MODELS } from "../../providers/registry/agy-acp-models";
 import { aliasTemplateError, expandAliasTemplate } from "../../providers/alias-template";
+import { isBareOpenAiFamilyModel } from "../../codex/control-plane-models";
+import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers-destination";
 
 export const AGY_ACP_PROVIDER_ID = "antigravity-acp";
 export const AGY_ACP_ADAPTER = "agy-acp";
 
 type ProviderLike = {
+  disabled?: unknown;
   adapter?: unknown; apiKey?: unknown; apiKeyPool?: unknown; authMode?: unknown; models?: unknown; defaultModel?: unknown;
   modelAliases?: unknown; alias?: unknown; aliasTemplate?: unknown; oauthAccountFailover?: unknown;
   anthropicAccountPool?: unknown; codexAccountMode?: unknown;
@@ -104,6 +107,8 @@ export function selectorCandidateProviders(config: ConfigLike, selector: string)
     }
     if (out.size > 0) return out;
   }
+  const openai = providers.find(([name]) => name === OPENAI_CODEX_PROVIDER_ID)?.[1];
+  if (openai && openai.disabled !== true && isBareOpenAiFamilyModel(raw)) return new Set([OPENAI_CODEX_PROVIDER_ID]);
   const bases = new Set([raw, raw.replace(EFFORT_SUFFIX, "")]);
   const lowerBases = [...bases].map(base => base.toLowerCase());
   for (const [name, provider] of providers) {

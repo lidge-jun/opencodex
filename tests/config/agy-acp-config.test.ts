@@ -137,6 +137,29 @@ describe("antigravity-acp configuration", () => {
       strategy: "jev", decisionModel: model, targets: [{ provider: "google", model: "gemini-3.8-flash" }],
     } } }, providers)))).toContain("cannot decide for a combo");
   });
+
+  test("an ACP default preserves the native OpenAI fallback on load and write", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-agy-acp-openai-fallback-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    const codexHome = installIsolatedCodexHome("ocx-agy-acp-openai-codex-");
+    process.env.OPENCODEX_HOME = home;
+    try {
+      const raw = config({ defaultProvider: "antigravity-acp", subagentModelFallback: ["gpt-6-sol"] }, {
+        openai: { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", disabled: false },
+      });
+      expect(validateConfigCandidate(raw).ok).toBe(true);
+      raw.subagentModelFallback!.push("antigravity-acp/gemini-3.8-flash");
+      expect(messages(validateConfigCandidate(raw))).toContain("subagentModelFallback.1");
+      writeFileSync(getConfigPath(), JSON.stringify(raw));
+      expect(readConfigDiagnostics().config.subagentModelFallback).toEqual(["gpt-6-sol"]);
+      expect(loadConfig().subagentModelFallback).toEqual(["gpt-6-sol"]);
+    } finally {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      codexHome.restore();
+      await removeTreeAfterBackgroundWork(home);
+    }
+  });
   test("a keyless Gemini row is valid, and the same Gemini model on google stays usable everywhere", () => {
     expect(validateConfigCandidate(config()).ok).toBe(true);
     expect(validateConfigCandidate(config({
@@ -216,6 +239,8 @@ describe("antigravity-acp configuration", () => {
     expect(source.match(/^\s*import\b[^\n]*/gm)?.map(line => line.trim())).toEqual([
       'import { AGY_ACP_DEFAULT_MODEL, AGY_ACP_SEED_MODELS } from "../../providers/registry/agy-acp-models";',
       'import { aliasTemplateError, expandAliasTemplate } from "../../providers/alias-template";',
+      'import { isBareOpenAiFamilyModel } from "../../codex/control-plane-models";',
+      'import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers-destination";',
     ]);
     const metadata = readFileSync(repoPath("src/providers/registry/agy-acp-models.ts"), "utf8");
     expect(metadata).not.toMatch(/^\s*import\s/m);
