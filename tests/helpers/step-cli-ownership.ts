@@ -18,7 +18,7 @@ export function event(queryId: string | undefined, message: Record<string, unkno
   return { protocol: "step-agent-sdk", version: 1, kind: "event", id: "evt", method: "query.message", sequence: 1, payload: { queryId, message } };
 }
 export function request(id: string, payload: Record<string, unknown>, method = "sdk_tool.invoke"): StepFrame {
-  return { protocol: "step-agent-sdk", version: 1, kind: "request", id, method, payload };
+  return { protocol: "step-agent-sdk", version: 1, kind: "request", id, method, sessionId: "synthetic-session", payload };
 }
 export class Session implements StepConversationSession {
   sessionId = "synthetic-session";
@@ -35,7 +35,7 @@ export class Session implements StepConversationSession {
   async sendInput(queryId: string, text: string) {
     this.inputs.push({ queryId, text });
     queueMicrotask(() => {
-      if (this.capture) handleReverseRequest(this, request("held", { queryId, serverName: "ocx", toolName: "shell", toolUseId: "call-1", input: {} }));
+      if (this.capture) handleReverseRequest(this, request("req_10", { serverName: "ocx", toolName: "shell", toolUseId: "call-1", input: {}, timeoutMs: 120_000 }));
       else handleRuntimeEvent(this, event(queryId, { type: "status", status: "turn_complete" }));
     });
   }

@@ -37,8 +37,17 @@ export function handleReverseRequest(session: StepConversationSession, frame: St
   const payload = asRecord(frame.payload);
   const expired = payload.__expired === true;
   const turn = currentTurn(session);
-  const ownsQuery = turn?.queryId !== undefined && payload.queryId === turn.queryId
-    && currentQuery(session) === turn.queryId;
+  const queryId = turn?.queryId;
+  // The SDK host sends a sessionId and allocates req_<n> and q_<n> from the same counter.
+  // A callback from before this query cannot acquire it, even though SDK callbacks omit queryId.
+  const requestSerial = /^req_(\d+)$/.exec(frame.id)?.[1];
+  const querySerial = queryId && /^q_(\d+)$/.exec(queryId)?.[1];
+  const ownsQuery = queryId !== undefined && currentQuery(session) === queryId
+    && session.sessionId !== undefined && frame.sessionId === session.sessionId
+    && (payload.queryId === undefined || payload.queryId === queryId)
+    && requestSerial !== undefined && querySerial !== undefined
+    && Number.isSafeInteger(Number(requestSerial)) && Number.isSafeInteger(Number(querySerial))
+    && Number(requestSerial) > Number(querySerial);
 
   if (expired) {
     // The hold elapsed, so the client can never answer this call. Refuse it so StepCode stops waiting
@@ -99,7 +108,7 @@ export function handleReverseRequest(session: StepConversationSession, frame: St
       typeof payload.toolUseId === "string" && payload.toolUseId.length > 0
         ? payload.toolUseId
         : `call_${frame.id}`;
-    turn.pool.rememberHeldTool(turn.ref, { frameId: frame.id, callId, queryId: turn.queryId!, catalogKey: turn.catalogKey });
+    turn.pool.rememberHeldTool(turn.ref, { frameId: frame.id, callId, queryId: queryId!, catalogKey: turn.catalogKey });
     turn.emit({ type: "tool_call_start", id: callId, name: resolved });
     turn.emit({ type: "tool_call_delta", arguments: JSON.stringify(asRecord(payload.input)) });
     turn.emit({ type: "tool_call_end" });

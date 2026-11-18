@@ -25,8 +25,10 @@ is reported rather than restarted — a restart
 would lose tool results the client already delivered, which this route cannot replay from a
 transcript.
 
-Events and reverse callbacks must name the active turn's exact `queryId`. Permissions require an
-owning turn and a tool in that query's declared catalog; other permissions are denied. A
+Events name the active turn's exact `queryId`. SDK reverse callbacks name the owning `sessionId`
+and carry a request ID allocated after the active query ID by the host's shared counter. If a
+callback also carries a query ID, it must match. Permissions require an owning turn and a tool in
+that query's declared catalog. Other permissions are denied. A
 `sdk_tool.invoke` is answered on the client's **next** request, with the original query and catalog.
 Changing the catalog while returning a held result closes the session. Abandoning a held call
 detaches its owner, interrupts it and confirms its input end before registering a replacement turn.

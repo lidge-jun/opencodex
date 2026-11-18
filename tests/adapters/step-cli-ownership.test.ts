@@ -116,21 +116,26 @@ describe("StepCode callback ownership", () => {
     } finally { endTurn(session); }
   });
 
-  test("missing query IDs and stale or undeclared permissions cannot acquire a turn", () => {
+  test("only current callbacks from the owning session can acquire a declared tool", () => {
     const session = new Session();
     const events: AdapterEvent[] = [];
     beginTurn(session, attachTurn(session, e => events.push(e)));
-    rememberQuery(session, "q_new");
+    rememberQuery(session, "q_10");
     try {
       handleRuntimeEvent(session, event(undefined, { type: "status", status: "turn_complete" }));
       handleReverseRequest(session, request("missing", { serverName: "ocx", toolName: "shell" }));
-      handleReverseRequest(session, request("stale", { queryId: "q_old", toolName: "ocx__shell" }, "permission.request"));
-      handleReverseRequest(session, request("builtin", { queryId: "q_new", toolName: "Bash" }, "permission.request"));
-      handleReverseRequest(session, request("current", { queryId: "q_new", toolName: "ocx__shell" }, "permission.request"));
+      handleReverseRequest(session, request("req_9", { serverName: "ocx", toolName: "shell" }));
+      handleReverseRequest(session, request("req_8", { toolName: "ocx__shell" }, "permission.request"));
+      handleReverseRequest(session, request("req_11", { queryId: "q_1", toolName: "ocx__shell" }, "permission.request"));
+      handleReverseRequest(session, request("req_12", { toolName: "Bash" }, "permission.request"));
+      handleReverseRequest(session, {
+        ...request("req_13", { toolName: "ocx__shell" }, "permission.request"), sessionId: "foreign",
+      });
+      handleReverseRequest(session, request("req_14", { toolName: "ocx__shell" }, "permission.request"));
       expect(events).toEqual([]);
-      expect(session.refused).toEqual(["missing"]);
-      expect(session.denied).toEqual(["stale", "builtin"]);
-      expect(session.allowed).toEqual(["current"]);
+      expect(session.refused).toEqual(["missing", "req_9"]);
+      expect(session.denied).toEqual(["req_8", "req_11", "req_12", "req_13"]);
+      expect(session.allowed).toEqual(["req_14"]);
     } finally { endTurn(session); }
   });
 

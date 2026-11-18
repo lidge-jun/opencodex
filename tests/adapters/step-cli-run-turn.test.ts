@@ -49,8 +49,8 @@ class FakeSession implements StepConversationSession {
   /** Deliver a frame immediately, standing in for the CLI streaming it at this moment. */
   emitNow(frame: StepFrame): void {
     const payload = frame.payload as Record<string, unknown>;
-    frame = { ...frame, payload: frame.kind === "request"
-      ? { queryId: `q_${this.#n}`, ...payload }
+    frame = { ...frame, sessionId: this.sessionId, payload: frame.kind === "request"
+      ? payload
       : { queryId: `q_${this.#n}`, message: payload } };
     if (frame.kind === "request") handleReverseRequest(this, frame);
     else handleRuntimeEvent(this, frame);
@@ -234,13 +234,17 @@ describe("StepCode runTurn, two turns through one conversation", () => {
     // The CLI asks permission, calls the tool, and waits for the result: the call is held, so the turn
     // ends with the client's `tool_call` rather than waiting for the model to finish.
     session.stream = [
-      requestFrame("perm-1", "permission.request", { toolName: "ocx__shell", toolUseId: "perm-1" }),
-      requestFrame("tool-1", "sdk_tool.invoke", {
+      requestFrame("req_101", "permission.request", {
+        toolName: "ocx__shell", input: {}, toolUseId: "perm_100",
+        decisionReason: "tool execution requires approval", timeoutMs: 60_000,
+      }),
+      requestFrame("req_102", "sdk_tool.invoke", {
         serverName: "ocx",
         toolName: "shell",
         input: { cmd: "echo LIVE_BRIDGE_OK" },
-        toolUseId: "call-9",
+        toolUseId: "call-9", timeoutMs: 120_000,
       }),
+      TURN_COMPLETE, // Lets a rejected callback fail assertions without waiting for the turn timeout.
     ];
     await adapter.runTurn!(parsed(USER_ASK), THREAD_META, event => events.push(event));
 
@@ -248,7 +252,7 @@ describe("StepCode runTurn, two turns through one conversation", () => {
       expect.objectContaining({ serverName: "ocx", toolName: "shell", description: "run" }),
     ]);
     expect(session.queries[0]?.model).toBe("step-5-preview");
-    expect(session.allowed).toEqual(["perm-1"]);
+    expect(session.allowed).toEqual(["req_101"]);
     // The client regains tool ownership: the call is reported, and nothing is executed in StepCode.
     const kinds = events.map(event => event.type);
     expect(kinds).toContain("tool_call_start");
@@ -262,12 +266,15 @@ describe("StepCode runTurn, two turns through one conversation", () => {
     const adapter = createStepCliAdapter(provider(), { openSession: host(session) });
 
     session.stream = [
-      requestFrame("perm-1", "permission.request", { toolName: "ocx__shell", toolUseId: "perm-1" }),
-      requestFrame("tool-1", "sdk_tool.invoke", {
+      requestFrame("req_101", "permission.request", {
+        toolName: "ocx__shell", input: {}, toolUseId: "perm_100",
+        decisionReason: "tool execution requires approval", timeoutMs: 60_000,
+      }),
+      requestFrame("req_102", "sdk_tool.invoke", {
         serverName: "ocx",
         toolName: "shell",
         input: { cmd: "echo LIVE_BRIDGE_OK" },
-        toolUseId: "call-9",
+        toolUseId: "call-9", timeoutMs: 120_000,
       }),
     ];
     await adapter.runTurn!(parsed(USER_ASK), THREAD_META, () => {});
@@ -305,12 +312,15 @@ describe("StepCode runTurn, two turns through one conversation", () => {
     const session = new FakeSession();
     const adapter = createStepCliAdapter(provider(), { openSession: host(session) });
     session.stream = [
-      requestFrame("perm-1", "permission.request", { toolName: "ocx__shell", toolUseId: "perm-1" }),
-      requestFrame("tool-1", "sdk_tool.invoke", {
+      requestFrame("req_101", "permission.request", {
+        toolName: "ocx__shell", input: {}, toolUseId: "perm_100",
+        decisionReason: "tool execution requires approval", timeoutMs: 60_000,
+      }),
+      requestFrame("req_102", "sdk_tool.invoke", {
         serverName: "ocx",
         toolName: "shell",
         input: { cmd: "echo LIVE_BRIDGE_OK" },
-        toolUseId: "call-9",
+        toolUseId: "call-9", timeoutMs: 120_000,
       }),
     ];
     await adapter.runTurn!(parsed(USER_ASK), THREAD_META, () => {});
@@ -377,12 +387,15 @@ describe("StepCode query lifecycle", () => {
     const session = new FakeSession();
     const adapter = createStepCliAdapter(provider(), { openSession: host(session) });
     session.stream = [
-      requestFrame("perm-1", "permission.request", { toolName: "ocx__shell", toolUseId: "perm-1" }),
-      requestFrame("tool-1", "sdk_tool.invoke", {
+      requestFrame("req_101", "permission.request", {
+        toolName: "ocx__shell", input: {}, toolUseId: "perm_100",
+        decisionReason: "tool execution requires approval", timeoutMs: 60_000,
+      }),
+      requestFrame("req_102", "sdk_tool.invoke", {
         serverName: "ocx",
         toolName: "shell",
         input: { cmd: "echo ok" },
-        toolUseId: "call-9",
+        toolUseId: "call-9", timeoutMs: 120_000,
       }),
     ];
     await adapter.runTurn!(
@@ -468,12 +481,15 @@ describe("StepCode concurrent turns on one conversation", () => {
     const session = new FakeSession();
     const adapter = createStepCliAdapter(provider(), { openSession: host(session) });
     session.stream = [
-      requestFrame("perm-1", "permission.request", { toolName: "ocx__shell", toolUseId: "perm-1" }),
-      requestFrame("tool-1", "sdk_tool.invoke", {
+      requestFrame("req_101", "permission.request", {
+        toolName: "ocx__shell", input: {}, toolUseId: "perm_100",
+        decisionReason: "tool execution requires approval", timeoutMs: 60_000,
+      }),
+      requestFrame("req_102", "sdk_tool.invoke", {
         serverName: "ocx",
         toolName: "shell",
         input: { cmd: "echo ok" },
-        toolUseId: "call-9",
+        toolUseId: "call-9", timeoutMs: 120_000,
       }),
     ];
     // Awaited deliberately: the fake drains `stream` when it flushes, so queuing the next turn's
@@ -806,12 +822,15 @@ describe("StepCode held-result delivery ordering", () => {
     const adapter = createStepCliAdapter(provider(), { openSession: host(session) });
 
     session.stream = [
-      requestFrame("perm-1", "permission.request", { toolName: "ocx__shell", toolUseId: "perm-1" }),
-      requestFrame("tool-1", "sdk_tool.invoke", {
+      requestFrame("req_101", "permission.request", {
+        toolName: "ocx__shell", input: {}, toolUseId: "perm_100",
+        decisionReason: "tool execution requires approval", timeoutMs: 60_000,
+      }),
+      requestFrame("req_102", "sdk_tool.invoke", {
         serverName: "ocx",
         toolName: "shell",
         input: { cmd: "echo ok" },
-        toolUseId: "call-9",
+        toolUseId: "call-9", timeoutMs: 120_000,
       }),
     ];
     await adapter.runTurn!(
@@ -851,12 +870,15 @@ describe("StepCode held-result delivery ordering", () => {
 describe("StepCode turn ownership", () => {
   function captureCall(session: FakeSession): void {
     session.stream = [
-      requestFrame("perm-1", "permission.request", { toolName: "ocx__shell", toolUseId: "perm-1" }),
-      requestFrame("tool-1", "sdk_tool.invoke", {
+      requestFrame("req_101", "permission.request", {
+        toolName: "ocx__shell", input: {}, toolUseId: "perm_100",
+        decisionReason: "tool execution requires approval", timeoutMs: 60_000,
+      }),
+      requestFrame("req_102", "sdk_tool.invoke", {
         serverName: "ocx",
         toolName: "shell",
         input: { cmd: "echo LIVE_BRIDGE_OK" },
-        toolUseId: "call-9",
+        toolUseId: "call-9", timeoutMs: 120_000,
       }),
     ];
   }
@@ -881,7 +903,7 @@ describe("StepCode turn ownership", () => {
     expect(second.some(event => event.type === "error")).toBe(false);
     expect(second.find(event => event.type === "done")).toMatchObject({ stopReason: "stop" });
     expect(session.delivered).toHaveLength(1);
-    expect(session.delivered[0]?.id).toBe("tool-1");
+    expect(session.delivered[0]?.id).toBe("req_102");
     expect((session.delivered[0]?.result as { isError?: boolean }).isError).toBe(true);
     expect(session.interrupts).toEqual(["q_1"]);
     expect(session.queries).toHaveLength(2);
