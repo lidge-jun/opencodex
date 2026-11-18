@@ -336,9 +336,10 @@ Otherwise, if the existing account's organization stays unknown (expired token, 
 login whose own organization was not reported), the login may replace it, as earlier releases did.
 Reauthentication also checks existing accounts through their usable tokens when their organization
 is missing. It refuses a grant for a different confirmed organization or one another account
-already holds. Sign in separately to add the other organization. When Claude Code rotates both
-tokens for a user with multiple pool accounts, automatic adoption requires matching organization
-proof for the existing account and the new grant.
+already holds. If an account changes during that check and its organization can no longer be
+confirmed, retry reauthentication. Sign in separately to add another organization. When Claude Code
+rotates both tokens and the same Claude account has another entry in either Anthropic pool,
+automatic adoption requires matching organization proof for the existing account and the new grant.
 
 OAuth reauthentication preserves operator settings such as model selections, pricing overrides,
 and account failover preferences. Login-owned transport/authentication fields and registry-owned

@@ -325,14 +325,14 @@ Regression coverage: `tests/adapters/anthropic/anthropic-account-pause.test.ts`,
 `src/oauth/anthropic-identity.ts` binds authenticated `account.uuid` to the access bearer's SHA-256. The fixed-origin profile rejects redirects
 and applies a ten-second deadline and 64 KiB body limit. `src/oauth/store.ts` drops invalid or stale proofs, and summaries omit the proof.
 Each grant serves one organization. Its proof may carry `organizationUuid` (a lowercase UUID) as slot scope. Browser login and refresh in
-`src/oauth/anthropic.ts` fill missing token-response proof from the same bearer's profile. A conflicting account or organization leaves token evidence and labels untouched.
+`src/oauth/anthropic.ts` fill missing token-response proof from the same bearer's profile. The exchange's validated organization constrains enrichment even when the exchange omits the account UUID. A conflicting account or organization leaves token evidence and labels untouched. If the exchange attests an organization without an account UUID and the profile attests a different organization, browser login fails before account selection and refresh keeps the rotated grant without the conflicting profile.
 `src/oauth/anthropic-login-slot.ts` chooses the same organization or an unknown row for login and CLI import. A proven other organization gets a new row.
 Login and reauth probe unknown same-account rows with their own unexpired bearers before the store lock. The reauth guard checks each observation against
-the current bearer and account, then refuses a different proven organization or one a sibling proves. Own-grant refresh retains scope until fresh proof names one.
+the current bearer and account, then refuses a different proven organization or one a sibling proves. Reauth also stops if a changed target or same-account sibling invalidates its observation and has no current organization proof. Own-grant refresh retains scope until fresh proof names one.
 
 `src/oauth/anthropic-continuity.ts` accepts usable changed CLI generations with a shared nonempty token. Full rotation requires matching authenticated account UUIDs.
 The old bearer uses stored or fresh proof. Independent old/new reads run in parallel, and stored proof missing its organization may prompt one profile read.
-Full rotation in a multi-slot account requires matching organizations. The writer checks the current roster for this requirement and sibling ownership of the incoming organization.
+Full rotation requires matching organizations whenever either pool has a same-account sibling. The writer checks both current rosters and refuses adoption when a sibling already proves the incoming organization.
 Shared-refresh adoption cannot copy proof to a new bearer. Provider refresh needs new bearer proof and refuses a conflicting authenticated account UUID.
 
 The refresh owner captures login ID, token generation and identity metadata before observation.

@@ -20,8 +20,9 @@ import type { OAuthCredentials, ProviderAccount } from "./types";
 /** Interactive login waits on these reads; a slow profile falls back to the historical match. */
 const LOGIN_OBSERVATION_TIMEOUT_MS = 5_000;
 
-/** Organizations observed for stored rows, keyed by the SHA-256 of the bearer that proved them. */
-type AnthropicSlotOrganizations = ReadonlyMap<string, { accountUuid: string; organizationUuid: string }>;
+type SlotOrganizationProof = { accountUuid: string; organizationUuid: string; bearerSha256: string };
+/** Keyed by row ID so a writer can distinguish a stale proof from an unobserved row. */
+type AnthropicSlotOrganizations = ReadonlyMap<string, SlotOrganizationProof>;
 
 function bearerSha256(access: string): string {
   return createHash("sha256").update(access).digest("hex");
@@ -36,18 +37,19 @@ function loginIdentity(credential: OAuthCredentials): string | undefined {
   return slotAccountUuid(credential) ?? credential.email;
 }
 
-function slotOrganization(credential: OAuthCredentials, observed?: AnthropicSlotOrganizations): string | undefined {
+function slotOrganization({ id, credential }: ProviderAccount, observed: AnthropicSlotOrganizations): string | undefined {
   const stored = anthropicOrganization(credential);
-  if (stored || !observed?.size) return stored;
-  const proof = observed.get(bearerSha256(credential.access));
-  return proof && proof.accountUuid === slotAccountUuid(credential) ? proof.organizationUuid : undefined;
+  if (stored) return stored;
+  const proof = observed.get(id);
+  return proof && proof.accountUuid === slotAccountUuid(credential) && proof.bearerSha256 === bearerSha256(credential.access)
+    ? proof.organizationUuid : undefined;
 }
 
 /**
  * Before the store lock: read the organization of each same-account row that has none recorded
  * (rows saved before organizations were tracked), so the login can tell its org from theirs.
  * Only an unexpired bearer is asked, each answer is bound to that exact bearer, and nothing is
- * written here; a row whose bearer changes before the write simply stays unknown.
+ * written here.
  */
 export async function observeAnthropicSlotOrganizations(
   accounts: readonly ProviderAccount[],
@@ -63,11 +65,11 @@ export async function observeAnthropicSlotOrganizations(
   if (pending.length === 0) return new Map();
   const signal = AbortSignal.timeout(LOGIN_OBSERVATION_TIMEOUT_MS);
   const proofs = await Promise.all(pending.map(row => resolve(row.credential.access, signal)));
-  const observed = new Map<string, { accountUuid: string; organizationUuid: string }>();
+  const observed = new Map<string, SlotOrganizationProof>();
   pending.forEach((row, index) => {
     const proof = normalizeAnthropicIdentity(proofs[index], row.credential.access);
     if (proof?.organizationUuid && proof.accountUuid === slotAccountUuid(row.credential)) {
-      observed.set(proof.bearerSha256, { accountUuid: proof.accountUuid, organizationUuid: proof.organizationUuid });
+      observed.set(row.id, { accountUuid: proof.accountUuid, organizationUuid: proof.organizationUuid, bearerSha256: proof.bearerSha256 });
     }
   });
   return observed;
@@ -83,7 +85,7 @@ function pickSlot(
   candidates: readonly ProviderAccount[], incoming: OAuthCredentials,
   observed: AnthropicSlotOrganizations, activeAccountId?: string,
 ): ProviderAccount | undefined {
-  const organizationOf = (row: ProviderAccount) => slotOrganization(row.credential, observed);
+  const organizationOf = (row: ProviderAccount) => slotOrganization(row, observed);
   const organization = anthropicOrganization(incoming);
   if (organization) {
     return candidates.find(row => organizationOf(row) === organization)
@@ -110,13 +112,14 @@ export function findAnthropicImportSlot(
   return pickSlot(accounts.filter(row => matchesAnthropicImport(row.credential, incoming)), incoming, observed, activeAccountId);
 }
 
-export function anthropicSiblingSlots(accounts: readonly ProviderAccount[], accountId: string, accountUuid: string): ProviderAccount[] {
+export function anthropicSiblingSlots(accounts: readonly ProviderAccount[], accountId: string | undefined, accountUuid: string): ProviderAccount[] {
   return accounts.filter(row => row.id !== accountId && slotAccountUuid(row.credential) === accountUuid);
 }
 
 /**
  * Recheck the target and siblings under the writer lock. A persisted proof takes precedence, and
- * a pre-lock observation applies only to the same bearer and account that were observed.
+ * a pre-lock observation applies only to the same bearer and account that were observed. Refuse
+ * the write if a relevant observation went stale and the current row has no replacement proof.
  */
 export function anthropicReauthSlotGuard(
   accountId: string, incoming: OAuthCredentials, observed: AnthropicSlotOrganizations,
@@ -124,14 +127,19 @@ export function anthropicReauthSlotGuard(
   const organization = anthropicOrganization(incoming);
   const accountUuid = slotAccountUuid(incoming);
   return accounts => {
-    const target = accounts.find(row => row.id === accountId)?.credential;
+    const target = accounts.find(row => row.id === accountId);
     if (!target) return;
-    const targetAccountUuid = slotAccountUuid(target);
+    const targetAccountUuid = slotAccountUuid(target.credential);
     if (targetAccountUuid && accountUuid && targetAccountUuid !== accountUuid) throw new OAuthReauthIdentityMismatchError();
     if (!organization || !accountUuid) return;
     const targetOrganization = slotOrganization(target, observed);
-    if ((targetOrganization && targetOrganization !== organization)
-      || anthropicSiblingSlots(accounts, accountId, accountUuid).some(row => slotOrganization(row.credential, observed) === organization)) {
+    const siblingConflict = accounts.some(row => {
+      const prior = observed.get(row.id);
+      if (row.id === accountId || (slotAccountUuid(row.credential) ?? prior?.accountUuid) !== accountUuid) return false;
+      const siblingOrganization = slotOrganization(row, observed);
+      return siblingOrganization === organization || (!siblingOrganization && prior !== undefined);
+    });
+    if ((targetOrganization ? targetOrganization !== organization : observed.has(target.id)) || siblingConflict) {
       throw new OAuthReauthIdentityMismatchError();
     }
   };

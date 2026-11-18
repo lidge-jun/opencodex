@@ -5,7 +5,7 @@ import { credentialGeneration, type AuthStore } from "./store";
 import { mergeOAuthOrganizationName, mergeOAuthPlan } from "./plan";
 import { REFRESH_SKEW_MS } from "./refresh-policy";
 import type { OAuthCredentials, ProviderAccount, ProviderAccountSet } from "./types";
-import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
+import { ANTHROPIC_INSTANCE_IDS, type AnthropicInstanceId } from "../providers/anthropic-instance-id";
 
 export type ClaudeCredentialObservation =
   | { kind: "absent" }
@@ -78,12 +78,13 @@ export async function newerClaudeCredentialForInstance(
 
 /** Check the latest roster while adoption owns the auth-store writer lock. */
 export function claudeAdoptionSlotCurrent(
-  accounts: readonly ProviderAccount[], accountId: string, adoption: ClaudeCredentialAdoption,
+  store: AuthStore, instance: AnthropicInstanceId, accountId: string, adoption: ClaudeCredentialAdoption,
 ): boolean {
   const credential = adoption.credential;
   const identity = normalizeAnthropicIdentity(credential.anthropicIdentity, credential.access);
   if (!identity) return true;
-  const siblings = anthropicSiblingSlots(accounts, accountId, identity.accountUuid);
+  const siblings = ANTHROPIC_INSTANCE_IDS.flatMap(pool =>
+    anthropicSiblingSlots(store[pool]?.accounts ?? [], pool === instance ? accountId : undefined, identity.accountUuid));
   if (siblings.length === 0) return true;
   const organization = identity.organizationUuid;
   if (adoption.previousOrganization !== undefined && (!organization || organization !== adoption.previousOrganization)) return false;

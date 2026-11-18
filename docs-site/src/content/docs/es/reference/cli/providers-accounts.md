@@ -205,9 +205,11 @@ del panel y a las credenciales con permisos completos de administración.
 
 Al iniciar sesión o reautenticar, OpenCodex comprueba con los tokens vigentes la organización de
 las cuentas anteriores que aún carecen de ese dato. La reautenticación rechaza una autorización
-para otra organización confirmada o para una que ya corresponde a otra cuenta. Si Claude Code
-renueva ambos tokens de un usuario con varias cuentas en el pool, la adopción automática exige
-confirmar que la cuenta existente y la nueva autorización corresponden a la misma organización.
+para otra organización confirmada o para una que ya corresponde a otra cuenta. Si una cuenta
+cambia durante la comprobación y ya no se puede confirmar su organización, vuelve a autenticarte.
+Si Claude Code renueva ambos tokens y la misma cuenta de Claude tiene otra entrada en cualquiera
+de los dos pools de Anthropic, la adopción automática exige confirmar que la cuenta existente y
+la nueva autorización corresponden a la misma organización.
 
 La reautenticación OAuth conserva la configuración del operador, como selecciones de modelo, anulaciones de precios, y preferencias de conmutación por error de cuenta. Campos de transporte/autenticación de inicio de sesión y de registro Se actualizan los metadatos del catálogo. Un proveedor de live-discovery mantiene su modelo predeterminado seleccionado; un El proveedor estático puede reemplazar un valor predeterminado que ya no existe en su catálogo actualizado.
 

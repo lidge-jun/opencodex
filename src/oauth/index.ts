@@ -908,7 +908,7 @@ export async function refreshAnthropicAccountWithLock(
         },
         assertOwnership: store => {
           assertOwner(store);
-          if (!claudeAdoptionSlotCurrent(store[provider]?.accounts ?? [], accountId, observed)) throw new OAuthTokenRefreshStaleError();
+          if (!claudeAdoptionSlotCurrent(store, provider, accountId, observed)) throw new OAuthTokenRefreshStaleError();
         },
       });
       // A superseding write did not adopt our candidate. Its pending intent remains owned by it.

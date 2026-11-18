@@ -16,14 +16,14 @@ export type AnthropicIdentityResolver = (access: string, signal?: AbortSignal) =
 const ORGANIZATION_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** A well-formed organization UUID in canonical lowercase, or undefined. */
-function organizationUuidOf(value: unknown): string | undefined {
+export function normalizeAnthropicOrganizationUuid(value: unknown): string | undefined {
   return typeof value === "string" && ORGANIZATION_UUID_RE.test(value) ? value.toLowerCase() : undefined;
 }
 
 export function bindAnthropicIdentity(access: string, accountUuid: unknown, organizationUuid?: unknown): AnthropicIdentity | undefined {
   if (!access || typeof accountUuid !== "string" || !accountUuid.length || accountUuid.length > 128
     || accountUuid !== accountUuid.trim() || /[\x00-\x1f\x7f]/.test(accountUuid)) return undefined;
-  const organization = organizationUuidOf(organizationUuid);
+  const organization = normalizeAnthropicOrganizationUuid(organizationUuid);
   return { v: 1, accountUuid, bearerSha256: createHash("sha256").update(access).digest("hex"),
     ...(organization ? { organizationUuid: organization } : {}) };
 }
