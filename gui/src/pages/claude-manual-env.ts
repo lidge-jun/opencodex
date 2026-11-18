@@ -39,6 +39,8 @@ export interface ClaudeManualEnvState {
    * `contextAccounting`, which is what a caller with only one snapshot has.
    */
   servedContextAccounting?: "1m" | "200k";
+  /** Fable slot from the same read as `effectiveModelEnv`, empty when unconfigured. */
+  servedFableModel?: string;
   /** Configured slots, so a 200k draft can drop automatic marks without dropping an explicit `[1m]`. */
   model?: string;
   smallFastModel?: string;
@@ -74,33 +76,42 @@ function configuredSlot(state: ClaudeManualEnvState, name: (typeof MODEL_ENV_NAM
     : name === "ANTHROPIC_DEFAULT_OPUS_MODEL" ? state.tierModels?.opus
     : name === "ANTHROPIC_DEFAULT_SONNET_MODEL" ? state.tierModels?.sonnet
     : name === "ANTHROPIC_DEFAULT_HAIKU_MODEL" ? haiku
-    : name === "ANTHROPIC_DEFAULT_FABLE_MODEL" ? state.tierModels?.fable
     : "";
   return (raw ?? "").trim();
 }
 
 /**
- * Model exports for the pasted block. A 200k draft over a 1M server snapshot must not keep
+ * Model exports for the pasted block. An automatic Fable fill is chosen for the daemon's CLI,
+ * so the block leaves that choice to the CLI on the user's shell PATH.
+ * A 200k draft over a 1M server snapshot must not keep
  * automatic `[1m]` marks or native tier fills: the runtime omits both, and an explicit `[1m]`
  * already on the configured selector stays. A 1M draft over a 200k snapshot cannot re-mark
  * without the window map, so it keeps that snapshot rather than pairing a compact window
  * with unmarked ids.
  */
 export function manualModelEnv(state: ClaudeManualEnvState): Record<string, string> {
+  const fableSlot = state.servedFableModel ?? (state.tierModels && (state.tierModels.fable ?? ""));
+  const { ANTHROPIC_DEFAULT_FABLE_MODEL: fable, ...withoutFable } = state.effectiveModelEnv;
+  const omitFable = fable && (fableSlot === undefined
+    ? NATIVE_TIER_FILL.ANTHROPIC_DEFAULT_FABLE_MODEL?.includes(stripOneMillionMarker(fable))
+    : !fableSlot.trim());
+  const modelEnv = omitFable ? withoutFable : state.effectiveModelEnv;
   const accounting = state.contextAccounting ?? "1m";
   const served = state.servedContextAccounting ?? accounting;
-  if (accounting !== "200k" || served === "200k") return state.effectiveModelEnv;
+  if (accounting !== "200k" || served === "200k") return modelEnv;
   const slotsKnown = state.model !== undefined || state.smallFastModel !== undefined || state.tierModels !== undefined;
   const out: Record<string, string> = {};
   for (const name of MODEL_ENV_NAMES) {
-    const server = state.effectiveModelEnv[name];
+    const server = modelEnv[name];
     if (!server) continue;
-    if (!slotsKnown) {
+    const slot = name === "ANTHROPIC_DEFAULT_FABLE_MODEL" && fableSlot !== undefined
+      ? fableSlot.trim()
+      : slotsKnown ? configuredSlot(state, name) : undefined;
+    if (slot === undefined) {
       if (NATIVE_TIER_FILL[name]?.includes(stripOneMillionMarker(server))) continue;
       out[name] = stripOneMillionMarker(server);
       continue;
     }
-    const slot = configuredSlot(state, name);
     if (!slot) continue;
     out[name] = ONE_M_MARKER.test(slot) ? server : stripOneMillionMarker(server);
   }

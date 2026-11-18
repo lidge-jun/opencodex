@@ -886,8 +886,10 @@ slot then gets the native id Claude Code resolves that alias to, with the `[1m]`
 behind a gateway Claude Code accounts an unmarked id at 200k. An `anthropic` row capped below 1M or
 a `claudeCode.modelMap` entry keeps its id unmarked, and Haiku is never filled or marked. When the
 launch uses proxy auth or `nativePassthrough` is off, the router decides, and only a routed row's
-window counts. System env and the shell file export a configured Fable slot. When the slot is
-unset, each `ocx claude` launch chooses the automatic Fable fill using the CLI on its own PATH.
+window counts. System env, the shell file, and the dashboard's manual environment block export
+Fable only when its slot is configured. When the slot is unset, `ocx claude` chooses the automatic
+Fable fill using the CLI on its own PATH. The manual block leaves Fable selection to the Claude Code
+installation in the shell where you paste it.
 
 When both `tierModels.haiku` and `smallFastModel` are absent, OpenCodex leaves both helper variables unset; Claude Code then chooses its native helper model (currently Sonnet), which may incur native-provider charges.
 
