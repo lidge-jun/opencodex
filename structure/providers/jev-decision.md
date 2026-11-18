@@ -219,7 +219,7 @@ An absent note leaves the prior decision payload shape intact.
 `src/server/responses/core-combo.ts` computes current eligibility and asks JEV once for the initial pick.
 Candidate enumeration carries the initial pick's request-scoped cooldown reservation and cannot
 reserve another pass. After the decision returns, reserved requests recheck current eligibility and
-cooldown revisions before dispatch. A post-decision capability refresh and candidate selection share one live combo snapshot and retain the request admission scope. A stale choice fails open to the first remaining eligible target
+cooldown revisions before dispatch. A stale choice fails open to the first remaining eligible target
 and its supported effort, recording that actual fallback. No remaining choice returns unavailable
 without sending; the completed decision keeps its reported usage and zero model attempts. A previously
 applicable choice is marked invalid; existing failure gates remain. The selected pick retains the reservation through ordinary failover and
@@ -248,6 +248,12 @@ section (`gui/src/components/combo-workspace-jev-decision.tsx`) chooses TypeSafe
 or an opencodex model route, with the timeout and a Test probe; there is no separate decisions page.
 
 ## Session pin
+
+After a decision await, metered consent, target roster and capability eligibility share
+one live combo snapshot under the original request admission scope. The capability await
+is followed by a live snapshot and consent check. A change restarts local eligibility up
+to twice. Persistent churn makes selection unavailable and preserves completed decision
+usage.
 
 `sessionPin: { ttlMs }` is an opt-in, JEV-only Combo field (#7525); `src/combos/jev-session-pin-config.ts`
 owns its 60000..86400000 ms range, the CLI duration grammar and the closed `pinReason` vocabulary.

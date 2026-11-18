@@ -495,7 +495,7 @@ export async function executeComboResponses(
   if (combo.imageInput === "disabled" && comboRequestHasImageInput(body)) {
     return formatErrorResponse(400, "invalid_request_error", "This combo does not accept image input");
   }
-  const meteredAllowed = admissionMayUseMeteredComboTargets(config, options.admission, combo);
+  let meteredAllowed = admissionMayUseMeteredComboTargets(config, options.admission, combo);
   const mayUseTarget = (target: (typeof combo.targets)[number]): boolean =>
     (meteredAllowed || !target.metered) && (combo.strategy !== "jev" || target.provider !== JEV_PROVIDER_ID);
   // The combo ladder owns the whole logical request, so the catalog diagnostic is counted here for
@@ -841,7 +841,16 @@ export async function executeComboResponses(
   let jevDecision: JevDecision | undefined;
   let failedPinEffortDecision: JevDecision | undefined;
   if (combo.strategy === "jev" && !toolLoopPin) {
-    const choices = eligibleJevComboChoices(config, comboId, targetEligible, Date.now(), pick.cooldownReprobeTargets);
+    const jevTargetEligible = (target: (typeof combo.targets)[number]): boolean => {
+      if (!targetEligible(target)) return false;
+      if (!admissionScope) return true;
+      try {
+        return routeAllowedByScope(admissionScope, routeConcreteModel(config, `${target.provider}/${target.model}`));
+      } catch {
+        return false;
+      }
+    };
+    const choices = eligibleJevComboChoices(config, comboId, jevTargetEligible, Date.now(), pick.cooldownReprobeTargets);
     const first = choices[0];
     if (!first) {
       return comboUnavailable(comboId, undefined, comboExclusion(config, comboId, target =>
@@ -931,19 +940,31 @@ export async function executeComboResponses(
     let selected = choices.find(choice => choice.candidate.key === decision.targetKey) ?? first;
     let selectionUnavailable = false;
     let refreshedRefusal: Response | undefined;
-    if ((pick.cooldownReprobeTargets || awaitedPinEffort) && !options.abortSignal?.aborted) {
-      // Keep capability and selection on the same live combo even if the vision probe yields.
-      const rawCombo = Object.hasOwn(config.combos ?? {}, comboId) ? config.combos?.[comboId] : undefined;
-      const combos = rawCombo ? { [comboId]: { ...rawCombo, targets: rawCombo.targets.map(target => ({ ...target })) } } : {};
-      const selectionConfig = { ...config, combos };
-      const currentCombo = getCombo(selectionConfig, comboId);
+    if ((!pinReuse?.decision || pick.cooldownReprobeTargets || awaitedPinEffort) && !options.abortSignal?.aborted) {
       const previousUnservable = capability.unservable;
-      if (currentCombo) capability = await readCapability(currentCombo);
-      if (options.abortSignal?.aborted) return clientCancelledResponse();
-      refreshedRefusal = currentCombo && capabilityRefusal(capability, currentCombo);
-      omittingImages = capability.unservable === "image";
-      if (!refreshedRefusal && previousUnservable !== capability.unservable) warnCapabilityDegradation(capability.unservable);
-      const currentChoices = refreshedRefusal ? [] : eligibleJevComboChoices(selectionConfig, comboId, targetEligible, Date.now(), pick.cooldownReprobeTargets);
+      const liveCombo = () => Object.hasOwn(config.combos ?? {}, comboId) ? config.combos?.[comboId] : undefined;
+      let currentChoices: typeof choices = [];
+      // Retry only the local capability read. An unstable roster is unavailable.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const rawCombo = liveCombo();
+        if (!rawCombo) break;
+        const snapshot = structuredClone(rawCombo);
+        const selectionConfig = { ...config, combos: { [comboId]: snapshot } };
+        const currentCombo = getCombo(selectionConfig, comboId)!;
+        meteredAllowed = admissionMayUseMeteredComboTargets(config, options.admission, currentCombo);
+        capability = await readCapability(currentCombo);
+        if (options.abortSignal?.aborted) return clientCancelledResponse();
+        const latestCombo = liveCombo();
+        if (!Bun.deepEquals(snapshot, latestCombo)
+          || meteredAllowed !== admissionMayUseMeteredComboTargets(config, options.admission, latestCombo)) continue;
+        refreshedRefusal = capabilityRefusal(capability, currentCombo);
+        omittingImages = capability.unservable === "image";
+        if (!refreshedRefusal && previousUnservable !== capability.unservable) warnCapabilityDegradation(capability.unservable);
+        if (!refreshedRefusal) {
+          currentChoices = eligibleJevComboChoices(selectionConfig, comboId, jevTargetEligible, Date.now(), pick.cooldownReprobeTargets);
+        }
+        break;
+      }
       const current = currentChoices.find(choice => choice.candidate.key === decision.targetKey
         && (decision.effort === null ? choice.candidate.reasoningEfforts.length === 0
           : choice.candidate.reasoningEfforts.includes(decision.effort)));
@@ -1124,6 +1145,10 @@ export async function executeComboResponses(
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
     const firstComboTarget = comboTargetsDispatched === 0;
+    if (!firstComboTarget && combo.strategy === "jev" && pick.target.metered
+      && !admissionMayUseMeteredComboTargets(config, options.admission, getCombo(config, comboId))) {
+      return lastFailure ? exhaustedFailure() : comboUnavailable(comboId);
+    }
     // The physical destination after provider aliases and blockedModelRedirects: hops are
     // classified by where the request really goes, not by the selector the combo names.
     const targetRoute = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
@@ -1402,6 +1427,7 @@ export async function executeComboResponses(
         },
       }) : await requestDispatchers.handleResponses(childRequest, config, childLog, {
         ...options,
+        admissionScope,
         plaintextV2Decision: strictReplay,
         replayPrincipal,
         // A bridge child is a concrete route; the native source belongs to this loop only.
