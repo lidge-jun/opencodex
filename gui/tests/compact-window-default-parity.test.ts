@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
-import { AUTO_COMPACT_WINDOW_DEFAULT as RUNTIME_DEFAULT } from "../../src/claude/context-windows";
+import {
+  AUTO_COMPACT_WINDOW_DEFAULT as RUNTIME_DEFAULT,
+  buildClaudeContextWindows,
+  effectiveModelEnv,
+  nativeClaudePassthroughFor,
+} from "../../src/claude/context-windows";
 import { AUTO_COMPACT_WINDOW_DEFAULT as GUI_DEFAULT } from "../src/pages/claude-code-types";
 import { buildManualEnv } from "../src/pages/claude-manual-env";
 
@@ -35,4 +40,22 @@ test("the pasted manual export falls back to that same default", () => {
     effectiveModelEnv: {},
   } as never);
   expect(explicit).toContain("export CLAUDE_CODE_AUTO_COMPACT_WINDOW=250000");
+});
+
+test("a 200k manual snippet drops the server's native Fable fill without slot evidence", () => {
+  const windows = buildClaudeContextWindows([], [], undefined, nativeClaudePassthroughFor(undefined, "subscription"));
+  const serverEnv = effectiveModelEnv(undefined, windows);
+  const snapshot = {
+    port: 10100,
+    authMode: "subscription",
+    autoContext: true,
+    maxContextTokens: null,
+    autoCompactWindow: null,
+    servedContextAccounting: "1m",
+    effectiveModelEnv: serverEnv,
+  } as const;
+
+  expect(serverEnv.ANTHROPIC_DEFAULT_FABLE_MODEL).toEndWith("[1m]");
+  expect(buildManualEnv(snapshot)).toContain(`export ANTHROPIC_DEFAULT_FABLE_MODEL=${serverEnv.ANTHROPIC_DEFAULT_FABLE_MODEL}\n`);
+  expect(buildManualEnv({ ...snapshot, contextAccounting: "200k" })).not.toContain("ANTHROPIC_DEFAULT_FABLE_MODEL");
 });
