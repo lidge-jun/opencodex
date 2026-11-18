@@ -1371,6 +1371,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         if (liveInference === undefined) delete candidate.inferContextWindow;
         else candidate.inferContextWindow = liveInference;
       }
+      const livePrice = config.providers[name]?.creditPriceUsd;
+      if (!Object.hasOwn(rawProvider, "creditPriceUsd") && livePrice !== undefined) candidate.creditPriceUsd = livePrice;
       const draft = { ...(registrationDraft ?? config), providers: { ...config.providers, [name]: candidate }, ...(body.setDefault === true ? { defaultProvider: name } : {}) };
       const validation = validateConfigCandidate(draft); if (!validation.ok) { validationError = validation.error; return; }
       try {
