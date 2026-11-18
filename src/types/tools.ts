@@ -367,7 +367,10 @@ function toolAllowedByChoiceFromIndex(
   return false;
 }
 
-export function resolveToolChoiceWireName(tools: readonly Pick<OcxTool, "namespace" | "name">[] | undefined, name: string): string {
+export function resolveToolChoiceWireName(
+  tools: readonly ToolIdentity[] | undefined, name: string, choice?: OcxToolChoice,
+): string {
+  if (isQualifiedToolChoiceName(choice, name)) return name;
   const candidates = toolChoiceCandidates(tools, name);
   if (candidates.length === 1) {
     const match = candidates[0];
@@ -390,15 +393,24 @@ export function modelInList(list: string[] | undefined, modelId: string): boolea
   return colon > 0 && list.includes(modelId.slice(0, colon));
 }
 
+interface QualifiedToolChoices {
+  /** Canonical wire names already resolved from explicit namespace and name coordinates. */
+  qualifiedToolNames?: readonly string[];
+}
+
 export type OcxToolChoice =
   | "auto"
   | "none"
   | "required"
-  | { name: string }
-  | { allowedTools: string[]; mode: "auto" | "required" };
+  | ({ name: string } & QualifiedToolChoices)
+  | ({ allowedTools: string[]; mode: "auto" | "required" } & QualifiedToolChoices);
 
-export function isAllowedToolChoice(value: OcxToolChoice | undefined): value is { allowedTools: string[]; mode: "auto" | "required" } {
+export function isAllowedToolChoice(value: OcxToolChoice | undefined): value is Extract<OcxToolChoice, { allowedTools: string[] }> {
   return typeof value === "object" && value !== null && "allowedTools" in value;
+}
+
+export function isQualifiedToolChoiceName(choice: OcxToolChoice | undefined, name: string): boolean {
+  return typeof choice === "object" && choice.qualifiedToolNames?.includes(name) === true;
 }
 
 export function requiresToolCall(choice: OcxToolChoice | undefined): boolean {
@@ -417,9 +429,14 @@ export function toolChoiceToolPredicate(
   if (choice === "none") return () => false;
   if (isAllowedToolChoice(choice)) {
     const allowed = new Set(choice.allowedTools);
+    const qualified = new Set<string>();
+    for (const name of choice.qualifiedToolNames ?? []) {
+      if (allowed.delete(name)) qualified.add(name);
+    }
     const resolver = createToolChoiceResolver(tools);
-    return tool => resolver.allows(tool, allowed);
+    return tool => qualified.has(namespacedToolName(tool.namespace, tool.name)) || resolver.allows(tool, allowed);
   }
+  if (isQualifiedToolChoiceName(choice, choice.name)) return tool => namespacedToolName(tool.namespace, tool.name) === choice.name;
   if (!tools) return tool => toolChoiceAliases(tool).includes(choice.name);
   const resolver = createToolChoiceResolver(tools);
   return tool => resolver.selects(tool, choice.name);

@@ -290,17 +290,17 @@ per-grant refresh file lock. Caller cancellation can stop either wait and is
 checked before the token exchange starts. Once started, the exchange observes
 only the refresh's own 30-second timeout: success rotates and retires the old
 refresh token, so cancellation cannot discard the only live grant. Both locks
-await the callback through completion, including publication; aborting their
-wait signal does not release an acquired lock while the exchange runs.
-Successful refresh publishes access and refresh tokens and advances the
-credential mutation epoch before clearing grant rejection and applicable
-reauth quarantine, then throws the caller's abort reason if cancelled.
-Snapshot and identity checks still refuse to overwrite an external auth writer,
-including when the caller also cancelled. A save refused after a successful
-exchange serves the new access token to that request only: auth.json stays as
-the other writer left it, the rotated grant is kept nowhere, and the old grant
-is not marked rejected (#2999). Same-identity device reauth obtains a new login
-grant rather than rotating the existing grant and keeps its pre-publication fence.
+await the callback through completion, including publication; aborting their wait signal does not release the acquired locks.
+Successful refresh publishes access and refresh tokens and advances the credential mutation epoch before clearing
+grant rejection and applicable reauth quarantine, then throws the caller's abort reason if cancelled.
+Snapshot and identity checks still refuse to overwrite an external auth writer, including when the caller also cancelled.
+If publication is refused after an exchange, the active request alone receives the new access token, or throws its abort reason if the caller cancelled. The other writer's auth.json stays intact, the exchanged grant is not stored, and the old grant keeps its rejection status (#2999).
+Same-identity device reauth obtains a new login grant and keeps its pre-publication fence.
+
+## Pool login policy and cancellation
+
+For ChatGPT/Codex pool logins, `codexAuthMethod` applies at proxy startup. With `"device-only"`, `src/codex/auth-api/login-flow.ts` forces a device grant and returns `authMethod: "device-only"`. `src/cli/account-auth.ts` attempts to cancel that flow when the caller supplies `--code` or requests a JSON wait without `--no-wait`. The policy covers only pool login.
+The pool poller requires success for its exact flow id and receives that flow's persisted credential through the OAuth lifecycle callback. Automatic OAuth cleanup retains that exact outcome while the pool login is starting or pending. It rechecks ownership immediately before writing. Pool cancellation remains available through identity and eligibility checks, including after OAuth settles. After publication starts, cancellation is refused while the catalog result settles.
 
 ## Native-main refresh ownership
 

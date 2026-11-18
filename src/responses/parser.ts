@@ -12,7 +12,7 @@ import type {
   OcxToolCall,
   OcxReasoningReplayScopeRef,
 } from "../types";
-import { createToolChoiceResolver, namespacedToolName } from "../types";
+import { namespacedToolName } from "../types";
 import { responsesRequestSchema } from "./schema";
 import { providerMetadataFromResponsesFunctionCall } from "./provider-opaque-metadata";
 import { lookupReplayThoughtSignature } from "./thought-signature-replay";
@@ -27,7 +27,7 @@ import { buildImageTool, extractHostedImageGeneration, IMAGE_GEN_TOOL_NAME } fro
 import { toolSearchDescription, toolSearchParameters } from "./tool-search-compat";
 
 import { isObj, inputContentParts, outputTextOf, outputToToolResultContent, toolOutputContainsEncryptedContent } from "./parser-content";
-import { mapToolChoice, buildTools, customToolNamespaces } from "./parser-tools";
+import { mapToolChoice, buildTools, customToolNamespaces, explicitToolChoices } from "./parser-tools";
 import { parseTextFormat } from "./parser-text-format";
 import { externalTaskInputContent } from "./task-input";
 import { normalizeVisualizationContext } from "./visualization-directives";
@@ -699,23 +699,14 @@ export function parseRequest(
     ...(mergedTools.length > 0 ? { tools: mergedTools } : {}),
   };
 
-  const options: OcxRequestOptions = {};
+  const options: OcxRequestOptions = explicitToolChoices(data.tool_choice, mergedTools);
   if (data.max_output_tokens !== undefined) options.maxOutputTokens = data.max_output_tokens;
   if (data.temperature !== undefined) options.temperature = data.temperature;
   if (data.top_p !== undefined) options.topP = data.top_p;
   if (data.stop !== undefined && data.stop !== null) {
     options.stopSequences = typeof data.stop === "string" ? [data.stop] : data.stop;
   }
-  const tc = mapToolChoice(data.tool_choice);
-  if (tc && typeof tc === "object") {
-    const selectors = "allowedTools" in tc ? tc.allowedTools : [tc.name];
-    const resolver = createToolChoiceResolver(mergedTools);
-    for (const selector of selectors) {
-      if (resolver.candidateCount(selector) > 1) {
-        throw new Error(`ambiguous tool_choice name: ${selector}`);
-      }
-    }
-  }
+  const tc = mapToolChoice(data.tool_choice, mergedTools);
   if (tc !== undefined) options.toolChoice = tc;
   if (data.parallel_tool_calls !== undefined) options.parallelToolCalls = data.parallel_tool_calls;
   // Upstream codex-rs converts "ultra" to "max" at the inference boundary (core/src/client.rs
