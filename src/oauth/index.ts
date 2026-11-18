@@ -1,5 +1,5 @@
 import { MuseLoginError, museLoginErrorMessage } from "./meta-muse-errors";
-import type { KiroOAuthMetadata, OAuthController, OAuthCredentials, ProviderAccount } from "./types";
+import type { KiroOAuthMetadata, OAuthController, OAuthCredentials } from "./types";
 import { mapFill } from "../providers/resolved-model-policy-merge";
 import { initializeProviderModelSelection } from "../providers/initial-model-selection";
 import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
@@ -99,9 +99,9 @@ import { codexAccountNamespaceProviderCollisionError } from "../codex/account-na
 import { REFRESH_SKEW_MS } from "./refresh-policy";
 import { newerClaudeCredentialForInstance, captureAnthropicCredentialOwnerForInstance, claudeCredentialGenerationCurrent } from "./anthropic-continuity";
 import { anthropicSubscriptionLabel } from "../providers/anthropic-subscription";
-import { mergeOAuthOrganizationName, normalizeOAuthOrganizationName, normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
+import { mergeOAuthOrganizationName, normalizeOAuthPlan, mergeOAuthPlan, oauthOrganizationNameSummary, withMergedOAuthLabels } from "./plan";
 import { mergeAnthropicIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
-import { anthropicReauthSlotRefused } from "./anthropic-login-slot";
+import { anthropicReauthSlotGuard, anthropicReauthSlotRefused } from "./anthropic-login-slot";
 import { AnthropicCrossInstanceDuplicateError, AnthropicLocalCliImportError, assertAnthropicCredentialSource } from "./store-anthropic-instance";
 export interface OAuthAccessSnapshot {
   workbuddy?: import("./types").WorkBuddyOAuthMetadata;
@@ -1700,17 +1700,10 @@ export async function runLogin(
         throw new OAuthReauthIdentityMismatchError();
       }
       // Proven same account: a reauth whose tier read failed keeps the stored label.
-      const reauthPlan = mergeOAuthPlan(cred, existing);
-      const reauthName = mergeOAuthOrganizationName(cred, existing);
-      const reauthCred = { ...cred, ...(reauthPlan === undefined ? {} : { plan: reauthPlan }),
-        ...(reauthName === undefined ? {} : { organizationName: reauthName }) };
-      const reauthAccountId = opts.reauthAccountId;
-      const written = await (deps.saveAccountCredential ?? saveAccountCredential)(provider, reauthAccountId, reauthCred, {
+      const reauthCred = withMergedOAuthLabels(cred, existing);
+      const written = await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, reauthCred, {
         assertBeforePersist: deps.assertCurrentOwner,
-        // The check above read a snapshot; the writer repeats it on the rows it loaded under the lock.
-        ...(isAnthropicOAuthInstance(provider) ? { assertAccounts: (accounts: readonly ProviderAccount[]) => {
-          if (anthropicReauthSlotRefused(accounts, reauthAccountId, reauthCred)) throw new OAuthReauthIdentityMismatchError();
-        } } : {}),
+        ...(isAnthropicOAuthInstance(provider) ? { assertAccounts: anthropicReauthSlotGuard(opts.reauthAccountId, reauthCred) } : {}),
         rotateLoginId: true,
         clearAutomaticPause: true,
       });
@@ -1864,8 +1857,7 @@ export function getLoginStatus(provider: string, maskEmails = true, flowId?: str
     plan: normalizeOAuthPlan(a.credential.plan) ?? null,
     ...((provider === "anthropic" || provider === "anthropic2") && anthropicSubscriptionLabel(a.credential.plan)
       ? { planLabel: anthropicSubscriptionLabel(a.credential.plan) } : {}),
-    ...((provider === "anthropic" || provider === "anthropic2") && normalizeOAuthOrganizationName(a.credential.organizationName)
-      ? { organizationName: normalizeOAuthOrganizationName(a.credential.organizationName) } : {}),
+    ...((provider === "anthropic" || provider === "anthropic2") ? oauthOrganizationNameSummary(a.credential) : {}),
   }));
 
   // A stored credential counts as "logged in" when it exists and is not marked for

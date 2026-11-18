@@ -23,7 +23,7 @@ import { publishCredentialSync } from "../local-credentials/generation";
 import { notifyAuthStoreLoaded } from "../lib/decision-quota-sink";
 import { isPassiveRead } from "../lib/passive-read";
 import { accountPauseDetailsSchema, accountPauseEvidenceSchema } from "../config/schema/account-auto-pause";
-import { mergeOAuthOrganizationName, normalizeOAuthOrganizationName, normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
+import { mergeOAuthOrganizationName, normalizeOAuthOrganizationName, normalizeOAuthPlan, mergeOAuthPlan, withMergedOAuthLabels } from "./plan";
 import { normalizeAnthropicIdentity, mergeAnthropicIdentity } from "./anthropic-identity";
 import { findAnthropicImportSlot, findAnthropicLoginSlot, observeAnthropicSlotOrganizations } from "./anthropic-login-slot";
 import { normalizeWorkBuddyMetadata } from "../providers/workbuddy";
@@ -1033,10 +1033,7 @@ export async function saveCredentialWithReceipt(
         const incoming = provider === "kiro" ? withRetainedKiroUser(safe, existing.credential) : safe;
         // Same identity: a login whose tier read failed keeps the stored label (plan absent),
         // while an observed unknown (plan null) still clears it.
-        const plan = mergeOAuthPlan(incoming, existing.credential);
-        const organizationName = mergeOAuthOrganizationName(incoming, existing.credential);
-        existing.credential = { ...incoming, ...(plan === undefined ? {} : { plan }),
-          ...(organizationName === undefined ? {} : { organizationName }) };
+        existing.credential = withMergedOAuthLabels(incoming, existing.credential);
         delete existing.needsReauth;
         delete existing.needsReauthReason;
         delete existing.refreshAttentionGeneration;

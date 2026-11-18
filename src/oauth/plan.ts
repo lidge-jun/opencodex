@@ -52,6 +52,19 @@ export function mergeOAuthOrganizationName(fresh: OAuthCredentials, previous: OA
   return previous.organizationName === null ? null : normalizeOAuthOrganizationName(previous.organizationName);
 }
 
+/** Account-summary projection: the validated name, or nothing. */
+export function oauthOrganizationNameSummary(credential: OAuthCredentials): { organizationName?: string } {
+  const organizationName = normalizeOAuthOrganizationName(credential.organizationName);
+  return organizationName ? { organizationName } : {};
+}
+
+/** `fresh` with its plan and organization name merged from `previous`; an unresolved merge leaves the field as sent. */
+export function withMergedOAuthLabels(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCredentials {
+  const plan = mergeOAuthPlan(fresh, previous);
+  const organizationName = mergeOAuthOrganizationName(fresh, previous);
+  return { ...fresh, ...(plan === undefined ? {} : { plan }), ...(organizationName === undefined ? {} : { organizationName }) };
+}
+
 /** An observed unknown clears old metadata; an account replacement cannot inherit a plan. */
 export function mergeOAuthPlan(fresh: OAuthCredentials, previous: OAuthCredentials): string | null | undefined {
   if (fresh.plan !== undefined) return normalizeOAuthPlan(fresh.plan) ?? null;

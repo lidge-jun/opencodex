@@ -14,6 +14,7 @@
 import { createHash } from "node:crypto";
 import { anthropicOrganization, anthropicOrganizationsConflict, matchesAnthropicImport, normalizeAnthropicIdentity,
   resolveAnthropicAccountIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
+import { OAuthReauthIdentityMismatchError } from "./oauth-errors";
 import type { OAuthCredentials, ProviderAccount } from "./types";
 
 /** Interactive login waits on these reads; a slow profile falls back to the historical match. */
@@ -125,4 +126,14 @@ export function anthropicReauthSlotRefused(
   if (target?.accountId && incoming.accountId && target.accountId !== incoming.accountId) return true;
   return (target !== undefined && anthropicOrganizationsConflict(target, incoming))
     || anthropicOrganizationHeldElsewhere(accounts, accountId, incoming);
+}
+
+/**
+ * The writer-side half of that check for `saveAccountCredential`'s `assertAccounts`: the login's
+ * own check read a snapshot, so the writer repeats it on the rows it loaded under the lock.
+ */
+export function anthropicReauthSlotGuard(accountId: string, incoming: OAuthCredentials): (accounts: readonly ProviderAccount[]) => void {
+  return accounts => {
+    if (anthropicReauthSlotRefused(accounts, accountId, incoming)) throw new OAuthReauthIdentityMismatchError();
+  };
 }
