@@ -4,6 +4,10 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { loadConfig, saveConfig } from "../../src/config";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { flushNativeMainStartupReleases } from "../../src/codex/native-profile-startup";
+import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/main-account";
+import {
+  invalidateCodexModelEntitlementsForAccount, resolveCodexEntitlementClientVersion, seedCodexModelEntitlementsForTests,
+} from "../../src/codex/model-entitlements";
 import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
 import { setPersistedConfigMutationBeforeCommitForTests } from "../../src/config/persisted-mutation";
 import { gatherRoutedModels, getLastComboCatalogOmissions } from "../../src/codex/catalog";
@@ -45,6 +49,15 @@ afterEach(async () => {
     home.remove();
   }
 });
+
+async function expectDesktopSnapshotBusy(response: Response): Promise<void> {
+  expect(response.status, await response.clone().text()).toBe(503);
+  expect(response.headers.get("retry-after")).toBe("1");
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(await response.json()).toEqual({
+    error: { type: "server_error", code: "desktop_snapshot_busy", message: "Desktop model snapshot is temporarily unavailable" },
+  });
+}
 
 const cases: Array<{
   name: string;
@@ -305,7 +318,7 @@ test.each(["desktop-warm", "desktop-cold", "desktop-registry-changed", "desktop-
     expect(code, stderr).toBe(0);
     return JSON.parse(stdout.trim().split("\n").at(-1)!) as { ok: boolean; path: string; reason?: string };
   };
-  let firstProfile: { path: string; bytes: string } | undefined;
+  let firstProfile: { path: string; bytes: Buffer } | undefined;
   if (mode === "desktop-warm" || mode === "desktop-registry-changed" || mode === "desktop-model-hidden") {
     const baseUrl = `http://127.0.0.1:${server.port}`;
     const token = "desktop-fixture-key";
@@ -325,8 +338,8 @@ test.each(["desktop-warm", "desktop-cold", "desktop-registry-changed", "desktop-
     } satisfies OcxConfig), { mode: 0o600 });
     const first = await apply();
     expect(first).toMatchObject({ ok: true });
-    const bytes = readFileSync(first.path, "utf8");
-    const profile = JSON.parse(bytes) as { inferenceModels: Array<{ name: string }>; modelDiscoveryEnabled: boolean };
+    const bytes = readFileSync(first.path);
+    const profile = JSON.parse(bytes.toString("utf8")) as { inferenceModels: Array<{ name: string }>; modelDiscoveryEnabled: boolean };
     expect(profile.modelDiscoveryEnabled).toBe(false);
     expect(profile.inferenceModels.map(row => row.name).sort()).toEqual([goodAlias, commonAlias].sort());
     firstProfile = { path: first.path, bytes };
@@ -370,25 +383,12 @@ test.each(["desktop-warm", "desktop-cold", "desktop-registry-changed", "desktop-
     }
   };
   if (mode === "desktop-cold" || mode === "desktop-model-hidden") {
-    await checkAfterSupersession(fetch(desktopUrl, { signal }), async response => {
-      expect(response.status, await response.clone().text()).toBe(503);
-      expect(response.headers.get("retry-after")).toBe("1");
-      expect(await response.json()).toEqual({
-        error: { type: "server_error", code: "desktop_snapshot_busy", message: "Desktop model snapshot is temporarily unavailable" },
-      });
-    });
+    await checkAfterSupersession(fetch(desktopUrl, { signal }), expectDesktopSnapshotBusy);
   } else if (firstProfile) {
     const { path, bytes } = firstProfile;
     await checkAfterSupersession(apply(), second => {
-      if (mode === "desktop-registry-changed") {
-        expect(second).toMatchObject({ ok: false, reason: "desktop_snapshot_http_503", applied: false });
-      } else {
-        expect(second).toMatchObject({ ok: true, path });
-      }
-      const after = readFileSync(path, "utf8");
-      const { inferenceModels } = JSON.parse(after) as { inferenceModels: Array<{ name: string }> };
-      expect(inferenceModels.map(row => row.name).sort()).toEqual([goodAlias, commonAlias].sort());
-      expect(after === bytes).toBe(true);
+      expect(second).toMatchObject({ ok: false, reason: "desktop_snapshot_http_503", applied: false });
+      expect(readFileSync(path)).toEqual(bytes);
     });
   } else {
     await checkAfterSupersession(fetch(anthropicUrl, { signal }), async response => {
@@ -415,6 +415,78 @@ test.each(["desktop-warm", "desktop-cold", "desktop-registry-changed", "desktop-
     expect(fresh.status).toBe(200);
     const { models } = await fresh.json() as { models: Array<{ name: string }> };
     expect(models.map(model => model.name)).toEqual([commonAlias]);
+  }
+}), SERVER_BUDGET_MS);
+
+test("superseded Desktop listing retries after a Daybreak grant is withdrawn", () => lifecycle.run(async () => {
+  const daybreak = "gpt-daybreak-blue-latest";
+  const alias = desktop3pAlias("native", daybreak);
+  const accountId = "desktop-entitlement-fixture";
+  const version = resolveCodexEntitlementClientVersion();
+  const seedRoster = (models: readonly string[]) => seedCodexModelEntitlementsForTests(
+    MAIN_CODEX_ACCOUNT_ID, models, Date.now(), version, `main:${accountId}`,
+  );
+  const fetchingOlder = Promise.withResolvers<void>();
+  const releaseOlder = Promise.withResolvers<void>();
+  let discoveries = 0;
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
+    if (new URL(request.url).pathname !== "/v1/models") return new Response(null, { status: 404 });
+    if (++discoveries === 2) return new Response(null, { status: 429 });
+    fetchingOlder.resolve();
+    await releaseOlder.promise;
+    return Response.json({ data: [{ id: arrival }] });
+  } });
+  lifecycle.ownStop(() => upstream.stop(true));
+  saveConfig({
+    port: 0, hostname: "127.0.0.1", defaultProvider: provider,
+    providers: { [provider]: {
+      adapter: "openai-chat", baseUrl: new URL("/v1", upstream.url).href,
+      apiKey: "fixture-key", allowPrivateNetwork: true, liveModels: true,
+    } },
+    claudeCode: { enabled: true, desktopNativeModels: true },
+  });
+  const { startServer } = await import("../../src/server");
+  const server = startServer(0);
+  lifecycle.ownStop(() => server.stop(true));
+  writeFileSync(home.path(".codex", "auth.json"), JSON.stringify({
+    tokens: { access_token: "fixture-entitlement-token", account_id: accountId },
+  }), { mode: 0o600 });
+  const cachedModels = [{ provider, id: "model-a" }];
+  setCached(provider, cachedModels);
+  seedRoster([daybreak]);
+  const url = new URL("/v1/models?format=desktop-config", server.url);
+  const options = { signal: lifecycle.abort.signal };
+  const modelNames = async (response: Response) => {
+    expect(response.status).toBe(200);
+    const { models } = await response.json() as { models: Array<{ name: string }> };
+    return models.map(model => model.name);
+  };
+  try {
+    expect(await modelNames(await fetch(url, options))).toContain(alias);
+    seedRoster([]);
+    expect(resolveDesktop3pAlias(alias)).toBe(`native/${daybreak}`);
+    expect(discoveries).toBe(0);
+    expect(expireModelCache(provider)).toBe(true);
+
+    const pending = fetch(url, options);
+    let superseded: Response;
+    try {
+      await Promise.race([fetchingOlder.promise, pending.then(() => { throw new Error("Listing finished before discovery"); })]);
+      await gatherRoutedModels(loadConfig(), { onlyProvider: provider });
+      expect(getProviderDiscoveryStatus(provider)).toEqual({ status: "failed", reason: "http", httpStatus: 429 });
+      releaseOlder.resolve();
+      superseded = await pending;
+    } finally {
+      releaseOlder.resolve();
+      await pending;
+    }
+    expect(resolveDesktop3pAlias(alias)).toBe(`native/${daybreak}`);
+    setCached(provider, cachedModels);
+    expect(await modelNames(await fetch(url, options))).not.toContain(alias);
+    expect(discoveries).toBe(2);
+    await expectDesktopSnapshotBusy(superseded);
+  } finally {
+    invalidateCodexModelEntitlementsForAccount(MAIN_CODEX_ACCOUNT_ID);
   }
 }), SERVER_BUDGET_MS);
 

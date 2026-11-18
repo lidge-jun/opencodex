@@ -133,12 +133,9 @@ import {
   buildDesktop3pRegistry,
   desktop3pModelOptions,
   generateDesktop3pModels,
-  isRealDesktop3pModelId,
   resolvableDesktop3pAlias,
-  resolveDesktop3pAlias,
-  type Desktop3pModelEntry,
 } from "../../claude/desktop-3p";
-import { buildDesktopDiscoveryInputs, desktopSnapshotPolicyIdentity } from "../../claude/desktop-discovery-inputs";
+import { buildDesktopDiscoveryInputs } from "../../claude/desktop-discovery-inputs";
 import { observeModelCacheRevision } from "../../codex/model-cache";
 import { handleImages } from "../images";
 import {
@@ -241,10 +238,6 @@ export {
   type ServeOptionsContext,
 } from "./serve-contract";
 
-function desktopSnapshotRoute(name: string): string | null {
-  return resolveDesktop3pAlias(name) ?? (isRealDesktop3pModelId(name) ? `anthropic/${name}` : null);
-}
-
 export function createServeOptions(ctx: ServeOptionsContext) {
   const {
     drainingResponse,
@@ -272,11 +265,6 @@ export function createServeOptions(ctx: ServeOptionsContext) {
     port,
   } = ctx;
   void port;
-  let lastDesktopSnapshot: {
-    models: Desktop3pModelEntry[];
-    routes: ReadonlyArray<readonly [string, string | null]>;
-    policyIdentity: string;
-  } | undefined;
   const requestMetrics = metricsExportEnabled(config)
     ? createRequestMetricsOwner(Date.now() / 1000, cachedKiroQuotaMetricRows) : undefined;
   const requestMetricsLogContext = requestMetrics ? { requestMetricsRecorder: requestMetrics } : {};
@@ -968,17 +956,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // Entitlement resolution and imports can outlive the gather that chose these rows.
         const canInstallAliases = () => config === ctx.config
           && [...providerContentRevisions].every(([provider, revision]) => observeModelCacheRevision(provider) === revision);
-        const desktopSnapshotResponse = (models: Desktop3pModelEntry[]) => {
-          const response = jsonResponse({ version: 1, models }, 200, req, policy);
-          response.headers.set("Cache-Control", "no-store");
-          return response;
-        };
-        const retryDesktopSnapshot = () => {
-          // Hidden models can remain routable, so registry matches alone cannot validate the list.
-          if (lastDesktopSnapshot?.policyIdentity === desktopSnapshotPolicyIdentity(ctx.config)
-            && lastDesktopSnapshot.routes.every(([name, route]) => route !== null && desktopSnapshotRoute(name) === route)) {
-            return desktopSnapshotResponse(lastDesktopSnapshot.models);
-          }
+        const desktopSnapshotBusyResponse = () => {
           const response = jsonResponse({ error: {
             type: "server_error", code: "desktop_snapshot_busy", message: "Desktop model snapshot is temporarily unavailable",
           } }, 503, req, policy);
@@ -1004,7 +982,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           ]);
         } catch (error) {
           if (error instanceof CatalogGatherBusyError) {
-            if (wantsDesktopConfig && !canInstallAliases()) return retryDesktopSnapshot();
+            if (wantsDesktopConfig && !canInstallAliases()) return desktopSnapshotBusyResponse();
             return withCors(new Response(JSON.stringify({ error: { type: "server_error", code: "catalog_busy", message: error.message } }), {
               status: 503,
               headers: { "content-type": "application/json", "Retry-After": "1" },
@@ -1111,18 +1089,16 @@ export function createServeOptions(ctx: ServeOptionsContext) {
 
         if (wantsAnthropicList && !url.searchParams.has("client_version")) {
           if (wantsDesktopConfig) {
-            if (!canInstallAliases()) return retryDesktopSnapshot();
+            if (!canInstallAliases()) return desktopSnapshotBusyResponse();
             const enabled = config.claudeCode?.enabled !== false;
             const models = enabled ? generateDesktop3pModels(
               desktopInputs.nativeSlugs, desktopInputs.routedModels,
               config.claudeCode?.desktopProfile, desktopInputs.nativeContextCap,
               desktop3pModelOptions(config.claudeCode),
             ) : [];
-            lastDesktopSnapshot = {
-              models, policyIdentity: desktopSnapshotPolicyIdentity(config),
-              routes: models.map(({ name }) => [name, desktopSnapshotRoute(name)]),
-            };
-            return desktopSnapshotResponse(models);
+            const response = jsonResponse({ version: 1, models }, 200, req, policy);
+            response.headers.set("Cache-Control", "no-store");
+            return response;
           }
           if (config.claudeCode?.enabled === false) return jsonResponse({ data: [] }, 200, req, policy);
           const { buildAnthropicModelInfos, configuredRoutedDisplayName } = await import("../../claude/model-info");
