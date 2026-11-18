@@ -145,4 +145,5 @@ Configured model strings and combo aliases do not enter the client message; the 
 
 A Responses combo advances past a local hosted web-search deadline using a request-scoped
 pick in `src/combos/resolve.ts`. This preserves the primary’s round-robin sticky state
-and leaves target cooldown unchanged.
+and leaves target cooldown unchanged. For a committed hosted web-search stream, the combo
+counts a sticky success and clears any matching reprobe cooldown only on successful completion.

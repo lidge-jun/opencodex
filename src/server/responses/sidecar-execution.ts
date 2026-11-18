@@ -840,6 +840,7 @@ export async function executeResponsesSidecars(
         notifyResponseComplete(response);
       },
     });
+    if (loopResponse.ok && parsed.stream) options.onHostedWebSearchStream?.();
     const wsScopeRefusal = sidecarScopeRefusal(loopResponse);
     if (wsScopeRefusal) return wsScopeRefusal;
     // A routed Anthropic model whose last pool account refused on spent quota fails the loop's

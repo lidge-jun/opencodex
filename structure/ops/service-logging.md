@@ -25,7 +25,8 @@ snapshot exit can adopt the last failed child's diagnostics before returning a s
 quota cooldown advice. Only HTTP 402 and 429 qualify as retained quota responses, and the replay
 refusal marker excludes those refusals from quota retention. An HTTP 504 from a
 [local web-search deadline](../data-planes/error-detail.md) is ineligible by status and carries
-no upstream condition in the combo warning.
+no upstream condition in the combo warning. The [combo fallback policy](../fallback-policy.md)
+defines when a committed hosted-search stream counts as a target success.
 Each physical attempt remains in the row's attempt history.
 
 ## Retention

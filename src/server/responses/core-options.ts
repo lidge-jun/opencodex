@@ -274,6 +274,7 @@ export interface HandleResponsesOptions {
   onBridgeUsageBound?: () => void;
   /** A web-search deadline has been recorded on the child before its failure is emitted. */
   onWebSearchLocalFailure?: () => void;
+  onHostedWebSearchStream?: () => void;
   /** Child-owned prepaid initial send; capacity remains charged until dispatch or unsent release. */
   comboInitialSend?: { permit: SingleUseDispatchPermit; producerOwned?: boolean };
   /** Exact externally booked combo hop, used for its child's spend preflight and send reports. */

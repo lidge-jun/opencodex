@@ -332,7 +332,7 @@ describe("combo web-search deadline provenance", () => {
       globalThis.fetch = (async (input, init) => {
         const url = String(input);
         sends.push(url);
-        if (backup && (url === backupUrl || sends.length === 3)) {
+        if (backup && (url === backupUrl || sends.length === (stallOnBody ? 2 : 3))) {
           const content = url === backupUrl ? "backup answered" : "primary answered";
           const chunk = { id: "chunk", choices: [{ index: 0, delta: { content }, finish_reason: "stop" }] };
           return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
@@ -355,7 +355,7 @@ describe("combo web-search deadline provenance", () => {
           ...(backup && { "fixture-backup": { adapter: "openai-chat", baseUrl: "https://backup.test/v1", authMode: "key", apiKey: "fixture" } as const }),
         },
         combos: { [comboId]: backup
-          ? { strategy: "round-robin", stickyLimit: 2, targets: [primary, secondary] }
+          ? { strategy: "round-robin", stickyLimit: stallOnBody ? 1 : 2, targets: [primary, secondary] }
           : { strategy: "failover", targets: [primary] } },
         webSearchSidecar: {
           backend: "exa", exaApiKey: "fixture", routedModelStallTimeoutMs: comboStallMs, streamRoutedModelOutput: true,
@@ -403,6 +403,15 @@ describe("combo web-search deadline provenance", () => {
       }
 
       const outcome = await send();
+      if (backup && stallOnBody) {
+        expect(outcome.wire).toContain(output);
+        expect(outcome.row.failureDetail).toEqual({ code: "generation_timeout", value: comboStallMs });
+        expect(isComboTargetInCooldown(comboId, primary)).toBe(false);
+        expect((await send()).wire).toContain("primary answered");
+        expect((await send()).wire).toContain("backup answered");
+        expect(sends).toEqual([primaryUrl, primaryUrl, backupUrl]);
+        return outcome;
+      }
       if (backup) {
         expect(outcome.wire).toContain("backup answered");
         expect(sends).toEqual([primaryUrl, backupUrl]);
@@ -455,6 +464,10 @@ describe("combo web-search deadline provenance", () => {
 
   test("a local deadline falls through to backup and preserves the sticky primary", async () => {
     await comboRun(false, "responses", false, true, true);
+  }, 6_000);
+
+  test("a late local deadline leaves the sticky success allowance for the next request", async () => {
+    await comboRun(true, "responses", false, true, true);
   }, 6_000);
 
   test("committed combo forwards a late body deadline before the request row finalizes", async () => {

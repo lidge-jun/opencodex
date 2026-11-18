@@ -1261,11 +1261,18 @@ export async function executeComboResponses(
     };
     const completedTarget = { provider: pick.target.provider, model: pick.target.model };
     const writerGeneration = pick.writerGeneration;
+    const completedPick = pick;
+    const settleSuccess = () => {
+      noteComboSuccess(comboId, combo, completedPick.target, writerGeneration);
+      settleComboReprobeSuccess(completedPick);
+    };
+    let hostedWebSearchStream = false;
     let consumedChildFailure: ConsumedComboFailure | undefined;
     let preflightModelRefusal: CodexAccountModelRefusal | undefined;
     const callbackGate = createChildPassthroughCallbackGate({
       ...options,
       onResponseComplete: model => {
+        if (hostedWebSearchStream) settleSuccess();
         // The live config can change while the child is streaming. Never retain credentials.
         const currentCombo = getCombo(config, comboId);
         const provider = config.providers[completedTarget.provider];
@@ -1348,6 +1355,7 @@ export async function executeComboResponses(
           childUsageBound = true;
           forwardChildUsage();
         },
+        onHostedWebSearchStream: () => { hostedWebSearchStream = true; },
         onWebSearchLocalFailure: () => {
           if (childCommitted) carryLocalFailureState(childLog, logCtx);
         },
@@ -1434,8 +1442,7 @@ export async function executeComboResponses(
         childLog.accountLogLabel,
       );
       attemptRetained = true;
-      noteComboSuccess(comboId, combo, pick.target, pick.writerGeneration);
-      settleComboReprobeSuccess(pick);
+      if (!hostedWebSearchStream) settleSuccess();
       carryProxyErrorContext(childLog, logCtx);
       Object.assign(logCtx, childLog, {
         client: logCtx.client,
