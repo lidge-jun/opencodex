@@ -126,8 +126,9 @@ export function publishDecisionAccountQuota(provider: string, id: string, genera
   if (roster?.root !== getConfigDir() || !roster.accounts.some(row => row.id === id && row.generation === generation)) return;
   const key = accountKey(provider, id);
   const previous = accounts.get(key);
-  // Anthropic monthly is an extra-usage fallback. Only the current observation can supply it.
-  const retained = partial && previous?.generation === generation ? previous.windows.filter(row =>
+  // Anthropic monthly and included-plan windows come from mutually exclusive observations.
+  const monthlyFallback = provider === "anthropic" && windows.some(row => row.window === "monthly");
+  const retained = partial && !monthlyFallback && previous?.generation === generation ? previous.windows.filter(row =>
     (provider !== "anthropic" || row.window !== "monthly") && !windows.some(next => row.window === next.window)) : [];
   accounts.set(key, { generation, windows: copyWindows([...retained, ...windows]) });
 }

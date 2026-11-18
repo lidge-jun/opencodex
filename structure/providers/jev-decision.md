@@ -153,11 +153,12 @@ usage/header projections and Codex raw reset validity/producer clocks stay separ
 windows require producer-validated structure. Captured generations and cooldown/family fences
 reject late observations. Partial responses retain omitted windows with their own original clocks,
 except for Anthropic’s monthly fallback, which each accepted observation replaces. A recognized Anthropic
-plan row with no usable meter retires the monthly fallback while retaining all other advisory windows and
-their clocks. Serving headers, including those from a validated sidecar send, publish under the sending
-credential generation. A monthly-only probe is rejected if newer plan evidence committed for its account
-after physical dispatch, including when readers share that probe. Authoritative enumerations replace all
-windows. Codex pool writers require dispatched live provenance;
+plan row with no usable meter or an explicit extra-usage disable retires the monthly fallback while retaining
+all other advisory windows and their clocks. A monthly-only observation replaces older plan evidence. Serving
+headers, including those from a validated sidecar send, publish under the sending credential generation.
+Monthly-only probes yield to plan evidence committed after physical dispatch, and older probes yield to a newer
+accepted monthly dispatch, including when readers share a probe. Authoritative enumerations replace all windows.
+Codex pool writers require dispatched live provenance;
 native-main writer objects bind the observed bearer generation. Display-only and disk-carried
 rows cannot republish advisory evidence. Producer/store bounds overflow to unknown, not a
 truncated supposedly exhaustive pool.

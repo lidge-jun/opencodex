@@ -205,10 +205,10 @@ With explicit legacy `five_hour: null`, a five-hour meter requires a finite sess
 Usage-based seats such as Enterprise can report an undated monthly fallback from enabled `extra_usage`.
 Any recognized plan row, including an inactive or skipped row, suppresses the fallback. The bar shows the
 higher of reported utilization and the share of a positive monthly credit cap consumed, clamped to 0–100.
-Later plan evidence from a usage probe or serving headers retires the cached monthly fallback. A recognized
-row without a usable meter retires only the monthly bar. Monthly-only responses yield to plan evidence committed
-for the same account after physical dispatch. The cap informs display and advisory ranking. Included-plan admission
-and wallet availability are independent.
+Plan evidence from either persisted usage-probe path or from serving headers retires the fallback. A recognized row
+without a meter or explicit `extra_usage.is_enabled: false` retires only monthly. Missing or malformed extra usage
+with no plan evidence keeps the last good reading. A monthly-only response replaces older plan bars, yields to later
+plan commits, and supersedes older probes. It informs display and advisory ranking. Plan admission and wallet availability are independent.
 
 Only active scoped rows inform routing. Inactive rows go into `AccountQuota.displayWindows` for display
 alone, with routed labels taking precedence. `gui/src/components/QuotaBars.tsx` marks them as not in

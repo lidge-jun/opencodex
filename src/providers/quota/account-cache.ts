@@ -124,24 +124,44 @@ export function withoutAnthropicMonthlyFallback(quota: ProviderQuota | null): Pr
   return hasQuotaRows(plan) ? plan : null;
 }
 
+function hydrateAnthropicQuota(quota: ProviderQuota, now: number): ProviderQuota | null {
+  // Older mixed rows establish plan presence even when those meters have since expired.
+  const reportedPlan = typeof quota.fiveHourPercent === "number" || typeof quota.weeklyPercent === "number"
+    || [quota.customWindows, quota.displayWindows].some(rows => Array.isArray(rows) && rows.some(row => typeof row?.percent === "number"));
+  const normalized = normalizeAnthropicQuota(quota, now);
+  return reportedPlan && normalized?.monthlyPercent !== undefined ? withoutAnthropicMonthlyFallback(normalized) : normalized;
+}
+
 function isAnthropicAccountCacheKey(key: string): boolean {
   const separator = key.indexOf("\0");
   return separator > 0 && isAnthropicInstanceId(key.slice(0, separator));
 }
 
 export const accountQuotaCache = new Map<string, AccountQuotaCacheEntry>();
-// Order in-flight responses independently of display-cache expiry and reset-grant eviction.
-const anthropicPlanObservationRevisions = new Map<string, number>();
-let nextAnthropicPlanObservationRevision = 1;
+// Order fallback transitions independently of display-cache expiry and reset-grant eviction.
+const anthropicQuotaObservations = new Map<string, { planCommit: number; monthlyDispatch: number }>();
+let nextAnthropicQuotaRevision = 1;
 
-export function anthropicPlanObservationRevision(key: string): number {
-  return anthropicPlanObservationRevisions.get(key) ?? 0;
+export function reserveAnthropicQuotaDispatch(): number {
+  return nextAnthropicQuotaRevision++;
 }
 
-/** Record plan evidence only at an owned commit, including retirement without usable meters. */
-export function commitAnthropicAccountQuota(key: string, entry: AccountQuotaCacheEntry, observedPlan: boolean): void {
+/** A monthly sample yields to any plan evidence committed since dispatch. Any probe yields to a newer monthly dispatch. */
+export function anthropicQuotaDispatchIsCurrent(key: string, dispatch: number, monthly: boolean): boolean {
+  const previous = anthropicQuotaObservations.get(key);
+  return !previous || (dispatch >= previous.monthlyDispatch && (!monthly || dispatch > previous.planCommit));
+}
+
+/** Record monthly evidence and retirement only at an owned commit. */
+export function commitAnthropicAccountQuota(key: string, entry: AccountQuotaCacheEntry, retiresMonthly: boolean, dispatch?: number): void {
   accountQuotaCache.set(key, entry);
-  if (observedPlan) anthropicPlanObservationRevisions.set(key, nextAnthropicPlanObservationRevision++);
+  if (retiresMonthly || dispatch !== undefined) {
+    const previous = anthropicQuotaObservations.get(key);
+    anthropicQuotaObservations.set(key, {
+      planCommit: retiresMonthly ? nextAnthropicQuotaRevision++ : previous?.planCommit ?? 0,
+      monthlyDispatch: !retiresMonthly && dispatch !== undefined ? dispatch : previous?.monthlyDispatch ?? 0,
+    });
+  }
 }
 
 export let explicitAccountEpoch = 0;
@@ -183,7 +203,7 @@ export function hydrateAccountQuotaCache(): void {
       const anthropic = isAnthropicAccountCacheKey(key);
       accountQuotaCache.set(key, {
         ts: anthropic ? 0 : quota.updatedAt,
-        quota: anthropic ? normalizeAnthropicQuota(quota, now)
+        quota: anthropic ? hydrateAnthropicQuota(quota, now)
           : key.startsWith("kiro\0") ? sanitizeKiroQuota(quota) : quota,
         ...(key.startsWith("kiro\0") ? { identity: (quota as KiroPersistedQuota).identity } : {}),
       });
@@ -470,8 +490,8 @@ export function reconcileProviderAccountQuotaRows(context: GenerationContext): n
     accountQuotaCache.delete(key);
     removed += 1;
   }
-  for (const key of anthropicPlanObservationRevisions.keys()) {
-    if (!context.oauthAccountKeys.has(key)) anthropicPlanObservationRevisions.delete(key);
+  for (const key of anthropicQuotaObservations.keys()) {
+    if (!context.oauthAccountKeys.has(key)) anthropicQuotaObservations.delete(key);
   }
   // Kiro exhaustion rows are keyed identically, so they retire with their quota row; a
   // verdict outliving its account would hand the replacement a cooldown it never earned.
@@ -505,7 +525,7 @@ export function clearAccountQuotaCache(provider?: string): void {
   if (!provider) {
     allAccountQuotaEpoch += 1;
     accountQuotaCache.clear();
-    anthropicPlanObservationRevisions.clear();
+    anthropicQuotaObservations.clear();
     accountQuotaInflight.clear();
     clearKiroAccountUsageState();
     // A cleared cache must not be re-seeded from the file it was just cleared of, and any
@@ -520,8 +540,8 @@ export function clearAccountQuotaCache(provider?: string): void {
   for (const key of [...accountQuotaCache.keys()]) {
     if (key.startsWith(prefix)) accountQuotaCache.delete(key);
   }
-  for (const key of anthropicPlanObservationRevisions.keys()) {
-    if (key.startsWith(prefix)) anthropicPlanObservationRevisions.delete(key);
+  for (const key of anthropicQuotaObservations.keys()) {
+    if (key.startsWith(prefix)) anthropicQuotaObservations.delete(key);
   }
   clearKiroAccountUsageState(prefix);
   // Drop in-flight probes too so a late resolve cannot repopulate after logout/remove.

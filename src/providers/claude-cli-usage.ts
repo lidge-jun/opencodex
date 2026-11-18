@@ -1,6 +1,6 @@
 import { markAnthropicFamilyEnumeration } from "./quota/anthropic-family-headers";
 import { rawAnthropicUsageWindows } from "./quota/anthropic-decision-windows";
-import { anthropicExtraUsageMonthlyPercent, anthropicUsageBuckets, type AnthropicUsageBucket } from "./quota/anthropic-usage-windows";
+import { anthropicExtraUsageMonthlyPercent, anthropicUsageBuckets, parseAnthropicExtraUsage, type AnthropicUsageBucket } from "./quota/anthropic-usage-windows";
 import { bindRawDecisionWindows } from "./quota-decision-publication";
 import { decisionQuotaSinkActive } from "../lib/decision-quota-sink";
 import { CLAUDE_CLI_USER_AGENT } from "./claude-cli-identity";
@@ -82,8 +82,8 @@ export async function probeAnthropicUsageQuota(accessToken: string): Promise<Ant
     ...(displayWindows.length > 0 ? { displayWindows } : {}),
     updatedAt: Date.now(),
   };
-  // A recognized plan row can rule out extra_usage even when it supplies no usable meter.
-  if (!hasQuotaRows(quota)) return windows.hasPlanWindow
+  // Plan presence or an explicit disable can retire the fallback without supplying a meter.
+  if (!hasQuotaRows(quota)) return windows.hasPlanWindow || parseAnthropicExtraUsage(body.extra_usage)?.state === "disabled"
     ? { quota: null, retireMonthlyFallback: true }
     : { quota: null, failure: "response_unusable" };
   if (decisionQuotaSinkActive()) bindRawDecisionWindows(quota, rawAnthropicUsageWindows(body, quota.updatedAt));

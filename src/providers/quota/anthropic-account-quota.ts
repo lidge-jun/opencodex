@@ -84,9 +84,9 @@ export async function fetchAnthropicAccountQuota(
       ...(!result && failure ? { quotaFailure: failure, quotaFailureIsCurrent: isCurrent } : {}),
     };
     if (isCurrent() && mayCommitAccountQuotaKey(key, writerGeneration)) {
-      commitAnthropicAccountQuota(key, entry, !!result && result.quota?.monthlyPercent === undefined);
+      commitAnthropicAccountQuota(key, entry, !!result && result.quota?.monthlyPercent === undefined, result?.dispatch);
       result?.publishDecisionQuota();
-      if (retirementOnly) persistAccountQuotaCache();
+      if (result) persistAccountQuotaCache();
       sweepExpiredOnWrite(entry.ts);
     }
     return entry;

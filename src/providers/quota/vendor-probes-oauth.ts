@@ -37,7 +37,8 @@ import {
 } from "./report-cache";
 import {
   accountCacheKey,
-  anthropicPlanObservationRevision,
+  reserveAnthropicQuotaDispatch,
+  anthropicQuotaDispatchIsCurrent,
   captureProviderAccountQuotaEpoch,
   accountQuotaCache,
   commitAnthropicAccountQuota,
@@ -283,13 +284,12 @@ export async function fetchAnthropicUsageProbeForInstance(
   const joinable = requireFreshDispatch ? undefined : anthropicUsageInflight.get(key);
   if (joinable) return joinable;
 
-  // Joiners inherit these revisions from the physical request, even if a plan observation
-  // committed before they joined. A monthly-only payload cannot supersede that observation.
-  const planRevisions = new Map(accounts.map(({ id }) => [id, anthropicPlanObservationRevision(accountCacheKey(instance, id))]));
+  // Joiners inherit the ordering of the physical request, even after a competing observation.
+  const dispatch = reserveAnthropicQuotaDispatch();
   const probe = probeAnthropicUsageQuota(accessToken).then(result => ({
-    ...result,
-    monthlyFallbackIsCurrent: (id: string) =>
-      anthropicPlanObservationRevision(accountCacheKey(instance, id)) <= (planRevisions.get(id) ?? 0),
+    ...result, dispatch,
+    isQuotaDispatchCurrent: (id: string) =>
+      anthropicQuotaDispatchIsCurrent(accountCacheKey(instance, id), dispatch, result.quota?.monthlyPercent !== undefined),
   })).finally(() => {
     if (anthropicUsageInflight.get(key) === probe) anthropicUsageInflight.delete(key);
   });
@@ -389,13 +389,14 @@ export async function fetchAnthropicQuota(provider: string, config: OcxConfig = 
   // loads do not double-hit Anthropic's rate-limited usage endpoint.
   const stillOwnsToken = getAccountCredential(instance, probedAccountId)?.access === accessToken;
   if (stillOwnsToken && anthropicCurrent() && mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
-    if (!quota) hydrateAccountQuotaCache();
+    // The snapshot writer serializes the whole cache, including other accounts on a cold start.
+    hydrateAccountQuotaCache();
     const cached = quota ?? withoutAnthropicMonthlyFallback(getCachedProviderAccountQuota(instance, probedAccountId));
     commitAnthropicAccountQuota(probedAccountKey, {
       ts: Date.now(), quota: cached, isCurrent: anthropicCurrent,
-    }, quota?.monthlyPercent === undefined);
+    }, quota?.monthlyPercent === undefined, result.dispatch);
     result.publishDecisionQuota();
-    if (!quota) persistAccountQuotaCache();
+    persistAccountQuotaCache();
   }
   if (!quota) return null;
   const pooledReport = anthropicPoolReport(provider, instance, config, probedAccountId, quota);

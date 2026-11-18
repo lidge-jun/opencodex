@@ -4,6 +4,8 @@
 quotas for restart recovery. The Codex snapshot also carries bounded observation history
 and separately identity-bound main-policy evidence; provider snapshots include Kiro's
 identity-bound exhaustion verdicts. Their existing hydration and expiry rules govern readers.
+Accepted Anthropic usage probes schedule a snapshot even when they only retire the monthly fallback.
+Hydration of an older Anthropic row with both plan and monthly meters drops the monthly fallback even if the plan meters have expired.
 Meta Muse rows carry a private account and credential incarnation digest and hydrate for any matching usable account, independently of the active selection; a cold routing lookup hydrates them passively, and legacy unbound rows are ignored. Selection revisions fence in-flight publication, not retained observations or reset baselines. Managed credential replacement changes the incarnation even if the old credential is later restored. The digest is excluded from quota responses.
 
 Muse key-mint quota probes serialize by account: a caller with a replacement credential cannot join the old owner's result or start a parallel mint. A later attempt remains subject to the account's success spacing and failure backoff.
