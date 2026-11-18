@@ -320,7 +320,7 @@ describe("managed native Messages", () => {
   test("joins bare-CR SSE data lines before parsing message_start", async () => {
     const malformed = 'event: message_start\rdata: {"type":"message_start","message":{"id":"a\rdata: b","model":"provider"}}\r\r';
     const valid = 'event: message_start\rdata: {"type":"message_start",\rdata: "message":{"id":"good","model":"provider"}}\r\r';
-    const rewritten = 'event: message_start\rdata: {"type":"message_start","message":{"id":"good","model":"anth/claude-x"}}\r\r';
+    const rewritten = 'event: message_start\rdata: {"type":"message_start","message":{"id":"good","model":"anth/claude-x"}}\rdata:\r\r';
     const body = new Response(malformed + valid).body!;
     const echoed = echoRequestedModel(body, "anth/claude-x", new MessagesSseFrameContext());
     expect(new Uint8Array(await new Response(echoed).arrayBuffer())).toEqual(new TextEncoder().encode(malformed + rewritten));
