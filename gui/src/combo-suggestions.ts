@@ -9,8 +9,8 @@
  * capability) and a trailing reasoning-effort suffix is dropped.
  */
 import { COMBO_ID_RE, emptyDraft, newComboTarget, type ComboItem } from "./combo-workspace-data";
-import { channelTier, EFFORT_SUFFIX, isMeteredTier, normalizeModelName, TIER_RANK, type ChannelTier, type SuggestionProvider } from "../../src/combos/suggestion-channel";
-export { channelTier, isMeteredTier, normalizeModelName, type ChannelTier, type SuggestionProvider };
+import { channelTier, EFFORT_SUFFIX, normalizeModelName, TIER_RANK, type ChannelTier, type SuggestionProvider } from "../../src/combos/suggestion-channel";
+export { channelTier, normalizeModelName, type ChannelTier, type SuggestionProvider };
 
 
 export interface SuggestionModel {
@@ -141,8 +141,7 @@ export function buildComboSuggestions(input: SuggestionInput): ComboSuggestion[]
   const extends_: Array<ComboSuggestion & { kind: "extend" }> = [];
   for (const [name, served] of byModel) {
     const combo = covering.get(name);
-    const eligible = [...served].map(([p, m]) => member(p, m))
-      .filter((entry) => combo?.allowMeteredTargets === true || !isMeteredTier(entry.tier));
+    const eligible = [...served].map(([p, m]) => member(p, m));
     // An existing combo takes any eligible provider it is missing, even the only one left once
     // its own members are excluded; a new combo needs two providers to fail over between.
     if (combo) {
@@ -179,7 +178,8 @@ export function buildComboSuggestions(input: SuggestionInput): ComboSuggestion[]
 export function suggestionDraft(comboId: string, members: readonly SuggestedMember[]): ComboItem {
   return {
     ...emptyDraft(comboId),
-    targets: members.filter((entry) => !isMeteredTier(entry.tier)).map(({ provider, model }) => newComboTarget({ provider, model })),
+    allowMeteredTargets: true,
+    targets: members.map(({ provider, model }) => newComboTarget({ provider, model, metered: true })),
   };
 }
 
@@ -192,11 +192,11 @@ export function extendedCombo(
   members: readonly SuggestedMember[],
   tierOf: (provider: string, model: string) => ChannelTier,
 ): ComboItem {
+  if (combo.allowMeteredTargets !== true) return combo;
   const targets = [...combo.targets];
   for (const entry of members) {
-    if (isMeteredTier(entry.tier) && combo.allowMeteredTargets !== true) continue;
     const at = targets.findIndex((target) => TIER_RANK[tierOf(target.provider, target.model)] > TIER_RANK[entry.tier]);
-    targets.splice(at < 0 ? targets.length : at, 0, newComboTarget({ provider: entry.provider, model: entry.model, ...(isMeteredTier(entry.tier) ? { metered: true } : {}) }));
+    targets.splice(at < 0 ? targets.length : at, 0, newComboTarget({ provider: entry.provider, model: entry.model, metered: true }));
   }
   return { ...combo, targets };
 }

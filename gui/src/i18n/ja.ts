@@ -4575,6 +4575,8 @@ export const ja: Record<TKey, string> = {
   "comboSuggest.draft.orderHint": "上から順に試行されます。サブスクリプションが先、次に Vertex クレジット、従量課金の API キーとリレーは最後です。保存前に並べ替えや削除ができます。",
   "comboSuggest.draft.left": "残り {percent}%",
   "comboSuggest.draft.strategy": "戦略：フェイルオーバー。保存後に行内で変更できます。",
+  "comboSuggest.allowPaid": "有料ターゲットを許可する（保存に必須）。有料クレジットや従量料金が発生する場合があります。",
+  "comboSuggest.enablePaid": "先にこのコンボの有料ターゲットを有効にしてください。",
   "comboSuggest.draft.save": "コンボを保存",
   "comboSuggest.draft.saving": "保存中…",
 };

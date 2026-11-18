@@ -4542,6 +4542,8 @@ export const fr: Record<TKey, string> = {
   "comboSuggest.draft.orderHint": "Testés de haut en bas : les abonnements d’abord, puis le crédit Vertex, les clés à l’usage et les relais en dernier. Réordonnez ou retirez des éléments avant d’enregistrer.",
   "comboSuggest.draft.left": "{percent} % restants",
   "comboSuggest.draft.strategy": "Stratégie : basculement. Modifiez-la dans la ligne après l’enregistrement.",
+  "comboSuggest.allowPaid": "Autoriser les cibles payantes (requis pour enregistrer). Ces cibles peuvent facturer des crédits ou des frais d’utilisation.",
+  "comboSuggest.enablePaid": "Activez d’abord les cibles payantes pour cette combinaison.",
   "comboSuggest.draft.save": "Enregistrer la combinaison",
   "comboSuggest.draft.saving": "Enregistrement…",
 };

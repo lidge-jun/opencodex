@@ -87,14 +87,14 @@ describe("buildComboSuggestions", () => {
     })).toEqual(["create gemini-3.8-flash: xai > kimi-responses"]);
   });
 
-  test("Devin is omitted without spend consent", () => {
+  test("Devin remains visible when spend consent is required", () => {
     const model = "gpt-6-luna";
     const current = combo(model, [["openai", model]]);
     const input = {
       providers: [...PROVIDERS, { name: "devin", adapter: "devin", authMode: "oauth", baseUrl: "https://server.codeium.com" }],
       models: models([["openai", model], ["devin", model]]),
     };
-    expect(summary({ ...input, combos: [current] })).toEqual([]);
+    expect(summary({ ...input, combos: [current] })).toEqual(["extend gpt-6-luna: devin"]);
     expect(summary({ ...input, combos: [{ ...current, allowMeteredTargets: true }] })).toEqual(["extend gpt-6-luna: devin"]);
   });
 
@@ -102,14 +102,14 @@ describe("buildComboSuggestions", () => {
     expect(channelTier({ name: "unknown", adapter: "openai-chat", authMode: "oauth", baseUrl: "https://unknown.example" }, "gpt-6-luna")).toBe("metered");
   });
 
-  test("custom forward gateways stay out of drafts and require consent on append", () => {
+  test("custom forward gateways rank after subscription channels", () => {
     const model = "gpt-6-luna";
     const input = {
       providers: [...PROVIDERS, { name: "gateway", adapter: "openai-responses", authMode: "forward", baseUrl: "https://gateway.example/v1" }],
       models: models([["openai", model], ["xai", model], ["gateway", model]]),
     };
-    expect(summary(input)).toEqual(["create gpt-6-luna: openai > xai"]);
-    expect(summary({ ...input, combos: [combo(model, [["openai", model], ["xai", model]])] })).toEqual([]);
+    expect(summary(input)).toEqual(["create gpt-6-luna: openai > xai > gateway"]);
+    expect(summary({ ...input, combos: [combo(model, [["openai", model], ["xai", model]])] })).toEqual(["extend gpt-6-luna: gateway"]);
     expect(summary({ ...input, combos: [combo(model, [["openai", model], ["xai", model]], { allowMeteredTargets: true })] }))
       .toEqual(["extend gpt-6-luna: gateway"]);
   });
@@ -120,7 +120,7 @@ describe("buildComboSuggestions", () => {
     expect(summary({
       providers: [...PROVIDERS, gateway],
       models: models([["openai", model], ["xai", model], ["gateway", model]]),
-    })).toEqual(["create gpt-6-luna: openai > xai"]);
+    })).toEqual(["create gpt-6-luna: openai > xai > gateway"]);
   });
 
   test("a model only one provider serves is no suggestion", () => {
@@ -246,7 +246,7 @@ describe("drafts", () => {
     expect(next.targets.map((t) => t.provider)).toEqual(["kimi", "xai", "zayu-claude", "anthropic-apikey", "relay-2"]);
     const relayFirst = combo("opus", [["zayu-claude", "kimi-k3-1-pro"], ["kimi", "kimi-k3-1-pro"]]);
     expect(extendedCombo(relayFirst, [{ provider: "xai", model: "kimi-k3.1-pro", tier: "subscription" }], tierOf).targets.map((t) => t.provider))
-      .toEqual(["xai", "zayu-claude", "kimi"]);
+      .toEqual(["zayu-claude", "kimi"]);
   });
 
   test.each([
@@ -349,6 +349,11 @@ describe("ComboSuggestions card", () => {
     expect(gemini.querySelector(".rb-order")?.textContent).toContain("→");
     await act(async () => { button(gemini, "Generate").click(); });
     const draft = gemini.querySelector<HTMLElement>(".rb-suggest-draft")!;
+    const consent = draft.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect(consent.checked).toBe(false);
+    expect(draft.textContent).toContain("paid credits or usage");
+    expect(button(draft, "Save combo").disabled).toBe(true);
+    await act(async () => { consent.click(); });
     await act(async () => { button(draft.querySelectorAll("li")[0]!, "Move Kimi gemini-3.8-flash down").click(); });
     await act(async () => { button(draft, "Save combo").click(); });
     expect(saved.map(({ kind, item }) => [kind, item.id, item.strategy, item.targets.map((t) => t.provider)])).toEqual([
@@ -367,7 +372,13 @@ describe("ComboSuggestions card", () => {
   });
 
   test("an existing combo missing a provider offers to add it", async () => {
-    await render([combo("gemini", [["kimi-responses", "gemini-3.8-flash"]])]);
+    const existing = combo("gemini", [["kimi-responses", "gemini-3.8-flash"]]);
+    await render([existing]);
+    expect(card("gemini").textContent).toContain("Enable paid targets on this combo first.");
+    expect(button(card("gemini"), "Add to combo").disabled).toBe(true);
+    await act(async () => { button(card("gemini"), "Add to combo").click(); });
+    expect(saved).toEqual([]);
+    await render([{ ...existing, allowMeteredTargets: true }]);
     const extend = card("gemini");
     expect(extend.textContent).toContain("can also use");
     await act(async () => { button(extend, "Add to combo").click(); });
@@ -464,7 +475,7 @@ describe("ComboSuggestions card", () => {
 
   test("adding to a combo with unsaved workspace edits is held", async () => {
     const extended: string[] = [];
-    const existing = [combo("gemini", [["kimi-responses", "gemini-3.8-flash"]])];
+    const existing = [combo("gemini", [["kimi-responses", "gemini-3.8-flash"]], { allowMeteredTargets: true })];
     const view = (locked: string | null) => sonnet({
       combos: existing,
       models: models([["kimi-responses", "gemini-3.8-flash"], ["xai", "gemini-3.8-flash"]]),
@@ -518,7 +529,7 @@ describe("ComboSuggestions card", () => {
     }
   });
 
-  test("new cards and drafts omit paid Vertex and API-key members", async () => {
+  test("new cards and drafts include paid Vertex and API-key members", async () => {
     const name = "kimi-k3-1-pro";
     await mount(<LanguageProvider><ComboSuggestions
       combos={[]} models={models(["kimi", "xai", "google-vertex", "anthropic-apikey"].map((provider) => [provider, name]))}
@@ -527,9 +538,9 @@ describe("ComboSuggestions card", () => {
       onCreate={async () => ({ ok: true })} onExtend={async () => ({ ok: true })}
     /></LanguageProvider>);
     const suggestion = card(name);
-    expect(suggestion.querySelectorAll(".rb-order-item")).toHaveLength(2);
+    expect(suggestion.querySelectorAll(".rb-order-item")).toHaveLength(4);
     await act(async () => { button(suggestion, "Generate").click(); });
-    expect(suggestion.querySelectorAll(".rb-suggest-members li")).toHaveLength(2);
+    expect(suggestion.querySelectorAll(".rb-suggest-members li")).toHaveLength(4);
   });
 
   test("revoked metered consent blocks Add to combo and shows an error", async () => {
@@ -622,7 +633,7 @@ test("another model on the same provider does not hide a missing channel", () =>
 
 test("only consented extensions serialize paid targets, without writing consent", () => {
   const member = { provider: "google-vertex", model: "kimi-k3-1-pro", tier: "vertex" } as const;
-  expect(suggestionDraft("opus", [member]).targets).toEqual([]);
+  expect(suggestionDraft("opus", [member])).toMatchObject({ allowMeteredTargets: true, targets: [{ metered: true }] });
   const current = combo("opus", [["kimi", member.model]]);
   expect(extendedCombo(current, [member], () => "own-subscription").targets).toEqual(current.targets);
   const body = toPutBody(extendedCombo({ ...current, allowMeteredTargets: true }, [member], () => "own-subscription")).combo;

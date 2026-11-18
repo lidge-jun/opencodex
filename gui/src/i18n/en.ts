@@ -4587,6 +4587,8 @@ export const en = {
   "comboSuggest.draft.orderHint": "Tried top to bottom: subscriptions first, then Vertex credit, pay-per-use keys and relays last. Reorder or remove before saving.",
   "comboSuggest.draft.left": "{percent}% left",
   "comboSuggest.draft.strategy": "Strategy: failover. Change it in the row after saving.",
+  "comboSuggest.allowPaid": "Allow paid targets (required to save). These targets may bill paid credits or usage.",
+  "comboSuggest.enablePaid": "Enable paid targets on this combo first.",
   "comboSuggest.draft.save": "Save combo",
   "comboSuggest.draft.saving": "Saving…",
 } as const;

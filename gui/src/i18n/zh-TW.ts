@@ -4539,6 +4539,8 @@ export const zhTW: Record<TKey, string> = {
   "comboSuggest.draft.orderHint": "從上往下依次嘗試：訂閱在前，其次 Vertex 贈金，按量 API key 和中轉站最後。儲存前可以調整順序或刪掉某一家。",
   "comboSuggest.draft.left": "剩 {percent}%",
   "comboSuggest.draft.strategy": "策略：容錯移轉。儲存後可以在列中改。",
+  "comboSuggest.allowPaid": "允許付費目標（儲存時必選）。這些目標可能消耗付費額度或產生用量費用。",
+  "comboSuggest.enablePaid": "請先為此組合啟用付費目標。",
   "comboSuggest.draft.save": "儲存組合",
   "comboSuggest.draft.saving": "正在儲存…",
 };

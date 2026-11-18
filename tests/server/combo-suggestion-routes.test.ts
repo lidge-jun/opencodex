@@ -144,6 +144,7 @@ test.each([
   ["GET", "/api/combo-suggestions", undefined],
   ["PUT", "/api/combo-suggestions", { excludedProviders: ["other"] }],
   ["POST", "/api/combo-suggestions/save", { id: "mix", mode: "append", targets: [paidTarget] }],
+  ["POST", "/api/combo-suggestions/save", { id: "draft", mode: "create", targets: [paidTarget], allowMeteredTargets: true }],
 ] as const)("%s %s requires a dashboard session", async (method, path, body) => {
   const live = seedPaidSuggestion();
   const before = onDisk();
@@ -185,10 +186,9 @@ test("append uses the current combo and marks a consented Vertex target metered"
   expect(live.combos?.mix?.targets).toHaveLength(2);
 });
 
-test("create rejects paid Vertex and never accepts consent from the request", async () => {
+test("create requires explicit consent for every channel", async () => {
   const live = seedPaidSuggestion();
   const draft = { id: "draft", mode: "create", targets: [paidTarget] };
-  expect((await saveSuggestion(live, { ...draft, allowMeteredTargets: true })).status).toBe(400);
   const response = await saveSuggestion(live, draft);
   expect(response.status).toBe(409);
   expect(await response.json()).toMatchObject({ code: "suggestion_consent_required" });
@@ -198,8 +198,15 @@ test("create rejects paid Vertex and never accepts consent from the request", as
   setCanonicalForward(live);
   setCanonicalForward(current);
   saveConfig(current);
-  expect((await saveSuggestion(live, { ...draft, targets: [{ provider: "mock", model: "m" }] })).status).toBe(200);
-  expect(loadConfig().combos?.draft?.allowMeteredTargets).toBeUndefined();
+  const targets = [{ provider: "mock", model: "m" }, paidTarget];
+  expect((await saveSuggestion(live, { ...draft, targets })).status).toBe(409);
+  expect((await saveSuggestion(live, { ...draft, targets, allowMeteredTargets: true })).status).toBe(200);
+  for (const config of [live, loadConfig()]) {
+    expect(config.combos?.draft).toMatchObject({
+      allowMeteredTargets: true,
+      targets: targets.map(target => ({ ...target, metered: true })),
+    });
+  }
 });
 
 for (const paidSide of ["live", "persisted", "both"] as const) {
@@ -255,7 +262,7 @@ test("append inserts a subscription before explicitly metered targets without re
   const response = await saveSuggestion(live, { id: "mix", mode: "append", targets: [target] });
   expect(response.status).toBe(200);
   for (const config of [live, loadConfig()]) {
-    expect(config.combos?.mix?.targets).toEqual([target, ...existing]);
+    expect(config.combos?.mix?.targets).toEqual([{ ...target, metered: true }, ...existing]);
   }
 });
 
@@ -282,4 +289,18 @@ test.each(["create", "append"] as const)("Devin %s requires stored spend consent
       expect(config.combos?.mix?.targets).toContainEqual({ ...target, metered: true });
     }
   }
+});
+
+test("append requires stored consent even for a canonical subscription and rejects request consent", async () => {
+  const live = seedPaidSuggestion();
+  setCanonicalForward(live);
+  delete live.combos!.mix!.allowMeteredTargets;
+  saveConfig(live);
+  const before = onDisk();
+  const request = { id: "mix", mode: "append", targets: [{ provider: "mock", model: "other" }] };
+  expect((await saveSuggestion(live, { ...request, allowMeteredTargets: true })).status).toBe(400);
+  const denied = await saveSuggestion(live, request);
+  expect(denied.status).toBe(409);
+  expect(await denied.json()).toMatchObject({ code: "suggestion_consent_required" });
+  expect(onDisk()).toEqual(before);
 });

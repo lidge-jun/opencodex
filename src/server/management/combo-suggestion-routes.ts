@@ -112,17 +112,22 @@ async function saveSuggestion(ctx: ManagementContext): Promise<Response> {
       ?? jsonResponse({ error: "invalid JSON body", code: "invalid_request" }, 400, req, config);
   }
   const invalid = () => jsonResponse({ error: "invalid suggested combo", code: "invalid_request" }, 400, req, config);
-  if (!isPlainRecord(body) || Object.keys(body).some(key => key !== "id" && key !== "mode" && key !== "targets")
+  if (!isPlainRecord(body) || Object.keys(body).some(key => key !== "id" && key !== "mode" && key !== "targets" && key !== "allowMeteredTargets")
     || typeof body.id !== "string" || (body.mode !== "create" && body.mode !== "append")) return invalid();
   const id = body.id.trim();
   const targets = parseTargets(body.targets);
   if (!targets || !id) return invalid();
   const create = body.mode === "create";
+  const consent = body.allowMeteredTargets;
+  if (!create && Object.hasOwn(body, "allowMeteredTargets")) return invalid();
 
   const rejected = (code: string, status = 409) => ({ changed: false, value: { code, status } });
   const outcome = mutatePersistedConfig<{ code: string; status: number } | { combos: NonNullable<OcxConfig["combos"]> }>(persisted => {
     const previous = Object.hasOwn(persisted.combos ?? {}, id) ? persisted.combos![id] : undefined;
     if (create ? previous : !previous) return rejected("suggestion_combo_changed");
+
+    if (create && consent !== undefined && typeof consent !== "boolean") return rejected("invalid_request", 400);
+    if ((create ? consent : previous?.allowMeteredTargets) !== true) return rejected("suggestion_consent_required");
 
     const nextTargets = [...(previous?.targets ?? [])];
     const providerFor = (snapshot: OcxConfig, name: string) =>
@@ -131,8 +136,9 @@ async function saveSuggestion(ctx: ManagementContext): Promise<Response> {
       const current = providerFor(snapshot, provider);
       return current ? channelTier({ ...current, name: provider }, model) : "metered";
     };
-    // A provider can have different billing in the running and saved config.
+    // Use the lower placement preference when live and persisted channel classifications differ.
     const rankOf = (target: Target) => Math.max(TIER_RANK[tierOf(persisted, target)], TIER_RANK[tierOf(config, target)]);
+    const inserted = new Set<OcxComboConfig["targets"][number]>();
     for (const target of targets) {
       if (nextTargets.some(({ provider, model }) => provider.trim() === target.provider && model.trim() === target.model)) continue;
       const provider = providerFor(persisted, target.provider);
@@ -141,14 +147,14 @@ async function saveSuggestion(ctx: ManagementContext): Promise<Response> {
       }
       if (persisted.comboSuggestionExcludedProviders?.includes(target.provider)) return rejected("suggestion_provider_excluded");
       const rank = rankOf(target);
-      const metered = rank >= TIER_RANK.vertex;
-      if (metered && previous?.allowMeteredTargets !== true) return rejected("suggestion_consent_required");
       const at = create ? -1 : nextTargets.findIndex(existing =>
-        (existing.metered === true ? TIER_RANK.metered : rankOf(existing)) > rank);
-      nextTargets.splice(at < 0 ? nextTargets.length : at, 0, { ...target, ...(metered ? { metered: true } : {}) });
+        (existing.metered === true && !inserted.has(existing) ? TIER_RANK.metered : rankOf(existing)) > rank);
+      const added = { ...target, metered: true };
+      inserted.add(added);
+      nextTargets.splice(at < 0 ? nextTargets.length : at, 0, added);
     }
 
-    const combo: OcxComboConfig = { strategy: "failover", ...previous, targets: nextTargets };
+    const combo: OcxComboConfig = { strategy: "failover", ...previous, allowMeteredTargets: true, targets: nextTargets };
     const combos = { ...persisted.combos, [id]: combo };
     const prospective = { ...persisted, combos };
     if (comboConfigIssues(id, combo, persisted.providers, {

@@ -4553,6 +4553,8 @@ export const de: Record<TKey, string> = {
   "comboSuggest.draft.orderHint": "Die Reihenfolge von oben nach unten: zuerst Abos, dann Vertex-Guthaben, zuletzt Keys mit nutzungsabhängiger Abrechnung und Relays. Vor dem Speichern umsortieren oder entfernen.",
   "comboSuggest.draft.left": "{percent}% übrig",
   "comboSuggest.draft.strategy": "Strategie: Failover. Nach dem Speichern in der Zeile ändern.",
+  "comboSuggest.allowPaid": "Kostenpflichtige Ziele erlauben (zum Speichern erforderlich). Diese Ziele können kostenpflichtiges Guthaben oder Nutzung abrechnen.",
+  "comboSuggest.enablePaid": "Aktiviere zuerst kostenpflichtige Ziele für diese Kombination.",
   "comboSuggest.draft.save": "Combo speichern",
   "comboSuggest.draft.saving": "Wird gespeichert…",
 };

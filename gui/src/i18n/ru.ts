@@ -4576,6 +4576,8 @@ export const ru: Record<TKey, string> = {
   "comboSuggest.draft.orderHint": "Пробуются сверху вниз: сначала подписки, затем кредит Vertex, а ключи с оплатой по факту и ретрансляторы — в конце. Измените порядок или удалите лишнее перед сохранением.",
   "comboSuggest.draft.left": "осталось {percent}%",
   "comboSuggest.draft.strategy": "Стратегия: Failover. Изменить можно в строке после сохранения.",
+  "comboSuggest.allowPaid": "Разрешить платные цели (необходимо для сохранения). Возможны списания платных кредитов или оплата за использование.",
+  "comboSuggest.enablePaid": "Сначала разрешите платные цели для этой комбинации.",
   "comboSuggest.draft.save": "Сохранить комбо",
   "comboSuggest.draft.saving": "Сохранение…",
 };

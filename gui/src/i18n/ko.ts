@@ -4575,6 +4575,8 @@ export const ko: Record<TKey, string> = {
   "comboSuggest.draft.orderHint": "위에서 아래 순서로 시도합니다. 구독이 먼저, 그다음 Vertex 크레딧, 종량제 키와 릴레이는 마지막입니다. 저장하기 전에 순서를 바꾸거나 삭제할 수 있습니다.",
   "comboSuggest.draft.left": "{percent}% 남음",
   "comboSuggest.draft.strategy": "전략: 장애 조치(failover). 저장 후 행에서 바꿀 수 있습니다.",
+  "comboSuggest.allowPaid": "유료 대상 허용(저장에 필요). 유료 크레딧이 차감되거나 사용 요금이 청구될 수 있습니다.",
+  "comboSuggest.enablePaid": "먼저 이 콤보에서 유료 대상을 허용하세요.",
   "comboSuggest.draft.save": "콤보 저장",
   "comboSuggest.draft.saving": "저장 중…",
 };

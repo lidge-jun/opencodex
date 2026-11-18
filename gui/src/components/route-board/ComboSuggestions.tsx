@@ -204,7 +204,7 @@ function SuggestionCard({
             <button
               type="button"
               className="btn btn-primary btn-sm"
-              disabled={busy || !target || locked}
+              disabled={busy || target?.allowMeteredTargets !== true || locked}
               title={locked ? t("cws.unsavedTitle") : undefined}
               onClick={() => target && void save(extendedCombo(target, suggestion.members, tierOf), false)}
             >
@@ -214,6 +214,9 @@ function SuggestionCard({
           <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={onDismiss}>{t("comboSuggest.dismiss")}</button>
         </span>
       </div>
+      {suggestion.kind === "extend" && target?.allowMeteredTargets !== true && (
+        <p className="rb-suggest-hint">{t("comboSuggest.enablePaid")}</p>
+      )}
       {message && <p className="rb-row-message" role="alert">{message}</p>}
       {drafting && suggestion.kind === "create" && (
         <SuggestionDraft
@@ -244,6 +247,7 @@ function SuggestionDraft({
   const t = useT();
   const [comboId, setComboId] = useState(suggestion.comboId);
   const [members, setMembers] = useState<SuggestedMember[]>(suggestion.members);
+  const [allowPaid, setAllowPaid] = useState(false);
   const idOk = isValidComboId(comboId.trim());
   return (
     <div className="rb-suggest-draft">
@@ -276,10 +280,14 @@ function SuggestionDraft({
           );
         })}
       </ol>
+      <label className="rb-suggest-field">
+        <input type="checkbox" checked={allowPaid} onChange={(event) => setAllowPaid(event.target.checked)} />
+        <span>{t("comboSuggest.allowPaid")}</span>
+      </label>
       <div className="rb-suggest-draft-actions">
         <span className="rb-suggest-note">{t("comboSuggest.draft.strategy")}</span>
         <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={onCancel}>{t("common.cancel")}</button>
-        <button type="button" className="btn btn-primary btn-sm" disabled={busy || !idOk}
+        <button type="button" className="btn btn-primary btn-sm" disabled={busy || !idOk || !allowPaid}
           onClick={() => onSave(suggestionDraft(comboId.trim(), members))}>
           {busy ? t("comboSuggest.draft.saving") : t("comboSuggest.draft.save")}
         </button>

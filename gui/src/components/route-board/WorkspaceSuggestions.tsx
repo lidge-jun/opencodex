@@ -35,7 +35,7 @@ export function WorkspaceSuggestions(props: Props) {
       const response = await fetch(`${props.apiBase}/api/combo-suggestions/save`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: item.id, mode: isCreate ? "create" : "append", targets }),
+        body: JSON.stringify({ id: item.id, mode: isCreate ? "create" : "append", targets, ...(isCreate ? { allowMeteredTargets: item.allowMeteredTargets } : {}) }),
       });
       if (response.status === 409) {
         setConflict(true);

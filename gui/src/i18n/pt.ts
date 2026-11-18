@@ -4548,6 +4548,8 @@ export const pt: Record<TKey, string> = {
   "comboSuggest.draft.orderHint": "Testados de cima para baixo: assinaturas primeiro, depois crédito Vertex; chaves de pagamento por uso e relays por último. Reordene ou remova antes de salvar.",
   "comboSuggest.draft.left": "{percent}% restante",
   "comboSuggest.draft.strategy": "Estratégia: failover. Altere-a na linha depois de salvar.",
+  "comboSuggest.allowPaid": "Permitir destinos pagos (obrigatório para salvar). Esses destinos podem cobrar créditos ou taxas de uso.",
+  "comboSuggest.enablePaid": "Primeiro, habilite destinos pagos neste combo.",
   "comboSuggest.draft.save": "Salvar combo",
   "comboSuggest.draft.saving": "Salvando…",
 };

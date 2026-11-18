@@ -14,7 +14,7 @@ export interface SuggestionProvider {
 }
 
 /**
- * Order members are suggested in: a subscription from the model's own maker, any other
+ * Placement preference only. Every suggested target can incur charges. Order members are suggested in: a subscription from the model's own maker, any other
  * subscription, Vertex credit, then pay-per-use keys and relays.
  */
 export type ChannelTier = "own-subscription" | "subscription" | "vertex" | "metered";
@@ -86,8 +86,4 @@ export function channelTier(provider: SuggestionProvider, model: string): Channe
   if (!providerMaker) return "metered";
   const modelMaker = MODEL_MAKERS.find(([re]) => re.test(normalizeModelName(model)))?.[1];
   return modelMaker !== undefined && modelMaker === providerMaker ? "own-subscription" : "subscription";
-}
-
-export function isMeteredTier(tier: ChannelTier): boolean {
-  return tier === "metered" || tier === "vertex";
 }

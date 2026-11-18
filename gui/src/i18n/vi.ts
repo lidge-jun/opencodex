@@ -4545,6 +4545,8 @@ export const vi: Record<TKey, string> = {
   "comboSuggest.draft.orderHint": "Thử từ trên xuống: gói đăng ký trước, rồi credit Vertex, key trả theo lượt dùng và relay ở cuối. Sắp xếp lại hoặc xóa trước khi lưu.",
   "comboSuggest.draft.left": "còn {percent}%",
   "comboSuggest.draft.strategy": "Chiến lược: failover. Đổi trong hàng sau khi lưu.",
+  "comboSuggest.allowPaid": "Cho phép đích trả phí (bắt buộc để lưu). Các đích này có thể tính phí tín dụng hoặc phí sử dụng.",
+  "comboSuggest.enablePaid": "Trước tiên, hãy bật đích trả phí cho tổ hợp này.",
   "comboSuggest.draft.save": "Lưu combo",
   "comboSuggest.draft.saving": "Đang lưu…",
 };
