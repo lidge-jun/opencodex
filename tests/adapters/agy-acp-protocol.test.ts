@@ -91,7 +91,9 @@ describe("binary and version", () => {
     expect(runs).toBe(1);
     clearAgyVersionCacheForTests();
     expect(await probeAgyVersion(bin, async () => undefined)).toEqual({ ok: false, reason: "unreadable" });
-    expect(await probeAgyVersion(bin, async () => "1.5.0")).toEqual({ ok: true, version: "1.5.0" });
+    expect(await probeAgyVersion(bin, async () => "1.5.0")).toEqual({ ok: false, reason: "too_old", version: "1.5.0" });
+    clearAgyVersionCacheForTests();
+    expect(await probeAgyVersion(bin, async () => "1.5.1")).toEqual({ ok: true, version: "1.5.1" });
   });
 });
 
@@ -115,13 +117,13 @@ describe("workspace and reaping", () => {
     await expect(createTurnWorkspace(home, nested)).rejects.toThrow(/inside the OpenCodex home/);
   });
 
-  test.each(["close-first", "tree-first", "timeout"])("Windows waits for tree cleanup before settling (%s)", async order => {
+  test.each(["close-first", "tree-first", "tree-failed", "timeout"])("Windows waits for tree cleanup before settling (%s)", async order => {
     const calls: string[] = [];
     const timers: Array<() => void> = [];
     const set = ((fn: () => void) => { timers.push(fn); return timers.length; }) as unknown as typeof setTimeout;
     const clear = (() => {}) as unknown as typeof clearTimeout;
     let close!: () => void;
-    let treeComplete!: () => void;
+    let treeComplete!: (ok: boolean) => void;
     const child = {
       pid: 99, exitCode: null, signalCode: null,
       kill: (signal: string) => { calls.push(signal); return true; },
@@ -129,7 +131,8 @@ describe("workspace and reaping", () => {
     } as unknown as AgyAcpChild;
     const done = reapProcessTree(child, {
       graceMs: 2_000, reapTimeoutMs: 5_000, platform: "win32", setTimeout: set, clearTimeout: clear,
-      killWindowsTree: (pid: number, completed: () => void) => {
+      warnWindowsTreeFailure: () => { calls.push("tree failure"); },
+      killWindowsTree: (pid: number, completed: (ok: boolean) => void) => {
         calls.push(`taskkill ${pid}`);
         treeComplete = completed;
       },
@@ -139,17 +142,28 @@ describe("workspace and reaping", () => {
       close();
       await Promise.resolve();
       expect(calls).toEqual(["taskkill 99"]);
-      treeComplete();
+      treeComplete(true);
       await done;
       expect(calls).toEqual(["taskkill 99", "settled"]);
+    } else if (order === "tree-failed") {
+      treeComplete(false);
+      expect(calls).toEqual(["taskkill 99", "tree failure", "SIGKILL"]);
+      close();
+      await Promise.resolve();
+      expect(calls).not.toContain("settled");
+      timers[0]!();
+      await done;
     } else {
-      if (order === "tree-first") treeComplete();
+      if (order === "tree-first") treeComplete(true);
       else timers[0]!();
-      expect(calls).toEqual(["taskkill 99", "SIGKILL"]);
+      await Promise.resolve();
+      if (order === "timeout") expect(calls).toContain("settled");
+      else expect(calls).not.toContain("settled");
+      expect(calls).toContain("SIGKILL");
       if (order === "tree-first") close();
       await done;
-      if (order === "timeout") { close(); treeComplete(); }
-      expect(calls).toEqual(["taskkill 99", "SIGKILL", "settled"]);
+      if (order === "timeout") { close(); treeComplete(true); }
+      expect(calls.at(-1)).toBe("settled");
     }
   });
 

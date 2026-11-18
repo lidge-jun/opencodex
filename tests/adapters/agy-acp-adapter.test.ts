@@ -154,6 +154,54 @@ describe("agy acp turn", () => {
     expect(budget.used).toBe(1);
     expect(createAgyAcpAdapter(provider).reportsPhysicalSends).toBe(true);
   });
+
+  test("a denied prompt owns the terminal before another ACP frame in the chunk", async () => {
+    const budget = createRequestExecutionBudget({
+      maxTotalModelSends: 1, baseSendAllowance: 1, finalRecoveryAllowance: 0,
+      maxAlternateTargetSends: 0, maxTargetTransitions: 0,
+    });
+    const reserved = budget.reserveDispatch({ sendClass: "initial", targetKey: "agy" });
+    if (!reserved.allowed || !reserved.permit.use()) throw new Error("test must spend the allowance");
+
+    const sent: string[] = [];
+    const sendAccounting = { sendBudget: budget, onPhysicalSend: () => { sent.push("reported"); } };
+    await expect(run(script((frame, _api, state) => {
+      if (frame.method === "session/prompt") sent.push("prompt");
+      if (frame.method !== "session/new") return;
+      return true;
+    }), {
+      sendAccounting,
+      beforeRun: child => {
+        child.stdin.on("data", (chunk: Buffer) => {
+          const frame = JSON.parse(chunk.toString()) as Frame;
+          if (frame.method !== "session/new") return;
+          child.stdout.write([
+            JSON.stringify({ jsonrpc: "2.0", id: frame.id, result: { sessionId: "s1", configOptions: [modelOption("gemini-3.8-flash", OFFERED)] } }),
+            JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "config_option_update", configOptions: [] } } }),
+            "",
+          ].join("\n"));
+        });
+      },
+    })).rejects.toBeInstanceOf(SendBudgetExhaustedError);
+    expect(sent).toEqual([]);
+  });
+
+  test("a permit that refuses dispatch is released without a prompt or a send report", async () => {
+    const budget = createRequestExecutionBudget();
+    let released = false;
+    budget.reserveDispatch = () => ({
+      allowed: true,
+      permit: { sendClass: "transient", use: () => false, assumeCharge: () => false, release: () => { released = true; } },
+    });
+    const sent: string[] = [];
+    const agent = script(frame => { if (frame.method === "session/prompt") sent.push("prompt"); });
+    await expect(run(agent, { sendAccounting: {
+      sendBudget: budget,
+      onPhysicalSend: () => { sent.push("reported"); },
+    } })).rejects.toBeInstanceOf(SendBudgetExhaustedError);
+    expect(released).toBe(true);
+    expect(sent).toEqual([]);
+  });
   test("a local interactive turn: initialize, session/new in the private workspace, prompt, one done", async () => {
     process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "admin-secret-should-not-leak";
     const h = await run(script());

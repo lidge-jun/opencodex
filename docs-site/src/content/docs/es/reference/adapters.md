@@ -327,7 +327,7 @@ El identificador de modelo que elige es una familia de modelos, y el esfuerzo de
 
 ## `agy-acp`
 
-**Destinos:** la Antigravity CLI oficial (`agy acp`, 1.5.0 o posterior) como proceso hijo local mediante el Agent Client Protocol v1 (JSON-RPC delimitado por saltos de línea en stdio).
+**Destinos:** la Antigravity CLI oficial (`agy acp`, 1.5.1 o posterior) como proceso hijo local mediante el Agent Client Protocol v1 (JSON-RPC delimitado por saltos de línea en stdio).
 **Autenticación:** ninguna en OpenCodex; la CLI es dueña de su inicio de sesión de Google.
 
 - Solo `runTurn`: una sesión ACP por turno (`initialize`, `session/new`, `session/set_config_option`, `session/prompt`). El modelo y el nivel de pensamiento se seleccionan mediante las opciones que anuncia la CLI; el modelo Gemini seleccionado debe confirmarse antes del prompt y seguir seleccionado durante él, o el turno falla de forma cerrada.

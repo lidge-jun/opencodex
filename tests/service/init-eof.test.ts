@@ -92,11 +92,14 @@ describe("ocx init piped stdin (#754)", () => {
     const stderr = new Response(proc.stderr).text();
     try {
       const menu = await waitForOutput(proc.stdout, "Select default provider (number):");
+      expect(menu).toContain("Antigravity CLI (ACP, local) — subscription CLI (no API key)");
       const index = /^\s*(\d+)\.\s+Antigravity CLI \(ACP, local\)/m.exec(menu)?.[1];
       expect(index).toBeDefined();
       proc.stdin.write(index + "\n");
       await proc.stdin.flush();
       const prompt = await waitForOutput(proc.stdout, /API key \(|Default model \[/);
+      expect(prompt).toContain("Sign in on the proxy host with: agy acp --login");
+      expect(prompt).toContain("CLI setup:");
       expect(prompt).toContain("Default model [");
       expect(prompt).not.toContain("API key (");
       proc.stdin.write("\n");

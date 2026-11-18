@@ -54,7 +54,7 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
 
 - `cursor` stays direct because its `runTurn` transport and gated native-file fallback are distinct.
 - `agy-acp` is direct and `runTurn`-only: it starts the official Antigravity CLI (`agy acp --sandbox`) as a local
-  child per turn and drives one Agent Client Protocol session (`src/adapters/agy-acp/`; #8480, plan 080 of the
+  child per turn and drives one Agent Client Protocol session with CLI 1.5.1 or later (`src/adapters/agy-acp/`; #8480, plan 080 of the
   Google protocol parity unit in lidge-jun/opencodex#8771). The CLI owns its Google sign-in,
   so the `antigravity-acp` row is keyless (`authKind: "key"`, `keyOptional`, like `claude-cli`). The init wizard skips
   the key question and omits the key field for those rows. Structural config validation
@@ -67,7 +67,8 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   (`src/adapters/agy-acp/policy.ts`) refuses subagent turns (`x-codex-parent-thread-id`), turns Codex labels as spawned threads (`isThreadSpawnRequest`) or as
   its memory pipeline (`detectMemoryModelPhase`, `x-openai-subagent: memory_consolidation`, `x-openai-memgen-request`).
   A spawn label in the WebSocket frame body is sufficient. An HTTP memory label in the header is sufficient even
-  when the body metadata is malformed. A WebSocket handshake's turn-metadata header does not label later frames.
+  when the body metadata is malformed. For WebSocket memory turns, the frame's metadata decides independently
+  of memory headers from the handshake.
   The policy also refuses combo members, a combo's internal
   decision call (`IncomingMeta.internalDecisionCall`, set only by the JEV decision invoke), routes chosen by subagent
   fallback (`IncomingMeta.subagentFallback`, set only where request-prepare's fallback moves the route), and requests
@@ -78,9 +79,11 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   `src/server/responses/agy-acp-preflight.ts` answers those with a 403 before sidecars run, and `runTurn` repeats the
   check before any probe or spawn. Each `session/prompt` reserves and reports one physical inference send from
   the shared request budget, including a retried turn. Model selection is phase-aware and fails closed when the Gemini model is not
-  confirmed; permission requests are answered `cancelled`; errors carry fixed text only. The workspace stays outside the
+  confirmed. Permission requests are answered `cancelled`. Errors may include validated model IDs, offered
+  Gemini model IDs or a numeric protocol code. Raw child error text stays inside the proxy. The workspace stays outside the
   OpenCodex home and is removed after reaping. On Windows, cleanup waits within the reap deadline for the tree
-  terminator before falling back to killing the leader. Coverage:
+  terminator before falling back to killing the leader. A failed tree command produces a fixed warning and
+  leader closure alone cannot finish cleanup before the deadline. Coverage:
   `tests/adapters/agy-acp-{adapter,protocol,policy}.test.ts`, `tests/config/agy-acp-config.test.ts`,
   `tests/server/server-agy-acp.test.ts`.
 - `devin` is direct for a related reason. It streams Cognition's

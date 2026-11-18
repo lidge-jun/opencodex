@@ -29,7 +29,7 @@ import {
   currentSelection, effortLabels, findSelector, matchValue, parseConfigOptions, proveModel, safeOfferedValues,
   type AcpConfigOption, type AcpSelectValue,
 } from "./options";
-import { AGY_INSTALL_HINT, probeAgyVersion, resolveAgyBinary, type AgyVersionProbe } from "./binary";
+import { AGY_ACP_MIN_VERSION, AGY_INSTALL_HINT, probeAgyVersion, resolveAgyBinary, type AgyVersionProbe } from "./binary";
 import { createTurnWorkspace, defaultAgyAcpSpawn, reapProcessTree, type AgyAcpChild, type AgyAcpSpawn, type TurnWorkspace } from "./process";
 import { agyAcpPolicyRefusal } from "./policy";
 
@@ -159,7 +159,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       const version = await probeVersion(binary);
       if (!version.ok) {
         emit(failure("agy_acp_unavailable", version.reason === "too_old"
-          ? `Antigravity CLI 1.5.0 or newer is required for ACP; found ${version.version}`
+          ? `Antigravity CLI ${AGY_ACP_MIN_VERSION.join(".")} or newer is required for ACP; found ${version.version}`
           : "the Antigravity CLI version could not be read"));
         return;
       }
@@ -276,35 +276,36 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
           return;
         }
       }
-      beginPrompt();
+      sendPrompt();
     }
 
-    function beginPrompt(): void {
-      void sendPrompt().catch(error => finish(undefined, false, () => rejectTurn(error)));
-    }
-
-    async function sendPrompt(): Promise<void> {
+    function sendPrompt(): void {
       if (!checkSelectedModel()) return;
       const prompt = buildAcpPrompt(parsed, !systemOnSession);
-      const decision = incoming.sendBudget?.reserveDispatch({ sendClass: "transient", targetKey: AGY_ACP_IDENTITY_URL });
-      if (decision && !decision.allowed) throw new SendBudgetExhaustedError();
-      const permit = decision?.permit;
-      const dispatch = async (): Promise<void> => {
-        if (settled) return;
-        if (incoming.abortSignal?.aborted) return onAbort();
-        if (!checkSelectedModel()) return;
-        if (child.stdin.destroyed || child.stdin.writableEnded) return fail("agy_acp_protocol", "prompt pipe closed");
-        incoming.beforePhysicalSend?.();
-        if (permit && !permit.use()) throw new SendBudgetExhaustedError();
-        prompting = true;
-        incoming.onPhysicalSend?.({ ordinal: 1 });
-        request("prompt", id => sessionPromptFrame(id, sessionId!, prompt));
-      };
+      const refuse = (error: unknown): void => finish(undefined, false, () => rejectTurn(error));
       try {
-        if (permit?.execute) await permit.execute(dispatch);
-        else await dispatch();
-      } finally {
-        permit?.release();
+        const decision = incoming.sendBudget?.reserveDispatch({ sendClass: "transient", targetKey: AGY_ACP_IDENTITY_URL });
+        if (decision && !decision.allowed) return refuse(new SendBudgetExhaustedError());
+        const permit = decision?.permit;
+        const dispatch = async (): Promise<void> => {
+          try {
+            if (settled) return;
+            if (incoming.abortSignal?.aborted) return onAbort();
+            if (!checkSelectedModel()) return;
+            if (child.stdin.destroyed || child.stdin.writableEnded) return fail("agy_acp_protocol", "prompt pipe closed");
+            incoming.beforePhysicalSend?.();
+            if (permit && !permit.use()) return refuse(new SendBudgetExhaustedError());
+            prompting = true;
+            incoming.onPhysicalSend?.({ ordinal: 1 });
+            request("prompt", id => sessionPromptFrame(id, sessionId!, prompt));
+          } catch (error) {
+            refuse(error);
+          }
+        };
+        const sending = permit?.execute ? permit.execute(dispatch) : dispatch();
+        void sending.catch(refuse).finally(() => permit?.release());
+      } catch (error) {
+        refuse(error);
       }
     }
 
@@ -357,7 +358,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
         if (!adoptState(r.configOptions)) return;
         const thought = findSelector(state, "thought_level");
         if (!thought.ok || currentSelection(thought.selector)?.value !== thoughtTarget?.value) return fail("agy_acp_protocol", "thinking level not acknowledged");
-        return beginPrompt();
+        return sendPrompt();
       }
       // prompt
       usage = mapAcpUsage(r.usage) ?? usage;

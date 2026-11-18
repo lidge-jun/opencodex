@@ -45,7 +45,8 @@ const LOCAL_MESSAGE = "The Antigravity CLI (ACP) provider requires a local conne
  * metadata in the header or the body copy) and a spawned thread (`isThreadSpawnRequest`).
  */
 function isUnattendedCodexTurn({ headers, body, inboundTransport }: AgyAcpPolicySignals): boolean {
-  if (headers.get("x-openai-subagent") === "memory_consolidation" || headers.has("x-openai-memgen-request")) return true;
+  if (inboundTransport !== "websocket"
+    && (headers.get("x-openai-subagent") === "memory_consolidation" || headers.has("x-openai-memgen-request"))) return true;
   if (isThreadSpawnRequest(headers)) return true;
   const client = body && typeof body === "object" && "client_metadata" in body ? body.client_metadata : undefined;
   if (client && typeof client === "object" && "x-codex-turn-metadata" in client

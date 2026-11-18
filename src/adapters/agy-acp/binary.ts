@@ -9,10 +9,10 @@
 import { realpathSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 
-/** ACP shipped in Antigravity CLI 1.5.0 (#8480). */
-export const AGY_ACP_MIN_VERSION: readonly [number, number, number] = [1, 5, 0];
+/** 1.5.1 ensures session/update notifications precede the session/prompt reply. */
+export const AGY_ACP_MIN_VERSION: readonly [number, number, number] = [1, 5, 1];
 export const AGY_BIN_ENV = "OPENCODEX_AGY_BIN";
-export const AGY_INSTALL_HINT = "Install the Antigravity CLI (agy) 1.5.0 or newer and sign in with `agy acp --login`, or set OPENCODEX_AGY_BIN to its absolute path.";
+export const AGY_INSTALL_HINT = `Install the Antigravity CLI (agy) ${AGY_ACP_MIN_VERSION.join(".")} or newer and sign in with \`agy acp --login\`, or set OPENCODEX_AGY_BIN to its absolute path.`;
 
 /** The configured absolute override, else `agy` on PATH; undefined when neither resolves. */
 export function resolveAgyBinary(env: NodeJS.ProcessEnv = process.env, which: (name: string) => string | null = name => Bun.which(name)): string | undefined {

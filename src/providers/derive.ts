@@ -767,6 +767,7 @@ function customPreset(): DerivedProviderPreset {
 
 function formatInitLabel(entry: ProviderRegistryEntry): string {
   if (entry.authKind === "forward") return "OpenAI — ChatGPT login (no key; account pool default, Direct selectable)";
+  if (entry.adapter === "agy-acp") return `${entry.label} — subscription CLI (no API key)`;
   if (entry.authKind === "oauth") {
     if (entry.id === "xai") return "xAI (Grok) — account login";
     if (entry.id === "anthropic") return "Anthropic (Claude) — account login";

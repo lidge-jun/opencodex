@@ -53,14 +53,19 @@ export interface ReapOptions {
   reapTimeoutMs: number;
   platform?: NodeJS.Platform;
   signalGroup?: (pid: number, signal: NodeJS.Signals) => void;
-  killWindowsTree?: (pid: number, completed: () => void) => void;
+  killWindowsTree?: (pid: number, completed: (ok: boolean) => void) => void;
+  warnWindowsTreeFailure?: () => void;
   setTimeout?: typeof setTimeout;
   clearTimeout?: typeof clearTimeout;
 }
 
-function defaultKillWindowsTree(pid: number, completed: () => void): void {
+function defaultKillWindowsTree(pid: number, completed: (ok: boolean) => void): void {
   const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
-  execFile(taskkill, ["/PID", String(pid), "/T", "/F"], { windowsHide: true, timeout: 5_000 }, completed);
+  execFile(taskkill, ["/PID", String(pid), "/T", "/F"], { windowsHide: true, timeout: 5_000 }, error => completed(!error));
+}
+
+function warnWindowsTreeFailure(): void {
+  console.warn("Antigravity ACP could not confirm Windows process tree cleanup.");
 }
 
 /**
@@ -83,30 +88,31 @@ export function reapProcessTree(child: AgyAcpChild, options: ReapOptions): Promi
   if (platform === "win32") {
     if (leaderGone) return Promise.resolve();
     return new Promise<void>(resolve => {
-      let treeDone = false;
+      let treeResult: boolean | undefined;
       let leaderClosed = false;
       const finish = (): void => {
         clear(deadline);
         resolve();
       };
-      const afterTree = (): void => {
-        if (treeDone) return;
-        treeDone = true;
-        if (leaderClosed) finish();
-        else signal("SIGKILL");
+      const afterTree = (ok: boolean): void => {
+        if (treeResult !== undefined) return;
+        treeResult = ok;
+        if (!ok) (options.warnWindowsTreeFailure ?? warnWindowsTreeFailure)();
+        if (!leaderClosed) signal("SIGKILL");
+        else if (ok) finish();
       };
       const deadline = set(() => {
-        afterTree();
+        afterTree(false);
         finish();
       }, options.reapTimeoutMs);
       child.once("close", () => {
         leaderClosed = true;
-        if (treeDone) finish();
+        if (treeResult === true) finish();
       });
-      if (pid === undefined) afterTree();
+      if (pid === undefined) afterTree(false);
       else {
         try { (options.killWindowsTree ?? defaultKillWindowsTree)(pid, afterTree); }
-        catch { afterTree(); }
+        catch { afterTree(false); }
       }
     });
   }

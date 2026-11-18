@@ -856,7 +856,7 @@ once per turn and talks to it over the Agent Client Protocol on stdin and stdout
 }
 ```
 
-- **Prerequisites:** Antigravity CLI 1.5.0 or newer on `PATH` (or `OPENCODEX_AGY_BIN` set to its absolute path),
+- **Prerequisites:** Antigravity CLI 1.5.1 or newer on `PATH` (or `OPENCODEX_AGY_BIN` set to its absolute path),
   signed in once on the proxy host with `agy acp --login` or an interactive `agy` session. A CLI that is not signed in fails the turn
   with HTTP 401 `agy_login_required`.
 - **No credential stored:** the CLI owns its Google sign-in. OpenCodex never reads, stores or forwards it, and the row

@@ -161,7 +161,12 @@ export async function runInit(): Promise<void> {
         providerConfig = { adapter: p.adapter, baseUrl: p.baseUrl, authMode: "oauth", ...(p.defaultModel ? { defaultModel: p.defaultModel } : {}) };
         oauthHint = true;
       } else {
-        if (!p.keyOptional && p.dashboardUrl) console.log(`   🔑 Get your key: ${p.dashboardUrl}`);
+        if (p.adapter === "agy-acp") {
+          console.log("   Sign in on the proxy host with: agy acp --login");
+          if (p.dashboardUrl) console.log(`   CLI setup: ${p.dashboardUrl}`);
+        } else if (!p.keyOptional && p.dashboardUrl) {
+          console.log(`   🔑 Get your key: ${p.dashboardUrl}`);
+        }
         // Template URL with placeholders (e.g. Cloudflare's {account_id}) needs a resolved value.
         let baseUrl = p.baseUrl;
         if (/\{[^}]*\}/.test(baseUrl)) {

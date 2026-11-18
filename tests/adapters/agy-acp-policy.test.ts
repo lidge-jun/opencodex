@@ -105,6 +105,8 @@ describe("use policy", () => {
   test("a WebSocket handshake memory label does not classify an ordinary frame", () => {
     const headers = new Headers({ "x-codex-turn-metadata": JSON.stringify({ request_kind: "memory" }) });
     expect(agyAcpPolicyRefusal({ headers, body: {}, inboundTransport: "websocket", local: true })).toBeUndefined();
+    headers.set("x-openai-subagent", "memory_consolidation");
+    expect(agyAcpPolicyRefusal({ headers, body: {}, inboundTransport: "websocket", local: true })).toBeUndefined();
   });
 
   test("HTTP preflight refuses a memory header with malformed body metadata", async () => {
