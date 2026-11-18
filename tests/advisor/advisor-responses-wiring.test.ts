@@ -806,7 +806,7 @@ describe("advisor responses wiring (end-to-end)", () => {
       { type: "tool_call_delta", arguments: '{"question":' },
       { type: "tool_call_end", incomplete: true },
       { type: "done", stopReason: "max_tokens" },
-    ] as AdapterEvent[], { advisor: true });
+    ] as AdapterEvent[], () => "synthetic");
     expect(incomplete.calls).toHaveLength(0);
     expect(incomplete.hasMalformedToolCall).toBe(true);
     expect(JSON.stringify(incomplete.passthrough)).not.toContain("advisor");
@@ -815,7 +815,7 @@ describe("advisor responses wiring (end-to-end)", () => {
       { type: "tool_call_start", id: "adv-unterminated", name: "advisor" },
       { type: "tool_call_delta", arguments: '{"question":' },
       { type: "done", stopReason: "max_tokens" },
-    ] as AdapterEvent[], { advisor: true });
+    ] as AdapterEvent[], () => "synthetic");
     expect(unterminated.calls).toHaveLength(0);
     expect(unterminated.hasMalformedToolCall).toBe(true);
     expect(JSON.stringify(unterminated.passthrough)).not.toContain("advisor");

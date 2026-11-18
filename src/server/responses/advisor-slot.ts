@@ -30,7 +30,7 @@ import type {
   OcxToolResultMessage,
   OcxUsage,
 } from "../../types";
-import { createToolChoiceResolver, toolChoiceToolPredicate } from "../../types";
+import { createToolChoiceResolver, namespacedToolName, normalizeDeclaredToolName, toolChoiceAliases, toolChoiceToolPredicate } from "../../types";
 import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "../../lib/errors";
 import { jsonStringPartsUtf8Bytes, jsonUtf8Bytes } from "../../lib/json-byte-size";
 import { isTranslatorBudgetExceededError, releaseTranslatedEvent, TRANSLATOR_MAX_CALL_ARGUMENT_BYTES, TranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
@@ -48,14 +48,55 @@ export function advisorToolAllowed(
   return toolChoiceToolPredicate(toolChoice, [...(parsed.context.tools ?? []), advisorTool])(advisorTool);
 }
 
-export function callerAdvisorToolPredicate(parsed: OcxParsedRequest): (tool: OcxTool) => boolean {
+type AdvisorCallDisposition = "synthetic" | "refused" | { clientWireName: string } | undefined;
+const ROOT_ADVISOR_ALIASES = toolChoiceAliases({ namespace: "functions", name: ADVISOR_TOOL_NAME });
+
+/** Resolve provider echoes before interpreting them as synthetic or caller-owned Advisor calls. */
+export function createAdvisorCallResolver(
+  parsed: OcxParsedRequest,
+  syntheticAllowed: boolean,
+  callerCatalog = parsed.context.tools ?? [],
+): (name: string) => AdvisorCallDisposition {
+  // Keep the original identities recognizable even when a worker leg removes tools.
+  const knownAdvisorNames = new Set([ADVISOR_TOOL_NAME]);
+  for (const tool of callerCatalog) {
+    if (tool.advisor || tool.name !== ADVISOR_TOOL_NAME) continue;
+    for (const name of toolChoiceAliases(tool)) knownAdvisorNames.add(name);
+    if (!tool.namespace) for (const name of ROOT_ADVISOR_ALIASES) knownAdvisorNames.add(name);
+  }
+  if (knownAdvisorNames.size === 1) {
+    return name => name === ADVISOR_TOOL_NAME ? (syntheticAllowed ? "synthetic" : "refused") : undefined;
+  }
   const { explicitClientToolChoices, toolChoice } = parsed.options;
   const catalog = parsed.context.tools ?? [];
   const effectiveChoiceAllows = toolChoiceToolPredicate(toolChoice, catalog);
-  const resolver = explicitClientToolChoices?.length ? createToolChoiceResolver(catalog) : undefined;
-  return tool => !tool.advisor && tool.name === ADVISOR_TOOL_NAME && effectiveChoiceAllows(tool)
-    && (explicitClientToolChoices === undefined || explicitClientToolChoices.some(choice =>
-      choice.type === (tool.freeform ? "custom" : "function") && resolver?.selects(tool, choice.name)));
+  const availableClients = catalog.filter(tool => !tool.advisor && effectiveChoiceAllows(tool));
+  const emittedNames = createToolChoiceResolver(availableClients);
+  const wireTools = new Map(availableClients.map(tool => [namespacedToolName(tool.namespace, tool.name), tool]));
+  const selectedNames = explicitClientToolChoices?.length ? createToolChoiceResolver(callerCatalog) : undefined;
+
+  return name => {
+    if (name === ADVISOR_TOOL_NAME && syntheticAllowed) return "synthetic";
+    const emittedName = name.startsWith("default.") && emittedNames.candidateCount(name) === 0
+      ? normalizeDeclaredToolName(name, knownAdvisorNames) : name;
+    if (!knownAdvisorNames.has(emittedName)) return undefined;
+    // An exact wire identity wins over compatibility aliases. Bare and dotted echoes
+    // need a unique candidate, and the reserved functions wrapper only denotes a root tool.
+    let tool = wireTools.get(emittedName);
+    if (!tool) {
+      const candidates = emittedNames.candidates(emittedName);
+      if (candidates.length === 1) {
+        tool = wireTools.get(namespacedToolName(candidates[0].namespace, candidates[0].name));
+      } else if (candidates.length === 0 && ROOT_ADVISOR_ALIASES.includes(emittedName)) {
+        tool = wireTools.get(ADVISOR_TOOL_NAME);
+      }
+    }
+    if (!tool) return "refused";
+    if (tool.name !== ADVISOR_TOOL_NAME) return undefined;
+    const selected = explicitClientToolChoices === undefined || explicitClientToolChoices.some(choice =>
+      choice.type === (tool.freeform ? "custom" : "function") && selectedNames?.selects(tool, choice.name));
+    return selected ? { clientWireName: namespacedToolName(tool.namespace, tool.name) } : "refused";
+  };
 }
 
 /** Hard bound on advisor consultations per worker request (recursion guard). */
@@ -258,19 +299,14 @@ export function createAdvisorGuard(plan: AdvisorPlan): NonNullable<OcxParsedRequ
   const sidecar = createAdvisorSidecarStep(plan);
   return async function* guardAdvisorStream(options: Omit<AdvisorGuardOptions, "plan">): AsyncGenerator<AdapterEvent> {
     let parsed = options.parsed;
+    const callerCatalog = parsed.context.tools ?? [];
     let accumulatedUsage: OcxUsage | undefined;
     let source: AsyncIterable<AdapterEvent> = options.firstEvents;
     const retention = new AdvisorRetention(options.translatorBudget);
     try {
     while (true) {
       // A continuation or reused guard may have a narrower choice than the original turn.
-      const catalog = parsed.context.tools ?? [];
-      const advisorAllowed = advisorToolAllowed(parsed);
-      // The bridge restores a unique authorized namespaced tool's bare echo. When no
-      // synthetic Advisor was permitted, that alias still belongs to the caller's tool.
-      const callerAdvisorOwners = new Set(catalog.filter(callerAdvisorToolPredicate(parsed))
-        .map(tool => tool.namespace ?? ""));
-      const callerOwnsAdvisorAlias = !advisorAllowed && callerAdvisorOwners.size === 1;
+      const resolveAdvisorCall = createAdvisorCallResolver(parsed, advisorToolAllowed(parsed), callerCatalog);
       const held: HeldAdvisorCall[] = [];
       const legEvents: AdapterEvent[] = [];
       let legTextChars = 0;
@@ -299,7 +335,8 @@ export function createAdvisorGuard(plan: AdvisorPlan): NonNullable<OcxParsedRequ
           continue;
         }
         if (event.type === "tool_call_start") {
-          if (event.name === ADVISOR_TOOL_NAME && !advisorAllowed && !callerOwnsAdvisorAlias) {
+          const disposition = resolveAdvisorCall(event.name);
+          if (disposition === "refused") {
             if (options.translatorBudget) releaseTranslatedEvent(event, options.translatorBudget);
             const refusal: Extract<AdapterEvent, { type: "error" }> = { type: "error", status: 502, errorType: "upstream_error", code: UNDECLARED_TOOL_CALL_ERROR_CODE,
               message: "routed provider emitted an Advisor call outside the current request's tool choice",
@@ -309,8 +346,11 @@ export function createAdvisorGuard(plan: AdvisorPlan): NonNullable<OcxParsedRequ
             continue;
           }
           if (pending) { held.push(pending); pending = null; }
-          holdingCurrent = event.name === ADVISOR_TOOL_NAME && !callerOwnsAdvisorAlias;
+          holdingCurrent = disposition === "synthetic";
           if (!holdingCurrent) {
+            // The parser flattens the reserved functions namespace into the root catalog.
+            if (typeof disposition === "object" && disposition.clientWireName === ADVISOR_TOOL_NAME
+              && ROOT_ADVISOR_ALIASES.includes(event.name)) event.name = disposition.clientWireName;
             hasRealToolCall = true;
             // No continuation can use this leg. Real-tool arguments are never copied.
             held.length = legEvents.length = 0;

@@ -69,8 +69,10 @@ multi-call pairing, overlap and lifecycle release.
   kind and name match the original selector and the effective choice permits it. With `auto`
   or `required`, caller-owned tools follow the effective choice alone. A forced hosted search
   excludes a caller-owned `advisor` even when the worker receives `auto`.
-  The guard rechecks the caller's selection and effective tool choice on each worker leg and
-  refuses a forbidden call before consultation, continuation, or disclosure of its ID and arguments.
+  The guard resolves worker call names against the caller catalog, including flattened, dotted,
+  and compatible bare or reserved `functions` echoes. It checks the declared tool's kind against
+  the original typed selector and checks the effective choice on each worker leg. A forbidden call
+  is refused before consultation, continuation, or disclosure of its ID and arguments.
   Linked Messages replay uses the same check. `src/claude/inbound-content-options.ts` identifies
   an explicitly selected hosted Advisor from the original declaration before choice lowering.
   The Responses core validates the original choice against the resolved route and admitted
@@ -94,7 +96,7 @@ multi-call pairing, overlap and lifecycle release.
   consultation and continuation bounds with the normal guard. The search scanner consumes advisor
   calls alongside `web_search`, fulfills them in worker order, and replays paired results without
   exposing the synthetic call to the client. The synthetic tool and scanner are enabled only when
-  the caller's selection and effective `tool_choice` permit Advisor. The same check runs on each
+  the caller's selection and effective `tool_choice` permit Advisor. The same call resolver runs on each
   search iteration and leaves the search tool's outbound translation intact. A caller-owned
   `advisor` must be declared and permitted by both the original selector and current iteration's
   effective choice. The loop refuses other unauthorized calls before their IDs or arguments

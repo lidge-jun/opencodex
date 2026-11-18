@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { parseRequest } from "../../src/responses/parser";
-import { createAdvisorGuard, type AdvisorPlan, type AdvisorConsultOutcome } from "../../src/server/responses/advisor-slot";
+import { createAdvisorCallResolver, createAdvisorGuard, type AdvisorPlan, type AdvisorConsultOutcome } from "../../src/server/responses/advisor-slot";
+import { guardEmptyCompletionEventStream } from "../../src/server/responses/empty-completion-guard";
+import { scanEventsForWebSearch } from "../../src/web-search/loop";
 import type { AdapterEvent, OcxParsedRequest, OcxToolChoice } from "../../src/types";
 
 const ADVICE: AdvisorConsultOutcome = {
@@ -54,6 +56,93 @@ const baseParsed = (): OcxParsedRequest => parseRequest({
   model: "deepseek/deepseek-v4",
   stream: true,
   input: [{ role: "user", content: "task" }],
+});
+
+describe("caller-owned Advisor delivery policy", () => {
+  const aliases = [
+    { name: "advisor", namespace: undefined },
+    { name: "work__advisor", namespace: "work" },
+    { name: "work.advisor", namespace: "work" },
+    { name: "functions.advisor", namespace: "functions" },
+    { name: "functions__advisor", namespace: "functions" },
+    { name: "default.work__advisor", namespace: "work" },
+  ];
+  const advisor = { type: "function", name: "advisor", parameters: { type: "object" } };
+  const modes = ["streaming", "buffered", "empty-completion retry", "fetch search"] as const;
+
+  test.each(modes.flatMap(mode => aliases.map(alias => ({ mode, ...alias }))))(
+    "retains no denied call fields in %j",
+    async ({ mode, name, namespace }) => {
+      const parsed = parseRequest({ model: "worker", input: "task", stream: mode !== "buffered",
+        tools: [namespace ? { type: "namespace", name: namespace, tools: [advisor] } : advisor],
+        tool_choice: { type: "web_search" },
+      });
+      expect(parsed.options.toolChoice).toBe("auto");
+      const resolve = createAdvisorCallResolver(parsed, false);
+      expect(resolve(name)).toBe("refused");
+
+      const workerEvents: AdapterEvent[] = [
+        { type: "tool_call_start", id: "fixture-call-field", name },
+        { type: "tool_call_delta", arguments: '{"question":"fixture-argument-field"}' },
+        { type: "tool_call_end" },
+        { type: "done" },
+      ];
+      const recorder = { consults: [] };
+      const { requests, continuation } = makeContinuation();
+      const guard = createAdvisorGuard(planFrom(recorder));
+      const guarded = () => guard({ parsed, continuation, firstEvents: (async function* () { yield* workerEvents; })() });
+      let events: AdapterEvent[];
+      if (mode === "fetch search") {
+        const split = scanEventsForWebSearch(workerEvents, resolve);
+        expect(split.calls).toEqual([]);
+        events = split.passthrough;
+      } else if (mode === "empty-completion retry") {
+        events = await collect(guardEmptyCompletionEventStream({
+          firstEvents: (async function* (): AsyncGenerator<AdapterEvent> { yield { type: "done" }; })(),
+          continuation: guarded,
+          preserveRetryError: event => event.type === "error" && event.code === "undeclared_tool_call",
+        }));
+      } else {
+        events = await collect(guarded());
+      }
+      expect(events.at(-1)).toMatchObject({ type: "error", code: "undeclared_tool_call" });
+      expect(events.some(event => event.type.startsWith("tool_call"))).toBe(false);
+      expect(JSON.stringify(events)).not.toContain("fixture-call-field");
+      expect(JSON.stringify(events)).not.toContain("fixture-argument-field");
+      expect(recorder.consults).toEqual([]);
+      expect(requests).toEqual([]);
+    },
+  );
+
+  test.each(["auto", "required", { type: "custom", name: "advisor" }])(
+    "allows the matching caller tool under %j",
+    tool_choice => {
+      const parsed = parseRequest({ model: "worker", input: "task", tool_choice,
+        tools: [{ type: "custom", name: "advisor" }] });
+      const resolve = createAdvisorCallResolver(parsed, false);
+      for (const name of ["advisor", "functions.advisor"]) {
+        expect(resolve(name)).toEqual({ clientWireName: "advisor" });
+        const split = scanEventsForWebSearch([
+          { type: "tool_call_start", id: "client-call", name },
+          { type: "tool_call_delta", arguments: '{"input":"client-tool-input"}' },
+          { type: "tool_call_end" },
+          { type: "done" },
+        ], resolve);
+        expect(split.calls).toEqual([]);
+        expect(split.hasRealToolCall).toBe(true);
+        expect(split.passthrough[0]).toMatchObject({ type: "tool_call_start", name: "advisor", id: "client-call" });
+      }
+    },
+  );
+
+  test("keeps an unrelated exact wire name distinct from an Advisor alias", () => {
+    const parsed = parseRequest({ model: "worker", input: "task", tool_choice: { type: "web_search" },
+      tools: [{ type: "namespace", name: "work", tools: [advisor] }, { ...advisor, name: "work.advisor" }],
+    });
+    const resolve = createAdvisorCallResolver(parsed, false);
+    expect(resolve("work.advisor")).toBeUndefined();
+    expect(resolve("work__advisor")).toBe("refused");
+  });
 });
 
 describe("createAdvisorGuard — manual advisor() interception", () => {

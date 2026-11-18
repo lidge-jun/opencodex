@@ -162,6 +162,8 @@ also maps to the root. Forced hosted web search and
 same-named custom or hosted selectors grant no manual Advisor permission. This applies to
 ordinary translated Responses and Messages requests as well as web search. A forbidden call
 is rejected before consultation, worker redispatch, or disclosure of its ID and arguments.
+The original selection also governs client tools named `advisor` in any namespace. With a forced
+hosted search, both those tools and manual proxy consultations are excluded.
 When translated Messages explicitly selects Anthropic's hosted `advisor`, OpenCodex forwards the
 original declaration and named choice on an eligible route. A combo or routing profile can skip
 incompatible candidates under its fallback policy. OpenCodex returns HTTP 400 locally when
