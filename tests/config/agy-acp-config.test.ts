@@ -79,6 +79,7 @@ describe("antigravity-acp configuration", () => {
           "model-two": ["google/gemini-4-argon"],
           "model-three": ["gemini-3.8-flash", "antigravity-acp/gemini-3.8-flash"],
           [credentialKey]: ["antigravity-acp/gemini-3.8-flash"],
+          ["unsafe\npath\u001b"]: ["antigravity-acp/gemini-3.8-flash"],
         },
       });
       const candidateError = messages(validateConfigCandidate(raw));
@@ -110,11 +111,13 @@ describe("antigravity-acp configuration", () => {
         expect.stringContaining("subagentModelFallbackByModel.model-three.0"),
         expect.stringContaining("subagentModelFallbackByModel.model-three.1"),
         expect.stringContaining("subagentModelFallbackByModel.[REDACTED].0"),
+        expect.stringContaining("subagentModelFallbackByModel.unsafe\\u000apath\\u001b.0"),
       ]));
       expect(diagnostics.warnings.join("\n").includes(credentialKey)).toBe(false);
       const logged = warn.mock.calls.flat().join("\n");
       expect(logged.includes(credentialKey)).toBe(false);
       expect(logged).toContain("subagentModelFallbackByModel.[REDACTED].0");
+      expect(logged).toContain("subagentModelFallbackByModel.unsafe\\u000apath\\u001b.0");
       expect(readFileSync(path, "utf8")).toBe(bytes);
     } finally {
       warn.mockRestore();

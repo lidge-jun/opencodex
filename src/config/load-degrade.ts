@@ -224,7 +224,10 @@ export function sanitizeAgyAcpUnattendedTargetsForLoad(
         if (fallback.length === 0) delete byModel[field];
       }
     }
-    const path = issue.path.map(segment => typeof segment === "string" ? redactSecretString(segment) : segment).join(".");
+    const path = issue.path.map(segment => typeof segment === "string"
+      ? redactSecretString(segment).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g,
+        ch => "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0"))
+      : segment).join(".");
     warn(`${path}: ${issue.message} Ignoring this target on load.`);
   }
 }
