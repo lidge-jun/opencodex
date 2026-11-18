@@ -155,12 +155,9 @@ compatibility integration owner; it currently has an authenticated HTTP contract
 `src/codex/desktop-compatibility/runtime.ts` owns an explicit, default-off runtime.
 Construction and status do not start listeners, load credentials or enroll trust. Start
 loads an existing DPAPI key, verifies CurrentUser trust and a fresh native file-login
-identity, then creates only loopback TLS/CONNECT/PAC listeners. The official Windows
-package family and publisher proof are declared in the module; builds that cannot prove
-that package identity refuse activation, while the observed package version stays part of
-the assessed identity rather than an admission list. The full package basename and App
-entry must also agree; matching the version prefix alone does not qualify a foreign
-package identity.
+identity, then creates only loopback TLS/CONNECT/PAC listeners. Admission requires a healthy
+current-user Microsoft Store package with the expected Codex family, package publisher, basename
+and App entry. The package full name includes the version and participates in the trial identity.
 HTTP, identity verification and upgraded sockets use the explicit desktop egress policy
 described in the [transport inventory](../transports/inventory.md#native-desktop-proxy-egress).
 Invalid proxy routes refuse rather than falling back to direct egress.
@@ -228,27 +225,37 @@ table do not invalidate the routing snapshot. Desktop refreshes that tool-transp
 after launch; all other native fields, including unknown ones and selected profiles, remain bound.
 It does not claim knowledge of project-local overrides or a conversation's selected model.
 Each record that would be corrected checks routing and the proof-verified installed build asynchronously,
-then rechecks account identity and trial generation before emitting it. `installed-build.ts` uses a
-compatibility-only current-user package query that reads the registered manifest's actual App and
-fixed ChatGPT.exe entry in the installed package's app directory, binds its publisher/name to the exact official family,
-and refuses missing/reparse executable facts. It coalesces concurrent probes without caching a positive
-result across requests, and aborts/reaps its bounded child before shutdown completes. Observe and
-unchanged responses do not query Windows. Background refresh runs once a minute in Observe,
-every ten seconds during Apply, and stops probing after the safety deadline. Failed checks
-disarm Apply. Native update/routing failures are
-public diagnostic codes; originals continue to relay and no app/config repair is automatic.
-The package proof's manifest digest and canonical executable metadata stay private. An observed
-identity change or failed proof invalidates trial generation, prior exhaustion and outputs before
-another correction; a package-identity A-to-B-to-A transition cannot revive old consent. Later
-success requires a new original exhaustion and explicit account-wide consent with the unchanged
-maximum three-minute trial. Stop/start replaces the observation context, and old probe completions
-cannot affect its replacement. Identical observed registration/file metadata cannot detect every
-same-version reinstall; this is not continuous file/process or signature attestation.
-Every volume-root-to-file ancestor is checked for reparse points before manifest/file consumption
-and rechecked before proof publication. FullName is lexical and is not a held-handle canonical-path
-proof; the bounded before/after metadata walk does not exclude a transient replace-and-restore
-between observations. Such unobserved replacement remains outside this observation contract. The launcher,
-GET/SSE surface and default-off behavior remain unchanged.
+then rechecks account identity and trial generation before emitting it. `installed-build.ts` uses
+`src/codex/desktop-compatibility/windows-package-proof.ts` for native proof. Windows PowerShell 5.1
+looks up the exact installed package for the current user, requires the Store signature kind and
+healthy deployment status, and calls
+[Package.VerifyContentIntegrityAsync](https://learn.microsoft.com/en-us/uwp/api/windows.applicationmodel.package.verifycontentintegrityasync)
+to verify the installed contents through Windows' signed MSIX package integrity mechanism
+([AppxBlockMap.xml and AppxSignature.p7x](https://learn.microsoft.com/en-us/windows/msix/package/signing-package-overview#package-integrity-enforcement)).
+It independently requires Windows Authenticode status Valid for the expected OpenAI code-signing
+subject on `ChatGPT.exe`. The manifest and executable stay open with read-only sharing during
+these checks. The probe compares their handle-resolved paths to the registered paths, checks their
+ancestors for reparse points, and hashes their bytes with SHA-256 from the held handles. Any
+unavailable, failed or inconsistent check refuses admission. The probe coalesces concurrent
+checks, refreshes proof on each new check and aborts and reaps its bounded child on shutdown.
+Background refresh runs once a minute in Observe, every ten seconds during Apply and stops at
+the safety deadline. Failed checks disarm Apply. Originals continue to relay.
+
+The package name, digests, signer thumbprint and path evidence stay private. An observed identity
+change or failed proof invalidates trial generation, prior exhaustion and outputs before another
+correction. A package-identity A-to-B-to-A transition also revokes the old consent. Later success
+requires a new original exhaustion observation and explicit account-wide consent. Stop/start
+replaces the observation context and fences off late completions.
+
+Both compatibility launch entry points pass the approved build to the activation command.
+The managed restart also checks the captured runtime generation and build revision after the stop
+ladder. Before activation, the command rechecks the live registration and the full proof against
+the approved package while holding the two files open. Windows activates by AUMID. Readback uses
+one process handle to check the exact package full name and kernel-reported image path, then
+checks the PAC argument and the held image file's SHA-256 before returning success. A package change
+at the activation boundary may still result in a process starting and a refused launch result.
+The checks rely on Windows deployment, filesystem and code-signing trust. The executable hash
+covers the on-disk image, and verification is bounded to the described probe and launch points.
 Each completed check also publishes a `buildAssessment` record on runtime status holding only
 `assessedVersion`, `observedVersion`, `verified` and `completedAt`. A status read never starts
 a probe, a runtime without a real probe omits the field, and an aborted or in-flight check never

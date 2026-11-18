@@ -9,15 +9,17 @@ import { windowsDesktopAppAdapter } from "../../src/codex/desktop-app/windows";
 import { activateWindowsCodexCompatibility, captureWindowsCompatibilityContext } from "../../src/codex/desktop-compatibility/windows-package-command";
 import { acquireDesktopCompatibilityRuntime, bindDesktopCompatibilityLaunch, readDesktopCompatibilityLaunch } from "../../src/codex/desktop-compatibility/runtime-ownership";
 
+import { verifiedDesktopPackage } from "../helpers/desktop-package-observation";
+
 const powershell = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
-const install = { id: "OpenAI.Codex_fixture", root: "C:\\Program Files\\WindowsApps\\OpenAI.Codex_fixture", relaunch: "OpenAI.Codex_fixture!App" };
+const install = verifiedDesktopPackage("1.2.3.0");
 const pac = "http://127.0.0.1:10102/fixture-0123456789/proxy.pac";
-const packageFullName = "OpenAI.Codex_1.2.3.0_x64__fixture";
+const { packageFullName, executableHash } = install;
 const releases: (() => void)[] = [];
 afterEach(() => { for (const release of releases.splice(0).reverse()) release(); setTrustedWindowsElevationExecutablesForTests(null); });
-function own(pacUrl = pac, current = () => true) {
+function own(pacUrl = pac, current = () => true, revision = () => 1) {
   const release = acquireDesktopCompatibilityRuntime(); releases.push(release);
-  releases.push(bindDesktopCompatibilityLaunch(pacUrl, current));
+  releases.push(bindDesktopCompatibilityLaunch(pacUrl, () => current() ? { build: install, revision: revision() } : null));
   return { release, generation: readDesktopCompatibilityLaunch()!.generation };
 }
 function executor(options: { running?: string; probeFailure?: boolean; output?: string } = {}) {
@@ -25,8 +27,7 @@ function executor(options: { running?: string; probeFailure?: boolean; output?: 
   setTrustedWindowsElevationExecutablesForTests({ powershell });
   const exec: DesktopExec = (_file, args) => {
     const script = args.at(-1)!; calls.push(script);
-    if (script.includes("OpenCodexPackageActivation")) return options.output ?? JSON.stringify({ pid: 123, packageFullName, verified: true });
-    if (script.includes("Get-AppxPackage")) return `${install.id}\n${install.root}\n${install.relaunch}`;
+    if (script.includes("OpenCodexPackageActivation")) return options.output ?? JSON.stringify({ pid: 123, packageFullName, executableHash, verified: true });
     if (options.probeFailure) throw new Error("probe refused");
     return options.running ?? "";
   };
@@ -34,12 +35,24 @@ function executor(options: { running?: string; probeFailure?: boolean; output?: 
 }
 
 describe("Codex Desktop compatibility package launch", () => {
+  test("activation cannot report a different version or executable digest from the verified package", () => {
+    const build = install;
+    for (const observed of [
+      { packageFullName: packageFullName.replace("1.2.3.0", "1.2.4.0"), executableHash: build.executableHash },
+      { packageFullName, executableHash: "b".repeat(64) },
+    ]) {
+      const io = executor({ output: JSON.stringify({ pid: 123, ...observed, verified: true }) });
+      expect(() => activateWindowsCodexCompatibility(io.exec, build, pac))
+        .toThrow("desktop_compatibility_activation_unverified");
+    }
+  });
+
   test("a same-shape PAC without a live runtime owner refuses before restart", () => {
     const root = { pid: 100, parentPid: 50, createdAt: "fixture", executable: "ChatGPT.exe", commandLine: `ChatGPT.exe --proxy-pac-url=${pac}` };
-    expect(() => captureWindowsCompatibilityContext([root])).toThrow("desktop_compatibility_launch_owner_unverified");
+    expect(() => captureWindowsCompatibilityContext([root], install)).toThrow("desktop_compatibility_launch_owner_unverified");
   });
   test("activation tolerates a BOM and preceding warnings but normalizes invalid or timed-out output", () => {
-    const io = executor({ output: `\uFEFFwarning: fixture\r\n${JSON.stringify({ pid: 123, packageFullName, verified: true })}\r\n` });
+    const io = executor({ output: `\uFEFFwarning: fixture\r\n${JSON.stringify({ pid: 123, packageFullName, executableHash, verified: true })}\r\n` });
     expect(activateWindowsCodexCompatibility(io.exec, install, pac)).toEqual({ pid: 123, packageFullName });
     for (const output of ["", "null", "[]", "warning only"]) {
       expect(() => activateWindowsCodexCompatibility(executor({ output }).exec, install, pac)).toThrow("desktop_compatibility_activation_unverified");
@@ -53,7 +66,7 @@ describe("Codex Desktop compatibility package launch", () => {
     const processes = windowsDesktopAppAdapter.listProcesses(io.exec, install)!;
     expect(processes[0]?.commandLine).toBe(commandLine);
     const context = windowsDesktopAppAdapter.captureRelaunchContext(io.exec, install, processes);
-    expect(context).toEqual({ codexCompatibilityPacUrl: pac, codexCompatibilityGeneration: generation });
+    expect(context).toEqual({ codexCompatibilityPacUrl: pac, codexCompatibilityGeneration: generation, codexCompatibilityBuildRevision: "1" });
     windowsDesktopAppAdapter.relaunch(io.exec, install, context);
     expect(io.calls.at(-1)).toContain("OpenCodexPackageActivation");
     expect(io.calls.at(-1)).toContain(pac);
@@ -74,37 +87,54 @@ describe("Codex Desktop compatibility package launch", () => {
     const { generation } = own();
     const root = { pid: 100, parentPid: 50, createdAt: "fixture", executable: "ChatGPT.exe", commandLine: `ChatGPT.exe --proxy-pac-url=${pac}` };
     const other = pac.replace(":10102", ":10103");
-    expect(captureWindowsCompatibilityContext([root, { ...root, pid: 101, parentPid: 100, commandLine: `ChatGPT.exe --proxy-pac-url=${other}` }]))
-      .toEqual({ codexCompatibilityPacUrl: pac, codexCompatibilityGeneration: generation });
-    expect(() => captureWindowsCompatibilityContext([root, { ...root, pid: 200, commandLine: `ChatGPT.exe --proxy-pac-url=${other}` }]))
+    expect(captureWindowsCompatibilityContext([root, { ...root, pid: 101, parentPid: 100, commandLine: `ChatGPT.exe --proxy-pac-url=${other}` }], install))
+      .toEqual({ codexCompatibilityPacUrl: pac, codexCompatibilityGeneration: generation, codexCompatibilityBuildRevision: "1" });
+    expect(() => captureWindowsCompatibilityContext([root, { ...root, pid: 200, commandLine: `ChatGPT.exe --proxy-pac-url=${other}` }], install))
       .toThrow("desktop_compatibility_conflicting_launch_context");
-    expect(captureWindowsCompatibilityContext([{ ...root, commandLine: "ChatGPT.exe" }])).toEqual({});
-    expect(captureWindowsCompatibilityContext([root, { ...root, pid: 101, parentPid: 100, commandLine: "" }]))
-      .toEqual({ codexCompatibilityPacUrl: pac, codexCompatibilityGeneration: generation });
+    expect(captureWindowsCompatibilityContext([{ ...root, commandLine: "ChatGPT.exe" }], install)).toEqual({});
+    expect(captureWindowsCompatibilityContext([root, { ...root, pid: 101, parentPid: 100, commandLine: "" }], install))
+      .toEqual({ codexCompatibilityPacUrl: pac, codexCompatibilityGeneration: generation, codexCompatibilityBuildRevision: "1" });
   });
 
   test("a foreign same-shape endpoint and an invalidated owner refuse capture", () => {
     let current = true;
     own(pac, () => current);
     const root = { pid: 100, parentPid: 50, createdAt: "fixture", executable: "ChatGPT.exe", commandLine: `ChatGPT.exe --proxy-pac-url=${pac.replace(":10102", ":10103")}` };
-    expect(() => captureWindowsCompatibilityContext([root])).toThrow("desktop_compatibility_launch_owner_unverified");
+    expect(() => captureWindowsCompatibilityContext([root], install)).toThrow("desktop_compatibility_launch_owner_unverified");
     current = false;
-    expect(() => captureWindowsCompatibilityContext([{ ...root, commandLine: `ChatGPT.exe --proxy-pac-url=${pac}` }]))
+    expect(() => captureWindowsCompatibilityContext([{ ...root, commandLine: `ChatGPT.exe --proxy-pac-url=${pac}` }], install))
       .toThrow("desktop_compatibility_launch_owner_unverified");
   });
 
   test("a stopped or replaced runtime cannot reuse a previously captured restart context", () => {
     const first = own();
     const root = { pid: 100, parentPid: 50, createdAt: "fixture", executable: "ChatGPT.exe", commandLine: `ChatGPT.exe --proxy-pac-url=${pac}` };
-    const context = captureWindowsCompatibilityContext([root]), io = executor();
+    const context = captureWindowsCompatibilityContext([root], install), io = executor();
     first.release();
     expect(() => windowsDesktopAppAdapter.relaunch(io.exec, install, context)).toThrow("desktop_compatibility_launch_owner_unverified");
     const second = own();
     expect(second.generation).not.toBe(first.generation);
     expect(() => windowsDesktopAppAdapter.relaunch(io.exec, install, context)).toThrow("desktop_compatibility_launch_owner_unverified");
     expect(io.calls).toEqual([]);
-    windowsDesktopAppAdapter.relaunch(io.exec, install, captureWindowsCompatibilityContext([root]));
+    windowsDesktopAppAdapter.relaunch(io.exec, install, captureWindowsCompatibilityContext([root], install));
     expect(io.calls).toHaveLength(1);
+  });
+
+  test("managed restart refuses a different install or a newly verified build revision", () => {
+    let revision = 1;
+    own(pac, () => true, () => revision);
+    const io = executor();
+    const root = { pid: 100, parentPid: 50, createdAt: "fixture", executable: "ChatGPT.exe", commandLine: `ChatGPT.exe --proxy-pac-url=${pac}` };
+    const other = verifiedDesktopPackage("1.2.4.0");
+    expect(() => windowsDesktopAppAdapter.captureRelaunchContext(io.exec, other, [root]))
+      .toThrow("desktop_compatibility_launch_owner_unverified");
+    const context = captureWindowsCompatibilityContext([root], install);
+    expect(() => windowsDesktopAppAdapter.relaunch(io.exec, other, context))
+      .toThrow("desktop_compatibility_launch_owner_unverified");
+    revision++;
+    expect(() => windowsDesktopAppAdapter.relaunch(io.exec, install, context))
+      .toThrow("desktop_compatibility_launch_owner_unverified");
+    expect(io.calls).toEqual([]);
   });
 
   test("accepts only canonical owned-shape loopback PAC URLs", () => {
@@ -118,35 +148,42 @@ describe("Codex Desktop compatibility package launch", () => {
 
   test("uses Windows package activation with PAC arguments and requires package readback", () => {
     const io = executor();
-    expect(launchWindowsCodexCompatibility(pac, { exec: io.exec, platform: "win32" })).toEqual({ status: "started", pid: 123, packageFullName });
+    expect(launchWindowsCodexCompatibility(pac, install, { exec: io.exec, platform: "win32" })).toEqual({ status: "started", pid: 123, packageFullName });
     const script = io.calls.at(-1)!;
     expect(script).toContain("::Activate($family+'!App','--proxy-pac-url='+$pac)");
-    expect(script).toContain("::PackageOf($pidValue)");
+    expect(io.calls).toHaveLength(2); // process probe and bound activation, without general discovery
+    const activate = script.indexOf("::Activate($family");
+    expect(activate).toBeGreaterThan(script.indexOf("$p.PackageFullName -cne $fullName"));
+    expect(activate).toBeGreaterThan(script.indexOf("$executableHash -cne $hash"));
+    expect(script.indexOf("::ImageOf($processHandle,$fullName)")).toBeGreaterThan(activate);
+    expect(script.indexOf("$imageHash -cne $hash")).toBeGreaterThan(activate);
+    expect(script).toContain(packageFullName);
+    expect(script).toContain(executableHash);
     expect(script).toContain("Get-AppxPackageManifest");
-    expect(script).toContain("Launch arguments not observed");
+    expect(script).toContain("Launch arguments or image not observed");
     expect(script).not.toContain("Start-Process");
     expect(script).not.toContain("taskkill");
   });
 
   test("an existing app or failed process discovery refuses before activation", () => {
     const running = executor({ running: `100 50 2026-01-01T00:00:00Z ${install.root}\\app\\ChatGPT.exe` });
-    expect(launchWindowsCodexCompatibility(pac, { exec: running.exec, platform: "win32" })).toEqual({ status: "refused", reason: "app_running" });
+    expect(launchWindowsCodexCompatibility(pac, install, { exec: running.exec, platform: "win32" })).toEqual({ status: "refused", reason: "app_running" });
     expect(running.calls.some(script => script.includes("OpenCodexPackageActivation"))).toBe(false);
     const failed = executor({ probeFailure: true });
-    expect(launchWindowsCodexCompatibility(pac, { exec: failed.exec, platform: "win32" })).toEqual({ status: "refused", reason: "process_probe_failed" });
+    expect(launchWindowsCodexCompatibility(pac, install, { exec: failed.exec, platform: "win32" })).toEqual({ status: "refused", reason: "process_probe_failed" });
   });
 
   test("unverified activation or the wrong package publisher cannot report success", () => {
     for (const output of ["broken", JSON.stringify({ pid: 123, packageFullName, verified: false }),
       JSON.stringify({ pid: 123, packageFullName: "OpenAI.Codex_1.2.3.0_x64__foreign", verified: true })]) {
       const io = executor({ output });
-      expect(launchWindowsCodexCompatibility(pac, { exec: io.exec, platform: "win32" })).toEqual({ status: "refused", reason: "activation_failed" });
+      expect(launchWindowsCodexCompatibility(pac, install, { exec: io.exec, platform: "win32" })).toEqual({ status: "refused", reason: "activation_failed" });
     }
   });
 
   test("non-Windows and armed tests never reach the real native app", () => {
-    expect(launchWindowsCodexCompatibility(pac, { platform: "linux" })).toEqual({ status: "refused", reason: "unsupported_platform" });
-    expect(launchWindowsCodexCompatibility(pac, { platform: "win32" })).toEqual({ status: "refused", reason: "test_environment" });
+    expect(launchWindowsCodexCompatibility(pac, null, { platform: "linux" })).toEqual({ status: "refused", reason: "unsupported_platform" });
+    expect(launchWindowsCodexCompatibility(pac, install, { platform: "win32" })).toEqual({ status: "refused", reason: "test_environment" });
   });
 });
 

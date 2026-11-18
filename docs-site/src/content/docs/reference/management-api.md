@@ -1048,11 +1048,16 @@ create a general pairing session. Controls stay disabled until that scope is ver
 grant nor the exchange changes certificate trust, runtime state or the auto-start preference.
 
 Start requires an already prepared, trusted certificate, a freshly verified native file-based
-ChatGPT login and a proof-verified official Codex Windows package. It begins in Observe mode.
+ChatGPT login and an official Microsoft Store Codex package for the current Windows user.
+Windows must verify the signed package contents and report a valid OpenAI Authenticode signature
+for the installed `ChatGPT.exe`. Failure or unavailable proof returns `build_unverified`.
+Observation starts in Observe mode.
 HTTP/HTTPS and authenticated SOCKS5 outbound proxies use the same explicit selection for HTTP,
 identity verification and upgraded sockets. NO_PROXY is honored; failures never retry directly.
 An invalid or unsupported setting returns `egress_proxy_invalid`. Start never registers a certificate or changes
-login. Launch preserves package identity and refuses an app that is already running.
+login. Launch refuses an app that is already running. It checks the verified full package name and
+executable SHA-256 before package activation, then checks the process image and routing argument
+before reporting success. An unverified activation is refused.
 PAC and CONNECT ports are persisted after successful first binding and reused on restart.
 `connection_unavailable` means binding failed; `connection_invalid` or `connection_changed`
 means stored endpoint identity could not be accepted. These failures never silently rotate

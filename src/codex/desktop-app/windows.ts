@@ -225,14 +225,14 @@ export const windowsDesktopAppAdapter: DesktopAppAdapter = {
     exec(resolveTrustedWindowsTaskkillExe(), ["/PID", String(root.pid), "/T", "/F"], POWERSHELL_PROBE_OPTIONS);
   },
 
-  captureRelaunchContext(_exec, _install, processes): Record<string, string> {
-    return captureWindowsCompatibilityContext(processes);
+  captureRelaunchContext(_exec, install, processes): Record<string, string> {
+    return captureWindowsCompatibilityContext(processes, install);
   },
 
   relaunch(exec, install, context): void {
     if (context.codexCompatibilityPacUrl) {
-      assertWindowsCompatibilityContext(context);
-      activateWindowsCodexCompatibility(exec, install, context.codexCompatibilityPacUrl);
+      const build = assertWindowsCompatibilityContext(context, install);
+      activateWindowsCodexCompatibility(exec, build, context.codexCompatibilityPacUrl);
       return;
     }
     // Throws on failure so the ladder reports relaunch_failed. The old code

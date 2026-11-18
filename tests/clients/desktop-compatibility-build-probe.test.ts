@@ -11,6 +11,41 @@ import { hostedWindowsQuarantine } from "../helpers/windows-ci-quarantine";
 
 const installed = desktopPackageObservation;
 
+test("registration and file metadata alone cannot admit a Codex package", async () => {
+  const install = installed();
+  for (const facts of [
+    { signatureKind: undefined, contentIntegrity: undefined, signerSubject: undefined, signerThumbprint: undefined, executableHash: undefined },
+    { signatureKind: "Developer" },
+    { contentIntegrity: false },
+    { contentIntegrity: undefined },
+    { signerSubject: "CN=OpenAI" },
+    { signerThumbprint: "" },
+    { executableHash: "metadata" },
+  ]) {
+    const probe = createInstalledBuildProbe(async () => ({ ...install, proof: { ...install.proof!, ...facts } }));
+    expect(await probe.check()).toBe(false);
+    expect(probe.lastResult()).toMatchObject({ verified: false });
+    expect(probe.binding().identity).toBeNull();
+    expect(probe.binding().build).toBeNull();
+    await probe.close();
+  }
+});
+
+test("a verified executable digest change advances the same-version consent fence", async () => {
+  let executableHash = "a".repeat(64);
+  const probe = createInstalledBuildProbe(async () => {
+    const install = installed();
+    return { ...install, proof: { ...install.proof!, executableHash } };
+  });
+  expect(await probe.check()).toBe(true);
+  const earlier = probe.binding();
+  executableHash = "b".repeat(64);
+  expect(await probe.check()).toBe(true);
+  expect(probe.binding().identity).not.toBe(earlier.identity);
+  expect(probe.binding().revision).toBeGreaterThan(earlier.revision);
+  await probe.close();
+});
+
 /**
  * One run of the ancestry probe: a fixture on the volume root, the real PowerShell guard, and the
  * assertions. The warm-up below replays this exact call, so the warmed path is the measured path.
@@ -89,8 +124,7 @@ test("manifest and canonical executable facts are required while an official new
     { ...good.proof!, appId: "Other" }, { ...good.proof!, executable: "other\\ChatGPT.exe" },
     { ...good.proof!, canonicalExecutable: good.root + "-foreign\\app\\ChatGPT.exe" },
     { ...good.proof!, packageFullName: good.proof!.packageFullName + "_extra" },
-    { ...good.proof!, manifestDigest: "unverified" }, { ...good.proof!, ancestryIdentity: "" },
-    { ...good.proof!, executableIdentity: "" }]) {
+    { ...good.proof!, manifestDigest: "unverified" }, { ...good.proof!, ancestryIdentity: "" }, { ...good.proof!, executableIdentity: "" }]) {
     const probe = createInstalledBuildProbe(async () => ({ ...good, proof }));
     expect(await probe.check()).toBe(false); expect(probe.binding().identity).toBeNull(); await probe.close();
   }
@@ -106,6 +140,9 @@ test("manifest and canonical executable facts are required while an official new
   expect(baseline.binding().identity).not.toBe(newerBinding.identity);
   await baseline.close();
   expect(DESKTOP_PACKAGE_PROOF_SCRIPT).toContain("Get-AppxPackageManifest");
+  expect(DESKTOP_PACKAGE_PROOF_SCRIPT).toContain("VerifyContentIntegrityAsync()");
+  expect(DESKTOP_PACKAGE_PROOF_SCRIPT).toContain("Get-AuthenticodeSignature -LiteralPath $exePath");
+  expect(DESKTOP_PACKAGE_PROOF_SCRIPT).toContain("Get-DesktopPackageHash $exeStream");
   expect(DESKTOP_PACKAGE_PROOF_SCRIPT).toContain("ChatGPT.exe");
   expect(DESKTOP_PACKAGE_PROOF_SCRIPT).not.toContain("Activate");
 });
@@ -127,7 +164,7 @@ test("same-version package proof changes and failure advance a private ABA fence
   await probe.close(); expect(probe.binding().identity).toBeNull();
 });
 
-test("identical observed metadata cannot claim to detect a same-version reinstall", async () => {
+test("identical proof observations reuse the current consent fence", async () => {
   const probe = createInstalledBuildProbe(async () => structuredClone(installed()));
   expect(await probe.check()).toBe(true); const original = probe.binding();
   expect(await probe.check()).toBe(true); expect(probe.binding()).toEqual(original);

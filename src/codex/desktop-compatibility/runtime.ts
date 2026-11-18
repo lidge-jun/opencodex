@@ -45,30 +45,32 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
   const buildSupported = io.buildSupported ?? (() => buildProbe?.check() ?? Promise.resolve(false));
   let routingSupported = io.routingSupported ?? (() => false);
   let contextFailure: "build_unverified" | "native_routing_unverified" | null = null;
-  const contextValid = async () => {
+  const checkContext = async () => {
     const epoch = contextEpoch, probe = buildProbe;
+    let binding: ReturnType<NonNullable<typeof probe>["binding"]> | null = null;
     try {
-      if (!routingSupported()) { contextFailure = "native_routing_unverified"; invalidateTrial?.(); return false; }
+      if (!routingSupported()) { contextFailure = "native_routing_unverified"; invalidateTrial?.(); return null; }
       const supported = await buildSupported();
       // An old probe completion must not invalidate a replacement runtime's consent.
-      if (epoch !== contextEpoch || probe !== buildProbe) return false;
+      if (epoch !== contextEpoch || probe !== buildProbe) return null;
       if (!io.buildSupported && probe) {
-        const binding = probe.binding();
+        binding = probe.binding();
         const changed = boundBuild?.probe === probe && boundBuild.revision !== binding.revision;
         boundBuild = { probe, revision: binding.revision };
         if (!supported || !binding.identity || changed) {
-          contextFailure = "build_unverified"; invalidateTrial?.(); return false;
+          contextFailure = "build_unverified"; invalidateTrial?.(); return null;
         }
       }
       contextFailure = !routingSupported() ? "native_routing_unverified" : !supported ? "build_unverified" : null;
     }
     catch {
-      if (epoch !== contextEpoch || probe !== buildProbe) return false;
+      if (epoch !== contextEpoch || probe !== buildProbe) return null;
       contextFailure = "build_unverified";
     }
     if (contextFailure) invalidateTrial?.();
-    return contextFailure === null;
+    return contextFailure === null ? { binding } : null;
   };
+  const contextValid = async () => (await checkContext()) !== null;
   let phase: "off" | "starting" | "running" | "stopping" | "cleanup-required" = "off";
   let owned: { controller: UsageRelayController; close(): Promise<void>; pacUrl: string; fingerprint: string; deadline: number } | null = null;
   let closing: Promise<void> | null = null;
@@ -168,8 +170,11 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
       owned = { controller, close: cleanup, fingerprint: authority.fingerprint, deadline, pacUrl: `http://127.0.0.1:${pac.port}/${runId}/proxy.pac` };
       phase = "running";
       const launchedBy = owned;
-      unbindLaunch = bindDesktopCompatibilityLaunch(owned.pacUrl,
-        () => owned === launchedBy && phase === "running" && Date.now() < deadline);
+      unbindLaunch = bindDesktopCompatibilityLaunch(owned.pacUrl, () => {
+        if (owned !== launchedBy || phase !== "running" || Date.now() >= deadline || contextFailure) return null;
+        const binding = buildProbe?.binding();
+        return binding && binding.revision === boundBuild?.revision ? binding : null;
+      });
       detach = registerOptionalShutdownHook("codex-desktop-compatibility", () => { void stop().catch(() => {}); });
       return status();
     } catch (error) {
@@ -195,9 +200,13 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
     async launch() {
       if (!owned || phase !== "running") throw new Error("desktop_compatibility_not_running");
       const current = owned;
-      if (!await contextValid()) throw new Error(`desktop_compatibility_${contextFailure}`);
+      const verified = await checkContext();
+      if (!verified) throw new Error(`desktop_compatibility_${contextFailure}`);
       if (owned !== current || phase !== "running") throw new Error("desktop_compatibility_not_running");
-      return launchWindowsCodexCompatibility(current.pacUrl);
+      if (verified.binding && buildProbe?.binding().revision !== verified.binding.revision) {
+        throw new Error("desktop_compatibility_build_unverified");
+      }
+      return launchWindowsCodexCompatibility(current.pacUrl, verified.binding?.build ?? null);
     },
     /** Internal native launch context; management status never returns the control endpoint. */
     getPacUrl: () => owned?.pacUrl ?? null,

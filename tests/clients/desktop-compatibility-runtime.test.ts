@@ -245,7 +245,7 @@ describe("optional native compatibility runtime", () => {
     }, 15_000);
   }
 
-  for (const failure of ["same-version-replacement", "unverifiable", "ABA", "version-update"] as const) {
+  for (const failure of ["same-version-replacement", "executable-bytes", "unverifiable", "ABA", "version-update"] as const) {
     test(`${failure} revokes package-bound trial consent before another corrected response`, async () => {
       let current: DesktopAppInstall | null = assessedInstall();
       let probe!: ReturnType<typeof createInstalledBuildProbe>;
@@ -261,6 +261,7 @@ describe("optional native compatibility runtime", () => {
       const generation = io.runtime.status().usage!.generation;
       current = failure === "unverifiable" ? null
         : failure === "version-update" ? assessedInstall("26.1007.9446.0")
+        : failure === "executable-bytes" ? { ...assessedInstall(), proof: { ...assessedInstall().proof!, executableHash: "e".repeat(64) } }
         : { ...assessedInstall(), proof: { ...assessedInstall().proof!, executableIdentity: "1024:100:201" } };
       // A newer proof-verified build admits but its changed identity still revokes the trial.
       if (failure === "version-update") expect(await probe.check()).toBe(true);
@@ -372,22 +373,23 @@ describe("optional native compatibility runtime", () => {
   });
 
   test("only a serving runtime attests PAC preservation and stop/start invalidates the captured generation", async () => {
-    const io = fixture();
+    const io = fixture(true, undefined, undefined, () => createInstalledBuildProbe(async () => assessedInstall()));
+    const install = assessedInstall();
     expect(readDesktopCompatibilityLaunch()).toBeNull();
     await io.runtime.start();
     const pacUrl = io.runtime.getPacUrl()!;
     expect((await fetch(pacUrl)).status).toBe(200);
     const root = { pid: 100, parentPid: 50, createdAt: "fixture", executable: "ChatGPT.exe", commandLine: `ChatGPT.exe --proxy-pac-url=${pacUrl}` };
-    const captured = captureWindowsCompatibilityContext([root]);
+    const captured = captureWindowsCompatibilityContext([root], install);
     expect(captured.codexCompatibilityGeneration).toBe(readDesktopCompatibilityLaunch()!.generation);
-    expect(() => assertWindowsCompatibilityContext(captured)).not.toThrow();
+    expect(() => assertWindowsCompatibilityContext(captured, install)).not.toThrow();
     const stopping = io.runtime.stop();
     expect(readDesktopCompatibilityLaunch()).toBeNull();
     await stopping;
     await io.runtime.start();
     expect(io.runtime.getPacUrl()).toBe(pacUrl);
-    expect(() => assertWindowsCompatibilityContext(captured)).toThrow("desktop_compatibility_launch_owner_unverified");
-    expect(() => assertWindowsCompatibilityContext(captureWindowsCompatibilityContext([root]))).not.toThrow();
+    expect(() => assertWindowsCompatibilityContext(captured, install)).toThrow("desktop_compatibility_launch_owner_unverified");
+    expect(() => assertWindowsCompatibilityContext(captureWindowsCompatibilityContext([root], install), install)).not.toThrow();
   });
   test("observation cancels a pending apply request before its build preflight can finish", async () => {
     let pending = false, entered!: () => void, release!: (value: boolean) => void;

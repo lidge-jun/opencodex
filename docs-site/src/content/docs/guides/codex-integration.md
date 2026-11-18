@@ -1166,8 +1166,11 @@ local HTTP authorization; cleanup, renewal, stopping and turning off startup sti
 1. Inspect status, prepare the encrypted certificate and review its fingerprint before
    registering trust. Windows may ask for confirmation. Trust applies to the current Windows
    user and allows the local relay to handle `chatgpt.com` traffic.
-2. Start observation. Save drafts, close Codex, then use **Open Codex** in this panel to launch
-   the packaged app with the managed connection. The panel never forcibly closes an existing app.
+2. Start observation with an official Microsoft Store Codex package for the current Windows user.
+   Windows must verify the package contents, and the installed `ChatGPT.exe` must have a valid
+   OpenAI Authenticode signature. If either check fails or is unavailable, repair or reinstall Codex
+   from the Microsoft Store and try again. Save drafts, close Codex, then use **Open Codex** to
+   launch the verified build with the managed connection.
 3. Only after eligible exhaustion is observed, **Run 3-minute trial** offers a separate account-wide
    consent. It adjusts two UI flags across the signed-in account, not just the selected model.
    Actual usage, credits, spending restrictions and server limits remain unchanged. A produced
@@ -1261,10 +1264,11 @@ interrupted, it can lag the actual installation; only a completed probe refreshe
 
 On Windows, an explicit OpenCodex full-app restart preserves an already active loopback
 compatibility PAC argument only when the current OpenCodex process owns the serving compatibility
-runtime. A stale or foreign endpoint is refused before stopping Codex; replacement of the runtime
-during restart also prevents managed relaunch. The app launches through Windows package activation. It checks the
-package identity and routing argument after launch; unreadable or conflicting main-app routing arguments cause
-a refusal before the restart. This does not enable a compatibility mode, install a certificate,
+runtime. A stale or foreign endpoint, mismatched install, or unreadable or conflicting main-app
+routing arguments cause a refusal before stopping Codex. After stopping, OpenCodex checks the
+captured runtime and build again. Windows package activation requires the verified package full
+name and executable SHA-256. OpenCodex checks that identity and the routing argument on the
+launched process before reporting success. This does not enable a compatibility mode, install a certificate,
 or watch and restart the app automatically. Normal launches without that routing argument keep
 their existing behavior.
 
