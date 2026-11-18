@@ -1,7 +1,16 @@
-import { describe, expect, test } from "bun:test";
-import { handleCodexAuthLoginCancel } from "../../src/codex/auth-api/login-flow";
-import { codexAuthLoginState } from "../../src/codex/auth-api/login-state";
-import { cancelLoginFlow, clearLoginState, getLoginStatus, OAUTH_PROVIDERS, startLoginFlow } from "../../src/oauth";
+import { describe, expect, spyOn, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getCodexAccountCredential, saveCodexAccountCredential } from "../../src/codex/account-store";
+import { isAccountNeedsReauth, markAccountNeedsReauth } from "../../src/codex/account-runtime-state";
+import { handleCodexAuthLoginCancel, handleCodexAuthLoginStart } from "../../src/codex/auth-api/login-flow";
+import { CODEX_LOGIN_TERMINAL_TTL_MS, codexAuthLoginState } from "../../src/codex/auth-api/login-state";
+import { saveConfig } from "../../src/config";
+import { cancelLoginFlow, clearLoginState, getLoginStatus, OAUTH_PROVIDERS, startLoginFlow, waitForLoginSettled } from "../../src/oauth";
+import { saveCredential } from "../../src/oauth/store";
+import type { OcxConfig } from "../../src/types";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const OLD_ID = "cancel-ownership-old";
 const NEW_ID = "cancel-ownership-new";
@@ -75,3 +84,115 @@ describe("Codex OAuth cancel ownership", () => {
     }
   });
 });
+
+test.each(["cancel before OAuth settles", "cancel during the pool usage probe", "newer OAuth flow succeeds"] as const)(
+  "pool reauth remains bound to its own flow when %s",
+  async phase => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-pool-cancel-"));
+    const priorOcxHome = process.env.OPENCODEX_HOME;
+    const priorCodexHome = process.env.CODEX_HOME;
+    process.env.OPENCODEX_HOME = home;
+    process.env.CODEX_HOME = join(home, "codex");
+    const id = "pool-cancel";
+    const identity = "fixture-chatgpt-account";
+    const expires = Date.now() + 60_000;
+    const oauthCredential = { access: "fixture-oauth-access", refresh: "fixture-oauth-refresh", expires, accountId: identity };
+    const poolCredential = { accessToken: "fixture-pool-access", refreshToken: "fixture-pool-refresh", expiresAt: expires, chatgptAccountId: identity };
+    const config: OcxConfig = {
+      port: 10100, defaultProvider: "openai",
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1" } },
+      codexAccounts: [{ id }],
+    };
+    const grant = Promise.withResolvers<typeof oauthCredential>();
+    const probeStarted = Promise.withResolvers<void>();
+    const probe = Promise.withResolvers<Response>();
+    const pollStopped = Promise.withResolvers<void>();
+    let poll: (() => void) | undefined;
+    const originalSetTimeout = globalThis.setTimeout;
+    const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback, delay, ...args) => {
+      if (delay === 2_000) poll = () => callback(...args);
+      else if (delay === CODEX_LOGIN_TERMINAL_TTL_MS) pollStopped.resolve();
+      else if (delay !== 30_000) return originalSetTimeout(callback, delay, ...args);
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async request => {
+      if (String(request) === "https://chatgpt.com/backend-api/wham/usage") {
+        probeStarted.resolve();
+        return probe.promise;
+      }
+      throw new Error("Unexpected fetch in pool cancellation test");
+    });
+    const originalLogin = OAUTH_PROVIDERS.chatgpt.login;
+    OAUTH_PROVIDERS.chatgpt.login = async controller => {
+      controller.onAuth({ url: "https://example.test/oauth" });
+      return grant.promise;
+    };
+    let flowId: string | undefined;
+    const exhausted = () => Response.json({ plan_type: "pro", rate_limit: {
+      primary_window: { used_percent: 100, limit_window_seconds: 604800 },
+    } });
+    try {
+      saveConfig(config);
+      saveCodexAccountCredential(id, poolCredential);
+      markAccountNeedsReauth(id);
+      await saveCredential("chatgpt", oauthCredential);
+      const resp = await handleCodexAuthLoginStart(new Request("http://127.0.0.1/api/codex-auth/login", {
+        method: "POST",
+        body: JSON.stringify({ id, reauth: true, openBrowser: false }),
+      }), config);
+      expect(resp.status).toBe(200);
+      flowId = (await resp.json() as { flowId: string }).flowId;
+      if (phase !== "cancel before OAuth settles") {
+        grant.resolve(oauthCredential);
+        expect(await waitForLoginSettled("chatgpt", 1_000, flowId)).toBe(true);
+        expect(getLoginStatus("chatgpt", true, flowId).status).toBe("complete");
+      }
+      if (phase === "newer OAuth flow succeeds") {
+        const newerId = "pool-reauth-newer-oauth";
+        OAUTH_PROVIDERS.chatgpt.login = async controller => {
+          controller.onAuth({ url: "https://example.test/oauth" });
+          return { ...oauthCredential, access: "fixture-other-access", accountId: "other-fixture-account" };
+        };
+        await startLoginFlow("chatgpt", { forceLogin: true }, { flowId: newerId });
+        expect(await waitForLoginSettled("chatgpt", 1_000, newerId)).toBe(true);
+        expect(getLoginStatus("chatgpt").flowId).toBe(newerId);
+        poll?.();
+        probe.resolve(exhausted());
+        await pollStopped.promise;
+        expect(codexAuthLoginState.get(flowId)).toMatchObject({ status: "done", accountId: id });
+        expect(getCodexAccountCredential(id)?.accessToken).toBe(oauthCredential.access);
+        expect(isAccountNeedsReauth(id)).toBe(false);
+        return;
+      }
+      if (phase === "cancel during the pool usage probe") {
+        poll?.();
+        await probeStarted.promise;
+      }
+      const cancelled = await cancel({ flowId });
+      if (phase === "cancel before OAuth settles") {
+        grant.resolve(oauthCredential);
+        poll?.();
+      }
+      probe.resolve(exhausted());
+      await pollStopped.promise;
+      expect(cancelled.status).toBe(200);
+      expect(codexAuthLoginState.get(flowId)).toMatchObject({ status: "error", error: "Login cancelled" });
+      expect(getCodexAccountCredential(id)).toEqual(poolCredential);
+      expect(isAccountNeedsReauth(id)).toBe(true);
+      if (phase === "cancel before OAuth settles") expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      grant.resolve(oauthCredential);
+      probe.resolve(exhausted());
+      clearLoginState("chatgpt");
+      if (flowId) codexAuthLoginState.delete(flowId);
+      timer.mockRestore();
+      fetchSpy.mockRestore();
+      OAUTH_PROVIDERS.chatgpt.login = originalLogin;
+      if (priorOcxHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = priorOcxHome;
+      if (priorCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = priorCodexHome;
+      await removeTreeWithRetry(home);
+    }
+  },
+);

@@ -215,6 +215,8 @@ export interface LoginOpts {
 
 export interface LoginFlowLifecycle {
   flowId?: string;
+  /** Internal handoff of this flow's credential after its store write is confirmed. */
+  onCredentialPersisted?: (credential: OAuthCredentials) => void;
   /** Runs after background credential/config persistence settles, before status becomes done. */
   onSettled?: () => void | Promise<void>;
 }
@@ -1932,13 +1934,14 @@ export async function startLoginFlow(
     // The row this flow's own credential write landed in, from the store's receipt. A token match
     // after the fact would miss it once a concurrent login for the same account rotates the token.
     let persistedAccountId: string | undefined;
-    const settle = async (error?: unknown): Promise<void> => {
+    const settle = async (error?: unknown, credential?: OAuthCredentials): Promise<void> => {
       // Cancellation deletes this controller and records its own terminal result. A late provider
       // rejection (or an older flow settling after a replacement starts) must not overwrite that
       // state or delete the replacement flow's controller/manual-code slot.
       if (abandonIfNotOwner(error)) return;
       let finalError = error;
       try {
+        if (credential && persistedAccountId) lifecycle?.onCredentialPersisted?.(credential);
         await lifecycle?.onSettled?.();
       } catch (settleError) {
         // A successful credential/config commit is not fully live until its owner reconciles the
@@ -1971,7 +1974,7 @@ export async function startLoginFlow(
     };
     const onAccountPersisted = (accountId: string): void => { persistedAccountId = accountId; };
     void runLogin(provider, ctrl, opts, { assertCurrentOwner, onAccountPersisted }).then(
-      () => settle(),
+      credential => settle(undefined, credential),
       (e: unknown) => settle(e),
     ).catch((e: unknown) => {
       // settle catches lifecycle failures, so this is only a defensive promise-boundary guard.
