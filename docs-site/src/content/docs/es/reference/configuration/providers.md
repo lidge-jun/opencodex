@@ -151,6 +151,14 @@ La fila API tiene 1.050.000 contextos, 922.000 entradas máximas, 128.000 salida
 | `gpt-6-sol` | 272,000 | 872,000 | `medium` | `low` hasta `ultra` |
 | `gpt-6-luna` | 272,000 | 872,000 | `medium` | `low` a `max` (n.o `ultra`) |
 
+[GPT-6.2 Sol](https://developers.openai.com/api/docs/models/gpt-6.2-sol) y
+[GPT-6.2 Astra](https://developers.openai.com/api/docs/models/gpt-6.2-astra) están disponibles como modelos
+nativos de Codex, en `openai-apikey` y como `openai/gpt-6.2-sol` y `openai/gpt-6.2-astra` en OpenRouter.
+Codex usa por defecto 500.000 tokens para Sol y 272.000 para Astra. Ambos admiten hasta 872.000 tokens
+si se amplía la ventana de forma explícita. La API de OpenAI admite una ventana de 1.050.000 tokens,
+con hasta 922.000 tokens de entrada y 128.000 de salida. En Codex, el esfuerzo va de `low` a `ultra`
+y el valor predeterminado es `low`. En la API, va de `low` a `max`.
+
 [GPT-6.1 Sol](https://openai.com/index/introducing-gpt-6-1-sol/) (anunciado el 29 de septiembre de 2026) es la actualización a GPT-6 Sol; Astra y Luna no obtuvieron un lanzamiento de 6.1. Está catalogado como `gpt-6.1-sol` (**GPT-6.1-Sol**), sin conexión como Sol, y su fila proviene del catálogo Codex, donde necesita `client_version` **0.153.0 o más tarde** y era el modelo predeterminado de Codex antes de GPT-6.2 Sol. GPT-6 Sol se queda en la lista.
 
 | Modelo | Contexto predeterminado | Techo opt-in | Esfuerzo predeterminado | Razonamiento escalera |
