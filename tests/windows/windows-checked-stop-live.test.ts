@@ -327,7 +327,10 @@ function Invoke-CimMethod {
     ["hidden", "unverified-registration", ""],
     ["idle", "not-running", ""],
   ]) {
-    const script = "$args = @('" + scenario + "'); " + fixture + "\n& {\n" + helper + "\n}\n'Stopped=' + ($script:stopped -join ',')";
+    // Production runs the helper alone, which silences progress before its first module use. The fixture
+    // runs first here and its Add-Member/[pscustomobject] calls autoload Microsoft.PowerShell.Utility, which
+    // writes a "Preparing modules for first use" CLIXML progress record to stderr on a cold runner.
+    const script = "$ProgressPreference = 'SilentlyContinue'; $args = @('" + scenario + "'); " + fixture + "\n& {\n" + helper + "\n}\n'Stopped=' + ($script:stopped -join ',')";
     const child = Bun.spawn([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand",
       Buffer.from(script, "utf16le").toString("base64")], {
       stdio: ["pipe", "pipe", "pipe"], windowsHide: true, timeout: 5_000,

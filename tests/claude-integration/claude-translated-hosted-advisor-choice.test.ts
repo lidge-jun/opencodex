@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { declaredAnthropicServerTools, hostedAdvisorSelection } from "../../src/claude/inbound-content-options";
 import { messagesToResponsesTranslation } from "../../src/protocols/codecs/messages";
+import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { protocolTraceForRequest } from "../../src/protocols/trace";
 import type { RequestLogContext } from "../../src/server/request-log";
@@ -13,7 +14,7 @@ import { handleResponses as runResponsesCore } from "../../src/server/responses/
 import { handleResponsesWithPolicyFallback } from "../../src/server/responses/policy-fallback";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS, removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 
 const MODEL = "claude-opus-5";
 const HOSTED_ADVISOR = { type: "advisor_20260301", name: "advisor", model: "claude-opus-4-8", max_uses: 2 };
@@ -200,8 +201,13 @@ test.each([
         release();
       }
     } finally {
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
-      removeTreeWithRetry(home);
+      try {
+        // Policy health scoring opens the index and can start an integrity worker.
+        closeRequestHistoryIndex();
+        await removeTreeAfterBackgroundWork(home);
+      } finally {
+        if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = previousHome;
+      }
     }
-  });
+  }, BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
