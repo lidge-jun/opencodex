@@ -515,8 +515,11 @@ posterior, ese vencimiento se conserva.
 Durante la comprobación previa de Responses, el combo puede probar el siguiente destino
 elegible si recibe un evento terminal que permite reintentar, contiene únicamente texto de
 razonamiento o comentarios y llega en el primer segundo a partir del primer evento
-almacenado en el búfer, incluido `response.created`. Un rechazo, una respuesta final,
-una llamada a una herramienta o el vencimiento de la espera fija el destino del stream.
+almacenado en el búfer, incluido `response.created`. El contenido de rechazo fija el destino del
+stream. Un motivo de rechazo como `content_filter` en `incomplete_details.reason` también lo fija,
+tanto si aparece en el evento terminal como en su instantánea `response`. Cualquiera de los dos
+puede impedir el reintento con `end_turn: false` o `incomplete_details.retryable: false`. Una
+respuesta final, una llamada a una herramienta o el vencimiento de la espera también fijan el destino.
 
 <a id="last-resort-targets"></a>
 

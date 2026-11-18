@@ -96,3 +96,49 @@ test.each(vetoCases.flatMap(veto => [[], [commentary]].map(output => ({ ...veto,
       response: { id: "r1", status: "incomplete", output, ...nested, incomplete_details: details },
     });
 });
+
+test.each([
+  { ...completed, end_turn: false },
+  { ...completed, response: { ...completed.response, incomplete_details: { retryable: false } } },
+])("a completed commentary terminal honors a replay veto on either carrier (%j)", async terminal => {
+  await expectCommitted(created, added, terminal);
+});
+
+test.each([
+  { eventReason: "content_filter", responseReason: "upstream_stall_timeout" },
+  { eventReason: "upstream_stall_timeout", responseReason: "content_filter" },
+].flatMap(reasons => [[], [commentary]].map(output => ({ ...reasons, output }))))(
+  "an incomplete refusal reason on either carrier commits the original stream (%j)",
+  async ({ eventReason, responseReason, output }) => {
+    await expectCommitted(created, {
+      type: "response.incomplete",
+      incomplete_details: { reason: eventReason },
+      response: { id: "r1", status: "incomplete", output, incomplete_details: { reason: responseReason } },
+    });
+  },
+);
+
+test.each([
+  { ...completed, incomplete_details: { reason: "content_filter" } },
+  { ...completed, response: { ...completed.response, incomplete_details: { reason: "content_filter" } } },
+])("a completed commentary terminal honors a refusal reason on either carrier (%j)", async terminal => {
+  await expectCommitted(created, added, terminal);
+});
+
+test("the zero-output fallback preserves an event-level limit alongside a nested stall reason", async () => {
+  const terminal = {
+    type: "response.incomplete",
+    incomplete_details: { reason: "max_output_tokens" },
+    response: {
+      id: "r1", status: "incomplete", output: [], incomplete_details: { reason: "upstream_stall_timeout" },
+      usage: { input_tokens: 25, output_tokens: 0 },
+    },
+  };
+  const result = await preflightComboStreamResponse(new Response(frame(terminal), { headers }), logContext());
+  expect(result.kind).toBe("failed");
+  expect(result.response.status).toBe(502);
+  expect(await result.response.json()).toMatchObject({
+    error: { code: "zero_output_token_limit", message: "Provider reached its output token limit before producing output" },
+    response: { usage: terminal.response.usage },
+  });
+});

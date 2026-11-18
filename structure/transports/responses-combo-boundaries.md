@@ -374,9 +374,11 @@ Responses combo preflight holds reasoning and commentary for up to 1,000 ms from
 client-visible event, including `response.created`. A terminal within that window can trigger
 `degenerate_completion` when its output contains only reasoning and commentary text. A terminal-only
 snapshot can itself supply the prelude. Refusals and other non-prelude content commit the original
-stream whether they arrive in a separate frame or only in a terminal snapshot. Incomplete terminals
-require replay eligibility. An explicit `end_turn: false` or `incomplete_details.retryable: false` on
-either the event or the response snapshot vetoes both degenerate and zero-output replay.
+stream whether they arrive in a separate frame or only in a terminal snapshot. An explicit
+`end_turn: false`, `incomplete_details.retryable: false`, or semantic reason such as `content_filter`
+on either the terminal event or the response snapshot vetoes degenerate and zero-output replay.
+When both carriers allow replay, `max_output_tokens` on either carrier takes the zero-output limit
+path and retains its dedicated error code. With prelude output, the limit commits the stream.
 Hold expiry commits the original stream. The next hop remains subject to eligibility and send budget.
 Coverage: `tests/routing/combo-committed-terminal-cooldown.test.ts`, `tests/routing/combo-stream-preflight.test.ts`,
 and `tests/routing/combo-stream-prelude-guards.test.ts`.

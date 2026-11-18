@@ -252,6 +252,16 @@ function incompleteCarrierVetoesReplay(carrier: Record<string, unknown> | undefi
   return carrier?.end_turn === false || recordValue(carrier?.incomplete_details)?.retryable === false;
 }
 
+function classifyIncompleteReplayReason(
+  event: Record<string, unknown>,
+  response: Record<string, unknown> | undefined,
+): "veto" | "output-limit" | "retryable" {
+  const reasons = [recordValue(event.incomplete_details)?.reason, recordValue(response?.incomplete_details)?.reason];
+  if (reasons.some(reason => reason !== undefined && reason !== "max_output_tokens"
+    && (typeof reason !== "string" || !RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(reason)))) return "veto";
+  return reasons.includes("max_output_tokens") ? "output-limit" : "retryable";
+}
+
 /**
  * A terminal whose entire output is reasoning/commentary prelude delivered nothing the
  * caller can act on: the model announced work and stopped. Verified against the terminal
@@ -261,6 +271,10 @@ function isDegenerateStreamTerminal(payload: unknown, context?: object): boolean
   const event = recordValue(payload);
   if (!event || (event.type !== "response.completed" && event.type !== "response.incomplete")) return false;
   const response = recordValue(event.response);
+  // Output limits have a separate zero-output recovery contract. With prelude output they commit.
+  if (incompleteCarrierVetoesReplay(event) || incompleteCarrierVetoesReplay(response)
+    || classifyIncompleteReplayReason(event, response) !== "retryable"
+    || (event.type === "response.incomplete" && isPausedTurn(context))) return false;
   // Both carriers count: an item that exists only at event level is still client-visible
   // output the hop would lose, exactly as retryableZeroOutputTerminal treats it.
   const carriers = [event.output, response?.output].filter(value => value !== undefined);
@@ -275,17 +289,7 @@ function isDegenerateStreamTerminal(payload: unknown, context?: object): boolean
       preludeItems++;
     }
   }
-  if (preludeItems === 0) return false;
-  if (event.type !== "response.incomplete") return true;
-  // Incomplete terminals keep every replay-safety guard the zero-output path owns: paused
-  // turns, explicitly unfinished turns, non-retryable limits, and reasons outside the
-  // retryable set (content_filter, max_output_tokens, ...) never hop as degenerate — the
-  // output-limit contract especially keeps its own code and cooldown instead.
-  const details = recordValue(response?.incomplete_details ?? event.incomplete_details);
-  const reason = details?.reason;
-  if (reason !== undefined
-    && (typeof reason !== "string" || !RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(reason))) return false;
-  return !isPausedTurn(context) && !incompleteCarrierVetoesReplay(event) && !incompleteCarrierVetoesReplay(response);
+  return preludeItems > 0;
 }
 
 export function explicitErrorEventStatus(payload: unknown): number | undefined {
@@ -444,32 +448,16 @@ function heldOnlyOutput(...outputs: unknown[]): boolean {
 }
 
 function retryableZeroOutputTerminal(payload: unknown, context?: object): boolean {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
-  const event = payload as {
-    type?: unknown;
-    status?: unknown;
-    end_turn?: unknown;
-    incomplete_details?: { reason?: unknown; retryable?: unknown };
-    output?: unknown;
-    error?: { code?: unknown; retryable?: unknown };
-    response?: {
-      status?: unknown;
-      end_turn?: unknown;
-      incomplete_details?: { reason?: unknown; retryable?: unknown };
-      output?: unknown;
-      error?: { code?: unknown; retryable?: unknown };
-    };
-  };
+  const event = recordValue(payload);
+  if (!event) return false;
   if (bareErrorIsRetryable(event)) return true;
-  const target = (event.response && typeof event.response === "object" && !Array.isArray(event.response))
-    ? event.response as Record<string, unknown>
-    : event as Record<string, unknown>;
+  const response = recordValue(event.response);
+  const target = response ?? event;
   const emptyOutput = (!Array.isArray(event.output) || event.output.length === 0)
     && (!Array.isArray(target.output) || target.output.length === 0);
 
   if (event.type === "response.failed" || event.status === "failed") {
-    const error = (event.response as { error?: { code?: unknown; retryable?: unknown } } | undefined)?.error
-      ?? event.error;
+    const error = recordValue(response?.error ?? event.error);
     const code = error?.code;
     // The required-tool guard synthesizes this terminal over output it held back from the client,
     // so held text and reasoning are not evidence of anything sent; it keeps the retryability it
@@ -484,10 +472,8 @@ function retryableZeroOutputTerminal(payload: unknown, context?: object): boolea
   if (!isIncomplete) return false;
   if (!emptyOutput) return false;
   // A pause or explicit replay restriction takes precedence even when the reason is absent.
-  if (isPausedTurn(context) || incompleteCarrierVetoesReplay(event) || incompleteCarrierVetoesReplay(target)) return false;
-  const reason = recordValue(target.incomplete_details ?? event.incomplete_details)?.reason;
-  if (reason === undefined || reason === "max_output_tokens") return true;
-  return typeof reason === "string" && RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(reason);
+  if (isPausedTurn(context) || incompleteCarrierVetoesReplay(event) || incompleteCarrierVetoesReplay(response)) return false;
+  return classifyIncompleteReplayReason(event, response) !== "veto";
 }
 
 /**
@@ -611,11 +597,11 @@ function failedTerminalResponse(
   logCtx: RequestLogContext,
   collectUsage: boolean,
 ): Response {
-  const nested = terminalPayload.response;
-  const terminalResponse = nested && typeof nested === "object" && !Array.isArray(nested)
-    ? nested as Record<string, unknown>
-    : terminalPayload;
-  const nestedError = (nested as Record<string, unknown> | undefined)?.error;
+  const nested = recordValue(terminalPayload.response);
+  const terminalResponse = nested ?? terminalPayload;
+  const zeroOutputLimit = (terminalPayload.type === "response.incomplete" || terminalPayload.status === "incomplete")
+    && classifyIncompleteReplayReason(terminalPayload, nested) === "output-limit";
+  const nestedError = nested?.error;
   const topLevelError = terminalPayload.error;
   const error = nestedError && typeof nestedError === "object" && !Array.isArray(nestedError)
     ? nestedError as Record<string, unknown>
@@ -639,15 +625,12 @@ function failedTerminalResponse(
             : typeof terminalPayload.code === "number" && Number.isFinite(terminalPayload.code)
               ? String(terminalPayload.code)
               : null)
-        : ((terminalPayload.type === "response.incomplete" || terminalPayload.status === "incomplete")
-          && (terminalResponse.incomplete_details as { reason?: unknown } | undefined)?.reason === "max_output_tokens"
-            ? "zero_output_token_limit" : "upstream_server_error"),
+        : zeroOutputLimit ? "zero_output_token_limit" : "upstream_server_error",
       message: typeof terminalPayload.message === "string"
         ? terminalPayload.message
-        : ((terminalPayload.type === "response.incomplete" || terminalPayload.status === "incomplete")
-          && (terminalResponse.incomplete_details as { reason?: unknown } | undefined)?.reason === "max_output_tokens"
-            ? "Provider reached its output token limit before producing output"
-            : logCtx.upstreamError ?? "Provider stream failed before producing output"),
+        : zeroOutputLimit
+          ? "Provider reached its output token limit before producing output"
+          : logCtx.upstreamError ?? "Provider stream failed before producing output",
     };
   const headers = new Headers(response.headers);
   headers.set("content-type", "application/json");
