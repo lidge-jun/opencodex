@@ -5,8 +5,9 @@
  * member removes image input, and the effort ladders intersect. `union` advertises what any
  * member can serve, then picks per request: a member that can serve the request after a local
  * degradation (vision sidecar describes the image, or effort snaps to a supported rung) can
- * stay eligible. The catalog takes the minimum context window for `intersection` and the
- * maximum for `union`. It publishes the minimum max output when every member declares one.
+ * stay eligible. The catalog publishes the minimum context window for both policies. A
+ * degrading union can try the largest compatible window at dispatch. It publishes the minimum
+ * max output when every member declares one.
  */
 export type OcxComboCapabilityPolicy = "intersection" | "union";
 

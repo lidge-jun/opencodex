@@ -259,7 +259,7 @@ A change to mandatory-tool support recomputes image eligibility before applying 
 omission or refusal policy. Credential selection revisions and pool entry identities are
 metadata. Credential resolution stays in the routing and sidecar paths. A changed snapshot
 restarts local admission up to twice. Persistent churn returns `503 combo_unavailable`.
-A refusal retains completed decision usage and never sends another decision request.
+A refusal or cancellation during admission retains completed decision usage on the parent request. Neither dispatches a child or repeats the decision request. A pin reused without a paid decision still passes the [dispatch-time consent check](../runtime.md#request-local-target-compatibility).
 Dispatch uses the admitted combo policy, including the refusal or omission rule if a required
 image description fails. The turn captures JEV effort ownership at ingress so the
 wire effort and its request log label follow the same mode.

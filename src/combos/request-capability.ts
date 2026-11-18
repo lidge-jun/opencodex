@@ -114,7 +114,8 @@ function parseComboInput(body: unknown): OcxParsedRequest | undefined {
 
 /**
  * Request-side half of `capabilityPolicy: "union"`. The catalog advertises the union of member
- * capabilities and the largest member window, so a request may need something only some members
+ * capabilities and the minimum member window. Dispatch can try the largest compatible member
+ * when context is unservable, so a request may need something only some members
  * have. Audio requires a member that accepts it. Members that can degrade an image stay
  * eligible (keeping the subscription order and the prompt cache); members that cannot take the
  * image, or whose window cannot hold the input, are filtered.

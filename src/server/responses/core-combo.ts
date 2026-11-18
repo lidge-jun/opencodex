@@ -479,9 +479,10 @@ export async function executeComboResponses(
   // children replay a snapshot and skip theirs.
   observeLinkTurnExpansion(options.linkTurn, req, logCtx, body,
     requestedPreviousId.trim().length > 0 ? (unresolvedPrevious ? "unexpanded" : "chained") : "none");
-  let meteredAllowed: boolean;
+  const maySpendOnTarget = (target: (typeof combo.targets)[number]): boolean =>
+    !target.metered || admissionMayUseMeteredComboTargets(config, options.admission, config.combos?.[comboId]);
   const mayUseTarget = (target: (typeof combo.targets)[number]): boolean =>
-    (meteredAllowed || !target.metered) && (combo.strategy !== "jev" || target.provider !== JEV_PROVIDER_ID);
+    maySpendOnTarget(target) && (combo.strategy !== "jev" || target.provider !== JEV_PROVIDER_ID);
   // The combo ladder owns the whole logical request, so the catalog diagnostic is counted here for
   // combo-routed turns; children run as concrete selections and would otherwise never report it.
   // Counting after the replay expansion keeps restored history out of the tally.
@@ -630,7 +631,6 @@ export async function executeComboResponses(
     if (combo.imageInput === "disabled" && comboRequestHasImageInput(body)) {
       return formatErrorResponse(400, "invalid_request_error", "This combo does not accept image input");
     }
-    meteredAllowed = admissionMayUseMeteredComboTargets(config, options.admission, combo);
     const capability = await comboCapabilityGate(config, combo, body,
       target => {
         const route = resolveCapabilityRoute(config, target);
@@ -746,7 +746,7 @@ export async function executeComboResponses(
     ...pickOptions,
     // Every pick, including the recovery picks that skip `targetEligible`, keeps metered
     // targets away from callers that may not spend on them.
-    eligible: target => (meteredAllowed || !target.metered) && (pickOptions.eligible?.(target) ?? true),
+    eligible: target => maySpendOnTarget(target) && (pickOptions.eligible?.(target) ?? true),
     waitForCooldownMs: combo.waitForCooldownMs,
     abortSignal: options.abortSignal,
   });
@@ -759,7 +759,7 @@ export async function executeComboResponses(
       comboId,
       lane: sessionLaneIdFromRequest(req.headers),
       body,
-      eligible: target => (meteredAllowed || !target.metered) && targetEligible(target),
+      eligible: target => maySpendOnTarget(target) && targetEligible(target),
       now: initialNow,
     });
   let pick = toolLoopPin ?? await pickWithWait({
@@ -963,7 +963,10 @@ export async function executeComboResponses(
         combo = currentCombo;
         protocolLanes = buildProtocolLanes(config, combo.targets);
         const result = await admitCombo();
-        if (options.abortSignal?.aborted) return clientCancelledResponse();
+        if (options.abortSignal?.aborted) {
+          refreshedRefusal = clientCancelledResponse();
+          break;
+        }
         if (!Bun.deepEquals(snapshot, snapshotComboAdmission(config, comboId))) continue;
         if (result instanceof Response) {
           refreshedRefusal = result;
@@ -1168,9 +1171,22 @@ export async function executeComboResponses(
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
     const firstComboTarget = comboTargetsDispatched === 0;
-    if (!firstComboTarget && combo.strategy === "jev" && pick.target.metered
-      && !admissionMayUseMeteredComboTargets(config, options.admission, getCombo(config, comboId))) {
-      return lastFailure ? exhaustedFailure() : comboUnavailable(comboId);
+    // Recheck after every async selection, before reserving or dispatching a child.
+    const selected: ComboPick = pick;
+    const liveCombo = getCombo(config, comboId);
+    const currentMember = liveCombo?.targets.find(target => targetKey(target) === targetKey(selected.target));
+    if (!maySpendOnTarget(currentMember ?? selected.target)) {
+      pick = liveCombo ? await pickWithWait({
+        exclude: selected.attempted,
+        eligible: targetEligible,
+        allowCooldownReprobe: false,
+        cooldownReprobeTargets: Object.entries(selected.cooldownReprobeTargets ?? {}),
+      }) : null;
+      if (options.abortSignal?.aborted) return clientCancelledResponse();
+      if (!pick) return lastFailure ? exhaustedFailure() : comboUnavailable(comboId);
+      jevDecision = undefined;
+      toolLoopTurnEffort = undefined;
+      continue;
     }
     // The physical destination after provider aliases and blockedModelRedirects: hops are
     // classified by where the request really goes, not by the selector the combo names.

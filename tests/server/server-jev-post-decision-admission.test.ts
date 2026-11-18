@@ -62,3 +62,28 @@ test.each([
     if (change === "churn") expect(await response.text()).toContain("combo_unavailable");
   },
 );
+
+test("accounts for the completed decision when admission refresh is cancelled", async () => {
+  const payloads: Record<string, unknown>[] = [];
+  const config = perTurnConfig(["sol/gpt-5.6-sol:high"], payloads);
+  config.combos!.auto!.capabilityPolicy = "union";
+  const controller = new AbortController();
+  const decide = config.providers.jev!.fetch!;
+  config.providers.jev!.fetch = (async (input, init) => {
+    Object.defineProperty(config.providers.sol!, "contextWindow", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        queueMicrotask(() => controller.abort());
+        return 100_000;
+      },
+    });
+    return decide(input, init);
+  }) as typeof fetch;
+  const models: string[] = [];
+  const log: RequestLogContext = { model: "", provider: "" };
+  expect((await turn(config, { models, log, signal: controller.signal })).status).toBe(499);
+  expect(models).toEqual([]);
+  expect(payloads).toHaveLength(1);
+  expect(log.jevDecision?.usage).toMatchObject({ totalTokens: 10 });
+});

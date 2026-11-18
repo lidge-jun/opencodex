@@ -67,3 +67,24 @@ test("intersection dispatches a replacement added during the paid decision", asy
   expect(models).toEqual([`replacement/${LUNA.model}`]);
   expect(payloads).toHaveLength(2);
 });
+
+test.each([true, false])("first dispatch rechecks metered consent with unmetered sibling=%s", async sibling => {
+  const config = perTurnConfig([], []);
+  const combo = config.combos!.auto!;
+  combo.strategy = "failover";
+  combo.capabilityPolicy = "union";
+  combo.allowMeteredTargets = true;
+  combo.targets = [{ ...SOL, metered: true }, ...(sibling ? [LUNA] : [])];
+  Object.defineProperty(config.providers.sol!, "contextWindow", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      queueMicrotask(() => { combo.allowMeteredTargets = false; });
+      return 100_000;
+    },
+  });
+  const models: string[] = [];
+  const response = await turn(config, { models });
+  expect(models).toEqual(sibling ? [`${LUNA.provider}/${LUNA.model}`] : []);
+  expect(response.status).toBe(sibling ? 200 : 503);
+});
