@@ -1,6 +1,6 @@
 import { markAnthropicFamilyEnumeration } from "./quota/anthropic-family-headers";
 import { rawAnthropicUsageWindows } from "./quota/anthropic-decision-windows";
-import { anthropicUsageBuckets, type AnthropicUsageBucket } from "./quota/anthropic-usage-windows";
+import { anthropicExtraUsageMonthlyPercent, anthropicUsageBuckets, type AnthropicUsageBucket } from "./quota/anthropic-usage-windows";
 import { bindRawDecisionWindows } from "./quota-decision-publication";
 import { decisionQuotaSinkActive } from "../lib/decision-quota-sink";
 import { CLAUDE_CLI_USER_AGENT } from "./claude-cli-identity";
@@ -72,24 +72,8 @@ export async function probeAnthropicUsageQuota(accessToken: string): Promise<Ant
     }
   }
   const displayWindows = displayBuckets.flatMap(bucket => familyWindow(bucket) ?? []);
-  if (shared.fiveHourPercent === undefined && shared.weeklyPercent === undefined && customWindows.length === 0) {
-    const extraUsage = asRecord(body.extra_usage);
-    if (extraUsage && extraUsage.is_enabled === true) {
-      let monthlyPercent = normalizePercent(extraUsage.utilization);
-      if (monthlyPercent === undefined) {
-        const usedCredits = typeof extraUsage.used_credits === "number" ? extraUsage.used_credits : undefined;
-        const monthlyLimit = typeof extraUsage.monthly_limit === "number" ? extraUsage.monthly_limit : undefined;
-        if (usedCredits !== undefined && monthlyLimit !== undefined && Number.isFinite(usedCredits) && Number.isFinite(monthlyLimit) && monthlyLimit > 0) {
-          monthlyPercent = normalizePercent((usedCredits / monthlyLimit) * 100);
-        }
-      }
-      if (monthlyPercent !== undefined) {
-        shared.monthlyPercent = monthlyPercent;
-        const monthlyResetAt = normalizeResetAt(extraUsage.resets_at ?? extraUsage.reset_at);
-        if (monthlyResetAt !== undefined) shared.monthlyResetAt = monthlyResetAt;
-      }
-    }
-  }
+  const monthlyPercent = anthropicExtraUsageMonthlyPercent(body, buckets);
+  if (monthlyPercent !== undefined) shared.monthlyPercent = monthlyPercent;
   const quota: ProviderQuota = {
     ...shared,
     ...(customWindows.length > 0 ? { customWindows } : {}),

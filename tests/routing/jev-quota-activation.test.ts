@@ -208,6 +208,22 @@ describe("opt-in JEV quota activation", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  test("Anthropic monthly-only extra_usage publishes a monthly window, so an exhausted account is not unknown", async () => {
+    const seeded = await seedStores();
+    reconcileJevQuotaActivation(config());
+    const usage = (utilization: number) => ({
+      five_hour: null, seven_day: null, limits: [],
+      extra_usage: { is_enabled: true, monthly_limit: 24300, used_credits: 24300, utilization },
+    });
+    spyOn(globalThis, "fetch").mockImplementation((async () => Response.json(usage(100))) as typeof globalThis.fetch);
+    const quota = await readAnthropicUsageQuota(seeded.credential.access);
+    expect(quota?.monthlyPercent).toBe(100);
+    publishAnthropicDecisionQuota(seeded.authId, credentialGeneration(seeded.credential), quota);
+    const row = readLoadedDecisionQuotaPool("anthropic")?.find(item => item.id === seeded.authId);
+    expect(row!.windows).toEqual([{ window: "monthly", percent: 100, observedAt: quota!.updatedAt }]);
+    expect(row!.windows).not.toEqual([]);
+  });
+
   for (const source of ["wham", "response-header"] as const) for (const parsedWhileActive of [false, true]) {
     test(`Codex ${source} parsed while ${parsedWhileActive ? "active preserves invalid resets" : "inactive stays unknown after activation"}`, async () => {
       const seeded = await seedStores();

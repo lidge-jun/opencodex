@@ -55,10 +55,7 @@ export const resolveAnthropicAccountIdentity: AnthropicIdentityResolver = async 
     const organization = "organization" in data ? data.organization : undefined;
     const org = organization && typeof organization === "object"
       ? organization as Record<string, unknown> : undefined;
-    const plan = normalizeAnthropicPlan(org?.rate_limit_tier, true)
-      ?? normalizeAnthropicPlan(org?.organization_type, true)
-      ?? normalizeAnthropicPlan(org?.rate_limit_tier)
-      ?? normalizeAnthropicPlan(org?.organization_type);
+    const plan = normalizeAnthropicPlan(org?.rate_limit_tier) ?? normalizeAnthropicPlan(org?.organization_type);
     return { ...identity, ...(plan ? { plan } : {}) };
   } catch {
     // Unavailable identity is an explicit unresolved result, never an ownership guess.

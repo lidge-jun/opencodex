@@ -1,5 +1,6 @@
 /** One source selection for display and advisory usage; neither projection invents absent limits. */
 import { asRecord, toFiniteNumber } from "../quota-wire";
+import { normalizePercent } from "../quota-wire";
 
 type UsageWindow = "5h" | "weekly" | "fable" | "opus" | "sonnet";
 export interface AnthropicUsageBucket {
@@ -59,6 +60,27 @@ function applyWeeklyShares(body: Record<string, unknown>, scopedRows: Map<number
     }
     bucket.weeklyAllowancePercent = allowance;
   }
+}
+
+/**
+ * Monthly usage for plans that report no five-hour, weekly or scoped window, such as
+ * usage-based Enterprise seats. `extra_usage.is_enabled` says the credit allowance is
+ * usable now; `has_extra_usage_enabled` on the profile only says it was opted into, so it
+ * is not consulted. The payload carries no reset time. The percentage tracks the credit
+ * balance and falls when credits reset, so no reset is read or invented. Display and
+ * advisory projections share this one reading.
+ */
+export function anthropicExtraUsageMonthlyPercent(
+  body: Record<string, unknown>, buckets: readonly AnthropicUsageBucket[],
+): number | undefined {
+  if (buckets.length > 0) return undefined;
+  const extra = asRecord(body.extra_usage);
+  if (!extra || extra.is_enabled !== true) return undefined;
+  const reported = toFiniteNumber(extra.utilization);
+  if (reported !== undefined) return normalizePercent(reported);
+  const used = toFiniteNumber(extra.used_credits);
+  const limit = toFiniteNumber(extra.monthly_limit);
+  return used !== undefined && limit !== undefined && limit > 0 ? normalizePercent((used / limit) * 100) : undefined;
 }
 
 /**
