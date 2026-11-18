@@ -336,6 +336,7 @@ export async function listManagementModelRows(
   options: {
     entitlementWaitMs?: number;
     models?: readonly CatalogModel[];
+    allowSuperseded?: boolean;
     /** Filled with each provider's content revision as of the moment its rows were chosen. */
     providerContentRevisions?: Map<string, string>;
   } = {},
@@ -351,7 +352,11 @@ export async function listManagementModelRows(
   // A passive read (#6959) also skips the entitlement refresh, which reaches the Codex accounts.
   const models = options.models === undefined
     ? isPassiveRead() ? [] : (await Promise.all([
-      fetchAllModels(config, options.providerContentRevisions, projection => { config = projection; }),
+      fetchAllModels(config, {
+        providerContentRevisions: options.providerContentRevisions,
+        allowSuperseded: options.allowSuperseded,
+        publishProjection: projection => { config = projection; },
+      }),
       ensureCodexEntitlementFreshness(config, {
         waitMs: options.entitlementWaitMs ?? 3_000,
       }),

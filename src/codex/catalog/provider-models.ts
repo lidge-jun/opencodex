@@ -17,6 +17,7 @@ import { readKiroAccountModels, kiroObservedContextWindow } from "../../provider
 import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readRootTomlString, resolveCodexConfigPath } from "../paths";
 import {
   canPublishModelDiscovery,
+  callerLocalModelDiscoveryRevision,
   claimModelDiscoveryPublication,
   captureModelDiscoveryGeneration,
   clearModelCache,
@@ -252,7 +253,10 @@ async function fetchProviderModelsUncached(
   });
   const publishCache = (models: CatalogModel[], authority?: string) =>
     setCached(name, models, Date.now(), cacheGeneration, authority, discoveryGeneration);
-  const superseded = (models: CatalogModel[]) => observed(models, "degraded", false);
+  const supersededSuccess = (models: CatalogModel[]): ProviderModelsResult => ({
+    ...observed(models, "degraded", false),
+    contentRevision: callerLocalModelDiscoveryRevision(cacheGeneration),
+  });
   if (prov.authMode === "forward") return observed([], "authoritative"); // ChatGPT backend has no /models
   if (azureMetadata) await refreshAzureModelMetadata(prov.baseUrl, metadataConfigDir);
   const seedVertexDefault = prov.adapter === "google"
@@ -384,7 +388,7 @@ async function fetchProviderModelsUncached(
       // for an Auto-only account even when its saved configuration still contains it.
       const returned = copilotRequiresAuto(prov, models)
         ? picker : withConfiguredRetention(picker, { warnDrops: true });
-      if (!claimPublication()) return superseded(returned);
+      if (!claimPublication()) return supersededSuccess(returned);
       markProviderDiscoveryOk(name, picker.length);
       return observed(returned, "authoritative");
     } catch {
@@ -449,8 +453,8 @@ async function fetchProviderModelsUncached(
         ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false),
       }));
       const forCache = withConfiguredRetention(discovered, { retainComboTargets: false });
-      if (!isCurrentCacheGeneration()) return superseded(withConfiguredRetention(configured));
-      if (!publishCache(forCache, authorityIdentity)) return superseded(withConfiguredRetention(forCache));
+      if (!isCurrentCacheGeneration()) return observed(withConfiguredRetention(configured), "degraded", false);
+      if (!publishCache(forCache, authorityIdentity)) return supersededSuccess(withConfiguredRetention(forCache));
       markProviderDiscoveryOk(name, live.models.length);
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     }
@@ -505,8 +509,8 @@ async function fetchProviderModelsUncached(
         } as CatalogModel;
       });
       const forCache = withConfiguredRetention(discovered, { retainComboTargets: false });
-      if (!isCurrentCacheGeneration()) return superseded(withConfiguredRetention(configured));
-      if (!publishCache(forCache, authorityIdentity)) return superseded(withConfiguredRetention(forCache));
+      if (!isCurrentCacheGeneration()) return observed(withConfiguredRetention(configured), "degraded", false);
+      if (!publishCache(forCache, authorityIdentity)) return supersededSuccess(withConfiguredRetention(forCache));
       markProviderDiscoveryOk(name, live.models.length);
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     } catch {
@@ -555,8 +559,8 @@ async function fetchProviderModelsUncached(
         ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false),
       }));
       const forCache = withConfiguredRetention(discovered, { retainComboTargets: false });
-      if (!isCurrentCacheGeneration()) return superseded(withConfiguredRetention(configured));
-      if (!publishCache(forCache, authorityIdentity)) return superseded(withConfiguredRetention(forCache));
+      if (!isCurrentCacheGeneration()) return observed(withConfiguredRetention(configured), "degraded", false);
+      if (!publishCache(forCache, authorityIdentity)) return supersededSuccess(withConfiguredRetention(forCache));
       markQoderDiscoveryCommitted(profile, apiKey, discoveryScope);
       markProviderDiscoveryOk(name, live.models.length);
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
@@ -637,8 +641,8 @@ async function fetchProviderModelsUncached(
         } as CatalogModel;
       });
       const forCache = withConfiguredRetention(result, { retainComboTargets: false });
-      if (!isCurrentCacheGeneration()) return superseded(withConfiguredRetention(configured));
-      if (!publishCache(forCache, authorityIdentity)) return superseded(withConfiguredRetention(forCache));
+      if (!isCurrentCacheGeneration()) return observed(withConfiguredRetention(configured), "degraded", false);
+      if (!publishCache(forCache, authorityIdentity)) return supersededSuccess(withConfiguredRetention(forCache));
       markProviderDiscoveryOk(name, liveResult.models.length);
       return observed(withConfiguredRetention(forCache), "authoritative");
     }
@@ -695,8 +699,8 @@ async function fetchProviderModelsUncached(
       // Cache the discovery-filtered roster without combo retention so a later
       // gather can re-apply the current capture's retain set on read.
       const forCache = withConfiguredRetention(result, { retainComboTargets: false });
-      if (!isCurrentCacheGeneration()) return superseded(withConfiguredRetention(configured));
-      if (!publishCache(forCache, authorityIdentity)) return superseded(withConfiguredRetention(forCache));
+      if (!isCurrentCacheGeneration()) return observed(withConfiguredRetention(configured), "degraded", false);
+      if (!publishCache(forCache, authorityIdentity)) return supersededSuccess(withConfiguredRetention(forCache));
       // Publish roster-derived state only for a discovery the cache accepted: a stale
       // in-flight capture (generation revoked by a credential/config change) must not
       // overwrite the spelling or Max-Mode evidence of the newer one.
@@ -921,7 +925,7 @@ async function fetchProviderModelsUncached(
       if (!isCurrentCacheGeneration()) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
-      if (!canPublish()) return superseded(withConfiguredRetention(forCache));
+      if (!canPublish()) return supersededSuccess(withConfiguredRetention(forCache));
       // Save exact family routes before publishing synthetic IDs. These synchronous writes
       // cannot interleave with a credential-generation change; failure keeps the prior cache.
       registerAntigravityDiscoveredWireModels(prov.baseUrl, merged, {
@@ -931,7 +935,7 @@ async function fetchProviderModelsUncached(
       // Entitlement is per account (Claude 4.6 vs 5.5, Argon): remember what THIS account
       // lists so account selection can prefer one that serves the requested model.
       if (auth.oauthAccountId) recordAntigravityAccountRoster(name, auth.oauthAccountId, antigravity, Date.now(), antigravityObservation);
-      if (!publishCache(forCache, catalogAuthority)) return superseded(withConfiguredRetention(forCache));
+      if (!publishCache(forCache, catalogAuthority)) return supersededSuccess(withConfiguredRetention(forCache));
       markProviderDiscoveryOk(name, live.length);
       return observed(withConfiguredRetention(azureMetadata ? live : forCache, { warnDrops: true }), "authoritative");
     }
@@ -1035,10 +1039,11 @@ async function fetchProviderModelsUncached(
     if (!maySendAnthropicDiscovery() || !isCurrentCacheGeneration()) {
       return observed(withConfiguredRetention(configured), "degraded");
     }
-    if (!canPublishDiscovery() || !vertexResponseCurrent()) return superseded(returned);
+    if (!vertexResponseCurrent()) return observed(returned, "degraded", false);
+    if (!canPublishDiscovery()) return supersededSuccess(returned);
     // The original caller can inspect its own rows, but a superseded revision
     // prevents a sync or arrival-policy writer from adopting a superseded result.
-    if (!publishCache(forCache, catalogAuthority)) return superseded(returned);
+    if (!publishCache(forCache, catalogAuthority)) return supersededSuccess(returned);
     markProviderDiscoveryOk(name, liveModelCount, discoveryObservation);
     return observed(returned, "authoritative");
   } catch (error) {

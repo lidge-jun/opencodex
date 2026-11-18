@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  callerLocalModelDiscoveryRevision,
   captureModelCacheGeneration,
   captureModelDiscoveryGeneration,
+  claimModelDiscoveryPublication,
   clearModelCache,
   expireModelCache,
   getProviderDiscoveryStatus,
@@ -9,6 +11,8 @@ import {
   isModelsFetchCoolingDown,
   markModelsFetchFailure,
   markProviderDiscoveryFailed,
+  observeModelCacheRevision,
+  readableSupersededModelDiscovery,
   reconcileModelCacheProviders,
   setCached,
 } from "../../src/codex/model-cache";
@@ -53,6 +57,25 @@ describe("model-cache provider reconciliation", () => {
     clearModelCache(provider, "eviction");
     expect(setCached(provider, [{ provider, id: "old-model" }], Date.now(), authority, undefined, older)).toBe(false);
     expect(getStaleCached(provider)).toBeNull();
+  });
+
+  test.each([
+    ["provider", () => clearModelCache(provider)],
+    ["global", () => clearModelCache()],
+  ])("superseded reads keep caller-local evidence only within %s authority", (_scope, revokeAuthority) => {
+    const authority = captureModelCacheGeneration(provider);
+    const earlier = observeModelCacheRevision(provider);
+    expect(readableSupersededModelDiscovery(provider, earlier)).toBeNull();
+    expect(claimModelDiscoveryPublication(provider, captureModelDiscoveryGeneration())).toBe(true);
+
+    const callerLocal = callerLocalModelDiscoveryRevision(authority);
+    expect(readableSupersededModelDiscovery(provider, earlier)).toBe("previously-current");
+    expect(readableSupersededModelDiscovery(provider, callerLocal)).toBe("caller-local");
+    expect(observeModelCacheRevision(provider)).not.toBe(callerLocal);
+
+    revokeAuthority();
+    expect(readableSupersededModelDiscovery(provider, earlier)).toBeNull();
+    expect(readableSupersededModelDiscovery(provider, callerLocal)).toBeNull();
   });
 
   test.each([

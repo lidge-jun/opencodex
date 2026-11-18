@@ -281,6 +281,11 @@ function bumpProviderCacheRevision(provider: string): void {
   providerCacheRevisions.set(provider, (providerCacheRevisions.get(provider) ?? 0) + 1);
 }
 
+/** A successful roster available to its caller after a newer observation wins publication. */
+export function callerLocalModelDiscoveryRevision(cacheGeneration: string): string {
+  return `caller-local:${cacheGeneration}`;
+}
+
 export function observeModelCacheRevision(provider: string): string {
   // The global term covers a clear that empties the map wholesale, which per-provider counters
   // cannot express: without it, wiping every entry and republishing identical-looking rows would
@@ -289,6 +294,15 @@ export function observeModelCacheRevision(provider: string): string {
   // retires older derived rosters on a newer failure, even when the rows stay unchanged.
   return `${globalContentRevision}:${providerCacheRevisions.get(provider) ?? 0}`
     + `:${providerCacheGenerations.get(provider) ?? 0}:${publishedDiscoveryGenerations.get(provider) ?? 0}`;
+}
+
+/** Recognize ordered supersession while the provider's cache authority still holds. */
+export function readableSupersededModelDiscovery(provider: string, revision: string): "caller-local" | "previously-current" | null {
+  const authority = providerCacheGenerations.get(provider) ?? 0;
+  if (revision === callerLocalModelDiscoveryRevision(`${globalCacheGeneration}:${authority}`)) return "caller-local";
+  const [epoch, , capturedAuthority, publication] = revision.split(":");
+  return epoch === String(globalContentRevision) && capturedAuthority === String(authority)
+    && Number(publication) < (publishedDiscoveryGenerations.get(provider) ?? 0) ? "previously-current" : null;
 }
 
 /**

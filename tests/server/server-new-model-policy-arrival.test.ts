@@ -5,7 +5,7 @@ import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { flushNativeMainStartupReleases } from "../../src/codex/native-profile-startup";
 import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
 import { setPersistedConfigMutationBeforeCommitForTests } from "../../src/config/persisted-mutation";
-import { gatherRoutedModels } from "../../src/codex/catalog";
+import { gatherRoutedModels, getLastComboCatalogOmissions } from "../../src/codex/catalog";
 import {
   clearModelCache, expireModelCache, getProviderDiscoveryStatus, getStaleCached,
   isModelsFetchCoolingDown, observeModelCacheRevision, setCached,
@@ -179,16 +179,18 @@ test.each(supersededReads)("$path projects a superseded success under policy $po
   const lastGood = [{ provider, id: "last-good" }];
   setCached(provider, lastGood);
   expect(expireModelCache(provider)).toBe(true);
-  const pending = fetch(new URL(path, server.url), {
+  const requestOptions = {
     headers: { "x-opencodex-api-key": readFileSync(home.path("admin-api-token"), "utf8").trim() },
     signal: lifecycle.abort.signal,
-  });
+  };
+  const pending = fetch(new URL(path, server.url), requestOptions);
   try {
     await fetchingOlder.promise;
     await gatherRoutedModels(loadConfig(), { onlyProvider: provider });
     const failure = { status: "failed", reason: "http", httpStatus: 429 };
     expect(getProviderDiscoveryStatus(provider)).toEqual(failure);
     const revision = observeModelCacheRevision(provider);
+    const omissions = getLastComboCatalogOmissions();
     releaseOlder.resolve();
     const response = await pending;
     expect(response.status).toBe(200);
@@ -210,8 +212,14 @@ test.each(supersededReads)("$path projects a superseded success under policy $po
     expect(isModelsFetchCoolingDown(provider)).toBe(true);
     expect(getStaleCached(provider)).toEqual(lastGood);
     expect(observeModelCacheRevision(provider)).toBe(revision);
+    expect(getLastComboCatalogOmissions()).toBe(omissions);
     expect(readFileSync(configPath, "utf8")).toBe(configBefore);
     expect(readFileSync(catalogPath, "utf8")).toBe(catalogBefore);
+    const discovery = await fetch(new URL("/api/model-discovery", server.url), requestOptions);
+    expect(discovery.status).toBe(200);
+    expect(await discovery.json()).toMatchObject({
+      baselineCounts: { [provider]: existing.length }, recentArrivals: {},
+    });
   } finally {
     releaseOlder.resolve();
     await pending;

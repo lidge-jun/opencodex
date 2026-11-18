@@ -931,6 +931,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       }
 
       if (url.pathname === "/v1/models" && req.method === "GET") {
+        let config = ctx.config;
         // #809: the catalog read sits immediately before model discovery because it shares
         // that route's admission rationale exactly. Keep them adjacent so a future change to
         // one is made in sight of the other.
@@ -953,7 +954,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         let modelEntitlements;
         try {
           [goModels, modelEntitlements] = await Promise.all([
-            fetchAllModels(config),
+            fetchAllModels(config, { allowSuperseded: true, publishProjection: projection => { config = projection; } }),
             // Codex sends its own client_version on this request, and upstream filters the
             // entitlement roster by it. Passing it through is what stops an entitled account
             // being told it cannot use models a newer client can (#2886).

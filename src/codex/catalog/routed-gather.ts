@@ -16,6 +16,7 @@ import {
   DEFAULT_MODEL_CACHE_TTL_MS,
   getFreshCached,
   getStaleCached,
+  observeModelCacheRevision,
   isModelsFetchCoolingDown,
   isModelCacheGenerationCurrent,
   markModelsFetchFailure,
@@ -550,7 +551,10 @@ async function gatherRoutedModelsUncached(
     }
     else warnUncataloguedComboOnce(id, combo, members, localOmissions);
   }
-  if (onlyProvider === undefined) replaceLastComboCatalogOmissions(localOmissions);
+  if (onlyProvider === undefined && providerResults.every(({ outcome, contentRevision }) =>
+    observeModelCacheRevision(outcome.provider) === contentRevision)) {
+    replaceLastComboCatalogOmissions(localOmissions);
+  }
   // Preserve declaratively ordered discovery (and cold-start seed order); other presets
   // retain their historical alphabetical order. Renamed/custom transport scoping still applies.
   // Read the captured discovery policy, never the live registry: a flight must keep the
