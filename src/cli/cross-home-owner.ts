@@ -3,12 +3,12 @@ import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { getConfigDir } from "../config/paths";
-import { readRuntimePort } from "../config/process-state";
+import { isOcxCommandLine, readProcessCommandLine, readRuntimePort } from "../config/process-state";
 import { getCodexHome } from "../codex/paths";
 import { detectCodexRoutingDrift } from "../codex/routing-drift";
 import { readBoundedCodexConfig } from "../codex/inject/bounded-config-reader";
 import { currentExternalCodexModelProvider } from "../codex/inject";
-import { reconcileJournal } from "../codex/journal";
+import { journalOwner, reconcileJournal } from "../codex/journal";
 import { shouldSyncCodexOnStart } from "../codex/desired-state";
 import { loadConfig } from "../config";
 import { updateTeardownHandoverPending } from "../update/teardown-handover";
@@ -22,8 +22,8 @@ import { readOwnerRegistry } from "../config/owner-registry";
 import {
   classifyHealthz,
   loopbackProbeHosts,
+  observeStartupEndpoint,
   proveLiveProxyOwnedByHome,
-  proxyIdentityAt,
   START_OWNERSHIP_LIVENESS,
   type LivenessIo,
 } from "../server/proxy-liveness";
@@ -118,6 +118,19 @@ function validPort(value: unknown): value is number {
   return Number.isInteger(value) && Number(value) > 0 && Number(value) <= 65535;
 }
 
+function recordedOwnerMayBeLive(pid: number, readCommandLine?: typeof readProcessCommandLine): boolean {
+  try { process.kill(pid, 0); }
+  catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
+  const commandLine = readCommandLine?.(pid);
+  return !commandLine?.trim() || isOcxCommandLine(commandLine);
+}
+
+/** A temporarily vacant port does not release an active process's journal. */
+export function hasLiveStartupJournalOwner(): boolean {
+  const owner = journalOwner({ readOnly: true });
+  return owner?.kind === "process" && recordedOwnerMayBeLive(owner.pid);
+}
+
 function loopbackPort(raw: string | null): number | null {
   if (!raw) return null;
   try {
@@ -153,7 +166,8 @@ export async function findCrossHomeOwnerDetailed(options: CrossHomeOwnerOptions 
   // fallback classification shares it, so a pile of stale hints cannot stretch the
   // start path the way per-candidate budgets did (CodeRabbit on #6198).
   const deadlineAt = io.deadlineAt ?? nowFn() + timeoutMs * attempts * 4;
-  const probeIo: LivenessIo = { ...io, timeoutMs, attempts, deadlineAt };
+  const probeIo: LivenessIo = { ...START_OWNERSHIP_LIVENESS, ...io, timeoutMs, attempts, deadlineAt };
+  const budgetSpent = () => io.signal?.aborted || nowFn() >= deadlineAt;
 
   const candidates = new Set<number>();
   const records = new Map<number, CandidateRecord[]>();
@@ -233,7 +247,7 @@ export async function findCrossHomeOwnerDetailed(options: CrossHomeOwnerOptions 
     if (hosts.length === 0) hosts.push(...loopbackProbeHosts(undefined));
 
     for (const hostname of hosts) {
-      if (deadlineAt - nowFn() <= 0) {
+      if (budgetSpent()) {
         noteIndeterminate(port, "ownership discovery ran out of its shared time budget");
         break;
       }
@@ -242,23 +256,31 @@ export async function findCrossHomeOwnerDetailed(options: CrossHomeOwnerOptions 
       // timeout as empty. Unknown bind failures retain the existing probes.
       if (!availability.has(hostname)) availability.set(hostname, checkAvailability(hostname));
       if (availability.get(hostname) === "unavailable") continue;
-      const identity = await proxyIdentityAt(port, { hostname }, probeIo);
+      const { identity, bindProof } = await observeStartupEndpoint(port, { hostname }, probeIo);
       if (identity === null) {
-        // A null identity is not "free": distinguish a unanimous connect refusal
-        // (the family is genuinely empty) from a transport or shape that stayed
-        // unreadable. On a managed port an unreadable answer is owner evidence the
-        // caller cannot dismiss.
-        const remainingMs = deadlineAt - nowFn();
-        if (remainingMs <= 0) {
+        // The bind only settles this endpoint. A different home's live process may
+        // still own the shared clients while its listener is between binds.
+        const recordedOwner = bindProof && (hasLiveStartupJournalOwner() || portRecords.some(rec =>
+          recordedOwnerMayBeLive(rec.pid, io.readCommandLineFn ?? readProcessCommandLine)));
+        if (budgetSpent()) {
           noteIndeterminate(port, "ownership discovery ran out of its shared time budget");
           break;
         }
-        const classification = await classifyHealthz(
-          "http://" + hostname + ":" + port + "/healthz",
-          probeIo.fetchFn ?? directLocalHttpFetch,
-          Math.min(timeoutMs, remainingMs),
-        );
-        if (classification === "dead") continue;
+        if (recordedOwner) {
+          noteIndeterminate(port, "a recorded process may still own the shared clients");
+          continue;
+        }
+        if (bindProof === undefined) {
+          // Keep the existing classification probe when the startup proof did not apply.
+          const verdict = await classifyHealthz(`http://${hostname}:${port}/healthz`,
+            io.fetchFn ?? directLocalHttpFetch, Math.min(timeoutMs, deadlineAt - nowFn()));
+          if (budgetSpent()) {
+            noteIndeterminate(port, "ownership discovery ran out of its shared time budget");
+            break;
+          }
+          if (verdict === "dead") continue;
+        }
+        if (bindProof === true) continue;
         noteIndeterminate(port, "a managed client port answered but its listener could not be classified");
         continue;
       }

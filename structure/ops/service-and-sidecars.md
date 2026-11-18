@@ -498,7 +498,7 @@ them for hosts whose loopback connects are slowed by a security layer; each ceil
 so an override can never shorten the budgets that prevent a duplicate proxy, and a value above the
 30 s ceiling is ignored so the single-shot stop deadline (`timeoutMs * attempts + 250` in
 `src/service/orchestration.ts`) stays bounded. `tests/server/probe-timeout-env.test.ts` reads the
-constants in child processes.
+constants in child processes. Windows startup also has a bounded loopback bind proof under the [runtime ownership contract](../runtime.md#lifecycle).
 
 In Bun installs (`src/update/index.ts`), `runConfigPreflight` opens `config.json` and checks the same descriptor's bytes using passive diagnostics before stopping the proxy. Imported-text diagnostics suppress configuration-derived sanitizer warnings for this check; normal diagnostics and loading retain their warnings. The check writes no recovery backups. An unreadable entry (including a dangling symlink), descriptor close failure, or configuration requiring diagnostics fallback or salvage aborts with code 1 before tray handoff or `ocx stop`. Recovery guidance distinguishes unreadable paths from readable invalid files and explains that validation does not edit the file. Reparable configs and readable symlinks to regular files pass; a genuinely missing config is allowed. The check does not prevent later edits. npm/pnpm flows (`bin/ocx.mjs`) keep their existing stop sequence.
 The npm and Bun updaters confirm the stop with the plain-ESM tri-state probe `src/update/proxy-liveness-probe.mjs`, decided by

@@ -68,14 +68,11 @@ describe("connected-client start ownership fence", () => {
     expect(fence).toBeGreaterThan(start.indexOf("probeOwnerPastRestartParent("));
     expect(fence).toBeLessThan(start.indexOf("recoverStartJournalAfterOwnerRecheck(owner, siblingStart)"));
     const recovery = readFileSync(repoPath("src/cli/start-owner-fence.ts"), "utf8");
-    expect(recovery.indexOf("await findLiveProxy(START_OWNERSHIP_LIVENESS)"))
-      .toBeLessThan(recovery.indexOf("removePidIfValueIs(owner.pidSnapshot)"));
-    expect(recovery.indexOf("if (owner.live) return sibling"))
-      .toBeLessThan(recovery.indexOf("removePidIfValueIs(owner.pidSnapshot)"));
-    expect(recovery.indexOf("removePidIfValueIs(owner.pidSnapshot)"))
-      .toBeLessThan(recovery.indexOf("await markCrossHomeSibling()"));
-    expect(recovery.indexOf("await markCrossHomeSibling()"))
-      .toBeLessThan(recovery.indexOf("if (!sibling) reconcileStartupJournal()"));
+    const steps = ["await observeProxyLiveness(START_OWNERSHIP_LIVENESS)", "if (owner.live) return sibling",
+      "await markCrossHomeSibling()", "&& hasLiveStartupJournalOwner()", "removePidIfValueIs(owner.pidSnapshot)",
+      "if (!sibling) reconcileStartupJournal()"].map(step => recovery.indexOf(step));
+    expect(steps[0]).toBeGreaterThanOrEqual(0);
+    for (let index = 1; index < steps.length; index++) expect(steps[index]).toBeGreaterThan(steps[index - 1]);
     expect(fence).toBeLessThan(start.indexOf('if (clientState.kind === "connected")'));
     expect(fence).toBeLessThan(start.indexOf("bindAndPublishStartOwnership("));
     expect(start.slice(fence, start.indexOf('if (clientState.kind === "connected")')))
