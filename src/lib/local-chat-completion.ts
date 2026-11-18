@@ -96,6 +96,7 @@ export async function postLocalChatCompletion(request: LocalChatCompletionReques
       body: JSON.stringify({ ...request.body, stream: false }),
       signal: linkedSignal.signal,
       redirect: "manual",
+      proxy: false,
     });
     const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
     try {

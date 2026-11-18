@@ -208,6 +208,8 @@ Its random 256-bit handle is honored only beside the current process-owned capab
 or missing handles are refused. Consultation completion or failure releases the entry; abort
 revokes it immediately, even while transport work is still settling. Registration owns a frozen copy.
 The bounded scope envelope remains validated separately. Neither handle nor capability is sent upstream.
+Advisor and shared local Chat self-fetches use direct transport, including when the destination
+is the hub's non-loopback bind address. Outbound provider requests still follow provider egress policy.
 
 Routed vision carries the same frozen policy through its plan and a scoped registry entry. The
 shared local Chat helper registers every self-fetch and attaches a frozen policy when supplied.
