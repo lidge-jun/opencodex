@@ -151,13 +151,13 @@ La fila API tiene 1.050.000 contextos, 922.000 entradas máximas, 128.000 salida
 | `gpt-6-sol` | 272,000 | 872,000 | `medium` | `low` hasta `ultra` |
 | `gpt-6-luna` | 272,000 | 872,000 | `medium` | `low` a `max` (n.o `ultra`) |
 
-[GPT-6.1 Sol](https://openai.com/index/introducing-gpt-6-1-sol/) (anunciado el 29 de septiembre de 2026) es la actualización a GPT-6 Sol; Astra y Luna no obtuvieron un lanzamiento de 6.1. Está catalogado como `gpt-6.1-sol` (**GPT-6.1-Sol**), sin conexión como Sol, y su fila proviene del catálogo Codex, donde necesita `client_version` **0.153.0 o más tarde** y es el Codex predeterminado. GPT-6 Sol se queda en la lista.
+[GPT-6.1 Sol](https://openai.com/index/introducing-gpt-6-1-sol/) (anunciado el 29 de septiembre de 2026) es la actualización a GPT-6 Sol; Astra y Luna no obtuvieron un lanzamiento de 6.1. Está catalogado como `gpt-6.1-sol` (**GPT-6.1-Sol**), sin conexión como Sol, y su fila proviene del catálogo Codex, donde necesita `client_version` **0.153.0 o más tarde** y era el modelo predeterminado de Codex antes de GPT-6.2 Sol. GPT-6 Sol se queda en la lista.
 
 | Modelo | Contexto predeterminado | Techo opt-in | Esfuerzo predeterminado | Razonamiento escalera |
 | --- | ---: | ---: | --- | --- |
 | `gpt-6.1-sol` | 500,000 | 872,000 | `low` | `low` hasta `ultra` |
 
-OpenAI elevó el contexto predeterminado de GPT-6.1 Sol en Codex y Work de 272,000 a 500,000 tokens el 11 de octubre de 2026, por lo que la fila nativa ahora se establece en 500,000 y se compacta en 450,000. El catálogo Codex incluido todavía lee 272,000, por lo que opencodex establece el nuevo valor predeterminado. Una ventana configurada o tapa del proveedor todavía lo baja, y el opt-in de ventana larga todavía se detiene en 872,000: OpenAI describe el máximo del modelo como 1M sin decir cómo se mapea en los límites de ventana y entrada de Codex, por lo que opencodex no anuncia más que el techo que puede verificar.
+OpenAI elevó el contexto predeterminado de GPT-6.1 Sol en Codex y Work de 272,000 a 500,000 tokens el 11 de octubre de 2026, por lo que la fila nativa ahora se establece en 500,000 y se compacta en 450,000. OpenCodex aplica 500.000 tokens a partir de la entrada histórica de 272.000. Una ventana configurada o tapa del proveedor todavía lo baja, y el opt-in de ventana larga todavía se detiene en 872,000: OpenAI describe el máximo del modelo como 1M sin decir cómo se mapea en los límites de ventana y entrada de Codex, por lo que opencodex no anuncia más que el techo que puede verificar.
 
 Las mismas palancas `providerContextCaps.openai`, `modelContextWindows` y `modelAutoCompactTokenLimits` se aplican como para Astra. En el OpenAI API (`openai-apikey`), `gpt-6.1-sol` tiene 1.050.000 contextos, 922.000 entradas máximas, 128.000 salidas máximas y esfuerzos `low` a `max`, con un precio de $2 entradas, $0.10 entradas en caché y $10 salidas por 1 millón de tokens (provoca más de 272K billetes a la tasa de contexto largo). GitHub Copilot, OpenRouter, Vercel AI Gateway, Kilo y OpenCode Zen también lo enumeran.
 

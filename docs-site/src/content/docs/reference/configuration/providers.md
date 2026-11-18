@@ -248,18 +248,25 @@ when your installed Codex catalog predates them.
 | `gpt-6-sol` | 272,000 | 872,000 | `medium` | `low` through `ultra` |
 | `gpt-6-luna` | 272,000 | 872,000 | `medium` | `low` through `max` (no `ultra`) |
 
+[GPT-6.2 Sol](https://developers.openai.com/api/docs/models/gpt-6.2-sol) and
+[GPT-6.2 Astra](https://developers.openai.com/api/docs/models/gpt-6.2-astra) are available as bare
+Codex native models, on `openai-apikey`, and as `openai/gpt-6.2-sol` and
+`openai/gpt-6.2-astra` through OpenRouter. Codex defaults to 500,000 tokens for Sol and
+272,000 for Astra, with an 872,000 opt-in ceiling on both. The OpenAI API has a 1,050,000-token
+context window with up to 922,000 input and 128,000 output tokens. Codex lists reasoning efforts
+`low` through `ultra` and defaults to `low`. The API supports `low` through `max`.
+
 [GPT-6.1 Sol](https://openai.com/index/introducing-gpt-6-1-sol/) (announced September 29, 2026)
 is the upgrade to GPT-6 Sol; Astra and Luna did not get a 6.1 release. It is listed as
 `gpt-6.1-sol` (**GPT-6.1-Sol**), ungated like Sol, and its row comes from the Codex catalog, where
-it needs `client_version` **0.153.0 or later** and is the Codex default. GPT-6 Sol stays listed.
+it needs `client_version` **0.153.0 or later** and was the Codex default before GPT-6.2 Sol. GPT-6 Sol stays listed.
 
 | Model | Default context | Opt-in ceiling | Default effort | Reasoning ladder |
 | --- | ---: | ---: | --- | --- |
 | `gpt-6.1-sol` | 500,000 | 872,000 | `low` | `low` through `ultra` |
 
 OpenAI raised GPT-6.1 Sol's default context in Codex and Work from 272,000 to 500,000 tokens on
-October 11, 2026, so the native row now defaults to 500,000 and compacts at 450,000. The bundled
-Codex catalog still reads 272,000, so opencodex sets the new default itself. A configured window or
+October 11, 2026, so the native row now defaults to 500,000 and compacts at 450,000. OpenCodex applies 500,000 over the historical 272,000 row it pins. A configured window or
 provider cap still lowers it, and the long-window opt-in still stops at 872,000: OpenAI describes
 the model maximum as 1M without saying how that maps onto Codex's window and input limits, so
 opencodex does not advertise more than the ceiling it can verify.
