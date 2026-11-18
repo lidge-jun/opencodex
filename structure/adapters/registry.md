@@ -96,10 +96,11 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   Selection rejects duplicate setting IDs, oversized snapshots and nested groups. The adapter ignores updates
   until it has a session ID and accepts updates only for that session. Permission requests are answered `cancelled`.
   Selection errors use fixed text. Answer and reasoning
-  deltas each pass through a bounded streaming redactor for minted OpenCodex credentials, Bearer values, and
-  token-shaped JWT and API-key strings. Long values stay masked across frames, and buffered chunks still report
-  activity to the streaming watchdog. Safe text is published in ACP arrival order even when answer and reasoning
-  chunks interleave. Header names and their surrounding prose remain intact. Protocol errors may include a numeric
+  deltas each pass through a bounded streaming redactor for minted OpenCodex credentials, Bearer values,
+  OAuth token fields, and token-shaped JWT and API-key strings. Long values stay masked across frames.
+  The redactor publishes safe prefixes on each update and reports buffered activity to the streaming
+  watchdog. It preserves ACP arrival order across channels. If an uncertain suffix holds up a full queue,
+  it masks that suffix and continues scanning for its continuation in the original channel. Protocol errors may include a numeric
   code. Probe and turn workspaces are created under the
   system temporary directory outside the OpenCodex home. Windows requires a private NTFS ACL before either
   child can start. Retained workspaces can accumulate when cleanup repeatedly cannot be confirmed.

@@ -682,11 +682,11 @@ describe("agy acp turn", () => {
     expect(methods(h)).toEqual(["initialize", "session/new", "session/prompt"]);
     expect(h.sent[0]!.params).toMatchObject({ protocolVersion: 1, clientCapabilities: {} });
     expect(h.sent[1]!.params).toEqual({ cwd: "/tmp/ocx-agy-acp-test", mcpServers: [] });
-    // The buffered thought reports activity, then its safe text precedes the answer.
+    // Safe thinking text precedes the answer, and the pending suffix flushes before done.
     expect(h.events).toEqual([
-      { type: "heartbeat" },
       { type: "thinking_delta", thinking: "thinking" },
-      { type: "text_delta", text: "hello" },
+      { type: "text_delta", text: "hell" },
+      { type: "text_delta", text: "o" },
       { type: "done" },
     ]);
     expect(h.args).toEqual([...AGY_ACP_ARGS]);

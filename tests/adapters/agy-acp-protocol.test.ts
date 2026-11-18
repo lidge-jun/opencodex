@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acpTerminal, buildAcpPrompt, classifyFrame, permissionCancelledFrame } from "../../src/adapters/agy-acp/acp";
 import { matchValue, parseConfigOptions, proveModel } from "../../src/adapters/agy-acp/options";
+import { AcpTurnOutput } from "../../src/adapters/agy-acp/output-redaction";
 import { clearAgyVersionCacheForTests, parseAgyVersion, probeAgyVersion, resolveAgyBinary, versionAtLeast } from "../../src/adapters/agy-acp/binary";
 import { createTurnWorkspace, reapProcessTree, type AgyAcpChild } from "../../src/adapters/agy-acp/process";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -141,6 +142,38 @@ test("rejects duplicate config IDs across categories", () => {
     { id: "shared", category: "model", type: "select", currentValue: "a", options: [{ value: "a", name: "A" }] },
     { id: "shared", category: "mode", type: "select", currentValue: "b", options: [{ value: "b", name: "B" }] },
   ])).toBeUndefined();
+});
+
+describe("ACP output streaming", () => {
+  test.each(["text_delta", "thinking_delta"] as const)("masks opaque OAuth fields in %s across frame boundaries", type => {
+    const seen: string[] = [];
+    const output = new AcpTurnOutput((_type, text) => seen.push(text));
+    output.push(type, 'refresh_token=example.opaque-1; {"access_to');
+    output.push(type, 'ken": "example');
+    output.push(type, '.opaque-2", "id_token": ');
+    output.push(type, "'example.opaque-3'}");
+    output.flush();
+    expect(seen.join("")).toBe("refresh_token=[REDACTED]; {\"access_token\": \"[REDACTED]\", \"id_token\": '[REDACTED]'}");
+  });
+
+  test("publishes short safe text before the terminal reply", () => {
+    const seen: string[] = [];
+    const output = new AcpTurnOutput((_type, text) => seen.push(text));
+    output.push("text_delta", "A short answer.");
+    expect(seen.join("")).toBe("A short answer.");
+  });
+
+  test("bounds the ordered backlog while still masking a later credential continuation", () => {
+    const seen: [string, string][] = [];
+    const output = new AcpTurnOutput((type, text) => seen.push([type, text]));
+    output.push("thinking_delta", "A label: refresh_to");
+    for (let i = 0; i < 80; i++) output.push("text_delta", "Continuing answer. ");
+    expect(seen.filter(([type]) => type === "text_delta").map(([, text]) => text).join("")).toBe("Continuing answer. ".repeat(80));
+    output.push("thinking_delta", 'ken="example.opaque-4" further thought.');
+    output.flush();
+    expect(seen.filter(([type]) => type === "thinking_delta").map(([, text]) => text).join("")).toContain("further thought.");
+    expect(JSON.stringify(seen)).not.toContain("example.opaque-4");
+  });
 });
 
 describe("workspace and reaping", () => {
