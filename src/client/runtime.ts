@@ -538,15 +538,18 @@ export async function startClientRuntime(
       );
     },
     resume: async () => {
+      const recycleAfterRollback = () => {
+        if (!shuttingDown && !observeExplicitStop()) return recycleStandalone(state.value.tokenFingerprint);
+      };
       // The connection may have changed while the replacement was starting (`ocx disconnect`, a
       // new connect). Serving the old one again would be a stale runtime nothing recycles; hand
       // off to the recycle, which starts whatever the durable state now calls for.
       if (clientRestartRollbackAction(state.value, readClientConnectionState()) === "recycle") {
-        await recycleStandalone(state.value.tokenFingerprint);
+        await recycleAfterRollback();
         return;
       }
       if (!(await serve({ port: servedPort, portWaitMs: CLIENT_RESTART_REBIND_WAIT_MS }))) {
-        await recycleStandalone(state.value.tokenFingerprint);
+        await recycleAfterRollback();
       }
     },
     exitProcess: async code => {

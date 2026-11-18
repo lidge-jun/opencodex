@@ -31,6 +31,9 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   lateFileSync?: boolean;
   deferFileApply?: boolean;
   oldStopCapability?: boolean;
+  missingStopRecord?: "absent" | "invalid";
+  startIdentityChanges?: "request" | "escalation";
+  failedRollback?: "before-rebind" | "during-rebind";
   legacyOwnerRecord?: boolean;
   stopConnectionDrift?: "invalid" | "mismatched" | "disconnected" | "other-link" | "hub";
   driftDuringFallback?: boolean;
@@ -70,7 +73,13 @@ config.client = {
 };
 saveConfig(config);
 const expected = structuredClone(config.client);
-if (options.mode === "file-cycle") {
+const codexProbe = join(home, "unexpected-codex-discovery");
+if (options.mode === "parent" && process.platform !== "win32") {
+  const executable = join(home, "fixture-codex");
+  writeFileSync(executable, '#!/bin/sh\n: > "$OPENCODEX_HOME/unexpected-codex-discovery"\nprintf "codex-cli 0.135.0\\n"\n', { mode: 0o700 });
+  process.env.CODEX_CLI_PATH = executable;
+}
+if (options.mode === "file-cycle" || options.mode === "parent") {
   // This fixture supplies a routed model roster. Reading native metadata must not
   // start the host's Codex discovery process and keep the fixture alive after it reports.
   const codexRuntime = await import("../../src/codex/runtime");
@@ -197,7 +206,7 @@ const snapshot = (result: unknown) => ({
   catalogBefore, catalogAfter: JSON.parse(readFileSync(DEFAULT_CATALOG_PATH, "utf8")),
   grokBefore, grokAfter: readFileSync(grokPath, "utf8"),
   fileOwnedBytes, fileAfter: Object.fromEntries(Object.entries(filePaths).map(([id, path]) => [id, readFileSync(path, "utf8")])), fileRefusal, fileLateResult,
-  teardownOutstanding: pendingTeardownOutstanding(),
+  teardownOutstanding: pendingTeardownOutstanding(), codexDiscovery: existsSync(codexProbe),
 });
 const report = (result: unknown) => writeFileSync(join(home, "result.json"), JSON.stringify(snapshot(result)));
 process.on("exit", () => writeFileSync(join(home, "exit.json"), JSON.stringify(snapshot(null))));
@@ -312,10 +321,30 @@ if (options.mode === "retry") {
       await fileSyncFlight;
     } }));
   }
+  let replacementAttempts = 0;
+  let restartSettled: (() => Promise<void>) | undefined;
+  const replaceSavedConnection = () => {
+    config.client!.connectedAt = "2026-11-17T00:00:00.000Z";
+    saveConfig(config);
+    protectedBefore = protectedPaths.map(path => readFileSync(path, "utf8"));
+  };
+  if (options.failedRollback) {
+    const controller = await import("../../src/client/runtime-restart");
+    const create = controller.createClientRestartController;
+    mock.module("../../src/client/runtime-restart", () => ({ ...controller, createClientRestartController: (...args: Parameters<typeof create>) => {
+      const result = create(...args);
+      restartSettled = result.settled;
+      return result;
+    } }));
+  }
   if (options.preserve?.startsWith("restart-rollback")) {
     const replacement = await import("../../src/server/restart-replacement");
     mock.module("../../src/server/restart-replacement", () => ({ ...replacement,
-      spawnReplacementStart: async () => { throw Object.assign(new Error("fixture replacement refused"), { code: "not_ready" }); },
+      spawnReplacementStart: async () => {
+        replacementAttempts++;
+        if (options.failedRollback === "before-rebind") replaceSavedConnection();
+        if (replacementAttempts === 1) throw Object.assign(new Error("fixture replacement refused"), { code: "not_ready" });
+      },
     }));
   }
   const { scheduleStandaloneRecycle, startClientRuntime } = await import("../../src/client/runtime");
@@ -326,6 +355,7 @@ if (options.mode === "retry") {
   const restartRelease = new Promise<void>(resolve => { releaseRestartStop = resolve; });
   await startClientRuntime({ block: false }, { restartSupervisor: () => options.preserve?.startsWith("restart-rollback") ? Promise.resolve(null) : new Promise(() => {}), startListener: (port, deps) => {
     requestRestart = deps?.restart?.request;
+    if (options.failedRollback === "during-rebind" && replacementAttempts === 1) replaceSavedConnection();
     const server = startMachineListener(port, options.oldStopCapability && deps?.restart
       ? { ...deps, restart: { ...deps.restart, linkStopFence: undefined } } : deps);
     const stop = server.stop.bind(server);
@@ -350,6 +380,12 @@ if (options.mode === "retry") {
       preflight = await (await import("../../src/cli/stop-restore")).preflightConnectedClientStop({ pid: process.pid, port: config.port, hostname: "127.0.0.1" }, finish => { finishStop = finish; });
       if (options.finishStopBeforeRollback) await finishStop();
       releaseRestartStop();
+    }
+    if (options.failedRollback) {
+      await restartSettled!();
+      report({ preflight, replacementAttempts, runtimePresent: readRuntimePort(process.pid) !== null,
+        explicitStop: readRuntimePort(process.pid)?.clientStopRequested });
+      process.exit(0);
     }
     let after = readRuntimePort(process.pid)!;
     for (let attempt = 0; attempt < 400 && after.servingGeneration === before.servingGeneration; attempt++) {
@@ -383,6 +419,13 @@ if (options.mode === "retry") {
     await ready;
   }
   if (options.mode === "file-stop") {
+    if (options.missingStopRecord) {
+      const path = join(home, "runtime-port.json");
+      if (options.missingStopRecord === "absent") unlinkSync(path);
+      else writeFileSync(path, "{");
+      const processState = await import("../../src/config/process-state");
+      mock.module("../../src/config/process-state", () => ({ ...processState, readPid: () => process.pid }));
+    }
     if (options.legacyOwnerRecord) {
       const path = join(home, "runtime-port.json");
       const runtime = JSON.parse(readFileSync(path, "utf8"));
@@ -409,17 +452,43 @@ if (options.mode === "retry") {
       mock.module("../../src/client/sync-runtime", () => ({ ...sync, finishClientRuntimeStop: () => { throw new Error("fixture storage refusal"); } }));
     }
     const calls = { service: 0, killed: 0 };
+    let startChanged = false;
     const kill = process.kill;
     process.kill = ((pid: number, signal?: number | NodeJS.Signals) => {
       if (signal === 0) return kill(pid, signal);
-      calls.killed++; throw new Error("unexpected stop signal after file refusal");
+      calls.killed++;
+      if (options.startIdentityChanges === "escalation" && signal === "SIGTERM") {
+        startChanged = true;
+        return true;
+      }
+      throw new Error("unexpected stop signal after file refusal");
     }) as typeof process.kill;
+    if (options.startIdentityChanges === "escalation" && process.platform === "linux") {
+      const linux = await import("../../src/service/health-sentinel-linux");
+      mock.module("../../src/service/health-sentinel-linux", () => ({ ...linux,
+        openVerifiedPidfd: (pid: number, verify: () => boolean) => {
+          verify();
+          return { kind: "bound", handle: {
+            terminate: (signal: number) => { process.kill(pid, signal === 15 ? "SIGTERM" : "SIGKILL"); return "terminated"; },
+            close() {},
+          } };
+        },
+      }));
+    }
+    if (options.startIdentityChanges) {
+      const owner = await import("../../src/client/stop-teardown-owner");
+      const readStart = owner.readClientStopProcessStart;
+      mock.module("../../src/client/stop-teardown-owner", () => ({ ...owner,
+        readClientStopProcessStart: (pid: number) => startChanged ? "fixture:replacement" : readStart(pid),
+      }));
+    }
     const control = await import("../../src/lib/process-control");
     const realStopProxy = control.stopProxy;
     mock.module("../../src/lib/process-control", () => ({ ...control, stopProxy: async (pid: number, io: Parameters<typeof control.stopProxy>[1]) => {
-      if (options.driftDuringFallback) {
+      if (options.driftDuringFallback || options.startIdentityChanges) {
         return realStopProxy(pid, { ...io, fetchFn: async () => {
-          writeFileSync(join(home, "config.json"), "{");
+          if (options.driftDuringFallback) writeFileSync(join(home, "config.json"), "{");
+          if (options.startIdentityChanges === "request") startChanged = true;
           return new Response(null, { status: 404 });
         } });
       }
@@ -428,7 +497,7 @@ if (options.mode === "retry") {
     const service = await import("../../src/service");
     mock.module("../../src/service", () => ({ ...service, stopServiceIfInstalledDetailed: () => {
       calls.service++;
-      if (options.driftDuringFallback) return "absent";
+      if (options.driftDuringFallback || options.startIdentityChanges) return "absent";
       throw new Error("unexpected service stop after file refusal");
     } }));
     const dispatch = await import("../../src/cli/dispatch");
@@ -436,9 +505,9 @@ if (options.mode === "retry") {
     mock.module("../../src/cli/dispatch", () => ({ ...dispatch, dispatchCommand: async (...args: Parameters<typeof command>) => {
       const exitCode = await command(...args);
       const health = await fetch(`http://127.0.0.1:${config.port}/healthz`);
-      const runtime = JSON.parse(readFileSync(join(home, "runtime-port.json"), "utf8"));
-      report({ exitCode, calls, bound: health.ok, stopping: runtime.clientStopping === true,
-        ...(options.finalizeFailure ? { activeStop: runtime.clientStopRequested === true } : {}) });
+      const runtime = (await import("../../src/config/process-state")).readRuntimePort();
+      report({ exitCode, calls, bound: health.ok, stopping: runtime?.clientStopping === true,
+        ...(options.finalizeFailure ? { activeStop: runtime?.clientStopRequested === true } : {}) });
       return exitCode;
     } }));
     mock.module("../../src/cli/codex-shim-autorestore", () => ({ async maybeAutoRestoreCodexShimAsync() {} }));
@@ -552,6 +621,11 @@ if (options.mode === "retry") {
   }, { fetchImpl: (async () => Response.json({ data: [{ id: "fixture/home-model" }] })) as typeof fetch });
   report({ first, second, stopped, reapplied: reapplied?.outcomes.filter(row => options.fileClients?.includes(row.client as "pi" | "opencode")) });
 } else {
+  if (options.mode === "parent" && options.stopConnectionDrift === "disconnected") {
+    delete config.client;
+    delete config.runtimeRole;
+    saveConfig(config);
+  }
   const result = options.mode === "api"
     ? await (await import("../../src/server/stop-teardown")).performStopTeardown(new URL("http://127.0.0.1:10100/api/stop?deferSharedTeardown=1&teardownNonce=fixture"), { ownsReceipt: () => true })
     : options.mode === "parent" ? await (await import("../../src/cli/stop-restore")).restoreSharedClientStateAfterStop(() => {})

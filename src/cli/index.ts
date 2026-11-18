@@ -166,7 +166,7 @@ import { uninstallPrivilegeRefusal } from "../lib/config-ownership";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { startArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
-import { abandonedTeardownIsSafeToFinish, assertConnectedClientStopSupported, clearRestoredStopReceipts, connectedClientStopSkipLine, needsConnectedStopPreflight, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary, unsupportedConnectedStop, verifyConnectedStopTarget, type LinkStopPreflight } from "./stop-restore";
+import { abandonedTeardownIsSafeToFinish, assertConnectedClientStopSupported, clearRestoredStopReceipts, connectedClientStopSkipLine, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary, unsupportedConnectedStop, verifyConnectedStopTarget, type LinkStopPreflight, type StopTargetProof } from "./stop-restore";
 import { stopRestoreWriteGuard } from "./stop-restore-guard";
 import { startClientRuntimeUnderOwnershipLease } from "./client-start-fence";
 import { recoverStartJournalAfterOwnerRecheck, recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
@@ -1043,19 +1043,6 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
   // with an explicit --port is not on the configured one.
   const endpointOf = (runtime: { port: number; hostname?: string } | null): { hostname: string; port: number } | null =>
     runtime?.port ? { hostname: runtime.hostname ?? "127.0.0.1", port: runtime.port } : null;
-  // Last-resort endpoint for a receipt: the address this home is configured to serve on,
-  // which is what a later recovery probe would ask about anyway.
-  const configuredEndpoint = (): { hostname: string; port: number } => {
-    try {
-      const config = loadConfig();
-      return {
-        hostname: config.hostname ?? "127.0.0.1",
-        port: typeof config.port === "number" && config.port > 0 ? config.port : 10100,
-      };
-    } catch {
-      return { hostname: "127.0.0.1", port: 10100 };
-    }
-  };
   let stopFailed = false;
   let historyOnlyFailure = false;
   /**
@@ -1108,15 +1095,12 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
   const inheritedTeardowns = connectedClientState.kind === "connected" && connectedClientState.value.transport === "link"
     ? (await import("../client/stop-native-handoff")).readLinkInheritedTeardowns()
     : listPendingTeardowns().filter(read => isPendingTeardownAbandoned(read, teardownOwnerStillRunning));
-  let connectedClientAlreadyStopped = false;
   let linkStop: LinkStopPreflight | undefined;
-  if (needsConnectedStopPreflight(connectedClientState, initialRuntime)
-    && (!stoppingSibling || initialRuntime?.clientLinkOwner != null
-      || connectedClientState.kind === "invalid" || connectedClientState.kind === "mismatched")) {
-    const preflight = await preflightConnectedClientStop(snapshot?.approval, onFence, inheritedTeardowns, proof => { linkStop = proof; });
-    if (preflight === "already-stopped") connectedClientAlreadyStopped = true;
-    else if (preflight) return preflight;
-  }
+  let stopTarget: StopTargetProof | undefined;
+  const preflight = await preflightConnectedClientStop(snapshot?.approval, onFence, inheritedTeardowns,
+    proof => { linkStop = proof; }, proof => { stopTarget = proof; }, siblingOfPort);
+  const connectedClientAlreadyStopped = preflight === "already-stopped";
+  if (preflight && preflight !== "already-stopped") return preflight;
   // Structured twin of the human lines below, for `ocx stop --json`: one document the
   // desktop shell can read across the process boundary (D4). Every field is assigned
   // where the corresponding boolean already flips — the summarizer never re-decides.
@@ -1134,7 +1118,7 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
     && !stoppingSibling && readClientConnectionState().kind !== "connected";
   let deferralHonoredByProxy = false;
   const verifyStopTarget = (pid?: number) =>
-    verifyConnectedStopTarget(linkStop, stoppingSibling, connectedClientAlreadyStopped, pid);
+    verifyConnectedStopTarget(stopTarget, linkStop, pid);
   const claimTeardown = (endpoint: { hostname: string; port: number }, endpointSource: "exact" | "guessed") => {
     if (teardownNonce || stoppingSibling) return;
     if (connectedClientSkip) return;
@@ -1146,18 +1130,15 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
       console.warn(`⚠️  Could not record the deferred-teardown receipt: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
-  // Resolve one target for receipt and request. Only a discovered endpoint may direct POST;
-  // a configured guess records an obligation but is never evidence for orphan recovery.
-  // Claim before any kill fallback so a parent crash leaves a durable teardown obligation.
-  const stopWithDeferral = async (pid: number, discovered?: { hostname: string; port: number; role?: string } | null): Promise<boolean> => {
-    // Resolve ONCE. Reading the runtime record twice let the receipt name the configured
-    // guess while the request went to a runtime endpoint that appeared in between.
+  // The attested endpoint directs both receipt and POST. Claim the receipt before signalling.
+  const stopWithDeferral = async (pid: number): Promise<boolean> => {
     verifyStopTarget(pid);
     const verifiedLink = linkStop;
-    if (discovered?.role === "client" && !verifiedLink && readClientConnectionState().kind !== "connected") throw unsupportedConnectedStop();
-    const exact = verifiedLink ? endpointOf(verifiedLink.target) : discovered ?? endpointOf(readRuntimePort(pid));
-    if (connectedClientSkip) await assertConnectedClientStopSupported(exact ? { ...exact, pid } : null);
-    claimTeardown(exact ?? configuredEndpoint(), exact ? "exact" : "guessed");
+    const exact = stopTarget && endpointOf(stopTarget.target);
+    if (!exact) throw unsupportedConnectedStop();
+    if (connectedClientSkip) await assertConnectedClientStopSupported({ ...exact, pid });
+    claimTeardown(exact, "exact");
+    verifyStopTarget(pid);
     const graceful = await stopProxy(pid, {
       deferSharedTeardownNonce: teardownNonce,
       // "not-owned" is refused only for a positively identified Link connection, read at the
@@ -1165,12 +1146,9 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
       // restore. A connect committed mid-stop can make this a hub client whose answer is
       // truthful, so the entry-time skip snapshot cannot stand in for this check.
       acceptNotOwnedTeardown: notOwnedTeardownIsAcceptable(readClientConnectionState(), stoppingSibling),
-      // Only an exact endpoint may direct the request; the configured fallback is a guess
-      // good enough to record an obligation against, not to POST a stop to. Never re-read the
-      // record here: one published since would send the receipt to a port it does not name.
-      runtimeEndpoint: exact ?? undefined,
+      runtimeEndpoint: exact,
       runtimeEndpointOnly: true,
-      ...(verifiedLink ? { mayTerminate: () => { verifiedLink.verify(); return true; } } : {}),
+      ...(verifiedLink ? { forceKill: verifiedLink.forceKill } : { mayTerminate: () => { verifyStopTarget(pid); return true; } }),
       skipPortWait: windowsPartBOwnsPortWait(), // #7771: Part B owns the Windows port wait on both paths.
     });
     // A valid receipt means the proxy deferred shared teardown to this process. If the
@@ -1184,7 +1162,7 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
     ? { hostname: probeHostname(snapshot.approval.hostname || undefined), port: snapshot.approval.port }
     : null;
   // Only an exact runtime endpoint may back a handover; without one the ordinary restore runs.
-  const claimHandoverBeforeManager = () => { const exact = handoverRequested ? endpointOf(readRuntimePort()) : null; if (exact) claimTeardown(exact, "exact"); };
+  const claimHandoverBeforeManager = () => { const exact = handoverRequested && stopTarget ? endpointOf(stopTarget.target) : null; if (exact) claimTeardown(exact, "exact"); };
   let guardedStep: Awaited<ReturnType<typeof runGuardedManagerStep>> | null = null;
   try {
     const serviceStop = snapshot
@@ -1195,7 +1173,7 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
             if (approvedEndpoint) claimTeardown(approvedEndpoint, "exact");
             return stopGuardedManager({ approvedPort: snapshot.approval.port, receiptNonce: () => teardownNonce, inheritedReceipts: inheritedTeardowns.length });
           },
-          signalApproved: () => stopWithDeferral(snapshot.approval.pid, approvedEndpoint),
+          signalApproved: () => stopWithDeferral(snapshot.approval.pid),
           settle: () => settleApprovedTarget(snapshot.approval),
           confirmFreed: () => confirmGuardedFreed(record),
           managerState: () => observeGuardedStopped(snapshot.manager),
@@ -1261,7 +1239,7 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
       record.proxy = "unknown";
       console.error("The approved runtime could not be verified after the guarded stop step.");
     }
-  } else if (windowsChildStopHeld() || (linkStop && ownershipBlocked)) { /* No process stop after the manager gate refused. */ } else {
+  } else if (windowsChildStopHeld() || ownershipBlocked) { /* No process stop after the manager gate refused. */ } else {
   const pid = readPid() ?? (linkStop && isProcessAlive(linkStop.target.pid) ? linkStop.target.pid : null);
   if (pid) {
     try {
@@ -1314,12 +1292,8 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
       console.error("   Skipping shared teardown (native Codex restore, Grok config) while that proxy is running.");
     } else if (live?.pid) {
       try {
-        // The probe already found where it answers, and on this path the runtime record is
-        // typically what went missing in the first place.
-        nativeRestoreHandledByProxy = await stopWithDeferral(
-          live.pid,
-          { hostname: live.hostname ?? "127.0.0.1", port: live.port, role: live.role },
-        );
+        // A second discovery cannot substitute a different PID for the attested target.
+        nativeRestoreHandledByProxy = await stopWithDeferral(live.pid);
         console.log(`✅ Proxy (PID ${live.pid}) stopped.`);
         record.proxy = "stopped-orphan";
       } catch (err) {

@@ -193,7 +193,8 @@ if ((!options.alreadyStopped || options.staleRuntimeRecord) && !options.noRuntim
 }
 const stopOwner = await import("../../src/client/stop-teardown-owner");
 mock.module("../../src/client/stop-teardown-owner", () => ({ ...stopOwner,
-  readClientStopProcessStart: (pid: number) => pid === process.pid ? "fixture:stop-owner" : unexpected(`readClientStopProcessStart(${pid})`),
+  readClientStopProcessStart: (pid: number) => pid === process.pid ? "fixture:stop-owner"
+    : pid === fakePid && alive ? "fixture:serving-runtime" : undefined,
 }));
 mock.module("../../src/config/process-state", () => ({
   ...state,
@@ -290,7 +291,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
     if (url.endsWith("/healthz")) {
       return Response.json({ service: "opencodex", version: "2.93.0", pid: fakePid,
         ...(options.clientTransport === "link" ? { linkStopFence: true } : {}),
-        ...(!options.serverTeardown && !options.clientServer ? { role: "client" } : {}) }, { headers });
+        ...(options.clientTransport && !options.serverTeardown && !options.clientServer ? { role: "client" } : {}) }, { headers });
     }
     if (!url.endsWith("/api/stop")) return unexpected(`GET ${url}`);
     if (options.clientServer === "unknown") throw new Error("fixture probe unavailable");

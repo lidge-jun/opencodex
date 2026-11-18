@@ -27,6 +27,12 @@ async function runStop(options: Record<string, unknown>) {
       expect(exit, stdout).toBe(1);
       expect(stderr).toContain("Connected-client stop refused");
       expect(stderr).toContain("update/restart");
+      if (options.expectLegacyRecovery) {
+        expect(stderr).toMatch(/close.*clients.*old.*ocx stop.*current.*ocx stop.*ocx start.*ocx sync --restart-codex/is);
+      }
+    } else if (options.expectedUnownedFileRecovery) {
+      expect(exit, stdout).toBe(0);
+      expect(stderr).toContain("Link Child file routing restore failed");
     } else if (options.expectedNativePreflightRefusal) {
       expect(exit, stdout).toBe(1);
       expect(stderr).toContain("Link Child native teardown preflight refused");
@@ -44,7 +50,7 @@ async function runStop(options: Record<string, unknown>) {
     } else expect({ exit, stderr }, stdout).toEqual({ exit: 0, stderr: "" });
     const report = JSON.parse(readFileSync(join(home, "result.json"), "utf8"));
     const atExit = JSON.parse(readFileSync(join(home, "exit.json"), "utf8"));
-    for (const field of ["after", "profileAfter", "journalRetained", "journalHomeBound", "catalogAfter", "grokAfter", "protectedUnchanged", "fileAfter"]) {
+    for (const field of ["after", "profileAfter", "journalRetained", "journalHomeBound", "catalogAfter", "grokAfter", "protectedUnchanged", "fileAfter", "codexDiscovery"]) {
       expect(atExit[field], `no late restoration after listener release: ${field}`).toEqual(report[field]);
     }
     return { ...report, fileLateResult: atExit.fileLateResult };
@@ -55,11 +61,11 @@ async function runStop(options: Record<string, unknown>) {
   }
 }
 
-async function runRecovery(mode: string, scheduled = false) {
+async function runRecovery(mode: string, scheduled = false, env = process.env) {
   const root = mkdtempSync(join(tmpdir(), "ocx-link-stop-recovery-"));
   const child = Bun.spawn([process.execPath, fixturePath("client-link-stop-recovery-runner.ts")], {
     cwd: repoPath(), stdin: new Blob([JSON.stringify({ mode, scheduled })]), stdout: "pipe", stderr: "pipe",
-    env: { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: join(root, "ocx"), CODEX_HOME: join(root, "codex"), OCX_SERVICE_MANAGED: "0" },
+    env: { ...env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: join(root, "ocx"), CODEX_HOME: join(root, "codex"), OCX_SERVICE: "", OCX_SERVICE_MANAGED: "0" },
   });
   const timeout = setTimeout(() => child.kill("SIGKILL"), 15_000);
   try {
@@ -94,6 +100,11 @@ for (const mode of ["parent-active", "signal-active", "pending", "foreign-owner"
     if (mode === "parent-active") expect(result.marker).toBe(true);
   }, 20_000);
 }
+
+test("recovery treats a foreground fixture as foreground even under a service-owned test runner", async () => {
+  const result = await runRecovery("parent", false, { ...process.env, OCX_SERVICE: "1" });
+  expect(result).toMatchObject({ role: "standalone", spawned: 1, recoveryAdmission: 202 });
+}, 20_000);
 
 test("a parent stop admitted before a recovery timer fires prevents the scheduled replacement", async () => {
   const result = await runRecovery("timer-parent-active");
@@ -184,6 +195,14 @@ test("a parent stop remains fenced through an already-admitted restart rollback"
   expect(report.fileAfter.pi).not.toContain("127.0.0.1");
   expect(report.protectedUnchanged).toBe(true);
 }, 20_000);
+
+for (const failedRollback of ["before-rebind", "during-rebind"]) {
+  test(`failed rollback (${failedRollback}) cannot recycle over an active parent stop`, async () => {
+    const report = await runStop({ mode: "file-restart-overlap", preserve: "restart-rollback", fileClients: ["pi"], failedRollback });
+    expect(report.result).toEqual({ preflight: null, replacementAttempts: 1, runtimePresent: true, explicitStop: true });
+    expect(report.fileAfter.pi).not.toContain("127.0.0.1");
+  }, 20_000);
+}
 
 test("ordinary restart rollback keeps file routes and admits fresh sync", async () => {
   const report = await runStop({ mode: "file-restart-control", preserve: "restart-rollback", fileClients: ["pi"] });
@@ -338,10 +357,38 @@ for (const stopConnectionDrift of ["invalid", "mismatched", "disconnected", "oth
   }, 20_000);
 }
 
+for (const missingStopRecord of ["absent", "invalid"]) {
+  test(`ocx stop retains a live tracked Child with a disconnected saved state and ${missingStopRecord} runtime record`, async () => {
+    const report = await runStop({ mode: "file-stop", fileClients: ["pi"], stopConnectionDrift: "disconnected",
+      missingStopRecord, expectedUnsupportedStop: true });
+    expect(report.result).toEqual({ exitCode: 1, calls: { service: 0, killed: 0 }, bound: true, stopping: false });
+    expect(report.fileAfter).toEqual(report.fileOwnedBytes);
+  }, 20_000);
+}
+
+test("ocx stop refuses a new process incarnation after an unanswered Link stop", async () => {
+  const report = await runStop({ mode: "file-stop", fileClients: ["pi"], startIdentityChanges: "request", expectedUnsupportedStop: true });
+  expect(report.result).toEqual({ exitCode: 1, calls: { service: 1, killed: 0 }, bound: true, stopping: true });
+  expect(report.fileAfter.pi).not.toContain("127.0.0.1");
+}, 20_000);
+
+test.skipIf(process.platform === "win32")("ocx stop refuses escalation when the Child incarnation changes after SIGTERM", async () => {
+  const report = await runStop({ mode: "file-stop", fileClients: ["pi"], startIdentityChanges: "escalation", expectedUnsupportedStop: true });
+  expect(report.result).toEqual({ exitCode: 1, calls: { service: 1, killed: 1 }, bound: true, stopping: true });
+  expect(report.fileAfter.pi).not.toContain("127.0.0.1");
+}, 20_000);
+
 test("ocx stop rechecks Link ownership before forced fallback after an unanswered stop", async () => {
   const report = await runStop({ mode: "file-stop", fileClients: ["pi"], driftDuringFallback: true, expectedUnsupportedStop: true });
   expect(report.result).toEqual({ exitCode: 1, calls: { service: 1, killed: 0 }, bound: true, stopping: true });
   expect(report.fileAfter.pi).not.toContain("127.0.0.1");
+}, 20_000);
+
+test("the legacy Link refusal gives a connection-preserving recovery in execution order", async () => {
+  const report = await runStop({ mode: "file-stop", fileClients: ["pi"], oldStopCapability: true,
+    legacyOwnerRecord: true, expectedUnsupportedStop: true, expectLegacyRecovery: true });
+  expect(report.result).toEqual({ exitCode: 1, calls: { service: 0, killed: 0 }, bound: true, stopping: false });
+  expect(report.fileAfter).toEqual(report.fileOwnedBytes);
 }, 20_000);
 
 test("an older native Child cannot be treated as Hub-owned from saved config alone", async () => {
@@ -405,6 +452,14 @@ test("parent Link teardown retains the merged full restoration contract", async 
   expect(report.catalogAfter.models).toEqual([{ slug: "fixture-native", visibility: "list" }]);
   expect(report.grokAfter).toBe('theme = "fixture"\n');
   expect(report.fileAfter.pi).not.toContain("127.0.0.1");
+  expect(report.codexDiscovery).toBe(false);
+});
+
+test("post-stop restore reports unowned Link file receipts despite disconnected saved state", async () => {
+  const report = await runStop({ mode: "parent", fileClients: ["pi"], stopConnectionDrift: "disconnected",
+    expectedUnownedFileRecovery: true });
+  expect(report.result.other).toBe(true);
+  expect(report.fileAfter).toEqual(report.fileOwnedBytes);
 });
 
 for (const preserve of ["service", "desktop", "sibling"]) {
