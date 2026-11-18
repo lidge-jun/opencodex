@@ -101,7 +101,11 @@ another owner's pending booking. Cleanup cannot refund real work. Detached judge
 child-owned booking. Each generic HTTP/WS send settles at the final physical-dispatch receipt,
 including direct sends, connection-reset retries and later tool rounds. The receipt consumes its
 prepaid permit when present or reserves a fresh send against the shared ledger, refusing dispatch
-when the allowance is exhausted. Adapter-owned
+when the allowance is exhausted. Cancellation at the final HTTP boundary leaves an unused booking
+refundable. The default guarded policy starts with three base sends and one recovery-only send.
+For direct generic hosted web search, each later model iteration authorized by the search loop adds
+one base send to the ingress-owned budget. A reset, same-iteration replay or repair adds no capacity.
+Explicit and Combo budgets retain their supplied limits. Adapter-owned
 `fetchResponse`/`runTurn` receives the live budget and observers instead, never both charge paths.
 Receipt selection follows the actual iteration adapter after rotation. Hosted tool execution does
 not itself settle the model's booking. Direct adapter-owned sidecars receive the same live request

@@ -170,6 +170,7 @@ Key identity is sealed at guarded physical dispatch after queued selections are 
 Before a turn-scoped retry readmits a refreshed selection, it rejects a binding already recorded as failed for this request and returns the last key failure. Eligible replacement keys still release the old lease and reacquire their own pacing capacity before invocation, rechecking after every admission. CLI-backed turns carry a synchronous selection fence through asynchronous tool setup to the physical spawn boundary. Raw adapter terminal usage is recorded before continuation, search, or image loops merge it;
 repeated parsing of one physical response does not count it twice. Key changes preserve the
 previous attempt while retaining the active attempt object shared by streaming/combo callbacks.
+Search and media settle accumulated hidden-round usage on the current row when staging a credential replacement, including a replacement with the same account label. The replacement opens its own attempt at physical dispatch.
 Bounded failure-body observation retains reported usage and releases cloned readers on abort.
 Identity and consumer aggregation follow the [account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution).
 

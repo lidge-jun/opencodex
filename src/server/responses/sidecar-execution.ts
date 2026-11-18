@@ -1,3 +1,4 @@
+import { allowInferenceSearchRound } from "../inference/context";
 import { clientFacingModelText } from "../../lib/error-destination";
 import { createAnthropicThinkingRecovery } from "./anthropic-thinking-recovery";
 import { anthropicRefusalCredentialChanged, rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
@@ -574,7 +575,8 @@ export async function executeResponsesSidecars(
     adapter.name !== "anthropic" ? {} : { onPhysicalDispatch: () => {
       if (recovery === "opaque-blob-rejection") {
         const decision = sendBudgetState.adapterDispatchBudget?.reserveDispatch({
-          sendClass: "repair", targetKey: `${route.providerName}|${request.url}|${route.modelId}`,
+          sendClass: "repair", targetKey: sendBudgetState.adapterDispatchBudget.lastTargetKey
+            ?? `${route.providerName}|${request.url}|${route.modelId}`,
         });
         if (sendBudgetState.adapterDispatchBudget?.spendEnforced || !decision?.allowed) {
           if (decision?.allowed) decision.permit.release();
@@ -634,11 +636,11 @@ export async function executeResponsesSidecars(
     sidecarBudget.releaseUnsentHop();
   };
   // A loop's hidden rounds before a rotation were spent by the account it left. Bill them to that
-  // account's attempt while it is still open; the next send seals it. Declined when that send
-  // keeps the account (no new attempt), so the loop's final total still carries them.
+  // attempt while it is still open. A staged credential replay also starts a new row even
+  // when the account label stays the same. In-place retries keep the loop’s accumulated usage.
   const billRotatedUsage = (usage: OcxUsage): boolean => {
     const attempt = logCtx.activeAttempt;
-    if (!attempt || !attemptAccountChanged(attempt.accountLogLabel, logCtx.accountLogLabel, attempt.provider, logCtx.provider)) return false;
+    if (!attempt || (!pendingSidecarReplay && !attemptAccountChanged(attempt.accountLogLabel, logCtx.accountLogLabel, attempt.provider, logCtx.provider))) return false;
     transportState.bindKeyUsageFromBridge(usage);
     return true;
   };
@@ -829,6 +831,9 @@ export async function executeResponsesSidecars(
         ...sidecarBudget.fetchOptions(transportState.adapter),
       })(input, init)) as typeof globalThis.fetch;
     const loopResponse = await runWithWebSearch({
+      ...(!options.comboAttempt && !options.comboInitialSend && !routedCompaction
+        && !transportState.adapter.fetchResponse && !transportState.adapter.runTurn
+        ? { allowNextSearchRound: () => allowInferenceSearchRound(options.sendBudget) } : {}),
       emptyCompletionRetry: emptyCompletionRetryEnabled(config) && !options.comboAttempt && !routedCompaction,
       dispatchSidecarSend: sendBudgetState.dispatchSidecarSend,
       parsed, adapter: transportState.adapter,

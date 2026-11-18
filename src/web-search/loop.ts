@@ -426,6 +426,7 @@ export interface WebSearchLoopDeps {
    * served. Returning true means it was billed to that credential's attempt, so `onUsage` will not
    * report it again.
    */
+  allowNextSearchRound?: () => void;
   onRotatedUsage?: (usage: OcxUsage) => boolean;
   /** Observe the exact adapter request selected for each routed-model iteration. */
   onRequestBuilt?: (request: AdapterRequest) => void;
@@ -1201,6 +1202,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           // First loop turn reuses the eager HEADERS. Subsequent header acquisitions run here.
           if (i > 0) {
             yield { type: "heartbeat" };
+            deps.allowNextSearchRound?.();
             prepared = yield* prepareIterationEvents(forceAnswer);
           }
           // Raw-byte progress heartbeats reach the bridge; semantic events remain buffered.
