@@ -331,15 +331,19 @@ export function recordAnthropicAccountQuotaFromHeadersForInstance(
   const previous = candidate?.isCurrent?.() === false
     || candidate?.anthropicCredentialGeneration && candidate.anthropicCredentialGeneration !== generation ? undefined : candidate;
   if (observed.customWindows) observeAnthropicFamilyQuota(accountId, observed.customWindows, observed.updatedAt);
+  const quota = {
+    ...normalizeAnthropicQuota(previous?.quota, observed.updatedAt), ...observed,
+    ...(observed.customWindows ? { customWindows: mergeAnthropicFamilyWindows(previous?.quota?.customWindows, observed.customWindows) } : {}),
+  };
+  // Each accepted header observation carries a plan window, superseding the extra-usage fallback.
+  delete quota.monthlyPercent;
+  delete quota.monthlyResetAt;
   accountQuotaCache.set(key, {
     ...previous,
     ...(generation ? { anthropicCredentialGeneration: generation, isCurrent: undefined } : {}),
     // Headers do not prove that the last usage probe succeeded.
     ts: previous?.ts ?? 0,
-    quota: normalizeAnthropicQuota({
-      ...normalizeAnthropicQuota(previous?.quota, observed.updatedAt), ...observed,
-      ...(observed.customWindows ? { customWindows: mergeAnthropicFamilyWindows(previous?.quota?.customWindows, observed.customWindows) } : {}),
-    }, observed.updatedAt),
+    quota: normalizeAnthropicQuota(quota, observed.updatedAt),
   });
   // Advisory evidence is published for the primary pool only; Pool 2 stays unknown to decisions.
   if (instance === "anthropic" && generation && generation === decisionCredentialGeneration && decisionQuotaSinkActive()) {

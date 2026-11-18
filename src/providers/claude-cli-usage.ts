@@ -54,7 +54,8 @@ export async function probeAnthropicUsageQuota(accessToken: string): Promise<Ant
   }
   const body = asRecord(await readQuotaJson(response));
   if (!body) return { quota: null, failure: "response_unusable" };
-  const { buckets, displayBuckets, familyEnumeration } = anthropicUsageBuckets(body);
+  const windows = anthropicUsageBuckets(body);
+  const { buckets, displayBuckets, familyEnumeration } = windows;
   const shared: Partial<ProviderQuota> = {};
   const customWindows: ProviderQuotaWindow[] = [];
   for (const bucket of buckets) {
@@ -72,7 +73,7 @@ export async function probeAnthropicUsageQuota(accessToken: string): Promise<Ant
     }
   }
   const displayWindows = displayBuckets.flatMap(bucket => familyWindow(bucket) ?? []);
-  const monthlyPercent = anthropicExtraUsageMonthlyPercent(body, { buckets, displayBuckets });
+  const monthlyPercent = anthropicExtraUsageMonthlyPercent(body, windows);
   if (monthlyPercent !== undefined) shared.monthlyPercent = monthlyPercent;
   const quota: ProviderQuota = {
     ...shared,

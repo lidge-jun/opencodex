@@ -194,32 +194,30 @@ preserves, `null` deletes and an instance sets; an unset choice is never written
 
 ## Pool-bound quota and reset grants
 
-`src/providers/quota/anthropic-usage-windows.ts` selects the same source windows for
-`src/providers/claude-cli-usage.ts` display and the raw advisory projection in
-`src/providers/quota/anthropic-decision-windows.ts`. Recognized `limits` rows take
-precedence over their legacy buckets: `session`, `weekly_all`, and model-scoped
-`weekly_scoped`. Each recognized row is represented before any skip, so duplicates
-and malformed shared measurements cannot revive legacy data and make family enumeration
-incomplete. Shared finite measurements are used regardless of the binding `is_active` flag;
-a non-boolean flag also makes enumeration incomplete. When legacy `five_hour` is explicitly
-null, only a finite session marked active creates a five-hour meter. Inactive shared usage
-is valid routing and cooldown recovery evidence. Scoped rows retain active-only semantics
-for routing; an inactive scoped row is published only as `displayWindows`, which quota
-display renders and routing, exhaustion, cooldown recovery, pool assembly and reset ordering
-never read, so Fable shows whether or not it binds, regardless of plan name. The GUI keeps them in
-`AccountQuota.displayWindows` (a routed label wins); only `gui/src/components/QuotaBars.tsx`
-draws them, marked not in effect (`gui/tests/quota-display-only-window.test.tsx`).
-Unknown kinds or model families preserve usable shared windows without claiming a complete
-family enumeration. An authoritative inactive family row can retire a previous
-passive family refusal; an incomplete enumeration cannot. Shared cooldown recovery
-still requires finite headroom for each rejected window, never an invented zero.
-`weekly_scoped_shares[]` names, by raw `limits` index, the share of the weekly limit a
-recognized scoped row, routed or display-only, may consume (Fable: "up to 50% of your weekly
-limit"); the window carries it as `weeklyAllowancePercent`, shown under the bar label, whose
-value stays the family's own `percent`. It is read from upstream and never inferred from a
-plan; a share pointing at no recognized scoped row, outside (0, 100] or conflicting is ignored.
-`tests/providers/provider-anthropic-usage-windows.test.ts` covers source precedence, scoped
-admission, raw precision, pool projection, weekly shares and legacy compatibility.
+`src/providers/quota/anthropic-usage-windows.ts` selects windows for both `src/providers/claude-cli-usage.ts`
+and the raw advisory projection in `src/providers/quota/anthropic-decision-windows.ts`. Recognized `limits`
+rows (`session`, `weekly_all`, and model-scoped `weekly_scoped`) supersede legacy counterparts before selection.
+Duplicates, malformed shared measurements, unknown kinds or families, and non-boolean active flags make family
+enumeration incomplete. Finite shared readings inform routing and cooldown recovery even when inactive.
+With explicit legacy `five_hour: null`, a five-hour meter requires a finite session marked active.
+
+Usage-based seats such as Enterprise can report an undated monthly fallback from enabled `extra_usage`.
+Any recognized plan row, including an inactive or skipped row, suppresses the fallback. The bar shows the
+higher of reported utilization and the share of a positive monthly credit cap consumed, clamped to 0–100.
+Later plan windows from a usage probe or serving headers retire the cached monthly fallback. The monthly
+cap informs display and advisory ranking. Included-plan admission and wallet availability are independent.
+
+Only active scoped rows inform routing. Inactive rows go into `AccountQuota.displayWindows` for display
+alone, with routed labels taking precedence. `gui/src/components/QuotaBars.tsx` marks them as not in
+effect (`gui/tests/quota-display-only-window.test.tsx`). An authoritative inactive family row can retire
+a previous passive family refusal. Shared cooldown recovery requires finite headroom for each rejected window.
+
+`weekly_scoped_shares[]` identifies a routed or display-only scoped row by its raw `limits` index and
+gives its share of the weekly limit. The bar shows the family's own `percent` with the allowance
+(`weeklyAllowancePercent`) below the label. Shares come from upstream. Conflicting shares, shares outside
+(0, 100], and shares without a recognized scoped row are ignored.
+`tests/providers/provider-anthropic-usage-windows.test.ts` covers source precedence, scoped admission,
+raw precision, pool projection, weekly shares and legacy compatibility.
 
 Profile tiers in `src/oauth/anthropic-identity.ts` accept both `default_claude_`
 and `claude_` prefixes and the Ultra display spelling. `max_20x` remains the legacy

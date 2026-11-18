@@ -7,7 +7,7 @@ function reset(value: unknown): number | undefined {
   // Explicit invalid reset must not become an apparently undated valid measurement.
   return value === undefined || value === null ? undefined : normalizeResetAt(value) ?? NaN;
 }
-/** Extract raw decision windows (5h, weekly and per-model families) from an Anthropic usage body, keeping invalid resets distinct from display parsing. */
+/** Project plan windows and the optional monthly fallback, preserving invalid plan resets. */
 export function rawAnthropicUsageWindows(body: Record<string, unknown>, observedAt: number): DecisionQuotaWindow[] {
   const rows: DecisionQuotaWindow[] = [];
   const windows = anthropicUsageBuckets(body);

@@ -370,6 +370,16 @@ test("monthly usage falls back to used_credits over monthly_limit, and clamps", 
   expect((await parse({ ...enterpriseUsage, extra_usage: { ...base, utilization: 140 } }))?.monthlyPercent).toBe(100);
 });
 
+test("monthly usage takes the higher reading when utilization and credit counters disagree", async () => {
+  const body = { ...enterpriseUsage, extra_usage: {
+    is_enabled: true, utilization: 10, used_credits: 100, monthly_limit: 100,
+  } };
+  expect((await parse(body))?.monthlyPercent).toBe(100);
+  expect(rawAnthropicUsageWindows(body, now)).toEqual([{ window: "monthly", percent: 100, observedAt: now }]);
+  const belowCap = { ...body, extra_usage: { ...body.extra_usage, used_credits: 45 } };
+  expect((await parse(belowCap))?.monthlyPercent).toBe(45);
+});
+
 test("a monthly value follows the credit balance on the next read, with no reset time", async () => {
   expect((await parse(enterpriseUsage))?.monthlyPercent).toBeCloseTo(5.58, 2);
   const reset = await parse({ ...enterpriseUsage, extra_usage: { ...enterpriseUsage.extra_usage, used_credits: 0, utilization: 0 } });
@@ -418,4 +428,10 @@ test("an inactive scoped row is a reported plan window, so extra_usage adds no m
   // The same body without the scoped row is a monthly-only seat, so the row is what suppresses it.
   const withoutScoped = await parse({ ...inactiveScoped, limits: [] });
   expect(withoutScoped?.monthlyPercent).toBeCloseTo(5.58, 2);
+});
+
+test("a recognized session skipped because legacy five_hour is null suppresses monthly usage", async () => {
+  const body = { ...enterpriseUsage, limits: [{ kind: "session", percent: 20, is_active: false }] };
+  expect(await parse(body)).toBeNull();
+  expect(rawAnthropicUsageWindows(body, now)).toEqual([]);
 });
