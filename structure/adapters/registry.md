@@ -59,7 +59,9 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   so the `antigravity-acp` row is keyless (`authKind: "key"`, `keyOptional`, like `claude-cli`) and config validation
   (`src/config/schema/agy-acp-references.ts`, structural, no imports) refuses keys, pools, account settings,
   non-Gemini models and any use as a combo target, a combo's `decisionModel`, a subagent fallback, a `memoryModels` phase or the
-  `shadowCallIntercept` target. The use policy
+  `shadowCallIntercept` target. Validation masks credential-shaped diagnostic path segments. A disk
+  read drops an ACP memory phase or disables an ACP shadow-call target while retaining other settings.
+  Candidate writes reject both selectors. The use policy
   (`src/adapters/agy-acp/policy.ts`) refuses subagent turns (`x-codex-parent-thread-id`), turns Codex labels as spawned threads (`isThreadSpawnRequest`) or as
   its memory pipeline (`detectMemoryModelPhase`, `x-openai-subagent: memory_consolidation`, `x-openai-memgen-request`).
   A spawn label in the WebSocket frame body is sufficient. An HTTP memory label in the header is sufficient even

@@ -1,4 +1,5 @@
 import { aliasTemplateError } from "../providers/alias-template";
+import { redactSecretString } from "../lib/redact";
 import { parseDashboardTrustedProxy } from "./dashboard-trusted-proxy";
 import { readExistingSpendSalt, spendPoolAliasesError, validatePoolAliasOwners } from "../lib/spend-pool-alias-validation";
 import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
@@ -30,6 +31,7 @@ import { projectRemovedOpenCodeFreeSnapshot } from "./removed-opencode-free-back
 import { sanitizeOpenCodeOverridesForLoad } from "./opencode-wire-upgrade";
 import {
   sanitizeReasoningPinsForLoad,
+  sanitizeAgyAcpUnattendedTargetsForLoad,
   sanitizeRetryOn429ForLoad,
   sanitizeCapabilityDeclarationsForLoad,
   sanitizeModelCostsForLoad,
@@ -229,7 +231,7 @@ export function mergeConfigDefaults(parsed: unknown): unknown {
 
 function schemaDiagnosticsError(error: z.ZodError): string {
   const details = error.issues.map(issue => {
-    const path = issue.path.join(".") || "config";
+    const path = issue.path.map(segment => typeof segment === "string" ? redactSecretString(segment) : segment).join(".") || "config";
     return `${path}: ${issue.message}`;
   });
   return details.length > 0 ? `schema_invalid: ${details.join("; ")}` : "schema_invalid";
@@ -845,6 +847,7 @@ function configDiagnosticsFromText(raw: string, file?: { path: string; bytes: Ui
     sanitizeModelDisplayNamesForLoad(parsed, warn);
     sanitizeAutoReviewForLoad(parsed, warn);
     sanitizeRetryOn429ForLoad(parsed, warn);
+    sanitizeAgyAcpUnattendedTargetsForLoad(parsed, warn);
     sanitizeModelCostsForLoad(parsed, warn);
     sanitizeCapabilityDeclarationsForLoad(parsed, warn);
     const result = configSchema.safeParse(parsed);
@@ -853,6 +856,7 @@ function configDiagnosticsFromText(raw: string, file?: { path: string; bytes: Ui
     }
 
     const merged = mergeConfigDefaults(parsed);
+    sanitizeAgyAcpUnattendedTargetsForLoad(merged, warn);
     const retryResult = configSchema.safeParse(merged);
     if (retryResult.success) {
       return validFileConfigDiagnostics(normalizeApiKeyIds(retryResult.data as OcxConfig), parsed);

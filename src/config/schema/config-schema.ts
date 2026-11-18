@@ -941,8 +941,10 @@ export const configSchema = z.object({
     }
   }
   for (const issue of agyAcpConfigIssues(config as Parameters<typeof agyAcpConfigIssues>[0])) {
-    // Provider names in paths are redacted like every other provider issue in this schema.
-    const path = issue.path[0] === "providers" ? ["providers", redactSecretString(String(issue.path[1])), ...issue.path.slice(2)] : issue.path;
+    // Preserve non-provider identifiers for load-time salvage; diagnostics mask them at serialization.
+    const path = issue.path[0] === "providers"
+      ? issue.path.map(segment => typeof segment === "string" ? redactSecretString(segment) : segment)
+      : issue.path;
     ctx.addIssue({ code: "custom", path, message: issue.message });
   }
   const routingProfiles = (config as { routingProfiles?: unknown }).routingProfiles;

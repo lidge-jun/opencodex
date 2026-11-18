@@ -188,9 +188,15 @@ export function agyAcpConfigIssues(config: ConfigLike): AgyAcpConfigIssue[] {
   if (isRecord(config.subagentModelFallbackByModel)) {
     for (const [model, list] of Object.entries(config.subagentModelFallbackByModel)) checkList(list, ["subagentModelFallbackByModel", model]);
   }
-  // Codex's memory pipeline and the shadow-call helper redirect run without a person driving them.
+  return issues.concat(agyAcpUnattendedTargetIssues(config));
+}
+
+/** Codex's memory pipeline and the shadow-call redirect run without a person driving them. */
+export function agyAcpUnattendedTargetIssues(config: ConfigLike): AgyAcpConfigIssue[] {
+  const issues: AgyAcpConfigIssue[] = [];
   const selectsAcp = (selector: unknown): boolean =>
-    typeof selector === "string" && [...selectorCandidateProviders(config, selector)].some(name => acp.has(name));
+    typeof selector === "string" && [...selectorCandidateProviders(config, selector)].some(name =>
+      Object.hasOwn(config.providers ?? {}, name) && isAgyAcpProvider(name, config.providers?.[name]));
   if (isRecord(config.memoryModels)) {
     for (const phase of ["extract", "consolidation"] as const) {
       const setting = config.memoryModels[phase];

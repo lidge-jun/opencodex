@@ -11,6 +11,7 @@ import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import { mainAccountHardLockFallbackError } from "./schema/main-account-hard-lock-fallback";
 import { fallbackPolicyError } from "./schema/fallback-policy";
 import { anthropicSidecarConfigError } from "./schema/anthropic-account-pool";
+import { agyAcpUnattendedTargetIssues } from "./schema/agy-acp-references";
 import {
   modelPinnedEffortsConfigError,
   pinnedReasoningEffortConfigError,
@@ -194,6 +195,23 @@ export function warnDegradedMemoryModels(rawParsed: unknown, validated: OcxConfi
     if ((raw as Record<string, unknown>)[phase] !== undefined && validated.memoryModels[phase] === undefined) {
       console.warn("\u26a0\ufe0f  config.json memoryModels." + phase + " is invalid (expected { model, reasoningEffort? } with a nonblank model) \u2014 that phase keeps its existing route, which may include shadow-call interception");
     }
+  }
+}
+
+/** Ignore ACP selectors for unattended helpers when reading a hand-edited file. */
+export function sanitizeAgyAcpUnattendedTargetsForLoad(parsed: unknown, warn: (message: string) => void = console.warn): void {
+  const root = rawConfigRecord(parsed);
+  if (!root) return;
+  for (const issue of agyAcpUnattendedTargetIssues(root)) {
+    const [section, field] = issue.path;
+    if (section === "memoryModels" && typeof field === "string") {
+      const memory = rawConfigRecord(root.memoryModels);
+      if (memory) delete memory[field];
+    } else if (section === "shadowCallIntercept") {
+      const shadow = rawConfigRecord(root.shadowCallIntercept);
+      if (shadow) shadow.enabled = false;
+    }
+    warn(`⚠️  config.json ${issue.path.join(".")}: ${issue.message} Ignoring this target on load.`);
   }
 }
 

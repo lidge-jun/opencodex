@@ -1,7 +1,11 @@
 /** Configuration rules for the Antigravity ACP provider (plan 080, B2/R2-1). */
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { getDefaultConfig, validateConfigCandidate } from "../../src/config";
+import { describe, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getConfigPath, getDefaultConfig, loadConfig, readConfigDiagnostics, validateConfigCandidate } from "../../src/config";
+import { installIsolatedCodexHome } from "../helpers/isolated-codex-home";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { AGY_ACP_DEFAULT_MODEL, AGY_ACP_PROVIDER_ID, AGY_ACP_SEED_MODELS, agyAcpConfigIssues, selectorCandidateProviders } from "../../src/config/schema/agy-acp-references";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import type { OcxConfig } from "../../src/types";
@@ -22,6 +26,53 @@ function config(extra: Record<string, unknown> = {}, providers: Record<string, u
 const messages = (result: ReturnType<typeof validateConfigCandidate>) => (result.ok ? "" : result.error);
 
 describe("antigravity-acp configuration", () => {
+  test("schema diagnostics redact credential-shaped model alias keys", () => {
+    const aliasKey = "sk-proj-" + "x".repeat(44);
+    const error = messages(validateConfigCandidate(config({}, {
+      "antigravity-acp": { ...acp, modelAliases: { [aliasKey]: "example-alias" } },
+    })));
+    expect(error).toContain("schema_invalid: providers.antigravity-acp.modelAliases.[REDACTED]");
+    expect(error).not.toContain(aliasKey);
+  });
+
+  test("disk loads ignore only ACP memory and shadow targets while writes reject them", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-agy-acp-config-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    const codexHome = installIsolatedCodexHome("ocx-agy-acp-config-codex-");
+    process.env.OPENCODEX_HOME = home;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const raw = config({
+        memoryModels: {
+          extract: { model: "antigravity-acp/gemini-3.8-flash" },
+          consolidation: { model: "google/gemini-3.8-flash", reasoningEffort: "medium" },
+        },
+        shadowCallIntercept: { enabled: true, model: "antigravity-acp/gemini-3.8-flash" },
+      });
+      expect(validateConfigCandidate(raw).ok).toBe(false);
+      const path = getConfigPath();
+      const bytes = JSON.stringify(raw);
+      writeFileSync(path, bytes);
+      const diagnostics = readConfigDiagnostics();
+      for (const loaded of [loadConfig(), diagnostics.config]) {
+        expect(loaded.defaultProvider).toBe("google");
+        expect(loaded.providers.google?.apiKey).toBe(google.apiKey);
+        expect(loaded.providers["antigravity-acp"]?.adapter).toBe("agy-acp");
+        expect(loaded.memoryModels).toEqual({ consolidation: raw.memoryModels!.consolidation });
+        expect(loaded.shadowCallIntercept?.enabled).toBe(false);
+      }
+      expect(diagnostics.source).toBe("file");
+      expect(diagnostics.error).toBeNull();
+      expect(warn).toHaveBeenCalled();
+      expect(readFileSync(path, "utf8")).toBe(bytes);
+    } finally {
+      warn.mockRestore();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      codexHome.restore();
+      removeTreeWithRetry(home);
+    }
+  });
   test("a keyless Gemini row is valid, and the same Gemini model on google stays usable everywhere", () => {
     expect(validateConfigCandidate(config()).ok).toBe(true);
     expect(validateConfigCandidate(config({

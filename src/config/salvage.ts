@@ -11,7 +11,7 @@ import type { OcxConfig } from "../types";
 export function warnConfigRepaired(configPath: string, error: z.ZodError): void {
   if (hasWarnedConfigFallback(configPath)) return;
   markWarnedConfigFallback(configPath);
-  const fields = error.issues.map(i => i.path.join(".") || "config").join(", ");
+  const fields = error.issues.map(i => redactIssuePath(i.path) || "config").join(", ");
   console.error(`opencodex config at ${configPath}: repaired missing field(s) [${fields}] with defaults. Your providers and accounts are preserved.`);
 }
 
@@ -229,7 +229,7 @@ export function warnAndBackupInvalidConfig(configPath: string, error: unknown): 
 
   const backupPath = backupInvalidConfig(configPath);
   const reason = error instanceof z.ZodError
-    ? error.issues.map(issue => `${issue.path.join(".") || "config"}: ${issue.message}`).join("; ")
+    ? error.issues.map(issue => `${redactIssuePath(issue.path) || "config"}: ${issue.message}`).join("; ")
     : error instanceof Error ? error.message : String(error);
   const backupNote = backupPath ? ` A backup was written to ${backupPath}.` : "";
   console.error(`Could not load opencodex config at ${configPath}: ${reason}. Using default config.${backupNote}`);
