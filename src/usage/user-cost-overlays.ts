@@ -21,7 +21,7 @@
 import type { OcxConfig, OcxProviderConfig, ProviderCostOverlay, PromptLengthPricing } from "../types";
 import type { ExpectedPriceOverlay } from "./expected-prices";
 import { validCost4 } from "./user-cost-validation";
-import { isValidCreditPriceUsd } from "../config/schema/leaf-validators";
+import { isValidCreditPriceBound as isValidCreditPriceUsd } from "./credit-billing";
 export { COST4_RATE_KEYS, isValidCost4Rate, validCost4, isValidPromptLengthPricing } from "./user-cost-validation";
 import { redactSecretString } from "../lib/redact";
 import { isSelectableCodexPoolAccount, MAIN_CODEX_ACCOUNT_ID } from "../codex/account-id";
