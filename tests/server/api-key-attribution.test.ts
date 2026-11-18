@@ -766,6 +766,8 @@ describe("AUTH_MATRIX is true of the running server", () => {
           // "no such model", which is proof admission let it through.)
           expect(res.status).not.toBe(405);
           if (disposition === "rejected") expect(res.status).toBe(401);
+          // The role gate runs after admission and returns a specific 404 on this non-hub.
+          if (row.endpoint === "/v1/usage/windows" && disposition === "accepted") expect(res.status).toBe(404);
           if (res.status === 404) {
             // The fixture provider is disabled, so an ADMITTED request can still
             // 404 downstream on "no such model" — that is proof admission let it
@@ -782,8 +784,6 @@ describe("AUTH_MATRIX is true of the running server", () => {
             // admission proof. Pin its distinguishing code too.
             if (row.endpoint === "/v1/hub-state") expect(body.error?.code).toBe("hub_state_not_a_hub");
             if (row.endpoint === "/v1/usage") expect(body.error?.code).toBe("hub_usage_not_a_hub");
-            // /v1/usage/windows 404s for the same reason: the role gate runs after admission,
-            // and its distinguishing code is what proves the route exists on this build.
             if (row.endpoint === "/v1/usage/windows") expect(body.error?.code).toBe("usage_windows_not_a_hub");
           }
           const admitted = res.status !== 401;

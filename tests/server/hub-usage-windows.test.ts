@@ -371,7 +371,12 @@ test.each([false, true])("pool rows require an enabled provider and registered a
   saveConfig(config({ codexAccounts, providers: { openai: { ...OPENAI_PROVIDER, disabled } } }));
   server = startServer(0);
   const now = Date.now();
-  updateAccountQuota("cached-only", 42, now + 86_400_000, 13, now + 20 * 86_400_000);
+  if (disabled) {
+    seedPoolQuota("cached-only", { weeklyPercent: 42, weeklyResetAt: now + 86_400_000,
+      monthlyPercent: 13, monthlyResetAt: now + 20 * 86_400_000 });
+  } else {
+    updateAccountQuota("cached-only", 42, now + 86_400_000, 13, now + 20 * 86_400_000);
+  }
   const response = await fetch(new URL("/v1/usage/windows", server.url), { headers: { "x-opencodex-api-key": OPENAI_KEY } });
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({ windows: [] });

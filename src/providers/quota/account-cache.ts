@@ -258,7 +258,9 @@ export function getCredentialOwnedAccountQuota(provider: string, accountId: stri
   hydrateAccountQuotaCache();
   const entry = accountQuotaCache.get(accountCacheKey(provider, accountId));
   if (provider !== "kiro" && entry?.quotaOwnerIsCurrent?.() !== true) return null;
-  return getCachedProviderAccountQuota(provider, accountId);
+  const quota = getCachedProviderAccountQuota(provider, accountId);
+  if (provider === "kiro" && quota && Date.now() - quota.updatedAt >= ACCOUNT_QUOTA_TTL_MS) return null;
+  return quota;
 }
 
 /** Test-only: seed or clear the per-account quota cache without probing upstream. */
