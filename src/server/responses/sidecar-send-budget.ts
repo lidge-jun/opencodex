@@ -29,7 +29,8 @@ export function createSidecarSendBudget(
     },
     // Adapter-owned transports settle through the live dispatch view, not an HTTP receipt too.
     incomingMeta: {
-      ...(initial ? { comboAttempt: options.comboAttempt === true, sendBudget: budget.adapterDispatchBudget } : {}),
+      ...(initial ? { comboAttempt: options.comboAttempt === true } : {}),
+      sendBudget: budget.adapterDispatchBudget,
       onPhysicalSend: send => budget.noteAdapterPhysicalSend(inputTokens(), send),
       onRecoveryWithheld: budget.noteAdapterRecoveryWithheld,
     } satisfies Partial<IncomingMeta>,
@@ -44,7 +45,8 @@ export function createSidecarSendBudget(
     },
     /** Transfer cleanup to the asynchronous producer before it can outlive the response. */
     takeProducerOwnership(): void {
-      if (initial) { initial.producerOwned = true; producerActive = true; }
+      if (initial) initial.producerOwned = true;
+      producerActive = true;
     },
     /** Release unused bookings only after the owning producer has settled. */
     release(): void {

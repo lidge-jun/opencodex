@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KIRO_COMPLETION_TOOL_NAME } from "../../src/adapters/kiro-constants";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { encodeMessage } from "../../src/lib/eventstream-decoder";
 import { saveCredential } from "../../src/oauth/store";
 import { handleResponses } from "../../src/server/responses/core";
@@ -60,8 +61,10 @@ function completedAnswer(): Response {
 }
 
 describe("sidecar prompt usage accounting", () => {
-  for (const sidecar of ["none", "web-search", "images"] as const) {
-    test(`${sidecar}: persists the full Kiro prompt estimate into daily activity`, async () => {
+  for (const [sidecar, cap] of [
+    ["none", 1], ["web-search", 2], ["images", 2], ["web-search", 1], ["images", 1],
+  ] as const) {
+    test(`${sidecar}: accounts for Kiro sends with a ${cap}-send cap`, async () => {
       const retry = sidecar !== "none";
       let sends = 0;
       globalThis.fetch = (async input => {
@@ -100,11 +103,23 @@ describe("sidecar prompt usage accounting", () => {
       });
       const log: RequestLogContext = { model: "", provider: "" };
       const started = Date.now();
-      const response = await handleResponses(request, config, log);
+      const sendBudget = createRequestExecutionBudget({
+        maxTotalModelSends: cap, baseSendAllowance: cap, finalRecoveryAllowance: 0,
+        maxAlternateTargetSends: 0, maxTargetTransitions: 0,
+      });
+      const response = await handleResponses(request, config, log, { sendBudget });
       const logged = responseWithDeferredRequestLog(response, `sidecar-usage-${sidecar}`, started, log);
+      const body = await logged.text();
+      expect(sends).toBe(cap);
+      expect(sendBudget.used).toBe(sends);
+      if (retry && cap === 1) {
+        expect(response.status).toBe(429);
+        expect(body).not.toContain("Completed fixture answer.");
+        expect(log.activeAttempt?.sendCount).toBe(1);
+        return;
+      }
       expect(response.status).toBe(200);
-      expect(await logged.text()).toContain("Completed fixture answer.");
-      expect(sends).toBe(retry ? 2 : 1);
+      expect(body).toContain("Completed fixture answer.");
 
       const entries = readUsageEntries();
       expect(entries).toHaveLength(1);

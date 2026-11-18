@@ -101,15 +101,16 @@ another owner's pending booking. Cleanup cannot refund real work. Detached judge
 child-owned booking. Generic HTTP/WS uses the final physical-dispatch receipt; adapter-owned
 `fetchResponse`/`runTurn` receives the live budget and observers instead, never both charge paths.
 Receipt selection follows the actual iteration adapter after rotation. Hosted tool execution does
-not itself settle the model's booking. Children without an owning initial permit keep their existing
-accounting contract. The hosted reservation, producer and WS regression siblings in `tests/responses/`
+not itself settle the model's booking. Direct adapter-owned sidecars receive the same live request
+ledger even without a prepaid Combo send. The hosted reservation, producer and WS regression siblings in `tests/responses/`
 assert real synthetic inference, explicit durable settlement and unsent release without widening caps.
 Hosted credential hops stay open in this owner and the live pending-hop view until physical dispatch;
 generic receipts consume that exact permit, adapters claim it through the view, and fetch-iteration
 cleanup releases an unsent hop once, except while an asynchronous runTurn producer still owns it.
 Producer settlement performs that release instead, clearing only the matching pending-hop reference.
-Direct fetch sidecars also hold the credential hop until guarded dispatch. The executor
-records the first send, and the adapter observer adds subsequent physical sends to the same attempt.
+Direct adapter-owned fetch sidecars also hold the credential hop until guarded dispatch. The
+adapter claims and settles the permit. The executor publishes the first attempt send, and the
+adapter observer adds subsequent physical sends to that attempt.
 
 The optional Anthropic-hosted Advisor on translated Messages turns is withheld from the first
 send whose selected target has an applicable captured root, identity or pool token ceiling or has

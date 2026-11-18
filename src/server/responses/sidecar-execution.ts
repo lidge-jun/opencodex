@@ -605,7 +605,8 @@ export async function executeResponsesSidecars(
       providerName: route.providerName, modelId: route.modelId, ...physicalOptions,
       onPhysicalDispatch: () => {
         if (physicalOptions.onPhysicalDispatch) physicalOptions.onPhysicalDispatch();
-        else if (handoff || sendBudgetState.pendingHopPermit) {
+        else if (!(adapter.fetchResponse && sendBudgetState.adapterDispatchBudget)
+          && (handoff || sendBudgetState.pendingHopPermit)) {
           const prepaid = sendBudgetState.pendingHopPermit;
           if (!prepaid && sendBudgetState.sendBudgetExhausted()) throw new SendBudgetExhaustedError(errorDestinationLabel(request.url));
           sendBudgetState.noteInitialDispatch(prepaid);
@@ -709,7 +710,6 @@ export async function executeResponsesSidecars(
         comboAttempt: options.comboAttempt === true, ...(requestState.subagentFallbackSelected ? { subagentFallback: true } : {}),
         ...(options.internalDecisionCall ? { internalDecisionCall: true } : {}),
         ...(transportState.adapter.reportsPhysicalSends ? {
-          sendBudget: sendBudgetState.adapterDispatchBudget,
           onPhysicalSend: (send: { ordinal: number; recovery?: AttemptRecoveryKind }) => {
             if (send.ordinal === 1) transportState.commitRunTurnAttemptSend(parsed, send.recovery);
             sendBudgetState.noteAdapterPhysicalSend(logCtx.usageLogInputTokens, send);
