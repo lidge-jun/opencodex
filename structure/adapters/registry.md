@@ -69,7 +69,9 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   matches from an ACP provider's model alias template. The use policy
   (`src/adapters/agy-acp/policy.ts`) refuses subagent turns (`x-codex-parent-thread-id`), turns Codex labels as spawned threads (`isThreadSpawnRequest`) or as
   its memory pipeline (`detectMemoryModelPhase`, `x-openai-subagent: memory_consolidation`, `x-openai-memgen-request`).
-  A spawn label in the WebSocket frame body is sufficient. An HTTP memory label in the header is sufficient even
+  A spawn label in the WebSocket frame body is sufficient. Explicit user-turn metadata there supersedes a stale spawn
+  label from the upgrade's turn metadata. A connection labeled `collab_spawn` still refuses every frame. A spawn
+  label in the upgrade's turn metadata still refuses frames without explicit user provenance. An HTTP memory label in the header is sufficient even
   when the body metadata is malformed. For WebSocket memory turns, the frame's metadata decides independently
   of memory headers from the handshake.
   The policy also refuses combo members, a combo's internal

@@ -109,6 +109,21 @@ describe("use policy", () => {
     expect(agyAcpPolicyRefusal({ headers, body: {}, inboundTransport: "websocket", local: true })).toBeUndefined();
   });
 
+  test("a WebSocket ordinary frame supersedes handshake spawn metadata, with refusal for unlabeled frames", () => {
+    const key = "x-codex-turn-metadata";
+    const spawn = JSON.stringify({ subagent_kind: "thread_spawn" });
+    const headers = new Headers({ [key]: spawn });
+    const websocket = { headers, inboundTransport: "websocket" as const, local: true };
+    const ordinary = { client_metadata: { [key]: JSON.stringify({ request_kind: "turn", thread_source: "user" }) } };
+    expect(agyAcpPolicyRefusal({ ...websocket, body: ordinary })).toBeUndefined();
+    for (const body of [{}, ...["broken", "{}", spawn].map(value => ({ client_metadata: { [key]: value } }))]) {
+      expect(agyAcpPolicyRefusal({ ...websocket, body })?.code).toBe("agy_acp_interactive_only");
+    }
+    expect(agyAcpPolicyRefusal({ headers, local: true, body: ordinary })?.code).toBe("agy_acp_interactive_only");
+    headers.set("x-openai-subagent", "collab_spawn");
+    expect(agyAcpPolicyRefusal({ ...websocket, body: ordinary })?.code).toBe("agy_acp_interactive_only");
+  });
+
   test("HTTP preflight refuses a memory header with malformed body metadata", async () => {
     const refused = runWithRequestPeer({ local: true }, () => agyAcpPreflightResponse({
       adapterName: "agy-acp",

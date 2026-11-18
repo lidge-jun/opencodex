@@ -104,11 +104,16 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
     }
   });
 
-  test.each([false, true])("a local WebSocket turn is classified by its frame body (spawned=%s)", async spawned => {
+  test.each(["ordinary", "spawned", "ordinary after spawned handshake"])("a local WebSocket frame is classified by its turn metadata (%s)", async scenario => {
+    const spawned = scenario === "spawned";
+    const stale = scenario === "ordinary after spawned handshake";
+    const spawnMetadata = JSON.stringify({ subagent_kind: "thread_spawn" });
     saveConfig({ ...config(), websockets: true } as OcxConfig);
     const server = startServer(0);
     try {
-      const socket = new WebSocket(new URL("/v1/responses", server.url).href.replace(/^http/, "ws"));
+      const socket = new WebSocket(new URL("/v1/responses", server.url).href.replace(/^http/, "ws"), {
+        headers: stale ? { "x-codex-turn-metadata": spawnMetadata } : {},
+      } as unknown as string[]);
       let received = "";
       const completed = new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error("no terminal frame")), 15_000);
@@ -120,8 +125,8 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
       });
       await new Promise<void>((resolve, reject) => { socket.onopen = () => resolve(); socket.onerror = () => reject(new Error("websocket error")); });
       const clientMetadata = spawned
-        ? { "x-codex-turn-metadata": JSON.stringify({ subagent_kind: "thread_spawn" }) }
-        : undefined;
+        ? { "x-codex-turn-metadata": spawnMetadata }
+        : stale ? { "x-codex-turn-metadata": JSON.stringify({ request_kind: "turn", thread_source: "user" }) } : undefined;
       socket.send(JSON.stringify({ ...JSON.parse(body), type: "response.create", client_metadata: clientMetadata }));
       await completed;
       socket.close();

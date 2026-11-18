@@ -39,6 +39,16 @@ export interface AgyAcpPolicyRefusal {
 const INTERACTIVE_MESSAGE = "The Antigravity CLI (ACP) provider is for interactive, user-directed turns only: it refuses subagent and spawned-thread turns, Codex memory turns, combo members and combo decision calls, and subagent-fallback routing, per Google's terms for the agy acp binary. Use a Gemini API key or Vertex AI for programmatic workloads.";
 const LOCAL_MESSAGE = "The Antigravity CLI (ACP) provider requires a local connection to the proxy host. Hub links and connections classified as remote are refused. Use a Gemini API key or Vertex AI for shared or programmatic workloads.";
 
+function isExplicitUserTurn(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  try {
+    const metadata = JSON.parse(value) as { request_kind?: unknown; thread_source?: unknown } | null;
+    return metadata?.request_kind === "turn" && metadata.thread_source === "user";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * A turn Codex itself labels as unattended, without a parent-thread header: Codex's memory
  * pipeline (`x-openai-subagent: memory_consolidation`, `x-openai-memgen-request`, or memory turn
@@ -47,10 +57,17 @@ const LOCAL_MESSAGE = "The Antigravity CLI (ACP) provider requires a local conne
 function isUnattendedCodexTurn({ headers, body, inboundTransport }: AgyAcpPolicySignals): boolean {
   if (inboundTransport !== "websocket"
     && (headers.get("x-openai-subagent") === "memory_consolidation" || headers.has("x-openai-memgen-request"))) return true;
-  if (isThreadSpawnRequest(headers)) return true;
   const client = body && typeof body === "object" && "client_metadata" in body ? body.client_metadata : undefined;
-  if (client && typeof client === "object" && "x-codex-turn-metadata" in client
-    && isThreadSpawnTurnMetadata(client["x-codex-turn-metadata"])) return true;
+  const turn = client && typeof client === "object" && "x-codex-turn-metadata" in client
+    ? client["x-codex-turn-metadata"] : undefined;
+  if (isThreadSpawnTurnMetadata(turn)) return true;
+  if (inboundTransport !== "websocket" && isThreadSpawnRequest(headers)) return true;
+  if (inboundTransport === "websocket") {
+    // collab_spawn describes the connection. Only explicit user provenance supersedes a
+    // spawned-turn metadata snapshot from the upgrade; an unlabeled frame still refuses.
+    if (headers.get("x-openai-subagent") === "collab_spawn"
+      || (isThreadSpawnTurnMetadata(headers.get("x-codex-turn-metadata")) && !isExplicitUserTurn(turn))) return true;
+  }
   // For a refusal, either turn-local copy can establish an unattended label on its own.
   if (inboundTransport !== "websocket" && detectMemoryModelPhase(undefined, headers) !== null) return true;
   return detectMemoryModelPhase(body, headers, { transport: "websocket" }) !== null;
