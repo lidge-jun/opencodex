@@ -50,7 +50,7 @@ import {
   runCodexHistoryJob,
 } from "../codex/history-job";
 import { findCrossHomeOwner, markCrossHomeSibling, markLiveHomeSibling } from "./cross-home-owner";
-import { clientStartupRefusalMessage, inspectClientRotationRecoveryGate, isLinkConnection, readClientConnectionState } from "../client/state";
+import { clientStartupRefusalMessage, inspectClientRotationRecoveryGate, readClientConnectionState } from "../client/state";
 import {
   codexAutoStartEnabled,
   getConfigDir,
@@ -168,7 +168,7 @@ import { startArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
 import { abandonedTeardownIsSafeToFinish, assertConnectedClientStopSupported, classifyStopRole, clearRestoredStopReceipts, configuredStopEndpoint, connectedClientStopSkipLine, isRegisteredServiceStopTarget, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, proveStandaloneStopRecord, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary, stopOwnershipRefused, unclassifiedStopTarget, unsupportedConnectedStop, verifyConnectedStopTarget, type LinkStopPreflight, type StopTargetProof } from "./stop-restore";
 import { stopRestoreWriteGuard } from "./stop-restore-guard";
-import { recheckClientStartOwnership, startClientRuntimeUnderOwnershipLease } from "./client-start-fence";
+import { startConnectedClientWithOwnershipFence } from "./client-start-fence";
 import { recoverStartJournalAfterOwnerRecheck, recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
 import { handledSignalExitCode } from "../lib/handled-signal-exit";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
@@ -491,18 +491,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     if (rotationGate.kind === "recovery-required" || rotationGate.kind === "unsafe") {
       throw new Error(clientStartupRefusalMessage(rotationGate.reason));
     }
-    const { startClientRuntime } = await import("../client/runtime");
-    // Same lease-held owner recheck as the server path below: this branch binds and publishes too.
-    await startClientRuntimeUnderOwnershipLease({
-      acquireLease: () => acquireOwnershipMutationLease(serviceStatePaths()),
-      decide: () => serviceChildOwnershipDecisionForClassifiedChild(supervisedServiceChild),
-      stayOut: refusal => { console.error("❌ " + refusal); process.exit(serviceStayOutExitCode()); },
-      start: async afterPublish => {
-        const refusal = await recheckClientStartOwnership(siblingStart, isLinkConnection(clientState.value) ? undefined : requestedPort);
-        if (refusal !== null) { process.exitCode = refusal; return; }
-        await startClientRuntime({ port: requestedPort, block: options.block, afterPublish });
-      },
-    });
+    await startConnectedClientWithOwnershipFence({ connection: clientState.value, siblingStart, supervisedServiceChild, requestedPort, block: options.block });
     return;
   }
 

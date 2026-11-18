@@ -126,11 +126,16 @@ describe("connected-client start ownership fence", () => {
 
   test("handleStart routes the connected-client branch through the fence and the runtime releases after publication", () => {
     const cli = readFileSync(repoPath("src/cli/index.ts"), "utf8");
-    const branch = cli.slice(cli.indexOf('if (clientState.kind === "connected") {'));
-    const fence = branch.indexOf("startClientRuntimeUnderOwnershipLease(");
+    const branch = cli.slice(cli.indexOf('if (clientState.kind === "connected") {'), cli.indexOf("// Managed service children may defer before binding"));
+    expect(branch).toMatch(/await startConnectedClientWithOwnershipFence\(\{[^}]+\}\);\s*return;/);
+    const module = readFileSync(repoPath("src/cli/client-start-fence.ts"), "utf8");
+    const start = module.slice(module.indexOf("export async function startConnectedClientWithOwnershipFence("));
+    const fence = start.indexOf("startClientRuntimeUnderOwnershipLease(");
+    const recheck = start.indexOf("await recheckClientStartOwnership(");
     expect(fence).toBeGreaterThan(-1);
-    expect(fence).toBeLessThan(branch.indexOf("startClientRuntime({"));
-    expect(branch.slice(fence, branch.indexOf("return;"))).toContain("serviceChildOwnershipDecisionForClassifiedChild(supervisedServiceChild)");
+    expect(recheck).toBeGreaterThan(fence);
+    expect(recheck).toBeLessThan(start.indexOf("startClientRuntime({"));
+    expect(start.slice(fence, recheck)).toContain("serviceChildOwnershipDecisionForClassifiedChild(supervisedServiceChild)");
     const runtime = readFileSync(repoPath("src/client/runtime.ts"), "utf8");
     // serve() binds and publishes (it runs again for a restart rollback, OCX-6); the lease is
     // released only once the first serve() returned, i.e. after publication.

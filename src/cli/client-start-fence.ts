@@ -1,10 +1,14 @@
 import { lstatSync } from "node:fs";
+import { isLinkConnection } from "../client/state";
 import { markSiblingStart } from "../codex/sibling-start";
 import { isMissingPathError } from "../config/atomic-write";
 import { getPidPath, getRuntimePortPath } from "../config/process-state";
-import type { ServiceChildOwnershipDecision } from "../service/service-child-ownership";
+import { acquireOwnershipMutationLease } from "../service/ownership-mutation-lease.mjs";
+import { serviceChildOwnershipDecisionForClassifiedChild, type ServiceChildOwnershipDecision } from "../service/service-child-ownership";
+import { serviceStatePaths } from "../service/state";
 import { serviceStayOutExitCode } from "../service/windows-wrapper-exit";
 import { observeProxyLiveness, START_OWNERSHIP_LIVENESS } from "../server/proxy-liveness";
+import type { OcxClientConnectionConfig } from "../types";
 import { findCrossHomeOwner, markCrossHomeSibling } from "./cross-home-owner";
 
 function ownershipRecordIsAbsent(path: string): boolean {
@@ -13,7 +17,7 @@ function ownershipRecordIsAbsent(path: string): boolean {
 }
 
 /** Called under the publication lease, before the client can bind or write ownership records. */
-export async function recheckClientStartOwnership(sibling: boolean, requestedPort?: number): Promise<number | null> {
+async function recheckClientStartOwnership(sibling: boolean, requestedPort?: number): Promise<number | null> {
   const fenced = await observeProxyLiveness(START_OWNERSHIP_LIVENESS);
   if (fenced.kind === "live") {
     const { pid, port } = fenced.live;
@@ -70,4 +74,26 @@ export async function startClientRuntimeUnderOwnershipLease(deps: {
   } finally {
     release();
   }
+}
+
+export async function startConnectedClientWithOwnershipFence({
+  connection, siblingStart, supervisedServiceChild, requestedPort, block,
+}: {
+  connection: OcxClientConnectionConfig;
+  siblingStart: boolean;
+  supervisedServiceChild: boolean;
+  requestedPort?: number;
+  block?: boolean;
+}): Promise<void> {
+  const { startClientRuntime } = await import("../client/runtime");
+  await startClientRuntimeUnderOwnershipLease({
+    acquireLease: () => acquireOwnershipMutationLease(serviceStatePaths()),
+    decide: () => serviceChildOwnershipDecisionForClassifiedChild(supervisedServiceChild),
+    stayOut: refusal => { console.error("❌ " + refusal); process.exit(serviceStayOutExitCode()); },
+    start: async afterPublish => {
+      const refusal = await recheckClientStartOwnership(siblingStart, isLinkConnection(connection) ? undefined : requestedPort);
+      if (refusal !== null) { process.exitCode = refusal; return; }
+      await startClientRuntime({ port: requestedPort, block, afterPublish });
+    },
+  });
 }
