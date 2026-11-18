@@ -667,6 +667,7 @@ export function advanceComboAfterFailure(
     && combo.targets.some(target => !target.lastResort);
   return pickComboTarget(config, pick.comboId, {
     exclude: pick.attempted,
+    preview: options.recordFailure === false,
     now: options.now,
     cooldownReprobeTargets: pick.cooldownReprobeTargets
       ? Object.entries(pick.cooldownReprobeTargets)

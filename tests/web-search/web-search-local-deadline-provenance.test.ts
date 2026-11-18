@@ -64,6 +64,7 @@ interface Outcome {
   wireStatus: number;
   wire: string;
   row: RequestLogEntry & Record<string, unknown>;
+  warnings?: string[];
 }
 
 async function run(adapter: ProviderAdapter, extra: Partial<WebSearchLoopDeps> = {}, providerName?: string): Promise<Outcome> {
@@ -278,6 +279,27 @@ describe("T04-b local deadline provenance in the request row", () => {
     expect(out.row.failureDetail).toBeUndefined();
   }, 2_000);
 
+  test("a genuine upstream error terminal emits a service warning", async () => {
+    const warn = spyOn(console, "warn");
+    try {
+      const out = await run({
+        name: "upstream-stream-error", buildRequest: request,
+        fetchResponse: async () => new Response("first"),
+        async *parseStream(response) {
+          await response.text();
+          yield { type: "error", message: "gateway timeout", status: 504 };
+        },
+        parseResponse: noParseResponse,
+      });
+      expect(out.row.status).toBe(504);
+      expect(warn.mock.calls.map(([line]) => String(line))).toContain(
+        "[opencodex] upstream failure status=504 type=server_error",
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   test("guard: a terminal upstream 403 keeps credential attribution", async () => {
     const out = await run({
       name: "upstream-403", buildRequest: request,
@@ -294,18 +316,30 @@ describe("combo web-search deadline provenance", () => {
   const comboId = "deadline-fixture";
   const output = "visible answer prefix";
   const comboStallMs = 120;
+  const primaryUrl = "https://routed.test/v1/chat/completions";
+  const backupUrl = "https://backup.test/v1/chat/completions";
+  const primary = { provider: "fixture-routed", model: "fixture-model" };
+  const secondary = { provider: "fixture-backup", model: "fixture-model" };
 
-  async function comboRun(stallOnBody: boolean, surface = "responses", upstream = false, stream = true): Promise<Outcome> {
+  async function comboRun(stallOnBody: boolean, surface = "responses", upstream = false, stream = true, backup = false): Promise<Outcome> {
     let releaseSpendHome: (() => void) | undefined;
     let warn: ReturnType<typeof spyOn<typeof console, "warn">> | undefined;
     const home = createTempHome("ocx-combo-web-search-deadline-");
     try {
       warn = spyOn(console, "warn");
       releaseSpendHome = acquireOwnedSpendHome();
-      let sends = 0;
+      const sends: string[] = [];
       globalThis.fetch = (async (input, init) => {
-        expect(String(input)).toBe("https://routed.test/v1/chat/completions");
-        sends++;
+        const url = String(input);
+        sends.push(url);
+        if (backup && (url === backupUrl || sends.length === 3)) {
+          const content = url === backupUrl ? "backup answered" : "primary answered";
+          const chunk = { id: "chunk", choices: [{ index: 0, delta: { content }, finish_reason: "stop" }] };
+          return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+            headers: { "content-type": "text/event-stream" },
+          });
+        }
+        expect(url).toBe(primaryUrl);
         if (upstream) return json(504, { error: { message: "gateway timeout", type: "server_error" } });
         if (!stallOnBody) return hanging({ abortSignal: init?.signal ?? undefined } as AdapterFetchContext);
         const chunk = { id: "chunk", choices: [{ index: 0, delta: { content: output }, finish_reason: null }] };
@@ -316,8 +350,13 @@ describe("combo web-search deadline provenance", () => {
 
       const config: OcxConfig = {
         port: 0, defaultProvider: "fixture-routed", connectTimeoutMs: HEADER_MS,
-        providers: { "fixture-routed": { adapter: "openai-chat", baseUrl: "https://routed.test/v1", authMode: "key", apiKey: "fixture" } },
-        combos: { [comboId]: { strategy: "failover", targets: [{ provider: "fixture-routed", model: "fixture-model" }] } },
+        providers: {
+          "fixture-routed": { adapter: "openai-chat", baseUrl: "https://routed.test/v1", authMode: "key", apiKey: "fixture" },
+          ...(backup && { "fixture-backup": { adapter: "openai-chat", baseUrl: "https://backup.test/v1", authMode: "key", apiKey: "fixture" } as const }),
+        },
+        combos: { [comboId]: backup
+          ? { strategy: "round-robin", stickyLimit: 2, targets: [primary, secondary] }
+          : { strategy: "failover", targets: [primary] } },
         webSearchSidecar: {
           backend: "exa", exaApiKey: "fixture", routedModelStallTimeoutMs: comboStallMs, streamRoutedModelOutput: true,
         },
@@ -326,18 +365,53 @@ describe("combo web-search deadline provenance", () => {
       const body = surface === "responses" ? { input: messages[0]!.content, store: false }
         : { messages, ...(surface === "messages" ? { max_tokens: 100 } : {}) };
       const tools = [surface === "messages" ? { type: "web_search_20250305", name: "web_search" } : { type: "web_search" }];
-      const req = new Request(`http://localhost/v1/${surface}`, {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...body, model: `combo/${comboId}`, stream, tools }),
-      });
-      const handler = surface === "messages" ? handleClaudeMessages : surface === "chat/completions" ? handleChatCompletions : handleResponses;
-      const logCtx: RequestLogContext = { model: "", provider: "" };
-      const rows: RequestLogEntry[] = [];
-      const start = Date.now();
-      const response = await handler(req, config, logCtx);
-      const wire = await responseWithDeferredRequestLog(response, "ocx-combo-deadline", start, logCtx, row => rows.push(row)).text();
-      expect(sends).toBe(1);
-      expect(rows).toHaveLength(1);
+      async function send(): Promise<Outcome> {
+        const controller = new AbortController();
+        const { signal } = controller;
+        const deadline = Promise.withResolvers<never>();
+        const timer = setTimeout(() => {
+          const error = new Error("Combo fixture request timed out");
+          controller.abort(error);
+          deadline.reject(error);
+        }, 2_000);
+        try {
+          const req = new Request(`http://localhost/v1/${surface}`, {
+            method: "POST", headers: { "content-type": "application/json" }, signal,
+            body: JSON.stringify({ ...body, model: `combo/${comboId}`, stream, tools }),
+          });
+          const handler = surface === "messages" ? handleClaudeMessages : surface === "chat/completions" ? handleChatCompletions : handleResponses;
+          const logCtx: RequestLogContext = { model: "", provider: "" };
+          const rows: RequestLogEntry[] = [];
+          const start = Date.now();
+          const pending = (async () => {
+            const response = await handler(req, config, logCtx);
+            const logged = responseWithDeferredRequestLog(response, "ocx-combo-deadline", start, logCtx, row => rows.push(row));
+            const decoder = new TextDecoder();
+            let wire = "";
+            await logged.body?.pipeTo(new WritableStream<Uint8Array>({
+              write(chunk) { wire += decoder.decode(chunk, { stream: true }); },
+            }), { signal });
+            wire += decoder.decode();
+            expect(rows).toHaveLength(1);
+            return { wireStatus: response.status, wire, row: rows[0] as Outcome["row"] };
+          })();
+          return await Promise.race([pending, deadline.promise]);
+        } finally {
+          clearTimeout(timer);
+          controller.abort();
+        }
+      }
+
+      const outcome = await send();
+      if (backup) {
+        expect(outcome.wire).toContain("backup answered");
+        expect(sends).toEqual([primaryUrl, backupUrl]);
+        expect(isComboTargetInCooldown(comboId, primary)).toBe(false);
+        expect((await send()).wire).toContain("primary answered");
+        expect(sends).toEqual([primaryUrl, backupUrl, primaryUrl]);
+        return outcome;
+      }
+      expect(sends).toEqual([primaryUrl]);
       if (!stallOnBody) {
         const target = { provider: "fixture-routed", model: "fixture-model" };
         expect({
@@ -345,7 +419,7 @@ describe("combo web-search deadline provenance", () => {
           upstreamWarning: warn.mock.calls.some(([line]) => String(line).includes("upstream_failed")),
         }).toEqual({ cooled: upstream, upstreamWarning: upstream });
       }
-      return { wireStatus: response.status, wire, row: rows[0] as Outcome["row"] };
+      return { ...outcome, warnings: warn.mock.calls.map(([line]) => String(line)) };
     } finally {
       try {
         warn?.mockRestore();
@@ -379,8 +453,13 @@ describe("combo web-search deadline provenance", () => {
     expect(out.row.upstreamCondition).toBeUndefined();
   });
 
+  test("a local deadline falls through to backup and preserves the sticky primary", async () => {
+    await comboRun(false, "responses", false, true, true);
+  }, 6_000);
+
   test("committed combo forwards a late body deadline before the request row finalizes", async () => {
     const out = await comboRun(true);
+    expect(out.warnings?.filter(line => line.includes("[opencodex] upstream failure"))).toEqual([]);
     expect(out.wireStatus).toBe(200);
     expect(out.wire).toContain(`"delta":${JSON.stringify(output)}`);
     expect(failedError(out.wire)).toMatchObject({ message: stallSentence(comboStallMs) });

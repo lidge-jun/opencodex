@@ -142,3 +142,7 @@ The opt-in [all-cooled Combo recovery](runtime.md#scoped-provider-quota-for-comb
 Local combo refusals name target indices and validated provider labels with closed exclusion reasons.
 Configured model strings and combo aliases do not enter the client message; the current contract is
 [Chat client error bodies](data-planes/error-detail.md#client-error-bodies-chat).
+
+A Responses combo advances past a local hosted web-search deadline using a request-scoped
+pick in `src/combos/resolve.ts`. This preserves the primary’s round-robin sticky state
+and leaves target cooldown unchanged.

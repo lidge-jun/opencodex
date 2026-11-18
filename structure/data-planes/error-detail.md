@@ -25,7 +25,9 @@ through the disk reader. A row keeps:
   `recordLocalFailureDetail` is not upstream evidence unless the caller passes `upstreamEvidence: true`
   (the Messages passthrough restating an upstream status and closed type); `upstreamErrorIsLocal` keeps
   it out of the final row's evidence, including the upstream code/type diagnostics of the failed frame the
-  proxy wrote itself and any condition already stored on the context. The web-search loop records its
+  proxy wrote itself and any condition already stored on the context.
+  `src/server/request-log-terminal-status.ts` captures terminal status and suppresses upstream
+  service warnings when the local provenance marker is present. The web-search loop records its
   header deadline, routed-model byte stall and downstream handoff deadline as `header_timeout`,
   `generation_timeout` and `turn_inactivity` respectively. The row keeps the bounded
   `failureDetail` and omits `upstreamCondition`. A body stall retains `failureCause: upstream-fault` and `terminalSource: upstream`.
