@@ -160,7 +160,7 @@ test("image response byte reader enforces the stream cap when Content-Length is 
   expect(canceled).toBe(true);
   // One queued chunk may be prefetched; cancellation must stop later draining.
   expect(tailPulled).toBe(false);
-});
+}, 5_000);
 
 function xaiBridgeConfig(): OcxConfig {
   return {
@@ -1134,7 +1134,7 @@ test.each([
   expect(selection.keyed).toBeUndefined();
   expect(selection.forwardCandidates).toHaveLength(0);
   expect(selection.error).toContain(expectedError);
-});
+}, 5_000);
 
 test("keyed baseUrl with a /v1 suffix is normalized (no double /v1)", async () => {
   const captured: CapturedRequest[] = [];
@@ -1531,7 +1531,7 @@ test("a client abort during image body reading maps to 499 and cancels upstream"
   const response = await reading;
   expect(response.status).toBe(499);
   expect(upstreamCanceled).toBe(true);
-});
+}, 5_000);
 
 test("a client abort before the image reader attaches cancels the untouched upstream body", async () => {
   const parent = new AbortController();
@@ -1561,7 +1561,7 @@ test("a client abort before the image reader attaches cancels the untouched upst
   const response = await handleImages(request, forwardConfig(), "generations", { model: "", provider: "" });
   expect(response.status).toBe(499);
   expect(upstreamCanceled).toBe(true);
-});
+}, 5_000);
 
 test("a hung upstream times out with 504 after config.images.timeoutMs", async () => {
   const upstream = Bun.serve({
@@ -2160,9 +2160,9 @@ test("CCA body-read client cancellation returns 499, not 504", async () => {
     signal: ctrl.signal,
   });
   const logCtx = { model: "", provider: "" } as never;
-
   const responsePromise = handleImages(req, cfg, "generations", logCtx);
-  await bodyStarted.promise;
+  const earlyResponse = await Promise.race([bodyStarted.promise, responsePromise]);
+  if (earlyResponse) throw new Error(`Image handler returned HTTP ${earlyResponse.status} before reading the body`);
   ctrl.abort();
   const response = await responsePromise;
   expect(response.status).toBe(499);
@@ -2363,9 +2363,9 @@ test("CCA client abort during OAuth preflight returns 499, not a hung response",
     signal: ctrl.signal,
   });
   const logCtx = { model: "", provider: "" } as never;
-
   const responsePromise = handleImages(req, cfg, "generations", logCtx);
-  await refreshStarted.promise;
+  const earlyResponse = await Promise.race([refreshStarted.promise, responsePromise]);
+  if (earlyResponse) throw new Error(`Image handler returned HTTP ${earlyResponse.status} before starting OAuth refresh`);
   ctrl.abort();
   const response = await responsePromise;
   expect(response.status).toBe(499);

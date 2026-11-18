@@ -546,7 +546,7 @@ test("routes every Devin model family through the native search RPC without a se
   expect(requests.every(request => !request.body.includes(Buffer.from("claude-sonnet-5"))
     && !request.body.includes(Buffer.from("grok-4-7"))
     && !request.body.includes(Buffer.from("swe-2")))).toBe(true);
-});
+}, 5_000);
 
 test("native search route preview does not claim a round-robin combo turn", async () => {
   await saveCredential("devin", {
@@ -591,7 +591,7 @@ test("native search route preview does not claim a round-robin combo turn", asyn
   } finally {
     clearComboSelectionState();
   }
-});
+}, 5_000);
 
 test("falls back to a configured exa sidecar when no ChatGPT forward provider exists", async () => {
   const captured: CapturedExaRequest[] = [];
@@ -619,7 +619,7 @@ test("falls back to a configured exa sidecar when no ChatGPT forward provider ex
   expect(captured[0].url).toBe("https://api.exa.ai/search");
   expect(captured[0].headers.get("x-api-key")).toBe("exa-test-key");
   expect(captured[0].body).toMatchObject({ query: "OpenAI news" });
-});
+}, 5_000);
 
 test("a ChatGPT forward provider still wins over a configured web-search sidecar", async () => {
   const captured: CapturedRequest[] = [];
@@ -674,7 +674,7 @@ test("an openai webSearchSidecar backend cannot serve alpha/search without ChatG
   expect(json.error.message).toContain("ChatGPT forward provider");
   expect(json.error.message).toContain("webSearchSidecar");
   expect(captured).toHaveLength(0);
-});
+}, 5_000);
 
 test("a webSearchSidecar backend with no credential does not fall through to another paid backend", async () => {
   const captured: CapturedExaRequest[] = [];
@@ -693,7 +693,7 @@ test("a webSearchSidecar backend with no credential does not fall through to ano
   expect(json.error.message).not.toContain("ChatGPT forward provider");
   expect(json.error.message).toContain("not sent to any other backend");
   expect(captured).toHaveLength(0);
-});
+}, 5_000);
 
 test("a disabled web-search sidecar cannot serve alpha/search either", async () => {
   const captured: CapturedExaRequest[] = [];
@@ -707,7 +707,7 @@ test("a disabled web-search sidecar cannot serve alpha/search either", async () 
   const json = await response.json() as { error: { message: string } };
   expect(json.error.message).toContain("ChatGPT forward provider");
   expect(captured).toHaveLength(0);
-});
+}, 5_000);
 
 test("an alpha/search sidecar failure names the backend instead of asking for ChatGPT auth", async () => {
   const key = "exa-secret-key-123";
@@ -730,7 +730,7 @@ test("an alpha/search sidecar failure names the backend instead of asking for Ch
   expect(json.error.message).toContain("502");
   expect(json.error.message).not.toContain("ChatGPT");
   expect(json.error.message).not.toContain(key);
-});
+}, 5_000);
 
 test("an eligible sidecar still 400s when the search body has no query", async () => {
   const captured: CapturedExaRequest[] = [];
@@ -745,7 +745,7 @@ test("an eligible sidecar still 400s when the search body has no query", async (
   expect(json.error.message.toLowerCase()).toContain("query");
   expect(json.error.message).not.toContain("ChatGPT");
   expect(captured).toHaveLength(0);
-});
+}, 5_000);
 
 test("relays search upstream error status and body verbatim", async () => {
   const captured: CapturedRequest[] = [];
@@ -916,7 +916,7 @@ test("a client abort during search body reading maps to 499 and cancels upstream
   const response = await reading;
   expect(response.status).toBe(499);
   expect(upstreamCanceled).toBe(true);
-});
+}, 5_000);
 
 test("a client abort before the search reader attaches cancels the untouched upstream body", async () => {
   const parent = new AbortController();
@@ -947,7 +947,7 @@ test("a client abort before the search reader attaches cancels the untouched ups
   const response = await handleSearch(request, forwardConfig(), { model: "", provider: "" });
   expect(response.status).toBe(499);
   expect(upstreamCanceled).toBe(true);
-});
+}, 5_000);
 
 test("a hung search upstream times out with 504 after config.search.timeoutMs", async () => {
   const upstream = Bun.serve({
