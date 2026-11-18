@@ -81,7 +81,7 @@ OpenCodex 不会把 provider API key、Authorization 头、OAuth token、仅后�
 
 手动建议是 Worker 自己发出的 `advisor` 调用所对应的工具结果。结果是一个 JSON 对象。`advice` 是顾问模型的文本。`status` 由运行时写入。
 
-在常规的 Responses、Messages 转换请求和 Web 搜索中，只有当前 `tool_choice` 允许 `advisor` 时才能手动咨询。显式指定工具或使用允许列表时，必须选中根级的 `advisor` 函数。保留的 `functions` 命名空间也会按根级处理。强制使用托管 Web 搜索，或选中同名的自定义工具或托管工具，都不会授权手动咨询。未经允许的调用会以 `undeclared_tool_call` 拒绝，且不会触发咨询、向 Worker 重新发送请求或返回调用 ID 和参数。
+在常规的 Responses、Messages 转换请求和 Web 搜索中，只有当前 `tool_choice` 允许 `advisor` 时才能手动咨询。显式指定工具或使用允许列表时，必须选中根级的 `advisor` 函数。保留的 `functions` 命名空间也会按根级处理。如果客户端未声明根级 `advisor`，符合条件的 sidecar 可以提供该工具。如果存在匹配的函数声明，通过 `functions` 选择时会使用客户端工具。强制使用托管 Web 搜索，或选中同名的自定义工具或托管工具，都不会授权手动咨询。未经允许的调用会以 `undeclared_tool_call` 拒绝，且不会触发咨询、向 Worker 重新发送请求或返回调用 ID 和参数。
 
 翻译后的 Messages 请求如果按名称显式选择 Anthropic 托管的 `advisor`，OpenCodex 会在兼容路由上原样转发工具声明和选择。选择有歧义或尝试过的候选路由均不兼容时，OpenCodex 会在本地返回 HTTP 400。两种情况下都不会发起代理咨询。
 

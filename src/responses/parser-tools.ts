@@ -5,7 +5,7 @@ import { buildImageTool, IMAGE_GEN_TOOL_NAME } from "../images/synthetic-tool";
 import { toolSearchDescription, toolSearchParameters } from "./tool-search-compat";
 
 /** Capture the function and custom selectors from the original request before wire lowering. */
-export function explicitToolChoices(value: unknown): Pick<OcxRequestOptions, "explicitRootFunctionChoices" | "explicitClientToolChoices"> {
+export function explicitToolChoices(value: unknown, tools: readonly OcxTool[]): Pick<OcxRequestOptions, "explicitRootFunctionChoices" | "explicitClientToolChoices"> {
   if (!isObj(value)) return {};
   const selectors = value.type === "allowed_tools" && Array.isArray(value.tools) ? value.tools : [value];
   const rootFunctions = new Set<string>();
@@ -16,8 +16,9 @@ export function explicitToolChoices(value: unknown): Pick<OcxRequestOptions, "ex
     if (type !== "function" && type !== "custom") continue;
     const namespace = selectorNamespace(selector);
     clientTools.push({ type, name, namespace });
-    // A qualified selection names an existing client tool, even under `functions`.
-    if (type === "function" && namespace === undefined) rootFunctions.add(name);
+    if (type === "function" && (namespace === undefined || (
+      isQualifiedRootAdvisor(type, namespace, name) && !tools.some(tool => !tool.namespace && tool.name === name)
+    ))) rootFunctions.add(name);
   }
   return { explicitRootFunctionChoices: [...rootFunctions], explicitClientToolChoices: clientTools };
 }
@@ -25,6 +26,10 @@ export function explicitToolChoices(value: unknown): Pick<OcxRequestOptions, "ex
 function selectorNamespace(selector: Record<string, unknown>): string | undefined {
   // Codex's reserved functions group and the empty namespace both denote root tools.
   return typeof selector.namespace === "string" ? (selector.namespace === "functions" ? "" : selector.namespace) : undefined;
+}
+
+function isQualifiedRootAdvisor(type: unknown, namespace: string | undefined, name: string): boolean {
+  return type === "function" && namespace === "" && name === "advisor";
 }
 
 export function mapToolChoice(value: unknown, tools?: readonly OcxTool[]): OcxRequestOptions["toolChoice"] {
@@ -47,8 +52,11 @@ export function mapToolChoice(value: unknown, tools?: readonly OcxTool[]): OcxRe
       if (tools) {
         wireTools ??= new Map(tools.map(tool => [namespacedToolName(tool.namespace, tool.name), tool]));
         const match = wireTools.get(wireName);
-        if (!match || (match.namespace ?? "") !== namespace || match.name !== name
-          || (match.freeform ? "custom" : "function") !== type || match.imageGeneration || match.toolSearch) {
+        // An undeclared root Advisor can be supplied later by the sidecar. A declared
+        // owner still has to match exactly, including kind.
+        const defersToAdvisor = !match && isQualifiedRootAdvisor(type, namespace, name);
+        if (!defersToAdvisor && (!match || (match.namespace ?? "") !== namespace || match.name !== name
+          || (match.freeform ? "custom" : "function") !== type || match.imageGeneration || match.toolSearch)) {
           throw new Error(`invalid tool_choice: no declared ${type} tool ${dottedToolName(namespace, name)}`);
         }
       }

@@ -65,7 +65,9 @@ multi-call pairing, overlap and lifecycle release.
   Synthetic injection requires the request's effective `tool_choice` to permit Advisor. For an
   explicit selector or allowlist, `src/responses/parser-tools.ts` retains typed client selectors
   and the selected root function names before provider translation. An unqualified function
-  selector can permit synthetic Advisor. A caller-owned `advisor` can pass through when its
+  selector can permit synthetic Advisor. An explicit root selector using the reserved `functions`
+  namespace also permits synthetic Advisor when no caller declaration owns the root name.
+  A caller-owned `advisor` can pass through when its
   declared kind, name and any explicit namespace match the original selector and the effective choice permits it. With `auto`
   or `required`, caller-owned tools follow the effective choice alone. A forced hosted search
   excludes a caller-owned `advisor` even when the worker receives `auto`.

@@ -158,7 +158,9 @@ object. Its `advice` field is the Advisor model's text. Its `status` is set by t
 
 Manual calls also require the current request's `tool_choice` to allow `advisor`. An explicit
 selector or allowlist must select the root `advisor` function. The reserved `functions` namespace
-also maps to the root. Forced hosted web search and
+also maps to the root. If the caller has no root declaration named `advisor`, an eligible sidecar
+can supply the tool. A selector in the `functions` namespace uses the caller's root tool when
+the matching declaration exists. Forced hosted web search and
 same-named custom or hosted selectors grant no manual Advisor permission. This applies to
 ordinary translated Responses and Messages requests as well as web search. A forbidden call
 is rejected before consultation, worker redispatch, or disclosure of its ID and arguments.

@@ -699,7 +699,7 @@ export function parseRequest(
     ...(mergedTools.length > 0 ? { tools: mergedTools } : {}),
   };
 
-  const options: OcxRequestOptions = explicitToolChoices(data.tool_choice);
+  const options: OcxRequestOptions = explicitToolChoices(data.tool_choice, mergedTools);
   if (data.max_output_tokens !== undefined) options.maxOutputTokens = data.max_output_tokens;
   if (data.temperature !== undefined) options.temperature = data.temperature;
   if (data.top_p !== undefined) options.topP = data.top_p;
