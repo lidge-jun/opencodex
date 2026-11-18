@@ -671,7 +671,7 @@ function toolChoiceToGeminiToolConfig(parsed: OcxParsedRequest): Record<string, 
   return {
     functionCallingConfig: {
       mode: "ANY",
-      allowedFunctionNames: [resolveToolChoiceWireName(parsed.context.tools, choice.name)],
+      allowedFunctionNames: [resolveToolChoiceWireName(parsed.context.tools, choice.name, choice)],
     },
   };
 }

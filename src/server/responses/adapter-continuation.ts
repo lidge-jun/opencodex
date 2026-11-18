@@ -1,6 +1,7 @@
 import { carryProxyError, proxyErrorPresentation, isProxyError, rememberProxyErrorMessage } from "../../lib/client-error-body";
 import { providerAffinityGenerationIsCurrent } from "../../providers/api-key-selection";
 import { bindAnthropicRejectionResponse } from "../../adapters/anthropic-rejection-memo";
+import { hostedAdvisorCredentials } from "../../adapters/anthropic/advisor-tool";
 import { deferPhysicalSendReporter } from "./deferred-send-reporter";
 import { responsesSpendTarget } from "./request-spend-target";
 import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
@@ -39,6 +40,7 @@ import {
 } from "../../lib/upstream-retry";
 import { unwrapUpstreamRetryEvidenceError } from "../../codex/auth-context";
 import { AdmissionModelDeniedError, MODEL_NOT_ALLOWED_FOR_KEY } from "../admission-model-scope";
+import { HostedAdvisorSpendRefusal } from "./policy-request-scope";
 import { redactSecretString } from "../../lib/redact";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { bindRouteReasoningReplayScope } from "./core-replay";
@@ -161,6 +163,7 @@ export function createAdapterContinuations(
       return { type: "error", message: "client closed request during terminal continuation", status: 499 };
     }
     const refusal = unwrapUpstreamRetryEvidenceError(error);
+    if (refusal instanceof HostedAdvisorSpendRefusal) return refusal.event();
     if (refusal instanceof AdmissionModelDeniedError || refusal instanceof SendBudgetExhaustedError) rememberProxyErrorMessage(logCtx, refusal.message, { status: refusal instanceof AdmissionModelDeniedError ? 403 : 429,
       type: refusal instanceof AdmissionModelDeniedError ? MODEL_NOT_ALLOWED_FOR_KEY : "rate_limit_error", code: refusal instanceof AdmissionModelDeniedError ? MODEL_NOT_ALLOWED_FOR_KEY : refusal.code, presentation: refusal instanceof AdmissionModelDeniedError ? "scope" : "send" });
     if (refusal instanceof AdmissionModelDeniedError) {
@@ -287,8 +290,10 @@ export function createAdapterContinuations(
           ? fetchWithTransientRetry
           : fetchWithResetRetry;
         const continuationReporter = transientSendReporter();
-        const deferredContinuation = (continuationTransientPolicy || sendBudgetState.adapterSendBudget?.spendEnforced)
-          && route.providerName === "github-copilot" && route.provider.authMode !== "forward"
+        const countsContinuationSends = continuationTransientPolicy || anthropicInstance || sendBudgetState.adapterSendBudget?.spendEnforced;
+        const deferredContinuation = countsContinuationSends && (hostedAdvisorCredentials.has(builtContinuationRequest)
+          || ((continuationTransientPolicy || sendBudgetState.adapterSendBudget?.spendEnforced)
+            && route.providerName === "github-copilot" && route.provider.authMode !== "forward"))
           ? deferPhysicalSendReporter(continuationReporter) : undefined;
         return await fetchContinuationWithRetryPolicy(
           recovery => {
@@ -320,7 +325,7 @@ export function createAdapterContinuations(
             // Same request-scoped budget as the initial send and the 429/rotation refetches:
             // a terminal-guard continuation is another leg of ONE request, so handing it a
             // fresh `attempts` would let one request exceed the configured total-send ceiling.
-            ...(continuationTransientPolicy || anthropicInstance || sendBudgetState.adapterSendBudget?.spendEnforced
+            ...(countsContinuationSends
               ? {
                 attempts: Math.min(continuationTransientPolicy?.attempts ?? 1,
                   remainingTransientSendBudget(continuationTransientPolicy?.attempts ?? 1)

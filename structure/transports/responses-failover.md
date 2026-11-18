@@ -137,6 +137,11 @@ combo whose remaining eligible targets use other providers.
 
 > Decision record: [ADR-0070](../decisions/ADR-0070-same-provider-combo-quota-fallback.md)
 
+The [xAI Legacy privacy refusal](../providers/xai-grok.md#legacy-privacy-mode-403) uses normal
+403 failover eligibility with no cooldown. On exhaustion, the existing context-window and quota
+verdicts take precedence. When the ladder returns the fixed privacy 403, it adopts that child's
+failure attribution.
+
 ## Single-target cooldown retry ownership
 
 `src/combos/failover.ts` reports whether the current failure actually records a cooldown. An ordinary local `CodexAccountCooldownError` mapped by `mapCodexAuthContextErrorToResponse` (`src/server/responses/codex-auth-error.ts`) carries process-local Response identity in `src/codex/account-cooldown-response.ts`. `core-lifetime.ts` carries it through the translator-budget and account-lease wrappers (retained compaction delivers through the latter), and `core-combo-failure.ts` carries it through error reconstruction; `core-combo.ts` omits its restated retry/reset metadata only when recording combo target cooldowns. The target retains the existing capped local backoff, while the client's Retry-After, account quota/health, probe leases and admission policy remain authoritative. Main hard-lock, credit, Reserve and transient-policy subclasses do not receive this provenance. Copied bodies or headers cannot grant it; genuine upstream Retry-After retains the 24-hour ceiling. Coverage: `tests/server/server-combo-cooldown-recording.test.ts`.
@@ -349,6 +354,7 @@ the pre-header row in `fetchWithResetRetry` and the WebSocket row alike:
 | --- | --- |
 | 2xx | Returned unchanged. |
 | 307, 308, 401, 402, 408, 409, 413, 429, or any 5xx | Body released; settles as the refusal. |
+| Responses HTTP 403 with the exact [xAI OAuth Legacy privacy marker](../providers/xai-grok.md#legacy-privacy-mode-403) | Fixed privacy guidance and policy-refusal attribution with the non-replayable marker retained. |
 | Any other status | Real status and non-replayability kept; bounded client projection retains allowlisted error type and code and `x-should-retry: false` when present, withholds upstream body text and all other upstream headers, and emits a fixed generic message. |
 
 The refusal set is everything that would send again: the client retry table (408, 409, 429,

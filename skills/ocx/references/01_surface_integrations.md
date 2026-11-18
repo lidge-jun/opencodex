@@ -12,7 +12,7 @@ Declared capabilities: 41.
 
 ### `ocx claude config`
 
-Usage: `ocx claude config status [--json]; ocx claude config set [--enabled <on|off>] [--auth-mode <auto|proxy|subscription>] [--system-env <on|off>] [--fast-mode <on|off>] [--auto-context <on|off>] [--compact-window <tokens|default>] [--context-accounting <1m|200k>] [--inject-agents <on|off>] [--small-fast-model <id|->] [--model-map <from=to,...|->] [--blocked-skills <name,name|->] [--web-model <id|->] [--web-backend <openai|anthropic|xai|gemini|exa|->] [--vision-model <id|->] [--vision-backend <openai|anthropic|->] [--json]; or ocx claude config set --first-party <on|off> [--json]`
+Usage: `ocx claude config status [--json]; ocx claude config set [--enabled <on|off>] [--auth-mode <auto|proxy|subscription>] [--system-env <on|off>] [--fast-mode <on|off>] [--auto-context <on|off>] [--compact-window <tokens|default>] [--context-accounting <1m|200k>] [--inject-agents <on|off>] [--native-passthrough <on|off>] [--small-fast-model <id|->] [--model-map <from=to,...|->] [--blocked-skills <name,name|->] [--web-model <id|->] [--web-backend <openai|anthropic|xai|gemini|exa|->] [--vision-model <id|->] [--vision-backend <openai|anthropic|->] [--json]; or ocx claude config set --first-party <on|off> [--json]`
 
 Read or update Claude Code settings, including independent CLI first-party routing.
 
@@ -33,6 +33,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--compact-window` | string | Positive token count or default to clear. |
 | `--context-accounting` | string | 1m (default) or 200k. |
 | `--inject-agents` | string | on or off. |
+| `--native-passthrough` | string | on or off; off routes bare Claude models through opencodex instead of Claude Code's own login. |
 | `--small-fast-model` | string | Model ID; - clears. |
 | `--model-map` | string | Comma-separated from=to mappings; - clears. |
 | `--blocked-skills` | string | Comma-separated names; - clears. |
@@ -521,7 +522,7 @@ State-changing: no. JSON mode: `payload`.
 
 ### `ocx claude config set`
 
-Usage: `ocx claude config set [--enabled <on|off>] [--auth-mode <auto|proxy|subscription>] [--system-env <on|off>] [--fast-mode <on|off>] [--auto-context <on|off>] [--compact-window <tokens|default>] [--context-accounting <1m|200k>] [--inject-agents <on|off>] [--small-fast-model <id|->] [--model-map <from=to,...|->] [--blocked-skills <name,name|->] [--web-model <id|->] [--web-backend <openai|anthropic|xai|gemini|exa|->] [--vision-model <id|->] [--vision-backend <openai|anthropic|->] [--json]; or ocx claude config set --first-party <on|off> [--json]`
+Usage: `ocx claude config set [--enabled <on|off>] [--auth-mode <auto|proxy|subscription>] [--system-env <on|off>] [--fast-mode <on|off>] [--auto-context <on|off>] [--compact-window <tokens|default>] [--context-accounting <1m|200k>] [--inject-agents <on|off>] [--native-passthrough <on|off>] [--small-fast-model <id|->] [--model-map <from=to,...|->] [--blocked-skills <name,name|->] [--web-model <id|->] [--web-backend <openai|anthropic|xai|gemini|exa|->] [--vision-model <id|->] [--vision-backend <openai|anthropic|->] [--json]; or ocx claude config set --first-party <on|off> [--json]`
 
 Change Claude Code settings through the runtime owner.
 
@@ -529,6 +530,7 @@ State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
+| GET | `/api/claude-code` |
 | PUT | `/api/claude-code` |
 
 | Flag | Value | Meaning |
@@ -541,6 +543,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--compact-window` | string | Positive token count or default to clear. |
 | `--context-accounting` | string | 1m (default) or 200k. |
 | `--inject-agents` | string | on or off. |
+| `--native-passthrough` | string | on or off; off routes bare Claude models through opencodex instead of Claude Code's own login. |
 | `--small-fast-model` | string | Model ID; - clears. |
 | `--model-map` | string | Comma-separated from=to mappings; - clears. |
 | `--blocked-skills` | string | Comma-separated names; - clears. |
@@ -552,6 +555,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--json` | boolean | Emit the result as JSON. |
 
 - At least one setting is required. --first-party must be set alone and writes Claude settings immediately.
+- --native-passthrough checks support on the running proxy before sending the settings update.
 - Clear both helper model and backend with - to restore inheritance. Preserve shared_proxy_retained warnings.
 
 ### `ocx claude desktop show`

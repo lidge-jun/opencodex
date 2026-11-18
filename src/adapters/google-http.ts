@@ -4,7 +4,7 @@ import { createAdapterPhysicalSend } from "./physical-send";
 import type { SendClass } from "../lib/request-execution-budget";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { debugProviderDiagnosticLazy } from "../lib/debug";
-import { extractGoogleRetryAfterSeconds, isQuotaExhaustedBody, retryableGoogleStatus, safeGoogleHttpErrorMessage } from "./google-errors";
+import { extractGoogleRetryAfterSeconds, hasGoogle429RetryEvidence, isQuotaExhaustedBody, retryableGoogleStatus, safeGoogleHttpErrorMessage } from "./google-errors";
 import { repairGoogleInvalidRequestBodyWithReport } from "./google-wire-compiler";
 import type { GoogleToolSchemaPolicy, GoogleToolSchemaProfile } from "./google-tool-schema";
 import { normalizeUpstreamHttpErrorResponse, readDisplaySafeErrorPayloadText } from "./upstream-http-error";
@@ -136,8 +136,9 @@ export async function fetchGoogleWithRetry(
       if (!retryableGoogleStatus(res.status) || attempt === TRANSIENT_RETRY_MAX_ATTEMPTS - 1) {
         return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal);
       }
-      // A 429 may be a transient rate limit (retry) or hard quota exhaustion (do NOT retry —
-      // it won't recover for hours and burns retries). Peek the body to tell them apart.
+      // A 429 may be a transient rate limit (retry), hard quota exhaustion (do NOT retry — it
+      // won't recover for hours and burns retries), or a refusal no replay can change. The
+      // status alone cannot tell them apart, so peek the body once and decide from evidence.
       if (res.status === 429) {
         const peekTarget = res.clone();
         const peek = await readDisplaySafeErrorPayloadText(peekTarget, ctx.abortSignal);
@@ -152,6 +153,14 @@ export async function fetchGoogleWithRetry(
             if (retryAfter) normalized.headers.set("retry-after", retryAfter);
           }
           return normalized;
+        }
+        // The ladder below replays the same bytes. Without a Retry-After, a reset delay, a
+        // transient-rate-limit phrase, or a structured rate-limit reason, that replay is a
+        // guess: Cloud Code Assist answers request-shape rejections with a bare
+        // RESOURCE_EXHAUSTED, and the proxy turned each one into three identical sends per
+        // turn before surfacing the same refusal.
+        if (!hasGoogle429RetryEvidence(res.headers, peek)) {
+          return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal);
         }
       }
       // Retry-After names the earliest send Google will serve (#7802). The local maximum bounds
