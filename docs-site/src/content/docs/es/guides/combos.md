@@ -576,7 +576,7 @@ La escalera anunciada del objetivo sigue siendo autorizada. Se conserva un valor
 
 En modo estricto, los niveles de esfuerzo publicados por un combo son la intersección de los niveles de sus destinos. Si un destino indica explícitamente que **no** admite control de esfuerzo, su conjunto vacío participa en la intersección y la deja vacía para todo el combo, aunque los demás destinos permitan ajustar el esfuerzo.
 
-Configure `reasoningEffortMode: "adaptive"` para excluir esos conjuntos vacíos de la intersección publicada. El selector muestra los niveles comunes de los destinos restantes; el destino sin control de esfuerzo sigue siendo elegible para el enrutamiento. Los destinos cuyos niveles son simplemente *desconocidos* se tratan como comodines en ambos modos.
+Configure `reasoningEffortMode: "adaptive"` para excluir esos conjuntos vacíos de la intersección publicada. El selector muestra los niveles comunes de los destinos restantes; el destino sin control de esfuerzo sigue siendo elegible para el enrutamiento. Los destinos cuyos niveles son simplemente *desconocidos* se tratan como comodines en ambos modos. En un Combo JEV con `jevEffortMode: "decide"`, el selector de Codex oculta el control de esfuerzo incluso si se configura `reasoningEffortMode: "adaptive"`.
 
 ```json
 {
@@ -781,6 +781,8 @@ Una pasada de recuperación pertenece solo a la solicitud que la reservó; las d
 Un HTTP 400 puede ser incompatibilidad local del destino. El wrapper opaco OpenRouter `Provider returned error`, `code: 400` numérico, sin `type` y con `metadata.raw: "ERROR"`, permite otro destino sin enfriarlo. Un 400 tipado sin código, un `response_format` mal formado o código raíz terminal siguen siendo terminales. Una raíz con `model_not_found`, insufficient_quota, usage_limit_exceeded, free_rate_limited, `input_admission_refused` o unsupported_input_modality no añade otro veredicto; código vacío es ausente. Un evento de error streaming sin estado pero con `code` entero 400–599 se juzga como HTTP: antes de salida, 400/409/413/422 genéricos detienen, 401/402/403 enfrían proveedor y el exceso de contexto reconocido permite alternativa.
 
 Con `jevEffortMode: "decide"`, predeterminado, el esfuerzo elegido por JEV prevalece en el primer hijo Responses y en Chat nativo activado; elimina controles de pensamiento y service_tier incompatibles. Elegir sin esfuerzo también quita un predeterminado forzado. Con `"client"`, mantiene destino y deja esfuerzo al cliente, escala y defaultEffort; defaultEffortMode force sigue prevaleciendo. Fijaciones, límites y normalización del proveedor se aplican después.
+
+En modo `"decide"`, la fila del Combo en el catálogo no anuncia niveles de esfuerzo de razonamiento ni un esfuerzo predeterminado, por lo que el selector de modelos de Codex oculta el control de esfuerzo. En modo `"client"`, la fila conserva la intersección habitual de los niveles de esfuerzo de los destinos del Combo.
 
 El enfriamiento por combo es independiente del de cuenta y persiste con expiración absoluta en `combo-cooldowns.json`. Proxies del mismo directorio no lo acortan; guardar, renombrar o borrar el combo lo limpia.
 

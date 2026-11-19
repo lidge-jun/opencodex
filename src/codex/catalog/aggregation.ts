@@ -147,7 +147,10 @@ export function deriveComboCatalogModel(
   const advertisedLadders = combo.reasoningEffortMode === "adaptive"
     ? knownLadders.filter(ladder => ladder.length > 0)
     : knownLadders;
-  const reasoningEfforts = advertisedLadders.length === 0
+  // The JEV decision owns effort in decide mode, so the picker has no effort control.
+  // Client mode keeps the ladder from ordinary Combo policy.
+  const decisionOwnsEffort = combo.strategy === "jev" && combo.jevEffortMode !== "client";
+  const reasoningEfforts = decisionOwnsEffort || advertisedLadders.length === 0
     ? []
     : intersectStrings(advertisedLadders);
   const contextWindow = Math.min(...members.map(member => member.contextWindow!));
