@@ -161,7 +161,6 @@ export function createClientRestartController(io: ClientRestartIo): ClientRestar
         // The recheck is the last step before the recycle, after the (asynchronous) supervisor lookup.
         flight = sleep(200).then(async () => {
           const supervisor = await io.supervisor();
-          if (io.stopping?.()) return;
           if (restartRefusedByOwner(supervisor)) { warn("[client] restart: this runtime's owner could not be proven to relaunch it; it keeps serving"); return; }
           if (changed()) await recycle(supervisor);
         }).finally(() => { flight = null; });

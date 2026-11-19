@@ -16,7 +16,7 @@ export type PidfdSyscalls = {
   close(fd: number): void;
   dispose(): void;
 };
-export type ParentPidfd = { terminate(signal?: 15 | 9): TerminateResult; close(): void };
+export type ParentPidfd = { terminate(): TerminateResult; close(): void };
 export type ParentPidfdResult =
   | { kind: "bound"; handle: ParentPidfd }
   | { kind: "unsupported"; reason: string }
@@ -57,16 +57,7 @@ export function openParentPidfd(
   isParent: () => boolean,
   options: { arch?: string; load?: () => PidfdSyscalls } = {},
 ): ParentPidfdResult {
-  return openVerifiedPidfd(pid, isParent, options);
-}
-
-/** The verifier confirms the same PID ownership on both sides of pidfd acquisition. */
-export function openVerifiedPidfd(
-  pid: number,
-  verify: () => boolean,
-  options: { arch?: string; load?: () => PidfdSyscalls } = {},
-): ParentPidfdResult {
-  if (!verify()) return { kind: "refused", reason: "PID ownership could not be verified" };
+  if (!isParent()) return { kind: "refused", reason: "the sentinel is not the watched process's child" };
   const arch = options.arch ?? process.arch;
   if (arch !== "x64" && arch !== "arm64") return { kind: "unsupported", reason: `pidfd syscall ABI is unsupported on ${arch}` };
   let api: PidfdSyscalls;
@@ -90,7 +81,7 @@ export function openVerifiedPidfd(
         : { kind: "refused", reason: `pidfd_open failed (errno ${opened.errno})` };
     }
     fd = opened.value;
-    if (!verify()) return refuse("PID ownership changed during pidfd acquisition");
+    if (!isParent()) return refuse("the watched parent exited during pidfd acquisition");
     // Check both syscall support and permission before arming, without sending a signal.
     const probe = api.signal(fd, 0);
     if (probe.value < 0) {
@@ -99,18 +90,18 @@ export function openVerifiedPidfd(
         ? { kind: "unsupported", reason: "pidfd_send_signal is unsupported by this kernel" }
         : { kind: "refused", reason: `pidfd signal check failed (errno ${probe.errno})` };
     }
-    if (!verify()) return refuse("PID ownership changed during pidfd verification");
+    if (!isParent()) return refuse("the watched parent exited during pidfd verification");
     return {
       kind: "bound",
       handle: {
         close,
-        terminate: (signal = 9) => {
+        terminate: () => {
           if (closed || signalled) return "not_target";
           // A throwing binding must settle the recorded intent as "failed", like process.kill does.
           let sent: CallResult;
-          try { sent = api.signal(fd!, signal); } catch { return "failed"; }
+          try { sent = api.signal(fd!, 9); } catch { return "failed"; }
           if (sent.value < 0) return sent.errno === ESRCH ? "not_target" : "failed";
-          if (signal === 9) signalled = true;
+          signalled = true;
           return "terminated";
         },
       },
