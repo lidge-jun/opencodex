@@ -87,12 +87,12 @@ function kiroMeters(withTokenUsage: boolean): Uint8Array[] {
 }
 
 /** With tools declared, Kiro answers in two legs: progress prose, then the private completion call. */
-function kiroTwoLegTurn(secondLegTokenUsage: boolean): Uint8Array[][] {
+function kiroTwoLegTurn(secondLegTokenUsage: boolean, firstLegTokenUsage = true): Uint8Array[][] {
   const input = JSON.stringify({ answer: "The layout is flat." });
   const toolUse = (extra: Record<string, unknown>) =>
     eventFrame("toolUseEvent", { name: KIRO_COMPLETION_TOOL_NAME, toolUseId: "completion-1", ...extra });
   return [
-    [eventFrame("assistantResponseEvent", { content: "Checking the layout." }), ...kiroMeters(true)],
+    [eventFrame("assistantResponseEvent", { content: "Checking the layout." }), ...kiroMeters(firstLegTokenUsage)],
     [toolUse({}), toolUse({ input }), toolUse({ stop: true }), ...kiroMeters(secondLegTokenUsage)],
   ];
 }
@@ -310,13 +310,15 @@ const kiroRetryRows = {
     terminal: "response.incomplete", settled: [1550], lost: 1 },
   estimated: { title: "a Kiro retry without a tokenUsage frame leaves the retry unresolved instead of settling its local estimate",
     terminal: "response.completed", settled: [1550], lost: 1 },
+  estimatedFirst: { title: "a dispatched Kiro retry leaves an estimated first send unresolved and settles the retry with its reading",
+    terminal: "response.completed", settled: [1550], lost: 1 },
 } as const;
 for (const ceiling of [false, true]) for (const [retry, row] of Object.entries(kiroRetryRows)) {
   test(`${row.title} (pool ceiling: ${ceiling})`, async () => {
     const release = acquireOwnedSpendHome();
     try {
       if (ceiling) configureSharedSpendLedger(spendPolicyFromConfig({ pool: { maxTokens: 10_000_000 } }, undefined, ["fixture"]));
-      const turns = kiroTwoLegTurn(retry !== "estimated");
+      const turns = kiroTwoLegTurn(retry !== "estimated", retry !== "estimatedFirst");
       let sends = 0;
       globalThis.fetch = (async (input: RequestInfo | URL) => {
         if ((input instanceof Request ? input.url : String(input)) !== CHAT_ENDPOINT) throw new Error("unexpected network target");
@@ -347,6 +349,58 @@ for (const ceiling of [false, true]) for (const [retry, row] of Object.entries(k
         settled: records.flatMap(record => record?.kind === "settle" ? [record.tokens] : []),
         lost: records.filter(record => record?.kind === "lost").length })
         .toEqual({ sends: 2, dispatched: 2, settled: row.settled, lost: row.lost });
+    } finally {
+      release();
+    }
+  });
+}
+
+// When Kiro's first response carries no tokenUsage frame and the request's one-send budget refuses
+// the completion retry before it leaves, that response is the request's only routed send. It must
+// settle with the request's aggregate (estimated) usage, as a single send always did, instead of
+// staying unresolved at its full reservation: under a 3,000-token pool ceiling the leaked
+// reservation would refuse the next identical request.
+for (const ceiling of [false, true]) {
+  test(`an estimated Kiro response whose retry the budget refuses settles its estimate (pool ceiling: ${ceiling})`, async () => {
+    const release = acquireOwnedSpendHome();
+    try {
+      if (ceiling) configureSharedSpendLedger(spendPolicyFromConfig({ pool: { maxTokens: 3_000 } }, undefined, ["fixture"]));
+      let sends = 0;
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        if ((input instanceof Request ? input.url : String(input)) !== CHAT_ENDPOINT) throw new Error("unexpected network target");
+        sends++;
+        const frames = [eventFrame("assistantResponseEvent", { content: "Checking the layout." }), ...kiroMeters(false)];
+        return new Response(streamOf(frames), { headers: { "content-type": "application/vnd.amazon.eventstream" } });
+      }) as typeof fetch;
+      const config = { port: 0, defaultProvider: "fixture", providers: { fixture: {
+        adapter: "kiro", baseUrl: CHAT_ENDPOINT.slice(0, -1), authMode: "key", apiKey: "ksk_fixture", models: ["claude-sonnet-4.5"], liveModels: false,
+      } } } as OcxConfig;
+      const ledgerRows = async () => {
+        const journal = Bun.file(join(testDir, SPEND_LEDGER_JOURNAL_FILENAME));
+        const records = await journal.exists() ? (await journal.text()).trim().split("\n").map(parseSpendJournalRecord) : [];
+        return { dispatched: records.filter(record => record?.kind === "dispatch").length,
+          settled: records.flatMap(record => record?.kind === "settle" ? [record.tokens] : []),
+          lost: records.filter(record => record?.kind === "lost").length };
+      };
+      const statuses: number[] = [];
+      for (let round = 0; round < (ceiling ? 2 : 1); round++) {
+        const request = new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "fixture/claude-sonnet-4.5", input: "Summarise the repository layout.", stream: true,
+            tools: [{ type: "function", name: "bash", parameters: { type: "object" } }] }) });
+        const log: Parameters<typeof handleResponses>[2] = { model: "", provider: "" };
+        const budget = createRequestExecutionBudget({ maxTotalModelSends: 1, baseSendAllowance: 1, finalRecoveryAllowance: 0,
+          maxAlternateTargetSends: 0, maxTargetTransitions: 0 }, undefined, attachRequestSpendTracker(request, log));
+        const response = await handleResponses(request, config, log, { sendBudget: budget });
+        statuses.push(response.status);
+        await response.text();
+        log.spendTracker?.settle(log.usage);
+        if (round === 0) {
+          const rows = await ledgerRows();
+          expect({ sends, ...rows, settled: rows.settled.length }).toEqual({ sends: 1, dispatched: 1, settled: 1, lost: 0 });
+          expect(rows.settled[0]).toBe((log.usage?.inputTokens ?? 0) + (log.usage?.outputTokens ?? 0));
+        }
+      }
+      expect(statuses).toEqual(ceiling ? [200, 200] : [200]);
     } finally {
       release();
     }

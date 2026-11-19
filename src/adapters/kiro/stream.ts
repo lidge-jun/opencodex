@@ -1321,7 +1321,17 @@ export async function* parseKiroStream(
     // The retry below is a second physical send inside this parse, and the terminal will sum both
     // readings. Report the first response's reading now so it settles the send that produced it;
     // a retry that reports nothing then stays unresolved instead of absorbing this reading.
-    reportResponseSendReading(response, attemptReading(firstResult));
+    // A first response with no reading of its own is marked unmetered only once the retry has
+    // left: a retry refused before dispatch keeps it the request's one routed send, which settles
+    // with the request's aggregate usage like any other single send.
+    const firstReading = attemptReading(firstResult);
+    let firstReadingReported = false;
+    const reportFirstReading = (): void => {
+      if (firstReadingReported) return;
+      firstReadingReported = true;
+      reportResponseSendReading(response, firstReading);
+    };
+    if (firstReading) reportFirstReading();
     yield { type: "heartbeat" };
     // Failed validation releases held progress. Keep those failures non-retryable so a later
     // replay cannot duplicate it; successful validation instead discards the superseded text.
@@ -1336,7 +1346,7 @@ export async function* parseKiroStream(
         firstAssistantText,
         firstResult.sawReasoning,
         budget,
-        () => { fallbackSends++; },
+        () => { fallbackSends++; reportFirstReading(); },
       );
     } catch (err) {
       // A retry the factory already sent read nothing back: mark it unmetered.
@@ -1366,6 +1376,7 @@ export async function* parseKiroStream(
       };
       return;
     }
+    reportFirstReading();
     // The factory has retained its retry serialization. First-attempt progress remains charged
     // until the second attempt decides whether it is superseded or must be released.
     firstAssistantText = "";
