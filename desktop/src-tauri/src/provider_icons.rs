@@ -44,6 +44,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("fireworks", "fireworks-color.svg"),
     ("github", "github-copilot-color.svg"),
     ("github-copilot", "copilot-color.svg"),
+    ("m365-copilot", "copilot-color.svg"),
     ("gitlab-duo", "gitlab-duo-color.svg"),
     ("google", "gemini-color.svg"),
     ("google-antigravity", "antigravity-color.svg"),

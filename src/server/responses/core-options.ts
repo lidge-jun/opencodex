@@ -2,14 +2,14 @@ import type { ClientFacingModelLabel } from "../../lib/error-destination";
 import type { HostedAdvisorSelection } from "../../claude/inbound-content-options";
 import type { CodexAccountModelRefusal } from "../../combos/failover";
 import type { NativeResponseControl } from "./native-response-control";
-import type { AdapterEvent, OcxUsage, OcxProviderContinuationState, OcxConfig } from "../../types";
+import type { AdapterEvent, OcxUsage, OcxProviderContinuationState, OcxConfig, OcxProviderConfig } from "../../types";
 import type { RouteResult } from "../../router";
 import type { SingleUseDispatchPermit } from "../../lib/request-execution-budget";
 import type { CodexAuthPolicyConfig, CodexAuthContext } from "../../codex/auth-context";
 import type { AdmissionLease } from "../../lib/admission";
 import type { DataPlaneAdmission } from "../auth-cors";
 import type { AdmissionModelScope } from "../admission-model-scope";
-import { resolveCodexModelEntitlements } from "../../codex/model-entitlements";
+import type { resolveCodexModelEntitlements } from "../../codex/model-entitlements";
 import type { ResponsesTerminalStatus } from "../../bridge";
 import type { ResponsesTerminalRepairScheduler } from "../responses-terminal-repair";
 import type { BunRuntimeGateInput } from "./ws-upstream";
@@ -322,11 +322,12 @@ export interface HandleResponsesOptions {
    * Terminal advisor marker: true when the inbound request IS the advisor sidecar's own loopback
    * consultation. The advisor planner then never plans a consultation — a depth cap of 1 that
    * keeps Worker → Advisor → Advisor recursion impossible (same structure as
-   * {@linkcode visionDescribeTerminal}). The Chat surface detects the raw
-   * `x-opencodex-advisor-internal` header before its bridge rebuilds headers and carries the
-   * fact through this flag.
+   * {@linkcode visionDescribeTerminal}). The Chat surface validates the capability and registered
+   * policy before its bridge rebuilds headers and carries the fact through this flag.
    */
   advisorInternal?: boolean;
+  /** A local Chat helper authenticated through its registered process capability. */
+  internalSidecarCall?: boolean;
   /**
    * Set only by the Chat and Messages ingresses when `protocols.rollout.directEncoders` is on and
    * the settled route is one non-Responses target. Adapter delivery then encodes the adapter
@@ -345,6 +346,11 @@ export interface HandleResponsesOptions {
   responsesFileImage?: boolean;
   /** Set only by the Chat or Messages ingress on an eligible Antigravity route; see {@link DirectRequestOption}. */
   directRequest?: DirectRequestOption;
+}
+
+/** The internal Responses handoff for /responses/compact keeps the endpoint's global budgets. */
+export function responsesTimeoutProvider(options: HandleResponsesOptions, provider: OcxProviderConfig): OcxProviderConfig | undefined {
+  return options.compactionRecoveryKind === "compaction-v1" ? undefined : provider;
 }
 
 /** Values shared by the call, not a bag of mutable pipeline state. */

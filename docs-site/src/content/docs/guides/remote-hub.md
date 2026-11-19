@@ -137,11 +137,56 @@ same answer as `runtimeRole` plus a `remoteHub` block whose `stateSource` is `hu
 reports `unavailable` with an instruction to upgrade the hub rather than silently falling back to
 local login state, and `ocx config show` on a client prints a `_remoteHub` note saying the
 credentials and model availability live on the hub. The hub read uses the per-client data key
-only; no admin token and no provider secret ever reaches a client.
+only. Provider secrets stay on the Hub.
 
 `ocx status` makes a live hub-state request only when the saved connection still matches the
 status snapshot and the data-token file matches that connection. If either check fails, it skips
 the request and shows matching cached hub state, or `unavailable` if no matching cache exists.
+
+### Management reads from a connected client
+
+`ocx account list` authenticates to the client listener with the local admin token. The Hub
+issues a separate read credential during enrollment with a pairing code or an admin token.
+The client stores only the scoped credential in `hub-management-session.json`, with mode
+`0600` on POSIX or owner-only access on Windows. Each read also proves possession of the
+current enrolled data key. The Hub checks the exact method, path and query before serving
+cached or stored information. A cache miss does not start a provider probe or refresh.
+
+| Method | Local path | Allowed query keys |
+| --- | --- | --- |
+| GET, HEAD | `/api/codex-auth/accounts` | — |
+| GET, HEAD | `/api/codex-auth/active` | — |
+| GET, HEAD | `/api/oauth/providers` | — |
+| GET, HEAD | `/api/oauth/accounts` | `provider` (required) |
+| GET, HEAD | `/api/providers/keys` | `name` (required, positional key IDs and status) |
+| GET, HEAD | `/api/provider-quotas` | — |
+| GET, HEAD | `/api/quota-pool` | `refresh` (accepted and ignored) |
+| GET, HEAD | `/api/usage` | `range`, `surface`, `provider`, `model`, `since`, `until` |
+
+The key listing exposes the position, active state and paused state of each row. Use the Hub
+directly for durable account IDs, labels and key management. The quota pool serves the cached
+`ocx.quota-pool/1` contract used by GOAT.
+
+Usage through the stored credential returns the enrolled key's report without account breakdowns. The `ocx usage` command on
+a connected client continues to use the separate data-plane usage report described below.
+The dashboard relay applies the same read table and checks the local machine session, Host
+and Origin. It uses the caller's own Hub session, with its own pairing bootstrap at
+`/api/machine/hub-relay/opencodex-session`. Dashboard sign-out uses
+`POST /api/machine/hub-relay/api/session/logout` with the caller's machine and Hub GUI
+sessions and their CSRF tokens. The scoped read credential is barred from sign-out.
+Open the Hub dashboard directly for other writes and management routes. `ocx stop` targets the local runtime.
+
+Authenticated reads renew the Hub's five-minute idle lease. While the client runtime is
+running, it renews the lease once a minute with a passive read. Rotation replaces the credential and invalidates the old key generation on the
+Hub. Online `ocx disconnect` revokes the relay credential on the Hub and deletes the local file.
+If the Hub cannot confirm revocation, disconnect still completes locally and the Hub expires
+the credential five minutes after its last authenticated read. The enrolled data key has a
+separate revocation step, described above.
+
+`ocx connect status` reports the local file. If the lease expires or the Hub restarts, reads
+with the stored credential return `401`. Use a fresh pairing code with
+`ocx connect rotate --pairing-code-stdin` to provision a new credential. Pairing requires the
+client browser origin in the Hub's `corsAllowOrigins`.
 
 ## Linux systemd or macOS launchd
 

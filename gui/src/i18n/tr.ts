@@ -2,6 +2,7 @@ import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
+import { gatewayClientsCopy } from "./gateway-clients-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -137,6 +138,7 @@ export const tr: Record<TKey, string> = {
   ...shellV2Copy("tr"),
   ...codexCliUpdateCopy("tr"),
   ...remoteLinkDiagnosticsCopy("tr"),
+  ...gatewayClientsCopy("tr"),
   ...modelsV2Copy("tr"),
   ...accountsV2Copy("tr"),
   ...subagentsV2Copy("tr"),
@@ -770,11 +772,13 @@ export const tr: Record<TKey, string> = {
   "dash.updateCurrent": "Güncel",
   "dash.updateCommand": "Komut",
   "dash.updateSource": "Bu bir kaynak kod kopyasıdır. Terminalden güncelleyin.",
+  "dash.updateManaged": "Güncellemeler otomatik yapılır. Bu sürüm dizinini ana makinedeki zamanlanmış güncelleme görevi yönetir. Burada işlem yapmanız gerekmez.",
   "dash.updateUnavailable": "npm'den en son sürüm okunamadı.",
   "dash.updateRetry": "Tekrar dene",
   "dash.updateRecheck": "Yeniden kontrol et",
   "dash.updateCannotAuto": "Tek tıkla güncelleme kullanılamıyor ({reason}).",
   "dash.updateReason.source_checkout": "kaynak kod kopyası",
+  "dash.updateReason.managed_release": "yönetilen sürüm dizini",
   "dash.updateReason.latest_unavailable": "npm sunucusuna ulaşılamıyor",
   "dash.updateReason.already_latest": "zaten en son sürümde",
   "dash.updateReason.externally_managed": "mise tarafından harici olarak yönetiliyor; gösterilen komutu çalıştırın",

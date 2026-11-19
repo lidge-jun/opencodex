@@ -14,7 +14,11 @@ const STATUS_INFO_LENGTH_MISMATCH = 0xc0000004;
 const STATUS_BUFFER_OVERFLOW = 0x80000005;
 const STATUS_BUFFER_TOO_SMALL = 0xc0000023;
 
-type NativeReader = (pid: number) => string | undefined;
+type ProcessHandle = number | bigint;
+type NativeReader = {
+  readPid(pid: number): string | undefined;
+  readHandle(handle: ProcessHandle): string | undefined;
+};
 let nativeReader: NativeReader | null | undefined;
 
 /**
@@ -71,10 +75,8 @@ function loadNativeReader(): NativeReader | null {
   }
   const { OpenProcess, CloseHandle } = kernel32;
   const { NtQueryInformationProcess } = ntdll;
-  nativeReader = pid => {
-    const handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-    if (!handle) return undefined;
-    try {
+  nativeReader = {
+    readHandle(handle) {
       let size = INITIAL_BUFFER_BYTES;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const buffer = new Uint8Array(size);
@@ -90,9 +92,16 @@ function loadNativeReader(): NativeReader | null {
         size = needed;
       }
       return undefined;
-    } finally {
-      CloseHandle(handle);
-    }
+    },
+    readPid(pid) {
+      const handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+      if (!handle) return undefined;
+      try {
+        return this.readHandle(handle);
+      } finally {
+        CloseHandle(handle);
+      }
+    },
   };
   return nativeReader;
 }
@@ -100,7 +109,16 @@ function loadNativeReader(): NativeReader | null {
 /** The command line of `pid`, or undefined whenever the native read cannot answer. */
 export function readWindowsProcessCommandLineNative(pid: number): string | undefined {
   try {
-    return loadNativeReader()?.(pid);
+    return loadNativeReader()?.readPid(pid);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Read argv from the caller's open process handle, without resolving a PID again. */
+export function readWindowsProcessCommandLineFromHandle(handle: ProcessHandle): string | undefined {
+  try {
+    return loadNativeReader()?.readHandle(handle);
   } catch {
     return undefined;
   }

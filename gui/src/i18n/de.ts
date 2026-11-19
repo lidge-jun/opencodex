@@ -2,6 +2,7 @@ import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
+import { gatewayClientsCopy } from "./gateway-clients-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -137,6 +138,7 @@ export const de: Record<TKey, string> = {
   ...shellV2Copy("de"),
   ...codexCliUpdateCopy("de"),
   ...remoteLinkDiagnosticsCopy("de"),
+  ...gatewayClientsCopy("de"),
   ...modelsV2Copy("de"),
   ...accountsV2Copy("de"),
   ...subagentsV2Copy("de"),
@@ -757,11 +759,13 @@ export const de: Record<TKey, string> = {
   "dash.updateCurrent": "Auf dem neuesten Stand",
   "dash.updateCommand": "Befehl",
   "dash.updateSource": "Dies ist ein Source-Checkout. Aktualisiere es im Terminal mit dem angezeigten Befehl.",
+  "dash.updateManaged": "Updates erfolgen automatisch. Der geplante Aktualisierungsdienst des Hosts verwaltet dieses Versionsverzeichnis. Hier ist nichts zu tun.",
   "dash.updateUnavailable": "Die neueste Version konnte nicht von npm gelesen werden. Versuche es später erneut.",
   "dash.updateRetry": "Wiederholen",
   "dash.updateRecheck": "Erneut prüfen",
   "dash.updateCannotAuto": "Ein-Klick-Update ist nicht verfügbar ({reason}).",
   "dash.updateReason.source_checkout": "Quellcode-Checkout",
+  "dash.updateReason.managed_release": "verwaltetes Versionsverzeichnis",
   "dash.updateReason.latest_unavailable": "npm-Registry nicht erreichbar",
   "dash.updateReason.already_latest": "bereits auf dem neuesten Stand",
   "dash.updateReason.externally_managed": "extern von mise verwaltet; führe den angezeigten Befehl aus",

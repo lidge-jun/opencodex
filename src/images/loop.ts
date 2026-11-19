@@ -340,9 +340,9 @@ export interface ImageBridgeDeps {
   onIterationEnd?: () => void;
   /** Max image-generation rounds before forcing a final answer. Defaults to 3; clamped to [0, 10]. */
   maxRounds?: number;
-  /** Connect / response-header budget for non-runTurn iterations. */
+  /** Response-header budget for HTTP iterations. Zero disables the timer. */
   connectTimeoutMs?: number;
-  /** Stall budget (seconds) forwarded to bridgeToResponsesSSE; also bounds runTurn collect. */
+  /** Inactivity budget (seconds) for HTTP bodies, runTurn collection, and downstream SSE. Zero disables it. */
   stallTimeoutSec?: number;
   /** Provider-specific fetch (e.g. xAI transport wrapper). Falls back to global fetch. */
   fetchImpl?: typeof globalThis.fetch;
@@ -411,10 +411,10 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   let adapter = deps.adapter;
   const maxRounds = clampImageMaxRounds(deps.maxRounds ?? DEFAULT_MAX_ROUNDS);
   const HARD_CAP = maxRounds + 1;
-  const connectTimeoutMs = typeof deps.connectTimeoutMs === "number" && Number.isFinite(deps.connectTimeoutMs) && deps.connectTimeoutMs > 0
+  const connectTimeoutMs = typeof deps.connectTimeoutMs === "number" && Number.isFinite(deps.connectTimeoutMs) && deps.connectTimeoutMs >= 0
     ? Math.floor(deps.connectTimeoutMs)
     : CONNECT_TIMEOUT_MS;
-  const stallTimeoutMs = typeof deps.stallTimeoutSec === "number" && Number.isFinite(deps.stallTimeoutSec) && deps.stallTimeoutSec > 0
+  const stallTimeoutMs = typeof deps.stallTimeoutSec === "number" && Number.isFinite(deps.stallTimeoutSec) && deps.stallTimeoutSec >= 0
     ? Math.floor(deps.stallTimeoutSec * 1000)
     : STALL_TIMEOUT_MS;
   const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
@@ -743,7 +743,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
             body: prepared.response.body,
             signal,
             delayMs: rateLimitRetryDelayMs(rateLimitRetryPolicy, retryAfterHeader, Date.now()),
-            heartbeatIntervalMs: Math.min(10_000, Math.max(250, stallTimeoutMs / 2)),
+            heartbeatIntervalMs: stallTimeoutMs === 0 ? 10_000 : Math.min(10_000, Math.max(250, stallTimeoutMs / 2)),
           });
         } catch {
           throw new LoopError(499, "client closed request during image-bridge");

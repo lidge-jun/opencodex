@@ -2,6 +2,7 @@ import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
+import { gatewayClientsCopy } from "./gateway-clients-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -138,6 +139,7 @@ export const pt: Record<TKey, string> = {
   ...shellV2Copy("pt"),
   ...codexCliUpdateCopy("pt"),
   ...remoteLinkDiagnosticsCopy("pt"),
+  ...gatewayClientsCopy("pt"),
   ...modelsV2Copy("pt"),
   ...accountsV2Copy("pt"),
   ...subagentsV2Copy("pt"),
@@ -782,11 +784,13 @@ export const pt: Record<TKey, string> = {
   "dash.updateCurrent": "Atualizado",
   "dash.updateCommand": "Comando",
   "dash.updateSource": "Esta é uma cópia do código-fonte. Atualize-a pelo terminal com o comando exibido.",
+  "dash.updateManaged": "As atualizações são automáticas. A tarefa de atualização agendada no host gerencia este diretório de versão. Nenhuma ação é necessária aqui.",
   "dash.updateUnavailable": "Não foi possível ler a versão mais recente no npm. Tente novamente mais tarde.",
   "dash.updateRetry": "Tentar novamente",
   "dash.updateRecheck": "Verificar de novo",
   "dash.updateCannotAuto": "A atualização com um clique não está disponível ({reason}).",
   "dash.updateReason.source_checkout": "cópia do código-fonte",
+  "dash.updateReason.managed_release": "diretório de versão gerenciado",
   "dash.updateReason.latest_unavailable": "registro do npm inacessível",
   "dash.updateReason.already_latest": "já está na versão mais recente",
   "dash.updateReason.externally_managed": "gerenciado externamente pelo mise; execute o comando exibido",

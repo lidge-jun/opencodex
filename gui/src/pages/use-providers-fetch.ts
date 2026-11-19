@@ -99,7 +99,7 @@ export function useProvidersFetch({
       await Promise.all(provs.map(async p => {
         const read = (oauthReads.current.get(p) ?? 0) + 1;
         oauthReads.current.set(p, read);
-        const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${encodeURIComponent(p)}`).catch(() => null);
+        const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${encodeURIComponent(p)}${p === "m365-copilot" ? "&summary=1" : ""}`).catch(() => null);
         const s = sRes ? await readJsonIfOk<OAuthStatus>(sRes) : null;
         if (!s || typeof s.loggedIn !== "boolean") return;
         if (activeTarget.current !== target || !oauthAdmitted.current.has(p) || oauthBlocked.current.has(p) || !unchanged(p) || read < (oauthPublished.current.get(p) ?? 0)) return;

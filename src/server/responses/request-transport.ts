@@ -18,7 +18,7 @@ import { anthropicApiKeyForRequest, resolveAnthropicMessagesUrl } from "../../ad
 import { hostedAdvisorCredentials, stripHostedAdvisorBeta } from "../../adapters/anthropic/advisor-tool";
 import { bindAnthropicRefusalCredentialForSend } from "../../oauth/anthropic-account-refusal";
 import { captureAnthropicPhysicalSendOwnership, anthropicPhysicalSendOwnershipIsCurrent, type AnthropicPhysicalSendOwnership } from "../../oauth/anthropic-send-ownership";
-import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
+import { responsesTimeoutProvider, type ResponsesRequestContext, type ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { OAuthAccessSnapshot } from "../../oauth";
 import {
@@ -95,7 +95,7 @@ import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../../provide
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
 import { applyReasoningDisplayPolicy } from "./core-normalize";
 import { codexWsExecutorBinding, fetchWithHeaderTimeout, physicalSendGuardInit, physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
-import { resolveConnectTimeoutMs } from "../../stall-timeout";
+import { providerConnectTimeoutMs, resolveConnectTimeoutMs } from "../../stall-timeout";
 import { isLocalUpstream } from "../../lib/local-upstream";
 import { deepSeekImageFileBody, needsDeepSeekImageFiles } from "./deepseek-image-files";
 import type { ProviderFetchOptions } from "./fetch-helpers";
@@ -936,6 +936,14 @@ export async function prepareResponsesTransport(
           refused = true;
           throw new Error("Account selection changed before turn admission");
         }
+        const beforeCredentialSend = (): void => {
+          incoming.abortSignal?.throwIfAborted();
+          incoming.beforeCredentialSend?.();
+          if (!selectionIsCurrent(binding)) {
+            refused = !sent;
+            throw new Error("Account selection changed before turn dispatch");
+          }
+        };
         const beforePhysicalSend = (): void => {
           incoming.abortSignal?.throwIfAborted();
           if (sent) {
@@ -943,10 +951,7 @@ export async function prepareResponsesTransport(
               && !selectionIsCurrent(binding)) throw new Error("API key became unavailable during the turn");
             return;
           }
-          if (!selectionIsCurrent(binding)) {
-            refused = true;
-            throw new Error("Account selection changed before the first turn dispatch");
-          }
+          beforeCredentialSend();
           incoming.beforePhysicalSend?.();
           commitKeyAttemptSend();
           sent = true;
@@ -958,7 +963,7 @@ export async function prepareResponsesTransport(
           accountAutoPause: (name, provider, headers) => captureAccountAutoPauseAttempt(name, provider, { config, oauth: binding?.kind === "oauth" ? binding.snapshot : undefined }, headers),
           beforeDispatch: beforePhysicalSend,
         });
-        await run(requestParsed, { ...incoming, pacingSlot: attemptSlot, providerFetch: fetch, beforePhysicalSend }, event => { if (!refused) emit(event); });
+        await run(requestParsed, { ...incoming, pacingSlot: attemptSlot, providerFetch: fetch, beforePhysicalSend, beforeCredentialSend }, event => { if (!refused) emit(event); });
       } catch (error) {
         if (!refused) throw error;
       } finally {
@@ -1098,8 +1103,9 @@ export async function prepareResponsesTransport(
                   }) : {}) },
               { providerName: route.providerName, provider: route.provider },
             )) as typeof globalThis.fetch;
+            const connectTimeoutMs = providerConnectTimeoutMs(config, owner === "passthrough" ? undefined : responsesTimeoutProvider(options, route.provider));
             response = await fetchWithHeaderTimeout(target, dispatchInit, dispatchInit.signal ?? options.abortSignal ?? req.signal,
-              resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(target) }), requestParsed.stream, physicalFetch);
+              resolveConnectTimeoutMs(connectTimeoutMs, { localUpstream: isLocalUpstream(target) }), requestParsed.stream, physicalFetch);
           } catch (error) {
             if (pinned || !advisorRefusal || error !== advisorRefusal || !hostedAdvisor || advisorRebuilt) throw error;
             const signal = dispatchInit.signal ?? options.abortSignal ?? req.signal;

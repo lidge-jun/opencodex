@@ -34,6 +34,7 @@ export interface OAuthStatus {
   email?: string;
   error?: string;
   done?: boolean;
+  status?: "idle" | "pending" | "complete" | "error";
   hint?: import("../components/login-url-block").LoginHintData;
   needsReauth?: boolean;
   activeAccountId?: string | null;
