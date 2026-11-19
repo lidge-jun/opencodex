@@ -1,10 +1,12 @@
 /**
  * In-process Windows process primitives for the checked service stop (#7771).
  *
- * Four questions the checked stop asks of the kernel and the SCM:
+ * Process evidence the stop paths ask of the kernel and the SCM:
  *
  * - when was this process created (GetProcessTimes), so a PID that was reused between
  *   bind and terminate is told apart from the process that was bound;
+ * - does a live process share the caller's token user, and what is its creation identity
+ *   and optional command line (all read through the same handle for Link stop);
  * - terminate exactly the bound process: verify its creation time and token user on
  *   the same handle passed to TerminateProcess, so PID reuse cannot redirect the stop;
  * - has a bound process exited (WaitForSingleObject with a zero timeout on a handle
@@ -20,6 +22,7 @@
  */
 import { join } from "node:path";
 
+import { readWindowsProcessCommandLineFromHandle } from "../config/windows-process-command-line";
 import { resolveTrustedWindowsSystemDirectory } from "../lib/windows-elevation";
 
 const PROCESS_TERMINATE = 0x0001;
@@ -63,10 +66,17 @@ export type WindowsProcessWatch =
 export interface WindowsProcessNativeApi {
   /** Creation time in epoch ms (FILETIME truncated to ms), or null when unreadable. */
   creationTime(pid: number): number | null;
+  /** Creation in .NET ticks at CIM precision from a live process with the same token user. */
+  sameUserIdentity(pid: number, withCommandLine?: boolean): { ticks: bigint; commandLine?: string } | null;
   terminate(pid: number, boundStartTime: number | bigint): WindowsTerminateResult;
   openWatch(pid: number, boundStartTime: number): WindowsProcessWatch;
   /** PID of the running Task Scheduler service host, or null when it cannot be read. */
   scheduleServicePid(): number | null;
+}
+
+/** Keep compatibility with CIM timestamps in saved runtime and teardown records. */
+function fileTimeToCimTicks(fileTime: bigint): bigint {
+  return (fileTime + FILETIME_DOTNET_EPOCH) / 10n * 10n;
 }
 
 /** FILETIME (100 ns since 1601) to epoch ms, truncated. Zero or pre-1970 is unreadable. */
@@ -198,15 +208,28 @@ function loadNativeApi(): WindowsProcessNativeApi | null {
         k.CloseHandle(handle);
       }
     },
+    sameUserIdentity(pid, withCommandLine) {
+      const handle = k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid);
+      if (!handle) return null;
+      try {
+        const fileTime = handleFileTime(handle);
+        if (fileTime === null || handleUserSid(handle) !== handleUserSid(k.GetCurrentProcess())) return null;
+        const commandLine = withCommandLine ? readWindowsProcessCommandLineFromHandle(handle) : undefined;
+        if (handleExited(handle) !== false) return null;
+        return { ticks: fileTimeToCimTicks(fileTime), commandLine };
+      } catch {
+        return null;
+      } finally {
+        k.CloseHandle(handle);
+      }
+    },
     terminate(pid, boundStartTime) {
       const handle = k.OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid);
       if (!handle) return { status: openFailure() };
       try {
         const fileTime = handleFileTime(handle);
         if (fileTime === null) return { status: "unavailable" };
-        // The same-user CIM observation exposes .NET ticks at microsecond precision.
-        const created = typeof boundStartTime === "number" ? fileTimeToEpochMs(fileTime)
-          : (fileTime + FILETIME_DOTNET_EPOCH) / 10n * 10n;
+        const created = typeof boundStartTime === "number" ? fileTimeToEpochMs(fileTime) : fileTimeToCimTicks(fileTime);
         if (created !== boundStartTime) return { status: "reused" };
         const before = handleExited(handle);
         if (before === true) return { status: "gone" };

@@ -306,7 +306,7 @@ export async function preflightConnectedClientStop(
           const clientMayRemain = connection.kind !== "disconnected" || runtime?.clientLinkOwner !== undefined
             || runtime?.servingGeneration !== undefined;
           const manager = await observeGuardedManagerStopped({ kind: "absent" });
-          const offlineForegroundLink = manager === "unknown" && process.platform === "linux"
+          const offlineForegroundLink = manager === "unknown"
             && connection.kind === "connected" && connection.value.transport === "link"
             && (await import("../service/systemd")).systemdInstallationAbsent();
           if ((clientMayRemain && endpoints.length === 0)
@@ -331,12 +331,17 @@ export async function preflightConnectedClientStop(
     if ((savedLink || clientRecord) && !targetStart) throw unsupportedConnectedStop();
     const capability = await assertConnectedClientStopSupported(target, { healthOnly: connection.kind === "disconnected" || standaloneSibling });
     const sameStart = () => targetStart === undefined || readClientStopProcessStart(stopTarget.pid) === targetStart;
-    const checkPinnedTarget = (afterTerm?: RuntimePortState) => {
+    const checkPinnedRecord = (afterTerm?: RuntimePortState) => {
       const current = readRuntimePort(stopTarget.pid);
-      if ((!Bun.deepEquals(current, pinned, true) && !(afterTerm && Bun.deepEquals(current, afterTerm, true)))
-        || !sameStart()) throw unsupportedConnectedStop();
+      if (!Bun.deepEquals(current, pinned, true) && !(afterTerm && Bun.deepEquals(current, afterTerm, true))) throw unsupportedConnectedStop();
     };
-    checkPinnedTarget();
+    const checkPinnedTarget = (afterTerm?: RuntimePortState) => {
+      checkPinnedRecord(afterTerm);
+      if (!sameStart()) throw unsupportedConnectedStop();
+    };
+    // Attestation is read-only. Check the record now and the process again at the
+    // first write, manager stop or signal boundary that uses this proof.
+    checkPinnedRecord();
     if (!capability) throw unsupportedConnectedStop();
     if (standaloneSibling && !capability.nativeClient && !capability.linkStopFence) {
       onTarget?.({ target, verify: checkPinnedTarget, siblingOnly: true });

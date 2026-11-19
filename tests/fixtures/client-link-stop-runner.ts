@@ -741,7 +741,13 @@ if (options.mode === "retry") {
   }
   report({ signals, message });
 } else if (options.mode === "offline-stop") {
-  const { unitPath } = await import("../../src/service/systemd");
+  const systemd = await import("../../src/service/systemd");
+  const { unitPath, systemdInstallationAbsent } = systemd;
+  // Select just the Linux service probe. Keep real filesystem and ACL semantics
+  // for every recovery write, including when the fixture runs on Windows.
+  mock.module("../../src/service/systemd", () => ({ ...systemd,
+    systemdInstallationAbsent: () => systemdInstallationAbsent("linux"),
+  }));
   if (options.danglingServiceRecord) symlinkSync(join(home, "missing-service-state"), join(home, "service-state.json"));
   if (options.installedUnit) {
     mkdirSync(dirname(unitPath()), { recursive: true });
@@ -759,7 +765,6 @@ if (options.mode === "retry") {
     return exitCode;
   } }));
   mock.module("../../src/cli/codex-shim-autorestore", () => ({ async maybeAutoRestoreCodexShimAsync() {} }));
-  Object.defineProperty(process, "platform", { value: "linux" });
   process.argv = [process.execPath, "ocx", "stop", "--json"];
   await import("../../src/cli/index");
 } else if (options.mode === "file-cycle") {
