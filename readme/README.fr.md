@@ -303,7 +303,7 @@ consultez la [documentation d'installation](https://opencodex.me/fr/getting-star
 
 OpenCodex suit l'état conservé par le processus dans les catégories ci-dessous. Chacune possède une limite documentée :
 
-- **14 stockages conservés** (journal des requêtes, tampons circulaires de débogage, cache d'images, cache de
+- **15 stockages conservés** (journal des requêtes, tampons circulaires de débogage, cache d'images, cache de
   modèles, descriptions visuelles, blobs de curseurs, continuation des réponses, etc.) sont comptabilisés en octets et
   évincés selon le budget mémoire géré par l'application (256 Mio par défaut), sauf le stockage de
   rejeu des contrôles natifs, épinglé et jamais évincé.

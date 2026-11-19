@@ -78,8 +78,18 @@ export type OAuthCredentials = {
   source?: OAuthCredentialSource;
   /** Validated upstream subscription label; null is an observed unknown, absent is not read. */
   plan?: string | null;
-  /** Private authenticated account proof; never projected into account summaries. */
-  anthropicIdentity?: { v: 1; accountUuid: string; bearerSha256: string };
+  /**
+   * Display-only name of the organization the grant serves (Anthropic), read with the plan from
+   * the same bearer's profile; null is an observed unknown, absent is not read. Never identity.
+   */
+  organizationName?: string | null;
+  /**
+   * Private authenticated account proof; never projected into account summaries. The optional
+   * organization is the grant's scope, observed from the same bearer; it never proves identity.
+   */
+  anthropicIdentity?: { v: 1; accountUuid: string; bearerSha256: string; organizationUuid?: string };
+  /** Private exchange-attested scope for a bearer whose account UUID could not be proven. */
+  anthropicOrganizationScope?: { v: 1; organizationUuid: string; bearerSha256: string };
   /** Google Antigravity (Cloud Code Assist) discovered project id; injected into the CCA envelope. */
   projectId?: string;
   /**
@@ -123,6 +133,12 @@ export interface ProviderAccount {
    * verification will not help. Absent means an ordinary credential failure.
    */
   needsReauthReason?: "verify_account";
+  /**
+   * Why a `verify_account` hold was placed, when it is narrower than "verify". `tos_violation`:
+   * Google suspended the account. Kept beside the hold, not instead of it, so a build that does
+   * not know the cause still keeps the account out of the pool.
+   */
+  needsReauthCause?: "tos_violation";
   addedAt?: number;
 }
 

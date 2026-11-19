@@ -380,6 +380,26 @@ describe("pooled native Codex recovers a pre-output upstream refusal (#6969)", (
     expect(sharedSpendLedger().snapshot("pool", "openai")).toMatchObject({ reserved: 0, unresolved: expectedSends * 100 });
   });
 
+  test.each([
+    { attempts: 1, retried: false },
+    { attempts: 2, retried: true },
+  ])("opted-in main charges and records each of $attempts capacity sends once", async ({ attempts, retried }) => {
+    configureSharedSpendLedger({ ...DEFAULT_SPEND_RESERVATION_POLICY, pool: { maxTokens: 1_000 } });
+    const config = poolConfig([]);
+    config.providers.openai!.codexAccountMode = "direct";
+    config.providers.openai!.transientRetryOn5xx = { attempts };
+    FakeWebSocket.plan = ["heartbeat-bare-then-refuse", "heartbeat-bare-then-refuse", "ok"];
+
+    const { response, logCtx } = await send(config, { inputEstimate: 100 });
+    expect(response.status).toBe(200);
+    // A one-send cap refuses the retry before the wire; a two-send cap dispatches and records both.
+    expect(FakeWebSocket.instances.flatMap(socket => socket.sent)).toHaveLength(attempts);
+    expect((logCtx.attempts ?? []).reduce((sum, attempt) => sum + (attempt.sendCount ?? 0), 0)).toBe(attempts);
+    expect(logCtx.activeAttempt?.recoveryKinds?.includes("transient-5xx") ?? false).toBe(retried);
+    logCtx.spendTracker!.settle(undefined);
+    expect(sharedSpendLedger().snapshot("pool", "openai")).toMatchObject({ reserved: 0, unresolved: attempts * 100 });
+  });
+
   test("the same account is retried first and serves the turn", async () => {
     FakeWebSocket.plan = ["refuse", "ok"];
     const { response, body, logCtx } = await send(poolConfig());

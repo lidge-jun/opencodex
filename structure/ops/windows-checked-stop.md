@@ -88,9 +88,10 @@ is `survived` while the proxy is still alive after the service reports stopped. 
 variant `guardedStopWindowsServiceChecked` runs its authorizer at entry, before each manager stop and before each terminate and
 reports a refusal as `WindowsCheckedStopRefusedError` with what had already happened. For Task
 Scheduler it reauthorizes after validating the helper proof, before sending `stop` on stdin. The
-helper and outer deadlines must still be open after authorization. The parent sends only the
-smaller of the helper and outer remaining budgets; the helper checks that budget after
-post-approval refresh and before each captured instance's `Stop()`. The outer cap also aborts
+helper and outer deadlines must still be open after authorization. The helper starts its
+monotonic clock before sending proof. The parent measures from proof receipt and sends the
+earlier deadline as a cutoff on that clock. Time spent delivering approval and refreshing
+instances counts toward the cutoff, which the helper checks before each `Stop()`. The outer cap also aborts
 the owned helper, including while its registration or instance refresh is pending.
 Task-stop verdicts carry separate mutation evidence: a known failure before dispatch leaves
 `changed` false even if proof was approved, an attempted stop keeps it true, and a lost answer after dispatch is conservative.

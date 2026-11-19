@@ -1,4 +1,6 @@
-export const CODEX_WS_ID_MAX_BYTES = 4096;
+import { RESPONSE_ID_MAX_BYTES as CODEX_WS_ID_MAX_BYTES } from "../../responses/id-limits";
+
+export { CODEX_WS_ID_MAX_BYTES };
 export const CODEX_WS_MAX_TRACKED_ITEMS = 10_000;
 const MAX_TRACKED_ID_BYTES = 1024 * 1024;
 

@@ -249,6 +249,8 @@ export interface RetryBackoffOptions {
   baseDelayMs: number;
   maxDelayMs: number;
   headers?: Headers;
+  /** Delay already validated by the caller, including an explicit zero. */
+  retryAfterMs?: number;
   /**
    * Treat a provider's `Retry-After` as the earliest legal send rather than something the
    * local maximum may shorten. Opt-in per caller so the change lands on the transient path
@@ -419,7 +421,7 @@ export function retryAfterDelayMs(headers: Headers): number | undefined {
 }
 
 export function retryBackoffDelayMs(attempt: number, opts: RetryBackoffOptions): number {
-  const retryAfter = opts.headers ? retryAfterDelayMs(opts.headers) : undefined;
+  const retryAfter = opts.retryAfterMs ?? (opts.headers ? retryAfterDelayMs(opts.headers) : undefined);
   const exp = Math.min(opts.baseDelayMs * (2 ** attempt), opts.maxDelayMs);
   const jittered = Math.floor(exp * (0.8 + Math.random() * 0.4));
   if (retryAfter === undefined) return jittered;
@@ -523,6 +525,8 @@ export interface ResetRetryOptions {
   destination?: ErrorDestinationLabel;
   /** Total upstream sends allowed, including the first one. Not a per-layer retry count. */
   attempts?: number;
+  /** Live shared allowance, also forwarded to nested reset retries. */
+  remainingSends?: () => number;
   /**
    * Reports how many upstream sends this call actually consumed, so a caller that spans
    * several legs of one request (initial send, then a 429/account-recovery refetch) can
@@ -534,9 +538,10 @@ export interface ResetRetryOptions {
    * uncounted but UNCOUNTABLE: the callback existed on a type those call sites never reach.
    */
   onSendsConsumed?: ((sends: number) => void) & {
+    remaining?: () => number;
     beforeSend?: (reserveRetrySpend?: boolean) => boolean;
     close?: () => void;
-    execute?: <T>(run: () => Promise<T>) => Promise<T>;
+    execute?: <T>(run: () => Promise<T>, recoveryAdmission?: RetryRecoveryAdmission) => Promise<T>;
   };
   /**
    * Spend one operator-granted replacement for a pre-header reset this helper would otherwise
@@ -601,6 +606,20 @@ export function retainPacedRetryResponse(
 /** `offline-resend` is the single send after an offline wait (#7958), never a reset retry. */
 export type UpstreamSendRecovery = "connection-reset" | "transient-5xx" | "offline-resend";
 type ReplayableFetch = (recovery?: UpstreamSendRecovery) => Promise<Response>;
+
+/** A nested transport recovery must spend a slot in the retry helper that owns the send. */
+export type RetryRecoveryAdmission = {
+  canSend: () => boolean;
+  claim: (admit: () => boolean) => boolean;
+};
+
+function retryRecoveryAdmission(canSend: () => boolean, debit: () => void): RetryRecoveryAdmission {
+  return { canSend, claim(admit) {
+    if (!canSend() || !admit()) return false;
+    debit();
+    return true;
+  } };
+}
 
 /**
  * Rejection thrown by the upstream retry helpers when the terminal attempt
@@ -689,6 +708,7 @@ export async function fetchWithResetRetry(
   firstRecovery?: UpstreamSendRecovery,
 ): Promise<Response> {
   const attempts = normalizeSendAttempts(opts.attempts, RESET_RETRY_MAX_ATTEMPTS);
+  const remainingSends = opts.remainingSends ?? opts.onSendsConsumed?.remaining;
   // Zero is zero. The old Math.max(1, ...) floor meant an exhausted budget still bought one
   // more send on every recovery leg, which is most of what made a bounded per-layer retry
   // compose into an unbounded per-request count.
@@ -702,34 +722,45 @@ export async function fetchWithResetRetry(
   let spentOperatorReplacement = false;
   // The recovery the next send reports: the caller's for the first, then whichever path resent it.
   let recovery = firstRecovery;
+  let offlineFailure: { error: unknown } | undefined;
+  const budgetRefusal = () => recovery === "offline-resend" && offlineFailure
+    ? offlineFailure.error
+    : new SendBudgetExhaustedError(opts.destination ?? (opts.label ? errorDestinationLabel(opts.label) : undefined));
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (opts.abortSignal?.aborted) throw abortError(opts.abortSignal);
+    if (remainingSends && remainingSends() <= 0) throw budgetRefusal();
     // Reported before the await, one physical send at a time: a send that rejects has still
     // been made, and this helper leaves through four exits (return, reset give-up, non-reset
     // rethrow, abort), so a per-send report is the only shape that is correct on all of them.
-    if (opts.onSendsConsumed?.beforeSend && !opts.onSendsConsumed.beforeSend()) throw new SendBudgetExhaustedError(opts.destination ?? (opts.label ? errorDestinationLabel(opts.label) : undefined));
+    if (opts.onSendsConsumed?.beforeSend && !opts.onSendsConsumed.beforeSend()) throw budgetRefusal();
     if (!opts.onSendsConsumed?.beforeSend) opts.onSendsConsumed?.(1);
     try {
       let response: Response;
       try { const sendRecovery = recovery; const run = () => doFetch(sendRecovery);
-        response = await (opts.onSendsConsumed?.execute ? opts.onSendsConsumed.execute(run) : run()); }
+        response = await (opts.onSendsConsumed?.execute
+          ? opts.onSendsConsumed.execute(run, retryRecoveryAdmission(() => attempt + 1 < attempts, () => { attempt++; }))
+          : run()); }
       finally { if (opts.onSendsConsumed?.beforeSend) opts.onSendsConsumed(1); }
       return spentOperatorReplacement ? settleOperatorReplacement(response) : response;
     } catch (err) {
+      if (offlineFailure && recovery === "offline-resend" && err instanceof SendBudgetExhaustedError) throw offlineFailure.error;
       if (opts.abortSignal?.aborted) throw err;
       if (!isConnectionResetError(err)) {
         // Whatever ended the leg, an operator replacement already went out, so the first send
         // may have run the turn. Settle it as the refusal instead of throwing into a caller
         // whose transport-failure path answers with a client-retryable 502.
         if (spentOperatorReplacement) return replayRefusalResponse();
+        if (err instanceof SendBudgetExhaustedError) throw err;
         // A reset that already reached the origin is credential-visible
         // evidence: keep it attached so the terminal rejection cannot be
         // downgraded to the pre-connection neutral class (#914 review).
         if (sawReset) throw new UpstreamRetryEvidenceError([], err, true);
         // Nothing reached the origin, so one resend after reachability returns cannot repeat an effect.
         // A client that left during the wait gets this failure back, never the abort reason.
-        if (attempt + 1 < attempts && opts.offlineWait && await opts.offlineWait(err, opts.abortSignal)
+        if (attempt + 1 < attempts && (!remainingSends || remainingSends() > 0)
+          && opts.offlineWait && await opts.offlineWait(err, opts.abortSignal)
           && !opts.abortSignal?.aborted) {
+          offlineFailure = { error: err };
           recovery = "offline-resend";
           continue;
         }
@@ -738,14 +769,14 @@ export async function fetchWithResetRetry(
       if (opts.replaySafe === true) {
         // Repeating this operation cannot duplicate anything, so an exhausted budget rethrows
         // and the caller's own error path takes over.
-        if (attempt === attempts - 1) throw err;
+        if (attempt === attempts - 1 || (remainingSends && remainingSends() <= 0)) throw err;
       } else {
         // The stage table refuses an ambiguous pre-header reset. The only thing that overrides
         // it is an operator allowance, and claiming it here is what keeps the grant single --
         // the post-header protocol gate spends the same counter for the same logical request.
         // Return evidence rather than throwing a generic transport error: outer catches
         // otherwise turn it into a replayable 502 and a combo/account recovery resends it.
-        if (attempt + 1 >= attempts || opts.claimAmbiguousResend?.() !== true) {
+        if (attempt + 1 >= attempts || (remainingSends && remainingSends() <= 0) || opts.claimAmbiguousResend?.() !== true) {
           return replayRefusalResponse();
         }
         spentOperatorReplacement = true;
@@ -876,19 +907,23 @@ export async function fetchWithTransientRetry(
     retainedResponse = undefined;
     return response;
   };
+  let recovered = 0;
+  const remainingLocal = () => budget - sent - recovered;
+  const recoveryAdmission = retryRecoveryAdmission(() => remainingLocal() > 0, () => { recovered++; });
   const countedFetch: ReplayableFetch = (recovery) => {
     // Incremented BEFORE the await so a rejected send still consumes budget; counting only
     // successes would let a reset storm loop without bound.
     const reserveRetrySpend = retainedResponse !== undefined || sent > 0 && opts.reserveRetrySpend?.() === true;
-    if (opts.onSendsConsumed?.beforeSend?.(reserveRetrySpend) === false) throw new SendBudgetExhaustedError(opts.destination ?? (opts.label ? errorDestinationLabel(opts.label) : undefined));
+    if (remaining() <= 0 || opts.onSendsConsumed?.beforeSend?.(reserveRetrySpend) === false) throw new SendBudgetExhaustedError(opts.destination ?? (opts.label ? errorDestinationLabel(opts.label) : undefined));
     sent += 1;
     const run = () => doFetch(recovery);
-    return opts.onSendsConsumed?.execute ? opts.onSendsConsumed.execute(run) : run();
+    return opts.onSendsConsumed?.execute ? opts.onSendsConsumed.execute(run, recoveryAdmission) : run();
   };
   // No floor. A spent budget hands the inner helper 0, which refuses rather than buying one
   // more send -- the loop condition alone was never enough, because every later recovery leg
   // called this helper again and the floor funded each of them.
-  const remaining = () => Math.max(0, budget - sent);
+  const remaining = () => Math.max(0, Math.min(remainingLocal(),
+    opts.remainingSends?.() ?? Infinity, opts.onSendsConsumed?.remaining?.() ?? Infinity));
   // The inner reset layer now has its own `onSendsConsumed`, and these are the same physical
   // sends `countedFetch` already counts. Forwarding the reporter down the `remaining()` path
   // would report each of them twice, which is how a four-send cap becomes a two-send cap. One
@@ -896,6 +931,7 @@ export async function fetchWithTransientRetry(
   const innerResetOptions = (): ResetRetryOptions => ({
     ...opts,
     attempts: remaining(),
+    remainingSends: remaining,
     onSendsConsumed: undefined,
     // The offline wait belongs to the request's first send only (see below); later legs never wait.
     offlineWait: undefined,
@@ -916,7 +952,7 @@ export async function fetchWithTransientRetry(
       return resumed;
     } } : {}),
   }));
-  for (let attempt = 0; sent < budget; attempt++) {
+  for (let attempt = 0; remaining() > 0; attempt++) {
     // A non-replayable gateway status was settled after the request body had already left
     // for the origin; retrying it here is the automatic resend the marker exists to forbid.
     // An upstream that answers with the exact `x-should-retry: false` verdict has said the same
@@ -944,7 +980,7 @@ export async function fetchWithTransientRetry(
       return res;
     }
     console.warn(
-      `[upstream-retry] transient ${res.status}${opts.label ? ` (${opts.label})` : ""} — retrying (${sent + 1}/${budget})`,
+      `[upstream-retry] transient ${res.status}${opts.label ? ` (${opts.label})` : ""} — retrying (${sent + recovered + 1}/${budget})`,
     );
     const delay = retryBackoffDelayMs(attempt, {
       baseDelayMs: TRANSIENT_RETRY_BASE_DELAY_MS,

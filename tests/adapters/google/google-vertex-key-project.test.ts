@@ -96,7 +96,8 @@ describe("vertex project auto", () => {
   test("honors an explicit regional location", async () => {
     const req = await createGoogleAdapter(vertex("key-a", { location: "us" }))
       .buildRequest({ ...parsed(), stream: false } as OcxParsedRequest, incoming());
-    expect(req.url).toBe("https://us-aiplatform.googleapis.com/v1/projects/111111111111/locations/us/publishers/google/models/gemini-4-argon:generateContent");
+    // The us multi-region uses its regional-endpoint (rep) host.
+    expect(req.url).toBe("https://aiplatform.us.rep.googleapis.com/v1/projects/111111111111/locations/us/publishers/google/models/gemini-4-argon:generateContent");
   });
 
   test("probes once per key, including concurrent first requests", async () => {

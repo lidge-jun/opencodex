@@ -5,6 +5,7 @@
   "anthropic-active-limit-routing.test.ts": "adapters/anthropic",
   "anthropic-output-cap-by-model.test.ts": "adapters/anthropic",
   "web-search-eof.test.ts": "web-search",
+  "web-search-reset-recovery.test.ts": "web-search",
   "web-search-memory-citation.test.ts": "web-search",
   "openai-chat-single-system.test.ts": "adapters/openai",
   "fix-search-frame-shapes.test.ts": "web-search",
@@ -25,6 +26,8 @@
   "eventstream-fragmentation.test.ts": "responses",
   "responses-sidecar-usage.test.ts": "responses",
   "google-429-retry-evidence.test.ts": "adapters/google",
+  "google-retry-before-pacing.test.ts": "adapters/google",
+  "google-retry-held-lease.test.ts": "adapters/google",
   "google-vertex-key-project.test.ts": "adapters/google",
   "google-stream-fragmentation.test.ts": "adapters/google",
   "provider-quota-abliteration.test.ts": "providers",
@@ -40,5 +43,9 @@
   "agy-acp-policy.test.ts": "adapters",
   "agy-acp-config.test.ts": "config",
   "server-agy-acp.test.ts": "server",
-  "agy-acp-routing-policy.test.ts": "routing"
+  "agy-acp-routing-policy.test.ts": "routing",
+  "google-error-details.test.ts": "adapters/google",
+  "google-retry-structured.test.ts": "adapters/google",
+  "google-finish-fidelity.test.ts": "adapters/google",
+  "google-request-fidelity.test.ts": "adapters/google"
 }

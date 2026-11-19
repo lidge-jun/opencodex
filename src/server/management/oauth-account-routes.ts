@@ -553,6 +553,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   if (url.pathname === "/api/oauth/accounts" && req.method === "GET") {
     const provider = oauthCredentialSlot((url.searchParams.get("provider") ?? "").trim().toLowerCase());
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    const showOrganizationName = principal === "gui-session" || principal === "admin-token";
     const quotaMode = providerOAuthAccountQuotaMode(provider);
     const quotaProvider = config.providers[provider];
     const { getAccountSet } = await import("../../oauth/store");
@@ -572,7 +573,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const current = getLoginStatus(provider, maskEmails);
       return {
         ...(provider === "anthropic2" ? { provider } : {}), activeAccountId: current.activeAccountId ?? null,
-        accounts: (current.accounts ?? []).map(summary => {
+        accounts: (current.accounts ?? []).map(({ organizationName, ...summary }) => {
           const full = set?.accounts.find(account => account.id === summary.id);
           const health = full
             ? projectStoredOAuthAccountHealth(provider, full)
@@ -584,6 +585,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
           // `maskedLabel` stays masked for tray surfaces; `accountLabel` follows privacy.maskEmails.
           const accountLabel = accountDisplayLabel(full?.credential.email, maskEmails);
           return { ...summary, ...(maskedLabel ? { maskedLabel } : {}), ...(accountLabel ? { accountLabel } : {}),
+            ...(showOrganizationName && organizationName ? { organizationName } : {}),
             ...oauthAccountHealthFields(provider, summary.id, health), quotaMode,
             ...(supportsPause ? { paused: full?.paused === true, ...(full?.pauseDetails ? { pauseDetails: full.pauseDetails,
               ...(full.pauseEvidence ? { pauseEvidence: full.pauseEvidence } : {}) } : {}) } : {}),

@@ -14,7 +14,10 @@ async function answer(escapeMemoryCitationTags?: boolean): Promise<string> {
   const adapter: ProviderAdapter = {
     name: "mock-answer",
     buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
-    fetchResponse: async () => new Response("ok"),
+    fetchResponse: async (_req, ctx) => {
+      ctx?.onPhysicalSend?.({ ordinal: 1 });
+      return new Response("ok");
+    },
     async *parseStream() {
       yield { type: "text_delta", text: "quoted <oai-mem-" } satisfies AdapterEvent;
       yield { type: "text_delta", text: "citation> prose" } satisfies AdapterEvent;

@@ -114,8 +114,8 @@ de tareas. Finalizar sus instancias no repara el registro. Repara un registro qu
 o contacta con su propietario o administrador. La parada rechaza nuevas acciones al vencer
 su límite de tiempo, cancela el proceso auxiliar de parada y conserva los cambios confirmados
 en el resultado, incluso si la verificación final sigue pendiente.
-Si ya se envió la autorización pero el auxiliar no ha respondido, el resultado indica de forma
-conservadora que pudo haber una parada; una respuesta ausente no prueba que nada cambió.
+Si se envía la autorización y el auxiliar no responde antes del plazo, la CLI indica
+que no pudo leer el estado del servicio (`state-unknown`) y marca la parada como fallida.
 
 OpenCodex solo finaliza directamente un envoltorio si comprueba que pertenece a tu cuenta.
 Ignora los envoltorios que pertenecen a otro usuario. Si no puede verificar el propietario

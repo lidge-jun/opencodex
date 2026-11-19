@@ -261,8 +261,15 @@ $script:scenario = $args[0]
 $script:sid = 'S-1-5-21-100-200-300-1001'
 $script:taskReads = 0
 $script:elapsed = 0
-$script:stopClock = [pscustomobject]@{}
-$script:stopClock | Add-Member ScriptProperty ElapsedMilliseconds { $script:elapsed }
+function Start-FixtureClock {
+  $clock = [pscustomobject]@{ Started = $script:elapsed }
+  $clock | Add-Member ScriptProperty ElapsedMilliseconds { $script:elapsed - $this.Started }
+  $clock
+}
+function Read-FixtureApproval {
+  if ($script:scenario -eq 'late-approval') { $script:elapsed = 2000 }
+  [Console]::ReadLine()
+}
 $script:stopped = [Collections.Generic.List[int]]::new()
 function New-Instance($enginePid) {
   $obj = [pscustomobject]@{ EnginePID = $enginePid; State = 4; InstanceGuid = [Guid]::NewGuid(); Reads = 0 }
@@ -318,7 +325,8 @@ function Invoke-CimMethod {
 }
 `;
   const helper = WINDOWS_TASK_INSTANCE_STOP_SCRIPT
-    .replace("[Diagnostics.Stopwatch]::StartNew()", "$script:stopClock")
+    .replace("[Diagnostics.Stopwatch]::StartNew()", "Start-FixtureClock")
+    .replace("[Console]::ReadLine()", "Read-FixtureApproval")
     .replace(/^\s*Import-Module .*'CimCmdlets\.psd1'.*$/m, "")
     .replaceAll("CimCmdlets\\", "")
     .replace("Microsoft.PowerShell.Utility\\New-Object -ComObject Schedule.Service", "New-Object -ComObject FixtureScheduler")
@@ -326,7 +334,7 @@ function Invoke-CimMethod {
       "([pscustomobject]@{ User = @{ Value = $script:sid }; Name = 'HOST\\test' })");
   expect(helper).toContain("$service = New-Object -ComObject FixtureScheduler");
   expect(helper).not.toContain("Schedule.Service");
-  // All eight launches share one 60 s window (each capped at the spawn budget), so a hang fails here
+  // All launches share one 60 s window (each capped at the spawn budget), so a hang fails here
   // with the active scenario named, inside the 120 s Linux batch deadline.
   const deadline = Date.now() + 60_000;
   for (const [scenario, status, stopped] of [
@@ -338,6 +346,7 @@ function Invoke-CimMethod {
     ["rejected", "unverified-registration", ""],
     ["hidden", "unverified-registration", ""],
     ["idle", "not-running", ""],
+    ["late-approval", "failed", ""],
     ["deadline-before-first", "failed", ""],
     ["deadline-between-stops", "failed", "42"],
   ]) {
@@ -350,7 +359,7 @@ function Invoke-CimMethod {
       stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
       timeout: Math.max(1_000, Math.min(SPAWN_BUDGET_MS, deadline - Date.now())),
     });
-    child.stdin.write(scenario === "rejected" ? "\n" : "stop 2000\n");
+    child.stdin.write(scenario === "rejected" ? "\n" : "stop-before 2000\n");
     child.stdin.end();
     const [stdout, stderr, code] = await Promise.all([
       new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,

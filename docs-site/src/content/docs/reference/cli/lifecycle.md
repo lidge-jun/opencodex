@@ -187,8 +187,8 @@ Ending its running instances does not repair its registration. Repair a registra
 or contact its owner or administrator. The stop refuses further actions once its time limit has
 passed, cancels the owned stop helper, and retains confirmed changes in its result even if
 final verification is still pending when the time limit expires.
-If approval was sent but the helper has not answered, the result conservatively reports that
-a stop may have occurred; it does not report an unchanged system from a missing answer.
+If the helper has not answered by the deadline after approval was sent, the CLI reports that
+it could not read the service state (`state-unknown`) and marks the stop as failed.
 
 OpenCodex terminates a wrapper directly only after verifying that it belongs to your account.
 It ignores wrappers proven to belong to another user. If it cannot verify the owner of a wrapper

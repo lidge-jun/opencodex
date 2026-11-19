@@ -29,6 +29,7 @@ import type { PolicyRequestScope } from "./policy-request-scope";
 import type { SpendAdmissionPolicy } from "../../lib/spend-reservation-ledger";
 import type { OcxParsedRequest } from "../../types";
 import type { PolicyRequestEvidence } from "../../routing/evaluator";
+import type { ConnectionReplayScope } from "../../responses/state/connection-scope";
 
 export interface HostedAdvisorSpendScope {
   readonly ceilings: SpendAdmissionPolicy;
@@ -170,6 +171,14 @@ export interface HandleResponsesOptions {
    * holder with no principal preserves keyless replay; never populate it from client data.
    */
   replayPrincipal?: Readonly<{ clientPrincipalId: string | undefined }>;
+  /**
+   * Internal connection-owned replay scope minted by the /v1/responses WebSocket upgrade for an
+   * unidentified loopback caller (src/responses/state/connection-scope.ts). Memory-only, bound to
+   * that socket's handshake thread, never sent to the client. It backfills only the replay owner
+   * key when no caller principal resolved; it is not a credential, grants no data-plane, history
+   * or notes authority, and must never be populated from client data.
+   */
+  replayScope?: ConnectionReplayScope;
   /** Captured for the logical request and inherited by retries and combo children. */
   readonly plaintextV2Decision?: boolean;
   /** Called at most once after the complete client body is read and accepted for dispatch. */

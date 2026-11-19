@@ -14,6 +14,7 @@ export type OAuthHealthReason =
   | "quota"
   | "unauthorized"
   | "forbidden"
+  | "tos_violation"
   | "refresh_failed"
   | "refresh_conflict"
   | "metadata_mismatch"
@@ -75,6 +76,7 @@ export function oauthHealthLabelKey(health: OAuthHealthView | undefined): TKey |
       : "pws.healthLabel.quotaLimited";
   }
   if (health.status === "reauth_required") {
+    if (health.reason === "tos_violation") return "pws.healthLabel.accountSuspended";
     return health.reason === "refresh_failed"
       ? "pws.healthLabel.refreshFailed"
       : "pws.healthLabel.reauthRequired";
@@ -114,7 +116,10 @@ export function formatOAuthHealthSummary(
     );
   }
   if (health.status === "reauth_required") {
-    return t("pws.healthSummary.reauthRequired", { provider, account });
+    const key = health.reason === "tos_violation"
+      ? "pws.healthSummary.accountSuspended"
+      : "pws.healthSummary.reauthRequired";
+    return t(key, { provider, account });
   }
   if (health.reason === "validation_pending") {
     return t("pws.healthSummary.validationPending", { provider, account });

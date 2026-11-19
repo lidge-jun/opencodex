@@ -175,12 +175,12 @@ function rollbackInjectedKeys(port: number, injectedKeys: string[], tracked?: Tr
 }
 
 /**
- * In-process effective model-env (default + tier slots, [1m] applied) under the shared
- * 3s bound (audit R4#3). Returns {} on timeout/failure so injection degrades safely.
+ * Resolve model slots with the shared 3s context-map bound (audit R4#3).
+ * Without the map, configured selectors still work and automatic tier fills are omitted.
  */
 async function computeEffectiveModelEnv(config: OcxConfig, auto?: AutoContextMode): Promise<{ modelEnv: Record<string, string>; windows: Record<string, number> }> {
   const { boundedContextWindows, buildClaudeContextWindows, effectiveModelEnv } = await import("../claude/context-windows");
-  const windows = await boundedContextWindows(async () => {
+  const windows = (await boundedContextWindows(async () => {
     const { gatherRoutedModels, nativeContextLimits, visibleNativeSlugs } = await import("../codex/catalog");
     try {
       return buildClaudeContextWindows([...visibleNativeSlugs(config)], await gatherRoutedModels(config), nativeContextLimits(config));
@@ -190,8 +190,11 @@ async function computeEffectiveModelEnv(config: OcxConfig, auto?: AutoContextMod
       }
       throw error;
     }
-  });
-  return { modelEnv: effectiveModelEnv(config.claudeCode, windows ?? {}, auto), windows: windows ?? {} };
+  })) ?? {};
+  const modelEnv = effectiveModelEnv(config.claudeCode, windows, auto);
+  // A system-wide default would look like a user override to a launcher on a different PATH.
+  if (config.claudeCode?.tierModels?.fable === undefined) delete modelEnv.ANTHROPIC_DEFAULT_FABLE_MODEL;
+  return { modelEnv, windows };
 }
 
 export async function injectSystemEnv(

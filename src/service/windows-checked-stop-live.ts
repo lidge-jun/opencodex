@@ -131,15 +131,20 @@ export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, 
       pending += chunk.toString("latin1");
       const end = pending.indexOf("\n");
       if (end < 0) return;
+      const proofReceivedAt = performance.now();
       helper.stdout?.off("data", onProof);
       let approved = false;
       try {
         approved = await authorizeProof(pending.slice(0, end).replace(/\r$/, ""));
       } catch { /* An authorizer failure leaves stdin unapproved. */ }
-      const remaining = Math.floor(Math.min(deadline - performance.now(), control?.remainingMs?.() ?? Infinity));
+      const now = performance.now();
+      const remaining = Math.floor(Math.min(deadline - now, control?.remainingMs?.() ?? Infinity));
       authorized = approved && remaining > 0 && control?.signal?.aborted !== true;
+      // The helper started its stopwatch before sending proof. Measuring from receipt here
+      // gives it a conservative cutoff on that clock, even if our reply sits unread.
+      const stopBeforeMs = Math.floor(now - proofReceivedAt + remaining);
       if (authorized && helper.stdin && !helper.stdin.destroyed && !helper.stdin.writableEnded) control?.onDispatch?.();
-      helper.stdin?.end(authorized ? `stop ${remaining}\n` : "\n");
+      helper.stdin?.end(authorized ? `stop-before ${stopBeforeMs}\n` : "\n");
     };
     helper.stdin?.on("error", () => { /* execFile reports the helper's exit or timeout. */ });
     helper.stdout?.on("data", onProof);

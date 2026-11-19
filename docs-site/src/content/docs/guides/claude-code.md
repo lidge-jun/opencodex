@@ -228,7 +228,7 @@ ocx claude
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Auto-context compaction threshold (default `829800`); when smaller catalog windows need per-model limits, routed `ocx claude` uses session-only `--settings` instead |
 | `ANTHROPIC_MODEL` | `claudeCode.model` (optional) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (optional; legacy `ANTHROPIC_SMALL_FAST_MODEL` too) |
-| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`; on a subscription launch an unset slot gets the native `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`, so `--model opus`, `sonnet` and `fable` keep their 1M context |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`. On a local subscription launch with `nativePassthrough` enabled and 1M accounting (the default), an unset slot that qualifies for automatic marking gets the native `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]`. Fable gets `claude-fable-5-2[1m]` with Claude Code 2.1.290 or newer, and `claude-fable-5-1[1m]` when the version is older or unknown. Setting `claudeCode.contextAccounting` to `200k` disables automatic `[1m]` marking and leaves unset slots empty. |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | The `/model` label for a tier slot that OpenCodex sets to a routed alias, such as `gpt-6.1-sol (native)` for `ocx-claude-native--gpt-6.1-sol`. Without it, Claude Code labels that row with the alias. The alias stays the selected model id. When system env is on, the launchd environment and the shell hook get the same slot and label pair. A slot or label you set yourself is left alone |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `1` when `alwaysEnableEffort` is on (conditional) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` when set (conditional; not injected by default, so Claude Code's own default applies — see [MCP tool schemas fill the context](#troubleshooting)) |
@@ -946,8 +946,10 @@ slot then gets the native id Claude Code resolves that alias to, with the `[1m]`
 behind a gateway Claude Code accounts an unmarked id at 200k. An `anthropic` row capped below 1M or
 a `claudeCode.modelMap` entry keeps its id unmarked, and Haiku is never filled or marked. When the
 launch uses proxy auth or `nativePassthrough` is off, the router decides, and only a routed row's
-window counts. System env and the shell file leave unset slots empty, since their values also reach
-launches that go through a hub.
+window counts. System env, the shell file, and the dashboard's manual environment block export
+Fable only when its slot is configured. When the slot is unset, `ocx claude` chooses the automatic
+Fable fill using the CLI on its own PATH. The manual block leaves Fable selection to the Claude Code
+installation in the shell where you paste it.
 
 When both `tierModels.haiku` and `smallFastModel` are absent, OpenCodex leaves both helper variables unset; Claude Code then chooses its native helper model (currently Sonnet), which may incur native-provider charges.
 
