@@ -9,8 +9,9 @@ use the bridge for their inherited-policy checks.
 
 The native leg checks the captured admission model scope against the resolved destination.
 `src/server/gemini-native-catalog.ts` extends the configured Gemini catalog with visible Gemini
-models from the existing Antigravity discovery cache. List, lookup and token counting apply
-the same route and key checks. Wire aliases are published only when routing the alias selects
+models from the existing Antigravity discovery cache and the shared model visibility filter.
+List, lookup and token counting apply the same route and key checks to the advertised
+destination. A key can allow a concrete tier without allowing its source family. Wire aliases are published only when routing the alias selects
 the native leg and maps to that same wire ID. These reads reuse the cached roster and start no
 upstream discovery. Generation resolves the Antigravity wire model before accessing OAuth.
 
@@ -49,8 +50,9 @@ Native errors fail the request-log row. A physical send marks the [protocol trac
 as native Gemini, which the dashboard uses for its protocol badge. Successful buffered responses
 and complete streams supply normalized token counts through the shared Google usage parser.
 For a stream, only its last valid cumulative snapshot is recorded. The dashboard derives its
-end-to-end token rate from output tokens and request duration. Payloads and provider diagnostics
-are omitted from the log.
+end-to-end token rate from output tokens and request duration. When an API price matches,
+the cost estimate accounts for reported cache hits at the read rate. Gemini generation usage
+has no cache-write counter. Payloads and provider diagnostics are omitted from the log.
 
 Coverage lives in `tests/server/gemini-native-routes.test.ts`,
 `tests/server/gemini-native-wire.test.ts` and `tests/server/gemini-native.test.ts`.

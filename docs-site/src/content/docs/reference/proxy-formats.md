@@ -1161,7 +1161,9 @@ models. Refresh the Antigravity model list in OpenCodex to populate the cache. N
 are available when the exact selector routes to that Antigravity model and the admission key
 allows it. Requests sent through the native path show **Gemini → Gemini · Native** in the
 dashboard's request logs. When a completed response reports token counts, the log displays
-them and computes the end-to-end output rate.
+them and computes the end-to-end output rate. For models with a matched official rate, the
+`~$` column estimates the equivalent Gemini API cost from reported input, output and cache-hit
+tokens. The amount is an API price reference for Antigravity OAuth sessions.
 
 If an upstream payload contains bound account credentials, the proxy returns a generic
 Gemini error. A valid upstream `[DONE]` or a Gemini error ends stream delivery.

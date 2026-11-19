@@ -24,9 +24,12 @@ const SCOPE_KEY = "ocx_data_" + "d".repeat(40);
 const MODEL_SCOPE_KEY = "ocx_data_" + "b".repeat(40);
 const HYDROGEN = "gemini-4-hydrogen";
 const NEON = "gemini-4-neon";
+const NEW_GEMINI = "gemini-discovery-fixture";
+const TIER_SCOPE_KEY = "ocx_data_" + "f".repeat(40);
 const DISCOVERED_WIRES = [
   ...["low", "medium", "high", "xhigh"].map(tier => `${HYDROGEN}-${tier}`),
   ...["low", "medium", "high"].map(tier => `${NEON}-${tier}`),
+  NEW_GEMINI,
 ];
 const RAW = '{"contents":[{"role":"user","parts":[{"text":"hello"}]}], "future":9007199254740993123}';
 const PAYLOAD = '{"candidates":[{"content":{"role":"model","parts":[{"text":"hello"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":12,"toolUsePromptTokenCount":5,"candidatesTokenCount":7,"thoughtsTokenCount":3,"cachedContentTokenCount":4},"future":9007199254740993123}';
@@ -102,6 +105,8 @@ function config(flag?: boolean): OcxConfig {
       { id: "gemini-scope", name: "Gemini scope", key: SCOPE_KEY, createdAt: "2026-01-01T00:00:00.000Z", allowedProviders: ["fx"] },
       { id: "gemini-model-scope", name: "Gemini model scope", key: MODEL_SCOPE_KEY, createdAt: "2026-01-01T00:00:00.000Z",
         allowedProviders: [PROVIDER], allowedModels: [`${PROVIDER}/gemini-4-argon`] },
+      { id: "gemini-tier-scope", name: "Gemini tier scope", key: TIER_SCOPE_KEY, createdAt: "2026-01-01T00:00:00.000Z",
+        allowedProviders: [PROVIDER], allowedModels: [`${PROVIDER}/${HYDROGEN}-high`] },
     ],
   };
 }
@@ -292,6 +297,22 @@ test("Gemini discovery and lookup reuse live Antigravity models and exact wire t
       }
       expect(models.map(model => model.name)).not.toContain(`models/${NEON}-xhigh`);
       expect((await get(base, `/v1beta/models/${NEON}-xhigh`)).status).toBe(404);
+
+      const tierScope = { "x-goog-api-key": TIER_SCOPE_KEY };
+      const high = `${HYDROGEN}-high`;
+      const scopedCatalog = await get(base, "/v1beta/models", tierScope);
+      const scopedModels = (await scopedCatalog.json() as { models: Array<{ name: string }> }).models;
+      expect(scopedModels.map(model => model.name)).toEqual([`models/${high}`]);
+      const scopedLookup = await get(base, `/v1beta/models/${high}`, tierScope);
+      expect(scopedLookup.status).toBe(200);
+      expect(await scopedLookup.json()).toEqual(scopedModels[0]);
+      expect((await get(base, `/v1beta/models/${PROVIDER}/${HYDROGEN}`, tierScope)).status).toBe(404);
+      expect((await get(base, `/v1beta/models/${HYDROGEN}-xhigh`, tierScope)).status).toBe(404);
+      const scopedSend = await post(base, generation(high), tierScope);
+      expect(scopedSend.status).toBe(200);
+      expect(await scopedSend.text()).toBe(PAYLOAD);
+      expect(JSON.parse(seen.at(-1)!.body).model).toBe(high);
+      expect((await post(base, generation(`${HYDROGEN}-xhigh`), tierScope)).status).toBe(403);
 
       const send = await post(base, generation(`${HYDROGEN}-xhigh`));
       expect(send.status).toBe(200);

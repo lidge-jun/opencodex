@@ -19,7 +19,7 @@ import { chatConversationToIr } from "../protocols/codecs/chat-ir";
 import { ChatCompletionsRequestError } from "../chat/inbound";
 import { estimateInputTokens } from "./responses/input-admission";
 import type { DataPlaneAdmission } from "./auth-cors";
-import { resolveAdmissionModelScope, routeAllowedByScope, type AdmissionModelScope } from "./admission-model-scope";
+import { resolveAdmissionModelScope, routeAllowedByScope } from "./admission-model-scope";
 import type { GeminiMethod } from "./gemini-native-paths";
 import { geminiNativeCatalogAliases, geminiNativeCatalogLookup, geminiNativeDiscoveredRoutes } from "./gemini-native-catalog";
 import {
@@ -66,11 +66,11 @@ export function toGeminiRefusal(response: Response): Response {
   return applyLocalRefusalCode(geminiError(parts.status, parts.message, parts.retryAfter), parts.localRefusalCode);
 }
 
-function eligibleRoutes(config: OcxConfig, req: Request, scope: AdmissionModelScope | undefined) {
+function geminiCatalogRoutes(config: OcxConfig, req: Request) {
   const configured = listOllamaRoutes(config, req);
   const selectors = new Set(configured.map(row => row.selector));
   const discovered = geminiNativeDiscoveredRoutes(config, req).filter(row => !selectors.has(row.selector));
-  return [...configured, ...discovered].filter(row => routeAllowedByScope(scope, row.route));
+  return [...configured, ...discovered];
 }
 
 /** Token limits from configuration first, then generated model metadata; omitted when unknown. */
@@ -98,8 +98,10 @@ const modelResource = (config: OcxConfig, row: { selector: string; route: RouteR
 
 export function handleGeminiModels(config: OcxConfig, req: Request, admission: DataPlaneAdmission): Response {
   const scope = resolveAdmissionModelScope(config, admission);
-  const rows = eligibleRoutes(config, req, scope);
-  const aliases = geminiNativeCatalogAliases(config, req, rows, scope);
+  const candidates = geminiCatalogRoutes(config, req);
+  const rows = candidates.filter(row => routeAllowedByScope(scope, row.route));
+  // A key can allow a concrete effort tier while excluding its source family.
+  const aliases = geminiNativeCatalogAliases(config, req, candidates, scope);
   return Response.json({ models: [...rows, ...aliases].map(row => modelResource(config, row)) });
 }
 
@@ -107,7 +109,7 @@ function findGeminiCatalogRow(config: OcxConfig, req: Request, admission: DataPl
   const row = findOllamaRoute(config, model, req) ?? geminiNativeDiscoveredRoutes(config, req, model)[0];
   const scope = resolveAdmissionModelScope(config, admission);
   if (row && routeAllowedByScope(scope, row.route)) return row;
-  return geminiNativeCatalogLookup(config, req, model, () => eligibleRoutes(config, req, scope), scope);
+  return geminiNativeCatalogLookup(config, req, model, () => geminiCatalogRoutes(config, req), scope);
 }
 
 export function handleGeminiModel(config: OcxConfig, req: Request, admission: DataPlaneAdmission, model: string): Response {
