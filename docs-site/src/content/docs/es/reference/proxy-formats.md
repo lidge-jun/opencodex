@@ -35,7 +35,7 @@ antes de reintentar con la misma clave. Los límites de frecuencia reales del pr
 influyendo en las pausas temporales de las cuentas.
 
 Si una solicitud de Messages sin streaming recibe un rechazo de reenvío reconocido al
-procesar un flujo de Responses, devuelve el mismo código y mensaje fijo en un error HTTP 429
+procesar un flujo de Responses o eventos directos del proveedor, devuelve el mismo código y mensaje fijo en un error HTTP 429
 de Messages, con `x-should-retry: false` y sin `Retry-After`.
 
 Si ya se envió una solicitud de inferencia por la ruta nativa de Anthropic Messages y se agota

@@ -102,6 +102,8 @@ interface ProviderAdapter {
 
 ## `anthropic`
 
+有关可选 OAuth 兼容设置及系统指令优先级的变化，请参阅[英文规范文档](/reference/adapters/#anthropic)。
+
 **目标：** Anthropic **Messages**（`/v1/messages`）。
 **认证：** `key`（默认 `x-api-key`，或设置 `apiKeyTransport: "bearer"` 后使用 `Authorization: Bearer`）或 `oauth`（Bearer + `anthropic-beta`，用于 Claude Pro/Max）。
 

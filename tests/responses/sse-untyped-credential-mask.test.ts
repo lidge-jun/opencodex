@@ -3,7 +3,7 @@ import { addFinalRequestLog, inspectResponseLogSsePayload, type RequestLogContex
 import { relaySseWithFailedTail } from "../../src/server";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/relay-eager";
 import { createForwardedEvidenceRedaction, createOutboundCredentialMask, createSynthesizedCopyMask, createTerminalErrorRedactionBlockRewrite } from "../../src/server/responses/terminal-error-redaction";
-import { OutboundCredentialRegistry, createSentValueGuard, createSentValueMask, maskSecretSpans, setOutboundCredentialRegistryForTests } from "../../src/lib/outbound-credential-registry";
+import { OutboundCredentialRegistry, SecretIndex, containsIndexedSecret, createSentValueGuard, createSentValueMask, maskSecretSpans, setOutboundCredentialRegistryForTests } from "../../src/lib/outbound-credential-registry";
 import { REDACTED_SECRET } from "../../src/lib/redact";
 import { sseDataPayload } from "../../src/server/sse-payload-rewrite";
 import { noteRelaySyntheticTail, noteRequestSentValueGuard } from "../../src/server/request-log-terminal-status";
@@ -712,5 +712,88 @@ describe("untyped error envelopes never carry a value this request sent", () => 
     } finally {
       restore();
     }
+  });
+});
+
+describe("credential prefix rejection", () => {
+  test("reuses completed KMP indexes without dropping safe text or later short matches", () => {
+    const index = new SecretIndex(["abaabaaba", "xyxyxyxy", "!"]);
+    for (const text of ["keep abaabaaba / xyxyxyxy tail !", "keep xyxyxyxy / abaabaaba tail !"]) {
+      expect(maskSecretSpans(text, "[REDACTED]", index)).toBe("keep [REDACTED] / [REDACTED] tail [REDACTED]");
+    }
+  });
+
+  test.each([String.fromCharCode(0), "\t", "\n", '"', "\\", String.fromCharCode(0xd800)])("indexes raw and JSON-escaped credential prefixes (%j)", prefix => {
+    const secret = prefix + "fixture-value-12345";
+    const mask = createOutboundCredentialMask({ "x-api-key": secret });
+    for (const spelling of [secret, JSON.stringify(secret).slice(1, -1)]) {
+      expect(mask(`keep ${spelling} tail`)).toBe("keep [REDACTED] tail");
+    }
+  });
+
+  test("stops prefix lookups after all long secrets received a complete overlapping scan", () => {
+    const index = new SecretIndex(["aaaaaaaa", "aaaaaaaa"]);
+    const get = spyOn(index.byPrefix, "get");
+    try {
+      expect(maskSecretSpans(`keep ${"a".repeat(4_096)} tail`, "[REDACTED]", index)).toBe("keep [REDACTED] tail");
+      expect(get).toHaveBeenCalledTimes(1);
+    } finally {
+      get.mockRestore();
+    }
+    const mixed = new SecretIndex(["aaaaaaaa", "bbbbbbbb", "tailSAFE"]);
+    expect(maskSecretSpans(`keep ${"a".repeat(32)} / ${"b".repeat(32)} / tailSAFE done`, "[REDACTED]", mixed))
+      .toBe("keep [REDACTED] / [REDACTED] / [REDACTED] done");
+  });
+
+  test.each(["exact", "containment", "sent guard", "sent mask"] as const)("%s allocates no prefix slices at impossible starts", mode => {
+    // 'z' can start an excerpt, but 'zz' cannot. Reject before making an 8-character slice.
+    const headers = { "x-api-key": "azbcdefgh" };
+    const index = new SecretIndex(["zbcdefgh"]);
+    const guard = createSentValueGuard(headers);
+    const mask = createSentValueMask(headers, "[REDACTED]", { wholeText: true });
+    const text = "z".repeat(4_096);
+    const run = () => mode === "exact" ? maskSecretSpans(text, "[REDACTED]", index)
+      : mode === "containment" ? containsIndexedSecret(text, index)
+      : mode === "sent guard" ? guard(text) : mask(text);
+    const slice = spyOn(String.prototype, "slice");
+    let result: string | boolean;
+    let slices: number;
+    try {
+      result = run();
+      slices = slice.mock.calls.length;
+    } finally {
+      slice.mockRestore();
+    }
+    expect(result!).toBe(mode === "containment" || mode === "sent guard" ? false : text);
+    expect(slices!).toBe(0);
+  });
+
+  test.each([
+    ["az123456", String.fromCharCode(0x161, 0x17a) + "123456"],
+    [String.fromCharCode(0x161, 0x17a) + "123456", "az123456"],
+    [String.fromCharCode(0, 0x7a) + "123456", String.fromCharCode(0x100, 0x7a) + "123456"],
+    [String.fromCharCode(0xd83d, 0xde00) + "123456", String.fromCharCode(0xd83d, 0xde01) + "123456"],
+    [String.fromCharCode(0xd800, 0x7a) + "123456", String.fromCharCode(0xd900, 0x7a) + "123456"],
+  ])("low-byte collisions cannot mask another UTF-16 prefix (%j, %j)", (secret, collision) => {
+    const index = new SecretIndex([secret]);
+    const headers = { "x-api-key": secret };
+    const guard = createSentValueGuard(headers);
+    const mask = createSentValueMask(headers, "[REDACTED]", { wholeText: true });
+    const text = `keep ${collision} | ${secret} tail`;
+    const expected = `keep ${collision} | [REDACTED] tail`;
+    expect(maskSecretSpans(text, "[REDACTED]", index)).toBe(expected);
+    expect(mask(text)).toBe(expected);
+    expect([containsIndexedSecret(collision, index), guard(collision)]).toEqual([false, false]);
+    expect([containsIndexedSecret(secret, index), guard(`keep ${secret} tail`)]).toEqual([true, true]);
+  });
+
+  test("keeps short matches, overlapping excerpts and independent request indexes", () => {
+    expect(maskSecretSpans("keep ababa tail", "[REDACTED]", new SecretIndex(["aba"]))).toBe("keep [REDACTED] tail");
+    const first = createSentValueMask({ "x-api-key": "az123456789" }, "[REDACTED]", { wholeText: true });
+    const second = createSentValueMask({ "x-api-key": "xy987654321" }, "[REDACTED]", { wholeText: true });
+    const text = "keep z12345678 tail";
+    expect(first(text)).toBe("keep [REDACTED] tail");
+    expect(second(text)).toBe(text);
+    expect(first(text)).toBe("keep [REDACTED] tail");
   });
 });

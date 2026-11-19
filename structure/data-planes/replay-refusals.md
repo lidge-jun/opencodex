@@ -20,6 +20,11 @@ Native and translated HTTP delivery preserve the fixed 429 envelope, exact code 
 `x-should-retry: false` across JSON rewraps, including combo and Messages conversion.
 The envelope omits `Retry-After`. The translated Messages collector preserves this policy
 when a Responses SSE terminal pairs a recognized refusal code with `response.retryable: false`.
+The direct Messages writer also retains recognized refusal codes, independently of a conflicting
+adapter status, `retryable` flag or overflow-like diagnostic. Only successful frame admission
+publishes this verdict to its collector. A matching collected terminal returns the same fixed
+429 envelope and retry veto; an unmatched raw record cannot borrow that verdict. Streaming
+delivery preserves the fixed error code and wording without changing committed HTTP headers.
 `src/server/responses/non-replayable-error.ts` sets that flag and preserves the exact public
 codes on native Responses failed terminals while replacing upstream diagnostics with fixed
 text. The upstream-owned `upstream_no_response` and `upstream_closed_before_response` retain

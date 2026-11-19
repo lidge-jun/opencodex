@@ -556,6 +556,9 @@ describe("headless GUI parity CLI", () => {
       ["/api/combos", "ocx combo"],
       ["/api/client-config", "ocx export"],
       ["/api/client-integrations", "ocx integration client"],
+      // Antigravity app and agy CLI: status, connect and disconnect are
+      // `ocx connect antigravity|agy [status]` and `ocx disconnect antigravity|agy`.
+      ["/api/gateway-clients", "ocx connect/disconnect antigravity|agy"],
       ["/api/codex-agent-roles", "ocx agent roles"],
       // #2463: both read and write reach the CLI. `ocx alias list` reads /api/aliases,
       // `ocx alias defaults` writes /api/default-aliases, and the per-provider writes sit

@@ -198,6 +198,8 @@ El catálogo ChatGPT passthrough también se superpone en las identificadores GP
 
 ## 2. Inicio de sesión de la cuenta (OAuth)
 
+Para cuentas profesionales o educativas de Microsoft, consulta la [configuración de Microsoft 365 Copilot](/es/guides/m365-copilot/).
+
 Los ajustes preestablecidos del proveedor pueden usar el inicio de sesión de la cuenta, incluido el GitHub Copilot, a través de un puente experimental no oficial de flujo de dispositivos. opencodex almacena sus credenciales en `~/.opencodex/auth.json`; los tokens actualizables se actualizan automáticamente, mientras que las claves duraderas se reutilizan hasta que el proveedor las revoca. `ocx login codex` también es aceptado, pero no es uno de estos proveedores: se dirige al grupo de cuentas Codex, el mismo flujo que `ocx account login codex`, que mantiene su propio libro de cuentas y necesita un proxy en ejecución. `chatgpt` y `openai` son alias de esa ruta.
 
 ```bash

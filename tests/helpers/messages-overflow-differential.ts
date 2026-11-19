@@ -59,9 +59,14 @@ function replaceOnce(source: string, needle: string, replacement: string): strin
       source = replaceOnce(source, "\n  const overflow = !replayRefusal && messagesOverflowPresentation((legacy.error as Rec).message);",
         '\n  globalThis.__messagesOverflowRecord("native-http", legacyOverflow);\n  const overflow = !replayRefusal && messagesOverflowPresentation((legacy.error as Rec).message);');
     }
-    if (path === "src/protocols/encoders/messages.ts" && !base) source = replaceOnce(source,
-      '  const status = isError ? (baselineOverflow ? 400 : 502) : 200;',
-      '  const status = isError ? (baselineOverflow ? 400 : 502) : 200;\n  globalThis.__messagesOverflowRecord("direct-collector", baselineOverflow);');
+    if (path === "src/protocols/encoders/messages.ts" && !base) {
+      source = replaceOnce(source,
+        '  const status = isError ? (baselineOverflow ? 400 : 502) : 200;',
+        '  const status = isError ? (baselineOverflow ? 400 : 502) : 200;\n  globalThis.__messagesOverflowRecord("direct-collector", baselineOverflow);');
+      source = replaceOnce(source,
+        'status: REPLAY_REFUSED_STATUS, code, contract: "replay_refused", overflow: false,',
+        'status: REPLAY_REFUSED_STATUS, code, contract: "replay_refused", overflow: globalThis.__messagesOverflowRecord("direct-refusal", false),');
+    }
     const target = join(scratch, base ? "baseline" : "head", path); mkdirSync(dirname(target), { recursive: true }); writeFileSync(target, source); overlays.set(repoPath(path), target);
   }
   const filter = new RegExp(`^(?:${[...overlays.keys()].map(path => path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})$`);

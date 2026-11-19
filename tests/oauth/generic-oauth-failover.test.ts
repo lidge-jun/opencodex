@@ -559,11 +559,13 @@ describe("sidecar on429 wiring", () => {
     // The counts differ by rotator because the recovery sites differ, and each number is a
     // statement about which providers can recover where:
     //
-    //   generic  = 6: streaming loop, continuation loop, sidecar hook, runTurn preflight,
+    //   generic  = 7: streaming loop, continuation loop, sidecar hook, runTurn preflight,
     //                native Responses passthrough, plus the combo failure attribution in
     //                core-combo.ts, which sends nothing: it records the refused account the
     //                request budget left uncooled and spares the combo target only when the
-    //                rotator names a sibling. The Antigravity 403 verify-account
+    //                rotator names a sibling. The seventh call passively attributes a
+    //                replay-blocked passthrough 429, with commitSelection=false and no send.
+    //                The Antigravity 403 verify-account
     //                arm deliberately does NOT use this rotator: a verification refusal
     //                must not record rate-limit cooldown semantics, so it moves via
     //                rotateAntigravityAccountOnAuthRefusal instead. The new default
@@ -585,7 +587,17 @@ describe("sidecar on429 wiring", () => {
     //
     // Adding a recovery site means deciding, deliberately, which rotators it needs and
     // updating the matching number. That decision is the thing this test exists to force.
-    expect(counts.generic).toBe(6);
+    const passiveStart = coreSource.indexOf("if (upstreamResponse.status === 429 && !isReplayRefusalResponse(upstreamResponse)");
+    expect(passiveStart).toBeGreaterThan(-1);
+    const passiveEnd = coreSource.indexOf("// Native Responses returns", passiveStart);
+    expect(passiveEnd).toBeGreaterThan(passiveStart);
+    const passive = coreSource.slice(passiveStart, passiveEnd);
+    expect(passive).toContain("isAutomaticReplayBlocked(upstreamResponse) && transportState.genericFailoverAccountId");
+    expect(passive).toMatch(/rotateGenericOAuthAccountOn429\(config, route\.providerName, transportState\.genericFailoverAccountId,\s*upstreamResponse\.headers\.get\("retry-after"\), Date\.now\(\), route\.modelId, false\)/);
+    expect(passive.match(rotators.generic)).toHaveLength(1);
+    expect(passive).not.toMatch(/reserveCredentialHop\(|rebuildAndRefetch\(|applyFailoverSnapshot\(/);
+    expect(counts.generic).toBe(7);
+    expect(counts.generic! - (passive.match(rotators.generic) ?? []).length).toBe(6);
     expect(counts.anthropic).toBe(3);
     expect(counts.key).toBe(8);
   });
@@ -603,8 +615,20 @@ describe("sidecar on429 wiring", () => {
     expect(arm).not.toContain("rotateGenericOAuthAccountOn429(");
     // Marking stays generation-fenced: no unfenced fallback may re-quarantine a
     // credential that rotated after the 403 was sent.
-    expect(arm).toContain("markAccountNeedsReauthIfGeneration(");
-    expect(arm).not.toMatch(/await markAccountNeedsReauth\(route\.providerName/);
+    expect(arm).toContain("sent = await quarantineAntigravityVerificationRefusal(upstreamResponse, route.providerName,");
+    expect(arm).toContain("transportState.genericFailoverAccountId, transportState.sentOAuthSnapshot, upstream.signal)");
+    expect(arm).toContain("if (!sent) break;");
+    expect(arm.indexOf("quarantineAntigravityVerificationRefusal(")).toBeLessThan(arm.indexOf("rotateAntigravityAccountOnAuthRefusal("));
+    const quarantineSource = readFileSync(repoPath("src/server/responses/antigravity-validation-refusal.ts"), "utf8");
+    const quarantineStart = quarantineSource.indexOf("export async function quarantineAntigravityVerificationRefusal");
+    expect(quarantineStart).toBeGreaterThan(-1);
+    const quarantineEnd = quarantineSource.indexOf("/** Match only", quarantineStart);
+    expect(quarantineEnd).toBeGreaterThan(quarantineStart);
+    const quarantine = quarantineSource.slice(quarantineStart, quarantineEnd);
+    expect(quarantine).toContain('if (response.status !== 403 || providerName !== "google-antigravity" || !sent || sent.accountId !== accountId) return;');
+    expect(quarantine).toContain('if (!body.displaySafe || body.truncated || classifyAntigravityRefusal(response.status, body.text).kind === "other") return;');
+    expect(quarantine).toContain('markAccountNeedsReauthIfGeneration(providerName, sent.accountId, sent.generation, undefined, "verify_account")');
+    expect(arm + quarantine).not.toMatch(/\bmarkAccountNeedsReauth\(/);
     // Cross-account thought signatures are not a source-text claim. The dispatch
     // test in server-google-antigravity-oauth-401-replay proves account A's
     // durable signature is absent from the sibling replay.

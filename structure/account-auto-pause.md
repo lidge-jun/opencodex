@@ -13,7 +13,7 @@ Codex/runTurn response observation; the transport leaf imports no account or OAu
 `src/server/responses/request-transport.ts`; native Chat/Messages capture at their send
 boundaries. `src/oauth/account-auto-pause.ts` is dormant unless `effectiveAccountAutoPause` in
 `src/config/account-auto-pause-revisions.ts` resolves a policy for the named provider (an explicit
-opt-in, or the Cloud Code Assist default below), writes only fixed pause metadata, and preserves upstream responses if
+opt-in, or the Cloud Code Assist default below), writes pause metadata, and preserves upstream responses if
 optional persistence fails. Counters and asynchronous decisions belong to the runtime
 config object; completed pauses belong to the existing durable account stores. A response is counted only when the final destination and credential
 headers, reported by `sendWithConnectionPolicy` after plugin rewrites and queued rebuilds, match the
@@ -41,8 +41,14 @@ dial never gains the default's authority; such a route pauses only with an expli
 `enabled: false`, replaces the default; `enabled: true` counts every permanent refusal as before. `src/config/schema/account-auto-pause.ts` validates
 the policy and allowlisted reason/timestamp DTO. OAuth pause metadata is stored with the
 auth row; Codex metadata/revision fences use `codexAccountPauseState`; key pools retain
-`disabled`, `pauseDetails` and `pauseRevision` per entry. Runtime counters are process-local.
-Manual resume (including an already enabled key) clears details and changes the revision, fencing already-sent refusals.
+`disabled`, `pauseDetails` and `pauseRevision` per entry. Both explicit and implicit OAuth
+auto-pauses store a sibling `pauseEvidence` with the decisive refusal's HTTP `statusCode`
+and optional message. The message comes from `error.message`, with redaction applied before
+and after collapsing whitespace, followed by the 300-character cap. A Cloud Code Assist appeal sentence
+survives when the qualifying message contains it. Structured metadata such as `appeal_url`
+is outside the evidence contract. Older builds can still read the strict `pauseDetails`.
+Runtime counters are process-local. Manual resume clears the pause metadata and changes
+the revision (including an already enabled key), fencing already-sent refusals.
 
 ## Explicit health-gated resume and login (#8398)
 
@@ -136,8 +142,11 @@ Regression coverage: `tests/oauth/oauth-account-auto-pause-revision.test.ts` and
 ## Auto-paused account recovery
 
 OAuth and Codex account-list DTOs project optional `pauseDetails` (fixed reason plus epoch
-ms timestamp) beside the existing pause flag. The CLI preserves those fields and includes
-the reason in account listings. `src/server/management/oauth-account-routes.ts` also serves
+ms timestamp) beside the existing pause flag. The OAuth account list API also returns
+the sibling `pauseEvidence` when present. The CLI preserves `pauseDetails` and includes the
+reason in account listings. `tests/server/management-account-auto-pause.test.ts` covers the
+OAuth evidence projection and its removal after resume.
+`src/server/management/oauth-account-routes.ts` also serves
 `PUT /api/providers/keys/pause` with provider `name`, key `id` and boolean `paused`, through
 the existing management authorization boundary. Its success response reports the committed
 `activeAccountId` (or `null`) and whether the active key changed. Key listings expose `disabled`

@@ -7,7 +7,7 @@ export interface MessagesFailureVerdictSink {
   collected?: Rec;
   collectedProjection?: boolean;
   collectedErrorEvent?: true;
-  /** The matched Responses terminal paired this code with an explicit retry veto. */
+  /** The matched, admitted terminal selected this code's explicit retry veto. */
   collectedReplayRefusalCode?: ReplayRefusalCode;
 }
 export function admitMessagesFailure(sink: MessagesFailureVerdictSink | undefined, client: Rec, legacy: Rec, replayRefusalCode?: ReplayRefusalCode): void {

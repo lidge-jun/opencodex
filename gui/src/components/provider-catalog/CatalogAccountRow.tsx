@@ -110,6 +110,7 @@ export default function CatalogAccountRow({
       </div>
       {showHint && loginHint && (
         <LoginHint
+          providerId={row.id}
           hint={{ url: loginHint.url, deviceCode: loginHint.deviceCode, instructions: loginHint.instructions, browserLaunch: loginHint.browserLaunch }}
           {...(paste
             ? {

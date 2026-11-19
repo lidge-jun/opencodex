@@ -2,7 +2,6 @@ import { captureAccountAutoPauseFence, accountAutoPauseFenceIsLocal, accountAuto
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import type { OAuthAccessSnapshot } from "./index";
 import type { CodexAuthContext } from "../codex/auth-context";
-import type { AccountPauseReason } from "../types/account-auto-pause";
 import { credentialGeneration, getAccountSet, setAccountPaused } from "./store";
 import { mutatePersistedConfig } from "../config";
 import { isCodexAccountGenerationLive, readCodexAccountRecord } from "../codex/account-store";
@@ -12,7 +11,7 @@ import { apiKeyPoolEntryId } from "../providers/api-keys";
 import { resolveProviderApiKey } from "../providers/api-key-resolve";
 import { createHash } from "node:crypto";
 import { setProviderApiKeyPaused } from "../providers/api-key-pause";
-import { AccountRefusalStreaks, permanentAccountRefusal } from "./account-auto-pause-policy";
+import { AccountRefusalStreaks, permanentAccountRefusalEvidence, type PermanentAccountRefusalEvidence } from "./account-auto-pause-policy";
 import { clearThreadAccountMapForAccount, reconcileCodexActiveAfterExclusion } from "../codex/routing";
 import { isNonReplayableResponse } from "../lib/upstream-retry";
 import { hasUpstreamRewriters, upstreamRewriterEpoch } from "../plugins/upstream-hooks";
@@ -62,7 +61,7 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
     && samePolicy(config.providers[name])
     && JSON.stringify([config.providers[name]?.baseUrl, config.providers[name]?.adapter, config.providers[name]?.authMode]) === route;
   let key: string, incarnation: string, current: () => boolean, owns: (wire: Headers) => boolean;
-  let pause: (reason: AccountPauseReason) => Promise<boolean>;
+  let pause: (refusal: PermanentAccountRefusalEvidence) => Promise<boolean>;
   if (provider.authMode === "oauth") {
     if (!oauth || oauth.provider !== name || headers?.get("authorization") !== `Bearer ${oauth.accessToken}` || headers.has("x-api-key")) return;
     const row = getAccountSet(name)?.accounts.find(a => a.id === oauth.accountId);
@@ -75,9 +74,10 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
       const live = getAccountSet(name)?.accounts.find(a => a.id === oauth.accountId);
       return !!live && !live.paused && live.pauseRevision === revision && credentialGeneration(live.credential) === oauth.generation;
     };
-    pause = async reason => (await setAccountPaused(name, oauth.accountId, true, {
+    pause = async ({ reason, ...evidence }) => (await setAccountPaused(name, oauth.accountId, true, {
       generation: oauth.generation, pauseRevision: revision, isCurrent: policyCurrent,
       assertPolicyBeforePersist: () => { if (!accountAutoPauseFenceMatchesDisk(name, fence)) throw new Error("Account auto-pause policy changed before persistence"); }, details: { reason, pausedAt: Date.now() },
+      evidence,
     })).status === "updated";
   } else if (provider.authMode === "forward") {
     if (!codex || codex.kind !== "pool" && codex.kind !== "main-pool") return;
@@ -99,7 +99,7 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
     incarnation = `${codex.kind === "pool" ? readCodexAccountRecord(accountId)?.quotaHistoryIdentity ?? codex.generation : mainDispatch?.credentialGeneration}\0${revision ?? ""}`;
     current = () => !isCodexAccountPaused(config, accountId)
       && config.codexAccountPauseState?.[accountId]?.revision === revision && credentialCurrent();
-    pause = async reason => {
+    pause = async ({ reason }) => {
       let pauseState: OcxConfig["codexAccountPauseState"];
       const outcome = mutatePersistedConfig(fresh => {
         if (!policyCurrent() || !accountAutoPauseFenceMatchesDisk(name, fence, fresh) || !credentialCurrent() || isCodexAccountPaused(fresh, accountId)
@@ -135,7 +135,7 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
       const live = configured?.apiKeyPool?.find(e => e.id === id) ?? (!configured?.apiKeyPool?.length && configured?.apiKey === reference ? entry : undefined);
       return !!live && !live.disabled && live.key === reference && live.pauseRevision === pauseRevision && resolveProviderApiKey(reference) === resolvedKey;
     };
-    pause = async reason => setProviderApiKeyPaused(config, name, id, true, {
+    pause = async ({ reason }) => setProviderApiKeyPaused(config, name, id, true, {
       selection, pauseRevision, resolvedKey, fence, details: { reason, pausedAt: Date.now() },
     });
   }
@@ -158,9 +158,9 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
     if (counted.has(key)) return response;
     countedResponses.set(response, counted.add(key));
     try {
-      const verdict = permanentAccountRefusal(response, undefined, conclusiveOnly).then(reason => {
-        if (reason) markPermanentAccountRefusal(response);
-        return reason;
+      const verdict = permanentAccountRefusalEvidence(response, undefined, conclusiveOnly).then(refusal => {
+        if (refusal) markPermanentAccountRefusal(response);
+        return refusal;
       });
       const paused = await tracker.observe(key, incarnation, threshold, verdict, response.ok,
         () => policyCurrent() && current(), pause);

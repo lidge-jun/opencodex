@@ -39,8 +39,8 @@ Responses, Compact, Chat Completions and routed Messages include `x-should-retry
 and omit `Retry-After` on those errors. The original upstream headers still inform quota
 and cooldown tracking.
 
-When a non-streaming Messages request folds a Responses stream with a recognized replay
-refusal, it returns the same code and fixed message in an HTTP 429 Messages error.
+When a non-streaming Messages request folds a Responses stream or direct provider events with
+a recognized replay refusal, it returns the same code and fixed message in an HTTP 429 Messages error.
 The response includes `x-should-retry: false` and omits `Retry-After`.
 
 If native Anthropic Messages inference was dispatched and its upstream response-header deadline

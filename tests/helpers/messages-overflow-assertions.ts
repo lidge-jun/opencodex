@@ -42,7 +42,7 @@ const GENERIC_5XX_LANES = new Set(["converter", "direct-stream", "direct-fold", 
 const GENERIC_5XX_DIRECT_IDS = new Set(["shared-8128-12", "shared-8128-13"]);
 
 // Reviewed #8843 delta: upstream refusal codes select the fixed terminal response on HTTP
-// and JSON paths, including Responses SSE folded into a Messages JSON reply.
+// and JSON paths, including Responses SSE and direct adapter events folded into Messages JSON.
 const REPLAY_REFUSAL_LANES = new Set<Row["lane"]>(["passthrough", "count_tokens", "native-http", "translated-http", "translated-json"]);
 const REPLAY_REFUSAL_IDS = new Set([
   "sweep-code-upstream_reset_replay_refused-phrase",
@@ -66,6 +66,7 @@ function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
   const passthrough = base.lane === "passthrough" || base.lane === "count_tokens";
   const correctedReplayRefusal = REPLAY_REFUSAL_LANES.has(base.lane) && REPLAY_REFUSAL_IDS.has(base.input.id);
   const foldedReplayRefusal = base.lane === "translated-fold" && REPLAY_REFUSAL_IDS.has(base.input.id);
+  const directReplayRefusal = (base.lane === "direct-stream" || base.lane === "direct-fold") && REPLAY_REFUSAL_IDS.has(base.input.id);
   if (correctedReplayRefusal) {
     expect(before.status).toBe(base.lane === "translated-http" ? 429 : base.lane === "translated-json" ? 502 : 400);
     expect(before.type).toBe(base.lane === "translated-http" ? "rate_limit_error" : base.lane === "translated-json" ? "api_error" : "invalid_request_error");
@@ -85,6 +86,16 @@ function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
     expect(before.clientRecognizes).toBe(base.input.id.endsWith("-phrase"));
     expect(before.internalDecisions).toEqual({ status: false, writer: false });
   }
+  if (directReplayRefusal) {
+    expect(before.status).toBe(base.lane === "direct-fold" ? 502 : 200);
+    expect(before.type).toBe("invalid_request_error");
+    expect(before.code).toBeUndefined();
+    expect(before.clientError).toBe(true);
+    expect(before.mediaType).toBe(base.lane === "direct-fold" ? "application/json" : null);
+    expect(before.clientRecognizes).toBe(base.input.id.endsWith("-phrase"));
+    expect(before.internalDecisions).toEqual(base.lane === "direct-fold"
+      ? { status: false, writer: false, "direct-collector": false } : { status: false, writer: false });
+  }
   if (correctedGeneric) {
     const wasFold = base.lane === "direct-fold";
     expect(before.status).toBe(wasFold || (genericCode && base.lane === "translated-json") ? 502 : ["translated-http", "translated-json", "translated-fold"].includes(base.lane) ? 400 : 200);
@@ -101,6 +112,11 @@ function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
   } : foldedReplayRefusal ? {
     ...before, status: 429, type: "rate_limit_error", code: "upstream_reset_replay_refused", clientRecognizes: false,
     internalDecisions: { ...before.internalDecisions, "translated-refusal": false },
+  } : directReplayRefusal ? {
+    ...before, status: base.lane === "direct-fold" ? 429 : 200,
+    type: "rate_limit_error", code: "upstream_reset_replay_refused", clientRecognizes: false,
+    internalDecisions: base.lane === "direct-fold"
+      ? { status: false, writer: false, "direct-refusal": false } : { status: false, writer: false },
   } : correctedOverflow || correctedGeneric ? {
     ...before,
     status: ["direct-fold", "translated-http", "translated-fold", "translated-json"].includes(base.lane) ? 400 : 200,
@@ -123,14 +139,18 @@ function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
   }
   expect(current.input).toEqual(base.input);
   const after = current.head;
-  if (correctedReplayRefusal || foldedReplayRefusal) {
+  if (correctedReplayRefusal || foldedReplayRefusal || directReplayRefusal) {
+    const streaming = base.lane === "direct-stream";
     expect(after.clientError).toBe(true);
-    expect(after.mediaType).toBe("application/json");
-    expect(after.replayPolicy).toEqual({
+    expect(after.mediaType).toBe(streaming ? null : "application/json");
+    expect(after.replayPolicy).toEqual(streaming ? {
+      retryHeader: null, retryAfter: null,
+      proxyOwned: false, nonReplayable: false, automaticReplayBlocked: false,
+    } : {
       retryHeader: "false", retryAfter: null,
       proxyOwned: false, nonReplayable: false, automaticReplayBlocked: true,
     });
-    expect(JSON.parse(after.text)).toEqual({
+    expect(JSON.parse(streaming ? after.text.split("data: ").at(-1)! : after.text)).toEqual({
       type: "error",
       error: { type: expected.type, code: expected.code, message: CLIENT_ERROR_CONTRACTS.replay_refused },
     });
@@ -150,7 +170,7 @@ function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
     if (!base.input.fault) expect(base.input.eventLanes).toContain(base.lane);
   }
   expect(before.clientRecognizes).toBe(base.input.recovery[base.lane]);
-  expect(after.clientRecognizes).toBe(correctedReplayRefusal || foldedReplayRefusal ? false : correctedOverflow || correctedGeneric ? true : base.input.recovery[base.lane]);
+  expect(after.clientRecognizes).toBe(correctedReplayRefusal || foldedReplayRefusal || directReplayRefusal ? false : correctedOverflow || correctedGeneric ? true : base.input.recovery[base.lane]);
   expect(after.clientRecognizes).toBe(expected.clientRecognizes);
   expect(after.internalDecisions).toEqual(expected.internalDecisions);
   if (classification === "success" || base.input.fixedLocal) {

@@ -124,7 +124,8 @@ for (const [status, message, expectedStatus, expectedCode] of [
     const releaseSpend = acquireOwnedSpendHome();
     let sends = 0;
     const config = { defaultProvider: "a", providers: { a: {
-      adapter: "openai-responses", authMode: "key", baseUrl: "https://responses.example/v1", apiKey: "key-a",
+      // This provider uses the in-memory fetch fixture, including under an inherited proxy.
+      adapter: "openai-responses", authMode: "key", proxy: "direct", baseUrl: "https://responses.example/v1", apiKey: "key-a",
       models: ["m"], transientRetryOn5xx: { attempts: 3 },
     } } } as unknown as OcxConfig;
     const req = new Request("http://localhost/v1/messages", { method: "POST", headers: { "content-type": "application/json" },
