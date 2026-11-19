@@ -196,7 +196,8 @@ export function handleRuntimeEvent(session: StepConversationSession, frame: Step
     const queryId = currentQuery(session);
     if (queryId) {
       forgetQuery(session);
-      void session.endInput(queryId).catch(() => session.close());
+      // Observe the derived rejection here. The pool can still await the session's cleanup receipt.
+      void session.endInput(queryId).catch(() => session.close()).catch(() => {});
     }
     return;
   }
