@@ -154,6 +154,7 @@ export async function runWindowsServiceStopPartA(request: WindowsPartARequest = 
     const authorize = async (): Promise<void> => {
       if (!withinCap()) throw new Error("the checked stop's cap has passed");
       await request.authorize?.();
+      if (!withinCap()) throw new Error("the checked stop's cap has passed");
     };
     const result = await (request.authorize || request.capMs !== undefined
       ? guardedStopWindowsServiceChecked(authorize, deps, options)
@@ -184,7 +185,9 @@ export async function runWindowsServiceStopPartA(request: WindowsPartARequest = 
   });
   try {
     const result = await Promise.race([work, cap]);
-    return result !== null && withinCap() ? result : unknownResult("the checked stop did not finish within its cap");
+    if (result !== null && withinCap()) return result;
+    const refusal = unknownResult("the checked stop did not finish within its cap");
+    return result === null ? refusal : { ...result, outcome: refusal.outcome, reason: refusal.reason, detail: refusal.detail };
   } finally {
     if (timer) clearTimeout(timer);
   }

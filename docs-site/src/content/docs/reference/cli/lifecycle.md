@@ -180,10 +180,12 @@ for about six seconds and that no wrapper started again, so a wrapper's restart 
 the proxy back behind a successful stop.
 
 OpenCodex verifies that the scheduled task launches this installation under your Windows account
-and checks the account for each running instance before stopping it. An owned, disabled task with
+and checks the account for its triggers and each running instance before stopping it. An owned, disabled task with
 no running instances counts as idle. A queued task prevents OpenCodex from confirming the stop.
-If verification fails, check the launcher and run-as account in Task Scheduler and stop the task
-from its owning session.
+If verification fails, check the launcher, trigger accounts and run-as account in Task Scheduler.
+Ending its running instances does not repair its registration. Repair a registration you own,
+or contact its owner or administrator. The stop refuses further actions once its time limit has
+passed and retains any confirmed changes in its result.
 
 OpenCodex terminates a wrapper directly only after verifying that it belongs to your account.
 It ignores wrappers proven to belong to another user. If it cannot verify the owner of a wrapper

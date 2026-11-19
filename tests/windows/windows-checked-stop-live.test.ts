@@ -260,14 +260,21 @@ test.skipIf(process.platform !== "win32" && !portablePowerShell)("the PowerShell
 $script:scenario = $args[0]
 $script:sid = 'S-1-5-21-100-200-300-1001'
 $script:taskReads = 0
+$script:elapsed = 0
+$script:stopClock = [pscustomobject]@{}
+$script:stopClock | Add-Member ScriptProperty ElapsedMilliseconds { $script:elapsed }
 $script:stopped = [Collections.Generic.List[int]]::new()
 function New-Instance($enginePid) {
   $obj = [pscustomobject]@{ EnginePID = $enginePid; State = 4; InstanceGuid = [Guid]::NewGuid(); Reads = 0 }
   $obj | Add-Member ScriptMethod Refresh {
     $this.Reads++
     if ($script:scenario -eq 'engine-changed' -and $this.Reads -eq 2) { $this.EnginePID++ }
+    if ($script:scenario -eq 'deadline-before-first' -and $this.Reads -eq 2) { $script:elapsed = 2000 }
   }
-  $obj | Add-Member ScriptMethod Stop { $script:stopped.Add($this.EnginePID) }
+  $obj | Add-Member ScriptMethod Stop {
+    $script:stopped.Add($this.EnginePID)
+    if ($script:scenario -eq 'deadline-between-stops') { $script:elapsed = 2000 }
+  }
   return $obj
 }
 $instances = [pscustomobject]@{ Rows = @((New-Instance 42), (New-Instance 43)) }
@@ -311,6 +318,7 @@ function Invoke-CimMethod {
 }
 `;
   const helper = WINDOWS_TASK_INSTANCE_STOP_SCRIPT
+    .replace("[Diagnostics.Stopwatch]::StartNew()", "$script:stopClock")
     .replace(/^\s*Import-Module .*'CimCmdlets\.psd1'.*$/m, "")
     .replaceAll("CimCmdlets\\", "")
     .replace("Microsoft.PowerShell.Utility\\New-Object -ComObject Schedule.Service", "New-Object -ComObject FixtureScheduler")
@@ -330,6 +338,8 @@ function Invoke-CimMethod {
     ["rejected", "unverified-registration", ""],
     ["hidden", "unverified-registration", ""],
     ["idle", "not-running", ""],
+    ["deadline-before-first", "failed", ""],
+    ["deadline-between-stops", "failed", "42"],
   ]) {
     // Production runs the helper alone, which silences progress before its first module use. The fixture
     // runs first here and its Add-Member/[pscustomobject] calls autoload Microsoft.PowerShell.Utility, which
@@ -340,7 +350,7 @@ function Invoke-CimMethod {
       stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
       timeout: Math.max(1_000, Math.min(SPAWN_BUDGET_MS, deadline - Date.now())),
     });
-    child.stdin.write(scenario === "rejected" ? "\n" : "stop\n");
+    child.stdin.write(scenario === "rejected" ? "\n" : "stop 2000\n");
     child.stdin.end();
     const [stdout, stderr, code] = await Promise.all([
       new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,

@@ -75,8 +75,8 @@ export interface WindowsCheckedStopDeps {
   probeWinsw(timeoutMs: number): MaybePromise<WinswStatus>;
   enumerate(timeoutMs: number): MaybePromise<readonly WindowsStopProcessEntry[] | null>;
   scheduleServicePid(timeoutMs: number): MaybePromise<number | null>;
-  /** Reauthorize after the Scheduler proof and before releasing the instance stop. */
-  endTask(timeoutMs: number, authorize?: () => MaybePromise<void>): MaybePromise<WindowsTaskEndResult>;
+  /** Reauthorize after proof; report mutation evidence separately from the final verdict. */
+  endTask(timeoutMs: number, authorize?: () => MaybePromise<void>, mutation?: (attempted: boolean) => void): MaybePromise<WindowsTaskEndResult>;
   /** Running state of the task (schtasks /query); the final manager-state read. */
   taskState(timeoutMs: number): MaybePromise<"running" | "not-running" | "unknown">;
   winswStop(timeoutMs: number): MaybePromise<WindowsWinswStopResult>;
@@ -309,13 +309,17 @@ export async function stopWindowsServiceChecked(
     if (taskRegistered) {
       // Check before launching the helper, then again at its mutation boundary.
       await authorize();
+      let mutationKnown = false;
       const ended = await runCapped(clock, C.taskEnd,
-        timeoutMs => deps.endTask(timeoutMs, options.authorize ? authorize : undefined));
+        timeoutMs => deps.endTask(timeoutMs, options.authorize ? authorize : undefined, attempted => {
+          mutationKnown = true;
+          result.changed ||= attempted;
+        }));
       if (ended.ok && ended.value === "unverified-registration") {
         return finish("unknown", "evidence-unreadable",
-          "the scheduled task's launcher, run-as account, or running instances could not be verified for this installation and Windows account. Confirm them in Task Scheduler and stop the task from its owning Windows session");
+          "the scheduled task's launcher, run-as account, or running instances could not be verified for this installation and Windows account. Ending its running instances does not repair its registration. Confirm it in Task Scheduler; repair a registration you own, or contact its owner or administrator");
       }
-      result.changed = !ended.ok || ended.value !== "not-running";
+      if (!mutationKnown) result.changed ||= !ended.ok || ended.value !== "not-running";
       if (!ended.ok) return finish("unknown", "evidence-unreadable", "the task end command did not answer within its cap");
       if (ended.value === "denied") return finish("denied", "access-denied", "ending the task was denied");
       if (ended.value === "failed") return finish("unknown", "evidence-unreadable", "the task end command failed");

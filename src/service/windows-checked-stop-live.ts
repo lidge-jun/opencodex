@@ -29,7 +29,7 @@ import { parseListenPidsFromNetstat, type ListenPidScan } from "../server/port-r
 import { dropWindowsTcpRowsForLocalPort } from "../server/windows-tcp-drop";
 import { TASK, windowsLauncherVbsPath, windowsServiceScriptPath } from "./state";
 import { ancestorWrapperPids } from "./windows-guarded-manager";
-import type { WindowsCheckedStopDeps, WindowsWinswScmState, WindowsWinswStopResult } from "./windows-checked-stop";
+import type { WindowsCheckedStopDeps, WindowsTaskEndResult, WindowsWinswScmState, WindowsWinswStopResult } from "./windows-checked-stop";
 import {
   openWindowsProcessWatch,
   readScheduleServicePid,
@@ -69,6 +69,7 @@ export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, 
   // execFile reads a 0 timeout as "no timeout": a deadline-derived fraction is floored, and a
   // timeout that floors to 0 spawns nothing.
   const timeout = Math.floor(timeoutMs);
+  const deadline = performance.now() + timeout;
   if (!(timeout > 0)) {
     resolve({ status: null, stdout: "", stderr: "", timedOut: true });
     return;
@@ -112,7 +113,8 @@ export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, 
       try {
         approved = await authorizeProof(pending.slice(0, end).replace(/\r$/, ""));
       } catch { /* An authorizer failure leaves stdin unapproved. */ }
-      helper.stdin?.end(approved ? "stop\n" : "\n");
+      const remaining = Math.floor(deadline - performance.now());
+      helper.stdin?.end(approved && remaining > 0 ? `stop ${remaining}\n` : "\n");
     };
     helper.stdin?.on("error", () => { /* execFile reports the helper's exit or timeout. */ });
     helper.stdout?.on("data", onProof);
@@ -294,8 +296,9 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
       const whole = wholeTimeoutMs(timeoutMs);
       return whole === null ? null : readScheduleServicePid({ timeoutMs: whole });
     },
-    async endTask(timeoutMs, authorize) {
-      if (!gate()) return "failed";
+    async endTask(timeoutMs, authorize, mutation) {
+      const finish = (verdict: WindowsTaskEndResult, attempted: boolean) => { mutation?.(attempted); return verdict; };
+      if (!gate()) return finish("failed", false);
       const deadline = performance.now() + Math.floor(timeoutMs);
       const withinDeadline = () => performance.now() < deadline && gate();
       const launcher = windowsLauncherVbsPath();
@@ -315,11 +318,13 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
           return approved;
         });
       if (refusal) throw refusal.cause;
-      if (ended.timedOut || ended.status !== 0) return "failed";
-      const verdict = ended.stdout.trim().split(/\r?\n/).at(-1);
-      if (verdict === "unverified-registration" || verdict === "denied") return verdict;
-      if (approved && (verdict === "ended" || verdict === "not-running")) return verdict;
-      return "failed";
+      const lines = ended.stdout.trim().split(/\r?\n/);
+      const attempted = lines.includes("stop-attempted");
+      if (ended.timedOut || ended.status !== 0) return finish("failed", attempted || approved);
+      const verdict = lines.at(-1);
+      if (verdict === "unverified-registration" || verdict === "denied") return finish(verdict, attempted);
+      if (approved && (verdict === "ended" || verdict === "not-running")) return finish(verdict, attempted || verdict === "ended");
+      return finish("failed", attempted || approved && verdict !== "failed");
     },
     async taskState(timeoutMs) {
       const started = Date.now();
@@ -346,7 +351,7 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
       return pid === null ? false : isProcessAlive(pid);
     },
     openWatch: (pid, startTime) => openWindowsProcessWatch(pid, startTime),
-    terminate: (pid, startTime, timeoutMs) => windowsStopTerminate(pid, startTime, timeoutMs),
+    terminate: (pid, startTime, timeoutMs) => gate() ? windowsStopTerminate(pid, startTime, timeoutMs) : { status: "unavailable" },
   };
 }
 

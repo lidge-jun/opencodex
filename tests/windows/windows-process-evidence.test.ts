@@ -211,27 +211,30 @@ const portablePowerShell = Bun.which("pwsh");
 // most of it, but a hang still fails inside the 120 s Linux batch deadline, naming the active budget.
 test.skipIf(process.platform !== "win32" && !portablePowerShell)("owner enrichment prioritizes this home and retains every row", async () => {
   const deadline = Date.now() + 60_000;
-  for (const budget of ["available", "expired", "expires-during-owner"] as const) {
+  for (const budget of ["available", "expired", "expires-during-owner", "expires-during-refresh", "expires-during-enumeration"] as const) {
     try { await ownerEnrichmentCase(budget, deadline); }
     catch (error) { throw new Error("budget=" + budget + ": " + (error instanceof Error ? error.message : String(error)), { cause: error }); }
   }
 }, 65_000);
 
-async function ownerEnrichmentCase(budget: "available" | "expired" | "expires-during-owner", deadline: number): Promise<void> {
+async function ownerEnrichmentCase(budget: "available" | "expired" | "expires-during-owner" | "expires-during-refresh" | "expires-during-enumeration", deadline: number): Promise<void> {
   const powershell = process.platform === "win32" ? resolveTrustedWindowsPowerShellExe() : portablePowerShell!;
   const launcher = Buffer.from(windowsLauncherVbsPath(), "utf8").toString("base64");
   const script = windowsProcessSnapshotScript().replace(
     "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value", "'S-1-5-21-100-200-300-1001'",
-  ).replace("[Diagnostics.Stopwatch]::StartNew()", "[pscustomobject]@{ ElapsedMilliseconds = " + (budget === "expired" ? 1500 : 0) + " }");
+  ).replace("[Diagnostics.Stopwatch]::StartNew()", "(New-FixtureClock)");
   const prelude = [
     "$script:ownerReads = 0; $script:refreshReads = 0;",
+    "function New-FixtureClock { $script:elapsed = " + (budget === "expired" ? 1500 : 0) + "; $clock = [pscustomobject]@{};",
+    "  $clock | Add-Member ScriptProperty ElapsedMilliseconds { $script:elapsed }; return $clock };",
     "function Get-CimInstance { param($ClassName, $InputObject, $ErrorAction, $OperationTimeoutSec)",
-    "  if ($InputObject) { $script:refreshReads++; return $InputObject };",
+    "  if ($InputObject) { $script:refreshReads++; " + (budget === "expires-during-refresh" ? "$script:elapsed = 1500; " : "") + "return $InputObject };",
+    budget === "expires-during-enumeration" ? "$script:elapsed = 1500;" : "",
     "  1..40 | ForEach-Object { [pscustomobject]@{ ProcessId = $_; ParentProcessId = 900; Name = 'cmd.exe';",
     "    CommandLine = if ($_ -eq 40) { 'wscript.exe \"' + [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + launcher + "')) + '\"' } else { 'cmd.exe' };",
     "    CreationDate = [datetime]'2026-11-12T01:02:03Z' } } };",
     "function Invoke-CimMethod { param($InputObject, $MethodName, $ErrorAction, $OperationTimeoutSec)",
-    "  $script:ownerReads++; " + (budget === "expires-during-owner" ? "$ownerBudget.Clock.ElapsedMilliseconds = 1500; " : "")
+    "  $script:ownerReads++; " + (budget === "expires-during-owner" ? "$script:elapsed = 1500; " : "")
       + "@{ Sid = $currentSid; ReturnValue = 0 } };",
     "$rows = & { " + script + " };",
     "[pscustomobject]@{ Snapshot = $rows; OwnerReads = $script:ownerReads; RefreshReads = $script:refreshReads } | ConvertTo-Json -Compress",
@@ -247,14 +250,14 @@ async function ownerEnrichmentCase(budget: "available" | "expired" | "expires-du
   expect(errors).toBe("");
   expect(exitCode).toBe(0);
   const result = JSON.parse(output);
-  const rows = parseWindowsProcessSnapshot(result.Snapshot)!;
+  const rows = parseWindowsProcessSnapshot(Array.isArray(result.Snapshot) ? result.Snapshot.join("\n") : result.Snapshot)!;
   expect(rows).toHaveLength(40);
   expect(rows.map(row => row.pid)).toEqual(Array.from({ length: 40 }, (_, index) => index + 1));
-  expect(result.OwnerReads).toBe(budget === "available" ? 32 : budget === "expired" ? 0 : 1);
-  const refreshed = budget === "available" ? 32 : 0;
+  expect(result.OwnerReads).toBe(budget === "available" ? 32 : ["expired", "expires-during-enumeration"].includes(budget) ? 0 : 1);
+  const refreshed = budget === "available" ? 32 : budget === "expires-during-refresh" ? 1 : 0;
   expect(result.RefreshReads).toBe(refreshed);
   expect(rows[39]!.foreignOwner).toBe(budget === "available" ? false : null);
-  const ordinaryRefreshed = Math.max(0, refreshed - 1);
+  const ordinaryRefreshed = budget === "available" ? 31 : 0;
   expect(rows.slice(0, ordinaryRefreshed).every(row => row.foreignOwner === false)).toBe(true);
   expect(rows.slice(ordinaryRefreshed, 39).every(row => row.foreignOwner === null)).toBe(true);
 }
