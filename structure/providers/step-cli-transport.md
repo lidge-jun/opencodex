@@ -49,11 +49,19 @@ awaits the asynchronous helper in
 `src/adapters/coding-agent/process-tree.ts` (`taskkill /T /F`, up to five seconds per attempt)
 before releasing the wrapper. The normal cleanup queue runs up to four sessions concurrently
 across pools, including idle and late-opening sessions. POSIX cleanup sends TERM to the detached
-group and escalates to KILL after the grace period while its original leader is still alive and
-unreaped. A successful KILL or an ESRCH from signalling ends group signalling. Cleanup then waits
-for the original leader's exit through its child handle. If the leader exits before either outcome,
+group and escalates to KILL after the grace period. It signals the group only while the original
+leader is observed alive. A successful KILL or an ESRCH from signalling ends group signalling.
+Cleanup then waits for the original leader's exit through its child handle. If the leader exits before either outcome,
 cleanup quarantines the session and logs `StepCode POSIX process cleanup is incomplete because the process group leader exited before group termination.`
 Descendants that outlive their leader cannot be safely signalled once the PGID can be reused.
+
+Bun 1.4.4 reaps the child on a native waiter thread and delivers the exit event to JavaScript
+afterwards. In the microsecond window between the native reap and the JavaScript exit event, a
+group signal could reach a reused PGID. Bun exposes no `pidfd` or other syscall-level ownership
+handle, so JavaScript cannot close this window. Closing it requires a native supervisor or a Bun
+change. The leader guard makes the window narrower than in the existing `claude-cli`, `qoder` and
+`codebuddy` adapters, which have no leader guard. The owner accepted this residual risk on 2026-11-19.
+
 On Windows the OS PID check also handles Bun retaining null child exit fields after an external
 tree kill.
 Explicit registry clears await every pool and retain failed pools, so clearing state cannot bypass
@@ -62,8 +70,8 @@ through the registry and pool, including to sessions already closing. POSIX TERM
 at two seconds and ends at least 250 ms before the deadline when that time is available. At that
 margin, queued sessions bypass the four slots and proceed directly to group KILL or Windows
 tree kill. The hook reports incomplete confirmation as a shutdown failure. Before returning
-an incomplete receipt, it runs a final synchronous KILL sweep of pending POSIX groups with live,
-unreaped leaders and starts any Windows tree kills still in the queue.
+an incomplete receipt, it runs a final synchronous KILL sweep of pending POSIX groups whose original
+leaders are still observed alive and starts any Windows tree kills still in the queue.
 If the group operation fails, the sweep can still signal the leader through its child handle
 and reports the tree cleanup as incomplete.
 

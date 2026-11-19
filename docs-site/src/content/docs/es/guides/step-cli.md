@@ -37,7 +37,15 @@ solicitud para que el cliente pueda aprobarlas y ejecutarlas:
 - **Apagado ordenado.** El proxy espera a que terminen los procesos de StepCode dentro de su plazo
   de apagado e informa de un error si no puede confirmarlo. En macOS y Linux, esto puede ocurrir si
   el líder del grupo de procesos sale antes de que termine el grupo. Algunos procesos descendientes
-  pueden seguir ejecutándose.
+  pueden seguir ejecutándose. En POSIX, la limpieza solo envía señales al grupo mientras el líder
+  original se observa con vida. Bun 1.4.4 recoge el estado de salida del hijo en un hilo de espera
+  nativo y después entrega el evento de salida a JavaScript. En el intervalo de microsegundos entre
+  esa recogida y el evento de salida en JavaScript, una señal al grupo podría llegar a un PGID
+  reutilizado. Bun no expone un `pidfd` ni otro identificador que acredite la pertenencia del proceso
+  a nivel de llamada al sistema, así que JavaScript no puede eliminar ese intervalo. Para eliminarlo
+  hace falta un supervisor nativo o un cambio en Bun. El intervalo es más corto que en los adaptadores
+  existentes `claude-cli`, `qoder` y `codebuddy`, que carecen de esa comprobación del líder. El
+  responsable del proyecto aceptó este riesgo residual el 2026-11-19.
 - **Límites de sesión.** Si una herramienta tarda más de dos minutos en devolver un resultado,
   el turno informa del error `step_cli_tool_result_too_late`. El protocolo no permite reemplazar
   el mensaje de sistema de la sesión. OpenCodex antepone las instrucciones del cliente al turno.
