@@ -9,6 +9,7 @@ import { reserveWorkflowSend } from "../lib/workflow-budget";
 import { currentWorkflowBudgetPolicy } from "../lib/workflow-budget-config";
 import { spendPolicyFromConfig } from "../lib/spend-reservation-ledger";
 import { carryWorkflowRefusal, workflowRefusalResponse } from "./workflow-refusal";
+import { geminiErrorBody } from "./gemini-inbound";
 import type { RequestLogContext } from "./request-log";
 import { DEFAULT_STALL_TIMEOUT_SEC, resolveStallTimeoutMs } from "../stall-timeout";
 import { isLocalUpstream } from "../lib/local-upstream";
@@ -16,14 +17,14 @@ import { assertProviderDestinationAllowed } from "../lib/destination-policy";
 import { registerTurn, unregisterTurn, type ActiveTurnLease } from "./lifecycle";
 import { geminiSseTransform, readGeminiText, validateGeminiObject, GEMINI_NATIVE_MAX_BYTES, GEMINI_NATIVE_ERROR_CODE, unwrapGeminiResponse, wrapGeminiRequest } from "./gemini-native-wire";
 
-const PROVIDER = "google-antigravity";
+export const GEMINI_NATIVE_PROVIDER = "google-antigravity";
 class NativeWorkflowSendDenied extends Error {}
 class NativeSpendLimitsUnsupported extends Error {}
 class NativeRequestBodyTimeout extends Error {}
 class NativeConfigurationInvalid extends Error {}
-export const GEMINI_NATIVE_PATH = /^\/v1beta\/models\/(gemini-[A-Za-z0-9._-]{1,120}):(generateContent|streamGenerateContent)$/;
 export function geminiNativeError(status: number, message: string, reason?: string): Response {
-  return Response.json({ error: { code: status, message, ...(reason ? { details: [{ reason }] } : {}) } }, { status });
+  const { error } = geminiErrorBody(status, message);
+  return Response.json({ error: { ...error, ...(reason ? { details: [{ reason }] } : {}) } }, { status });
 }
 
 export interface GeminiNativeDeps {
@@ -33,16 +34,16 @@ export interface GeminiNativeDeps {
 }
 const defaults: GeminiNativeDeps = {
   access: async () => {
-    const set = getAccountSet(PROVIDER);
-    if (!set) throw new OAuthLoginRequiredError(PROVIDER);
-    return getValidAccessSnapshotForAccount(PROVIDER, set.activeAccountId, { requireUsableAccount: true });
+    const set = getAccountSet(GEMINI_NATIVE_PROVIDER);
+    if (!set) throw new OAuthLoginRequiredError(GEMINI_NATIVE_PROVIDER);
+    return getValidAccessSnapshotForAccount(GEMINI_NATIVE_PROVIDER, set.activeAccountId, { requireUsableAccount: true });
   }, refresh: forceRefreshOAuthAccessSnapshot,
   fetch: globalThis.fetch,
 };
 
 /** Active-account native leg; no internal messages, tool-schema repair or model rewriting. */
 export async function handleGeminiNative(
-  req: Request, config: OcxConfig, model: string, streaming: boolean,
+  req: Request, config: OcxConfig, model: string, streamFormat: "sse" | "array" | undefined,
   lease: ActiveTurnLease, deps: GeminiNativeDeps = defaults, logCtx?: RequestLogContext,
 ): Promise<Response> {
   const rootId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
@@ -57,7 +58,7 @@ export async function handleGeminiNative(
     "Gemini native requests do not support configured token spend limits; use a translated OC route",
     "gemini_native_spend_limits_unsupported");
   if (spendUnsupported()) return unsupportedSpend();
-  const provider = config.providers[PROVIDER];
+  const provider = config.providers[GEMINI_NATIVE_PROVIDER];
   if (!provider || provider.disabled === true) return geminiNativeError(503, "Enable google-antigravity and sign in before using Gemini native requests");
   if (provider.adapter !== "google" || (provider.authMode && provider.authMode !== "oauth") || (provider.googleMode && provider.googleMode !== "cloud-code-assist")) {
     return geminiNativeError(503, "Gemini native requests require a Google Antigravity OAuth provider");
@@ -68,7 +69,7 @@ export async function handleGeminiNative(
   req.signal.addEventListener("abort", onAbort, { once: true });
   if (req.signal.aborted) onAbort();
   registerTurn(ac, lease);
-  const baseUrl = provider.baseUrl || getProviderRegistryEntry(PROVIDER)!.baseUrl;
+  const baseUrl = provider.baseUrl || getProviderRegistryEntry(GEMINI_NATIVE_PROVIDER)!.baseUrl;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let bodyReadTimer: ReturnType<typeof setTimeout> | undefined;
   let finished = false;
@@ -117,19 +118,19 @@ export async function handleGeminiNative(
       ac.signal.throwIfAborted();
       if (!access.projectId) { finish(); return geminiNativeError(503, "Antigravity project missing; sign in again"); }
       try {
-        assertProviderDestinationAllowed(PROVIDER, { ...provider, baseUrl });
+        assertProviderDestinationAllowed(GEMINI_NATIVE_PROVIDER, { ...provider, baseUrl });
         const base = new URL(baseUrl);
         if (base.username || base.password || base.search || base.hash) throw new NativeConfigurationInvalid();
       } catch { throw new NativeConfigurationInvalid(); }
-      const method = streaming ? "streamGenerateContent?alt=sse" : "generateContent";
-      const slot = await waitForProviderRequestSlot(PROVIDER, provider, model, ac.signal);
+      const method = streamFormat ? "streamGenerateContent?alt=sse" : "generateContent";
+      const slot = await waitForProviderRequestSlot(GEMINI_NATIVE_PROVIDER, provider, model, ac.signal);
       upstream = await sendTrackingRequestSlot(slot, () => {
         ac.signal.throwIfAborted();
         // A pacing wait must not outlive an operator pause, reauth mark or account removal.
-        const account = getAccountCredentialWithStatus(PROVIDER, access.accountId);
-        if (!account) throw new OAuthLoginRequiredError(PROVIDER);
+        const account = getAccountCredentialWithStatus(GEMINI_NATIVE_PROVIDER, access.accountId);
+        if (!account) throw new OAuthLoginRequiredError(GEMINI_NATIVE_PROVIDER);
         if (account.paused) throw new OAuthAccountPausedError();
-        if (account.needsReauth) throw new OAuthLoginRequiredError(PROVIDER);
+        if (account.needsReauth) throw new OAuthLoginRequiredError(GEMINI_NATIVE_PROVIDER);
         if (spendUnsupported()) throw new NativeSpendLimitsUnsupported();
         if (!reserveWorkflowSend(rootId, currentWorkflowBudgetPolicy())) throw new NativeWorkflowSendDenied();
         return fetchWithAttemptDeadline(`${baseUrl.replace(/\/$/, "")}/v1internal:${method}`, {
@@ -168,8 +169,9 @@ export async function handleGeminiNative(
       },
       cancel(reason) { ac.abort(reason); finish(); return reader.cancel(reason); },
     });
-    if (upstream.ok && streaming) {
-      return new Response(body.pipeThrough(geminiSseTransform(GEMINI_NATIVE_MAX_BYTES, noteNativeError)), { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
+    if (streamFormat) {
+      const headers = { "Content-Type": streamFormat === "sse" ? "text/event-stream" : "application/json", "Cache-Control": "no-cache" };
+      return new Response(body.pipeThrough(geminiSseTransform(GEMINI_NATIVE_MAX_BYTES, noteNativeError, streamFormat)), { headers });
     }
     const text = await readGeminiText(body, GEMINI_NATIVE_MAX_BYTES, ac.signal);
     if (text === null) return geminiNativeError(502, "Gemini upstream response exceeds the body limit");

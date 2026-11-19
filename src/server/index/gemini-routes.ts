@@ -7,10 +7,14 @@
  * `x-opencodex-api-key` and the query key dropped; the key is never logged or forwarded.
  */
 import { classifyUsageClient } from "../../usage/client";
-import { admissionFields, isAllowedRequestOrigin, resolveApiAuth, resolveResponsesApiAuth, withCors, type RequestPolicyView } from "../auth-cors";
+import { admissionFields, isAllowedRequestOrigin, resolveApiAuth, resolveResponsesApiAuth, withCors } from "../auth-cors";
 import { withCallerSessionIdentity } from "../caller-session-identity";
+import { routeAllowedByScope } from "../admission-model-scope";
 import { captureAdmissionPolicy } from "../capture-admission-policy";
 import { isDraining } from "../lifecycle";
+import { GEMINI_NATIVE_PROVIDER, handleGeminiNative } from "../gemini-native";
+import { logGeminiNativeDelivery } from "../gemini-native-log";
+import { preflightOllamaRoute } from "../ollama-route-policy";
 import { geminiRouteAllowHeader, geminiRouteAllows, parseGeminiNativePath, type GeminiNativeRoute } from "../gemini-native-paths";
 import { geminiError, handleGeminiCountTokens, handleGeminiGeneration, handleGeminiModel, handleGeminiModels, toGeminiRefusal } from "../gemini-inbound";
 import { handleGeminiInteraction, handleGeminiInteractionResource } from "../gemini-interactions-inbound";
@@ -99,11 +103,25 @@ async function handleGeminiRoute(route: GeminiNativeRoute, original: Request, ur
   const sessionReq = withCallerSessionIdentity(req, admission);
   // Discovery-style clients spell the parameter `$alt`.
   const sse = (url.searchParams.get("alt") ?? url.searchParams.get("$alt")) === "sse";
+  const nativeOptIn = url.pathname.startsWith("/v1beta/") && url.searchParams.get("ocx_native") === "true";
   // Expose an id only when the handler or a logged refusal owns the history row.
   let ownsRequestLog = false;
   const advisorAdmissionPolicy = captureAdmissionPolicy(config, admission);
   const response = await deps.runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => {
     ownsRequestLog = true;
+    const preflight = nativeOptIn && route.kind === "method" ? preflightOllamaRoute(config, route.model, sessionReq) : undefined;
+    const destination = preflight?.ok ? preflight.route : undefined;
+    if (route.kind === "method" && destination?.providerName === GEMINI_NATIVE_PROVIDER && destination.routeReason !== "blocked-model-redirect"
+      && /^gemini-[A-Za-z0-9._-]{1,120}$/.test(destination.modelId)
+      && (route.model === destination.modelId || route.model === `${destination.providerName}/${destination.modelId}`)) {
+      const { modelId, providerName } = destination;
+      Object.assign(logCtx, { model: modelId, requestedModel: route.model, provider: providerName });
+      const streamFormat = route.method === "streamGenerateContent" ? (sse ? "sse" : "array") : undefined;
+      const nativeResponse = routeAllowedByScope(advisorAdmissionPolicy.modelScope, destination)
+        ? await handleGeminiNative(sessionReq, config, modelId, streamFormat, turnAdmissionLease, undefined, logCtx)
+        : geminiError(403, "API key does not permit this destination");
+      return withCors(logGeminiNativeDelivery(nativeResponse, sessionReq, requestId, start, logCtx), original, policy);
+    }
     const ids = { requestId, start, turnAdmissionLease, admission, advisorAdmissionPolicy };
     return withCors(
       route.kind === "method"

@@ -49,13 +49,17 @@ export function wrapGeminiRequest(raw: string, model: string, project: string): 
   return `${envelope.slice(0, -1)},"request":${raw}}`;
 }
 
-/** Bounded SSE framing. Only the CCA response envelope is removed. */
-export function geminiSseTransform(maxBytes = GEMINI_NATIVE_MAX_BYTES, onNativeError?: () => void): TransformStream<Uint8Array, Uint8Array> {
+/** Decode bounded upstream SSE events and frame the unwrapped JSON for the client. */
+export function geminiSseTransform(
+  maxBytes = GEMINI_NATIVE_MAX_BYTES,
+  onNativeError?: () => void,
+  format: "sse" | "array" = "sse",
+): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const encoder = new TextEncoder();
   let lineParts: string[] = [], data: string[] = [], eventBytes = 0, afterCR = false;
   const candidates = new Map<number, boolean>();
-  let nativeError = false, blocked = false;
+  let nativeError = false, blocked = false, arrayOpened = false;
   const complete = () => nativeError || (candidates.size ? [...candidates.values()].every(Boolean) : blocked);
   function observe(raw: string) {
     const value = JSON.parse(raw) as { candidates?: Array<{ index?: number; finishReason?: string }>; error?: unknown; promptFeedback?: { blockReason?: string } };
@@ -80,7 +84,12 @@ export function geminiSseTransform(maxBytes = GEMINI_NATIVE_MAX_BYTES, onNativeE
       } else {
         const response = unwrapGeminiResponse(payload);
         observe(response);
-        controller.enqueue(encoder.encode(`data: ${response.replaceAll("\n", "\ndata: ")}\n\n`));
+        if (format === "sse") {
+          controller.enqueue(encoder.encode(`data: ${response.replaceAll("\n", "\ndata: ")}\n\n`));
+        } else {
+          controller.enqueue(encoder.encode((arrayOpened ? ",\n" : "[\n") + response));
+          arrayOpened = true;
+        }
       }
     }
     data = []; eventBytes = 0;
@@ -118,11 +127,12 @@ export function geminiSseTransform(maxBytes = GEMINI_NATIVE_MAX_BYTES, onNativeE
       }
       appendLineBytes(chunk.subarray(start));
     },
-    flush() {
+    flush(controller) {
       const tail = decoder.decode();
       if (tail) lineParts.push(tail);
       if (lineParts.join("").trim() || data.length) throw new Error("truncated Gemini SSE event");
       if (!complete()) throw new Error("incomplete Gemini generation");
+      if (format === "array") controller.enqueue(encoder.encode("\n]"));
     },
   });
 }

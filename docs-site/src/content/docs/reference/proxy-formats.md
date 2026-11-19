@@ -1123,22 +1123,23 @@ A repair must decode to a JSON object. Valid JSON values containing those tags a
 
 ## Native Gemini with Antigravity
 
-Gemini clients can use the normal authenticated OC listener with `/v1beta` as the base URL:
+The Gemini-compatible API translates requests through OpenCodex by default. For direct Gemini
+JSON with Antigravity, enable the canonical `google-antigravity` provider, sign in with
+`ocx login google-antigravity`, and set `ocx_native=true` on a generation request. Use a concrete
+`gemini-*` model from that provider. For example:
 
-- `GET /v1beta/models` and `GET /v1beta/models/{model}`
-- `POST /v1beta/models/{model}:generateContent`
-- `POST /v1beta/models/{model}:streamGenerateContent?alt=sse`
+- `POST /v1beta/models/google-antigravity/gemini-3.8-flash-medium:generateContent?ocx_native=true`
+- `POST /v1beta/models/google-antigravity/gemini-3.8-flash-medium:streamGenerateContent?ocx_native=true&alt=sse`
 
-Enable the `google-antigravity` provider and sign in with `ocx login google-antigravity`.
-Use an OC admission key in `Authorization: Bearer <OC_KEY>` or `x-opencodex-api-key`.
-The upstream token and project come from OC's active Antigravity account. A separate proxy
-process is not required.
+On an authenticated listener, send the OpenCodex admission key in `x-goog-api-key` or
+`x-opencodex-api-key`. The upstream token and project come from OpenCodex's active Antigravity
+account. `GET /v1beta/models` lists configured routes under the caller's model scope.
+Use the provider-qualified selector from the catalog to select Antigravity explicitly.
 
-This route adds and removes only the Cloud Code Assist envelope. Original JSON fields,
-large integers, function arguments and thought signatures retain their source representation.
-Streaming uses Gemini SSE; framing can change. Other OC providers, aliases, combos and effort
-selectors do not participate. Supply a concrete `gemini-*` wire model. The catalog lists OC's
-known AGY models filtered by the key's destination scope; listing does not prove account access.
+The native path preserves original JSON fields, including large integers, function arguments and
+thought signatures, through the Cloud Code Assist envelope. Streams use SSE with `alt=sse` and a
+streamed JSON array otherwise. Other providers, aliases, combos and effort selectors do not
+enter the native path.
 
 Bodies and SSE events are capped at 16 MiB; a lower `maxInboundBodyBytes` also applies to requests.
 Send identity-encoded JSON. Compressed requests are rejected. Uploads have an independent idle

@@ -556,9 +556,8 @@
       "documents": [
         "src/server/gemini-native.ts",
         "src/server/gemini-native-wire.ts",
-        "src/server/gemini-native-catalog.ts",
         "src/server/gemini-native-log.ts",
-        "src/server/index/gemini-native-routes.ts"
+        "src/server/index/gemini-routes.ts"
       ]
     },
     {

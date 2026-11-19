@@ -224,9 +224,9 @@ describe("Gemini-compatible inbound routes", () => {
     });
   });
 
-  test("buffered generateContent answers on /v1beta and on /v1 with an encoded model", async () => {
+  test("buffered generation supports /v1 and keeps other providers translated with the native opt-in", async () => {
     await withServer(async base => {
-      for (const path of ["/v1beta/models/fx/m1:generateContent", "/v1/models/fx%2Fm1:generateContent"]) {
+      for (const path of ["/v1beta/models/fx/m1:generateContent", "/v1beta/models/fx/m1:generateContent?ocx_native=true", "/v1/models/fx%2Fm1:generateContent"]) {
         const res = await post(base, path, request());
         expect(res.status).toBe(200);
         expect(await res.json()).toEqual({
@@ -235,9 +235,9 @@ describe("Gemini-compatible inbound routes", () => {
           modelVersion: "fx/m1",
         });
       }
-      expect(seen.map(call => call.body.stream)).toEqual([false, false]);
+      expect(seen.map(call => call.body.stream)).toEqual([false, false, false]);
       await Bun.sleep(20);
-      expect(newRows()).toHaveLength(2);
+      expect(newRows()).toHaveLength(3);
     });
   });
 

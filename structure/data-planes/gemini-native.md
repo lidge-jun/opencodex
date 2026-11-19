@@ -1,11 +1,9 @@
 # Native Gemini Inbound
 
-`src/server/index/gemini-native-routes.ts` dispatches `/v1beta/` on the authenticated
-listener before the GUI fallback. The separate unauthenticated loopback, linked ingress and
-management listener allowlists remain unchanged. Package-tree replacement fences native requests.
-
-Generation uses Responses data-plane admission, origin checks, destination scopes, drain,
-caller-session identity, active-turn/workflow admission and the HTTP idle-timeout override.
+The [Gemini-compatible ingress](gemini-inbound.md#native-antigravity-passthrough) owns route
+registration, discovery, and admission. Its generation handler in `src/server/index/gemini-routes.ts`
+selects this path for an opted-in `/v1beta` request that resolves a concrete Gemini model to the
+canonical `google-antigravity` provider. The same admission policy scopes the actual wire model.
 `src/server/gemini-native.ts` uses the enabled canonical `google-antigravity` provider and its
 active, usable OAuth account. Snapshot token and project stay together, including after one
 401-triggered refresh of the rejected generation. OC's provider pacing applies to each physical
@@ -23,9 +21,9 @@ unknown fields, integer precision, number spelling, tool arguments and thought s
 Neither direction passes through internal Messages/Responses conversion, model aliases,
 effort rewriting, schema repair, signature replay caches or built-in tool emulation.
 
-The methods are `POST /v1beta/models/gemini-*:generateContent` and
-`POST /v1beta/models/gemini-*:streamGenerateContent`. Streaming always uses SSE. Only the
-CCA response envelope is removed; SSE framing is regenerated and keepalive comments discarded.
+The native path handles `generateContent` and `streamGenerateContent`. The upstream stream is SSE.
+Clients receive SSE with `alt=sse` and a streamed JSON array otherwise. Each unwrapped response
+retains its source JSON as the handler regenerates frame delimiters and discards keepalive comments.
 UTF-8 and CR/LF delimiters can span chunks. Missing/duplicate wrappers, malformed or oversized
 frames, incomplete final frames and EOF before all observed candidates finish terminate delivery,
 with no resend after output. A blocked prompt or native error is also terminal; `[DONE]` alone is not.
@@ -38,11 +36,6 @@ that resets per chunk and clears before OAuth/pacing; a disabled upstream timer 
 300-second upload protection in place. Upload inactivity returns 408.
 Request abort, shutdown, stream cancellation, failure and EOF release their turn and transport
 owners. Native parsing does not borrow the translator budget or retain replay state.
-
-`src/server/gemini-native-catalog.ts` serves `GET /v1beta/models` and individual model metadata
-from OC's known AGY registry/cache/config catalog, filtered by destination scope. Pagination uses
-`pageSize` (1–1000, default 50) and an offset `pageToken`. Listing is not an upstream entitlement
-check. Unsupported methods and Interactions return explicit errors.
 
 `src/server/gemini-native-log.ts` records delivery status, latency, client and admission identity
 without inspecting payloads or retaining prompts/signatures. Token usage and pricing are unreported. Native SSE and buffered error objects are forwarded unchanged but

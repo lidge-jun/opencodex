@@ -23,7 +23,7 @@ function transport(fn: (url: string, init: RequestInit) => Response | Promise<Re
 }
 async function run(req: Request, deps: GeminiNativeDeps, stream = false, cfg = config) {
   const lease = tryAdmitTurn(undefined, req.signal)!;
-  try { return await handleGeminiNative(req, cfg, "gemini-test", stream, lease, deps); }
+  try { return await handleGeminiNative(req, cfg, "gemini-test", stream ? "sse" : undefined, lease, deps); }
   finally { if (!lease.isTransferred()) lease.release(); }
 }
 test("native generation preserves source JSON, binds project and replaces ingress credentials", async () => {
@@ -166,7 +166,7 @@ test("native physical sends consume the workflow ceiling across requests and 401
     const req = request();
     req.headers.set("x-codex-parent-thread-id", rootId);
     req.headers.set("thread-id", rootId);
-    return guarded(req, config, lease => handleGeminiNative(req, config, "gemini-test", false, lease, deps));
+    return guarded(req, config, lease => handleGeminiNative(req, config, "gemini-test", undefined, lease, deps));
   };
   let sends = 0;
   try {
@@ -228,7 +228,7 @@ test("native SSE errors retain their payload while delivery logs record failure"
   const id = `gemini-native-error-fixture-${crypto.randomUUID()}`;
   const payload = '{"error":{"code":500,"message":"opaque upstream diagnostic","future":9007199254740993123}}';
   try {
-    const response = await handleGeminiNative(req, config, "gemini-test", true, lease, {
+    const response = await handleGeminiNative(req, config, "gemini-test", "sse", lease, {
       access: async () => old, refresh: async () => fresh,
       fetch: transport(() => new Response(`data: {"response":${payload}}\n\n`)),
     }, context);
@@ -377,7 +377,7 @@ test("buffered native errors preserve original JSON and log failure without reta
   const id = `gemini-buffered-error-fixture-${crypto.randomUUID()}`;
   const payload = '{"error":{"code":500,"message":"private buffered diagnostic","future":9007199254740993123}}';
   try {
-    const response = await handleGeminiNative(req, config, "gemini-test", false, lease, {
+    const response = await handleGeminiNative(req, config, "gemini-test", undefined, lease, {
       access: async () => old, refresh: async () => fresh,
       fetch: transport(() => new Response(`{"response":${payload}}`)),
     }, context);

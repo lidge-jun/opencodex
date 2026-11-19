@@ -2,8 +2,8 @@
 
 Gemini clients (the google-genai SDK with a custom base URL, `agy` with its `genai` gateway wire
 protocol, `GOOGLE_GEMINI_BASE_URL`) can use configured provider routes through the Gemini REST
-shape. Like the [Ollama inbound](ollama-inbound.md) it is a translation onto the
-[Chat Completions inbound](inbound-compat.md) path and never talks to Google itself.
+shape. By default it translates onto the [Chat Completions inbound](inbound-compat.md) path,
+like the [Ollama inbound](ollama-inbound.md).
 
 `src/server/gemini-native-paths.ts` classifies a path: `GET /v1beta/models`,
 `GET /v1beta/models/{model}`, and `POST /v1beta/models/{model}:{method}` or
@@ -43,7 +43,7 @@ more than 1,024 function calls) is a 400. Responses map Chat finish `stop` and `
 error, never a success. A streamed tool call is accumulated and emitted as one whole `functionCall`
 part. Usage becomes `usageMetadata`, with reasoning tokens reported as `thoughtsTokenCount`.
 
-`src/server/gemini-inbound.ts` owns delivery. With `alt=sse` a stream is `data: <json>\r\n\r\n`
+`src/server/gemini-inbound.ts` owns translated delivery. With `alt=sse` a stream is `data: <json>\r\n\r\n`
 frames; without it, one streamed JSON array. The closing chunk (finish reason and usage) is emitted
 only after the Chat stream reached EOF and the inner path settled, through the shared pump in
 `src/server/native-chat-bridge.ts` that Ollama also uses: identity-only internal Chat request,
@@ -144,6 +144,15 @@ emission. The bridge disposes the translator on success, failure, or cancellatio
 `x-opencodex-interaction-stored: true|false` (exposed to browsers) whenever a store was requested. `GET`
 returns the stored resource with its input steps and `previous_interaction_id`; `DELETE` answers `{}`;
 cancel answers 400 for an owned interaction (nothing runs in the background) and 404 otherwise.
+
+## Native Antigravity passthrough
+
+A request to either `/v1beta` generation method can set `ocx_native=true`. The shared dispatcher
+selects the [native transport](gemini-native.md) if the normal route preflight resolves an exact
+`gemini-*` wire model to canonical `google-antigravity`, and the selector is that model ID or its
+canonical provider-qualified form. The translated path handles other providers and selectors.
+The native branch uses the same auth, origin, body, active-turn and workflow admission, and
+validates the resolved destination against the captured model scope before OAuth or dispatch.
 
 ## Coverage
 

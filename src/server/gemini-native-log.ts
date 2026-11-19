@@ -29,7 +29,5 @@ export function logGeminiNativeDelivery(response: Response, req: Request, reques
     },
     cancel(reason) { finish(499); return reader.cancel(reason); },
   });
-  const headers = new Headers(response.headers);
-  headers.set("x-opencodex-request-id", requestId);
-  return new Response(body, { status: response.status, headers });
+  return new Response(body, { status: response.status, headers: response.headers });
 }

@@ -494,7 +494,6 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/gemini-inbound.ts` | [`data-planes/gemini-inbound.md`](data-planes/gemini-inbound.md) |
 | `src/server/gemini-interactions-inbound.ts` | [`data-planes/gemini-inbound.md`](data-planes/gemini-inbound.md) |
 | `src/server/gemini-interactions-store.ts` | [`data-planes/gemini-inbound.md`](data-planes/gemini-inbound.md) |
-| `src/server/gemini-native-catalog.ts` | [`data-planes/gemini-native.md`](data-planes/gemini-native.md) |
 | `src/server/gemini-native-log.ts` | [`data-planes/gemini-native.md`](data-planes/gemini-native.md) |
 | `src/server/gemini-native-paths.ts` | [`data-planes/gemini-inbound.md`](data-planes/gemini-inbound.md) |
 | `src/server/gemini-native-wire.ts` | [`data-planes/gemini-native.md`](data-planes/gemini-native.md) |
@@ -505,8 +504,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/images.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/index.ts` | [`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
 | `src/server/index/` | [`usage-client-attribution.md`](usage-client-attribution.md) |
-| `src/server/index/gemini-native-routes.ts` | [`data-planes/gemini-native.md`](data-planes/gemini-native.md) |
-| `src/server/index/gemini-routes.ts` | [`data-planes/gemini-inbound.md`](data-planes/gemini-inbound.md) |
+| `src/server/index/gemini-routes.ts` | [`data-planes/gemini-native.md`](data-planes/gemini-native.md)<br>[`data-planes/gemini-inbound.md`](data-planes/gemini-inbound.md) |
 | `src/server/index/link-management.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/index/link-websocket-limits.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/index/link-websocket.ts` | [`remote-link.md`](remote-link.md) |
