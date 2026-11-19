@@ -28,7 +28,7 @@ lazily, caches a failed load as unavailable, and closes every handle in a `final
 - an exit watch: a handle opened at bind time and polled with `WaitForSingleObject(handle, 0)`;
 - the Task Scheduler service host PID through `QueryServiceStatusEx` on `Schedule`, only while it runs.
 
-The Link Child process fallback uses the same handle-bound termination primitive with the same-user CIM creation time at microsecond precision. If handle binding cannot be verified, it refuses the fallback.
+Link stop reads a live process’s creation time and token user through one handle. To verify a stop owner, it also reads the command line through that handle using `src/config/windows-process-command-line.ts`. The creation time uses .NET ticks truncated to CIM’s microsecond precision so existing receipts and runtime records still match. If the native API is unavailable, a bounded CIM probe refreshes the creation time after reading the SID. A failed native read leaves the identity unverified. Forced Link termination requires the native handle and compares the saved creation time and token user on that handle before ending the process.
 
 Windows ARM64, other platforms and any test that simulates a platform get no native API.
 `src/service/windows-process-evidence.ts` is the facade the operations use. Its process snapshot is

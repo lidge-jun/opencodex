@@ -81,7 +81,7 @@ injected hash. Native content can establish a fresh snapshot; routed content can
 unverified older original. Existing hash-backed edit preservation and external-provider opt-out
 remain separate paths. Removal with `preserveProfile: false` refuses a final-component profile symlink before changing config or journal state. Profile cleanup uses the held configuration lock, canonical parent and identity rechecks; its pathname unlink is not atomic against non-cooperating writers. A matching journal refuses profiles eligible for restoration or removal when they are symlinks, including dangling generated links, before changing either artifact or recovery evidence. Config publication is covered by `withConfigWriteRecovery` if later profile removal throws.
 
-Standalone removal derives its transform and rollback preimage from the same raw bytes.
+Standalone removal derives its transform and rollback preimage from the same raw bytes. Standalone removal and field-level journal restoration treat an explicit catalog binding as ownership evidence. For legacy records, a recorded catalog artifact is evidence for the binding only when it resolves to the default sibling catalog. Field-level restoration preserves a legacy binding that points elsewhere, even when a field snapshot captured it.
 Removal refuses before publication if the recovery capture no longer matches its input bytes.
 Nested removal also requires the outer scope's last observed file identity to remain current;
 its transaction preimage is retained. Advisory locking does not serialize non-cooperating edits

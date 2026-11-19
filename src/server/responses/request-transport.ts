@@ -10,7 +10,7 @@ import { isOpenCodeGoResponsesUrl } from "../../adapters/opencode-go-additional-
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
 import { anthropicBillingPhysicalFetch } from "../../providers/anthropic-billing-ownership";
 import { passiveKeyPhysicalFetch } from "../../providers/passive-key-observation";
-import { rebindPhysicalSend } from "../../lib/request-execution-budget";
+import { captureCurrentPhysicalSendUsage, rebindPhysicalSend, recordCurrentPhysicalSendUsage } from "../../lib/request-execution-budget";
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
 import { anthropicRatePolicyFor } from "../../oauth/anthropic-rate-limit-policy";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
@@ -18,7 +18,7 @@ import { anthropicApiKeyForRequest, resolveAnthropicMessagesUrl } from "../../ad
 import { hostedAdvisorCredentials, stripHostedAdvisorBeta } from "../../adapters/anthropic/advisor-tool";
 import { bindAnthropicRefusalCredentialForSend } from "../../oauth/anthropic-account-refusal";
 import { captureAnthropicPhysicalSendOwnership, anthropicPhysicalSendOwnershipIsCurrent, type AnthropicPhysicalSendOwnership } from "../../oauth/anthropic-send-ownership";
-import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
+import { responsesTimeoutProvider, type ResponsesRequestContext, type ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { OAuthAccessSnapshot } from "../../oauth";
 import {
@@ -31,7 +31,8 @@ import {
 import { refreshKiroAccountModelsDetached } from "../../providers/kiro-model-catalog";
 import type { ProviderAdapter, AdapterRequest } from "../../adapters/base";
 import { copyVertexRequestAuthority, hasVertexRequestAuthority, vertexRequestAuthorityIsCurrent } from "../../lib/gcp-adc";
-import { releaseProviderRequestSlot, waitForProviderRequestSlot, type ProviderRequestSlot } from "../../providers/request-pacing";
+import { registerProviderResponseProvenance, releaseProviderRequestSlot, waitForProviderRequestSlot, type ProviderRequestSlot } from "../../providers/request-pacing";
+import type { AnthropicImageRecoveryPin } from "./anthropic-image-context";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../../types";
 import type { AnthropicAccountSelectionReason } from "../../oauth/anthropic-routing";
 import { resolveAnthropicModelRouteForInstance, routeCandidates, type AnthropicRouteDecision } from "../../oauth/anthropic-model-routes";
@@ -69,7 +70,7 @@ import { oauthSessionKeyFromParts } from "../../oauth/session-affinity-key";
 import { resolveContextPrincipal } from "../auth-cors";
 import { tryKiroAlternateAfterTerminalRefresh } from "../../oauth/kiro-terminal-failover";
 import { classifyModelFamilyForQuota } from "../../oauth/account-quota-rank";
-import { expandInferenceOAuthSendBudget } from "../inference/context";
+import { expandInferenceOAuthSendBudget, fundChatGptRetryAttempts } from "../inference/context";
 import { stampOAuthAccountLabel, stampApiKeyAccountLabel, usesApiKeyAccount } from "../../providers/label";
 import { apiKeyAccountLogLabel, oauthAccountLogLabel } from "../../codex/account-label";
 import { bindResponsesHostedAdvisorSpendTarget, bindResponsesSpendTarget, responsesSpendTarget } from "./request-spend-target";
@@ -92,8 +93,9 @@ import {
 } from "../../providers/api-key-selection";
 import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../../providers/api-key-pause";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
+import { applyReasoningDisplayPolicy } from "./core-normalize";
 import { codexWsExecutorBinding, fetchWithHeaderTimeout, physicalSendGuardInit, physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
-import { resolveConnectTimeoutMs } from "../../stall-timeout";
+import { providerConnectTimeoutMs, resolveConnectTimeoutMs } from "../../stall-timeout";
 import { isLocalUpstream } from "../../lib/local-upstream";
 import { deepSeekImageFileBody, needsDeepSeekImageFiles } from "./deepseek-image-files";
 import type { ProviderFetchOptions } from "./fetch-helpers";
@@ -105,7 +107,7 @@ import { bindRouteReasoningReplayScope } from "./core-replay";
 import { affinityLaneFromRequest, assignNativeLogConversationId, normalizeLogConversationId, sessionIdHeaderFromRequest } from "../request-log-conversation";
 import { redactSecretString } from "../../lib/redact";
 import { captureAccountAutoPauseAttempt } from "../../oauth/account-auto-pause";
-import { selectProactiveApiKeyTransport } from "../../providers/key-failover";
+import { selectProactiveApiKeyTransport, transientRetryPolicyFor } from "../../providers/key-failover";
 import { distributedKeyPhysicalFetch, hasConflictingApiKeyHeaders } from "../../providers/api-key-response-ownership";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { providerConsumesCallerAuthorization } from "../../providers/caller-authorization";
@@ -114,17 +116,31 @@ import {
   beginRequestAttempt,
   sealRequestAttemptIdentity,
   recordAttemptCredentialSource,
+  recordAdapterReasoning,
+  recordAdapterTier,
   recordAdapterTierMetadata,
+  recordAttemptRequestedEffort,
   noteProviderAttemptSend,
-  recordKeyAttemptFailure,
   recordKeyAttemptUsage,
   rebindCacheDiagnosticBody,
+  type RequestLogContext,
 } from "../request-log";
+import { recordKeyAttemptFailure } from "../request-log-key-failure";
+import { sealCredentialRefusal } from "../credential-recovery-attempt";
+import { sealedCredentialRefusals } from "../request-log-attempt-recovery";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { bindAttemptDeliveryRecorder } from "../../usage/attempt-delivery";
 import { resolvePassiveRouteSubjectId } from "../passive-route-linker";
 import { anthropicPoolCooldownResponse, clientCancelledResponse } from "./core-errors";
 import { acquireAccountLease, KIRO_ACCOUNT_WAIT_MS } from "../../oauth/kiro-account-load";
+
+type CopilotInferenceReceipt = {
+  attempt: NonNullable<RequestLogContext["activeAttempt"]>;
+  ordinal: number;
+  sendCount: number;
+};
+const copilotInferenceReceipts = new WeakMap<Response, CopilotInferenceReceipt>();
+registerProviderResponseProvenance(copilotInferenceReceipts);
 
 /** Return a renewed Chat wire to the native owner before sending inference. */
 export class CopilotAutoAdapterHandoff extends Error {
@@ -132,6 +148,10 @@ export class CopilotAutoAdapterHandoff extends Error {
     super("Copilot Auto dispatch requires the Chat adapter");
   }
 }
+
+type ImageDispatchPin = { current(): boolean; matches(target: string, headers: Headers): boolean };
+const imageRefusals = new WeakMap<Response, AnthropicImageRecoveryPin | null>();
+registerProviderResponseProvenance(imageRefusals);
 
 /** Owns live credential selection and adapter bindings for one request. */
 export async function prepareResponsesTransport(
@@ -263,6 +283,8 @@ export async function prepareResponsesTransport(
     | { kind: "oauth"; selection: NonNullable<typeof oauthSelection>; snapshot: OAuthAccessSnapshot }
     | { kind: "api-key"; provider: OcxProviderConfig };
   const requestBindings = new WeakMap<AdapterRequest, DispatchBinding>();
+  const capturedImagePins = new WeakSet<AnthropicImageRecoveryPin>();
+  const imageHistoryPins = new WeakMap<AnthropicImageRecoveryPin["owner"], (request: AdapterRequest) => ImageDispatchPin>();
   const hostedAdvisorDispatches = new WeakMap<AdapterRequest, {
     credential: NonNullable<ReturnType<typeof hostedAdvisorCredentials.get>>;
     rebuild: (refusal: HostedAdvisorSpendRefusal, signal: AbortSignal) => Promise<AdapterRequest>;
@@ -481,6 +503,7 @@ export async function prepareResponsesTransport(
     copilotAutoAdapter = autoAdapter;
     for (const target of new Set([parsed, requestParsed])) {
       target.modelId = selected.modelId;
+      applyReasoningDisplayPolicy(target, negotiatedWire, inboundWire);
       if (target._rawBody && typeof target._rawBody === "object")
         (target._rawBody as { model?: string }).model = selected.modelId;
       target.context = renameRoutedIdentityInContext(target.context, selected.modelId);
@@ -602,8 +625,7 @@ export async function prepareResponsesTransport(
     if (attemptSendDeferred()) pendingKeySend = { estimate, recovery };
     else noteProviderAttemptSend(logCtx, route.providerName, route.provider, estimate, recovery);
   };
-  const commitKeyAttemptSend = (): void => {
-    if (!attemptSendDeferred()) return;
+  const commitRoutedAttemptSend = (estimate: number | undefined, recovery?: AttemptRecoveryKind, resolved = copilotCandidate): void => {
     if (copilotCandidate) {
       logCtx.model = copilotCandidate.model;
       logCtx.providerAdapter = copilotCandidate.adapter;
@@ -614,12 +636,68 @@ export async function prepareResponsesTransport(
         sentOAuthSnapshot = servingOAuthSnapshot;
       }
     }
-    noteProviderAttemptSend(logCtx, route.providerName, route.provider,
-      pendingKeySend?.estimate ?? logCtx.usageLogInputTokens, pendingKeySend?.recovery, copilotCandidate);
+    noteProviderAttemptSend(logCtx, route.providerName, route.provider, estimate, recovery, resolved);
+  };
+  const commitKeyAttemptSend = (): void => {
+    if (!attemptSendDeferred()) return;
+    const pending = pendingKeySend;
     pendingKeySend = undefined;
+    commitRoutedAttemptSend(pending?.estimate ?? logCtx.usageLogInputTokens, pending?.recovery);
+  };
+  const bindPassiveSubject = (adapter: string, model: string): void => {
+    const attempt = logCtx.activeAttempt;
+    if (!attempt || sealedCredentialRefusals.has(attempt)) return;
+    const subject = resolvePassiveRouteSubjectId(config, route.providerName, model, route.provider, inboundWire, adapter);
+    if (subject) attempt.labRouteSubjectId = subject;
+    else delete attempt.labRouteSubjectId;
+  };
+  const commitRunTurnAttemptSend = (requestParsed: OcxParsedRequest, recovery?: AttemptRecoveryKind): void => {
+    const selected = runTurnAdapter;
+    pendingKeySend = undefined;
+    commitRoutedAttemptSend(logCtx.usageLogInputTokens, recovery, { model: route.modelId, adapter: selected.name });
+    logCtx.providerAdapter = selected.name;
+    bindPassiveSubject(selected.name, route.modelId);
+    recordAttemptRequestedEffort(logCtx);
+    recordAdapterTierMetadata(logCtx, selected.tierLogForRunTurn?.(requestParsed));
+  };
+  const commitAdapterAttemptSend = (request: AdapterRequest, adapter: string, recovery?: AttemptRecoveryKind): void => {
+    const estimate = request.usageLog?.inputTokens;
+    pendingKeySend = undefined;
+    const identity = copilotCandidate ?? { model: route.modelId, adapter };
+    commitRoutedAttemptSend(estimate, recovery, identity);
+    logCtx.providerAdapter = identity.adapter;
+    logCtx.usageLogInputTokens = estimate;
+    recordAdapterReasoning(logCtx, request);
+    recordAdapterTier(logCtx, request);
+  };
+  const createCredentialReplayAttempt = (status: number, recovery: AttemptRecoveryKind) => {
+    sealCredentialRefusal(logCtx, status, recovery);
+    let dispatched = false;
+    return (request: AdapterRequest, adapter: string, transportRecovery?: AttemptRecoveryKind): void => {
+      const estimate = request.usageLog?.inputTokens;
+      const identity = copilotCandidate ?? { model: route.modelId, adapter };
+      if (!dispatched) pendingKeySend = undefined;
+      commitRoutedAttemptSend(estimate, dispatched ? transportRecovery : recovery, identity);
+      if (dispatched) return;
+      logCtx.providerAdapter = identity.adapter;
+      logCtx.usageLogInputTokens = estimate;
+      bindPassiveSubject(identity.adapter, identity.model);
+      recordAdapterReasoning(logCtx, request);
+      recordAdapterTier(logCtx, request);
+      dispatched = true;
+    };
+  };
+  let credentialReplayHandoff: ReturnType<typeof createCredentialReplayAttempt> | undefined;
+  const isCurrentInferenceResponse = (response: Response): boolean => {
+    if (route.providerName !== "github-copilot" || route.provider.authMode === "forward") return true;
+    const receipt = copilotInferenceReceipts.get(response);
+    const attempt = logCtx.activeAttempt;
+    return receipt !== undefined && receipt.attempt === attempt
+      && receipt.ordinal === attempt.ordinal && receipt.sendCount === attempt.sendCount;
   };
   const bindKeyUsageFromBridge = (usage: OcxUsage | undefined): void => {
     logCtx.usageFromBridge = true;
+    if (logCtx.activeAttempt && sealedCredentialRefusals.has(logCtx.activeAttempt)) return;
     if (usesApiKeyAccount(route.provider)) {
       if (!logCtx.activeAttempt?.usage && usage) recordKeyAttemptUsage(logCtx, usage);
       logCtx.usage = logCtx.activeAttempt?.usage;
@@ -725,7 +803,10 @@ export async function prepareResponsesTransport(
     // transport relayed, and a difference between the two is the loss signal (#3983). Reading
     // the current attempt through logCtx rather than capturing one keeps the count with the
     // attempt that is live when the event arrives, across a mid-request attempt rotation.
-    const delivery = bindAttemptDeliveryRecorder(translatorBudget, () => logCtx.activeAttempt);
+    const delivery = bindAttemptDeliveryRecorder(translatorBudget, () => {
+      const attempt = logCtx.activeAttempt;
+      return attempt && !sealedCredentialRefusals.has(attempt) ? attempt : undefined;
+    });
     const observeEvent = (event: AdapterEvent, response: object): void => {
       delivery.noteAdapterEvent();
       observeUsage(event, response);
@@ -927,6 +1008,14 @@ export async function prepareResponsesTransport(
           refused = true;
           throw new Error("Account selection changed before turn admission");
         }
+        const beforeCredentialSend = (): void => {
+          incoming.abortSignal?.throwIfAborted();
+          incoming.beforeCredentialSend?.();
+          if (!selectionIsCurrent(binding)) {
+            refused = !sent;
+            throw new Error("Account selection changed before turn dispatch");
+          }
+        };
         const beforePhysicalSend = (): void => {
           incoming.abortSignal?.throwIfAborted();
           if (sent) {
@@ -934,13 +1023,8 @@ export async function prepareResponsesTransport(
               && !selectionIsCurrent(binding)) throw new Error("API key became unavailable during the turn");
             return;
           }
-          if (!selectionIsCurrent(binding)) {
-            refused = true;
-            throw new Error("Account selection changed before the first turn dispatch");
-          }
+          beforeCredentialSend();
           incoming.beforePhysicalSend?.();
-          commitKeyAttemptSend();
-          sent = true;
         };
         const fetch = providerFetch(route.provider, options.codexWsRuntimeIdentity, {
           providerName: route.providerName, modelId: route.modelId, pacingSlotAcquired: true,
@@ -948,8 +1032,15 @@ export async function prepareResponsesTransport(
           turnScopedPacing: true,
           accountAutoPause: (name, provider, headers) => captureAccountAutoPauseAttempt(name, provider, { config, oauth: binding?.kind === "oauth" ? binding.snapshot : undefined }, headers),
           beforeDispatch: beforePhysicalSend,
+          onPhysicalDispatch: () => {
+            sent = true;
+            if (incoming.onGuardedDispatch) incoming.onGuardedDispatch();
+            else if (!selectedAdapter.reportsPhysicalSends) commitKeyAttemptSend();
+          },
         });
-        await run(requestParsed, { ...incoming, pacingSlot: attemptSlot, providerFetch: fetch, beforePhysicalSend }, event => { if (!refused) emit(event); });
+        await run(requestParsed, { ...incoming, pacingSlot: attemptSlot, providerFetch: fetch, beforePhysicalSend, beforeCredentialSend,
+          onPhysicalSend: send => { sent = true; incoming.onPhysicalSend?.(send); },
+        }, event => { if (!refused) emit(event); });
       } catch (error) {
         if (!refused) throw error;
       } finally {
@@ -964,7 +1055,13 @@ export async function prepareResponsesTransport(
     } finally { producer?.close(); }
   };
   /** Fence the physical send, with bounded credential/session rebuilds and safe negotiated refusals. */
-  const oauthDispatch = (wireRequest: AdapterRequest, requestParsed = parsed, owner: "adapter" | "passthrough" = "adapter"): ProviderFetchOptions["dispatchOverride"] => {
+  const oauthDispatch = (wireRequest: AdapterRequest, requestParsed = parsed, owner: "adapter" | "passthrough" = "adapter",
+    explicitAttemptCommit = false, imagePin?: ImageDispatchPin): ProviderFetchOptions["dispatchOverride"] => {
+    const priorImageOwner = requestParsed._anthropicImageOwner;
+    const pinned = imagePin ?? (priorImageOwner ? imageHistoryPins.get(priorImageOwner)?.(wireRequest) : undefined);
+    if (priorImageOwner && (!pinned || route.provider.authMode === "forward")) {
+      throw new Error("Anthropic image context has no dispatch authority");
+    }
     const stripWithheldAdvisorBeta = () => hostedAdvisorCredentialWithheld
       || (route.provider.adapter === "anthropic" && options.hostedAdvisorSpendScope?.optionalWithheld === true);
     if (route.provider.authMode === "forward" && !hostedAdvisorDispatches.has(wireRequest)
@@ -982,6 +1079,7 @@ export async function prepareResponsesTransport(
           await reacquirePacing(route.provider, route.modelId);
           pacingChanged = false;
         }
+        if (pinned && !pinned.current()) throw new Error("Anthropic image recovery owner changed before dispatch");
         if (selectionIsCurrent(requestBindings.get(wireRequest)) && vertexRequestAuthorityIsCurrent(wireRequest) && copilotSessionExpiresAt > Date.now() + 1000) {
           const ws = codexWsExecutorBinding(execute);
           const fetchImpl = (route.provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? ws?.http ?? execute;
@@ -997,6 +1095,29 @@ export async function prepareResponsesTransport(
           if (authorizedAnthropicTarget && target !== authorizedAnthropicTarget) {
             throw new OAuthLoginRequiredError(anthropicInstance!);
           }
+          const recoveryOwner = owner === "adapter" && route.provider.adapter === "anthropic"
+            && route.provider.anthropicImageContextRecovery === true ? requestParsed._providerContinuationOwner : undefined;
+          const expectedHeaders = recoveryOwner ? new Headers(wireRequest.headers) : undefined;
+          const expectedKey = binding?.kind === "oauth" ? binding.snapshot.accessToken : binding?.provider.apiKey;
+          const bearer = binding?.kind === "oauth" || route.provider.apiKeyTransport === "bearer";
+          const carriesSelectedKey = !!expectedKey && (bearer
+            ? expectedHeaders?.get("authorization") === `Bearer ${expectedKey}` && !expectedHeaders.has("x-api-key")
+            : expectedHeaders?.get("x-api-key") === expectedKey && !expectedHeaders.has("authorization"));
+          const recoveryGeneration = recoveryOwner ? captureConfigGeneration() : undefined;
+          const recoveryProvider = route.provider;
+          const configuredProvider = recoveryOwner ? config.providers[route.providerName] : undefined;
+          const configuredBase = configuredProvider?.baseUrl;
+          const wireUrl = wireRequest.url;
+          const wireMatches = (finalTarget: string, finalHeaders: Headers): boolean =>
+            finalTarget === wireUrl && expectedHeaders !== undefined
+            && finalHeaders.get("authorization") === expectedHeaders.get("authorization")
+            && finalHeaders.get("x-api-key") === expectedHeaders.get("x-api-key")
+            && !finalHeaders.has("api-key") && !finalHeaders.has("cookie");
+          const recoveryCurrent = (): boolean => recoveryGeneration === captureConfigGeneration()
+            && route.provider === recoveryProvider && config.providers[route.providerName] === configuredProvider
+            && configuredProvider?.baseUrl === configuredBase && configuredProvider?.anthropicImageContextRecovery === true
+            && resolveAnthropicMessagesUrl(recoveryProvider) === wireUrl && selectionIsCurrent(binding);
+          let imageOwnerMatched = false;
           const writerGeneration = snapshot ? captureConfigGeneration() : 0;
           const sentHeaders = snapshot ? new Headers(dispatchInit.headers) : undefined;
           const ownsBearer = snapshot !== undefined
@@ -1014,6 +1135,7 @@ export async function prepareResponsesTransport(
           const observeAutoPause = captureAccountAutoPauseAttempt(route.providerName, binding?.kind === "api-key" ? binding.provider : route.provider,
             { config, oauth: binding?.kind === "oauth" ? binding.snapshot : undefined }, new Headers(dispatchInit.headers));
           let response: Response | undefined;
+          let copilotReceipt: CopilotInferenceReceipt | undefined;
           let physicalOwner: AnthropicPhysicalSendOwnership | null = null;
           try {
             requireAnthropicAdmission();
@@ -1030,8 +1152,8 @@ export async function prepareResponsesTransport(
             // Copilot's local negotiation may refuse before this point, and spend admission
             // may still refuse at the HTTP executor. Its note follows that final admission.
             const deferredCopilotNote = route.providerName === "github-copilot" && route.provider.authMode !== "forward";
-            const deferAttemptNote = deferredCopilotNote || advisorCredential !== undefined;
-            if (!deferAttemptNote) commitKeyAttemptSend();
+            const deferAttemptNote = deferredCopilotNote || advisorCredential !== undefined || pinned !== undefined;
+            if (!explicitAttemptCommit && !deferAttemptNote) commitKeyAttemptSend();
             // The WS executor dials its own socket: HTTP connection policy and body coding do not apply.
             // WS eligibility (egress, pacing, URL) was checked for the provider it was built for; a
             // provider reselected above was not, so it takes the HTTP fallback under its own route.
@@ -1039,8 +1161,20 @@ export async function prepareResponsesTransport(
               passiveKeyPhysicalFetch(distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider), route.providerName, route.provider, target), config, route.providerName, route.provider),
               input,
               { ...physicalInit, redirect: "manual",
-                ...physicalSendObserverInit(observeAutoPause, target, deferAttemptNote ? commitKeyAttemptSend : undefined),
-                ...(vertexAuthority || advisorCredential || stripAdvisorBeta ? physicalSendGuardInit((finalTarget, finalHeaders) => {
+                ...physicalSendObserverInit(observeAutoPause, target, (!explicitAttemptCommit && deferAttemptNote) || pinned ? () => {
+                  // An explicit caller commit has already published this attempt at dispatch.
+                  if (!explicitAttemptCommit) commitKeyAttemptSend();
+                  // A pinned receipt keeps its estimate until this send reports usage.
+                  if (pinned) recordCurrentPhysicalSendUsage(null);
+                } : undefined,
+                deferredCopilotNote ? () => {
+                  const attempt = logCtx.activeAttempt;
+                  if (attempt?.sendCount) copilotReceipt = { attempt, ordinal: attempt.ordinal, sendCount: attempt.sendCount };
+                } : undefined),
+                ...(pinned || recoveryOwner || vertexAuthority || advisorCredential || stripAdvisorBeta ? physicalSendGuardInit((finalTarget, finalHeaders) => {
+                    if (pinned && (!pinned.current() || !pinned.matches(finalTarget, finalHeaders))) {
+                      throw new Error("Anthropic image recovery destination or credential changed before dispatch");
+                    }
                     if (vertexAuthority && (!selectionIsCurrent(binding) || !vertexRequestAuthorityIsCurrent(wireRequest, finalTarget, finalHeaders))) {
                       throw new Error("Vertex credential authority changed before dispatch");
                     }
@@ -1048,13 +1182,15 @@ export async function prepareResponsesTransport(
                       || finalHeaders.get(advisorCredential.header) !== advisorCredential.value
                       || hasConflictingApiKeyHeaders(finalHeaders.keys(), advisorCredential.header))) throw advisorRefusal;
                     if (stripAdvisorBeta) stripHostedAdvisorBeta(finalHeaders);
+                    imageOwnerMatched = wireMatches(finalTarget, finalHeaders);
                   }) : {}) },
               { providerName: route.providerName, provider: route.provider },
             )) as typeof globalThis.fetch;
+            const connectTimeoutMs = providerConnectTimeoutMs(config, owner === "passthrough" ? undefined : responsesTimeoutProvider(options, route.provider));
             response = await fetchWithHeaderTimeout(target, dispatchInit, dispatchInit.signal ?? options.abortSignal ?? req.signal,
-              resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(target) }), requestParsed.stream, physicalFetch);
+              resolveConnectTimeoutMs(connectTimeoutMs, { localUpstream: isLocalUpstream(target) }), requestParsed.stream, physicalFetch);
           } catch (error) {
-            if (!advisorRefusal || error !== advisorRefusal || !hostedAdvisor || advisorRebuilt) throw error;
+            if (pinned || !advisorRefusal || error !== advisorRefusal || !hostedAdvisor || advisorRebuilt) throw error;
             const signal = dispatchInit.signal ?? options.abortSignal ?? req.signal;
             rebuildHostedAdvisor = async () => {
               signal.throwIfAborted();
@@ -1079,8 +1215,34 @@ export async function prepareResponsesTransport(
             } catch { /* best-effort observation cannot fail the response */ }
           }
           if (response) {
-            if (!response.ok) await recordKeyAttemptFailure(logCtx, response, dispatchInit.signal ?? options.abortSignal);
-            return observeAutoPause ? await observeAutoPause(response) : response;
+            const recoveryRefusal = !pinned && response.status === 413 && binding && imageOwnerMatched
+              && recoveryOwner && carriesSelectedKey;
+            const recordFailureSpend = !response.ok && (pinned || recoveryRefusal) ? captureCurrentPhysicalSendUsage() : undefined;
+            const failureUsage = response.ok ? undefined
+              : await recordKeyAttemptFailure(logCtx, response, dispatchInit.signal ?? options.abortSignal,
+                recordFailureSpend !== undefined);
+            if (failureUsage && pinned) recordFailureSpend?.(failureUsage);
+            if (observeAutoPause) response = await observeAutoPause(response);
+            if (recoveryRefusal && response.status === 413) {
+              const immutableRequest = { ...wireRequest, headers: { ...wireRequest.headers } };
+              const bindImageHistory = (wire: AdapterRequest): ImageDispatchPin => ({
+                current: () => recoveryCurrent() && requestBindings.get(wire) === binding
+                  && wireMatches(wire.url, new Headers(wire.headers)),
+                matches: wireMatches,
+              });
+              const pin: AnthropicImageRecoveryPin = {
+                owner: recoveryOwner,
+                request: immutableRequest,
+                isCurrent: recoveryCurrent,
+                recordRefusalSpend: recordFailureSpend && (() => recordFailureSpend(failureUsage ?? null)),
+                dispatchOverride: (wire, input) => oauthDispatch(wire, input, "adapter", false, bindImageHistory(wire))!,
+              };
+              imageHistoryPins.set(recoveryOwner, bindImageHistory);
+              capturedImagePins.add(pin);
+              imageRefusals.set(response, imageRefusals.has(response) ? null : pin);
+            }
+            if (copilotReceipt) copilotInferenceReceipts.set(response, copilotReceipt);
+            return response;
           }
         }
         let rebuilt: AdapterRequest;
@@ -1089,6 +1251,9 @@ export async function prepareResponsesTransport(
           rebuilt = await rebuildHostedAdvisor();
           advisorRebuilt = true;
         } else {
+          if (pinned || requestParsed._anthropicImageOwner) {
+            throw new Error("Anthropic image recovery account changed before dispatch");
+          }
           let nextAdapter: ProviderAdapter;
           try { nextAdapter = await refreshDispatchAdapter(requestParsed); }
           catch (error) {
@@ -1475,8 +1640,9 @@ export async function prepareResponsesTransport(
       config,
       route.providerName,
       route.modelId,
-      route.provider,
+      adapterProvider,
       inboundWire,
+      adapter.name,
     );
     if (passiveSubjectId) logCtx.activeAttempt.labRouteSubjectId = passiveSubjectId;
   }
@@ -1510,8 +1676,12 @@ export async function prepareResponsesTransport(
   ]).size : 0;
   const anthropicFundedAccounts = Math.min(anthropicRosterSize, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST);
   const anthropicFailoverLimit = Math.max(ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST, anthropicFundedAccounts - 1);
-  if (fundingAccountId || anthropicPoolAccountId)
+  if (fundingAccountId || anthropicPoolAccountId) {
     expandInferenceOAuthSendBudget(options.sendBudget, Math.max(fundedAccounts, anthropicFundedAccounts));
+  } else if (isPassthrough && !options.comboAttempt && isCanonicalOpenAiForwardProvider(route.provider)) {
+    const policy = transientRetryPolicyFor(route.provider);
+    if (policy) fundChatGptRetryAttempts(options.sendBudget, policy.attempts);
+  }
 
   return {
     genericFailoverLimit, anthropicFailoverLimit,
@@ -1620,9 +1790,19 @@ export async function prepareResponsesTransport(
     set hostedAdvisorSpendGuard(guard: typeof hostedAdvisorSpendGuard) { hostedAdvisorSpendGuard = guard; },
     resolveCopilotSelection,
     copilotRefusalResponse,
+    isCurrentInferenceResponse,
     refreshRunTurnAdapter,
     oauthDispatch,
+    pinAnthropicImageRecovery: (response: Response): AnthropicImageRecoveryPin | undefined => {
+      const pin = imageRefusals.get(response);
+      return pin && capturedImagePins.has(pin) && pin.isCurrent() ? pin : undefined;
+    },
     noteRoutedAttemptSend,
+    createCredentialReplayAttempt,
+    commitRunTurnAttemptSend,
+    commitAdapterAttemptSend,
+    get credentialReplayHandoff() { return credentialReplayHandoff; },
+    set credentialReplayHandoff(value: typeof credentialReplayHandoff) { credentialReplayHandoff = value; },
     attemptSendDeferred,
     deferPhysicalAttribution,
     commitKeyAttemptSend,

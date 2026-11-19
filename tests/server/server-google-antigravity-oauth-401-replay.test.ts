@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { OAUTH_ACCOUNT_LOG_LABEL_RE } from "../../src/codex/account-label";
 import * as configModule from "../../src/config";
 import { forceRefreshOAuthAccessSnapshot, getValidAccessTokenSnapshot } from "../../src/oauth";
 import { credentialGeneration, getAccountSet, getAuthStorePath, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
@@ -28,6 +29,9 @@ import {
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { registerLabPassiveRouteLinker } from "../../src/lib/lab-passive-linker-registration";
+import { readInstallationSalt } from "../../src/lab/subject/installation-salt";
+import { resetCompatibilityVersionCacheForTests, setCompatibilityVersionOverrideForTests } from "../../src/routing/compatibility/version";
 
 const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const PROD_API_BASE = "https://cloudcode-pa.googleapis.com";
@@ -858,6 +862,7 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
       await response.text();
       expect(observed.chatAuth).toHaveLength(6);
       expect(new Set(observed.chatAuth)).toEqual(new Set(["Bearer rejected-access", "Bearer access-b"]));
+      expect(readUsageEntries().at(-1)?.attempts?.map(attempt => attempt.status)).toEqual([503, 503]);
     } finally { await server.stop(true); }
   });
 
@@ -968,7 +973,62 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
       expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer fresh-access"]);
       expect(observed.chatProjects).toEqual(["initial-project-id", "refreshed-project-id"]);
       expect(observed.counts.refresh).toBe(1);
+      const attempts = readUsageEntries().at(-1)?.attempts;
+      expect(attempts?.map(attempt => ({ status: attempt.status, sendCount: attempt.sendCount })))
+        .toEqual([{ status: 401, sendCount: 1 }, { status: 200, sendCount: 1 }]);
+      expect(attempts?.[0]?.accountLogLabel ?? "").toMatch(OAUTH_ACCOUNT_LOG_LABEL_RE);
+      expect(attempts?.[1]?.accountLogLabel).toBe(attempts?.[0]?.accountLogLabel);
+      expect(attempts?.[1].recoveryKinds).toContain("oauth-401");
     } finally { await server.stop(true); }
+  });
+
+  test("same-account refresh links the new project on an unchanged wire and URL", async () => {
+    await seedOAuth();
+    saveConfig(antigravityConfig());
+    installOAuthFetch([401, 200]);
+    readInstallationSalt(testDir);
+    const server = startServer(0);
+    setCompatibilityVersionOverrideForTests("b".repeat(64));
+    const detach = registerLabPassiveRouteLinker(testDir);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(200);
+      await response.text();
+      const ids = readUsageEntries().at(-1)?.attempts?.map(attempt => attempt.labRouteSubjectId);
+      expect(ids).toEqual([expect.stringMatching(/^[a-f0-9]{64}$/), expect.stringMatching(/^[a-f0-9]{64}$/)]);
+      expect(ids?.[0]).not.toBe(ids?.[1]);
+    } finally {
+      detach();
+      resetCompatibilityVersionCacheForTests();
+      await server.stop(true);
+    }
+  });
+
+  test("adapter-owned OAuth replay rejected by pacing leaves one physical 401", async () => {
+    await seedOAuth();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([401, 200]);
+    const server = startServer(0);
+    const withSlot = requestPacing.withProviderRequestSlot;
+    const pacing = spyOn(requestPacing, "withProviderRequestSlot").mockImplementation(async (name, provider, ...rest) => {
+      if (name === "google-antigravity" && provider.apiKey === "fresh-access") {
+        throw new requestPacing.RequestPacingQueueOverloadError(name, "queue_full", 1);
+      }
+      return withSlot(name, provider, ...rest);
+    });
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(429);
+      await response.text();
+      expect(observed.counts.refresh).toBe(1);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
+      const entry = readUsageEntries().at(-1);
+      expect(entry?.status).toBe(429);
+      expect(entry?.attempts?.map(attempt => [attempt.status, attempt.sendCount])).toEqual([[401, 1]]);
+    } finally {
+      pacing.mockRestore();
+      await server.stop(true);
+    }
   });
 
   test("replayed 401 sends once on the sibling with its paired project", async () => {

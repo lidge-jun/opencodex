@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -214,6 +215,32 @@ test("real contender processes cannot enter a held async SQLite transaction", as
   const after = contender(lockPath, true);
   expect(await exited(after)).toBe(0);
   expect(JSON.parse(await new Response(after.stdout).text())).toEqual({ ran: true, acquired: true });
+}, PROCESS_TIMEOUT);
+
+test("the lifecycle lock excludes an older SQLite holder and leaves no rollback journal", async () => {
+  const held = holder();
+  await ready(held.child, held.marker);
+  try {
+    expect(existsSync(`${lockPath}-journal`)).toBe(false);
+    const legacy = new Database(lockPath);
+    try {
+      legacy.exec("PRAGMA locking_mode = NORMAL; PRAGMA busy_timeout = 0");
+      expect(() => legacy.exec("BEGIN IMMEDIATE")).toThrow(/locked|busy/i);
+    } finally { legacy.close(); }
+  } finally {
+    writeFileSync(held.release, "release");
+    expect(await exited(held.child)).toBe(0);
+  }
+
+  const legacy = new Database(lockPath);
+  try {
+    legacy.exec("PRAGMA locking_mode = NORMAL; PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    const blocked = contender(lockPath, true);
+    expect(await exited(blocked)).toBe(0);
+    expect(JSON.parse(await new Response(blocked.stdout).text())).toEqual({ ran: false, code: "client_lifecycle_busy" });
+    legacy.exec("ROLLBACK");
+  } finally { legacy.close(); }
+  expect(withClientLifecycleSync(() => existsSync(`${lockPath}-journal`), { lockPath })).toBe(false);
 }, PROCESS_TIMEOUT);
 
 test("SIGKILL releases the OS lock without deleting or reclaiming the database", async () => {

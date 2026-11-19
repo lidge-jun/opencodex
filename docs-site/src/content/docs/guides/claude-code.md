@@ -75,6 +75,22 @@ filesystem behavior must be verified separately; a local test is not cross-platf
 Verify the resolved provider/model in request logs: selecting a tier is not proof of the
 actual model served. This is especially useful for external classifiers requesting Sonnet.
 
+## Weekly subscription reserve
+
+To reserve weekly Claude subscription quota for interactive work, enable
+[`subscriptionReserve`](/reference/configuration/#claude-subscription-reserve) and configure a
+routed destination. Set `x-ocx-priority: background` in your client or wrapper on individual
+`/v1/messages` requests you want to divert when quota is high. An unmarked request is interactive,
+including Haiku turns, subagents, and short requests without tools.
+
+The proxy learns weekly utilization from passthrough replies for the same subscription credential
+and upstream. It only steers requests that would otherwise use that passthrough. Requests carrying
+a message thread keep their original upstream. Observations expire
+after 30 minutes or when the weekly window resets, whichever comes first, and are cleared on restart.
+Requests already routed through proxy-managed credentials use their normal routing. The alternate
+provider receives marked requests selected for diversion under its own normal routing and billing
+policy.
+
 ## Claude OAuth account pool (experimental)
 
 Native Anthropic subscription passthrough retains recognized, valid `anthropic-ratelimit-*`
@@ -209,7 +225,7 @@ ocx claude
 | `ANTHROPIC_BASE_URL` | `http://127.0.0.1:<port>` |
 | `ANTHROPIC_AUTH_TOKEN` | Only when the proxy requires an API key — otherwise it is NOT set, so your claude.ai login (subscription + connectors) stays active |
 | `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` | `1` (native `/model` picker discovery) |
-| `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Auto-context compaction threshold (default `829800`); only injected when auto-context is enabled |
+| `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Auto-context compaction threshold (default `829800`); when smaller catalog windows need per-model limits, routed `ocx claude` uses session-only `--settings` instead |
 | `ANTHROPIC_MODEL` | `claudeCode.model` (optional) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (optional; legacy `ANTHROPIC_SMALL_FAST_MODEL` too) |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`; on a subscription launch an unset slot gets the native `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`, so `--model opus`, `sonnet` and `fable` keep their 1M context |
@@ -424,7 +440,7 @@ hub, so `ocx claude desktop apply` there uses the gateway profile.
 
 ### Picker mode: opencodex models in the first-party Code-tab picker
 
-Picker mode is part of first-party mode. On macOS and Windows it is on by default when first-party is selected,
+Picker mode is part of first-party mode. On macOS, Windows and Linux it is on by default when first-party is selected,
 unless `claudeCode.intercept.picker: false` is set. It changes the first-party Desktop Code-tab picker
 so it lists available opencodex models by name. The first time it is enabled, macOS may ask you to
 trust a local certificate authority in the login keychain, and Windows may ask you to trust it in the current-user Root store. That authority is constrained to `claude.ai`
@@ -444,9 +460,14 @@ until cleanup succeeds; `ocx claude desktop picker status` reports that state. m
 ask you to unlock the keychain or approve an application's access to stored credentials. These native
 access prompts can still occur on restart or upgrade. On Windows, explicit `on` or `trust` may show a confirmation to add the root.
 
-Picker mode remains unsupported on Linux: OpenCodex starts no picker CA, credential-store
-or proxy work there. The main Claude intercept remains available with ownership, symlink, file-permission
-and Windows ACL checks protecting its local CA files.
+On Linux, explicit picker activation uses `certutil` to trust the constrained picker CA
+in Chromium’s user NSS database. Chromium uses an existing `~/.pki/nssdb` first, then
+`${XDG_DATA_HOME:-$HOME/.local/share}/pki/nssdb`. OpenCodex remembers the database used to install
+the CA. If that database is unavailable or removal cannot be confirmed, OpenCodex keeps the
+removal pending and retries at the next start.
+For older removal records, OpenCodex saves the NSS database identity before deleting the CA so
+it can verify removal there on retry. If cleanup reports that the original NSS database is
+unknown, restart OpenCodex with the `XDG_DATA_HOME` that was set when you installed the certificate.
 
 Picker mode allows up to 64 KiB of headers on incoming requests and ordinary HTTP
 responses, preserving browser session cookies. Larger upstream response headers return
@@ -826,8 +847,35 @@ default) fixes that:
    **and** at least the configured auto-compact threshold. Discovery and Desktop picker rows do not follow
    that threshold: they use the fixed 829,800-token floor (a genuine 1M for Claude models on an
    Anthropic route).
-2. `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (default `829800`, range `100000`–`1000000`) is injected so
-   the conversation auto-summarizes at that point.
+2. The default compact window is `829800` (range `100000`–`1000000`). When the live catalog
+   includes smaller windows, `ocx claude` passes session-only `--settings`: the default stays
+   unchanged and each smaller model selector gets 95% of its known window, provided that value
+   is within the client's supported range. Switching with `/model` selects the corresponding
+   compact window. No Claude Code settings file is written. With no eligible smaller window,
+   the launcher retains the existing `CLAUDE_CODE_AUTO_COMPACT_WINDOW` injection.
+   Generated keys are limited to gateway-discovered model IDs and the launcher's model slots.
+   The launcher uses the existing environment variable if the generated JSON exceeds 4,000
+   characters on Windows or 32,000 elsewhere. On Windows it also falls back if the escaped
+   arguments together exceed 7,000 characters, leaving room for the command shim and shell wrapper.
+
+Generated JSON uses Claude Code's command-line settings scope, above local, project, and user
+files and below managed settings. Passing `--settings <file>` or `--autocompact` skips the
+generated JSON. The launcher forwards explicit `--settings` arguments as supplied and leaves
+file handling to Claude Code.
+
+When either flag skips JSON generation, the launcher keeps the legacy
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` if auto-context supplies it. An explicitly exported value
+also skips generation and stays in the launch environment. Claude Code gives a usable
+value of this variable precedence over `--autocompact` and saved compact settings.
+To use the compact policy from a file, set `claudeCode.autoContext` to `false` to stop automatic
+injection, unset any exported `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, and pass `--settings <file>`.
+See [Claude Code's auto-compact precedence](https://code.claude.com/docs/en/model-config#set-the-auto-compact-window).
+
+Generated per-model settings apply to routed `ocx claude` sessions. The launcher skips them and keeps the original arguments and launch environment if any argument
+exactly matches a Remote Control command or alias (`remote-control`, `rc`, `bridge`, `remote`, or `sync`),
+including option values and arguments after `--`.
+The `--remote-control` session option still supports generated settings. The `modelUsage.contextWindow`
+accounting field can differ from the working compact window shown by `/context`.
 
 Three config states:
 

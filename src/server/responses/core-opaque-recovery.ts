@@ -9,9 +9,10 @@ import {
 } from "../../providers/reasoning-metadata";
 import { isAnthropicFastRefusal } from "../../providers/anthropic-fast";
 import type { AdapterRequest } from "../../adapters/base";
-import { isNonReplayableResponse } from "../../lib/upstream-retry";
+import { isNonReplayableResponse, retainPacedRetryResponse } from "../../lib/upstream-retry";
 import type { OcxParsedRequest } from "../../types";
 import type { RequestLogContext } from "../request-log";
+import { takeLocalFailureState } from "../request-log-failure-detail";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { rememberReasoningReplayOpaqueBlobRejection } from "../../responses/reasoning-replay-cache";
 import { resolvedAdapterWire } from "../../responses/continuation-ownership";
@@ -542,6 +543,7 @@ export function prepareOpaqueBlobRecovery(parsed: OcxParsedRequest): void {
 
 
 export function resetStreamedOpaqueBlobLogContext(logCtx: RequestLogContext): void {
+  takeLocalFailureState(logCtx);
   delete logCtx.upstreamError;
   delete logCtx.terminalHttpStatus;
   delete logCtx.terminalErrorCode;
@@ -566,8 +568,9 @@ export async function attemptOpaqueBlobRecovery<Failure = Response>(
     parsed: OcxParsedRequest;
     guard: OpaqueBlobRecoveryGuard;
     signal: AbortSignal;
+    preserveResponse?: boolean;
   },
-  rebuild: (kind: AttemptRecoveryKind) => Promise<Response | { failed: Failure }>,
+  rebuild: (kind: AttemptRecoveryKind, preceding?: Response) => Promise<Response | { failed: Failure }>,
 ): Promise<OpaqueBlobRecoveryResult<Failure>> {
   const errorBody = await opaqueBlobRejectionBodyForRecovery(
     args.response,
@@ -597,8 +600,16 @@ export async function attemptOpaqueBlobRecovery<Failure = Response>(
       }
     : undefined;
   prepareOpaqueBlobRecovery(args.parsed);
-  try { void args.response.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-  const result = await rebuild("opaque-blob-rejection");
+  if (!args.preserveResponse) {
+    try { void args.response.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+  }
+  const preceding = args.preserveResponse ? await retainPacedRetryResponse(args.response, args.signal) : undefined;
+  const result = await rebuild("opaque-blob-rejection", preceding);
+  if (result === args.response) return { kind: "skipped" };
+  if (result === preceding) return { kind: "recovered", response: result };
+  if (args.preserveResponse) {
+    try { void args.response.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+  }
   if (!("failed" in result) && result.ok) {
     rememberReasoningReplayOpaqueBlobRejection(rejectedScope);
   }

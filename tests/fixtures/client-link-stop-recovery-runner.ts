@@ -13,12 +13,11 @@ import { createSystemRestartCapability, SYSTEM_RESTART_CAPABILITY_HEADER, SYSTEM
   SYSTEM_RESTART_NONCE_HEADER, SYSTEM_RESTART_PATH } from "../../src/lib/system-restart-contract";
 
 const options = JSON.parse(readFileSync(0, "utf8")) as { mode: string; scheduled?: boolean };
-let phase = "fixture setup";
 const home = process.env.OPENCODEX_HOME!;
 mkdirSync(home, { recursive: true });
 const lifecycle = await import("../../src/client/lifecycle-lock");
 const lock = lifecycle.withClientLifecycleSync, asyncLock = lifecycle.withClientLifecycle;
-const lifecycleLockDeps = { lockPath: join(home, "lifecycle.sqlite") };
+const lifecycleLockDeps = { lockPath: join(dirname(home), "runtime", "lifecycle.sqlite") };
 mock.module("../../src/client/lifecycle-lock", () => ({ ...lifecycle,
   withClientLifecycleSync: (work: Parameters<typeof lock>[0], deps?: Parameters<typeof lock>[1]) => lock(work, { lockPath: deps?.lockPath ?? lifecycleLockDeps.lockPath }),
   withClientLifecycle: (work: Parameters<typeof asyncLock>[0], deps?: Parameters<typeof asyncLock>[1]) => asyncLock(work, { lockPath: deps?.lockPath ?? lifecycleLockDeps.lockPath }),
@@ -95,10 +94,16 @@ async function main() {
     },
   }));
   const { startClientRuntime, scheduleStandaloneRecycle } = await import("../../src/client/runtime");
-  phase = "starting the Child listener";
   // Keep the selected port reserved while preparing the fixture and loading the runtime.
   await probe.stop(true);
   await startClientRuntime({ block: false }, { restartSupervisor: async () => null });
+  // The parent watchdog bounds total time, including fixture setup. Give the
+  // stop and disconnect operations their own phase deadline once the Child serves.
+  let phase = "observing the refused stop";
+  setTimeout(() => {
+    console.error(`recovery fixture timed out (${options.mode}: ${phase})`);
+    process.exit(1);
+  }, 10_000).unref();
   const pendingRecycle = options.mode === "signal-pending-recycle";
   const scheduleAndCountTimers = () => {
     const timer = spyOn(globalThis, "setTimeout");
@@ -118,7 +123,6 @@ async function main() {
     await response.arrayBuffer(); return response.status;
   };
   let finishStop: () => Promise<void> = async () => {};
-  phase = "observing the refused stop";
   if (options.mode.startsWith("signal")) {
     // Queue and signal in one turn so the first timer is still pending at shutdown.
     if (pendingRecycle) observations.firstRecycleTimers = scheduleAndCountTimers();
@@ -193,6 +197,4 @@ async function main() {
   }
 }
 
-const deadline = setTimeout(() => { console.error(`recovery fixture timed out (${options.mode}: ${phase})`); process.exit(1); }, 10_000);
-deadline.unref();
 try { await main(); } catch (error) { console.error(error); process.exit(1); }

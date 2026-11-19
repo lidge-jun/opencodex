@@ -187,7 +187,7 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
       if (live) {
         try {
           const config = deps.loadConfig();
-          const { refreshOwnedCatalogIntegrations } = await import("../integrations/catalog-refresh");
+          const { catalogRefreshClientIds, refreshOwnedCatalogIntegrations } = await import("../integrations/catalog-refresh");
           results.push(...await refreshOwnedCatalogIntegrations({
             models: async () => {
               const { loadExportModels } = await import("../server/management/model-rows");
@@ -195,7 +195,7 @@ export async function runSyncCommand(deps: CliDispatchDeps): Promise<number> {
             },
             config,
             port: live.port,
-          }, ["mcode", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]));
+          }, catalogRefreshClientIds("cliSync")));
         } catch (error) {
           console.warn(`Client integrations were not refreshed: ${error instanceof Error ? error.message : String(error)}`);
         }

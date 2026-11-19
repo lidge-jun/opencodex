@@ -360,6 +360,8 @@ The ChatGPT passthrough catalog also layers in the bare GPT-5.6 Sol/Terra/Luna s
 
 ## 2. Account login (OAuth)
 
+For Microsoft work or school accounts, see [Microsoft 365 Copilot setup](/guides/m365-copilot/).
+
 Provider presets can use account login — including GitHub Copilot via an experimental unofficial
 device-flow bridge. opencodex stores their credentials in
 `~/.opencodex/auth.json`; refreshable tokens are refreshed automatically, while durable keys are
@@ -799,6 +801,7 @@ are on the [API-key catalog](/guides/api-key-catalog/) page. Its sections:
 - [Official CodeBuddy Code CLI (Global & CN)](/guides/api-key-catalog/#official-codebuddy-code-cli-global--cn)
 - [Official Qoder CLI (Global & CN)](/guides/api-key-catalog/#official-qoder-cli-global--cn)
 - [Claude Code CLI (subscription)](/guides/api-key-catalog/#claude-code-cli-subscription)
+- [Antigravity CLI (ACP, local)](/guides/api-key-catalog/#antigravity-cli-acp-local)
 - [A6API credit quota](/guides/api-key-catalog/#a6api-credit-quota)
 - [BigModel Coding Plan over Responses](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses)
 - [Multiple API keys](/guides/api-key-catalog/#multiple-api-keys)
@@ -903,6 +906,13 @@ Providers with a live probe: OpenAI/Codex, Anthropic, xAI, Cursor, Kimi,
 Google Antigravity, OpenCode Go, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax,
 Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, Command Code, and any a6api-backed
 or Abliteration custom provider.
+
+**Anthropic monthly usage.** Usage-based seats such as Enterprise can show a monthly
+extra-usage bar when Anthropic reports enabled extra usage and no plan windows. The reading
+comes without a reset date. The bar clears when Anthropic reports plan windows or confirms that
+extra usage is disabled. If the response supplies no usable quota window, the account quota check
+still reports that the reading is unavailable, including after a provider quota refresh receives
+the same response.
 
 **Kimi Coding Plan quota.** Account login and API-key providers on the canonical
 `https://api.kimi.com/coding/v1` endpoint read `/usages`. API-key providers on the regional

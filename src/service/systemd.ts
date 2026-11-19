@@ -65,8 +65,9 @@ export function unitPath(): string {
   return join(unitDir(), `${TASK}.service`);
 }
 
-/** Offline proof that OpenCodex has no recorded service installation or installer unit. */
-export function systemdInstallationAbsent(): boolean {
+/** On Linux, prove that OpenCodex has no recorded service installation or installer unit. */
+export function systemdInstallationAbsent(platform: NodeJS.Platform = process.platform): boolean {
+  if (platform !== "linux") return false;
   return [unitPath(), ...serviceStatePaths()].every(path => {
     try { lstatSync(path); return false; }
     catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT"; }

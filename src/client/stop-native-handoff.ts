@@ -8,7 +8,7 @@ import { isLikelyOcxProcess, type ClientStopOwner, type RuntimePortState } from 
 import { readBoundedRegularFileSync } from "../lib/bounded-file-read";
 import { isProcessAlive } from "../lib/process-control";
 import { readSyncRuntime } from "./sync-runtime";
-import { observeClientStopOwner, readClientStopProcessStart } from "./stop-teardown-owner";
+import { observeClientStopOwner, readClientStopProcessStart, type ClientStopOwnerStatus } from "./stop-teardown-owner";
 
 export type LinkStopRuntime = Required<Pick<RuntimePortState, "pid" | "port" | "attestationSecret">>;
 export type NativeTeardownDecision = "restore" | "defer" | "refuse";
@@ -52,13 +52,20 @@ export function inheritedTeardownDigest(snapshots: readonly Buffer[]): string | 
 
 /** Preserve the parent's recovery ownership rules and use one snapshot before/after stop. */
 export function readLinkInheritedTeardowns(): LinkInheritedTeardown[] {
+  // Multiple valid receipts can name the same stop incarnation. Their nonce is
+  // validated against the filename above and does not change what the OS can prove.
+  const owners = new Map<string, ClientStopOwnerStatus>();
   return readLinkNativeTeardownEvidence().flatMap<LinkInheritedTeardown>(read => {
     if (read.state === "quarantined") return [];
     if (read.state === "valid" && read.receipt.ownerStartTime) {
       const { ownerPid: pid, ownerStartTime: startTime, nonce } = read.receipt;
-      const ours = pid === process.pid && readClientStopProcessStart(pid) === startTime;
-      if (ours) return [];
-      const status = observeClientStopOwner({ pid, startTime, nonce });
+      const key = `${pid}:${startTime}`;
+      let status = owners.get(key);
+      if (status === undefined) {
+        status = pid === process.pid && readClientStopProcessStart(pid) === startTime
+          ? "active" : observeClientStopOwner({ pid, startTime, nonce });
+        owners.set(key, status);
+      }
       if (status === "active") return [];
       if (status === "unverified") return [{ state: "unscannable", detail: "the pending-teardown receipt's stop owner could not be verified" }];
       return [read];

@@ -1,9 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../../src/config";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
+import { echoRequestedModel } from "../../src/server/messages-native";
+import { MessagesSseFrameContext } from "../../src/lib/messages-sse-error-presentation";
 import { handleResponses } from "../../src/server/responses";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { clearKeyCooldowns, getKeyCooldownUntil } from "../../src/providers/key-failover";
@@ -26,6 +28,42 @@ const output = [
   { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 2 } },
   { type: "message_stop" },
 ];
+
+test("native Messages model echo copies fragmented frame bytes only linearly", async () => {
+  const encoder = new TextEncoder();
+  const frame = encoder.encode(sse([{ ...output[0]!, message: { ...output[0]!.message, padding: "x".repeat(60 * 1024) + "한🙂" } }]));
+  const tail = encoder.encode(sse(output.slice(1)));
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (let offset = 0; offset < frame.length - 1; offset += 256) {
+        controller.enqueue(frame.subarray(offset, Math.min(offset + 256, frame.length - 1)));
+      }
+      controller.enqueue(frame.subarray(frame.length - 1)); // Second LF alone.
+      controller.enqueue(tail);
+      controller.close();
+    },
+  });
+  const actual: Uint8Array[] = [];
+  const set = Uint8Array.prototype.set;
+  let copied = 0;
+  const spy = spyOn(Uint8Array.prototype, "set").mockImplementation(function (this: Uint8Array, source, offset) {
+    copied += source.length;
+    set.call(this, source, offset);
+  });
+  try {
+    const reader = echoRequestedModel(body, "anth/claude-x", new MessagesSseFrameContext()).getReader();
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      actual.push(next.value);
+    }
+  } finally {
+    spy.mockRestore();
+  }
+  const rewritten = encoder.encode(new TextDecoder().decode(frame).replace('"model":"claude-x"', '"model":"anth/claude-x"'));
+  expect(Buffer.concat(actual)).toEqual(Buffer.concat([rewritten, tail]));
+  expect(copied).toBeLessThanOrEqual(frame.length * 4);
+});
 const success = (stream = false) => stream
   ? new Response(sse(output), { headers: { "content-type": "text/event-stream" } })
   : Response.json({ id: "msg_billing_fixture", type: "message", role: "assistant", model: "claude-x",

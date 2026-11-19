@@ -9,6 +9,7 @@ export const RESPONSES_CORE_MODULES = [
   "core.ts",
   "core-pipeline.ts",
   "hosted-advisor-spend.ts",
+  "image-context-recovery.ts",
   "compaction-retention.ts",
   "core-options.ts",
   "native-response-control.ts",
@@ -110,6 +111,7 @@ export const RESPONSES_CORE_MODULES = [
   "antigravity-fault-rotation.ts",
   "adapter-continuation.ts",
   "adapter-delivery.ts",
+  "anthropic-image-context.ts",
   "anthropic-thinking-recovery.ts",
   "advisor-slot.ts",
   // Reached from advisor-slot.ts: shared question bounds/clip helper for opt-in question-only consultation text (#7526).
@@ -117,6 +119,8 @@ export const RESPONSES_CORE_MODULES = [
   "advisor-retention.ts",
   "advisor-plan-slot.ts",
   "policy-refusal.ts",
+  // Reached from core-pipeline.ts: the Antigravity ACP use-policy preflight (plan 080, #8480).
+  "agy-acp-preflight.ts",
 ] as const;
 
 export type ResponsesCoreModule = typeof RESPONSES_CORE_MODULES[number];

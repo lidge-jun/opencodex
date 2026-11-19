@@ -170,7 +170,8 @@ model-route admission, account selection and credential snapshot through
 pool's selection without promoting the active account, so a helper never moves the
 active pointer or spends a one-dispatch manual preference. `fetchAnthropicHelper`
 rechecks the configured row, captured target, live account and bearer before each
-physical send, so a removed, paused or replaced account refuses rather than sending.
+physical send, so a removed, paused or replaced account refuses rather than sending. Primary-pool
+quota headers carry the validated send owner's credential generation to the advisory snapshot.
 Callers and the send fence build the Messages URL with the same
 `anthropicHelperMessagesUrl`, so a trailing slash on `baseUrl` cannot split them.
 Generated image descriptions are cached per resolved pool, model and reasoning;
@@ -195,32 +196,31 @@ preserves, `null` deletes and an instance sets; an unset choice is never written
 
 ## Pool-bound quota and reset grants
 
-`src/providers/quota/anthropic-usage-windows.ts` selects the same source windows for
-`src/providers/claude-cli-usage.ts` display and the raw advisory projection in
-`src/providers/quota/anthropic-decision-windows.ts`. Recognized `limits` rows take
-precedence over their legacy buckets: `session`, `weekly_all`, and model-scoped
-`weekly_scoped`. Each recognized row is represented before any skip, so duplicates
-and malformed shared measurements cannot revive legacy data and make family enumeration
-incomplete. Shared finite measurements are used regardless of the binding `is_active` flag;
-a non-boolean flag also makes enumeration incomplete. When legacy `five_hour` is explicitly
-null, only a finite session marked active creates a five-hour meter. Inactive shared usage
-is valid routing and cooldown recovery evidence. Scoped rows retain active-only semantics
-for routing; an inactive scoped row is published only as `displayWindows`, which quota
-display renders and routing, exhaustion, cooldown recovery, pool assembly and reset ordering
-never read, so Fable shows whether or not it binds, regardless of plan name. The GUI keeps them in
-`AccountQuota.displayWindows` (a routed label wins); only `gui/src/components/QuotaBars.tsx`
-draws them, marked not in effect (`gui/tests/quota-display-only-window.test.tsx`).
-Unknown kinds or model families preserve usable shared windows without claiming a complete
-family enumeration. An authoritative inactive family row can retire a previous
-passive family refusal; an incomplete enumeration cannot. Shared cooldown recovery
-still requires finite headroom for each rejected window, never an invented zero.
-`weekly_scoped_shares[]` names, by raw `limits` index, the share of the weekly limit a
-recognized scoped row, routed or display-only, may consume (Fable: "up to 50% of your weekly
-limit"); the window carries it as `weeklyAllowancePercent`, shown under the bar label, whose
-value stays the family's own `percent`. It is read from upstream and never inferred from a
-plan; a share pointing at no recognized scoped row, outside (0, 100] or conflicting is ignored.
-`tests/providers/provider-anthropic-usage-windows.test.ts` covers source precedence, scoped
-admission, raw precision, pool projection, weekly shares and legacy compatibility.
+`src/providers/quota/anthropic-usage-windows.ts` selects windows for both `src/providers/claude-cli-usage.ts`
+and the raw advisory projection in `src/providers/quota/anthropic-decision-windows.ts`. Recognized `limits`
+rows (`session`, `weekly_all`, and model-scoped `weekly_scoped`) supersede legacy counterparts before selection.
+Duplicates, malformed shared measurements, unknown kinds or families, and non-boolean active flags make family
+enumeration incomplete. Finite shared readings inform routing and cooldown recovery even when inactive.
+With explicit legacy `five_hour: null`, a five-hour meter requires a finite session marked active.
+
+Usage-based seats such as Enterprise can report an undated monthly fallback from enabled `extra_usage`.
+Any recognized plan row, including an inactive or skipped row, suppresses the fallback. The bar shows the
+higher of reported utilization and the share of a positive monthly credit cap consumed, clamped to 0–100.
+Plan evidence from usage probes or serving headers retires the fallback. A recognized row without a meter or
+explicit `extra_usage.is_enabled: false` retires only monthly. Without either signal, an unusable response keeps
+the last good reading. A monthly-only response replaces older plan bars, yields to later plan commits, and
+supersedes older probes. It informs display and advisory ranking. Plan admission and wallet availability are independent.
+
+Only active scoped rows inform routing. Inactive rows go into `AccountQuota.displayWindows` for display
+alone, with routed labels taking precedence. `gui/src/components/QuotaBars.tsx` marks them as not in
+effect (`gui/tests/quota-display-only-window.test.tsx`). An authoritative inactive family row can retire
+a previous passive family refusal. Shared cooldown recovery requires finite headroom for each rejected window.
+
+`weekly_scoped_shares[]` identifies a routed or display-only scoped row by its raw `limits` index and
+gives its share of the weekly limit. The bar shows the family's own `percent` with the allowance
+(`weeklyAllowancePercent`) below the label. Shares come from upstream. Conflicting shares, shares outside
+(0, 100], and shares without a recognized scoped row are ignored.
+`tests/providers/provider-anthropic-usage-windows.test.ts` covers source precedence, scoped admission, raw precision, pool projection, weekly shares and legacy compatibility.
 
 Profile tiers in `src/oauth/anthropic-identity.ts` accept both `default_claude_`
 and `claude_` prefixes and the Ultra display spelling. `max_20x` remains the legacy
@@ -235,13 +235,13 @@ quota epoch, configured row, account incarnation and login identity are unchange
 `src/providers/quota/account-cache.ts` are per instance, so clearing Pool 2 quota never
 invalidates the primary pool. With the pool on and two or more accounts, `fetchAnthropicQuota` (`src/providers/quota/vendor-probes-oauth.ts`) reports a display-only estimate via `aggregateCodexPoolCapacity`: seats weigh 1, inactive seats use their last-good row (no extra probes), paused, reauth or stale seats count as incomplete coverage. Every Anthropic report is current only while the pool switch and each seat's id, paused and reauth state are unchanged; pool off or one account keeps the active report. Quota reset detection observes the active seat's own reading (`observedQuotaFor`), never the estimate, which has no reset times (`tests/providers/provider-anthropic-pool-capacity.test.ts`).
 
-A probe that yields no quota names one closed `quotaFailure` code from
+A failed probe names one closed `quotaFailure` code from
 `src/providers/quota/failure-codes.ts`: `account_unavailable` when no usable credential could
 be obtained (no request is sent), the HTTP status class (`access_denied`, `rate_limited`,
-`upstream_error`, `redirect_blocked`), `response_unusable` for an unparsable or empty body,
-and `timeout` or `transport_error` for a thrown dispatch. Ownership and cooldown refusals set
-no code. The code is published only while the flight is current, never carries upstream text,
-and never changes account health or `needsReauth`.
+`upstream_error`, `redirect_blocked`), `response_unusable` for a body with no usable quota,
+and `timeout` or `transport_error` for a thrown dispatch. Both probe writers cache `unavailable: true`
+and `quotaFailure: "response_unusable"` on retirement-only responses. Ownership and cooldown refusals
+set no code. The code requires a current flight, carries no upstream text and never changes account health or `needsReauth`.
 
 `src/providers/anthropic-reset-grant-ledger.ts` names the journal by instance:
 `anthropic-reset-grant-ledger.json` keeps the primary pool's existing bytes and records,
@@ -439,10 +439,11 @@ rejection does not assert shared exhaustion. A transient Retry-After pauses acco
 without clearing affinity; a request gets one same-account wait up to one second and at most
 one eligible sibling detour. Timer rounding at the captured retry deadline permits that
 retry, while a concurrent admission-pause extension still blocks it. Headerless/invalid-hint
-refusals get at most one short same-account
-retry and never cool the roster or invent a client Retry-After. Main, pre-output continuation
-and sidecars share the request-local allowance and physical-send budget. Cancellation,
-ambiguous-send markers, replaced credentials and committed streaming output forbid replay.
+refusals get at most one short same-account retry and never cool the roster or invent a
+client Retry-After. Main, pre-output continuation and sidecars share the request-local
+allowance and physical-send budget. Cancellation, ambiguous-send markers, replaced credentials
+and committed streaming output forbid replay. Inline retries add a send to the current attempt.
+Native Messages, translated Responses, continuations and sidecars split the attempt on a credential change.
 Default single-account users acquire no new retry or admission pause.
 
 Regression coverage: `tests/adapters/anthropic/anthropic-429-policy.test.ts`.
@@ -585,16 +586,15 @@ Responses captures the routing-reset generation before credential resolution and
 While a live JEV combo enables quota signals, auth-store load/persist and accepted quota producer
 boundaries hand bounded secret-free rosters/windows to the core slot `src/lib/decision-quota-sink.ts`,
 which forwards them to the activation-owned snapshot; otherwise those calls are no-ops
-([activation](jev-decision.md#loaded-advisory-quota)). These owner-observed generations
-are separate from display caches and serving-account selection. Request decisions consume only
+([activation](jev-decision.md#loaded-advisory-quota)). These owner-observed generations are separate from display caches and serving-account selection. Request decisions consume only
 loaded evidence; cold or mismatched generations remain unknown. Usability, partial-window clocks
-and late-writer fences follow [loaded advisory quota](jev-decision.md#loaded-advisory-quota). Only the primary `anthropic` pool publishes; `anthropic2` is excluded and stays unknown.
+and late-writer fences follow [loaded advisory quota](jev-decision.md#loaded-advisory-quota). Only the primary `anthropic` pool publishes. The `anthropic2` pool stays unknown.
 
 ## Permanent refusal auto-pause
 
 The separate `providers.<instance>.accountAutoPause` policy is default off. Physical
 Responses and native Messages sends observe their captured bearer before recovery. Exact
 organization/OAuth or subscription refusals can persist `pauseDetails` with a fixed reason
-and timestamp through `src/oauth/store.ts`. `pauseRevision` changes on resume, so late
+and timestamp through `src/oauth/store.ts`, with a sibling `pauseEvidence` (`statusCode` plus an optional redacted message of at most 300 characters) stored beside it. `pauseRevision` changes on resume, so late
 pre-resume responses cannot pause the resumed account. The existing selectors rebuild an
 eligible sibling within their send budgets; proactive-pool activation is not required.

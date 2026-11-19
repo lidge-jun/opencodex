@@ -97,18 +97,12 @@ another owner's pending booking. Cleanup cannot refund real work. Detached judge
 `tests/responses/responses-first-send-reservation.test.ts` and
 `tests/responses/responses-dispatch-receipt.test.ts` pin these boundaries.
 
-`src/server/responses/sidecar-send-budget.ts` binds hosted search/image/video inference to this same
-child-owned booking. Generic HTTP/WS uses the final physical-dispatch receipt; adapter-owned
-`fetchResponse`/`runTurn` receives the live budget and observers instead, never both charge paths.
-Receipt selection follows the actual iteration adapter after rotation. Hosted tool execution does
-not itself settle the model's booking. Children without an owning initial permit keep their existing
-accounting contract. The hosted reservation, producer and WS regression siblings in `tests/responses/`
-assert real synthetic inference, explicit durable settlement and unsent release without widening caps.
-Hosted credential hops stay open in this owner and the live pending-hop view until physical dispatch;
-generic receipts consume that exact permit, adapters claim it through the view, and fetch-iteration
-cleanup releases an unsent hop once, except while an asynchronous runTurn producer still owns it.
-Producer settlement performs that release instead, clearing only the matching pending-hop reference.
-Direct callers retain their prior hop reporting contract.
+`src/server/responses/sidecar-send-budget.ts` binds hosted search, image and video model sends to the shared request ledger. Generic HTTP/WS receipts settle a prepaid permit or reserve a fresh send, including for reset retries and later tool rounds. A refusal or cancellation before dispatch leaves the booking refundable.
+The default guarded policy starts with three base sends and one recovery-only send. Before the first direct hosted model send, ingress sizes the base allowance from bounded model rounds, request-wide 429 retries and the transport’s per-dispatch retry bound. Search also includes its forced-answer retry, optional empty-completion retry and applicable thinking-signature recovery. Explicit and Combo caps and the separate credential recovery reserve still apply.
+Adapter-owned `fetchResponse` and `runTurn` receive the live ledger and report their own sends. The current iteration adapter determines who settles the send after rotation. Hosted tool execution itself leaves the model booking untouched.
+A credential hop stays pending until guarded dispatch. Generic receipts consume its permit, while adapters claim it through their budget view. Iteration cleanup releases an unsent hop once. If an asynchronous runTurn producer still owns the hop, producer settlement releases it and clears its matching pending reference.
+For adapter-owned fetch sidecars, the guarded inference executor publishes the first send. The adapter reports subsequent sends. Zed account lookup and token exchange use a separate provider-policy executor. Hosted search preserves it across the pacing deadline wrapper, and hosted media selects the unpaced executor with its own support binding. Preparation borrows any live pre-acquired concurrency lease without transferring it to a support response body. Inference transfers the lease to its response body, or reacquires capacity if the lease has already been released. Attempt cleanup releases an unused lease when preparation fails or is cancelled. Only admitted completions publish an attempt and charge a send.
+`tests/responses/responses-sidecar-usage.test.ts` covers one- and two-send caps for generic hosted search and media. The reservation, producer and WS tests in `tests/responses/` cover settlement and release without expanding explicit caps.
 
 The optional Anthropic-hosted Advisor on translated Messages turns is withheld from the first
 send whose selected target has an applicable captured root, identity or pool token ceiling or has
@@ -149,10 +143,9 @@ selection change cannot replace the request's identity until the normal credenti
 accepts a new snapshot. Provider display tags and generic account log fields remain unchanged.
 Withholding removes both declaration and Advisor replay. Other completed exchanges in the same
 validated run retain their original anchor, order and destination restrictions.
-Optional turns proceed with their other tools. The separately budgeted
-[proxy Advisor](../advisor.md#claude-codes-typed-advisor-server-tool) remains available.
-`tests/claude-integration/claude-translated-advisor-tool.test.ts` checks the wire, accounting,
-admitted identity and captured-policy changes.
+Optional turns keep their other tools and the separately budgeted
+[proxy Advisor](../advisor.md#claude-codes-typed-advisor-server-tool).
+`tests/claude-integration/claude-translated-advisor-tool.test.ts` checks the wire, accounting, admitted identity and captured policy changes.
 
 ## Auxiliary search inference
 
@@ -256,10 +249,9 @@ because its replay is the next loop iteration. `run-turn-execution.ts` always ha
 down, because a runTurn adapter is by definition the layer that sends. The passthrough ladder keeps
 the shape it already had: reserve with `countedExternally: true` and pass the permit to the rebuild.
 
-An explicit provider `transientRetryOn5xx.attempts` value is the exact physical-send total for that
-request (target-local inside a Combo). Once spent, a passthrough rebuild receives no final-recovery reserve and returns the
-original upstream response. The guarded profile's shared reserve remains available only when the
-provider leaves that transient policy unconfigured; its existing hop-permit settlement is unchanged.
+An explicit provider `transientRetryOn5xx.attempts` value caps physical sends (target-local in a
+Combo). Once spent, a passthrough rebuild returns the preceding response. Unconfigured recovery
+uses the guarded profile's shared reserve and existing hop-permit settlement.
 
 What must not happen is a ladder that charges and then returns through a path that neither confirms
 nor releases. That is not a lost send; it is a send the request never made, spending an allowance a
@@ -287,8 +279,11 @@ booking, and a combo child's sends would go missing from the ledger. `permit.ass
 closes its booking on the same shared ledger, so the adapter handoff above and the combo
 derivation agree rather than each settling against a counter the other cannot see.
 
-What stays per-scope is deliberate: the reserve, alternate-target and transition ledgers are each
-target's own recovery decision, while the physical-send total is what binds every target together.
+Recovery reserves, alternate-target allowances and transitions are target-local. The physical-send total
+is shared. An explicit native v1 compact retry ceiling lives on that ledger, so remembered handoffs
+including Combo retain the ceiling, pending reservations and spend observer. Without a shared ledger,
+the ceiling also follows the live caller allowance and charges that caller before dispatch. Opaque spend
+or workflow observers, unverifiable reservations and unshareable prepaid receipts refuse before dispatch.
 
 ## Durable spend reservations
 
@@ -311,25 +306,23 @@ at the terminal frame. `executeComboResponses` therefore passes each child `onBr
 the combo sets `usageFromBridge` and `usage` on its own context; a binding that came earlier waits
 for the commit, and a child that fails or never commits forwards nothing. Without that, the row
 and the settlement would read the usage back off the bridged Responses wire, which carries no
-`providerCredits` and derives its input count from the context checkpoint.
+`providerCredits` and derives its input count from the context checkpoint. Native Responses children publish raw usage and `usageWireParsed` through the committed terminal callback before parent settlement, including terminals arriving after the commit copy. Their client-facing preflight leaves usage collection to the original inspector, including when it converts a zero-output terminal into a retryable failure. If selection already committed a keepalive head, the outer log tap also leaves usage to that raw observer once the selected native response is known; it still records terminal and error metadata. On zero-output exhaustion, the child log supplies settlement usage and the synthesized client terminal supplies only delivery metadata to the log tap. `tests/responses/responses-combo-estimated-usage-spend.test.ts` covers both relay modes, early and late terminals, actual usage, the durable journal and the next HTTP admission.
 
-Unconfigured requests preserve the legacy counter observer: reservations increment the send
-counter, refunds decrement it, and named reports reconcile prepaid sends. Enforced requests use
-the seed and physical-start protocol below across Responses, native Messages and native Chat.
-Each transport claims immediately before inference I/O and retains a producer through completion.
+Unconfigured requests keep the legacy counter observer. Reservations increment the send counter,
+refunds decrement it, and named reports reconcile prepaid sends. Enforced Responses, native Messages
+and native Chat sends claim immediately before inference I/O and retain a producer through completion.
+Direct [Anthropic image-context recovery](../providers/anthropic-cache-lifecycle.md) uses a separate seed for each leg.
 
-A request fixes its enforcement mode and physical-send limit L at its first actual spend admission
-or start. Translated turns carrying hosted Advisor tools or replay capture numeric ceilings at
-outer Responses ingress and pass them to default trackers for policy candidates and translated Combo
-children. Other trackers capture ceilings at first spend admission/start or an earlier hosted-Advisor
-query. Configuration changes leave captured ceilings and the physical-send allowance fixed.
-A request that starts observe-only stays observe-only for that tracker. Constructing a budget or
-reading its ordinary enforcement preview does not capture policy. Hosted-Advisor capture fixes only
-the numeric ceilings; accounting mode, reservations and L are decided at admission/start. Generic Responses paths that
-omit retry reporters still invoke that same capture before the wire. Root and pool preflight read
-an already captured numeric policy before accounting starts. Later preflight and exact seed
-admission use the effective accounting policy and the same prepaid proof;
-pool continuity validation and shared tracking-capacity safeguards remain active.
+A request fixes its enforcement mode and physical-send limit L at first spend admission or start.
+Translated turns with hosted Advisor tools or replay capture numeric ceilings at outer Responses ingress
+and pass them to default trackers for policy candidates and translated Combo children. Other trackers
+capture ceilings at first spend admission or start, or on an earlier hosted Advisor query. Captured
+ceilings and L survive configuration changes, and a tracker that starts observe-only stays observe-only.
+Budget construction and ordinary enforcement previews leave policy uncaptured. Early Advisor capture
+fixes only numeric ceilings. Admission or start sets accounting mode, reservations and L, including
+before generic Responses sends without retry reporters. Before accounting starts, root and pool
+preflight use captured numeric ceilings. Later preflight and exact seed admission share the effective
+policy and prepaid proof. Pool continuity validation and shared tracking-capacity safeguards still apply.
 
 Provider-pool accounting uses the canonical routed provider identity, not the mutable display label
 that may identify an OAuth account in request logs. Responses final-route normalization captures
@@ -395,17 +388,18 @@ queues the missing ordinary reserve prefix ahead of those records. Later pruning
 including observe-only admission, retries that queue so recovered storage retains the reservation.
 This grants no seed or overflow capacity and adds no journal record type or identity metadata.
 
-For requests with an applicable root, identity or pool ceiling, each selected target/key first
-obtains a normal-capacity pre-send seed through `reserveSeed`. A failed initial seed refuses the
-wire call, including rootless passthrough and generic adapter ingress. Stable retries reuse that
-seed; a real identity change must acquire its own normal seed. A prepaid combo child adopts only
-its exact permit on the same shared send ledger, excluding that reservation once from preflight.
-An `explicitEstimate` target — an explicit native continuation — reserves against its own measured
-input and output ceiling instead of the opening estimate; its seed books beside unrelated pending
-reservations rather than retiring them, is never adopted by an unkeyed same-scope lookup, and still
-owns routed terminal usage like any non-auxiliary send.
-Reported additional sends reuse the seed's exact scope references through `reserveReportedFromSeed`
-and allocate no new scope keys. Already-started sends remain booked even during persistence failure.
+With an applicable root, identity or pool ceiling, `reserveSeed` admits each selected target/key at
+normal capacity before dispatch, including rootless passthrough and generic adapter ingress. Stable
+retries normally reuse the seed. A new identity needs its own. A Combo child can adopt only its exact
+prepaid permit on the shared ledger and exclude that reservation from preflight once.
+Opted-in ChatGPT capacity, gated-model, alternate-account, refreshed-credential and rebuilt sends
+each reserve the request estimate against captured ceilings before dispatch. Configured native
+compact carries this admission into quota and 404 handoffs, including routed and Combo dispatch.
+An exact prepaid first send keeps its receipt. Additional adapter-owned permits prepay their own
+estimate. Scope changes rebook it before dispatch. Paced retries buffer the preceding refusal
+within the error-body limit to release its concurrency slot before waiting for another one.
+An `explicitEstimate` continuation owns its estimate and terminal usage without touching other seeds.
+Additional sends reported against a shared seed use its exact scopes without allocating scope keys.
 
 `src/lib/request-execution-budget.ts` shares a physical-start counter across derived budgets and
 freezes the finite positive limit L when the request starts. The default guarded limit is four;
@@ -454,10 +448,10 @@ Legacy direct charges still infer dispatch from a later charge and leave their n
 open. Report order updates terminal attribution; unrelated pending reservations remain independent.
 `tests/lib/spend-pool-continuity.test.ts` covers reversed child reports and exact-pool cancellation.
 
-Settlement follows what the request learned. The terminal usage belongs to the last send that
-left, so that one settles with the real figure; every earlier send failed without reporting usage
-of its own and may still have been billed, so it becomes unresolved spend rather than free. A
-request that reports no usage at all leaves all of them unresolved. A pre-output Grok/Devin 429
+Once the image-context summary dispatches, the original 413 and the pinned sends in that recovery
+flow settle from their own receipts, including usage reported in HTTP failures. Each such receipt
+with unknown usage remains unresolved at its reservation estimate. Ordinary requests continue to
+settle aggregate terminal usage on the last routed send. A pre-output Grok/Devin 429
 binds usage carried by its error event before returning the HTTP refusal, just as the ordinary
 streaming and buffered bridges bind terminal usage. If deferred settlement reaches a tracker with reserved sends after its ledger lease ends, only `SPEND_LEDGER_OWNER_NOT_HELD` is dropped with the discarded ledger. Other owner and storage failures propagate with pending send IDs intact so settlement can be retried.
 

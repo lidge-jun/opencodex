@@ -20,6 +20,7 @@ type CodexCliVersionManagerRoots = Readonly<Partial<Record<CodexCliVersionManage
 
 export type TrustedNodeLaunchContext = {
   anthropicEnvSlots: readonly AnthropicParentEnvSlot[];
+  managedRelease: boolean;
   codexCliInspectionEnv: Readonly<{
     codexCliPath: string | null;
     path: string | null;
@@ -90,6 +91,10 @@ export function initializeNodeLauncherContext(
 
   const raw = env[NODE_LAUNCH_CONTEXT_ENV];
   delete env[NODE_LAUNCH_CONTEXT_ENV];
+  // A child launcher must never inherit a project dotenv marker as parent input.
+  for (const name of Object.keys(env)) {
+    if (name.toUpperCase() === "OCX_MANAGED_RELEASE") delete env[name];
+  }
   // Older launchers used this unauthenticated marker. Never let a project
   // dotenv resurrect it as a trusted provenance channel.
   delete env.OCX_PRE_BUN_ANTHROPIC_ENV;
@@ -104,11 +109,13 @@ export function initializeNodeLauncherContext(
       version?: unknown;
       proof?: unknown;
       anthropicEnvSlots?: unknown;
+      managedRelease?: unknown;
       codexCliInspectionEnv?: unknown;
     };
     if (parsed.version !== 1 || parsed.proof !== proof || !Array.isArray(parsed.anthropicEnvSlots)) {
       return null;
     }
+    if (parsed.managedRelease !== undefined && typeof parsed.managedRelease !== "boolean") return null;
     const allowed = new Set<string>(ANTHROPIC_PARENT_ENV_SLOTS);
     const slots = parsed.anthropicEnvSlots.filter(
       (slot): slot is AnthropicParentEnvSlot => typeof slot === "string" && allowed.has(slot),
@@ -158,7 +165,7 @@ export function initializeNodeLauncherContext(
           })
         : undefined;
     if (codexCliInspectionEnv === undefined) return null;
-    trustedContext = { anthropicEnvSlots: slots, codexCliInspectionEnv };
+    trustedContext = { anthropicEnvSlots: slots, managedRelease: parsed.managedRelease === true, codexCliInspectionEnv };
     return trustedContext;
   } catch {
     return null;
@@ -167,6 +174,10 @@ export function initializeNodeLauncherContext(
 
 export function trustedNodeLauncherContext(): TrustedNodeLaunchContext | null {
   return trustedContext;
+}
+
+export function trustedManagedReleaseOptIn(): boolean {
+  return trustedContext?.managedRelease === true;
 }
 import {
   CODEX_CLI_TRANSPORT_ENV_KEYS,

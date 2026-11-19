@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -116,11 +116,11 @@ test("untrust is a no-op success when the current CA is not in the login keychai
   expect(await untrustPickerCa("/ca.pem", sha1, fake(listed, ok, ok, listed).run, "darwin")).toEqual({ ok: false });
 });
 
-test("non-darwin never invokes the runner", async () => {
+test("an unsupported platform never invokes the runner", async () => {
   const run: SecurityRunner = async () => { throw new Error("runner must stay idle"); };
-  expect(await inspectPickerTrust("/leaf.pem", sha1, run, "linux")).toBe("unsupported");
-  expect(await trustPickerCa("/ca.pem", run, "linux")).toEqual({ ok: false, reason: "unsupported" });
-  expect(await untrustPickerCa("/ca.pem", sha1, run, "linux")).toEqual({ ok: false });
+  expect(await inspectPickerTrust("/leaf.pem", sha1, run, "freebsd")).toBe("unsupported");
+  expect(await trustPickerCa("/ca.pem", run, "freebsd")).toEqual({ ok: false, reason: "unsupported" });
+  expect(await untrustPickerCa("/ca.pem", sha1, run, "freebsd")).toEqual({ ok: false });
 });
 
 test("trust installs a private copy of the verified certificate, not the shared ca.pem", async () => {
@@ -147,5 +147,21 @@ test("trust installs a private copy of the verified certificate, not the shared 
     expect(existsSync(installedPath)).toBe(false);
   } finally {
     rmSync(dirname(shared), { recursive: true, force: true });
+  }
+});
+
+test("linux routes an injected runner to the NSS adapter of the given home", async () => {
+  const home = mkdtempSync(join(tmpdir(), "ocx-nss-dispatch-"));
+  try {
+    mkdirSync(join(home, ".pki", "nssdb"), { recursive: true });
+    const calls: string[][] = [];
+    const run: SecurityRunner = async args => {
+      calls.push([...args]);
+      return { code: 0, stdout: "Certificate Nickname    Trust Attributes\n    SSL,S/MIME,JAR/XPI\n", stderr: "" };
+    };
+    expect(await inspectPickerTrust("/leaf.pem", sha1, run, "linux", home)).toBe("untrusted");
+    expect(calls).toEqual([["-L", "-d", `sql:${join(home, ".pki", "nssdb")}`]]);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
   }
 });

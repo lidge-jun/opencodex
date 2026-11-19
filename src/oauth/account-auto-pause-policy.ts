@@ -1,5 +1,7 @@
-import type { AccountPauseReason } from "../types/account-auto-pause";
+import type { AccountPauseEvidence, AccountPauseReason } from "../types/account-auto-pause";
 import { readBoundedResponseBody } from "../lib/bounded-body";
+import { sanitizeUpstreamErrorText } from "../adapters/upstream-http-error";
+import { normalizeCloudCodeAppealText, normalizeCloudCodeAppealUrl } from "../lib/cloud-code-appeal-link";
 
 /** Only whole, account-scoped messages are authority; model/resource policy errors are not. */
 export function classifyPermanentAccountRefusal(status: number, payload: unknown): AccountPauseReason | undefined {
@@ -44,25 +46,65 @@ const CCA_TOS_ACCOUNT_BAN = new RegExp("^This service has been disabled in this 
   + "(?: If you believe this is an error, contact gemini-code-assist-user-feedback@google\\.com\\."
   + "| Please submit an appeal to continue using this product\\.)?$");
 
-/** `conclusiveOnly` admits only {@link isConclusiveAccountBan}, the default for a row with no policy. */
-export async function permanentAccountRefusal(response: Response, signal?: AbortSignal, conclusiveOnly = false): Promise<AccountPauseReason | undefined> {
+export interface PermanentAccountRefusalEvidence extends AccountPauseEvidence {
+  reason: AccountPauseReason;
+}
+
+/** Preserve line breaks for the first redaction pass, then redact again before capping. */
+export function pauseEvidenceMessage(raw: string): string {
+  const redacted = sanitizeUpstreamErrorText(raw);
+  const normalized = redacted.replace(/\s+/g, " ").trim();
+  return sanitizeUpstreamErrorText(normalized).slice(0, 300);
+}
+
+/** `conclusiveOnly` admits only {@link isConclusiveAccountBan}, the Cloud Code Assist default. */
+export async function permanentAccountRefusalEvidence(
+  response: Response, signal?: AbortSignal, conclusiveOnly = false, firstPartyCloudCodeSend = false,
+): Promise<PermanentAccountRefusalEvidence | undefined> {
   if (response.status !== 401 && response.status !== 403) return;
   try {
     const body = await readBoundedResponseBody(response.clone(), { signal, fatalUtf8: true,
       maxBytes: 16_384, totalTimeoutMs: 250, inactivityTimeoutMs: 250 });
     if (!body.displaySafe || body.truncated) return;
     const payload: unknown = JSON.parse(body.text);
-    if (conclusiveOnly) return isConclusiveAccountBan(response.status, payload) ? "account_permission_denied" : undefined;
-    return classifyPermanentAccountRefusal(response.status, payload);
+    const conclusiveBan = (conclusiveOnly || firstPartyCloudCodeSend) && isConclusiveAccountBan(response.status, payload);
+    const reason = conclusiveBan ? "account_permission_denied"
+      : conclusiveOnly ? undefined : classifyPermanentAccountRefusal(response.status, payload);
+    if (!reason) return;
+    const error = (payload as { error?: { message?: unknown; details?: unknown } }).error;
+    const raw = error?.message;
+    const message = typeof raw === "string" ? pauseEvidenceMessage(raw) : "";
+    const appeal = firstPartyCloudCodeSend && conclusiveBan ? cloudCodeAppealEvidence(error?.details) : undefined;
+    return { reason, statusCode: response.status, ...(message ? { message } : {}), ...appeal };
   } catch { return; }
+}
+
+function cloudCodeAppealEvidence(details: unknown): Pick<AccountPauseEvidence, "appealUrl" | "appealText"> | undefined {
+  if (!Array.isArray(details)) return;
+  for (const candidate of details as unknown[]) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+    const detail = candidate as Record<string, unknown>;
+    if (detail["@type"] !== "type.googleapis.com/google.rpc.ErrorInfo"
+      || detail.reason !== "TOS_VIOLATION" || detail.domain !== "cloudcode-pa.googleapis.com") continue;
+    if (!detail.metadata || typeof detail.metadata !== "object" || Array.isArray(detail.metadata)) continue;
+    const metadata = detail.metadata as Record<string, unknown>;
+    const appealUrl = normalizeCloudCodeAppealUrl(metadata.appeal_url);
+    if (!appealUrl) continue;
+    const appealText = normalizeCloudCodeAppealText(metadata.appeal_url_link_text);
+    return { appealUrl, ...(appealText ? { appealText } : {}) };
+  }
+}
+
+export async function permanentAccountRefusal(response: Response, signal?: AbortSignal, conclusiveOnly = false): Promise<AccountPauseReason | undefined> {
+  return (await permanentAccountRefusalEvidence(response, signal, conclusiveOnly))?.reason;
 }
 
 type Streak = { incarnation: string; count: number; tail: Promise<unknown>; paused: boolean };
 /** Process-local streaks, serialized in response-arrival order, including asynchronous reads/writes. */
 export class AccountRefusalStreaks {
   private readonly accounts = new Map<string, Streak>();
-  observe(key: string, incarnation: string, threshold: number, verdict: Promise<AccountPauseReason | undefined>, success: boolean,
-    current: () => boolean, pause: (reason: AccountPauseReason) => Promise<boolean>): Promise<boolean> {
+  observe(key: string, incarnation: string, threshold: number, verdict: Promise<PermanentAccountRefusalEvidence | undefined>, success: boolean,
+    current: () => boolean, pause: (refusal: PermanentAccountRefusalEvidence) => Promise<boolean>): Promise<boolean> {
     if (!current()) return Promise.resolve(false);
     let streak = this.accounts.get(key);
     if (!streak || streak.incarnation !== incarnation) {
@@ -73,13 +115,13 @@ export class AccountRefusalStreaks {
     }
     const owned = streak;
     const result = owned.tail.catch(() => undefined).then(async () => {
-      const reason = await verdict;
+      const refusal = await verdict;
       if (this.accounts.get(key) !== owned || owned.paused || !current()) return false;
       if (success) { owned.count = 0; return false; }
-      if (!reason) return false;
+      if (!refusal) return false;
       owned.count = Math.min(owned.count + 1, threshold);
       if (owned.count < threshold) return false;
-      owned.paused = await pause(reason);
+      owned.paused = await pause(refusal);
       return owned.paused;
     });
     owned.tail = result;

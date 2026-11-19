@@ -64,7 +64,7 @@ export const CAPABILITIES: readonly Capability[] = [
     mutates: false,
     json: "payload",
     usage: "ocx link status [--json]",
-    details: ["Reads live listener/tunnel metadata; when no proxy is found, falls back to the local link store. Always emits JSON."],
+    details: ["Reads live listener/tunnel metadata; when no proxy is found, falls back to the local link store. Always emits JSON.","Home-initiated links report recent authenticated HTTP delivery in relayHealth, with inference readiness reported as unknown."],
   },
   {
     command: ["link","diagnostics"],

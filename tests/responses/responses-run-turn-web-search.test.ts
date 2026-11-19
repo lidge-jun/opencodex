@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
 import type { ProviderAdapter } from "../../src/adapters/base";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
@@ -11,6 +12,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const resolver = await import("../../src/server/adapter-resolve");
 const resolveAdapter = resolver.resolveAdapter;
+let chargeSearchIterations = false;
 let attempts: OcxParsedRequest[] = [];
 let events: AdapterEvent[][] = [];
 let onAttempt: ((index: number, parsed: OcxParsedRequest) => void | Promise<void>) | undefined;
@@ -18,9 +20,14 @@ let onPacingSlotWait: (() => void | Promise<void>) | undefined;
 function fixture(provider: OcxProviderConfig): ProviderAdapter {
   return {
     name: "cursor",
+    hostedIterationSendLimit: 3,
     buildRequest: () => ({ url: provider.baseUrl, method: "POST", headers: {}, body: "" }),
     async *parseStream() { yield { type: "done" } as AdapterEvent; },
-    async runTurn(parsed, _incoming, emit) {
+    async runTurn(parsed, incoming, emit) {
+      for (let send = 0; chargeSearchIterations && send < 2; send++) {
+        const decision = incoming.sendBudget?.reserveDispatch({ sendClass: "transient", targetKey: "cursor" });
+        if (!decision?.allowed || !decision.permit.use()) throw new SendBudgetExhaustedError();
+      }
       const index = attempts.length;
       attempts.push(structuredClone(parsed));
       for (const event of events[index] ?? []) emit(event);
@@ -86,6 +93,7 @@ beforeEach(async () => {
   release = acquireOwnedSpendHome();
   clearGenericFailoverHealth();
   attempts = [];
+  chargeSearchIterations = false;
   onAttempt = undefined;
   onPacingSlotWait = undefined;
   for (let i = 0; i < 2; i++) await saveCredential("cursor", {
@@ -367,3 +375,22 @@ for (const settlement of ["complete", "cancel", "error"] as const) {
     }
   });
 }
+
+test("direct Cursor hosted search funds four model iterations", async () => {
+  chargeSearchIterations = true;
+  events = Array.from({ length: 3 }, (_, index) => [
+    { type: "tool_call_start", id: `search-${index}`, name: "web_search" },
+    { type: "tool_call_delta", arguments: JSON.stringify({ query: `fixture ${index}` }) },
+    { type: "tool_call_end" }, { type: "done" },
+  ]);
+  events.push([{ type: "text_delta", text: "fourth iteration answer" }, { type: "done" }]);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async input => {
+    if (String(input) !== "https://api.exa.ai/search") throw new Error("Unexpected network target");
+    return Response.json({ results: [{ title: "Fixture", url: "https://example.invalid/", text: "Result" }] });
+  }) as typeof fetch;
+  try {
+    expect(await run(true)).toContain("fourth iteration answer");
+    expect(attempts).toHaveLength(4);
+  } finally { globalThis.fetch = realFetch; }
+});

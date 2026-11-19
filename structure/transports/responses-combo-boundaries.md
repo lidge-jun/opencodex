@@ -150,6 +150,7 @@ Explicit non-SSE types pass through unread, including parameters or longer subty
 event-stream token. A caller can still opt into inspecting a response without a content type. Non-streaming
 JSON from a native (non-runTurn) child is therefore never inspected here: an empty `max_output_tokens`
 limit in such a body is returned to the client unchanged, and only SSE and runTurn children fail over on it.
+A process-marked native stream has a raw-body observer, so this downstream inspector keeps terminal, output and error classification but does not collect usage again. Client display estimates stay outside the [spend contract](responses-spend.md#durable-spend-reservations); unmarked upstream/reset preflight retains normal usage inspection.
 
 Native post-header reset recovery shares that boundary, because it is asking the same question
 about the same bytes. With `replayReadErrors`, the preflight reports the stage it observed —

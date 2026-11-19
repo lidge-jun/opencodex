@@ -6,6 +6,7 @@ import * as destinationPolicy from "../../src/lib/destination-policy";
 import * as stateStores from "../../src/lib/state-store-registrations";
 import * as mutationLock from "../../src/config/mutation-lock";
 import { clearModelCache } from "../../src/codex/model-cache";
+import { credentialGeneration, getAccountSet, saveCredential, setAccountPaused } from "../../src/oauth/store";
 import { providerManagementConfigError } from "../../src/server/auth-cors";
 import { handleProviderRoutes } from "../../src/server/management/provider-routes";
 import { handleOauthAccountRoutes } from "../../src/server/management/oauth-account-routes";
@@ -45,7 +46,7 @@ function harness(policy?: OcxProviderConfig["accountAutoPause"]) {
   } };
   const path = join(home, "config.json");
   writeFileSync(path, JSON.stringify(config));
-  async function request(method: "POST" | "PUT", body: unknown, pathname = "/api/providers") {
+  async function request(method: "GET" | "POST" | "PUT", body: unknown, pathname = "/api/providers") {
     const url = new URL(pathname, "http://127.0.0.1");
     const context: ManagementContext = {
       req: new Request(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
@@ -54,7 +55,8 @@ function harness(policy?: OcxProviderConfig["accountAutoPause"]) {
       convergeCodexCatalog: async () => ({ status: "committed", changed: false, degraded: false, notices: [] }),
       syncClaudeAgentDefsBestEffort: async () => {},
     };
-    return pathname.endsWith("/pause") ? handleOauthAccountRoutes(context) : handleProviderRoutes(context);
+    return url.pathname.startsWith("/api/oauth/") || url.pathname.endsWith("/pause")
+      ? handleOauthAccountRoutes(context) : handleProviderRoutes(context);
   }
   return { config, path, request, post: (fields: Record<string, unknown> = {}) =>
     request("POST", { name: "relay", provider: { ...base, ...fields } }),
@@ -62,6 +64,41 @@ function harness(policy?: OcxProviderConfig["accountAutoPause"]) {
 }
 
 describe("account auto-pause management", () => {
+  test("the OAuth account list returns sibling pause evidence and drops it after resume", async () => {
+    const h = harness();
+    const provider = "google-antigravity";
+    h.config.providers[provider] = {
+      adapter: "google", googleMode: "cloud-code-assist", authMode: "oauth",
+      baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+    };
+    await saveCredential(provider, {
+      access: "synthetic-access", refresh: "synthetic-refresh", expires: Date.now() + 3_600_000, source: "oauth",
+    });
+    const account = getAccountSet(provider)!.accounts[0]!;
+    const details = { reason: "account_permission_denied", pausedAt: Date.now() } as const;
+    const evidence = { statusCode: 403, message: "This service has been disabled in this account for violation of Terms of Service.",
+      appealUrl: "https://forms.gle/appeal-fixture", appealText: "Submit Appeal" };
+    expect((await setAccountPaused(provider, account.id, true, {
+      generation: credentialGeneration(account.credential), details, evidence,
+    })).status).toBe("updated");
+
+    const list = async () => {
+      const response = await h.request("GET", undefined, `/api/oauth/accounts?provider=${provider}`);
+      expect(response?.status).toBe(200);
+      const { accounts } = await response!.json();
+      expect(accounts).toHaveLength(1);
+      return accounts[0];
+    };
+    expect(await list()).toMatchObject({ id: account.id, paused: true, pauseDetails: details, pauseEvidence: evidence });
+
+    const resume = await h.request("PUT", { provider, accountId: account.id, paused: false }, "/api/oauth/accounts/pause");
+    expect(resume?.status).toBe(200);
+    const resumed = await list();
+    expect(resumed.paused).toBe(false);
+    expect(resumed).not.toHaveProperty("pauseDetails");
+    expect(resumed).not.toHaveProperty("pauseEvidence");
+  });
+
   test.each([{}, { enabled: false }, { enabled: true, consecutiveFailures: 7 }])(
     "POST omission retains stored policy %j and explicit policy replaces it", async policy => {
       const h = harness(policy);

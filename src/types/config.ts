@@ -679,6 +679,13 @@ export interface OcxConfig extends OcxLinkHomeConfig, CodexAccountLoginConfig {
   googleAntigravityStaticCatalogVersion?: 1 | 2;
   /** Claude Code inbound + launcher settings. */
   claudeCode?: OcxClaudeCodeConfig;
+  /** Opt-in weekly reserve for explicitly marked caller-forward Claude subscription turns. */
+  subscriptionReserve?: {
+    enabled?: boolean;
+    soft?: number;
+    hard?: number;
+    targets?: string[];
+  };
   /**
    * Which public inference APIs this proxy serves. Read only through
    * `resolveApiSurfaceSettings` in `src/protocols/settings.ts`, which fails closed on a
@@ -795,6 +802,11 @@ export interface OcxConfig extends OcxLinkHomeConfig, CodexAccountLoginConfig {
    * would silently hide every future model behind a switch nobody knew to flip.
    */
   grokExcludedModels?: string[];
+  /**
+   * Provider names the dashboard's suggested combos leave out (Combos page). View-only:
+   * existing combos that name one keep routing to it.
+   */
+  comboSuggestionExcludedProviders?: string[];
   /**
    * When true, OpenAI-routed requests include `service_tier: "priority"` (fast inference).
    * When false, service_tier is stripped so requests use default speed.

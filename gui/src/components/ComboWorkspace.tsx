@@ -37,6 +37,7 @@ export default function ComboWorkspace({
   addDecisionProvider,
   onCloseAdd,
   onCreated,
+  renderSuggestions,
 }: ComboWorkspaceProps) {
   const t = useT();
   const providerMap = useMemo(
@@ -130,6 +131,8 @@ export default function ComboWorkspace({
   };
 
   return (
+    <>
+    {renderSuggestions?.(detailDirty ? activeId : null)}
     <div className={`combos-workspace-root${creatingFirstCombo ? " combos-workspace-root--empty" : ""}`}>
       <aside className="combos-workspace-rail" aria-label={t("cws.railAria")}>
         <div className="combos-workspace-rail-header">
@@ -334,5 +337,6 @@ export default function ComboWorkspace({
         <UnsavedLeaveDialog onKeep={cancelPending} onDiscard={confirmDiscard} />
       )}
     </div>
+    </>
   );
 }

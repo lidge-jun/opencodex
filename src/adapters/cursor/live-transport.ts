@@ -1140,6 +1140,7 @@ class LiveCursorTransport implements CursorTransport {
     let session: http2.ClientHttp2Session | undefined;
     let stream: http2.ClientHttp2Stream | undefined;
     if (!useHttp1) {
+      this.input.onRunDispatch?.();
       session = http2.connect(baseUrl);
       this.session = session;
       // The run request is buffered until the HTTP/2 session connects. Failures before `connect`
@@ -1489,6 +1490,7 @@ class LiveCursorTransport implements CursorTransport {
         sessionId: this.sessionId,
         requestId,
         translatorBudget: this.translatorBudget,
+        onRunDispatch: this.input.onRunDispatch,
         callbacks: {
           onCommitted: () => {
             this.committed = true;

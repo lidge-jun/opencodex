@@ -268,6 +268,7 @@ test("Link API teardown preserves the merged parent deferral contract", async ()
   expect(report.protectedUnchanged).toBe(true);
 });
 
+// Real Windows restore writes use NTFS ACLs within the fixture's 15 s watchdog.
 test("parent Link teardown retains the merged full restoration contract", async () => {
   const report = await runStop({ mode: "parent", fileClients: ["pi"] });
   expect(report.result).toEqual({ historyOnly: false, historyDeferred: false, other: false });
@@ -277,7 +278,7 @@ test("parent Link teardown retains the merged full restoration contract", async 
   expect(report.catalogAfter.models).toEqual([{ slug: "fixture-native", visibility: "list" }]);
   expect(report.grokAfter).toBe('theme = "fixture"\n');
   expect(report.fileAfter.pi).not.toContain("127.0.0.1");
-});
+}, 20_000);
 
 test("post-stop restore reports unowned Link file receipts despite disconnected saved state", async () => {
   const report = await runStop({ mode: "parent", fileClients: ["pi"], stopConnectionDrift: "disconnected",

@@ -75,7 +75,7 @@ provider-wide fallback. Exact model output limits precede the provider default o
   generated metadata for historical accounting—never enter dashboard or Codex pickers;
 - strips native-only service tier and WebSocket metadata unless the final routed provider/model
   explicitly enables the verified OpenAI-compatible service tier;
-- backs up the pristine catalog once per catalog: the copy is keyed by a hash of the catalog path
+- backs up the pristine catalog once per catalog: the copy is keyed by a hash of the [config-resolved catalog path](config.md#config-injection)
   (`catalog-backup-<id>.json`), and the legacy unsuffixed `catalog-backup.json` is retained in
   addition for the default catalog, so a restore resolves the backup for the catalog it is restoring
   rather than assuming a single file; restoration omits retired bare and trusted account-qualified
@@ -502,7 +502,7 @@ while retained `ultra` remains the supported harness path.
 
 `effortCap` and `subagentEffortCap` are hard ceilings applied on the V2 path (`src/server/effort-policy.ts`): they lower or preserve the requested effort rather than rejecting the request, and they never raise it.
 
-Combo dispatch reads the final target ladder through the same `supportedLadderFor` authority. An explicit empty ladder means that target receives no effort control; an unknown ladder receives no parent effort controls only when the combo opts into `reasoningEffortMode: "adaptive"`. Known non-empty ladders continue through the existing per-target resolution. Independent `reasoning.enabled` survives this strength-only stripping.
+Combo dispatch reads the final target ladder through the same `supportedLadderFor` authority. An explicit empty ladder means that target receives no effort control; an unknown ladder receives no parent effort controls only when the combo opts into `reasoningEffortMode: "adaptive"`. Known non-empty ladders continue through the existing per-target resolution. Independent `reasoning.enabled` survives this strength-only stripping. A [JEV Combo](providers/jev-decision.md) in `decide` mode publishes an empty effort ladder with no default effort in its Codex catalog row. In `client` mode, the row uses the ordinary Combo ladder.
 
 The `ocx effort` CLI accepts only the same canonical cap ladder before live probing or persistence.
 Its status output preserves unsupported legacy cap values and reports that those fields are ignored;

@@ -67,6 +67,8 @@ Native compact in `src/server/responses/compact.ts` projects the body per physic
 failover uses the newly selected account ID. Alternate construction reports identity failures as
 503 instead of treating them as absence of an eligible account, while recording the first
 account's completed rejection and quota headers without attributing a send to the alternate.
+The first native compact send and a credential replay each enter the
+[usage attempt log](../usage-client-attribution.md#credential-recovery-attempts) at guarded dispatch.
 `src/server/context-history.ts` applies the same clone
 and header contract. `src/server/search.ts`, `src/server/images.ts` and `src/server/live.ts`
 retain the selected context and project cloned client metadata immediately before each physical

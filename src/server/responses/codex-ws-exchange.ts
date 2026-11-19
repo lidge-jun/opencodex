@@ -15,7 +15,7 @@ import { UPGRADE_DEADLINE_MS, CODEX_WS_LIVENESS_PING_INTERVAL_MS, CODEX_WS_RESPO
   codexWsCreateFrameExceedsLimit, codexWsFailureDetail, codexWsPreResponseFailure, markCodexWsStage, codexWsOcxVersion,
   markCodexWsSocketDeath, codexWsWrapperStatus, isCodexWsTerminalEvent, type CodexWsFailureStage, type CodexWsStageRecord,
   type CodexWsTerminalEvent, codexWsPreOutputRefusalStatus, isEmptyCodexWsLifecycleEvent, codexWsFrameResponseIds,
-  markCodexWsPreOutputRefusal, type CodexWsPreOutputRefusalHold } from "./codex-ws-wire";
+  markCodexWsPreOutputRefusal, responsesFrameIsReplayUnsafe, type CodexWsPreOutputRefusalHold } from "./codex-ws-wire";
 
 interface ExchangeOptions {
   nativeControl?: NativeResponseControl;
@@ -625,8 +625,14 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         failStream("codex websocket frame exceeds the response size limit");
         return;
       }
-      const normalized = normalizeResponsesWsRelayEvent(text);
-      if (!normalized) return;
+      let replayUnsafe = false;
+      const normalized = normalizeResponsesWsRelayEvent(text, refusalEligible && sent && !responseCommitted
+        ? payload => { replayUnsafe = responsesFrameIsReplayUnsafe(payload); }
+        : undefined);
+      if (!normalized) {
+        if (replayUnsafe) commitResponse();
+        return;
+      }
       const { type } = normalized;
       let relayText = normalized.text;
       let controlFrame = false;
@@ -648,17 +654,23 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         failStream("codex websocket frame exceeds the response size limit");
         return;
       }
-      if (!controlFrame && !type.startsWith("response.") && type !== "error") return;
+      if (!controlFrame && !type.startsWith("response.") && type !== "error") {
+        if (replayUnsafe) commitResponse();
+        return;
+      }
       let steeringEnded = false;
       let refusalStatus: number | undefined;
       let refusalHeaders: Headers | undefined;
       let refusalPrelude: Headers | undefined;
-      if (!controlFrame) {
+      if (controlFrame) {
+        if (replayUnsafe) commitResponse();
+      } else {
         firstResponseAt ??= Date.now();
         try {
           if (nativeControl) steeringEnded = nativeControl.observe(normalized.payload);
           else correlation?.accept(normalized.payload);
         } catch (error) { failStream(error); return; }
+        if (replayUnsafe) commitResponse();
         const holdOpen = refusalEligible && sent && !responseCommitted;
         if (holdOpen) noteRefusalIdentity(normalized.payload);
         // Correlation must run first: a reused socket's foreign-stream error settles as a

@@ -1,5 +1,6 @@
 import { anthropicSubscriptionLabel } from "../../../../src/providers/anthropic-subscription";
 import { anthropicInstanceRowShapeMatches, isAnthropicInstanceId } from "../../../../src/providers/anthropic-instance-id";
+import { normalizeCloudCodeAppealText, normalizeCloudCodeAppealUrl } from "../../../../src/lib/cloud-code-appeal-link";
 /**
  * ProviderAuthPanel — OAuth accounts, API-key pool, and forward-auth
  * embedding for the workspace Settings tab (WP091). Consumes WP040+WP060
@@ -575,6 +576,7 @@ export default function ProviderAuthPanel({
                 <div className="pwi-auth-wait-copy">
                   <div className="pwi-auth-wait-title">{t("prov.waitingBrowser")}</div>
                   <LoginHintView
+                    providerId={item.name}
                     hint={{
                       url: hintForThis.url,
                       deviceCode: hintForThis.deviceCode,
@@ -641,6 +643,7 @@ export default function ProviderAuthPanel({
                   const maskedId = displayAccountId(account.id);
                   const healthLabel = formatOAuthHealthLabel(t, account.health);
                   const healthSummary = isAnthropicPool ? null : formatOAuthHealthSummary(t, item.name, account.id, account.health);
+                  const appealUrl = account.paused ? normalizeCloudCodeAppealUrl(account.pauseEvidence?.appealUrl) : undefined;
                   return (
                   <li key={account.id} className={`pwi-auth-acct${account.active ? " pwi-auth-acct--active" : ""}`}>
                     <div className={`pwi-auth-row${account.active ? " pwi-auth-row--active" : ""}`}>
@@ -718,6 +721,11 @@ export default function ProviderAuthPanel({
                     </button>
                     </div>
                     <div className="pwi-auth-acct-quota">
+                      {appealUrl && (
+                        <a className="text-highlight underline" href={appealUrl} target="_blank" rel="noopener noreferrer">
+                          {normalizeCloudCodeAppealText(account.pauseEvidence?.appealText) ?? t("accountPause.submitAppeal")}
+                        </a>
+                      )}
                       {isAnthropicPool && account.autoSwitchThresholdOverride !== undefined
                         && account.autoSwitchThreshold !== undefined && authHandlers.onAccountThreshold && (
                         <AccountAutoSwitchControl

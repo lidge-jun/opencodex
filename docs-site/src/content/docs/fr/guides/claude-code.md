@@ -170,7 +170,7 @@ unknown signifie qu’opencodex ne peut pas déterminer si les réglages pointen
 
 ### Mode picker : modèles opencodex dans le sélecteur Code first-party
 
-Le mode picker fait partie du mode first-party. Sur macOS et Windows, il est activé par défaut lorsque first-party
+Le mode picker fait partie du mode first-party. Sur macOS, Windows et Linux, il est activé par défaut lorsque first-party
 est sélectionné, sauf si `claudeCode.intercept.picker: false` est défini. Il modifie le sélecteur de
 modèles de l'onglet Code de Desktop first-party pour y afficher les modèles opencodex disponibles par
 leur nom. Lors de la première activation, macOS peut demander l'autorisation d'une autorité de certification
@@ -187,9 +187,7 @@ Une migration unique depuis une ancienne identité peut demander votre consentem
 confiance. Si ce nettoyage échoue, le picker reste indisponible et le profil appliqué utilise un relais
 sans déchiffrement jusqu'à sa réussite. macOS peut aussi demander de déverrouiller le trousseau ou
 d'autoriser l'accès d'une application aux identifiants, y compris après un redémarrage ou une mise à jour. Sur Windows, `on` ou `trust` explicite peut afficher une confirmation d'ajout de la racine.
-Le picker reste non pris en charge sous Linux : aucun travail de CA, de magasin d'identifiants
-ou de proxy picker n'y démarre. L'interception Claude principale reste disponible ; ses fichiers CA locaux
-sont protégés par des vérifications du propriétaire, des liens symboliques, des permissions et des ACL Windows.
+Sous Linux, l'activation explicite du picker utilise `certutil` pour ajouter l'autorité de certification restreinte du picker aux autorités de confiance dans la base NSS de l'utilisateur.
 
 Lorsque le mode picker est actif, Claude Desktop accède au réseau par OpenCodex. Si OpenCodex s'arrête,
 Desktop reste hors ligne jusqu'à son redémarrage complet ou jusqu'à la désactivation du mode picker.
@@ -493,7 +491,15 @@ par défaut, corrige ce comportement :
    atteint au moins le seuil de compactage automatique configuré. Les lignes de découverte et du sélecteur Desktop ne suivent pas
    ce seuil : elles utilisent le plancher fixe de 829 800 jetons (1M réel pour un modèle Claude sur une route Anthropic).
 2. `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (`829800` par défaut, plage `100000`–`1000000`) est injecté afin
-   que la conversation soit automatiquement résumée à ce seuil.
+   que la conversation soit automatiquement résumée à ce seuil. Pour les sessions routées, `ocx claude`
+   peut utiliser `--settings` pour appliquer des seuils par modèle lorsque le catalogue contient des
+   fenêtres plus petites. Si les arguments dépassent la limite du lanceur, la variable reste utilisée.
+
+Le JSON généré relève de la configuration en ligne de commande de Claude Code, au-dessus des fichiers locaux, du projet et de l’utilisateur, et en dessous des paramètres administrés. Passer `--settings <file>` ou `--autocompact` désactive la génération de ce JSON. Le lanceur transmet les arguments `--settings` tels quels et laisse Claude Code lire les fichiers.
+
+Quand l’une de ces options désactive la génération du JSON, le lanceur conserve `CLAUDE_CODE_AUTO_COMPACT_WINDOW` si le contexte automatique la définit. Une valeur exportée explicitement est aussi conservée et désactive la génération du JSON. Dans Claude Code, une valeur valide de cette variable prévaut sur `--autocompact` et les réglages de compactage enregistrés. Pour utiliser les réglages de compactage d’un fichier, définissez `claudeCode.autoContext` sur `false` pour désactiver l’injection automatique, retirez toute valeur exportée de `CLAUDE_CODE_AUTO_COMPACT_WINDOW` et passez `--settings <file>`. Voir [l’ordre de priorité du compactage automatique de Claude Code](https://code.claude.com/docs/en/model-config#set-the-auto-compact-window).
+
+Le lanceur omet les réglages générés et conserve les arguments et l’environnement de lancement d’origine si un argument correspond exactement à une commande ou à un alias de Remote Control (`remote-control`, `rc`, `bridge`, `remote` ou `sync`), y compris une valeur d’option ou un argument après `--`.
 
 Trois états de configuration :
 
