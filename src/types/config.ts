@@ -48,6 +48,8 @@ export interface OcxProtocolsConfig {
      * answered through the direct encoders, with no internal Responses body in either direction.
      */
     antigravityDirect?: boolean;
+    /** Preserve native Gemini payloads for concrete Antigravity OAuth routes on /v1beta. Default off. */
+    geminiNativeAntigravity?: boolean;
     /** Compare the dispatch plan with the observed path; never sends a second request. */
     shadowPlan?: boolean;
   };

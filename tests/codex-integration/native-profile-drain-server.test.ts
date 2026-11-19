@@ -24,12 +24,14 @@ import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
 
+import { redirectCanonicalCodexTo } from "../helpers/pool-retry-harness";
 import { watchdogMs } from "../helpers/ci-watchdog";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 /** These cases sandbox CODEX_HOME/OPENCODEX_HOME, so the installed service is not their evidence. */
 const inspectNativeCodexOwnership = ownedServiceHomeInspection("native-profile drain server test");
 
 const originalFetch = globalThis.fetch;
+const originalWebSocket = globalThis.WebSocket;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const previousCodexHome = process.env.CODEX_HOME;
 let opencodexHome = "";
@@ -53,6 +55,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  globalThis.WebSocket = originalWebSocket;
   resetLifecycleDrainStateForTests();
   clearAccountQuota();
   clearThreadAccountMap();
@@ -69,6 +72,8 @@ afterEach(() => {
 describe("native main profile scoped server admission", () => {
   test("HTTP and Responses WebSocket keep Direct live while main Pool frames are rejected", async () => {
     let upstreamRequests = 0;
+    // The HTTP mock below owns inference; native WSS must not contact the real service.
+    redirectCanonicalCodexTo("http://127.0.0.1");
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       if (url.includes("chatgpt.com/backend-api/codex/responses")) {
