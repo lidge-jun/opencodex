@@ -108,9 +108,9 @@ export async function fetchGoogleWithRetry(
           if (previous) cancelResponseBodyBestEffort(previous);
           if (retryDelayMs > 0) await sleepWithAbort(retryDelayMs, ctx.abortSignal);
         },
-        dispatch: executor => fetchWithAttemptDeadline(activeRequest.url, {
+        dispatch: (executor, wasDispatched) => fetchWithAttemptDeadline(activeRequest.url, {
           method: activeRequest.method, headers: activeRequest.headers, body: activeRequest.body,
-        }, timeoutMs, ctx.abortSignal, ctx.stream, executor, { refusePostDeadline: true }),
+        }, timeoutMs, ctx.abortSignal, ctx.stream, executor, { wasDispatched }),
       });
       retryDelayMs = 0;
       sendClass = "transient";

@@ -571,7 +571,7 @@ export async function fetchWithAttemptDeadline(
   abortSignal?: AbortSignal,
   preferIdentityEncoding = false,
   executor: typeof globalThis.fetch = globalThis.fetch,
-  options?: { refusePostDeadline: boolean },
+  options?: { wasDispatched: () => boolean },
 ): Promise<Response> {
   const attemptTimeout = clearableDeadline(timeoutMs, abortSignal);
   const headers = new Headers(init.headers);
@@ -586,8 +586,8 @@ export async function fetchWithAttemptDeadline(
       signal: attemptTimeout.signal,
     });
   } catch (error) {
-    if (options?.refusePostDeadline && init.method?.toUpperCase() === "POST" && !abortSignal?.aborted
-      && attemptTimeout.didExpire() && error === attemptTimeout.signal.reason) return replayRefusalResponse();
+    if (init.method?.toUpperCase() === "POST" && !abortSignal?.aborted
+      && attemptTimeout.didExpire() && error === attemptTimeout.signal.reason && options?.wasDispatched()) return replayRefusalResponse();
     throw error;
   } finally {
     // Only the header timer is cleared. The composed signal still contains the parent, so a

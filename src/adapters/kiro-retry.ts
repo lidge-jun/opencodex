@@ -202,6 +202,7 @@ async function fetchWithResetRecovery(
       // admitted one is counted exactly once whichever way the fetch below settles.
       const permit = decision?.allowed ? decision.permit : undefined;
       const requestUrl = request.url;
+      let dispatched = false;
       try {
         const headers = new Headers(request.headers);
         const recovered = attempt > 0;
@@ -215,6 +216,7 @@ async function fetchWithResetRecovery(
           try {
             const run = () => fetchWithPhysicalSendReceipt(executor.unpacedFetch ?? executor, input, init, () => {
               if (permit && !permit.use()) throw new SendBudgetExhaustedError(errorDestinationLabel(destination));
+              dispatched = true;
               notePhysicalSend(attempt > 0);
             });
             return await (permit?.execute ? permit.execute(run) : run());
@@ -226,7 +228,7 @@ async function fetchWithResetRecovery(
             }
             throw error;
           }
-        }) as typeof globalThis.fetch, { refusePostDeadline: true }));
+        }) as typeof globalThis.fetch, { wasDispatched: () => dispatched }));
         await hasUpstreamReplayRefusal(response, ctx.abortSignal, { requireCompleteBody: true });
         if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
         return response;

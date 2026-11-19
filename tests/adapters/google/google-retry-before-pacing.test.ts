@@ -2,6 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import type { AdapterRequest } from "../../../src/adapters/base";
 import { fetchGoogleWithRetry } from "../../../src/adapters/google-http";
 import { createAdapterPhysicalSend } from "../../../src/adapters/physical-send";
+import { EXECUTOR_PHYSICAL_SEND_RECEIPT, markPhysicalSendReceiptExecutor } from "../../../src/lib/executor-physical-send-receipt";
 import { createRequestExecutionBudget } from "../../../src/lib/request-execution-budget";
 import { hasClientReplayVeto, SendBudgetExhaustedError } from "../../../src/lib/upstream-retry";
 import {
@@ -26,6 +27,29 @@ const repairable = (): AdapterRequest => ({
 });
 const schemaError = JSON.stringify({ error: { code: 400, status: "INVALID_ARGUMENT",
   message: "tools.0.custom.input_schema: JSON schema is invalid" } });
+
+test("Google retries a guarded header deadline before the physical receipt", async () => {
+  const sendBudget = budgetOf(1);
+  const ordinals: number[] = [];
+  let calls = 0;
+  const executor = markPhysicalSendReceiptExecutor(fakeFetch(async (_input, init) => {
+    if (++calls === 1) {
+      const signal = init!.signal!;
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    }
+    (init as RequestInit & { [EXECUTOR_PHYSICAL_SEND_RECEIPT]: () => void })[EXECUTOR_PHYSICAL_SEND_RECEIPT]();
+    return new Response("ok");
+  }));
+  const response = await fetchGoogleWithRetry("Antigravity", request(), {
+    executor, sendBudget, timeoutMs: 1, onPhysicalSend: send => ordinals.push(send.ordinal),
+  });
+  expect(response.status).toBe(200);
+  expect(calls).toBe(2);
+  expect(ordinals).toEqual([1]);
+  expect(sendBudget.used).toBe(1);
+});
 
 describe("Google retry ownership and repair counterexamples", () => {
   test("abort just after retry classification cleans up the still-owned response", () => withClock(async clock => {

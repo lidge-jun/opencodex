@@ -689,7 +689,9 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
   refresh/replay after HTTP 401, and bounded recovery for transient Kiro 429s. A shared cooldown and
   single post-cooldown probe prevent concurrent requests from exhausting independent retry budgets;
   hard quota failures are not retried on that same account, and other service errors are not replayed. Every Kiro physical send uses
-  configured provider egress. A header deadline returns 504; caller cancellation stops the turn.
+  configured provider egress. A header deadline before the physical send returns HTTP 504. After a
+  POST is sent, a header deadline returns HTTP 429 with `upstream_reset_replay_refused` and
+  `x-should-retry: false`. Caller cancellation stops the turn.
   Final HTTP 5xx bodies use fixed public text without upstream detail.
 - Its non-streaming parser drains the same event stream for the web-search loop.
 - Reports per-account usage. `AmazonCodeWhispererService.GetUsageLimits` on

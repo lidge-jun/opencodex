@@ -27,7 +27,7 @@ export function createAdapterPhysicalSend(ctx: AdapterFetchContext = {}, fallbac
     beforePacing?: () => void | Promise<void>;
     /** Runs only after pacing admission. */
     beforeDispatch?: () => void | Promise<void>;
-    dispatch: (executor: typeof globalThis.fetch) => Promise<Response>;
+    dispatch: (executor: typeof globalThis.fetch, wasDispatched: () => boolean) => Promise<Response>;
   }): Promise<Response> => {
     if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
     const decision = ctx.sendBudget?.reserveDispatch({
@@ -58,7 +58,7 @@ export function createAdapterPhysicalSend(ctx: AdapterFetchContext = {}, fallbac
       if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
       await options.beforeDispatch?.();
       if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
-      return await sendTrackingRequestSlot(slot, () => options.dispatch(physicalExecutor));
+      return await sendTrackingRequestSlot(slot, () => options.dispatch(physicalExecutor, () => dispatched));
     } finally {
       releaseProviderRequestSlot(slot);
       permit?.release();

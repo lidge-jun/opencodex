@@ -6,6 +6,7 @@ import { fetchKiroWithRetry, resetKiroThrottleStateForTests } from "../../../src
 import { getDebugLogEntries, resetDebugLogBufferForTests } from "../../../src/lib/debug-log-buffer";
 import { clearDebugSetting, getDebugSettings, setDebugSettings } from "../../../src/lib/debug-settings";
 import { encodeMessage } from "../../../src/lib/eventstream-decoder";
+import { EXECUTOR_PHYSICAL_SEND_RECEIPT, markPhysicalSendReceiptExecutor } from "../../../src/lib/executor-physical-send-receipt";
 import { createRequestExecutionBudget } from "../../../src/lib/request-execution-budget";
 import { isReplayRefusalResponse } from "../../../src/lib/upstream-retry";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
@@ -237,6 +238,31 @@ test("account switch before alternate sends rebuilt account headers and body", a
   expect(urls).toEqual([request.url, "https://q.eu-west-1.amazonaws.com/"]);
   expect(bodies).toEqual(["old-body", "new-body"]);
   expect(bearers).toEqual(["Bearer old", "Bearer new"]);
+});
+
+test.each([false, true])("guarded POST header deadline with physical receipt = %s", async dispatched => {
+  const sendBudget = createRequestExecutionBudget();
+  const ordinals: number[] = [];
+  const urls: string[] = [];
+  const executor = markPhysicalSendReceiptExecutor((async (input, init) => {
+    if (dispatched) {
+      (init as RequestInit & { [EXECUTOR_PHYSICAL_SEND_RECEIPT]: () => void })[EXECUTOR_PHYSICAL_SEND_RECEIPT]();
+      urls.push(String(input));
+    }
+    const signal = init!.signal!;
+    return new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  }) as typeof fetch);
+  const result = await fetchKiroWithRetry(request, {
+    executor, timeoutMs: 1, sendBudget, onPhysicalSend: send => ordinals.push(send.ordinal),
+  });
+  expect(urls).toEqual(dispatched ? [request.url] : []);
+  expect(ordinals).toEqual(dispatched ? [1] : []);
+  expect(sendBudget.used).toBe(dispatched ? 1 : 0);
+  expect(result.status).toBe(dispatched ? 429 : 504);
+  expect(isReplayRefusalResponse(result)).toBe(dispatched);
+  expect(result.headers.get("x-should-retry")).toBe(dispatched ? "false" : null);
 });
 
 test("dispatched POST header deadline becomes a replay refusal without rotating; caller abort preserves its reason", async () => {
