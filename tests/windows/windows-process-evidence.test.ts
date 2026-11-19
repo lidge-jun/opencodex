@@ -3,6 +3,7 @@
 // cases gated on real Windows, which exercise the owner snapshot and x64 FFI on our own child.
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsSystemDirectory } from "../../src/lib/windows-elevation";
 import { windowsLauncherVbsPath } from "../../src/service/state";
@@ -206,7 +207,17 @@ const liveX64 = process.platform !== "win32" || process.arch !== "x64";
 
 const portablePowerShell = Bun.which("pwsh");
 
-for (const budget of ["available", "expired", "expires-during-owner"] as const) test.skipIf(process.platform !== "win32" && !portablePowerShell)("owner enrichment prioritizes this home and retains every row (budget=" + budget + ")", async () => {
+// The three budgets run in one test that shares one 60 s window: a slow first PowerShell start may use
+// most of it, but a hang still fails inside the 120 s Linux batch deadline, naming the active budget.
+test.skipIf(process.platform !== "win32" && !portablePowerShell)("owner enrichment prioritizes this home and retains every row", async () => {
+  const deadline = Date.now() + 60_000;
+  for (const budget of ["available", "expired", "expires-during-owner"] as const) {
+    try { await ownerEnrichmentCase(budget, deadline); }
+    catch (error) { throw new Error("budget=" + budget + ": " + (error instanceof Error ? error.message : String(error)), { cause: error }); }
+  }
+}, 65_000);
+
+async function ownerEnrichmentCase(budget: "available" | "expired" | "expires-during-owner", deadline: number): Promise<void> {
   const powershell = process.platform === "win32" ? resolveTrustedWindowsPowerShellExe() : portablePowerShell!;
   const launcher = Buffer.from(windowsLauncherVbsPath(), "utf8").toString("base64");
   const script = windowsProcessSnapshotScript().replace(
@@ -226,7 +237,9 @@ for (const budget of ["available", "expired", "expires-during-owner"] as const) 
     "[pscustomobject]@{ Snapshot = $rows; OwnerReads = $script:ownerReads; RefreshReads = $script:refreshReads } | ConvertTo-Json -Compress",
   ].join(" ");
   const child = Bun.spawn([powershell, "-NoProfile", "-NonInteractive", "-Command", prelude], {
-    stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: 5_000,
+    // A cold PowerShell start is the proof here; on a loaded Linux runner it outlasted 5 s (exit 143).
+    stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
+    timeout: Math.max(1_000, Math.min(SPAWN_BUDGET_MS, deadline - Date.now())),
   });
   const [output, errors, exitCode] = await Promise.all([
     new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
@@ -244,7 +257,7 @@ for (const budget of ["available", "expired", "expires-during-owner"] as const) 
   const ordinaryRefreshed = Math.max(0, refreshed - 1);
   expect(rows.slice(0, ordinaryRefreshed).every(row => row.foreignOwner === false)).toBe(true);
   expect(rows.slice(ordinaryRefreshed, 39).every(row => row.foreignOwner === null)).toBe(true);
-}, 10_000);
+}
 
 test.skipIf(process.platform !== "win32")("the live capped snapshot reads and refreshes a wrapper child's owner", async () => {
   // /d disables AutoRun. `rem` does no work; /k and an open stdin keep this owned child
