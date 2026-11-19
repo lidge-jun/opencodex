@@ -45,9 +45,12 @@ export interface ChatCompletionEncodeOptions extends AdapterEventEncodeOptions {
   model: string;
   failureVerdictSink?: FailureVerdictSink;
   proxyErrorContext?: object;
+  /** The client set `stream_options.include_usage`: a failed terminal's usage precedes its error frame. */
+  includeUsage?: boolean;
 }
 
-function createChatCompletionWriter(sink: ClientFrameSink, model: string, failureVerdictSink?: FailureVerdictSink, proxyErrorContext?: object): ClientWireWriter {
+function createChatCompletionWriter(sink: ClientFrameSink, model: string, failureVerdictSink?: FailureVerdictSink, proxyErrorContext?: object,
+  includeUsage = false): ClientWireWriter {
   const id = completionId();
   const created = Math.floor(Date.now() / 1000);
   let started = false;
@@ -150,8 +153,16 @@ function createChatCompletionWriter(sink: ClientFrameSink, model: string, failur
     sink.emitBatch(batch);
     terminated = true;
   };
-  const fail = (message: string, details?: ChatCompletionsStreamFailure) => {
+  const fail = (message: string, details?: ChatCompletionsStreamFailure, usage?: Rec | null) => {
     if (terminated) return;
+    // As the converter: the failed terminal's usage rides its own chunk before the error frame.
+    if (includeUsage && usage) {
+      try {
+        const frame = chunkBase(id, model, created);
+        frame.usage = chatCompletionsUsage(usage);
+        emit(frame);
+      } catch { /* the error frame below still ends the stream */ }
+    }
     terminated = true;
     failed = true;
     // A real error event, then an abnormal close without [DONE].
@@ -245,12 +256,13 @@ function createChatCompletionWriter(sink: ClientFrameSink, model: string, failur
           finish(outcome.finishReason, terminal.usageOnWire ? responsesUsage(terminal.usage) : null);
         } else {
           fail(outcome.originalFailMessage, { contract: "stream_incomplete",
-            proxyAuthored: isProxyError(terminal) });
+            proxyAuthored: isProxyError(terminal) }, terminal.usageOnWire ? responsesUsage(terminal.usage) : null);
         }
         return;
       }
       const failure = chatCompletionsFailedResponse((terminal.error ?? {}) as unknown as Rec);
-      fail(failure.message, { ...failure.details, proxyAuthored: hasProxyErrorMessage(proxyErrorContext, failure.message, failure.details) });
+      fail(failure.message, { ...failure.details, proxyAuthored: hasProxyErrorMessage(proxyErrorContext, failure.message, failure.details) },
+        terminal.usageOnWire ? responsesUsage(terminal.usage) : null);
     },
     overflow() {
       fail("upstream translation buffer exceeded the safe limit", {
@@ -268,7 +280,8 @@ export function encodeChatCompletionSse(
   events: AsyncIterable<AdapterEvent>,
   options: ChatCompletionEncodeOptions,
 ): ReadableStream<Uint8Array> {
-  return encodeAdapterEventStream(events, sink => createChatCompletionWriter(sink, options.model, options.failureVerdictSink, options.proxyErrorContext), options);
+  return encodeAdapterEventStream(events, sink => createChatCompletionWriter(sink, options.model, options.failureVerdictSink, options.proxyErrorContext,
+    options.includeUsage), options);
 }
 
 /**

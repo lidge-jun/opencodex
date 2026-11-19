@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +10,8 @@ import { httpStatusFromTerminalError } from "../../src/lib/errors";
 import { errorDetailFor } from "../../src/usage/error-detail";
 import { inspectResponseLogJson, type RequestLogContext } from "../../src/server/request-log";
 import { responseWithDeferredRequestLog } from "../../src/server/relay";
-import type { OcxConfig } from "../../src/types";
+import type { AdapterEvent, OcxConfig } from "../../src/types";
+import * as resolver from "../../src/server/adapter-resolve";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { saveCredential, setActiveAccount, getAccountSet } from "../../src/oauth/store";
@@ -205,10 +206,53 @@ describe("server terminal guard integration", () => {
     expect(log.usage).toMatchObject({ inputTokens: 30, outputTokens: 5 });
   });
 
-  test.each([true, false])("buffered OAuth continuation keeps usage on its issuing account (replacement reports usage: %s)", async reported => {
+  // A re-ask that fails upstream fails the turn, and the failed terminal carries the usage the
+  // request metered (the announcing leg's 10 + 2; the overloaded leg reported none). The Chat wire
+  // ends that turn in an {error} frame, so an include_usage client reads it from the usage chunk
+  // before the error, through the bridge converter and the direct Chat encoder alike.
+  const failedContinuation = [
+    'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":20,"output_tokens":1}}}\n\n',
+    'event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n',
+  ].join("");
+  test.each([false, true])("a failed re-ask's metered usage precedes the Chat error frame (directEncoders=%p)", async directEncoders => {
+    takeInheritedSpendHome();
+    globalThis.fetch = (async () => { calls += 1; return anthropicSse(calls === 1 ? firstTurn : failedContinuation); }) as typeof fetch;
+    const log: RequestLogContext = { model: "", provider: "" };
+    const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "se-claude-opus-4.8", stream: true, stream_options: { include_usage: true },
+        messages: [{ role: "user", content: "请检查这个问题并修复代码" }],
+        tools: [{ type: "function", function: { name: "exec_command", description: "run a command", parameters: { type: "object" } } }],
+      }),
+    }), { ...config, ...(directEncoders ? { protocols: { rollout: { directEncoders: true } } } : {}) } as OcxConfig, log);
+
+    const frames = (await response.text()).split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+    expect(calls).toBe(2);
+    expect(frames.at(-1)?.error).toBeDefined();
+    expect(frames.at(-2)).toMatchObject({ choices: [], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } });
+    expect(log.usage).toMatchObject({ inputTokens: 10, outputTokens: 2 });
+  });
+
+  /**
+   * Account A announces work, its re-ask is rate-limited, and account B answers the re-ask. The
+   * first leg reports usage unless `firstUsageless`; `credits` adds that credit reading to every
+   * usage the parser reports, as a credit-billed provider would.
+   */
+  async function oauthRotation(opts: { reported: boolean; firstUsageless?: boolean; credits?: number }) {
     const previousHome = process.env.OPENCODEX_HOME;
     const home = mkdtempSync(join(tmpdir(), "ocx-terminal-guard-oauth-usage-"));
     process.env.OPENCODEX_HOME = home;
+    const originalResolve = resolver.resolveAdapter;
+    const withCredits = (event: AdapterEvent): AdapterEvent => opts.credits !== undefined && "usage" in event && event.usage
+      ? { ...event, usage: { ...event.usage, providerCredits: opts.credits } } as AdapterEvent : event;
+    const adapterSpy = spyOn(resolver, "resolveAdapter").mockImplementation((...args) => {
+      const adapter = originalResolve(...args);
+      const parseResponse = adapter.parseResponse?.bind(adapter);
+      return parseResponse ? { ...adapter, parseResponse: async (...params: Parameters<typeof parseResponse>) =>
+        (await parseResponse(...params)).map(withCredits) } : adapter;
+    });
     try {
       takeInheritedSpendHome();
       clearAnthropicAccountPoolState();
@@ -229,12 +273,12 @@ describe("server terminal guard integration", () => {
         auth.push(new Headers(init?.headers).get("authorization") ?? "");
         if (auth.length === 1) return Response.json({ type: "message", role: "assistant",
           content: [{ type: "text", text: "我接下来会修改相关文件。" }], stop_reason: "end_turn",
-          usage: { input_tokens: 10, output_tokens: 2 } });
+          ...(opts.firstUsageless ? {} : { usage: { input_tokens: 10, output_tokens: 2 } }) });
         if (auth.length === 2) return Response.json({ type: "error", error: { type: "rate_limit_error", message: "rate limit exceeded" } },
           { status: 429, headers: { "retry-after": "120" } });
         return Response.json({ type: "message", role: "assistant", stop_reason: "tool_use",
           content: [{ type: "tool_use", id: "toolu_1", name: "exec_command", input: {} }],
-          ...(reported ? { usage: { input_tokens: 20, output_tokens: 3 } } : {}) });
+          ...(opts.reported ? { usage: { input_tokens: 20, output_tokens: 3 } } : {}) });
       }) as typeof fetch;
 
       const log: RequestLogContext = { model: "", provider: "" };
@@ -246,29 +290,16 @@ describe("server terminal guard integration", () => {
           tools: [{ type: "function", name: "exec_command", description: "run a command", parameters: { type: "object" } }] }),
       }), oauthConfig, log);
       const body = await responseWithDeferredRequestLog(response, requestId, start, log).json();
-      expect(response.status).toBe(200);
-      expect(body).toMatchObject({ status: "completed", usage: reported
-        ? { input_tokens: 20, output_tokens: 3 } : { input_tokens: 10, output_tokens: 2 } });
-      expect(auth).toEqual(["Bearer fixture-access-a", "Bearer fixture-access-a", "Bearer fixture-access-b"]);
       const row = readUsageEntries().find(entry => entry.requestId === requestId);
-      expect(row?.attempts?.map(attempt => ({
-        provider: attempt.provider, sends: attempt.sendCount, status: attempt.status,
-        input: attempt.usage?.inputTokens, output: attempt.usage?.outputTokens,
-      }))).toEqual([
-        { provider: formatAnthropicProviderForLog("anthropic", firstAccount), sends: 2, status: 429, input: 10, output: 2 },
-        { provider: formatAnthropicProviderForLog("anthropic", replacementAccount), sends: 1, status: 200,
-          input: reported ? 20 : undefined, output: reported ? 3 : undefined },
-      ]);
       const journal = Bun.file(join(home, SPEND_LEDGER_JOURNAL_FILENAME));
       const records = await journal.exists() ? (await journal.text()).trim().split("\n").map(parseSpendJournalRecord) : [];
-      // #8902: account A's first send settles its own 12 tokens, the usage-less 429 stays
-      // unresolved, and account B's send settles only what it reported.
       const dispatched = records.flatMap(record => record?.kind === "dispatch" ? [record.send] : []);
-      expect(records.flatMap(record => record?.kind === "settle" ? [{ send: dispatched.indexOf(record.send) + 1, tokens: record.tokens }]
-        : record?.kind === "lost" ? [{ send: dispatched.indexOf(record.send) + 1, tokens: "lost" }] : [])
-        .sort((a, b) => a.send - b.send)).toEqual([{ send: 1, tokens: 12 }, { send: 2, tokens: "lost" },
-        { send: 3, tokens: reported ? 23 : "lost" }]);
+      const ledger = records.flatMap(record => record?.kind === "settle" ? [{ send: dispatched.indexOf(record.send) + 1, tokens: record.tokens }]
+        : record?.kind === "lost" ? [{ send: dispatched.indexOf(record.send) + 1, tokens: "lost" as const }] : [])
+        .sort((a, b) => a.send - b.send);
+      return { status: response.status, body, auth, row, ledger, accounts: [firstAccount, replacementAccount] };
     } finally {
+      adapterSpy.mockRestore();
       releaseInheritedSpendHome?.();
       releaseInheritedSpendHome = undefined;
       clearAnthropicAccountPoolState();
@@ -276,6 +307,35 @@ describe("server terminal guard integration", () => {
       else process.env.OPENCODEX_HOME = previousHome;
       removeTreeWithRetry(home);
     }
+  }
+
+  test.each([true, false])("buffered OAuth continuation keeps usage on its issuing account (replacement reports usage: %s)", async reported => {
+    const { status, body, auth, row, ledger, accounts: [firstAccount, replacementAccount] } = await oauthRotation({ reported });
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ status: "completed", usage: reported
+      ? { input_tokens: 20, output_tokens: 3 } : { input_tokens: 10, output_tokens: 2 } });
+    expect(auth).toEqual(["Bearer fixture-access-a", "Bearer fixture-access-a", "Bearer fixture-access-b"]);
+    expect(row?.attempts?.map(attempt => ({
+      provider: attempt.provider, sends: attempt.sendCount, status: attempt.status,
+      input: attempt.usage?.inputTokens, output: attempt.usage?.outputTokens,
+    }))).toEqual([
+      { provider: formatAnthropicProviderForLog("anthropic", firstAccount), sends: 2, status: 429, input: 10, output: 2 },
+      { provider: formatAnthropicProviderForLog("anthropic", replacementAccount), sends: 1, status: 200,
+        input: reported ? 20 : undefined, output: reported ? 3 : undefined },
+    ]);
+    // #8902: account A's first send settles its own 12 tokens, the usage-less 429 stays
+    // unresolved, and account B's send settles only what it reported.
+    expect(ledger).toEqual([{ send: 1, tokens: 12 }, { send: 2, tokens: "lost" }, { send: 3, tokens: reported ? 23 : "lost" }]);
+  });
+
+  // #8452 across a rotation: the rotation reuses the live attempt object for account B, so a
+  // marker keyed by that object made A's usage-less leg mark B's own 3 credits incomplete. A's
+  // missing reading leaves the request's credit total incomplete; B's attempt keeps its reading.
+  test("a usage-less leg before an OAuth rotation leaves the request credits incomplete and keeps the replacement's own", async () => {
+    const { status, row } = await oauthRotation({ reported: true, firstUsageless: true, credits: 3 });
+    expect(status).toBe(200);
+    expect(row?.attempts?.map(attempt => attempt.usage?.providerCredits)).toEqual([undefined, 3]);
+    expect(row?.usage?.providerCredits).toBe(-1);
   });
 
   // #8877, empty-completion retry path: the retry runs its own terminal guard, and a re-ask

@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ADAPTER_REGISTRY } from "../../src/adapters/registry";
+import { handleChatCompletions } from "../../src/server/chat-completions";
 import { handleResponses } from "../../src/server/responses/core";
 import { attachRequestSpendTracker } from "../../src/server/responses/request-spend";
 import { createRequestExecutionBudget, type RequestExecutionBudget } from "../../src/lib/request-execution-budget";
@@ -32,6 +33,8 @@ interface Case {
   usagelessFinal?: boolean;
   /** The parser adds a credit reading of 2 to every usage it reports (#8452). */
   credits?: boolean;
+  /** Ask through /v1/chat/completions instead of /v1/responses (no send budget). */
+  chat?: { includeUsage: boolean };
 }
 
 async function hostedReask(row: Case) {
@@ -100,6 +103,18 @@ async function hostedReask(row: Case) {
         apiKey: "synthetic-not-a-key", models: ["m"], terminalContinuationGuard: true } },
       webSearchSidecar: { enabled: true, backend: "exa", exaApiKey: "synthetic-not-a-key" },
     } as OcxConfig;
+    const log: Parameters<typeof handleResponses>[2] = { model: "", provider: "" };
+    if (row.chat) {
+      const chatTools: unknown[] = [{ type: "function", function: { name: "read_fixture", parameters: { type: "object", properties: {} } } }];
+      if (row.search !== false) chatTools.push({ type: "web_search" });
+      const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "relay/m", stream: row.stream, max_tokens: 256, tools: chatTools,
+          ...(row.stream && row.chat.includeUsage ? { stream_options: { include_usage: true } } : {}),
+          messages: [{ role: "user", content: "Please fix the file and test it." }] }),
+      }), config, log);
+      return { status: response.status, text: await response.text(), physical, logUsage: log.usage };
+    }
     const tools: unknown[] = [{ type: "function", name: "read_fixture", parameters: { type: "object", properties: {} } }];
     if (row.search !== false) tools.push({ type: "web_search" });
     const request = new Request("http://localhost/v1/responses", {
@@ -107,7 +122,6 @@ async function hostedReask(row: Case) {
       body: JSON.stringify({ model: "relay/m", input: "Please fix the file and test it.", stream: row.stream,
         store: false, max_output_tokens: 256, tools }),
     });
-    const log: Parameters<typeof handleResponses>[2] = { model: "", provider: "" };
     budget = row.sendCap === undefined ? undefined : createRequestExecutionBudget({
       maxTotalModelSends: row.sendCap, baseSendAllowance: row.sendCap, finalRecoveryAllowance: 0,
       maxAlternateTargetSends: 0, maxTargetTransitions: 0,
@@ -184,6 +198,33 @@ for (const stream of [true, false]) {
     expect(clientUsage).toMatchObject({ input_tokens: 10, output_tokens: 19, total_tokens: 29 });
     expect(result.logUsage).toMatchObject({ inputTokens: 20, outputTokens: 38 });
     expect({ settled: result.settled, lost: result.lost }).toEqual({ settled: [29, 29], lost: 0 });
+  });
+
+  // The same failed or cut terminal on the public Chat wire. A streamed failure ends in an {error}
+  // frame, so the summed usage rides the include_usage chunk before it, only for a client that
+  // asked for one; a buffered Chat error body has no usage field, and a cut turn is an early finish
+  // that carries the sum like any other completion. (The direct Chat encoder: terminal-guard-server.)
+  test.each(["plan", "cut"] as const)(`the Chat wire keeps the summed usage of a failed or cut hosted terminal (stream=${stream}, final=%p)`, async final => {
+    const summed = { prompt_tokens: 20, completion_tokens: 38, total_tokens: 58 };
+    for (const includeUsage of stream ? [true, false] : [false]) {
+      const result = await hostedReask({ stream, chat: { includeUsage }, frames: ["plan", final] });
+      expect({ physical: result.physical, logUsage: result.logUsage })
+        .toMatchObject({ physical: 2, logUsage: { inputTokens: 20, outputTokens: 38 } });
+      if (!stream) {
+        const body = JSON.parse(result.text);
+        if (final === "plan") expect({ status: result.status, keys: Object.keys(body) }).toEqual({ status: 502, keys: ["error"] });
+        else expect({ status: result.status, finish: body.choices?.[0]?.finish_reason, usage: body.usage })
+          .toMatchObject({ status: 200, finish: "length", usage: summed });
+        continue;
+      }
+      const frames = result.text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+      if (final === "cut") {
+        expect(frames.findLast(frame => frame.usage)?.usage).toMatchObject(summed);
+        continue;
+      }
+      expect(frames.at(-1)?.error).toBeDefined();
+      expect(frames.findLast(frame => frame.usage)?.usage).toEqual(includeUsage ? expect.objectContaining(summed) : undefined);
+    }
   });
 
   // A failed or incomplete terminal after a re-ask is not a context checkpoint: the client sees

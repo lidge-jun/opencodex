@@ -246,6 +246,9 @@ async function handleChatCompletionsWithBudget(
     chatBody.service_tier = "priority";
   }
   const stream = chatBody.stream === true;
+  const streamOptions = chatBody.stream_options;
+  const includeUsage = stream && typeof streamOptions === "object" && streamOptions !== null
+    && (streamOptions as Rec).include_usage === true;
   // Best-effort Grok attribution: the managed fence stamps this header on every model
   // it registers (extra_headers, sent verbatim by upstream Grok). Dashboard usage
   // bucketing only — never an auth or billing signal.
@@ -621,7 +624,7 @@ async function handleChatCompletionsWithBudget(
     // point of the lane is that neither direction passes through the internal Responses body.
     ...(directRoute && directConversation
       ? {
-        clientEncoder: { protocol: "chat" as const, stream, model: requestedModel, requestLane: "direct" as const },
+        clientEncoder: { protocol: "chat" as const, stream, includeUsage, model: requestedModel, requestLane: "direct" as const },
         directRequest: {
           protocol: "chat" as const,
           providerName: directRoute.providerName,
@@ -639,7 +642,7 @@ async function handleChatCompletionsWithBudget(
         },
       }
       : directEncodersApply(config, settledRoute)
-        ? { clientEncoder: { protocol: "chat" as const, stream, model: requestedModel } }
+        ? { clientEncoder: { protocol: "chat" as const, stream, includeUsage, model: requestedModel } }
         : {}),
   });
   // Already in the Chat wire: no conversion. A direct-encoder body (PF-09) reports its own log
@@ -771,7 +774,7 @@ async function handleChatCompletionsWithBudget(
 
   if (contentType.includes("text/event-stream") && response.body) {
     const failureVerdictSink: FailureVerdictSink = {};
-    const chatSse = responsesSseToChatCompletionsSse(response.body, requestedModel, { translatorBudget, failureVerdictSink, proxyErrorContext: logCtx });
+    const chatSse = responsesSseToChatCompletionsSse(response.body, requestedModel, { translatorBudget, failureVerdictSink, proxyErrorContext: logCtx, includeUsage });
     if (stream) {
       // Stream failures surface as an error SSE frame then abort the body — never a
       // success completion that embeds `[error] ...` + clean [DONE].

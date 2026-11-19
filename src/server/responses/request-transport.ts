@@ -700,11 +700,12 @@ export async function prepareResponsesTransport(
   const trackGuardedOAuthAttemptUsage = (): void => {
     if (route.provider.authMode === "oauth") guardedOAuthAttemptOrdinal = logCtx.activeAttempt?.ordinal;
   };
-  // Attempts that dispatched a parsed leg with no usage: their parser-built credit total is
-  // incomplete however many other legs reported one (#8452).
-  const attemptsMissingCredit = new WeakSet<NonNullable<typeof logCtx.activeAttempt>>();
+  // Attempt ordinals that dispatched a parsed leg with no usage: their parser-built credit total
+  // is incomplete however many other legs reported one (#8452). Keyed by ordinal, never by the
+  // attempt object: a rotation reuses the live object for the next attempt.
+  const attemptsMissingCredit = new Set<number>();
   const markMissingCredit = (attempt: typeof logCtx.activeAttempt): void => {
-    if (attempt?.usage && attemptsMissingCredit.has(attempt)) attempt.usage = withMissingCreditReading(attempt.usage);
+    if (attempt?.usage && attemptsMissingCredit.has(attempt.ordinal)) attempt.usage = withMissingCreditReading(attempt.usage);
   };
   const bindKeyUsageFromBridge = (usage: OcxUsage | undefined): void => {
     logCtx.usageFromBridge = true;
@@ -820,12 +821,16 @@ export async function prepareResponsesTransport(
     // and a response that reports none leaves its issuing attempt's credits incomplete (#8452).
     const observeLeg = () => {
       const recordSpend = logCtx.spendTracker?.captureRoutedSendUsage?.();
-      const attempt = logCtx.activeAttempt;
+      const ordinal = logCtx.activeAttempt?.ordinal;
       let reported = false;
       const end = (): void => {
-        if (reported || !attempt || !parserOwnsUsage()) return;
-        attemptsMissingCredit.add(attempt);
-        markMissingCredit(attempt);
+        if (reported || ordinal === undefined || !parserOwnsUsage()) return;
+        attemptsMissingCredit.add(ordinal);
+        // A rotation during this parse sealed the issuing attempt into its own row; a row with no
+        // usage already leaves the request-wide credit sum incomplete.
+        const live = logCtx.activeAttempt;
+        markMissingCredit(live?.ordinal === ordinal ? live
+          : logCtx.attempts?.find(attempt => attempt !== live && attempt.ordinal === ordinal));
       };
       return {
         event(event: AdapterEvent): void {

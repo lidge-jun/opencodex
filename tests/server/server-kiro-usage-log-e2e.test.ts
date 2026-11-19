@@ -9,6 +9,12 @@ import { saveCredential } from "../../src/oauth/store";
 import { startServer } from "../../src/server";
 import * as resolver from "../../src/server/adapter-resolve";
 import { handleChatCompletions } from "../../src/server/chat-completions";
+import { handleResponses } from "../../src/server/responses/core";
+import { attachRequestSpendTracker } from "../../src/server/responses/request-spend";
+import {
+  configureSharedSpendLedger, parseSpendJournalRecord, SPEND_LEDGER_JOURNAL_FILENAME, spendPolicyFromConfig,
+} from "../../src/lib/spend-reservation-ledger";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { clearRequestLogsForTests, getRequestLogEntries, type RequestLogEntry } from "../../src/server/request-log";
 import { readUsageEntries, resetUsageReadCacheForTests, usageLogPath } from "../../src/usage/log";
@@ -284,6 +290,46 @@ describe("Kiro usage reaches the ledger as Kiro reported it, on every inbound wi
     });
   }
 });
+
+// Kiro's bounded completion retry is dispatched from inside the first response's parse, and the
+// terminal it yields sums both sends (1550 tokens each). The spend ledger must settle that measured
+// total exactly once across the two sends: before, all 3100 settled on send 1 and send 2 was also
+// left unresolved at its reservation, so the request was charged twice.
+for (const ceiling of [false, true]) {
+  test(`a Kiro retry dispatched inside the parse settles the measured total once (pool ceiling: ${ceiling})`, async () => {
+    const release = acquireOwnedSpendHome();
+    try {
+      if (ceiling) configureSharedSpendLedger(spendPolicyFromConfig({ pool: { maxTokens: 10_000_000 } }, undefined, ["fixture"]));
+      const turns = kiroTwoLegTurn(true);
+      let sends = 0;
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        if ((input instanceof Request ? input.url : String(input)) !== CHAT_ENDPOINT) throw new Error("unexpected network target");
+        sends++;
+        return new Response(streamOf(turns.shift() ?? []), { headers: { "content-type": "application/vnd.amazon.eventstream" } });
+      }) as typeof fetch;
+      const config = { port: 0, defaultProvider: "fixture", providers: { fixture: {
+        adapter: "kiro", baseUrl: CHAT_ENDPOINT.slice(0, -1), authMode: "key", apiKey: "ksk_fixture", models: ["claude-sonnet-4.5"], liveModels: false,
+      } } } as OcxConfig;
+      const request = new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "fixture/claude-sonnet-4.5", input: "Summarise the repository layout.", stream: true,
+          tools: [{ type: "function", name: "bash", parameters: { type: "object" } }] }) });
+      const log: Parameters<typeof handleResponses>[2] = { model: "", provider: "" };
+      const budget = createRequestExecutionBudget({ maxTotalModelSends: 4, baseSendAllowance: 4, finalRecoveryAllowance: 0,
+        maxAlternateTargetSends: 0, maxTargetTransitions: 0 }, undefined, attachRequestSpendTracker(request, log));
+      const response = await handleResponses(request, config, log, { sendBudget: budget });
+      expect(await response.text()).toContain("response.completed");
+      log.spendTracker?.settle(log.usage);
+      const journal = Bun.file(join(testDir, SPEND_LEDGER_JOURNAL_FILENAME));
+      const records = await journal.exists() ? (await journal.text()).trim().split("\n").map(parseSpendJournalRecord) : [];
+      const settled = records.flatMap(record => record?.kind === "settle" ? [record.tokens] : []);
+      expect({ sends, dispatched: records.filter(record => record?.kind === "dispatch").length,
+        settledTotal: settled.reduce((sum, tokens) => sum + tokens, 0), lost: records.filter(record => record?.kind === "lost").length })
+        .toEqual({ sends: 2, dispatched: 2, settledTotal: 2 * 1550, lost: 0 });
+    } finally {
+      release();
+    }
+  });
+}
 
 for (const component of ["userinfo", "path", "query"] as const) for (const stream of [false, true]) {
   test(`Kiro local send-budget refusal bounds the destination ${component} stream=${stream}`, async () => {
