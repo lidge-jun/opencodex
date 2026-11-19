@@ -626,10 +626,10 @@ jobs:
     needs: changes
     if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.fast != 'true')
     runs-on: ${{ vars.LIDGE_RUNNERS == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-latest' }}
-    # The full suite needs setup and cleanup beyond its bounded test batches.
-    # Runs 44462803582 and 44463273114 exhausted 15 minutes while progressing;
-    # keep the independent batch deadlines and allow a bounded 18-minute job.
-    timeout-minutes: 18
+    # A fifth of the suite. A shard that needs longer than this is wedged, not
+    # slow — the old 30-minute ceiling was margin for the Windows leg, which no
+    # longer runs here (see platform-windows).
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
