@@ -567,9 +567,12 @@
       "path": "data-planes/gemini-inbound.md",
       "tier": 3,
       "title": "Gemini-Compatible Inbound",
-      "scope": "Gemini-shaped models/generateContent/streamGenerateContent routes translated onto Chat Completions, the x-goog-api-key and ?key= credential move, the native error shape, SSE and JSON-array streaming, and the Chat bridge shared with the Ollama inbound.",
+      "scope": "Gemini-shaped models/generateContent/streamGenerateContent and Interactions API routes translated onto Chat Completions, the x-goog-api-key and ?key= credential move, the native error shape, SSE and JSON-array streaming, the Interactions SSE vocabulary, and the Chat bridge shared with the Ollama inbound.",
       "documents": [
         "src/server/gemini-inbound.ts",
+        "src/server/gemini-interactions-inbound.ts",
+        "src/protocols/codecs/gemini-interactions.ts",
+        "src/server/gemini-interactions-store.ts",
         "src/server/gemini-native-paths.ts",
         "src/server/native-chat-bridge.ts",
         "src/server/index/gemini-routes.ts",
@@ -619,10 +622,11 @@
     {
       "path": "data-planes/chat-reasoning-details.md",
       "tier": 3,
-      "title": "Anthropic Thinking Signatures on the Chat Wire",
-      "scope": "The reasoning_details carrier that lets Chat Completions clients round-trip signed Anthropic thinking across tool steps (#7429).",
+      "title": "Provider Signatures on the Chat Wire",
+      "scope": "The reasoning_details carrier that lets Chat Completions clients round-trip signed Anthropic thinking across tool steps (#7429), and the extra_content carrier for Gemini thought signatures on tool calls, including the native Chat decline for non-Google destinations.",
       "documents": [
-        "src/chat/reasoning-details.ts"
+        "src/chat/reasoning-details.ts",
+        "src/server/chat-native-eligibility.ts"
       ]
     },
     {
@@ -913,8 +917,10 @@
       "path": "providers/google.md",
       "tier": 4,
       "title": "Google Provider",
-      "scope": "Gemini thought-text, response parts, thought-signature replay, and adjacency repair.",
-      "documents": []
+      "scope": "Gemini thought-text, response parts, thought-signature replay, adjacency repair, and Google error classification.",
+      "documents": [
+        "src/adapters/google-error-details.ts"
+      ]
     },
     {
       "path": "providers/kiro.md",

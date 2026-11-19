@@ -1812,7 +1812,7 @@ export interface OAuthAccountSummary {
   email?: string;
   active: boolean;
   needsReauth?: boolean;
-  needsReauthReason?: "verify_account";
+  needsReauthReason?: "verify_account"; needsReauthCause?: "tos_violation";
   expiresAt?: number;
   /**
    * Subscription tier, mirroring the field the OpenAI/Codex provider reports, so a consumer
@@ -1853,7 +1853,7 @@ export function getLoginStatus(provider: string, maskEmails = true, flowId?: str
     email: projectEmail(a.credential.email, maskEmails) ?? undefined,
     active: a.id === set.activeAccountId,
     ...(accountNeedsReauthForStatus(provider, a) ? { needsReauth: true } : {}),
-    ...(a.needsReauth && a.needsReauthReason === "verify_account" ? { needsReauthReason: a.needsReauthReason } : {}),
+    ...(a.needsReauth && a.needsReauthReason === "verify_account" ? { needsReauthReason: a.needsReauthReason, ...(a.needsReauthCause === "tos_violation" ? { needsReauthCause: a.needsReauthCause } : {}) } : {}),
     expiresAt: a.credential.expires,
     // Explicitly null rather than omitted when upstream tier metadata is unknown.
     plan: normalizeOAuthPlan(a.credential.plan) ?? null,

@@ -707,6 +707,7 @@ function normalizeAccount(value: unknown): ProviderAccount | null {
   if (threshold !== null) account.autoSwitchThresholdOverride = threshold;
   if (candidate.needsReauth === true && candidate.needsReauthReason === "verify_account") {
     account.needsReauthReason = "verify_account";
+    if (candidate.needsReauthCause === "tos_violation") account.needsReauthCause = "tos_violation";
   }
   if (typeof candidate.addedAt === "number") account.addedAt = candidate.addedAt;
   if (typeof candidate.loginId === "string"
@@ -1630,7 +1631,7 @@ export async function replaceProviderAccountSet(
         ...(account.pauseDetails && account.pauseEvidence ? { pauseEvidence: account.pauseEvidence } : {}),
         ...(account.pauseRevision ? { pauseRevision: account.pauseRevision } : {}),
         ...(account.autoSwitchThresholdOverride !== undefined ? { autoSwitchThresholdOverride: account.autoSwitchThresholdOverride } : {}),
-        ...(account.needsReauthReason === "verify_account" ? { needsReauthReason: account.needsReauthReason } : {}),
+        ...(account.needsReauthReason === "verify_account" ? { needsReauthReason: account.needsReauthReason, ...(account.needsReauthCause === "tos_violation" ? { needsReauthCause: account.needsReauthCause } : {}) } : {}),
         ...(account.addedAt !== undefined ? { addedAt: account.addedAt } : {}),
         ...(account.loginId ? { loginId: account.loginId } : {}),
       })),
@@ -1689,11 +1690,18 @@ export async function rekeyProviderCredentials(
   }, [from, to]);
 }
 
+/** A suspension is stored as a verify hold plus its cause, so older builds keep the hold. */
+function applyReauthReason(account: ProviderAccount, reason: "verify_account" | "tos_violation" | undefined): void {
+  if (reason === undefined) return;
+  account.needsReauthReason = "verify_account";
+  if (reason === "tos_violation") account.needsReauthCause = "tos_violation";
+}
+
 export async function markAccountNeedsReauth(
   provider: string,
   accountId: string,
   needsReauth: boolean,
-  reason?: "verify_account",
+  reason?: "verify_account" | "tos_violation",
   writerGeneration = captureConfigGeneration(),
 ): Promise<void> {
   provider = oauthCredentialSlot(provider);
@@ -1703,10 +1711,11 @@ export async function markAccountNeedsReauth(
     if (!account) return;
     if (needsReauth) {
       account.needsReauth = true;
-      if (reason === "verify_account") account.needsReauthReason = reason;
+      applyReauthReason(account, reason);
     } else {
       delete account.needsReauth;
       delete account.needsReauthReason;
+      delete account.needsReauthCause;
     }
   }, [provider, accountId]);
 }
@@ -1714,7 +1723,7 @@ export async function markAccountNeedsReauth(
 export async function mergeAccountCredential(provider:string,accountId:string,credential:OAuthCredentials,opts:{expectedGeneration?:string;afterPrePersistRead?:()=>void|Promise<void>;assertOwnership?: (store: AuthStore) => void;keepReauthMarkedAfterDispatch?:boolean}={}):Promise<{superseded:false}|{superseded:true;stored:OAuthCredentials}>{provider=oauthCredentialSlot(provider);const safe=normalizeCredential(credential);if(!safe)throw new Error("Refusing to persist invalid OAuth credential");if(isAnthropicInstanceId(provider))assertAnthropicCredentialSource(provider,safe);return await mutateStore(async store=>{await opts.afterPrePersistRead?.();const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account)throw new Error(`OAuth account disappeared before persist: ${provider}`);if(opts.expectedGeneration!==undefined&&credentialGeneration(account.credential)!==opts.expectedGeneration)return{superseded:true,stored:account.credential};opts.assertOwnership?.(store);account.credential=safe;delete account.refreshAttentionGeneration;if(account.needsReauthReason!=="verify_account"&&!(opts.keepReauthMarkedAfterDispatch&&account.needsReauth)){delete account.needsReauth;delete account.needsReauthReason;}return{superseded:false};},[provider,accountId,safe,opts.expectedGeneration]);}
 // A late refresh failure must not change an operator-paused account's health. Check under
 // the mutation lock, not before awaiting it, so a concurrent pause cannot be overwritten.
-export async function markAccountNeedsReauthIfGeneration(provider:string,accountId:string,generation:string,writerGeneration=captureConfigGeneration(),reason?:"verify_account",isCurrent?:(store:AuthStore)=>boolean):Promise<boolean>{provider=oauthCredentialSlot(provider);const key=oauthAccountKey(provider,accountId);if(writerGeneration<lastReconciledGeneration&&!liveOAuthAccountKeys.has(key))return false;return await mutateStore(store=>{const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account?.credential||account.paused||credentialGeneration(account.credential)!==generation)return false;if(writerGeneration<lastReconciledGeneration&&!liveOAuthAccountKeys.has(key))return false;if(isCurrent&&!isCurrent(store))return false;account.needsReauth=true;if(reason==="verify_account")account.needsReauthReason=reason;return true;},[provider,accountId,generation]);}
+export async function markAccountNeedsReauthIfGeneration(provider:string,accountId:string,generation:string,writerGeneration=captureConfigGeneration(),reason?:"verify_account"|"tos_violation",isCurrent?:(store:AuthStore)=>boolean):Promise<boolean>{provider=oauthCredentialSlot(provider);const key=oauthAccountKey(provider,accountId);if(writerGeneration<lastReconciledGeneration&&!liveOAuthAccountKeys.has(key))return false;return await mutateStore(store=>{const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account?.credential||account.paused||credentialGeneration(account.credential)!==generation)return false;if(writerGeneration<lastReconciledGeneration&&!liveOAuthAccountKeys.has(key))return false;if(isCurrent&&!isCurrent(store))return false;account.needsReauth=true;applyReauthReason(account,reason);return true;},[provider,accountId,generation]);}
 
 /** Attention is projected only; refresh selection continues to use the stored terminal flag. */
 export function accountNeedsReauthForStatus(provider: string, account: ProviderAccount, now = Date.now()): boolean {

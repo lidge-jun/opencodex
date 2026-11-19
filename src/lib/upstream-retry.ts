@@ -249,6 +249,8 @@ export interface RetryBackoffOptions {
   baseDelayMs: number;
   maxDelayMs: number;
   headers?: Headers;
+  /** Delay already validated by the caller, including an explicit zero. */
+  retryAfterMs?: number;
   /**
    * Treat a provider's `Retry-After` as the earliest legal send rather than something the
    * local maximum may shorten. Opt-in per caller so the change lands on the transient path
@@ -419,7 +421,7 @@ export function retryAfterDelayMs(headers: Headers): number | undefined {
 }
 
 export function retryBackoffDelayMs(attempt: number, opts: RetryBackoffOptions): number {
-  const retryAfter = opts.headers ? retryAfterDelayMs(opts.headers) : undefined;
+  const retryAfter = opts.retryAfterMs ?? (opts.headers ? retryAfterDelayMs(opts.headers) : undefined);
   const exp = Math.min(opts.baseDelayMs * (2 ** attempt), opts.maxDelayMs);
   const jittered = Math.floor(exp * (0.8 + Math.random() * 0.4));
   if (retryAfter === undefined) return jittered;

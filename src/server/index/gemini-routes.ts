@@ -11,9 +11,11 @@ import { admissionFields, isAllowedRequestOrigin, resolveApiAuth, resolveRespons
 import { withCallerSessionIdentity } from "../caller-session-identity";
 import { captureAdmissionPolicy } from "../capture-admission-policy";
 import { isDraining } from "../lifecycle";
-import { parseGeminiNativePath } from "../gemini-native-paths";
-import { geminiError, handleGeminiGeneration, handleGeminiModel, handleGeminiModels, toGeminiRefusal } from "../gemini-inbound";
+import { geminiRouteAllowHeader, geminiRouteAllows, parseGeminiNativePath, type GeminiNativeRoute } from "../gemini-native-paths";
+import { geminiError, handleGeminiCountTokens, handleGeminiGeneration, handleGeminiModel, handleGeminiModels, toGeminiRefusal } from "../gemini-inbound";
+import { handleGeminiInteraction, handleGeminiInteractionResource } from "../gemini-interactions-inbound";
 import { nextRequestLogId, type RequestLogContext } from "../request-log";
+import { runAdmittedBodyWork } from "../inbound-body-admission";
 import { disableResponsesRequestTimeout } from "../responses";
 import { withRequestLogId } from "./startup-warnings";
 import type { OllamaRouteDeps } from "./ollama-routes";
@@ -37,15 +39,33 @@ function withProxyCredential(req: Request, url: URL): Request {
 export async function dispatchGeminiRoute(original: Request, url: URL, deps: GeminiRouteDeps): Promise<Response | undefined> {
   const route = parseGeminiNativePath(url.pathname);
   if (!route) return undefined;
+  const response = await handleGeminiRoute(route, original, url, deps);
+  if (route.kind === "interactions" || route.kind === "interaction" || route.kind === "interaction-cancel") {
+    // A cached success or miss must never cross the interaction owner's credential boundary.
+    response.headers.set("Cache-Control", "no-store");
+  }
+  return response;
+}
+
+async function handleGeminiRoute(route: GeminiNativeRoute, original: Request, url: URL, deps: GeminiRouteDeps): Promise<Response> {
   const { config, policy } = deps;
-  if (original.method !== route.httpMethod) {
+  if (!geminiRouteAllows(route, original.method)) {
     const refused = geminiError(405, `method ${original.method} not allowed`);
-    refused.headers.set("Allow", route.httpMethod);
+    refused.headers.set("Allow", geminiRouteAllowHeader(route));
     return withCors(refused, original, policy);
   }
-  const generation = route.kind === "method" && (route.method === "generateContent" || route.method === "streamGenerateContent");
+  const generation = route.kind === "interactions"
+    || (route.kind === "method" && (route.method === "generateContent" || route.method === "streamGenerateContent"));
   if (generation) disableResponsesRequestTimeout(original, deps.requestServer);
   const req = withProxyCredential(original, url);
+  if (route.kind === "interaction" || route.kind === "interaction-cancel") {
+    // Stored interactions take the same admission as creating them, so the keys that can read or
+    // delete one are exactly the keys that can create one.
+    const admission = resolveResponsesApiAuth(req, policy);
+    if (!admission) return withCors(geminiError(401, "opencodex API key required"), original, policy);
+    if (!isAllowedRequestOrigin(req, policy)) return withCors(geminiError(403, "cross-origin data-plane request blocked"), original, policy);
+    return withCors(handleGeminiInteractionResource(route, req, config, admission), original, policy);
+  }
   if (!generation) {
     // Model discovery never forwards Authorization upstream, so the broader admission set is safe.
     const admission = resolveApiAuth(req, policy);
@@ -53,7 +73,14 @@ export async function dispatchGeminiRoute(original: Request, url: URL, deps: Gem
     if (!isAllowedRequestOrigin(req, policy)) return withCors(geminiError(403, "cross-origin data-plane request blocked"), original, policy);
     const response = route.kind === "models" ? handleGeminiModels(config, req, admission)
       : route.kind === "model" ? handleGeminiModel(config, req, admission, route.model)
-        : geminiError(501, `${route.method} is not supported`);
+        // countTokens reads and decodes a body, so it holds the shared body allowance until its
+        // answer settles; it sends nothing upstream and takes no turn slot.
+        : route.kind === "method" && route.method === "countTokens"
+          ? await runAdmittedBodyWork(req, policy, config.maxInboundBodyBytes,
+            () => handleGeminiCountTokens(config, req, admission, route.model), undefined, toGeminiRefusal,
+            () => geminiError(499, "request cancelled"))
+          : route.kind === "method" ? geminiError(501, `${route.method} is not supported`)
+            : geminiError(405, "method not allowed");
     return withCors(response, original, policy);
   }
   if (isDraining()) return withCors(toGeminiRefusal(deps.drainingResponse(req, policy)), original, policy);
@@ -70,15 +97,18 @@ export async function dispatchGeminiRoute(original: Request, url: URL, deps: Gem
     ...admissionFields(admission),
   };
   const sessionReq = withCallerSessionIdentity(req, admission);
-  const sse = url.searchParams.get("alt") === "sse";
+  // Discovery-style clients spell the parameter `$alt`.
+  const sse = (url.searchParams.get("alt") ?? url.searchParams.get("$alt")) === "sse";
   // Expose an id only when the handler or a logged refusal owns the history row.
   let ownsRequestLog = false;
   const advisorAdmissionPolicy = captureAdmissionPolicy(config, admission);
-  const method = route.method as "generateContent" | "streamGenerateContent";
   const response = await deps.runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => {
     ownsRequestLog = true;
+    const ids = { requestId, start, turnAdmissionLease, admission, advisorAdmissionPolicy };
     return withCors(
-      await handleGeminiGeneration(method, route.model, sse, sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission, advisorAdmissionPolicy }),
+      route.kind === "method"
+        ? await handleGeminiGeneration(route.method as "generateContent" | "streamGenerateContent", route.model, sse, sessionReq, config, logCtx, ids)
+        : await handleGeminiInteraction(sessionReq, config, logCtx, ids),
       original,
       policy,
     );

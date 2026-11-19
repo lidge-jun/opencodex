@@ -349,7 +349,13 @@ reauthentication flow above. A second `401` does not start another refresh/retry
 A `403` asking to verify the account quarantines that credential as `needs-reauth(verify)`;
 when account failover is enabled, the request can retry on another eligible account. Complete
 Google's account verification, then run `ocx login google-antigravity`. Silent token refresh
-does not clear this verification requirement. If OpenCodex cannot save the quarantine, this adapter exchange preserves the original `403` without another recovery send; the account has not been durably quarantined. If a sibling request cannot be built or admitted for sending, the exchange delivers the original `403` through normal error formatting. An enclosing combo or policy route can still apply its existing fallback rules.
+does not clear this verification requirement. A `403` whose typed Google error details carry
+`TOS_VIOLATION` means Google suspended the account. For first-party Cloud Code Assist OAuth
+requests, the credential is quarantined as
+`needs-reauth(tos)` with the health "Account suspended", the client receives a fixed
+`Antigravity account suspended (TOS_VIOLATION)` message, and failover works as above. Silent token
+refresh keeps the account out of the pool. The dashboard shows an Account suspended badge and directs
+you to appeal with Google before signing in again. If OpenCodex cannot save the quarantine, this adapter exchange preserves the original `403` without another recovery send; the account has not been durably quarantined. If a sibling request cannot be built or admitted for sending, the exchange delivers the original `403` through normal error formatting. An enclosing combo or policy route can still apply its existing fallback rules.
 
 For fetch-based web-search requests, automatic sibling rotation accepts only a complete, bounded
 Google error envelope containing `error.details[].reason === "VALIDATION_REQUIRED"` or a `PERMISSION_DENIED`

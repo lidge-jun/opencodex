@@ -123,6 +123,12 @@ export interface ProviderAccount {
    * verification will not help. Absent means an ordinary credential failure.
    */
   needsReauthReason?: "verify_account";
+  /**
+   * Why a `verify_account` hold was placed, when it is narrower than "verify". `tos_violation`:
+   * Google suspended the account. Kept beside the hold, not instead of it, so a build that does
+   * not know the cause still keeps the account out of the pool.
+   */
+  needsReauthCause?: "tos_violation";
   addedAt?: number;
 }
 
