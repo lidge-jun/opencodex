@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { getLoginStatus, OAUTH_PROVIDERS, refreshAnthropicAccountWithLock } from "../../src/oauth";
 import { AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "../../src/oauth/anthropic";
 import { anthropicOrganization, resolveAnthropicAccountIdentity } from "../../src/oauth/anthropic-identity";
-import { captureOAuthAccountSelection, loadAuthStore, mutateStore, oauthMutationTailSnapshot, removeAccount, saveAccountCredential, setAccountPaused } from "../../src/oauth/store";
+import { captureOAuthAccountSelection, loadAuthStore, mutateStore, oauthMutationTailSnapshot, removeAccount, saveAccountCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
 import type { OAuthCredentials } from "../../src/oauth/types";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
@@ -1289,14 +1289,86 @@ test.each<{
   expect(profileReads).toBe(legacy ? 2 : 1);
 });
 
-test("a login that proves the account reuses the row an email-only sign-in left in its organization", async () => {
-  orgProfiles({});
+test.each([
+  { scenario: "a reassigned email", profiles: { "synthetic-email-only": ORG_A }, accountUuid: "synthetic-account-b" },
+  { scenario: "an unavailable profile", profiles: {}, accountUuid: "synthetic-account-a" },
+] as const)("UUID recovery appends a slot for $scenario", async ({ profiles, accountUuid }) => {
   await saveCredential("anthropic", emailOnlyCredential("synthetic-email-only", ORG_A));
   const slot = anthropicRows()[0]!;
   expect(slot.credential.accountId).toBeUndefined();
-  await saveCredential("anthropic", { ...orgCredential("synthetic-org-a", ORG_A), email: "shared@Example.Test" });
-  expect(anthropicRows()).toHaveLength(1);
-  expect(getAccountCredential("anthropic", slot.id)).toMatchObject({ access: "synthetic-org-a", accountId: "synthetic-account-a" });
+  const asked = orgProfiles(profiles, accountUuid);
+  const incoming = orgCredential("synthetic-incoming", ORG_A);
+  await saveCredential("anthropic", incoming);
+  expect(anthropicRows()).toHaveLength(2);
+  expect(anthropicRows().find(row => row.id === slot.id)).toEqual(slot);
+  expect(getAccountSet("anthropic")!.activeAccountId).not.toBe(slot.id);
+  expect(getAccountCredential("anthropic", getAccountSet("anthropic")!.activeAccountId)).toEqual(incoming);
+  expect(asked).toEqual([slot.credential.access]);
+});
+
+test.each(["shared refresh token", "matching profile UUID"] as const)(
+  "UUID recovery reuses the email-only slot with a %s", async continuity => {
+    await saveCredential("anthropic", emailOnlyCredential("synthetic-email-only", ORG_A));
+    const slot = anthropicRows()[0]!;
+    const sharedRefresh = continuity === "shared refresh token";
+    const asked = orgProfiles(sharedRefresh ? {} : { [slot.credential.access]: ORG_A });
+    const incoming = { ...orgCredential("synthetic-incoming", ORG_A), email: "shared@Example.Test" };
+    if (sharedRefresh) incoming.refresh = slot.credential.refresh;
+    await saveCredential("anthropic", incoming);
+    expect(anthropicRows()).toHaveLength(1);
+    expect(getAccountSet("anthropic")!.activeAccountId).toBe(slot.id);
+    expect(getAccountCredential("anthropic", slot.id)).toEqual(incoming);
+    expect(asked).toEqual(sharedRefresh ? [] : [slot.credential.access]);
+  },
+);
+
+test("UUID recovery appends when the candidate bearer changes before the writer lock", async () => {
+  await saveCredential("anthropic", emailOnlyCredential("synthetic-email-only", ORG_A));
+  const slot = anthropicRows()[0]!;
+  const incoming = orgCredential("synthetic-incoming", ORG_A);
+  const rotated = { ...emailOnlyCredential("synthetic-rotated", ORG_A), refresh: incoming.refresh };
+  const asked = orgProfiles({ [slot.credential.access]: ORG_A });
+  const gate = deferred();
+  const locked = deferred();
+  const held = mutateStore(async store => {
+    locked.resolve();
+    await gate.promise;
+    store.anthropic!.accounts[0]!.credential = rotated;
+  });
+  await locked.promise;
+  const login = saveCredential("anthropic", incoming);
+  try {
+    for (const deadline = Date.now() + 2_000; oauthMutationTailSnapshot().active < 2;) {
+      if (Date.now() > deadline) throw new Error("UUID recovery did not queue behind the writer");
+      await new Promise(resolve => setTimeout(resolve, 1));
+    }
+    expect(asked).toEqual([slot.credential.access]);
+  } finally {
+    gate.resolve();
+    await Promise.all([held, login]);
+  }
+  expect(anthropicRows()).toHaveLength(2);
+  expect(getAccountCredential("anthropic", slot.id)).toEqual(rotated);
+  expect(getAccountCredential("anthropic", getAccountSet("anthropic")!.activeAccountId)).toEqual(incoming);
+});
+
+test("UUID recovery preserves an unidentified active row when continuity is unavailable", async () => {
+  await saveCredential("anthropic", { access: "synthetic-legacy", refresh: "synthetic-legacy-refresh", expires: 1 });
+  const legacy = anthropicRows()[0]!;
+  await saveCredential("anthropic", emailOnlyCredential("synthetic-email-only", ORG_A));
+  await setActiveAccount("anthropic", legacy.id);
+  const before = getAccountSet("anthropic")!;
+  expect(before.activeAccountId).toBe(legacy.id);
+  expect(before.accounts).toHaveLength(2);
+  const incoming = orgCredential("synthetic-incoming", ORG_A);
+  await saveCredential("anthropic", incoming);
+  const after = getAccountSet("anthropic")!;
+  expect(after.accounts).toHaveLength(3);
+  expect(after.accounts.slice(0, 2)).toEqual(before.accounts);
+  expect(getAccountCredential("anthropic", after.activeAccountId)).toEqual(incoming);
+});
+
+test("UUID recovery refuses ambiguous slots and preserves other accounts and organizations", () => {
   const incoming = orgCredential("synthetic-incoming", ORG_A);
   const row = (id: string, credential: OAuthCredentials) => ({ id, credential, addedAt: 0 });
   const emailOnly = row("email-only", emailOnlyCredential("synthetic-email-only", ORG_A));

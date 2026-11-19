@@ -343,8 +343,10 @@ can update the single account with a matching email in that organization. The pa
 internationalized domains match exactly after trimming surrounding whitespace. Other domains are
 compared without regard to ASCII case. If no account matches in the confirmed organization, sign-in
 adds a separate account and preserves existing accounts, including older entries without an email
-or account UUID. A later sign-in to that organization that does supply the account UUID updates the
-single account without one whose email matches. If several accounts match in the confirmed
+or account UUID. A later sign-in with a confirmed account UUID can update the single account
+without a UUID whose email and organization match. The grants must share a refresh token or the
+saved account's profile must confirm the same account UUID. Without that confirmation, sign-in
+keeps the existing account and adds a separate one. If several accounts match in the confirmed
 organization, sign-in stops without changing any of them. To reauthenticate the intended account, use
 `ocx account login anthropic --id <account-id> --reauth`. When Claude supplies only email and
 organization, reauthentication requires a matching email and a confirmed matching organization on

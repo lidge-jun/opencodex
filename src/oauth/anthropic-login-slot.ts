@@ -23,6 +23,13 @@ type SlotOrganizationProof = { accountUuid: string; organizationUuid: string; be
 /** Keyed by row ID so a writer can distinguish a stale proof from an unobserved row. */
 type AnthropicSlotOrganizations = ReadonlyMap<string, SlotOrganizationProof>;
 
+type AnthropicLoginContinuity = {
+  slotId: string;
+  bearerSha256: string;
+  accountUuid: string;
+  via: "refresh" | "profile";
+};
+
 function bearerSha256(access: string): string {
   return createHash("sha256").update(access).digest("hex");
 }
@@ -62,6 +69,40 @@ function slotOrganization({ id, credential }: ProviderAccount, observed: Anthrop
 
 function hasStaleSlotObservation(row: ProviderAccount, observed: AnthropicSlotOrganizations): boolean {
   return observed.has(row.id) && slotOrganization(row, observed) === undefined;
+}
+
+function sameOrganizationEmailSlots(
+  accounts: readonly ProviderAccount[], incoming: OAuthCredentials, observed: AnthropicSlotOrganizations,
+): ProviderAccount[] {
+  const organization = anthropicOrganization(incoming);
+  if (!organization) return [];
+  return accounts.filter(row => anthropicSlotEmailsMatch(row.credential.email, incoming.email)
+    && slotOrganization(row, observed) === organization);
+}
+
+function sharesRefreshToken(incoming: OAuthCredentials, stored: OAuthCredentials): boolean {
+  return Boolean(incoming.refresh) && incoming.refresh === stored.refresh;
+}
+
+/** Outside the writer lock, establish continuity for the unique UUID-less recovery candidate. */
+export async function observeAnthropicLoginContinuity(
+  accounts: readonly ProviderAccount[], incoming: OAuthCredentials,
+): Promise<AnthropicLoginContinuity | undefined> {
+  if (incoming.source === "local-cli") return undefined;
+  const accountUuid = normalizeAnthropicIdentity(incoming.anthropicIdentity, incoming.access)?.accountUuid;
+  if (!accountUuid) return undefined;
+  const [row, ambiguous] = sameOrganizationEmailSlots(accounts, incoming, new Map());
+  if (!row || ambiguous || slotAccountUuid(row.credential) !== undefined) return undefined;
+  const { access, expires } = row.credential;
+  const observation = { slotId: row.id, bearerSha256: bearerSha256(access), accountUuid };
+  if (sharesRefreshToken(incoming, row.credential)) return { ...observation, via: "refresh" };
+  if (!access || expires <= Date.now()) return undefined;
+  const proof = await resolveAnthropicAccountIdentity(access, AbortSignal.timeout(LOGIN_OBSERVATION_TIMEOUT_MS));
+  if (proof?.accountUuid === accountUuid && proof.bearerSha256 === observation.bearerSha256
+    && (!proof.organizationUuid || proof.organizationUuid === anthropicOrganization(incoming))) {
+    return { ...observation, via: "profile" };
+  }
+  return undefined;
 }
 
 /**
@@ -130,6 +171,7 @@ function pickSlot(
 export function findAnthropicLoginSlot(
   accounts: readonly ProviderAccount[], incoming: OAuthCredentials,
   observed: AnthropicSlotOrganizations = new Map(), activeAccountId?: string,
+  continuity?: AnthropicLoginContinuity,
 ): ProviderAccount | undefined {
   const accountUuid = slotAccountUuid(incoming);
   const email = slotEmail(incoming.email);
@@ -142,25 +184,27 @@ export function findAnthropicLoginSlot(
       return match;
     }
   }
-  const identity = accountUuid ?? incoming.email;
-  return pickSlot(accounts, incoming, observed, row => loginIdentity(row.credential) === identity, activeAccountId)
-    ?? (accountUuid ? emailOnlyLoginSlot(accounts, incoming, observed) : undefined);
+  return pickSlot(accounts, incoming, observed, row => accountUuid
+    ? slotAccountUuid(row.credential) === accountUuid
+    : loginIdentity(row.credential) === incoming.email, activeAccountId)
+    ?? (accountUuid ? emailOnlyLoginSlot(accounts, incoming, observed, continuity) : undefined);
 }
 
 /**
- * With no row of its account UUID, a login reuses the unique row an email-only sign-in left in the
- * same proven organization. A row of another known account UUID is never reused, and another
- * same-email row in that organization makes the match ambiguous.
+ * Email and organization only locate a candidate. Recheck continuity against the locked slot and
+ * bearer before replacing the credential. Another same-email row in the org makes it ambiguous.
  */
 function emailOnlyLoginSlot(
   accounts: readonly ProviderAccount[], incoming: OAuthCredentials, observed: AnthropicSlotOrganizations,
+  continuity?: AnthropicLoginContinuity,
 ): ProviderAccount | undefined {
-  const organization = anthropicOrganization(incoming);
-  if (!organization) return undefined;
-  const sameEmail = accounts.filter(row => anthropicSlotEmailsMatch(row.credential.email, incoming.email)
-    && slotOrganization(row, observed) === organization);
-  const [match] = sameEmail.filter(row => slotAccountUuid(row.credential) === undefined);
-  if (match && sameEmail.length > 1) throw new Error("Multiple Anthropic login slots match this organization and email. Try signing in again.");
+  const sameEmail = sameOrganizationEmailSlots(accounts, incoming, observed);
+  const match = sameEmail.find(row => slotAccountUuid(row.credential) === undefined);
+  if (!match) return undefined;
+  if (sameEmail.length > 1) throw new Error("Multiple Anthropic login slots match this organization and email. Try signing in again.");
+  if (continuity?.slotId !== match.id || continuity.accountUuid !== slotAccountUuid(incoming)
+    || continuity.bearerSha256 !== bearerSha256(match.credential.access)
+    || (continuity.via === "refresh" && !sharesRefreshToken(incoming, match.credential))) return undefined;
   return match;
 }
 

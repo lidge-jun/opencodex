@@ -219,8 +219,10 @@ Tras quitar los espacios al principio y al final, la parte anterior a `@` y los 
 internacionalizados deben coincidir exactamente. En los demás dominios se ignoran las diferencias
 entre mayúsculas y minúsculas ASCII. Si ninguna cuenta coincide en la organización confirmada,
 el inicio de sesión añade una cuenta y conserva las existentes, incluidas las antiguas que no
-tienen correo ni UUID de cuenta. Un inicio de sesión posterior en esa organización que sí incluye el
-UUID de la cuenta actualiza la única cuenta sin UUID con un correo coincidente. Si coinciden varias
+tienen correo ni UUID de cuenta. Un inicio de sesión posterior con un UUID confirmado puede
+actualizar la única cuenta sin UUID cuyo correo y organización coincidan. Las autorizaciones deben
+compartir un token de actualización o el perfil de la cuenta guardada debe confirmar el mismo UUID.
+Sin esa confirmación, el inicio de sesión conserva la cuenta existente y añade otra. Si coinciden varias
 cuentas en la organización confirmada, el inicio de sesión se detiene sin cambiar ninguna. Para
 reautenticar la cuenta correcta, usa
 `ocx account login anthropic --id <account-id> --reauth`. Si Claude solo proporciona el correo

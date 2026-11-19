@@ -26,7 +26,7 @@ import { accountPauseDetailsSchema, accountPauseEvidenceSchema } from "../config
 import { mergeOAuthOrganizationName, normalizeOAuthOrganizationName, normalizeOAuthPlan, mergeOAuthPlan, withMergedOAuthLabels } from "./plan";
 import { anthropicOrganization, anthropicOrganizationsConflict, normalizeAnthropicIdentity, normalizeAnthropicOrganizationScope,
   mergeAnthropicIdentity } from "./anthropic-identity";
-import { findAnthropicImportSlot, findAnthropicLoginSlot, observeAnthropicSlotOrganizations } from "./anthropic-login-slot";
+import { findAnthropicImportSlot, findAnthropicLoginSlot, observeAnthropicLoginContinuity, observeAnthropicSlotOrganizations } from "./anthropic-login-slot";
 import { normalizeWorkBuddyMetadata } from "../providers/workbuddy";
 import { findKiroAccountForLogin, withRetainedKiroUser } from "./kiro-account-identity";
 import { isAnthropicInstanceId, type AnthropicInstanceId } from "../providers/anthropic-instance-id";
@@ -989,8 +989,11 @@ export async function saveCredentialWithReceipt(
   const safe = normalizeCredential(cred);
   if (!safe) return null;
   // Network reads stay outside the store lock; the answers are bound to bearers rechecked inside.
-  const anthropicOrganizations = isAnthropicInstanceId(provider)
-    ? await observeAnthropicSlotOrganizations(getAccountSet(provider)?.accounts ?? [], safe) : undefined;
+  const anthropicAccounts = isAnthropicInstanceId(provider) ? getAccountSet(provider)?.accounts ?? [] : undefined;
+  const [anthropicOrganizations, anthropicContinuity] = anthropicAccounts ? await Promise.all([
+    observeAnthropicSlotOrganizations(anthropicAccounts, safe),
+    observeAnthropicLoginContinuity(anthropicAccounts, safe),
+  ]) : [];
   // A login that clears an automatic pause publishes it once the write commits (#8398).
   let pauseCleared = false;
   const receipt = await mutateStore(store => {
@@ -1036,7 +1039,7 @@ export async function saveCredentialWithReceipt(
       const existing = provider === "kiro"
         ? findKiroAccountForLogin(set.accounts, safe)
         : isAnthropicInstanceId(provider)
-          ? findAnthropicLoginSlot(set.accounts, safe, anthropicOrganizations, set.activeAccountId)
+          ? findAnthropicLoginSlot(set.accounts, safe, anthropicOrganizations, set.activeAccountId, anthropicContinuity)
           : set.accounts.find(a => (a.credential.accountId ?? a.credential.email) === identity);
       if (existing) {
         const incoming = provider === "kiro" ? withRetainedKiroUser(safe, existing.credential) : safe;
@@ -1050,18 +1053,16 @@ export async function saveCredentialWithReceipt(
         if (existing.paused !== true) set.activeAccountId = existing.id;
         accountId = existing.id;
       } else {
-        // Legacy migration: a pre-identity row (no accountId/email) for this provider is the
-        // SAME human re-logging in after the identity extraction shipped — upgrading the
-        // active identity-less row in place prevents a stale duplicate that stays selectable
-        // and would re-refresh into a second row with the same identity.
+        // Keep the historical upgrade of an active pre-identity row. Scoped Anthropic email
+        // logins require a matching slot, including when recovering an account UUID.
         const active = set.accounts.find(a => a.id === set.activeAccountId);
-        const scopedAnthropicEmailOnly = isAnthropicInstanceId(provider) && !safe.accountId
-          && !safe.anthropicIdentity && anthropicOrganization(safe) !== undefined;
+        const scopedAnthropicEmail = isAnthropicInstanceId(provider) && Boolean(safe.email)
+          && anthropicOrganization(safe) !== undefined;
         // Kiro rows of one organization differ only by user: while another row shares the profile,
         // an unmatched Kiro login claims an identity-less slot only as the same CLI session (#6641).
         const legacyUpgrade = active !== undefined && active.credential.accountId === undefined
           && active.credential.email === undefined
-          && !scopedAnthropicEmailOnly
+          && !scopedAnthropicEmail
           && (!isAnthropicInstanceId(provider) || !anthropicOrganizationsConflict(active.credential, safe))
           && (provider !== "kiro" || (Boolean(safe.refresh) && active.credential.refresh === safe.refresh)
             || !set.accounts.some(a => safe.accountId !== undefined && a.credential.accountId === safe.accountId));
