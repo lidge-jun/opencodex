@@ -9,7 +9,13 @@ import type { OAuthAccessSnapshot } from "../../src/oauth";
 const config = { providers: { "google-antigravity": { adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authMode: "oauth" } } } as OcxConfig;
 const old: OAuthAccessSnapshot = { provider: "google-antigravity", accountId: "fixture-account", generation: "old", accessToken: "fixture-old-token", projectId: "fixture-project" };
 const fresh = { ...old, generation: "new", accessToken: "fixture-new-token" };
-const fixtureAccount = () => ({ credential: { access: old.accessToken, refresh: "fixture-refresh", expires: Date.now() + 3600_000, projectId: old.projectId }, paused: false, needsReauth: false });
+const fixtureAccount = () => ({
+  credential: {
+    access: old.accessToken, refresh: "fixture-refresh", expires: Date.now() + 3600_000,
+    projectId: old.projectId, email: "fixture-account@example.invalid", accountId: "fixture-google-subject",
+  },
+  paused: false, needsReauth: false,
+});
 let accountStatus: ReturnType<typeof oauthStore.getAccountCredentialWithStatus>;
 let accountStatusSpy: ReturnType<typeof spyOn<typeof oauthStore, "getAccountCredentialWithStatus">>;
 beforeEach(() => { accountStatus = fixtureAccount(); accountStatusSpy = spyOn(oauthStore, "getAccountCredentialWithStatus").mockImplementation(() => accountStatus); });
@@ -21,9 +27,9 @@ function request(body = '{"contents":[],"future":9007199254740993123}', signal?:
 function transport(fn: (url: string, init: RequestInit) => Response | Promise<Response>): typeof fetch {
   return Object.assign((url: RequestInfo | URL, init?: RequestInit) => Promise.resolve(fn(String(url), init!)), { preconnect: fetch.preconnect }) as typeof fetch;
 }
-async function run(req: Request, deps: GeminiNativeDeps, stream = false, cfg = config) {
+async function run(req: Request, deps: GeminiNativeDeps, stream: boolean | "array" = false, cfg = config) {
   const lease = tryAdmitTurn(undefined, req.signal)!;
-  try { return await handleGeminiNative(req, cfg, "gemini-test", stream ? "sse" : undefined, lease, deps); }
+  try { return await handleGeminiNative(req, cfg, "gemini-test", stream === "array" ? stream : stream ? "sse" : undefined, lease, deps); }
   finally { if (!lease.isTransferred()) lease.release(); }
 }
 test("native generation preserves source JSON, binds project and replaces ingress credentials", async () => {
@@ -44,6 +50,91 @@ test("native generation preserves source JSON, binds project and replaces ingres
   expect(await response.text()).toBe('{"future":9007199254740993123}');
   expect(getActiveTurnCount()).toBe(baseline);
 });
+
+const fixtureCredentials = [
+  { name: "access token", wire: old.accessToken },
+  { name: "project ID", wire: old.projectId! },
+  { name: "refresh token", wire: fixtureAccount().credential.refresh },
+  { name: "account identity", wire: fixtureAccount().credential.accountId },
+  { name: "JSON-escaped project ID", wire: "\\u0066ixture-project" },
+];
+const finishedPayload = '{ "candidates": [{"finishReason":"STOP"}], "future":9007199254740993123 }';
+const safeUpstreamError = { error: { code: 502, message: "Antigravity upstream rejected the request", status: "UNAVAILABLE" } };
+const safeInBandUpstreamError = { error: { ...safeUpstreamError.error, status: "INTERNAL" } };
+const event = (response: string) => `data: {"response":${response}}\n\n`;
+const fixtureChunk = (text: string) => new TextEncoder().encode(text);
+
+for (const { name, wire } of fixtureCredentials) {
+  const payload = `{"future":[{"text":"prefix ${wire} suffix","text":"replacement"}]}`;
+  test(`buffered native success rejects an echoed ${name}`, async () => {
+    const response = await run(request(), {
+      access: async () => old, refresh: async () => fresh,
+      fetch: transport(() => new Response(`{"response":${payload}}`)),
+    });
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual(safeUpstreamError);
+  });
+
+  for (const format of ["sse", "array"] as const) {
+    test(`native ${format} rejects an echoed ${name} split across transport chunks`, async () => {
+      const frame = event(payload);
+      const split = frame.indexOf(wire) + Math.floor(wire.length / 2);
+      const response = await run(request(), {
+        access: async () => old, refresh: async () => fresh,
+        fetch: transport(() => new Response(new ReadableStream({
+          start(controller) {
+            for (const chunk of [event(finishedPayload), frame.slice(0, split), frame.slice(split)]) {
+              controller.enqueue(fixtureChunk(chunk));
+            }
+            controller.close();
+          },
+        }))),
+      }, format === "array" ? format : true);
+      const prefix = format === "sse" ? `data: ${finishedPayload}\n\n` : `[\n${finishedPayload},\n`;
+      const error = JSON.stringify(safeInBandUpstreamError);
+      expect(await response.text()).toBe(prefix + (format === "sse" ? `data: ${error}\n\n` : `${error}\n]`));
+    });
+  }
+}
+
+for (const format of ["sse", "array"] as const) {
+  for (const terminal of ["DONE", "in-band error"] as const) {
+    test(`native ${format} stops at ${terminal} and cancels the open upstream`, async () => {
+      const baseline = getActiveTurnCount();
+      let cancelled = false;
+      const terminalEvent = terminal === "DONE" ? "data: [DONE]\n\n" : event('{"error":{"message":"private upstream diagnostic"}}');
+      const late = event('{"candidates":[{"finishReason":"STOP"}],"text":"late success"}');
+      const response = await run(request(), {
+        access: async () => old, refresh: async () => fresh,
+        fetch: transport(() => new Response(new ReadableStream({
+          start(controller) {
+            controller.enqueue(fixtureChunk(event(finishedPayload) + terminalEvent + late));
+            controller.enqueue(fixtureChunk(late));
+          },
+          cancel() { cancelled = true; },
+        }))),
+      }, format === "array" ? format : true);
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      const read = async () => decoder.decode((await reader.read()).value);
+      try {
+        expect(await read()).toBe(format === "sse" ? `data: ${finishedPayload}\n\n` : `[\n${finishedPayload}`);
+        if (terminal === "in-band error") {
+          const error = JSON.stringify(safeInBandUpstreamError);
+          expect(await read()).toBe(format === "sse" ? `data: ${error}\n\n` : `,\n${error}`);
+        }
+        if (format === "array") expect(await read()).toBe("\n]");
+        expect((await reader.read()).done).toBe(true);
+        await Bun.sleep(0);
+        expect(cancelled).toBe(true);
+        expect(getActiveTurnCount()).toBe(baseline);
+      } finally {
+        await reader.cancel();
+      }
+    });
+  }
+}
+
 test("401 refreshes the rejected snapshot once and cancels its response", async () => {
   let calls = 0, refreshes = 0, cancelled = false;
   const response = await run(request(), {
@@ -59,6 +150,25 @@ test("401 refreshes the rejected snapshot once and cancels its response", async 
   expect(response.status).toBe(200);
   expect(calls).toBe(2); expect(refreshes).toBe(1); expect(cancelled).toBe(true);
 });
+
+for (const [name, echoed] of [["previous", old.accessToken], ["refreshed", fresh.accessToken]] as const) {
+  test(`401 recovery still rejects the ${name} access token in a successful reply`, async () => {
+    let calls = 0;
+    const response = await run(request(), {
+      access: async () => old,
+      refresh: async () => {
+        accountStatus = { ...fixtureAccount(), credential: { ...fixtureAccount().credential, access: fresh.accessToken } };
+        return fresh;
+      },
+      fetch: transport(() => ++calls === 1
+        ? new Response(null, { status: 401 })
+        : new Response(`{"response":{"text":"${echoed}"}}`)),
+    });
+    expect(calls).toBe(2);
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual(safeUpstreamError);
+  });
+}
 test("cancellation while discarding a 401 detaches a stalled body without refreshing", async () => {
   const ac = new AbortController();
   const cancel = Promise.withResolvers<void>();
