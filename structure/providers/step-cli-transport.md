@@ -61,9 +61,15 @@ notification, a group signal could reach a reused PGID. Bun exposes no `pidfd` o
 syscall-level ownership handle to JavaScript. Closing this window requires a native supervisor
 or a Bun change. The owner accepted this residual risk on 2026-11-19.
 
-Windows teardown starts the asynchronous helper in `src/adapters/coding-agent/process-tree.ts`
-(`taskkill /T /F`, up to five seconds per attempt) only while the original wrapper is observed
-alive. Cleanup can retry a confirmed helper launch failure while the wrapper still appears alive.
+On Windows, StepCode checks that the original wrapper is still alive before launching the asynchronous
+helper in `src/adapters/coding-agent/process-tree.ts` (`taskkill /T /F`, up to five seconds per
+attempt). The helper resolves the numeric PID after launch. If the wrapper exits and Windows reuses its PID
+between the liveness check and that lookup, the signal could reach an unrelated process tree.
+Closing this window requires establishing ownership at launch, for example with a kill-on-close
+Job Object, and terminating through that handle. The owner accepted this residual risk on
+2026-11-19 alongside the POSIX reap-ordering risk.
+
+Cleanup can retry a confirmed helper launch failure while the wrapper still appears alive.
 If the wrapper has already exited or cleanup is unconfirmed after the helper may have run, the
 session is quarantined and cleanup logs the fixed Windows warning. A successful tree-kill
 receipt allows an OS liveness check if Bun still reports null exit fields.

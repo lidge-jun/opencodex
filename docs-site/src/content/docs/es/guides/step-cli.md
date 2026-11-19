@@ -3,9 +3,10 @@ title: StepCode CLI (suscripción)
 description: Envíe solicitudes de Codex a través de StepCode CLI con una suscripción Step Plan.
 ---
 
-OpenCodex puede usar una suscripción Step Plan mediante StepCode. El preajuste `step-cli`
-ejecuta la CLI oficial de StepCode (`step --sdk-stdio`) y le declara las herramientas de cada
-solicitud para que el cliente pueda aprobarlas y ejecutarlas:
+OpenCodex puede usar una suscripción Step Plan mediante StepCode sin llamar directamente a
+`api.stepfun.com/step_plan`. El preajuste `step-cli` ejecuta la CLI oficial de StepCode
+(`step --sdk-stdio`) y le declara las herramientas de cada solicitud para que el cliente pueda
+aprobarlas y ejecutarlas:
 
 ```json
 {
@@ -19,9 +20,9 @@ solicitud para que el cliente pueda aprobarlas y ejecutarlas:
 ```
 
 - **Requisitos.** Instale StepCode CLI en `~/.stepcode/bin/step` e inicie sesión con `step login`.
-  La CLI obtiene su credencial de `auth.json` y se conecta a `api.stepfun.com/step_plan`.
-- **Credenciales.** OpenCodex no lee, copia ni reenvía el token de Step. Al igual que `claude-cli`,
-  este preajuste tiene el campo `keyOptional`. Para facturación directa por API, use `stepfun`.
+  La CLI obtiene su credencial de `auth.json`.
+- **Credenciales.** OpenCodex no lee, copia ni reenvía el token de Step. Este preajuste tiene el
+  campo `keyOptional`, al igual que `claude-cli`. Para facturación directa por API, use `stepfun`.
 - **Una cuenta para el proxy.** Todas las solicitudes enviadas por esta ruta consumen la cuota de
   la cuenta Step Plan del usuario que ejecuta OpenCodex. El plan mide el consumo por solicitud y
   aplica límites de cinco horas y semanales. Codex comparte la cuota con las sesiones de `step`.
@@ -45,9 +46,15 @@ solicitud para que el cliente pueda aprobarlas y ejecutarlas:
   JavaScript un `pidfd` ni otro identificador que acredite la pertenencia del proceso a nivel de
   llamada al sistema. Para eliminar ese intervalo hace falta un supervisor nativo o un cambio en
   Bun. El responsable del proyecto aceptó este riesgo residual el 2026-11-19.
-  En Windows, la limpieza inicia `taskkill /T /F` solo mientras el proceso lanzador original se
-  observa con vida. Si el lanzador ya ha salido o la limpieza sigue sin confirmarse después de que
-  la utilidad haya podido ejecutarse, OpenCodex pone la sesión en cuarentena, registra una
+  En Windows, StepCode comprueba que el proceso lanzador original sigue en ejecución antes de
+  iniciar `taskkill /T /F`. La utilidad busca el PID numérico después de iniciarse. Si el lanzador
+  termina y Windows reutiliza su PID entre la comprobación y esa búsqueda, la señal podría
+  alcanzar un árbol de procesos ajeno. Para cerrar ese intervalo hay que establecer la pertenencia
+  del proceso desde el arranque, por ejemplo con un objeto de trabajo que finalice los procesos al
+  cerrarse, y usar su identificador de objeto para terminarlos. El responsable del proyecto aceptó
+  este riesgo residual el 2026-11-19 junto con el riesgo de POSIX relativo al orden de recogida y
+  notificación de salida. Si el lanzador ya ha salido o la limpieza sigue sin confirmarse después
+  de que la utilidad haya podido ejecutarse, OpenCodex pone la sesión en cuarentena, registra una
   advertencia fija e informa de que la limpieza quedó incompleta.
 - **Límites de sesión.** Si una herramienta tarda más de dos minutos en devolver un resultado,
   el turno informa del error `step_cli_tool_result_too_late`. El protocolo no permite reemplazar

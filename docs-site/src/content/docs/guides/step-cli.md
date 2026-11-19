@@ -47,7 +47,12 @@ StepCode:
   notification could reach a reused PGID. Bun exposes no `pidfd` or other syscall-level ownership
   handle to JavaScript. Closing this window requires a native supervisor or a Bun change. The owner
   accepted this residual risk on 2026-11-19.
-  On Windows, cleanup starts `taskkill /T /F` only while the original wrapper is observed alive.
+  On Windows, StepCode checks that the original wrapper is still alive before launching
+  `taskkill /T /F`. The helper resolves the numeric PID after launch. If the wrapper exits and
+  Windows reuses its PID between the liveness check and that lookup, the signal could reach an
+  unrelated process tree. Closing this window requires establishing ownership at launch, for
+  example with a kill-on-close Job Object, and terminating through that handle. The owner
+  accepted this residual risk on 2026-11-19 alongside the POSIX reap-ordering risk.
   If the wrapper has already exited or cleanup is unconfirmed after the helper may have run,
   OpenCodex quarantines the session, logs a fixed warning and reports incomplete cleanup.
 - **Two documented limits:** a tool that takes longer than two minutes to come back exceeds the
