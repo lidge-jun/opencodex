@@ -1,4 +1,3 @@
-import { setCodexWsReuseAcrossTurns } from "./codex-ws-reuse-setting";
 import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
 import { chmodSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -149,7 +148,6 @@ export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxCon
   if (nativeReasoningRetentionConfigError(rawParsed)) console.warn("⚠️  invalid nativeReasoningRetention disabled; model and account switch allowances remain off");
   if (workflowBudgetConfigError(rawParsed)) console.warn("⚠️  invalid workflowBudget ignored; the built-in workflow ceilings stay in force");
   if (routedCatalogDefaultsConfigError(rawParsed)) console.warn("⚠️  invalid routedCatalogDefaults ignored; routed catalog rows keep their derived values");
-  setCodexWsReuseAcrossTurns(validated.codexWsReuseAcrossTurns === true);
   const retentionWarning = degradedReasoningRetentionWarning(rawParsed, validated);
   if (retentionWarning) console.warn(retentionWarning);
   if (compactionRecoveryConfigError(rawParsed)) console.warn("⚠️  invalid compactionRecovery disabled; the original compaction failure is preserved");

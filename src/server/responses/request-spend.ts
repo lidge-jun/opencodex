@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { RequestSendObserver } from "../../lib/request-execution-budget";
 import type { AdapterEvent } from "../../types";
-import { sharedSpendLedger, sharedSpendPolicy, type SpendReservationLedger, type SpendScopes, type SpendSeed, type SpendReservationProof, type SpendAdmissionPolicy } from "../../lib/spend-reservation-ledger";
+import { sharedSpendLedger, sharedSpendPolicy, type SpendReservationLedger, type SpendScopes, type SpendSeed, type SpendReservationProof, type SpendAdmissionPolicy, type SpendReservationRequest } from "../../lib/spend-reservation-ledger";
 import { SpendLedgerOwnerError } from "../../lib/spend-ledger-owner";
 import { markLocalRequestLogRefusal, type RequestLogContext } from "../request-log";
 import { chargeWorkflowSends, recordWorkflowRefusalEvent, reserveWorkflowSend, workflowDenialSummary, type WorkflowDenial, type WorkflowSpendDenialDetail } from "../../lib/workflow-budget";
@@ -110,6 +110,8 @@ export function createRequestSpendTracker(
   let admissionPolicy: SpendAdmissionPolicy | undefined;
   const capturePolicy = (): SpendAdmissionPolicy => capturedPolicy ??= captureRequestSpendPolicy(ledgerRef?.policy);
   let initialEnforced: boolean | undefined;
+  let recoveryIdentityCeiling: number | undefined;
+  let prepaidSpend: WeakMap<SpendReservationProof, { identityId?: string; tokens: number; hasInputEstimate: boolean }> | undefined;
   // Outstanding entries; exact dispatch reports move their reservation to the end.
   const live: string[] = [];
   const pendingDispatch = new Set<string>();
@@ -122,7 +124,7 @@ export function createRequestSpendTracker(
   let finalUsage: TerminalSpendUsage | undefined;
   let reporters = 0;
   const seeds = new Map<string, { seed: SpendSeed; started: boolean; reported: boolean; auxiliary: boolean; independent: boolean; retryScopes?: SpendScopes; estimate?: { inputTokens: number; outputCeilingTokens: number } }>();
-  const auxiliarySendIds = new Set<string>();
+  const nonTerminalSendIds = new Set<string>();
   // Abandoned capabilities retain cleanup ownership, never admission lookup.
   const retiredSeeds = new Set<SpendSeed>();
   const resolvedSendIds = new Set<string>();
@@ -151,7 +153,7 @@ export function createRequestSpendTracker(
     retryPhysicalReports();
     // All starts are booked before producers close. Ordinal, never callback order, owns usage.
     const entries = [...physical.entries()].sort((a, b) => a[0] - b[0]);
-    const terminal = entries.findLast(([, entry]) => entry.sendId && !auxiliarySendIds.has(entry.sendId))?.[1].sendId;
+    const terminal = entries.findLast(([, entry]) => entry.sendId && !nonTerminalSendIds.has(entry.sendId))?.[1].sendId;
     const ids: string[] = [];
     for (const [, entry] of entries) {
       if (!entry.sendId) return false;
@@ -270,6 +272,32 @@ export function createRequestSpendTracker(
     recordWorkflowRefusalEvent(rootId, "workflow-sends-exhausted");
     return false;
   };
+  const reserveObservedRecovery = (request: SpendReservationRequest, proof: SpendReservationProof | undefined) => {
+    const identityId = request.scopes.identityId;
+    if (resolved || !identityId || !proof || proof.ledger !== ledgerRef) return undefined;
+    const delta = prepaidSpend?.get(proof);
+    if (!delta) return undefined;
+    const bookedLedger = proof.ledger;
+    try {
+      const missingAccountTokens = (delta.identityId === identityId ? 0 : delta.tokens)
+        + (delta.hasInputEstimate ? 0 : request.inputTokens);
+      if (missingAccountTokens > 0) {
+        // Keep the delta's missing account liability live through resend admission.
+        // Preserve any prepaid output cap and estimate unpriced input at the full frame cost.
+        const booking = bookedLedger.reserve({ sendId: randomUUID(), scopes: { identityId },
+          inputTokens: missingAccountTokens, outputCeilingTokens: 0, admissionPolicy: request.admissionPolicy, alreadySent: true });
+        if (!booking.reserved) return booking;
+        live.push(booking.sendId);
+        nonTerminalSendIds.add(booking.sendId);
+        prepaidSpend?.delete(proof);
+        if (!bookedLedger.markDispatched(booking.sendId) || !booking.durable) return undefined;
+      }
+      return bookedLedger.reserve(request);
+    } catch (error) {
+      if (error instanceof SpendLedgerOwnerError) return undefined;
+      throw error;
+    }
+  };
   const tracker: RequestSpendTracker = {
     recordWorkflowSend() { chargeWorkflowSends(rootId, 1); },
     beforePhysicalSend(auxiliary = false) {
@@ -279,7 +307,10 @@ export function createRequestSpendTracker(
       if (admissionPolicy) return;
       admissionPolicy = capturePolicy();
       initialEnforced = applicable(selectedScopes(target));
-      if (!initialEnforced) admissionPolicy = Object.freeze({ root: Object.freeze({}), identity: Object.freeze({}), pool: Object.freeze({}) });
+      if (!initialEnforced) {
+        recoveryIdentityCeiling = admissionPolicy.identity.maxTokens;
+        admissionPolicy = Object.freeze({ root: Object.freeze({}), identity: Object.freeze({}), pool: Object.freeze({}) });
+      }
     },
     // Combo prepayment can fix observe-only accounting before its child has an identity.
     // Optional hosted work still consults the original ceilings, never the live ledger policy.
@@ -419,7 +450,7 @@ export function createRequestSpendTracker(
       entry.reportPending = true;
       const firstOrdinal = [...physical.entries()].filter(([, send]) => send.seed === seed).map(([order]) => order).sort((a, b) => a - b)[0];
       const sendId = entry.sendId ??= ordinal === firstOrdinal ? seed.sendId : randomUUID();
-      if (state.auxiliary) auxiliarySendIds.add(sendId);
+      if (state.auxiliary) nonTerminalSendIds.add(sendId);
       const estimate = entry.estimate ??= state.estimate ?? estimates();
       if (sendId !== seed.sendId && !ledger().reserveReportedFromSeed(seed, { sendId, ...estimate })) {
         throw new Error("Already-sent spend could not be persisted");
@@ -444,9 +475,19 @@ export function createRequestSpendTracker(
         if (alreadySent) chargeWorkflowSends(rootId, 1);
         else if (!claimWorkflowSend(!options?.auxiliary)) return false;
       }
+      const recovery = !alreadySent && options?.incrementalRecovery;
+      let estimate = options?.auxiliary && options.estimate ? options.estimate : estimates();
+      const hasInputEstimate = Number.isFinite(estimate.inputTokens) && estimate.inputTokens >= 1;
+      const needsRecoveryEstimate = !!recovery && !hasInputEstimate;
+      if (needsRecoveryEstimate) {
+        const inputTokens = recovery.inputEstimateTokens;
+        if (inputTokens === undefined || !Number.isSafeInteger(inputTokens) || inputTokens < 1) return false;
+        estimate = { ...estimate, inputTokens };
+      }
       if (!alreadySent && tracker.enforced) {
         const seed = tracker.ensureSeed({ ...options?.scopes, targetKey: options?.targetKey,
-          ...(options?.auxiliary ? { auxiliary: true, estimate: options.estimate } : {}) });
+          ...(options?.auxiliary ? { auxiliary: true, estimate: options.estimate }
+            : recovery ? { explicitEstimate: true, estimate } : {}) });
         if (!seed) return false;
         options?.onReserved?.({ ledger: ledger(), sendId: seed.sendId });
         return true;
@@ -462,18 +503,26 @@ export function createRequestSpendTracker(
           ? { poolId: logCtx.spendPoolId ?? logCtx.provider }
           : {}),
       };
-      const policy = admissionPolicy!;
+      const enforceRecovery = Boolean(recovery) && recoveryIdentityCeiling !== undefined;
+      const policy = enforceRecovery
+        ? { ...admissionPolicy!, identity: { maxTokens: recoveryIdentityCeiling } }
+        : admissionPolicy!;
       const enforced = (scopes.rootId !== undefined && policy.root.maxTokens !== undefined)
         || (scopes.identityId !== undefined && policy.identity.maxTokens !== undefined)
         || (scopes.poolId !== undefined && policy.pool.maxTokens !== undefined);
-      const decision = bookedLedger.reserve({
+      const reservation: SpendReservationRequest = {
         sendId,
         scopes,
-        admissionPolicy,
-        ...(options?.auxiliary && options.estimate ? options.estimate : estimates()),
+        admissionPolicy: policy,
+        ...estimate,
         ...(alreadySent ? { alreadySent: true } : {}),
-      });
+      };
+      const decision = recovery && enforceRecovery
+        ? reserveObservedRecovery(reservation, recovery.prepaidDelta)
+        : bookedLedger.reserve(reservation);
+      if (!decision) return false;
       if (!decision.reserved) {
+        if (enforceRecovery) { refusal(decision.denial, false); return false; }
         // An applicable ceiling cannot authorize an unbooked send, including when tracking
         // capacity is full. Unconfigured/nonapplicable requests remain observe-only, and a
         // physical send reported after dispatch cannot be refused retroactively.
@@ -481,9 +530,15 @@ export function createRequestSpendTracker(
         refusal(decision.denial, !options?.auxiliary);
         return false;
       }
-      if (!alreadySent) options?.onReserved?.({ ledger: bookedLedger, sendId });
+      if (!alreadySent && options?.onReserved) {
+        const proof = { ledger: bookedLedger, sendId };
+        if (!recovery && recoveryIdentityCeiling !== undefined && decision.durable) {
+          (prepaidSpend ??= new WeakMap()).set(proof, { identityId: scopes.identityId, tokens: decision.tokens, hasInputEstimate });
+        }
+        options.onReserved(proof);
+      }
       live.push(sendId);
-      if (options?.auxiliary) auxiliarySendIds.add(sendId);
+      if (options?.auxiliary) nonTerminalSendIds.add(sendId);
       if (options?.deferDispatch) pendingDispatch.add(sendId);
       else confirmOlderSends();
       // It has already left, so the reservation cannot be handed back for free: from here only
@@ -522,7 +577,7 @@ export function createRequestSpendTracker(
       if (seededAccounting) { tracker.requestFinalSettlement(usage); return; }
       try {
         if (!terminalProcessed && live.length > 0) {
-          const terminalIndex = live.findLastIndex(sendId => !auxiliarySendIds.has(sendId));
+          const terminalIndex = live.findLastIndex(sendId => !nonTerminalSendIds.has(sendId));
           const terminal = live[terminalIndex];
           const reported = typeof usage?.inputTokens === "number" || typeof usage?.outputTokens === "number";
           if (terminal && reported) {

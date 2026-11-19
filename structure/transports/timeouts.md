@@ -119,8 +119,9 @@ request's path. The waiter polls that name's DNS once a second until it resolves
 probe races the remaining budget and client cancellation, and a success after the deadline does not count. The
 first send's slow-attempt clock restarts when the wait resumes. Adapters with their own `fetchResponse` transport
 (google Vertex and Cloud Code Assist, kiro, cursor, zed, command-code, mimo-free) are not wired; direct Google AI Studio is. One resend then
-follows inside the request's existing `attempts` budget and send accounting; no budget, a second DNS failure, an
-exhausted wait or any other failure returns the original error.
+follows inside the existing `attempts` budget and send accounting. The helper checks the live
+allowance before waiting and again before the resend. Exhaustion before the resend preserves
+the initial connection failure, as does an exhausted wait.
 A client cancel during the wait or a probe makes the waiter answer `false` instead of rejecting with the abort
 reason, so `fetchWithResetRetry` rethrows the original DNS error and a Codex pool send keeps the host-wide
 `connect_neutral` class in `classifyTransportFailureKind`. The resend's send carries its own recovery kind,
