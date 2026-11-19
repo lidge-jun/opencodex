@@ -12,7 +12,7 @@ const fresh = { ...old, generation: "new", accessToken: "fixture-new-token" };
 const fixtureAccount = () => ({
   credential: {
     access: old.accessToken, refresh: "fixture-refresh", expires: Date.now() + 3600_000,
-    projectId: old.projectId, email: "fixture-account@example.invalid", accountId: "fixture-google-subject",
+    projectId: old.projectId, accountId: "fixture-google-subject",
   },
   paused: false, needsReauth: false,
 });
