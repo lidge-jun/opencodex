@@ -44,6 +44,30 @@ export function unwrapGeminiResponse(raw: string): string {
   return response;
 }
 
+/** Check validated JSON source, including escaped strings and duplicate members. */
+export function containsGeminiCredential(raw: string, credentials: readonly string[]): boolean {
+  if (!credentials.length) return false;
+  const contains = (text: string) => credentials.some(value => text.includes(value));
+  if (contains(raw)) return true;
+  if (!raw.includes("\\")) return false;
+
+  const delimiters = /["\\]/g;
+  let start = -1, escaped = false;
+  for (let match = delimiters.exec(raw); match; match = delimiters.exec(raw)) {
+    if (match[0] === "\\") {
+      escaped = true;
+      delimiters.lastIndex++;
+    } else if (start < 0) {
+      start = match.index;
+    } else {
+      if (escaped && contains(JSON.parse(raw.slice(start, delimiters.lastIndex)))) return true;
+      start = -1;
+      escaped = false;
+    }
+  }
+  return false;
+}
+
 export function wrapGeminiRequest(raw: string, model: string, project: string): string {
   validateGeminiObject(raw);
   const envelope = JSON.stringify({ model, project, userAgent: "antigravity", requestType: "agent", requestId: `agent-${crypto.randomUUID()}` });
@@ -55,17 +79,21 @@ export function geminiSseTransform(
   maxBytes = GEMINI_NATIVE_MAX_BYTES,
   onNativeError?: () => void,
   format: "sse" | "array" = "sse",
+  credentials: readonly string[] = [],
 ): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const encoder = new TextEncoder();
   let lineParts: string[] = [], data: string[] = [], eventBytes = 0, afterCR = false;
   const candidates = new Map<number, boolean>();
-  let nativeError = false, blocked = false, arrayOpened = false;
-  const complete = () => nativeError || (candidates.size ? [...candidates.values()].every(Boolean) : blocked);
+  let terminal = false, blocked = false, arrayOpened = false;
+  const complete = () => candidates.size ? [...candidates.values()].every(Boolean) : blocked;
+  const closeArray = (controller: TransformStreamDefaultController<Uint8Array>) => {
+    if (format === "array") controller.enqueue(encoder.encode("\n]"));
+  };
   function observe(raw: string) {
     const value = JSON.parse(raw) as { candidates?: Array<{ index?: number; finishReason?: string }>; error?: unknown; promptFeedback?: { blockReason?: string } };
-    if (Object.hasOwn(value, "error")) {
-      nativeError = true;
+    if (Object.hasOwn(value, "error") || containsGeminiCredential(raw, credentials)) {
+      terminal = true;
       try { onNativeError?.(); } catch { /* Observational callbacks never change delivery. */ }
       return SAFE_UPSTREAM_ERROR;
     }
@@ -84,6 +112,7 @@ export function geminiSseTransform(
       const payload = data.join("\n");
       if (payload.trim() === "[DONE]") {
         if (!complete()) throw new Error("premature Gemini stream terminator");
+        terminal = true;
       } else {
         const response = observe(unwrapGeminiResponse(payload));
         if (format === "sse") {
@@ -95,6 +124,10 @@ export function geminiSseTransform(
       }
     }
     data = []; eventBytes = 0;
+    if (terminal) {
+      closeArray(controller);
+      controller.terminate();
+    }
   }
   function appendLineBytes(bytes: Uint8Array) {
     if (!bytes.byteLength) return;
@@ -124,6 +157,7 @@ export function geminiSseTransform(
         if (byte !== 10 && byte !== 13) continue;
         appendLineBytes(chunk.subarray(start, i));
         endLine(controller);
+        if (terminal) return;
         afterCR = byte === 13;
         start = i + 1;
       }
@@ -134,7 +168,7 @@ export function geminiSseTransform(
       if (tail) lineParts.push(tail);
       if (lineParts.join("").trim() || data.length) throw new Error("truncated Gemini SSE event");
       if (!complete()) throw new Error("incomplete Gemini generation");
-      if (format === "array") controller.enqueue(encoder.encode("\n]"));
+      closeArray(controller);
     },
   });
 }

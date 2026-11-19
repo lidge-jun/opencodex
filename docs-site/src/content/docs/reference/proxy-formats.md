@@ -1150,6 +1150,9 @@ large integers, function arguments, and thought signatures. Streaming uses SSE w
 configured, scoped catalog and also expose eligible native wire aliases that route back
 to their Antigravity model.
 
+If an upstream payload contains bound account credentials, the proxy returns a generic
+Gemini error. A valid upstream `[DONE]` or a Gemini error ends stream delivery.
+
 Send identity-encoded JSON. Request and buffered response bodies and SSE events have a
 16 MiB cap. A lower `maxInboundBodyBytes` also applies to requests. Upload inactivity has
 its own timeout. The first send and up to one 401 recovery on the same account count

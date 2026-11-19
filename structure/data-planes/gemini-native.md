@@ -28,8 +28,12 @@ so unknown fields, integer precision, number spelling, tool arguments and though
 survive. CCA SSE is reframed as Gemini SSE with `alt=sse` and as a streamed JSON array otherwise.
 Malformed or oversized events, missing or duplicate envelopes, incomplete final events and
 EOF before all observed candidates finish terminate delivery without a replay. A blocked prompt
-or native error can also end the stream. Successful payloads are preserved while in-band errors
-are replaced with a fixed Gemini error. HTTP failures retain only bounded numeric retry advice.
+also counts as completion when no candidates were observed. A valid `[DONE]` or a sanitized
+in-band error ends delivery and cancels the upstream body. Before sending buffered JSON or a
+complete stream frame, the native leg checks the original JSON and its decoded strings for
+bound OAuth tokens, project IDs and private account identifiers from both sends. A match returns
+the same fixed Gemini error as an in-band upstream error. HTTP failures retain only bounded
+numeric retry advice.
 
 Request and buffered response bodies and each SSE event have a 16 MiB ceiling. A lower
 `maxInboundBodyBytes` narrows the request limit. Compressed requests are refused with 415.

@@ -660,6 +660,9 @@ razonamiento. La transmisión usa SSE con `alt=sse` y una matriz JSON en los dem
 El listado mediante `GET /v1beta/models` y la consulta de modelos conservan el catálogo permitido por la clave e
 incluyen los alias nativos que se enrutan al modelo de Antigravity correspondiente.
 
+Si una respuesta del proveedor contiene credenciales de la cuenta vinculada, el proxy devuelve
+un error genérico de Gemini. Un `[DONE]` válido del proveedor o un error de Gemini pone fin a la transmisión.
+
 Envía JSON con codificación `identity`. El cuerpo de la solicitud, la respuesta almacenada
 en búfer y cada evento SSE tienen un límite de 16 MiB. Si `maxInboundBodyBytes` es menor,
 se aplica a la solicitud. La inactividad durante la carga tiene su propio tiempo de

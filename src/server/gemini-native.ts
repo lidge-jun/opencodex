@@ -15,7 +15,7 @@ import { DEFAULT_STALL_TIMEOUT_SEC, resolveStallTimeoutMs } from "../stall-timeo
 import { isLocalUpstream } from "../lib/local-upstream";
 import { assertProviderDestinationAllowed } from "../lib/destination-policy";
 import { registerTurn, unregisterTurn, type ActiveTurnLease } from "./lifecycle";
-import { geminiSseTransform, readGeminiText, validateGeminiObject, GEMINI_NATIVE_MAX_BYTES, GEMINI_NATIVE_ERROR_CODE, unwrapGeminiResponse, wrapGeminiRequest } from "./gemini-native-wire";
+import { containsGeminiCredential, geminiSseTransform, readGeminiText, validateGeminiObject, GEMINI_NATIVE_MAX_BYTES, GEMINI_NATIVE_ERROR_CODE, unwrapGeminiResponse, wrapGeminiRequest } from "./gemini-native-wire";
 
 export const GEMINI_NATIVE_PROVIDER = "google-antigravity";
 class NativeWorkflowSendDenied extends Error {}
@@ -113,6 +113,7 @@ export async function handleGeminiNative(
     try { validateGeminiObject(raw); }
     catch { finish(); return geminiNativeError(400, "Expected a Gemini JSON object"); }
     let access = await deps.access();
+    const boundCredentials = new Set<string>();
     for (let attempt = 0; attempt < 2; attempt++) {
       ac.signal.throwIfAborted();
       if (!access.projectId) { finish(); return geminiNativeError(503, "Antigravity project missing; sign in again"); }
@@ -132,6 +133,12 @@ export async function handleGeminiNative(
         if (account.needsReauth) throw new OAuthLoginRequiredError(GEMINI_NATIVE_PROVIDER);
         if (spendUnsupported()) throw new NativeSpendLimitsUnsupported();
         if (!reserveWorkflowSend(rootId, currentWorkflowBudgetPolicy())) throw new NativeWorkflowSendDenied();
+        const { credential } = account;
+        // Keep both generations across a 401 recovery. The store can also rotate during pacing.
+        for (const value of [access.accessToken, access.projectId, access.accountId, credential.access,
+          credential.refresh, credential.projectId, credential.accountId, credential.email]) {
+          if (value) boundCredentials.add(value);
+        }
         return fetchWithAttemptDeadline(`${baseUrl.replace(/\/$/, "")}/v1internal:${method}`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${access.accessToken}`, "User-Agent": antigravityUserAgentForWireModel(model) },
@@ -169,14 +176,15 @@ export async function handleGeminiNative(
       },
       cancel(reason) { ac.abort(reason); finish(); return reader.cancel(reason); },
     });
+    const credentials = [...boundCredentials];
     if (streamFormat) {
       const headers = { "Content-Type": streamFormat === "sse" ? "text/event-stream" : "application/json", "Cache-Control": "no-cache" };
-      return new Response(body.pipeThrough(geminiSseTransform(GEMINI_NATIVE_MAX_BYTES, noteNativeError, streamFormat)), { headers });
+      return new Response(body.pipeThrough(geminiSseTransform(GEMINI_NATIVE_MAX_BYTES, noteNativeError, streamFormat, credentials)), { headers });
     }
     const text = await readGeminiText(body, GEMINI_NATIVE_MAX_BYTES, ac.signal);
     if (text === null) return geminiNativeError(502, "Gemini upstream response exceeds the body limit");
     const response = unwrapGeminiResponse(text);
-    if (Object.hasOwn(JSON.parse(response), "error")) {
+    if (Object.hasOwn(JSON.parse(response), "error") || containsGeminiCredential(response, credentials)) {
       noteNativeError();
       return geminiNativeError(502, "Antigravity upstream rejected the request");
     }
