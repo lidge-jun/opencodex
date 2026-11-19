@@ -169,14 +169,35 @@ test("an untouched model field sends no model, so the current one is kept", asyn
 
 test("a refusal is translated from its code, and an I/O error keeps the system text", async () => {
   actionResponse = () => json({ ok: false, code: "unsupported-file", message: "settings.json is not a JSON object; left untouched." }, 409);
+  clients[0]!.state = "connected";
   await mount();
-  await act(async () => { button(card("agy"), "Disconnect").click(); });
+  await act(async () => { button(card("antigravity"), "Disconnect").click(); });
   await settle();
-  expect(requests.find(request => request.method === "POST")?.url).toBe(`${apiBase}/api/gateway-clients/agy/disconnect`);
-  expect(card("agy").querySelector(".notice-err")?.textContent).toBe("settings.json could not be read as a JSON object, so OpenCodex left it untouched. Fix the file, then try again.");
+  expect(requests.find(request => request.method === "POST")?.url).toBe(`${apiBase}/api/gateway-clients/antigravity/disconnect`);
+  expect(card("antigravity").querySelector(".notice-err")?.textContent).toBe("settings.json could not be read as a JSON object, so OpenCodex left it untouched. Fix the file, then try again.");
 
   actionResponse = () => json({ ok: false, code: "io-error", message: "EACCES: permission denied" }, 409);
   await act(async () => { button(card("agy"), "Disconnect").click(); });
   await settle();
   expect(card("agy").querySelector(".notice-err code")?.textContent).toBe("EACCES: permission denied");
+});
+
+test("agy disconnect shows the affected shell profile and recovery instructions", async () => {
+  clients[1]!.state = "drifted";
+  actionResponse = () => json({
+    ok: false,
+    code: "agy-profile-restore-required",
+    profilePath: "~/.zshrc",
+    message: "Server diagnostic that must stay hidden.",
+  }, 409);
+  await mount();
+  const agy = card("agy");
+  await act(async () => { button(agy, "Disconnect").click(); });
+  await settle();
+
+  expect(requests.find(request => request.method === "POST")?.url).toBe(`${apiBase}/api/gateway-clients/agy/disconnect`);
+  expect(agy.querySelector(".notice-err")?.textContent).toBe(
+    "OpenCodex could not verify the agy profile at ~/.zshrc. Restore the complete marked agy block or the saved original profile, then retry.",
+  );
+  expect(button(agy, "Disconnect").disabled).toBe(false);
 });

@@ -34,7 +34,7 @@ const ID = "antigravity";
 const BOM = String.fromCharCode(0xfeff);
 const settingsPath = (ctx: GatewayClientContext) => join(ctx.home, ".antigravity", "settings.json");
 const isObj = (v: unknown): v is Json => !!v && typeof v === "object" && !Array.isArray(v);
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+const same = (a: unknown, b: unknown) => Bun.deepEquals(a, b, true);
 const prior = (o: Json | undefined, k: string): Prior => o && k in o ? { present: true, value: o[k] } : { present: false };
 
 interface Parsed { doc: Json; indent: string | number | undefined; eol: string; trailing: boolean; bom: boolean }
@@ -182,26 +182,39 @@ function disconnect(ctx: GatewayClientContext): GatewayClientResult {
   const parsed = parseSettings(file.bytes);
   if (typeof parsed === "string") return clientRefusal(`${GATEWAY_NOTE_TEXT[parsed]} The restore record was kept.`, "unsupported-file");
   const { doc } = parsed;
-  const kept: string[] = [];
-  if (states.some(st => st.written.gateway !== null && same(doc.gateway, st.written.gateway))) {
-    if (stash.prior.gateway.present) doc.gateway = stash.prior.gateway.value; else delete doc.gateway;
-  } else kept.push("gateway");
   const models = isObj(doc.models) ? doc.models : undefined;
+  const saved = stash.prior;
   const writtenModels = states.map(st => st.written.defaultModelId).filter((id): id is string => id !== null);
-  if (models && writtenModels.length > 0) {
-    if (writtenModels.includes(models.defaultModelId as string)) {
-      if (stash.prior.defaultModelId.present) models.defaultModelId = stash.prior.defaultModelId.value; else delete models.defaultModelId;
-    } else kept.push("models.defaultModelId");
+  const gatewayMatches = states.some(st => st.written.gateway !== null && same(doc.gateway, st.written.gateway));
+  const defaultMatches = writtenModels.some(id => models?.defaultModelId === id);
+  const listWasRemoved = saved.list.present && (models !== undefined || doc.models === undefined) && models?.list === undefined;
+
+  // A prior value may already be in place if a previous restore could not remove the record.
+  const conflicts: string[] = [];
+  if (!gatewayMatches && !same(doc.gateway, saved.gateway.value)) conflicts.push("gateway");
+  if (writtenModels.length > 0 && !defaultMatches && !same(models?.defaultModelId, saved.defaultModelId.value)) {
+    conflicts.push("models.defaultModelId");
   }
-  if (stash.prior.list.present) {
+  if (saved.list.present && !listWasRemoved && !same(models?.list, saved.list.value)) conflicts.push("models.list");
+  if (conflicts.length) {
+    return clientRefusal(`Antigravity settings changed at ${conflicts.join(", ")}. The restore record was kept.`, "unsupported-file");
+  }
+
+  if (gatewayMatches) {
+    if (saved.gateway.present) doc.gateway = saved.gateway.value; else delete doc.gateway;
+  }
+  if (models && defaultMatches) {
+    if (saved.defaultModelId.present) models.defaultModelId = saved.defaultModelId.value; else delete models.defaultModelId;
+  }
+  if (listWasRemoved) {
     const m: Json = models ?? {};
-    if (!("list" in m)) m.list = stash.prior.list.value; else kept.push("models.list");
+    m.list = saved.list.value;
     doc.models = m;
   }
   const finalModels = isObj(doc.models) ? doc.models : undefined;
   if (finalModels && Object.keys(finalModels).length === 0 && !stash.prior.modelsPresent) delete doc.models;
   writeClientFile(ctx, path, file, serialize(parsed));
-  return done("path-wise", `The file changed after OpenCodex wrote it, so only the gateway, models.defaultModelId and models.list entries were restored; your other edits were kept.${kept.length ? ` Left as you had them: ${kept.join(", ")}.` : ""}`, [path]);
+  return done("path-wise", `The file changed after OpenCodex wrote it, so only the gateway, models.defaultModelId and models.list entries were restored; your other edits were kept.`, [path]);
 }
 
 export const ANTIGRAVITY_CONNECTOR: GatewayClientConnector = {

@@ -73,3 +73,5 @@ Translated union Combo admission and final child preparation share the hosted Ad
 
 A combo bridge child inherits the intersection of the ingress scope and the current
 configured-key scope at dispatch.
+
+A strict replay miss ends preparation before recovery or upstream dispatch. For a direct canonical ChatGPT route, request preparation records the requested model and effort, provider, and route trace using request metadata and a route preview. `tests/codex-integration/issue-702-expired-replay-state.test.ts` covers the resulting zero-send log row.
