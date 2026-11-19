@@ -6,14 +6,12 @@ import { finalizeProviderCacheAffinity } from "./request-log-cache-affinity";
 import { aggregateAttemptUsage } from "./request-log-attempt-usage";
 export { aggregateAttemptUsage } from "./request-log-attempt-usage";
 
-import { KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { attemptAccountChanged, sealRequestAttemptIdentity } from "./request-log-account-rotation";
 export { sealRequestAttemptIdentity };
 import { credentialRecoveryStatus, retainRefusedAccount, sealedCredentialRefusals } from "./request-log-attempt-recovery";
 export { noteAttemptRecoveryWithheld } from "./request-log-attempt-recovery";
 import { bareVerdictRowErrorCode, captureUpstreamTerminalDiagnostics, guardedRowCopy, linkLogField, notifyLinkTurnFinal, upstreamDiagnosticLogFields, type LinkRequestLogCarrier, type UpstreamErrorDiagnostics, type UpstreamErrorPayload } from "./request-log-terminal-status";
 export { noteUpstreamRequestId } from "./request-log-terminal-status";
-import { readBoundedResponseBody } from "../lib/bounded-body";
 import type { ResponsesTerminalStatus } from "../bridge";
 import {
   classifyError,
@@ -1819,28 +1817,6 @@ export function beginRequestAttempt(
     recoveryKinds: [],
     usageStatus: "unreported",
   };
-}
-
-/** Preserve metered JSON failures before recovery consumes/cancels their body. */
-export async function recordKeyAttemptFailure(logCtx: RequestLogContext, response: Response, signal?: AbortSignal,
-  includeUnattributed = false): Promise<OcxUsage | undefined> {
-  const attempt = logCtx.activeAttempt;
-  const keyAttempt = attempt && !sealedCredentialRefusals.has(attempt) && KEY_ACCOUNT_LOG_LABEL_RE.test(attempt.accountLogLabel ?? "") ? attempt : undefined;
-  if (!keyAttempt && !includeUnattributed) return;
-  const ordinal = keyAttempt?.ordinal;
-  if (keyAttempt) keyAttempt.status = response.status;
-  const cancelOriginal = (): void => { try { void response.body?.cancel().catch(() => {}); } catch { /* closed */ } };
-  signal?.addEventListener("abort", cancelOriginal, { once: true });
-  try {
-    if (signal?.aborted) { cancelOriginal(); return; }
-    const body = await readBoundedResponseBody(response.clone(), { signal, totalTimeoutMs: 1000, inactivityTimeoutMs: 1000 });
-    if (body.truncated || body.oversized) return;
-    const value = JSON.parse(body.text);
-    const usage = usageFromResponsesPayload(value?.usage ?? value?.response?.usage);
-    if (usage && keyAttempt && logCtx.activeAttempt === keyAttempt && keyAttempt.ordinal === ordinal) recordKeyWireAttemptUsage(logCtx, usage);
-    return usage;
-  } catch { /* Absent/malformed usage remains unknown; recovery still owns the response. */ }
-  finally { signal?.removeEventListener("abort", cancelOriginal); }
 }
 
 /** Add raw per-response usage before a bridge combines multiple rounds for the client. */

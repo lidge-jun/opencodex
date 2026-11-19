@@ -121,11 +121,11 @@ import {
   recordAdapterTierMetadata,
   recordAttemptRequestedEffort,
   noteProviderAttemptSend,
-  recordKeyAttemptFailure,
   recordKeyAttemptUsage,
   rebindCacheDiagnosticBody,
   type RequestLogContext,
 } from "../request-log";
+import { recordKeyAttemptFailure } from "../request-log-key-failure";
 import { sealCredentialRefusal } from "../credential-recovery-attempt";
 import { sealedCredentialRefusals } from "../request-log-attempt-recovery";
 import type { AttemptRecoveryKind } from "../../usage/log";

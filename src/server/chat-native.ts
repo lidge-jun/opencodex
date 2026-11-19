@@ -83,11 +83,11 @@ import { resolveConnectTimeoutMs, resolveJsonBodyReadTimeoutMs } from "../stall-
 import { linkAbortSignal } from "./responses";
 import {
   noteProviderAttemptSend,
-  recordKeyAttemptFailure,
   recordKeyWireAttemptUsage,
   recordFirstOutput,
   type RequestLogContext,
 } from "./request-log";
+import { recordKeyAttemptFailure } from "./request-log-key-failure";
 import { chatResponseHasUndeclaredToolCalls, UNDECLARED_CHAT_TOOL_MESSAGE, jsonCompletionSse, nativeChatSse, structuredError, usageFromChat } from "./chat-native-sse";
 import { beginInferenceAttempt, type InferenceAttempt } from "./inference/attempt";
 import { createFinalRequestLog } from "./inference/final-log";

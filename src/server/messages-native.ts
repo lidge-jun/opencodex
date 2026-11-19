@@ -133,10 +133,10 @@ import {
   noteProviderAttemptSend,
   recordAttemptRequestedEffort,
   recordFirstOutput,
-  recordKeyAttemptFailure,
   recordKeyWireAttemptUsage,
   type RequestLogContext,
 } from "./request-log";
+import { recordKeyAttemptFailure } from "./request-log-key-failure";
 import { fetchWithHeaderTimeout, physicalSendObserverInit, providerFetch, safeHostLabel, sendWithConnectionPolicy } from "./responses/fetch-helpers";
 import { isLocalUpstream } from "../lib/local-upstream";
 import { resolveConnectTimeoutMs, resolveJsonBodyReadTimeoutMs } from "../stall-timeout";

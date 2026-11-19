@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
   addFinalRequestLog, aggregateAttemptUsage, beginRequestAttempt, finishRequestAttempt, noteProviderAttemptSend,
-  recordKeyAttemptFailure, recordKeyAttemptUsage, applyResponseLogMetadata, sealRequestAttemptIdentity, noteAttemptSend,
+  recordKeyAttemptUsage, applyResponseLogMetadata, sealRequestAttemptIdentity, noteAttemptSend,
   recordAdapterReasoning,
   inspectResponseLogSsePayload, recordAdapterTierMetadata, type RequestLogContext, type RequestLogEntry,
 } from "../../src/server/request-log";
+import { recordKeyAttemptFailure } from "../../src/server/request-log-key-failure";
 import { readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
 import { normalizeUsageEntryForTest } from "../../src/usage/log";
