@@ -84,6 +84,8 @@ if (options.legacyWindowsEvidence) {
   };
   const { proveStandaloneStopRecord } = await import("../../src/cli/stop-restore");
   const { setProcessCommandLinePlatformForTests } = await import("../../src/config/process-state");
+  const { setWindowsProcessNativeForTests } = await import("../../src/service/windows-process-native");
+  setWindowsProcessNativeForTests(null); // Exercise the mocked CIM fallback on Windows too.
   setProcessCommandLinePlatformForTests("win32");
   const windows = await import("../../src/lib/windows-elevation");
   mock.module("../../src/lib/windows-elevation", () => ({ ...windows,
