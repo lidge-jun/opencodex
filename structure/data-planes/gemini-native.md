@@ -44,8 +44,9 @@ default 300-second upload timeout in effect. A stalled upload returns 408. Cance
 shutdown, failure and EOF release the turn and transport. Native parsing owns no replay state.
 
 `src/server/gemini-native-log.ts` records final status, latency, client and admission identity.
-Native errors fail the request-log row. Payloads, provider diagnostics and token usage are
-omitted from the log.
+Native errors fail the request-log row. A physical send marks the [protocol trace](protocol-paths.md)
+as native Gemini, which the dashboard uses for its protocol badge. Payloads, provider diagnostics
+and token usage are omitted from the log.
 
 Coverage lives in `tests/server/gemini-native-routes.test.ts`,
 `tests/server/gemini-native-wire.test.ts` and `tests/server/gemini-native.test.ts`.

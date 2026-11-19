@@ -1157,7 +1157,8 @@ The proxy preserves successful request and response JSON source, including unkno
 large integers, function arguments, and thought signatures. Streaming uses SSE with
 `alt=sse` or a streamed JSON array otherwise. `GET /v1beta/models` and model lookup keep the
 configured, scoped catalog and also expose eligible native wire aliases that route back
-to their Antigravity model.
+to their Antigravity model. Requests sent through the native path show **Gemini → Gemini · Native**
+in the dashboard's request logs.
 
 If an upstream payload contains bound account credentials, the proxy returns a generic
 Gemini error. A valid upstream `[DONE]` or a Gemini error ends stream delivery.

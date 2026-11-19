@@ -88,7 +88,7 @@ native lane, and the request's features; the Messages ingress (`src/server/claud
 marks caller-forward passthrough and the managed native lane as native, the translated path as
 the bridge, and a disabled surface or a compatibility reject as blocked. The Responses ingress needs no mark: its
 path follows the final adapter's wire. Marks live in WeakMaps keyed by the request log context
-and the live attempt objects, and no mark function throws into the request.
+and the live attempt objects. The native Gemini transport marks its same-wire path when it sends.
 
 `addFinalRequestLog` derives one `ProtocolTraceV1` through `path.ts`: a blocked mark wins with
 empty paths; otherwise each attempt gets the lane-derived path (or an explicit attempt mark),

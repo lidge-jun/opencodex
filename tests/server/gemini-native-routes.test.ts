@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { saveCredential } from "../../src/oauth/store";
 import { startServer } from "../../src/server";
+import { getRequestLogEntries } from "../../src/server/request-log";
 import { nativeGeminiDestination } from "../../src/server/gemini-native-catalog";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -106,6 +107,14 @@ test("opted-in Gemini routes preserve native JSON and replace every ingress cred
     expect(response.headers.get("x-opencodex-request-id")).toBeTruthy();
     expect(response.headers.has("set-cookie")).toBe(false);
     expect(await response.text()).toBe(PAYLOAD);
+    const log = getRequestLogEntries().find(row => row.requestId === response.headers.get("x-opencodex-request-id"));
+    expect(log?.protocolTrace).toMatchObject({
+      inbound: "gemini",
+      upstream: "gemini",
+      mode: "native",
+      requestPath: ["gemini", "gemini"],
+      responsePath: ["gemini", "gemini"],
+    });
     expect(seen).toHaveLength(1);
     expect(seen[0]!.url.href).toBe(CCA + "/v1internal:generateContent");
     expect(seen[0]!.headers.get("authorization")).toBe("Bearer " + OAUTH_TOKEN);
@@ -172,6 +181,12 @@ test("native selection shares key, origin, host, and model-scope refusals", asyn
       const response = await post(base, generation(), { ...headers });
       expect(response.status).toBe(status);
       expect(await response.json()).toMatchObject({ error: { code: status, status: errorStatus } });
+      const requestId = response.headers.get("x-opencodex-request-id");
+      if (requestId) {
+        const log = getRequestLogEntries().find(row => row.requestId === requestId);
+        expect(log).toBeDefined();
+        expect(log?.protocolTrace).toBeUndefined();
+      }
     }
     expect(seen).toHaveLength(0);
     expect((await get(base, generation())).headers.get("allow")).toBe("POST");

@@ -1,4 +1,5 @@
 import type { OcxConfig } from "../types";
+import { markNativeGeminiProtocol } from "../protocols/trace";
 import { getValidAccessSnapshotForAccount, forceRefreshOAuthAccessSnapshot, OAuthLoginRequiredError, OAuthAccountPausedError, OAuthTokenRefreshBusyError, OAuthTokenRefreshStaleError, type OAuthAccessSnapshot } from "../oauth";
 import { getAccountSet, getAccountCredentialWithStatus } from "../oauth/store";
 import { getProviderRegistryEntry } from "../providers/registry";
@@ -139,10 +140,12 @@ export async function handleGeminiNative(
           credential.refresh, credential.projectId, credential.accountId, credential.email]) {
           if (value) boundCredentials.add(value);
         }
+        const body = wrapGeminiRequest(raw, model, access.projectId!);
+        if (logCtx) markNativeGeminiProtocol(logCtx);
         return fetchWithAttemptDeadline(`${baseUrl.replace(/\/$/, "")}/v1internal:${method}`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${access.accessToken}`, "User-Agent": antigravityUserAgentForWireModel(model) },
-          body: wrapGeminiRequest(raw, model, access.projectId!),
+          body,
         }, config.connectTimeoutMs ?? 200_000, ac.signal, true, deps.fetch);
       });
       if (upstream.status !== 401 || attempt === 1) break;
