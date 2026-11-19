@@ -118,8 +118,6 @@ round trip; `tests/server/upstream-error-detail-boundaries.test.ts` drives nativ
 passthrough and both Messages lanes against an upstream that echoes its credential, and checks the live
 row, `usage.jsonl`, hydration and console output.
 
-The combo ladder checks the resolved child route against both the ingress model scope and the current configured-key scope. A refused member is skipped for an eligible sibling first; when none remains, the local scope refusal uses the original client selector.
-
 ## Service tier and model identity
 
 A recorded response service tier is a member of `RESPONSE_SERVICE_TIERS` in
@@ -269,10 +267,8 @@ the original label in process-local options. Compact captures that label from th
 profile id to the message or request row. Command Code plan refusals use fixed wording because
 the adapter request contains the resolved wire model. Local model refusals project their request
 rows to client or catalog model identities and validated provider ids, omitting an untrusted routing decision. `projectAdmissionModelDeniedLog` in `src/server/admission-model-scope.ts` applies that bound before any Chat, Claude or native Messages final-log write, and before returning late guard, compact and sidecar refusals. The response builder only builds the owned envelope. The projected original selector (or fixed placeholder) is recorded explicitly even when compact routing has not initialized the context. Input-admission projection runs before either buffered or streaming delivery. Input-only ceilings are named as input limits; the actual shared context window remains separate in both direct refusals and combo-exhaustion wording. No provider diagnostic
-is interpolated into those local messages. No serialized flag, code or header mints identity.
-Locally generated combo exhaustion returns HTTP 503 across all three wires. Chat Completions uses
-`server_error` with code `server_is_overloaded`. Messages uses `api_error` with code
-`combo_unavailable`, and Responses uses `server_error` with code `combo_unavailable`.
+is interpolated into those local messages. No serialized flag, code or header mints identity. The combo ladder checks the resolved child route against both the ingress model scope and the current configured-key scope. A refused member is skipped for an eligible sibling first; when none remains, the local scope refusal uses the original client selector.
+Locally generated combo exhaustion returns HTTP 503 across all three wires. Chat Completions uses `server_error` with code `server_is_overloaded`. Messages uses `api_error` with code `combo_unavailable`, and Responses uses `server_error` with code `combo_unavailable`.
 The shared builders live in `src/combos/resolve.ts`, `src/server/admission-model-scope.ts`,
 `src/server/responses/input-admission.ts` and `src/oauth/generic-account-failover.ts`.
 `src/lib/upstream-retry.ts` owns the retry constructors. For a transient 5xx, `fetchWithTransientRetry`
