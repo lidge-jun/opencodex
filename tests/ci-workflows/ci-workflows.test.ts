@@ -111,11 +111,12 @@ describe("GitHub Actions hardening", () => {
     };
 
     // Job-scoped: a global count still passes if values are swapped between jobs.
-    // The Linux full-suite budget includes setup and cleanup around bounded
-    // batches. Runs 44462803582 and 44463273114 exhausted 15m with healthy
-    // progress; only that outer budget changes. Other jobs keep their own bounds.
+    // Pin ownership explicitly. The Windows leg is sharded like the Linux ones
+    // since 8034cd7c0 — a single leg reached 30m on a green suite and was killed
+    // in cleanup, so each shard now holds the same 15m a Linux shard holds. A
+    // shard that needs longer is wedged, not slow.
     expect(ci.jobs?.["select-windows-runner"]?.["timeout-minutes"]).toBe(2);
-    expect(ci.jobs?.test?.["timeout-minutes"]).toBe(18);
+    expect(ci.jobs?.test?.["timeout-minutes"]).toBe(15);
     expect(ci.jobs?.gates?.["timeout-minutes"]).toBe(15);
     // 30 with four shards: run 43508374033 cancelled all four at the 20-minute
     // wall with no failing tests, and no fifth macOS slot exists for another
