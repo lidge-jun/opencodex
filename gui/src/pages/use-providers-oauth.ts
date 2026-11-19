@@ -2,14 +2,18 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import type { TFn } from "../i18n/shared";
 import { readJsonIfOk } from "../fetch-json";
 import { openBrowserRequestField } from "../oauth-open-browser-pref";
-import { afterOAuthCancellation, cancelOAuthLogin } from "../oauth-cancellation-barrier";
+import { oauthRiskAcknowledgementBody } from "../oauth-tos-risk";
+import { afterOAuthCancellation, cancelOAuthLogin, oauthLoginStatusUrl, readOAuthLoginStart, type OAuthLoginAttempt } from "../oauth-cancellation-barrier";
 import { parseBrowserLaunch, type BrowserLaunch } from "../oauth-browser-launch";
-import { loginPollAttempts } from "../oauth-login-budget";
+import { BROWSER_LOGIN_POLL_ATTEMPTS, loginPollAttempts } from "../oauth-login-budget";
+import { isServerOwnedLogin, serverOwnedLoginAttempts } from "../oauth-server-owned-login";
 import type { OAuthAccount, OAuthStatus } from "./providers-shared";
 import { oauthLabel } from "./providers-shared";
 import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
 import { errorMessageFrom } from "../api-error";
 import { useRenderTargetCapture } from "../use-render-target-capture";
+import { confirmAction } from "../action-dialogs";
+import { oauthCredentialSiblingsOf, oauthCredentialSlot } from "../../../src/oauth/credential-siblings";
 
 type AccountSet = { activeAccountId: string | null; accounts: OAuthAccount[] };
 
@@ -65,7 +69,10 @@ export function useProvidersOAuth({
   const targetKeyRef = useRef(targetKey ?? apiBase);
   useLayoutEffect(() => { targetKeyRef.current = targetKey ?? apiBase; }, [apiBase, targetKey]);
   const activeLoginGenerationsRef = useRef(new Map<string, number>());
-  const activeLoginCapturesRef = useRef(new Map<string, ApiTargetCapture>());
+  const activeLoginCapturesRef = useRef(new Map<string, OAuthLoginAttempt>());
+  // The capture of each provider's last login that ended on this target, so a code pasted into
+  // the add-provider modal's Accounts row can say the login ended (#8618).
+  const endedLoginCapturesRef = useRef(new Map<string, ApiTargetCapture>());
   useEffect(() => {
     // The old target's busy state and device URL must not survive under the new label.
     // Cancel each active login on the target it actually started against; the map is the
@@ -73,10 +80,14 @@ export function useProvidersOAuth({
     const active = [...activeLoginCapturesRef.current];
     activeLoginGenerationsRef.current.clear();
     activeLoginCapturesRef.current.clear();
+    endedLoginCapturesRef.current.clear();
     setBusy(null);
     setLoginInfo(null);
     setStatus("");
-    for (const [provider, capture] of active) void cancelOAuthLogin(capture, provider);
+    for (const [provider, capture] of active) {
+      if (isServerOwnedLogin(provider)) continue;
+      void cancelOAuthLogin(capture, provider);
+    }
   }, [setBusy, setLoginInfo, setStatus, targetKey]);
 
   const bumpLoginGeneration = useCallback((provider: string) => {
@@ -89,7 +100,7 @@ export function useProvidersOAuth({
    * Cancel a login on the target it started against. A missing capture fails closed:
    * falling back to the live target would send an old login's cancel to the new server.
    */
-  const cancelServerLogin = useCallback((capture: ApiTargetCapture, provider: string) =>
+  const cancelServerLogin = useCallback((capture: OAuthLoginAttempt, provider: string) =>
     cancelOAuthLogin(capture, provider), []);
 
   const reloadAccountsAfterLogin = useCallback(async (provider: string) => {
@@ -125,6 +136,15 @@ export function useProvidersOAuth({
       for (const [provider, generation] of active) {
         const capture = activeLoginCapturesRef.current.get(provider);
         activeLoginCapturesRef.current.delete(provider);
+        if (isServerOwnedLogin(provider)) {
+          // A page restored from the back-forward cache still needs its original Cancel target.
+          if (clearUi && capture) {
+            activeLoginGenerationsRef.current.set(provider, generation);
+            activeLoginCapturesRef.current.set(provider, capture);
+          }
+          continue;
+        }
+        if (capture) endedLoginCapturesRef.current.set(provider, capture);
         if (oauthLoginGenerationRef.current!.get(provider) === generation) bumpLoginGeneration(provider);
         if (clearUi) {
           setBusy(current => current === provider ? null : current);
@@ -148,6 +168,7 @@ export function useProvidersOAuth({
     const capture = activeLoginCapturesRef.current.get(provider);
     activeLoginGenerationsRef.current.delete(provider);
     activeLoginCapturesRef.current.delete(provider);
+    if (capture) endedLoginCapturesRef.current.set(provider, capture);
     // Clear the local UI at the click, even if the captured target has already changed.
     setBusy(current => current === provider ? null : current);
     setLoginInfo(current => current?.provider === provider ? null : current);
@@ -158,9 +179,11 @@ export function useProvidersOAuth({
     notify(t("prov.loginCancelled", { provider: oauthLabel(provider) }), false);
   }, [aliveRef, apiBase, bumpLoginGeneration, cancelServerLogin, notify, setBusy, setLoginInfo, t, targetKey]);
 
-  const loginOAuth = async (provider: string, addAccount = false, accountId?: string) => {
-    const capture = renderCapture;
+  /** `riskAcknowledged` comes only from the warning dialog's Continue (see oauthRiskAcknowledgementBody). */
+  const loginOAuth = async (provider: string, addAccount = false, accountId?: string, riskAcknowledged = false, row?: string) => {
+    const capture: OAuthLoginAttempt = { ...renderCapture };
     activeLoginCapturesRef.current.set(provider, capture);
+    endedLoginCapturesRef.current.delete(provider);
     const generation = bumpLoginGeneration(provider);
     const targetId = targetKey ?? apiBase;
     // The key alone cannot tell A from A again after A-B-A; the capture generation does.
@@ -172,7 +195,7 @@ export function useProvidersOAuth({
     setStatus("");
     setLoginInfo(null);
     try {
-      const res = await afterOAuthCancellation(capture, provider, () => {
+      const result = await afterOAuthCancellation(capture, provider, () => {
         if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
         return targetFetch(capture, `${apiBase}/api/oauth/login`, {
           method: "POST",
@@ -185,12 +208,16 @@ export function useProvidersOAuth({
             ...openBrowserRequestField(),
             ...(addAccount || reauthTargetId ? { addAccount: true } : {}),
             ...(reauthTargetId ? { accountId: reauthTargetId, reauth: true } : {}),
+            ...(row ? { row } : {}),
+            ...oauthRiskAcknowledgementBody(provider, riskAcknowledged),
           }),
-        });
+        }).then(res => readOAuthLoginStart(capture, provider, res));
       });
-      if (!res || oauthLoginGenerationRef.current!.get(provider) !== generation || !targetCurrent()) return;
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({})) as { error?: string };
+      if (!result) return;
+      const { data, errorResponse } = result;
+      if (errorResponse) {
+        if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
+        const data = await errorResponse.json().catch(() => ({})) as { error?: string };
         if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
         notify(errorMessageFrom(
           data,
@@ -199,7 +226,6 @@ export function useProvidersOAuth({
         ), false);
         return;
       }
-      const data = await res.json() as { url?: string; instructions?: string; deviceCode?: string; browserLaunch?: unknown };
       if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
       const browserLaunch = parseBrowserLaunch(data.browserLaunch);
       if (data.url || data.instructions || data.deviceCode) {
@@ -210,16 +236,25 @@ export function useProvidersOAuth({
       // A device code can arrive with the POST or with a later status hint; either one stretches
       // the budget to the grant's lifetime (see oauth-login-budget.ts).
       let deviceFlow = Boolean(data.deviceCode);
-      for (let i = 0; i < loginPollAttempts(deviceFlow, 2000, 150) && targetCurrent() && oauthLoginGenerationRef.current!.get(provider) === generation; i++) {
+      const pollAttempts = isServerOwnedLogin(provider)
+        ? serverOwnedLoginAttempts(2000)
+        : BROWSER_LOGIN_POLL_ATTEMPTS;
+      for (let i = 0; i < loginPollAttempts(deviceFlow, 2000, pollAttempts) && targetCurrent() && oauthLoginGenerationRef.current!.get(provider) === generation; i++) {
         await new Promise(r => setTimeout(r, 2000));
         if (oauthLoginGenerationRef.current!.get(provider) !== generation || !targetCurrent()) return;
         const isCurrentStatusRead = captureOauthStatusRead?.(provider);
-        const sRes = await targetFetch(capture, `${apiBase}/api/oauth/status?provider=${provider}`).catch(() => null);
+        const sRes = await targetFetch(capture, oauthLoginStatusUrl(apiBase, provider, capture.flowId)).catch(() => null);
         const s: (OAuthStatus & { accounts?: OAuthAccount[]; activeAccountId?: string | null }) | null = sRes
           ? ((await readJsonIfOk<OAuthStatus & { accounts?: OAuthAccount[]; activeAccountId?: string | null }>(sRes)) ?? null)
           : null;
         if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
         if (isCurrentStatusRead && !isCurrentStatusRead()) continue;
+        if (capture.flowId && sRes?.status === 404) {
+          notify(t("prov.loginExpired"), false);
+          setLoginInfo(null);
+          finished = true;
+          break;
+        }
         if (!s) continue;
         if (s.error) {
           if (invalidateOauthStatusReads?.(provider) === false) return;
@@ -236,9 +271,10 @@ export function useProvidersOAuth({
           break;
         }
         const statusCount = s.accounts?.length ?? 0;
-        const completed = addAccount || reauthTargetId
-          ? (statusCount > baselineCount || s.done === true)
-          : (s.loggedIn || s.done === true);
+        const completed = capture.flowId ? s.status === "complete"
+          : addAccount || reauthTargetId
+            ? (statusCount > baselineCount || s.done === true)
+            : (s.loggedIn || s.done === true);
         if (completed) {
           if (invalidateOauthStatusReads?.(provider) === false) return;
           setOauthStatus(prev => ({ ...prev, [provider]: s }));
@@ -270,7 +306,8 @@ export function useProvidersOAuth({
             }));
           }
           setLoginInfo(null);
-          onLoginSettled?.(provider);
+          // The row this login published (Kimi (Responses)) is the one to select; it may be the only one.
+          onLoginSettled?.(row ?? provider);
           await reloadAccountsAfterLogin(provider);
           if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
           const sameIdentityAdd = addAccount && !reauthTargetId && statusCount <= baselineCount;
@@ -308,6 +345,7 @@ export function useProvidersOAuth({
       if (activeLoginGenerationsRef.current.get(provider) === generation) {
         activeLoginGenerationsRef.current.delete(provider);
         activeLoginCapturesRef.current.delete(provider);
+        endedLoginCapturesRef.current.set(provider, capture);
       }
       if (targetCurrent() && oauthLoginGenerationRef.current!.get(provider) === generation) setBusy(current => current === provider ? null : current);
     }
@@ -316,6 +354,19 @@ export function useProvidersOAuth({
   const logoutOAuth = async (provider: string) => {
     const capture = renderCapture;
     const logoutTarget = targetKey ?? apiBase;
+    // A shared-login row (Kimi (Responses)) signs out the owner's Chat row too: say so first.
+    const sharedOwner = oauthCredentialSlot(provider) !== provider ? oauthCredentialSlot(provider) : undefined;
+    // Every other row on this login (kimi <-> kimi-responses): logout removes their active account too.
+    const sharedRows = [oauthCredentialSlot(provider), ...oauthCredentialSiblingsOf(oauthCredentialSlot(provider))]
+      .filter(row => row !== provider);
+    if (sharedOwner) {
+      const consented = await confirmAction({
+        message: t("prov.logoutConfirmShared", { provider: oauthLabel(sharedOwner) }),
+        confirmLabel: t("prov.logout"),
+        tone: "danger",
+      });
+      if (!consented || !aliveRef.current || targetKeyRef.current !== logoutTarget || !isApiTargetCaptureCurrent(capture)) return;
+    }
     const finishLogout = beginAccountLogout?.(provider);
     if (beginAccountLogout && !finishLogout) {
       if (aliveRef.current) notify(t("prov.logoutBusy"), false);
@@ -333,6 +384,14 @@ export function useProvidersOAuth({
     bumpLoginGeneration(provider);
     setBusy(current => current === provider ? null : current);
     setLoginInfo(current => current?.provider === provider ? null : current);
+    // Fence the other rows on this login too, and the owner's login flows (keyed by kimi), so a
+    // late status read or login poll cannot report the removed account as signed in.
+    for (const row of sharedRows) invalidateOauthStatusReads?.(row);
+    if (sharedOwner) {
+      bumpLoginGeneration(sharedOwner);
+      setBusy(current => current === sharedOwner ? null : current);
+      setLoginInfo(current => current?.provider === sharedOwner ? null : current);
+    }
     let success = false;
     let failed = false;
     try {
@@ -351,19 +410,20 @@ export function useProvidersOAuth({
     // A read started while the server was processing logout can still describe
     // the old account. Only a read started after settlement can verify status.
     if (invalidateOauthStatusReads?.(provider, false) === false) return;
+    for (const row of sharedRows) invalidateOauthStatusReads?.(row);
     clearStatus();
     if (!success) {
-      void fetchAccountSets([provider]).catch(() => {});
+      void fetchAccountSets([provider, ...sharedRows]).catch(() => {});
       void fetchOauth();
       return;
     }
     try {
       await Promise.all([
-        fetchAccountSets([provider]), fetchOauth(), fetchConfig(), fetchProviderQuotas(true),
+        fetchAccountSets([provider, ...sharedRows]), fetchOauth(), fetchConfig(), fetchProviderQuotas(true),
       ]);
       bumpModelsRefresh();
       if (targetKeyRef.current === logoutTarget && isApiTargetCaptureCurrent(capture))
-        notify(t("prov.logoutOk", { provider: oauthLabel(provider) }), true);
+        notify(sharedOwner ? t("prov.logoutOkShared", { provider: oauthLabel(sharedOwner) }) : t("prov.logoutOk", { provider: oauthLabel(provider) }), true);
     } catch {
       if (targetKeyRef.current === logoutTarget && isApiTargetCaptureCurrent(capture))
         notify(t("prov.logoutFail", { provider: oauthLabel(provider) }), false);
@@ -373,5 +433,6 @@ export function useProvidersOAuth({
   return {
     cancelLoginOAuth, loginOAuth, logoutOAuth, onNativeLoginSettled,
     loginCapture: (provider: string) => activeLoginCapturesRef.current.get(provider),
+    loginEndedCapture: (provider: string) => endedLoginCapturesRef.current.get(provider),
   };
 }

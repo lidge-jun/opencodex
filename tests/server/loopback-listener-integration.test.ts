@@ -7,7 +7,7 @@
  * one, or serves routes outside its allowlist. These tests start real servers and speak HTTP
  * to them, so those regressions have somewhere to fail.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { connect } from "node:net";
@@ -26,6 +26,13 @@ import {
 import type { OcxConfig } from "../../src/types";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { allowOwnInterfaceAddressesForTest } from "../helpers/network-egress-guard";
+
+// This suite connects to the machine's own non-loopback interface address on purpose; the
+// test network guard (#8848) refuses that address everywhere else.
+let restoreEgressGuard: (() => void) | undefined;
+beforeAll(() => { restoreEgressGuard = allowOwnInterfaceAddressesForTest(); });
+afterAll(() => restoreEgressGuard?.());
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;

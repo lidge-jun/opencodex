@@ -13,6 +13,8 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   codexToolMode: "none",
   projectContext: "none",
   requestPacing: "nested-models",
+  connectTimeoutMs: "none",
+  stallTimeoutSec: "none",
   mcpMaxTools: "none",
   mcpMaxSchemaBytes: "none",
   mcpMaxResultBytes: "none",
@@ -144,6 +146,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   requiresReasoningPlaceholderModels: "list",
   showThinkingSummary: "none",
   hideRawReasoning: "none",
+  rawReasoningAsSummary: "none",
   retryOn429: "none",
   transientRetryOn5xx: "none",
   retryOnReset: "none",
@@ -154,7 +157,9 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   thinkingBudgetModels: "list",
   escapeBuiltinToolNames: "none",
   anthropicEofTolerance: "none",
+  anthropicImageContextRecovery: "none",
   forwardAdvisorTool: "none",
+  perMessageEffort: "none",
   noVisionModels: "list",
   googleMode: "none",
   googleToolSchemaPolicy: "none",
@@ -165,7 +170,9 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   unsafeAllowNativeLocalExec: "none",
   nativeLocalExec: "none",
   messagePhaseInference: "none",
+  estimateMissingUsage: "none",
   tlsProfile: "none",
+  anthropicOAuthUserInstructions: "none",
 } as const satisfies Record<keyof OcxProviderConfig, ModelRenameRole>;
 
 function fieldsWithRole(role: ModelRenameRole): string[] {

@@ -25,7 +25,10 @@ export type ModelOption = {
 
 export type ComboAddIntent = "blank" | "jev-auto";
 
+import type { ReactNode } from "react";
+
 export interface ComboWorkspaceProps {
+  renderSuggestions?: (lockedComboId: string | null) => ReactNode;
   /** Management API target; enables the per-candidate path preview and JEV stats in the detail panel. */
   apiBase?: string;
   combos: ComboItem[];

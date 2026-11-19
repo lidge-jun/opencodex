@@ -17,7 +17,8 @@ import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import type { RequestFailureStage } from "../../lib/request-failure-model";
 import type { RequestLogContext } from "../request-log";
 import { carryResponseToolOwnership } from "./response-tool-ownership";
-import { createSseInspector } from "../relay";
+import { responsesFrameIsReplayUnsafe } from "./codex-ws-wire";
+import { createSseInspector, isNativePassthroughSseResponse } from "../relay";
 import { sseDataPayload } from "../sse-payload-rewrite";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 import { REQUIRED_TOOL_CONTRACT_CODE } from "../../lib/errors";
@@ -138,7 +139,8 @@ function snapshotMetadataIsSafe(snapshot: Record<string, unknown>): boolean {
   if (typeof snapshot.tool_choice === "string" && !["none", "auto", "required"].includes(snapshot.tool_choice)) return false;
   if (snapshot.tool_choice != null && typeof snapshot.tool_choice !== "string") {
     if (!recordWithOnly(snapshot.tool_choice, ["type", "name", "namespace", "function"])
-      || !["function", "custom", "tool_search"].includes(String(snapshot.tool_choice.type))
+      || typeof snapshot.tool_choice.type !== "string"
+      || !["function", "custom", "tool_search"].includes(snapshot.tool_choice.type)
       || (snapshot.tool_choice.name != null && typeof snapshot.tool_choice.name !== "string")
       || (snapshot.tool_choice.namespace != null && typeof snapshot.tool_choice.namespace !== "string")) return false;
     const selected = snapshot.tool_choice.function;
@@ -160,7 +162,8 @@ function snapshotMetadataIsSafe(snapshot: Record<string, unknown>): boolean {
       || (snapshot.text.verbosity != null && typeof snapshot.text.verbosity !== "string")) return false;
     const format = snapshot.text.format;
     if (format != null && (!recordWithOnly(format, ["type", "name", "description", "schema", "strict"])
-      || !["text", "json_object", "json_schema"].includes(String(format.type))
+      || typeof format.type !== "string"
+      || !["text", "json_object", "json_schema"].includes(format.type)
       || (format.name != null && typeof format.name !== "string")
       || (format.description != null && typeof format.description !== "string")
       || (format.schema != null && !isRecord(format.schema))
@@ -418,6 +421,7 @@ function retryableZeroOutputTerminal(payload: unknown, context?: object): boolea
  */
 export function comboStreamPayloadCommitsOutput(payload: unknown): boolean {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return true;
+  if (responsesFrameIsReplayUnsafe(payload as Record<string, unknown>)) return true;
   const type = (payload as { type?: unknown }).type;
   if (typeof type !== "string") return true;
   if (PRE_OUTPUT_CONTROL_EVENTS.has(type)) {
@@ -426,7 +430,6 @@ export function comboStreamPayloadCommitsOutput(payload: unknown): boolean {
     const event = payload as Record<string, unknown>;
     const conflictingStatus = (status: unknown) => status != null && status !== "queued" && status !== "in_progress";
     if (Object.keys(event).some(key => !PRE_OUTPUT_EVENT_FIELDS.has(key))) return true;
-    if (Object.hasOwn(event, "replayUnsafe") && event.replayUnsafe !== false) return true;
     if (event.sequence_number !== undefined && !(typeof event.sequence_number === "number"
       && Number.isSafeInteger(event.sequence_number) && event.sequence_number >= 0)) return true;
     if (event.error != null || event.last_error != null || event.incomplete_details != null
@@ -440,7 +443,6 @@ export function comboStreamPayloadCommitsOutput(payload: unknown): boolean {
       if (Object.keys(snapshot).some(key => !PRE_OUTPUT_SNAPSHOT_FIELDS.has(key))) return true;
       if (!snapshotMetadataIsSafe(snapshot)) return true;
       if (snapshot.output !== undefined && (!Array.isArray(snapshot.output) || snapshot.output.length > 0)) return true;
-      if (Object.hasOwn(snapshot, "replayUnsafe") && snapshot.replayUnsafe !== false) return true;
       if (snapshot.error != null || snapshot.last_error != null || snapshot.incomplete_details != null
         || conflictingStatus(snapshot.status)) return true;
       if (snapshot.completed_at != null || (snapshot.end_turn != null && snapshot.end_turn !== false)
@@ -530,6 +532,7 @@ function failedTerminalResponse(
   response: Response,
   terminalPayload: Record<string, unknown>,
   logCtx: RequestLogContext,
+  collectUsage: boolean,
 ): Response {
   const nested = terminalPayload.response;
   const terminalResponse = nested && typeof nested === "object" && !Array.isArray(nested)
@@ -573,7 +576,8 @@ function failedTerminalResponse(
   headers.set("content-type", "application/json");
   headers.delete("content-length");
   headers.delete("content-encoding");
-  const usage = terminalResponse.usage;
+  const usage = collectUsage && !logCtx.usageFromBridge && !logCtx.clientResponseUsage
+    ? terminalResponse.usage : undefined;
   return new Response(JSON.stringify({
     error,
     ...(typeof terminalPayload.detail === "string" ? { detail: terminalPayload.detail } : {}),
@@ -654,8 +658,11 @@ export async function preflightComboStreamResponse(
   let retryableTerminalPayload: Record<string, unknown> | undefined;
   let holdTimer: ReturnType<typeof setTimeout> | undefined;
   let holdDeadline: Promise<"hold-expired"> | undefined;
+  // Native delivery already inspects raw usage; these bytes may contain display estimates.
+  const collectUsage = !isNativePassthroughSseResponse(response);
   const inspector = createSseInspector({
     logCtx,
+    collectUsage,
     onFrame: frame => {
       if (terminalStatus === undefined && !outputCommitted && !retryableTerminalPayload
         && ambiguousSseFrame(frame)) outputCommitted = true;
@@ -665,31 +672,43 @@ export async function preflightComboStreamResponse(
     onOpaquePayload: () => { outputCommitted = true; },
     onParsedPayload: payload => {
       if (terminalStatus !== undefined || outputCommitted || retryableTerminalPayload) return;
-      if (payload !== null && typeof payload === "object" && !Array.isArray(payload)
-        && (payload as { type?: unknown }).type === "response.created") responseCreated = true;
-      const retryable = retryableTerminalFor(payload);
-      const matchedBareError = retryable && payload !== null && typeof payload === "object"
-        && !Array.isArray(payload) && (payload as { type?: unknown }).type === "error";
-      // A zero-output bare error is terminal evidence. Explicit client errors stay
-      // committed; unknown and retryable upstream failures may advance the combo.
-      const heldReasoning = options?.requiredToolPrelude && requiredToolReasoningPrelude(payload);
-      if (heldReasoning) holdDeadline ??= new Promise(resolve => {
-        holdTimer = setTimeout(() => resolve("hold-expired"), COMBO_REQUIRED_TOOL_REASONING_HOLD_MS);
-      });
-      if (comboStreamPayloadCommitsOutput(payload) && !matchedBareError && !heldReasoning) outputCommitted = true;
-      if (options?.requiredToolPrelude && payload && typeof payload === "object") {
-        const event = payload as { type?: unknown; response?: { output?: unknown; error?: { code?: unknown; retryable?: unknown } } };
-        const output = event.response?.output;
-        const contractFailure = event.type === "response.failed" && event.response?.error?.code === REQUIRED_TOOL_CONTRACT_CODE
-          && event.response.error.retryable !== false && Array.isArray(output) && output.every(item =>
-            item !== null && typeof item === "object" && !Array.isArray(item)
-            && ["message", "reasoning"].includes((item as { type: string }).type));
-        // Other lifecycle/terminal snapshots can hide effects too. Only our checked contract
-        // failure may discard a terminal-only text snapshot that was held in its entirety.
-        if (output !== undefined && (!Array.isArray(output) || output.length > 0) && !contractFailure) outputCommitted = true;
+      try {
+        const event = payload !== null && typeof payload === "object" && !Array.isArray(payload)
+          ? payload as Record<string, unknown> : undefined;
+        if (event && responsesFrameIsReplayUnsafe(event)) {
+          outputCommitted = true;
+          return;
+        }
+        if (event?.type === "response.created") responseCreated = true;
+        const retryable = retryableTerminalFor(payload);
+        const matchedBareError = retryable && payload !== null && typeof payload === "object"
+          && !Array.isArray(payload) && (payload as { type?: unknown }).type === "error";
+        // A zero-output bare error is terminal evidence. Explicit client errors stay
+        // committed; unknown and retryable upstream failures may advance the combo.
+        const heldReasoning = options?.requiredToolPrelude && requiredToolReasoningPrelude(payload);
+        if (heldReasoning) holdDeadline ??= new Promise(resolve => {
+          holdTimer = setTimeout(() => resolve("hold-expired"), COMBO_REQUIRED_TOOL_REASONING_HOLD_MS);
+        });
+        if (comboStreamPayloadCommitsOutput(payload) && !matchedBareError && !heldReasoning) outputCommitted = true;
+        if (options?.requiredToolPrelude && payload && typeof payload === "object") {
+          const event = payload as { type?: unknown; response?: { output?: unknown; error?: { code?: unknown; retryable?: unknown } } };
+          const output = event.response?.output;
+          const contractFailure = event.type === "response.failed" && event.response?.error?.code === REQUIRED_TOOL_CONTRACT_CODE
+            && event.response.error.retryable !== false && Array.isArray(output) && output.every(item =>
+              item !== null && typeof item === "object" && !Array.isArray(item)
+              && ["message", "reasoning"].includes((item as { type: string }).type));
+          // Other lifecycle/terminal snapshots can hide effects too. Only our checked contract
+          // failure may discard a terminal-only text snapshot that was held in its entirety.
+          if (output !== undefined && (!Array.isArray(output) || output.length > 0) && !contractFailure) outputCommitted = true;
+        }
+        if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
+        if (retryable) retryableTerminalPayload = payload as Record<string, unknown>;
+      } catch {
+        // The generic inspector swallows observer errors. Replay requires a successful proof
+        // of no effects, so a failed classification keeps this attempt and its original bytes.
+        outputCommitted = true;
+        retryableTerminalPayload = undefined;
       }
-      if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
-      if (retryable) retryableTerminalPayload = payload as Record<string, unknown>;
     },
     onTerminal: status => { terminalStatus = status; },
   });
@@ -756,7 +775,7 @@ export async function preflightComboStreamResponse(
         || retryableTerminalPayload?.type === "error")
         && !outputCommitted && retryableTerminalPayload) {
         await reader.cancel("retrying zero-output combo stream terminal").catch(() => undefined);
-        const failed = failedTerminalResponse(response, retryableTerminalPayload, logCtx);
+        const failed = failedTerminalResponse(response, retryableTerminalPayload, logCtx, collectUsage);
         // The rebuilt envelope keeps only the record. When either the whole frame or that slim
         // envelope reads as a moderation verdict, the combo loop must judge the whole frame: a
         // verdict needs the evidence the envelope dropped (a root code, an innererror), and a veto

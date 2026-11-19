@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,8 +20,9 @@ import {
   type UsageAggregateResult,
 } from "../../src/server/management/usage-aggregate-cache";
 import type { OcxConfig } from "../../src/types/config";
-import { resetUsageReadCacheForTests, type PersistedUsageEntry } from "../../src/usage/log";
+import { resetUsageReadCacheForTests, usageLogRevisionKey, type PersistedUsageEntry, type UsageLogRevision } from "../../src/usage/log";
 import * as usageLedgerScannerModule from "../../src/usage/ledger-scanner";
+import * as usageSummaryModule from "../../src/usage/summary";
 import { getUsageSourceFacets, SourceFacetsBusyError } from "../../src/server/management/usage-source-facets";
 import { refreshUserCostOverlays } from "../../src/usage/user-cost-overlays";
 import { buildRouteDecisionTrace } from "../../src/routing/trace";
@@ -81,6 +82,43 @@ afterEach(() => {
 });
 
 describe("retained usage aggregate cache", () => {
+  test("costly accumulator work yields within one indexed candidate page", async () => {
+    const count = 40;
+    writeFileSync(join(testDir, "usage.jsonl"), Array.from({ length: count }, (_, index) => line(`costly-${index}`)).join(""));
+    // Build the shared index with another filter so ingestion cannot supply the observed yield.
+    const warm = await getFilteredUsageAggregate({ provider: "anthropic" });
+    expect(warm.filterIndex).toMatchObject({ totalRows: count, candidateRows: 0 });
+    let elapsed = 0;
+    let visited = 0;
+    let visitedAtTimer = -1;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const original = usageSummaryModule.createUsageSummaryAccumulator;
+    const clock = spyOn(performance, "now").mockImplementation(() => elapsed);
+    const create = spyOn(usageSummaryModule, "createUsageSummaryAccumulator").mockImplementation(options => {
+      const accumulator = original(options);
+      const add = accumulator.add.bind(accumulator);
+      accumulator.add = value => {
+        add(value);
+        visited += 1;
+        elapsed += 10;
+        if (timer === undefined) timer = setTimeout(() => { visitedAtTimer = visited; }, 0);
+      };
+      return accumulator;
+    });
+    try {
+      const result = await getFilteredUsageAggregate({ provider: "openai" });
+      expect(result.filterIndex).toMatchObject({ totalRows: count, candidateRows: count });
+      expect(visited).toBe(count);
+      expect(visitedAtTimer).toBeGreaterThan(0);
+      expect(visitedAtTimer).toBeLessThan(count);
+      expect(result.accumulator.summarize("all", NOW).summary).toMatchObject({ requests: count, totalTokens: count * 2 });
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      create.mockRestore();
+      clock.mockRestore();
+    }
+  });
+
   test("app breakdowns survive filtered cache appends and match fresh scans", async () => {
     const path = join(testDir, "usage.jsonl");
     const row = (id: string, client: "codex_cli" | "claude_code", apiKeyId: string) => ({ ...entry(id), client, apiKeyId });
@@ -634,6 +672,62 @@ describe("retained usage aggregate cache", () => {
     } finally {
       scanSpy.mockRestore();
     }
+  });
+
+  test("a ChangeTime-only move of the ledger is a content change on POSIX and not on win32", async () => {
+    const base: UsageLogRevision = { path: "usage.jsonl", dev: "1", ino: "2", birthtimeMs: 3, size: 4, mtimeMs: 5, ctimeMs: 6 };
+    const moved = { ...base, ctimeMs: 7 };
+    expect(usageLogRevisionKey(moved, "linux")).not.toBe(usageLogRevisionKey(base, "linux"));
+    expect(usageLogRevisionKey(moved, "darwin")).not.toBe(usageLogRevisionKey(base, "darwin"));
+    expect(usageLogRevisionKey(moved, "win32")).toBe(usageLogRevisionKey(base, "win32"));
+    for (const field of ["path", "dev", "ino", "birthtimeMs", "size", "mtimeMs"] as const) {
+      const changed = { ...base, [field]: typeof base[field] === "number" ? 99 : "99" };
+      expect(usageLogRevisionKey(changed, "win32"), field).not.toBe(usageLogRevisionKey(base, "win32"));
+    }
+  });
+
+  test.skipIf(process.platform === "win32")("win32 reuses every retained aggregate after a ChangeTime-only move", async () => {
+    const ledgerPath = join(testDir, "usage.jsonl");
+    writeFileSync(ledgerPath, `${line("one")}${line("two")}`);
+    const mode = statSync(ledgerPath).mode & 0o777;
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const moveChangeTimeOnly = async () => {
+      const before = statSync(ledgerPath);
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        chmodSync(ledgerPath, (statSync(ledgerPath).mode & 0o777) === mode ? 0o640 : mode);
+        if (statSync(ledgerPath).ctimeMs !== before.ctimeMs) break;
+        await Bun.sleep(5);
+      }
+      const after = statSync(ledgerPath);
+      expect(after.ctimeMs).not.toBe(before.ctimeMs);
+      expect(after.mtimeMs).toBe(before.mtimeMs);
+      expect(after.size).toBe(before.size);
+    };
+    try {
+      Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+      const base = await getUsageAggregate({ now: NOW });
+      const filtered = await getFilteredUsageAggregate({ provider: "openai" });
+      await moveChangeTimeOnly();
+      const baseAgain = await getUsageAggregate({ now: NOW });
+      const filteredAgain = await getFilteredUsageAggregate({ provider: "openai" });
+      expect(baseAgain.update).toBe("unchanged");
+      expect(baseAgain.accumulator).toBe(base.accumulator);
+      expect(filteredAgain.update).toBe("unchanged");
+      expect(filteredAgain.accumulator).toBe(filtered.accumulator);
+      // The moved ChangeTime must not hide a real append on the same retained state.
+      appendFileSync(ledgerPath, line("three"));
+      expect(requests(await getUsageAggregate({ now: NOW }))).toBe(3);
+      expect((await getFilteredUsageAggregate({ provider: "openai" })).update).toBe("append");
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+
+    // The same move on this platform's own rules is still a rewrite signal.
+    resetUsageAggregateCacheForTests();
+    resetUsageReadCacheForTests();
+    await getFilteredUsageAggregate({ provider: "openai" });
+    await moveChangeTimeOnly();
+    expect((await getFilteredUsageAggregate({ provider: "openai" })).update).toBe("rebuild");
   });
 
   test("concurrent cold callers share one full base scan", async () => {

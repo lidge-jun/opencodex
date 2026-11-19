@@ -74,12 +74,17 @@ afterEach(() => {
 });
 
 describe("unattended native and file client admission", () => {
+  test.each([false, true])("owned DeepSeek Harness joins file sync (unattended=%s)", async background => {
+    await syncEnabledClientIntegrations(12345, config, deps(), background ? unattended : {});
+    expect(refresh.mock.calls[0]?.[1]).toContain("dsh");
+  });
+
   test("no Desktop marker skips discovery, and file clients exclude Cline with a fresh admit", async () => {
     const fetch = mock(async () => models);
     expect(await syncEnabledClientIntegrations(12345, config, deps(fetch), unattended)).toEqual([]);
     expect(fetch).not.toHaveBeenCalled(); expect(writer).not.toHaveBeenCalled();
     const args = refresh.mock.calls[0]!;
-    expect(args[1]).toEqual(["mcode", "pi", "aside", "raycast", "omo", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]);
+    expect(args[1]).toEqual(["mcode", "pi", "aside", "raycast", "omo", "commandcode", "dsh", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]);
     expect(args[2]?.refreshOnly).toBe(true); expect(args[2]?.admit?.()).toBe(true);
     config.runtimeRole = "hub"; persist(); expect(args[2]?.admit?.()).toBe(false);
     config.unauthenticatedLoopbackListener = { enabled: true, port: 12346 }; persist();

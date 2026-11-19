@@ -8,6 +8,10 @@ All duplicate hosted-search declarations are omitted together; shared sidecar ba
 uniformly enforce these constraints. A forced hosted-search choice without a surviving declaration
 refuses locally. Typed originals still reach first-party Anthropic through the existing out-of-body
 server-tool lane; native passthrough retains its own declaration. Unrestricted search is unchanged.
+
+An explicitly named hosted Advisor selection keeps its original [declaration and choice](../advisor.md#execution-paths)
+across translated combo and policy candidates. Preparation admits them against the candidate's final route and model scope.
+
 Valid function definitions marked `defer_loading` lower to ordinary callable functions on combo
 Responses/Chat destinations; the flag never drops the function or alone triggers compatibility
 rejection. `src/claude/compatibility.ts` still rejects unsupported top-level deferral, schema-less
@@ -85,9 +89,12 @@ hidden deferred tool the model called directly or through the dispatcher, keep o
 native slot, which changes the catalog once. A forced choice of any tool the projection would
 hide, an allowed-tools restriction, duplicate tool_use ids, a discovery result that is not
 present exactly once, a duplicate declared name, or a client tool already named
-`use_loaded_tool` sends the request unprojected and leaves its response untouched. Absent, empty
-or unlisted configuration, a selected request without `ToolSearch`, and a Chat route named only by
-`appendOnlyToolLoadingModels` are byte-identical to no configuration, streaming or not.
+`use_loaded_tool` sends the request unprojected and leaves its response untouched.
+Caller-restricted tools also leave the original catalog and history intact, using the shared
+`toolRestrictsCallers` predicate, so the final Chat adapter guard rejects the unsupported
+restriction before dispatch. An absent caller list or exactly `["direct"]` remains eligible.
+Absent, empty or unlisted configuration, a selected request without `ToolSearch`, and a Chat route
+named only by `appendOnlyToolLoadingModels` are byte-identical to no configuration, streaming or not.
 Definitions travel as text, so provider-side strict schema enforcement does not apply to them.
 The shared selector helpers are `isToolLoadingModelSelectors` and `toolLoadingModelMatches`;
 both settings and `toolSearch` are typed in `src/types/claude-tool-loading.ts`, which
@@ -96,8 +103,8 @@ both settings and `toolSearch` are typed in `src/types/claude-tool-loading.ts`, 
 the real Chat adapter output, bail-out cases and the stream rewrite, including unloaded and
 undeclared names; `tests/claude-integration/claude-chat-tool-dispatch-routes.test.ts` covers byte
 identity when off, Responses and combo routes, late fallback in both directions, streaming and
-non-streaming client responses for loaded, unloaded and undeclared names, both parse paths and
-configuration salvage/migration.
+non-streaming client responses for loaded, unloaded and undeclared names, caller restrictions
+before dispatch with direct-only controls, both parse paths and configuration salvage/migration.
 
 ## Claude models behind a Responses gateway
 

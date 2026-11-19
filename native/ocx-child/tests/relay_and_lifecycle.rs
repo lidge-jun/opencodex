@@ -1161,11 +1161,10 @@ fn detach_purge_removes_only_managed_binary_refuses_symlinks_and_emits_conflict_
     );
     drop(held);
 
-    // 2. Conflict code: child_external_provider_conflict across all 3 root conflict branches
+    // 2. Conflict code for non-catalog routing (catalog conflicts are covered at apply in conformance.rs).
     for sample in [
         "model_provider = \"custom\"\n[model_providers.custom]\nbase_url = \"https://api.example.com/v1\"\n",
         "openai_base_url = \"https://custom.example.com/v1\"\n",
-        "model_catalog_json = \"/tmp/custom-catalog.json\"\n",
     ] {
         let err =
             ocx_child::toml_surgeon::detect_unowned_root_routing_conflict(sample).unwrap_err();

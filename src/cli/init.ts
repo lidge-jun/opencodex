@@ -5,6 +5,7 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { injectCodexConfig } from "../codex/inject";
 import { classifyOpenAiTierBackup, ConfigMutationLockError, getConfigPath, getDefaultConfig, initializePersistedConfigIfMissing, isValidProviderName, observeInitialConfigState, preserveOpenAiTierRollbackSnapshot } from "../config";
 import { InitialConfigPublicationError } from "../config/initialize";
+import { agyAcpConfigIssues, isAgyAcpProvider } from "../config/schema/agy-acp-references";
 import { redactUserPath } from "../lib/redact";
 import { enrichProviderFromCatalog } from "../oauth/key-providers";
 import { deriveInitProviders } from "../providers/derive";
@@ -75,6 +76,7 @@ export interface InitProvider {
   adapter: string;
   baseUrl: string;
   kind: InitKind;
+  keyOptional?: boolean;
   dashboardUrl?: string;
   defaultModel?: string;
 }
@@ -160,8 +162,13 @@ export async function runInit(): Promise<void> {
         providerConfig = { adapter: p.adapter, baseUrl: p.baseUrl, authMode: "oauth", ...(p.defaultModel ? { defaultModel: p.defaultModel } : {}) };
         oauthHint = true;
       } else {
-        // key + local: collect a key (local usually blank).
-        if (p.dashboardUrl) console.log(`   🔑 Get your key: ${p.dashboardUrl}`);
+        const isAgyAcp = isAgyAcpProvider(p.id, p);
+        if (isAgyAcp) {
+          console.log("   Sign in on the proxy host with: agy acp --login");
+          if (p.dashboardUrl) console.log(`   CLI setup: ${p.dashboardUrl}`);
+        } else if (p.dashboardUrl) {
+          console.log(`   🔑 Get your key: ${p.dashboardUrl}`);
+        }
         // Template URL with placeholders (e.g. Cloudflare's {account_id}) needs a resolved value.
         let baseUrl = p.baseUrl;
         if (/\{[^}]*\}/.test(baseUrl)) {
@@ -174,17 +181,26 @@ export async function runInit(): Promise<void> {
         }
         const env = envKeyFor(p.id);
         const hint = p.kind === "local" ? "API key (usually blank — press Enter): " : `API key (paste, or env var $${env}): `;
-        const apiKey = (await prompt.ask(`\n${hint}`)).trim();
+        const apiKey = isAgyAcp ? "" : (await prompt.ask(`\n${hint}`)).trim();
         const modelChoice = (await prompt.ask(`Default model${p.defaultModel ? ` [${p.defaultModel}]` : " (optional)"}: `)).trim();
         const defaultModel = modelChoice || p.defaultModel;
         providerConfig = {
           adapter: p.adapter,
           baseUrl,
-          ...(p.kind === "key" ? { apiKey: apiKey || `\${${env}}` } : apiKey ? { apiKey } : {}),
+          ...(p.kind === "key" && !isAgyAcp ? { apiKey: apiKey || `\${${env}}` } : apiKey ? { apiKey } : {}),
           ...(defaultModel ? { defaultModel } : {}),
         };
         // Apply the catalog's models / vision classification (same enrichment as the GUI).
         enrichProviderFromCatalog(p.id, providerConfig);
+        if (isAgyAcp) {
+          const issue = agyAcpConfigIssues({ providers: { [p.id]: providerConfig } })
+            .find(({ path }) => path[2] === "defaultModel");
+          if (issue) {
+            console.error(`\n❌ ${issue.path.join(".")}: ${issue.message}`);
+            process.exitCode = 1;
+            return;
+          }
+        }
       }
     } else {
       providerName = (await prompt.ask("Provider name: ")).trim();

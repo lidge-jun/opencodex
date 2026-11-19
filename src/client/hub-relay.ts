@@ -1,10 +1,17 @@
 import { stripMachineAuthHeaders } from "./machine-auth";
 import { homeUnreachableBody } from "./home-unreachable";
+import {
+  HUB_RELAY_ENROLLMENT_ID_HEADER, HUB_RELAY_ENROLLMENT_PROOF_HEADER, HUB_RELAY_PROOF_TIME_HEADER, HUB_RELAY_READ_PREFIX,
+  hubRelayBootstrapAllowed, hubRelayLogoutAllowed, hubRelayReadAllowed,
+} from "../remote/hub-management-relay";
+import type { readHubRelayAdmission } from "./hub-session";
 
 export interface HubRelayTarget {
   managementUrl: string;
   browserOrigin: string;
 }
+
+type HubRelayCredentialSource = (method: string, target: string) => ReturnType<typeof readHubRelayAdmission>;
 
 export const HUB_RELAY_REQUEST_BODY_MAX_BYTES = 4 * 1024 * 1024;
 export const HUB_RELAY_RESPONSE_BODY_MAX_BYTES = 16 * 1024 * 1024;
@@ -12,8 +19,8 @@ export const HUB_RELAY_DEFAULT_TIMEOUT_MS = 15_000;
 export const HUB_RELAY_HEADER_MAX_BYTES = 64 * 1024;
 export const HUB_RELAY_EXPECTED_TARGET_HEADER = "x-opencodex-expected-target";
 export const HUB_RELAY_EXPECTED_TARGET_MAX_BYTES = 512;
+const HUB_RELAY_REFRESH_INTERVAL_MS = 60_000;
 
-const ALLOWED_METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]);
 const REQUEST_HEADERS = new Set([
   "accept",
   "accept-language",
@@ -100,26 +107,9 @@ function canonicalExpectedOrigin(value: string): string | null {
 
 function relayDestination(suffix: string, target: HubRelayTarget, method: string): URL | null {
   const origin = canonicalOrigin(target.managementUrl);
-  const browserOrigin = canonicalOrigin(target.browserOrigin);
-  if (!origin || !browserOrigin || !ALLOWED_METHODS.has(method)) return null;
-  if (!suffix.startsWith("/") || suffix.startsWith("//") || suffix.includes("\\") || suffix.includes("#")) return null;
-  if (/%(?:2f|5c)/i.test(suffix) || /%(?:2e)(?:%2e|\.)?/i.test(suffix)) return null;
-  const rawPath = suffix.split("?", 1)[0]!;
-  for (const segment of rawPath.split("/")) {
-    let decoded: string;
-    try { decoded = decodeURIComponent(segment); } catch { return null; }
-    if (decoded === "." || decoded === ".." || decoded.includes("/") || decoded.includes("\\")) return null;
-  }
-  if (rawPath === "/opencodex-session") {
-    if (suffix !== rawPath || (method !== "GET" && method !== "POST")) return null;
-  } else if (!rawPath.startsWith("/api/")) {
-    return null;
-  }
-  let destination: URL;
-  try { destination = new URL(suffix, `${origin}/`); } catch { return null; }
-  if (destination.origin !== origin || destination.username || destination.password || destination.hash) return null;
-  if (destination.pathname !== rawPath) return null;
-  return destination;
+  if (!origin) return null;
+  if (hubRelayBootstrapAllowed(method, suffix) || hubRelayLogoutAllowed(method, suffix)) return new URL(suffix, origin);
+  return hubRelayReadAllowed(method, suffix) ? new URL(HUB_RELAY_READ_PREFIX + suffix, origin) : null;
 }
 
 export async function readBoundedRelayRequestBody(
@@ -234,11 +224,11 @@ export async function relayHubManagementRequest(
   req: Request,
   suffix: string,
   target: HubRelayTarget,
-  deps: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+  deps: { fetchImpl?: typeof fetch; timeoutMs?: number; readCredential?: HubRelayCredentialSource } = {},
 ): Promise<Response> {
-  const method = req.method.toUpperCase();
+  const method = req.method;
   const destination = relayDestination(suffix, target, method);
-  if (!destination) return relayError(404, "hub relay path refused");
+  if (!destination || (deps.readCredential && !hubRelayReadAllowed(method, suffix))) return relayError(404, "hub relay path refused");
   const requestHeaderValidation = validateHubRelayRequestHeaders([...req.headers]);
   if (!requestHeaderValidation.ok) return relayError(400, "hub relay request headers refused");
 
@@ -260,6 +250,12 @@ export async function relayHubManagementRequest(
     }
   }
 
+  const stripped = stripMachineAuthHeaders(req.headers);
+  const headers = filterRelayHeaders(stripped, REQUEST_HEADERS, requestHeaderValidation.connectionNamed);
+  if (hubRelayLogoutAllowed(method, suffix) && !headers.get("x-opencodex-api-key")?.startsWith("ocx_session_")) {
+    return relayError(401, "caller Hub GUI session required");
+  }
+
   let body: Uint8Array<ArrayBuffer> | null;
   try {
     body = method === "GET" || method === "HEAD"
@@ -269,13 +265,20 @@ export async function relayHubManagementRequest(
     return relayError(413, "hub relay request body too large");
   }
 
-  const stripped = stripMachineAuthHeaders(req.headers);
-  const headers = filterRelayHeaders(stripped, REQUEST_HEADERS, requestHeaderValidation.connectionNamed);
+  const stored = deps.readCredential?.(method, destination.pathname + destination.search);
+  if (deps.readCredential && !stored) return relayError(401, "Hub relay credential unavailable");
+  if (stored) {
+    headers.set("x-opencodex-api-key", stored.token);
+    headers.set(HUB_RELAY_ENROLLMENT_ID_HEADER, stored.keyId);
+    headers.set(HUB_RELAY_ENROLLMENT_PROOF_HEADER, stored.proof);
+    headers.set(HUB_RELAY_PROOF_TIME_HEADER, stored.at);
+    for (const name of ["origin", "x-opencodex-gui-origin", "x-opencodex-csrf-token"]) headers.delete(name);
+  }
   if (!headersWithinLimit(headers)) return relayError(431, "hub relay request headers too large");
   const browserOrigin = canonicalOrigin(target.browserOrigin);
   const mutation = method !== "GET" && method !== "HEAD";
   const suppliedOrigin = headers.get("origin");
-  if (!browserOrigin || (mutation ? suppliedOrigin !== browserOrigin : suppliedOrigin !== null && suppliedOrigin !== browserOrigin)) {
+  if (!stored && (!browserOrigin || (mutation ? suppliedOrigin !== browserOrigin : suppliedOrigin !== null && suppliedOrigin !== browserOrigin))) {
     return relayError(403, "hub relay browser origin refused");
   }
 
@@ -285,9 +288,8 @@ export async function relayHubManagementRequest(
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const relayAbort = new AbortController();
   const signal = relayAbort.signal;
-  const stopDeadline = () => timeoutSignal.removeEventListener("abort", onTimeout);
   const cleanup = () => {
-    stopDeadline();
+    timeoutSignal.removeEventListener("abort", onTimeout);
     req.signal.removeEventListener("abort", onClientAbort);
   };
   const onTimeout = () => { relayAbort.abort(timeoutSignal.reason); cleanup(); };
@@ -334,13 +336,6 @@ export async function relayHubManagementRequest(
     try { await upstream.body?.cancel(); } catch { /* best effort */ }
     return relayError(502, "hub relay response body too large");
   }
-  // Only this known, successfully established SSE endpoint outlives the handshake.
-  // Its body remains byte-bounded and connected to the browser's abort signal.
-  if (method === "GET" && destination.pathname === "/api/accounts/events" && !destination.search
-    && upstream.status === 200
-    && responseHeaders.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() === "text/event-stream") {
-    stopDeadline();
-  }
   let responseBody: ReadableStream<Uint8Array> | null = null;
   if (method === "HEAD" || !upstream.body) {
     cleanup();
@@ -353,4 +348,34 @@ export async function relayHubManagementRequest(
     statusText: upstream.statusText,
     headers: responseHeaders,
   });
+}
+
+function scheduleLeaseRefresh(run: () => Promise<void>): () => void {
+  void run();
+  const timer = setInterval(() => { void run(); }, HUB_RELAY_REFRESH_INTERVAL_MS);
+  timer.unref();
+  return () => clearInterval(timer);
+}
+
+/** Keep an idle serving client enrolled using the same passive read admission as the CLI. */
+export function startHubRelayLeaseRefresh(
+  managementUrl: string, readCredential: HubRelayCredentialSource,
+  deps: { fetchImpl?: typeof fetch; schedule?: typeof scheduleLeaseRefresh } = {},
+): { stop(): void } {
+  const abort = new AbortController();
+  const path = "/api/codex-auth/active";
+  let inFlight = false;
+  const cancel = (deps.schedule ?? scheduleLeaseRefresh)(async () => {
+    if (abort.signal.aborted || inFlight) return;
+    inFlight = true;
+    try {
+      const req = new Request("http://127.0.0.1" + path, { method: "HEAD", signal: abort.signal });
+      await relayHubManagementRequest(req, path, { managementUrl, browserOrigin: "" }, { fetchImpl: deps.fetchImpl, readCredential });
+    } catch {
+      // The next tick retries. The Hub still expires an unrenewed lease.
+    } finally {
+      inFlight = false;
+    }
+  });
+  return { stop() { cancel(); abort.abort(); } };
 }

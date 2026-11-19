@@ -1,3 +1,6 @@
+import { oauthSubscriptionMaker } from "../combos/suggestion-channel";
+import { isCanonicalOpenAiForwardProvider } from "../providers/openai-forward-destination";
+import { transientRetryOn5xxPolicyConfigError } from "../config/load-degrade";
 import { providerRelativeSendPathConfigError } from "../config/provider-relative-send-path";
 import { contextTierRecordConfigError, modelCapabilitiesConfigError, providerInputModalitiesConfigError } from "../config/provider-validation";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
@@ -10,6 +13,7 @@ import {
   providerModelCostsConfigError,
   providerWebSearchBridgeConfigError,
   requestPacingConfigError,
+  providerTimeoutOverrideConfigError,
   retryOn429PolicyConfigError,
   retryOnResetPolicyConfigError,
   sanitizeModelCostsForDisplay,
@@ -35,6 +39,8 @@ import {
   credentialPinnedProviderConfigError,
 } from "../config/provider-validation";
 import { providerDestinationConfigError } from "../lib/destination-policy";
+import { gcpCredentialMarkerAccount, vertexAdcCredentialVerified, vertexConfiguredCredentialKind } from "../lib/gcp-adc";
+import { selectVertexDiscoveryCredential } from "../providers/google-vertex-model-discovery";
 import { providerEgressConfigError } from "../lib/provider-egress";
 import { providerTlsProfileConfigError } from "../lib/provider-tls-profile";
 import { redactSecretString } from "../lib/redact";
@@ -706,6 +712,8 @@ export const AUTH_MATRIX: readonly ApiAuthMatrixRow[] = [
   { endpoint: "/v1/usage", bearer: "rejected", dedicated: "accepted", xApiKey: "rejected" },
   // The live meter reads the in-process request log only (numbers and model names), admitted like /v1/models.
   { endpoint: "/v1/usage/live", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
+  // Usage windows require a configured, single-provider key with full model scope.
+  { endpoint: "/v1/usage/windows", bearer: "accepted", dedicated: "accepted", xApiKey: "rejected" },
 ];
 
 /** Whether `token` is the environment-provided management secret. */
@@ -907,6 +915,10 @@ export function providerManagementConfigError(
   }
   if (name === "chatgpt") return "provider chatgpt is reserved for internal credential compatibility";
   if (name === "openai-multi") return "provider openai-multi is reserved for legacy config migration";
+  const timeoutOverrideError = providerTimeoutOverrideConfigError(raw);
+  if (timeoutOverrideError) {
+    return `provider ${JSON.stringify(redactSecretString(name))} ${timeoutOverrideError}`;
+  }
   if (name === "openai") {
     const entry = getProviderRegistryEntry(name);
     const seed = entry ? providerConfigSeed(entry) : undefined;
@@ -930,6 +942,7 @@ export function providerManagementConfigError(
     // sends recover, not what the canonical forward seed is. Validated below
     // (retryOnResetPolicyConfigError).
     delete canonicalCandidate.retryOnReset;
+    delete canonicalCandidate.transientRetryOn5xx;
     // Validated account eligibility policy is independent of the canonical transport.
     delete canonicalCandidate.accountAutoPause;
     // Context windows are the same kind of user-owned overlay as requestPacing: the operator
@@ -951,6 +964,9 @@ export function providerManagementConfigError(
     // forwardClientHeaders is an editor-managed request-metadata overlay. It is validated
     // separately below and must not make an otherwise canonical OpenAI provider fail the seed check.
     delete canonicalCandidate.forwardClientHeaders;
+    // Timeout overrides are validated above and are independent of the canonical seed.
+    delete canonicalCandidate.connectTimeoutMs;
+    delete canonicalCandidate.stallTimeoutSec;
     // Canonical ChatGPT keeps WebSocket as the default, but an operator may
     // select the existing HTTP/SSE path without changing its auth or endpoint.
     if (raw.upstreamWebsocket !== undefined) {
@@ -995,6 +1011,10 @@ export function providerManagementConfigError(
     // The provider name is caller-controlled and can be token-shaped; redact and JSON-escape
     // it before it reaches the management API response.
     return `provider ${JSON.stringify(redactSecretString(name))} ${retryOn429Error}`;
+  }
+  const transientRetryError = transientRetryOn5xxPolicyConfigError(raw.transientRetryOn5xx);
+  if (transientRetryError) {
+    return `provider ${JSON.stringify(redactSecretString(name))} ${transientRetryError}`;
   }
   const retryOnResetError = retryOnResetPolicyConfigError(raw.retryOnReset);
   if (retryOnResetError) {
@@ -1182,6 +1202,8 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   codexToolMode: "editor",
   projectContext: "editor",
   requestPacing: "editor",
+  connectTimeoutMs: "editor",
+  stallTimeoutSec: "editor",
   mcpMaxTools: "editor",
   mcpMaxSchemaBytes: "editor",
   mcpMaxResultBytes: "editor",
@@ -1320,6 +1342,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   requiresReasoningPlaceholderModels: "editor",
   showThinkingSummary: "editor",
   hideRawReasoning: "editor",
+  rawReasoningAsSummary: "editor",
   retryOn429: "editor",
   transientRetryOn5xx: "editor",
   retryOnReset: "editor",
@@ -1330,7 +1353,9 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   thinkingBudgetModels: "editor",
   escapeBuiltinToolNames: "editor",
   anthropicEofTolerance: "editor",
+  anthropicImageContextRecovery: "editor",
   forwardAdvisorTool: "editor",
+  perMessageEffort: "editor",
   noVisionModels: "editor",
   googleMode: "editor",
   project: "editor",
@@ -1340,7 +1365,9 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   unsafeAllowNativeLocalExec: "editor",
   nativeLocalExec: "editor",
   messagePhaseInference: "editor",
+  estimateMissingUsage: "editor",
   tlsProfile: "editor",
+  anthropicOAuthUserInstructions: "editor",
 } as const satisfies Record<keyof OcxProviderConfig, ProviderConfigFieldPolicy>;
 
 type ProviderFieldWithPolicy<Policy extends ProviderConfigFieldPolicy> = {
@@ -1471,6 +1498,8 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       ...editor.providers[name],
       hasApiKey: !!provider.apiKey,
       hasHeaders: !!provider.headers && Object.keys(provider.headers).length > 0,
+      ...(provider.authMode === "oauth" ? { knownSubscriptionOAuth: oauthSubscriptionMaker({ ...provider, name }) !== undefined } : {}),
+      ...(provider.authMode === "forward" ? { canonicalOpenAiForward: isCanonicalOpenAiForwardProvider(provider) } : {}),
     };
     const registry = getProviderRegistryEntry(name);
     const vertex = (provider.adapter === "google" && effectiveGoogleMode(name, provider) === "vertex")
@@ -1478,9 +1507,15 @@ export function safeConfigDTO(config: OcxConfig): unknown {
         && providerMatchesRegistryTransport(name, provider));
     if (vertex) {
       const key = provider.apiKey;
-      dto.vertexCredentialKind = key?.startsWith("gcp-sa:") ? "marker"
-        : !key?.trim() || key === "N/A" || key.startsWith("<") ? "ambient"
-          : key.startsWith("keychain:") || /^\$\{?\w+\}?$/.test(key) ? "reference" : "api-key";
+      dto.vertexCredentialKind = vertexConfiguredCredentialKind(key);
+      if (dto.vertexCredentialKind === "ambient" || dto.vertexCredentialKind === "marker") {
+        // Proof is reported only for the credential inference selects: an ambient row with
+        // GOOGLE_CLOUD_API_KEY set sends that key, so an ADC token says nothing about it.
+        try {
+          const selection = selectVertexDiscoveryCredential(provider);
+          if (selection.kind === "adc") dto.vertexCredentialVerified = vertexAdcCredentialVerified(gcpCredentialMarkerAccount(selection.marker));
+        } catch { dto.vertexCredentialVerified = false; }
+      }
     }
     if (name === "xai") {
       dto.xaiResponsesOptInState = xaiResponsesOptInState(provider);
@@ -1500,6 +1535,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     // historical auto-open behavior.
     oauthOpenBrowser: config.oauthOpenBrowser !== false,
     showCodexCredits: config.showCodexCredits === true,
+    subscriptionReserve: config.subscriptionReserve,
     providers,
   };
 }

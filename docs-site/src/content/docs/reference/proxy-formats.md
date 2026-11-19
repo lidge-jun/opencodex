@@ -421,8 +421,8 @@ completion event for that open call. Calls already completed keep their status. 
 the provider outcome.
 
 On the Responses streaming wire, an explicit non-retryable content-filter stop from
-Anthropic (`refusal` / `content_filter`) or Kiro (`CONTENT_FILTERED` /
-`GUARDRAIL_INTERVENED`) ends with `response.failed`, `error.code: "invalid_prompt"`,
+Anthropic (`refusal` / `content_filter`), Kiro (`CONTENT_FILTERED` /
+`GUARDRAIL_INTERVENED`) or Antigravity ACP (`refusal`) ends with `response.failed`, `error.code: "invalid_prompt"`,
 and `retryable: false`. This prevents clients that retry incomplete streams from
 resending the refused context. Usage and partial output are preserved. Web-search
 and image sidecars stop without executing calls from that refused iteration or
@@ -458,6 +458,13 @@ If native passthrough rewriting fails, including when it exceeds the translation
 buffer budget, the relay reports the failure without waiting for upstream inspection
 to finish. It cancels the upstream work and emits `response.failed` followed by
 `data: [DONE]`; a budget overflow uses the `translation_buffer_limit` error code.
+
+When filtering replayed tool results, Cursor, xAI Responses and Qoder hold lines that might be
+echoed tool envelopes until they can distinguish them from prose. An unresolved line is limited
+to 65,536 UTF-16 code units, including trailing whitespace. Exceeding this limit ends the turn
+without publishing the held text or a successful completion. Cursor and xAI report
+`translation_buffer_limit`; Qoder reports its existing non-retryable `vendor_scaffold_detected`
+refusal. Ordinary prose and closed fenced examples within the limit remain intact.
 
 Responses SSE accepts CR, LF and CRLF line endings, including mixed endings and CRLF split across
 network chunks. Tool validation, Chat translation, terminal inspection and WebSocket projection
@@ -1006,7 +1013,7 @@ Errors use the client dialect's envelope where needed, but these status/code mea
 | --- | --- | --- |
 | 401 | `authentication_error` | A required proxy admission credential is missing or invalid |
 | 403 | `origin_rejected` | A Responses/OpenAI data-plane request or WebSocket upgrade came from a disallowed origin |
-| 503 | `combo_unavailable` | Every target in the selected combo is unavailable, in cooldown, disabled, or otherwise ineligible |
+| 503 | `combo_unavailable` | Every target in the selected combo is unavailable, in cooldown, disabled, or otherwise ineligible. `error.combo` carries the cause class and target counts; see [Why do I get `combo_unavailable`?](/guides/combos/#why-do-i-get-combo_unavailable) |
 | 400 | `unreadable_encrypted_agent_task` | An encrypted v2 worker task has no eligible canonical ChatGPT target or direct key-auth Responses target explicitly trusted with `allowEncryptedV2AgentTasks: true` that can consume it |
 | 426 | `upgrade_required` | The Responses WebSocket transport is disabled or the upgrade failed; use HTTP |
 

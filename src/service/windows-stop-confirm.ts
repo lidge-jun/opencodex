@@ -120,7 +120,7 @@ export async function confirmWindowsStopFreed(deps: WindowsStopConfirmDeps): Pro
   if (result.lateWrappers.length > 0) return finish("survived", "a wrapper of this home is running after the stop");
   if (result.listener?.identity === "ours") return finish("survived", "this installation answers on the port again");
   if (processes === null) return finish("unknown", "the final process list could not be read");
-  const unnamed = processes.some(entry => entry.name === null && entry.pid !== (deps.selfPid ?? process.pid)
+  const unnamed = processes.some(entry => entry.name === null && entry.foreignOwner !== true && entry.pid !== (deps.selfPid ?? process.pid)
     && deps.canonicalPaths.some(path => commandLineHasPathToken(entry.commandLine, path)));
   if (unnamed) return finish("unknown", "a process carrying this home's paths has an unreadable image name");
   if (held) return finish("freed", "the port stayed free for the hold and no wrapper of this home is running");

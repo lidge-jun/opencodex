@@ -5,6 +5,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { buildClientContribution, type ExportModel } from "../../src/clients/config-export";
+import { refreshOwnedCatalogIntegrations } from "../../src/integrations/catalog-refresh";
 import { assertIntegrationWriteOwnership, fileIO, type IntegrationIO } from "../../src/integrations/config-io";
 import { canonicalContribution, fingerprint } from "../../src/integrations/ownership";
 import { protectedContributionFingerprint } from "../../src/integrations/ownership-policy";
@@ -997,6 +998,15 @@ describe("OMP source preservation", () => {
 });
 
 describe("DSH source preservation", () => {
+  test("the default catalog refresh updates an already-owned DSH block", async () => {
+    const path = installDsh();
+    const first = input({ clientId: "dsh" });
+    expect(applyIntegration(first).ok).toBe(true);
+    const models = [...MODELS, { namespaced: "openai/new-model", provider: "openai", id: "new-model" }];
+    expect(await refreshOwnedCatalogIntegrations({ ...first, models })).toEqual([{ client: "dsh", ok: true, changed: true }]);
+    expect(readFileSync(path, "utf8")).toContain("openai/new-model");
+  });
+
   test("preserves defaults, namespaces, providers, comments, and formatting through refresh and disable", () => {
     const configPath = installDsh();
     const original = [

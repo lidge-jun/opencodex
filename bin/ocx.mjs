@@ -1335,8 +1335,15 @@ function resolveBun({ allowInstall = true, launcherPath, allowMissing = false } 
 const updateHelpRequested = process.argv[2] === "update" && !isOrchestratedUpdateArgv(process.argv.slice(3)) &&
   process.argv.slice(3).some(a => a === "--help" || a === "-h" || a === "help");
 if (updateHelpRequested) {
-  console.log("Usage: ocx update [--tag latest|preview]\n       ocx update --plan --json [--tag latest|preview | --version <version>]\n       ocx update --yes --json [--tag latest|preview | --version <version>] [--expect-plan <token>] [--not-after <unix-ms>]\n\nPreview with --plan; apply with --yes. --expect-plan binds apply to the planToken; --not-after sets a Unix millisecond mutation deadline.\nOrchestrated exit codes: 0 verified or up-to-date; 10 refused; 11 failed with previous version verified; 12 unverified or still running; 64 invalid usage.\nPreview installs stay on the preview tag unless overridden.");
+  console.log("Usage: ocx update [--tag latest|preview]\n       ocx update --plan --json [--tag latest|preview | --version <version>]\n       ocx update --yes --json [--tag latest|preview | --version <version>] [--expect-plan <token>] [--not-after <unix-ms>]\n       ocx update --desktop [--check] [--json]   (Windows OpenCodex Desktop installation only)\n\nPreview with --plan; apply with --yes. --expect-plan binds apply to the planToken; --not-after sets a Unix millisecond mutation deadline.\nOrchestrated exit codes: 0 verified or up-to-date; 10 refused; 11 failed with previous version verified; 12 unverified or still running; 64 invalid usage.\nPreview installs stay on the preview tag unless overridden.");
   process.exit(0);
+}
+
+// `ocx update --desktop` updates a Windows Desktop installation through its bundled ocx.exe (#8246).
+// This launcher only ever runs a package installation, so it refuses before any package update.
+if (process.argv[2] === "update" && process.argv.slice(3).includes("--desktop")) {
+  console.error("opencodex: 'ocx update --desktop' updates a Windows OpenCodex Desktop installation and must be run with that installation's ocx.exe. This ocx is a package installation; update it with 'ocx update'.");
+  process.exit(64);
 }
 
 // This intercept precedes Desktop handoff, boot restore and install-capable Bun resolution.
@@ -1573,6 +1580,8 @@ function createNodeLaunchContext() {
     version: 1,
     proof: launchProof,
     anthropicEnvSlots: preBunAnthropicSlots,
+    // Running this shim under Bun can already have loaded project dotenv.
+    managedRelease: process.versions.bun === undefined && process.env.OCX_MANAGED_RELEASE === "1",
     codexCliInspectionEnv: codexCliUpdateInspectionContext ? {
       codexCliPath: preBunCodexCliPath,
       path: preBunPath,

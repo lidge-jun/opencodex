@@ -139,6 +139,11 @@ test("a cockpit import opened on A cannot post its document to B", async () => {
   const input = host.querySelector<HTMLInputElement>("#cockpit-import-file")!;
   Object.defineProperty(input, "files", { configurable: true, value: [file] });
   await act(async () => { input.dispatchEvent(new win.Event("change", { bubbles: true })); });
+  // The pick is held behind the Antigravity risk dialog; accepting it starts the import on A.
+  const dialog = host.querySelector("dialog")!;
+  await act(async () => { dialog.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click(); });
+  await act(async () => { dialog.querySelector<HTMLButtonElement>(".modal-actions .btn-primary")!.click(); });
+  expect(releaseText).toBeDefined();
   configureApiTargets(relayTargets("https://hub-b.example"));
   await act(async () => { releaseText(JSON.stringify({ accounts: [] })); await Promise.resolve(); });
   expect(posts).toBe(0);

@@ -1,5 +1,6 @@
-import type { AccountPauseReason, AccountAutoPausePolicy } from "../types/account-auto-pause";
+import type { AccountPauseEvidence, AccountPauseReason } from "../types/account-auto-pause";
 import { readBoundedResponseBody } from "../lib/bounded-body";
+import { sanitizeUpstreamErrorText } from "../adapters/upstream-http-error";
 
 /** Only whole, account-scoped messages are authority; model/resource policy errors are not. */
 export function classifyPermanentAccountRefusal(status: number, payload: unknown): AccountPauseReason | undefined {
@@ -17,41 +18,74 @@ export function classifyPermanentAccountRefusal(status: number, payload: unknown
   if (/^(?:(?:Your |The )?(?:Claude |ChatGPT )?subscription is inactive|Your account does not have an active subscription)[.!]?$/i.test(text)) return "subscription_inactive";
   if (/^Your (?:account|plan) (?:has been |was )?downgraded to (?:the )?free(?: plan)? (?:and |with )?(?:has )?(?:no|without) (?:remaining )?credits[.!]?$/i.test(text)) return "plan_downgraded";
   if (type === "permission_error" && /^Your account (?:does not have access to Claude Code|is (?:disabled|suspended)|is not permitted to use (?:the |this )?API)[.!]?$/i.test(text)) return "account_permission_denied";
-  // Cloud Code Assist (Antigravity / Gemini CLI OAuth) account ban (#7803). Google's backend has
-  // returned the sentence alone and with exactly two closing sentences (google-gemini/gemini-cli
-  // #19501, #20813, #27199, #27388); only those whole messages, on a consistent 403 / numeric 403
-  // / PERMISSION_DENIED envelope, qualify. Project-scoped CONSUMER_SUSPENDED, SERVICE_DISABLED
-  // and model-permission errors name a project or a model, not the sending identity.
-  if (status === 403 && code === 403 && googleStatus === "PERMISSION_DENIED"
-    && CCA_TOS_ACCOUNT_BAN.test(text.replace(/\s+/g, " "))) return "account_permission_denied";
+  // Cloud Code Assist (Antigravity / Gemini CLI OAuth) account ban (#7803).
+  if (isConclusiveAccountBan(status, payload)) return "account_permission_denied";
+}
+
+/**
+ * A refusal the upstream itself marks permanent for the whole account: the Cloud Code Assist Terms
+ * of Service ban. Google's backend has returned the sentence alone and with exactly two closing
+ * sentences (google-gemini/gemini-cli #19501, #20813, #27199, #27388); only those whole messages,
+ * on a consistent 403 / numeric 403 / PERMISSION_DENIED envelope, qualify. Project-scoped
+ * CONSUMER_SUSPENDED, SERVICE_DISABLED and model-permission errors name a project or a model, not
+ * the sending identity.
+ */
+export function isConclusiveAccountBan(status: number, payload: unknown): boolean {
+  if (status !== 403 || !payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const error = (payload as { error?: unknown }).error;
+  if (!error || typeof error !== "object" || Array.isArray(error)) return false;
+  const { type, code, message, status: googleStatus } = error as Record<string, unknown>;
+  // The same type gate classifyPermanentAccountRefusal applies before reaching this envelope.
+  if (type !== undefined && !["permission_error", "authentication_error", "invalid_request_error"].includes(String(type))) return false;
+  return code === 403 && googleStatus === "PERMISSION_DENIED" && typeof message === "string"
+    && CCA_TOS_ACCOUNT_BAN.test(message.trim().replace(/\s+/g, " "));
 }
 
 const CCA_TOS_ACCOUNT_BAN = new RegExp("^This service has been disabled in this account for violation of Terms of Service\\."
   + "(?: If you believe this is an error, contact gemini-code-assist-user-feedback@google\\.com\\."
   + "| Please submit an appeal to continue using this product\\.)?$");
 
-export async function permanentAccountRefusal(response: Response, signal?: AbortSignal): Promise<AccountPauseReason | undefined> {
+export interface PermanentAccountRefusalEvidence extends AccountPauseEvidence {
+  reason: AccountPauseReason;
+}
+
+/** Preserve line breaks for the first redaction pass, then redact again before capping. */
+export function pauseEvidenceMessage(raw: string): string {
+  const redacted = sanitizeUpstreamErrorText(raw);
+  const normalized = redacted.replace(/\s+/g, " ").trim();
+  return sanitizeUpstreamErrorText(normalized).slice(0, 300);
+}
+
+/** `conclusiveOnly` admits only {@link isConclusiveAccountBan}, the Cloud Code Assist default. */
+export async function permanentAccountRefusalEvidence(
+  response: Response, signal?: AbortSignal, conclusiveOnly = false,
+): Promise<PermanentAccountRefusalEvidence | undefined> {
   if (response.status !== 401 && response.status !== 403) return;
   try {
     const body = await readBoundedResponseBody(response.clone(), { signal, fatalUtf8: true,
       maxBytes: 16_384, totalTimeoutMs: 250, inactivityTimeoutMs: 250 });
     if (!body.displaySafe || body.truncated) return;
-    return classifyPermanentAccountRefusal(response.status, JSON.parse(body.text));
+    const payload: unknown = JSON.parse(body.text);
+    const reason = conclusiveOnly
+      ? isConclusiveAccountBan(response.status, payload) ? "account_permission_denied" : undefined
+      : classifyPermanentAccountRefusal(response.status, payload);
+    if (!reason) return;
+    const raw = (payload as { error?: { message?: unknown } }).error?.message;
+    const message = typeof raw === "string" ? pauseEvidenceMessage(raw) : "";
+    return { reason, statusCode: response.status, ...(message ? { message } : {}) };
   } catch { return; }
 }
 
-export function autoPauseThreshold(policy: AccountAutoPausePolicy | undefined): number | undefined {
-  if (policy?.enabled !== true) return;
-  const threshold = policy.consecutiveFailures ?? 2;
-  return Number.isInteger(threshold) && threshold >= 1 && threshold <= 100 ? threshold : undefined;
+export async function permanentAccountRefusal(response: Response, signal?: AbortSignal, conclusiveOnly = false): Promise<AccountPauseReason | undefined> {
+  return (await permanentAccountRefusalEvidence(response, signal, conclusiveOnly))?.reason;
 }
 
 type Streak = { incarnation: string; count: number; tail: Promise<unknown>; paused: boolean };
 /** Process-local streaks, serialized in response-arrival order, including asynchronous reads/writes. */
 export class AccountRefusalStreaks {
   private readonly accounts = new Map<string, Streak>();
-  observe(key: string, incarnation: string, threshold: number, verdict: Promise<AccountPauseReason | undefined>, success: boolean,
-    current: () => boolean, pause: (reason: AccountPauseReason) => Promise<boolean>): Promise<boolean> {
+  observe(key: string, incarnation: string, threshold: number, verdict: Promise<PermanentAccountRefusalEvidence | undefined>, success: boolean,
+    current: () => boolean, pause: (refusal: PermanentAccountRefusalEvidence) => Promise<boolean>): Promise<boolean> {
     if (!current()) return Promise.resolve(false);
     let streak = this.accounts.get(key);
     if (!streak || streak.incarnation !== incarnation) {
@@ -62,13 +96,13 @@ export class AccountRefusalStreaks {
     }
     const owned = streak;
     const result = owned.tail.catch(() => undefined).then(async () => {
-      const reason = await verdict;
+      const refusal = await verdict;
       if (this.accounts.get(key) !== owned || owned.paused || !current()) return false;
       if (success) { owned.count = 0; return false; }
-      if (!reason) return false;
+      if (!refusal) return false;
       owned.count = Math.min(owned.count + 1, threshold);
       if (owned.count < threshold) return false;
-      owned.paused = await pause(reason);
+      owned.paused = await pause(refusal);
       return owned.paused;
     });
     owned.tail = result;

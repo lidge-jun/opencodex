@@ -81,9 +81,62 @@ La rotación mantiene las claves de datos antiguas y nuevas válidas durante un 
 
 `ocx connect` y `ocx connect status` comprueban la disponibilidad del catálogo contra el primer entorno de ejecución local válido de Codex en orden de selección. Los candidatos preferidos fallidos pueden retroceder, pero las alternativas de menor prioridad no se prueban después de que se selecciona un entorno de ejecución válido. Esta comprobación deja la selección de entorno de ejecución guardada sin cambios. General `ocx status` todavía descubre alternativas para el diagnóstico en entorno de ejecución.
 
-Un cliente no almacena credenciales de proveedor y ningún catálogo propio, por lo que su tienda de configuración y credenciales locales están vacías por diseño, y leerlas como la verdad produce una respuesta segura y errónea sobre lo que el concentrador puede servir. En un cliente conectado `ocx status` por lo tanto conduce con `State from hub <origin>` y fuentes las líneas de OAuth - inicios de sesión, proveedores y modelos delegables desde el concentrador sobre el plano de datos, etiquetando las líneas que realmente describen esta máquina `(local)`: el proxy, el servicio, el binario Codex y la shim, y los puertos locales. `ocx status --json` lleva la misma respuesta que `runtimeRole` más un bloque `remoteHub` cuyo `stateSource` es `hub`, `cache` o `unavailable`, nunca el propio estado del cliente. Un concentrador más antiguo que no sirve `/v1/hub-state` informa `unavailable` con una instrucción para actualizar el concentrador en lugar de volver silenciosamente al estado de inicio de sesión local, y `ocx config show` en un cliente imprime una nota `_remoteHub` que indica las credenciales y la disponibilidad del modelo en vivo en el concentrador. La lectura de concentrador utiliza solo la clave de datos por cliente; ningún token de administrador y ningún secreto de proveedor llegan a un cliente.
+Un cliente no almacena credenciales de proveedor y ningún catálogo propio, por lo que su tienda de configuración y credenciales locales están vacías por diseño, y leerlas como la verdad produce una respuesta segura y errónea sobre lo que el concentrador puede servir. En un cliente conectado `ocx status` por lo tanto conduce con `State from hub <origin>` y fuentes las líneas de OAuth - inicios de sesión, proveedores y modelos delegables desde el concentrador sobre el plano de datos, etiquetando las líneas que realmente describen esta máquina `(local)`: el proxy, el servicio, el binario Codex y la shim, y los puertos locales. `ocx status --json` lleva la misma respuesta que `runtimeRole` más un bloque `remoteHub` cuyo `stateSource` es `hub`, `cache` o `unavailable`, nunca el propio estado del cliente. Un concentrador más antiguo que no sirve `/v1/hub-state` informa `unavailable` con una instrucción para actualizar el concentrador en lugar de volver silenciosamente al estado de inicio de sesión local, y `ocx config show` en un cliente imprime una nota `_remoteHub` que indica las credenciales y la disponibilidad del modelo en vivo en el concentrador. Esta lectura del concentrador utiliza solo la clave de datos del cliente. Los secretos de los proveedores permanecen en el concentrador.
 
 `ocx status` realiza una solicitud de estado de concentrador en vivo solo cuando la conexión guardada aún coincide con la instantánea de estado y el archivo de token de datos coincide con esa conexión. Si falla la comprobación, se salta la solicitud y muestra el estado del concentrador en caché coincidente, o `unavailable` si no existe caché coincidente.
+
+<a id="management-reads-from-a-connected-client"></a>
+
+### Lecturas de administración desde un cliente conectado
+
+`ocx account list` se autentica ante el servicio del cliente con el token de administración
+local. Durante el registro con un código de emparejamiento o un token de administración, el
+concentrador emite una credencial de lectura independiente. El cliente solo guarda esa
+credencial en `hub-management-session.json`, con modo `0600` en POSIX o acceso exclusivo del
+propietario en Windows. Cada lectura también demuestra la posesión de la clave de datos
+registrada vigente. El concentrador comprueba el método, la ruta y la consulta exactos antes de
+servir datos guardados o en caché. Si faltan datos en caché, la lectura no inicia consultas ni
+actualizaciones en los proveedores.
+
+| Método | Ruta local | Parámetros permitidos |
+| --- | --- | --- |
+| GET, HEAD | `/api/codex-auth/accounts` | — |
+| GET, HEAD | `/api/codex-auth/active` | — |
+| GET, HEAD | `/api/oauth/providers` | — |
+| GET, HEAD | `/api/oauth/accounts` | `provider` (obligatorio) |
+| GET, HEAD | `/api/providers/keys` | `name` (obligatorio, identificadores por posición y estado) |
+| GET, HEAD | `/api/provider-quotas` | — |
+| GET, HEAD | `/api/quota-pool` | `refresh` (se acepta y se ignora) |
+| GET, HEAD | `/api/usage` | `range`, `surface`, `provider`, `model`, `since`, `until` |
+
+La lista de claves muestra la posición y el estado activo o pausado de cada fila. Los
+identificadores persistentes, las etiquetas y la gestión de claves se consultan directamente en
+el concentrador. El grupo de cuotas sirve el contrato en caché `ocx.quota-pool/1` que usa GOAT.
+
+Con la credencial guardada, el informe de uso se limita a la clave registrada y omite el desglose por cuenta.
+`ocx usage` en un cliente conectado sigue usando su informe en el plano de datos.
+El reenvío del panel aplica la misma tabla y comprueba la sesión local y las cabeceras `Host`
+y `Origin`. Usa la sesión del usuario en el concentrador, con el emparejamiento en
+`/api/machine/hub-relay/opencodex-session`. El cierre de sesión del panel usa
+`POST /api/machine/hub-relay/api/session/logout` con las sesiones del usuario en el cliente y
+el concentrador y sus respectivos tokens CSRF. La credencial de lectura no permite cerrar sesión.
+Abre el panel del concentrador para realizar otros cambios y operaciones administrativas.
+`ocx stop` actúa sobre el proceso local.
+
+Las lecturas autenticadas renuevan la vigencia de cinco minutos de inactividad. Mientras
+el servicio del cliente está en ejecución, hace una lectura pasiva cada minuto para renovarla.
+La rotación sustituye la credencial e invalida en el concentrador la
+generación anterior de la clave. Si el concentrador está disponible, `ocx disconnect` revoca
+la credencial de reenvío allí y elimina el archivo local. Si no se puede confirmar la
+revocación, la desconexión local se completa y el concentrador deja caducar la credencial
+cinco minutos después de la última lectura autenticada. La clave de datos registrada se
+revoca por separado, como se indica arriba.
+
+`ocx connect status` informa del archivo local. Si la credencial caduca por inactividad o
+el concentrador se reinicia, las lecturas con la credencial guardada devuelven `401`.
+Usa un código nuevo con `ocx connect rotate --pairing-code-stdin` para obtener otra
+credencial. El origen del navegador del cliente debe estar en `corsAllowOrigins` del
+concentrador para el emparejamiento.
 
 <a id="linux-systemd-or-macos-launchd"></a>
 
@@ -389,6 +442,14 @@ ocx config set oauthOpenBrowser false
 3. Si la devolución de llamada no puede llegar al concentrador, pegue la URL o el código de redirección final en el panel de control/ CLI. Envía `POST /api/oauth/login/code` con `{provider,input}`.
 4. Sondear el punto final de estado existente hasta que se complete y, a continuación, realizar una solicitud de modelo enrutado.
 
+Para las cuentas del grupo de ChatGPT/Codex, un concentrador puede exigir en su lugar el flujo con código de dispositivo, de modo que nunca se inicie un inicio de sesión con devolución de llamada a localhost:
+
+```bash
+ocx config set codexAuthMethod device-only
+```
+
+Un concentrador en ejecución mantiene el método de inicio de sesión con el que arrancó, así que reinícielo (`ocx restart`, o reinicie el pod) para aplicar el cambio; `ocx config set` lo indica. Al añadir o volver a autenticar una cuenta del grupo desde el panel de control, o con `ocx account login openai [--id <account-id> --reauth]`, se muestran una URL de verificación y un código corto para introducir en cualquier otro dispositivo. Con `--json`, añada `--no-wait`: el inicio de sesión devuelve al momento `url` y `deviceCode`, y una espera en JSON se rechaza (y su flujo se cancela) porque no mostraría ninguno de los dos hasta el final; `--code` se rechaza del mismo modo. Quite el ajuste con `ocx config unset codexAuthMethod` y vuelva a reiniciar.
+
 Nunca ponga el código OAuth en argv de shell, registros, texto de emisión, capturas de pantalla o evidencia de implementación. La ruta de código manual mantiene sus comprobaciones de entrada existentes de proveedor desconocido, flujo no activo, código no válido y 4096 bytes.
 
 ## Docker Compose
@@ -539,6 +600,12 @@ Para una reversión de contenedor, conserve tanto los volúmenes de estado con n
 `ocx usage` lee el concentrador conectado con la clave de datos registrada de este cliente. La salida humana identifica la fuente del concentrador y el alcance de la clave del cliente; `--json` devuelve los mismos datos de alcance. Los filtros de rango, superficie, proveedor / modelo y los límites personalizados `--since` / `--until` permanecen disponibles. Los desgloses de cuentas y los registros de otros clientes no se comparten. Un concentrador antiguo o no disponible produce un error explícito en lugar de sustituir el uso local; actualice el concentrador si no admite esta lectura.
 
 El endpoint de datos de solo lectura es `GET /v1/usage`. Usa `x-opencodex-api-key` con una clave de cliente configurada; se rechazan las claves globales del entorno y las de administración. Acepta `range`, `surface`, `provider`, `model`, `since` y `until`. Rechaza opciones desconocidas o repetidas e identificadores de clave elegidos por quien hace la solicitud. Las filas demasiado grandes que se omiten conservan el aviso explícito de historial incompleto.
+
+Usa `GET /v1/usage/windows` en el listener de datos del concentrador para consultar la cuota de suscripción en caché de una sola cuenta del proveedor. Envía una clave de cliente configurada en `x-opencodex-api-key` o `Authorization: Bearer`. Asigna a la clave un solo proveedor permitido y deja vacía su lista de modelos permitidos. La ruta devuelve `401` para otras credenciales, incluidos el token compartido de la instancia y los tokens de administración. Una clave válida recibe `404 usage_windows_not_a_hub` en instalaciones autónomas o de cliente.
+
+Si un proveedor llega a la selección de cuentas y tiene varias cuentas registradas, el concentrador devuelve `403 usage_windows_account_scope_required`. Los proveedores deshabilitados y las cuentas sin una lectura verificada para la credencial OAuth actual devuelven una lista `windows` vacía. Las lecturas de cuota de Kiro caducan a los diez minutos. Después de reiniciar, una lectura en caché cuya pertenencia a la credencial no se haya verificado permanece oculta hasta que haya una lectura verificada. Cada fila indica el porcentaje consumido, el estado del límite de esa ventana y la hora de reinicio en milisegundos Unix. El uso adicional mensual de Anthropic se omite porque el proveedor no informa de su hora de reinicio.
+
+El proveedor OpenAI puede mostrar la única cuenta registrada en el grupo de ChatGPT. Sus etiquetas son `ChatGPT Weekly`, `ChatGPT Monthly` y, para la ventana corta, `ChatGPT 5-hour` si la observación correspondiente indica 18 000 segundos o `ChatGPT Short window` si la duración es distinta o desconocida. Remote Link permite `/v1/usage` y excluye `/v1/usage/windows`.
 
 Las credenciales de uso del cliente se envían solo por HTTPS o loopback HTTP. Tanto la solicitud como la respuesta deshabilitan el almacenamiento en caché.
 

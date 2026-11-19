@@ -1,3 +1,4 @@
+import type { AnthropicImageRecovery } from "../server/responses/image-context-recovery";
 import { bindAnthropicRejectionResponse } from "../adapters/anthropic-rejection-memo";
 import { anthropicDeclaredTools } from "../adapters/anthropic-tool-catalog";
 import { enableAnthropicReplayCapture, takeAnthropicReplay, bindAnthropicReplay, type AnthropicReplaySnapshot } from "../adapters/anthropic-replay";
@@ -12,7 +13,7 @@ import type { AttemptRecoveryKind } from "../usage/log";
 import { isTruncatedStopReason } from "../responses/truncated-stop-reason";
 import { bridgeToResponsesSSE } from "../bridge";
 import { guardEmptyToolCatalogStream, type ClientToolCatalogRestriction } from "../lib/empty-tool-catalog";
-import { mergeUsage } from "../server/responses/empty-completion-guard";
+import { emptyCompletionRetryFailedEvent, mergeUsage } from "../server/responses/empty-completion-guard";
 import { markSidecarContextOverflow, sidecarLoopTerminalEvent, upstreamErrorCode, type SidecarLoopFailure } from "../server/responses/context-overflow";
 import { markVerifiedModelNotInPlanResponse, MODEL_NOT_IN_PLAN_CODE, UNDECLARED_TOOL_CALL_ERROR_CODE, verifiedPlanRefusalMessage } from "../lib/errors";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
@@ -24,8 +25,11 @@ import { runExaWebSearch } from "./exa-executor";
 import type { WebSearchBackendId } from "./index";
 import { pacingHeaderDeadline } from "./header-deadline";
 import { redactSecretString } from "../lib/redact";
+import { recordLocalFailureDetail, type FailureDetail } from "../server/request-log-failure-detail";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, isSameTargetRetryHold, SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { unwrapUpstreamRetryEvidenceError } from "../codex/auth-context";
+import { HostedAdvisorSpendRefusal } from "../server/responses/policy-request-scope";
 import { rateLimitRetryDelayMs } from "../providers/key-failover";
 import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import {
@@ -34,11 +38,13 @@ import {
   TranslatorBudgetExceededError,
 } from "../lib/translator-budget";
 import { formatWebSearchResults } from "./format-result";
-import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchConsumerInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "./progress-stream";
+import { parseStreamWithProgress, withHeartbeats, RoutedModelInactivityError, WebSearchConsumerInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "./progress-stream";
 import { WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 import { newSidecarSearchCellId, rememberSidecarSearch, restoreSidecarSearchResults } from "./sidecar-search-replay";
 import {
   ADVISOR_TOOL_NAME,
+  advisorToolAllowed,
+  createAdvisorCallResolver,
   MAX_ADVISOR_CONTINUATIONS_PER_REQUEST,
   parseAdvisorQuestionArgs,
   type AdvisorSidecarStep,
@@ -91,7 +97,10 @@ function parseQueries(argsBuf: string): string[] {
  * (Codex never sees the synthetic tool); every other event — text, thinking, real tool calls, done —
  * is preserved in order.
  */
-export function scanEventsForWebSearch(events: AdapterEvent[], options: { advisor?: boolean; clientAdvisorAllowed?: boolean } = {}): {
+export function scanEventsForWebSearch(
+  events: AdapterEvent[],
+  resolveAdvisorCall: ReturnType<typeof createAdvisorCallResolver> = name => name === ADVISOR_TOOL_NAME ? "refused" : undefined,
+): {
   calls: WebSearchCall[];
   passthrough: AdapterEvent[];
   hasRealToolCall: boolean;
@@ -102,13 +111,12 @@ export function scanEventsForWebSearch(events: AdapterEvent[], options: { adviso
   let hasRealToolCall = false;
   let hasMalformedToolCall = false;
   let refusal: Extract<AdapterEvent, { type: "error" }> | undefined;
-  let pending: { name: string; id: string; argsBuf: string; closed: boolean; events: AdapterEvent[]; providerMetadata?: OcxProviderOpaqueToolCallMetadata } | null = null;
+  let pending: { name: string; id: string; argsBuf: string; closed: boolean; advisor: boolean; events: AdapterEvent[]; providerMetadata?: OcxProviderOpaqueToolCallMetadata } | null = null;
   const isBlank = (value: string): boolean => value.trim().length === 0;
   const flushPending = (): void => {
     // A pending call that never saw tool_call_end is structurally malformed.
     if (pending && !pending.closed) hasMalformedToolCall = true;
-    const advisor = options.advisor === true && pending?.name === ADVISOR_TOOL_NAME;
-    if (pending && pending.name !== WEB_SEARCH_TOOL_NAME && !advisor) {
+    if (pending && pending.name !== WEB_SEARCH_TOOL_NAME && !pending.advisor) {
       passthrough.push(...pending.events);
       if (pending.closed && !isBlank(pending.id) && !isBlank(pending.name)) hasRealToolCall = true;
     }
@@ -121,14 +129,17 @@ export function scanEventsForWebSearch(events: AdapterEvent[], options: { adviso
     }
     if (e.type === "tool_call_start") {
       flushPending();
-      if (e.name === ADVISOR_TOOL_NAME && !options.advisor && !options.clientAdvisorAllowed) {
+      const disposition = resolveAdvisorCall(e.name);
+      if (disposition === "refused") {
         refusal = { type: "error", status: 502, errorType: "upstream_error", code: UNDECLARED_TOOL_CALL_ERROR_CODE,
           message: "routed provider emitted advisor outside the current iteration's permitted tool catalog" };
         passthrough.push(refusal);
         continue;
       }
       if (isBlank(e.id) || isBlank(e.name)) hasMalformedToolCall = true;
-      pending = { name: e.name, id: e.id, argsBuf: "", closed: false, events: [e], providerMetadata: e.providerMetadata };
+      const start = typeof disposition === "object" && disposition.clientWireName !== e.name
+        ? { ...e, name: disposition.clientWireName } : e;
+      pending = { name: start.name, id: e.id, argsBuf: "", closed: false, advisor: disposition === "synthetic", events: [start], providerMetadata: e.providerMetadata };
     } else if (e.type === "tool_call_delta") {
       // Orphan delta (no open call) is malformed.
       if (!pending) hasMalformedToolCall = true;
@@ -143,13 +154,12 @@ export function scanEventsForWebSearch(events: AdapterEvent[], options: { adviso
       } else {
         pending.events.push(e);
         pending.closed = true;
-        const advisor = options.advisor === true && pending.name === ADVISOR_TOOL_NAME;
         if (e.incomplete) {
           hasMalformedToolCall = true;
-          if (!advisor) passthrough.push(...pending.events);
+          if (!pending.advisor) passthrough.push(...pending.events);
         } else if (pending.name === WEB_SEARCH_TOOL_NAME) {
           calls.push({ id: pending.id, queries: parseQueries(pending.argsBuf), providerMetadata: pending.providerMetadata });
-        } else if (advisor) {
+        } else if (pending.advisor) {
           calls.push({
             id: pending.id,
             kind: "advisor",
@@ -185,23 +195,6 @@ export function hasVisibleAssistantText(events: AdapterEvent[]): boolean {
 
 async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
   for (const e of events) yield e;
-}
-
-/**
- * Keeps the Responses bridge alive while an internal sidecar await is pending. Rejections retain
- * their original error, and each timeout is cleared on completion, failure, or generator return.
- */
-async function* withHeartbeats<T>(promise: Promise<T>): AsyncGenerator<AdapterEvent, T> {
-  const tracked = promise.then(value => ({ value }));
-  for (;;) {
-    let timer: number | undefined;
-    const heartbeat = new Promise<undefined>(resolve => { timer = setTimeout(resolve, 1_000); });
-    let result: { value: T } | undefined;
-    try { result = await Promise.race([tracked, heartbeat]); }
-    finally { if (timer) clearTimeout(timer); }
-    if (result) return result.value;
-    yield { type: "heartbeat" };
-  }
 }
 
 function terminalUsage(events: AdapterEvent[]): OcxUsage | undefined {
@@ -342,10 +335,18 @@ class LoopError extends Error {
     message: string,
     readonly event?: Extract<AdapterEvent, { type: "error" }>,
     readonly detail?: Pick<SidecarLoopFailure, "upstreamCode" | "nonReplayable" | "verifiedPlanRefusal">,
+    /** A deadline this proxy enforced; logged as local failure detail, never as upstream evidence. */
+    readonly localFailure?: FailureDetail,
   ) {
     super(message);
     this.name = "LoopError";
   }
+}
+
+/** The response-header deadline verdict; the wire status and text are the pre-existing ones. */
+function headerDeadlineError(connectTimeoutMs: number): LoopError {
+  return new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during web-search`,
+    undefined, undefined, { code: "header_timeout", value: connectTimeoutMs });
 }
 
 function loopFailure(e: LoopError): SidecarLoopFailure {
@@ -358,6 +359,8 @@ function loopFailure(e: LoopError): SidecarLoopFailure {
  */
 export interface WebSearchLoopDeps {
   parsed: OcxParsedRequest;
+  /** The global emptyCompletionRetry opt-in; the loop applies it only to final openai-chat iterations. */
+  emptyCompletionRetry?: boolean;
   advisor?: AdvisorSidecarStep;
   /** Chat delivery only; never copied into parsed generation options. */
   chatRawReasoningVisible?: boolean;
@@ -399,6 +402,8 @@ export interface WebSearchLoopDeps {
   connectTimeoutMs?: number;
   /** Continuous routed-model response-body raw-byte inactivity deadline. Default 200000ms. */
   routedModelStallTimeoutMs?: number;
+  /** Best-effort notification before publication. Observer exceptions leave the timeout response intact. */
+  onLocalFailure?: () => void;
   /**
    * Effective bridge stall deadline for this turn (seconds). Computed by planWebSearch
    * (webSearchStallTimeoutSec) to cover response-header wait, routed-model body inactivity, and one
@@ -426,6 +431,7 @@ export interface WebSearchLoopDeps {
   onRequestBuilt?: (request: AdapterRequest) => void;
   /** Request-scoped executor retains the core's selection binding across loop retries. */
   thinkingRecovery?: ReturnType<typeof createAnthropicThinkingRecovery>;
+  imageRecovery?: AnthropicImageRecovery;
   fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest, adapter: ProviderAdapter, recovery?: AttemptRecoveryKind) => typeof globalThis.fetch;
   /** Called before each routed-model dispatch in the loop, for attempt telemetry. Same-target 429 replays pass the `rate-limit-429` recovery kind. */
   onAttemptSend?: (recovery?: AttemptRecoveryKind) => void;
@@ -491,6 +497,14 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   const messages: OcxMessage[] = [...parsed.context.messages];
   const replaySnapshots = new Set<AnthropicReplaySnapshot>();
   const loopT0 = Date.now();
+  // A deadline this proxy enforced ends the turn: the row keeps its closed detail and the same text
+  // is no longer read as upstream evidence. The context text is the one the wire carries, so the
+  // status-derived error code and every retry decision read exactly what they read before.
+  const recordLocalLoopFailure = (e: unknown): void => {
+    if (!(e instanceof LoopError) || !e.localFailure || !deps.proxyErrorContext) return;
+    recordLocalFailureDetail(deps.proxyErrorContext as { upstreamError?: string; failureDetail?: FailureDetail }, e.message, e.localFailure);
+    try { deps.onLocalFailure?.(); } catch { /* Keep the original timeout response. */ }
+  };
   let allTools = adapter.name === "anthropic" ? anthropicDeclaredTools(parsed) : parsed.context.tools ?? [];
   let activeToolChoice = parsed.options.toolChoice;
   let forcedNudgeAdded = false;
@@ -514,8 +528,12 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
 
   // Hard iteration bound (termination safety net); forceAnswer normally ends the loop sooner.
   // One iteration beyond the forced answer is reserved for its empty-answer recovery below.
+  // An authorized Chat empty-completion retry adds its own iteration (see completionRetries in the
+  // loop bound), so ordinary iterations, including repeat placeholders for a failed query that never
+  // advance searchesExecuted, cannot use up the slot the retry needs.
   const HARD_CAP = maxSearches + 3 + (deps.advisor ? MAX_ADVISOR_CONTINUATIONS_PER_REQUEST : 0);
   let emptyAnswerRetries = 0;
+  let completionRetries = 0;
   // Every iteration re-sends the full context, but only the last one's terminal reaches the bridge.
   // Search-calling passes and the discarded empty forced answer are summed here and added to what
   // onUsage reports, so the request log meters what was actually sent. The client-facing terminal
@@ -529,8 +547,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   interface IterationResponse {
     response: Response;
     responseAdapter: ProviderAdapter;
-    clientAdvisorAllowed: boolean;
-    syntheticAdvisorAllowed: boolean;
+    resolveAdvisorCall: ReturnType<typeof createAdvisorCallResolver>;
     recover?: (error: WebSearchAdapterEventError) => Promise<IterationResponse | undefined>;
   }
   type IterationSplit = ReturnType<typeof scanEventsForWebSearch> & {
@@ -711,18 +728,14 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         }
         bindAnthropicRejectionResponse(request, response);
         const iterTools = iterParsed.context.tools ?? [];
-        const toolAllowed = toolChoiceToolPredicate(iterParsed.options.toolChoice, iterTools);
-        const clientAdvisorAllowed = iterTools.some(tool => !tool.advisor && !tool.namespace
-          && tool.name === ADVISOR_TOOL_NAME && toolAllowed(tool));
         const declaredAdvisor = iterTools.find(tool => tool.advisor && tool.name === ADVISOR_TOOL_NAME);
         // Exhaustion removes the declaration, but its paired limit result still belongs
         // to the sidecar. A tools-disabled recovery revokes that permission too.
-        const advisorCandidate = declaredAdvisor ?? { name: ADVISOR_TOOL_NAME };
         const syntheticAdvisorAllowed = !!deps.advisor && !recoveringEmptyAnswer
           && (!!declaredAdvisor || deps.advisor.exhausted())
-          && toolChoiceToolPredicate(iterParsed.options.toolChoice,
-            declaredAdvisor ? iterTools : [...iterTools, advisorCandidate])(advisorCandidate);
-        return { response, responseAdapter: requestAdapter, clientAdvisorAllowed, syntheticAdvisorAllowed };
+          && advisorToolAllowed(iterParsed, declaredAdvisor);
+        return { response, responseAdapter: requestAdapter,
+          resolveAdvisorCall: createAdvisorCallResolver(iterParsed, syntheticAdvisorAllowed, parsed.context.tools) };
       };
 
       const recover = async (error: WebSearchAdapterEventError): Promise<IterationResponse | undefined> => {
@@ -739,8 +752,9 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           return replacement;
         } catch (error) {
           if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
-          if (headerDeadline.didExpire()) throw new LoopError(504,
-            `Provider response-header timeout after ${connectTimeoutMs}ms during web-search`);
+          if (headerDeadline.didExpire()) throw headerDeadlineError(connectTimeoutMs);
+          const refusal = unwrapUpstreamRetryEvidenceError(error);
+          if (refusal instanceof HostedAdvisorSpendRefusal) throw new LoopError(400, refusal.message, refusal.event());
           if (error instanceof LoopError || error instanceof SendBudgetExhaustedError || isTranslatorBudgetExceededError(error)) throw error;
           throw new LoopError(502, `Provider unreachable: ${error instanceof Error ? error.message : String(error)}`);
         } finally {
@@ -818,7 +832,19 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         prepared = replacement;
       }
 
-      if (await deps.thinkingRecovery?.prepareHttp(prepared.response, prepared.responseAdapter.name, iterParsed)) {
+      let imageReplacement: AdapterRequest | undefined;
+      if (deps.imageRecovery && prepared.response.status === 413) {
+        headerDeadline.clear();
+        const recovered = yield* withHeartbeats(deps.imageRecovery(prepared.response, iterParsed, prepared.responseAdapter, signal), signal);
+        prepared.response = recovered.response;
+        imageReplacement = recovered.request;
+        if (recovered.response.ok && imageReplacement) {
+          messages.splice(0, messages.length, ...iterParsed.context.messages);
+          parsed._anthropicImageOwner = iterParsed._anthropicImageOwner;
+          cachedRequest = imageReplacement;
+        }
+      }
+      if (!imageReplacement && await deps.thinkingRecovery?.prepareHttp(prepared.response, prepared.responseAdapter.name, iterParsed)) {
         try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* closed */ }
         cachedRequest = undefined;
         cachedAdapter = undefined;
@@ -832,10 +858,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       return { ...prepared, recover };
     } catch (error) {
       if (isTranslatorBudgetExceededError(error) || error instanceof SendBudgetExhaustedError) throw error;
-      if (headerDeadline.didExpire()) {
-        throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during web-search`);
-      }
+      if (headerDeadline.didExpire()) throw headerDeadlineError(connectTimeoutMs);
       if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
+      const refusal = unwrapUpstreamRetryEvidenceError(error);
+      if (refusal instanceof HostedAdvisorSpendRefusal) throw new LoopError(400, refusal.message, refusal.event());
       if (error instanceof LoopError || error instanceof RequestPacingQueueOverloadError) throw error;
       throw new LoopError(502, `Provider unreachable: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -919,8 +945,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         throw new LoopError(event.status ?? 502, event.message, event);
       }
       if (error instanceof LoopError) throw error;
-      if (error instanceof RoutedModelInactivityError) throw new LoopError(504, error.message);
-      if (error instanceof WebSearchConsumerInactivityError) throw new LoopError(504, error.message);
+      if (error instanceof RoutedModelInactivityError) throw new LoopError(504, error.message, undefined, undefined,
+        { code: "generation_timeout", value: error.timeoutMs });
+      if (error instanceof WebSearchConsumerInactivityError) throw new LoopError(504, error.message, undefined, undefined,
+        { code: "turn_inactivity", value: error.timeoutMs });
       if (error instanceof WebSearchStreamProtocolError) throw new LoopError(502, error.message);
       throw new LoopError(502, `Provider stream error: ${error instanceof Error ? error.message : String(error)}`);
     } finally { releaseCapture(); }
@@ -939,7 +967,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       throw new LoopError(502, terminal.message, terminal.code === "context_length_exceeded" ? terminal : undefined);
     }
     deps.thinkingRecovery?.observeIteration(events);
-    return { ...scanEventsForWebSearch(events, { advisor: prepared.syntheticAdvisorAllowed, clientAdvisorAllowed: prepared.clientAdvisorAllowed }), streamedPassthroughCount, events, anthropicReplay };
+    return { ...scanEventsForWebSearch(events, prepared.resolveAdvisorCall), streamedPassthroughCount, events, anthropicReplay };
   };
 
   /**
@@ -1132,6 +1160,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   } catch (e) {
     if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
     if (e instanceof LoopError) {
+      recordLocalLoopFailure(e);
       const failure = loopFailure(e);
       const failed = markSidecarContextOverflow(jsonError(e.status, e.message, e.event), failure);
       if (failure.verifiedPlanRefusal) markVerifiedModelNotInPlanResponse(failed);
@@ -1166,7 +1195,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   async function* produce(): AsyncGenerator<AdapterEvent> {
     let prepared = firstPrepared;
     try {
-      for (let i = 0; i < HARD_CAP; i++) {
+      for (let i = 0; i < HARD_CAP + completionRetries; i++) {
         const forceAnswer = searchesExecuted >= maxSearches;
         try {
           // First loop turn reuses the eager HEADERS. Subsequent header acquisitions run here.
@@ -1191,6 +1220,18 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             && !split.passthrough.some(event => event.type === "incomplete" || event.type === "error"
               || (event.type === "done" && isTruncatedStopReason(event.stopReason)));
           if (!shouldLoop) {
+            // Validate every final Chat iteration, even when no search was called. Retry
+            // only this model leg: already executed search results stay in messages.
+            const final = split.passthrough.find(event => event.type === "done");
+            if (deps.emptyCompletionRetry && !forceAnswer && adapter.name === "openai-chat"
+              && final?.type === "done" && !isTruncatedStopReason(final.stopReason)
+              && !split.passthrough.some(event => event.type === "error" || event.type === "incomplete")
+              && !signal.aborted && !split.hasMalformedToolCall && !split.hasRealToolCall
+              && split.streamedPassthroughCount === 0 && !hasVisibleAssistantText(split.passthrough)) {
+              hiddenUsage = mergeUsage(hiddenUsage, final.usage);
+              if (completionRetries++ === 0) { yield { type: "heartbeat" }; continue; }
+              throw new LoopError(502, "Provider completed without usable output after one retry", emptyCompletionRetryFailedEvent());
+            }
             // #1001: a forced-answer pass that ends `done` must have produced
             // usable output — never a malformed tool call, and never silence.
             if (forceAnswer) {
@@ -1294,6 +1335,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         } catch (e) {
           // The bridge reports no usage for either error; the iterations already sent still count.
           if (hiddenUsage) deps.onUsage?.(hiddenUsage);
+          recordLocalLoopFailure(e);
           if (isTranslatorBudgetExceededError(e)) {
             yield {
               type: "error",
@@ -1343,6 +1385,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       chatRawReasoningVisible: deps.chatRawReasoningVisible,
       hideRawReasoning: parsed.options.hideRawReasoning,
+      rawReasoningAsSummary: parsed.options.rawReasoningAsSummary,
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
       ...(deps.onUsage ? { onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(mergeUsage(countersOnly(hiddenUsage), usage)) } : {}),

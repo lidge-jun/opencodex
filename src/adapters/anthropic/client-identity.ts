@@ -24,6 +24,8 @@ function valid(name: typeof NAMES[number], value: string): boolean {
   if (name === "User-Agent") {
     const entrypoint = interceptEntrypoint(value);
     return entrypoint === "cli" || entrypoint === "sdk-cli" || entrypoint === "sdk" || entrypoint === "sdk-ts"
+      // First-party project children use a wire label independent of the host routing surface.
+      || entrypoint === "local_projects"
       || (DESKTOP_ENTRYPOINTS as readonly string[]).includes(entrypoint ?? "");
   }
   if (name === "X-App") return CLAUDE_CODE_APPS.has(value);

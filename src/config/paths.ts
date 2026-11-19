@@ -20,6 +20,9 @@ const configDirHardeningFlights = new Map<string, Promise<void>>();
 
 export function getConfigDir(): string {
   const raw = process.env["OPENCODEX_HOME"]?.trim() || undefined;
+  if (raw === "undefined" || raw === "./undefined") {
+    throw new Error('OPENCODEX_HOME resolved to "undefined"; set it to a config directory');
+  }
   if (resolvedConfigDirCache && resolvedConfigDirCache.raw === raw) return resolvedConfigDirCache.path;
   const path = raw ? resolve(expandUserPath(raw)) : join(homedir(), ".opencodex");
   resolvedConfigDirCache = { raw, path };

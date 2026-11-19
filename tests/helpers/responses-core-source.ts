@@ -8,6 +8,8 @@ import { repoPath } from "./repo-root";
 export const RESPONSES_CORE_MODULES = [
   "core.ts",
   "core-pipeline.ts",
+  "hosted-advisor-spend.ts",
+  "image-context-recovery.ts",
   "compaction-retention.ts",
   "core-options.ts",
   "native-response-control.ts",
@@ -20,6 +22,8 @@ export const RESPONSES_CORE_MODULES = [
   "native-injection-replay.ts",
   // Reached from passthrough dispatch: the physical replay guard for a native reset/EOF replacement (#8292).
   "native-replay-guard.ts",
+  // Reached from passthrough delivery: opt-in estimated usage for providers that omit it (#7427).
+  "estimated-usage.ts",
   "native-steering.ts",
   "native-steering-settings.ts",
   "native-steering-policy.ts",
@@ -34,6 +38,8 @@ export const RESPONSES_CORE_MODULES = [
   "core-auth.ts",
   "core-normalize.ts",
   "core-combo.ts",
+  // Reached from core.ts: the keepalive head a slow streaming combo selection commits (#8326).
+  "combo-selection-keepalive.ts",
   "deferred-send-reporter.ts",
   "combo-requested-effort.ts",
   "core-combo-native.ts",
@@ -102,8 +108,10 @@ export const RESPONSES_CORE_MODULES = [
   "adapter-failure-message.ts",
   "antigravity-validation-refusal.ts",
   "antigravity-model-denial-recovery.ts",
+  "antigravity-fault-rotation.ts",
   "adapter-continuation.ts",
   "adapter-delivery.ts",
+  "anthropic-image-context.ts",
   "anthropic-thinking-recovery.ts",
   "advisor-slot.ts",
   // Reached from advisor-slot.ts: shared question bounds/clip helper for opt-in question-only consultation text (#7526).
@@ -111,6 +119,8 @@ export const RESPONSES_CORE_MODULES = [
   "advisor-retention.ts",
   "advisor-plan-slot.ts",
   "policy-refusal.ts",
+  // Reached from core-pipeline.ts: the Antigravity ACP use-policy preflight (plan 080, #8480).
+  "agy-acp-preflight.ts",
 ] as const;
 
 export type ResponsesCoreModule = typeof RESPONSES_CORE_MODULES[number];

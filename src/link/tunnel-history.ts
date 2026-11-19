@@ -50,6 +50,8 @@ function retryFailedAgain(before: TunnelState, after: TunnelState): boolean {
 export interface TunnelHistoryBook {
   /** Count one ssh attempt for the link. */
   spawned(linkId: string): void;
+  /** Record a failed attempt that leaves the link in its current state. */
+  recordFailure(linkId: string, cause: TunnelCause, at: number): void;
   /** Record a state change; `cause` names why the link left a working state, when known. */
   observe(linkId: string, before: TunnelState, after: TunnelState, cause: TunnelCause | null, at: number): void;
   get(linkId: string): TunnelHistory | undefined;
@@ -71,6 +73,9 @@ export function createTunnelHistoryBook(
   return {
     spawned(linkId) {
       entry(linkId).attempt += 1;
+    },
+    recordFailure(linkId, cause, at) {
+      entry(linkId).lastFailure = { cause, at };
     },
     observe(linkId, before, after, cause, at) {
       const refailed = retryFailedAgain(before, after);

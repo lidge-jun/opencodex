@@ -2,8 +2,9 @@ import { clientLinkStatusIdentity } from "../client/link-status";
 import { clientLinkTunnelStatus } from "../client/link-tunnel";
 import { loadConfig } from "../config";
 import {
-  projectLinkStatus, type ClientLinkIdentity, type LinkStatusConfig, type LinkStatusDto, type LinkTunnelDiagnostics, type LinkWireState,
+  LINK_RELAY_DEGRADED_GUIDANCE, projectLinkStatus, type ClientLinkIdentity, type LinkRelayHealth, type LinkStatusConfig, type LinkStatusDto, type LinkTunnelDiagnostics, type LinkWireState,
 } from "../link/status-projection";
+import { LINK_DELIVERY_DEGRADED_THRESHOLD, LINK_DELIVERY_SAMPLE_LIMIT } from "../link/child-activity";
 import { TUNNEL_CAUSES } from "../link/tunnel-history";
 import { isEpochMs, type LinkChildParity } from "../link/child-parity";
 import { CODEX_SETTINGS_DIGEST_PATTERN } from "../link/codex-settings";
@@ -188,7 +189,7 @@ export function validateStatus(value: unknown): LinkStatusPayload {
     if (!isRecord(candidate)) throw new Error(`invalid link API response: link ${index}`);
     // The OCX-6 parity fields are optional on the wire (an older runtime omits them) and always
     // present in this output, null when absent.
-    assertKeys(candidate, ["id", "alias", "direction", "state", "since", "reason", "tunnelPort"], [...PARITY_KEYS, "peer", "tunnel", "childKind", "exclusive", "explicitRoute", "child", "ws", "traffic", "routes", "route", "routeBlocked"], `link ${index}`);
+    assertKeys(candidate, ["id", "alias", "direction", "state", "since", "reason", "tunnelPort"], [...PARITY_KEYS, "peer", "tunnel", "relayHealth", "childKind", "exclusive", "explicitRoute", "child", "ws", "traffic", "routes", "route", "routeBlocked"], `link ${index}`);
     const parity = validateParity(candidate, index);
     if (typeof candidate.id !== "string" || !LINK_ID.test(candidate.id)
       || !validString(candidate.alias) || (candidate.direction !== "hub-initiated" && candidate.direction !== "client-initiated")
@@ -213,6 +214,7 @@ export function validateStatus(value: unknown): LinkStatusPayload {
       ...parity,
       ...(candidate.peer !== undefined ? { peer: validatePeer(candidate.peer, index) } : {}),
       ...(candidate.tunnel !== undefined ? { tunnel: validateTunnel(candidate.tunnel, index) } : {}),
+      ...(candidate.relayHealth !== undefined ? { relayHealth: validateRelayHealth(candidate.relayHealth, index) } : {}),
       ...(candidate.child !== undefined ? { child: validateChildOps(candidate.child, index) } : {}),
       ...(candidate.ws !== undefined ? { ws: validateLinkWs(candidate.ws, index) } : {}),
       ...(candidate.traffic !== undefined ? { traffic: validateLinkTraffic(candidate.traffic, index) } : {}),
@@ -371,10 +373,9 @@ async function runStatus(args: string[], deps: LinkCliDeps): Promise<void> {
     }
     throw error;
   }
-  // A proxy older than the compatibility report, the tunnel diagnostics, the Child block, the link WebSocket counters or
-  // the traffic counters ignores the query and answers without those fields.
+  // Older runtimes ignore unsupported query parameters and omit those fields.
   const result = validateStatus(await viaLocalControlSocket(baseUrl, deps,
-    statusDeps => linkRequest<unknown>("/api/link/status?compatibility=1&diagnostics=1&children=1&transport=1&traffic=1&routes=1", {}, statusDeps)));
+    statusDeps => linkRequest<unknown>("/api/link/status?compatibility=1&diagnostics=1&children=1&transport=1&traffic=1&routes=1&relayHealth=1", {}, statusDeps)));
   console.log(JSON.stringify(result));
 }
 
@@ -582,6 +583,24 @@ function validateTunnel(value: unknown, index: number): LinkTunnelDiagnostics {
   return value as unknown as LinkTunnelDiagnostics;
 }
 
+function validateRelayHealth(value: unknown, index: number): LinkRelayHealth {
+  const label = `link ${index} relayHealth`;
+  const fail = (): never => { throw new Error(`invalid link API response: ${label}`); };
+  if (!isRecord(value)) return fail();
+  assertKeys(value, ["relayAuthentication", "delivery", "inferenceReadiness", "recentInterruptions"], ["guidance"], label);
+  const { relayAuthentication, delivery, inferenceReadiness, recentInterruptions, guidance } = value;
+  if ((relayAuthentication !== "observed" && relayAuthentication !== "unknown")
+    || (delivery !== "observed" && delivery !== "degraded" && delivery !== "unknown")
+    || inferenceReadiness !== "unknown"
+    || typeof recentInterruptions !== "number" || !Number.isSafeInteger(recentInterruptions)
+    || recentInterruptions < 0 || recentInterruptions > LINK_DELIVERY_SAMPLE_LIMIT
+    || (delivery !== "unknown" && relayAuthentication !== "observed")
+    || (delivery === "unknown" && recentInterruptions !== 0)
+    || (delivery === "degraded") !== (recentInterruptions >= LINK_DELIVERY_DEGRADED_THRESHOLD)
+    || guidance !== (delivery === "degraded" ? LINK_RELAY_DEGRADED_GUIDANCE : undefined)) return fail();
+  return value as unknown as LinkRelayHealth;
+}
+
 function validateParity(candidate: Record<string, unknown>, index: number): LinkChildParity {
   const time = (key: "lastApplyAt" | "runtimeStartedAt" | "reportedAt"): number | null => {
     const value = candidate[key];
@@ -698,13 +717,14 @@ const NEXT_STEP: Record<string, string> = {
   // A resumed owner can meet the same live write failure again and keep its receipt, so a repeat proves nothing: the same id after
   // the fix, and a new id only through link_retirement_owned's guidance if one is tried.
   operation_journal_failed: "The journal could not record a step: fix what keeps it from being written (disk space, permissions), then repeat the revoke with the same operation id. If it keeps answering operation_journal_failed, a new operation id can be tried; if that answers link_retirement_owned, this id may still own the removal: follow that answer",
-  // A stale retirement receipt (the record was edited after a removal claimed it, for example by ocx link routes, which does not
-  // check for a receipt: #8678) answers link_changed to every revoke, this id's resume included, until the record matches the
-  // receipt's copy again. A claim that met a changed record (no receipt for this id) is journalled, so this id replays it while a
+  // A stale retirement receipt (the record was edited after a removal claimed it) answers link_changed to every revoke, this id's
+  // resume included, until the record matches the receipt's copy again. A current Home refuses a route edit while a receipt is
+  // outstanding (link_retirement_pending, #8678), so only an older Home's ocx link routes, which did not check, or an edit by
+  // hand leaves one stale. A claim that met a changed record (no receipt for this id) is journalled, so this id replays it while a
   // new id reads the record afresh; a commit that met one leaves this id's receipt, so its repeat resumes the removal and meets
   // the same comparison. In one runtime a revoke and a route edit hold the same Child-job reservation, so the code never proves
   // that the link changed while this revoke ran.
-  link_changed: "The link, or the record of its unfinished removal, no longer matches what this removal started from: read ocx link status, then repeat the revoke with the same operation id. If it answers link_changed again, the link may have been edited after its removal began (for example with ocx link routes). A new operation id can remove it only when no unfinished removal of this link remains; while one remains, no revoke finishes it until the link matches that removal's copy again",
+  link_changed: "The link, or the record of its unfinished removal, no longer matches what this removal started from: read ocx link status, then repeat the revoke with the same operation id. If it answers link_changed again, the link was edited after its removal began, by ocx link routes on an older Home that did not refuse route edits during a removal or by hand. A new operation id can remove it only when no unfinished removal of this link remains; while one remains, no revoke finishes it until the link matches that removal's copy again",
 };
 
 /**

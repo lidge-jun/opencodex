@@ -1,3 +1,4 @@
+import type { AnthropicImageRecovery } from "../server/responses/image-context-recovery";
 import type { createAnthropicThinkingRecovery } from "../server/responses/anthropic-thinking-recovery";
 import { markSidecarContextOverflow, sidecarLoopTerminalEvent, upstreamErrorCode, type SidecarLoopFailure } from "../server/responses/context-overflow";
 import { markVerifiedModelNotInPlanResponse, MODEL_NOT_IN_PLAN_CODE, verifiedPlanRefusalMessage } from "../lib/errors";
@@ -28,6 +29,8 @@ import { isTruncatedStopReason } from "../responses/truncated-stop-reason";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, isSameTargetRetryHold, SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { unwrapUpstreamRetryEvidenceError } from "../codex/auth-context";
+import { HostedAdvisorSpendRefusal } from "../server/responses/policy-request-scope";
 import { rateLimitRetryDelayMs } from "../providers/key-failover";
 import { releaseProviderRequestSlot, RequestPacingQueueOverloadError, sendTrackingRequestSlot, type ProviderRequestSlot } from "../providers/request-pacing";
 import {
@@ -37,7 +40,7 @@ import {
   TRANSLATOR_MAX_TURN_BYTES,
   TranslatorBudgetExceededError,
 } from "../lib/translator-budget";
-import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchConsumerInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "../web-search/progress-stream";
+import { parseStreamWithProgress, withHeartbeats, RoutedModelInactivityError, WebSearchConsumerInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "../web-search/progress-stream";
 import { fulfillImageCall } from "./fulfill";
 import { parseVideoCallArgs, pollVideoWithHeartbeats, buildVideoResult, createVideoBudget } from "./fulfill-video";
 import { submitVideoJob } from "./xai-video-client";
@@ -311,6 +314,7 @@ function loopFailure(e: LoopError): SidecarLoopFailure {
  */
 export interface ImageBridgeDeps {
   thinkingRecovery?: ReturnType<typeof createAnthropicThinkingRecovery>;
+  imageRecovery?: AnthropicImageRecovery;
   parsed: OcxParsedRequest;
   /** Chat delivery only; never copied into parsed generation options. */
   chatRawReasoningVisible?: boolean;
@@ -336,9 +340,9 @@ export interface ImageBridgeDeps {
   onIterationEnd?: () => void;
   /** Max image-generation rounds before forcing a final answer. Defaults to 3; clamped to [0, 10]. */
   maxRounds?: number;
-  /** Connect / response-header budget for non-runTurn iterations. */
+  /** Response-header budget for HTTP iterations. Zero disables the timer. */
   connectTimeoutMs?: number;
-  /** Stall budget (seconds) forwarded to bridgeToResponsesSSE; also bounds runTurn collect. */
+  /** Inactivity budget (seconds) for HTTP bodies, runTurn collection, and downstream SSE. Zero disables it. */
   stallTimeoutSec?: number;
   /** Provider-specific fetch (e.g. xAI transport wrapper). Falls back to global fetch. */
   fetchImpl?: typeof globalThis.fetch;
@@ -407,10 +411,10 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   let adapter = deps.adapter;
   const maxRounds = clampImageMaxRounds(deps.maxRounds ?? DEFAULT_MAX_ROUNDS);
   const HARD_CAP = maxRounds + 1;
-  const connectTimeoutMs = typeof deps.connectTimeoutMs === "number" && Number.isFinite(deps.connectTimeoutMs) && deps.connectTimeoutMs > 0
+  const connectTimeoutMs = typeof deps.connectTimeoutMs === "number" && Number.isFinite(deps.connectTimeoutMs) && deps.connectTimeoutMs >= 0
     ? Math.floor(deps.connectTimeoutMs)
     : CONNECT_TIMEOUT_MS;
-  const stallTimeoutMs = typeof deps.stallTimeoutSec === "number" && Number.isFinite(deps.stallTimeoutSec) && deps.stallTimeoutSec > 0
+  const stallTimeoutMs = typeof deps.stallTimeoutSec === "number" && Number.isFinite(deps.stallTimeoutSec) && deps.stallTimeoutSec >= 0
     ? Math.floor(deps.stallTimeoutSec * 1000)
     : STALL_TIMEOUT_MS;
   const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
@@ -739,7 +743,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
             body: prepared.response.body,
             signal,
             delayMs: rateLimitRetryDelayMs(rateLimitRetryPolicy, retryAfterHeader, Date.now()),
-            heartbeatIntervalMs: Math.min(10_000, Math.max(250, stallTimeoutMs / 2)),
+            heartbeatIntervalMs: stallTimeoutMs === 0 ? 10_000 : Math.min(10_000, Math.max(250, stallTimeoutMs / 2)),
           });
         } catch {
           throw new LoopError(499, "client closed request during image-bridge");
@@ -771,7 +775,19 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         prepared = await fetchOnce(adapter, rotated.recoveryKind);
       }
 
-      if (await deps.thinkingRecovery?.prepareHttp(prepared.response, prepared.responseAdapter.name, iterParsed)) {
+      let imageReplacement: AdapterRequest | undefined;
+      if (deps.imageRecovery && prepared.response.status === 413) {
+        headerDeadline.clear();
+        const recovered = yield* withHeartbeats(deps.imageRecovery(prepared.response, iterParsed, prepared.responseAdapter, signal), signal);
+        prepared.response = recovered.response;
+        imageReplacement = recovered.request;
+        if (recovered.response.ok && imageReplacement) {
+          messages.splice(0, messages.length, ...iterParsed.context.messages);
+          parsed._anthropicImageOwner = iterParsed._anthropicImageOwner;
+          cachedRequest = imageReplacement;
+        }
+      }
+      if (!imageReplacement && await deps.thinkingRecovery?.prepareHttp(prepared.response, prepared.responseAdapter.name, iterParsed)) {
         try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* closed */ }
         cachedRequest = undefined;
         prepared = await fetchOnce(adapter, "opaque-blob-rejection");
@@ -834,6 +850,8 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during image-bridge`);
       }
       if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
+      const refusal = unwrapUpstreamRetryEvidenceError(error);
+      if (refusal instanceof HostedAdvisorSpendRefusal) throw new LoopError(400, refusal.message, refusal.event());
       if (error instanceof LoopError || error instanceof RequestPacingQueueOverloadError) throw error;
       throw new LoopError(502, `Provider unreachable: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -1028,9 +1046,13 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                 continue;
               }
               const vArgs = parseVideoCallArgs(call.args);
+              const videoAuth = videoPlan!.auth;
               let vResult;
               if (!vArgs.ok) {
                 vResult = { ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0, error: vArgs.error };
+              } else if (!videoAuth) {
+                // An unusable images.videoProvider answers the call; it never reaches any upstream.
+                vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt, files: [], count: 0, error: videoPlan!.unavailable };
               } else {
                 paidVideoCalls += 1;
                 const videoTimeout = videoTimeoutMs ?? 300_000;
@@ -1048,13 +1070,13 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                       ...(vArgs.resolution != null ? { resolution: vArgs.resolution } : {}),
                       ...(vArgs.aspectRatio != null ? { aspectRatio: vArgs.aspectRatio } : {}),
                     },
-                    videoPlan!.auth, linkedDeadline,
+                    videoAuth, linkedDeadline,
                   );
                   const remainingMs = videoDeadline - Date.now();
                   if (remainingMs <= 0) {
                     vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt, files: [], count: 0, error: `video generation timed out after ${Math.floor(videoTimeout / 1000)}s` };
                   } else {
-                  const pollGen = pollVideoWithHeartbeats(requestId, videoPlan!.auth, linkedDeadline, remainingMs);
+                  const pollGen = pollVideoWithHeartbeats(requestId, videoAuth, linkedDeadline, remainingMs);
                   let pollResult: { ok: true; videoUrl: string } | { ok: false; error: string };
                   try {
                     for (;;) {
@@ -1227,6 +1249,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       chatRawReasoningVisible: deps.chatRawReasoningVisible,
       hideRawReasoning: parsed.options.hideRawReasoning,
+      rawReasoningAsSummary: parsed.options.rawReasoningAsSummary,
       stallTimeoutSec: deps.stallTimeoutSec,
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
       ...(deps.onUsage ? {

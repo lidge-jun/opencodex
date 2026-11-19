@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { ANTIGRAVITY_RISK_WARNING } from "../../src/oauth/antigravity-risk";
 
 const marker = "oauth-cli-provider-response-marker";
 const moduleUrl = (...name: string[]) => JSON.stringify(pathToFileURL(repoPath("src", ...name)).href);
@@ -127,7 +128,8 @@ test("Antigravity discovery diagnostics survive CLI reporting without provider t
   const { stdout, stderr, code } = await runLoginChild(`
     import { handleLogin } from ${moduleUrl("oauth", "login-cli.ts")};
     ${antigravityFailureSetup}
-    await handleLogin("google-antigravity", { ask: async () => "", openUrl: async () => ({ status: "started" }) });
+    // The Antigravity risk gate is covered in oauth-antigravity-risk.test.ts; this case is about discovery.
+    await handleLogin("google-antigravity", { ask: async () => "", openUrl: async () => ({ status: "started" }), agentDriven: () => false }, { acceptAntigravityRisk: true });
   `);
   expect(code).toBe(1);
   expect(stderr).toContain("Antigravity login could not discover a Cloud Code Assist project");
@@ -175,11 +177,12 @@ test("a plain Error cannot impersonate Antigravity diagnostics in CLI or settled
     await startLoginFlow("google-antigravity", { forceLogin: true });
     if (!await waitForLoginSettled("google-antigravity", 5000)) throw new Error("login did not settle");
     console.log(JSON.stringify(getLoginStatus("google-antigravity")));
-    await handleLogin("google-antigravity", { ask: async () => "", runLogin: async () => { throw error; } });
+    await handleLogin("google-antigravity", { ask: async () => "", runLogin: async () => { throw error; }, agentDriven: () => false }, { acceptAntigravityRisk: true });
   `);
   expect(code).toBe(1);
   expect(JSON.parse(stdout.trim())).toMatchObject({ error: publicMessage, loggedIn: false, done: true, status: "error" });
-  expect(stderr.trim()).toBe(`❌ OAuth login failed (oauth_authentication_failed): ${publicMessage}`);
+  // The Antigravity risk warning always prints first; nothing else may reach stderr.
+  expect(stderr.replace(ANTIGRAVITY_RISK_WARNING, "").trim()).toBe(`❌ OAuth login failed (oauth_authentication_failed): ${publicMessage}`);
   expect(stdout + stderr).not.toContain(marker);
 });
 

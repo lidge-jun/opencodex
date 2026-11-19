@@ -117,6 +117,12 @@ function observeBufferedBody(body: Record<string, unknown>): { semanticBytes: nu
       const text = (part as Record<string, unknown>).text;
       if (typeof text === "string") semanticBytes += Buffer.byteLength(text, "utf8");
     }
+    const summary = Array.isArray(item.summary) ? item.summary : [];
+    for (const part of summary) {
+      if (part === null || typeof part !== "object") continue;
+      const { type, text } = part as Record<string, unknown>;
+      if (type === "summary_text" && typeof text === "string") semanticBytes += Buffer.byteLength(text, "utf8");
+    }
   }
   return { semanticBytes, sideEffects };
 }

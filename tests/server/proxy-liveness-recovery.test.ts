@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
-import { findLiveProxy, observeProxyLiveness, type LivenessIo } from "../../src/server/proxy-liveness";
+import { findLiveProxy, observeProxyLiveness, START_OWNERSHIP_LIVENESS, type LivenessIo } from "../../src/server/proxy-liveness";
+import { localConnectTimeoutFetch } from "../helpers/local-connect-timeout";
+import { decideStartWithLiveOwner } from "../../src/cli/dispatch";
 
 const refused = () => Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" });
 const timeout = () => Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
@@ -92,4 +94,97 @@ test("port zero cannot name an owner, but an ambiguous runtime still blocks reco
   expect(await observeProxyLiveness(dynamicIo)).toEqual({ kind: "absent", live: null });
   expect(await observeProxyLiveness({ ...dynamicIo, readRuntimeFn: () => ({ pid: 4242, port: 20200 }) }))
     .toEqual({ kind: "unknown", live: null });
+});
+
+function windowsStartup(hostname: string, overrides: LivenessIo = {}): LivenessIo {
+  return {
+    ...io, ...START_OWNERSHIP_LIVENESS, platform: "win32", timeoutMs: 100,
+    configFn: () => ({ port: 10100, hostname }),
+    fetchFn: localConnectTimeoutFetch(host => host === hostname ? "timeout" : "refused"),
+    ...overrides,
+  };
+}
+
+test.each([["127.0.0.1", "0.0.0.0"], ["::1", "::"]])(
+  "Windows startup can prove a timed-out %s endpoint absent",
+  async (host, wildcard) => {
+    const binds: Array<[string, number]> = [];
+    const opts = windowsStartup(host, {
+      bindProofFn: async (address, port) => { binds.push([address, port]); return true; },
+    });
+    expect(await observeProxyLiveness(opts)).toEqual({ kind: "absent", live: null, loopbackBindProven: true });
+    expect(binds).toEqual([[host, 10100], [wildcard, 10100]]);
+    expect(await observeProxyLiveness({ ...opts, platform: "darwin" })).toEqual({ kind: "unknown", live: null });
+    expect(binds).toHaveLength(2);
+  },
+);
+
+test.each(["127.0.0.1", "0.0.0.0", "error"])("Windows startup refuses when the bind at %s is unprovable", async blocked => {
+  const binds: string[] = [];
+  const opts = windowsStartup("127.0.0.1", { bindProofFn: async address => {
+    binds.push(address);
+    if (blocked === "error") throw new Error("unavailable");
+    return address !== blocked;
+  } });
+  expect(await observeProxyLiveness(opts)).toEqual({ kind: "unknown", live: null });
+  expect(binds).toEqual(blocked === "0.0.0.0" ? ["127.0.0.1", "0.0.0.0"] : ["127.0.0.1"]);
+});
+
+test.each(["deadline", "cancel"])("Windows startup discards a bind proof after %s", async stop => {
+  const controller = new AbortController();
+  let clock = 10;
+  const binds: Array<[string, number]> = [];
+  const opts = windowsStartup("127.0.0.1", {
+    deadlineAt: 60, nowFn: () => clock, signal: controller.signal,
+    bindProofFn: async (address, _port, budget) => {
+      binds.push([address, budget]);
+      if (stop === "cancel") controller.abort();
+      else clock = 60;
+      return true;
+    },
+  });
+  expect(await observeProxyLiveness(opts)).toEqual({ kind: "unknown", live: null });
+  expect(binds).toEqual([["127.0.0.1", 50]]);
+});
+
+test("a Windows connect timeout does not supersede live PID or runtime evidence", async () => {
+  let binds = 0;
+  const opts = windowsStartup("127.0.0.1", { bindProofFn: async () => { binds++; return true; } });
+  expect(await observeProxyLiveness({ ...opts, readPidFn: () => process.pid })).toEqual({ kind: "unknown", live: null });
+  expect(await observeProxyLiveness({ ...opts, readRuntimeFn: () => ({ pid: process.pid, port: 10100 }) }))
+    .toEqual({ kind: "unknown", live: null });
+  expect(binds).toBeGreaterThanOrEqual(4);
+});
+
+test("the final startup probe sees a listener that takes the port after the bind proof", async () => {
+  const released = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+  const port = released.port;
+  await released.stop(true);
+  const opts = windowsStartup("127.0.0.1", { configFn: () => ({ port }) });
+  expect(await observeProxyLiveness(opts)).toEqual({ kind: "absent", live: null, loopbackBindProven: true });
+
+  // This is a real bind on the endpoint that the temporary proof has just released.
+  const owner = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => Response.json({ service: "opencodex", pid: process.pid }) });
+  try {
+    const live = await findLiveProxy({ ...opts, fetchFn: undefined, timeoutMs: 1_500 });
+    if (!live) throw new Error("the final probe missed the late listener");
+    expect(live).toMatchObject({ pid: process.pid, port });
+    expect(decideStartWithLiveOwner({ livePid: live.pid, livePort: live.port, requestedPort: undefined, ocxService: undefined })).toBe("refuse");
+  } finally { await owner.stop(true); }
+});
+
+test("a response timeout or a mixed reset and connect timeout provides no bind evidence", async () => {
+  let ipv4Calls = 0;
+  const connected = localConnectTimeoutFetch(host => host === "127.0.0.1" ? "connected" : "refused");
+  const connecting = localConnectTimeoutFetch(host => host === "127.0.0.1" ? "timeout" : "refused");
+  let bindAttempts = 0;
+  const bindProofFn = async () => { bindAttempts++; return true; };
+  expect((await observeProxyLiveness(windowsStartup("127.0.0.1", { fetchFn: connected, bindProofFn }))).kind).toBe("unknown");
+  const mixed = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (new URL(String(input)).hostname === "127.0.0.1" && ++ipv4Calls === 1) throw Object.assign(new Error("reset"), { code: "ECONNRESET" });
+    return connecting(input, init);
+  }) as typeof fetch;
+  expect((await observeProxyLiveness(windowsStartup("127.0.0.1", { fetchFn: mixed, bindProofFn }))).kind).toBe("unknown");
+  expect(ipv4Calls).toBe(3);
+  expect(bindAttempts).toBe(0);
 });

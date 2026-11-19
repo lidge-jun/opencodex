@@ -45,6 +45,8 @@ export type ProviderModelDiscoveryFailure = ProviderModelDiscoveryStatus extends
     : never
   : never;
 
+export type ProviderModelDiscoveryWarningCondition = "xai-legacy-privacy-mode";
+
 /** Whether clearing cache rows also revokes in-flight discovery authority. */
 export type ModelCacheClearReason = "authority" | "eviction";
 
@@ -92,7 +94,21 @@ interface DiscoveryFailure {
 }
 
 const failureAt = new Map<string, DiscoveryFailure>();
-const discoveryStatus = new Map<string, ProviderModelDiscoveryStatus>();
+const discoveryStatus = new Map<string, {
+  observation: ProviderModelDiscoveryStatus;
+  observationOrder?: number;
+  warningCondition?: ProviderModelDiscoveryWarningCondition;
+}>();
+let nextDiscoveryObservationOrder = 0;
+
+/** Stamp a discovery at headers, before reading a body that may finish out of order. */
+export function captureProviderDiscoveryObservation(): number {
+  return ++nextDiscoveryObservationOrder;
+}
+
+export function isProviderDiscoveryObservationCurrent(provider: string, order?: number): boolean {
+  return order === undefined || order > (discoveryStatus.get(provider)?.observationOrder ?? 0);
+}
 /**
  * How many models the last successful discovery actually returned, before any configured-alias
  * augmentation or custom-model merge. Consumers cannot recover this by subtracting known custom
@@ -112,16 +128,20 @@ export function markModelsFetchFailure(
 
 /** `liveModelCount` is required so a caller that forgets to pass it fails typecheck instead of
  * silently recording zero and misclassifying the provider as having no live catalog. */
-export function markProviderDiscoveryOk(provider: string, liveModelCount: number): void {
-  discoveryStatus.set(provider, { status: "ok" });
+export function markProviderDiscoveryOk(provider: string, liveModelCount: number, observationOrder?: number): void {
+  discoveryStatus.set(provider, { observation: { status: "ok" }, observationOrder });
+  // Ordered discovery can succeed after an earlier failure started a cooldown in flight.
+  if (observationOrder !== undefined) failureAt.delete(provider);
   liveModelCounts.set(provider, Math.max(0, Math.floor(liveModelCount)));
 }
 
 export function markProviderDiscoveryFailed(
   provider: string,
   failure: ProviderModelDiscoveryFailure,
+  warningCondition?: ProviderModelDiscoveryWarningCondition,
+  observationOrder?: number,
 ): void {
-  discoveryStatus.set(provider, { status: "failed", ...failure });
+  discoveryStatus.set(provider, { observation: { status: "failed", ...failure }, warningCondition, observationOrder });
 }
 
 /**
@@ -130,16 +150,20 @@ export function markProviderDiscoveryFailed(
  * Foundry, returns HTTP 404 forever; the 30s cooldown re-probes and previously re-logged each time).
  *
  * Returns true only when the failure SIGNATURE changed since the last observed status — i.e. the
- * previous state was ok/undefined, or a different reason/httpStatus. Repeated identical failures
- * stay observable through `getProviderDiscoveryStatus()` / the providers API without log spam.
+ * previous state was ok/undefined, or a different reason, HTTP status, or warning condition.
+ * Repeated identical failures stay observable through `getProviderDiscoveryStatus()` / the
+ * providers API without log spam.
  * Call this BEFORE `markProviderDiscoveryFailed` so it can see the prior state.
  */
 export function shouldLogDiscoveryFailure(
   provider: string,
   failure: ProviderModelDiscoveryFailure,
+  warningCondition?: ProviderModelDiscoveryWarningCondition,
 ): boolean {
-  const prev = discoveryStatus.get(provider);
-  if (!prev || prev.status !== "failed") return true;
+  const previous = discoveryStatus.get(provider);
+  if (!previous || previous.observation.status !== "failed") return true;
+  if (previous.warningCondition !== warningCondition) return true;
+  const prev = previous.observation;
   if (prev.reason !== failure.reason) return true;
   if (prev.reason === "http" && failure.reason === "http") {
     return prev.httpStatus !== failure.httpStatus;
@@ -153,7 +177,7 @@ export function clearProviderDiscoveryStatus(provider: string): void {
 }
 
 export function getProviderDiscoveryStatus(provider: string): ProviderModelDiscoveryStatus | undefined {
-  return discoveryStatus.get(provider);
+  return discoveryStatus.get(provider)?.observation;
 }
 
 /** Undefined when discovery has never succeeded for this provider. A failed refresh keeps the

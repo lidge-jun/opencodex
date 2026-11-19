@@ -174,7 +174,7 @@ async function trustPickerLocally(
     const inspect = deps.inspectPickerTrustImpl ?? inspectPickerTrust;
     const before = await inspect(paths.leafPath, paths.sha1, deps.security, deps.platform);
     if (before === "trusted") return { ok: true, callerAddedTrust: false, caPath: paths.caPath, sha1: paths.sha1 };
-    const trust = await (deps.trustPickerCaImpl ?? trustPickerCa)(paths.caPath, deps.security, deps.platform, { pem: paths.certPem });
+    const trust = await (deps.trustPickerCaImpl ?? trustPickerCa)(paths.caPath, deps.security, deps.platform, { pem: paths.certPem, configDir });
     if (!trust.ok) return { ok: false, reason: trust.reason ?? "trust_declined" };
     return { ok: true, callerAddedTrust: true, caPath: paths.caPath, sha1: paths.sha1 };
   } catch (error) {
@@ -187,7 +187,7 @@ async function compensateLocalPickerTrust(
   deps: ApplyProfileDeps,
 ): Promise<void> {
   if (!trust.callerAddedTrust) return;
-  await (deps.untrustPickerCaImpl ?? untrustPickerCa)(trust.caPath, trust.sha1, deps.security, deps.platform);
+  await (deps.untrustPickerCaImpl ?? untrustPickerCa)(trust.caPath, trust.sha1, deps.security, deps.platform, undefined, { configDir: getConfigDir() });
 }
 
 function printPickerStatus(status: DesktopPickerStatus | undefined, json = false): void {

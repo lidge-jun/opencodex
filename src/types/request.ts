@@ -38,9 +38,10 @@ export interface OcxReasoningReplayScopeRef {
    */
   readonly clientPrincipalId?: string;
   /**
-   * Conversation namespace for replay state. Historically this was always the Codex parent-thread
-   * id; headerless Responses callers use a raw sanitized thread/Cursor/session fallback, never the
-   * hashed request-log conversation id.
+   * Conversation namespace for replay state. The request's own thread-id wins so a child agent
+   * cannot write its route into the parent's record (#8632); otherwise this is the Codex
+   * parent-thread id, and headerless Responses callers use a raw sanitized thread/Cursor/session
+   * fallback, never the hashed request-log conversation id.
    */
   readonly clientThreadId: string;
   current?: Readonly<OcxReasoningReplayIdentity>;
@@ -69,6 +70,8 @@ export interface OcxParsedRequest {
   _rawBody?: unknown;
   /** Trusted ingress provenance: preserve Chat's tool defaults only on the final Responses wire. */
   _chatCompletionsInput?: boolean;
+  /** Server-owned request provenance. All system text on this turn belongs at system priority. */
+  _proxyOwnedSystemPrompt?: true;
   /** Claude replay tags, retained only until each route binding verifies them. */
   _nativeReasoningReplay?: ReadonlyMap<string, string>;
   _nativeReasoningBoundOwner?: NativeReasoningOwner;
@@ -171,6 +174,10 @@ export interface OcxParsedRequest {
   _providerContinuationCandidate?: OcxProviderContinuationState;
   /** Exact process-local route owner attached to newly persisted provider state. */
   _providerContinuationOwner?: OcxProviderContinuationOwner;
+  /** Serving owner of image history that was summarized within this request. */
+  _anthropicImageOwner?: OcxProviderContinuationOwner;
+  /** Internal image recovery summary that must bypass native adaptive thinking defaults. */
+  _anthropicImageSummary?: true;
   /**
    * The hosted `{type:"web_search", ...}` tool config, stashed when Codex enables web search. Routed
    * (non-OpenAI) providers can't run it server-side, so the proxy re-exposes it as a function tool and
@@ -222,6 +229,14 @@ export interface OcxParsedRequest {
    */
   _contextCompactionBoundary?: boolean;
   /**
+   * Codex's own per-turn metadata for this request says `history_initialization: "New"` (HTTP header,
+   * or a WebSocket frame's own `client_metadata`). Read once in request preparation; the experimental
+   * Anthropic `perMessageEffort` option takes it as the new-transcript receipt (#6895).
+   */
+  _codexNewHistory?: boolean;
+  /** This turn's per-message effort bookkeeping (src/adapters/anthropic/per-message-effort.ts). */
+  _perMessageEffort?: PerMessageEffortTurn;
+  /**
    * Core-owned registration slot for the optional advisor subsystem (src/advisor). Set per request
    * by the sidecar planner, never at module load: the core Responses path only sees this
    * structural shape, so an advisor-disabled install imports no advisor module. When present, the
@@ -239,6 +254,9 @@ export interface OcxParsedRequest {
 
 export interface OcxContext {
   systemPrompt?: string[];
+  /** Proxy-authored suffixes in systemPrompt (including any joining separator). Keeping their
+   * provenance lets adapters relocate caller text while preserving the original system layout. */
+  proxySystemPrompt?: { blockIndex: number; suffix: string }[];
   messages: OcxMessage[];
   tools?: OcxTool[];
 }
@@ -408,6 +426,10 @@ export interface OcxRequestOptions {
   topP?: number;
   stopSequences?: string[];
   toolChoice?: OcxToolChoice;
+  /** Root functions explicitly selected by the caller. An empty list permits no synthetic root function. */
+  explicitRootFunctionChoices?: readonly string[];
+  /** Caller-owned function and custom selectors before hosted tools are lowered for the provider. */
+  explicitClientToolChoices?: readonly { type: "function" | "custom"; name: string; namespace?: string }[];
   parallelToolCalls?: boolean;
   reasoning?: string;
   /**
@@ -418,6 +440,8 @@ export interface OcxRequestOptions {
   hideThinkingSummary?: boolean;
   /** Provider policy: suppress raw content-channel reasoning while summaries stay visible. */
   hideRawReasoning?: boolean;
+  /** Final-route Chat-to-Responses display compatibility, off unless explicitly enabled. */
+  rawReasoningAsSummary?: boolean;
   serviceTier?: string;
   /** Final outbound tier action, resolved after the provider/model wire is settled. */
   tierDecision?: TierDecision;
@@ -561,6 +585,17 @@ export type AdapterEvent =
 export interface OcxUrlCitation {
   url: string;
   title?: string;
+}
+
+/**
+ * One turn's per-message effort state (#6895). Spread copies of the parsed request share it, so a
+ * rebuild of the same turn is seen as a second build.
+ */
+export interface PerMessageEffortTurn {
+  /** The pending decision this turn owns, until it commits or is abandoned. */
+  token?: string;
+  generation: string;
+  builds: number;
 }
 
 /**

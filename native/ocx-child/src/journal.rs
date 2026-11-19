@@ -12,10 +12,10 @@ use crate::platform::{
     DirectoryIdentity, directory_identity, ensure_private_dir, reject_symlink, sha256_hex,
     write_private_atomic, write_regular_atomic,
 };
-use crate::state::ChildPaths;
+use crate::state::{CATALOG_FILENAME, ChildPaths};
 use crate::toml_surgeon::{
-    ChildInjectedLedger, apply_design_b_config, detect_unowned_root_routing_conflict,
-    surgical_detach_config,
+    CatalogPathMatch, ChildInjectedLedger, apply_design_b_config, config_catalog_reference,
+    detect_unowned_root_routing_conflict, surgical_detach_config,
 };
 
 pub const CHILD_JOURNAL_SCHEMA: &str = "ocx.child.journal/1";
@@ -115,7 +115,7 @@ fn validate_journal_paths(paths: &ChildPaths, journal: &ChildJournalV1) -> Resul
         .ok_or("child journal lacks Codex directory identity")?;
     if current_ocx != Path::new(&journal.opencodex_home)
         || current_codex != Path::new(&journal.codex_home)
-        || catalog != current_codex.join("opencodex-catalog.json")
+        || catalog != current_codex.join(CATALOG_FILENAME)
         || &directory_identity(&current_ocx)? != expected_ocx_identity
         || &directory_identity(&current_codex)? != expected_codex_identity
     {
@@ -345,15 +345,17 @@ pub fn apply_attach_or_sync_with_fault(
         .map_err(|e| format!("cannot resolve OpenCodex home: {e}"))?;
     let canonical_codex = fs::canonicalize(&paths.codex_home)
         .map_err(|e| format!("cannot resolve Codex home: {e}"))?;
-    let catalog_path_str = canonical_codex
-        .join("opencodex-catalog.json")
+    let default_catalog = canonical_codex.join(CATALOG_FILENAME);
+    let catalog_path_str = default_catalog
         .to_str()
         .ok_or("canonical catalog path is not UTF-8")?
         .to_owned();
     let (next_cfg_text, next_ledger) = apply_design_b_config(
         &current_cfg_text,
         listen_port,
-        &catalog_path_str,
+        existing_journal
+            .as_ref()
+            .map_or(default_catalog.as_path(), |j| Path::new(&j.catalog_path)),
         settings,
         existing_journal.as_ref().map(|j| &j.ledger),
     )?;
@@ -806,8 +808,8 @@ fn offline_detach_inner(
             } else {
                 let text = std::str::from_utf8(&bytes)
                     .map_err(|_| DetachError::Conflict("config.toml is not UTF-8".to_owned()))?;
-                let stripped =
-                    surgical_detach_config(text, &journal.ledger).map_err(DetachError::Conflict)?;
+                let stripped = surgical_detach_config(text, &journal.ledger, catalog_path)
+                    .map_err(DetachError::Conflict)?;
                 match stripped {
                     Some(updated) => {
                         guard
@@ -833,8 +835,28 @@ fn offline_detach_inner(
                     .map_err(step_err)?;
             }
         } else {
+            // Preserve the catalog whenever a retained binding may still reference it.
+            // This is best effort against external writers such as Codex or an editor:
+            // they can change config.toml between this check and the unlink.
             guard
-                .restore_step(|| remove_optional_file(catalog_path))
+                .restore_step(|| {
+                    reject_symlink(&config_path)?;
+                    match fs::read_to_string(&config_path) {
+                        Ok(config) => match config_catalog_reference(&config, catalog_path)? {
+                            Some(CatalogPathMatch::Same) => return Ok(()),
+                            Some(CatalogPathMatch::Unresolved) => {
+                                eprintln!(
+                                    "detach kept {CATALOG_FILENAME}: could not resolve the retained model_catalog_json binding"
+                                );
+                                return Ok(());
+                            }
+                            Some(CatalogPathMatch::Different) | None => {}
+                        },
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) => return Err(format!("failed reading remaining config.toml: {e}")),
+                    }
+                    remove_optional_file(catalog_path)
+                })
                 .map_err(step_err)?;
         }
     }

@@ -387,3 +387,7 @@ Exception aux erreurs 400 terminales : l'enveloppe opaque d'OpenRouter (`Provide
 ## Réservation d’une tentative de récupération
 
 Une tentative de récupération activée par `cooldownReprobe: { enabled: true }` appartient uniquement à la requête qui l’a réservée ; les autres requêtes restent soumises aux délais de refroidissement enregistrés. La réservation est conservée pendant l’attente et la sélection JEV. Une cible redevenue utilisable pendant l’attente peut être réessayée si son délai enregistré n’a pas changé. Un nouvel enregistrement annule la réservation de cette cible. Un succès ne supprime que le délai inchangé de la cible ayant répondu ; les cibles non essayées et les nouveaux échecs conservent leurs délais. La désactivation du fournisseur, les quotas, l’admissibilité de la requête et l’annulation restent vérifiés. Voir les [réglages et limites](/guides/combos/#retry-all-cooled-targets-opt-in).
+
+## Combos suggérés
+
+Dans l’espace Combos, générez un brouillon de basculement pour un modèle partagé ou ajoutez une cible manquante à un combo existant. Les cartes ignorées restent masquées dans ce navigateur. Excluez des fournisseurs des suggestions via `comboSuggestionExcludedProviders` dans `config.json`. Les membres existants sont conservés. Les cibles facturées à l’usage suivent les règles de consentement.

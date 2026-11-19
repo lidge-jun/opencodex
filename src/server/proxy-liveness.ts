@@ -17,6 +17,7 @@ import {
   runtimeOwnerScope, sameRuntimeOwnerScope, verifyPidIdentity, type RuntimeOwnerScope,
 } from "../config/process-state";
 import { createServer, isIP } from "node:net";
+import { networkInterfaces } from "node:os";
 import { loopbackFamilyAvailability } from "../lib/loopback-family";
 import {
   LOCAL_ATTESTATION_CHALLENGE_HEADER,
@@ -24,7 +25,7 @@ import {
   createLocalAttestationChallenge,
   verifyLocalAttestationProof,
 } from "../lib/local-management-attestation";
-import { directLocalHttpFetch } from "./direct-local-http";
+import { directLocalHttpFetch, isConnectPhaseTimeout } from "./direct-local-http";
 
 export interface HealthzIdentity {
   service?: unknown;
@@ -60,22 +61,25 @@ export type EndpointLiveness = "live" | "dead" | "unknown";
  */
 const BIND_PROOF_TIMEOUT_MS = 1_500;
 
-export function canBindAddress(hostname: string, port: number, timeoutMs = BIND_PROOF_TIMEOUT_MS): Promise<boolean> {
-  if (!Number.isInteger(port) || port <= 0 || port > 65_535) return Promise.resolve(false);
+export function canBindAddress(hostname: string, port: number, timeoutMs = BIND_PROOF_TIMEOUT_MS, signal?: AbortSignal): Promise<boolean> {
+  if (!Number.isInteger(port) || port <= 0 || port > 65_535 || timeoutMs <= 0 || signal?.aborted) return Promise.resolve(false);
   return new Promise<boolean>(resolve => {
-    const server = createServer();
+    const server = createServer(socket => socket.destroy());
     let settled = false;
     const finish = (bound: boolean): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      try { server.close(); } catch { /* never bound */ }
+      signal?.removeEventListener("abort", onAbort);
+      try { server.close(); } catch { bound = false; }
       resolve(bound);
     };
     const timer = setTimeout(() => finish(false), timeoutMs);
+    const onAbort = () => finish(false);
+    signal?.addEventListener("abort", onAbort, { once: true });
     server.once("error", () => finish(false));
     server.once("listening", () => finish(true));
-    try { server.listen({ host: hostname, port, exclusive: true }); } catch { finish(false); }
+    try { server.listen({ host: hostname, port, exclusive: true, ipv6Only: hostname === "::" }); } catch { finish(false); }
   });
 }
 
@@ -95,7 +99,7 @@ export interface LivenessIo {
    * this process right now, which proves no process owns that address. `hostname` is the raw
    * socket address (IPv6 unbracketed) and `timeoutMs` the remaining discovery budget.
    */
-  bindProofFn?: (hostname: string, port: number, timeoutMs: number) => Promise<boolean>;
+  bindProofFn?: (hostname: string, port: number, timeoutMs: number, signal?: AbortSignal) => Promise<boolean>;
   readRuntimeFn?: (pid?: number) => { pid?: number; port: number; hostname?: string; ownerScope?: unknown } | null;
   /** This process, as the self-record proof in {@link observeProxyLiveness} needs it (#8552). */
   ownProcessFn?: () => OwnProcess;
@@ -116,6 +120,11 @@ export interface LivenessIo {
    */
   deadlineAt?: number;
   nowFn?: () => number;
+  signal?: AbortSignal;
+  /** Enable the Windows-only loopback bind proof for startup ownership discovery. */
+  windowsLoopbackBindProof?: boolean;
+  /** Test seam for the Windows bind policy. */
+  platform?: NodeJS.Platform;
   /**
    * Also accept a proxy whose `/healthz` is fenced by the package-tree guard (#5496).
    *
@@ -185,9 +194,10 @@ export const SERVICE_STOP_LIVENESS: Pick<LivenessIo, "timeoutMs" | "attempts"> =
  * when the failure mode is a duplicate instance, so the start path borrows the numbers
  * the stop path already uses for the mirror-image decision.
  */
-export const START_OWNERSHIP_LIVENESS: Pick<LivenessIo, "timeoutMs" | "attempts"> = {
+export const START_OWNERSHIP_LIVENESS: Pick<LivenessIo, "timeoutMs" | "attempts" | "windowsLoopbackBindProof"> = {
   timeoutMs: probeCeilingMs(OWNERSHIP_PROBE_FLOOR_MS, probeTimeoutOverrideMs),
   attempts: 3,
+  windowsLoopbackBindProof: true,
 };
 
 type LivenessFetch = (
@@ -397,14 +407,36 @@ export async function classifyHealthz(
   fetchFn: LivenessFetch,
   timeoutMs: number,
 ): Promise<EndpointLiveness> {
+  return (await classifyHealthzDetailed(url, fetchFn, timeoutMs)).verdict;
+}
+
+/** {@link classifyHealthz} plus whether an unknown verdict was a connect that timed out (#8318). */
+async function classifyHealthzDetailed(
+  url: string,
+  fetchFn: LivenessFetch,
+  timeoutMs: number,
+): Promise<{ verdict: EndpointLiveness; connectTimeout: boolean }> {
+  const answer = (verdict: EndpointLiveness, connectTimeout = false) => ({ verdict, connectTimeout });
   try {
     const response = await fetchFn(url, { signal: AbortSignal.timeout(timeoutMs) });
-    if (response.status !== 200) return "unknown";
+    if (response.status !== 200) return answer("unknown");
     const body = (await response.json().catch(() => undefined)) as HealthzIdentity | null | undefined;
-    if (body === undefined) return "unknown";
-    return isOpencodexHealthz(body) ? "live" : "dead";
+    if (body === undefined) return answer("unknown");
+    return answer(isOpencodexHealthz(body) ? "live" : "dead");
   } catch (error) {
-    return isConnectionRefused(error) ? "dead" : "unknown";
+    return isConnectionRefused(error) ? answer("dead") : answer("unknown", isConnectPhaseTimeout(error));
+  }
+}
+
+/** Whether `address` (unbracketed) is assigned to one of this machine's network interfaces. */
+export function isLocalInterfaceAddress(address: string): boolean {
+  const canonical = (value: string) => isIP(value) === 6 ? new URL(`http://[${value.split("%")[0]}]/`).hostname.slice(1, -1) : value;
+  const wanted = canonical(address);
+  try {
+    return Object.values(networkInterfaces()).some(entries =>
+      (entries ?? []).some(entry => canonical(entry.address) === wanted));
+  } catch {
+    return false;
   }
 }
 
@@ -417,22 +449,44 @@ export async function classifyHealthz(
  */
 export async function probeEndpointLiveness(
   endpoint: { port: number; hostname?: string },
-  io: Pick<LivenessIo, "fetchFn" | "timeoutMs"> = {},
+  io: Pick<LivenessIo, "fetchFn" | "timeoutMs" | "bindProofFn"> & {
+    /** Test seam for {@link isLocalInterfaceAddress}. */
+    localAddressFn?: (address: string) => boolean;
+  } = {},
 ): Promise<EndpointLiveness> {
   if (!Number.isFinite(endpoint.port) || endpoint.port <= 0 || endpoint.port > 65535) return "dead";
   const fetchFn = io.fetchFn ?? directLocalHttpFetch;
   const timeoutMs = io.timeoutMs ?? 1500;
   let sawUnknown = false;
   for (const hostname of loopbackProbeHosts(endpoint.hostname)) {
-    const result = await classifyHealthz(
+    const { verdict, connectTimeout } = await classifyHealthzDetailed(
       `http://${hostname}:${endpoint.port}/healthz`,
       fetchFn,
       timeoutMs,
     );
-    if (result === "live") return "live";
-    if (result === "unknown") sawUnknown = true;
+    if (verdict === "live") return "live";
+    if (verdict === "unknown" && !(connectTimeout && await provenFreeByBind(hostname, endpoint.port, io))) sawUnknown = true;
   }
   return sawUnknown ? "unknown" : "dead";
+}
+
+/**
+ * #8318: a connect to this machine's own non-loopback address (a Tailscale IP) with nothing
+ * listening can time out instead of being refused, which left `ocx resolve` unknown forever. Only
+ * a connect-phase timeout on a specific address of a local interface qualifies, and only an
+ * exclusive bind that succeeds (and is released at once) proves absence; EADDRINUSE or any other
+ * bind error keeps the verdict unknown. Loopback and wildcard binds keep their refusal-only rule,
+ * because a wildcard listener can share the port with a specific bind on some platforms.
+ */
+async function provenFreeByBind(
+  probeHost: string,
+  port: number,
+  io: { bindProofFn?: LivenessIo["bindProofFn"]; localAddressFn?: (address: string) => boolean },
+): Promise<boolean> {
+  const address = probeHost.replace(/^\[(.*)\]$/, "$1");
+  if (isIP(address) === 0 || recoveryLoopbackFamily(address) !== null || isWildcardHostname(address)) return false;
+  if (!(io.localAddressFn ?? isLocalInterfaceAddress)(address)) return false;
+  return await (io.bindProofFn ?? canBindAddress)(address, port, BIND_PROOF_TIMEOUT_MS);
 }
 
 /** Identity-checked /healthz probe; null when unreachable, non-OK, or not our proxy. */
@@ -449,9 +503,12 @@ async function proxyIdentityAtObserved(
   port: number,
   opts: { hostname?: string; expectedPid?: number },
   io: LivenessIo,
-  observe?: (result: EndpointLiveness) => void,
+  observe?: (result: EndpointLiveness, onlyConnectTimeouts?: boolean) => void,
 ): ReturnType<typeof proxyIdentityAt> {
-  const negative = (result: "dead" | "unknown"): null => { observe?.(result); return null; };
+  const negative = (result: "dead" | "unknown", onlyConnectTimeouts = false): null => {
+    observe?.(result, onlyConnectTimeouts);
+    return null;
+  };
   const fetchFn = io.fetchFn ?? directLocalHttpFetch;
   const sleepFn = io.sleepFn ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
   const nowFn = io.nowFn ?? Date.now;
@@ -461,15 +518,17 @@ async function proxyIdentityAtObserved(
     ? 1
     : Math.max(1, Math.min(requestedAttempts, 5));
   let sawUnknown = false;
+  let sawOtherFailure = false;
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const remainingMs = io.deadlineAt === undefined ? baseTimeoutMs : io.deadlineAt - nowFn();
-    if (remainingMs <= 0) return negative("unknown");
+    if (remainingMs <= 0 || io.signal?.aborted) return negative("unknown");
     const timeoutMs = Math.min(baseTimeoutMs, remainingMs);
     try {
       const url = `http://${probeHostname(opts.hostname)}:${port}/healthz`;
+      const timeout = AbortSignal.timeout(timeoutMs);
       const res = await fetchFn(url, {
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: io.signal ? AbortSignal.any([io.signal, timeout]) : timeout,
       });
       if (!res.ok && io.acceptPackageTreeFenced && res.status === 503) {
         const fenced = (await res.json().catch(() => null)) as HealthzIdentity | null;
@@ -505,8 +564,12 @@ async function proxyIdentityAtObserved(
     } catch (error) {
       // Transport failure (timeout / refused) — retry while budget remains; a proxy that
       // has only just begun listening can miss a single short probe (#764).
-      if (!isConnectionRefused(error)) sawUnknown = true;
-      if (attempt >= attempts) return negative(sawUnknown ? "unknown" : "dead");
+      if (!isConnectionRefused(error)) {
+        sawUnknown = true;
+        if (!isConnectPhaseTimeout(error)) sawOtherFailure = true;
+      }
+      if (io.signal?.aborted) return negative("unknown");
+      if (attempt >= attempts) return negative(sawUnknown ? "unknown" : "dead", sawUnknown && !sawOtherFailure);
       if (io.deadlineAt !== undefined && io.deadlineAt - nowFn() <= 0) return negative("unknown");
       await sleepFn(100);
     }
@@ -514,9 +577,42 @@ async function proxyIdentityAtObserved(
   return negative("unknown");
 }
 
+/** Startup identity and absence share one evidence history for this literal endpoint. */
+export async function observeStartupEndpoint(port: number, opts: { hostname: string; expectedPid?: number }, io: LivenessIo) {
+  let verdict: EndpointLiveness = "unknown";
+  let connectTimedOut = false;
+  const identity = await proxyIdentityAtObserved(port, opts, io, (result, onlyConnectTimeouts) => {
+    verdict = result;
+    connectTimedOut = onlyConnectTimeouts === true;
+  });
+  const bindProof = !identity && connectTimedOut ? await proveWindowsLoopbackVacant(opts.hostname, port, io) : undefined;
+  return { identity, verdict: bindProof ? "dead" as const : verdict, bindProof };
+}
+
+/** Undefined means the endpoint is outside the Windows loopback proof policy. */
+async function proveWindowsLoopbackVacant(hostname: string, port: number, io: LivenessIo): Promise<boolean | undefined> {
+  if (!io.windowsLoopbackBindProof || (io.platform ?? process.platform) !== "win32") return undefined;
+  const address = hostname.replace(/^\[(.*)\]$/, "$1");
+  const family = isIP(address);
+  if (!family || recoveryLoopbackFamily(address) !== family) return undefined;
+  const now = io.nowFn ?? Date.now;
+  const deadline = Math.min(io.deadlineAt ?? Infinity, now() + BIND_PROOF_TIMEOUT_MS);
+  const bind = io.bindProofFn ?? canBindAddress;
+  // Winsock can allow a specific exclusive bind beside an earlier nonexclusive wildcard
+  // listener under the same user. Require the exact bind and rule out that wildcard too.
+  for (const host of [address, family === 4 ? "0.0.0.0" : "::"]) {
+    const remaining = deadline - now();
+    if (remaining <= 0 || io.signal?.aborted) return false;
+    try { if (!await bind(host, port, remaining, io.signal)) return false; }
+    catch { return false; }
+  }
+  return now() < deadline && !io.signal?.aborted;
+}
+
 export type ProxyLivenessObservation =
   | { kind: "live"; live: LiveProxy }
-  | { kind: "absent" | "unknown"; live: null };
+  | { kind: "unknown"; live: null }
+  | { kind: "absent"; live: null; loopbackBindProven?: true };
 
 export interface OwnProcess {
   pid: number;
@@ -532,10 +628,14 @@ function currentOwnProcess(): OwnProcess {
 /** Recovery additionally covers both available loopback families and fresh PID identity. */
 export async function observeProxyLiveness(io: LivenessIo = {}): Promise<ProxyLivenessObservation> {
   let alivePid: number | null = null, runtimePid: number | undefined, runtimeScope: unknown, unknown = false;
+  let loopbackBindProven = false;
   const live = await discoverLiveProxy(io, {
     pid: pid => { alivePid = pid; },
     runtimePid: (pid, ownerScope) => { runtimePid = pid; runtimeScope = ownerScope; },
-    endpoint: result => { if (result === "unknown") unknown = true; },
+    endpoint: (result, bindProven) => {
+      if (result === "unknown") unknown = true;
+      if (bindProven) loopbackBindProven = true;
+    },
   });
   if (live) return { kind: "live", live };
   // #8552: in a container the proxy is PID 1 on every start, so the record the previous container
@@ -569,8 +669,9 @@ export async function observeProxyLiveness(io: LivenessIo = {}): Promise<ProxyLi
     unknown = !commandLine?.trim() || isOcxCommandLine(commandLine);
     if (io.deadlineAt !== undefined && (io.nowFn ?? Date.now)() >= io.deadlineAt) unknown = true;
   }
-  if (io.deadlineAt !== undefined && (io.nowFn ?? Date.now)() >= io.deadlineAt) unknown = true;
-  return { kind: unknown ? "unknown" : "absent", live: null };
+  if (io.signal?.aborted || (io.deadlineAt !== undefined && (io.nowFn ?? Date.now)() >= io.deadlineAt)) unknown = true;
+  if (unknown) return { kind: "unknown", live: null };
+  return { kind: "absent", live: null, ...(loopbackBindProven ? { loopbackBindProven: true } : {}) };
 }
 
 /**
@@ -585,7 +686,7 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
 async function discoverLiveProxy(io: LivenessIo, observer?: {
   pid: (pid: number | null) => void;
   runtimePid: (pid: number | undefined, ownerScope: unknown) => void;
-  endpoint: (result: EndpointLiveness) => void;
+  endpoint: (result: EndpointLiveness, loopbackBindProven?: boolean) => void;
 }): Promise<LiveProxy | null> {
   // Prefer the cheap alive-pid check: the Windows cmdline probe (WMIC/PowerShell) is too
   // expensive for waitForProxy's 150ms poll loop, and /healthz identity is the real trust gate.
@@ -597,7 +698,7 @@ async function discoverLiveProxy(io: LivenessIo, observer?: {
   const deadlineAt = io.deadlineAt;
   const probeIo: LivenessIo = io;
   const budgetExhausted = (): boolean =>
-    deadlineAt !== undefined && nowFn() >= deadlineAt;
+    io.signal?.aborted === true || (deadlineAt !== undefined && nowFn() >= deadlineAt);
   const expired = (): null => { observer?.endpoint("unknown"); return null; };
   // The proof stays inside the discovery deadline: it is skipped once the budget is spent, its
   // own timeout is capped by what remains, and a proof that finishes past the deadline is
@@ -605,11 +706,11 @@ async function discoverLiveProxy(io: LivenessIo, observer?: {
   // address, never the bracketed URL spelling `probeHostname` composes for IPv6.
   const bindProof = async (hostname: string, port: number): Promise<boolean> => {
     const remainingMs = deadlineAt === undefined ? BIND_PROOF_TIMEOUT_MS : Math.min(BIND_PROOF_TIMEOUT_MS, deadlineAt - nowFn());
-    if (remainingMs <= 0) return false;
+    if (remainingMs <= 0 || budgetExhausted()) return false;
     const socketHost = hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
     // A hostname can resolve to different addresses for the probe and the bind.
     if (isIP(socketHost) === 0) return false;
-    const bound = await (io.bindProofFn ?? canBindAddress)(socketHost, port, remainingMs);
+    const bound = await (io.bindProofFn ?? canBindAddress)(socketHost, port, remainingMs, io.signal);
     return bound && !budgetExhausted();
   };
   const probe = async (port: number, opts: { hostname?: string; expectedPid?: number }) => {
@@ -633,7 +734,8 @@ async function discoverLiveProxy(io: LivenessIo, observer?: {
     const hosts = recoveryProbeHosts(hostname).filter(host =>
       (io.loopbackAvailabilityFn ?? loopbackFamilyAvailability)(host) !== "unavailable");
     const identities = await Promise.all(hosts.map(async hostname => {
-      const identity = await proxyIdentityAtObserved(port, { ...opts, hostname }, probeIo, observer.endpoint);
+      const { identity, verdict, bindProof } = await observeStartupEndpoint(port, { ...opts, hostname }, probeIo);
+      if (!identity) observer.endpoint(verdict, bindProof);
       return identity ? { ...identity, hostname: bindHostname, probeHostname: hostname } : null;
     }));
     return identities.find(identity => identity !== null) ?? null;

@@ -130,7 +130,8 @@ for (const scenario of ["start", "ensure", "service", "supervised", "sibling", "
   }, watchdogMs(30_000));
 }
 
-test("an exited recorded owner on a refused port still recovers its journal and stale PID", async () => {
+test.each(["refused port", "Windows connect timeout", "Windows sibling discovery refusal", "Windows live journal owner"] as const)(
+  "an exited recorded owner goes through the journal and PID fences after %s", async scenario => {
   const root = mkdtempSync(join(tmpdir(), "ocx-dead-owner-"));
   roots.push(root);
   const home = join(root, "ocx"), codex = join(root, "codex");
@@ -142,13 +143,20 @@ test("an exited recorded owner on a refused port still recovers its journal and 
   writeFileSync(journalPath, JSON.stringify({ version: 1,
     originalConfig: Buffer.from(original).toString("base64"), originalProfile: null,
     injectedConfigHash: createHash("sha256").update(injected).digest("hex"), injectedProfileHash: null,
-    pid: 999_999, timestamp: new Date().toISOString(),
+    pid: scenario === "Windows live journal owner" ? process.pid : 999_999, timestamp: new Date().toISOString(),
   }));
   const script = join(root, "dead-owner.ts");
+  const fence = readFileSync(repoPath("src/cli/start-owner-fence.ts"), "utf8");
+  const recheck = fence.slice(fence.indexOf("export async function recoverStartJournalAfterOwnerRecheck("), fence.indexOf("/** Hold ownership stable"));
+  const executable = new Bun.Transpiler({ loader: "ts" }).transformSync(recheck.replace("export ", ""));
   writeFileSync(script, `
     import { writeFileSync } from "node:fs";
-    import { readAlivePid } from ${JSON.stringify(repoPath("src/config/process-state.ts"))};
+    import { readAlivePid, removePidIfValueIs } from ${JSON.stringify(repoPath("src/config/process-state.ts"))};
     import { recoverStartJournalAfterOwnerRecheck, recoverStartStateUnderOwnershipLease } from ${JSON.stringify(repoPath("src/cli/start-owner-fence.ts"))};
+    import { observeProxyLiveness, START_OWNERSHIP_LIVENESS } from ${JSON.stringify(repoPath("src/server/proxy-liveness.ts"))};
+    import { localConnectTimeoutFetch } from ${JSON.stringify(repoPath("tests/helpers/local-connect-timeout.ts"))};
+    import { hasLiveStartupJournalOwner, markCrossHomeSibling, reconcileStartupJournal } from ${JSON.stringify(repoPath("src/cli/cross-home-owner.ts"))};
+    const scenario = ${JSON.stringify(scenario)};
     const dead = Bun.spawn([process.execPath, "--version"], { stdout: "ignore", stderr: "ignore" });
     if (await dead.exited !== 0) throw new Error("fixture child failed");
     const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
@@ -158,22 +166,49 @@ test("an exited recorded owner on a refused port still recovers its journal and 
     writeFileSync(${JSON.stringify(join(home, "ocx.pid"))}, String(dead.pid));
     writeFileSync(${JSON.stringify(join(home, "runtime-port.json"))}, JSON.stringify({ pid: dead.pid, port, hostname: "127.0.0.1" }));
     if (readAlivePid() !== null) throw new Error("fixture owner is still alive");
+    const timeoutIo = { platform: "win32", timeoutMs: 100, sleepFn: async () => {},
+      fetchFn: localConnectTimeoutFetch(host => host === "127.0.0.1" ? "timeout" : "refused") };
+    const recover = scenario === "refused port" ? recoverStartJournalAfterOwnerRecheck : new Function(
+      "observeProxyLiveness", "START_OWNERSHIP_LIVENESS", "removePidIfValueIs", "markCrossHomeSibling", "reconcileStartupJournal", "hasLiveStartupJournalOwner",
+      ${JSON.stringify(executable)} + "; return recoverStartJournalAfterOwnerRecheck;"
+    )(budget => observeProxyLiveness({ ...budget, ...timeoutIo }), START_OWNERSHIP_LIVENESS, removePidIfValueIs,
+      () => markCrossHomeSibling({ io: { ...timeoutIo,
+        ...(scenario === "Windows sibling discovery refusal" ? { bindProofFn: async () => false } : {}) } }), reconcileStartupJournal, hasLiveStartupJournalOwner);
+    if (scenario === "Windows sibling discovery refusal") {
+      writeFileSync(${JSON.stringify(join(root, "grok", "config.toml"))},
+        '# >>> opencodex managed block — do not edit (removed by \`ocx stop\`) >>>\\n[model_providers.opencodex]\\nbase_url = "http://127.0.0.1:' + port + '/v1"\\n# <<< opencodex managed block <<<\\n');
+    }
     const events = [], owner = { live: null, pidSnapshot: dead.pid };
-    const sibling = await recoverStartStateUnderOwnershipLease({ supervised: false,
-      acquireLease: () => { events.push("lease"); return { release() { events.push("release"); } }; },
-      decide: () => ({ kind: "proceed" }), stayOut: () => { throw new Error("unexpected stay-out"); },
-      recover: () => recoverStartJournalAfterOwnerRecheck(owner),
-    });
-    console.log(JSON.stringify({ sibling, live: owner.live, events }));
+    let sibling, refusal;
+    try {
+      sibling = await recoverStartStateUnderOwnershipLease({ supervised: false,
+        acquireLease: () => { events.push("lease"); return { release() { events.push("release"); } }; },
+        decide: () => ({ kind: "proceed" }), stayOut: () => { throw new Error("unexpected stay-out"); },
+        recover: () => recover(owner),
+      });
+    } catch (error) { refusal = error.message; }
+    console.log(JSON.stringify({ sibling, refusal, deadPid: dead.pid, live: owner.live, events }));
   `);
+  const grok = join(root, "grok");
+  mkdirSync(grok);
   const child = Bun.spawn([process.execPath, script], { env: {
-    HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: codex,
+    HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: codex, GROK_HOME: grok,
     OCX_OWNER_REGISTRY_DIR: join(root, "registry"), XDG_RUNTIME_DIR: root,
   }, stdout: "pipe", stderr: "pipe" });
   children.push(child);
   const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   expect(exitCode, stderr).toBe(0);
-  expect(JSON.parse(stdout.trim().split("\n").at(-1)!)).toEqual({ sibling: false, live: null, events: ["lease", "release"] });
+  const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
+  expect(result).toMatchObject({ live: null, events: ["lease", "release"] });
+  if (scenario === "Windows sibling discovery refusal" || scenario === "Windows live journal owner") {
+    expect(result.refusal).toContain(scenario === "Windows live journal owner" ? "Proxy ownership is unverified" : "Shared-client owner could not be verified");
+    expect(readFileSync(configPath, "utf8")).toBe(injected);
+    expect(existsSync(journalPath)).toBe(true);
+    expect(readFileSync(join(home, "ocx.pid"), "utf8")).toBe(String(result.deadPid));
+    return;
+  }
+  expect(result.refusal).toBeUndefined();
+  expect(result.sibling).toBe(false);
   expect(readFileSync(configPath, "utf8")).toBe(original);
   expect(existsSync(journalPath)).toBe(false);
   expect(existsSync(join(home, "ocx.pid"))).toBe(false);

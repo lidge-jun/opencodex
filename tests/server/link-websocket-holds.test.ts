@@ -488,7 +488,8 @@ describe("a relayed POST whose traffic accounting throws (#8613 review)", () => 
 });
 
 describe("paced reads on the relay (#8601)", () => {
-  test.each([[true, true], [false, false]] as const)("with the feature on=%p, a relayed POST's turn paces its reads: %p", async (on, expected) => {
+  // Owner decision 2026-11-16: every relayed turn is paced; the feature switch gates only the request-log fields.
+  test.each([[true, true], [false, true]] as const)("with the feature on=%p, a relayed POST's turn paces its reads: %p", async (on, expected) => {
     const store: LinkStore = { version: 1, listenerPort: null, links: [{ id: KEY.linkId, alias: "paced", direction: "client-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2222, apiKeyId: KEY.id, createdAt: "2026-11-12T00:00:00.000Z" }] as LinkStore["links"] };
     const seen: boolean[] = [];
     const lifecycle = createLinkListenerLifecycle<WsData>({ storePath: join(dir, "link", "links.json"), readStore: () => store, writeStore: () => {}, warn: () => {} });
@@ -511,5 +512,11 @@ describe("paced reads on the relay (#8601)", () => {
   test("a link socket's turn observer paces its reads", () => {
     const s = harness().open();
     expect(s.ws!.data.linkTurnObserver?.(1).pacedReads).toBe(true);
+  });
+
+  test("a link socket is never a local peer, although its tunnel arrives on loopback", () => {
+    const s = harness().open();
+    // Read by local-only providers (src/lib/request-peer-scope.ts, the Antigravity ACP provider).
+    expect(s.ws!.data.peerLocal).toBe(false);
   });
 });
