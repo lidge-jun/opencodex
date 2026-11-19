@@ -22,6 +22,7 @@ import { runWithCompactionRecovery } from "./compaction-recovery";
 import { captureAdmissionPolicy } from "../capture-admission-policy";
 import { captureHostedAdvisorSpendScope } from "./hosted-advisor-spend";
 import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
+import { isUnattendedAgyAcpHttpTurn } from "../../adapters/agy-acp/policy";
 /**
  * Route one `/v1/responses` request through the adapter pipeline: recovery loop, passthrough
  * wire, image/web-search bridges, and the terminal-guard continuation.
@@ -55,6 +56,8 @@ export async function handleResponses(
       // Capture before combo replay rebuilds the Request headers; children carry options.
       visionDescribeTerminal: options.visionDescribeTerminal === true
         || req.headers.get("x-opencodex-vision-describe") === "1",
+      agyAcpUnattendedHttpTurn: options.agyAcpUnattendedHttpTurn === true
+        || (options.inboundTransport !== "websocket" && isUnattendedAgyAcpHttpTurn(req.headers)),
       translatorBudget,
       accountLoad,
       hostedAdvisorSpendScope,

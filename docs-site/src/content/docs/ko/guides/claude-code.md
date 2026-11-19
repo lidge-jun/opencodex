@@ -219,7 +219,7 @@ unknown은 설정이 아직 opencodex 프록시를 가리키는지 판단할 수
 
 ### Picker 모드: 1P Code 탭에 opencodex 모델 표시하기
 
-Picker 모드는 1P 모드의 일부예요. macOS와 Windows에서 1P를 선택하면 기본으로 켜지지만,
+Picker 모드는 1P 모드의 일부예요. macOS, Windows, Linux에서 1P를 선택하면 기본으로 켜지지만,
 `claudeCode.intercept.picker: false`를 설정하면 꺼져요. 1P Desktop의 Code 탭 모델 선택기를 바꿔서
 사용 가능한 opencodex 모델을 이름으로 보여줘요. 처음 켤 때 macOS 로그인 키체인이나 Windows 현재 사용자 Root 저장소에서 로컬 인증 기관을
 신뢰하라는 메시지가 표시될 수 있어요. 이 인증 기관은 `claude.ai`와 그 하위 도메인으로 제한돼요.
@@ -233,8 +233,7 @@ Picker는 대기 상태로 남아요. `ocx claude desktop picker on` 또는 `ocx
 이전 인증서에서 한 번 마이그레이션할 때는 기존 신뢰를 제거하기 위한 동의가 필요할 수 있어요. 정리가 끝나지
 않으면 Picker는 사용할 수 없고 적용된 프로필은 복호화하지 않는 중계로 동작해요. 키체인 잠금 해제나 앱의
 자격 증명 접근 허용은 별도의 macOS 동작이며, 재시작이나 업데이트 때도 메시지가 나올 수 있어요. Windows에서는 `on`이나 `trust`를 직접 실행할 때 루트 추가 확인이 나올 수 있어요.
-Linux에서는 Picker를 지원하지 않으며 Picker CA, 자격 증명 저장소, 프록시 작업을 시작하지 않아요.
-기본 Claude 인터셉트는 계속 사용할 수 있고, 로컬 CA 파일에 소유자, 심볼릭 링크, 파일 권한, Windows ACL 검사를 적용해요.
+Linux에서 Picker를 직접 활성화하면 `certutil`로 사용자 NSS 데이터베이스에 제한된 Picker CA를 신뢰하도록 등록해요.
 
 Picker 모드가 켜져 있는 동안 Claude Desktop의 네트워크는 OpenCodex를 거쳐요. OpenCodex가 중단되면
 Picker 모드를 끄거나 Desktop을 완전히 다시 시작할 때까지 Desktop은 오프라인이에요.

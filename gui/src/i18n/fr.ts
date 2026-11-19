@@ -1838,6 +1838,7 @@ export const fr: Record<TKey, string> = {
   "modal.freeTierTitle": "Offre gratuite",
   "modal.subscriptionCliTitle": "CLI d'abonnement, pas une clé API",
   "modal.subscriptionCliWarning": "Ce fournisseur n'utilise pas de clé API. Il pilote la CLI officielle Claude Code connectée sur cette machine ({cmd}) et facture ce compte d'abonnement Claude. OpenCodex ne stocke aucune clé pour lui, et une clé saisie ici n'est jamais utilisée. Pour une facturation par clé API, ajoutez plutôt {apiProvider}.",
+  "modal.subscriptionCliWarningAgy": "Ce fournisseur utilise la CLI officielle Antigravity connectée sur l’hôte du proxy ({cmd}). L’utilisation est facturée à ce compte Google Antigravity. Google autorise uniquement un usage interactif dirigé par l’utilisateur. OpenCodex refuse les tours de sous-agent, les combos et le routage de repli des sous-agents. Il juge si une requête est locale d’après la connexion observée. Un relais local non déclaré peut faire passer des requêtes distantes pour des requêtes locales s’il ne transmet aucun en-tête de transfert. Pour le port d’écoute public, déclarez le proxy inverse dans dashboardTrustedProxy ou ne relayez pas ce port. Aucune clé API n’est nécessaire ni stockée. Pour des tâches effectuées par programme ou des usages partagés, ajoutez plutôt {apiProvider}.",
   "modal.freeTierDefault": "Aucune clé API requise. Fonctionne immédiatement.",
   "modal.tab.accounts": "Comptes",
   "modal.tab.free": "Gratuit",

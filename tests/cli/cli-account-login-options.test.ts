@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Readable } from "node:stream";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { handleLogin, loginUsageMessage } from "../../src/oauth/login-cli";
+import { KEY_LOGIN_PROVIDERS, validateApiKey } from "../../src/oauth/key-providers";
 import { handleAccountAuthCommand } from "../../src/cli/account-auth";
 import { cmdAccount } from "../../src/cli/account";
 import { noteCredentialArgv, scrubCredentialOperands } from "../../src/cli/secret-args";
@@ -97,6 +99,21 @@ describe("account argument redaction", () => {
       expect(JSON.stringify(error.mock.calls)).not.toContain(SECRET);
     });
   }
+});
+
+test("ACP login prints host sign-in guidance without opening a browser or reading a key", async () => {
+  const ask = async () => { throw new Error("Unexpected key prompt"); };
+  const openUrl = async () => { throw new Error("Unexpected browser launch"); };
+  await handleLogin("antigravity-acp", { ask, openUrl });
+  expect(log.mock.calls).toEqual([["Sign in on the proxy host with: agy acp --login"]]);
+  expect(loginUsageMessage()).not.toContain("antigravity-acp");
+  expect(KEY_LOGIN_PROVIDERS.litellm?.adapter).toBe("openai-chat");
+});
+
+test("API key validation refuses ACP by adapter or canonical provider ID without fetching", async () => {
+  const provider = { label: "ACP", baseUrl: "https://example.test/docs", dashboardUrl: "https://example.test/docs" };
+  expect(await validateApiKey("custom-agy", { ...provider, adapter: "agy-acp" }, SECRET)).toBe(false);
+  expect(await validateApiKey("antigravity-acp", { ...provider, adapter: "openai-chat" }, SECRET)).toBe(false);
 });
 
 describe("login flow-specific options", () => {

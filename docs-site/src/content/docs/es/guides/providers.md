@@ -462,6 +462,7 @@ están en la página [Catálogo de proveedores con clave API](/es/guides/api-key
 - [CodeBuddy Code CLI oficial (Global y CN)](/es/guides/api-key-catalog/#official-codebuddy-code-cli-global--cn)
 - [Oficial Qoder CLI (Global y CN)](/es/guides/api-key-catalog/#official-qoder-cli-global--cn)
 - [Claude Code CLI (suscripción)](/es/guides/api-key-catalog/#claude-code-cli-subscription)
+- [Antigravity CLI (ACP, local)](/es/guides/api-key-catalog/#antigravity-cli-acp-local)
 - [Cuota de crédito A6API](/es/guides/api-key-catalog/#a6api-credit-quota)
 - [Plan de codificación BigModel sobre Responses](/es/guides/api-key-catalog/#bigmodel-coding-plan-over-responses)
 - [Múltiples claves API](/es/guides/api-key-catalog/#multiple-api-keys)

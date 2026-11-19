@@ -1537,8 +1537,8 @@ function writeFinalRequestLog(
   });
   if (attemptStatus !== undefined && logCtx.activeAttempt) attributePhysicalAttempt(logCtx.activeAttempt);
   // The one seam every request passes exactly once, whatever transport served it and however
-  // it ended. The terminal usage belongs to the last send that left; the ledger resolves every
-  // earlier send of this request as unresolved spend rather than handing its tokens back.
+  // it ended. The ledger gives per-send usage precedence over terminal usage and keeps unknown
+  // physical spend unresolved.
   logCtx.spendTracker?.settle(logCtx.usage);
   const existing = finalizedUsage(
     logCtx.providerAdapter ?? logCtx.provider,
@@ -1667,9 +1667,9 @@ function writeFinalRequestLog(
     ...(meta?.terminalStatus ? { terminalStatus: meta.terminalStatus } : {}),
     ...(closeReason ? { closeReason } : {}),
     ...(logCtx.upstreamError && !upstreamErrorIsLocal(logCtx) ? { upstreamError: logCtx.upstreamError } : {}), ...(logCtx.failureDetail ? { failureDetail: logCtx.failureDetail } : {}),
-    ...(logCtx.upstreamCondition ? { upstreamCondition: logCtx.upstreamCondition } : {}),
-    ...upstreamDiagnosticLogFields(logCtx),
-    usageStatus,
+    ...(logCtx.upstreamCondition && !upstreamErrorIsLocal(logCtx) ? { upstreamCondition: logCtx.upstreamCondition } : {}),
+    // A local verdict's failed frame is proxy-authored; its code/type are not upstream diagnostics.
+    ...(upstreamErrorIsLocal(logCtx) ? {} : upstreamDiagnosticLogFields(logCtx)), usageStatus,
     ...(loggedUsage ? { usage: loggedUsage } : {}),
     ...(totalTokens !== undefined ? { totalTokens } : {}),
     ...(attempts !== undefined ? { attempts } : {}),
@@ -1814,11 +1814,13 @@ export function beginRequestAttempt(
   };
 }
 
-/** Preserve metered JSON failures before key recovery consumes/cancels their body. */
-export async function recordKeyAttemptFailure(logCtx: RequestLogContext, response: Response, signal?: AbortSignal): Promise<void> {
+/** Preserve metered JSON failures before recovery consumes/cancels their body. */
+export async function recordKeyAttemptFailure(logCtx: RequestLogContext, response: Response, signal?: AbortSignal,
+  includeUnattributed = false): Promise<OcxUsage | undefined> {
   const attempt = logCtx.activeAttempt;
-  if (!attempt || !KEY_ACCOUNT_LOG_LABEL_RE.test(attempt.accountLogLabel ?? "")) return;
-  attempt.status = response.status;
+  const keyAttempt = attempt && KEY_ACCOUNT_LOG_LABEL_RE.test(attempt.accountLogLabel ?? "") ? attempt : undefined;
+  if (!keyAttempt && !includeUnattributed) return;
+  if (keyAttempt) keyAttempt.status = response.status;
   const cancelOriginal = (): void => { try { void response.body?.cancel().catch(() => {}); } catch { /* closed */ } };
   signal?.addEventListener("abort", cancelOriginal, { once: true });
   try {
@@ -1827,7 +1829,8 @@ export async function recordKeyAttemptFailure(logCtx: RequestLogContext, respons
     if (body.truncated || body.oversized) return;
     const value = JSON.parse(body.text);
     const usage = usageFromResponsesPayload(value?.usage ?? value?.response?.usage);
-    if (usage) recordKeyWireAttemptUsage(logCtx, usage);
+    if (usage && keyAttempt) recordKeyWireAttemptUsage(logCtx, usage);
+    return usage;
   } catch { /* Absent/malformed usage remains unknown; recovery still owns the response. */ }
   finally { signal?.removeEventListener("abort", cancelOriginal); }
 }

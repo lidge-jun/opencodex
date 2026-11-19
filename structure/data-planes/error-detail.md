@@ -24,7 +24,19 @@ through the disk reader. A row keeps:
   none, and a stored condition is kept only under the same rules. Text set through
   `recordLocalFailureDetail` is not upstream evidence unless the caller passes `upstreamEvidence: true`
   (the Messages passthrough restating an upstream status and closed type); `upstreamErrorIsLocal` keeps
-  it out of the final row's evidence. The Messages passthrough classifies the condition where it parses the
+  it out of the final row's evidence, including the upstream code/type diagnostics of the failed frame the
+  proxy wrote itself and any condition already stored on the context.
+  `src/server/request-log-terminal-status.ts` captures terminal status and suppresses upstream
+  service warnings when the local provenance marker is present. The web-search loop records its
+  header deadline, routed-model byte stall and downstream handoff deadline as `header_timeout`,
+  `generation_timeout` and `turn_inactivity` respectively. The row keeps the bounded
+  `failureDetail` and omits `upstreamCondition`. A body stall retains `failureCause: upstream-fault` and `terminalSource: upstream`.
+  A context reused across attempts drops the previous attempt's local verdict at the attempt
+  boundary (`takeLocalFailureState` in policy fallback, compaction recovery and the opaque-blob reset) and
+  puts it back only when that attempt is rolled back without dispatching (`restoreLocalFailureState`).
+  A Responses combo carries that local verdict when it adopts a child. A deadline recorded after
+  the child commits is forwarded before the terminal frame reaches the request logger.
+  The Messages passthrough classifies the condition where it parses the
   upstream error and stores only the member on the context (`upstreamCondition`), so a native Anthropic
   overflow is recorded as `context_overflow`. `classifyUpstreamCondition` reads status, bounded structured
   tokens and, for 4xx only, fixed lowercase keyword sets. HTTP 401 is authoritative. The exact transport
@@ -505,7 +517,20 @@ delay. A final error uses one full JSON parse and the shared private diagnostic 
 `src/lib/messages-error-body.ts`: truthy top-level message, otherwise whole-value serialization,
 with the pinned SDK's parsed-or-raw SSE fallback. Empty named errors retain generic SDK dispatch.
 `src/lib/messages-sse-error-presentation.ts` renders closed type/code/message literals and carries
-complete-frame construction identity. The single pre-echo flag authorizes owned data under the
+complete-frame construction identity. While looking for `message_start`, the native model echo
+uses the shared byte delimiter scanner for CR, LF, CRLF and mixed blank lines. A blank line
+ending in CR completes the frame immediately. A subsequent LF belongs to that delimiter and
+is relayed for ordinary frames. The scanner grows incomplete frame storage geometrically and
+reads through fragments until a frame is ready, the scan window ends, or EOF arrives. It scans
+at most 64 KiB of raw bytes, including any LF continuation within the window. A complete
+`message_start` ending at the limit can be rewritten. Frames that need bytes beyond the
+limit are relayed unchanged, regardless of upstream chunk boundaries. The echo joins SSE
+data fields with LF before parsing JSON. It writes the rewritten payload to the first data
+field and leaves later data fields empty, preserving control lines and all line endings.
+Starts whose last event field is `error` retain their canonical form.
+The native Messages tap
+refreshes its pending-read stall deadline on each nonempty raw chunk before frame buffering.
+The single pre-echo flag authorizes owned data under the
 existing message_start name; guard replacements retire that flag. Local guard and tap products
 keep their original observer bytes and separate fixed client products. Stall/cap text omits numbers;
 reader errors omit exception suffixes. Guard callbacks, tap accounting/settlement, budgets,
@@ -527,6 +552,8 @@ success/internal row and explicitly lists the ten changed error-response normali
 `tests/server/messages-sse-error-filter.test.ts`,
 `tests/server/messages-sse-error-lifecycle.test.ts` and the Messages SSE integration siblings cover
 first-field eligibility, formatting, bounds, identity handoffs, teardown and both exceptions.
+The native and builtin differential lanes expect the overwritten error field and final ping
+field to survive the model echo while every other byte matches the recorded baseline.
 `tests/claude-integration/messages-sse-control-fields.test.ts` covers final-error fields and rename replay.
 `tests/claude-integration/messages-sse-continuation.test.ts` checks later-event and EOF delivery after
 a suppressed split-CRLF continuation; pull completion depends on actual client output.

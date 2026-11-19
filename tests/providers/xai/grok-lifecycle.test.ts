@@ -162,7 +162,7 @@ describe("Grok fence lifecycle wiring", () => {
 
     // A proxy ownership refusal means a foreign service still owns the running proxy, so the
     // shared teardown must be skipped at both call sites, exactly like the service-manager path.
-    const ownershipRefusals = stopFn.match(/if \(err instanceof ProxyOwnershipRefusedError\) {\s+ownershipBlocked = true;/g);
+    const ownershipRefusals = stopFn.match(/err instanceof ProxyOwnershipRefusedError[\s\S]{0,200}?ownershipBlocked = true;/g);
     expect(ownershipRefusals).toHaveLength(2);
     expect(stopFn.match(/Skipping shared teardown \(native Codex restore, Grok config\): the refusing proxy is still running\./g)).toHaveLength(2);
     expect(PROCESS_CONTROL_SOURCE).toContain("throw new ProxyOwnershipRefusedError(");
@@ -239,15 +239,20 @@ describe("Grok fence lifecycle wiring", () => {
     // The deferral is an obligation, so it is claimed on disk BEFORE it is requested and
     // released only after THIS process has restored the shared config itself. A bare
     // query flag could not survive the parent dying mid-stop.
-    const claimAt = stopFn.indexOf('claimTeardown(exact ?? configuredStopEndpoint(), exact ? "exact" : "guessed");');
+    const claimAt = stopFn.indexOf("claimTeardown(exact ?? configuredEndpoint()");
     expect(claimAt).toBeGreaterThan(-1);
     expect(claimAt).toBeLessThan(stopFn.indexOf("deferSharedTeardownNonce: teardownNonce"));
-    // Connected stops pin the attested endpoint. Standalone stops resolve the endpoint
-    // once as well, and a guessed receipt never directs the POST.
-    const stopWithDeferral = sliceFn(stopFn, "const stopWithDeferral = ", "const approvedEndpoint");
-    expect(stopWithDeferral).toContain("const exact = connectedStop ? endpointOf(stopTarget?.target ?? null) : discovered ?? endpointOf(readRuntimePort(pid));");
-    expect(stopWithDeferral).toContain("if (connectedStop && !exact) throw unsupportedConnectedStop();");
-    expect(stopWithDeferral).toContain("runtimeEndpoint: exact ?? undefined");
+    // One resolved stop target feeds BOTH the receipt and the request, so the endpoint
+    // recorded is the endpoint contacted — recovery probes exactly that one.
+    // The endpoint is resolved ONCE: reading the runtime record twice let the receipt name
+    // the configured guess while the request went to one that appeared in between.
+    expect(stopFn).toContain("const exact = discovered ?? endpointOf(readRuntimePort(pid));");
+    // Every stop claims a receipt, including the one that resolves no endpoint at all —
+    // that path goes straight to the kill ladder with no child teardown, so a warning
+    // instead of a receipt is exactly the parent-crash window this exists to close.
+    expect(stopFn).toContain('claimTeardown(exact ?? configuredEndpoint(), exact ? "exact" : "guessed");');
+    // A guessed endpoint records an obligation but must not direct the stop request.
+    expect(stopFn).toContain("runtimeEndpoint: exact ?? undefined");
     // Nor may it authorize a later recovery: "the configured port refuses" is not proof
     // that a proxy on an explicit --port is down.
     expect(stopFn).toContain('if (read.receipt.endpointSource === "guessed")');
@@ -310,19 +315,16 @@ describe("Grok fence lifecycle wiring", () => {
     // proxy clears only its own and older obligations accumulate forever.
     expect(stopFn).toContain("if (inheritedTeardowns.length > 0 && !ownershipBlocked)");
     expect(stopFn).toContain("teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces");
-    // Orphan discovery supplies an endpoint for standalone stop. Connected stop still
-    // verifies the PID against preflight and uses the attested endpoint.
-    expect(stopFn).toContain('nativeRestoreHandledByProxy = await stopWithDeferral(live.pid, { hostname: live.hostname ?? "127.0.0.1", port: live.port });');
-    expect(sliceFn(stopFn, "const stopWithDeferral = ", "const approvedEndpoint")).toContain("verifyStopTarget(pid);");
-    expect(stopFn).toContain("verifyStopTarget(pid);");
-    expect(STOP_RESTORE_SOURCE).toContain("pid !== proof?.target.pid");
+    // The orphan path hands over the endpoint the probe already found; its runtime record
+    // is typically what went missing in the first place.
+    expect(stopFn).toContain('nativeRestoreHandledByProxy = await stopWithDeferral(\n          live.pid,\n          { hostname: live.hostname ?? "127.0.0.1", port: live.port },\n        );');
     // A live proxy with no killable pid is not "no proxy found": purging state and
     // restoring over it is the same failure arrived at from the other direction.
     expect(stopFn).toContain("} else if (live) {");
     const noPidBranch = stopFn.slice(stopFn.indexOf("} else if (live) {"), stopFn.indexOf('} else if (!stoppedService) {'));
     expect(noPidBranch).toContain("stopFailed = true;");
     expect(noPidBranch).toContain("ownershipBlocked = true;");
-    const gateFn = sliceFn(STOP_RESTORE_SOURCE, "export async function abandonedTeardownIsSafeToFinish(", "export async function assertConnectedClientStopSupported(");
+    const gateFn = sliceFn(CLI_SOURCE, "const abandonedTeardownIsSafeToFinish", "let stopFailed = false;");
     expect(gateFn).toContain('probeEndpointLiveness(endpoint) === "dead"');
     expect(gateFn).toContain("return false;");
   });

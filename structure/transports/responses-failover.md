@@ -142,6 +142,9 @@ The [xAI Legacy privacy refusal](../providers/xai-grok.md#legacy-privacy-mode-40
 verdicts take precedence. When the ladder returns the fixed privacy 403, it adopts that child's
 failure attribution.
 
+A proxy-enforced [web-search deadline](../data-planes/error-detail.md) delivered as HTTP 504
+can advance the combo ladder without upstream classification, target failure accounting or cooldown.
+
 ## Single-target cooldown retry ownership
 
 `src/combos/failover.ts` reports whether the current failure actually records a cooldown. An ordinary local `CodexAccountCooldownError` mapped by `mapCodexAuthContextErrorToResponse` (`src/server/responses/codex-auth-error.ts`) carries process-local Response identity in `src/codex/account-cooldown-response.ts`. `core-lifetime.ts` carries it through the translator-budget and account-lease wrappers (retained compaction delivers through the latter), and `core-combo-failure.ts` carries it through error reconstruction; `core-combo.ts` omits its restated retry/reset metadata only when recording combo target cooldowns. The target retains the existing capped local backoff, while the client's Retry-After, account quota/health, probe leases and admission policy remain authoritative. Main hard-lock, credit, Reserve and transient-policy subclasses do not receive this provenance. Copied bodies or headers cannot grant it; genuine upstream Retry-After retains the 24-hour ceiling. Coverage: `tests/server/server-combo-cooldown-recording.test.ts`.
@@ -279,7 +282,7 @@ changing tool choice invalidates message cache only. Client-only summaries keep 
 empty summaries and abnormal completions before delivery;
 only successful prose reaches the single synthetic compaction item. Truncated completions retain the existing incomplete outcome.
 Signed progress is not summary prose.
-`tests/responses/responses-anthropic-compaction-prefix.test.ts` covers the prefix and both delivery modes; image normalization and 413 recovery retain their existing policy.
+`tests/responses/responses-anthropic-compaction-prefix.test.ts` covers the prefix and both delivery modes; image handling follows the [image-context recovery contract](../providers/anthropic-cache-lifecycle.md).
 
 `src/server/responses/compaction-routing.ts` applies `compactionRouting` before model routing in
 both `request-prepare.ts` and `compact.ts`. It requires explicit `request_kind: "compaction"` in

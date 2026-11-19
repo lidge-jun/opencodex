@@ -29,6 +29,11 @@ export async function readAnthropicUsageQuota(accessToken: string): Promise<Prov
   return (await probeAnthropicUsageQuota(accessToken)).quota;
 }
 
+/** Read quota with the paid-usage state that Claude CLI admission needs. */
+export async function readClaudeCliUsageQuota(accessToken: string): Promise<ProviderQuota | null> {
+  return (await probeAnthropicUsageQuota(accessToken, { includeClaudeExtraUsage: true })).quota;
+}
+
 /** A usage read with a closed failure when no quota was usable, and optional monthly retirement evidence. A thrown fetch still throws. */
 export interface AnthropicUsageProbe {
   quota: ProviderQuota | null;
@@ -36,7 +41,10 @@ export interface AnthropicUsageProbe {
   failure?: QuotaFailureCode;
 }
 
-export async function probeAnthropicUsageQuota(accessToken: string): Promise<AnthropicUsageProbe> {
+export async function probeAnthropicUsageQuota(
+  accessToken: string,
+  { includeClaudeExtraUsage = false }: { includeClaudeExtraUsage?: boolean } = {},
+): Promise<AnthropicUsageProbe> {
   const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
     // Like the profile probe: a redirect must never carry the bearer to another host.
     redirect: "error",
@@ -74,16 +82,18 @@ export async function probeAnthropicUsageQuota(accessToken: string): Promise<Ant
     }
   }
   const displayWindows = displayBuckets.flatMap(bucket => familyWindow(bucket) ?? []);
+  const paidUsage = parseAnthropicExtraUsage(body.extra_usage)?.state;
   const monthlyPercent = anthropicExtraUsageMonthlyPercent(body, windows);
   if (monthlyPercent !== undefined) shared.monthlyPercent = monthlyPercent;
   const quota: ProviderQuota = {
     ...shared,
+    ...(includeClaudeExtraUsage && paidUsage !== undefined ? { claudeExtraUsage: paidUsage } : {}),
     ...(customWindows.length > 0 ? { customWindows } : {}),
     ...(displayWindows.length > 0 ? { displayWindows } : {}),
     updatedAt: Date.now(),
   };
   if (!hasQuotaRows(quota)) {
-    const retireMonthlyFallback = windows.hasPlanWindow || parseAnthropicExtraUsage(body.extra_usage)?.state === "disabled";
+    const retireMonthlyFallback = windows.hasPlanWindow || paidUsage === "disabled";
     return { quota: null, failure: "response_unusable", ...(retireMonthlyFallback ? { retireMonthlyFallback: true } : {}) };
   }
   if (decisionQuotaSinkActive()) bindRawDecisionWindows(quota, rawAnthropicUsageWindows(body, quota.updatedAt));

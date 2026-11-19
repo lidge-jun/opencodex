@@ -32,5 +32,11 @@
   "claude-chat-tool-dispatch.test.ts": "claude-integration",
   "claude-chat-tool-dispatch-routes.test.ts": "claude-integration",
   "anthropic-affinity-restart.test.ts": "adapters/anthropic",
-  "anthropic-affinity-store.test.ts": "adapters/anthropic"
+  "anthropic-affinity-store.test.ts": "adapters/anthropic",
+  "agy-acp-adapter.test.ts": "adapters",
+  "agy-acp-protocol.test.ts": "adapters",
+  "agy-acp-policy.test.ts": "adapters",
+  "agy-acp-config.test.ts": "config",
+  "server-agy-acp.test.ts": "server",
+  "agy-acp-routing-policy.test.ts": "routing"
 }

@@ -10,7 +10,7 @@ import { isOpenCodeGoResponsesUrl } from "../../adapters/opencode-go-additional-
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
 import { anthropicBillingPhysicalFetch } from "../../providers/anthropic-billing-ownership";
 import { passiveKeyPhysicalFetch } from "../../providers/passive-key-observation";
-import { rebindPhysicalSend } from "../../lib/request-execution-budget";
+import { captureCurrentPhysicalSendUsage, rebindPhysicalSend, recordCurrentPhysicalSendUsage } from "../../lib/request-execution-budget";
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
 import { anthropicRatePolicyFor } from "../../oauth/anthropic-rate-limit-policy";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
@@ -31,7 +31,8 @@ import {
 import { refreshKiroAccountModelsDetached } from "../../providers/kiro-model-catalog";
 import type { ProviderAdapter, AdapterRequest } from "../../adapters/base";
 import { copyVertexRequestAuthority, hasVertexRequestAuthority, vertexRequestAuthorityIsCurrent } from "../../lib/gcp-adc";
-import { releaseProviderRequestSlot, waitForProviderRequestSlot, type ProviderRequestSlot } from "../../providers/request-pacing";
+import { registerProviderResponseProvenance, releaseProviderRequestSlot, waitForProviderRequestSlot, type ProviderRequestSlot } from "../../providers/request-pacing";
+import type { AnthropicImageRecoveryPin } from "./anthropic-image-context";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../../types";
 import type { AnthropicAccountSelectionReason } from "../../oauth/anthropic-routing";
 import { resolveAnthropicModelRouteForInstance, routeCandidates, type AnthropicRouteDecision } from "../../oauth/anthropic-model-routes";
@@ -133,6 +134,10 @@ export class CopilotAutoAdapterHandoff extends Error {
     super("Copilot Auto dispatch requires the Chat adapter");
   }
 }
+
+type ImageDispatchPin = { current(): boolean; matches(target: string, headers: Headers): boolean };
+const imageRefusals = new WeakMap<Response, AnthropicImageRecoveryPin | null>();
+registerProviderResponseProvenance(imageRefusals);
 
 /** Owns live credential selection and adapter bindings for one request. */
 export async function prepareResponsesTransport(
@@ -264,6 +269,8 @@ export async function prepareResponsesTransport(
     | { kind: "oauth"; selection: NonNullable<typeof oauthSelection>; snapshot: OAuthAccessSnapshot }
     | { kind: "api-key"; provider: OcxProviderConfig };
   const requestBindings = new WeakMap<AdapterRequest, DispatchBinding>();
+  const capturedImagePins = new WeakSet<AnthropicImageRecoveryPin>();
+  const imageHistoryPins = new WeakMap<AnthropicImageRecoveryPin["owner"], (request: AdapterRequest) => ImageDispatchPin>();
   const hostedAdvisorDispatches = new WeakMap<AdapterRequest, {
     credential: NonNullable<ReturnType<typeof hostedAdvisorCredentials.get>>;
     rebuild: (refusal: HostedAdvisorSpendRefusal, signal: AbortSignal) => Promise<AdapterRequest>;
@@ -971,7 +978,13 @@ export async function prepareResponsesTransport(
     } finally { producer?.close(); }
   };
   /** Fence the physical send, with bounded credential/session rebuilds and safe negotiated refusals. */
-  const oauthDispatch = (wireRequest: AdapterRequest, requestParsed = parsed, owner: "adapter" | "passthrough" = "adapter"): ProviderFetchOptions["dispatchOverride"] => {
+  const oauthDispatch = (wireRequest: AdapterRequest, requestParsed = parsed, owner: "adapter" | "passthrough" = "adapter",
+    imagePin?: ImageDispatchPin): ProviderFetchOptions["dispatchOverride"] => {
+    const priorImageOwner = requestParsed._anthropicImageOwner;
+    const pinned = imagePin ?? (priorImageOwner ? imageHistoryPins.get(priorImageOwner)?.(wireRequest) : undefined);
+    if (priorImageOwner && (!pinned || route.provider.authMode === "forward")) {
+      throw new Error("Anthropic image context has no dispatch authority");
+    }
     const stripWithheldAdvisorBeta = () => hostedAdvisorCredentialWithheld
       || (route.provider.adapter === "anthropic" && options.hostedAdvisorSpendScope?.optionalWithheld === true);
     if (route.provider.authMode === "forward" && !hostedAdvisorDispatches.has(wireRequest)
@@ -989,6 +1002,7 @@ export async function prepareResponsesTransport(
           await reacquirePacing(route.provider, route.modelId);
           pacingChanged = false;
         }
+        if (pinned && !pinned.current()) throw new Error("Anthropic image recovery owner changed before dispatch");
         if (selectionIsCurrent(requestBindings.get(wireRequest)) && vertexRequestAuthorityIsCurrent(wireRequest) && copilotSessionExpiresAt > Date.now() + 1000) {
           const ws = codexWsExecutorBinding(execute);
           const fetchImpl = (route.provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? ws?.http ?? execute;
@@ -1004,6 +1018,29 @@ export async function prepareResponsesTransport(
           if (authorizedAnthropicTarget && target !== authorizedAnthropicTarget) {
             throw new OAuthLoginRequiredError(anthropicInstance!);
           }
+          const recoveryOwner = owner === "adapter" && route.provider.adapter === "anthropic"
+            && route.provider.anthropicImageContextRecovery === true ? requestParsed._providerContinuationOwner : undefined;
+          const expectedHeaders = recoveryOwner ? new Headers(wireRequest.headers) : undefined;
+          const expectedKey = binding?.kind === "oauth" ? binding.snapshot.accessToken : binding?.provider.apiKey;
+          const bearer = binding?.kind === "oauth" || route.provider.apiKeyTransport === "bearer";
+          const carriesSelectedKey = !!expectedKey && (bearer
+            ? expectedHeaders?.get("authorization") === `Bearer ${expectedKey}` && !expectedHeaders.has("x-api-key")
+            : expectedHeaders?.get("x-api-key") === expectedKey && !expectedHeaders.has("authorization"));
+          const recoveryGeneration = recoveryOwner ? captureConfigGeneration() : undefined;
+          const recoveryProvider = route.provider;
+          const configuredProvider = recoveryOwner ? config.providers[route.providerName] : undefined;
+          const configuredBase = configuredProvider?.baseUrl;
+          const wireUrl = wireRequest.url;
+          const wireMatches = (finalTarget: string, finalHeaders: Headers): boolean =>
+            finalTarget === wireUrl && expectedHeaders !== undefined
+            && finalHeaders.get("authorization") === expectedHeaders.get("authorization")
+            && finalHeaders.get("x-api-key") === expectedHeaders.get("x-api-key")
+            && !finalHeaders.has("api-key") && !finalHeaders.has("cookie");
+          const recoveryCurrent = (): boolean => recoveryGeneration === captureConfigGeneration()
+            && route.provider === recoveryProvider && config.providers[route.providerName] === configuredProvider
+            && configuredProvider?.baseUrl === configuredBase && configuredProvider?.anthropicImageContextRecovery === true
+            && resolveAnthropicMessagesUrl(recoveryProvider) === wireUrl && selectionIsCurrent(binding);
+          let imageOwnerMatched = false;
           const writerGeneration = snapshot ? captureConfigGeneration() : 0;
           const sentHeaders = snapshot ? new Headers(dispatchInit.headers) : undefined;
           const ownsBearer = snapshot !== undefined
@@ -1037,7 +1074,7 @@ export async function prepareResponsesTransport(
             // Copilot's local negotiation may refuse before this point, and spend admission
             // may still refuse at the HTTP executor. Its note follows that final admission.
             const deferredCopilotNote = route.providerName === "github-copilot" && route.provider.authMode !== "forward";
-            const deferAttemptNote = deferredCopilotNote || advisorCredential !== undefined;
+            const deferAttemptNote = deferredCopilotNote || advisorCredential !== undefined || pinned !== undefined;
             if (!deferAttemptNote) commitKeyAttemptSend();
             // The WS executor dials its own socket: HTTP connection policy and body coding do not apply.
             // WS eligibility (egress, pacing, URL) was checked for the provider it was built for; a
@@ -1046,8 +1083,15 @@ export async function prepareResponsesTransport(
               passiveKeyPhysicalFetch(distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider), route.providerName, route.provider, target), config, route.providerName, route.provider),
               input,
               { ...physicalInit, redirect: "manual",
-                ...physicalSendObserverInit(observeAutoPause, target, deferAttemptNote ? commitKeyAttemptSend : undefined),
-                ...(vertexAuthority || advisorCredential || stripAdvisorBeta ? physicalSendGuardInit((finalTarget, finalHeaders) => {
+                ...physicalSendObserverInit(observeAutoPause, target, deferAttemptNote ? () => {
+                  commitKeyAttemptSend();
+                  // A pinned receipt keeps its estimate until this send reports usage.
+                  if (pinned) recordCurrentPhysicalSendUsage(null);
+                } : undefined),
+                ...(pinned || recoveryOwner || vertexAuthority || advisorCredential || stripAdvisorBeta ? physicalSendGuardInit((finalTarget, finalHeaders) => {
+                    if (pinned && (!pinned.current() || !pinned.matches(finalTarget, finalHeaders))) {
+                      throw new Error("Anthropic image recovery destination or credential changed before dispatch");
+                    }
                     if (vertexAuthority && (!selectionIsCurrent(binding) || !vertexRequestAuthorityIsCurrent(wireRequest, finalTarget, finalHeaders))) {
                       throw new Error("Vertex credential authority changed before dispatch");
                     }
@@ -1055,13 +1099,14 @@ export async function prepareResponsesTransport(
                       || finalHeaders.get(advisorCredential.header) !== advisorCredential.value
                       || hasConflictingApiKeyHeaders(finalHeaders.keys(), advisorCredential.header))) throw advisorRefusal;
                     if (stripAdvisorBeta) stripHostedAdvisorBeta(finalHeaders);
+                    imageOwnerMatched = wireMatches(finalTarget, finalHeaders);
                   }) : {}) },
               { providerName: route.providerName, provider: route.provider },
             )) as typeof globalThis.fetch;
             response = await fetchWithHeaderTimeout(target, dispatchInit, dispatchInit.signal ?? options.abortSignal ?? req.signal,
               resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(target) }), requestParsed.stream, physicalFetch);
           } catch (error) {
-            if (!advisorRefusal || error !== advisorRefusal || !hostedAdvisor || advisorRebuilt) throw error;
+            if (pinned || !advisorRefusal || error !== advisorRefusal || !hostedAdvisor || advisorRebuilt) throw error;
             const signal = dispatchInit.signal ?? options.abortSignal ?? req.signal;
             rebuildHostedAdvisor = async () => {
               signal.throwIfAborted();
@@ -1086,8 +1131,33 @@ export async function prepareResponsesTransport(
             } catch { /* best-effort observation cannot fail the response */ }
           }
           if (response) {
-            if (!response.ok) await recordKeyAttemptFailure(logCtx, response, dispatchInit.signal ?? options.abortSignal);
-            return observeAutoPause ? await observeAutoPause(response) : response;
+            const recoveryRefusal = !pinned && response.status === 413 && binding && imageOwnerMatched
+              && recoveryOwner && carriesSelectedKey;
+            const recordFailureSpend = !response.ok && (pinned || recoveryRefusal) ? captureCurrentPhysicalSendUsage() : undefined;
+            const failureUsage = response.ok ? undefined
+              : await recordKeyAttemptFailure(logCtx, response, dispatchInit.signal ?? options.abortSignal,
+                recordFailureSpend !== undefined);
+            if (failureUsage && pinned) recordFailureSpend?.(failureUsage);
+            if (observeAutoPause) response = await observeAutoPause(response);
+            if (recoveryRefusal && response.status === 413) {
+              const immutableRequest = { ...wireRequest, headers: { ...wireRequest.headers } };
+              const bindImageHistory = (wire: AdapterRequest): ImageDispatchPin => ({
+                current: () => recoveryCurrent() && requestBindings.get(wire) === binding
+                  && wireMatches(wire.url, new Headers(wire.headers)),
+                matches: wireMatches,
+              });
+              const pin: AnthropicImageRecoveryPin = {
+                owner: recoveryOwner,
+                request: immutableRequest,
+                isCurrent: recoveryCurrent,
+                recordRefusalSpend: recordFailureSpend && (() => recordFailureSpend(failureUsage ?? null)),
+                dispatchOverride: (wire, input) => oauthDispatch(wire, input, "adapter", bindImageHistory(wire))!,
+              };
+              imageHistoryPins.set(recoveryOwner, bindImageHistory);
+              capturedImagePins.add(pin);
+              imageRefusals.set(response, imageRefusals.has(response) ? null : pin);
+            }
+            return response;
           }
         }
         let rebuilt: AdapterRequest;
@@ -1096,6 +1166,9 @@ export async function prepareResponsesTransport(
           rebuilt = await rebuildHostedAdvisor();
           advisorRebuilt = true;
         } else {
+          if (pinned || requestParsed._anthropicImageOwner) {
+            throw new Error("Anthropic image recovery account changed before dispatch");
+          }
           let nextAdapter: ProviderAdapter;
           try { nextAdapter = await refreshDispatchAdapter(requestParsed); }
           catch (error) {
@@ -1629,6 +1702,10 @@ export async function prepareResponsesTransport(
     copilotRefusalResponse,
     refreshRunTurnAdapter,
     oauthDispatch,
+    pinAnthropicImageRecovery: (response: Response): AnthropicImageRecoveryPin | undefined => {
+      const pin = imageRefusals.get(response);
+      return pin && capturedImagePins.has(pin) && pin.isCurrent() ? pin : undefined;
+    },
     noteRoutedAttemptSend,
     attemptSendDeferred,
     deferPhysicalAttribution,

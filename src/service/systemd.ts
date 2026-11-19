@@ -1,4 +1,4 @@
-import { lstatSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { execFileSync, execSync } from "node:child_process";
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
@@ -10,7 +10,7 @@ import { systemdProperty } from "../service-manager-probe";
 import { writeServiceApiTokenFile, sh } from "./guards";
 import { shellQuote, buildServiceShellCommand, buildServiceLauncherShellCommand, resolvedProxyEnv, pinnedServiceHomeShellAssignments } from "./definition";
 import type { ServiceInstallCleanupOps } from "./orchestration";
-import { SERVICE_MANAGED_ENV, TASK, cliEntry, filterTransientServicePath, stableLauncherEntry, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, currentCodexHome, currentOpenCodexHome, serviceStatePaths, writeServiceInstallState } from "./state";
+import { SERVICE_MANAGED_ENV, TASK, cliEntry, filterTransientServicePath, stableLauncherEntry, logPath, serviceStatePath, currentCodexSqliteHomeAbsolute, currentCodexHome, currentOpenCodexHome, writeServiceInstallState } from "./state";
 import { writeServiceDefinitionFile } from "./windows-ops";
 
 /** The `--port <n>` baked into the installed systemd user unit. Linux only. */
@@ -63,14 +63,6 @@ function unitDir(): string {
 
 export function unitPath(): string {
   return join(unitDir(), `${TASK}.service`);
-}
-
-/** Offline proof that OpenCodex has no recorded service installation or installer unit. */
-export function systemdInstallationAbsent(): boolean {
-  return [unitPath(), ...serviceStatePaths()].every(path => {
-    try { lstatSync(path); return false; }
-    catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT"; }
-  });
 }
 
 export function buildUnit(

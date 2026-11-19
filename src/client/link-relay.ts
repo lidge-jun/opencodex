@@ -9,6 +9,7 @@ import {
 } from "./hub-relay";
 import type { LinkDiagnosticRecord, LinkDiagnosticSink } from "../link/diagnostics";
 import { linkRouteAllowed } from "../link/routes";
+import { LINK_RELAY_AUTH_FAILED_CODE } from "../link/relay-auth";
 import { isLinkPort } from "../link/ports";
 import { resolveInboundBodyLimitBytes } from "../server/request-decompress";
 import type { LinkTrafficBook } from "../link/traffic";
@@ -163,7 +164,7 @@ function homeUnreachable(error: string): Response {
  * `home_unreachable`, which GOAT's device-local fallback keys on. The status and Retry-After it
  * carried before OCX-11 are kept: a lost bound socket can succeed on a fresh connection.
  */
-export const LINK_RELAY_AUTH_FAILED_CODE = "link_relay_auth_failed";
+export { LINK_RELAY_AUTH_FAILED_CODE };
 
 function relayAuthenticationFailed(error: string): Response {
   return Response.json({ error, code: LINK_RELAY_AUTH_FAILED_CODE }, {
