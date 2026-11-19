@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
 import {
-  initializeManagementAuthState, issueGuiSession, managementPrincipal,
+  createManagementSessionControl, initializeManagementAuthState, issueGuiSession, managementPrincipal,
   managementSessionIssuance, requireManagementAuth,
 } from "../../src/server/management-auth";
 import { loadConfig, saveConfig } from "../../src/config";
@@ -35,11 +35,44 @@ afterEach(() => {
   removeTreeWithRetry(home);
 });
 
-async function dispatch(config: OcxConfig, path: string, method: string, body?: unknown, adminOnly = false) {
+type ManagementState = ReturnType<typeof initializeManagementAuthState>;
+type Remembered = { state: ManagementState; headers: Record<string, string> };
+const ORIGIN = "http://localhost:10100";
+const USER_AGENT = "combo-suggestion-fixture";
+
+/** A remembered-admin dashboard session, freshly enrolled or resumed from its device cookie after a restart. */
+async function rememberedSession(config: OcxConfig, resumed: boolean): Promise<Remembered> {
+  let state = initializeManagementAuthState(config);
+  const enroll = new ManagementRequest(ORIGIN + "/api/session/remember", {
+    method: "POST", headers: { Origin: ORIGIN, "User-Agent": USER_AGENT, "X-OpenCodex-API-Key": state.token! },
+  });
+  const response = (await handleManagementAPI(enroll, new URL(enroll.url), config, {}, managementPrincipal(enroll, state, config)!,
+    createManagementSessionControl(state), { trustedLoopback: true, guiSessionIssuance: managementSessionIssuance(enroll, state) }))!;
+  expect(response.status).toBe(200);
+  const enrolled = await response.json() as { session: ReturnType<typeof issueGuiSession>; device: { proof: string } };
+  const cookie = response.headers.get("Set-Cookie")!.split(";")[0]!;
+  let session = enrolled.session;
+  if (resumed) {
+    state = initializeManagementAuthState(config);
+    session = issueGuiSession(new ManagementRequest(ORIGIN + "/opencodex-session", { headers: {
+      Host: new URL(ORIGIN).host, Origin: ORIGIN, "User-Agent": USER_AGENT, Cookie: cookie,
+      "X-OpenCodex-Device-Proof": enrolled.device.proof,
+    } }), config, state);
+  }
+  expect(session?.issuance).toBe("remembered-admin");
+  return { state, headers: {
+    "User-Agent": USER_AGENT, Cookie: cookie, "X-OpenCodex-API-Key": session!.token,
+    "X-OpenCodex-GUI-Origin": session!.browserOrigin, "X-OpenCodex-CSRF-Token": session!.csrfToken,
+  } };
+}
+
+async function dispatch(config: OcxConfig, path: string, method: string, body?: unknown, auth: "session" | "admin" | Remembered = "session") {
   const url = new URL(path, "http://localhost:10100");
-  const state = initializeManagementAuthState(config);
+  const state = typeof auth === "object" ? auth.state : initializeManagementAuthState(config);
   const headers = new Headers({ Origin: url.origin, "content-type": "application/json" });
-  if (adminOnly) {
+  if (typeof auth === "object") {
+    for (const [name, value] of Object.entries(auth.headers)) headers.set(name, value);
+  } else if (auth === "admin") {
     headers.set("X-OpenCodex-API-Key", state.token!);
   } else {
     const session = issueGuiSession(new ManagementRequest(url, { headers }), config, state)!;
@@ -158,13 +191,15 @@ test.each([
   ["PUT", "/api/combo-suggestions", { provider: "other", excluded: true }],
   ["POST", "/api/combo-suggestions/save", { id: "mix", mode: "append", targets: [paidTarget] }],
   ["POST", "/api/combo-suggestions/save", { id: "draft", mode: "create", targets: [paidTarget], allowMeteredTargets: true }],
-] as const)("%s %s requires a dashboard session", async (method, path, body) => {
+] as const)("%s %s requires a dashboard session; admin tokens and remembered-admin sessions are refused", async (method, path, body) => {
   const live = seedPaidSuggestion();
   const before = onDisk();
-  const denied = await dispatch(live, path, method, body, true);
-  expect(denied.status).toBe(403);
-  expect(await denied.json()).toEqual({ error: "dashboard session required" });
-  expect(onDisk()).toEqual(before);
+  for (const auth of ["admin", await rememberedSession(live, false), await rememberedSession(live, true)] as const) {
+    const denied = await dispatch(live, path, method, body, auth);
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toEqual({ error: "dashboard session required" });
+    expect(onDisk()).toEqual(before);
+  }
   expect((await dispatch(live, path, method, body)).status).toBe(200);
 });
 
