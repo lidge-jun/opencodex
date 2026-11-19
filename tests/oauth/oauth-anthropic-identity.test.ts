@@ -651,6 +651,27 @@ test("reauth of an organization slot refuses a grant for another organization", 
   } finally { OAUTH_PROVIDERS.anthropic!.login = original; }
 });
 
+test("an email-only reauth of an organization slot refuses a grant for another organization", async () => {
+  orgProfiles({});
+  await saveCredential("anthropic", orgCredential("synthetic-org-a", ORG_A));
+  const slot = anthropicRows()[0]!;
+  const original = OAUTH_PROVIDERS.anthropic!.login;
+  const config = (): OcxConfig => ({ port: 10100, defaultProvider: "openai", openaiProviderTierVersion: 2, providers: {} });
+  // The exchange named only the email and organization, and the profile read is unavailable.
+  const reauthWith = (access: string, organizationUuid: string) => {
+    OAUTH_PROVIDERS.anthropic!.login = async () => ({ access, refresh: `${access}-refresh`, expires: Date.now() + 3600_000,
+      source: "oauth", email: "shared@example.test",
+      anthropicOrganizationScope: { v: 1, organizationUuid, bearerSha256: proof(access).bearerSha256 } });
+    return runLogin("anthropic", {} as OAuthController, { reauthAccountId: slot.id }, { loadConfig: config, saveConfig: () => {} });
+  };
+  try {
+    await expect(reauthWith("synthetic-email-b", ORG_B)).rejects.toBeInstanceOf(OAuthReauthIdentityMismatchError);
+    expect(getAccountCredential("anthropic", slot.id)).toEqual(slot.credential);
+    await reauthWith("synthetic-email-a", ORG_A);
+    expect(getAccountCredential("anthropic", slot.id)!.access).toBe("synthetic-email-a");
+  } finally { OAUTH_PROVIDERS.anthropic!.login = original; }
+});
+
 test("own-grant refresh keeps the stored organization and never discards a rotated grant over it", () => {
   const stored = orgCredential("synthetic-old", ORG_A);
   const fresh = orgCredential("synthetic-new");
@@ -660,6 +681,25 @@ test("own-grant refresh keeps the stored organization and never discards a rotat
   // The organization is a scope, not identity: fresh evidence wins instead of throwing after rotation.
   expect(mergeAnthropicIdentity(orgCredential("synthetic-new", ORG_B), stored, { sameGrant: true }).anthropicIdentity)
     .toEqual({ ...proof("synthetic-new"), organizationUuid: ORG_B });
+});
+
+test("own-grant refresh without account proof keeps the organization as the new bearer's scope", async () => {
+  const previous = { ...orgCredential("synthetic-old", ORG_A), expires: 1 };
+  await saveCredential("anthropic", previous);
+  const id = getAccountSet("anthropic")!.activeAccountId;
+  // The token response omits account and organization, and the profile read is unavailable.
+  globalThis.fetch = (async (_url, init) => init?.method === "POST"
+    ? Response.json({ access_token: "synthetic-fresh", refresh_token: "synthetic-fresh-refresh", expires_in: 3600 })
+    : new Response(null, { status: 503 })) as typeof fetch;
+  await expect(refreshAnthropicAccountWithLock("anthropic", id, OAUTH_PROVIDERS.anthropic!, previous))
+    .resolves.toBe("synthetic-fresh");
+  const rotated = getAccountCredential("anthropic", id)!;
+  expect(rotated).toMatchObject({ refresh: "synthetic-fresh-refresh", accountId: previous.accountId });
+  expect(rotated.anthropicIdentity).toBeUndefined();
+  expect(rotated.anthropicOrganizationScope).toEqual({ v: 1, organizationUuid: ORG_A, bearerSha256: proof("synthetic-fresh").bearerSha256 });
+  await saveCredential("anthropic", orgCredential("synthetic-org-b", ORG_B));
+  expect(anthropicRows()).toHaveLength(2);
+  expect(getAccountCredential("anthropic", id)).toEqual(rotated);
 });
 
 test("Claude Code signed in to another organization is a different account, not a rotation", async () => {
@@ -809,7 +849,8 @@ test("reauth preserves the organization established by a legacy row's own bearer
 /**
  * A login for organization B and a reauth of a legacy row both pass their checks while another
  * writer holds the queue, and the login commits first. The reauth must decide again on the rows its
- * writer loads, not on the snapshot it read before queueing.
+ * writer loads, not on the snapshot it read before queueing. Only the login can read the legacy
+ * row's organization, so the reauth's own pre-lock checks pass and only the new sibling refuses it.
  */
 async function reauthQueuedBehindLogin(reauthOrganization?: string) {
   await saveCredential("anthropic", orgCredential("synthetic-legacy"));
@@ -817,26 +858,35 @@ async function reauthQueuedBehindLogin(reauthOrganization?: string) {
   orgProfiles({ "synthetic-legacy": ORG_A });
   const original = OAUTH_PROVIDERS.anthropic!.login;
   const config = (): OcxConfig => ({ port: 10100, defaultProvider: "openai", openaiProviderTierVersion: 2, providers: {} });
-  const queued = async (count: number) => {
-    while (oauthMutationTailSnapshot().active < count) await new Promise(resolve => setTimeout(resolve, 1));
+  let reauthSettled = false;
+  // Bounded below the test timeout, so a setup that never queues still reaches `finally`.
+  const queued = async (count: number, settled = () => false) => {
+    for (const deadline = Date.now() + 2_000; oauthMutationTailSnapshot().active < count;) {
+      if (settled() || Date.now() > deadline) throw new Error(`mutation ${count} was never queued`);
+      await new Promise(resolve => setTimeout(resolve, 1));
+    }
   };
-  let release!: () => void;
-  const held = mutateStore(() => new Promise<void>(resolve => { release = resolve; }));
+  const gate = deferred();
+  const held = mutateStore(() => gate.promise);
+  let login: Promise<unknown> | undefined;
+  let reauth: Promise<unknown> | undefined;
   try {
     await queued(1);
-    const login = saveCredential("anthropic", orgCredential("synthetic-org-b", ORG_B));
+    login = saveCredential("anthropic", orgCredential("synthetic-org-b", ORG_B));
     await queued(2);
+    orgProfiles({});
     OAUTH_PROVIDERS.anthropic!.login = async () => orgCredential("synthetic-reauth", reauthOrganization);
-    const reauth = runLogin("anthropic", {} as OAuthController, { reauthAccountId: legacy.id },
-      { loadConfig: config, saveConfig: () => {} }).then(() => undefined, (error: unknown) => error);
-    await queued(3);
-    while (!release) await new Promise(resolve => setTimeout(resolve, 1));
-    release();
+    reauth = runLogin("anthropic", {} as OAuthController, { reauthAccountId: legacy.id },
+      { loadConfig: config, saveConfig: () => {} }).then(() => undefined, (error: unknown) => error)
+      .finally(() => { reauthSettled = true; });
+    await queued(3, () => reauthSettled);
+    gate.resolve();
     await login;
     return { legacy, outcome: await reauth };
   } finally {
-    release?.();
+    gate.resolve();
     await held;
+    await Promise.allSettled([login, reauth]);
     OAUTH_PROVIDERS.anthropic!.login = original;
   }
 }
@@ -953,6 +1003,21 @@ test("automatic full rotation respects organization ownership across both Anthro
   await expect(adopt(ORG_A, ORG_A)).resolves.toBe("synthetic-other");
   expect(getAccountSet("anthropic2")).toEqual(sibling);
   expect(readOAuthRefreshIntent("anthropic", target.id)).toBeUndefined();
+});
+
+test("automatic full rotation refuses a same-account row of unknown organization in the other pool", async () => {
+  await saveCredential("anthropic", { ...orgCredential("synthetic-old"), anthropicIdentity: undefined, source: "local-cli" });
+  await saveCredential("anthropic2", orgCredential("synthetic-pool-2"));
+  const target = anthropicRows()[0]!;
+  const sibling = getAccountSet("anthropic2")!;
+  const intent = writeOAuthRefreshIntent("anthropic", target.id, credentialGeneration(target.credential));
+  disk();
+  await expect(refreshAnthropicAccountWithLock("anthropic", target.id, noRefresh, target.credential, {
+    resolveIdentity: async access => ({ ...proof(access), organizationUuid: ORG_A }),
+  })).rejects.toBeInstanceOf(OAuthTokenRefreshStaleError);
+  expect(anthropicRows()).toEqual([target]);
+  expect(getAccountSet("anthropic2")).toEqual(sibling);
+  expect(readOAuthRefreshIntent("anthropic", target.id)).toEqual(intent);
 });
 
 function profileOnlyTokenResponse(

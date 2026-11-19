@@ -197,14 +197,19 @@ ocx login anthropic --headless # no browser, no local port
 
 `--headless` ejecuta el inicio de sesión **code-display** para hosts cuyo navegador no puede llegar a la devolución de llamada de loopback del proxy (contenedores o servidores remotos). El comando muestra una URL de autorización; apruébala en cualquier navegador y pega la cadena `code#state` que muestra el proveedor. No se abre un puerto de devolución de llamada ni se inicia un navegador. Lo admiten `anthropic` y `anthropic2`. Como `xai` no tiene página de código, `--headless` inicia su autorización de dispositivo: muestra una URL y un código corto que confirmas en cualquier navegador y termina sin pegar nada. Cualquier otro proveedor termina mostrando la lista de proveedores compatibles. Para cuentas Codex usa `ocx account login codex --device`; `ocx login codex --headless` se rechaza. En el flujo code-display hay 10 minutos para pegar un único código; si falla el intercambio, inicia otra sesión. Un inicio correcto activa la cuenta del proveedor, igual que con el navegador.
 
-Si una cuenta de Claude pertenece a varias organizaciones, ejecuta `ocx login anthropic` para
-cada una y elígela en la pantalla de autorización de Claude. Cada organización confirmada tiene
+Si una cuenta de Claude pertenece a varias organizaciones, inicia sesión una vez por cada una y
+elígela en la pantalla de autorización de Claude. Si este equipo tiene una credencial utilizable
+de Claude Code, `ocx login anthropic` la importa sin mostrar esa pantalla; usa
+`ocx login anthropic --headless` para elegir otra organización. Cada organización confirmada tiene
 su propia cuenta en el pool, con su suscripción y sus límites. El panel muestra el nombre cuando
 Claude lo comunica al iniciar sesión o renovar el token. La lista expone ese nombre a las sesiones
 del panel y a las credenciales con permisos completos de administración.
 
 Al iniciar sesión, importar credenciales de Claude Code o reautenticar, OpenCodex comprueba con los
-tokens vigentes la organización de las cuentas anteriores que aún carecen de ese dato. Si Claude
+tokens vigentes la organización de las cuentas anteriores que aún carecen de ese dato. Si esa
+organización sigue siendo desconocida (token caducado o comprobación fallida), el inicio de sesión
+puede reemplazar esa cuenta, como en versiones anteriores: su organización no se puede comprobar
+hasta que se renueve su token. Si Claude
 comunica la organización de la nueva autorización al iniciar sesión y el perfil de la cuenta no
 está disponible, OpenCodex conserva la cuenta activa si su organización confirmada es distinta.
 Si Claude confirma la organización y proporciona un correo electrónico sin el UUID de la cuenta,
@@ -213,7 +218,10 @@ Tras quitar los espacios al principio y al final, la parte anterior a `@` y los 
 internacionalizados deben coincidir exactamente. En los demás dominios se ignoran las diferencias
 entre mayúsculas y minúsculas ASCII. Si la única cuenta con ese correo tiene una organización
 desconocida, se conserva y se puede añadir una cuenta nueva. Si coinciden varias cuentas en la
-organización confirmada, el inicio de sesión se detiene y te pide que lo intentes de nuevo.
+organización confirmada, el inicio de sesión se detiene sin cambiar ninguna. Volver a iniciar sesión
+funciona cuando Claude devuelve el perfil de la cuenta; mientras tanto, reautentica la cuenta
+correcta con `ocx account login anthropic --id <account-id> --reauth` o elimina el duplicado con
+`ocx account remove anthropic <account-id> --yes`.
 Si una cuenta cambia durante la comprobación y ya no se puede confirmar su organización, repite la operación.
 La reautenticación rechaza una autorización para otra organización confirmada o para una que ya
 corresponde a otra cuenta.

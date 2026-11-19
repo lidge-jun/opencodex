@@ -2,6 +2,7 @@ import { detectClaudeCodeTokenAsync, hasClaudeCredentialContinuity } from "./loc
 import { anthropicOrganization, normalizeAnthropicIdentity, resolveAnthropicAccountIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
 import { anthropicSiblingSlots } from "./anthropic-login-slot";
 import { credentialGeneration, type AuthStore } from "./store";
+import { AnthropicCrossInstanceDuplicateError, assertNoCrossAnthropicRegistration } from "./store-anthropic-instance";
 import { mergeOAuthOrganizationName, mergeOAuthPlan } from "./plan";
 import { REFRESH_SKEW_MS } from "./refresh-policy";
 import type { OAuthCredentials, ProviderAccount, ProviderAccountSet } from "./types";
@@ -90,6 +91,14 @@ export function claudeAdoptionSlotCurrent(
   const credential = adoption.credential;
   const identity = normalizeAnthropicIdentity(credential.anthropicIdentity, credential.access);
   if (!identity) return true;
+  // A full rotation brings a new grant, so the other pool's registration rule applies to it too.
+  if (adoption.previousOrganization !== undefined) {
+    try { assertNoCrossAnthropicRegistration(store, instance, credential); }
+    catch (error) {
+      if (error instanceof AnthropicCrossInstanceDuplicateError) return false;
+      throw error;
+    }
+  }
   const siblings = ANTHROPIC_INSTANCE_IDS.flatMap(pool =>
     anthropicSiblingSlots(store[pool]?.accounts ?? [], pool === instance ? accountId : undefined, identity.accountUuid));
   if (siblings.length === 0) return true;

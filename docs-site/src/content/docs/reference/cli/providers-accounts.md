@@ -319,8 +319,10 @@ A code-display login's paste window is 10 minutes, and each login accepts one co
 fails, start a new login. A successful login becomes the provider's active account, exactly
 like a browser login.
 
-A Claude account that belongs to several organizations can be added once per organization: run
-`ocx login anthropic` again and pick the other organization on Claude's consent screen. Each
+A Claude account that belongs to several organizations can be added once per organization: sign in
+again and pick the other organization on Claude's consent screen. When this machine has a usable
+Claude Code credential, `ocx login anthropic` imports it without showing the consent screen, so run
+`ocx login anthropic --headless` to choose another organization. Each
 organization has its own subscription and limits, so it becomes its own pool account instead of
 replacing the first. Logging in to an organization that already has an account refreshes that
 account. The dashboard shows each account's organization name under its label once Claude has
@@ -341,7 +343,10 @@ can update the single account with a matching email in that organization. The pa
 internationalized domains match exactly after trimming surrounding whitespace. Other domains are
 compared without regard to ASCII case. If the only account with that email has an unknown
 organization, sign-in preserves it and can add a separate account. If several accounts match in
-the confirmed organization, sign-in stops and asks you to try again.
+the confirmed organization, sign-in stops without changing any of them. Signing in again succeeds
+once Claude returns the account profile; until then, reauthenticate the intended account with
+`ocx account login anthropic --id <account-id> --reauth`, or remove the duplicate with
+`ocx account remove anthropic <account-id> --yes`.
 If an account changes during organization verification and the writer cannot confirm its current
 organization, retry the login or Claude Code credential import.
 Reauthentication also checks existing accounts through their usable tokens when their organization

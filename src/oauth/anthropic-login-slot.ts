@@ -164,16 +164,17 @@ export function anthropicReauthSlotGuard(
     if (!target) return;
     const targetAccountUuid = slotAccountUuid(target.credential);
     if (targetAccountUuid && accountUuid && targetAccountUuid !== accountUuid) throw new OAuthReauthIdentityMismatchError();
-    if (!organization || !accountUuid) return;
+    if (!organization) return;
+    // An email-only grant still names its organization; only the sibling match needs the account UUID.
     const targetOrganization = slotOrganization(target, observed);
+    if (targetOrganization ? targetOrganization !== organization : observed.has(target.id)) throw new OAuthReauthIdentityMismatchError();
+    if (!accountUuid) return;
     const siblingConflict = accounts.some(row => {
       const prior = observed.get(row.id);
       if (row.id === accountId || (slotAccountUuid(row.credential) ?? prior?.accountUuid) !== accountUuid) return false;
       const siblingOrganization = slotOrganization(row, observed);
       return siblingOrganization === organization || (!siblingOrganization && prior !== undefined);
     });
-    if ((targetOrganization ? targetOrganization !== organization : observed.has(target.id)) || siblingConflict) {
-      throw new OAuthReauthIdentityMismatchError();
-    }
+    if (siblingConflict) throw new OAuthReauthIdentityMismatchError();
   };
 }

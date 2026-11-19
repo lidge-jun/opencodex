@@ -108,7 +108,8 @@ export const resolveAnthropicAccountIdentity: AnthropicIdentityResolver = async 
  * A changed access bearer cannot inherit the previous bearer's proof. `sameGrant` marks a
  * provider refresh of this row's own refresh token: the grant's organization cannot change
  * there, so a freshly proven same account keeps the stored organization when the refresh
- * response and its profile read did not repeat it. The organization is a scope, not identity:
+ * response and its profile read did not repeat it, and an unproven one keeps it as the new
+ * bearer's organization scope. The organization is a scope, not identity:
  * a refresh that reports another one keeps the fresh answer instead of discarding a rotated grant.
  */
 export function mergeAnthropicIdentity(
@@ -122,12 +123,14 @@ export function mergeAnthropicIdentity(
   const sameBearer = fresh.access === previous.access;
   const scope = normalizeAnthropicOrganizationScope(fresh.anthropicOrganizationScope, fresh.access)
     ?? (sameBearer ? normalizeAnthropicOrganizationScope(previous.anthropicOrganizationScope, previous.access) : undefined);
-  const previousOrganization = opts.sameGrant && after && !after.organizationUuid && !scope
+  const previousOrganization = opts.sameGrant && !after?.organizationUuid && !scope
     ? anthropicOrganization(previous) : undefined;
   return {
     anthropicIdentity: after && previousOrganization ? { ...after, organizationUuid: previousOrganization }
       : after ?? (sameBearer ? before : undefined),
-    anthropicOrganizationScope: scope,
+    // Without a fresh account proof the organization stays a scope of the new bearer, never an identity.
+    anthropicOrganizationScope: scope ?? (!after && !sameBearer && previousOrganization
+      ? bindAnthropicOrganizationScope(fresh.access, previousOrganization) : undefined),
   };
 }
 

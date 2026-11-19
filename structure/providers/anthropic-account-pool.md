@@ -334,7 +334,7 @@ the current bearer and account and stops if a relevant observation goes stale an
 
 `src/oauth/anthropic-continuity.ts` accepts usable changed CLI generations with a shared nonempty token. Full rotation requires matching authenticated account UUIDs.
 The old bearer uses stored or fresh proof. Independent old/new reads run in parallel, and stored proof missing its organization may prompt one profile read.
-Full rotation requires matching organizations whenever either pool has a same-account sibling. The writer checks both current rosters and refuses adoption when a sibling already proves the incoming organization.
+Full rotation requires matching organizations whenever either pool has a same-account sibling. The writer checks both current rosters and refuses adoption when a sibling already proves the incoming organization or the other pool's registration rule refuses the new grant.
 Shared-refresh adoption cannot copy proof to a new bearer. Provider refresh needs new bearer proof and refuses a conflicting authenticated account UUID.
 
 The refresh owner captures login ID, token generation and identity metadata before observation.
