@@ -5,6 +5,7 @@
  * Same translate-and-replay pattern as Claude Messages: the produced body must pass
  * responsesRequestSchema so routing/OAuth/pool/sidecars are inherited unchanged.
  */
+import { normalizedClientExtraContent } from "../responses/provider-opaque-metadata";
 import { chatImageUrlFromPart } from "./image-parts";
 import { signedReasoningInputItems } from "./reasoning-details";
 import { untranslatedChatInputMedia, untranslatedInputMediaMessage } from "../responses/input-media";
@@ -221,7 +222,9 @@ function toolCallsToItems(
     if (!name) name = knownNameByCallId.get(callId) ?? "";
     if (!name) throw new ChatCompletionsRequestError("tool_calls entries require function.name");
     knownNameByCallId.set(callId, name);
-    input.push({ type: "function_call", call_id: callId, name, arguments: args });
+    // A Gemini thought signature rides on extra_content (the Responses carrier); keep only a
+    // well-formed one so a malformed echo is dropped instead of failing the request.
+    input.push({ type: "function_call", call_id: callId, name, arguments: args, ...(normalizedClientExtraContent(raw.extra_content) ?? {}) });
     awaitingToolResult.add(callId);
   }
 }

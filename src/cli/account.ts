@@ -123,7 +123,8 @@ function statusText(row: AccountRow): string {
   if (row.paused) parts.push(row.pauseDetails ? `paused(${row.pauseDetails.reason})` : "paused");
   if (row.active) parts.push(row.type === "codex" ? "selected" : "active");
   if (row.needsReauth && !(row.provider === "kiro" && row.skipReason === "needs_reauth")) {
-    parts.push(row.needsReauthReason === "verify_account" ? "needs-reauth(verify)" : "needs-reauth");
+    parts.push(row.needsReauthCause === "tos_violation" ? "needs-reauth(tos)"
+      : row.needsReauthReason === "verify_account" ? "needs-reauth(verify)" : "needs-reauth");
   }
   // A paused Kiro row already says "paused"; repeating it as a skip reason adds nothing.
   if (row.provider === "kiro" && row.autoSelectable === false && !(row.paused && row.skipReason === "paused"))

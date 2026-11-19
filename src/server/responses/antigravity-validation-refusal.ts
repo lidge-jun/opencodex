@@ -3,21 +3,42 @@ import {
   GOOGLE_PERMISSION_DENIED_SUFFIX, safeAntigravityHttpErrorMessage,
 } from "../../adapters/google-errors";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
-import { classifyAntigravityRefusal, hasAntigravityModelNotFoundProvenance } from "../../adapters/antigravity-refusal";
+import { classifyAntigravityRefusal, hasAntigravityModelNotFoundProvenance, type AntigravityRefusal } from "../../adapters/antigravity-refusal";
+import { isCanonicalAntigravityUrl } from "../../lib/provider-tls-profile";
+import { hasUpstreamRewriters, upstreamRewriterEpoch } from "../../plugins/upstream-hooks";
 import { markAccountNeedsReauthIfGeneration } from "../../oauth/store";
+import type { OcxProviderConfig } from "../../types";
+import { readDisplaySafeErrorText } from "./core-errors";
 
-/** Record a verification verdict against its sending generation without authorizing a resend. */
-export async function quarantineAntigravityVerificationRefusal<T extends { accountId: string; generation: string }>(
-  response: Response, providerName: string, accountId: string | null | undefined, sent: T | undefined, signal?: AbortSignal,
+export function captureAntigravityQuarantineTrust(providerName: string): number | undefined {
+  return providerName === "google-antigravity" && !hasUpstreamRewriters() ? upstreamRewriterEpoch() : undefined;
+}
+
+export async function classifyAntigravityQuarantine(
+  response: Response,
+  provider: Pick<OcxProviderConfig, "authMode" | "baseUrl">,
+  rewriterEpoch: number | undefined,
+  signal: AbortSignal,
+): Promise<AntigravityRefusal> {
+  const refusal = classifyAntigravityRefusal(response.status, await readDisplaySafeErrorText(response.clone(), signal, ""));
+  // Keep durable suspension holds within the first-party Cloud Code Assist trust boundary.
+  if (refusal.kind === "tos_violation" && (
+    provider.authMode !== "oauth"
+    || !isCanonicalAntigravityUrl(provider.baseUrl)
+    || rewriterEpoch !== upstreamRewriterEpoch()
+  )) return { kind: "other" };
+  return refusal;
+}
+
+/** Record the refusal only against its issuing credential generation. */
+export async function quarantineAntigravityRefusal<T extends { accountId: string; generation: string }>(
+  response: Response, providerName: string, provider: Pick<OcxProviderConfig, "authMode" | "baseUrl">,
+  accountId: string | null | undefined, sent: T | undefined, trust: number | undefined, signal: AbortSignal,
 ): Promise<T | undefined> {
   if (response.status !== 403 || providerName !== "google-antigravity" || !sent || sent.accountId !== accountId) return;
-  const body = await readBoundedResponseBody(response.clone(), { signal });
-  if (!body.displaySafe || body.truncated || classifyAntigravityRefusal(response.status, body.text).kind === "other") return;
-  // A late response cannot quarantine a refreshed or replaced credential. The caller owns
-  // its existing recovery policy and treats a failed persistence operation as terminal.
-  // The durable row appears as needs-reauth(verify) in account list and verify_account
-  // in the management API, and remains excluded from the pool until re-login.
-  await markAccountNeedsReauthIfGeneration(providerName, sent.accountId, sent.generation, undefined, "verify_account");
+  const refusal = await classifyAntigravityQuarantine(response, provider, trust, signal);
+  if (refusal.kind === "other") return;
+  await markAccountNeedsReauthIfGeneration(providerName, sent.accountId, sent.generation, undefined, refusal.kind);
   return sent;
 }
 

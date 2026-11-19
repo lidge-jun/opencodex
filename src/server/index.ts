@@ -5,7 +5,7 @@ import { normalizeBindHostname } from "./bind-host";
 import { configureInboundBodyBudget } from "./inbound-body-admission";
 import { createAdmittedHttpTurn } from "./admitted-http-turn";
 import { isOllamaNativePath } from "./ollama-native-paths";
-import { isGeminiNativePath, parseGeminiNativePath } from "./gemini-native-paths";
+import { geminiRouteAllows, isGeminiNativePath, parseGeminiNativePath } from "./gemini-native-paths";
 import {
   buildWarmupCompletionFrames,
   buildWsErrorFrame,
@@ -423,7 +423,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     // Gemini wire (#8732): `ocx connect agy` points the CLI at this socket. Same admission as the
     // chat wire it is translated into; each Gemini path admits only its own HTTP method.
     const gemini = parseGeminiNativePath(path);
-    if (gemini) return req.method === gemini.httpMethod;
+    if (gemini) return geminiRouteAllows(gemini, req.method);
     // Realtime voice — a directly-spawned `codex app-server` needs these for desktop voice
     // the same way it needs /v1/responses. Two shapes, same trust model as /v1/responses:
     //  - standalone sessions (codex-rs thread/realtime/start, WebSocket transport):

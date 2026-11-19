@@ -351,7 +351,7 @@ describe("GET /api/system/memory", () => {
       appOwnedBytes: ReturnType<typeof appOwnedBytesSnapshot>;
     };
     expect(Object.keys(body.appOwnedBytes.stores).sort()).toEqual([
-      "antigravity_replay", "claude_debug", "crash_ring", "cursor_blobs", "image_normalize",
+      "antigravity_replay", "claude_debug", "crash_ring", "cursor_blobs", "gemini_interactions", "image_normalize",
       "injection_debug", "model_cache", "native_control_replay", "provider_debug", "request_log", "responses_continuation",
       "usage_snapshot", "usage_summary", "vision_descriptions",
     ]);

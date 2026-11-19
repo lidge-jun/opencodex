@@ -23,7 +23,7 @@ export type OAuthAccountHealth =
 /** Why an OAuth account needs reauthentication. `verify_account` is distinct from a dead
  * credential: the grant is alive but the provider blocks the account until a human
  * verifies it, so a plain re-login without that verification will not help. */
-export type OAuthReauthReason = "unauthorized" | "forbidden" | "refresh_failed" | "verify_account";
+export type OAuthReauthReason = "unauthorized" | "forbidden" | "refresh_failed" | "verify_account" | "tos_violation";
 
 /**
  * Codex-pool health: the same shape minus the provider-verification cause, which only
@@ -42,6 +42,7 @@ export type OAuthHealthLabel =
   | "Quota limited"
   | "Reauthentication required"
   | "Verification required"
+  | "Account suspended"
   | "Refresh failed"
   | "Metadata mismatch"
   | "Credential conflict"
@@ -114,6 +115,9 @@ function actionFor(provider: string, health: OAuthAccountHealth): string | undef
   }
   if (health.status === "reauth_required") {
     if (provider === "codex") return CODEX_REAUTH_ACTION;
+    if (health.reason === "tos_violation") {
+      return `the provider suspended this account for a Terms of Service violation; appeal with the provider before running \`ocx login ${provider}\` again`;
+    }
     if (health.reason === "verify_account") {
       return `verify the account with the provider in a browser, then run \`ocx login ${provider}\``;
     }
@@ -138,6 +142,7 @@ export function oauthHealthLabel(health: OAuthAccountHealth): OAuthHealthLabel {
     case "reauth_required":
       if (health.reason === "refresh_failed") return "Refresh failed";
       if (health.reason === "verify_account") return "Verification required";
+      if (health.reason === "tos_violation") return "Account suspended";
       return "Reauthentication required";
     case "warning":
       switch (health.reason) {
@@ -215,7 +220,7 @@ export function projectStoredOAuthAccountHealth(
   return projectOAuthAccountHealth({
     needsReauth,
     reauthReason: needsReauth
-      ? (account.needsReauthReason ?? "refresh_failed")
+      ? (account.needsReauthCause === "tos_violation" ? "tos_violation" : account.needsReauthReason ?? "refresh_failed")
       : undefined,
     cooldownUntilMs: anthropicSnap?.cooldownUntil,
     // Same mapping as the Codex pool's `cooldownReasonFromSource`: only a Retry-After is

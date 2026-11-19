@@ -270,17 +270,7 @@ rows to client or catalog model identities and validated provider ids, omitting 
 is interpolated into those local messages. No serialized flag, code or header mints identity.
 The shared builders live in `src/combos/resolve.ts`, `src/server/admission-model-scope.ts`,
 `src/server/responses/input-admission.ts` and `src/oauth/generic-account-failover.ts`. See [combo output headroom](../transports/responses-failover.md#combo-output-headroom) for the strict pre-dispatch gate, including the input margin and reserve when `max_output_tokens` is omitted.
-`src/lib/upstream-retry.ts` owns the retry constructors. For a transient 5xx, `fetchWithTransientRetry`
-does not resend a response whose bounded body prefix proves context overflow. It reads at most 16,384
-bytes from a clone within 250ms or until cancellation, leaving the returned body intact.
-A conclusive probe without a refusal or overflow verdict retains the normal retry. For replay-unsafe requests, see [inconclusive probes](replay-refusals.md#resend-and-quota-evidence).
-Hypothetical, negated, question-form and configuration-failure mentions are excluded per sentence
-so they cannot hide a definite overflow in another sentence. A throttle worded only as
-"too many tokens" is not a verdict. An explicit "prompt is too long" remains a verdict when no throughput signal is present.
-Body inspection time does not count toward the upstream slow-attempt budget, and empty chunks cannot
-starve the deadline or cancellation. `tests/lib/upstream-retry.test.ts` covers retry and cancellation.
-Before a spend-guarded retry, paced responses release their body lease by retaining bounded raw bytes via an optional caller-supplied reader.
-The retained body carries read failures for the receiver's usual error policy, and retry accounting keeps the upstream status.
+`src/lib/upstream-retry.ts` owns [transient retry and bounded error inspection](replay-refusals.md#transient-retry-and-bounded-error-inspection).
 `InvalidSendBudgetError` displays only a finite non-negative number or `invalid`.
 `UpstreamRetryEvidenceError` uses fixed retry-evidence wording and retains the original rejection
 only as `Error.cause`. Chat request-read failures keep typed local size/encoding messages; other

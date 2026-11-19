@@ -4,11 +4,12 @@ import { createAdapterPhysicalSend } from "./physical-send";
 import type { SendClass } from "../lib/request-execution-budget";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { debugProviderDiagnosticLazy } from "../lib/debug";
-import { extractGoogleRetryAfterSeconds, hasGoogle429RetryEvidence, isQuotaExhaustedBody, retryableGoogleStatus, safeGoogleHttpErrorMessage } from "./google-errors";
+import { extractGoogleRetryAfterSeconds, hasGoogle429BodyRetryEvidence, isQuotaExhaustedBody, retryableGoogleStatus, safeGoogleHttpErrorMessage } from "./google-errors";
 import { repairGoogleInvalidRequestBodyWithReport } from "./google-wire-compiler";
 import type { GoogleToolSchemaPolicy, GoogleToolSchemaProfile } from "./google-tool-schema";
 import { normalizeUpstreamHttpErrorResponse, readDisplaySafeErrorPayloadText } from "./upstream-http-error";
 import { readBoundedResponseBody } from "../lib/bounded-body";
+import { parseHttpDate } from "../lib/http-date";
 import { markAntigravityModelNotFound } from "./antigravity-refusal";
 import {
   abortError,
@@ -31,6 +32,16 @@ import {
 
 const GOOGLE_RETRY_BASE_MS = 250;
 const GOOGLE_RETRY_MAX_MS = 2_000;
+
+// Google retries use RFC 9110 delta-seconds or HTTP-date from Fetch-normalized headers.
+function googleRetryAfterDelayMs(headers: Headers): number | undefined {
+  const raw = headers.get("retry-after");
+  if (!raw) return undefined;
+  if (!/\D/.test(raw)) return Math.min(Number(raw) * 1000, Number.MAX_SAFE_INTEGER);
+  const now = Date.now();
+  const dateMs = parseHttpDate(raw, now);
+  return dateMs === undefined ? undefined : Math.max(0, dateMs - now);
+}
 
 export interface GoogleRetryOptions {
   /** Repair-and-replay structurally invalid 400 bodies (Vertex/Antigravity behavior). */
@@ -99,7 +110,7 @@ export async function fetchGoogleWithRetry(
     // Refresh its destination and headers without discarding the already-repaired payload.
     if (activeRequest !== request) activeRequest = { ...activeRequest, url: request.url, method: request.method, headers: request.headers };
     try {
-      const res = await send({ url: activeRequest.url, sendClass, recovery,
+      let res = await send({ url: activeRequest.url, sendClass, recovery,
         beforePacing: async () => {
           // Admission already reserved the retry budget. Drop our old response lease
           // before waiting for capacity; never hold the next slot during backoff.
@@ -160,36 +171,34 @@ export async function fetchGoogleWithRetry(
           continue;
         }
       }
-      if (!retryableGoogleStatus(res.status) || attempt === TRANSIENT_RETRY_MAX_ATTEMPTS - 1) {
-        return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal);
-      }
-      // A 429 may be a transient rate limit (retry), hard quota exhaustion (do NOT retry — it
-      // won't recover for hours and burns retries), or a refusal no replay can change. The
-      // status alone cannot tell them apart, so peek the body once and decide from evidence.
+      if (!retryableGoogleStatus(res.status)) return finalGoogleAnswer(label, res, activeRequest, ctx);
+      const lastAttempt = attempt === TRANSIENT_RETRY_MAX_ATTEMPTS - 1;
+      let retryAfterMs = googleRetryAfterDelayMs(res.headers);
       if (res.status === 429) {
-        const peekTarget = res.clone();
-        const peek = await readDisplaySafeErrorPayloadText(peekTarget, ctx.abortSignal);
-        if (isQuotaExhaustedBody(peek)) {
+        // On the final attempt, read the body for retry advice only if the header cannot supply it.
+        const peek = !lastAttempt || retryAfterMs === undefined
+          ? await readDisplaySafeErrorPayloadText(res.clone(), ctx.abortSignal)
+          : "";
+        if (retryAfterMs === undefined) {
+          const seconds = extractGoogleRetryAfterSeconds(peek);
+          if (seconds !== undefined) retryAfterMs = Number(seconds) * 1000;
+          res = replaceGoogleRetryAfter(res, seconds);
+        }
+        if (!lastAttempt && isQuotaExhaustedBody(peek, label)) {
           if (ctx.returnRawErrors) return res;
-          const normalized = await normalizeUpstreamHttpErrorResponse(res, {
+          return normalizeUpstreamHttpErrorResponse(res, {
             signal: ctx.abortSignal,
             formatMessage: payloadText => safeGoogleHttpErrorMessage(label, res.status, payloadText || peek),
           });
-          if (!normalized.headers.has("retry-after")) {
-            const retryAfter = extractGoogleRetryAfterSeconds(peek);
-            if (retryAfter) normalized.headers.set("retry-after", retryAfter);
-          }
-          return normalized;
         }
-        // The ladder below replays the same bytes. Without a Retry-After, a reset delay, a
-        // transient-rate-limit phrase, or a structured rate-limit reason, that replay is a
-        // guess: Cloud Code Assist answers request-shape rejections with a bare
-        // RESOURCE_EXHAUSTED, and the proxy turned each one into three identical sends per
-        // turn before surfacing the same refusal.
-        if (!hasGoogle429RetryEvidence(res.headers, peek)) {
-          return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal);
+        // #8897: replaying the same bytes requires evidence that the next send could succeed.
+        if (!lastAttempt && retryAfterMs === undefined && !hasGoogle429BodyRetryEvidence(peek)) {
+          return finalGoogleAnswer(label, res, activeRequest, ctx);
         }
+      } else if (retryAfterMs === undefined) {
+        res = replaceGoogleRetryAfter(res);
       }
+      if (lastAttempt) return finalGoogleAnswer(label, res, activeRequest, ctx);
       // Retry-After names the earliest send Google will serve (#7802). The local maximum bounds
       // only our own backoff; it must not shorten the provider's instruction into a send it
       // already said it would refuse. An instruction past the shared wait deadline ends with
@@ -197,11 +206,11 @@ export async function fetchGoogleWithRetry(
       const delayMs = retryBackoffDelayMs(attempt, {
         baseDelayMs: GOOGLE_RETRY_BASE_MS,
         maxDelayMs: GOOGLE_RETRY_MAX_MS,
-        headers: res.headers,
+        retryAfterMs,
         retryAfterIsLowerBound: true,
       });
       if (delayMs > RETRY_AFTER_CEILING_MS) {
-        return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal);
+        return finalGoogleAnswer(label, res, activeRequest, ctx);
       }
       pendingResponse = res;
       recovery = res.status === 429 ? "rate-limit-429" : "transient-5xx";
@@ -217,7 +226,7 @@ export async function fetchGoogleWithRetry(
           ctx.onRecoveryWithheld?.({ reason: "retry-send-budget" });
           const retained = pendingResponse;
           pendingResponse = undefined; // Transfer ownership to the caller/normalizer.
-          return ctx.returnRawErrors ? retained : normalizeFinalGoogleError(label, retained, activeRequest, ctx.abortSignal);
+          return finalGoogleAnswer(label, retained, activeRequest, ctx);
         }
         throw err;
       }
@@ -236,6 +245,19 @@ export async function fetchGoogleWithRetry(
     // A cancellation before the next retry's preparation must not strand its lease.
     if (pendingResponse) cancelResponseBodyBestEffort(pendingResponse);
   }
+}
+
+function finalGoogleAnswer(label: string, res: Response, request: AdapterRequest, ctx: AdapterFetchContext): Response | Promise<Response> {
+  return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, request, ctx.abortSignal);
+}
+
+/** Replace an invalid header with body advice, or remove it when no delay survives. */
+function replaceGoogleRetryAfter(res: Response, seconds?: string): Response {
+  if (seconds === undefined && !res.headers.has("retry-after")) return res;
+  const headers = new Headers(res.headers);
+  if (seconds === undefined) headers.delete("retry-after");
+  else headers.set("retry-after", seconds);
+  return inheritAccountAutoPauseResponse(res, new Response(res.body, { status: res.status, statusText: res.statusText, headers }));
 }
 
 /**

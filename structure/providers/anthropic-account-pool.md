@@ -322,26 +322,26 @@ Regression coverage: `tests/adapters/anthropic/anthropic-account-pause.test.ts`,
 
 ## Claude credential identity
 
-`src/oauth/anthropic-identity.ts` observes only authenticated `account.uuid` from the exact
-bearer's fixed-origin profile response or the token exchange in `src/oauth/anthropic.ts`.
-Its private versioned proof binds the UUID to SHA-256 of the access bearer. Store normalization
-in `src/oauth/store.ts` drops malformed or stale proofs; account summaries omit the entire field.
-Profile observations reject redirects and use a ten-second deadline and 64 KiB body limit.
-Organization, email, generic account ID, disk location and active selection do not establish proof.
+`src/oauth/anthropic-identity.ts` binds authenticated `account.uuid` to the access bearer's SHA-256. The fixed-origin profile rejects redirects
+and applies a ten-second deadline and 64 KiB body limit. `src/oauth/store.ts` drops invalid or stale proofs, and summaries omit the proof.
+Each grant serves one organization. Its proof may carry `organizationUuid` (a lowercase UUID) as slot scope. Browser login and refresh in
+`src/oauth/anthropic.ts` fill missing token-response proof from the same bearer's profile. The exchange's validated organization constrains enrichment even when the exchange omits the account UUID. A conflicting account or organization leaves token evidence and labels untouched. If the exchange attests an organization without an account UUID and the profile attests a different organization, browser login fails before account selection and refresh keeps the rotated grant with the exchange scope. Both paths keep private, bearer-bound exchange scope when the profile is unavailable and the exchange supplies only organization proof.
+For an identified account, `src/oauth/anthropic-login-slot.ts` prefers a row in the same organization for login and CLI import, with an unknown row as a fallback. A proven other organization gets a new row.
+When browser login provides email and proven organization scope without an account UUID, a unique email match within that proven organization reuses its row without carrying over account UUID proof. The matcher trims surrounding whitespace, compares the local part and internationalized domains exactly, and ignores ASCII case in other domains. With no proven match, sign-in appends a slot and preserves legacy rows, including an unidentified active row. Multiple matches in the proven organization are refused under the store lock. A later login with account UUID proof can recover a unique UUID-less slot with matching email and proven organization if it shares a refresh token or the slot's own bearer proves the same account UUID. The writer rechecks the slot and bearer under lock, including the token match when used. Unavailable, conflicting or stale continuity preserves the existing slot and permits an append with a distinct token. Sign-in and explicit reauthentication check refresh-token ownership under the writer lock. If another slot in the same pool holds the incoming token, the write stops and asks the user to sign in again.
+For a normal login without an account UUID or email, `src/oauth/store.ts` checks the active row under the writer lock. Different proven organizations get separate rows. The login can still replace the active row when the organizations agree or either scope is unknown.
+`src/oauth/reauth-precheck.ts` checks account identity before observation. Login, CLI import and reauth probe unknown same-account rows with their own unexpired bearers before the store lock. Each write checks observations against
+the current bearer and account and stops if a relevant observation goes stale and current proof cannot resolve it. Reauth refuses a different proven organization or one a sibling proves. With a scoped email-only grant, reauth also probes a target with a stored account UUID, matching email and no organization through its own bearer. Under the writer lock it requires the target's current email to match by the same rules, the target's organization to be proven and equal, and no other row of that organization to share the email. Own-grant refresh retains scope until fresh proof names one.
 
-`src/oauth/anthropic-continuity.ts` permits usable changed local-CLI generations with a shared
-nonempty token. A fully rotated pair instead requires matching authenticated account UUIDs.
-The old bearer may use its stored bound proof or a fresh observation; independent old/new
-observations run in parallel. Shared-refresh adoption cannot copy proof to a new access bearer.
-A provider refresh also drops proof unless its new bearer carries fresh authenticated evidence;
-conflicting authenticated UUIDs refuse persistence. Generic display metadata is not promoted to proof.
+`src/oauth/anthropic-continuity.ts` accepts usable changed CLI generations with a shared nonempty token. Full rotation requires matching authenticated account UUIDs.
+The old bearer uses stored or fresh proof. Independent old/new reads run in parallel, and stored proof missing its organization may prompt one profile read.
+Full rotation requires matching organizations whenever either pool has a same-account sibling. The writer checks both current rosters and refuses adoption when a sibling already proves the incoming organization or the other pool's registration rule refuses the new grant.
+Shared-refresh adoption cannot copy proof to a new bearer. Provider refresh needs new bearer proof and refuses a conflicting authenticated account UUID.
 
 The refresh owner captures login ID, token generation and identity metadata before observation.
 It rechecks them, pause/removal and selection revision after observation and inside serialized persistence.
-The CLI generation is re-read by an awaited `claudeCredentialGenerationCurrent`: once after observation, and for adoption again inside the serialized writer through `afterPrePersistRead`, so a rotation while the writer was queued is caught (the read is async, so the synchronous predicate only consumes its result and fails closed on a missing, unreadable, near-expiry or different generation). A read that arrives while a metadata probe holds the Keychain slot waits for that probe instead of reading as absent. Superseding writes win. An unresolved full rotation leaves the row and
-pending intent intact, without replaying a possibly consumed refresh or setting reauthentication
-solely from the identity failure. A proven different account may use its own stored refresh only
-when no pending intent blocks it. Intent cleanup follows successful durable adoption.
+The CLI generation is re-read by an awaited `claudeCredentialGenerationCurrent`. A `different` or `unresolved` observation re-reads it once right after observation. Adoption skips that read and checks the generation only inside the serialized writer through `afterPrePersistRead`, so a rotation while the writer was queued is caught (the read is async, so the synchronous predicate only consumes its result and fails closed on a missing, unreadable, near-expiry or different generation). A read that arrives while a metadata probe holds the Keychain slot waits for that probe instead of reading as absent. Superseding writes win. An unresolved full rotation leaves the row and
+pending intent intact, without replaying a possibly consumed refresh or setting reauthentication solely from the identity failure.
+A proven different account may use its own stored refresh only when no pending intent blocks it. Intent cleanup follows successful durable adoption.
 An unsent token request proven by structured `getaddrinfo` `ENOTFOUND` for the token host,
 with no outbound proxy configured in either the startup or current environment and a single
 HTTP/1.1 attempt without keep-alive reuse or redirect following, releases its intent as

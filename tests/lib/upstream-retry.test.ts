@@ -1,5 +1,5 @@
 import { formatErrorResponse as formatReplaySafetyError } from "../../src/bridge/errors";
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, jest, spyOn, test } from "bun:test";
 import {
   SendBudgetExhaustedError,
   fetchWithResetRetry,
@@ -503,6 +503,27 @@ describe("retryBackoffDelayMs", () => {
     expect(res.status).toBe(200);
     expect(calls.length).toBe(2);
     expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+  });
+
+  test("generic transient retry honors a fractional Retry-After of 5.0 seconds", async () => {
+    silenceWarn();
+    jest.useFakeTimers();
+    const timers = spyOn(globalThis, "setTimeout");
+    const random = spyOn(Math, "random").mockReturnValue(0.5);
+    try {
+      const limited = new Response("overloaded", { status: 503, headers: { "Retry-After": "5.0" } });
+      const { calls, doFetch } = mockDoFetch([limited, new Response("fine")]);
+      const pending = fetchWithTransientRetry(doFetch);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      jest.advanceTimersByTime(5_000);
+      expect((await pending).status).toBe(200);
+      expect(calls).toHaveLength(2);
+      expect(timers.mock.calls.map(([, delay]) => delay)).toContain(5_000);
+    } finally {
+      random.mockRestore();
+      timers.mockRestore();
+      jest.useRealTimers();
+    }
   });
 
   test("a caller deadline shorter than the default is not slept past (#4546)", async () => {

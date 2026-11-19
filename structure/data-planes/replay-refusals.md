@@ -123,3 +123,19 @@ its physical-send receipt before fixed error projection, and internal summary te
 the requested answer. A parser failure cannot erase an already recognized refusal code.
 `tests/responses/responses-anthropic-image-context-recovery.test.ts` covers the direct, search and
 media paths, header and body verdicts, the bounded probe boundary and observed-usage settlement.
+
+## Transient retry and bounded error inspection
+
+`src/lib/upstream-retry.ts` accepts finite numeric Retry-After seconds, including fractions, or dates
+accepted by `Date.parse`. Negative delays and past dates give zero.
+`src/lib/upstream-retry.ts` owns the retry constructors. For a transient 5xx, `fetchWithTransientRetry`
+does not resend a response whose bounded body prefix proves context overflow. It reads at most 16,384
+bytes from a clone within 250ms or until cancellation, leaving the returned body intact.
+A conclusive probe without a refusal or overflow verdict retains the normal retry. For replay-unsafe requests, see [inconclusive probes](replay-refusals.md#resend-and-quota-evidence).
+Hypothetical, negated, question-form and configuration-failure mentions are excluded per sentence
+so they cannot hide a definite overflow in another sentence. A throttle worded only as
+"too many tokens" is not a verdict. An explicit "prompt is too long" remains a verdict when no throughput signal is present.
+Body inspection time does not count toward the upstream slow-attempt budget, and empty chunks cannot
+starve the deadline or cancellation. `tests/lib/upstream-retry.test.ts` covers retry and cancellation.
+Before a spend-guarded retry, paced responses release their body lease by retaining bounded raw bytes via an optional caller-supplied reader.
+The retained body carries read failures for the receiver's usual error policy, and retry accounting keeps the upstream status.

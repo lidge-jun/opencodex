@@ -422,3 +422,63 @@ fetchable reference the proxy cannot vouch for is the SSRF-shaped half of this f
 
 `file_data` carries `file_uri` only. An earlier revision guessed a `mime_type` for it; the Files
 API already knows the type of what it stores, and a wrong guess is worse than no guess.
+
+## Google error classification
+
+`src/adapters/google-error-details.ts` reads the typed `google.rpc` details of a Google error body
+(bounded, never throwing): `ErrorInfo.reason`, `domain`, and a retry delay from `RetryInfo.retryDelay`, then
+`ErrorInfo.metadata.quotaResetDelay`, then a retry or reset delay in the message, in protobuf or Go duration
+syntax (`30s`, `0.5s`, `1h2m3s`, at most 30 days; a zero delay does not block the fallbacks). An untyped detail's
+reason is kept apart and never used for account decisions.
+
+`src/adapters/google-errors.ts` lets structured reasons outrank prose: `QUOTA_EXHAUSTED` and
+`INSUFFICIENT_G1_CREDITS_BALANCE` are quota exhaustion on every Google label (not retried), and `RATE_LIMIT_EXCEEDED`
+is a transient rate limit on Antigravity even when the prose sounds like quota, as CPA reads it; on AI Studio and
+Vertex the daily-quota prose still decides. `src/adapters/google-http.ts` validates the Fetch-normalized Retry-After
+once per retryable response. RFC 9110 delta-seconds (including zero) and HTTP-date forms take precedence.
+On a 429, an invalid or missing header falls back to the body delay. The effective delay supplies replay evidence
+and a floor for the next send.
+If it exceeds the retry ceiling, the request ends with the 429 carrying that advice as Retry-After. AI Studio keeps
+Google's body and status on raw 429s, including quota exhaustion. A 403 whose body is an object with code 403, `PERMISSION_DENIED`
+and a typed `ErrorInfo` `TOS_VIOLATION` entry becomes the fixed message
+`Antigravity account suspended (TOS_VIOLATION): ...`, which never echoes Google's appeal text; dispatch trusts only
+that leading prefix (`classifyAntigravityRefusal`) and quarantines only first-party Cloud Code Assist OAuth
+accounts when no upstream rewriter can have changed the destination. The account write uses the fenced path in
+[the transport inventory](../transports/inventory.md). Coverage: `tests/adapters/google/google-error-details.test.ts`,
+`google-errors.test.ts`, `google-retry-structured.test.ts`, `antigravity-refusal.test.ts`, and the TOS cases in
+`tests/server/server-google-antigravity-oauth-401-replay.test.ts`.
+
+## Google usage composition and finish outcomes
+
+`usageFromGemini` in `src/adapters/google.ts` reports output as `candidatesTokenCount + thoughtsTokenCount` and
+input as `promptTokenCount + toolUsePromptTokenCount`, so output includes reasoning as it does for every other
+adapter (telemetry, cost, the Claude and Chat encoders and the Gemini inbound codec subtract or clamp reasoning from
+that output). Tool-use prompt tokens count toward prompt-length pricing thresholds and Codex's context meter.
+
+`src/adapters/google-truncation.ts` owns the finish rules for every Google mode, stream and buffered alike.
+`isGoogleTruncatedTurn` fails a turn closed for `MALFORMED_FUNCTION_CALL`, for `MAX_TOKENS` after a started call, and
+for `UNEXPECTED_TOOL_CALL` or `MALFORMED_RESPONSE` when no visible output (non-thought text, an inline image or a
+function call) arrived anywhere in the turn. The error carries an explicit `status: 502` and `upstream_error`, so its
+HTTP outcome never depends on the message wording that `src/lib/errors.ts` otherwise matches; a zero-call failure is
+`replaySafeBeforeOutput` and the request log keeps the finish reason (`FAILURE_DETAIL_FINISH_REASONS` in
+`src/lib/failure-detail.ts`). `googleStopReason` maps `MAX_TOKENS` to `max_tokens` and the safety, recitation,
+image-safety and `MALFORMED_RESPONSE` finishes to `content_filter`. A response whose candidates are absent or empty
+and whose `promptFeedback.blockReason` is set becomes `googlePromptBlockedEvent`: HTTP 400
+`invalid_request_error` / `invalid_prompt`, which `src/bridge/terminal-refusal.ts` treats as a terminal refusal so
+Codex does not retry and a combo does not fail over. It names only the reason enum (anything outside `[A-Z_]` becomes
+`OTHER`) and never echoes `blockReasonMessage`. Coverage: `tests/adapters/google/google-finish-fidelity.test.ts`,
+`google-vertex-stream.test.ts` and `tests/adapters/adapter-usage.test.ts`.
+
+## Google request media, tool errors and Vertex hosts
+
+`messagesToGeminiFormat` in `src/adapters/google.ts` sends WAV and MP3 audio parts as `inline_data` (`audio/wav`,
+`audio/mp3`) on every Google mode except Claude models on Cloud Code Assist, which Antigravity translates into an
+Anthropic message with no audio block; those keep the part's text marker. `geminiToolResultParts` writes an
+`isError` tool result as `functionResponse.response.error` (Google's documented key for a failed call, and CPA's
+form on both its Gemini and Antigravity translators) and every other result as `response.result`; image placement is
+unchanged. Antigravity tool-result images keep the sibling layout above: CPA nests them in
+`functionResponse.parts`, but ADR-7279 extends nesting only with live upstream evidence for the route, which this
+unit did not have. `vertexHostForLocation` in `src/adapters/google-vertex-endpoint.ts` maps an already validated
+location to its inference authority: `global` → `aiplatform.googleapis.com`, `us`/`eu` →
+`aiplatform.<location>.rep.googleapis.com`, any region → `<location>-aiplatform.googleapis.com`; discovery and the
+express key-project probe stay on the global host. Coverage: `tests/adapters/google/google-request-fidelity.test.ts`.

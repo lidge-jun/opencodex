@@ -122,7 +122,7 @@ import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import { chargeWorkflowSends } from "../../lib/workflow-budget";
 import { hasWorkflowSendObserver } from "../../lib/request-execution-budget";
-import { isAntigravityAccessDeniedRefusal, isAntigravityValidationRefusal, quarantineAntigravityVerificationRefusal } from "./antigravity-validation-refusal";
+import { captureAntigravityQuarantineTrust, quarantineAntigravityRefusal, isAntigravityAccessDeniedRefusal, isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
 import { createAntigravityModelDenialRecovery, recoverAntigravityAccount } from "./antigravity-model-denial-recovery";
 import { isAntigravityFaultRotatable } from "./antigravity-fault-rotation";
 import { adapterSendBudgetRefusal } from "../workflow-refusal";
@@ -276,6 +276,7 @@ export async function prepareAdapterExchange(
   const antigravityPoolActivated = route.providerName === "google-antigravity"
     && isGenericOAuthFailoverEnabled(config, route.providerName);
   const antigravityDenial = createAntigravityModelDenialRecovery();
+  const antigravityQuarantineTrust = captureAntigravityQuarantineTrust(route.providerName);
   // One immutable, body-safe outbound request per same-target sequence (URL, serialized body,
   // Reuse the cached body while the parsed request, credential, wire and tier are unchanged.
   const handoffReplay = transportState.credentialReplayHandoff;
@@ -962,8 +963,8 @@ export async function prepareAdapterExchange(
         } finally { cleanupUpstreamAbort(); }
       }
       if (isAutomaticReplayBlocked(upstreamResponse)) {
-        try { await quarantineAntigravityVerificationRefusal(upstreamResponse, route.providerName,
-          transportState.genericFailoverAccountId, transportState.sentOAuthSnapshot, upstream.signal); }
+        try { await quarantineAntigravityRefusal(upstreamResponse, route.providerName, route.provider,
+          transportState.genericFailoverAccountId, transportState.sentOAuthSnapshot, antigravityQuarantineTrust, upstream.signal); }
         catch { /* Preserve the veto even if the fenced quarantine write fails. */ }
         break recovery;
       }
@@ -1691,8 +1692,8 @@ export async function prepareAdapterExchange(
       ) {
         let sent: typeof transportState.sentOAuthSnapshot;
         try {
-          sent = await quarantineAntigravityVerificationRefusal(upstreamResponse, route.providerName,
-            transportState.genericFailoverAccountId, transportState.sentOAuthSnapshot, upstream.signal);
+          sent = await quarantineAntigravityRefusal(upstreamResponse, route.providerName, route.provider,
+            transportState.genericFailoverAccountId, transportState.sentOAuthSnapshot, antigravityQuarantineTrust, upstream.signal);
         } catch {
           // A failed quarantine write must preserve the refusal, not authorize another send.
           break recovery;

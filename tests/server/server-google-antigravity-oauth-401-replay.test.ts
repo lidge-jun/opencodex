@@ -245,7 +245,7 @@ function preserveOAuthBootstrapFetch(fixtureFetch: typeof fetch): void {
 }
 
 function installOAuthFetch(
-  apiStatuses: Array<number | { status: number; reason?: string; oversized?: boolean; message?: string; rawBody?: string }>,
+  apiStatuses: Array<number | { status: number; reason?: string; typedReason?: string; oversized?: boolean; message?: string; rawBody?: string }>,
   options: {
     tokenErrorDescription?: string;
     tokenHttpStatus?: number;
@@ -253,6 +253,7 @@ function installOAuthFetch(
     refreshedProjectId?: string | null;
     beforeFirstUnauthorized?: () => Promise<void>;
     beforeFirstForbidden?: () => Promise<void>;
+    inferenceOrigin?: string;
   } = {},
 ): { chatAuth: string[]; chatProjects: string[]; requestPaths: string[]; chatBodies: string[]; counts: { refresh: number } } {
   const chatAuth: string[] = [];
@@ -347,7 +348,7 @@ function installOAuthFetch(
     }
 
     // Google Antigravity Generate Content endpoint
-    if (parsedUrl.origin === DAILY_API_BASE
+    if (parsedUrl.origin === (options.inferenceOrigin ?? DAILY_API_BASE)
       && ["/v1internal:streamGenerateContent", "/v1internal:generateContent"].includes(parsedUrl.pathname)) {
       requestPaths.push(parsedUrl.pathname);
       const auth = new Headers(init?.headers).get("authorization") ?? "";
@@ -382,6 +383,8 @@ function installOAuthFetch(
             ...(typeof status !== "number" ? {
               ...(status.oversized ? { filler: "x".repeat(4200) } : {}),
               ...(status.reason ? { details: [{ reason: status.reason }] } : {}),
+              ...(status.typedReason ? { details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: status.typedReason,
+                metadata: { appeal_url: "https://support.google.com/appeal-canary", appeal_url_link_text: "Open the private appeal form" } }] } : {}),
             } : {}),
           },
         }), {
@@ -549,6 +552,81 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
       expect(eligibleFailoverAccounts("google-antigravity")).toEqual([]);
     } finally { await server.stop(true); }
   });
+  test("a typed TOS_VIOLATION 403 quarantines the account as tos_violation and rotates to its sibling", async () => {
+    await seedOAuth();
+    await seedSibling();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([{ status: 403, typedReason: "TOS_VIOLATION", message: "This service has been disabled for violation of Terms of Service." }, 200]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      const body = await response.text();
+      expect(response.status).toBe(200);
+      expect(body).not.toContain("appeal-canary");
+      expect(observed.chatAuth).toHaveLength(2);
+      const rows = getAccountSet("google-antigravity")!.accounts;
+      expect(rows.filter(row => row.needsReauth)).toHaveLength(1);
+      expect(rows.find(row => row.needsReauth)).toMatchObject({ needsReauthReason: "verify_account", needsReauthCause: "tos_violation" });
+    } finally { await server.stop(true); }
+  });
+
+  test("a permanent TOS 403 with one account redacts upstream appeal and credential details", async () => {
+    await seedOAuth();
+    saveConfig(antigravityConfig());
+    const account = getAccountSet("google-antigravity")!.accounts[0]!;
+    const canaries = [
+      "https://support.google.com/appeal-canary", "Open the private appeal form",
+      account.credential.access, account.credential.refresh, account.credential.accountId!, account.id,
+    ];
+    const observed = installOAuthFetch([{
+      status: 403, typedReason: "TOS_VIOLATION", message: `Service disabled. ${canaries.join(" ")}`,
+    }]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(403);
+      expect(response.headers.get("retry-after")).toBeNull();
+      const body = await response.text();
+      expect(body).toContain("Antigravity account suspended");
+      for (const canary of canaries) expect(body).not.toContain(canary);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
+      expect(observed.counts.refresh).toBe(0);
+      expect(getAccountSet("google-antigravity")!.accounts).toMatchObject([
+        { id: account.id, needsReauth: true, needsReauthCause: "tos_violation" },
+      ]);
+    } finally { await server.stop(true); }
+  });
+
+  test("a custom Antigravity upstream does not quarantine a Google OAuth account", async () => {
+    await seedOAuth();
+    const config = antigravityConfig();
+    const inferenceOrigin = "https://cca-relay.example";
+    config.providers["google-antigravity"]!.baseUrl = inferenceOrigin;
+    saveConfig(config);
+    const observed = installOAuthFetch([{ status: 403, typedReason: "TOS_VIOLATION", message: "disabled" }], { inferenceOrigin });
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(403);
+      await response.text();
+      expect(observed.requestPaths).toEqual(["/v1internal:generateContent"]);
+      expect(getAccountSet("google-antigravity")!.accounts.every(row => !row.needsReauth && !row.paused)).toBe(true);
+    } finally { await server.stop(true); }
+  });
+
+  test("an untyped TOS_VIOLATION reason quarantines nothing", async () => {
+    await seedOAuth();
+    saveConfig(antigravityConfig());
+    installOAuthFetch([{ status: 403, reason: "TOS_VIOLATION", message: "disabled" }]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(403);
+      await response.text();
+      expect(getAccountSet("google-antigravity")!.accounts.every(row => !row.needsReauth)).toBe(true);
+    } finally { await server.stop(true); }
+  });
+
   test("structured validation 403 rotates once with the sibling's own project and recovery kind", async () => {
     await seedOAuth();
     await seedSibling();
