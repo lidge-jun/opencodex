@@ -1,4 +1,4 @@
-import { responseReplayOwnerKey } from "../../responses/state/replay-owner";
+import { selectResponseReplayOwner } from "./replay-owner";
 import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { comboLogLabel, comboTargetLogLabel } from "../../combos/resolve";
 import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
@@ -454,7 +454,7 @@ export async function executeComboResponses(
   const inboundClientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
   const inboundOwnThreadId = req.headers.get("thread-id")?.trim() || undefined;
   const strictReplay = options.plaintextV2Decision ?? isPlaintextV2AgentMessagesEnabled(config);
-  const replayOwnerKey = strictReplay ? responseReplayOwnerKey(replayPrincipal.clientPrincipalId, inboundOwnThreadId) : undefined;
+  const { replayOwnerKey, replayConnectionScope } = selectResponseReplayOwner(strictReplay, replayPrincipal.clientPrincipalId, inboundOwnThreadId, options);
   const body = expandPreviousResponseInput(rawBody, strictReplay ? inboundOwnThreadId : inboundClientThreadId, replayOwnerKey);
   const replayFailure = previousResponseReplayFailure(body);
   if (replayFailure?.reason === "scope_mismatch") {

@@ -47,7 +47,6 @@ import {
 } from "../ws-bridge";
 import { websocketsEnabled } from "../../config";
 import { metricsExportEnabled } from "../../config/feature-flags";
-import { grokDefaultReasoningEffort } from "../../grok/effort";
 import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { providerCodexAccountMode } from "../../providers/registry";
 import {
@@ -93,6 +92,7 @@ import {
   type RequestLogEntry,
 } from "../request-log";
 import { sessionLaneIdFromRequest } from "../request-log-conversation";
+import { mintConnectionReplayScope, releaseConnectionReplayScope } from "../../responses/state/connection-scope";
 import { responseWithDeferredRequestLog } from "../relay";
 import { createRequestMetricsOwner } from "../request-metrics";
 import { cachedKiroQuotaMetricRows } from "../../providers/kiro-quota-metrics";
@@ -110,6 +110,7 @@ import {
   resolveApiAuth,
   resolveResponsesApiAuth,
   resolveFilteredReplayPrincipal,
+  resolveContextPrincipal,
   type RequestPolicyView,
   withCors,
   withManagementCors,
@@ -219,7 +220,7 @@ import { dispatchGeminiRoute } from "./gemini-routes";
 
 import { readyProtocolMetadata } from "../../remote/protocol";
 import { homeInstanceId, stampServedBy } from "../../remote/served-by";
-import { modelCapabilityFields } from "../models-capabilities";
+import { grokEffortFields, modelCapabilityFields } from "../models-capabilities";
 import { createWebsocketHandler } from "./websocket-handler";
 import { reasoningArchiveErrorResponse } from "../responses/reasoning-archive-error";
 import { withGrokSessionIdentity } from "../../grok/session-identity";
@@ -584,6 +585,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (!websocketLease) return serverBusyResponse(req, "Codex WebSockets", policy);
         const forwardHeaders = selectForwardHeaders(req.headers);
         const replayPrincipal = resolveFilteredReplayPrincipal(req, config, admission, forwardHeaders);
+        // An unidentified loopback caller gets a server-minted replay scope bound to this
+        // socket and its handshake thread; a keyed caller keeps the durable principal path.
+        const replayScope = admission.kind === "loopback" && resolveContextPrincipal(req, config, admission) === undefined
+          ? mintConnectionReplayScope(req.headers.get("thread-id") ?? undefined)
+          : undefined;
         // Upgrade on the server that RECEIVED this request, not the captured `server`
         // binding. They are the same object for the public listener, but the
         // unauthenticated loopback listener (#1102) is a second Bun.serve, and handing its
@@ -594,9 +600,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             admission,
             websocketLease,
             sessionLaneIdFromRequest(req.headers),
-            classifyUsageClient(req.headers), replayPrincipal,
+            classifyUsageClient(req.headers), replayPrincipal, replayScope,
           ), peerLocal: classifyRequestPeer(ingress, requestServer.requestIP?.(req)?.address, config.dashboardTrustedProxy, req.headers).local },
         })) return undefined as unknown as Response;
+        releaseConnectionReplayScope(replayScope);
         websocketLease.release();
         return withCors(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"), req, policy);
       }
@@ -1125,28 +1132,6 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         // OpenAI list shape: native gpt bare + routed models namespaced "<provider>/<id>"
         // (pure availability list — disabled natives are omitted entirely).
-        // Grok Build discovers models through this endpoint too, and its model picker only
-        // enables /effort for entries that advertise the reasoning ladder in the Grok model
-        // catalog shape (supports_reasoning_effort + reasoning_efforts[]). The Codex catalog
-        // branch above already carries the same ladders, so mirror them here — native rows
-        // from the upstream snapshot, routed rows from the configured provider tiers. The
-        // default uses the same canonical fallback as the Codex catalog resolver
-        // (configured default, then medium, then high, then the first tier). Extra fields
-        // are ignored by plain OpenAI clients.
-        const grokEffortOption = (value: string, isDefault: boolean) => ({
-          value,
-          label: `${value[0].toUpperCase()}${value.slice(1)} Effort`,
-          ...(isDefault ? { default: true } : {}),
-        });
-        const grokEffortFields = (efforts: string[], configuredDefault?: string) => {
-          const defaultEffort = grokDefaultReasoningEffort(efforts, configuredDefault);
-          if (defaultEffort === undefined) return {};
-          return {
-            supports_reasoning_effort: true,
-            reasoning_effort: defaultEffort,
-            reasoning_efforts: efforts.map(effort => grokEffortOption(effort, effort === defaultEffort)),
-          };
-        };
         // Cursor's local-agent runtime (Private Inference build) reads api_types + capabilities
         // to enable its effort control; every other consumer ignores them. See
         // src/server/models-capabilities.ts.

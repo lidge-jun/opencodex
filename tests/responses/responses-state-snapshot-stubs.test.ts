@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -52,6 +52,29 @@ describe("Responses snapshot spill stub retention", () => {
     removeTreeWithRetry(home);
     if (priorHome === undefined) delete process.env["OPENCODEX_HOME"];
     else process.env["OPENCODEX_HOME"] = priorHome;
+  });
+
+  test("a malformed spill stub leaves later rows replayable and durable writes available", async () => {
+    const createdAt = Date.now();
+    writeFileSync(join(home, "responses-state.json"), JSON.stringify({ version: 2, states: [
+      ["resp_bad_stub", { kind: "spill", createdAt, spill: {
+        version: 1, fileName: "invalid.spill.json", digest: { toString: null }, payloadBytes: 0,
+      } }],
+      ["resp_saved_row", { createdAt, items: [{ type: "message", role: "user", content: "saved row" }] }],
+    ] }));
+    const replay = (id: string) => JSON.stringify(expandPreviousResponseInput({ previous_response_id: id, input: "next" }));
+    const savedReplay = replay("resp_saved_row");
+    expect(responseStateMetrics().spillStubCount).toBe(0);
+
+    rememberLarge("resp_new_row", "new durable row");
+    await flushResponseState();
+    clearResponseStateMemoryForTests();
+
+    expect({ savedReplay, reloaded: replay("resp_saved_row"), written: replay("resp_new_row") }).toEqual({
+      savedReplay: expect.stringContaining("saved row"),
+      reloaded: expect.stringContaining("saved row"),
+      written: expect.stringContaining("new durable row"),
+    });
   });
 
   test("a restart keeps spilled continuations replayable when residents fill the snapshot budget", async () => {
