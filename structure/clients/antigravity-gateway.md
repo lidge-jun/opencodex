@@ -63,9 +63,13 @@ URL again and disconnect restores the original gateway block.
 Connect journals the replacement hash before editing the client file, so disconnect can recognise
 the original and pending states after an interrupted write. A profile is read as UTF-8 without NUL
 bytes or as BOM-prefixed UTF-16LE (used by Windows PowerShell 5.1 redirection). It is written back
-in the same encoding. During disconnect, an untracked profile that cannot be resolved or read is skipped.
-Recorded profiles are checked strictly. If a recorded profile cannot be decoded or has incomplete or
-ambiguous block markers, disconnect refuses with `unsupported-file` and keeps the recovery record.
+in the same encoding. Connect refuses incomplete or ambiguous agy markers before staging any profile
+updates. During disconnect, an untracked profile that cannot be resolved or read is skipped.
+If a recorded profile cannot be decoded or has incomplete or ambiguous markers, disconnect refuses with
+`unsupported-file` and keeps the recovery record. When both markers are absent from a recorded profile,
+connect and disconnect require its bytes to match the saved original or a journaled path-wise restore.
+Disconnect records the expected hash before a path-wise write so a retry can verify profiles whose
+restore already finished.
 Antigravity uses the same refusal for a managed settings conflict or a settings file it cannot parse.
 
 `src/cli/uninstall-client-state.ts` disconnects every gateway client with a restore record before

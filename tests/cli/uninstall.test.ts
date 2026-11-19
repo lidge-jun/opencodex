@@ -985,6 +985,71 @@ describe("uninstall restores recorded third-party integrations before deleting r
     } finally { rmSync(f.root, { recursive: true, force: true }); }
   });
 
+  test("uninstall refuses a CRLF lone agy marker after a reconnect attempt", async () => {
+    const f = await fixture({ gatewayOnly: true });
+    try {
+      const context = f.deps.gatewayContext();
+      const profile = join(f.home, ".bashrc");
+      const record = join(f.configDir, "gateway-clients", "agy.json");
+      const original = "# existing shell profile\r\n";
+      writeFileSync(profile, original);
+      expect(connectGatewayClient("agy", context, config, config.port).ok).toBe(true);
+      const connected = readFileSync(profile, "utf8");
+      const damaged = connected.replace("# <<< opencodex agy <<<\r\n", "");
+      const saved = readFileSync(record, "utf8");
+      expect(damaged).not.toBe(connected);
+      writeFileSync(profile, damaged);
+      expect(GATEWAY_CLIENTS.agy.disconnect(context)).toMatchObject({ ok: false, code: "unsupported-file" });
+      const reconnect = connectGatewayClient("agy", context, config, config.port + 1);
+      f.deps.remove = () => removeGatewayFixtureConfig(f.configDir);
+
+      await expect(removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .rejects.toThrow("Gateway client cleanup refused for agy");
+      expect(reconnect).toMatchObject({ ok: false, code: "unsupported-file", changed: false });
+      expect(readFileSync(profile, "utf8")).toBe(damaged);
+      expect(readFileSync(record, "utf8")).toBe(saved);
+
+      writeFileSync(profile, connected);
+      expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .toEqual({ status: "removed", residualPaths: [] });
+      expect(readFileSync(profile, "utf8")).toBe(original);
+      expect(existsSync(record)).toBe(false);
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+
+  test.each([
+    ["partial wrapper", "agy() { AGY_LLM_GATEWAY_URL='http://127.0.0.1:10100' AGY_LLM_GATEWAY_API_KEY='opencodex-local' command agy \"$@\"; }"],
+    ["URL variable", "AGY_LLM_GATEWAY_URL='http://127.0.0.1:10100'"],
+    ["key variable", "AGY_LLM_GATEWAY_API_KEY='opencodex-local'"],
+    ["protocol variable", "AGY_LLM_GATEWAY_WIRE_PROTOCOL='genai'"],
+    ["URL value", "redirect='http://127.0.0.1:10100'"],
+  ])("uninstall preserves the agy journal when a markerless profile keeps the %s", async (_label, remnant) => {
+    const f = await fixture({ gatewayOnly: true });
+    try {
+      const context = f.deps.gatewayContext();
+      const profile = join(f.home, ".bashrc");
+      const record = join(f.configDir, "gateway-clients", "agy.json");
+      const original = "# existing shell profile\n";
+      writeFileSync(profile, original);
+      expect(connectGatewayClient("agy", context, config, config.port).ok).toBe(true);
+      const saved = readFileSync(record, "utf8");
+      const damaged = original + "\n" + remnant + "\n";
+      writeFileSync(profile, damaged);
+      f.deps.remove = () => removeGatewayFixtureConfig(f.configDir);
+
+      await expect(removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .rejects.toThrow("Gateway client cleanup refused for agy");
+      expect(readFileSync(profile, "utf8")).toBe(damaged);
+      expect(readFileSync(record, "utf8")).toBe(saved);
+
+      writeFileSync(profile, original);
+      expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .toEqual({ status: "removed", residualPaths: [] });
+      expect(readFileSync(profile, "utf8")).toBe(original);
+      expect(existsSync(record)).toBe(false);
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+
   function addAsideProfiles(f: Awaited<ReturnType<typeof fixture>>) {
     const asideRoot = join(f.home, ".aside");
     const profiles = [0, 1].map(id => {

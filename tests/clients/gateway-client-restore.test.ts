@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GATEWAY_CLIENTS, type GatewayClientContext } from "../../src/integrations/gateway-clients";
+import * as gatewayIO from "../../src/integrations/gateway-clients/io";
 
 const target = { url: "http://127.0.0.1:10100", apiKey: "opencodex-local", defaultModel: "managed-model" };
 const start = "# >>> opencodex agy >>>";
@@ -27,14 +28,15 @@ const originalSettings = {
 };
 
 const markerDamage = [
-  ["closing marker", (text: string) => text.replace(end, "")],
-  ["opening marker", (text: string) => text.replace(start, "")],
-  ["marker pair", (text: string) => text.replace(start, "").replace(end, "")],
-  ["standalone closing marker", (text: string) => text.replace(end, "# unrelated " + end)],
-  ["unambiguous closing marker", (text: string) => text.replace(end, start + "\necho inside-another-block\n" + end)],
+  ["a missing closing marker", (text: string) => text.replace(end, "")],
+  ["a missing opening marker", (text: string) => text.replace(start, "")],
+  ["both markers missing", (text: string) => text.replace(start, "").replace(end, "")],
+  ["an inline closing marker", (text: string) => text.replace(end, "# unrelated " + end)],
+  ["nested markers", (text: string) => text.replace(end, start + "\necho inside-another-block\n" + end)],
+  ["duplicate marker pairs", (text: string) => text + text.slice(text.indexOf(start))],
 ] as const;
 
-test.each(markerDamage)("agy refuses a tracked profile missing its %s and retries after repair", (_label, damage) => {
+test.each(markerDamage)("agy refuses to disconnect or reconnect a profile with %s", (_label, damage) => {
   const agy = GATEWAY_CLIENTS.agy;
   const bash = join(ctx.home, ".bashrc");
   const zsh = join(ctx.home, ".zshrc");
@@ -57,10 +59,59 @@ test.each(markerDamage)("agy refuses a tracked profile missing its %s and retrie
   expect(read(record("agy"))).toBe(saved);
   expect(agy.status(ctx, target).state).toBe("drifted");
 
+  expect(agy.connect(ctx, { ...target, url: "http://127.0.0.1:10200" })).toMatchObject({
+    ok: false, code: "unsupported-file", changed: false, changedFiles: [],
+  });
+  expect(read(bash)).toBe(connectedBash);
+  expect(read(zsh)).toBe(damaged);
+  expect(read(record("agy"))).toBe(saved);
+
   writeFileSync(zsh, connectedZsh + afterBlock);
   expect(agy.disconnect(ctx)).toMatchObject({ ok: true, restore: "path-wise" });
   expect(read(bash)).toBe("# bash\n");
   expect(read(zsh)).toBe("# zsh\n\n" + afterBlock);
+  expect(existsSync(record("agy"))).toBe(false);
+});
+
+test("agy refuses a first connect to a profile with reversed markers", () => {
+  const profile = join(ctx.home, ".zshrc");
+  const original = [end, "# profile", start].join("\r\n");
+  writeFileSync(profile, original);
+
+  expect(GATEWAY_CLIENTS.agy.connect(ctx, target)).toMatchObject({
+    ok: false, code: "unsupported-file", changed: false, changedFiles: [],
+  });
+  expect(read(profile)).toBe(original);
+  expect(existsSync(record("agy"))).toBe(false);
+});
+
+test("agy retries an interrupted path-wise restore without rewriting the restored profile", () => {
+  const agy = GATEWAY_CLIENTS.agy;
+  const bash = join(ctx.home, ".bashrc");
+  const zsh = join(ctx.home, ".zshrc");
+  writeFileSync(bash, "# bash\n");
+  writeFileSync(zsh, "# zsh\n");
+  expect(agy.connect(ctx, target).ok).toBe(true);
+  const edit = "export KEEP_ME=1\n";
+  writeFileSync(bash, read(bash) + edit);
+  writeFileSync(zsh, read(zsh) + edit);
+
+  const write = gatewayIO.writeClientFile;
+  const fault = spyOn(gatewayIO, "writeClientFile").mockImplementation((...args) => {
+    if (args[1] === zsh) throw new Error("fixture interrupted the second restore");
+    write(...args);
+  });
+  try {
+    expect(agy.disconnect(ctx)).toMatchObject({ ok: false, code: "io-error", changedFiles: [bash] });
+  } finally {
+    fault.mockRestore();
+  }
+  expect(read(bash)).toBe("# bash\n\n" + edit);
+  expect(existsSync(record("agy"))).toBe(true);
+
+  expect(agy.disconnect(ctx)).toMatchObject({ ok: true, restore: "path-wise", changedFiles: [zsh] });
+  expect(read(bash)).toBe("# bash\n\n" + edit);
+  expect(read(zsh)).toBe("# zsh\n\n" + edit);
   expect(existsSync(record("agy"))).toBe(false);
 });
 

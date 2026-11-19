@@ -1246,9 +1246,10 @@ Use `--model` only with `ocx connect antigravity` to set the desktop app's defau
 
 Connect records what it replaced. Disconnect puts the original bytes back when the file is unchanged, and
 otherwise reverts only OpenCodex's own entries and keeps your other edits. Antigravity can restore
-settings after JSON keys are reordered. If a managed setting has a conflicting value or a recorded
-`agy` block has missing or ambiguous markers, disconnect leaves the file and restore record in place.
-Restore the managed value or marker and try disconnect again. A complete `agy` block is removed whole,
+settings after JSON keys are reordered and keeps the file and restore record when a managed setting conflicts.
+With incomplete or ambiguous `agy` markers, connect keeps the profiles as they are. For a recorded
+profile, disconnect also stops and keeps the restore record when it cannot verify the block is gone.
+Restore the managed value or markers and try disconnect again. A complete `agy` block is removed whole,
 including any edits inside it. An `agy` profile symlink must resolve
 to another supported profile for the same shell family under your home. Antigravity settings must resolve
 to the exact `~/.antigravity/settings.json` path. Restart Antigravity, or open a new terminal for `agy`,

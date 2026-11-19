@@ -24,6 +24,7 @@ interface Entry {
   createdDirs: string[];
   writtenSha256: string;
   pendingSha256?: string;
+  restoredSha256?: string;
   pathWiseOnly?: true;
 }
 interface Stash { version: 1; files: Entry[] }
@@ -106,7 +107,14 @@ const recordedHash = (entry: Entry, current: string): boolean =>
 
 const MARKER_LINE = new RegExp(`(?:^\uFEFF?|\n)(${START}|${END})(?=\r?\n|$)`, "g");
 
-function blockSpan(text: string): { start: number; end: number } | "malformed" | null {
+// Markerless text alone cannot prove removal: even a bare gateway URL can remain.
+function matchesRestoredProfile(entry: Entry, file: ClientFile): boolean {
+  return entry.restoredSha256 === file.hash
+    || (entry.originalBytes !== null && file.bytes.equals(Buffer.from(entry.originalBytes, "base64")));
+}
+
+type BlockSpan = { start: number; end: number };
+function blockSpan(text: string): BlockSpan | "malformed" | null {
   const markers = text.matchAll(MARKER_LINE);
   const first = markers.next().value;
   if (!first) return null;
@@ -116,6 +124,11 @@ function blockSpan(text: string): { start: number; end: number } | "malformed" |
   let end = last.index + last[0].length;
   if (text.startsWith("\r\n", end)) end += 2; else if (text[end] === "\n") end += 1;
   return { start, end };
+}
+
+function markerRefusal(hasRecord: boolean): GatewayClientResult {
+  const message = "An agy profile has incomplete or ambiguous block markers.";
+  return clientRefusal(hasRecord ? message + " The restore record was kept." : message, "unsupported-file");
 }
 
 type Encoding = "utf8" | "utf16le";
@@ -136,11 +149,10 @@ const encode = (text: string, encoding: Encoding): Buffer =>
   encoding === "utf16le" ? Buffer.concat([UTF16LE_BOM, Buffer.from(text, "utf16le")]) : Buffer.from(text);
 
 const eolOf = (text: string) => (text.includes("\r\n") ? "\r\n" : "\n");
-const withBlock = (text: string, block: string): string => {
+const withBlock = (text: string, block: string, span: BlockSpan | null): string => {
   const eol = eolOf(text);
   const b = block.replace(/\n/g, eol) + eol;
-  const span = blockSpan(text);
-  if (span && span !== "malformed") return text.slice(0, span.start) + b + text.slice(span.end);
+  if (span) return text.slice(0, span.start) + b + text.slice(span.end);
   if (text === "") return b;
   let head = text;
   if (!/\n$/.test(head)) head += eol;
@@ -186,9 +198,10 @@ function connect(ctx: GatewayClientContext, target: GatewayTarget): GatewayClien
   const available = candidates(ctx);
   const profiles = targets(ctx, available).sort((a, b) => Number(entries.has(b.path)) - Number(entries.has(a.path)));
   const seen = new Set<string>();
-  const changedFiles: string[] = [];
-  const staged: { entry: Entry; file: ClientFile | null; out: Buffer; allowedPaths: string[] }[] = [];
-  for (const profile of profiles) {
+  const selected = new Set(profiles.map(profile => profile.path));
+  const trackedOnly = [...entries.values()].filter(entry => !selected.has(entry.path));
+  const checked: (Profile & { file: ClientFile | null; allowedPaths: string[]; text: string; encoding: Encoding; span: BlockSpan | null })[] = [];
+  for (const profile of [...profiles, ...trackedOnly]) {
     const { path, kind } = profile;
     const allowedPaths = allowedProfilePaths(available, kind);
     const file = readClientFile(ctx, path, allowedPaths);
@@ -198,20 +211,27 @@ function connect(ctx: GatewayClientContext, target: GatewayTarget): GatewayClien
     if (file) seen.add(file.target);
     const decoded = file ? decode(file.bytes) : { text: "", encoding: "utf8" as const };
     if (!decoded) return clientRefusal(`${path} is not UTF-8 or BOM-prefixed UTF-16LE text.`, "unsupported-file");
-    const out = encode(withBlock(decoded.text, agyBlock(kind, target)), decoded.encoding);
-    assertClientSize(out);
-    const keep = prev !== undefined && file !== null && blockIn(decoded.text) !== null;
-    const drifted = keep && (prev.pathWiseOnly === true || !recordedHash(prev, file.hash));
-    staged.push({
-      entry: {
-        path, kind, originalBytes: keep ? prev.originalBytes : file?.bytes.toString("base64") ?? null,
-        createdDirs: prev?.createdDirs ?? [], writtenSha256: file?.hash ?? "",
-        pendingSha256: sha256(out),
-        ...(drifted ? { pathWiseOnly: true } : {}),
-      },
-      file, out, allowedPaths,
-    });
+    const span = blockSpan(decoded.text);
+    if (span === "malformed" || (!span && prev && file && !matchesRestoredProfile(prev, file))) {
+      return markerRefusal(old !== null);
+    }
+    if (selected.has(path)) checked.push({ path, kind, file, allowedPaths, ...decoded, span });
   }
+  const changedFiles: string[] = [];
+  const staged = checked.map(({ path, kind, file, allowedPaths, text, encoding, span }) => {
+    const prev = entries.get(path);
+    const out = encode(withBlock(text, agyBlock(kind, target), span), encoding);
+    assertClientSize(out);
+    const keep = prev !== undefined && file !== null && span !== null;
+    const drifted = keep && (prev.pathWiseOnly === true || !recordedHash(prev, file.hash));
+    const entry: Entry = {
+      path, kind, originalBytes: keep ? prev.originalBytes : file?.bytes.toString("base64") ?? null,
+      createdDirs: prev?.createdDirs ?? [], writtenSha256: file?.hash ?? "",
+      pendingSha256: sha256(out),
+      ...(drifted ? { pathWiseOnly: true } : {}),
+    };
+    return { entry, file, out, allowedPaths };
+  });
   try {
     for (const { entry, file, allowedPaths } of staged) {
       entry.resolvedPath = checkedClientDestination(ctx, entry.path, file, allowedPaths);
@@ -246,6 +266,7 @@ function disconnect(ctx: GatewayClientContext): GatewayClientResult {
   const profiles = [...entries.values(), ...targets(ctx, available).filter(({ path }) => !entries.has(path))];
   const seen = new Set<string>();
   const changes: { path: string; apply: () => void }[] = [];
+  let journalRestore = false;
   const createdDirs: string[] = [];
   let pathWise = false;
   for (const { path, kind } of profiles) {
@@ -276,20 +297,22 @@ function disconnect(ctx: GatewayClientContext): GatewayClientResult {
     const { text, encoding } = decoded;
     const span = blockSpan(text);
     if (!span || span === "malformed") {
-      // With both markers gone, a remaining gateway wrapper still requires repair.
-      const hasWrapper = ["URL", "API_KEY", "WIRE_PROTOCOL"].every(key => text.includes(`AGY_LLM_GATEWAY_${key}`));
-      if (entry && (span === "malformed" || hasWrapper)) {
-        return clientRefusal("An agy profile has incomplete or ambiguous block markers. The restore record was kept.", "unsupported-file");
-      }
+      if (entry && (span === "malformed" || !matchesRestoredProfile(entry, file))) return markerRefusal(true);
       continue;
     }
     const bytes = encode(text.slice(0, span.start) + text.slice(span.end), encoding);
+    if (entry) {
+      entry.restoredSha256 = sha256(bytes);
+      journalRestore = true;
+    }
     changes.push({ path, apply: () => writeClientFile(ctx, path, file, bytes, allowedPaths) });
     pathWise = true;
   }
 
   const changedFiles: string[] = [];
   try {
+    // If a later write fails, a retry can verify profiles already restored path-wise.
+    if (journalRestore) writeStash(ctx, ID, { version: 1, files: [...entries.values()] } satisfies Stash);
     for (const { path, apply } of changes) {
       apply();
       changedFiles.push(path);
