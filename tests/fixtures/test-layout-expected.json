@@ -167,6 +167,7 @@
   "file-identity-callers.test.ts": "lib",
   "responses-undeclared-tool-guard-inbound.test.ts": "responses",
     "messages-request-id-endpoint.test.ts": "claude-integration",
+    "subscription-reserve.test.ts": "claude-integration",
     "combo-cooldown-persistence.test.ts": "routing",
     "combo-unoffered-tool-refusal.test.ts": "routing",
   "anthropic-revoked-token.test.ts": "adapters/anthropic",

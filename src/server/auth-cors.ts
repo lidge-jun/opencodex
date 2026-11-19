@@ -1527,6 +1527,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     // historical auto-open behavior.
     oauthOpenBrowser: config.oauthOpenBrowser !== false,
     showCodexCredits: config.showCodexCredits === true,
+    subscriptionReserve: config.subscriptionReserve,
     providers,
   };
 }
