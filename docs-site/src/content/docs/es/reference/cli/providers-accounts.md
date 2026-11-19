@@ -208,8 +208,9 @@ del panel y a las credenciales con permisos completos de administración.
 Al iniciar sesión, importar credenciales de Claude Code o reautenticar, OpenCodex comprueba con los
 tokens vigentes la organización de las cuentas anteriores que aún carecen de ese dato. Si esa
 organización sigue siendo desconocida (token caducado o comprobación fallida), el inicio de sesión
-puede reemplazar esa cuenta, como en versiones anteriores: su organización no se puede comprobar
-hasta que se renueve su token. Si Claude
+puede reemplazar esa cuenta, como en versiones anteriores. Si su token caducó, su organización no se
+puede comprobar hasta que se renueve; una comprobación fallida con un token vigente se puede repetir
+cuando Claude pueda devolver el perfil de la cuenta. Si Claude
 comunica la organización de la nueva autorización al iniciar sesión y el perfil de la cuenta no
 está disponible, OpenCodex conserva la cuenta activa si su organización confirmada es distinta.
 Si Claude confirma la organización y proporciona un correo electrónico sin el UUID de la cuenta,
@@ -218,11 +219,14 @@ Tras quitar los espacios al principio y al final, la parte anterior a `@` y los 
 internacionalizados deben coincidir exactamente. En los demás dominios se ignoran las diferencias
 entre mayúsculas y minúsculas ASCII. Si ninguna cuenta coincide en la organización confirmada,
 el inicio de sesión añade una cuenta y conserva las existentes, incluidas las antiguas que no
-tienen correo ni UUID de cuenta. Si coinciden varias cuentas en la organización confirmada, el
-inicio de sesión se detiene sin cambiar ninguna. Para reautenticar la cuenta correcta, usa
+tienen correo ni UUID de cuenta. Un inicio de sesión posterior en esa organización que sí incluye el
+UUID de la cuenta actualiza la única cuenta sin UUID con un correo coincidente. Si coinciden varias
+cuentas en la organización confirmada, el inicio de sesión se detiene sin cambiar ninguna. Para
+reautenticar la cuenta correcta, usa
 `ocx account login anthropic --id <account-id> --reauth`. Si Claude solo proporciona el correo
-y la organización, ambos deben coincidir con los de la cuenta existente y su organización debe
-estar confirmada. Si la organización es desconocida, vuelve a intentarlo cuando Claude pueda
+y la organización, ambos deben coincidir con los de la cuenta existente, su organización debe
+estar confirmada y ninguna otra cuenta de esa organización puede tener el mismo correo. Si la
+organización es desconocida, vuelve a intentarlo cuando Claude pueda
 devolver el perfil de la cuenta. Puedes eliminar un duplicado con
 `ocx account remove anthropic <account-id> --yes`.
 Si una cuenta cambia durante la comprobación y ya no se puede confirmar su organización, repite la operación.

@@ -576,6 +576,11 @@ function orgProfiles(organizationByBearer: Record<string, string>, accountUuid =
   return asked;
 }
 const anthropicRows = () => getAccountSet("anthropic")!.accounts;
+/** A grant whose exchange named only the email and organization, as when the profile read failed. */
+function emailOnlyCredential(access: string, organizationUuid: string, email = "shared@example.test"): OAuthCredentials {
+  return { access, refresh: `${access}-refresh`, expires: Date.now() + 3600_000, source: "oauth", email,
+    anthropicOrganizationScope: { v: 1, organizationUuid, bearerSha256: proof(access).bearerSha256 } };
+}
 
 test("profile binds the grant's organization in canonical form; a malformed organization stays unknown", async () => {
   orgProfiles({ "synthetic-access": ORG_A.toUpperCase(), "synthetic-malformed": "not-an-organization" });
@@ -719,6 +724,55 @@ test("scoped email-only reauth rechecks the current email under the writer lock"
   expect(getAccountSet("anthropic")).toEqual(changed);
 });
 
+test("scoped email-only reauth refuses when another row of the organization has the same email", async () => {
+  orgProfiles({});
+  await saveCredential("anthropic", orgCredential("synthetic-org-a", ORG_A));
+  const target = anthropicRows()[0]!;
+  await saveCredential("anthropic", orgCredential("synthetic-other-account", ORG_A, "synthetic-account-b"));
+  const before = getAccountSet("anthropic")!;
+  expect(before.accounts).toHaveLength(2);
+  const original = OAUTH_PROVIDERS.anthropic!.login;
+  OAUTH_PROVIDERS.anthropic!.login = async () => emailOnlyCredential("synthetic-reauth", ORG_A);
+  try {
+    await expect(runLogin("anthropic", {} as OAuthController, { reauthAccountId: target.id }, {
+      loadConfig: () => ({ port: 10100, defaultProvider: "openai", openaiProviderTierVersion: 2, providers: {} }),
+      saveConfig: () => {},
+    })).rejects.toBeInstanceOf(OAuthReauthIdentityMismatchError);
+    expect(getAccountSet("anthropic")).toEqual(before);
+  } finally { OAUTH_PROVIDERS.anthropic!.login = original; }
+  // A same-email row of another organization is not ambiguous.
+  const otherOrganization = { id: "other", credential: orgCredential("synthetic-org-b", ORG_B, "synthetic-account-b"), addedAt: 0 };
+  expect(() => anthropicReauthSlotGuard(target.id, emailOnlyCredential("synthetic-reauth", ORG_A), new Map())([target, otherOrganization]))
+    .not.toThrow();
+});
+
+test.each([
+  { scenario: "accepts the organization its own bearer proves", organization: ORG_A, accepted: true },
+  { scenario: "refuses another organization its own bearer proves", organization: ORG_B, accepted: false },
+  { scenario: "refuses when its profile is unavailable", organization: undefined, accepted: false },
+  { scenario: "refuses a profile of another account", organization: ORG_A, accountUuid: "synthetic-account-b", accepted: false },
+])("scoped email-only reauth of a legacy row $scenario", async ({ organization, accountUuid, accepted }) => {
+  await saveCredential("anthropic", orgCredential("synthetic-legacy"));
+  const legacy = anthropicRows()[0]!;
+  const asked = orgProfiles(organization ? { "synthetic-legacy": organization } : {}, accountUuid);
+  const original = OAUTH_PROVIDERS.anthropic!.login;
+  OAUTH_PROVIDERS.anthropic!.login = async () => emailOnlyCredential("synthetic-reauth", ORG_A);
+  try {
+    const reauth = runLogin("anthropic", {} as OAuthController, { reauthAccountId: legacy.id }, {
+      loadConfig: () => ({ port: 10100, defaultProvider: "openai", openaiProviderTierVersion: 2, providers: {} }),
+      saveConfig: () => {},
+    });
+    if (accepted) {
+      await reauth;
+      expect(getAccountCredential("anthropic", legacy.id)!.access).toBe("synthetic-reauth");
+    } else {
+      await expect(reauth).rejects.toBeInstanceOf(OAuthReauthIdentityMismatchError);
+      expect(getAccountCredential("anthropic", legacy.id)).toEqual(legacy.credential);
+    }
+    expect(asked).toEqual(["synthetic-legacy"]);
+  } finally { OAUTH_PROVIDERS.anthropic!.login = original; }
+});
+
 test("own-grant refresh keeps the stored organization and never discards a rotated grant over it", () => {
   const stored = orgCredential("synthetic-old", ORG_A);
   const fresh = orgCredential("synthetic-new");
@@ -728,6 +782,17 @@ test("own-grant refresh keeps the stored organization and never discards a rotat
   // The organization is a scope, not identity: fresh evidence wins instead of throwing after rotation.
   expect(mergeAnthropicIdentity(orgCredential("synthetic-new", ORG_B), stored, { sameGrant: true }).anthropicIdentity)
     .toEqual({ ...proof("synthetic-new"), organizationUuid: ORG_B });
+});
+
+test("on the same bearer, fresh organization proof replaces a retained exchange scope", () => {
+  const previous: OAuthCredentials = { ...emailOnlyCredential("synthetic-same", ORG_A), accountId: "synthetic-account-a" };
+  for (const sameGrant of [true, false]) {
+    const fresh = orgCredential("synthetic-same", ORG_B);
+    expect(anthropicOrganization({ ...fresh, ...mergeAnthropicIdentity(fresh, previous, { sameGrant }) })).toBe(ORG_B);
+    // Fresh proof that names no organization still keeps the retained scope.
+    const silent = orgCredential("synthetic-same");
+    expect(anthropicOrganization({ ...silent, ...mergeAnthropicIdentity(silent, previous, { sameGrant }) })).toBe(ORG_A);
+  }
 });
 
 test("own-grant refresh without account proof keeps the organization as the new bearer's scope", async () => {
@@ -809,7 +874,7 @@ for (const source of ["oauth", "local-cli"] as const) {
 test("login, import and reauth refuse stale organization observations", async () => {
   const row = { id: "legacy", credential: orgCredential("synthetic-before-refresh"), addedAt: 0 };
   const incoming = orgCredential("synthetic-org-b", ORG_B);
-  const observations = await observeAnthropicSlotOrganizations([row], incoming,
+  const observations = await observeAnthropicSlotOrganizations([row], incoming, undefined,
     async access => ({ ...proof(access), organizationUuid: ORG_A }));
   const refreshed = { ...row, credential: orgCredential("synthetic-refreshed") };
   expect(findAnthropicLoginSlot([row], incoming, observations)).toBeUndefined();
@@ -1011,7 +1076,10 @@ test("automatic adoption rechecks a sibling's organization inside the writer", a
     await started.promise;
     // A concurrent update changes only the sibling's grant while the target is being observed.
     await saveAccountCredential("anthropic", siblingId, orgCredential("synthetic-sibling-updated", ORG_A));
-  } finally { proceed.resolve(); }
+  } finally {
+    proceed.resolve();
+    await result;
+  }
   expect(await result).toBeInstanceOf(OAuthTokenRefreshStaleError);
   expect(getAccountCredential("anthropic", target.id)).toEqual(target.credential);
   expect(getAccountCredential("anthropic", siblingId)?.access).toBe("synthetic-sibling-updated");
@@ -1219,6 +1287,26 @@ test.each<{
     expect(saved.anthropicIdentity).toBeUndefined();
   }
   expect(profileReads).toBe(legacy ? 2 : 1);
+});
+
+test("a login that proves the account reuses the row an email-only sign-in left in its organization", async () => {
+  orgProfiles({});
+  await saveCredential("anthropic", emailOnlyCredential("synthetic-email-only", ORG_A));
+  const slot = anthropicRows()[0]!;
+  expect(slot.credential.accountId).toBeUndefined();
+  await saveCredential("anthropic", { ...orgCredential("synthetic-org-a", ORG_A), email: "shared@Example.Test" });
+  expect(anthropicRows()).toHaveLength(1);
+  expect(getAccountCredential("anthropic", slot.id)).toMatchObject({ access: "synthetic-org-a", accountId: "synthetic-account-a" });
+  const incoming = orgCredential("synthetic-incoming", ORG_A);
+  const row = (id: string, credential: OAuthCredentials) => ({ id, credential, addedAt: 0 });
+  const emailOnly = row("email-only", emailOnlyCredential("synthetic-email-only", ORG_A));
+  // Never a row of another known account or organization, and never a guess between candidates.
+  expect(findAnthropicLoginSlot([row("other-account", orgCredential("synthetic-other", ORG_A, "synthetic-account-b"))], incoming)).toBeUndefined();
+  expect(findAnthropicLoginSlot([row("other-organization", emailOnlyCredential("synthetic-org-b", ORG_B))], incoming)).toBeUndefined();
+  expect(() => findAnthropicLoginSlot([emailOnly, row("twin", emailOnlyCredential("synthetic-twin", ORG_A))], incoming))
+    .toThrow("Multiple Anthropic login slots match");
+  expect(() => findAnthropicLoginSlot([emailOnly, row("other-account", orgCredential("synthetic-other", ORG_A, "synthetic-account-b"))], incoming))
+    .toThrow("Multiple Anthropic login slots match");
 });
 
 test("browser login refuses a conflicting profile organization when the exchange omits the account", async () => {

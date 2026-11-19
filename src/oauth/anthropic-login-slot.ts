@@ -73,12 +73,16 @@ function hasStaleSlotObservation(row: ProviderAccount, observed: AnthropicSlotOr
 export async function observeAnthropicSlotOrganizations(
   accounts: readonly ProviderAccount[],
   incoming: OAuthCredentials,
+  reauthAccountId?: string,
   resolve: AnthropicIdentityResolver = resolveAnthropicAccountIdentity,
   now: () => number = Date.now,
 ): Promise<AnthropicSlotOrganizations> {
   const identity = loginIdentity(incoming);
   if (!identity || !anthropicOrganization(incoming)) return new Map();
-  const pending = accounts.filter(row => loginIdentity(row.credential) === identity
+  // An email-only reauth cannot name its target's stored account UUID, so it asks that target too.
+  const isEmailOnlyReauthTarget = (row: ProviderAccount) => row.id === reauthAccountId && !slotAccountUuid(incoming)
+    && slotAccountUuid(row.credential) !== undefined && anthropicSlotEmailsMatch(row.credential.email, incoming.email);
+  const pending = accounts.filter(row => (loginIdentity(row.credential) === identity || isEmailOnlyReauthTarget(row))
     && anthropicOrganization(row.credential) === undefined
     && row.credential.access && row.credential.expires > now());
   if (pending.length === 0) return new Map();
@@ -139,7 +143,25 @@ export function findAnthropicLoginSlot(
     }
   }
   const identity = accountUuid ?? incoming.email;
-  return pickSlot(accounts, incoming, observed, row => loginIdentity(row.credential) === identity, activeAccountId);
+  return pickSlot(accounts, incoming, observed, row => loginIdentity(row.credential) === identity, activeAccountId)
+    ?? (accountUuid ? emailOnlyLoginSlot(accounts, incoming, observed) : undefined);
+}
+
+/**
+ * With no row of its account UUID, a login reuses the unique row an email-only sign-in left in the
+ * same proven organization. A row of another known account UUID is never reused, and another
+ * same-email row in that organization makes the match ambiguous.
+ */
+function emailOnlyLoginSlot(
+  accounts: readonly ProviderAccount[], incoming: OAuthCredentials, observed: AnthropicSlotOrganizations,
+): ProviderAccount | undefined {
+  const organization = anthropicOrganization(incoming);
+  if (!organization) return undefined;
+  const sameEmail = accounts.filter(row => anthropicSlotEmailsMatch(row.credential.email, incoming.email)
+    && slotOrganization(row, observed) === organization);
+  const [match] = sameEmail.filter(row => slotAccountUuid(row.credential) === undefined);
+  if (match && sameEmail.length > 1) throw new Error("Multiple Anthropic login slots match this organization and email. Try signing in again.");
+  return match;
 }
 
 /** Inside the store lock: the row a Claude Code credential import enriches, or undefined for a new row. */
@@ -172,7 +194,10 @@ export function anthropicReauthSlotGuard(
     if (!organization) return;
     const targetOrganization = slotOrganization(target, observed);
     if (!accountUuid) {
-      if (targetOrganization !== organization || !anthropicSlotEmailsMatch(target.credential.email, incoming.email)) {
+      // Another row of the organization with the same email could own this grant, as on login.
+      if (targetOrganization !== organization || !anthropicSlotEmailsMatch(target.credential.email, incoming.email)
+        || accounts.some(row => row.id !== accountId && slotOrganization(row, observed) === organization
+          && anthropicSlotEmailsMatch(row.credential.email, target.credential.email))) {
         throw new OAuthReauthIdentityMismatchError();
       }
       return;

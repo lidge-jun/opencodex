@@ -1698,7 +1698,7 @@ export async function runLogin(
             : Boolean(existing.email && cred.email && existing.email.trim().toLowerCase() === cred.email.trim().toLowerCase());
       if (!identityMatches) throw new OAuthReauthIdentityMismatchError();
       const assertAccounts = isAnthropicOAuthInstance(provider) ? anthropicReauthSlotGuard(opts.reauthAccountId, cred,
-        await observeAnthropicSlotOrganizations(getAccountSet(provider)?.accounts ?? [], cred)) : undefined;
+        await observeAnthropicSlotOrganizations(getAccountSet(provider)?.accounts ?? [], cred, opts.reauthAccountId)) : undefined;
       const reauthCred = withMergedOAuthLabels(cred, existing);
       const written = await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, reauthCred, {
         assertBeforePersist: deps.assertCurrentOwner,

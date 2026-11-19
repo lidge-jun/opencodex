@@ -121,8 +121,10 @@ export function mergeAnthropicIdentity(
     throw new Error("Anthropic credential identity changed; explicit account login required");
   }
   const sameBearer = fresh.access === previous.access;
+  // The same bearer keeps its exchange scope only while no fresh proof names an organization.
   const scope = normalizeAnthropicOrganizationScope(fresh.anthropicOrganizationScope, fresh.access)
-    ?? (sameBearer ? normalizeAnthropicOrganizationScope(previous.anthropicOrganizationScope, previous.access) : undefined);
+    ?? (sameBearer && !after?.organizationUuid
+      ? normalizeAnthropicOrganizationScope(previous.anthropicOrganizationScope, previous.access) : undefined);
   const previousOrganization = opts.sameGrant && !after?.organizationUuid && !scope
     ? anthropicOrganization(previous) : undefined;
   return {
