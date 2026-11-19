@@ -708,6 +708,8 @@ export const AUTH_MATRIX: readonly ApiAuthMatrixRow[] = [
   { endpoint: "/v1/hub-state", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
   // Usage additionally requires a configured key identity; unscoped environment keys are refused.
   { endpoint: "/v1/usage", bearer: "rejected", dedicated: "accepted", xApiKey: "rejected" },
+  // Usage windows require a configured, single-provider key with full model scope.
+  { endpoint: "/v1/usage/windows", bearer: "accepted", dedicated: "accepted", xApiKey: "rejected" },
 ];
 
 /** Whether `token` is the environment-provided management secret. */

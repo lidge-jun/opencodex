@@ -517,13 +517,15 @@ describe("Spanish documentation localization", () => {
     expect(resolve(" docs-secret ")).toMatchObject({ kind: "configured", keyId: "docs-key", source: "dedicated" });
   });
 
-  test("Responses admission tables match the implemented header matrix in every locale", async () => {
+  test("documented admission tables match the implemented header matrix", async () => {
     const { AUTH_MATRIX } = await import("../../src/server/auth-cors");
     const accepted = new Set(["accepted", "aceptado", "accepté", "허용", "허용됨", "受け入れられる", "受け入れ", "принимается", "kabul edilir", "接受"]);
     const rejected = new Set(["not accepted", "no aceptado", "non accepté", "허용되지 않음", "受け入れられません", "не принимается", "kabul edilmez", "不接受"]);
     for (const locale of ["", ...localeFolders]) {
       const text = source(join(root, locale, "reference/configuration/server.md"));
-      for (const endpoint of ["/v1/responses", "/v1/chat/completions"]) {
+      const endpoints = ["/v1/responses", "/v1/chat/completions"];
+      if (locale === "" || locale === "es") endpoints.push("/v1/usage/windows");
+      for (const endpoint of endpoints) {
         const row = text.split("\n").find(line => line.startsWith(`| \`${endpoint}\` |`));
         expect(row, `${locale || "en"} ${endpoint}`).toBeDefined();
         const cells = row!.split("|").slice(2, -1).map(cell => cell.replace(/\*/g, "").trim());

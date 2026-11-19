@@ -401,6 +401,7 @@ export async function fetchAnthropicQuota(provider: string, config: OcxConfig = 
     const cached = quota ?? withoutAnthropicMonthlyFallback(getCachedProviderAccountQuota(instance, probedAccountId));
     commitAnthropicAccountQuota(probedAccountKey, {
       ts: Date.now(), quota: cached, isCurrent: anthropicCurrent, ...result.failureFields,
+      quotaOwnerIsCurrent: quota ? anthropicCurrent : accountQuotaCache.get(probedAccountKey)?.quotaOwnerIsCurrent,
     }, quota?.monthlyPercent === undefined, result.dispatch);
     result.publishDecisionQuota();
     persistAccountQuotaCache();
