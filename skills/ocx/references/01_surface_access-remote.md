@@ -117,6 +117,7 @@ State-changing: no. JSON mode: `payload`.
 | `--json` | boolean | Emit the K16 status payload as JSON. |
 
 - Reads live listener/tunnel metadata; when no proxy is found, falls back to the local link store. Always emits JSON.
+- Home-initiated links report recent authenticated HTTP delivery in relayHealth, with inference readiness reported as unknown.
 
 ### `ocx link diagnostics`
 

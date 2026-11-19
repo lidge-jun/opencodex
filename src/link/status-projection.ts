@@ -6,7 +6,7 @@ import { EMPTY_LINK_CHILD_PARITY, type LinkChildParity } from "./child-parity";
 import { linkPeerStatus, type LinkLocalPeer, type LinkPeerStatus } from "./compatibility";
 import type { LinkPeerEntry } from "./peer-report";
 import type { OcxClientConnectionConfig } from "../types";
-import { isLinkIdle, type LinkActivitySnapshot } from "./child-activity";
+import { isLinkIdle, LINK_DELIVERY_DEGRADED_THRESHOLD, type LinkActivitySnapshot } from "./child-activity";
 import { catalogVerdict, type CatalogPull, type CatalogRevision, type CatalogState } from "./child-catalog-freshness";
 import type { ChildObservation, ChildOp, ChildOperationSummary } from "./child-observations";
 import type { InstallKind, UpdateRoute } from "./child-update-contract";
@@ -35,6 +35,8 @@ export interface LinkStatusDto {
     peer?: LinkPeerStatus;
     /** Home-initiated links on request (`?diagnostics=1`): retry progress and the last failure. */
     tunnel?: LinkTunnelDiagnostics;
+    /** Home-initiated links on request (`?relayHealth=1`): delivery evidence for the current tunnel. */
+    relayHealth?: LinkRelayHealth;
     /** Home rows on request (`?children=1`): versions, update route, catalog freshness, activity and operations. */
     child?: LinkChildOpsStatus;
     /** Links with several routes, on request (`?routes=1`): each route's rest and last outcome. */
@@ -68,6 +70,41 @@ export interface LinkTunnelDiagnostics {
   nextRetryAt: string | null;
   lastTransition: { from: LinkWireState; to: LinkWireState; at: string; cause: string | null } | null;
   lastFailure: { cause: string; at: string } | null;
+}
+
+export const LINK_RELAY_DEGRADED_GUIDANCE =
+  "Run ocx link check --link-id <id>. If requests keep dropping, run ocx link reconnect --link-id <id> when the link is idle.";
+
+export interface LinkRelayHealth {
+  relayAuthentication: "observed" | "unknown";
+  delivery: "degraded" | "observed" | "unknown";
+  inferenceReadiness: "unknown";
+  recentInterruptions: number;
+  guidance?: typeof LINK_RELAY_DEGRADED_GUIDANCE;
+}
+
+/** No probe or routing decision. Only authenticated HTTP model delivery seen on the current Home tunnel. */
+export function attachLinkRelayHealth(
+  dto: LinkStatusDto,
+  generationOf: (linkId: string) => string | undefined,
+  activityOf: (linkId: string) => LinkActivitySnapshot | undefined,
+): void {
+  if (dto.role !== "home") return;
+  for (const link of dto.links) {
+    if (link.direction !== "hub-initiated") continue;
+    const generation = link.state === "connected" ? generationOf(link.id) : undefined;
+    const snapshot = generation === undefined ? undefined : activityOf(link.id)?.httpDelivery;
+    const evidence = snapshot?.generation === generation ? snapshot : undefined;
+    const recentInterruptions = evidence?.recentInterruptions ?? 0;
+    const degraded = recentInterruptions >= LINK_DELIVERY_DEGRADED_THRESHOLD;
+    link.relayHealth = {
+      relayAuthentication: evidence?.recentAuthentication ? "observed" : "unknown",
+      delivery: degraded ? "degraded" : evidence?.recentSettled ? "observed" : "unknown",
+      inferenceReadiness: "unknown",
+      recentInterruptions,
+      ...(degraded ? { guidance: LINK_RELAY_DEGRADED_GUIDANCE } : {}),
+    };
+  }
 }
 
 function iso(at: number): string {
@@ -132,12 +169,12 @@ export function attachLinkTunnelDiagnostics(dto: LinkStatusDto, supervisorStates
   for (const link of dto.links) {
     const status = byId.get(link.id);
     if (!status || status.direction !== "hub-initiated") continue;
-    const { state, history } = status;
-    const due = (state.kind === "failed" || state.kind === "reconnecting") && state.retryAt !== undefined && state.inFlight !== true
-      ? state.retryAt : null;
+    const { state, history, forwardRetryAt } = status;
+    const due = forwardRetryAt ?? ((state.kind === "failed" || state.kind === "reconnecting") && state.inFlight !== true
+      ? state.retryAt : undefined);
     link.tunnel = {
       attempt: history?.attempt ?? 0,
-      nextRetryAt: due === null ? null : iso(due),
+      nextRetryAt: due === undefined ? null : iso(due),
       lastTransition: history?.lastTransition
         ? { from: history.lastTransition.from, to: history.lastTransition.to, at: iso(history.lastTransition.at), cause: history.lastTransition.cause }
         : null,

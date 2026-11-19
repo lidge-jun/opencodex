@@ -13,7 +13,7 @@ import { loadHostCandidates } from "../../link/ssh-config";
 import { effectiveLinkRoutes, newLinkId, type LinkStore } from "../../link/store";
 import { claimLinkRetirement, clearLinkRetirement, disownLinkRetirement, readLinkRetirement, reownLinkRetirement, type LinkRetirement, type LinkRetirementMode } from "../../link/retirement";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
-import { attachLinkPeers, attachLinkRoutes, attachLinkTransport, attachLinkTunnelDiagnostics, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
+import { attachLinkPeers, attachLinkRelayHealth, attachLinkRoutes, attachLinkTransport, attachLinkTunnelDiagnostics, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
 import { homeLinkChildParity } from "../../link/child-parity";
 import { codexSettingsDigest, projectHomeCodexSettings } from "../../link/codex-settings";
 import { localLinkPeer } from "../../link/compatibility";
@@ -776,6 +776,10 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
     }
     // The same opt-in for each Home-initiated tunnel's retry progress and last failure cause.
     if (url.searchParams.get("diagnostics") === "1") attachLinkTunnelDiagnostics(dto, supervisorStates);
+    if (url.searchParams.get("relayHealth") === "1") {
+      const now = (ctx.deps.now ?? Date.now)();
+      attachLinkRelayHealth(dto, id => state.supervisor.connectionGeneration?.(id), id => state.listener.linkActivity?.(id, now));
+    }
     // The same opt-in for the route each multi-route link uses and why the others rest.
     if (url.searchParams.get("routes") === "1") attachLinkRoutes(dto, supervisorStates);
     // The same opt-in for each row's live link WebSocket counters and hold count (design 9.3).
