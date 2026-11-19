@@ -470,6 +470,7 @@ export interface WebSearchLoopDeps {
    * A rotation may cross ACCOUNTS, not just keys, and the attempt row is where an operator reads
    * which one happened. A rotator that knows which kind it performed returns it alongside the
    * adapter -- the same `{ adapter, recoveryKind }` shape `onCredentialError` already uses below.
+   * The usage snapshot includes any dispatched refusal before this hook can seal the attempt.
    */
   on429?: (
     retryAfterHeader: string | null,
@@ -871,8 +872,9 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           && (isAnthropicInstanceId(deps.incomingMeta?.providerName) || deps.incomingMeta?.providerName === "google-antigravity")
           && !accountRefusalOutputStarted)
         || (iterParsed._kiroAuthContext && (prepared.response.status === 400 || prepared.response.status === 403))) && deps.on429) {
+        const refusalUsage = mergePendingUsage(countersOnly(hiddenUsage), undefined);
         const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers,
-          iterParsed, prepared.response, hiddenUsage);
+          iterParsed, prepared.response, refusalUsage);
         if (!rotated) break;
         takeUsage(undefined);
         if (hiddenLegs > 0 && deps.onRotatedUsage?.(hiddenUsage)) {
