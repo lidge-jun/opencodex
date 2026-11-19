@@ -133,6 +133,29 @@ describe("ocx system settings desktop switches", () => {
     }
   });
 
+  test("reports a saved client-compaction switch whose history preflight refused application", async () => {
+    const { deps } = fakeRuntime(() => ({
+      ok: true,
+      codexDesktopSwitches: {
+        codexClientCompaction: { stored: true, effective: true },
+        apply: { applied: false, reason: "injection_refused", retryable: false,
+          detail: "history_paginated_openai_provider_locked" },
+        authSource: { summary: "Codex sign-in is required." },
+      },
+    }));
+    const output = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await handleSystemCommand(["settings", "--client-compaction", "on"], deps);
+      const text = output.mock.calls.flat().join("\n");
+      expect(text).toContain("Codex client compaction: stored on.");
+      expect(text).toContain("history_paginated_openai_provider_locked");
+      expect(text).not.toContain("effective on.");
+      expect(text).not.toContain("Run 'ocx sync'");
+    } finally {
+      output.mockRestore();
+    }
+  });
+
   test("prints a completed inline apply and the authless identity consequence", async () => {
     const { deps } = fakeRuntime(() => ({
       ok: true,

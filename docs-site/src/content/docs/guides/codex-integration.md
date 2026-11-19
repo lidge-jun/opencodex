@@ -554,6 +554,8 @@ ocx system settings --client-compaction on   # or "codexClientCompaction": true 
 ocx sync                                     # rewrites the active config (default: ~/.codex/config.toml); restart Desktop
 ```
 
+If the CLI reports `history_paginated_openai_provider_locked`, the preference was saved but the routing change was refused. To keep existing conversations resumable, keep client compaction and desktop authless off. Repeating the sync with the same settings will encounter the same refusal.
+
 The setting defaults to off. For authenticated loopback routing, OpenCodeX selects its existing
 dedicated provider form with `requires_openai_auth = true`. If `codexDesktopAuthless` is also
 enabled, that stronger compatibility setting takes precedence and writes
