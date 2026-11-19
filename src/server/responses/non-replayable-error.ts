@@ -75,7 +75,8 @@ export async function sanitizeNonReplayableUpstreamError(
     markResponseNonReplayable(refusal);
     return carryReplayRefusalToClient(response, refusal);
   }
-  if (terminalReplacement && invitesResendAfterReplacement(response.status)) {
+  const genuineNoRetry429 = response.status === 429 && hasNoRetryDirective(response);
+  if (terminalReplacement && !genuineNoRetry429 && invitesResendAfterReplacement(response.status)) {
     return carryReplayRefusal(response, projectReplayRefusal(UPSTREAM_RESET_REPLAY_REFUSED_CODE));
   }
   let type = "upstream_error";

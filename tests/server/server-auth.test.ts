@@ -3463,17 +3463,23 @@ describe("server local API auth", () => {
   // Release the suffix only after real inspection timed out, independent of header latency.
   test("stalled 400 body timeout never authorizes a pool retry", async () => {
     const prefix = unsupportedModelBody().slice(0, -1);
-    const body = prefix + "}";
     const stalled = timeoutGatedErrorBody(prefix, "}");
     let harness: PoolRetryHarness | undefined;
     try {
-      harness = await startPoolRetryHarness(() => rejectionResponse(stalled.stream()));
+      harness = await startPoolRetryHarness(() => rejectionResponse(stalled.stream(), { "retry-after": "60" }));
       const response = await harness.request();
       expect(response.status).toBe(400);
-      expect(response.headers.get("x-pool-retry-test")).toBe("original");
-      expect(await response.text()).toBe(body);
+      expect(response.headers.get("x-pool-retry-test")).toBeNull();
+      expect(response.headers.get("x-should-retry")).toBe("false");
+      expect(response.headers.get("retry-after")).toBeNull();
+      expect(await response.json()).toEqual({ error: {
+        type: "upstream_error",
+        message: "Provider error 400: upstream diagnostic withheld for a non-replayable failure",
+      } });
       expect(stalled.observedTimeouts()).toBeGreaterThan(0);
       expect(harness.dispatches).toEqual(["acct-pool-a"]);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getCodexUpstreamHealth("pool-b")).toBeNull();
     } finally {
       stalled.restore();
       if (harness) await stopPoolRetryHarness(harness);

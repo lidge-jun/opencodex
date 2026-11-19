@@ -98,6 +98,8 @@ response through quota observation. A native post-header replacement retains its
 wire code through a failed body reread, subject to caller cancellation. The protocol replacement
 selector distinguishes a recognized refusal from an inconclusive probe: an unusable replacement
 is cancelled, and an operator replacement that invites another send settles as the fixed refusal.
+A genuine replacement 429 with an explicit upstream retry veto keeps its withheld-diagnostic
+envelope after quota observation. A recognized refusal code still selects the fixed refusal.
 The selector also keeps the fixed projection of a verified
 [xAI Legacy 403](../providers/xai-grok.md#legacy-privacy-mode-403).
 

@@ -7,6 +7,7 @@ import { getDebugLogEntries, resetDebugLogBufferForTests } from "../../../src/li
 import { clearDebugSetting, getDebugSettings, setDebugSettings } from "../../../src/lib/debug-settings";
 import { encodeMessage } from "../../../src/lib/eventstream-decoder";
 import { createRequestExecutionBudget } from "../../../src/lib/request-execution-budget";
+import { isReplayRefusalResponse } from "../../../src/lib/upstream-retry";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import { withTestTranslatorBudget } from "../../helpers/translator-budget";
 
@@ -238,7 +239,7 @@ test("account switch before alternate sends rebuilt account headers and body", a
   expect(bearers).toEqual(["Bearer old", "Bearer new"]);
 });
 
-test("header deadline becomes 504 without rotating; caller abort preserves its reason", async () => {
+test("dispatched POST header deadline becomes a replay refusal without rotating; caller abort preserves its reason", async () => {
   const urls: string[] = [];
   const executor = (async (input: RequestInfo | URL, init?: RequestInit) => {
     urls.push(String(input));
@@ -249,8 +250,15 @@ test("header deadline becomes 504 without rotating; caller abort preserves its r
     });
   }) as typeof fetch;
   const timed = await fetchKiroWithRetry(request, { executor, timeoutMs: 1 });
-  expect(timed.status).toBe(504);
-  expect(await timed.text()).toBe("Kiro upstream gateway timeout");
+  expect(timed.status).toBe(429);
+  expect(isReplayRefusalResponse(timed)).toBe(true);
+  expect(timed.headers.get("x-should-retry")).toBe("false");
+  expect(timed.headers.get("retry-after")).toBeNull();
+  expect(await timed.json()).toEqual({ error: {
+    type: "upstream_error",
+    code: "upstream_reset_replay_refused",
+    message: "The upstream exchange did not complete reliably. The request may already have been processed; automatic replay was stopped.",
+  } });
   expect(urls).toEqual([request.url]);
   const caller = new AbortController();
   const reason = new DOMException("caller closed", "AbortError");
