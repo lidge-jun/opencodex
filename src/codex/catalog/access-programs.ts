@@ -7,7 +7,7 @@ import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { BUILT_IN_NATIVE_OPENAI_MODELS } from "./native-models";
 import {
   isNativeAliasCatalogEntry, NATIVE_OPENAI_CONTEXT_OVERRIDES, nativeOpenAiConfiguredContextLimit,
-  pinnedNativeCapabilityFlag, SUPPORTED_NATIVE_OPENAI_SLUGS, type NativeContextLimits,
+  narrowNativeOpenAiContextWindow, pinnedNativeCapabilityFlag, SUPPORTED_NATIVE_OPENAI_SLUGS, type NativeContextLimits,
 } from "./metadata";
 import type { RawEntry } from "./parsing";
 
@@ -28,7 +28,7 @@ function applyBuiltInCapabilities(
   const defaultWindow = roster.context_window ?? fallback?.contextWindow;
   if (defaultWindow === undefined || maximum === undefined) return;
   const configured = nativeOpenAiConfiguredContextLimit(slug, limits);
-  const window = Math.min(configured ?? defaultWindow, maximum);
+  const window = Math.min(narrowNativeOpenAiContextWindow(defaultWindow, slug, limits) ?? defaultWindow, maximum);
   const retained = entry.context_window === window ? entry.auto_compact_token_limit : undefined;
   const budget = clampAutoCompactTokenLimit(window, fallback?.maxInputTokens, limits.modelAutoCompactTokenLimits?.[slug]);
   entry.context_window = window;

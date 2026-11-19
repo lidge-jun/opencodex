@@ -124,6 +124,21 @@ test("hidden rows and failed or unlisted main rosters cannot retain a prompt", a
 
 let home: TempHome | undefined;
 
+test.each([
+  ["gpt-5.5", 840_000, 272_000],
+  ["gpt-5.5", 200_000, 200_000],
+  ["gpt-5.6-sol", 840_000, 840_000],
+  ["gpt-6-astra", 840_000, 840_000],
+] as const)("roster window for %s respects its opt-in policy with cap %d", async (slug, cap, expected) => {
+  const result = await snapshot([{ ...rosterRow(slug), context_window: 272_000, max_context_window: 872_000 }]);
+  const row: RawEntry = { slug, context_window: 272_000, auto_compact_token_limit: 244_800 };
+  applyNativeRosterMetadata([row], result, new Map(), { cap });
+  expect(row.context_window).toBe(expected);
+  expect(row.max_context_window).toBe(Math.min(cap, 872_000));
+  expect(row.auto_compact_token_limit).toBeLessThanOrEqual(expected);
+  if (slug === "gpt-5.5" && cap > 272_000) expect(row.auto_compact_token_limit).toBe(244_800);
+});
+
 test("exact native capabilities respect configured limits and exclude routed and alias rows", async () => {
   const luna = "gpt-6-luna";
   const daybreak = "gpt-daybreak-blue-latest";
