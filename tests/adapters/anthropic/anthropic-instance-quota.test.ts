@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   createAnthropicInstanceFixture, INSTANCE_FIXTURE_INSTANCES, anthropicInstanceBarrier,
   type AnthropicInstanceFixture,
 } from "../../helpers/anthropic-instance-fixture";
+import type { ProviderQuota } from "../../../src/providers/quota-types";
 import type { AnthropicInstanceId } from "../../../src/providers/anthropic-instance-id";
 import type { GenerationContext } from "../../../src/lib/state-store-sweeper";
 import { resetNearWeightOf } from "../../../src/routing/machine-weighted-routing";
@@ -377,8 +378,8 @@ test("Anthropic account and provider refreshes both stamp fresh weighted plan ev
   expectFreshWeight();
 });
 
-test("persisted Anthropic quota stays retired after credential reuse and cache hydration", async () => {
-  const { instance, id, original, weight, rotate } = await seedWeightedAnthropicQuota();
+test("persisted Anthropic quota projects cleanly on downgrade and stays revision-bound on hydration", async () => {
+  const { instance, id, original, observedAt, weight, rotate } = await seedWeightedAnthropicQuota();
   const { settleAccountQuotaPersistForTests } = await import("../../../src/providers/account-quota-disk");
   let flush!: () => void;
   const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void) => {
@@ -388,15 +389,46 @@ test("persisted Anthropic quota stays retired after credential reuse and cache h
   try { cache.persistAccountQuotaCache(); } finally { timer.mockRestore(); }
   flush();
   await settleAccountQuotaPersistForTests();
-  cache.clearAccountQuotaCache();
-  cache.hydrateAccountQuotaCache();
-  expect(f.quota.getCachedProviderAccountQuota(instance, id)?.fiveHourPercent).toBe(30);
-  expect(weight()).toBe(1); // Hydration never restores live observation clocks.
+  const key = cache.accountCacheKey(instance, id);
+  const path = join(f.paths.OPENCODEX_HOME, "provider-account-quota-cache.json");
+  const raw = readFileSync(path, "utf8");
+  const snapshot = JSON.parse(raw) as {
+    version: number;
+    rows?: Record<string, ProviderQuota>;
+    anthropicCredentialKeys?: Record<string, string>;
+  };
+  // The parent reader (25463d7f80) checks the v1 row and passes all its fields through
+  // Anthropic hydration to the account DTO. This fixture holds only live plan meters.
+  const row = snapshot.version === 1 && snapshot.rows && typeof snapshot.rows === "object"
+    ? snapshot.rows[key] : undefined;
+  const now = Date.now();
+  const priorQuota = row && typeof row === "object" && Number.isFinite(row.updatedAt)
+    && now - row.updatedAt <= 6 * 60 * 60_000 ? cache.normalizeAnthropicQuota(row, now) : null;
+  const priorAccountDto = { id, quota: priorQuota };
+  expect(priorAccountDto).toEqual({ id, quota: {
+    fiveHourPercent: 30, fiveHourResetAt: observedAt + 3_600_000,
+    weeklyPercent: 30, weeklyResetAt: observedAt + 3_600_000, updatedAt: observedAt,
+  } });
+
+  const ownership = snapshot.anthropicCredentialKeys?.[key];
+  expect(ownership).toMatch(/^[a-f0-9]{64}$/);
+  const inlineSnapshot = JSON.stringify({ version: 1, rows: { [key]: { ...row, anthropicCredentialKey: ownership } } });
+  for (const contents of [raw, inlineSnapshot]) {
+    writeFileSync(path, contents);
+    cache.clearAccountQuotaCache();
+    cache.hydrateAccountQuotaCache();
+    expect(f.quota.getCachedProviderAccountQuota(instance, id)).toEqual(priorQuota);
+    expect(weight()).toBe(1); // Hydration never restores live observation clocks.
+  }
+
   await rotate();
   await f.store.saveAccountCredential(instance, id, original);
-  cache.clearAccountQuotaCache();
-  cache.hydrateAccountQuotaCache();
-  expect(f.quota.getCachedProviderAccountQuota(instance, id)).toBeNull();
+  for (const contents of [raw, inlineSnapshot]) {
+    writeFileSync(path, contents);
+    cache.clearAccountQuotaCache();
+    cache.hydrateAccountQuotaCache();
+    expect(f.quota.getCachedProviderAccountQuota(instance, id)).toBeNull();
+  }
 });
 
 test.each(["before", "after"] as const)("failed Anthropic usage probe retains weight only until credential rotation %s the probe", async rotation => {

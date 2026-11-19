@@ -11,7 +11,7 @@ import type { GenerationContext } from "../../lib/state-store-sweeper";
 import { ACCOUNT_QUOTA_TTL_MS, toFiniteNumber } from "../quota-wire";
 import { clearKiroAccountUsageState, hydrateKiroUsageVerdict, kiroPersistableVerdicts, reconcileKiroAccountUsageState } from "../kiro-usage";
 import { kiroEvidenceIdentity, sanitizeKiroQuota, type KiroPersistedQuota } from "../kiro-account-state-disk";
-import { cancelPendingAccountQuotaPersist, readPersistedAccountQuotas, readPersistedKiroVerdicts, schedulePersistAccountQuotas } from "../account-quota-disk";
+import { cancelPendingAccountQuotaPersist, readPersistedAccountQuotaSnapshot, readPersistedKiroVerdicts, schedulePersistAccountQuotas } from "../account-quota-disk";
 import type { ProviderAccount } from "../../oauth/types";
 import { replaceCachedProviderQuotas } from "../quota-routing-cache";
 import { getProviderRegistryEntry } from "../registry";
@@ -218,7 +218,8 @@ export function hydrateAccountQuotaCache(): void {
   const store = loadAuthStore();
   const liveKiro = new Map<string, ProviderAccount>(store.kiro?.accounts.map(account =>
     [accountCacheKey("kiro", account.id), account]) ?? []);
-  for (const [key, quota] of readPersistedAccountQuotas(now)) {
+  const { rows, anthropicCredentialKeys } = readPersistedAccountQuotaSnapshot(now);
+  for (const [key, quota] of rows) {
     if (key.startsWith("kiro\0")) {
       const account = liveKiro.get(key);
       if (!account || (quota as KiroPersistedQuota).identity !== kiroEvidenceIdentity(account)
@@ -232,14 +233,17 @@ export function hydrateAccountQuotaCache(): void {
     // Disk stores observation time, not the Anthropic usage probe's clock.
     if (!accountQuotaCache.has(key)) {
       const anthropic = isAnthropicAccountCacheKey(key);
-      const { anthropicCredentialKey, ...anthropicQuota } = quota as AnthropicPersistedQuota;
+      // Also read and strip inline ownership from snapshots written by the earlier writer.
+      const { anthropicCredentialKey: inlineKey, ...anthropicQuota } = quota as ProviderQuota & { anthropicCredentialKey?: unknown };
+      const metadataKey = anthropicCredentialKeys?.[key];
+      const anthropicCredentialKey = metadataKey === undefined ? inlineKey : metadataKey;
       if (anthropic && anthropicCredentialKey !== undefined
-        && !anthropicCacheKeyIsCurrent(key, anthropicCredentialKey, store)) continue;
+        && (typeof anthropicCredentialKey !== "string" || !anthropicCacheKeyIsCurrent(key, anthropicCredentialKey, store))) continue;
       accountQuotaCache.set(key, {
         ts: anthropic ? 0 : quota.updatedAt,
         quota: anthropic ? hydrateAnthropicQuota(anthropicQuota, now)
           : key.startsWith("kiro\0") ? sanitizeKiroQuota(quota) : quota,
-        ...(anthropic && anthropicCredentialKey !== undefined ? { anthropicCredentialKey } : {}),
+        ...(anthropic && typeof anthropicCredentialKey === "string" ? { anthropicCredentialKey } : {}),
         ...(key.startsWith("kiro\0") ? { identity: (quota as KiroPersistedQuota).identity } : {}),
       });
     }
@@ -265,8 +269,7 @@ export function persistAccountQuotaCache(): void {
           yield [key, { ...sanitizeKiroQuota(quota), identity: entry.identity } as KiroPersistedQuota] as [string, KiroPersistedQuota];
       } else if (quota && entry.anthropicCredentialKey !== undefined) {
         if (anthropicCacheKeyIsCurrent(key, entry.anthropicCredentialKey, store)) {
-          const persisted: AnthropicPersistedQuota = { ...quota, anthropicCredentialKey: entry.anthropicCredentialKey };
-          yield [key, persisted] as [string, ProviderQuota];
+          yield [key, quota, entry.anthropicCredentialKey] as [string, ProviderQuota, string];
         }
       } else if (quota) yield [key, quota] as [string, ProviderQuota];
     }
@@ -313,8 +316,6 @@ export function providerOAuthAccountQuotaMode(provider: string): AccountQuotaMod
 export function accountCacheKey(provider: string, accountId: string): string {
   return `${provider}\u0000${accountId}`;
 }
-
-type AnthropicPersistedQuota = ProviderQuota & { anthropicCredentialKey?: string };
 
 function anthropicCacheKeyIsCurrent(key: string, credentialKey: string, store: AuthStore = loadAuthStore()): boolean {
   const separator = key.indexOf("\0");

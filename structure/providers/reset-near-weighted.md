@@ -22,4 +22,5 @@ shared five-hour and weekly bars on account and provider refresh. Both clocks be
 credential revision that supplied their readings. In both pools, carrying a bar forward during a partial update
 preserves its original observation time. An Anthropic probe that only retires monthly extra usage
 keeps those clocks for unchanged plan bars that still belong to the current credential.
-Hydrated display snapshots lack live observation clocks.
+Hydrated display snapshots lack live observation clocks. The account cache checks [snapshot
+ownership metadata](../quota-snapshots.md) against the current credential revision before hydration.
