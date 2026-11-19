@@ -255,6 +255,8 @@ export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequest
   /** Process-owned provenance when a later parse of the client body must skip its usage.
    *  The original provider usage, when present, is already recorded on this context. */
   clientResponseUsage?: "estimated" | "synthetic";
+  /** A committed keepalive's native child owns raw usage; only the outer client-body log tap skips it. */
+  clientSseUsageAlreadyInspected?: boolean;
   /** Secret-redacted upstream error reason (e.g. the granular Cursor "rate limit exceeded…"
    * message) extracted from a `response.failed` SSE payload or non-streaming error body, so the
    * request log / GUI shows the actual upstream failure rather than only the HTTP-mapped code. */
