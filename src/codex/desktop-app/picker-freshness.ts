@@ -25,9 +25,8 @@
  * desktop restart: a stale picker the operator asked us to fix is the failure this
  * command exists to prevent, so missing evidence never skips it.
  */
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { activeCodexConfigPath, resolveActiveCodexConfigPath } from "../catalog/parsing";
-import { readRootTomlString } from "../paths";
+import { statSync } from "node:fs";
+import { readCodexCatalogBinding } from "../paths";
 import { readProcessStartMsBatch } from "../app-server-processes";
 import { listCodexDesktopShellPids, type DesktopAppRestartIo } from "../desktop-app-restart";
 import { isTestHomeGuardArmed } from "../../lib/test-home-guard";
@@ -61,17 +60,7 @@ export interface DesktopPickerIo extends DesktopAppRestartIo {
   catalogMtimeMs?: (path: string) => number | null;
 }
 
-/** The resolved `model_catalog_json` path, or null when config.toml binds no catalog. */
-export function readCodexCatalogBinding(): string | null {
-  try {
-    const configPath = activeCodexConfigPath();
-    if (!existsSync(configPath)) return null;
-    const path = readRootTomlString(readFileSync(configPath, "utf-8"), "model_catalog_json");
-    return path ? resolveActiveCodexConfigPath(path) : null;
-  } catch {
-    return null;
-  }
-}
+export { readCodexCatalogBinding };
 
 function defaultCatalogMtimeMs(path: string): number | null {
   try {

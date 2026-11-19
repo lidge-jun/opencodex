@@ -287,7 +287,7 @@ describe("Codex config injection", () => {
       'model = "gpt-5.5"',
       'model_context_window = 1000000',
       'model_auto_compact_token_limit = 900000',
-      'model_catalog_json = "/tmp/opencodex-catalog.json"',
+      'model_catalog_json = "opencodex-catalog.json"',
       'model_provider = "opencodex"',
       "",
       "[features]",
@@ -642,7 +642,7 @@ describe("Design B openai_base_url injection", () => {
     const injected = setRootOpenaiBaseUrl([
       'model = "opencode-go/minimax-m3"',
       'model_verbosity = "high"',
-      'model_catalog_json = "/tmp/opencodex-catalog.json"',
+      'model_catalog_json = "opencodex-catalog.json"',
       "",
       "[features]",
       "fast_mode = true",

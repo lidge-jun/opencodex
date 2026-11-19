@@ -701,6 +701,7 @@
   "codex-history-writer.test.ts": "codex-integration", "codex-home-wsl.test.ts": "codex-integration",
   "codex-home-wsl-local-state.test.ts": "codex-integration",
   "codex-inject-history-wording.test.ts": "codex-integration", "codex-inject-integration.test.ts": "codex-integration",
+  "codex-inject-catalog-tilde.test.ts": "codex-integration",
   "codex-inject-missing-config.test.ts": "codex-integration",
   "codex-inject-retained-table.test.ts": "codex-integration", "codex-inject-v1-reconcile.test.ts": "codex-integration",
   "codex-inject-write-lock.test.ts": "codex-integration", "codex-inject.test.ts": "codex-integration",

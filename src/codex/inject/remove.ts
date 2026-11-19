@@ -14,6 +14,7 @@ import {
   journaledInjectedRootValues,
   journaledInjectedRootWebSearch,
   journaledInjectedSubagentDefaults,
+  journaledOwnedCatalogBinding,
   journaledReplacedRootWebSearch,
 } from "../journal";
 import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "../paths";
@@ -93,6 +94,7 @@ function stripOpencodexConfigResult(
   journaledRootWebSearch: string | null = null,
   journaledReplacedWebSearch: string | null = null,
   journaledSubagentDefaults: WrittenSubagentDefaults | null = null,
+  journaledCatalogBinding: string | null = null,
 ): StripOpencodexConfigResult {
   let out = content;
   const hadRootOcxProvider =
@@ -133,7 +135,7 @@ function stripOpencodexConfigResult(
   // A marked value the user edited after injection is theirs (#7425) and survives restore.
   const managedDefaults = transformManagedSubagentDefaults(out, null, journaledSubagentDefaults);
   if (managedDefaults.ok) out = managedDefaults.content;
-  out = stripOpencodexCatalogPath(out);
+  out = stripOpencodexCatalogPath(out, { journaledPath: journaledCatalogBinding });
   return {
     content: normalizeStructuralWhitespace(out),
     managedDefaultsError: !managedDefaults.ok ? managedDefaults.error : null,
@@ -252,6 +254,7 @@ export function removeCodexConfig(
     journaledRootWebSearch,
     journaledReplaced,
     journaledInjectedSubagentDefaults(),
+    journaledOwnedCatalogBinding(),
   );
   // Captured from the pre-strip bytes: the strip is what removes the table, so reading it
   // afterwards would find nothing.

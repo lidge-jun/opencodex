@@ -84,7 +84,7 @@ Codex's built-in `openai` provider id and points that provider at opencodex:
 
 ```toml
 # root keys, before the first table
-model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
+model_catalog_json = "opencodex-catalog.json"
 # Auto-injected by opencodex (undo: ocx restore)
 openai_base_url = "http://127.0.0.1:10100/v1"
 # Auto-injected by opencodex (undo: ocx restore)
@@ -401,7 +401,7 @@ uses a dedicated provider instead:
 ```toml
 # root keys
 model_provider = "opencodex"
-model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
+model_catalog_json = "opencodex-catalog.json"
 
 # appended at the end of the file
 # Auto-injected by opencodex (undo: ocx restore)
@@ -467,6 +467,16 @@ On WSL, if `CODEX_HOME` is unset and the Linux `~/.codex` directory is absent or
 checks for a single Windows Codex Desktop home at `/mnt/c/Users/*/.codex/config.toml`. When exactly
 one candidate exists, it uses that directory so WSL app-server mode and Windows Codex Desktop share
 the same config and auth files. Set `CODEX_HOME` explicitly to override this detection. When Windows Codex Desktop runs its app-server inside WSL, it ships the Linux Codex binary under that home as `bin/wsl/<hash>/codex`; opencodex finds it there when the service PATH has no `codex`, after any explicitly configured runtime and PATH.
+
+When the catalog is beside `config.toml`, OpenCodex writes its filename as `model_catalog_json` so
+Windows Codex and the WSL app-server can both open it from the shared home. Run `ocx sync` on
+Windows to update an older OpenCodex binding that contains a Windows absolute path. This also
+applies to sync on a lightweight Link Child. The Child recognizes symlinked directories and, on
+macOS and Linux, `~/` paths that select its catalog. It refuses attach or sync while
+`config.toml` selects a different catalog or contains invalid TOML. Detach keeps the generated
+catalog if the restored config still points to it. The full OpenCodex install
+preserves custom catalog assignments. Its generated profile uses an absolute path for a catalog
+in another directory and resolves `~/` against your user home on macOS and Linux.
 
 If the Codex home exists but Codex has not written `config.toml` yet (for example a fresh Desktop install
 that was never signed in to OpenAI), opencodex creates an empty `config.toml` there and continues. If
