@@ -75,7 +75,7 @@ Probes accept only numeric IPv4/IPv6 destinations. Default and localhost binds u
   `ENOSYS` from either startup syscall, or an unsupported syscall architecture, selects the existing
   live-parent fallback and logs the limitation. Permission/resource/identity errors and unavailable
   libc bindings refuse recovery. Both glibc and musl libc bindings are supported without new deps.
-  The watching line ends with `(pidfd)` when the binding succeeds. Explicit Link Child stop reuses pidfd acquisition with the attested creation identity and rechecks it before SIGTERM and SIGKILL.
+  The watching line ends with `(pidfd)` when the binding succeeds.
 - macOS, and Linux without pidfd support, check the live `process.ppid` immediately before
   SIGKILL. This fallback is probabilistic: if the sentinel is descheduled between the check and
   `kill` while the parent exits, is reaped, and its PID is reused, the signal can reach that process.
