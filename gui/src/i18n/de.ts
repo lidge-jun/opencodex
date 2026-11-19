@@ -3029,6 +3029,7 @@ export const de: Record<TKey, string> = {
   "modal.freeTierTitle": "Kostenloser Tarif",
   "modal.subscriptionCliTitle": "Abo-CLI, kein API-Schlüssel",
   "modal.subscriptionCliWarning": "Dieser Anbieter verwendet keinen API-Schlüssel. Er steuert die offizielle, auf diesem Rechner angemeldete Claude Code CLI ({cmd}) und rechnet über dieses Claude-Abonnement ab. OpenCodex speichert dafür keinen Schlüssel, und ein hier eingegebener Schlüssel wird nie verwendet. Für die Abrechnung per API-Schlüssel füge stattdessen {apiProvider} hinzu.",
+  "modal.subscriptionCliWarningAgy": "Dieser Anbieter nutzt die offizielle Antigravity CLI, die auf dem Proxy-Host angemeldet ist ({cmd}). Die Nutzung wird über dieses Google-Antigravity-Konto abgerechnet. Google erlaubt nur interaktive, vom Nutzer gesteuerte Nutzung. OpenCodex lehnt Subagenten-Turns, Kombinationen und Subagenten-Fallback-Routing ab und prüft anhand der beobachteten Verbindung, ob Anfragen lokal sind. Eine nicht deklarierte Loopback-Weiterleitung kann entfernte Anfragen lokal erscheinen lassen, wenn sie keine Weiterleitungsheader übermittelt. Tragen Sie den Reverse-Proxy für den öffentlichen Listener in dashboardTrustedProxy ein oder leiten Sie diesen Port nicht weiter. Ein API-Schlüssel ist weder erforderlich noch wird einer gespeichert. Für programmatische oder geteilte Arbeitslasten fügen Sie stattdessen {apiProvider} hinzu.",
   "modal.freeTierDefault": "Kein API-Schlüssel nötig. Funktioniert sofort.",
   "modal.tab.accounts": "Konten",
   "modal.tab.free": "Kostenlos",

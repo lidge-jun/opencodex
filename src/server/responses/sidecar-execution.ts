@@ -76,6 +76,7 @@ export async function executeResponsesSidecars(
     | "parsed"
     | "route"
     | "inboundWire"
+    | "subagentFallbackSelected"
     | "selectedForwardHeaders"
     | "translatorBudget"
     | "completedToolBlocks"
@@ -647,7 +648,10 @@ export async function executeResponsesSidecars(
       ...(transportState.adapter.name === "anthropic" ? { thinkingRecovery } : {}),
       ...(imageRecovery ? { imageRecovery } : {}),
       clientToolCatalogRestriction: route.provider.authMode === "forward" ? undefined : requestState.clientToolCatalogRestriction,
-      incomingMeta: { headers: requestState.selectedForwardHeaders, providerName: route.providerName, abortSignal: options.abortSignal, translatorBudget, ...(options.comboInitialSend ? { providerFetch: imageProviderFetch } : {}), ...sidecarBudget.incomingMeta },
+      incomingMeta: { headers: requestState.selectedForwardHeaders, providerName: route.providerName, abortSignal: options.abortSignal, translatorBudget, ...(options.comboInitialSend ? { providerFetch: imageProviderFetch } : {}), ...sidecarBudget.incomingMeta,
+        // Policy facts ride every runTurn caller, independent of a combo send-budget receipt.
+        comboAttempt: options.comboAttempt === true, ...(requestState.subagentFallbackSelected ? { subagentFallback: true } : {}),
+        ...(options.internalDecisionCall ? { internalDecisionCall: true } : {}) },
       onProducerStart: sidecarBudget.takeProducerOwnership,
       onProducerEnd: sidecarBudget.release,
       onIterationEnd: sidecarBudget.releaseUnsentHop,
@@ -796,6 +800,9 @@ export async function executeResponsesSidecars(
           onPhysicalSend: (send: { ordinal: number; recovery?: AttemptRecoveryKind }) =>
             sendBudgetState.noteAdapterPhysicalSend(logCtx.usageLogInputTokens, send),
         } : sidecarBudget.incomingMeta),
+        comboAttempt: options.comboAttempt === true,
+        ...(requestState.subagentFallbackSelected ? { subagentFallback: true } : {}),
+        ...(options.internalDecisionCall ? { internalDecisionCall: true } : {}),
       },
       backend: wsPlan.backend,
       forwardProvider: wsPlan.forwardSidecar?.provider,

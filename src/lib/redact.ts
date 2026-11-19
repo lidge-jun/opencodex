@@ -2,6 +2,14 @@ import { foldForMatching } from "./redact-folding";
 
 export const REDACTED_SECRET = "[REDACTED]";
 
+// Minted management, dashboard, catalog-read, device/pairing, data-plane and Remote Workspace credential values.
+// Match inside quoted strings and identifiers as well as standalone tokens.
+export const OPEN_CODEX_CREDENTIAL_PATTERN = /ocx_(?:(?:admin|session|device|proof|pair|catalog)_[A-Za-z0-9_-]{43}|data_[0-9a-f]{40})|ocxrw_[A-Za-z0-9_-]{43}/g;
+
+export function redactOpenCodexCredentials(value: string): string {
+  return value.replace(OPEN_CODEX_CREDENTIAL_PATTERN, REDACTED_SECRET);
+}
+
 /**
  * Credential-bearing header/field names. Exported for transports that must refuse to send
  * credentials over an unsafe channel (e.g. plaintext non-loopback HTTP) rather than
@@ -397,7 +405,7 @@ function isSensitiveKey(key: string): boolean {
 }
 
 export function redactSecretString(value: string): string {
-  let redacted = maskOtherFramings(maskCredentialHeaders(value));
+  let redacted = redactOpenCodexCredentials(maskOtherFramings(maskCredentialHeaders(value)));
   for (const rule of SECRET_VALUE_PATTERNS) {
     redacted = typeof rule === "function" ? rule(redacted) : redacted.replace(rule[0], rule[1]);
   }

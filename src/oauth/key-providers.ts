@@ -1,3 +1,4 @@
+import { isAgyAcpProvider } from "../config/schema/agy-acp-references";
 import type { OcxProviderConfig } from "../types";
 import { deriveKeyLoginMap, enrichProviderFromRegistry, type DerivedKeyLoginProvider } from "../providers/derive";
 import { providerModelsUrl, resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
@@ -72,6 +73,7 @@ export async function validateApiKey(
   provider: KeyLoginProvider,
   key: string,
 ): Promise<boolean | "unknown"> {
+  if (isAgyAcpProvider(providerName, provider)) return false;
   try {
     // A public model catalog cannot prove that the supplied key is valid. Returning unknown keeps
     // the best-effort login flow available without persisting a false-positive validation result.

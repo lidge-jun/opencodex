@@ -338,6 +338,20 @@ El identificador de modelo que elige es una familia de modelos, y el esfuerzo de
 - Obtiene una lista de modelos en vivo acotada y limitada a la cuenta para la visualización y la inferencia de familia de proveedor; la lista no es una lista de modelos permitidos, por lo que un id de modelo proporcionado por quien llama se sigue reenviando.
 - Experimental, no oficial y no respaldado por Zed. Usarlo puede romper los términos de servicio de Zed y puede limitar o suspender la cuenta de Zed; ese riesgo es el del usuario.
 
+## `agy-acp`
+
+**Destinos:** la Antigravity CLI oficial (`agy acp`, 1.5.3 o posterior) como proceso hijo local mediante el Agent Client Protocol v1 (JSON-RPC delimitado por saltos de línea en stdio).
+**Autenticación:** ninguna en OpenCodex; la CLI es dueña de su inicio de sesión de Google.
+
+- Solo `runTurn`: una sesión ACP por turno (`initialize`, `session/new`, `session/set_config_option`, `session/prompt`). El modelo y el nivel de pensamiento se seleccionan mediante las opciones que anuncia la CLI; el modelo Gemini seleccionado debe confirmarse antes del prompt y seguir seleccionado durante él, o el turno falla de forma cerrada.
+- La conversación se convierte en un único prompt de texto. Si la CLI admite un prompt de sistema separado, el texto de sistema se envía en `session/new`. El prompt de texto conserva los 200.000 caracteres más recientes y añade el marcador `[truncated]` al recortar el texto anterior. Si la CLI no admite un prompt de sistema separado, el bloque de sistema se antepone al prompt de texto y puede quedar recortado en parte o por completo.
+- Las solicitudes de permiso se responden con `cancelled`, las solicitudes de sistema de archivos y de terminal de la CLI no se ejecutan, y los errores llevan texto fijo: nunca se devuelven el stderr de la CLI ni sus mensajes de error.
+- OpenCodex busca los patrones de credenciales compatibles en el texto de respuesta y de razonamiento, incluso cuando los valores se dividen entre varias tramas ACP.
+  En los campos OAuth de JSON entre comillas, los espacios en blanco y los saltos de línea a ambos lados de los dos puntos también pueden abarcar varias tramas.
+- Cada turno empieza en un espacio de trabajo privado recién creado que solo contiene su propio directorio temporal vacío. En POSIX, la limpieza confirma que el grupo de procesos de la CLI ha desaparecido antes de eliminar el espacio de trabajo. Los descendientes que abandonan deliberadamente el grupo quedan fuera de esa comprobación. La eliminación no expone archivos preexistentes del usuario.
+- `end_turn` completa; `max_tokens` trunca la respuesta. Un `refusal` termina un flujo de Responses con `response.failed` e `invalid_prompt` para que Codex deje de reintentarlo. `max_turn_requests`, un `cancelled` no solicitado y un motivo de parada desconocido hacen fallar el turno.
+- Rechaza turnos de subagente, de hilos generados, de memoria de Codex y de compactación automática, miembros de combo y llamadas de decisión de combos, y rutas de reserva de subagentes. Chat Completions, Responses y Responses Compact devuelven `403 agy_acp_interactive_only` para los turnos identificados como desatendidos. Responses por WebSocket comprueba la compactación automática en cada trama. La compactación manual sigue disponible. OpenCodex determina si la solicitud es local a partir de la conexión observada y rechaza las solicitudes con cabeceras de reenvío reconocidas. Un intermediario en loopback o un reenvío de puerto por SSH que no añada ninguna de esas cabeceras puede parecer local. En el listener público, declara el proxy inverso en `dashboardTrustedProxy` o evita reenviar este puerto. Consulta el [catálogo de claves API](/es/guides/api-key-catalog/#antigravity-cli-acp-local).
+
 ## `azure-openai` (alias: `azure`)
 
 **Objetivos:** **Azure OpenAI**. Envuelve `openai-responses` (así también `passthrough: true`). **Auth:** `key` a través del encabezado `api-key` (no portador).

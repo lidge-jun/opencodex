@@ -26,6 +26,7 @@ import {
 } from "../codebuddy-models";
 import { QODER_CN_MODELS, QODER_GLOBAL_MODELS, QODER_REASONING_EFFORTS } from "../qoder-models";
 import type { ProviderRegistryEntry } from "./types";
+import { AGY_ACP_DEFAULT_MODEL, AGY_ACP_SEED_MODELS } from "./agy-acp-models";
 import {
   ZAI_GLM_53_MODELS,
   ZAI_GLM_5X_MODELS,
@@ -1751,5 +1752,29 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     note: "Runs Claude subscription traffic through Anthropic's own harness: the official Claude Code CLI headlessly (`claude -p`), one turn per request. OpenCodex stores no Claude token and injects none into CLI requests (quota admission only reads it in memory) — the CLI signs in and bills the account itself, which is why this row is keyless and an API key saved here never reaches the harness (use `anthropic-apikey` for key billing). The sign-in is the one of the user this proxy runs as, so every request served through this row — by any client of this proxy — spends that same account; OpenCodex neither pools nor multiplexes Claude sign-ins. Requires the CLI (`npm i -g @anthropic-ai/claude-code`) and a signed-in session (`claude` -> /login). v1 disables CLI tools (--tools \"\", --strict-mcp-config) so the client retains tool ownership; text, reasoning and native image input are supported. Subscription routing authorization flagged for maintainer review.",
+  },
+  {
+    // The official Antigravity CLI over the Agent Client Protocol (`agy acp`), the owner-approved
+    // alternative to credential replay (#8480, plan 080). Like claude-cli it is keyless rather than
+    // `local`: traffic still reaches Google, through the CLI's own sign-in. One account (the CLI's),
+    // no rotation, local requests only, Gemini only, interactive use only; config validation and
+    // the adapter's policy gate enforce those. The existing google-antigravity provider is unchanged.
+    id: "antigravity-acp",
+    label: "Antigravity CLI (ACP, local)",
+    adapter: "agy-acp",
+    // Identity only: the transport is stdio and this URL is never fetched.
+    baseUrl: "https://antigravity.google/docs/cli/acp",
+    authKind: "key",
+    keyOptional: true,
+    dashboardUrl: "https://antigravity.google/docs/cli/acp",
+    defaultModel: AGY_ACP_DEFAULT_MODEL,
+    // Static seed; the ACP model options the CLI advertises at turn time decide what is accepted.
+    models: [...AGY_ACP_SEED_MODELS],
+    liveModels: false,
+    modelContextWindows: { "gemini-3.8-flash": 1_048_576, "gemini-4-argon": 1_048_576, "gemini-3.7-flash": 1_048_576 },
+    // ACP prompts carry text only; client function tools are not offered to the model.
+    inputModalities: ["text"],
+    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    note: "Drives the official Antigravity CLI (`agy acp`, 1.5.3 or newer) as a local child process over the Agent Client Protocol. The CLI owns its Google sign-in (`agy acp --login`); OpenCodex never reads or stores it, so no key or account belongs on this row. Google permits this only for interactive, user-directed use: OpenCodex refuses subagent, spawned-thread and Codex memory turns, combo members and decision calls, subagent-fallback routing and requests classified as remote from the observed connection. An undeclared loopback relay that forwards no recognized forwarding headers can appear local. On the public listener, declare a reverse proxy in dashboardTrustedProxy or keep this port out of the relay. OpenCodex serves Gemini models only. Use a Gemini API key or Vertex AI for programmatic or shared workloads. Each turn runs in an empty private workspace with `--sandbox`, every permission request is refused, and client tools are not offered; allow rules in your own agy settings still apply.",
   },
 ];

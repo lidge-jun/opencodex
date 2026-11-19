@@ -3049,6 +3049,7 @@ export const zh: Record<TKey, string> = {
   "modal.freeTierTitle": "免费层级",
   "modal.subscriptionCliTitle": "订阅 CLI，而非 API 密钥",
   "modal.subscriptionCliWarning": "此提供商不使用 API 密钥。它调用本机已登录的官方 Claude Code CLI（{cmd}），并向该 Claude 订阅账户计费。OpenCodex 不为其存储任何密钥，在此输入的密钥也永远不会被使用。如需按 API 密钥计费，请改为添加 {apiProvider}。",
+  "modal.subscriptionCliWarningAgy": "此提供商使用在代理主机上已登录的官方 Antigravity CLI（{cmd}）。使用费用计入对应的 Google Antigravity 账户。Google 仅允许由用户主导的交互式使用。OpenCodex 拒绝子代理轮次、组合和子代理回退路由，并根据观测到的连接判断请求是否来自本地。如果未声明的回环中继没有传递转发标头，远程请求可能看起来像本地请求。对于公开监听器，请在 dashboardTrustedProxy 中声明反向代理，或避免转发此端口。无需 API 密钥，也不会存储密钥。如需以编程方式执行任务或供多人使用，请添加 {apiProvider}。",
   "modal.freeTierDefault": "无需 API 密钥，开箱即用。",
   "modal.tab.accounts": "账户",
   "modal.tab.free": "免费",

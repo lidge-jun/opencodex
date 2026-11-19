@@ -38,9 +38,9 @@ Google providers may persist `googleToolSchemaPolicy` as `compatible` or `reject
 ### OpenCodex home and live process state
 
 `initializePersistedConfigIfMissing` in `src/config.ts` is the create-only path consumed by
-`src/cli/init.ts`. It rechecks absence under the existing config-mutation lock and publishes through
-`src/config/initialize.ts`: a private descriptor is hardened before secret bytes are written, then
-linked without replacing an occupied destination. Existing invalid or unsafe entries are preserved.
+`src/cli/init.ts`. The wizard omits `apiKey` for Antigravity ACP, reports an invalid default model by field before publication, and accepts a key or an environment reference for LiteLLM.
+The initializer rechecks absence under the config-mutation lock and uses `src/config/initialize.ts` to harden a private
+descriptor before writing secret bytes, then links without replacing an occupied destination. Invalid or unsafe entries are preserved.
 The initializer never truncates a staged inode or rolls back by unlinking the destination; cleanup
 only removes its own temporary name. Unsupported/denied links and incomplete cleanup fail explicitly,
 and publication followed by a later failure can leave a complete config or private residue. Ordinary
@@ -88,7 +88,7 @@ object so the freshness the data write moved does not read as a replacement. A d
 
 `src/types.ts` is the shape; the load/validate pipeline lives in the split config leaves — schema in `src/config/schema/` (`config-schema.ts`, `leaf-validators.ts`) and replace-path persistence in `src/config/persist-unlocked.ts`, with `src/config.ts` as the compatibility facade — and is not reproduced here. What matters for maintainers is which groups exist and who resolves them:
 
-A schema-invalid top-level JSON value is repairable only when it is a non-array object.
+A schema-invalid top-level JSON value is repairable only when it is a non-array object. On disk reads, `src/config/load-degrade.ts` drops invalid ACP credential and account settings and non-Gemini model entries from the affected provider. It also drops memory phases and subagent fallback entries targeting Antigravity CLI (ACP) and disables a shadow call or managed subagent default sync targeting it. For ACP compaction overrides, load removes the automatic trigger and preserves manual compaction when enabled. It removes per-model chains emptied by this repair so valid sibling chains survive schema validation. Diagnostics report those repairs and leave the file as written. Candidate writes reject invalid ACP provider fields and those active selectors. `PUT /api/settings` checks memory and compaction targets and `PUT /api/injection-model` checks the managed subagent default against provider configuration before publishing changes. Repair warnings, schema diagnostics, and salvage logging redact credential-shaped path segments, including minted OpenCodex tokens, through `src/lib/redact.ts`.
 `loadConfig` backs up arrays, primitives, and null before using defaults, so the repair merge cannot turn them into a valid config while discarding the original bytes.
 
 `src/config/schema/config-schema.ts` accepts the opt-in `codexAccountPriorityFailback` preference and degrades a malformed value in a loaded file to false without discarding providers, while a write candidate carrying a non-boolean value is rejected. A malformed entry in `codexAccountAutoSwitchThresholds` is dropped on load with a warning and the valid entries are kept, so an unrelated save cannot erase them. Its [routing contract](providers/openai-accounts.md#ongoing-priority-failback) requires quota strategy and a positive threshold. The default-off `codexUseRemainingQuotaAccountIds` list degrades to absent when malformed; write candidates reject invalid account ids. Its [included-quota policy](providers/openai-accounts.md#main-account-policy-observations) preserves thresholds and credit-spending permission. It also keeps the Remote Link Home's `linkRequestCompression` boolean, reading any other value as unset, which is on ([`remote-link.md`](remote-link.md#per-body-request-compression)).

@@ -421,8 +421,8 @@ completion event for that open call. Calls already completed keep their status. 
 the provider outcome.
 
 On the Responses streaming wire, an explicit non-retryable content-filter stop from
-Anthropic (`refusal` / `content_filter`) or Kiro (`CONTENT_FILTERED` /
-`GUARDRAIL_INTERVENED`) ends with `response.failed`, `error.code: "invalid_prompt"`,
+Anthropic (`refusal` / `content_filter`), Kiro (`CONTENT_FILTERED` /
+`GUARDRAIL_INTERVENED`) or Antigravity ACP (`refusal`) ends with `response.failed`, `error.code: "invalid_prompt"`,
 and `retryable: false`. This prevents clients that retry incomplete streams from
 resending the refused context. Usage and partial output are preserved. Web-search
 and image sidecars stop without executing calls from that refused iteration or
