@@ -65,8 +65,8 @@ may be billable; `OCX_EMPTY_COMPLETION_RETRY=0` is a disable-only emergency over
 buffered HTTP adapters plus `runTurn` transports share the same guard, while combo attempts and
 routed compaction stay excluded. Pre-content reasoning is retained under named event-count and byte
 caps and emits liveness heartbeats while held. A second empty result or retry failure becomes typed
-502 `empty_completion_retry_failed`; usage is merged across sends, and the Logs attempt records
-recovery kind `empty-completion`. Native OpenGateway passthrough follows its [separate completion contract](../providers/opengateway.md), with destination-specific default recovery and terminal-only replay.
+502 `empty_completion_retry_failed`. HTTP adapter delivery preserves `undeclared_tool_call` from the retry. Usage is merged across sends.
+The Logs attempt records recovery kind `empty-completion`. Native OpenGateway passthrough follows its [separate completion contract](../providers/opengateway.md), with destination-specific default recovery and terminal-only replay.
 
 The fetch and runTurn web-search loops honor `streamRoutedModelOutput`: leading text and reasoning
 stream live until the first tool boundary, and final replay omits already delivered events.

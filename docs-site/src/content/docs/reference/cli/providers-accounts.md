@@ -1120,6 +1120,10 @@ code separate; a returned device grant is not a successful browser launch.
 expired, cancelled, validation-pending and catalog-pending state; never silently
 restart a flow, capture credentials or complete verification for the operator.
 
+In browser mode, `ocx account login openai --code -` requests cancellation of the browser flow if the pipe is empty or the stdin read times out. If the proxy cannot confirm cancellation, the CLI reports the flow ID when available.
+
+When the proxy uses `codexAuthMethod: "device-only"`, the CLI refuses `--code` before reading stdin and refuses `--json` without `--no-wait`. In either case, it attempts to cancel the device grant started by the proxy. Use `ocx account login openai` for interactive device login or `ocx account login openai --no-wait --json` for a JSON handoff.
+
 `ocx account login openai --device` runs OpenAI's device-code login instead of the browser
 callback. Use it when the proxy host has no browser, or when nothing can reach its
 `localhost:1455` — a container, a VPS, or any hub reached over SSH:

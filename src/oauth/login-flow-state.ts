@@ -63,6 +63,8 @@ export interface LoginFlowState {
   errorCode?: LoginCodeError;
   /** Account row this flow persisted, once it settled successfully. An id, never a credential. */
   accountId?: string;
+  /** An outer login can still need this exact outcome after OAuth has settled. */
+  retainOutcome?: () => boolean;
 }
 
 /** Keyed by flow id. */
@@ -152,7 +154,11 @@ function reapLoginFlows(provider: string): void {
   // +1 leaves room for the flow about to be recorded.
   const excess = keys.length - MAX_LOGIN_FLOWS_PER_PROVIDER + 1;
   if (excess <= 0) return;
-  for (const key of keys.filter(key => loginState.get(key)?.done === true).slice(0, excess)) {
+  const reclaimable = keys.filter(key => {
+    const state = loginState.get(key);
+    return state?.done === true && !state.retainOutcome?.();
+  });
+  for (const key of reclaimable.slice(0, excess)) {
     clearManualCodeSlot(key);
     dropLoginFlow(key);
   }
@@ -165,10 +171,10 @@ export const CODE_LOGIN_TTL_MS = 10 * 60_000;
  * Record a just-admitted flow under its id and return its paste deadline (code mode only).
  * Lives here rather than in `startLoginFlow` to keep `src/oauth/index.ts` under the size ratchet.
  */
-export function recordStartedLoginFlow(provider: string, flowId: string, codeMode: boolean): number | undefined {
+export function recordStartedLoginFlow(provider: string, flowId: string, codeMode: boolean, retainOutcome?: () => boolean): number | undefined {
   clearManualCodeSlot(flowId);
   const expiresAt = codeMode ? Date.now() + CODE_LOGIN_TTL_MS : undefined;
-  loginState.set(flowId, { done: false, provider, flowId, ...(codeMode ? { mode: "code" as const, expiresAt } : {}) });
+  loginState.set(flowId, { done: false, provider, flowId, retainOutcome, ...(codeMode ? { mode: "code" as const, expiresAt } : {}) });
   return expiresAt;
 }
 
@@ -360,7 +366,7 @@ export function reconcileOAuthFlowState(context: GenerationContext): number {
   let removed = 0;
   for (const [flowKey, state] of loginState) {
     const provider = state.provider ?? flowKey!;
-    if (context.providerNames.has(provider) || !state.done || loginAbort.has(flowKey)) continue;
+    if (context.providerNames.has(provider) || !state.done || loginAbort.has(flowKey) || state.retainOutcome?.()) continue;
     if (loginState.delete(flowKey)) removed += 1;
     if (loginManual.delete(flowKey)) removed += 1;
     if (loginAbort.delete(flowKey)) removed += 1;

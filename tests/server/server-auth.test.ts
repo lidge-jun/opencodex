@@ -60,7 +60,6 @@ import { getDebugLogEntries } from "../../src/lib/debug-log-buffer";
 import { setDebugSettings } from "../../src/lib/debug-settings";
 import { watchdogMs } from "../helpers/ci-watchdog";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { deferredResetSseUpstream } from "../helpers/deferred-reset-sse-upstream";
 import { serverAuthConfig as config } from "../helpers/server-auth-config";
 import { POOL_RETRY_TEST_DIR, redirectCanonicalCodexTo } from "../helpers/pool-retry-harness";
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
@@ -4093,14 +4092,19 @@ describe("server local API auth", () => {
   }, { timeout: SERVER_BUDGET_MS });
 
   test("native passthrough upstream reset still logs 502 and penalizes the pool", async () => {
-    const upstream = deferredResetSseUpstream('data: {"type":"response.output_text.delta","delta":"hello"}\n\n');
-    const harness = await startPoolRetryHarness(() => upstream.response(), { secondAccount: false, streamMode: "legacy-tee" });
+    const harness = await startPoolRetryHarness(() => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"type":"response.output_text.delta","delta":"hello"}\n\n'));
+      },
+    }), { headers: { "content-type": "text/event-stream" } }), { secondAccount: false, streamMode: "legacy-tee" });
     try {
       const response = await harness.request({ stream: true });
       const requestId = response.headers.get("x-opencodex-request-id");
       const reader = response.body!.getReader();
       expect((await reader.read()).done).toBe(false);
-      upstream.reset();
+      // Reset the owned upstream socket after its first chunk. Throwing from a
+      // fixture stream instead makes Bun's server sink report an uncaught error.
+      await harness.upstream.stop(true);
       while (!(await reader.read()).done) { /* drain the synthetic failed terminal */ }
       const deadline = Date.now() + INTERNAL_DEADLINE_MS;
       while (!getRequestLogEntries().some(entry => entry.requestId === requestId) && Date.now() < deadline) {

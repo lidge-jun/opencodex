@@ -89,13 +89,28 @@ Una salida proxy sola no confirma que la restauración compartida Codex / Grok t
 
 En Windows, `ocx stop` detiene una tarea registrada del Programador de tareas o un servicio nativo WinSW mediante una parada verificada. Primero finaliza la tarea y después solo los procesos envoltorios `wscript.exe` y `cmd.exe` que puede vincular a esta instalación (el lanzador o script de servicio de este directorio, una cadena de procesos padres que conduce al proxy o al servicio del Programador de tareas, y una hora de inicio registrada), y espera a que terminen. Solo entonces detiene el proxy de forma controlada. Después confirma que el puerto permanezca libre unos seis segundos y que ningún envoltorio se haya reiniciado, para impedir que un bucle de reinicio vuelva a iniciar el proxy tras una parada exitosa.
 
+OpenCodex verifica que la tarea programada inicie esta instalación con tu cuenta de Windows
+y comprueba la cuenta de cada instancia en ejecución antes de detenerla. Una tarea deshabilitada
+de tu cuenta se considera inactiva si no tiene instancias en ejecución. Si hay una tarea en cola,
+OpenCodex no confirma la parada. Si la comprobación falla,
+revisa el lanzador y la cuenta de ejecución en el Programador de tareas y detén la tarea desde
+la sesión de esa cuenta.
+
+OpenCodex solo finaliza directamente un envoltorio si comprueba que pertenece a tu cuenta.
+Ignora los envoltorios que pertenecen a otro usuario. Si no puede verificar el propietario
+de un envoltorio que debe finalizar, detenlo desde la sesión de su propietario con el
+Administrador de tareas y vuelve a intentarlo.
+Si OpenCodex no puede confirmar que un envoltorio terminó porque no dispone de un identificador
+de objeto de proceso (handle), como puede ocurrir en ARM64, compruébalo en el Administrador de tareas desde la sesión
+de su propietario, detenlo si sigue en ejecución y vuelve a intentarlo.
+
 Si no puede demostrarse que el servicio se detuvo, `ocx stop` no envía una solicitud de parada al proxy, deja intacta la configuración del cliente y falla. Con `--json`, el resumen conserva `outcome: "failed"` y `proxy: "unknown"`, y añade `serviceStopReason`:
 
 | `serviceStopReason` | Significado | Qué hacer |
 |---|---|---|
 | `access-denied` | Se denegó la finalización de la tarea o de un envoltorio, normalmente por detener una tarea elevada desde una terminal sin elevar | Ejecuta `ocx stop` desde una terminal elevada |
 | `unbound-wrapper` | No se pudo vincular al servicio un envoltorio que ejecuta el script de servicio de este directorio, por ejemplo uno iniciado manualmente | Finaliza ese `wscript.exe`/`cmd.exe` y vuelve a intentarlo |
-| `evidence-unreadable` | No se pudo leer el estado del servicio o proceso, o confirmar que el puerto está libre | Comprueba `ocx service status` y vuelve a intentarlo |
+| `evidence-unreadable` | No se pudo verificar la tarea, el envoltorio o el estado del servicio, o confirmar que el puerto está libre | Sigue las indicaciones del mensaje de parada o consulta `ocx service status` y vuelve a intentarlo |
 | `unverified-budget` | El tiempo restante no permitía verificar la parada, por lo que no se cambió nada | Vuelve a intentarlo desde una terminal |
 
 Si otro programa escucha en el puerto después de que terminen los procesos de esta instalación, la parada sigue siendo exitosa y `--json` informa `portHeldByForeign: true`. Ambos campos son adicionales y no existe ningún valor nuevo de `outcome`. `serviceStopReason` se omite cuando no hay nada que informar; `portHeldByForeign` aparece (`true` o `false`) siempre que se haya comprobado el puerto y se omite en caso contrario.

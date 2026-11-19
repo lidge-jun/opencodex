@@ -619,7 +619,10 @@ export interface OcxProviderConfig {
    * `apiKey` seeds a one-entry pool on first management touch.
    */
   apiKeyPool?: Array<{ id: string; key: string; label?: string; addedAt?: number; disabled?: boolean; pauseDetails?: AccountPauseDetails; pauseRevision?: string }>;
-  /** Explicit opt-in permanent account refusal policy; default off. */
+  /**
+   * Permanent account refusal policy. Explicit opt-in; with no key at all, a Cloud Code Assist
+   * provider still pauses on the first Terms of Service account ban (see `effectiveAccountAutoPause`).
+   */
   accountAutoPause?: AccountAutoPausePolicy;
   /**
    * Optional proactive ordering for `apiKeyPool` when the committed key is already
@@ -1137,7 +1140,7 @@ export interface OcxProviderConfig {
   /**
    * Default to displaying provider-authored summaries when Responses summary is omitted.
    * Explicit wire summary:"none" wins; false disables a seeded provider default.
-   * Raw reasoning is never relabeled as a summary.
+   * Raw reasoning is controlled separately by rawReasoningAsSummary.
    */
   showThinkingSummary?: boolean;
   /**
@@ -1148,6 +1151,12 @@ export interface OcxProviderConfig {
    * envelope; direct Chat/Messages encoders send no copy and replay from the server-side cache.
    */
   hideRawReasoning?: boolean;
+  /**
+   * Default-off Chat-to-Responses display compatibility: expose raw reasoning on the summary
+   * channel, verbatim (not a generated summary). hideRawReasoning and wire summary:"none" win.
+   * Native Responses passthrough and direct Chat/Messages delivery are unchanged.
+   */
+  rawReasoningAsSummary?: boolean;
   /**
    * Opt-in same-target 429 retry policy. Codex itself never retries 429 (it retries 5xx only,
    * openai/codex#30471), and single-key pools have no failover, so the proxy waits and replays

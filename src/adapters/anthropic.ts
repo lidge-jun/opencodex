@@ -41,7 +41,7 @@ import { resolveReasoningCapabilities } from "../providers/reasoning-capabilitie
 import { declaresThinkingToggleWire, reasoningControlsAreUnsupported } from "./reasoning-controls";
 import { applyAgentRouterLanguageFraming, isAgentRouterEndpoint } from "./agentrouter";
 import { anthropicCacheWrite1hTokens, resolveAnthropicCacheRetention, type AnthropicCacheRetention } from "./anthropic/cache-retention";
-import { advisorServerExchange, advisorServerToolDestination, planAnthropicServerTools } from "./anthropic/advisor-tool";
+import { advisorServerExchange, advisorServerToolDestination, hostedAdvisorCredentials, planAnthropicServerTools } from "./anthropic/advisor-tool";
 import { applyAnthropicPerMessageEffort } from "./anthropic/per-message-effort";
 import { claudeFamilyVersion, rejectsCombinedSampling, rejectsForcedToolChoice, rejectsSamplingParameters, supportsExplicitThinkingDisable, usesAdaptiveThinking, usesBetweenToolsFloor } from "./anthropic-model-contract";
 
@@ -566,11 +566,17 @@ export function anthropicBaseRequestHeaders(stream: boolean | undefined): Record
   };
 }
 
+/** The configured credential used by the non-OAuth Messages serializer. */
+export function anthropicApiKeyForRequest(provider: OcxProviderConfig): string | undefined {
+  return provider.authMode !== "oauth" && typeof provider.apiKey === "string" ? provider.apiKey : undefined;
+}
+
 /** Key-auth credential placement: `x-api-key`, or a bearer when the provider asks for one. */
 export function applyAnthropicKeyAuth(headers: Record<string, string>, provider: OcxProviderConfig): void {
-  if (typeof provider.apiKey !== "string") return;
-  if (anthropicKeyUsesBearer(provider)) headers["Authorization"] = `Bearer ${provider.apiKey}`;
-  else headers["x-api-key"] = provider.apiKey;
+  const apiKey = anthropicApiKeyForRequest(provider);
+  if (apiKey === undefined) return;
+  if (anthropicKeyUsesBearer(provider)) headers["Authorization"] = `Bearer ${apiKey}`;
+  else headers["x-api-key"] = apiKey;
 }
 
 export function resolveTranslatedAnthropicSessionKey(parsed: OcxParsedRequest, incoming?: IncomingMeta): string | undefined {
@@ -1198,7 +1204,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         else if (tc === "none") body.tool_choice = { type: "none" };
         else if (tc === "required") body.tool_choice = { type: "any" };
         else if (isAllowedToolChoice(tc)) body.tool_choice = { type: tc.mode === "required" ? "any" : "auto" };
-        else if (typeof tc === "object" && "name" in tc) body.tool_choice = { type: "tool", name: toolNames.toWire(resolveToolChoiceWireName(parsed.context.tools, tc.name)) };
+        else if (typeof tc === "object" && "name" in tc) body.tool_choice = { type: "tool", name: toolNames.toWire(resolveToolChoiceWireName(parsed.context.tools, tc.name, tc)) };
       } else if (tools && parsed.options.parallelToolCalls === false) {
         // The caller asked for one tool call at a time but sent no explicit choice.
         // Anthropic carries that intent INSIDE tool_choice, so the implicit default
@@ -1243,6 +1249,11 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       const headers = anthropicBaseRequestHeaders(parsed.stream);
       if (isOAuth) applyAnthropicOAuthAuth(headers, provider.apiKey, resolveTranslatedAnthropicSessionKey(parsed, incoming));
       else applyAnthropicKeyAuth(headers, provider);
+      const advisorCredential = serverToolPlan.betas.length > 0
+        ? headers.Authorization !== undefined
+          ? { header: "authorization" as const, value: headers.Authorization }
+          : { header: "x-api-key" as const, value: headers["x-api-key"]! }
+        : undefined;
       if (provider.headers) Object.assign(headers, provider.headers);
       mergeAnthropicBetaHeader(headers, [...(fastSpeed?.betas ?? []), ...(progressUpdates ? ["thinking-display-updates-2026-08-18"] : []), ...serverToolPlan.betas]);
 
@@ -1277,6 +1288,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         ),
       };
       captureAnthropicRejectionPayloads(request, body, incoming?.translatorBudget);
+      if (advisorCredential) hostedAdvisorCredentials.set(request, advisorCredential);
       return request;
     },
 

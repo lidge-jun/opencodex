@@ -124,8 +124,21 @@ hook を削除します。Claude Desktop は独立した profile を使用し、
 
 プロキシが保存済み OAuth 認証情報を使う管理対象のネイティブリクエストでは、宣言されたカスタムツール名も遅延参照とインライン追加・削除で揃えます。引数、スキーマ、キャッシュマーカーは保持します。システムメッセージ内のインライン変更には `inline-tools-2026-09-15` を指定してください。対応する型付きブロックがある場合、ファーストパーティ宛てのビルダーはこのヘッダーを保持します。
 
-`claudeCode.nativePassthrough: false` でオフにでき、`claudeCode.anthropicBaseUrl` で別のアドレスを
-指定できます。
+`claudeCode.nativePassthrough: false`、`ocx claude config set --native-passthrough off`、または
+ダッシュボードの Providers → Anthropic Claude → Accounts にある Claude アカウントプールの下の
+**Claude ネイティブパススルー** トグルでオフにでき、
+`claudeCode.anthropicBaseUrl` で別のアドレスを指定できます。Claude のモデル選択画面と Claude Desktop の受信時エイリアスは、`modelMap` より先に解決されます。
+エイリアスではないモデル ID をキーにした `modelMap` エントリは、パススルーのオン・オフにかかわらず、
+指定された別のプロバイダーのモデルへリクエストを送ります。パススルーをオフにすると、マッピングのない
+Claude のモデル ID はルーターに渡されます。ルーターはまずルーティングポリシーのエイリアスを確認し、次にコンボのエイリアスを確認します。
+どちらにも一致しない場合は、その ID を `defaultModel` にした有効なプロバイダー、
+有効な `anthropic` または `anthropic-*` プロバイダー、その ID をモデル一覧に含むプロバイダー、
+プロバイダー側のモデルエイリアス、最後に既定のプロバイダーの順に確認します。
+ルートが Anthropic OAuth プロバイダーの場合は OpenCodex に保存した Anthropic アカウントが処理し、2 つ目の
+アカウントを保存していれば 429 時のフェイルオーバーが加わります。能動的な
+Claude OAuth アカウントプールは `anthropicAccountPool.enabled` を有効にすると適用されます。
+ルーティングは次のリクエストから切り替わります。実行中の Claude Code セッションは、モデルスロットと
+コンテキストウィンドウを合わせるために再起動してください。
 
 ## Claude Desktop のモード: ゲートウェイ（デフォルト）と 1P
 
@@ -351,7 +364,15 @@ Claude Code は未知モデルのコンテキストを 200k トークンとし�
    `[1m]` 標識が付きます。ディスカバリーと Desktop のピッカー行はこのしきい値に従わず、固定の 829,800 トークン下限
    （Anthropic 経路の Claude モデルは実際の 1M）を使います。
 2. `CLAUDE_CODE_AUTO_COMPACT_WINDOW`(デフォルト `829800`、範囲 `100000`–`1000000`)を注入し、該当
-   地点で会話を自動要約します。
+   地点で会話を自動要約します。プロキシ経由の `ocx claude` では、カタログにより小さいウィンドウが
+   ある場合に `--settings` でモデル別のしきい値を設定できます。引数がランチャーの上限を超えると、
+   環境変数が使われます。
+
+生成された JSON は Claude Code のコマンドライン設定として適用されます。優先順位はローカル、プロジェクト、ユーザーの設定ファイルより上で、管理設定より下です。`--settings <file>` または `--autocompact` を指定すると、JSON の生成をスキップします。ランチャーは明示された `--settings` の引数をそのまま渡し、ファイルの処理は Claude Code に任せます。
+
+いずれかのオプションで JSON の生成をスキップしても、自動コンテキストが設定した `CLAUDE_CODE_AUTO_COMPACT_WINDOW` はそのまま引き継がれます。この変数を明示的にエクスポートした場合も、JSON は生成されず、その値が引き継がれます。Claude Code では、この変数の有効な値が `--autocompact` や保存済みの圧縮設定より優先されます。ファイルの圧縮設定を使うには、`claudeCode.autoContext` を `false` にして自動注入を止め、エクスポート済みの `CLAUDE_CODE_AUTO_COMPACT_WINDOW` を解除し、`--settings <file>` を指定します。[Claude Code の自動圧縮設定の優先順位](https://code.claude.com/docs/en/model-config#set-the-auto-compact-window)を参照してください。
+
+オプションの値や `--` より後の引数も含め、いずれかの引数が Remote Control のコマンドまたは別名（`remote-control`、`rc`、`bridge`、`remote`、`sync`）と完全に一致する場合、ランチャーは生成した設定を適用せず、元の引数と起動環境をそのまま渡します。
 
 設定状態は 3 つです。
 

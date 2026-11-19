@@ -1203,9 +1203,13 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           ));
         };
         const promoteAliasId = modelAliasIdPromoter(config);
-        const routedRows = await Promise.all(uniqueCatalogModelsForRawPublicList(goOrdered)
+        const { effectiveModelAliases } = await import("../../providers/default-aliases");
+        // One synchronous view per provider for this projection, including empty collision results.
+        // Keep it request-local so later config or discovery changes cannot reuse stale aliases.
+        const aliasViews = new Map<string, ReturnType<typeof effectiveModelAliases>>();
+        const routedRows = uniqueCatalogModelsForRawPublicList(goOrdered)
           .filter(m => listAllows(m.provider, m.id))
-          .map(async m => {
+          .map(m => {
           // Same rule as the anthropic branch: with the global fast switch on, a client
           // that has no Fast toggle is offered the fast identity directly. An operator
           // alias is an explicit decision and still wins.
@@ -1213,14 +1217,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           const publicId = m.alias ?? `${m.provider}/${fastModelId ?? m.id}`;
           const isCombo = m.provider === "combo" && exactComboSlugs.has(publicId);
           const provider = config.providers[m.provider];
-          const effective = provider
-            ? (await import("../../providers/default-aliases")).effectiveModelAliases(
-                config,
-                provider,
-                knownModelIdsForProvider(m.provider, provider, config),
-                m.provider,
-              ).get(m.id)
-            : undefined;
+          let aliases = aliasViews.get(m.provider);
+          if (provider && aliases === undefined) {
+            aliases = effectiveModelAliases(config, provider, knownModelIdsForProvider(m.provider, provider, config), m.provider);
+            aliasViews.set(m.provider, aliases);
+          }
+          const effective = aliases?.get(m.id);
           const effectiveId = !isCombo && !fastModelId && effective
             ? promoteAliasId(m.provider, m.id, effective.alias, catalogRowFastEligible(m)) ?? publicId
             : publicId;
@@ -1258,7 +1260,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             config,
             effortRowKnownIds,
           ));
-        }));
+        });
         const data = [
           ...visibleNatives
             .filter(id => listAllows(OPENAI_CODEX_PROVIDER_ID, id))

@@ -26,6 +26,8 @@ import { pacingHeaderDeadline } from "./header-deadline";
 import { redactSecretString } from "../lib/redact";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, isSameTargetRetryHold, SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { unwrapUpstreamRetryEvidenceError } from "../codex/auth-context";
+import { HostedAdvisorSpendRefusal } from "../server/responses/policy-request-scope";
 import { rateLimitRetryDelayMs } from "../providers/key-failover";
 import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import {
@@ -39,6 +41,8 @@ import { WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 import { newSidecarSearchCellId, rememberSidecarSearch, restoreSidecarSearchResults } from "./sidecar-search-replay";
 import {
   ADVISOR_TOOL_NAME,
+  advisorToolAllowed,
+  createAdvisorCallResolver,
   MAX_ADVISOR_CONTINUATIONS_PER_REQUEST,
   parseAdvisorQuestionArgs,
   type AdvisorSidecarStep,
@@ -91,7 +95,10 @@ function parseQueries(argsBuf: string): string[] {
  * (Codex never sees the synthetic tool); every other event — text, thinking, real tool calls, done —
  * is preserved in order.
  */
-export function scanEventsForWebSearch(events: AdapterEvent[], options: { advisor?: boolean; clientAdvisorAllowed?: boolean } = {}): {
+export function scanEventsForWebSearch(
+  events: AdapterEvent[],
+  resolveAdvisorCall: ReturnType<typeof createAdvisorCallResolver> = name => name === ADVISOR_TOOL_NAME ? "refused" : undefined,
+): {
   calls: WebSearchCall[];
   passthrough: AdapterEvent[];
   hasRealToolCall: boolean;
@@ -102,13 +109,12 @@ export function scanEventsForWebSearch(events: AdapterEvent[], options: { adviso
   let hasRealToolCall = false;
   let hasMalformedToolCall = false;
   let refusal: Extract<AdapterEvent, { type: "error" }> | undefined;
-  let pending: { name: string; id: string; argsBuf: string; closed: boolean; events: AdapterEvent[]; providerMetadata?: OcxProviderOpaqueToolCallMetadata } | null = null;
+  let pending: { name: string; id: string; argsBuf: string; closed: boolean; advisor: boolean; events: AdapterEvent[]; providerMetadata?: OcxProviderOpaqueToolCallMetadata } | null = null;
   const isBlank = (value: string): boolean => value.trim().length === 0;
   const flushPending = (): void => {
     // A pending call that never saw tool_call_end is structurally malformed.
     if (pending && !pending.closed) hasMalformedToolCall = true;
-    const advisor = options.advisor === true && pending?.name === ADVISOR_TOOL_NAME;
-    if (pending && pending.name !== WEB_SEARCH_TOOL_NAME && !advisor) {
+    if (pending && pending.name !== WEB_SEARCH_TOOL_NAME && !pending.advisor) {
       passthrough.push(...pending.events);
       if (pending.closed && !isBlank(pending.id) && !isBlank(pending.name)) hasRealToolCall = true;
     }
@@ -121,14 +127,17 @@ export function scanEventsForWebSearch(events: AdapterEvent[], options: { adviso
     }
     if (e.type === "tool_call_start") {
       flushPending();
-      if (e.name === ADVISOR_TOOL_NAME && !options.advisor && !options.clientAdvisorAllowed) {
+      const disposition = resolveAdvisorCall(e.name);
+      if (disposition === "refused") {
         refusal = { type: "error", status: 502, errorType: "upstream_error", code: UNDECLARED_TOOL_CALL_ERROR_CODE,
           message: "routed provider emitted advisor outside the current iteration's permitted tool catalog" };
         passthrough.push(refusal);
         continue;
       }
       if (isBlank(e.id) || isBlank(e.name)) hasMalformedToolCall = true;
-      pending = { name: e.name, id: e.id, argsBuf: "", closed: false, events: [e], providerMetadata: e.providerMetadata };
+      const start = typeof disposition === "object" && disposition.clientWireName !== e.name
+        ? { ...e, name: disposition.clientWireName } : e;
+      pending = { name: start.name, id: e.id, argsBuf: "", closed: false, advisor: disposition === "synthetic", events: [start], providerMetadata: e.providerMetadata };
     } else if (e.type === "tool_call_delta") {
       // Orphan delta (no open call) is malformed.
       if (!pending) hasMalformedToolCall = true;
@@ -143,13 +152,12 @@ export function scanEventsForWebSearch(events: AdapterEvent[], options: { adviso
       } else {
         pending.events.push(e);
         pending.closed = true;
-        const advisor = options.advisor === true && pending.name === ADVISOR_TOOL_NAME;
         if (e.incomplete) {
           hasMalformedToolCall = true;
-          if (!advisor) passthrough.push(...pending.events);
+          if (!pending.advisor) passthrough.push(...pending.events);
         } else if (pending.name === WEB_SEARCH_TOOL_NAME) {
           calls.push({ id: pending.id, queries: parseQueries(pending.argsBuf), providerMetadata: pending.providerMetadata });
-        } else if (advisor) {
+        } else if (pending.advisor) {
           calls.push({
             id: pending.id,
             kind: "advisor",
@@ -535,8 +543,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   interface IterationResponse {
     response: Response;
     responseAdapter: ProviderAdapter;
-    clientAdvisorAllowed: boolean;
-    syntheticAdvisorAllowed: boolean;
+    resolveAdvisorCall: ReturnType<typeof createAdvisorCallResolver>;
     recover?: (error: WebSearchAdapterEventError) => Promise<IterationResponse | undefined>;
   }
   type IterationSplit = ReturnType<typeof scanEventsForWebSearch> & {
@@ -717,18 +724,14 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         }
         bindAnthropicRejectionResponse(request, response);
         const iterTools = iterParsed.context.tools ?? [];
-        const toolAllowed = toolChoiceToolPredicate(iterParsed.options.toolChoice, iterTools);
-        const clientAdvisorAllowed = iterTools.some(tool => !tool.advisor && !tool.namespace
-          && tool.name === ADVISOR_TOOL_NAME && toolAllowed(tool));
         const declaredAdvisor = iterTools.find(tool => tool.advisor && tool.name === ADVISOR_TOOL_NAME);
         // Exhaustion removes the declaration, but its paired limit result still belongs
         // to the sidecar. A tools-disabled recovery revokes that permission too.
-        const advisorCandidate = declaredAdvisor ?? { name: ADVISOR_TOOL_NAME };
         const syntheticAdvisorAllowed = !!deps.advisor && !recoveringEmptyAnswer
           && (!!declaredAdvisor || deps.advisor.exhausted())
-          && toolChoiceToolPredicate(iterParsed.options.toolChoice,
-            declaredAdvisor ? iterTools : [...iterTools, advisorCandidate])(advisorCandidate);
-        return { response, responseAdapter: requestAdapter, clientAdvisorAllowed, syntheticAdvisorAllowed };
+          && advisorToolAllowed(iterParsed, declaredAdvisor);
+        return { response, responseAdapter: requestAdapter,
+          resolveAdvisorCall: createAdvisorCallResolver(iterParsed, syntheticAdvisorAllowed, parsed.context.tools) };
       };
 
       const recover = async (error: WebSearchAdapterEventError): Promise<IterationResponse | undefined> => {
@@ -747,6 +750,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
           if (headerDeadline.didExpire()) throw new LoopError(504,
             `Provider response-header timeout after ${connectTimeoutMs}ms during web-search`);
+          const refusal = unwrapUpstreamRetryEvidenceError(error);
+          if (refusal instanceof HostedAdvisorSpendRefusal) throw new LoopError(400, refusal.message, refusal.event());
           if (error instanceof LoopError || error instanceof SendBudgetExhaustedError || isTranslatorBudgetExceededError(error)) throw error;
           throw new LoopError(502, `Provider unreachable: ${error instanceof Error ? error.message : String(error)}`);
         } finally {
@@ -842,6 +847,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during web-search`);
       }
       if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
+      const refusal = unwrapUpstreamRetryEvidenceError(error);
+      if (refusal instanceof HostedAdvisorSpendRefusal) throw new LoopError(400, refusal.message, refusal.event());
       if (error instanceof LoopError || error instanceof RequestPacingQueueOverloadError) throw error;
       throw new LoopError(502, `Provider unreachable: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -945,7 +952,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       throw new LoopError(502, terminal.message, terminal.code === "context_length_exceeded" ? terminal : undefined);
     }
     deps.thinkingRecovery?.observeIteration(events);
-    return { ...scanEventsForWebSearch(events, { advisor: prepared.syntheticAdvisorAllowed, clientAdvisorAllowed: prepared.clientAdvisorAllowed }), streamedPassthroughCount, events, anthropicReplay };
+    return { ...scanEventsForWebSearch(events, prepared.resolveAdvisorCall), streamedPassthroughCount, events, anthropicReplay };
   };
 
   /**
@@ -1361,6 +1368,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       chatRawReasoningVisible: deps.chatRawReasoningVisible,
       hideRawReasoning: parsed.options.hideRawReasoning,
+      rawReasoningAsSummary: parsed.options.rawReasoningAsSummary,
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
       ...(deps.onUsage ? { onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(mergeUsage(countersOnly(hiddenUsage), usage)) } : {}),

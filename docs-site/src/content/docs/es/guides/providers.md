@@ -519,6 +519,14 @@ La sección **Límites de solicitudes** de la descripción general de proveedore
 
 Proveedores con una consulta activa: OpenAI/Codex, Anthropic, xAI, Cursor, Kimi, Google Antigravity, OpenCode Go, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax, Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, Command Code y proveedores personalizados basados en a6api o Abliteration.
 
+**Uso mensual de Anthropic.** Las cuentas con facturación por uso, como las de Enterprise,
+pueden mostrar una barra mensual cuando Anthropic indica que el uso adicional está activado
+y no informa de ventanas del plan. La barra se muestra sin fecha de restablecimiento y desaparece
+cuando Anthropic informa de ventanas del plan o confirma que el uso adicional está desactivado.
+Si la respuesta no contiene ninguna ventana de cuota utilizable, la consulta de la cuenta sigue
+indicando que la lectura no está disponible, incluso si al actualizar la cuota del proveedor se
+recibe la misma respuesta.
+
 **Cuota de Kimi Coding Plan.** Los proveedores con inicio de sesión de cuenta o clave API que usan el endpoint canónico `https://api.kimi.com/coding/v1` consultan `/usages`. Los planes que informan `usages.limit_month_total` (o `monthTotal`) muestran una barra de uso mensual; si el total no está disponible, se utiliza `limit_month_code` (o `monthCode`). La fracción `used_ratio` / `usedRatio` debe estar en `[0, 1]` antes de convertirse en porcentaje consumido; los valores inválidos se ignoran. Un contenedor `usages` vacío o inutilizable no oculta datos mensuales válidos de otro sobre compatible. Se conserva cualquier hora de restablecimiento informada. Las ventanas existentes de cinco horas, semanales y de créditos totales de suscripción siguen siendo independientes; una ventana mensual ausente no se muestra como 0%.
 
 **Créditos de Abliteration.** Un proveedor de cualquier nombre cuyo `baseUrl` sea `https://api.abliteration.ai` o `https://api.abliteration.ai/v1` consulta `GET https://api.abliteration.ai/v1/credits` con la clave activa como token bearer, sin seguir redirecciones. El saldo restante en USD es `total_credits` menos `total_usage`; la barra muestra el gasto consumido. Una cuenta sin créditos no muestra barra. Una clave rechazada elimina la fila; `503 credit_balance_unavailable`, 408 y 429 conservan la última lectura.
