@@ -236,6 +236,10 @@ that budget, bounded JSON returns HTTP 502 and a stream returns `response.failed
 sends the private aliases to Codex or saves the refused response for `previous_response_id`
 continuation.
 
+For local replay during plaintext v2, a loopback Responses WebSocket without an opencodex caller
+identity can retain history in memory for that socket and its own `thread-id`. If a response cannot
+fit the replay budgets, the proxy declines to retain it and preserves existing replay entries.
+
 For successfully rewritten calls, the option removes application-layer encryption from agent
 message arguments. HTTPS still encrypts network transport, but message text can appear in Codex
 task history, routed-provider requests, `responses-state.json` or its spill files, and

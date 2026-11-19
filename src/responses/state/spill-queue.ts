@@ -26,6 +26,7 @@ import {
   type ResponseSpillWriteFailureOrigin,
 } from "./spill-failure";
 import type { ResidentResponseState, StoredResponseState } from "../state";
+import { replayScopeMatches } from "./replay-owner";
 
 const RESPONSE_SPILL_SHUTDOWN_BUDGET_MS = 5_000;
 const RESPONSE_SPILL_SHUTDOWN_FALLBACK_RESERVE_MS = 4_000;
@@ -40,7 +41,6 @@ export interface SpillQueueStore {
   currentEntry(id: string): StoredResponseState | undefined;
   residentEntries(): Array<[string, StoredResponseState]>;
   recomputeOldestResident(): void;
-  schedulePersist(): void;
   pruneResponses(): void;
   accountedResponseSpillBytes(): number;
   spillByteCap(): number;
@@ -262,7 +262,6 @@ async function runPendingResponseSpill(job: PendingResponseSpill): Promise<void>
     releasePendingResponseSpill(job);
     requireStore().recomputeOldestResident();
     if (!cancelled) {
-      requireStore().schedulePersist();
       requireStore().pruneResponses();
       enforceAppOwnedMemoryBudget();
     }
@@ -274,6 +273,11 @@ export function queuePendingResponseSpill(
   candidate: ResidentResponseState,
   options: { supersededSpill?: ResponseSpillRef; directAdmission?: boolean } = {},
 ): void {
+  if (candidate.connectionOwned === true) {
+    // Refuse without changing the map or a foreign pending publication for this id.
+    // The state owner's memory-pressure and close paths perform scoped eviction.
+    return;
+  }
   const inheritedSpill = cancelPendingResponseSpill(id) ?? options.supersededSpill;
   if (pendingResponseSpillBytes + candidate.sizeBytes > MAX_PENDING_RESPONSE_SPILL_BYTES) {
     noteSpillWriteFailure(null, "ECAPACITY");
@@ -328,6 +332,17 @@ export function replaceWithPendingResponseSpill(
   expected: StoredResponseState | undefined,
   options: { directAdmission?: boolean } = {},
 ): boolean {
+  if (candidate.connectionOwned === true) {
+    // Memory-only candidates never take the pending queue — including when a foreign
+    // pending publication holds a superseded ref for this id. A free slot or a same-scope
+    // or dead entry still receives the resident in place; a live foreign entry is left
+    // untouched and the write is refused.
+    if (expected === undefined || expected.kind === "spill-failed" || (expected.kind === "resident"
+      && expected.connectionOwned === true && replayScopeMatches(expected, candidate.clientThreadId, candidate.replayOwnerKey))) {
+      return requireStore().replaceMapEntry(id, candidate, expected);
+    }
+    return false;
+  }
   const inheritedSpill = pendingResponseSpillById.get(id)?.supersededSpill
     ?? (expected?.kind === "spill" ? expected.spill : undefined);
   if (!requireStore().replaceMapEntry(id, candidate, expected)) return false;
@@ -529,6 +544,7 @@ function stopAtShutdownTerminalizationPassLimit(
   }
   for (const [id, state] of requireStore().residentEntries()) {
     if (state.kind !== "resident") continue;
+    if (state.connectionOwned === true) { requireStore().deleteEntry(id); continue; }
     noteSpillWriteFailure(null, "ELOOP");
     requireStore().replaceWithSpillFailure(id, state);
   }

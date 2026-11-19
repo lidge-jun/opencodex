@@ -93,6 +93,7 @@ import {
   type RequestLogEntry,
 } from "../request-log";
 import { sessionLaneIdFromRequest } from "../request-log-conversation";
+import { mintConnectionReplayScope, releaseConnectionReplayScope } from "../../responses/state/connection-scope";
 import { responseWithDeferredRequestLog } from "../relay";
 import { createRequestMetricsOwner } from "../request-metrics";
 import { cachedKiroQuotaMetricRows } from "../../providers/kiro-quota-metrics";
@@ -110,6 +111,7 @@ import {
   resolveApiAuth,
   resolveResponsesApiAuth,
   resolveFilteredReplayPrincipal,
+  resolveContextPrincipal,
   type RequestPolicyView,
   withCors,
   withManagementCors,
@@ -572,6 +574,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (!websocketLease) return serverBusyResponse(req, "Codex WebSockets", policy);
         const forwardHeaders = selectForwardHeaders(req.headers);
         const replayPrincipal = resolveFilteredReplayPrincipal(req, config, admission, forwardHeaders);
+        // An unidentified loopback caller gets a server-minted replay scope bound to this
+        // socket and its handshake thread; a keyed caller keeps the durable principal path.
+        const replayScope = admission.kind === "loopback" && resolveContextPrincipal(req, config, admission) === undefined
+          ? mintConnectionReplayScope(req.headers.get("thread-id") ?? undefined)
+          : undefined;
         // Upgrade on the server that RECEIVED this request, not the captured `server`
         // binding. They are the same object for the public listener, but the
         // unauthenticated loopback listener (#1102) is a second Bun.serve, and handing its
@@ -582,9 +589,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             admission,
             websocketLease,
             sessionLaneIdFromRequest(req.headers),
-            classifyUsageClient(req.headers), replayPrincipal,
+            classifyUsageClient(req.headers), replayPrincipal, replayScope,
           ), peerLocal: classifyRequestPeer(ingress, requestServer.requestIP?.(req)?.address, config.dashboardTrustedProxy, req.headers).local },
         })) return undefined as unknown as Response;
+        releaseConnectionReplayScope(replayScope);
         websocketLease.release();
         return withCors(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"), req, policy);
       }

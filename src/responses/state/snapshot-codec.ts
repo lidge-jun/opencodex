@@ -1,3 +1,4 @@
+import { readFileSync, statSync } from "node:fs";
 import { validReplayOwnerKey } from "./replay-owner";
 import type {
   ResidentInput,
@@ -10,12 +11,44 @@ import type { ResponseSpillRef } from "../spill-store";
 import type { OcxProviderContinuationState } from "../../types";
 
 export interface SnapshotLoadStore {
-  replaceMapEntry(id: string, next: StoredResponseState, expected?: StoredResponseState): boolean;
+  replaceMapEntry(id: string, next: StoredResponseState): void;
   stubSize(id: string, entry: Omit<SpilledResponseState, "sizeBytes">): number;
   tombstone(id: string, createdAt: number): SpillFailedResponseState;
   measureResidentEntry(id: string, entry: ResidentInput): ResidentResponseState | null;
-  admitOversizedCandidate(id: string, candidate: ResidentResponseState, expected?: StoredResponseState): void;
-  byteCap(): number;
+  admitResident(id: string, candidate: ResidentResponseState): void;
+}
+
+/** Load a bounded snapshot through the supplied sink. Returns true if the file is oversized. */
+export function loadSnapshotEntries(path: string, maxBytes: number, store: SnapshotLoadStore, cutoff = -Infinity): boolean {
+  try {
+    // stat and read both follow symlinks. A FIFO or device could block or supply unbounded input.
+    const stat = statSync(path, { throwIfNoEntry: false });
+    if (!stat?.isFile()) return false;
+    if (stat.size > maxBytes) return true;
+    const raw = JSON.parse(readFileSync(path, "utf-8")) as { version?: unknown; states?: unknown };
+    if ((raw.version === 1 || raw.version === 2) && Array.isArray(raw.states)) {
+      for (const entry of raw.states) {
+        if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string") continue;
+        loadSnapshotEntry(entry[0], entry[1], store, cutoff);
+      }
+    }
+  } catch {
+    /* best-effort snapshot recovery */
+  }
+  return false;
+}
+
+/** Decode and account live cold rows without running admission or disk maintenance. */
+export function stageSnapshotEntries(path: string, maxBytes: number, store: SnapshotLoadStore, cutoff: number) {
+  const entries = new Map<string, StoredResponseState>();
+  let bytes = 0;
+  const stage = (id: string, entry: StoredResponseState): void => {
+    bytes += entry.sizeBytes - (entries.get(id)?.sizeBytes ?? 0);
+    entries.delete(id);
+    entries.set(id, entry);
+  };
+  const oversized = loadSnapshotEntries(path, maxBytes, { ...store, replaceMapEntry: stage, admitResident: stage }, cutoff);
+  return { path, entries, bytes, oversized };
 }
 
 interface LegacySnapshotState {
@@ -39,10 +72,10 @@ function isSpillRef(value: unknown): value is ResponseSpillRef {
     && ref.payloadBytes >= 0;
 }
 
-export function loadSnapshotEntry(id: string, value: unknown, store: SnapshotLoadStore): void {
+function loadSnapshotEntry(id: string, value: unknown, store: SnapshotLoadStore, cutoff: number): void {
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
   const rec = value as LegacySnapshotState & { kind?: unknown; spill?: unknown };
-  if (typeof rec.createdAt !== "number" || !Number.isFinite(rec.createdAt)) return;
+  if (typeof rec.createdAt !== "number" || !Number.isFinite(rec.createdAt) || rec.createdAt < cutoff) return;
   if (rec.replayOwnerKey !== undefined && !validReplayOwnerKey(rec.replayOwnerKey)) {
     store.replaceMapEntry(id, store.tombstone(id, rec.createdAt));
     return;
@@ -108,12 +141,5 @@ export function loadSnapshotEntry(id: string, value: unknown, store: SnapshotLoa
     store.replaceMapEntry(id, store.tombstone(id, rec.createdAt));
     return;
   }
-  // Same admission boundary as live writes: an oversized snapshot row goes
-  // straight to spill (or tombstone above the payload ceiling) instead of
-  // entering the resident map and demoting unrelated rows on the first prune.
-  if (resident.sizeBytes > store.byteCap()) {
-    store.admitOversizedCandidate(id, resident, undefined);
-    return;
-  }
-  store.replaceMapEntry(id, resident);
+  store.admitResident(id, resident);
 }
