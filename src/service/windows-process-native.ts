@@ -37,6 +37,8 @@ const SERVICE_RUNNING = 4;
 const SERVICE_STATUS_PROCESS_BYTES = 36;
 const SERVICE_STATUS_STATE_OFFSET = 4;
 const SERVICE_STATUS_PID_OFFSET = 28;
+/** 100 ns intervals between 0001-01-01 (.NET) and 1601-01-01 (FILETIME). */
+const FILETIME_DOTNET_EPOCH = 504_911_232_000_000_000n;
 /** 100 ns intervals between 1601-01-01 and 1970-01-01. */
 const FILETIME_UNIX_EPOCH = 116_444_736_000_000_000n;
 const TERMINATE_EXIT_CODE = 1;
@@ -61,7 +63,9 @@ export type WindowsProcessWatch =
 export interface WindowsProcessNativeApi {
   /** Creation time in epoch ms (FILETIME truncated to ms), or null when unreadable. */
   creationTime(pid: number): number | null;
-  terminate(pid: number, boundStartTime: number): WindowsTerminateResult;
+  /** Same-user, live creation identity in CIM-compatible .NET ticks, read without a subprocess. */
+  sameUserStartTicks?(pid: number): bigint | null;
+  terminate(pid: number, boundStartTime: number | bigint): WindowsTerminateResult;
   openWatch(pid: number, boundStartTime: number): WindowsProcessWatch;
   /** PID of the running Task Scheduler service host, or null when it cannot be read. */
   scheduleServicePid(): number | null;
@@ -72,6 +76,29 @@ export function fileTimeToEpochMs(fileTime: bigint): number | null {
   if (fileTime <= FILETIME_UNIX_EPOCH) return null;
   const ms = (fileTime - FILETIME_UNIX_EPOCH) / 10_000n;
   return ms > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(ms);
+}
+
+/** Keep owner, lifetime and creation evidence on one process handle; never cache a PID proof. */
+export function readSameUserWindowsStart(pid: number, io: {
+  open: (pid: number) => number | bigint;
+  close: (handle: number | bigint) => void;
+  fileTime: (handle: number | bigint) => bigint | null;
+  exited: (handle: number | bigint) => boolean | null;
+  ownerSid: (handle: number | bigint) => string;
+  currentSid: () => string;
+}): bigint | null {
+  if (!Number.isInteger(pid) || pid <= 0 || pid > 0x7fffffff) return null;
+  const handle = io.open(pid);
+  if (!handle) return null;
+  try {
+    const created = io.fileTime(handle);
+    if (created === null || created <= FILETIME_UNIX_EPOCH || io.exited(handle) !== false) return null;
+    const owner = io.ownerSid(handle);
+    if (!/^S-1-\d+(?:-\d+)+$/.test(owner) || owner !== io.currentSid() || io.exited(handle) !== false) return null;
+    // Preserve the creation identity already stored by the CIM-based stop owner protocol.
+    return (created + FILETIME_DOTNET_EPOCH) / 10n * 10n;
+  } catch { return null; }
+  finally { io.close(handle); }
 }
 
 /** Decode SERVICE_STATUS_PROCESS: the PID only while the service reports RUNNING. */
@@ -160,11 +187,15 @@ function loadNativeApi(): WindowsProcessNativeApi | null {
     closeHandle: token => { k.CloseHandle(token); },
   });
 
-  const handleCreationTime = (handle: Handle): number | null => {
+  const handleFileTime = (handle: Handle): bigint | null => {
     const times = new BigUint64Array(4);
     const base = ptr(times);
     const ok = k.GetProcessTimes(handle, base, base + 8, base + 16, base + 24);
-    return ok ? fileTimeToEpochMs(times[0]!) : null;
+    return ok && times[0]! > FILETIME_UNIX_EPOCH ? times[0]! : null;
+  };
+  const handleCreationTime = (handle: Handle): number | null => {
+    const ticks = handleFileTime(handle);
+    return ticks === null ? null : fileTimeToEpochMs(ticks);
   };
   // true = exited, false = running, null = unreadable.
   const handleExited = (handle: Handle): boolean | null => {
@@ -192,12 +223,25 @@ function loadNativeApi(): WindowsProcessNativeApi | null {
         k.CloseHandle(handle);
       }
     },
+    sameUserStartTicks(pid) {
+      return readSameUserWindowsStart(pid, {
+        open: target => k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, target),
+        close: handle => { k.CloseHandle(handle); },
+        fileTime: handleFileTime,
+        exited: handleExited,
+        ownerSid: handleUserSid,
+        currentSid: () => handleUserSid(k.GetCurrentProcess()),
+      });
+    },
     terminate(pid, boundStartTime) {
       const handle = k.OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid);
       if (!handle) return { status: openFailure() };
       try {
-        const created = handleCreationTime(handle);
-        if (created === null) return { status: "unavailable" };
+        const fileTime = handleFileTime(handle);
+        if (fileTime === null) return { status: "unavailable" };
+        // Stop-owner identities retain .NET ticks at microsecond precision.
+        const created = typeof boundStartTime === "number" ? fileTimeToEpochMs(fileTime)
+          : (fileTime + FILETIME_DOTNET_EPOCH) / 10n * 10n;
         if (created !== boundStartTime) return { status: "reused" };
         const before = handleExited(handle);
         if (before === true) return { status: "gone" };

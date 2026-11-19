@@ -38,6 +38,8 @@ test("runtime recycle cancels its watch and tick before replacement handoff", ()
           }),
         }));
         const runtime = await import(${JSON.stringify(repoPath("src/client/runtime.ts"))});
+        const { clearClientConnection } = await import(${JSON.stringify(repoPath("src/client/state.ts"))});
+        const { withLinkApply } = await import(${JSON.stringify(repoPath("src/client/link-home.ts"))});
         const probe = Bun.serve({hostname:'127.0.0.1',port:0,fetch:()=>new Response(null)});
         const port = probe.port; await probe.stop(true);
         const token = 'ocx_data_'+'c'.repeat(40);
@@ -49,15 +51,22 @@ test("runtime recycle cancels its watch and tick before replacement handoff", ()
         configApi.saveConfig(config); writeFileSync(join(process.env.OPENCODEX_HOME,'service-api-token'), token);
         try {
           await runtime.startClientRuntime({block:false}, {restartSupervisor:async()=>null,
-            startListener: port => ({port,stop(){events.push('listener-stop');}})});
+            startListener: port => ({port,async stop(){
+              events.push('listener-stop');
+              await withLinkApply(async()=>{events.push('apply-entered-during-stop');})
+                .catch(error=>{if(error.code==='link_apply_busy')events.push('apply-blocked-during-stop');else throw error;});
+            }})});
           for(let i=0;i<100&&!active;i++)await Bun.sleep(5);
           expect(active).toBe(true);
+          expect(clearClientConnection(config.client)).toBe('committed');
           await runtime.recycleStandalone(serviceApiTokenFingerprint(token), {
             isDesktopSupervised:()=>false,
             spawnReplacement:async()=>{expect(active).toBe(false);events.push('replacement');},
             exitProcess:code=>events.push('exit:'+code),
           });
           expect(events.indexOf('watch-cancelled')).toBeGreaterThanOrEqual(0);
+          expect(events).toContain('apply-blocked-during-stop');
+          expect(events).not.toContain('apply-entered-during-stop');
           expect(events.indexOf('tick-stop')).toBeGreaterThanOrEqual(0);
           expect(events.filter(event => event === 'credential-observation-stop')).toHaveLength(1);
           expect(events.indexOf('watch-cancelled')).toBeLessThan(events.indexOf('listener-stop'));

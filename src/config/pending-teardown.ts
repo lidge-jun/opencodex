@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { atomicWriteFile } from "./atomic-write";
 import { getConfigDir } from "./paths";
+import type { ClientStopOwner } from "./process-state";
 
 /**
  * Ownership receipt for a deferred shared teardown (#3008).
@@ -30,6 +31,10 @@ import { getConfigDir } from "./paths";
 export type PendingTeardownReceipt = {
   /** Process that accepted the obligation, so a live owner is distinguishable from a dead one. */
   ownerPid: number;
+  /** Optional process incarnation on claims bound to an active Link stop fence. */
+  ownerStartTime?: string;
+  /** Exact foreign-endpoint receipt snapshot verified by this Link stop before signaling. */
+  inheritedTeardownDigest?: string;
   /** Identity of this claim; also its filename, which is what makes a clear a single-syscall delete. */
   nonce: string;
   /** ISO timestamp, for diagnostics only; recovery is decided by liveness, not by age. */
@@ -116,7 +121,7 @@ export function pendingTeardownPathFor(nonce: string): string {
   return join(getConfigDir(), `${PREFIX}${nonce}${SUFFIX}`);
 }
 
-function isReceipt(value: unknown, nonce: string): value is PendingTeardownReceipt {
+export function isValidPendingTeardownReceipt(value: unknown, nonce: string): value is PendingTeardownReceipt {
   if (!value || typeof value !== "object") return false;
   const receipt = value as Record<string, unknown>;
   const endpoint = receipt.endpoint as Record<string, unknown> | undefined;
@@ -132,6 +137,10 @@ function isReceipt(value: unknown, nonce: string): value is PendingTeardownRecei
     // The body must agree with the name: a receipt whose nonce was edited to name a
     // different claim would let a request authorize a deferral it does not own.
     && receipt.nonce === nonce
+    && (receipt.ownerStartTime === undefined || (typeof receipt.ownerStartTime === "string"
+      && receipt.ownerStartTime.length > 0 && receipt.ownerStartTime.length <= 80))
+    && (receipt.inheritedTeardownDigest === undefined || (typeof receipt.inheritedTeardownDigest === "string"
+      && /^[a-f0-9]{64}$/.test(receipt.inheritedTeardownDigest)))
     && typeof receipt.createdAt === "string"
     && (receipt.endpointSource === "exact" || receipt.endpointSource === "guessed")
     && (receipt.handover === undefined || receipt.handover === "update-restart")
@@ -145,12 +154,19 @@ export function claimPendingTeardown(
   ownerPid: number = process.pid,
   handover?: "update-restart",
   partA?: PendingTeardownPartA | null,
+  stopOwner?: ClientStopOwner,
+  inheritedTeardownDigest?: string,
 ): PendingTeardownReceipt {
   const dir = getConfigDir();
   assertNotRealHomeUnderTest(dir);
-  const nonce = randomBytes(16).toString("hex");
+  if (stopOwner && (stopOwner.pid !== ownerPid || endpointSource !== "exact" || !/^[a-f0-9]{32}$/.test(stopOwner.nonce))) {
+    throw new Error("invalid Link stop receipt owner");
+  }
+  const nonce = stopOwner?.nonce ?? randomBytes(16).toString("hex");
   const receipt: PendingTeardownReceipt = {
     ownerPid, nonce, createdAt: new Date().toISOString(), endpoint, endpointSource,
+    ...(stopOwner ? { ownerStartTime: stopOwner.startTime } : {}),
+    ...(inheritedTeardownDigest ? { inheritedTeardownDigest } : {}),
     ...(handover ? { handover } : {}),
     ...(partA ? { partA } : {}),
   };
@@ -205,7 +221,7 @@ export function readPendingTeardown(nonce: string): PendingTeardownRead {
   }
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (isReceipt(parsed, nonce)) return { state: "valid", receipt: parsed };
+    if (isValidPendingTeardownReceipt(parsed, nonce)) return { state: "valid", receipt: parsed };
     const digest = createHash("sha256").update(raw).digest("hex").slice(0, 12);
     return { state: "invalid", nonce, detail: `malformed receipt (sha256 ${digest})` };
   } catch {
