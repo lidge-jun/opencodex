@@ -72,10 +72,14 @@ function eligibleRoutes(config: OcxConfig, req: Request, admission: DataPlaneAdm
 }
 
 /** Token limits from configuration first, then generated model metadata; omitted when unknown. */
-function tokenLimits(route: RouteResult): { inputTokenLimit?: number; outputTokenLimit?: number } {
+function tokenLimits(config: OcxConfig, route: RouteResult): { inputTokenLimit?: number; outputTokenLimit?: number } {
   const metadataProvider = resolveMetadataProvider(route.providerName) ?? route.providerName;
   const metadata = getModelMetadata(metadataProvider, route.modelId);
-  const input = configuredMaxInputTokens(route.provider, route.modelId) ?? configuredContextWindow(route.provider, route.modelId) ?? metadata?.contextWindow;
+  const custom = config.customModels?.find(row => row.provider === route.providerName && row.modelId === route.modelId);
+  const customContext = custom?.contextWindow;
+  const input = configuredMaxInputTokens(route.provider, route.modelId)
+    ?? configuredContextWindow(route.provider, route.modelId)
+    ?? (typeof customContext === "number" && customContext > 0 ? customContext : metadata?.contextWindow);
   const output = modelRecordValue(route.provider.modelMaxOutputTokens, route.modelId) ?? route.provider.defaultMaxOutputTokens ?? metadata?.maxTokens;
   return {
     ...(typeof input === "number" && input > 0 ? { inputTokenLimit: input } : {}),
@@ -83,22 +87,22 @@ function tokenLimits(route: RouteResult): { inputTokenLimit?: number; outputToke
   };
 }
 
-const modelResource = (row: { selector: string; route: RouteResult }) => ({
+const modelResource = (config: OcxConfig, row: { selector: string; route: RouteResult }) => ({
   name: `models/${row.selector}`,
   displayName: row.selector,
-  ...tokenLimits(row.route),
+  ...tokenLimits(config, row.route),
   supportedGenerationMethods: ["generateContent", "streamGenerateContent", "countTokens"],
 });
 
 export function handleGeminiModels(config: OcxConfig, req: Request, admission: DataPlaneAdmission): Response {
-  return Response.json({ models: eligibleRoutes(config, req, admission).map(modelResource) });
+  return Response.json({ models: eligibleRoutes(config, req, admission).map(row => modelResource(config, row)) });
 }
 
 export function handleGeminiModel(config: OcxConfig, req: Request, admission: DataPlaneAdmission, model: string): Response {
   const row = findOllamaRoute(config, model, req);
   const scope = resolveAdmissionModelScope(config, admission);
   if (!row || !routeAllowedByScope(scope, { providerName: row.route.providerName, modelId: row.route.modelId })) return geminiError(404, "model not found");
-  return Response.json(modelResource(row));
+  return Response.json(modelResource(config, row));
 }
 
 /**

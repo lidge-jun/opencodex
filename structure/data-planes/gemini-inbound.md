@@ -71,8 +71,9 @@ allowance answers the Google-shaped 503 (`tests/server/gemini-count-tokens-admis
 `generateContentRequest`) is read under the inbound limit, projected with the same codec onto Chat, decoded with
 `chatConversationToIr` and estimated with `estimateInputTokens`; the answer is `{ totalTokens }` and nothing goes
 upstream. A body the Chat projection refuses (for example `fileData`, or no messages) is a 400. Model resources
-add `inputTokenLimit` (configured max input or context window, then generated model metadata) and
-`outputTokenLimit` (generated metadata) only when known, and list `countTokens` among
+add `inputTokenLimit` (configured provider max input, provider context-window override, matching
+custom model context window, then generated model metadata) and `outputTokenLimit` (configured
+provider maximum, then generated metadata) only when known, and list `countTokens` among
 `supportedGenerationMethods`. `$alt=sse` is accepted as `alt=sse`; `STATUS_NAMES` follows the google.rpc
 HTTP mapping, including 405 as `UNIMPLEMENTED`. Coverage: `tests/server/server-gemini-inbound-fidelity.test.ts`.
 

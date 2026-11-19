@@ -835,7 +835,8 @@ from the URL and headers before the request is logged or forwarded. Errors use G
 
 - `GET /v1beta/models` lists `models/<provider>/<model>` for the routes the key may use, and
   `GET /v1beta/models/{model}` returns one. A model includes `inputTokenLimit` and `outputTokenLimit`
-  when they are known.
+  when they are known. For `inputTokenLimit`, provider input and context-window overrides take precedence,
+  followed by the matching `customModels[].contextWindow` and generated model metadata.
 - `:generateContent` and `:streamGenerateContent`, under `/v1beta/models/` or `/v1/models/`, translate
   `contents`, `systemInstruction`, inline images, function declarations and calls, and
   `generationConfig`. Thought signatures on `functionCall` parts are carried in both directions. With

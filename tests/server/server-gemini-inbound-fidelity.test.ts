@@ -161,6 +161,37 @@ describe("Gemini inbound fidelity", () => {
     });
   });
 
+  test("model list and lookup apply provider overrides before custom and generated input limits", async () => {
+    const configured = config();
+    const google = configured.providers.google!;
+    google.modelMaxInputTokens = { "input-capped": 12000 };
+    google.modelContextWindows = { "context-capped": 24000, "input-capped": 48000 };
+    configured.customModels = [
+      { id: "other-provider", provider: "fx", modelId: "gemini-3-flash-preview", contextWindow: 55000 },
+      { id: "google-known", provider: "google", modelId: "gemini-3-flash-preview", contextWindow: 77000 },
+      { id: "google-custom", provider: "google", modelId: "custom-only", contextWindow: 33000 },
+      { id: "google-context", provider: "google", modelId: "context-capped", contextWindow: 99000 },
+      { id: "google-input", provider: "google", modelId: "input-capped", contextWindow: 88000 },
+    ];
+    saveConfig(configured);
+
+    await withServer(async base => {
+      const list = await fetch(new URL("/v1beta/models", base), { headers: googKey });
+      expect(list.status).toBe(200);
+      const { models } = await list.json() as { models: { name: string; inputTokenLimit?: number }[] };
+      for (const [id, inputTokenLimit] of [
+        ["gemini-3-flash-preview", 77000], ["custom-only", 33000],
+        ["context-capped", 24000], ["input-capped", 12000],
+      ] as const) {
+        const name = `models/google/${id}`;
+        const one = await fetch(new URL(`/v1beta/${name}`, base), { headers: googKey });
+        expect(one.status).toBe(200);
+        expect(await one.json()).toMatchObject({ name, inputTokenLimit });
+        expect(models.find(model => model.name === name)).toMatchObject({ name, inputTokenLimit });
+      }
+    });
+  });
+
   test("a configured output limit wins over generated metadata", async () => {
     const lookup = async (base: URL) => (await (await fetch(new URL("/v1beta/models/google/gemini-3-flash-preview", base), { headers: googKey })).json() as Record<string, any>).outputTokenLimit;
     await withServer(async base => { expect(await lookup(base)).toBe(65536); });
