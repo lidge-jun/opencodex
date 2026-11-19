@@ -15,6 +15,8 @@ import { SENT_VALUE_GUARD_SCAN_CHARS, outboundCredentials, type OutboundCredenti
 import { configuredCredentials, containsConfiguredCredentialExcerpt, type ConfiguredCredentials } from "./configured-credentials";
 import { isUntypedBareUpstreamError, reduceBareUpstreamEvidence, wrappedServerErrorStatus, type BareUpstreamError, type BareUpstreamEvidence } from "./bare-upstream-error";
 
+import { upstreamErrorIsLocal } from "./request-log-failure-detail";
+
 /** First bounded upstream diagnostics shared by request contexts and final rows. */
 export interface UpstreamErrorDiagnostics {
   upstreamErrorCode?: string;
@@ -93,7 +95,7 @@ function noteBoundedDiagnostic(
   if (!isClosedDiagnosticVocabulary(field, value) && repeatsRequestSentValue(logCtx, value)) return;
   logCtx[field] = value;
   const status = logCtx.terminalHttpStatus;
-  if (status === undefined || status >= 500) {
+  if (!upstreamErrorIsLocal(logCtx) && (status === undefined || status >= 500)) {
     // Service logs persist too: print only closed-vocabulary values, never an upstream id or code.
     const { upstreamErrorCode: rawCode, upstreamErrorType: type } = upstreamDiagnosticLogFields(logCtx);
     const code = rawCode !== undefined && KNOWN_BARE_ERROR_CODES.has(rawCode) ? rawCode : undefined;

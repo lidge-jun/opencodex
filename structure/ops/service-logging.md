@@ -22,8 +22,12 @@ covers failure, wait, last-resort, reprobe and effort diagnostic output.
 When ladder exhaustion returns a child response, the combo's logical row takes diagnostics from that
 child. A synthetic exhaustion response can retain child diagnostics. For example, the quota-cooldown
 snapshot exit can adopt the last failed child's diagnostics before returning a synthetic 503 with
-quota cooldown advice. A proxy-marked replay refusal is excluded from the retained quota response and
-its child diagnostics. Each physical attempt remains in the row's attempt history.
+quota cooldown advice. Only HTTP 402 and 429 qualify as retained quota responses, and the replay
+refusal marker excludes those refusals from quota retention. An HTTP 504 from a
+[local web-search deadline](../data-planes/error-detail.md) is ineligible by status and carries
+no upstream condition in the combo warning. The [combo fallback policy](../fallback-policy.md)
+defines when a committed hosted-search stream counts as a target success.
+Each physical attempt remains in the row's attempt history.
 
 ## Retention
 

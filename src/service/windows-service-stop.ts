@@ -177,7 +177,7 @@ export async function runWindowsServiceStopPartA(request: WindowsPartARequest = 
   };
   if (request.capMs === undefined) return run().finally(() => cancellation.abort());
   const work = run().catch(error => {
-    if (!request.authorize && error instanceof WindowsCheckedStopRefusedError) return error.partial;
+    if (error instanceof WindowsCheckedStopRefusedError && (!request.authorize || !withinCap())) return error.partial;
     throw error;
   });
   let timer: ReturnType<typeof setTimeout> | undefined;

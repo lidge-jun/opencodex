@@ -32,6 +32,7 @@ import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { currentTurnToolBridgeMaps, guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
 import { guardCompactionSummary } from "../../responses/compaction-summary";
 import { settleAnthropicPerMessageEffort } from "../../adapters/anthropic/per-message-effort";
+import { adapterResponseSpendObserver } from "./request-spend";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function deliverAdapterResponse(
@@ -89,6 +90,7 @@ export async function deliverAdapterResponse(
   const { routedCompaction } = sidecarState;
   const bodyInactivityMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream });
   const upstreamRequestsStream = parsed.stream || isCanonicalOpenAiForwardProvider(route.provider);
+  const observeInitialSpend = adapterResponseSpendObserver(upstreamResponse);
   const recoverThinkingSignature = (events: AsyncIterable<AdapterEvent>): AsyncIterable<AdapterEvent> =>
     thinkingSignatureRecovery.wrap(events, async function* () {
       const result = await refetchThinkingSignature();
@@ -109,6 +111,7 @@ export async function deliverAdapterResponse(
         return;
       }
       try {
+        const observeRetrySpend = adapterResponseSpendObserver(response);
         const bodyInactivityMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream: adapterExchange.localUpstream });
         const retryEvents = upstreamRequestsStream
           ? readResponseStreamWithInactivity(response, upstream.signal, bodyInactivityMs,
@@ -118,6 +121,7 @@ export async function deliverAdapterResponse(
                 guarded => transportState.activeAdapter.parseResponse!(guarded, translatorBudget, logCtx.activeTierMetadata));
             })();
         for await (const event of retryEvents) {
+          observeRetrySpend?.(event);
           options.onCompactionRecoveryAdapterEvent?.(event);
           yield event;
         }
@@ -153,6 +157,7 @@ export async function deliverAdapterResponse(
           bodyInactivityMs,
           response => transportState.activeAdapter.parseStream(response, translatorBudget, logCtx.activeTierMetadata, { completedToolBlocks: outputItemIds !== undefined }),
         )) {
+          observeInitialSpend?.(event);
           options.onCompactionRecoveryAdapterEvent?.(event);
           yield event;
         }
@@ -321,7 +326,10 @@ export async function deliverAdapterResponse(
           response => transportState.activeAdapter.parseResponse!(response, translatorBudget, logCtx.activeTierMetadata),
         ));
       }
-      for (const event of initialEvents) options.onCompactionRecoveryAdapterEvent?.(event);
+      for (const event of initialEvents) {
+        observeInitialSpend?.(event);
+        options.onCompactionRecoveryAdapterEvent?.(event);
+      }
       const recoveredEvents: AdapterEvent[] = [];
       for await (const event of recoverThinkingSignature((async function* () { yield* initialEvents; })())) {
         recoveredEvents.push(event);

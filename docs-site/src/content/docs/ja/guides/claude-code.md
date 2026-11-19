@@ -179,7 +179,7 @@ unknown は設定がまだ opencodex のプロキシを指すか判断できな�
 
 ### Picker モード: 1P の Code タブで opencodex モデルを表示する
 
-Picker モードは 1P モードの一部です。macOS と Windows で 1P を選ぶとデフォルトで有効になりますが、
+Picker モードは 1P モードの一部です。macOS、Windows、Linux で 1P を選ぶとデフォルトで有効になりますが、
 `claudeCode.intercept.picker: false` を設定した場合は無効です。1P の Desktop の Code タブにある
 モデルピッカーを書き換え、利用できる opencodex モデルを名前付きで表示します。初回の有効化時は、
 macOS がログインキーチェーン内、Windows が現在のユーザーのルートストアでローカル証明書認証局を信頼するよう求めることがあります。この認証局の
@@ -193,9 +193,8 @@ macOS がログインキーチェーン内、Windows が現在のユーザーの
 旧 ID からの一度限りの移行では、以前の信頼を削除するために同意が必要になる場合があります。
 削除が完了するまでは Picker は利用できず、適用済みプロファイルは復号しない中継を使います。
 キーチェーンのロック解除やアプリの資格情報へのアクセス許可は macOS 独自の動作で、再起動や更新時にも
-表示される場合があります。Windows では `on` や `trust` の明示的な実行時にルート追加の確認が表示されることがあります。Linux は Picker 非対応で、Picker の CA、資格情報ストア、
-プロキシの処理を開始しません。通常の Claude インターセプトは利用でき、ローカル CA ファイルには
-所有者、シンボリックリンク、ファイル権限、Windows ACL の検査が適用されます。
+表示される場合があります。Windows では `on` や `trust` の明示的な実行時にルート追加の確認が表示されることがあります。
+Linux で Picker を明示的に有効にすると、`certutil` がユーザーの NSS データベースに制約付き Picker CA を信頼済みとして登録します。
 
 Picker モードが有効な間、Claude Desktop のネットワークは OpenCodex を経由します。OpenCodex が停止
 すると、Picker モードをオフにするか Desktop を完全に再起動するまで Desktop はオフラインになります。

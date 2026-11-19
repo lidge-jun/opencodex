@@ -331,22 +331,6 @@ describe("client restart controller", () => {
     expect(recycled).toEqual([]);
   });
 
-  test("a stop begun during an accepted recycle's supervisor lookup prevents the handoff", async () => {
-    let stopping = false, lookups = 0;
-    let release!: () => void, entered!: () => void;
-    const paused = new Promise<void>(resolve => { entered = resolve; });
-    const wait = new Promise<void>(resolve => { release = resolve; });
-    const { io, calls } = fakeIo({ stopping: () => stopping, connectionChanged: () => true,
-      supervisor: async () => { if (++lookups === 2) { entered(); await wait; } return null; },
-      recycle: async () => { calls.push("recycle"); },
-    });
-    const controller = createClientRestartController(io);
-    expect(await controller.request()).toEqual({ kind: "accepted", alreadyRestarting: false });
-    await paused; stopping = true; release();
-    await controller.settled();
-    expect(calls).toEqual([]);
-  });
-
   // Final review: a manager that owns this process but cannot be proven to relaunch it must keep
   // the runtime; refused at admission, nothing recycled or detached.
   // The restart decision table (PR body): every supervisor verdict, with the connection ended

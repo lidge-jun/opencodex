@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { RequestSendObserver } from "../../lib/request-execution-budget";
+import type { AdapterEvent } from "../../types";
 import { sharedSpendLedger, sharedSpendPolicy, type SpendReservationLedger, type SpendScopes, type SpendSeed, type SpendReservationProof, type SpendAdmissionPolicy } from "../../lib/spend-reservation-ledger";
 import { SpendLedgerOwnerError } from "../../lib/spend-ledger-owner";
 import { markLocalRequestLogRefusal, type RequestLogContext } from "../request-log";
@@ -10,6 +11,23 @@ import { currentWorkflowBudgetPolicy } from "../../lib/workflow-budget-config";
 export interface TerminalSpendUsage {
   inputTokens?: number;
   outputTokens?: number;
+}
+
+type RecordSendUsage = (usage: TerminalSpendUsage) => void;
+const adapterResponseSpend = new WeakMap<Response, RecordSendUsage>();
+
+/** Bind an image-recovery response after its retry ladder has finished reporting sends. */
+export function bindAdapterResponseSpend(response: Response, record: RecordSendUsage | undefined): void {
+  if (response.ok && record) adapterResponseSpend.set(response, record);
+}
+
+/** Observe raw adapter events before guards and bridges merge usage across sends. */
+export function adapterResponseSpendObserver(response: Response): ((event: AdapterEvent) => void) | undefined {
+  const record = adapterResponseSpend.get(response);
+  if (!record) return;
+  return event => {
+    if ("usage" in event && event.usage && adapterResponseSpend.delete(response)) record(event.usage);
+  };
 }
 
 /** Settles one request's durable spend entries once its terminal usage is known. */
@@ -33,6 +51,7 @@ export interface SpendTargetIdentity extends SpendScopes {
 export interface RequestSpendReporter {
   start(seed: SpendSeed, ordinal: number): void;
   rebindTarget(target: SpendTargetIdentity, ordinal: number): boolean;
+  recordUsage(ordinal: number, usage: TerminalSpendUsage | null): void;
   report(sends: number): void;
   close(): void;
 }
@@ -67,11 +86,9 @@ export function captureRequestSpendPolicy(policy: SpendAdmissionPolicy = sharedS
  * so one entry per increment is one entry per send -- and a dispatch path added later cannot
  * forget to book, which is how the previous wiring attempt ended up with no caller at all.
  *
- * Settlement follows what the request actually learned. The terminal usage belongs to the LAST
- * send that left, so that one settles with the real figure. Every earlier send failed without
- * reporting usage of its own and may still have been billed, so it becomes unresolved spend
- * rather than free. A request that ends with no usage at all -- a cancel, a lost stream --
- * leaves all of them unresolved, which is the conservative answer this ledger exists to give.
+ * Image-recovery receipts carry their own usage, or null if usage is unknown. For an ordinary
+ * request the last routed send keeps the aggregate terminal usage. Other unknown sends remain
+ * unresolved at their reservation estimates.
  */
 export function createRequestSpendTracker(
   logCtx: Pick<
@@ -108,7 +125,8 @@ export function createRequestSpendTracker(
   const retiredSeeds = new Set<SpendSeed>();
   const resolvedSendIds = new Set<string>();
   const completedSeeds = new Set<SpendSeed>();
-  const physical = new Map<number, { seed: SpendSeed; sendId?: string; reportPending?: boolean; reportComplete?: boolean; estimate?: { inputTokens: number; outputCeilingTokens: number } }>();
+  const physical = new Map<number, { seed: SpendSeed; sendId?: string; reportPending?: boolean; reportComplete?: boolean;
+    estimate?: { inputTokens: number; outputCeilingTokens: number }; usage?: TerminalSpendUsage | null }>();
   const selectedScopes = (target: SpendTargetIdentity = {}): SpendScopes => ({
     ...(rootId !== undefined ? { rootId } : {}),
     ...(target.identityId ?? logCtx.accountLogLabel ? { identityId: target.identityId ?? logCtx.accountLogLabel } : {}),
@@ -135,9 +153,11 @@ export function createRequestSpendTracker(
     const ids: string[] = [];
     for (const [, entry] of entries) {
       if (!entry.sendId) return false;
-      const reported = entry.sendId === terminal && (typeof finalUsage?.inputTokens === "number" || typeof finalUsage?.outputTokens === "number");
+      // Recovery pins set null at dispatch to opt this receipt out of the aggregate fallback.
+      const usage = entry.usage === undefined && entry.sendId === terminal ? finalUsage : entry.usage;
+      const reported = typeof usage?.inputTokens === "number" || typeof usage?.outputTokens === "number";
       if (!resolvedSendIds.has(entry.sendId)) {
-        const ok = reported ? ledger().settle(entry.sendId, { inputTokens: finalUsage?.inputTokens ?? 0, outputTokens: finalUsage?.outputTokens ?? 0 })
+        const ok = reported ? ledger().settle(entry.sendId, { inputTokens: usage?.inputTokens ?? 0, outputTokens: usage?.outputTokens ?? 0 })
           : ledger().markLost(entry.sendId);
         if (!ok) return false;
         resolvedSendIds.add(entry.sendId);
@@ -349,6 +369,10 @@ export function createRequestSpendTracker(
           owned.seed = seed;
           seedState(seed)!.started = true;
           return true;
+        },
+        recordUsage(ordinal, usage) {
+          const entry = physical.get(ordinal);
+          if (!resolved && entry && starts.some(start => start.ordinal === ordinal)) entry.usage = usage;
         },
         report(sends) {
           if (closed) return;

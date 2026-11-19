@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { stopWindowsServiceChecked, type WindowsCheckedStopDeps } from "../../src/service/windows-checked-stop";
+import { stopWindowsServiceChecked, WindowsCheckedStopRefusedError, type WindowsCheckedStopDeps } from "../../src/service/windows-checked-stop";
 import { windowsCheckedStopLiveDeps } from "../../src/service/windows-checked-stop-live";
 import { parseWindowsProcessSnapshot, windowsProcessSnapshot } from "../../src/service/windows-process-evidence";
 import { setWindowsProcessNativeForTests } from "../../src/service/windows-process-native";
@@ -73,11 +73,45 @@ test("an asynchronous authorizer cannot dispatch a wrapper terminate after the o
   const fake = machine();
   setWindowsServiceStopHooksForTests({ liveDeps: () => fake.deps });
   try {
-    await runWindowsServiceStopPartA({ capMs: 50, authorize: async () => {
+    const result = await runWindowsServiceStopPartA({ capMs: 50, authorize: async () => {
       await Promise.resolve();
       if (++approvals === 3) elapsed = 50;
-    } }).catch(() => undefined);
+    } });
     expect(approvals).toBe(3);
+    expect(fake.terminated).toEqual([]);
+    expect(result).toMatchObject({ outcome: "unknown", changed: true, terminated: [] });
+    expect(result.detail).toBe("the checked stop did not finish within its cap");
+    expect(result.bound.map(row => row.pid)).toEqual([30, 20]);
+  } finally { now.mockRestore(); }
+});
+
+test("an explicit authorizer refusal inside the cap still throws with the completed stop evidence", async () => {
+  let approvals = 0;
+  const fake = machine();
+  const refusal = new Error("stop permission withdrawn");
+  setWindowsServiceStopHooksForTests({ liveDeps: () => fake.deps });
+  const failure = await runWindowsServiceStopPartA({ capMs: 1_000, authorize: () => {
+    if (++approvals === 3) throw refusal;
+  } }).catch(error => error);
+  expect(failure).toBeInstanceOf(WindowsCheckedStopRefusedError);
+  expect(failure.cause).toBe(refusal);
+  expect(failure.partial).toMatchObject({ outcome: "unknown", changed: true, terminated: [] });
+  expect(fake.terminated).toEqual([]);
+});
+
+test("an explicit authorizer refusal after the cap returns the detached cap snapshot", async () => {
+  let elapsed = 0, approvals = 0;
+  const now = spyOn(performance, "now").mockImplementation(() => elapsed);
+  const fake = machine();
+  setWindowsServiceStopHooksForTests({ liveDeps: () => fake.deps });
+  try {
+    const result = await runWindowsServiceStopPartA({ capMs: 50, authorize: async () => {
+      await Promise.resolve();
+      if (++approvals === 3) { elapsed = 50; throw new Error("stop permission withdrawn"); }
+    } });
+    expect(result).toMatchObject({ outcome: "unknown", changed: true, terminated: [] });
+    expect(result.detail).toBe("the checked stop did not finish within its cap");
+    expect(result.bound.map(row => row.pid)).toEqual([30, 20]);
     expect(fake.terminated).toEqual([]);
   } finally { now.mockRestore(); }
 });
@@ -201,12 +235,17 @@ test("the outer cap aborts a pending helper and retains dispatch or streamed mut
   }
 });
 
-for (const outcome of ["failed-before-dispatch", "unverified", "budget-before-stop", "partial-stop", "denied-after-stop", "lost-after-approval", "lost-successful-result"] as const) {
+for (const outcome of ["failed-before-dispatch", "unverified", "budget-before-stop", "partial-stop", "denied-after-stop", "lost-after-approval", "lost-successful-result",
+  "approved-not-dispatched-timeout", "approved-not-dispatched-failed", "approved-not-dispatched-empty"] as const) {
   test(`Scheduler mutation evidence survives ${outcome}`, async () => {
     const live = windowsCheckedStopLiveDeps({ run: async (_program, _args, _timeout, authorizeProof, control) => {
       if (outcome === "failed-before-dispatch") return { status: null, stdout: "", stderr: "PowerShell not found", timedOut: false };
       if (outcome === "unverified") return { status: 0, stdout: "unverified-registration", stderr: "", timedOut: false };
       expect(await authorizeProof?.(proof(ownedXml))).toBe(true);
+      if (outcome.startsWith("approved-not-dispatched-")) return {
+        status: outcome === "approved-not-dispatched-empty" ? 0 : null,
+        stdout: "", stderr: "", timedOut: outcome === "approved-not-dispatched-timeout",
+      };
       control?.onDispatch?.();
       if (outcome === "budget-before-stop" || outcome === "lost-successful-result") return {
         status: 0, stdout: outcome === "budget-before-stop" ? "failed" : "", stderr: "", timedOut: false,
@@ -218,7 +257,8 @@ for (const outcome of ["failed-before-dispatch", "unverified", "budget-before-st
     const fake = machine({ enumerate: () => [], endTask: live.endTask });
     const result = await stopWindowsServiceChecked(fake.deps);
     expect(result.outcome).toBe(outcome === "denied-after-stop" ? "denied" : "unknown");
-    expect(result.changed).toBe(!["failed-before-dispatch", "unverified", "budget-before-stop"].includes(outcome));
+    expect(result.changed).toBe(!["failed-before-dispatch", "unverified", "budget-before-stop"].includes(outcome)
+      && !outcome.startsWith("approved-not-dispatched-"));
     expect(fake.terminated).toEqual([]);
   });
 }

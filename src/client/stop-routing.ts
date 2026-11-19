@@ -6,15 +6,14 @@ import { journalOwner, JOURNAL_PATH } from "../codex/journal";
 import { CODEX_CONFIG_PATH } from "../codex/paths";
 import { siblingOfLivePort, siblingSkipMessage } from "../codex/sibling-start";
 import type { OcxClientConnectionConfig } from "../types";
+import { pendingTeardownOutstanding } from "../config/pending-teardown";
 import { stripGrokConfig } from "../grok/inject";
 import { isDesktopSupervised } from "../lib/system-restart-contract";
 import { serviceEnvironmentOwnedHere } from "../service/guards";
 import { stopRestoreWriteGuard } from "./restore-ownership";
 import { isLinkConnection } from "./state";
-import { linkNativeTeardownDecision, type LinkStopRuntime } from "./stop-native-handoff";
 
-export type LinkRoutingRestoreResult = { success: boolean; restored: boolean; message: string; retainListener?: true };
-type LinkRoutingRestoreOptions = { syncFenced: boolean; runtime?: LinkStopRuntime };
+export type LinkRoutingRestoreResult = { success: boolean; restored: boolean; message: string };
 
 const resumeGuidance = "After starting the Child again, run `ocx sync --restart-codex` to restore its Home routing.";
 const refusal = (reason: string): LinkRoutingRestoreResult => ({
@@ -22,52 +21,19 @@ const refusal = (reason: string): LinkRoutingRestoreResult => ({
   message: `Link Child Codex routing restore refused: ${reason}. No further writes; inspect remaining recovery evidence.`,
 });
 
-function preserveSupervisedRouting(): boolean {
-  return process.env.OCX_SERVICE === "1" || isDesktopSupervised();
-}
-
-/** Await file writers before releasing the socket, retaining it when safe cleanup is refused. */
-export async function restoreLinkClientRoutingBeforeExit(
-  expected: OcxClientConnectionConfig, options: LinkRoutingRestoreOptions,
-): Promise<LinkRoutingRestoreResult> {
-  expected = structuredClone(expected);
-  options = { ...options, ...(options.runtime ? { runtime: { ...options.runtime } } : {}) };
-  const retainOnRefusal = (result: LinkRoutingRestoreResult): LinkRoutingRestoreResult => result.success ? result : {
-    ...result, retainListener: true,
-    message: `${result.message} The listener remains bound; repair the reported evidence, then retry ocx stop.`,
-  };
-  // A parent receipt defers native Codex/Grok only. It never proves that a live owner
-  // will remove Link file routes before this socket closes, even when the receipt is valid.
-  if (siblingOfLivePort() !== null || !isLinkConnection(expected) || preserveSupervisedRouting()) {
-    return retainOnRefusal(restoreLinkClientRouting(expected, options));
-  }
-  try {
-    const { restoreLinkFileRouting } = await import("./stop-file-routing");
-    if (!options.syncFenced) throw new Error("the runtime sync fence could not be verified");
-    await restoreLinkFileRouting(expected, { beforeWrite: () => {
-      if (preserveSupervisedRouting() || siblingOfLivePort() !== null) throw new Error("restart or teardown ownership changed");
-    } });
-  } catch (error) {
-    return { success: false, restored: false, retainListener: true,
-      message: `Link Child file routing restore refused: ${error instanceof Error ? error.message : "restoration failed"}. The listener remains bound; repair the client configuration or ownership evidence, then retry ocx stop.` };
-  }
-  return retainOnRefusal(restoreLinkClientRouting(expected, options));
-}
-
 /** Unsupervised signal cleanup; explicit parent stop and restart retain their own restoration. */
-export function restoreLinkClientRouting(expected: OcxClientConnectionConfig, options: LinkRoutingRestoreOptions): LinkRoutingRestoreResult {
+export function restoreLinkClientRouting(expected: OcxClientConnectionConfig, options: { syncFenced: boolean }): LinkRoutingRestoreResult {
   if (siblingOfLivePort() !== null) return { success: true, restored: false, message: siblingSkipMessage() };
   if (!isLinkConnection(expected)) {
     return { success: true, restored: false, message: "Hub connection-owned integrations preserved." };
   }
-  if (preserveSupervisedRouting()) return { success: true, restored: false, message: "Supervised restart owns native Codex and managed Grok restoration." };
+  const preserve = () => process.env.OCX_SERVICE === "1" || isDesktopSupervised()
+    || pendingTeardownOutstanding();
+  if (preserve()) return { success: true, restored: false, message: "Supervised restart or pending teardown owns the client integrations." };
   if (options?.syncFenced !== true) return refusal("the runtime sync fence could not be verified");
-  const nativeTeardown = linkNativeTeardownDecision(options.runtime);
-  if (nativeTeardown === "defer") return { success: true, restored: false, message: "The active parent stop owns native Codex and managed Grok restoration." };
-  if (nativeTeardown === "refuse") return refusal("pending native teardown has no verified active parent stop");
   const guard = stopRestoreWriteGuard(expected);
   const withWriteGuard = <T>(write: () => T): T => guard.run(() => {
-    if (preserveSupervisedRouting() || linkNativeTeardownDecision(options.runtime) !== "restore") throw new Error("restart or teardown ownership changed");
+    if (preserve()) throw new Error("restart or teardown ownership changed");
     const owner = journalOwner({ readOnly: true });
     if (existsSync(JOURNAL_PATH) && (owner?.kind !== "client" || owner.apiKeyId !== expected.apiKeyId)) {
       throw new Error("the Codex journal belongs to another owner or is unverified");

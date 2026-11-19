@@ -68,14 +68,11 @@ describe("connected-client start ownership fence", () => {
     expect(fence).toBeGreaterThan(start.indexOf("probeOwnerPastRestartParent("));
     expect(fence).toBeLessThan(start.indexOf("recoverStartJournalAfterOwnerRecheck(owner, siblingStart)"));
     const recovery = readFileSync(repoPath("src/cli/start-owner-fence.ts"), "utf8");
-    expect(recovery.indexOf("await findLiveProxy(START_OWNERSHIP_LIVENESS)"))
-      .toBeLessThan(recovery.indexOf("removePidIfValueIs(owner.pidSnapshot)"));
-    expect(recovery.indexOf("if (owner.live) return sibling"))
-      .toBeLessThan(recovery.indexOf("removePidIfValueIs(owner.pidSnapshot)"));
-    expect(recovery.indexOf("removePidIfValueIs(owner.pidSnapshot)"))
-      .toBeLessThan(recovery.indexOf("await markCrossHomeSibling()"));
-    expect(recovery.indexOf("await markCrossHomeSibling()"))
-      .toBeLessThan(recovery.indexOf("if (!sibling) reconcileStartupJournal()"));
+    const steps = ["await observeProxyLiveness(START_OWNERSHIP_LIVENESS)", "if (owner.live) return sibling",
+      "await markCrossHomeSibling()", "&& hasLiveStartupJournalOwner()", "removePidIfValueIs(owner.pidSnapshot)",
+      "if (!sibling) reconcileStartupJournal()"].map(step => recovery.indexOf(step));
+    expect(steps[0]).toBeGreaterThanOrEqual(0);
+    for (let index = 1; index < steps.length; index++) expect(steps[index]).toBeGreaterThan(steps[index - 1]);
     expect(fence).toBeLessThan(start.indexOf('if (clientState.kind === "connected")'));
     expect(fence).toBeLessThan(start.indexOf("bindAndPublishStartOwnership("));
     expect(start.slice(fence, start.indexOf('if (clientState.kind === "connected")')))
@@ -129,17 +126,22 @@ describe("connected-client start ownership fence", () => {
 
   test("handleStart routes the connected-client branch through the fence and the runtime releases after publication", () => {
     const cli = readFileSync(repoPath("src/cli/index.ts"), "utf8");
-    const branch = cli.slice(cli.indexOf('if (clientState.kind === "connected") {'));
-    const fence = branch.indexOf("startClientRuntimeUnderOwnershipLease(");
+    const branch = cli.slice(cli.indexOf('if (clientState.kind === "connected") {'), cli.indexOf("// Managed service children may defer before binding"));
+    expect(branch).toMatch(/await startConnectedClientWithOwnershipFence\(\{[^}]+\}\);\s*return;/);
+    const module = readFileSync(repoPath("src/cli/client-start-fence.ts"), "utf8");
+    const start = module.slice(module.indexOf("export async function startConnectedClientWithOwnershipFence("));
+    const fence = start.indexOf("startClientRuntimeUnderOwnershipLease(");
+    const recheck = start.indexOf("await recheckClientStartOwnership(");
     expect(fence).toBeGreaterThan(-1);
-    expect(fence).toBeLessThan(branch.indexOf("startClientRuntime({"));
-    expect(branch.slice(fence, branch.indexOf("return;"))).toContain("serviceChildOwnershipDecisionForClassifiedChild(supervisedServiceChild)");
+    expect(recheck).toBeGreaterThan(fence);
+    expect(recheck).toBeLessThan(start.indexOf("startClientRuntime({"));
+    expect(start.slice(fence, recheck)).toContain("serviceChildOwnershipDecisionForClassifiedChild(supervisedServiceChild)");
     const runtime = readFileSync(repoPath("src/client/runtime.ts"), "utf8");
     // serve() binds and publishes (it runs again for a restart rollback, OCX-6); the lease is
     // released only once the first serve() returned, i.e. after publication.
     const serve = runtime.slice(runtime.indexOf("const serve = async"), runtime.indexOf("const stopServing"));
     // Each publication also stamps a fresh servingGeneration (restart sync fence, #8416).
-    expect(serve).toMatch(/writePid\(process\.pid\);\s*\n(?:\s*\/\/[^\n]*\n)*\s*writeRuntimePort\(\{ \.\.\.clientRuntimeRecord\(process\.pid, boundPort, attestationSecret\), servingGeneration: randomUUID\(\),\s+clientLinkOwner \}\);/);
+    expect(serve).toMatch(/writePid\(process\.pid\);\s*\n(?:\s*\/\/[^\n]*\n)*\s*writeRuntimePort\(\{ \.\.\.clientRuntimeRecord\(process\.pid, boundPort, attestationSecret\), servingGeneration: randomUUID\(\) \}\);/);
     expect(runtime).toMatch(/await serve\(\);\s*\n\s*options\.afterPublish\?\.\(\);/);
   });
 });

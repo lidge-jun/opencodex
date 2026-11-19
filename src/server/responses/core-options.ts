@@ -239,6 +239,8 @@ export interface HandleResponsesOptions {
   protocolSource?: import("./core-combo-native").ComboProtocolSource;
   /** Internal transport identity for route-scoped upstream compatibility policy. */
   inboundTransport?: "websocket";
+  /** ACP refusal signal captured from the original HTTP request, before any bridge translation. */
+  agyAcpUnattendedHttpTurn?: boolean;
   /**
    * Set by the HTTP `/v1/responses` ingress only: a streaming combo turn whose target selection
    * outlasts `COMBO_SELECTION_KEEPALIVE_THRESHOLD_MS` commits a 200 SSE head and sends keepalive
@@ -272,6 +274,9 @@ export interface HandleResponsesOptions {
    * can carry the binding to the context that writes the row.
    */
   onBridgeUsageBound?: () => void;
+  /** A web-search deadline has been recorded on the child before its failure is emitted. */
+  onWebSearchLocalFailure?: () => void;
+  onHostedWebSearchStream?: () => void;
   /** Child-owned prepaid initial send; capacity remains charged until dispatch or unsent release. */
   comboInitialSend?: { permit: SingleUseDispatchPermit; producerOwned?: boolean };
   /** Exact externally booked combo hop, used for its child's spend preflight and send reports. */

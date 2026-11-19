@@ -332,7 +332,7 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
       const withinDeadline = () => performance.now() < deadline && gate();
       const launcher = windowsLauncherVbsPath();
       const script = Buffer.from(WINDOWS_TASK_INSTANCE_STOP_SCRIPT, "utf16le").toString("base64");
-      let approved = false, observedMutation = false;
+      let approved = false, dispatched = false, observedMutation = false;
       let refusal: { cause: unknown } | undefined;
       const ended = await run("powershell", ["-NoProfile", "-NoLogo", "-NonInteractive", "-EncodedCommand", script], timeoutMs,
         async line => {
@@ -345,18 +345,18 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
           }
           approved = withinDeadline();
           return approved;
-        }, { remainingMs: options.remainingMs, signal: options.signal, onDispatch: () => mutation?.(false, true), onMutation: () => {
+        }, { remainingMs: options.remainingMs, signal: options.signal, onDispatch: () => { dispatched = true; mutation?.(false, true); }, onMutation: () => {
           observedMutation = true;
           mutation?.(true, false);
         } });
       if (refusal) throw refusal.cause;
       const lines = ended.stdout.trim().split(/\r?\n/);
       const attempted = observedMutation || lines.includes("stop-attempted");
-      if (ended.timedOut || ended.status !== 0) return finish("failed", attempted || approved);
+      if (ended.timedOut || ended.status !== 0) return finish("failed", attempted || dispatched);
       const verdict = lines.at(-1);
       if (verdict === "unverified-registration" || verdict === "denied") return finish(verdict, attempted);
       if (approved && (verdict === "ended" || verdict === "not-running")) return finish(verdict, attempted || verdict === "ended");
-      return finish("failed", attempted || approved && verdict !== "failed");
+      return finish("failed", attempted || dispatched && verdict !== "failed");
     },
     async taskState(timeoutMs) {
       const started = Date.now();

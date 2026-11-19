@@ -1,3 +1,5 @@
+import { oauthSubscriptionMaker } from "../combos/suggestion-channel";
+import { isCanonicalOpenAiForwardProvider } from "../providers/openai-forward-destination";
 import { providerRelativeSendPathConfigError } from "../config/provider-relative-send-path";
 import { contextTierRecordConfigError, modelCapabilitiesConfigError, providerInputModalitiesConfigError } from "../config/provider-validation";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
@@ -706,6 +708,8 @@ export const AUTH_MATRIX: readonly ApiAuthMatrixRow[] = [
   { endpoint: "/v1/hub-state", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
   // Usage additionally requires a configured key identity; unscoped environment keys are refused.
   { endpoint: "/v1/usage", bearer: "rejected", dedicated: "accepted", xApiKey: "rejected" },
+  // Usage windows require a configured, single-provider key with full model scope.
+  { endpoint: "/v1/usage/windows", bearer: "accepted", dedicated: "accepted", xApiKey: "rejected" },
 ];
 
 /** Whether `token` is the environment-provided management secret. */
@@ -1331,6 +1335,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   thinkingBudgetModels: "editor",
   escapeBuiltinToolNames: "editor",
   anthropicEofTolerance: "editor",
+  anthropicImageContextRecovery: "editor",
   forwardAdvisorTool: "editor",
   perMessageEffort: "editor",
   noVisionModels: "editor",
@@ -1474,6 +1479,8 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       ...editor.providers[name],
       hasApiKey: !!provider.apiKey,
       hasHeaders: !!provider.headers && Object.keys(provider.headers).length > 0,
+      ...(provider.authMode === "oauth" ? { knownSubscriptionOAuth: oauthSubscriptionMaker({ ...provider, name }) !== undefined } : {}),
+      ...(provider.authMode === "forward" ? { canonicalOpenAiForward: isCanonicalOpenAiForwardProvider(provider) } : {}),
     };
     const registry = getProviderRegistryEntry(name);
     const vertex = (provider.adapter === "google" && effectiveGoogleMode(name, provider) === "vertex")

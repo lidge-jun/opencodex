@@ -5,7 +5,7 @@
  * key) instead of the Responses replay. Everything here is a local fixture: no real credential
  * or service is reached.
  */
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +13,8 @@ import { saveConfig } from "../../src/config";
 import { clearKeyCooldowns, forgetApiKeyRotationCursor } from "../../src/providers/key-failover";
 import { estimateClaudeRequestTokens, handleClaudeCountTokens, handleClaudeMessages } from "../../src/server/claude-messages";
 import { getRequestLogEntries } from "../../src/server/request-log";
+import { echoRequestedModel } from "../../src/server/messages-native";
+import { MessagesSseFrameContext } from "../../src/lib/messages-sse-error-presentation";
 import type { OcxConfig } from "../../src/types";
 import type { AdmissionLease } from "../../src/lib/admission";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -79,6 +81,17 @@ const SSE_FRAMES = [
 ];
 const sseText = (frames: readonly { event: string; data: unknown }[]) => frames.map(frame => `event: ${frame.event}\ndata: ${JSON.stringify(frame.data)}\n\n`).join("");
 const SSE_TEXT = sseText(SSE_FRAMES);
+async function echoChunks(chunks: string[]): Promise<string> {
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+      controller.close();
+    },
+  });
+  return new Response(echoRequestedModel(body, "anth/claude-x", new MessagesSseFrameContext())).text();
+}
+
 /** What the client receives: the upstream stream with its selector echoed in message_start. */
 const ECHOED_SSE_TEXT = sseText(SSE_FRAMES.map((frame, index) => index === 0
   ? { ...frame, data: { ...frame.data, message: { ...(frame.data as { message: Record<string, unknown> }).message, model: "anth/claude-x" } } }
@@ -161,6 +174,12 @@ async function send(config: OcxConfig, body: Record<string, unknown>, headers?: 
   return { requestId, response, text };
 }
 
+async function waitForUpstreamPull(pull: Promise<void>, pending: ReturnType<typeof send>): Promise<void> {
+  await Promise.race([pull, pending.then(({ response }) => {
+    throw new Error(`Messages request settled with HTTP ${response.status} before the expected upstream pull`);
+  })]);
+}
+
 /** Streams the first frames of a turn, then stays open until the request is aborted. */
 function hangingAfterPartialTurn(): Response {
   return new Response(new ReadableStream<Uint8Array>({
@@ -192,6 +211,121 @@ async function settledRowFor(requestId: string) {
 }
 
 describe("managed native Messages", () => {
+  test.each([
+    ["CRLF", "\r\n", ["\r\n\r\n"]],
+    ["first CRLF split", "\r\n", ["\r", "\n\r\n"]],
+    ["second CRLF split", "\r\n", ["\r\n\r"], "\n"],
+    ["mixed LF and CRLF", "\r\n", ["\n", "\r\n"]],
+    ["mixed CRLF and LF", "\n", ["\r\n", "\n"]],
+    ["LF and bare CR", "\n", ["\n\r"]],
+    ["two bare CRs", "\r", ["\r\r"]],
+    ["late LF after CR", "\r", ["\r\r"], "\n"],
+  ] as const)("rewrites a live %s message_start and preserves neighboring bytes", async (_label, newline, ending, lateLf = "") => {
+    const prefix = ": keep this comment\n\n";
+    const suffix = "event: ping\r\ndata: {}\r\n\r\n";
+    const start = sseText(SSE_FRAMES.slice(0, 1)).trimEnd().replaceAll("\n", newline);
+    const chunks = [prefix, start + ending[0], ...ending.slice(1)];
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    const pulledPastFrame = Promise.withResolvers<"pending">();
+    let upstream!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { upstream = controller; },
+      pull(controller) {
+        const chunk = chunks.shift();
+        if (chunk === undefined) pulledPastFrame.resolve("pending");
+        else controller.enqueue(encoder.encode(chunk));
+      },
+    }, { highWaterMark: 0 });
+    const reader = echoRequestedModel(body, "anth/claude-x", new MessagesSseFrameContext()).getReader();
+    try {
+      expect(decoder.decode((await reader.read()).value)).toBe(prefix);
+      const first = await Promise.race([reader.read(), pulledPastFrame.promise]);
+      expect(first).not.toBe("pending");
+      if (first === "pending") return;
+      const echoedStart = ECHOED_SSE_TEXT.split("\n\n")[0]!.replaceAll("\n", newline);
+      expect(decoder.decode(first.value)).toBe(echoedStart + ending.join(""));
+      if (lateLf) {
+        upstream.enqueue(encoder.encode(lateLf));
+        expect(decoder.decode((await reader.read()).value)).toBe(lateLf);
+      }
+      upstream.enqueue(encoder.encode(suffix));
+      expect(decoder.decode((await reader.read()).value)).toBe(suffix);
+    } finally {
+      await reader.cancel();
+    }
+  });
+
+  test.each([65_535, 65_536, 65_537])("uses the same raw-byte cutoff for split and coalesced input ending at %i", async end => {
+    const start = sseText(SSE_FRAMES.slice(0, 1));
+    const prefix = ":" + "a".repeat(end - start.length - 3) + "\n\n";
+    const expected = prefix + (end <= 65_536 ? ECHOED_SSE_TEXT.split("\n\n")[0] + "\n\n" : start);
+    for (const chunks of [[prefix + start], [prefix, start], [prefix, start.slice(0, -1), start.slice(-1)]]) {
+      const body = new ReadableStream<Uint8Array>({ start(controller) {
+        for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk));
+        controller.close();
+      } });
+      expect(await new Response(echoRequestedModel(body, "anth/claude-x", new MessagesSseFrameContext())).text()).toBe(expected);
+    }
+  });
+
+  test.each([
+    ["LF", "\n", "\n", "\n"],
+    ["CRLF", "\r\n", "\r\n", "\r\n"],
+    ["CR", "\r", "\r", "\r"],
+    ["mixed", "\r\n", "\r", "\n"],
+  ])("preserves multiline start and following ping with %s endings", async (_name, newline, commentEnd, dataEnd) => {
+    const prefix = ["id: stream-42", "event: message_start",
+      'data: {"type":"message_start",', "retry: 1500", ""].join(newline);
+    const comment = ": keep this comment" + commentEnd;
+    const ping = 'event: ping\ndata: {"type":"ping"}\n\n';
+    const source = prefix + comment + 'data: "message":{"model":"provider"}}' + dataEnd + dataEnd + ping;
+    const expected = prefix.replace('data: {"type":"message_start",',
+      'data: {"type":"message_start","message":{"model":"anth/claude-x"}}') +
+      comment + "data:" + dataEnd + dataEnd + ping;
+    for (const chunks of [[source], [...source]]) {
+      const actual = await echoChunks(chunks);
+      expect(actual.replace(/\r\n|\r/g, "\n").split("\n\n").map(frame =>
+        frame.split("\n").filter(line => line.startsWith("event: ")))).toEqual([
+        ["event: message_start"], ["event: ping"], [],
+      ]);
+      expect(actual).toBe(expected);
+    }
+  });
+
+  test.each([["error", "message_start"], ["message_start", "error"]])(
+    "uses the final event field for echo framing (%s then %s)", async (first, last) => {
+      const controls = 'id: stream-42\n: keep this comment\n';
+      const events = 'event: ' + first + '\nevent: ' + last + '\n';
+      const source = controls + events + 'data: {"type":"message_start","message":{"model":"provider"}}\n\n';
+      const data = 'data: {"type":"message_start","message":{"model":"anth/claude-x"}}\n\n';
+      const expected = last === "error" ? "event: message_start\n" + data : controls + events + data;
+      expect(await echoChunks([source])).toBe(expected);
+    },
+  );
+
+  test("relays a post-cutoff frame and split LF continuation unchanged", async () => {
+    const prefix = ":" + "a".repeat(65_536 - 3) + "\n\r";
+    const start = sseText(SSE_FRAMES.slice(0, 1));
+    const expected = prefix + "\n" + start;
+    for (const chunks of [[expected], [prefix, "\n" + start], [prefix, "\n", start]]) {
+      const body = new ReadableStream<Uint8Array>({ start(controller) {
+        for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk));
+        controller.close();
+      } });
+      expect(await new Response(echoRequestedModel(body, "anth/claude-x", new MessagesSseFrameContext())).text()).toBe(expected);
+    }
+  });
+
+  test("joins bare-CR SSE data lines before parsing message_start", async () => {
+    const malformed = 'event: message_start\rdata: {"type":"message_start","message":{"id":"a\rdata: b","model":"provider"}}\r\r';
+    const valid = 'event: message_start\rdata: {"type":"message_start",\rdata: "message":{"id":"good","model":"provider"}}\r\r';
+    const rewritten = 'event: message_start\rdata: {"type":"message_start","message":{"id":"good","model":"anth/claude-x"}}\rdata:\r\r';
+    const body = new Response(malformed + valid).body!;
+    const echoed = echoRequestedModel(body, "anth/claude-x", new MessagesSseFrameContext());
+    expect(new Uint8Array(await new Response(echoed).arrayBuffer())).toEqual(new TextEncoder().encode(malformed + rewritten));
+  });
+
   for (const stream of [false, true]) {
     const cases: { name: string; controls: Record<string, unknown>; expected?: string }[] = [
       ...["minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map(effort => ({
@@ -568,6 +702,88 @@ describe("managed native Messages", () => {
     expect(row.closeReason).toBe("body_stall");
     expect(row.failureDetail).toMatchObject({ code: "body_stall" });
   });
+
+  test("reports early request settlement while waiting for an upstream pull", async () => {
+    const config = fixtureConfig(1);
+    Object.assign(config.providers.anth!, {
+      fetch: async () => Response.json({ type: "error", error: { type: "invalid_request_error" } }, { status: 400 }),
+    });
+    const pending = send(config, { ...SOURCE_BODY, stream: true });
+    const missingPull = Promise.withResolvers<void>();
+    try {
+      await pending;
+      const outcome = await Promise.race([
+        waitForUpstreamPull(missingPull.promise, pending).catch(error => error.message),
+        Bun.sleep(0).then(() => "still waiting"),
+      ]);
+      expect(outcome).toBe("Messages request settled with HTTP 400 before the expected upstream pull");
+    } finally {
+      missingPull.resolve();
+    }
+  });
+
+  for (const keepSending of [true, false]) {
+    test(keepSending ? "raw fragments keep an incomplete Messages frame alive" : "a partial Messages frame stalls without more raw bytes", async () => {
+      const config = fixtureConfig(1, { claudeCode: { bodyStallSec: 1 } as OcxConfig["claudeCode"] });
+      const reads = Array.from({ length: 3 }, () => Promise.withResolvers<void>());
+      let read = 0;
+      let controller!: ReadableStreamDefaultController<Uint8Array>;
+      let cancelled: unknown;
+      let finished = false;
+      const upstreamBody = new ReadableStream<Uint8Array>({
+        start(value) { controller = value; },
+        pull() { reads[read++]?.resolve(); },
+        cancel(reason) { cancelled = reason; },
+      }, { highWaterMark: 0 });
+      Object.assign(config.providers.anth!, {
+        fetch: async () => new Response(upstreamBody, { headers: { "content-type": "text/event-stream" } }),
+      });
+      const bytes = new TextEncoder().encode(SSE_TEXT);
+      const watchdog = Promise.withResolvers<"watchdog">();
+      // Schedule the watchdog on the real clock before installing fake timers.
+      const deadline = setTimeout(() => watchdog.resolve("watchdog"), 1_500);
+      jest.useFakeTimers();
+      const pending = send(config, { ...SOURCE_BODY, stream: true });
+      try {
+        await waitForUpstreamPull(reads[0]!.promise, pending);
+        controller.enqueue(bytes.subarray(0, 16));
+        await waitForUpstreamPull(reads[1]!.promise, pending);
+        if (keepSending) {
+          jest.advanceTimersByTime(600);
+          controller.enqueue(bytes.subarray(16, 32));
+          await waitForUpstreamPull(reads[2]!.promise, pending);
+          jest.advanceTimersByTime(600);
+          if (!cancelled) {
+            controller.enqueue(bytes.subarray(32));
+            controller.close();
+            finished = true;
+          }
+        } else {
+          jest.advanceTimersByTime(1_000);
+        }
+        const result = await Promise.race([pending, watchdog.promise]);
+        if (result === "watchdog") {
+          throw new Error(keepSending ? "Messages stream did not finish after the final fragment" : "Expected body_stall after the idle deadline");
+        }
+        const { requestId, response, text } = result;
+        expect(response.status).toBe(200);
+        if (keepSending) {
+          expect(text).toBe(ECHOED_SSE_TEXT);
+          expect(rowFor(requestId)).toMatchObject({ status: 200, closeReason: "terminal" });
+          expect(cancelled).toBeUndefined();
+        } else {
+          expect(text).toContain('"type":"timeout_error"');
+          expect(rowFor(requestId)).toMatchObject({ status: 502, closeReason: "body_stall", failureDetail: { code: "body_stall" } });
+          expect(cancelled).toMatchObject({ name: "TimeoutError" });
+        }
+      } finally {
+        jest.useRealTimers();
+        clearTimeout(deadline);
+        if (!finished && !cancelled) controller.close();
+        await pending.catch(() => {});
+      }
+    });
+  }
 
   test("a client that disconnects mid-stream is logged as a cancel, not an upstream failure", async () => {
     const config = fixtureConfig(startUpstream(hangingAfterPartialTurn));

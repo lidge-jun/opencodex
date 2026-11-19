@@ -15,6 +15,7 @@ import { ExplicitBodyStallError } from "../lib/response-body-inactivity";
 import { carryPacedStream, pacedQueuingStrategy } from "../lib/paced-stream";
 import { carryReplayRefusal, isReplayRefusalResponse } from "../lib/upstream-retry";
 import { isUsageDebugEnabled } from "../usage/debug";
+import { ESTIMATED_USAGE_HEADER } from "./responses/estimated-usage";
 import {
   addRequestLog,
   addFinalRequestLog,
@@ -918,6 +919,7 @@ export function trackSseForRequestLog(
     onTerminal: reportTerminal,
     logCtx,
     onFirstOutput,
+    collectUsage: () => logCtx?.clientSseUsageAlreadyInspected !== true,
   });
 
   return new ReadableStream<Uint8Array>({
@@ -1168,6 +1170,8 @@ export type SseInspector = {
 export type SseInspectorHandlers = {
   onTerminal?: (status: ResponsesTerminalStatus, httpStatusOverride?: number) => void;
   logCtx?: RequestLogContext;
+  /** Client-side reinspection leaves usage to the native raw-body observer. */
+  collectUsage?: boolean | (() => boolean);
   onCompletedResponse?: (response: { id?: unknown; output?: unknown; status?: unknown }) => void;
   /** A reconstructed snapshot for any valid terminal kind; unlike persistence, includes failures. */
   onTerminalResponse?: (
@@ -1393,7 +1397,8 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
       }
     }
     if (!reported && handlers.logCtx) {
-      inspectResponseLogSsePayloadParsed(handlers.logCtx, payload, parsed);
+      const collectUsage = typeof handlers.collectUsage === "function" ? handlers.collectUsage() : handlers.collectUsage;
+      inspectResponseLogSsePayloadParsed(handlers.logCtx, payload, parsed, collectUsage);
     }
     // Before any terminal handling: a consumer deciding on the whole turn must observe this
     // payload even when the terminal snapshot that follows no longer mentions it.
@@ -1882,6 +1887,7 @@ const PASSTHROUGH_DROP_HEADERS: ReadonlySet<string> = new Set([
   "te",
   "trailer",
   "upgrade",
+  ESTIMATED_USAGE_HEADER,
 ]);
 
 export interface CodexSafetyBufferingFilterOptions {

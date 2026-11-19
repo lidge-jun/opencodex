@@ -78,6 +78,8 @@ export async function fetchAnthropicAccountQuota(
       : result?.quota ?? retained?.quota;
     const entry: AccountQuotaCacheEntry = {
       ts: Date.now(), quota: normalizeAnthropicQuota(quota, Date.now()), isCurrent,
+      // A retirement-only response leaves the provenance of retained plan bars unchanged.
+      quotaOwnerIsCurrent: result?.quota ? result.isCurrent : retained?.quotaOwnerIsCurrent,
       ...result?.failureFields,
       ...(!result ? { unavailable: true as const } : {}),
       ...(!result && failure ? { quotaFailure: failure, quotaFailureIsCurrent: isCurrent } : {}),

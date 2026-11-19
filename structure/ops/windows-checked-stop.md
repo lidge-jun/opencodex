@@ -28,8 +28,6 @@ lazily, caches a failed load as unavailable, and closes every handle in a `final
 - an exit watch: a handle opened at bind time and polled with `WaitForSingleObject(handle, 0)`;
 - the Task Scheduler service host PID through `QueryServiceStatusEx` on `Schedule`, only while it runs.
 
-The Link Child process fallback uses the same handle-bound termination primitive with the same-user CIM creation time at microsecond precision. If handle binding cannot be verified, it refuses the fallback.
-
 Windows ARM64, other platforms and any test that simulates a platform get no native API.
 `src/service/windows-process-evidence.ts` is the facade the operations use. Its process snapshot is
 one capped PowerShell snapshot that emits UTF-8 JSON and uses ISO UTC for `CreationDate`.
@@ -93,13 +91,14 @@ smaller of the helper and outer remaining budgets; the helper checks that budget
 post-approval refresh and before each captured instance's `Stop()`. The outer cap also aborts
 the owned helper, including while its registration or instance refresh is pending.
 Task-stop verdicts carry separate mutation evidence: a known failure before dispatch leaves
-`changed` false, an attempted stop keeps it true, and a lost answer after approval is conservative.
+`changed` false even if proof was approved, an attempted stop keeps it true, and a lost answer after dispatch is conservative.
 Dispatching approval marks a pending possible mutation until a completed helper verdict proves
-otherwise; a timer between approval and the first stdout marker must not report `changed: false`.
+otherwise; a timer between dispatch and the first stdout marker must not report `changed: false`.
 The helper's `stop-attempted` marker confirms mutation as it arrives. Part A publishes detached
 progress at these boundaries, so an outer timer can return pending dispatch and confirmed stop attempts,
 bound wrappers and terminations without awaiting unfinished verification. Returned arrays and
 records do not change when a late dependency completes.
+An authorizer refusal before the outer cap throws with its partial result; after cap expiry it returns the detached cap snapshot with completed mutation evidence.
 
 Each step that asks the machine runs under a cap that races a timer and rechecks the elapsed time
 on the injected clock. The Scheduler proof-time authorization shares the 2 s task-end cap.
