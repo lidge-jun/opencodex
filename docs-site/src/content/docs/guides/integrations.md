@@ -252,6 +252,7 @@ fragment: Apply and Refresh replace it, Disable removes it, and Restore puts bac
 snapshot. These operations do not change the user's default model or the native
 `deepseek-official` provider.
 The managed DSH integration is currently loopback-only and never writes a real credential.
+With a live proxy, explicit sync and background catalog refresh update an already-connected DSH block.
 
 MiniMax Code follows `MINIMAX_DATA_DIR`, then `MAVIS_DATA_DIR`, before falling
 back to `~/.minimax`. Its managed block owns only `custom_provider.opencodex`.

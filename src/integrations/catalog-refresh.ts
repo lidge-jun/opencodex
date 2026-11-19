@@ -9,10 +9,28 @@ import {
   type OwnedIntegrationRefreshOutcome,
 } from "./owned-refresh";
 
+const CATALOG_REFRESH_CLIENTS: readonly IntegrationClientId[] = [
+  "mcode", "pi", "aside", "raycast", "omo", "cline", "commandcode", "dsh", "droid",
+  "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "gentle-shell", "hermes", "t3code",
+];
+
+const CATALOG_REFRESH_EXCLUSIONS = {
+  catalog: ["mcode", "cline"],
+  serverSync: ["gentle-shell"],
+  unattended: ["cline", "gentle-shell"],
+  // The CLI delegates Pi and Aside to the serving proxy.
+  cliSync: ["pi", "aside", "gentle-shell"],
+} satisfies Record<string, readonly IntegrationClientId[]>;
+
+export function catalogRefreshClientIds(mode: keyof typeof CATALOG_REFRESH_EXCLUSIONS): IntegrationClientId[] {
+  const excluded: readonly IntegrationClientId[] = CATALOG_REFRESH_EXCLUSIONS[mode];
+  return CATALOG_REFRESH_CLIENTS.filter(clientId => !excluded.includes(clientId));
+}
+
 /** Refresh only previously connected clients; a refused file never blocks its peers. */
 export async function refreshOwnedCatalogIntegrations(
   input: Omit<OwnedIntegrationRefreshInput, "clientId">,
-  clientIds: readonly IntegrationClientId[] = ["pi", "aside", "raycast", "omo", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "gentle-shell", "hermes", "t3code"],
+  clientIds: readonly IntegrationClientId[] = catalogRefreshClientIds("catalog"),
   options: { refreshOnly?: boolean; admit?: () => boolean } = {},
 ): Promise<OwnedIntegrationRefreshOutcome[]> {
   // Client files are shared with the live proxy a sibling instance runs beside; their entries
