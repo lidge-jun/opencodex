@@ -1,6 +1,5 @@
 import { lstatSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
 import {
   getConfigDir,
   getConfigPath,
@@ -30,16 +29,6 @@ export type ClientConnectionState =
 
 export function isLinkConnection(c: OcxClientConnectionConfig | undefined): boolean {
   return c?.transport === "link";
-}
-
-/** The serving Link's ownership, independent of selection and catalog sync observations. */
-export function linkStopConnectionOwner(connection: OcxClientConnectionConfig): string | undefined {
-  if (connection.transport !== "link" || !connection.link) return;
-  return createHash("sha256").update(JSON.stringify([
-    connection.serverUrl, connection.managementUrl, connection.managementTransport,
-    connection.apiKeyId, connection.connectedAt, connection.tokenFingerprint,
-    connection.link.linkId, connection.link.tunnelPort,
-  ])).digest("hex");
 }
 
 const pendingConnectPath = (): string => join(getConfigDir(), "client-connect-pending");

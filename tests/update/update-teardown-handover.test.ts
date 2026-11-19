@@ -237,7 +237,7 @@ describe("ocx stop under an update handover", () => {
       tokenEnv: "OPENCODEX_API_AUTH_TOKEN", apiKeyId: "fixture-client", tokenFingerprint: "a".repeat(64),
       protocolVersion: 1, connectedAt: "2026-10-01T00:00:00.000Z",
     } }));
-    const run = runStop(true, { managerCascades: true, deadPidReadsNull: true, clientTransport: "link" });
+    const run = runStop(true, { managerCascades: true, deadPidReadsNull: true });
     expect(run.exitCode, run.stderr).toBe(0);
     expect(run.calls).toMatchObject({ native: 1, grok: 1, service: 1 });
     expect(run.receiptExists).toBe(false);
@@ -245,8 +245,8 @@ describe("ocx stop under an update handover", () => {
     expect(JSON.parse(run.stdout)).toMatchObject({ sharedTeardown: "restored", exitCode: 0 });
   });
 
-  test("a manager-bound standalone stop without a runtime record restores instead of handing over a guessed receipt", () => {
-    const run = runStop(true, { noRuntimeRecord: true, managerBound: true, nativeSignal: true });
+  test("without a runtime record the stop restores instead of handing over a guessed receipt", () => {
+    const run = runStop(true, { noRuntimeRecord: true, nativeSignal: true });
     expect(run.exitCode, run.stderr).toBe(0);
     expect(run.calls).toMatchObject({ native: 1, grok: 1 });
     expect(receiptNames()).toEqual([]);

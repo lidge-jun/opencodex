@@ -61,7 +61,7 @@ if command -v timeout >/dev/null 2>&1 && timeout --signal=TERM --kill-after=1s 1
   BATCH_DEADLINE=gnu
 elif command -v perl >/dev/null 2>&1; then
   BATCH_DEADLINE=portable
-  echo "::notice::GNU timeout is unavailable; each batch uses the portable process-group deadline."
+  echo "::notice::GNU timeout is unavailable; each batch keeps its ${BATCH_TIMEOUT_SECONDS}s deadline through the portable process-group fallback."
 else
   echo "GNU timeout, or perl for the portable fallback, is required to bound Bun test batches." >&2
   exit 69
@@ -159,20 +159,6 @@ run_test_once() {
   local log_file
   local status
   local label="shard ${SHARD_SPEC} batch ${batch_number}/${TOTAL_BATCHES}"
-  local timeout_seconds="$BATCH_TIMEOUT_SECONDS"
-  local index
-
-  # An isolated file's override can extend the batch default, including a platform's longer default.
-  if (( ${#files[@]} == 1 )); then
-    for ((index = 0; index < ${#SERIAL_FILES[@]}; index += 1)); do
-      if [[ "${files[0]}" == "tests/${SERIAL_FILES[$index]}" ]]; then
-        if (( SERIAL_TIMEOUT_SECONDS[index] > timeout_seconds )); then
-          timeout_seconds="${SERIAL_TIMEOUT_SECONDS[$index]}"
-        fi
-        break
-      fi
-    done
-  fi
 
   if [[ -n "$phase" ]]; then
     label+=" ${phase}"
@@ -186,10 +172,10 @@ run_test_once() {
   set +e
   if [[ "$BATCH_DEADLINE" == "gnu" ]]; then
     timeout --signal=TERM --kill-after="${BATCH_KILL_GRACE_SECONDS}s" \
-      "${timeout_seconds}s" \
+      "${BATCH_TIMEOUT_SECONDS}s" \
       "$BUN_BIN" test --isolate ${PARALLEL_ARG:+"$PARALLEL_ARG"} --timeout 60000 "${files[@]}" 2>&1 | tee "$log_file"
   else
-    run_with_batch_deadline "$timeout_seconds" "$BATCH_KILL_GRACE_SECONDS" \
+    run_with_batch_deadline "$BATCH_TIMEOUT_SECONDS" "$BATCH_KILL_GRACE_SECONDS" \
       "$BUN_BIN" test --isolate ${PARALLEL_ARG:+"$PARALLEL_ARG"} --timeout 60000 "${files[@]}" 2>&1 | tee "$log_file"
   fi
   status="${PIPESTATUS[0]}"
@@ -205,7 +191,7 @@ run_test_once() {
 
   if (( status == 124 )); then
     LAST_FAILURE_KIND="timeout"
-    echo "::warning::Bun test process timed out after ${timeout_seconds}s in ${label}."
+    echo "::warning::Bun test process timed out after ${BATCH_TIMEOUT_SECONDS}s in ${label}."
     rm -f -- "$log_file"
     return "$status"
   fi
@@ -262,17 +248,10 @@ attribute_batch_file_by_file() {
   fi
 }
 
-serial_manifest="$("$BUN_BIN" -e 'import { serialFullSuiteBatchManifest } from "./scripts/test.ts"; console.log(serialFullSuiteBatchManifest());')"
+serial_manifest="$("$BUN_BIN" -e 'import { SERIAL_FULL_SUITE_FILES } from "./scripts/test.ts"; console.log(SERIAL_FULL_SUITE_FILES.join("\n"));')"
 [[ -n "$serial_manifest" ]] || { echo 'Empty isolated test manifest' >&2; exit 1; }
 SERIAL_FILES=()
-SERIAL_TIMEOUT_SECONDS=()
-while IFS= read -r row; do
-  file="${row%%$'\t'*}"
-  serial_timeout=0
-  if [[ "$row" != "$file" ]]; then
-    serial_timeout="${row#*$'\t'}"
-    [[ "$serial_timeout" =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid isolated test deadline' >&2; exit 1; }
-  fi
+while IFS= read -r file; do
   if [[ ! "$file" =~ ^[[:alnum:]_./-]+$ || "$file" == /* || "/$file/" == *"/../"* || "/$file/" == *"/./"* || ! -f "tests/$file" ]]; then
     echo 'Invalid or missing isolated test path' >&2; exit 1
   fi
@@ -280,7 +259,6 @@ while IFS= read -r row; do
     [[ "${SERIAL_FILES[$entry_index]}" != "$file" ]] || { echo 'Duplicate isolated test path' >&2; exit 1; }
   done
   SERIAL_FILES+=("$file")
-  SERIAL_TIMEOUT_SECONDS+=("$serial_timeout")
 done <<< "$serial_manifest"
 
 is_serial_test_file() {
@@ -443,7 +421,7 @@ if (( pending_count > 0 )); then
   BATCH_STARTS+=("$pending_start"); BATCH_LENGTHS+=("$pending_count")
 fi
 readonly TOTAL_BATCHES=${#BATCH_STARTS[@]}
-echo "Shard ${SHARD_SPEC}: ${#SELECTED_FILES[@]} files in ${TOTAL_BATCHES} primary Bun processes (scope ${TEST_FILE_SCOPE}, batch size <= ${BATCH_SIZE}, default timeout ${BATCH_TIMEOUT_SECONDS}s)."
+echo "Shard ${SHARD_SPEC}: ${#SELECTED_FILES[@]} files in ${TOTAL_BATCHES} primary Bun processes (scope ${TEST_FILE_SCOPE}, batch size <= ${BATCH_SIZE}, timeout ${BATCH_TIMEOUT_SECONDS}s)."
 durations_label="no duration table"
 [[ "$durations_source" == "/dev/null" ]] || durations_label="${durations_source##*/}"
 echo "Predicted shard time from recorded durations (${durations_label}): $((predicted_ms / 1000))s; a file without a record weighs ${FALLBACK_MS}ms and a batch closes before ${BATCH_BUDGET_MS}ms."

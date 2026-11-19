@@ -182,8 +182,7 @@ describe("start and ensure journal ownership (#1230)", () => {
         + cli.slice(cli.indexOf("async function handleEnsure("), cli.indexOf("async function handleTrayProxyStart("));
       const recovery = readFileSync(repoPath("src/cli/start-owner-fence.ts"), "utf8");
       const recheck = recovery.slice(recovery.indexOf("export async function recoverStartJournalAfterOwnerRecheck("), recovery.indexOf("/** Hold ownership stable"));
-      const relocatedBodies = bodies.replace('"../client/stop-teardown-owner"', JSON.stringify(repoPath("src/client/stop-teardown-owner.ts")));
-      const executable = new Bun.Transpiler({ loader: "ts" }).transformSync(relocatedBodies + recheck.replace("export ", ""));
+      const executable = new Bun.Transpiler({ loader: "ts" }).transformSync(bodies + recheck.replace("export ", ""));
       const script = join(fx.root, "missed-owner.ts");
       writeFileSync(script, `
         import { reconcileStartupJournal } from ${JSON.stringify(repoPath("src/cli/cross-home-owner.ts"))};
