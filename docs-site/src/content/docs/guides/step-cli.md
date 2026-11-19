@@ -42,12 +42,14 @@ StepCode:
   reports a shutdown failure if it cannot confirm cleanup. On macOS and Linux, this can happen
   if the process group leader exits before group termination. Descendants may still be running.
   On POSIX, cleanup signals the group only while the original leader is observed alive. Bun 1.4.4
-  reaps the child on a native waiter thread and delivers the exit event to JavaScript afterwards.
-  In the microsecond window between the native reap and the JavaScript exit event, a group signal
-  could reach a reused PGID. Bun exposes no `pidfd` or other syscall-level ownership handle, so
-  JavaScript cannot close this window. Closing it requires a native supervisor or a Bun change.
-  The window is narrower than in the existing `claude-cli`, `qoder` and `codebuddy` adapters,
-  which have no leader guard. The owner accepted this residual risk on 2026-11-19.
+  can reap the child before JavaScript receives the exit event. On Linux, the native waiter thread
+  is a fallback when pidfd monitoring is unavailable. A group signal between reap and exit
+  notification could reach a reused PGID. Bun exposes no `pidfd` or other syscall-level ownership
+  handle to JavaScript. Closing this window requires a native supervisor or a Bun change. The owner
+  accepted this residual risk on 2026-11-19.
+  On Windows, cleanup starts `taskkill /T /F` only while the original wrapper is observed alive.
+  If the wrapper has already exited or cleanup is unconfirmed after the helper may have run,
+  OpenCodex quarantines the session, logs a fixed warning and reports incomplete cleanup.
 - **Two documented limits:** a tool that takes longer than two minutes to come back exceeds the
   CLI's own tool-result window and the turn reports `step_cli_tool_result_too_late`; and the CLI's
   session system prompt cannot be replaced through this protocol, so your instructions are prepended

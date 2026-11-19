@@ -32,6 +32,8 @@ that query's declared catalog. Other permissions are denied. A
 `sdk_tool.invoke` is answered on the client's **next** request, with the original query and catalog.
 Changing the catalog while returning a held result closes the session. Abandoning a held call
 detaches its owner, interrupts it and confirms its input end before registering a replacement turn.
+After acquiring the conversation lock, a cancelled turn leaves held state untouched. Cancellation
+also stops new query starts, busy retries and input that has yet to be sent.
 
 Child response errors are classified at the transport boundary. The adapter emits locally defined
 error codes and messages for login failures, subscription limits, busy queries, timeouts and
@@ -42,28 +44,29 @@ each session before workspace setup, so shutdown can close an opening session be
 The pool retains ownership of adapter, idle-timer and sweep closes until termination is
 confirmed. Shutdown drains those receipts and propagates failures.
 Closing handles refuse replacement. Session close is idempotent and clears held-request timers.
-Termination gets at most two attempts. An exhausted retry budget or a lost POSIX group leader
+Termination gets at most two attempts. An exhausted retry budget or loss of process ownership
 permanently quarantines the handle in the pool and preserves the errors as the cleanup failure's
-cause. Repeated closes return that failure without restarting the retry budget. Windows teardown
-awaits the asynchronous helper in
-`src/adapters/coding-agent/process-tree.ts` (`taskkill /T /F`, up to five seconds per attempt)
-before releasing the wrapper. The normal cleanup queue runs up to four sessions concurrently
-across pools, including idle and late-opening sessions. POSIX cleanup sends TERM to the detached
+cause. Repeated closes return that failure without restarting the retry budget. The normal cleanup
+queue runs up to four sessions concurrently across pools, including idle and late-opening sessions.
+POSIX cleanup sends TERM to the detached
 group and escalates to KILL after the grace period. It signals the group only while the original
 leader is observed alive. A successful KILL or an ESRCH from signalling ends group signalling.
 Cleanup then waits for the original leader's exit through its child handle. If the leader exits before either outcome,
 cleanup quarantines the session and logs `StepCode POSIX process cleanup is incomplete because the process group leader exited before group termination.`
 Descendants that outlive their leader cannot be safely signalled once the PGID can be reused.
 
-Bun 1.4.4 reaps the child on a native waiter thread and delivers the exit event to JavaScript
-afterwards. In the microsecond window between the native reap and the JavaScript exit event, a
-group signal could reach a reused PGID. Bun exposes no `pidfd` or other syscall-level ownership
-handle, so JavaScript cannot close this window. Closing it requires a native supervisor or a Bun
-change. The leader guard makes the window narrower than in the existing `claude-cli`, `qoder` and
-`codebuddy` adapters, which have no leader guard. The owner accepted this residual risk on 2026-11-19.
+Bun 1.4.4 can reap the child before JavaScript receives the exit event. On Linux, the native
+waiter thread is a fallback when pidfd monitoring is unavailable. Between reap and exit
+notification, a group signal could reach a reused PGID. Bun exposes no `pidfd` or other
+syscall-level ownership handle to JavaScript. Closing this window requires a native supervisor
+or a Bun change. The owner accepted this residual risk on 2026-11-19.
 
-On Windows the OS PID check also handles Bun retaining null child exit fields after an external
-tree kill.
+Windows teardown starts the asynchronous helper in `src/adapters/coding-agent/process-tree.ts`
+(`taskkill /T /F`, up to five seconds per attempt) only while the original wrapper is observed
+alive. Cleanup can retry a confirmed helper launch failure while the wrapper still appears alive.
+If the wrapper has already exited or cleanup is unconfirmed after the helper may have run, the
+session is quarantined and cleanup logs the fixed Windows warning. A successful tree-kill
+receipt allows an OS liveness check if Bun still reports null exit fields.
 Explicit registry clears await every pool and retain failed pools, so clearing state cannot bypass
 quarantine. Graceful proxy shutdown passes the absolute [proxy stop deadline](../runtime.md#lifecycle)
 through the registry and pool, including to sessions already closing. POSIX TERM grace is capped

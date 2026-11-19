@@ -2,7 +2,7 @@ import { beforeAll, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -100,7 +100,9 @@ async function nativePool(recover: boolean) {
     },
     killWindowsProcessTree: async pid => {
       attempts++;
-      if (!recover || attempts === 1) throw Object.assign(new Error("injected tree termination ETIMEDOUT"), { code: "ETIMEDOUT" });
+      if (!recover || attempts === 1) {
+        throw Object.assign(new Error("injected taskkill spawn failure"), { code: "ENOENT", syscall: "spawn taskkill.exe" });
+      }
       if (process.platform === "win32") await killWindowsProcessTreeAsync(pid);
       else terminateNativeFixture(pid);
     },
@@ -153,7 +155,7 @@ test("failed native tree cleanup quarantines the handle after bounded retries", 
   } finally { await fixture.dispose(); }
 }, 30_000);
 
-test("a transient native tree timeout recovers before releasing the handle", async () => {
+test("a transient taskkill launch failure recovers before releasing the handle", async () => {
   const fixture = await nativePool(true);
   try {
     await fixture.session.close();
@@ -163,6 +165,51 @@ test("a transient native tree timeout recovers before releasing the handle", asy
     for (const pid of [fixture.roots[0]!, fixture.pids.parent, fixture.pids.worker]) expect(alive(pid)).toBe(false);
   } finally { await fixture.dispose(); }
 }, 30_000);
+
+test.each([
+  ["wrapper exited before cleanup", 0],
+  ["wrapper exited during taskkill", 1],
+  ["taskkill timed out without a wrapper exit event", 1],
+] as const)("Windows cleanup quarantines when %s", async (scenario, expectedCalls) => {
+  const cwd = await mkdtemp(join(tmpdir(), "ocx-step-windows-ownership-"));
+  const child = Object.assign(new EventEmitter(), {
+    pid: process.pid, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+    exitCode: null, signalCode: null,
+  });
+  const calls: number[] = [];
+  const pool = new StepSessionPool({ openCodexHome: cwd, idleTimeoutMs: 60_000, buildOptions: () => options(cwd) },
+    { onEvent: () => {} }, {
+      platform: "win32",
+      spawn: () => child as unknown as ChildProcess,
+      killWindowsProcessTree: async pid => {
+        calls.push(pid);
+        if (scenario === "wrapper exited during taskkill") child.emit("exit", 0, null);
+        throw Object.assign(new Error("inert taskkill timed out"), { killed: true, signal: "SIGKILL" });
+      },
+    });
+  const ref = { handle: "windows-ownership", sessionId: "" };
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const session = await pool.open(ref);
+    if (expectedCalls === 0) child.emit("exit", 0, null);
+    const closing = session.close();
+    const [receipt] = await Promise.allSettled([closing]);
+    expect(calls).toEqual(Array(expectedCalls).fill(child.pid));
+    expect(receipt).toMatchObject({ status: "rejected", reason: { code: "step_cli_cleanup_failed" } });
+    expect(session.close()).toBe(closing);
+    expect(pool.size).toBe(1);
+    expect(pool.get(ref)).toBeUndefined();
+    await expect(pool.open(ref)).rejects.toMatchObject({ code: "step_cli_cleanup_failed" });
+    await expect(pool.closeAll()).rejects.toMatchObject({ code: "step_cli_cleanup_failed" });
+    expect(warn.mock.calls).toEqual([
+      ["StepCode Windows process cleanup is incomplete because ownership of the wrapper PID could not be confirmed."],
+    ]);
+  } finally {
+    await pool.closeAll().catch(() => {});
+    warn.mockRestore();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
 
 async function controlledPool(idle = false) {
   const cwd = await mkdtemp(join(tmpdir(), "ocx-step-cleanup-drain-"));

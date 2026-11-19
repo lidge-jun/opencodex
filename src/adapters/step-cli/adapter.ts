@@ -112,10 +112,7 @@ export function createStepCliAdapter(
         );
         return;
       }
-      if (incoming.abortSignal?.aborted) {
-        emit({ type: "error", message: "StepCode turn was aborted before start.", retryable: false });
-        return;
-      }
+      if (incoming.abortSignal?.aborted) return emitPreDispatchAbort(emit);
       if (hasImageInput(parsed)) {
         emit(
           refusal(
@@ -215,19 +212,25 @@ export function createStepCliAdapter(
 async function startQueryWithBusyRetry(
   session: StepConversationSession,
   options: { model: string | undefined; maxThinkingTokens: number | undefined; sdkTools: readonly unknown[]; streamingInput: boolean },
+  signal: AbortSignal | undefined,
   delay: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms)),
-): Promise<{ queryId: string; sessionId: string }> {
+): Promise<{ queryId: string; sessionId: string } | undefined> {
   let attempt = 0;
-  for (;;) {
+  while (!signal?.aborted) {
     try {
       return await session.startQuery(options);
     } catch (error) {
       const busy = error instanceof StepSessionError && error.code === "step_cli_session_busy";
       if (!busy || attempt >= STEP_CLI_QUERY_RETRY_DELAYS_MS.length) throw error;
+      if (signal?.aborted) return;
       await delay(STEP_CLI_QUERY_RETRY_DELAYS_MS[attempt]!);
       attempt += 1;
     }
   }
+}
+
+function emitPreDispatchAbort(emit: (event: AdapterEvent) => void): void {
+  emit({ type: "error", message: "StepCode turn was aborted before start.", retryable: false });
 }
 
 async function driveTurn(
@@ -243,6 +246,7 @@ async function driveTurn(
     clearTimer: typeof clearTimeout;
   },
 ): Promise<void> {
+  if (incoming.abortSignal?.aborted) return emitPreDispatchAbort(emit);
   const { sessions, session, ref, tools, setTimer, clearTimer } = context;
       // A matching held result resumes its original query. An abandoned call must finish
       // unwinding without a turn before the replacement is registered.
@@ -340,10 +344,17 @@ async function driveTurn(
             maxThinkingTokens: stepThinkingTokens(parsed),
             sdkTools: tools.sdkTools,
             streamingInput: true,
-          });
+          }, incoming.abortSignal);
+          if (!started) {
+            endTurn(session);
+            settle();
+            return emitPreDispatchAbort(emit);
+          }
           queryId = started.queryId;
           rememberQuery(session, queryId);
-          await session.sendInput(queryId, composePrompt(parsed, userText ?? ""));
+          if (!incoming.abortSignal?.aborted) {
+            await session.sendInput(queryId, composePrompt(parsed, userText ?? ""));
+          }
         }
       } catch (error) {
         endTurn(session);

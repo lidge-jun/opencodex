@@ -41,6 +41,7 @@ const KILL_CONFIRMATION_MS = 2_000;
 const SHUTDOWN_KILL_MARGIN_MS = 250;
 const PROCESS_EXIT_POLL_MS = 20;
 const POSIX_LEADER_EXITED = "StepCode POSIX process cleanup is incomplete because the process group leader exited before group termination.";
+const WINDOWS_PID_UNCONFIRMED = "StepCode Windows process cleanup is incomplete because ownership of the wrapper PID could not be confirmed.";
 
 // Share slots across pools and all close paths, including idle and late-opening sessions.
 let activeCleanups = 0;
@@ -180,6 +181,7 @@ export class StepCliSession {
   #child: ChildProcess | undefined;
   #leaderExited = false;
   #posixGroupSignalState: "pending" | "finished" | "lost" = "pending";
+  #windowsTreeKillAttempted = false;
   #closed = false;
   #closePromise: Promise<void> | undefined;
   #cleanupComplete = false;
@@ -677,10 +679,23 @@ export class StepCliSession {
 
   async #terminateWithRetry(child: ChildProcess): Promise<void> {
     const failures: unknown[] = [];
+    const usesTaskkill = this.#platform === "win32" && child.pid !== undefined;
+    const recordWindowsOwnershipLoss = (): void => {
+      console.warn(WINDOWS_PID_UNCONFIRMED);
+      failures.push(new StepSessionError(WINDOWS_PID_UNCONFIRMED, "step_cli_cleanup_failed"));
+    };
     for (let attempt = 0; attempt < CLEANUP_ATTEMPTS; attempt++) {
+      if (usesTaskkill && !this.#hasLiveLeader(child)) {
+        recordWindowsOwnershipLoss();
+        break;
+      }
       try { await this.#terminate(child); return; }
       catch (error) {
         failures.push(error);
+        if (usesTaskkill && this.#windowsTreeKillAttempted) {
+          recordWindowsOwnershipLoss();
+          break;
+        }
         if (this.#posixGroupSignalState === "lost") break;
       }
     }
@@ -748,8 +763,6 @@ export class StepCliSession {
   }
 
   async #terminateChild(child: ChildProcess): Promise<void> {
-    // A root-exit receipt cannot prove that a Windows tree kill succeeded. In particular, a
-    // failed first attempt may have killed only the root; the retry must still confirm the tree.
     if ((child.exitCode !== null || child.signalCode !== null)
       && child.pid === undefined) return;
     let cancelWait = (): void => {};
@@ -763,8 +776,7 @@ export class StepCliSession {
     let failCleanup!: (error: unknown) => void;
     const cleanupFailed = new Promise<never>((_, reject) => { failCleanup = reject; });
     const gone = (): boolean => {
-      if (child.pid === undefined) return child.exitCode !== null || child.signalCode !== null;
-      return processIsGone(child.pid);
+      return !this.#hasLiveLeader(child) || (child.pid !== undefined && processIsGone(child.pid));
     };
     const signal = (kind: NodeJS.Signals): void => {
       try {
@@ -773,9 +785,20 @@ export class StepCliSession {
     };
     try {
       if (child.pid !== undefined) {
-        await (this.#deps.killWindowsProcessTree ?? killWindowsProcessTreeAsync)(child.pid);
+        this.#windowsTreeKillAttempted = true;
+        try {
+          await (this.#deps.killWindowsProcessTree ?? killWindowsProcessTreeAsync)(child.pid);
+        } catch (error) {
+          // After a failed or timed-out taskkill, the wrapper may already have exited and Bun
+          // may have released its handle. Retry only when taskkill itself failed to start.
+          const failure = error instanceof Error ? error as NodeJS.ErrnoException : undefined;
+          if ((failure?.code === "ENOENT" || failure?.code === "EACCES") && failure.syscall?.startsWith("spawn ")) {
+            this.#windowsTreeKillAttempted = false;
+          }
+          throw error;
+        }
         // Bun on Windows can retain null exit/signal fields after taskkill has reaped the tree.
-        // Verify with the OS before releasing the process and its stdio handles.
+        // Check the OS only when Bun has not already observed the original wrapper's exit.
         if (gone()) return;
       } else {
         signal("SIGTERM");

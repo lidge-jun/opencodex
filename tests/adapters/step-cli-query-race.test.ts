@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import { createStepCliAdapter } from "../../src/adapters/step-cli/adapter";
+import { ownedConversationHandle, withConversationLock } from "../../src/adapters/step-cli/conversation";
+import { StepSessionError } from "../../src/adapters/step-cli/errors";
 import { handleRuntimeEvent } from "../../src/adapters/step-cli/events";
 import { currentTurn } from "../../src/adapters/step-cli/registry";
 import type { AdapterEvent } from "../../src/types";
@@ -32,4 +34,70 @@ test("abandoning a held call cannot settle the replacement turn with the old que
     handleRuntimeEvent(session, event("q_1", { type: "status", status: "turn_complete" }));
     expect(emitted.filter(e => e.type === "done")).toHaveLength(1);
   } finally { await pool.closeAll(); }
+});
+
+test("a cancelled queued turn leaves the shared session available without sending a query", async () => {
+  const pool = host();
+  const adapter = createStepCliAdapter(provider, { openSession: pool });
+  const request = parsed("queued-caller");
+  const handle = ownedConversationHandle(request, incoming, provider)!;
+  await pool.open({ handle, sessionId: "" });
+  const session = pool.entries.get(handle)!;
+  session.capture = false;
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const owner = withConversationLock(handle, () => { entered.resolve(); return release.promise; });
+  const controller = new AbortController();
+  const events: AdapterEvent[] = [];
+  try {
+    await entered.promise;
+    const queued = adapter.runTurn!(request, { ...incoming, abortSignal: controller.signal }, e => events.push(e));
+    await new Promise<void>(resolve => setImmediate(resolve));
+    controller.abort();
+    release.resolve();
+    await queued;
+    expect(session.next).toBe(0);
+    expect(session.inputs).toEqual([]);
+    expect(events).toEqual([{ type: "error", message: "StepCode turn was aborted before start.", retryable: false }]);
+    expect(session.closed).toBe(false);
+
+    const next: AdapterEvent[] = [];
+    await adapter.runTurn!(request, incoming, e => next.push(e));
+    expect(next.filter(e => e.type === "done")).toHaveLength(1);
+  } finally {
+    release.resolve();
+    await owner;
+    await pool.closeAll();
+  }
+});
+
+test.each(["busy retry", "input"] as const)("cancellation before query %s prevents further dispatch", async phase => {
+  const pool = host();
+  const adapter = createStepCliAdapter(provider, { openSession: pool });
+  const request = parsed("dispatch-caller");
+  const handle = ownedConversationHandle(request, incoming, provider)!;
+  await pool.open({ handle, sessionId: "" });
+  const session = pool.entries.get(handle)!;
+  session.capture = false;
+  const controller = new AbortController();
+  const start = session.startQuery.bind(session);
+  let starts = 0;
+  session.startQuery = async () => {
+    starts++;
+    if (starts === 1) {
+      controller.abort();
+      if (phase === "busy retry") throw new StepSessionError("inert query busy", "step_cli_session_busy");
+    }
+    return start();
+  };
+  const events: AdapterEvent[] = [];
+  try {
+    await adapter.runTurn!(request, { ...incoming, abortSignal: controller.signal }, e => events.push(e));
+    expect(starts).toBe(1);
+    expect(session.inputs).toEqual([]);
+    expect(events.map(e => e.type)).toEqual(["error"]);
+    expect(session.closed).toBe(phase === "input");
+  } finally {
+    await pool.closeAll();
+  }
 });
