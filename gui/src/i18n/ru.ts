@@ -2790,6 +2790,7 @@ export const ru: Record<TKey, string> = {
   "codexAuth.pauseFailed": "Не удалось приостановить {email}. Изменений нет.",
   "codexAuth.resumeFailed": "Не удалось возобновить {email}. Изменений нет.",
   "accountPause.tooltip": "{reason} · {date}",
+  "accountPause.submitAppeal": "Подать апелляцию",
   "accountPause.reason.organizationDisabled": "Организация отключена",
   "accountPause.reason.permissionDenied": "Доступ к аккаунту запрещён",
   "accountPause.reason.subscriptionInactive": "Подписка неактивна",

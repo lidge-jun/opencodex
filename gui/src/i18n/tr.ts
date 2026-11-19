@@ -2828,6 +2828,7 @@ export const tr: Record<TKey, string> = {
   "codexAuth.pauseFailed": "{email} duraklatılamadı.",
   "codexAuth.resumeFailed": "{email} devam ettirilemedi.",
   "accountPause.tooltip": "{reason} · {date}",
+  "accountPause.submitAppeal": "İtiraz gönder",
   "accountPause.reason.organizationDisabled": "Kuruluş devre dışı",
   "accountPause.reason.permissionDenied": "Hesap izni reddedildi",
   "accountPause.reason.subscriptionInactive": "Abonelik etkin değil",

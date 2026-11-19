@@ -2804,6 +2804,7 @@ export const fr: Record<TKey, string> = {
   "codexAuth.pauseFailed": "Impossible de suspendre {email}. Aucune modification apportée.",
   "codexAuth.resumeFailed": "Impossible de réactiver {email}. Aucune modification apportée.",
   "accountPause.tooltip": "{reason} · {date}",
+  "accountPause.submitAppeal": "Faire appel",
   "accountPause.reason.organizationDisabled": "Organisation désactivée",
   "accountPause.reason.permissionDenied": "Accès au compte refusé",
   "accountPause.reason.subscriptionInactive": "Abonnement inactif",

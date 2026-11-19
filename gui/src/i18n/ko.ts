@@ -2268,6 +2268,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.pauseFailed": "{email} 계정을 일시 중지하지 못했습니다. 변경 사항이 없습니다.",
   "codexAuth.resumeFailed": "{email} 계정을 재개하지 못했습니다. 변경 사항이 없습니다.",
   "accountPause.tooltip": "{reason} · {date}",
+  "accountPause.submitAppeal": "이의 제기 제출",
   "accountPause.reason.organizationDisabled": "조직 비활성화",
   "accountPause.reason.permissionDenied": "계정 권한 거부",
   "accountPause.reason.subscriptionInactive": "구독 비활성",

@@ -1,4 +1,5 @@
 import type { QuotaFailureCode, QuotaUnknownReason } from "../../../../src/providers/quota-types";
+import type { AccountPauseEvidence } from "../../../../src/types/account-auto-pause";
 /**
  * provider-workspace/types.ts — shared view-model types for the Providers
  * workspace shell/rail/detail (WP080a). Data shapes only; no React.
@@ -73,6 +74,7 @@ export type OAuthAccountRow = AccountQuotaReading & {
   skipReason?: "needs_reauth" | "paused" | "suspended" | "cooldown" | "quota_exhausted";
   paused?: boolean;
   pauseDetails?: { reason: string; pausedAt: number };
+  pauseEvidence?: AccountPauseEvidence;
   autoSwitchThresholdOverride?: number | null;
   autoSwitchThreshold?: number;
   effectiveAutoSwitchThreshold?: number;
