@@ -65,14 +65,17 @@ describe("OpenDesign Go provider", () => {
 
   test("validates keys using authenticated discovery and distinguishes outage from rejection", async () => {
     for (const [status, expected] of [[200, true], [401, false], [503, "unknown"]] as const) {
+      const requests: Array<{ url: string; init?: RequestInit }> = [];
       globalThis.fetch = (async (input, init) => {
-        expect(String(input)).toBe(`${baseUrl}/models`);
-        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer test-key");
-        expect(init?.redirect).toBe("error");
+        requests.push({ url: String(input), init });
         return new Response(null, { status });
       }) as typeof fetch;
       expect(await validateApiKey("opendesign-go", KEY_LOGIN_PROVIDERS["opendesign-go"]!, "test-key"))
         .toBe(expected);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]!.url).toBe(`${baseUrl}/models`);
+      expect(new Headers(requests[0]!.init?.headers).get("authorization")).toBe("Bearer test-key");
+      expect(requests[0]!.init?.redirect).toBe("error");
     }
   });
 });
