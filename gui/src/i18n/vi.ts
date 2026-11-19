@@ -2821,6 +2821,7 @@ export const vi: Record<TKey, string> = {
   "codexAuth.pauseFailed": "Không thể ngưng {email}. Không có thay đổi nào.",
   "codexAuth.resumeFailed": "Không thể tiếp tục {email}. Không có thay đổi nào.",
   "accountPause.tooltip": "{reason} · {date}",
+  "accountPause.submitAppeal": "Gửi đơn kháng nghị",
   "accountPause.reason.organizationDisabled": "Tổ chức đã bị vô hiệu hóa",
   "accountPause.reason.permissionDenied": "Quyền truy cập tài khoản bị từ chối",
   "accountPause.reason.subscriptionInactive": "Gói đăng ký không hoạt động",

@@ -2222,6 +2222,7 @@ export const de: Record<TKey, string> = {
   "codexAuth.pauseFailed": "{email} konnte nicht pausiert werden. Es wurde nichts geändert.",
   "codexAuth.resumeFailed": "{email} konnte nicht fortgesetzt werden. Es wurde nichts geändert.",
   "accountPause.tooltip": "{reason} · {date}",
+  "accountPause.submitAppeal": "Einspruch einlegen",
   "accountPause.reason.organizationDisabled": "Organisation deaktiviert",
   "accountPause.reason.permissionDenied": "Kontoberechtigung verweigert",
   "accountPause.reason.subscriptionInactive": "Abonnement inaktiv",

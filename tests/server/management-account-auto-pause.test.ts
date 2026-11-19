@@ -76,7 +76,8 @@ describe("account auto-pause management", () => {
     });
     const account = getAccountSet(provider)!.accounts[0]!;
     const details = { reason: "account_permission_denied", pausedAt: Date.now() } as const;
-    const evidence = { statusCode: 403, message: "This service has been disabled in this account for violation of Terms of Service." };
+    const evidence = { statusCode: 403, message: "This service has been disabled in this account for violation of Terms of Service.",
+      appealUrl: "https://forms.gle/appeal-fixture", appealText: "Submit Appeal" };
     expect((await setAccountPaused(provider, account.id, true, {
       generation: credentialGeneration(account.credential), details, evidence,
     })).status).toBe("updated");
@@ -90,7 +91,8 @@ describe("account auto-pause management", () => {
     };
     expect(await list()).toMatchObject({ id: account.id, paused: true, pauseDetails: details, pauseEvidence: evidence });
 
-    expect((await setAccountPaused(provider, account.id, false)).status).toBe("updated");
+    const resume = await h.request("PUT", { provider, accountId: account.id, paused: false }, "/api/oauth/accounts/pause");
+    expect(resume?.status).toBe(200);
     const resumed = await list();
     expect(resumed.paused).toBe(false);
     expect(resumed).not.toHaveProperty("pauseDetails");
