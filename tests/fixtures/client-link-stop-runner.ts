@@ -64,9 +64,10 @@ mkdirSync(home, { recursive: true });
 const lifecycle = await import("../../src/client/lifecycle-lock");
 const lock = lifecycle.withClientLifecycleSync;
 const asyncLock = lifecycle.withClientLifecycle;
+const lifecycleLockDeps = { lockPath: join(dirname(home), "runtime", "lifecycle.sqlite") };
 mock.module("../../src/client/lifecycle-lock", () => ({ ...lifecycle,
-  withClientLifecycleSync: (work: Parameters<typeof lock>[0], deps?: Parameters<typeof lock>[1]) => lock(work, { lockPath: deps?.lockPath ?? join(home, "lifecycle.sqlite") }),
-  withClientLifecycle: (work: Parameters<typeof asyncLock>[0], deps?: Parameters<typeof asyncLock>[1]) => asyncLock(work, { lockPath: deps?.lockPath ?? join(home, "lifecycle.sqlite") }),
+  withClientLifecycleSync: (work: Parameters<typeof lock>[0], deps?: Parameters<typeof lock>[1]) => lock(work, deps ?? lifecycleLockDeps),
+  withClientLifecycle: (work: Parameters<typeof asyncLock>[0], deps?: Parameters<typeof asyncLock>[1]) => asyncLock(work, deps ?? lifecycleLockDeps),
 }));
 const token = `ocx_data_${"c".repeat(40)}`;
 const config = getDefaultConfig();
@@ -142,7 +143,7 @@ if (options.fileClients?.length) {
     sources: Object.fromEntries(ROUTE_CLIENT_IDS.map(id => [id, "default"])) } as import("../../src/link/route-intent").HomeRouteIntentDocument;
   preparedFileIntent = { document, stale: false, fetchedAt: "2026-11-16T00:00:00.000Z" };
   const applied = options.deferFileApply ? undefined : await applyConnectedRouteIntent(expected, token, preparedFileIntent, {
-    onlyClients: options.fileClients, lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+    onlyClients: options.fileClients, lifecycleLockDeps,
   }, { fetchImpl: (async () => Response.json({ data: [{ id: "fixture/home-model" }] })) as typeof fetch });
   for (const client of options.fileClients) {
     if (!options.deferFileApply && applied?.outcomes.find(row => row.client === client)?.outcome !== "current") throw new Error("fixture route apply failed");
@@ -443,7 +444,7 @@ if (options.mode === "retry") {
     // The real materializer has already committed its write-ahead receipt, then awaits
     // this Home catalog response. Deliver it only after the stopping listener releases.
     fileSyncFlight = applyConnectedRouteIntent(expected, token, preparedFileIntent, {
-      onlyClients: options.fileClients, lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+      onlyClients: options.fileClients, lifecycleLockDeps,
       beforeWrite: () => withConfigMutationLockSync(guard),
     }, { fetchImpl: (async () => {
       modelsReady(); await release; return Response.json({ data: [{ id: "fixture/late-home-model" }] });
@@ -596,11 +597,18 @@ if (options.mode === "retry") {
       calls.killed++; throw new Error("unexpected process stop after file refusal");
     } }));
     const service = await import("../../src/service");
-    mock.module("../../src/service", () => ({ ...service, stopServiceIfInstalledDetailed: () => {
+    const stopManager = () => {
       calls.service++;
-      if (options.driftDuringFallback || options.startIdentityChanges) return "absent";
-      throw new Error("unexpected service stop after file refusal");
-    } }));
+      if (!options.driftDuringFallback && !options.startIdentityChanges) throw new Error("unexpected service stop after file refusal");
+      return "absent" as const;
+    };
+    mock.module("../../src/service", () => ({ ...service, stopServiceIfInstalledDetailed: stopManager }));
+    if (process.platform === "win32") {
+      const { partAResult } = await import("../helpers/windows-stop-caller-fixtures");
+      (await import("../../src/service/windows-service-stop")).setWindowsServiceStopHooksForTests({
+        partA: async () => partAResult(stopManager()),
+      });
+    }
     const dispatch = await import("../../src/cli/dispatch");
     const command = dispatch.dispatchCommand;
     mock.module("../../src/cli/dispatch", () => ({ ...dispatch, dispatchCommand: async (...args: Parameters<typeof command>) => {
@@ -626,7 +634,7 @@ if (options.mode === "retry") {
     if (admitted) {
       try {
         await (await import("../../src/integrations/route-intent-connected")).applyConnectedRouteIntent(expected, token, preparedFileIntent, {
-          onlyClients: options.fileClients, lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+          onlyClients: options.fileClients, lifecycleLockDeps,
           beforeWrite: () => withConfigMutationLockSync(admitted),
         }, { fetchImpl: (async () => Response.json({ data: [{ id: "fixture/home-model" }] })) as typeof fetch });
         fileLateResult = "unexpected completion";
@@ -774,7 +782,7 @@ if (options.mode === "retry") {
   const stopped = Object.fromEntries(Object.entries(filePaths).map(([id, path]) => [id, readFileSync(path, "utf8")]));
   const { applyConnectedRouteIntent } = await import("../../src/integrations/route-intent-connected");
   const reapplied = await applyConnectedRouteIntent(expected, token, preparedFileIntent, {
-    onlyClients: options.fileClients, lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+    onlyClients: options.fileClients, lifecycleLockDeps,
   }, { fetchImpl: (async () => Response.json({ data: [{ id: "fixture/home-model" }] })) as typeof fetch });
   report({ first, second, stopped, reapplied: reapplied?.outcomes.filter(row => options.fileClients?.includes(row.client as "pi" | "opencode")) });
 } else {
