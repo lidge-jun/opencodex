@@ -1419,6 +1419,9 @@ test.each([
   { model: "bridged/model", event: "response.completed", scenario: "empty-error" },
   { model: "bridged/model", event: "response.completed", scenario: "refusal" },
   { model: "bridged/model", event: "response.completed", scenario: "veto" },
+  { model: "bridged/model", event: "response.completed", scenario: "root-code" },
+  { model: "bridged/model", event: "response.completed", scenario: "cause-code" },
+  { model: "bridged/model", event: "response.completed", scenario: "cause-veto" },
   { model: "bridged/model", event: "response.incomplete", scenario: "refusal" },
   { model: "bridged/model", event: "response.completed", scenario: "success" },
   { model: "combo/pair", event: "response.completed", scenario: "refusal" },
@@ -1431,6 +1434,7 @@ test.each([
   const refusalCode = "upstream_response_refused";
   const terminal = {
     type: event,
+    ...(scenario === "root-code" ? { code: refusalCode } : {}),
     ...(scenario === "event-string-error" ? { retryable: false, error: diagnostic } : {}),
     response: {
       id: "resp_terminal", object: "response", output: [],
@@ -1440,6 +1444,10 @@ test.each([
       ...(scenario === "response-string-error" && { error: diagnostic, retryable: false }),
       ...(scenario === "string-last-error" && { last_error: diagnostic, retryable: false }),
       ...(scenario === "veto" && { error: { code, message: diagnostic, retryable: false } }),
+      ...(["root-code", "cause-code", "cause-veto"].includes(scenario) && {
+        error: { code, message: diagnostic, cause: scenario === "cause-code" ? { code: refusalCode }
+          : scenario === "cause-veto" ? { retryable: false } : undefined },
+      }),
       ...(scenario === "refusal" && {
         error: { code, message: diagnostic },
         last_error: { code: refusalCode, message: diagnostic },
@@ -1466,7 +1474,7 @@ test.each([
     if (scenario === "success" || scenario === "empty-error") {
       expect(terminals).toEqual([terminal]);
     } else {
-      const error = scenario === "refusal"
+      const error = scenario === "refusal" || scenario.endsWith("-code")
         ? { code: refusalCode, message: CLIENT_ERROR_CONTRACTS.replay_refused }
         : { ...(scenario === "veto" && { code }), message: "Upstream reported a non-replayable failed completion." };
       expect(terminals).toMatchObject([{
@@ -1476,3 +1484,38 @@ test.each([
     }
   } finally { release(); }
 });
+
+test.each([{ code: "upstream_response_refused" }, { retryable: false }])(
+  "Combo preflight keeps a zero-output nested replay veto on its first target (%j)", async cause => {
+    const config = comboReplayConfig();
+    const diagnostic = "fixture nested-veto upstream diagnostic";
+    const terminal = { type: "response.failed", response: {
+      id: "resp_nested_veto", object: "response", status: "failed", output: [],
+      error: { code: "server_is_overloaded", message: diagnostic, cause },
+    } };
+    const sends: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? new URL(input) : input instanceof URL ? input : new URL(input.url);
+      sends.push(url.hostname);
+      return new Response(`event: response.failed\ndata: ${JSON.stringify(terminal)}\n\n`, {
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as typeof fetch;
+    const release = acquireOwnedSpendHome();
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "combo/pair", stream: true, store: false, ...RESPONSES_TURN }),
+      }), config, { model: "", provider: "" });
+      const body = await response.text();
+      expect(sends).toEqual([COMBO_FIRST_HOST]);
+      expect(response.status).toBe(200);
+      const frames = body.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+      expect(frames.find(frame => frame.type === "response.failed")?.response).toMatchObject({
+        retryable: false,
+        ...("code" in cause ? { error: { code: cause.code, message: CLIENT_ERROR_CONTRACTS.replay_refused } } : {}),
+      });
+      expect(body).not.toContain(diagnostic);
+    } finally { release(); }
+  },
+);

@@ -89,10 +89,10 @@ sends settle the initial booking through the physical receipt. The helper's live
 includes deferred reports and credits only its own unsettled prepaid booking.
 
 Before requesting a recovery slot or physical permit, the exchange checks the original
-cache-miss frame for a replay refusal code, a no-retry header or an explicit
-`retryable: false` on the frame, its response snapshot, or either level’s `error` or
-`last_error` record. Stream preflight shares the same explicit retry-veto check. The exchange projects the fixed refusal and client retry veto directly,
-retaining a recognized code even when it appeared in `last_error`.
+cache-miss frame and prelude for a no-retry header and checks the frame with the same
+[bounded replay envelope walker](../data-planes/replay-refusals.md) as stream preflight. The
+exchange projects the fixed refusal and client retry veto directly, retaining a recognized
+code even when it appeared in a nested cause or details entry.
 
 Recovery reserves a fresh seed for the selected pool and account when spend is enforced.
 The seed keeps its own estimate and stays independent of other pending reservations.

@@ -1582,6 +1582,7 @@
   "upstream-connect-error.test.ts": "server", "upstream-error-message-fallback.test.ts": "lib",
   "upstream-http-error.test.ts": "adapters", "upstream-http-version.test.ts": "server",
   "upstream-reachability.test.ts": "codex-integration", "upstream-retry.test.ts": "lib",
+  "replay-veto-envelope.test.ts": "lib",
   "upstream-retry-zero-output.test.ts": "lib", "upstream-transient-retry.test.ts": "providers",
   "url-normalization.test.ts": "config", "usage-aggregate-cache.test.ts": "usage",
   "usage-anthropic-fast-pricing.test.ts": "usage", "usage-cursor-fast-pricing.test.ts": "usage",

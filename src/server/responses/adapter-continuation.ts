@@ -33,7 +33,7 @@ import {
   fetchWithTransientRetry,
   fetchWithResetRetry,
   applyUpstreamRecoveryInit,
-  isAutomaticReplayBlocked, isReplayRefusalCode, hasUpstreamReplayRefusal, observedReplayRefusalCode, replayRefusalBodyCode, isSameTargetRetryHold, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE,
+  isAutomaticReplayBlocked, isReplayRefusalCode, hasUpstreamReplayRefusal, observedReplayRefusalCode, replayRefusalBodyVerdict, isSameTargetRetryHold, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE,
   prepareSameTarget429Wait, withheldReplayDiagnostic, hasClientReplayVeto, hasNoRetryDirective,
   SendBudgetExhaustedError, errorDestinationLabel,
 } from "../../lib/upstream-retry";
@@ -778,22 +778,18 @@ export function createAdapterContinuations(
     if (!response.ok) {
       if (route.providerName === "kiro") response = carryProxyError(response, await normalizeFinalKiroHttpError(response, upstream.signal));
       const errorText = await readDisplaySafeErrorText(response, upstream.signal, "unknown error");
-      const refusalCode = replayRefusalBodyCode(errorText) ?? observedReplayRefusalCode(response);
+      const verdict = replayRefusalBodyVerdict(errorText);
+      const refusalCode = verdict.refusalCode ?? observedReplayRefusalCode(response);
       if (refusalCode) {
         yield { type: "error", status: REPLAY_REFUSED_STATUS, errorType: "upstream_error", code: refusalCode,
           message: REPLAY_REFUSAL_MESSAGE, retryable: false };
         return;
       }
-      const normalized = normalizeUpstreamErrorText(errorText, "unknown error");
-      if (isReplayRefusalCode(normalized.code)) {
-        yield { type: "error", status: REPLAY_REFUSED_STATUS, errorType: "upstream_error", code: normalized.code,
-          message: REPLAY_REFUSAL_MESSAGE, retryable: false };
-        return;
-      }
-      if (hasClientReplayVeto(response) || hasNoRetryDirective(response)) {
+      if (verdict.explicitVeto || hasClientReplayVeto(response) || hasNoRetryDirective(response)) {
         yield { type: "error", status: response.status, message: withheldReplayDiagnostic(response.status), retryable: false };
         return;
       }
+      const normalized = normalizeUpstreamErrorText(errorText, "unknown error");
       const message = normalized.cyberPolicy
         ? normalized.message ?? (isCyberPolicyCode(normalized.code) ? CYBER_POLICY_FALLBACK_MESSAGE : normalized.safeText)
         : `Provider continuation error ${response.status}: ${normalized.safeText}`;

@@ -17,14 +17,14 @@ import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import type { RequestFailureStage } from "../../lib/request-failure-model";
 import type { RequestLogContext } from "../request-log";
 import { carryResponseToolOwnership } from "./response-tool-ownership";
-import { incompleteDetailsVetoReplay, responsesFrameIsReplayUnsafe, responsesFrameRetryVeto, terminalErrorRecords } from "./codex-ws-wire";
+import { responsesFrameIsReplayUnsafe, terminalErrorRecords } from "./codex-ws-wire";
 import { createSseInspector, isNativePassthroughSseResponse } from "../relay";
 import { sseDataPayload } from "../sse-payload-rewrite";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 import { COMBO_DEGENERATE_COMPLETION_CODE, REQUIRED_TOOL_CONTRACT_CODE, responsesCompletionError } from "../../lib/errors";
 import { attachComboFailureEvidence, isPausedTurn } from "../../lib/client-error-body";
 import { requiredToolReasoningPrelude } from "./combo-required-tool-stream";
-import { carryReplayRefusal, applyReplayRefusalClientHeaders, isAutomaticReplayBlocked, isNonReplayableUpstreamCode, markTerminalResetReplacement, ProtocolPreOutputEof } from "../../lib/upstream-retry";
+import { carryReplayRefusal, applyReplayRefusalClientHeaders, isAutomaticReplayBlocked, isNonReplayableUpstreamCode, markTerminalResetReplacement, ProtocolPreOutputEof, replayRefusalVerdict } from "../../lib/upstream-retry";
 import { carryPacedStream, pacedQueuingStrategy } from "../../lib/paced-stream";
 import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 
@@ -249,9 +249,16 @@ function comboStreamDegeneratePrelude(payload: unknown, commentaryItemIds: Set<s
   return requiredToolReasoningPrelude(payload);
 }
 
-function incompleteCarriersVetoReplay(...carriers: Array<Record<string, unknown> | undefined>): boolean {
-  return carriers.some(carrier => carrier?.end_turn === false
-    || incompleteDetailsVetoReplay(carrier));
+function legacyIncompleteDetailsVeto(event: Record<string, unknown>): boolean {
+  // Some Responses terminals put incomplete_details beside the event type.
+  const { refusalCode, explicitVeto } = replayRefusalVerdict({
+    response: { incomplete_details: event.incomplete_details },
+  });
+  return explicitVeto || refusalCode !== undefined;
+}
+
+function incompleteCarriersVetoReplay(event: Record<string, unknown>, response: Record<string, unknown> | undefined): boolean {
+  return event.end_turn === false || response?.end_turn === false || legacyIncompleteDetailsVeto(event);
 }
 
 function classifyIncompleteReplayReason(
@@ -460,11 +467,12 @@ export function failedTerminalReplayVerdict(payload: unknown): "blocked" | "poli
   if (!bare && !failed && payload.type !== "response.incomplete" && payload.status !== "incomplete") return;
   const errors = terminalErrorRecords(payload);
   if (isNonReplayableUpstreamCode(payload.code) || errors.some(error => isNonReplayableUpstreamCode(error.code))) return "blocked";
-  const veto = responsesFrameRetryVeto(payload);
-  if (veto === "envelope") {
+  const { refusalCode, explicitVeto } = replayRefusalVerdict(payload);
+  if (refusalCode !== undefined) return "blocked";
+  if (explicitVeto && (payload.retryable === false || recordValue(payload.response)?.retryable === false)) {
     return !bare && failed && errors.some(error => typeof error.code === "string" && isTerminalRefusalCode(error.code)) ? "policy" : "blocked";
   }
-  if (veto) return "blocked";
+  if (explicitVeto || legacyIncompleteDetailsVeto(payload)) return "blocked";
 }
 
 function retryableZeroOutputTerminal(payload: unknown, context?: object): boolean {
@@ -485,7 +493,7 @@ function retryableZeroOutputTerminal(payload: unknown, context?: object): boolea
     if (code === REQUIRED_TOOL_CONTRACT_CODE) {
       if (response?.error != null && event.error != null) return false;
       if (event.last_error != null || response?.last_error != null) return false;
-      return error?.retryable !== false && !incompleteCarriersVetoReplay(event, response)
+      return !incompleteCarriersVetoReplay(event, response)
         && classifyIncompleteReplayReason(event, response) !== "veto"
         && (emptyOutput || heldOnlyOutput(target.output, event.output));
     }
@@ -776,7 +784,9 @@ export async function preflightComboStreamResponse(
         // The default combo classifier still projects a pre-output policy refusal to its
         // HTTP 400 contract. A caller-provided recovery callback must never retry it.
         const projectPolicy = verdict === "policy" && retryableTerminal === undefined;
-        const retryable = (verdict === undefined || projectPolicy) && retryableTerminalFor(payload);
+        const replay = replayRefusalVerdict(payload);
+        const retryable = (projectPolicy || (verdict === undefined && !replay.explicitVeto && !replay.refusalCode))
+          && retryableTerminalFor(payload);
         const matchedBareError = retryable && event?.type === "error";
         // A zero-output bare error is terminal evidence. Explicit client errors stay
         // committed; unknown and retryable upstream failures may advance the combo.
@@ -787,7 +797,7 @@ export async function preflightComboStreamResponse(
           holdTimer = setTimeout(() => resolve("hold-expired"), COMBO_STREAM_PRELUDE_HOLD_MS);
         });
         const degenerateTerminal = options?.degeneratePrelude === true
-          && verdict === undefined && event !== undefined && !responsesFrameRetryVeto(event)
+          && verdict === undefined && event !== undefined && !replay.explicitVeto && !replay.refusalCode
           && !isNonReplayableUpstreamCode(event.code) && isDegenerateStreamTerminal(event, logCtx);
         if (comboStreamPayloadCommitsOutput(payload) && !matchedBareError && !heldReasoning) outputCommitted = true;
         if (options?.requiredToolPrelude && payload && typeof payload === "object") {

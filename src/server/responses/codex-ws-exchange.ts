@@ -1,5 +1,5 @@
 import {
-  isReplayRefusalCode, projectReplayRefusal, REPLAY_REFUSAL_NO_RETRY_HEADER,
+  replayRefusalVerdict, projectReplayRefusal, REPLAY_REFUSAL_NO_RETRY_HEADER,
   REPLAY_REFUSAL_NO_RETRY_VALUE, retainReplayRefusal, UPSTREAM_RESPONSE_REFUSED_CODE,
 } from "../../lib/upstream-retry";
 import { completeIncrementalFrame, recordIncrementalDispatch, type IncrementalPlan } from "./codex-ws-incremental";
@@ -20,7 +20,7 @@ import { UPGRADE_DEADLINE_MS, CODEX_WS_LIVENESS_PING_INTERVAL_MS, CODEX_WS_RESPO
   codexWsCreateFrameExceedsLimit, codexWsFailureDetail, codexWsPreResponseFailure, markCodexWsStage, codexWsOcxVersion,
   markCodexWsSocketDeath, codexWsWrapperStatus, isCodexWsTerminalEvent, type CodexWsFailureStage, type CodexWsStageRecord,
   type CodexWsTerminalEvent, codexWsPreOutputRefusalStatus, isEmptyCodexWsLifecycleEvent, codexWsFrameResponseIds,
-  markCodexWsPreOutputRefusal, responsesFrameIsReplayUnsafe, responsesFrameRetryVeto, type CodexWsPreOutputRefusalHold } from "./codex-ws-wire";
+  markCodexWsPreOutputRefusal, responsesFrameIsReplayUnsafe, type CodexWsPreOutputRefusalHold } from "./codex-ws-wire";
 
 interface ExchangeOptions {
   incrementalPlan?: IncrementalPlan;
@@ -121,12 +121,10 @@ function wrappedRejectionResponse(payload: Record<string, unknown>, prelude: Hea
 
 /** Inspect the original cache-miss envelope before dropping fields in HTTP projection. */
 function cacheMissReplayRefusal(payload: Record<string, unknown>, prelude: Headers) {
-  const response = record(payload.response) ? payload.response : undefined;
-  for (const carrier of [payload.error, payload.last_error, payload, response?.error, response?.last_error, response]) {
-    if (record(carrier) && isReplayRefusalCode(carrier.code)) return carrier.code;
-  }
+  const { refusalCode, explicitVeto } = replayRefusalVerdict(payload);
+  if (refusalCode !== undefined) return refusalCode;
   const headers = record(payload.headers) ? payload.headers : {};
-  if (responsesFrameRetryVeto(payload)
+  if (explicitVeto
     || prelude.get(REPLAY_REFUSAL_NO_RETRY_HEADER) === REPLAY_REFUSAL_NO_RETRY_VALUE
     || Object.entries(headers).some(([name, value]) =>
       name.toLowerCase() === REPLAY_REFUSAL_NO_RETRY_HEADER

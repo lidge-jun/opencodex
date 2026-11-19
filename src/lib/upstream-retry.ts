@@ -155,36 +155,64 @@ export function isReplayRefusalCode(code: unknown): code is ReplayRefusalCode {
   return code === UPSTREAM_RESET_REPLAY_REFUSED_CODE || code === UPSTREAM_RESPONSE_REFUSED_CODE;
 }
 
-/** Inspect an error envelope, including nested causes, without recursing on the JS stack. */
-export function replayRefusalVerdict(payload: unknown): { code?: ReplayRefusalCode; retryable?: false } {
-  let veto = false;
-  const root = payload as Record<string, unknown> | null | undefined;
-  const response = root?.response;
-  const pending = [response, payload];
-  while (pending.length > 0) {
-    const entry = pending.pop();
-    if (!entry || typeof entry !== "object") continue;
-    const record = entry as Record<string, unknown>;
-    if (isReplayRefusalCode(record.code)) return { code: record.code, retryable: false };
-    veto ||= record.retryable === false;
-    pending.push(record.error, record.last_error, record.incomplete_details, record.cause);
-    if (entry !== payload && entry !== response) pending.push(record.details);
+const MAX_REPLAY_ENVELOPE_DEPTH = 12;
+
+/** Reads only protocol error carriers and their cause/details branches. */
+export function replayRefusalVerdict(payload: unknown): { refusalCode?: ReplayRefusalCode; explicitVeto: boolean } {
+  const record = (value: unknown): Record<string, unknown> | undefined =>
+    value !== null && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown> : undefined;
+  const root = record(payload);
+  const response = record(root?.response);
+  let refusalCode: ReplayRefusalCode | undefined;
+  let explicitVeto = false;
+
+  function visit(value: unknown, depth: number, inDetails = false): void {
+    if (depth > MAX_REPLAY_ENVELOPE_DEPTH) return;
+    if (inDetails && Array.isArray(value)) {
+      for (const entry of value) visit(entry, depth + 1, true);
+      return;
+    }
+    const carrier = record(value);
+    if (!carrier) return;
+    if (refusalCode === undefined && isReplayRefusalCode(carrier.code)) refusalCode = carrier.code;
+    explicitVeto ||= carrier.retryable === false;
+    visit(carrier.cause, depth + 1);
+    visit(carrier.details, depth + 1, true);
   }
-  return veto ? { retryable: false } : {};
+
+  visit(root, 0);
+  visit(root?.error, 1);
+  visit(root?.last_error, 1);
+  visit(response, 1);
+  visit(response?.error, 2);
+  visit(response?.last_error, 2);
+  visit(response?.incomplete_details, 2);
+  return { ...(refusalCode === undefined ? {} : { refusalCode }), explicitVeto };
 }
 
-function replayRefusalBodyVerdict(body: string, requiredStatus?: "failed") {
+/** HTTP and translated adapters accept the legacy error.last_error envelope. */
+export function replayRefusalProviderErrorVerdict(payload: unknown): ReturnType<typeof replayRefusalVerdict> {
+  const verdict = replayRefusalVerdict(payload);
+  if (verdict.refusalCode !== undefined) return verdict;
+  const legacy = (payload as { error?: { last_error?: unknown } } | null)?.error?.last_error;
+  if (legacy === undefined) return verdict;
+  const nested = replayRefusalVerdict({ last_error: legacy });
+  return { ...nested, explicitVeto: verdict.explicitVeto || nested.explicitVeto };
+}
+
+export function replayRefusalBodyVerdict(body: string, requiredStatus?: "failed"): ReturnType<typeof replayRefusalVerdict> {
   try {
     const parsed = JSON.parse(body);
-    if (requiredStatus !== undefined && parsed?.status !== requiredStatus) return {};
-    return replayRefusalVerdict(parsed);
+    if (requiredStatus !== undefined && parsed?.status !== requiredStatus) return { explicitVeto: false };
+    return replayRefusalProviderErrorVerdict(parsed);
   } catch {
-    return {};
+    return { explicitVeto: false };
   }
 }
 
 export function replayRefusalBodyCode(body: string, requiredStatus?: "failed") {
-  return replayRefusalBodyVerdict(body, requiredStatus).code;
+  return replayRefusalBodyVerdict(body, requiredStatus).refusalCode;
 }
 
 /** Client-facing status for {@link UPSTREAM_RESET_REPLAY_REFUSED_CODE}. */
@@ -997,12 +1025,12 @@ async function observeRetryBody(res: Response, signal?: AbortSignal, checkOverfl
   try {
     const { text, complete } = await withPausedResponseHeaderDeadline(signal,
       () => peekBodyText(res, CONTEXT_OVERFLOW_PEEK_BYTES, CONTEXT_OVERFLOW_PEEK_MS, signal));
-    const { code, retryable } = replayRefusalBodyVerdict(text);
-    if (code !== undefined) {
-      wireReplayRefusals.set(res, code);
+    const { refusalCode, explicitVeto } = replayRefusalBodyVerdict(text);
+    if (refusalCode !== undefined) {
+      wireReplayRefusals.set(res, refusalCode);
       return "refusal";
     }
-    if (retryable === false) {
+    if (explicitVeto) {
       requireClientReplayVeto(res);
       return "refusal";
     }

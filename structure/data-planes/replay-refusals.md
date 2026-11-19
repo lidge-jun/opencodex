@@ -52,8 +52,11 @@ other rewraps still need client projection. An upstream wire code selects the fi
 message and allowlisted headers. A wire directive blocks automatic resends when headers
 arrive. Both signals preserve genuine upstream quota evidence.
 
-The shared predicate gates retries, credential recovery and same-request fallbacks. It reads
-verdicts from the root and response envelopes and follows error carriers, details and causes.
+The shared envelope walker gates retries, credential recovery, same-request fallbacks and
+terminal delivery. It checks the root and response records, their error and last_error records,
+and response.incomplete_details. It follows cause records and details records or array entries
+from those carriers, up to 12 edges from the root. HTTP and translated adapters also
+check the legacy error.last_error carrier through the same walker.
 Echoed request data has no authority over retry decisions. Kiro
 and Google HTTP check the directive and a bounded peek for refusal codes before adapter
 resends. Google keeps original evidence when raw errors are requested; display normalization

@@ -2,12 +2,12 @@ import { carryProxyError, ownedChatErrorPayload } from "../../lib/client-error-b
 import { httpStatusFromTerminalError, responsesCompletionError } from "../../lib/errors";
 import {
   applyReplayRefusalClientHeaders, withheldReplayDiagnostic, carryReplayRefusal, carryReplayRefusalToClient, hasClientReplayVeto, hasNoRetryDirective, hasUpstreamReplayRefusal, invitesResendAfterReplacement, isNonReplayableResponse,
-  isNonReplayableUpstreamCode, isReplayRefusalCode, isReplayRefusalProjection, isReplayRefusalResponse, replayRefusalBodyCode,
+  isNonReplayableUpstreamCode, replayRefusalVerdict, isReplayRefusalProjection, isReplayRefusalResponse, replayRefusalBodyCode,
   isTerminalResetReplacement, markResponseNonReplayable, observedReplayRefusalCode, projectReplayRefusal, UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../../lib/upstream-retry";
 import { isXaiLegacyPrivacyError, isXaiPrivacyModeRefusal, xaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
 import type { RequestFailureCause } from "../../usage/telemetry-contract";
-import { responsesFrameRetryVeto, terminalErrorRecords } from "./codex-ws-wire";
+import { terminalErrorRecords } from "./codex-ws-wire";
 import { clientCancelledResponse, readDisplaySafeErrorText } from "./core-errors";
 
 const UPSTREAM_ERROR_TYPES = new Set([
@@ -111,21 +111,19 @@ export function rewriteNonRetryableFailurePayload(payload: string, comboAttempt:
   try {
     const event = JSON.parse(payload) as {
       type?: unknown; error?: unknown; last_error?: unknown;
+      message?: unknown; cause?: unknown; details?: unknown;
       response?: Record<string, unknown>;
     };
     const terminalType = event?.type;
     if (terminalType !== "response.failed" && terminalType !== "response.completed" && terminalType !== "response.incomplete") return payload;
     const failed = terminalType === "response.failed";
-    const candidates = failed ? terminalErrorRecords(event) : [];
-    const upstream = failed
-      ? candidates.find(error => isReplayRefusalCode(error.code)) ?? candidates[0]
-      : responsesCompletionError(event, terminalType);
+    const upstream = failed ? terminalErrorRecords(event)[0] : responsesCompletionError(event, terminalType);
     if (!failed && !upstream) return payload;
-    const refusal = isReplayRefusalCode(upstream?.code);
-    const veto = responsesFrameRetryVeto(event) !== undefined;
+    const { refusalCode, explicitVeto: veto } = replayRefusalVerdict(event);
+    const refusal = refusalCode !== undefined;
     if (!refusal && !(failed ? comboAttempt && (veto || isNonReplayableUpstreamCode(upstream?.code)) : veto)) return payload;
     const type = typeof upstream?.type === "string" ? upstream.type : undefined;
-    const code = typeof upstream?.code === "string" ? upstream.code : undefined;
+    const code = refusalCode ?? (typeof upstream?.code === "string" ? upstream.code : undefined);
     const status = httpStatusFromTerminalError({ type, code });
     const { message, type: safeType, code: safeCode } = ownedChatErrorPayload({
       status, type, code, evidence: { status, type, code },
@@ -133,8 +131,14 @@ export function rewriteNonRetryableFailurePayload(payload: string, comboAttempt:
     const error = !failed && !refusal
       ? { type: safeType, code: code === undefined ? safeCode : maskCode(code), message: NON_REPLAYABLE_COMPLETION_MESSAGE }
       : { type: safeType, code: safeCode, message };
-    const { error: _error, last_error: _lastError, ...root } = event;
-    return JSON.stringify({ ...root, response: { ...event.response, retryable: false, error, last_error: error } });
+    const { error: _error, last_error: _lastError, message: _message, cause: _cause, details: _details, ...root } = event;
+    const { message: _responseMessage, cause: _responseCause, details: _responseDetails,
+      incomplete_details: incompleteDetails, ...response } = event.response ?? {};
+    const reason = (incompleteDetails as { reason?: unknown } | null | undefined)?.reason;
+    return JSON.stringify({ ...root, response: { ...response,
+      ...(typeof reason === "string" ? { incomplete_details: { reason } } : {}),
+      retryable: false, error, last_error: error,
+    } });
   } catch {
     return payload;
   }

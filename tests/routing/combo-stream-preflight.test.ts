@@ -558,6 +558,20 @@ describe("combo stream preflight", () => {
     expect(await result.response.text()).toBe(`data: ${JSON.stringify(payload)}\n\n`);
   });
 
+  for (const cause of [{ code: "upstream_response_refused" }, { retryable: false }]) {
+    test.each([false, true])(`nested ${Object.keys(cause)[0]} blocks preflight (custom=%s)`, async custom => {
+      const classify = jest.fn(() => true);
+      const result = await preflightComboStreamResponse(
+        sse({ type: "error", status: 503, error: { code: "server_is_overloaded", cause } }),
+        { model: "m1", provider: "a" }, custom ? classify : undefined,
+      );
+      expect(result.kind).toBe("accepted");
+      expect(result.response.status).toBe(200);
+      expect(classify).not.toHaveBeenCalled();
+      await result.response.text();
+    });
+  }
+
   test("a no-retry stream head bypasses the custom retry classifier", async () => {
     const response = sse({ type: "error", status: 503, error: { code: "server_is_overloaded" } });
     response.headers.set("x-should-retry", "false");
