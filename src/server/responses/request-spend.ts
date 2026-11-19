@@ -14,6 +14,12 @@ export interface TerminalSpendUsage {
 }
 
 type RecordSendUsage = (usage: TerminalSpendUsage) => void;
+/**
+ * Which routed send a reading covers: the send that was newest when the parse started (the one
+ * that produced the response being parsed), or the send that is newest now (a retry the parser
+ * dispatched itself, whose response it has just finished reading).
+ */
+export type RoutedSendReadingCover = "issuing" | "newest";
 const adapterResponseSpend = new WeakMap<Response, RecordSendUsage>();
 
 /** Bind an image-recovery response after its retry ladder has finished reporting sends. */
@@ -36,10 +42,11 @@ export interface RequestSpendSettlement {
   /**
    * Bind the usage a routed response reports to the routed send that is latest when its parse
    * starts. Legs run in sequence, so that send is the one that produced the response (#8902).
-   * A parser can dispatch its own retry (Kiro's completion retry) and report one usage for both
-   * sends; that usage then covers every routed send booked since the parse started, settled once.
+   * A parser that dispatches its own retry (Kiro's completion retry) reports one reading per
+   * physical response; each later reading covers the routed send that is newest when it arrives.
+   * A send keeps the first reading bound to it, and a send with none stays unresolved.
    */
-  captureRoutedSendUsage?(): ((usage: TerminalSpendUsage) => void) | undefined;
+  captureRoutedSendUsage?(): ((usage: TerminalSpendUsage, cover?: RoutedSendReadingCover) => void) | undefined;
 }
 
 export interface SpendTargetIdentity extends SpendScopes {
@@ -95,18 +102,6 @@ function netOfOtherSends(total: TerminalSpendUsage | undefined, others: readonly
   const inputTokens = remaining("inputTokens");
   const outputTokens = remaining("outputTokens");
   return inputTokens || outputTokens ? { inputTokens, outputTokens } : undefined;
-}
-
-/**
- * One measured usage covering `span` routed sends, oldest first: the newest send carries it and
- * the older ones settle at zero, so the sends together charge exactly what was measured and none
- * stays unresolved at its reservation. Sends that already hold their own reading keep it.
- */
-function bindSpanUsage<K>(span: readonly K[], usage: TerminalSpendUsage, observed: (key: K) => boolean,
-  record: (key: K, usage: TerminalSpendUsage) => void): void {
-  span.forEach((key, index) => {
-    if (!observed(key)) record(key, index === span.length - 1 ? usage : { inputTokens: 0, outputTokens: 0 });
-  });
 }
 
 /**
@@ -512,26 +507,22 @@ export function createRequestSpendTracker(
     captureRoutedSendUsage() {
       if (resolved) return undefined;
       if (seededAccounting) {
-        const routedOrdinals = () => [...physical.entries()].filter(([, entry]) => seedState(entry.seed)?.auxiliary !== true)
-          .map(([order]) => order).sort((a, b) => a - b);
-        const ordinal = routedOrdinals().at(-1);
-        if (ordinal === undefined) return undefined;
-        return usage => {
-          if (resolved || !physical.has(ordinal)) return;
-          bindSpanUsage(routedOrdinals().filter(order => order >= ordinal), usage,
-            order => physical.get(order)?.observed !== undefined,
-            (order, reading) => { physical.get(order)!.observed = reading; });
+        const newestRouted = () => [...physical.entries()].filter(([, entry]) => seedState(entry.seed)?.auxiliary !== true)
+          .reduce<number | undefined>((latest, [order]) => latest === undefined || order > latest ? order : latest, undefined);
+        const issuing = newestRouted();
+        if (issuing === undefined) return undefined;
+        return (usage, cover = "issuing") => {
+          const ordinal = cover === "issuing" ? issuing : newestRouted();
+          const entry = ordinal === undefined ? undefined : physical.get(ordinal);
+          if (!resolved && entry && entry.observed === undefined) entry.observed = usage;
         };
       }
-      const routedLive = () => live.filter(id => !nonTerminalSendIds.has(id));
-      const sendId = routedLive().at(-1);
-      if (sendId === undefined) return undefined;
-      return usage => {
-        if (resolved) return;
-        const routed = routedLive();
-        const start = routed.indexOf(sendId);
-        bindSpanUsage(start >= 0 ? routed.slice(start) : [sendId], usage,
-          id => observedLegacy.has(id), (id, reading) => observedLegacy.set(id, reading));
+      const newestRouted = () => live.findLast(id => !nonTerminalSendIds.has(id));
+      const issuing = newestRouted();
+      if (issuing === undefined) return undefined;
+      return (usage, cover = "issuing") => {
+        const sendId = cover === "issuing" ? issuing : newestRouted();
+        if (!resolved && sendId !== undefined && !observedLegacy.has(sendId)) observedLegacy.set(sendId, usage);
       };
     },
     charge(options?: Parameters<RequestSendObserver["charge"]>[0]): boolean {

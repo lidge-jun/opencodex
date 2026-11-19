@@ -131,6 +131,7 @@ import { sealCredentialRefusal } from "../credential-recovery-attempt";
 import { sealedCredentialRefusals } from "../request-log-attempt-recovery";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { bindAttemptDeliveryRecorder } from "../../usage/attempt-delivery";
+import { observeResponseSendReadings } from "../../lib/response-send-readings";
 import { resolvePassiveRouteSubjectId } from "../passive-route-linker";
 import { anthropicPoolCooldownResponse, clientCancelledResponse } from "./core-errors";
 import { acquireAccountLease, KIRO_ACCOUNT_WAIT_MS } from "../../oauth/kiro-account-load";
@@ -819,11 +820,19 @@ export async function prepareResponsesTransport(
     };
     // One parse is one physical response. Its usage settles the send that produced it (#8902),
     // and a response that reports none leaves its issuing attempt's credits incomplete (#8452).
-    const observeLeg = () => {
+    // A parser that dispatches its own retry reports each response's reading instead, because its
+    // terminal sums the sends; those readings then settle the sends and the terminal settles none.
+    const observeLeg = (response: object) => {
       const recordSpend = logCtx.spendTracker?.captureRoutedSendUsage?.();
       const ordinal = logCtx.activeAttempt?.ordinal;
       let reported = false;
+      let readings = 0;
+      const releaseReadings = observeResponseSendReadings(response, reading => {
+        if (reading) recordSpend?.(reading, readings === 0 ? "issuing" : "newest");
+        readings++;
+      });
       const end = (): void => {
+        releaseReadings();
         if (reported || ordinal === undefined || !parserOwnsUsage()) return;
         attemptsMissingCredit.add(ordinal);
         // A rotation during this parse sealed the issuing attempt into its own row; a row with no
@@ -836,7 +845,7 @@ export async function prepareResponsesTransport(
         event(event: AdapterEvent): void {
           if (!reported && "usage" in event && event.usage) {
             reported = true;
-            recordSpend?.(event.usage);
+            if (readings === 0) recordSpend?.(event.usage);
           }
           // Before the consumer binds the terminal's usage, which can precede this parse's close.
           if (event.type === "done" || event.type === "incomplete" || event.type === "error") end();
@@ -860,7 +869,7 @@ export async function prepareResponsesTransport(
     };
     const parseStream = resolved.parseStream.bind(resolved);
     resolved.parseStream = async function* (...args) {
-      const leg = observeLeg();
+      const leg = observeLeg(args[0]);
       // A guard stops reading at the terminal, which closes this generator early.
       try {
         for await (const event of parseStream(...args)) { observeEvent(event, args[0]); leg.event(event); yield event; }
@@ -869,7 +878,7 @@ export async function prepareResponsesTransport(
     if (resolved.parseResponse) {
       const parseResponse = resolved.parseResponse.bind(resolved);
       resolved.parseResponse = async (...args) => {
-        const leg = observeLeg();
+        const leg = observeLeg(args[0]);
         const events = await parseResponse(...args);
         events.forEach(event => { observeEvent(event, args[0]); leg.event(event); });
         leg.end();

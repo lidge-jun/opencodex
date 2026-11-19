@@ -553,8 +553,9 @@ and the send budget counts every leg. The spend ledger settles each leg's send w
 leg reported. A send that reported no usage stays unresolved at its reservation. If OAuth recovery
 switches accounts, each attempt records the usage reported by its own account. If a leg reports no
 usage, that attempt's provider credit total is marked incomplete. A provider retry sent while a
-response is still being read, such as Kiro's completion retry, reports one usage for both sends, and
-the spend ledger settles that usage once across them. A streamed Chat Completions turn that fails
+response is still being read, such as Kiro's completion retry, settles with the usage its own
+response reported, and the first send keeps its own reading. A retry whose response reports no
+usage stays unresolved at its reservation. A streamed Chat Completions turn that fails
 ends in an error frame instead of a finish chunk. If the client set
 `stream_options.include_usage`, a chunk with empty `choices` carrying the failed turn's usage comes
 right before that error frame. A non-streaming Chat error body has no usage field.

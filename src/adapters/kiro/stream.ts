@@ -5,6 +5,7 @@ import {
   type TranslatorBudget,
 } from "../../lib/translator-budget";
 import type { AdapterEvent, OcxUsage } from "../../types";
+import { reportResponseSendReading } from "../../lib/response-send-readings";
 import { sumCreditReadings, withMissingCreditReading } from "../../usage/credit-billing";
 import { recordKiroCalibration, rekeyKiroCalibration } from "../kiro-calibration";
 import {
@@ -56,6 +57,12 @@ interface KiroAttemptResult extends KiroAttemptParseResult {
   drainDeferred(supersededByCompletion?: boolean): AsyncGenerator<AdapterEvent>;
   releaseCollectors(): void;
   releaseRetained(): void;
+}
+
+/** The usage the one physical response an attempt parsed reported, if it reported any. */
+function attemptReading(result: KiroAttemptParseResult): OcxUsage | undefined {
+  const terminal = result.terminal;
+  return terminal && "usage" in terminal && terminal.usage ? terminal.usage : result.usage;
 }
 
 interface KiroAttemptRetention {
@@ -1305,6 +1312,10 @@ export async function* parseKiroStream(
       return;
     }
 
+    // The retry below is a second physical send inside this parse, and the terminal will sum both
+    // readings. Report the first response's reading now so it settles the send that produced it;
+    // a retry that reports nothing then stays unresolved instead of absorbing this reading.
+    reportResponseSendReading(response, attemptReading(firstResult));
     yield { type: "heartbeat" };
     // Failed validation releases held progress. Keep those failures non-retryable so a later
     // replay cannot duplicate it; successful validation instead discards the superseded text.
@@ -1389,6 +1400,7 @@ export async function* parseKiroStream(
       firstResult,
       structuredOutput,
     );
+    reportResponseSendReading(response, attemptReading(secondResult));
     try {
       if (!secondResult.terminal) {
         yield retryableKiroIncomplete(
