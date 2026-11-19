@@ -22,7 +22,7 @@ import { publishCredentialSync } from "../local-credentials/generation";
  */
 import { notifyAuthStoreLoaded } from "../lib/decision-quota-sink";
 import { isPassiveRead } from "../lib/passive-read";
-import { accountPauseDetailsSchema } from "../config/schema/account-auto-pause";
+import { accountPauseDetailsSchema, accountPauseEvidenceSchema } from "../config/schema/account-auto-pause";
 import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { normalizeAnthropicIdentity, matchesAnthropicImport, mergeAnthropicIdentity } from "./anthropic-identity";
 import { normalizeWorkBuddyMetadata } from "../providers/workbuddy";
@@ -662,6 +662,7 @@ function clearAutomaticPauseForLogin(set: ProviderAccountSet, account: ProviderA
   if (account.paused !== true || !account.pauseDetails) return false;
   delete account.paused;
   delete account.pauseDetails;
+  delete account.pauseEvidence;
   account.pauseRevision = randomUUID();
   set.selectionRevision = randomUUID();
   return true;
@@ -694,6 +695,9 @@ function normalizeAccount(value: unknown): ProviderAccount | null {
     account.paused = true;
     const details = accountPauseDetailsSchema.safeParse(candidate.pauseDetails);
     if (details.success) account.pauseDetails = details.data;
+    // Display-only and parsed on its own, so a malformed evidence row never costs the details.
+    const evidence = details.success ? accountPauseEvidenceSchema.safeParse(candidate.pauseEvidence) : undefined;
+    if (evidence?.success) account.pauseEvidence = evidence.data;
   }
   if (typeof candidate.pauseRevision === "string") account.pauseRevision = candidate.pauseRevision;
   const threshold = parseAnthropicAccountThreshold(candidate.autoSwitchThresholdOverride);
@@ -1504,7 +1508,7 @@ export async function setAccountPaused(
   provider: string,
   accountId: string,
   paused: boolean,
-  automatic?: { generation: string; pauseRevision?: string; details: import("../types/account-auto-pause").AccountPauseDetails; isCurrent?: () => boolean; assertPolicyBeforePersist?: () => void },
+  automatic?: { generation: string; pauseRevision?: string; details: import("../types/account-auto-pause").AccountPauseDetails; evidence?: import("../types/account-auto-pause").AccountPauseEvidence; isCurrent?: () => boolean; assertPolicyBeforePersist?: () => void },
   /** Resume only while the pause and credential are the ones a health check observed (#8398). */
   resumeGuard?: { generation: string; pauseRevision: string | undefined },
 ): Promise<SetAccountPausedResult> {
@@ -1526,6 +1530,8 @@ export async function setAccountPaused(
     account.pauseRevision = randomUUID();
     if (automatic) account.pauseDetails = automatic.details;
     else delete account.pauseDetails;
+    if (automatic?.evidence) account.pauseEvidence = automatic.evidence;
+    else delete account.pauseEvidence;
     // Pause is part of selection eligibility even when the operator changes a non-active
     // account. Bump the provider selection revision so observers receive the existing
     // post-persistence roster invalidation and stale automatic proposals cannot commit.
@@ -1618,6 +1624,7 @@ export async function replaceProviderAccountSet(
         ...(account.refreshAttentionGeneration ? { refreshAttentionGeneration: account.refreshAttentionGeneration } : {}),
         ...(account.paused ? { paused: true } : {}),
         ...(account.pauseDetails ? { pauseDetails: account.pauseDetails } : {}),
+        ...(account.pauseDetails && account.pauseEvidence ? { pauseEvidence: account.pauseEvidence } : {}),
         ...(account.pauseRevision ? { pauseRevision: account.pauseRevision } : {}),
         ...(account.autoSwitchThresholdOverride !== undefined ? { autoSwitchThresholdOverride: account.autoSwitchThresholdOverride } : {}),
         ...(account.needsReauthReason === "verify_account" ? { needsReauthReason: account.needsReauthReason } : {}),

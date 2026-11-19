@@ -106,6 +106,8 @@ export interface ProviderAccount {
   /** Operator exclusion from generic OAuth account selection until explicitly resumed. */
   paused?: boolean;
   pauseDetails?: import("../types/account-auto-pause").AccountPauseDetails;
+  /** What convicted an automatic pause; a sibling of `pauseDetails`, never present without it. */
+  pauseEvidence?: import("../types/account-auto-pause").AccountPauseEvidence;
   pauseRevision?: string;
   /** Anthropic-only usage-switch override; absent inherits its pool default, zero disables it. */
   autoSwitchThresholdOverride?: number;

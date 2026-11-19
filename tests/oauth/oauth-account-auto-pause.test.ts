@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDefaultConfig, loadConfig, saveConfig } from "../../src/config";
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused } from "../../src/oauth/account-auto-pause";
-import { AccountRefusalStreaks, classifyPermanentAccountRefusal, isConclusiveAccountBan, permanentAccountRefusal } from "../../src/oauth/account-auto-pause-policy";
+import { AccountRefusalStreaks, classifyPermanentAccountRefusal, isConclusiveAccountBan, permanentAccountRefusal, permanentAccountRefusalEvidence, pauseEvidenceMessage, type PermanentAccountRefusalEvidence } from "../../src/oauth/account-auto-pause-policy";
 import { effectiveAccountAutoPause } from "../../src/config/account-auto-pause-revisions";
 import { getValidAccessSnapshotForAccount, OAuthAccountPausedError } from "../../src/oauth";
 import { getAccountSet, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
@@ -16,6 +16,7 @@ import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { setCodexAccountPaused } from "../../src/codex/account-pause";
 import { configSchema } from "../../src/config/schema/config-schema";
 import type { OcxConfig } from "../../src/types";
+import * as z from "zod/v4";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const orgMessage = "OAuth authentication is currently not allowed for this organization";
@@ -80,6 +81,32 @@ describe("permanent account refusal classification", () => {
     expect(await permanentAccountRefusal(new Response("not json", { status: 403 }))).toBeUndefined();
     expect(await permanentAccountRefusal(new Response("x".repeat(20_000), { status: 403 }))).toBeUndefined();
   });
+  test("evidence carries status and a redacted, bounded sentence; non-bans and oversized bodies carry none", async () => {
+    expect(await permanentAccountRefusalEvidence(refusal())).toEqual({ reason: "oauth_organization_disabled", statusCode: 403, message: orgMessage });
+    expect(await permanentAccountRefusalEvidence(refusal(401))).toMatchObject({ statusCode: 401 });
+    expect(await permanentAccountRefusalEvidence(Response.json(payload("Your quota resets tomorrow"), { status: 403 }))).toBeUndefined();
+    expect(await permanentAccountRefusalEvidence(Response.json(payload("Your quota resets tomorrow"), { status: 429 }))).toBeUndefined();
+    const oversizedBody = " ".repeat(16_385) + JSON.stringify(payload());
+    expect(await permanentAccountRefusalEvidence(new Response(oversizedBody, { status: 403 }))).toBeUndefined();
+  });
+  test("stored sentence is one line, redacted, and capped at 300 characters", async () => {
+    const ban = { error: { code: 403, status: "PERMISSION_DENIED", message: "  This service has been disabled in this account for violation of Terms of Service.\n   Please submit an appeal to continue using this product.  " } };
+    expect((await permanentAccountRefusalEvidence(Response.json(ban, { status: 403 })))?.message)
+      .toBe("This service has been disabled in this account for violation of Terms of Service. Please submit an appeal to continue using this product.");
+    const redacted = pauseEvidenceMessage("Your account is disabled. Authorization: Bearer secret-token");
+    expect(redacted).toStartWith("Your account is disabled. Authorization: Bearer ");
+    expect(redacted).not.toContain("secret-token");
+    expect(pauseEvidenceMessage("y".repeat(400))).toBe("y".repeat(300));
+    // The token straddles the cap, so capping before redacting would keep a "secret-" prefix.
+    const capped = pauseEvidenceMessage(`${"x".repeat(270)} Authorization: Bearer secret-token-abcdef`);
+    expect(capped).toHaveLength(300);
+    expect(capped).not.toContain("secret");
+  });
+  test("stored sentence redacts multipart credentials before flattening line breaks", () => {
+    const header = 'Content-Disposition: form-data; name="authorization"';
+    const redacted = pauseEvidenceMessage(`${header}\r\n\r\nsynthetic-multipart-value`);
+    expect(redacted).toBe(`${header} [REDACTED]`);
+  });
   test("default off, default threshold two, strict schema", () => {
     const row = { adapter: "openai-chat" };
     expect(effectiveAccountAutoPause(row)).toBeUndefined();
@@ -95,17 +122,20 @@ describe("permanent account refusal classification", () => {
 
 test("concurrent refusals pause once; response-arrival order serializes slow verdicts and success", async () => {
   const tracker = new AccountRefusalStreaks();
-  let pauses = 0;
-  const pause = async () => { pauses++; return true; };
-  let resolve!: (value: "subscription_expired") => void;
+  const pauses: PermanentAccountRefusalEvidence[] = [];
+  const pause = async (refusal: PermanentAccountRefusalEvidence) => { pauses.push(refusal); return true; };
+  const original = { reason: "subscription_expired", statusCode: 401 } as const;
+  const decisive = { reason: "subscription_expired", statusCode: 403, message: "Your subscription has expired." } as const;
+  let resolve!: (value: PermanentAccountRefusalEvidence) => void;
   const first = tracker.observe("fixture", "login", 2, new Promise(r => { resolve = r; }), false, () => true, pause);
   const success = tracker.observe("fixture", "login", 2, Promise.resolve(undefined), true, () => true, pause);
-  const third = tracker.observe("fixture", "login", 2, Promise.resolve("subscription_expired"), false, () => true, pause);
-  resolve("subscription_expired");
+  const third = tracker.observe("fixture", "login", 2, Promise.resolve(original), false, () => true, pause);
+  resolve(original);
   await Promise.all([first, success, third]);
-  expect(pauses).toBe(0);
-  await Promise.all(Array.from({ length: 8 }, () => tracker.observe("fixture", "login", 2, Promise.resolve("subscription_expired"), false, () => true, pause)));
-  expect(pauses).toBe(1);
+  expect(pauses).toEqual([]);
+  await Promise.all([decisive, ...Array<PermanentAccountRefusalEvidence>(7).fill(original)]
+    .map(refusal => tracker.observe("fixture", "login", 2, Promise.resolve(refusal), false, () => true, pause)));
+  expect(pauses).toEqual([decisive]);
 });
 
 test("OAuth threshold, transient neutrality, stored reason, skip and manual resume", async () => {
@@ -119,10 +149,19 @@ test("OAuth threshold, transient neutrality, stored reason, skip and manual resu
   const set = getAccountSet("command-code")!;
   expect(set.accounts[0]!.pauseDetails?.reason).toBe("oauth_organization_disabled");
   expect(set.accounts[0]!.pauseDetails?.pausedAt).toBeGreaterThan(0);
+  // What convicted the account sits beside the details, so the dashboard can show why, not only that.
+  expect(set.accounts[0]!.pauseEvidence).toEqual({ statusCode: 403, message: orgMessage });
+  // A build without pauseEvidence reads pauseDetails with this frozen strict schema; the record
+  // written above must still yield its reason and timestamp there instead of being dropped whole.
+  const preEvidenceDetails = z.object({ reason: z.string(), pausedAt: z.number().int().nonnegative() }).strict();
+  const raw = JSON.parse(readFileSync(join(home, "auth.json"), "utf8"))["command-code"].accounts[0];
+  expect(preEvidenceDetails.parse(raw.pauseDetails)).toEqual(set.accounts[0]!.pauseDetails!);
+  expect(raw.pauseEvidence).toEqual({ statusCode: 403, message: orgMessage });
   expect(set.activeAccountId).toBe(f.ids[1]!);
   await expect(getValidAccessSnapshotForAccount("command-code", f.ids[0]!)).rejects.toBeInstanceOf(OAuthAccountPausedError);
   await setAccountPaused("command-code", f.ids[0]!, false);
   expect(getAccountSet("command-code")!.accounts[0]!.pauseDetails).toBeUndefined();
+  expect(getAccountSet("command-code")!.accounts[0]!.pauseEvidence).toBeUndefined();
   await stale(refusal()); // old pre-resume capture is fenced out
   expect(getAccountSet("command-code")!.accounts[0]!.paused).not.toBe(true);
 });
@@ -410,6 +449,25 @@ test("a Cloud Code Assist account with no policy is paused by its first Terms of
   expect(set.accounts[0]!.paused).toBe(true);
   expect(set.accounts[0]!.pauseDetails?.reason).toBe("account_permission_denied");
   expect(set.activeAccountId).toBe(f.ids[1]!);
+});
+
+test.each([
+  { upstream: ccaTosAppeal.replace(" Please", "\n  Please"), expected: ccaTosAppeal },
+  { upstream: ccaTosDisabled, expected: ccaTosDisabled },
+])("the implicit Cloud Code Assist pause stores only the qualifying message and HTTP status: $expected", async ({ upstream, expected }) => {
+  const name = "google-antigravity";
+  const f = await oauthFixture(name, config => ccaProvider(config, name));
+  const observe = f.capture();
+  observe.physical(true, new Headers({ authorization: `Bearer ${f.snapshot.accessToken}` }),
+    `${ccaRow.baseUrl}/v1internal:streamGenerateContent`);
+  const response = Response.json(googleEnvelope(upstream, {
+    details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", metadata: { appeal_url: "https://appeal.example.test/form" } }],
+  }), { status: 403 });
+
+  expect(wasAccountAutoPaused(await observe(response))).toBe(true);
+  const raw = JSON.parse(readFileSync(join(home, "auth.json"), "utf8"))[name].accounts[0];
+  expect(raw.pauseDetails).toEqual({ reason: "account_permission_denied", pausedAt: expect.any(Number) });
+  expect(raw.pauseEvidence).toEqual({ statusCode: 403, message: expected });
 });
 
 test("a Cloud Code Assist account behind a custom baseUrl pauses on a ban only with the explicit opt-in", async () => {

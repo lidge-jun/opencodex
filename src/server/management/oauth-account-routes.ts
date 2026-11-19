@@ -567,7 +567,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
           const accountLabel = accountDisplayLabel(full?.credential.email, maskEmails);
           return { ...summary, ...(maskedLabel ? { maskedLabel } : {}), ...(accountLabel ? { accountLabel } : {}),
             ...oauthAccountHealthFields(provider, summary.id, health), quotaMode,
-            ...(supportsPause ? { paused: full?.paused === true, ...(full?.pauseDetails ? { pauseDetails: full.pauseDetails } : {}) } : {}),
+            ...(supportsPause ? { paused: full?.paused === true, ...(full?.pauseDetails ? { pauseDetails: full.pauseDetails,
+              ...(full.pauseEvidence ? { pauseEvidence: full.pauseEvidence } : {}) } : {}) } : {}),
             ...(isAnthropicOAuthInstance(provider) && supportsPause ? { autoSwitchThresholdOverride: full?.autoSwitchThresholdOverride ?? null,
               effectiveAutoSwitchThreshold: effectiveAnthropicAccountThresholdForInstance(provider as AnthropicInstanceId, config, full),
               autoSwitchThreshold: effectiveAnthropicAccountThresholdForInstance(provider as AnthropicInstanceId, config) } : {}),
