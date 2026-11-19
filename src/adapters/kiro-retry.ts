@@ -9,8 +9,13 @@ import {
   SendBudgetExhaustedError, errorDestinationLabel,
   abortError,
   cancelResponseBodyBestEffort,
+  carryReplayRefusal,
   fetchWithAttemptDeadline,
+  hasUpstreamReplayRefusal,
+  isAutomaticReplayBlocked,
   isConnectionResetError,
+  observedReplayRefusalCode,
+  projectReplayRefusal,
   retryBackoffDelayMs,
   sleepWithAbort,
 } from "../lib/upstream-retry";
@@ -194,7 +199,7 @@ async function fetchWithResetRecovery(
         const headers = new Headers(request.headers);
         const recovered = attempt > 0;
         if (recovered) headers.set("connection", "close");
-        return await sendTrackingRequestSlot(slot, () => fetchWithAttemptDeadline(destination, {
+        const response = await sendTrackingRequestSlot(slot, () => fetchWithAttemptDeadline(destination, {
           method: request.method,
           headers,
           body: request.body,
@@ -216,6 +221,8 @@ async function fetchWithResetRecovery(
             throw error;
           }
         }) as typeof globalThis.fetch));
+        await hasUpstreamReplayRefusal(response, ctx.abortSignal);
+        return response;
       } catch (error) {
         if (ctx.abortSignal?.aborted || !isConnectionResetError(error) || attempt === RESET_ATTEMPTS - 1) throw error;
         lastError = error;
@@ -258,6 +265,11 @@ async function inspectEndpointHttpFailure(
 }
 
 export async function normalizeFinalKiroHttpError(res: Response, signal?: AbortSignal): Promise<Response> {
+  const refusalCode = observedReplayRefusalCode(res);
+  if (refusalCode !== undefined) {
+    cancelResponseBodyBestEffort(res);
+    return carryReplayRefusal(res, projectReplayRefusal(refusalCode));
+  }
   return normalizeUpstreamHttpErrorResponse(res, {
     signal,
     formatMessage: payloadText => safeKiroHttpErrorMessage(res.status, res.headers, payloadText),
@@ -268,7 +280,7 @@ async function inspectKiroThrottle(
   response: Response,
   signal?: AbortSignal,
 ): Promise<{ response: Response; transient: boolean; delayMs: number } | undefined> {
-  if (response.status !== 429) return undefined;
+  if (response.status !== 429 || isAutomaticReplayBlocked(response)) return undefined;
   const body = await readBoundedResponseBody(response, { signal });
   const headers = new Headers(response.headers);
   headers.delete("content-encoding");
@@ -311,6 +323,7 @@ async function fetchKiroAttempt(
     return fetchWithResetRecovery(request, currentLegacy, ctx, timeoutMs, notePhysicalSend);
   }
 
+  if (isAutomaticReplayBlocked(response)) return response;
   if (!response.ok && (response.status === 502 || response.status === 503 || response.status === 504)) {
     const baseUrl = response.url || request.url || plannedUrl;
     const alternate = ctx.allowGatewayRotation === false ? undefined : legacyUrl(baseUrl);
@@ -368,7 +381,7 @@ export async function fetchKiroWithRetry(request: AdapterRequest, ctx: KiroFetch
         const finalResponse = throttle?.response ?? response;
         return ctx.returnRawErrors
           ? finalResponse
-          : normalizeFinalKiroHttpError(finalResponse, ctx.abortSignal);
+          : carryReplayRefusal(finalResponse, await normalizeFinalKiroHttpError(finalResponse, ctx.abortSignal));
       }
 
       const claim = claimKiroThrottleProbe(throttle.delayMs, probeToken);

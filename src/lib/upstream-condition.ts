@@ -46,7 +46,7 @@ const MAX_TOKEN_LENGTH = 128;
 const MAX_MESSAGE_SCAN = 4096;
 
 const TRANSPORT_FAILURE_CODES: ReadonlySet<string> = new Set([
-  "upstream_reset_replay_refused", "upstream_closed_before_response", "upstream_no_response",
+  "upstream_reset_replay_refused", "upstream_closed_before_response", "upstream_no_response", "upstream_response_refused",
 ]);
 
 const STRUCTURED: ReadonlyArray<readonly [UpstreamCondition, ReadonlySet<string>]> = [

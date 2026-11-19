@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { registerUpstreamRewriter } from "../../src/plugins/upstream-hooks";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
-import { markResponseNonReplayable } from "../../src/lib/upstream-retry";
+import { markResponseNonReplayable, REPLAY_REFUSAL_MESSAGE, UPSTREAM_RESPONSE_REFUSED_CODE } from "../../src/lib/upstream-retry";
 import { sharedSpendLedger } from "../../src/lib/spend-reservation-ledger";
 import { createAnthropicImageRecovery, recoverAdapterImageContext } from "../../src/server/responses/image-context-recovery";
 import { routeModel } from "../../src/router";
@@ -11,6 +11,23 @@ import type { OcxConfig, OcxParsedRequest } from "../../src/types";
 import { completion, credential, fixture, image413, imageToolCall, providerName, target } from "../helpers/anthropic-image-413-fixture";
 
 for (const lane of ["direct", "search", "media"] as const) {
+  for (const refusalAt of [1, 2]) {
+    test(`image-context recovery stops on a coded refusal at send ${refusalAt} on the ${lane} path`, async () => {
+      const diagnostic = "Fixture request body too large";
+      const result = await fixture({ enabled: true, lane, handle: (_wire, index) => {
+        if (index < refusalAt) return image413();
+        if (index > refusalAt) return completion("Unexpected recovery", lane !== "direct");
+        return Response.json({ error: {
+          type: "request_too_large", code: UPSTREAM_RESPONSE_REFUSED_CODE, message: diagnostic,
+        } }, { status: index === 1 ? 413 : 429 });
+      } });
+      expect(result.sent).toHaveLength(refusalAt);
+      expect(result.text).toContain(UPSTREAM_RESPONSE_REFUSED_CODE);
+      expect(result.text).toContain(REPLAY_REFUSAL_MESSAGE);
+      expect(result.text).not.toContain(diagnostic);
+    });
+  }
+
   test(`image-context recovery uses the same credential and destination through the ${lane} path`, async () => {
     const budget = createRequestExecutionBudget({ maxTotalModelSends: 3, baseSendAllowance: 3,
       finalRecoveryAllowance: 0, maxAlternateTargetSends: 0, maxTargetTransitions: 0 });

@@ -1,7 +1,87 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
 import { fetchWithHeaderTimeout } from "../../src/server/responses";
+import { isNonReplayableResponse, isReplayRefusalResponse } from "../../src/lib/upstream-retry";
+import { sendWithConnectionPolicy } from "../../src/server/responses/fetch-helpers";
 
 const servers: Array<ReturnType<typeof Bun.serve>> = [];
+
+test("physical headers end the deadline without reading the no-retry body", async () => {
+  jest.useFakeTimers();
+  const caller = new AbortController();
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  let physicalSignal!: AbortSignal;
+  let headersArrived!: () => void;
+  const headers = new Promise<void>(resolve => { headersArrived = resolve; });
+  const physical = (async (_input, init) => {
+    physicalSignal = init!.signal!;
+    const body = new ReadableStream<Uint8Array>({ start(value) { controller = value; } });
+    physicalSignal.addEventListener("abort", () => controller.error(physicalSignal.reason), { once: true });
+    headersArrived();
+    return new Response(body, { status: 429, headers: { "content-type": "application/json", "x-should-retry": "false" } });
+  }) as typeof fetch;
+  const executor = ((input, init) => sendWithConnectionPolicy(physical, input, init)) as typeof fetch;
+  try {
+    const pending = fetchWithHeaderTimeout("https://fixture.example/v1/responses", { method: "POST", body: "{}" },
+      caller.signal, 100, false, executor);
+    await headers;
+    await Promise.resolve();
+    jest.advanceTimersByTime(140);
+    expect(physicalSignal.aborted).toBe(false);
+    const raw = JSON.stringify({ error: { code: "upstream_response_refused", message: "Fixture refusal" } });
+    controller.enqueue(new TextEncoder().encode(raw)); controller.close();
+    const response = await pending;
+    expect(isReplayRefusalResponse(response)).toBe(false);
+    expect(await response.text()).toBe(raw);
+  } finally { caller.abort(); jest.useRealTimers(); }
+});
+
+test("a dispatched POST's own header deadline refuses replay without claiming quota", async () => {
+  let received = 0;
+  let settle: ((response: Response) => void) | undefined;
+  const server = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    async fetch(request) {
+      expect(await request.text()).toBe('{"fixture":true}');
+      received++;
+      return new Promise<Response>(resolve => { settle = resolve; });
+    },
+  });
+  try {
+    const response = await fetchWithHeaderTimeout(server.url.toString(), {
+      method: "POST", headers: { "content-type": "application/json" }, body: '{"fixture":true}',
+    }, new AbortController().signal, 300);
+    expect(received).toBe(1);
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(response.headers.get("retry-after")).toBeNull();
+    expect(isNonReplayableResponse(response)).toBe(true);
+    expect(isReplayRefusalResponse(response)).toBe(true);
+    expect(await response.json()).toMatchObject({ error: {
+      code: "upstream_reset_replay_refused", message: expect.stringContaining("may already have been processed"),
+    } });
+  } finally {
+    settle?.(new Response(null, { status: 499 }));
+    await server.stop(true);
+  }
+});
+
+test("an unrelated POST TimeoutError is not our header deadline", async () => {
+  const unrelated = new DOMException("Executor's independent deadline", "TimeoutError");
+  await expect(fetchWithHeaderTimeout("http://127.0.0.1:1", { method: "POST" },
+    new AbortController().signal, 300, false, (async () => { throw unrelated; }) as typeof fetch))
+    .rejects.toBe(unrelated);
+});
+
+test("caller cancellation wins even when our POST header deadline already fired", async () => {
+  const caller = new AbortController(), cancelled = new DOMException("Caller cancelled", "AbortError");
+  const executor = (async (_url, init) => new Promise<Response>((_resolve, reject) => {
+    init!.signal!.addEventListener("abort", () => {
+      caller.abort(cancelled); reject(init!.signal!.reason);
+    }, { once: true });
+  })) as typeof fetch;
+  await expect(fetchWithHeaderTimeout("http://127.0.0.1:1", { method: "POST" },
+    caller.signal, 20, false, executor)).rejects.toBe(cancelled);
+});
 
 afterEach(() => {
   for (const server of servers.splice(0)) server.stop(true);

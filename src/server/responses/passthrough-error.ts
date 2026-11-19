@@ -2,7 +2,9 @@ import { formatErrorResponse } from "../../bridge";
 import { isCyberPolicyCode, isCyberPolicyMessage } from "../../lib/errors";
 import {
   applyReplayRefusalClientHeaders,
-  isReplayRefusalCode,
+  replayRefusalBodyCode,
+  projectReplayRefusal,
+  hasNoRetryDirective,
   retainReplayRefusal,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../../lib/upstream-retry";
@@ -29,26 +31,6 @@ function isCyberPolicyBody(body: string): boolean {
     /* non-JSON body — message detection above is the only safe fallback */
   }
   return false;
-}
-
-/**
- * True for a body this proxy wrote to refuse replaying an ambiguous pre-header reset.
- *
- * It is read off the body rather than a marker because this formatter is handed bytes, not
- * the response they came from, and the refusal reaches it after the original body was read.
- * The code is this proxy's own, so an upstream echoing it is not a case worth widening for.
- */
-function isReplayRefusalBody(body: string): boolean {
-  if (!body.includes(UPSTREAM_RESET_REPLAY_REFUSED_CODE)) return false;
-  try {
-    const parsed = JSON.parse(body) as Record<string, unknown>;
-    const error = parsed.error && typeof parsed.error === "object" && !Array.isArray(parsed.error)
-      ? parsed.error as Record<string, unknown>
-      : undefined;
-    return isReplayRefusalCode(error?.code) || isReplayRefusalCode(parsed.code);
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -83,15 +65,17 @@ export function formatPassthroughUpstreamError(
     /** Caller holds an authoritative fatal verdict; neither inherited nor inferred waits apply. */
     suppressRetryAfter?: boolean;
     /**
-     * Provenance from the caller that still holds the response: this body is a refusal this
-     * proxy synthesized. The body check below is the fallback for a re-wrapped body, and it
-     * cannot answer at all when the bounded read returned nothing display-safe -- which is
-     * precisely when the empty-body branch would invent the retryable-429 default.
+     * Provenance from the caller that still holds the response synthesized by this proxy.
      */
     replayRefusal?: boolean;
   },
 ): Response {
   const trimmed = bodyText.trim();
+  const refusalCode = replayRefusalBodyCode(trimmed);
+  if (refusalCode || options?.replayRefusal) {
+    const refusal = projectReplayRefusal(refusalCode ?? UPSTREAM_RESET_REPLAY_REFUSED_CODE);
+    return options?.replayRefusal ? retainReplayRefusal(refusal) : refusal;
+  }
   const now = options?.now ?? Date.now();
   // Meta's Muse Code subscription refusal is relayed as this proxy's own explanation (#8352):
   // the upstream body names the restriction but not the supported path, and a verbatim relay
@@ -116,10 +100,10 @@ export function formatPassthroughUpstreamError(
   }
   const upstreamRetryAfter = options?.headers?.get("retry-after")?.trim() || undefined;
   const cyberPolicyFailure = isCyberPolicyBody(trimmed);
-  const replayRefusal = options?.replayRefusal === true || isReplayRefusalBody(trimmed);
+  const noRetry = options?.headers !== undefined && hasNoRetryDirective({ headers: options.headers });
   // Two different reasons to answer with no wait at all, handled the same way: a hard policy
   // block will not become servable, and a refusal we made was never a rate limit.
-  const suppressRetryAfter = options?.suppressRetryAfter === true || cyberPolicyFailure || replayRefusal;
+  const suppressRetryAfter = options?.suppressRetryAfter === true || cyberPolicyFailure || noRetry;
   const resolved = suppressRetryAfter
     ? undefined
     : resolveClientRetryAfter({
@@ -136,9 +120,7 @@ export function formatPassthroughUpstreamError(
     const needsSet = formatted !== undefined && upstreamRetryAfter !== formatted;
     const needsDelete = formatted === undefined && upstreamRetryAfter !== undefined;
 
-    // A refusal always takes the rewriting path: it has a header to add even when the
-    // upstream named no wait for it to remove.
-    if (!needsSet && !needsDelete && !replayRefusal) {
+    if (!needsSet && !needsDelete) {
       return new Response(bodyText, {
         status,
         ...(options?.statusText ? { statusText: options.statusText } : {}),
@@ -151,31 +133,25 @@ export function formatPassthroughUpstreamError(
       : new Headers({ "Content-Type": "application/json" });
     if (needsSet) headers.set("Retry-After", formatted!);
     else headers.delete("Retry-After");
-    if (replayRefusal) applyReplayRefusalClientHeaders(headers);
+    if (noRetry) applyReplayRefusalClientHeaders(headers);
     const rewritten = new Response(bodyText, {
       status,
       ...(options?.statusText ? { statusText: options.statusText } : {}),
       headers,
     });
-    return replayRefusal ? retainReplayRefusal(rewritten) : rewritten;
+    return rewritten;
   }
 
   const response = formatErrorResponse(
     status,
     "upstream_error",
     `Provider error ${status}: (empty body)`,
-    // Provenance is all that is left when the bounded read returned nothing display-safe, and
-    // it is enough: the formatter allowlists this code, restates the refusal status and marks
-    // the response, so an unreadable refusal reaches the client as the same refusal.
-    replayRefusal
-      ? { code: UPSTREAM_RESET_REPLAY_REFUSED_CODE }
-      : resolved !== undefined ? { retryAfter: resolved } : undefined,
+    resolved !== undefined ? { retryAfter: resolved } : undefined,
   );
   const headers = new Headers(response.headers);
   headers.set("Content-Type", "application/json");
   if (formatted !== undefined) headers.set("Retry-After", formatted);
   else headers.delete("Retry-After");
-  if (replayRefusal) applyReplayRefusalClientHeaders(headers);
-  const wrapped = new Response(response.body, { status: response.status, headers });
-  return replayRefusal ? retainReplayRefusal(wrapped) : wrapped;
+  if (noRetry) applyReplayRefusalClientHeaders(headers);
+  return new Response(response.body, { status: response.status, headers });
 }

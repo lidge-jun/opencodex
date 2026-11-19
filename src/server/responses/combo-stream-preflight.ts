@@ -12,7 +12,7 @@ import {
 } from "../../combos/failover";
 import type { ResponsesTerminalStatus } from "../../bridge";
 import { comboFailureDecision } from "../../combos";
-import { httpStatusFromTerminalError } from "../../lib/errors";
+import { httpStatusFromTerminalError, isTerminalRefusalCode } from "../../lib/errors";
 import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import type { RequestFailureStage } from "../../lib/request-failure-model";
 import type { RequestLogContext } from "../request-log";
@@ -23,8 +23,9 @@ import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 import { REQUIRED_TOOL_CONTRACT_CODE } from "../../lib/errors";
 import { attachComboFailureEvidence, isPausedTurn } from "../../lib/client-error-body";
 import { requiredToolReasoningPrelude } from "./combo-required-tool-stream";
-import { ProtocolPreOutputEof } from "../../lib/upstream-retry";
+import { applyReplayRefusalClientHeaders, isNonReplayableUpstreamCode, markTerminalResetReplacement, ProtocolPreOutputEof } from "../../lib/upstream-retry";
 import { carryPacedStream, pacedQueuingStrategy } from "../../lib/paced-stream";
+import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 
 const COMBO_STREAM_PREFLIGHT_MAX_BYTES = MAX_CLIENT_SSE_FRAME_BYTES;
 // Required-tool reasoning may delay delivery, but never for an unbounded/trickling prelude.
@@ -352,6 +353,16 @@ function heldOnlyOutput(...outputs: unknown[]): boolean {
     && !Array.isArray(item) && ["message", "reasoning"].includes((item as { type?: unknown }).type as string));
 }
 
+export function failedTerminalReplayVerdict(payload: unknown): "blocked" | "policy" | undefined {
+  if (!isRecord(payload) || (payload.type !== "response.failed" && payload.status !== "failed")) return;
+  const response = isRecord(payload.response) ? payload.response : payload;
+  const error = isRecord(response.error) ? response.error : isRecord(payload.error) ? payload.error : undefined;
+  if (isNonReplayableUpstreamCode(error?.code)) return "blocked";
+  if (payload.retryable === false || response.retryable === false) {
+    return typeof error?.code === "string" && isTerminalRefusalCode(error.code) ? "policy" : "blocked";
+  }
+}
+
 function retryableZeroOutputTerminal(payload: unknown, context?: object): boolean {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
   const event = payload as {
@@ -576,6 +587,8 @@ function failedTerminalResponse(
   headers.set("content-type", "application/json");
   headers.delete("content-length");
   headers.delete("content-encoding");
+  const terminalPolicy = failedTerminalReplayVerdict(terminalPayload) === "policy";
+  if (terminalPolicy) applyReplayRefusalClientHeaders(headers);
   const usage = collectUsage && !logCtx.usageFromBridge && !logCtx.clientResponseUsage
     ? terminalResponse.usage : undefined;
   return new Response(JSON.stringify({
@@ -586,6 +599,7 @@ function failedTerminalResponse(
     // error envelope merely because they shared the terminal snapshot.
     response: {
       error,
+      ...(terminalPolicy ? { retryable: false } : {}),
       ...(usage && typeof usage === "object" && !Array.isArray(usage) ? { usage } : {}),
     },
   }), {
@@ -675,7 +689,11 @@ export async function preflightComboStreamResponse(
       try {
         if (payload !== null && typeof payload === "object" && !Array.isArray(payload)
           && (payload as { type?: unknown }).type === "response.created") responseCreated = true;
-        const retryable = retryableTerminalFor(payload);
+        const verdict = failedTerminalReplayVerdict(payload);
+        // The default combo classifier still projects a pre-output policy refusal to its
+        // HTTP 400 contract. A caller-provided recovery callback must never retry it.
+        const projectPolicy = verdict === "policy" && retryableTerminal === undefined;
+        const retryable = (verdict === undefined || projectPolicy) && retryableTerminalFor(payload);
         const matchedBareError = retryable && payload !== null && typeof payload === "object"
           && !Array.isArray(payload) && (payload as { type?: unknown }).type === "error";
         // A zero-output bare error is terminal evidence. Explicit client errors stay
@@ -859,6 +877,7 @@ export interface DeferredResetRecoveryOptions {
    * consumer whose silence clock sees only delivered bytes; its owner still bounds real silence.
    */
   keepalive?: "periodic" | "upstream-activity" | "none";
+  grokOAuthLogCtx?: Pick<RequestLogContext, "causeHint">;
 }
 
 /** Which physical attempt produced the head a reset selection published. */
@@ -965,7 +984,23 @@ function createResetSelection(
       const replacement = await recover(preflight.error, preflight.stage, preflightAbort.signal, accepts);
       if (replacement) {
         // Checked again here: the head may have been committed while the replacement was in flight.
-        if (!closed && accepts(replacement)) {
+        if (!closed && !replacement.ok) {
+          // Recovery only admits an HTTP failure when it carries a terminal refusal.
+          cancelBody(chosen.response.body, "using terminal replacement refusal");
+          markTerminalResetReplacement(replacement);
+          if (headCommitted) {
+            const refusal = await sanitizeNonReplayableUpstreamError(replacement, preflightAbort.signal, {
+              terminalReplacement: true, grokOAuthLogCtx: options?.grokOAuthLogCtx,
+            });
+            const { error } = await refusal.json();
+            const payload = { type: "response.failed", response: {
+              status: "failed", output: [], retryable: false, error, last_error: error,
+            } };
+            chosen = { response: new Response(`event: response.failed\ndata: ${JSON.stringify(payload)}\n\n`), owner: "replacement" };
+          } else {
+            chosen = { response: replacement, owner: "replacement" };
+          }
+        } else if (!closed && accepts(replacement)) {
           cancelBody(chosen.response.body, "using protocol-safe replacement stream");
           chosen = { response: replacement, owner: "replacement" };
           replacementHeadPending = headCommitted && keepalive === "upstream-activity";

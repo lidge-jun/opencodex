@@ -33,6 +33,7 @@ import {
 } from "../../lib/provider-egress";
 import { redactSecretString } from "../../lib/redact";
 import { outboundCredentials } from "../../lib/outbound-credential-registry";
+import { replayRefusalResponse } from "../../lib/upstream-retry";
 import { compressUpstreamRequestBody, isCanonicalCodexResponsesUrl } from "./request-compression";
 import { redeemOutboundTurnState, TURN_STATE_BINDING_INIT, turnStateBinding } from "../turn-state-handles";
 
@@ -585,6 +586,7 @@ export async function fetchWithHeaderTimeout(
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const timeout = new AbortController();
+    let ownDeadlineError: DOMException | undefined;
     const deadline: HeaderDeadline = {
       clientSignal: abortSignal,
       pause() { if (timer) clearTimeout(timer); timer = undefined; },
@@ -595,7 +597,10 @@ export async function fetchWithHeaderTimeout(
         // caller's own abort signal. See resolveConnectTimeoutMs in src/stall-timeout.ts.
         if (timeoutMs <= 0) return;
         timer = setTimeout(() => {
-          if (!timeout.signal.aborted) timeout.abort(new DOMException("Timeout elapsed", "TimeoutError"));
+          if (!timeout.signal.aborted) {
+            ownDeadlineError = new DOMException("Timeout elapsed", "TimeoutError");
+            timeout.abort(ownDeadlineError);
+          }
         }, timeoutMs);
       },
     };
@@ -616,9 +621,21 @@ export async function fetchWithHeaderTimeout(
       [HEADER_DEADLINE]: deadline,
       timeout: 0,
     };
-    return pacing.fetchWithPacingSlot
-      ? await pacing.fetchWithPacingSlot(slot, url, dispatchInit)
-      : await sendTrackingRequestSlot(slot, () => fetchExecutor(url, dispatchInit));
+    try {
+      return pacing.fetchWithPacingSlot
+        ? await pacing.fetchWithPacingSlot(slot, url, dispatchInit)
+        : await sendTrackingRequestSlot(slot, () => fetchExecutor(url, dispatchInit));
+    } catch (error) {
+      // Inspect the caller before outer cleanup can abort its controller. A dispatched POST
+      // may already run upstream; our own header deadline must not authorize another send.
+      if (abortSignal.aborted) throw abortSignal.reason;
+      if (init.method?.toUpperCase() === "POST" && ownDeadlineError && timeout.signal.aborted
+        && dispatchInit.signal.reason === ownDeadlineError
+        && (error === ownDeadlineError || (error instanceof Error && error.cause === ownDeadlineError))) {
+        return replayRefusalResponse();
+      }
+      throw error;
+    }
   } finally {
     if (timer) clearTimeout(timer);
     if (!slot?.bodyTracked) slot?.release();

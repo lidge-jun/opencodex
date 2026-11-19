@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { CLIENT_ERROR_CONTRACTS } from "../../src/lib/client-error-body";
 import { registerUpstreamRewriter } from "../../src/plugins/upstream-hooks";
 import { apiKeyAccountLogLabel } from "../../src/codex/account-label";
 import { captureProviderApiKeySelection } from "../../src/providers/api-key-selection";
@@ -226,6 +227,38 @@ test("chat owned 401 rotates the rejected distributed credential before output",
   expect(seen.map(entry => entry.key)).toEqual([`Bearer ${KEYS[0]}`, `Bearer ${KEYS[1]}`]);
   expect(getKeyCooldownUntil(NAME, "k1")).not.toBeNull();
   expect(getKeyCooldownUntil(NAME, "k2")).toBeNull();
+  unchanged(config); noLeaks(config);
+});
+
+test.each([
+  { sameKeyRetry: false, rootCode: false },
+  { sameKeyRetry: true, rootCode: false },
+  { sameKeyRetry: true, rootCode: true },
+])("round 4: native chat records a coded 429 without another send (same-key retry=$sameKeyRetry, root code=$rootCode)", async ({ sameKeyRetry, rootCode }) => {
+  const config = fixture();
+  if (sameKeyRetry) config.providers[NAME]!.retryOn429 = { attempts: 1, intervalMs: 100, respectRetryAfter: false };
+  const reply = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const isFirst = seen.length === 0;
+    const success = await reply(input, init);
+    if (!isFirst) return success;
+    await success.body?.cancel();
+    const error = { message: "provider-private-detail" };
+    const code = "upstream_response_refused";
+    return Response.json(rootCode ? { code, error } : { error: { code, ...error } }, {
+      status: 429, headers: { "retry-after": "30" },
+    });
+  }) as typeof fetch;
+  const { response, text } = await start(config, new AbortController());
+  expect(seen.map(row => row.key)).toEqual([`Bearer ${KEYS[0]}`]);
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  expect(response.headers.get("retry-after")).toBeNull();
+  expect(JSON.parse(text).error).toMatchObject({
+    code: "upstream_response_refused", message: CLIENT_ERROR_CONTRACTS.replay_refused,
+  });
+  expect(getKeyCooldownUntil(NAME, "k1")).toBeGreaterThan(Date.now());
+  for (const id of ["k2", "k3"]) expect(getKeyCooldownUntil(NAME, id)).toBeNull();
   unchanged(config); noLeaks(config);
 });
 

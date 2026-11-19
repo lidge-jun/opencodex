@@ -33,22 +33,24 @@ function bridged(events: AdapterEvent[]): Response {
 }
 
 describe("combo: terminal upstream refusal", () => {
-  test("a zero-output refusal becomes an HTTP 400 that stops the chain", async () => {
+  test("hardening: a zero-output policy refusal keeps its terminal verdict in the HTTP 400", async () => {
     const logCtx = {} as RequestLogContext;
     const preflight = await preflightComboStreamResponse(bridged([REFUSAL]), logCtx);
 
     if (preflight.kind !== "failed") throw new Error(`expected a failed preflight, got ${preflight.kind}`);
     expect(preflight.response.status).toBe(400);
     expect(preflight.response.headers.get("content-type")).toContain("application/json");
-    const body = await preflight.response.clone().json() as { error: { type: string; code: string; message: string } };
+    expect(preflight.response.headers.get("x-should-retry")).toBe("false");
+    const body = await preflight.response.clone().json() as { error: { type: string; code: string; message: string }; response: { retryable: boolean } };
+    expect(body.response.retryable).toBe(false);
     expect(body.error.type).toBe("invalid_request_error");
     expect(body.error.code).toBe("invalid_prompt");
     expect(body.error.message).toContain("refused");
     // The steps `src/server/responses/core-combo.ts` takes with a failed preflight: consume the
-    // failure body, carry the preflight's model-refusal evidence over, then decide. The loop's
-    // other stop conditions (non-replayable marker, spent replacement) are not in play here.
+    // failure body, carry the preflight's model-refusal evidence over, then decide.
     const failure = await consumeComboFailure(preflight.response);
     expect(failure.response.status).toBe(400);
+    expect(failure.response.headers.get("x-should-retry")).toBe("false");
     expect(failure.upstreamCode).toBe("invalid_prompt");
     expect(comboFailureDecision(failure.response.status, failure.classificationText, {
       code: failure.upstreamCode,

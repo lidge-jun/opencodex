@@ -20,6 +20,27 @@ response safety still happen at the proxy boundary. Configure the listener and a
 [Configuration](/reference/configuration/); use [Combos](/guides/combos/) when one public model id
 should select among several targets.
 
+## Replay refusals
+
+When an upstream failure carries `x-should-retry: false`, the proxy stops automatic retries and
+combo fallback. A zero-output Responses failure with `response.retryable: false` also stops combo
+and compaction fallback. A terminal refusal on an authorized Responses replacement uses fixed
+error text on both native and translated routes. Native Responses keeps an observed replacement
+refusal code even if the replacement body fails during delivery. Caller cancellation takes
+precedence. Native Responses JSON with `status: "failed"`
+and native `response.failed` stream events use the same fixed error text for recognized replay-refusal
+codes. The stream event carries `response.retryable: false`. Native Responses and native Messages
+honor recognized refusal codes in HTTP 429 bodies before retrying on the same key. Genuine upstream
+rate limits still inform account cooldowns.
+
+When a non-streaming Messages request folds a Responses stream with a recognized replay
+refusal, it returns the same code and fixed message in an HTTP 429 Messages error.
+The response includes `x-should-retry: false` and omits `Retry-After`.
+
+If native Anthropic Messages inference was dispatched and its upstream response-header deadline
+expires, the proxy returns HTTP 429 with `error.code: "upstream_reset_replay_refused"` and
+`x-should-retry: false`. The inference may already have run upstream.
+
 ## Function tool strictness on Chat input
 
 When Chat Completions is translated to OpenAI's Responses API or the ChatGPT backend,

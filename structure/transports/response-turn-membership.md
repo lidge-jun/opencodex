@@ -63,6 +63,10 @@ retry and queued rebuilds through `src/server/responses/adapter-dispatch.ts` and
 `src/server/responses/request-transport.ts` also records eligible key rate-limit headers through the process-local passive observation owner, without changing routing. This structural mechanism does not alter supplier bodies, reasoning effort, retry policy,
 settlement or provider-opaque replay scope.
 
+An authorized reset replacement's HTTP no-retry verdict stops translated dispatch recovery.
+The translated client boundary uses the shared [error projection](../data-planes/error-detail.md#client-error-bodies-chat)
+after transport observation.
+
 The route-independent Claude bridge pool key agrees with final Codex selection; see [Claude affinity](../data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch).
 
 Right after continuation expansion, and only for a request that carries a Remote Link turn observer (a link WebSocket turn, or a relayed request with the link relay's internal token header), `request-prepare.ts` reports the expanded input to `src/server/link-turn.ts`; an expansion miss reports a failure. A request without an observer runs no code there, and the header is removed before anything is forwarded (`structure/remote-link.md`). The same seam receives the chain outcome (expanded, unexpanded or none) and, at the two refusals of an unexpanded continuation, marks the row's link continuation as a miss with reason missing.

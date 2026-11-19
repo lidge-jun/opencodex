@@ -14,6 +14,35 @@ provider events → internal adapter events → client dialect
 
 La representación Responses es el centro del puente. Las rutas nativas compatibles pueden omitir partes de la traducción y pasar una solicitud, pero la autenticación, el enrutamiento, el control de admisión y la seguridad de la respuesta aún ocurren en el límite del proxy. Configure el oyente y las claves de admisión en [Configuración](/es/reference/configuration/); use [Combos](/es/guides/combos/) cuando un identificador de modelo público seleccione entre varios objetivos.
 
+<a id="replay-refusals"></a>
+
+## Rechazo del reenvío
+
+Si un fallo del proveedor incluye `x-should-retry: false`, el proxy detiene los reintentos
+automáticos e impide que el combo pruebe otro destino. Si Responses falla sin generar salida
+y devuelve `response.retryable: false`, el proxy también impide que el combo pruebe otro
+destino o que se recurra a la compactación como alternativa. Si una solicitud de reemplazo
+autorizada en Responses termina en un rechazo definitivo, el proxy devuelve un mensaje de
+error fijo tanto en rutas nativas como en rutas traducidas. En Responses nativo, el proxy
+conserva el código de rechazo que ya recibió aunque falle la entrega del cuerpo de la respuesta
+de reemplazo. La cancelación del cliente tiene prioridad.
+
+En Responses nativo, tanto las respuestas JSON con `status: "failed"` como los eventos
+`response.failed` del flujo usan el mismo mensaje fijo para los códigos de rechazo de reenvío
+reconocidos. El evento incluye `response.retryable: false`. Las rutas nativas de Responses y
+Messages respetan los códigos de rechazo reconocidos en el cuerpo de las respuestas HTTP 429
+antes de reintentar con la misma clave. Los límites de frecuencia reales del proveedor siguen
+influyendo en las pausas temporales de las cuentas.
+
+Si una solicitud de Messages sin streaming recibe un rechazo de reenvío reconocido al
+procesar un flujo de Responses, devuelve el mismo código y mensaje fijo en un error HTTP 429
+de Messages, con `x-should-retry: false` y sin `Retry-After`.
+
+Si ya se envió una solicitud de inferencia por la ruta nativa de Anthropic Messages y se agota
+el plazo para recibir los encabezados del proveedor, el proxy devuelve HTTP 429 con
+`error.code: "upstream_reset_replay_refused"` y `x-should-retry: false`. Es posible que el
+proveedor ya haya ejecutado la inferencia.
+
 <a id="required-tools-on-buffered-native-combo-routes"></a>
 
 ## Herramientas obligatorias en rutas nativas de combo sin streaming

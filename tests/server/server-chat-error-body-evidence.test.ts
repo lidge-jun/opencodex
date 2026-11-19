@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { attachComboFailureEvidence } from "../../src/lib/client-error-body";
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
 import { markVerifiedModelNotInPlanResponse } from "../../src/lib/errors";
-import { markResponseNonReplayable, markReplayRefusalResponse } from "../../src/lib/upstream-retry";
+import { markResponseNonReplayable, retainReplayRefusal } from "../../src/lib/upstream-retry";
 import { responseWithDeferredRequestLog, markPreinspectedJsonResponse } from "../../src/server/relay";
 import { createBoundedResponseLogBody } from "../../src/server/response-log-body";
 import type { RequestLogContext } from "../../src/server/request-log";
@@ -18,7 +18,7 @@ for (const [status, code, message] of [[429, "rate_limit_exceeded", "rate limit"
     const make = (text: string) => {
       const response = new Response(text, { status, headers: { "retry-after": "7", "x-codex-primary-reset-at": "2000000000" } });
       if (code === "model_not_in_plan") markVerifiedModelNotInPlanResponse(response);
-      if (code === "upstream_reset_replay_refused") markReplayRefusalResponse(response);
+      if (code === "upstream_reset_replay_refused") retainReplayRefusal(response);
       if (code === "model_not_allowed_for_key") markResponseNonReplayable(response);
       return response;
     };

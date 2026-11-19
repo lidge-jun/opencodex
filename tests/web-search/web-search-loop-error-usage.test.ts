@@ -89,7 +89,7 @@ for (const [label, second] of [
 
 // A worded verdict keeps its status and provider wording in-stream: combo stream preflight reads
 // exactly those to decide whether a larger-context target may still serve the turn.
-function wordedFailureRun(respond: () => Response) {
+function wordedFailureRun(respond: () => Response, sameTargetRetries = false) {
   spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ results: [] }));
   const passes: AdapterEvent[][] = [[
     { type: "tool_call_start", id: "ws1", name: "web_search" },
@@ -110,6 +110,9 @@ function wordedFailureRun(respond: () => Response) {
     adapter, backend: "exa", exaApiKey: "fixture", hostedTool: { type: "web_search" },
     settings: { model: "fixture", reasoning: "low", timeoutMs: 1000 }, maxSearches: 1,
     incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget() },
+    ...(sameTargetRetries ? { retryOn429Policy: {
+      enabled: true, attempts: 1, intervalMs: 1, maxIntervalMs: 1, respectRetryAfter: false,
+    } } : {}),
   });
   return { state, text: response.then(r => r.text()) };
 }
@@ -140,4 +143,16 @@ test("a later iteration's rate_limit_exceeded 400 keeps its rate verdict", async
   const text = await run.text;
   expect(text).toContain('"code":"rate_limit_exceeded"');
   expect(text).not.toContain("context_length_exceeded");
+});
+
+test.each([false, true])("web-search does not resend a terminal 429 (local marker %s)", async marked => {
+  const run = wordedFailureRun(() => {
+    const response = new Response("fixture quota", {
+      status: 429, headers: marked ? {} : { "x-should-retry": "false" },
+    });
+    if (marked) markResponseNonReplayable(response);
+    return response;
+  }, true);
+  expect(await run.text).toContain("response.failed");
+  expect(run.state.sends).toBe(2);
 });

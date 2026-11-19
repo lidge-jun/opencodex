@@ -286,6 +286,48 @@ describe("kiro retry fetch", () => {
     expect(pathMock.urls).toEqual([customPath.url]);
   });
 
+  test("hardening: Kiro keeps a no-retry gateway 503 without endpoint failover", async () => {
+    const upstream = () => new Response("provider-private-detail", {
+      status: 503, headers: { "x-should-retry": "false", "retry-after": "7" },
+    });
+    const raw = upstream();
+    const rawFetch = mockFetch([raw, new Response("duplicate")]);
+    const evidence = await fetchKiroWithRetry(request, { returnRawErrors: true });
+    expect(rawFetch.calls).toHaveLength(1);
+    expect(evidence).toBe(raw);
+    expect(evidence.status).toBe(503);
+    expect(evidence.headers.get("retry-after")).toBe("7");
+    expect(await evidence.text()).toBe("provider-private-detail");
+
+    const displayFetch = mockFetch([upstream(), new Response("duplicate")]);
+    const displayed = await fetchKiroWithRetry(request);
+    expect(displayFetch.calls).toHaveLength(1);
+    expect(displayed.status).toBe(503);
+    expect(displayed.headers.get("x-should-retry")).toBe("false");
+    expect(await displayed.text()).toBe("Kiro upstream service unavailable");
+  });
+
+  test("a headerless replay-refusal 503 never triggers Kiro endpoint fallback", async () => {
+    const body = { error: { code: "upstream_response_refused", message: "fixture diagnostic" } };
+    const upstream = Response.json(body, { status: 503, headers: { "retry-after": "7" } });
+    const mock = mockFetch([upstream, new Response("duplicate")]);
+    const response = await fetchKiroWithRetry(request, { returnRawErrors: true });
+    expect(mock.urls).toEqual([request.url]);
+    expect(response).toBe(upstream);
+    expect(response.headers.get("retry-after")).toBe("7");
+    expect(await response.json()).toEqual(body);
+
+    const displayFetch = mockFetch([Response.json(body, { status: 503 }), new Response("duplicate")]);
+    const displayed = await fetchKiroWithRetry(request);
+    expect(displayFetch.urls).toEqual([request.url]);
+    expect(displayed.status).toBe(429);
+    expect(displayed.headers.get("x-should-retry")).toBe("false");
+    expect(await displayed.json()).toEqual({ error: {
+      type: "upstream_error", code: "upstream_response_refused",
+      message: "The upstream exchange did not complete reliably. The request may already have been processed; automatic replay was stopped.",
+    } });
+  });
+
   test("does not retry non-retryable 400", async () => {
     const mock = mockFetch([new Response("bad request", { status: 400 })]);
     const res = await fetchKiroWithRetry(request, { timeoutMs: 5_000 });

@@ -6,6 +6,7 @@ import {
   fetchWithTransientRetry,
   isConnectionResetError,
   isNonReplayableResponse,
+  carryReplayRefusal, isAutomaticReplayBlocked,
   isReplayRefusalResponse,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
   prepareSameTarget429Wait,
@@ -296,6 +297,32 @@ describe("retryBackoffDelayMs", () => {
     expect(calls.length).toBe(1);
     expect(res.status).toBe(503);
     expect(res.headers.get("retry-after")).toBe("3600");
+  });
+
+  test("hardening: a coded 503 stops transient retry and preserves upstream quota evidence", async () => {
+    silenceWarn();
+    const rawError = { error: { code: "upstream_response_refused", message: "provider-private-detail" } };
+    const upstream = Response.json(rawError, {
+      status: 503, headers: { "retry-after": "0", "x-codex-primary-reset-at": "1900000000" },
+    });
+    const mock = mockDoFetch([upstream, new Response("duplicate")]);
+    const response = await fetchWithTransientRetry(mock.doFetch);
+    expect(mock.calls).toHaveLength(1);
+    expect(response).toBe(upstream);
+    expect(response.status).toBe(503);
+    expect(response.headers.get("x-codex-primary-reset-at")).toBe("1900000000");
+    expect(isAutomaticReplayBlocked(response)).toBe(true);
+    expect(isNonReplayableResponse(response)).toBe(false);
+    expect(isReplayRefusalResponse(response)).toBe(false);
+    const raw = await response.json();
+    expect(raw).toEqual(rawError);
+    const client = formatReplaySafetyError(response.status, "upstream_error", raw.error.message, { code: raw.error.code });
+    expect(client.status).toBe(429);
+    expect(client.headers.get("x-should-retry")).toBe("false");
+    expect(await client.json()).toEqual({ error: {
+      type: "upstream_error", code: "upstream_response_refused",
+      message: "The upstream exchange did not complete reliably. The request may already have been processed; automatic replay was stopped.",
+    } });
   });
 
   test("an upstream no-retry verdict stops transient retries and preserves its response", async () => {
@@ -846,6 +873,81 @@ describe("operator-granted replacement of an ambiguous reset", () => {
 });
 
 describe("ambiguous reset safety through error formatting", () => {
+  test("the transient ladder returns the last coded 429 with its raw quota evidence", async () => {
+    const body = { error: { code: "upstream_response_refused", message: "fixture quota" } };
+    const wire = Response.json(body, { status: 429, headers: { "retry-after": "45" } });
+    const mock = mockDoFetch([wire]);
+    const response = await fetchWithTransientRetry(mock.doFetch, { attempts: 1 });
+    expect(mock.calls).toHaveLength(1);
+    expect(response).toBe(wire);
+    expect(isAutomaticReplayBlocked(response)).toBe(true);
+    expect(isNonReplayableResponse(response)).toBe(false);
+    expect(isReplayRefusalResponse(response)).toBe(false);
+    expect(response.headers.get("retry-after")).toBe("45");
+    expect(await response.json()).toEqual(body);
+  });
+
+  test.each([
+    "upstream_response_refused", "upstream_reset_replay_refused",
+    "upstream_closed_before_response", "upstream_no_response", "rate_limit_exceeded",
+  ])("wire no-retry response never gains transport provenance: %s", async code => {
+    const body = JSON.stringify({ error: { type: "upstream_error", code } });
+    const wire = new Response(body, { status: 429, headers: { "content-type": "application/json", "x-should-retry": "false" } });
+    const response = await fetchWithTransientRetry(async () => wire, { attempts: 1 });
+    expect(isReplayRefusalResponse(response)).toBe(false);
+    expect(isNonReplayableResponse(response)).toBe(false);
+    expect(isAutomaticReplayBlocked(response)).toBe(true);
+    expect(await response.text()).toBe(body);
+  });
+
+  test("a no-retry directive survives re-wrapping without claiming proxy provenance", () => {
+    const source = Response.json({ error: { code: "rate_limit_exceeded" } }, { status: 429, headers: { "x-should-retry": "false" } });
+    const projected = carryReplayRefusal(source, new Response("quota", { status: 429, headers: { "retry-after": "2" } }));
+    expect(isAutomaticReplayBlocked(projected)).toBe(true);
+    expect(isNonReplayableResponse(projected)).toBe(false);
+    expect(isReplayRefusalResponse(projected)).toBe(false);
+    expect(projected.headers.get("x-should-retry")).toBe("false");
+    expect(projected.headers.get("retry-after")).toBeNull();
+  });
+
+  test.each([false, true])("a delayed HTTP no-retry body preserves delivery and client abort: %s", async abort => {
+    const body = JSON.stringify({ error: { code: "upstream_response_refused" } });
+    let sends = 0, timer: ReturnType<typeof setTimeout> | undefined;
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+      sends += 1;
+      return new Response(new ReadableStream({ start(controller) {
+        controller.enqueue(new TextEncoder().encode(body.slice(0, -1)));
+        timer = setTimeout(() => { controller.enqueue(new TextEncoder().encode(body.slice(-1))); controller.close(); }, 2_500);
+      }, cancel() { clearTimeout(timer); } }), { status: 429, headers: { "content-type": "application/json", "x-should-retry": "false" } });
+    } });
+    const caller = new AbortController();
+    try {
+      const started = performance.now();
+      const response = await fetchWithTransientRetry(async () => fetch(server.url, { signal: caller.signal }), { attempts: 3, abortSignal: caller.signal });
+      expect(performance.now() - started).toBeLessThan(1_000);
+      expect(isAutomaticReplayBlocked(response)).toBe(true);
+      expect(isNonReplayableResponse(response)).toBe(false);
+      expect(isReplayRefusalResponse(response)).toBe(false);
+      if (abort) {
+        caller.abort();
+        await expect(response.text()).rejects.toMatchObject({ name: "AbortError" });
+      } else expect(await response.text()).toBe(body);
+      expect(sends).toBe(1);
+    } finally { clearTimeout(timer); await server.stop(true); }
+  });
+
+  test("a relay response refusal keeps its client policy after JSON re-wrapping", async () => {
+    const response = formatReplaySafetyError(502, "upstream_error", "relay refused the answer", {
+      code: "upstream_response_refused", retryAfter: "2",
+    });
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(response.headers.get("retry-after")).toBeNull();
+    expect(isNonReplayableResponse(response)).toBe(true);
+    expect(isReplayRefusalResponse(response)).toBe(false);
+    expect((await response.json()).error.code).toBe("upstream_response_refused");
+  });
+
   test("every terminal code survives formatting without advertising Retry-After", async () => {
     for (const code of ["upstream_no_response", "upstream_closed_before_response", "upstream_reset_replay_refused"]) {
       const response = formatReplaySafetyError(502, "upstream_error", "closed", { code, retryAfter: "2" });
@@ -864,7 +966,10 @@ describe("ambiguous reset safety through error formatting", () => {
     });
     expect(refused.status).toBe(429);
     for (const code of ["upstream_no_response", "upstream_closed_before_response"]) {
-      expect(formatReplaySafetyError(502, "upstream_error", "closed", { code }).status).toBe(502);
+      const upstream = formatReplaySafetyError(502, "upstream_error", "closed", { code });
+      expect(upstream.status).toBe(502);
+      expect(upstream.headers.get("x-should-retry")).toBeNull();
+      expect(isReplayRefusalResponse(upstream)).toBe(false);
     }
   });
 

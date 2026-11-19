@@ -21,6 +21,7 @@ import { clearUpstreamHostHealth, getUpstreamHostHealth, upstreamHostHealthKey }
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import * as familyQuota from "../../src/oauth/anthropic-model-quota";
 import { anthropicSessionAffinitySizeForTests } from "../../src/oauth/anthropic-routing";
+import { anthropicRatePauseUntil } from "../../src/oauth/anthropic-rate-limit-policy";
 import { nativeOAuthBindingIsCurrent, resolveNativeOAuthBinding } from "../../src/server/messages-native-oauth";
 import { getRequestLogEntries } from "../../src/server/request-log";
 import { providerRequestPacingStatus, resetProviderRequestPacingForTest, waitForProviderRequestSlot } from "../../src/providers/request-pacing";
@@ -968,4 +969,42 @@ test("malformed native model routes answer 400 rather than an authentication ref
   expect(response.status).toBe(400);
   expect(JSON.parse(text).error.type).toBe("invalid_request_error");
   expect(sent).toHaveLength(0);
+});
+
+test.each(["shared-quota", "transient-rate", "stale credential"] as const)("native Messages settles a no-retry OAuth 429 (%s) without rotation", async kind => {
+  const [sender, alternate] = await seed(2);
+  const config = fixtureConfig();
+  config.anthropicAccountPool = { enabled: true };
+  let sends = 0;
+  config.providers.anthropic!.fetch = (async (_input, init) => {
+    sends++;
+    if (sends > 1) return Response.json(MESSAGE);
+    expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${credential(0).access}`);
+    if (kind === "stale credential") {
+      await saveAccountCredential("anthropic", sender!, { ...credential(0), access: "fixture-new-generation" });
+    }
+    return Response.json({ type: "error", error: { type: "rate_limit_error", message: "fixture quota" } }, {
+      status: 429, headers: { "x-should-retry": "false", "retry-after": "30",
+        ...(kind !== "transient-rate" ? { "anthropic-ratelimit-unified-5h-status": "rejected" } : {}) },
+    });
+  }) as typeof fetch;
+  const { response, row, text } = await send(config, { ...BODY, stream: false });
+  expect(row.protocolTrace?.mode).toBe("native");
+  expect(sends).toBe(1);
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  expect(response.headers.get("retry-after")).toBeNull();
+  expect(JSON.parse(text)).toEqual({ type: "error", error: {
+    type: "rate_limit_error", message: "The provider rate limit was reached; retry later.",
+  } });
+  if (kind === "shared-quota") {
+    expect(getAnthropicAccountHealthSnapshot(sender!)?.cooldownSource).toBe("retry-after");
+    expect(getAnthropicAccountHealthSnapshot(sender!)?.cooldownUntil).toBeGreaterThan(Date.now());
+  } else {
+    expect(getAnthropicAccountHealthSnapshot(sender!)).toBeNull();
+    if (kind === "transient-rate") expect(anthropicRatePauseUntil(sender!)).toBeGreaterThan(Date.now());
+    else expect(anthropicRatePauseUntil(sender!)).toBeUndefined();
+  }
+  expect(getAnthropicAccountHealthSnapshot(alternate!)).toBeNull();
+  expect(anthropicRatePauseUntil(alternate!)).toBeUndefined();
 });

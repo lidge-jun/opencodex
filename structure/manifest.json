@@ -596,6 +596,18 @@
       ]
     },
     {
+      "path": "data-planes/replay-refusals.md",
+      "tier": 3,
+      "title": "Replay Refusals",
+      "scope": "Terminal replay codes, fixed HTTP and SSE projection, transport provenance, and quota evidence.",
+      "documents": [
+        "src/lib/upstream-retry.ts",
+        "src/client/link-relay.ts",
+        "src/server/responses/fetch-helpers.ts",
+        "src/server/responses/non-replayable-error.ts"
+      ]
+    },
+    {
       "path": "data-planes/chat-reasoning-details.md",
       "tier": 3,
       "title": "Anthropic Thinking Signatures on the Chat Wire",

@@ -20,6 +20,7 @@ import {
   SendBudgetExhaustedError,
   TRANSIENT_RETRY_MAX_ATTEMPTS,
   isConnectionResetError,
+  hasUpstreamReplayRefusal,
 } from "../lib/upstream-retry";
 
 const GOOGLE_RETRY_BASE_MS = 250;
@@ -99,11 +100,12 @@ export async function fetchGoogleWithRetry(
         },
         dispatch: executor => fetchWithAttemptDeadline(activeRequest.url, {
           method: activeRequest.method, headers: activeRequest.headers, body: activeRequest.body,
-        }, timeoutMs, ctx.abortSignal, ctx.stream, executor),
+        }, timeoutMs, ctx.abortSignal, ctx.stream, executor, { refusePostDeadline: true }),
       });
       retryDelayMs = 0;
       sendClass = "transient";
       recovery = undefined;
+      if (await hasUpstreamReplayRefusal(res, ctx.abortSignal)) return res;
       if (res.status === 400 && repairInvalid400 && !compatibilityReplayUsed) {
         let payloadText = "";
         try {

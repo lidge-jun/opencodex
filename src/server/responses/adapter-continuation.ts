@@ -35,7 +35,7 @@ import {
   fetchWithTransientRetry,
   fetchWithResetRetry,
   applyUpstreamRecoveryInit,
-  isNonReplayableResponse, isSameTargetRetryHold,
+  isAutomaticReplayBlocked, isReplayRefusalCode, isSameTargetRetryHold, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE,
   prepareSameTarget429Wait,
   SendBudgetExhaustedError, errorDestinationLabel,
 } from "../../lib/upstream-retry";
@@ -350,7 +350,7 @@ export function createAdapterContinuations(
         nextContinuationRecoveryKind = undefined;
         response = await fetchContinuation(recoveryKind);
         bindAnthropicRejectionResponse(transportState.sameTargetRequest, response);
-        if (initialRecoveryKind === "empty-completion" && await adapterExchange.thinkingSignatureRecovery.prepareHttp(
+        if (initialRecoveryKind === "empty-completion" && !isAutomaticReplayBlocked(response) && await adapterExchange.thinkingSignatureRecovery.prepareHttp(
           response, transportState.activeAdapter.name, nextParsed,
         )) {
           try { void response.body?.cancel().catch(() => {}); } catch { /* closed */ }
@@ -396,7 +396,7 @@ export function createAdapterContinuations(
         && !replaySetupFailed
         // A synthesized replay refusal is not a rate limit; replaying the continuation on
         // it would re-send a turn whose first send may already have been processed.
-        && !isNonReplayableResponse(response) && !isSameTargetRetryHold(response)
+        && !isAutomaticReplayBlocked(response) && !isSameTargetRetryHold(response)
        && rateLimitPolicy !== null && providerAffinityGenerationIsCurrent(config, route.providerName, route.provider)
         && adapterExchange.rateLimitRetries < rateLimitPolicy.attempts
         // The main recovery loop and the passthrough ladder both consult the shared remainder
@@ -439,7 +439,7 @@ export function createAdapterContinuations(
         }
       }
 
-      if (response.status === 429 && !isNonReplayableResponse(response) && hasKeyPoolFailover(route.provider)) {
+      if (response.status === 429 && !isAutomaticReplayBlocked(response) && hasKeyPoolFailover(route.provider)) {
         const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
           retryAfter: response.headers.get("retry-after"),
           now: Date.now(),
@@ -480,7 +480,7 @@ export function createAdapterContinuations(
        (response.status === 429 || response.status === 403 || response.status === 401)
        && anthropicInstance
        && transportState.anthropicPoolAccountId
-        && !replaySetupFailed && !isNonReplayableResponse(response)
+        && !replaySetupFailed && !isAutomaticReplayBlocked(response)
       ) {
         const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;
         const hop = reserveCredentialHop("auth-recovery", `${route.providerName}|${route.modelId}|continuation-anthropic-429`,
@@ -541,7 +541,7 @@ export function createAdapterContinuations(
      if (
        (response.status === 429 || response.status === 400 || response.status === 403)
        && transportState.genericFailoverAccountId
-        && !isNonReplayableResponse(response)
+        && !isAutomaticReplayBlocked(response)
         && !replaySetupFailed
       ) {
         const refusal = classifyKiroRefusal(response.status,
@@ -644,7 +644,7 @@ export function createAdapterContinuations(
      if (
        response.status === 429
        && transportState.genericFailoverAccountId
-        && !isNonReplayableResponse(response)
+        && !isAutomaticReplayBlocked(response)
        && transportState.genericFailovers < transportState.genericFailoverLimit
         && isGenericOAuthFailoverEnabled(config, route.providerName)
       ) {
@@ -735,7 +735,7 @@ export function createAdapterContinuations(
         }
       }
       }
-      if (shouldAttemptImageTierRetry({
+      if (!isAutomaticReplayBlocked(response) && shouldAttemptImageTierRetry({
         status: response.status,
         adapterName: transportState.activeAdapter.name,
         parsed: nextParsed,
@@ -754,6 +754,11 @@ export function createAdapterContinuations(
       if (route.providerName === "kiro") response = carryProxyError(response, await normalizeFinalKiroHttpError(response, upstream.signal));
       const errorText = await readDisplaySafeErrorText(response, upstream.signal, "unknown error");
       const normalized = normalizeUpstreamErrorText(errorText, "unknown error");
+      if (isReplayRefusalCode(normalized.code)) {
+        yield { type: "error", status: REPLAY_REFUSED_STATUS, errorType: "upstream_error", code: normalized.code,
+          message: REPLAY_REFUSAL_MESSAGE, retryable: false };
+        return;
+      }
       const message = normalized.cyberPolicy
         ? normalized.message ?? (isCyberPolicyCode(normalized.code) ? CYBER_POLICY_FALLBACK_MESSAGE : normalized.safeText)
         : `Provider continuation error ${response.status}: ${normalized.safeText}`;
@@ -769,7 +774,7 @@ export function createAdapterContinuations(
             code: CYBER_POLICY_ERROR_CODE,
             retryable: false,
           }
-          : {}),
+          : isAutomaticReplayBlocked(response) ? { retryable: false } : {}),
       };
       return;
     }
@@ -805,7 +810,7 @@ export function createAdapterContinuations(
         invalidateSameTargetRequest();
         yield* parse(await fetchContinuation("opaque-blob-rejection"));
       }, () => transportState.activeAdapter.name,
-      initialRecoveryKind === "empty-completion" && !isNonReplayableResponse(response), response, nextParsed);
+      initialRecoveryKind === "empty-completion" && !isAutomaticReplayBlocked(response), response, nextParsed);
     } catch (error) {
       // Classify the thrown error before reading signal state: cancelling the stalled
       // source can synchronously abort the shared signal, which would otherwise report

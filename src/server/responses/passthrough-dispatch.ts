@@ -69,6 +69,7 @@ import { hasResponsesSnapshotRepair, repairResponsesSnapshotJson } from "../resp
 import { backfillResponsesFieldsJson } from "./responses-field-backfill";
 import type { AdapterRequest } from "../../adapters/base";
 import { isXaiResponsesDestination, resolveProviderTransport } from "../../providers/xai-transport";
+import { isXaiGrokOAuth } from "../../providers/xai-privacy-mode";
 import { CODE_MODE_EXEC_TOOL_NAME } from "../../types";
 import type { ResponsesTerminalStatus } from "../../bridge";
 import { hasPassiveAccountQuota, recordPassiveAccountQuota } from "../../providers/quota";
@@ -102,6 +103,7 @@ import {
 } from "./fetch-helpers";
 import { classifyPoolRecoveryDispatch } from "../../routing/probe-lease";
 import { anthropicPoolCooldownResponse, clientCancelledResponse } from "./core-errors";
+import { projectXaiResetRefusal } from "./non-replayable-error";
 import {
   upstreamHostCircuitOpenResponse,
   usesCodexForwardPoolAuth,
@@ -126,7 +128,7 @@ import {
   SendBudgetExhaustedError, errorDestinationLabel,
   fetchWithTransientRetry,
   applyUpstreamRecoveryInit,
-  isNonReplayableResponse,
+  isNonReplayableResponse, isAutomaticReplayBlocked,
   isConnectionResetError,
   settleOperatorReplacement,
   refetchAfterProtocolSafeReset,
@@ -1198,7 +1200,7 @@ export async function preparePassthroughExchange(
 
     // Keep recovery kinds in sync with the generic `recovery:` loop below.
     passthroughRecovery: for (;;) {
-      if (wasAccountAutoPaused(upstreamResponse) && route.provider.authMode !== "forward") {
+      if (!isAutomaticReplayBlocked(upstreamResponse) && wasAccountAutoPaused(upstreamResponse) && route.provider.authMode !== "forward") {
         const recovered = await recoverAutoPausedAccount({ requestKey: transportState, reserve: reserveCredentialHop,
           remaining: transientSendCapFor(transientRetryPolicyFor(route.provider)?.attempts, sendBudgetState.targetSendsUsed),
           mapRefreshError: createAutoPauseRefreshErrorMapper(upstreamResponse, upstream, cleanupUpstreamAbort, copilotRefusalResponse, () => (options.abortSignal ?? req.signal).aborted, clientCancelledResponse),
@@ -1209,7 +1211,7 @@ export async function preparePassthroughExchange(
       }
 
     if (
-      upstreamResponse.status === 401 && !wasPermanentAccountRefusal(upstreamResponse)
+      upstreamResponse.status === 401 && !wasPermanentAccountRefusal(upstreamResponse) && !isAutomaticReplayBlocked(upstreamResponse)
       && (admissionState.authCtx.kind === "main-pool" || admissionState.authCtx.kind === "pool")
       && usesCodexForwardPoolAuth(admissionState.authCtx, route.provider)
       && codex401ReplayKind === null
@@ -1345,7 +1347,7 @@ export async function preparePassthroughExchange(
     // rebuilt replay. xAI's current subscription models use this branch now that their official
     // Grok CLI catalog declares the Responses backend.
     if (
-      upstreamResponse.status === 401 && !wasPermanentAccountRefusal(upstreamResponse)
+      upstreamResponse.status === 401 && !wasPermanentAccountRefusal(upstreamResponse) && !isAutomaticReplayBlocked(upstreamResponse)
       && isOAuth401ReplayProvider
       && transportState.sentOAuthSnapshot
       && !oauth401ReplayAttempted
@@ -1469,7 +1471,7 @@ export async function preparePassthroughExchange(
       // Not a provider rate limit when this proxy synthesized it for a refused reset
       // replay; rotating accounts on it would re-send an inference that may already
       // have run and would cool down an account that refused nothing.
-      && !isNonReplayableResponse(upstreamResponse)
+      && !isAutomaticReplayBlocked(upstreamResponse)
      && transportState.genericFailoverAccountId
       && transportState.genericFailovers < transportState.genericFailoverLimit
       && isGenericOAuthFailoverEnabled(config, route.providerName)
@@ -1543,7 +1545,7 @@ export async function preparePassthroughExchange(
     // keep their pool logic below (rateLimitRetryPolicyFor returns null for them).
    while (
      upstreamResponse.status === 429
-      && !isNonReplayableResponse(upstreamResponse)
+      && !isAutomaticReplayBlocked(upstreamResponse)
      && rateLimitPolicy !== null && providerAffinityGenerationIsCurrent(config, route.providerName, route.provider)
       && rateLimitRetries < rateLimitPolicy.attempts
       // Checked here rather than inside the helper: prepareSameTarget429Wait releases the 429
@@ -1622,7 +1624,7 @@ export async function preparePassthroughExchange(
     };
     recordDistributedResponseFailure(lastDistributedResponse ?? upstreamResponse, config, route.providerName, options.abortSignal);
     captureAffinityResponse(upstreamResponse);
-    if (usesCodexForwardPoolAuth(admissionState.authCtx, route.provider)) {
+    if (!isAutomaticReplayBlocked(upstreamResponse) && usesCodexForwardPoolAuth(admissionState.authCtx, route.provider)) {
       let poolRetryOutcome: number | undefined;
       // A success is the freshest evidence there is about this pair, and it outranks any earlier
       // refusal: whatever the entitlement was when upstream declined, it is not that now. Both
@@ -1731,7 +1733,7 @@ export async function preparePassthroughExchange(
     // eviction, or an older transcript). Inspect only a bounded clone of a 4xx whose exact outbound
     // Responses body still carries opaque state, then rebuild once through the ordinary adapter
     // sanitation path. A second rejection falls through unchanged because the guard stays armed.
-    if (!configuredTransientSendBudgetExhausted()) {
+    if (!isAutomaticReplayBlocked(upstreamResponse) && !configuredTransientSendBudgetExhausted()) {
       const opaqueBlobRecovery = await attemptOpaqueBlobRecovery({
         response: upstreamResponse,
         outboundBody: request.body,
@@ -1749,6 +1751,7 @@ export async function preparePassthroughExchange(
 
     const recoveryContentType = upstreamResponse.headers.get("content-type")?.toLowerCase() ?? "";
     const streamedFunctionOutputCandidate = upstreamResponse.ok
+      && !isAutomaticReplayBlocked(upstreamResponse)
       && !!upstreamResponse.body
       && (recoveryContentType.includes("text/event-stream") || (!recoveryContentType && upstreamRequestsStream))
       && !opaqueBlobRecoveryGuard.attempted
@@ -1775,7 +1778,7 @@ export async function preparePassthroughExchange(
       upstreamResponse = preflight.response;
       if (preflight.kind === "failed") {
         // A zero-output failure does not undo an ambiguous replacement already sent.
-        if (!configuredTransientSendBudgetExhausted() && !sendBudgetState.ambiguousResendSpent) {
+        if (!isAutomaticReplayBlocked(upstreamResponse) && !configuredTransientSendBudgetExhausted() && !sendBudgetState.ambiguousResendSpent) {
           const streamedOpaqueRecovery = await attemptOpaqueBlobRecovery({
             response: upstreamResponse,
             outboundBody: request.body,
@@ -1803,7 +1806,7 @@ export async function preparePassthroughExchange(
     // later with 400 invalid_request_error / "Invalid upload request." Replay the byte-identical
     // request once after the exact gateway rejection. Single-shot guard.
     // This recovery reuses the captured request; other recovery kinds still rebuild.
-    if (!consoleGoUploadRetryGuard.attempted) {
+    if (!isAutomaticReplayBlocked(upstreamResponse) && !consoleGoUploadRetryGuard.attempted) {
       const uploadRejectionBody = await consoleGoUploadRejectionBody(
         upstreamResponse,
         consoleGoUploadRetryGuard.attempted,
@@ -1834,8 +1837,9 @@ export async function preparePassthroughExchange(
     // model's ladder, not this account's entitlement. Learn each refusal so later turns clamp
     // before dispatch. Direct requests repair once; combo candidates may retry the next lower
     // published rung until it works, the ladder ends, or the send budget is spent.
-    const downgrade = await refusedReasoningEffortDowngrade(upstreamResponse, upstream.signal, reasoningEffortDowngradeGuard,
-      options.comboAttempt, { provider: route.provider, modelId: parsed.modelId, requested: parsed.options.reasoning });
+    const downgrade = isAutomaticReplayBlocked(upstreamResponse) ? undefined
+      : await refusedReasoningEffortDowngrade(upstreamResponse, upstream.signal, reasoningEffortDowngradeGuard,
+        options.comboAttempt, { provider: route.provider, modelId: parsed.modelId, requested: parsed.options.reasoning });
     if (downgrade && !configuredTransientSendBudgetExhausted()) {
       reasoningEffortDowngradeGuard.attempted = true;
       parsed.options.reasoning = downgrade.effort;
@@ -1900,7 +1904,7 @@ export async function preparePassthroughExchange(
     const streamRecoveryContentType = upstreamResponse.headers.get("content-type")?.toLowerCase() ?? "";
     const protocolRecoveryCandidate = upstreamResponse.ok
       && !!upstreamResponse.body
-      && !isNonReplayableResponse(upstreamResponse)
+      && !isAutomaticReplayBlocked(upstreamResponse)
       // The WebSocket transport settles its own ambiguous failures and marks them
       // non-replayable; re-reading its body here would be a second owner of one exchange.
       && !isCodexWsUpstreamResponse(upstreamResponse)
@@ -1914,6 +1918,7 @@ export async function preparePassthroughExchange(
       && remainingTransientSendBudget(transientSendAttempts()) > 0
       && (streamRecoveryContentType.includes("text/event-stream") || (!streamRecoveryContentType && upstreamRequestsStream));
     if (protocolRecoveryCandidate) {
+      const grokOAuthLogCtx = isXaiGrokOAuth(route.providerName, route.provider) ? logCtx : undefined;
       // Selection may publish the replacement's own head until one is committed; see the helper.
       upstreamResponse = await selectPassthroughResetResponse(
         upstreamResponse, admissionState,
@@ -1925,15 +1930,14 @@ export async function preparePassthroughExchange(
             abortSignal: AbortSignal.any([upstream.signal, signal]),
             label: safeHostLabel(request.url), destination: errorDestinationLabel(request.url),
             attempts: remainingTransientSendBudget(transientSendAttempts()),
-            // The whole decision, including the stage the preflight observed and the grant the
-            // pre-header helper shares. A committed stage refuses here without touching the
-            // allowance, which is what keeps a turn that already emitted output from draining
-            // the replacement a later ambiguous reset would have been entitled to.
+            // The observed stage gates the same replacement grant as pre-header recovery.
             authorize: () => claimRecoveryResend(stage),
+            acceptTerminalRefusal: true,
+            projectTerminalRefusal: grokOAuthLogCtx ? candidate => projectXaiResetRefusal(candidate, signal, grokOAuthLogCtx) : undefined,
             acceptResponse: candidate => accepts(candidate) && isResetReplacementStream(candidate, upstreamRequestsStream),
           },
         ),
-        { request, config, signal: upstream.signal, allowMissingContentType: !streamRecoveryContentType && upstreamRequestsStream,
+        { request, config, signal: upstream.signal, allowMissingContentType: !streamRecoveryContentType && upstreamRequestsStream, grokOAuthLogCtx,
           delivery: canonicalBufferedJson ? "buffered-json" : options.comboAttempt ? "combo-child" : "direct-stream" },
       );
     }

@@ -34,8 +34,8 @@ import {
   relayWithAbort,
 } from "../relay";
 import { isUsageDebugEnabled } from "../../usage/debug";
-import { isNonReplayableResponse, isReplayRefusalResponse } from "../../lib/upstream-retry";
-import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
+import { carryReplayRefusal, isNonReplayableResponse, isReplayRefusalResponse, isTerminalResetReplacement, projectReplayRefusal, replayRefusalBodyCode } from "../../lib/upstream-retry";
+import { projectResponsesUpstreamRefusal, rewriteNonRetryableFailurePayload, sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 import { sliceChunks, teeWithBoundedInspection } from "../inspection-tee";
 import { markPacedStream } from "../../lib/paced-stream";
 import { LINK_PACED_SLICE_BYTES, linkTurnPacesReads } from "../link-turn";
@@ -117,7 +117,7 @@ import {
   createGrokResponsesTimestampBlockRewrite,
 } from "../grok-responses-control-frame";
 import { createGrokResponsesSparseTerminalBlockRewrite } from "../grok-responses-snapshot-repair";
-import { isXaiGrokOAuth, isXaiLegacyPrivacyError, xaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
+import { isXaiGrokOAuth } from "../../providers/xai-privacy-mode";
 import { isXaiResponsesDestination } from "../../providers/xai-transport";
 import {
   createGrokUpstreamEnvelopeEchoBlockRewrite,
@@ -643,9 +643,12 @@ export async function deliverPassthroughResponse(
     // through sanitizePassthroughHeaders) so a redirect to a dead host can never
     // masquerade as a pre-connection failure after the credential was seen.
     // The numeric outcome above already classified it neutral — no streak.
-    if (isNonReplayableResponse(upstreamResponse) && !isReplayRefusalResponse(upstreamResponse) && !wasPermanentAccountRefusal(upstreamResponse)) {
-      return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal,
-        isXaiGrokOAuth(route.providerName, route.provider) ? logCtx : undefined);
+    const terminalReplacement = isTerminalResetReplacement(upstreamResponse);
+    const grokOAuth = isXaiGrokOAuth(route.providerName, route.provider);
+    if (terminalReplacement || (isNonReplayableResponse(upstreamResponse) && !isReplayRefusalResponse(upstreamResponse) && !wasPermanentAccountRefusal(upstreamResponse))) {
+      return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal, {
+        terminalReplacement, grokOAuthLogCtx: grokOAuth ? logCtx : undefined,
+      });
     }
     if (upstreamResponse.status >= 300 && upstreamResponse.status < 400) {
       return new Response(upstreamResponse.body, {
@@ -655,7 +658,6 @@ export async function deliverPassthroughResponse(
       });
     }
     if (!upstreamResponse.ok) {
-      const grokOAuth = isXaiGrokOAuth(route.providerName, route.provider);
       if (options.comboAttempt) {
         // No pre-read guard here: `consumeComboFailure` -> `readBoundedResponseBody` reads
         // `response.body` itself and already threads the abort signal through its own read,
@@ -674,7 +676,8 @@ export async function deliverPassthroughResponse(
       // The bounded reader owns the original body, deadline, abort settlement, and lock.
       // Unsafe partial data falls back to #452's non-empty status-only JSON.
       const errorText = await readDisplaySafeErrorText(upstreamResponse, upstream.signal, "");
-      if (grokOAuth && isXaiLegacyPrivacyError(upstreamResponse.status, errorText)) return xaiPrivacyModeRefusal(logCtx);
+      const refusal = projectResponsesUpstreamRefusal(upstreamResponse, errorText, grokOAuth ? logCtx : undefined);
+      if (refusal) return refusal;
       if (upstreamResponse.status === 413) {
         if (options.clientModelLabel) projectLocalModelRefusalLog(logCtx, options.clientModelLabel);
         return clientRequestedStream
@@ -864,8 +867,9 @@ export async function deliverPassthroughResponse(
         && parsed._responseModelId !== parsed.modelId
         ? createResponsesModelPayloadRewrite(parsed._responseModelId)
         : undefined;
-      // Compose opt-in payload rewrites into one parse/stringify pass (image-gen restore first).
+      // Compose payload rewrites into one pass.
       const payloadRewrites = [
+        (payload: string) => rewriteNonRetryableFailurePayload(payload, options.comboAttempt === true),
         rewriteResponsesIncompleteReasonJson,
         createImageGenCallRestoreRewrite(imageGenCallAliases),
         // #3217: a call whose namespace repeats its own name is unroutable in codex-rs.
@@ -1449,6 +1453,8 @@ export async function deliverPassthroughResponse(
       }
       const text = bounded.text;
       inspectResponseLogJson(logCtx, text);
+      const refusalCode = replayRefusalBodyCode(text, "failed");
+      if (refusalCode) return carryReplayRefusal(upstreamResponse, projectReplayRefusal(refusalCode));
       let plaintextV2RestoreFailed = false;
       let clientJson = (() => {
         const restoredNamespace = restoreRoutedNamespaceCallsInJson(

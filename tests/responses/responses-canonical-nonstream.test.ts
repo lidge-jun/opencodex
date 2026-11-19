@@ -2,6 +2,7 @@ import { afterEach, describe, expect, jest, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
 import { getDefaultConfig } from "../../src/config";
+import { REPLAY_REFUSAL_MESSAGE } from "../../src/lib/upstream-retry";
 import { CODEX_FORWARD_BASE_URL } from "../../src/providers/openai-tiers";
 import { handleResponses } from "../../src/server/responses";
 import { expandPreviousResponseInput } from "../../src/responses/state";
@@ -653,6 +654,26 @@ describe("canonical ChatGPT transport for non-streaming Responses callers (#6162
     expect(response.status).not.toBe(503);
     expect(text).not.toContain("resp_replacement");
     expect(response.headers.get("x-ratelimit-remaining-requests")).not.toBe("6");
+  });
+
+  test.each([true, false])("hardening: a pre-head replacement refusal publishes a sanitized HTTP error (stream=%s)", async stream => {
+    let sends = 0;
+    const code = "upstream_response_refused";
+    globalThis.fetch = (async () => {
+      sends++;
+      if (sends === 1) return preludeThenEnd("eof", metadataHeaders("first", "first-id", "7"));
+      return Response.json({ error: { code, message: "provider-private-detail" } }, {
+        status: 503, headers: { "retry-after": "7", "x-ratelimit-remaining-requests": "0" },
+      });
+    }) as typeof fetch;
+    const response = await call(metadataBody(stream, false), {}, metadataConfig(false));
+    expect(sends).toBe(2); // The original and the single authorized replacement.
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(response.headers.get("retry-after")).toBeNull();
+    expect(await response.json()).toEqual({ error: {
+      type: "upstream_error", code, message: REPLAY_REFUSAL_MESSAGE,
+    } });
   });
 
   test("client abort ends pre-head selection although upstream cancellation never settles", async () => {

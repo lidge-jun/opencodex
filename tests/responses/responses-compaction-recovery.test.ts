@@ -235,6 +235,31 @@ describe("routed compaction emergency integration", () => {
     expect(calls.map(call => call.model)).toEqual(["swe-2", "rescue"]);
   });
 
+  test("a zero-output JSON compaction failure with retryable false never sends a fallback", async () => {
+    const error = { type: "server_error", code: "server_error", message: "fixture upstream diagnostic" };
+    sourceEvents = [{ type: "error", status: 502, code: error.code, message: error.message, errorType: error.type }];
+    const original = request();
+    const translatorBudget = createTranslatorBudget();
+    const budget = createRequestExecutionBudget();
+    try {
+      const response = await runWithCompactionRecovery(
+        original, settings(), { model: "", provider: "" }, { translatorBudget, sendBudget: budget },
+        async (sent, config, log, options) => {
+          const result = await handleResponses(sent, config, log, { ...options, compactionRecoveryAttempted: true });
+          if (sent !== original) return result;
+          await result.body?.cancel();
+          return Response.json({ status: "failed", output: [], error, retryable: false });
+        },
+      );
+      expect(calls.map(call => call.model)).toEqual(["swe-2"]);
+      expect(budget.used).toBe(1);
+      expect(response.status).toBe(502);
+      expect(response.headers.get("x-should-retry")).toBe("false");
+      expect(response.headers.get("retry-after")).toBeNull();
+      expect(await response.json()).toMatchObject({ error: { message: "The provider failed to complete the request." } });
+    } finally { translatorBudget.dispose(); }
+  });
+
   test("the actual fallback Request strips inbound auth and account headers", async () => {
     const original = request();
     let fallbackHeaders: Headers | undefined;

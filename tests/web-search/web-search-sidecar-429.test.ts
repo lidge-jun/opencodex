@@ -71,6 +71,35 @@ describe("web-search sidecar 429 replays", () => {
     expect(outcome.error).toBeUndefined();
   });
 
+  test("hardening: a no-retry sidecar 429 records quota and withholds diagnostics", async () => {
+    let calls = 0;
+    const recorded: Array<number | string> = [];
+    const outcome = await searchWith(async () => {
+      calls++;
+      if (calls > 1) return sseDone();
+      return new Response("provider-private-detail", {
+        status: 429, headers: { "x-should-retry": "false", "retry-after": "0" },
+      });
+    }, 30_000, value => recorded.push(value));
+    expect(calls).toBe(1);
+    expect(recorded).toEqual([429]);
+    expect(outcome).toEqual({ text: "", sources: [], error: "sidecar HTTP 429" });
+  });
+
+  test("round 4: a coded sidecar 429 records quota without another send", async () => {
+    let calls = 0;
+    const recorded: Array<number | string> = [];
+    const outcome = await searchWith(async () => {
+      if (++calls > 1) return sseDone();
+      return Response.json({ error: { code: "upstream_response_refused", message: "provider-private-detail" } }, {
+        status: 429, headers: { "retry-after": "0" },
+      });
+    }, 30_000, value => recorded.push(value));
+    expect(calls).toBe(1);
+    expect(recorded).toEqual([429]);
+    expect(outcome).toEqual({ text: "", sources: [], error: "sidecar HTTP 429" });
+  });
+
   test("a persistent 429 ends with the 429 after bounded attempts", async () => {
     let calls = 0;
     const outcome = await searchWith(async () => {

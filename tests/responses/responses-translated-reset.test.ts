@@ -13,7 +13,7 @@ import { handleResponses } from "../../src/server/responses";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
-import { isNonReplayableResponse, isReplayRefusalResponse, markResponseNonReplayable, replayRefusalResponse, retainReplayRefusal } from "../../src/lib/upstream-retry";
+import { carryReplayRefusal, isNonReplayableResponse, isReplayRefusalResponse, markResponseNonReplayable, REPLAY_REFUSAL_MESSAGE, replayRefusalResponse, retainReplayRefusal } from "../../src/lib/upstream-retry";
 import { requestLogDto } from "../../src/server/management/shared";
 import { responseWithDeferredRequestLog } from "../../src/server/relay";
 import { sanitizeNonReplayableUpstreamError } from "../../src/server/responses/non-replayable-error";
@@ -374,6 +374,21 @@ describe("reset replacement error confidentiality", () => {
     expect(await sanitizeNonReplayableUpstreamError(refusal, new AbortController().signal)).toBe(refusal);
     expect(isReplayRefusalResponse(refusal)).toBe(true);
     await refusal.text();
+  });
+
+  test("carrying the replay marker still requires projecting the new body", async () => {
+    const refusal = replayRefusalResponse();
+    const rewrapped = carryReplayRefusal(refusal, Response.json({
+      error: { code: "upstream_response_refused", message: `fixture diagnostic: ${credential}` },
+    }, { status: 503 }));
+    await refusal.body?.cancel();
+    const safe = await sanitizeNonReplayableUpstreamError(rewrapped, new AbortController().signal);
+    expect(isReplayRefusalResponse(safe)).toBe(true);
+    expect(safe.status).toBe(429);
+    expect(safe.headers.get("x-should-retry")).toBe("false");
+    expect(await safe.json()).toEqual({ error: {
+      type: "upstream_error", code: "upstream_response_refused", message: REPLAY_REFUSAL_MESSAGE,
+    } });
   });
 
   test("an ordinary error keeps its existing delivery owner", async () => {

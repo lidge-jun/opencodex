@@ -7,7 +7,7 @@ import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
 import { providerConfigSeed } from "../../src/providers/derive";
 import { clearKeyCooldowns, rateLimitRetryPolicyFor } from "../../src/providers/key-failover";
 import { isCanonicalMistralChat, MistralBudgetPacer, mistralMinuteRefusal, resolveMistralTransport } from "../../src/providers/mistral-transport";
-import { carryReplayRefusal, isNonReplayableResponse, isSameTargetRetryHold, sleepWithAbort } from "../../src/lib/upstream-retry";
+import { carryReplayRefusal, isNonReplayableResponse, isReplayRefusalResponse, isSameTargetRetryHold, sleepWithAbort } from "../../src/lib/upstream-retry";
 import { resolveProviderTransport } from "../../src/providers/xai-transport";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { routedProviderConfig } from "../../src/providers/routed-config";
@@ -645,13 +645,32 @@ describe("Mistral error-triggered minute recovery", () => {
     expect(sends).toBe(1);
   });
 
-  test("the response-header timeout still bounds the actual Mistral send", async () => {
+  test("the actual Mistral POST header deadline stops one send with a terminal refusal", async () => {
+    let sends = 0, activeSends = 0;
+    let deadlineReason: unknown;
+    const pacingWaits: number[] = [];
+    const caller = new AbortController();
     const transport = resolveMistralTransport({ ...provider, fetch: (async (_input, init) => {
-      await sleepWithAbort(1000, init?.signal ?? undefined); return new Response("too late");
-    }) as typeof fetch }, new MistralBudgetPacer());
+      sends++; activeSends++;
+      try {
+        await sleepWithAbort(1000, init?.signal ?? undefined); return new Response("too late");
+      } catch (error) { deadlineReason = error; throw error; }
+      finally { activeSends--; }
+    }) as typeof fetch }, new MistralBudgetPacer(() => 0, async ms => { pacingWaits.push(ms); }));
     const init = { method: "POST", body: JSON.stringify({ model }), headers: { authorization: "Bearer synthetic-key" } };
-    await expect(fetchWithHeaderTimeout(`${baseUrl}/chat/completions`, init,
-      new AbortController().signal, 5, false, transport.fetch!)).rejects.toThrow("Timeout elapsed");
+    const response = await fetchWithHeaderTimeout(`${baseUrl}/chat/completions`, init,
+      caller.signal, 5, false, transport.fetch!);
+    expect({ sends, activeSends, pacingWaits }).toEqual({ sends: 1, activeSends: 0, pacingWaits: [] });
+    expect(caller.signal.aborted).toBe(false);
+    expect(deadlineReason).toMatchObject({ name: "TimeoutError", message: "Timeout elapsed" });
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(response.headers.get("retry-after")).toBeNull();
+    expect(isNonReplayableResponse(response)).toBe(true);
+    expect(isReplayRefusalResponse(response)).toBe(true);
+    expect(await response.json()).toMatchObject({ error: {
+      code: "upstream_reset_replay_refused", message: expect.stringContaining("may already have been processed"),
+    } });
   });
 });
 

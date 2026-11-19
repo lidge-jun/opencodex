@@ -19,6 +19,8 @@ import { consumeComboFailure } from "../../src/server/responses/core-combo-failu
 import { runOptionalShutdownHooks } from "../../src/lib/optional-shutdown-hooks";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
+import type { ManagementAuthState } from "../../src/server/management-auth";
+import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 
 const originalFetch = globalThis.fetch;
 let home: TempHome;
@@ -67,6 +69,9 @@ async function turn(ingress: "HTTP" | "WebSocket", pool: boolean, reset: boolean
   const config = { port: 0, defaultProvider: provider, websockets: true, autoSwitchThreshold: 0,
     activeCodexAccountId: "fixture-pool", codexAccounts: pool ? [{ id: "fixture-pool", isMain: false,
       email: "fixture@example.test", chatgptAccountId: "fixture-chatgpt" }] : [],
+    // No local Codex client needs startup convergence. The configured account pool and
+    // real data-plane routing remain active without unrelated service ownership probes.
+    clientIntegrations: { codex: false },
     providers: {
       [provider]: { adapter: "openai-responses", upstreamWebsocket: false, retryOn429: { enabled: false },
         ...(pool
@@ -109,7 +114,12 @@ async function turn(ingress: "HTTP" | "WebSocket", pool: boolean, reset: boolean
   let code: string;
   if (ingress === "HTTP") {
     saveConfig(config);
-    const server = startServer(0);
+    // Management-token storage is outside this data-plane fixture's assertions.
+    const managementAuthState: ManagementAuthState = {
+      available: true, token: "combo-refusal-fixture-management-token", source: "environment",
+      sessions: new Map(), pairingGrants: new Map(),
+    };
+    const server = startServer(0, { managementAuthState });
     finishClient = async () => { await server.stop(true); };
     const response = await originalFetch(new URL("/v1/responses", server.url), {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
@@ -235,6 +245,9 @@ test("HTTP two-target combo stops before the fallback on replay refusal", async 
 });
 
 for (const ingress of ["HTTP", "WebSocket"] as const) {
+  // HTTP assertions cross a real listener and persisted account/log state. Keep the
+  // handler-only WebSocket cases on the default budget.
+  const budget = ingress === "HTTP" ? SERVER_BUDGET_MS : undefined;
   for (const pool of [false, true]) {
     test(`${ingress} combo ${pool ? "pool" : "gateway"} reset keeps synthetic replay-refusal attribution`, async () => {
       const { row, status, code } = await turn(ingress, pool, true);
@@ -248,7 +261,7 @@ for (const ingress of ["HTTP", "WebSocket"] as const) {
       expect(row.attempts![0]!.failureCause).toBe("transport-ambiguous");
       expect(row.attempts![0]!.failureStage).toBe("headers-only");
       expect(resendPermission(row.failureStage!, row.failureCause!)).toBe("refused-ambiguous");
-    });
+    }, budget);
 
     test(`${ingress} combo ${pool ? "pool" : "gateway"} genuine upstream 429 remains rate-limit evidence`, async () => {
       const { row, status, code } = await turn(ingress, pool, false);
@@ -258,6 +271,6 @@ for (const ingress of ["HTTP", "WebSocket"] as const) {
       expect(row.failureCause).toBe("rate-limit");
       expect(row.attempts![0]!.failureCause).toBe("rate-limit");
       expect(row.terminalSource).not.toBe("synthetic");
-    });
+    }, budget);
   }
 }

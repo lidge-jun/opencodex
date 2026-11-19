@@ -9,6 +9,7 @@ import { planWebSearch } from "../../src/web-search";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
+import { REPLAY_REFUSAL_MESSAGE } from "../../src/lib/upstream-retry";
 import { repoPath } from "../helpers/repo-root";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
@@ -44,7 +45,9 @@ for (const row of [
   }) as typeof setTimeout);
   const originalFetch = globalThis.fetch;
   const entered = Promise.withResolvers<void>();
+  let sends = 0;
   globalThis.fetch = (async (_input, init) => {
+    sends++;
     const signal = init!.signal!;
     entered.resolve();
     return new Promise<Response>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
@@ -65,7 +68,13 @@ for (const row of [
     if (row.armed.length > 0) {
       callbacks[0]!();
       const response = await pending;
-      expect(response.status).toBeGreaterThanOrEqual(500);
+      expect(sends).toBe(1);
+      expect(response.status).toBe(429);
+      expect(response.headers.get("x-should-retry")).toBe("false");
+      expect(response.headers.get("retry-after")).toBeNull();
+      expect(await response.json()).toMatchObject({ error: {
+        code: "upstream_reset_replay_refused", message: REPLAY_REFUSAL_MESSAGE,
+      } });
     }
   } finally {
     parent.abort(); await pending.catch(() => {});

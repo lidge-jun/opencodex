@@ -5,7 +5,7 @@ import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { carryProxyError, isProxyError } from "../../lib/client-error-body";
 import { checkOutboundBodySize } from "./outbound-body-guard";
 import { releaseTranslatedEvent, type TranslatorBudget } from "../../lib/translator-budget";
-import { isNonReplayableResponse, SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { hasUpstreamReplayRefusal, isAutomaticReplayBlocked, SendBudgetExhaustedError } from "../../lib/upstream-retry";
 import { COMPACT_PROMPT, SUMMARY_PREFIX } from "../../responses/compaction";
 import { sameProviderContinuationOwner } from "../../responses/provider-continuation";
 import { readDisplaySafeErrorText } from "./core-errors";
@@ -78,7 +78,7 @@ export function createAnthropicImageRecovery(
 ): AnthropicImageRecovery {
   return async (response, parsed, adapter, signal) => {
     if (recoveryAttempted.has(translatorBudget) || adapter.name !== "anthropic" || parsed._compactionRequest
-      || response.status !== 413 || isProxyError(response) || isNonReplayableResponse(response)) return { response };
+      || response.status !== 413 || isProxyError(response) || isAutomaticReplayBlocked(response)) return { response };
     signal.throwIfAborted();
     const owner = parsed._providerContinuationOwner;
     const pin = transport.pinAnthropicImageRecovery(response);
@@ -88,7 +88,7 @@ export function createAnthropicImageRecovery(
 
     const total = transientRetryPolicyFor(route.provider)?.attempts;
     const remaining = () => budget.remainingTransientSendBudget(transientSendCapFor(total, budget.targetSendsUsed));
-    if (remaining() < 2) return { response };
+    if (remaining() < 2 || await hasUpstreamReplayRefusal(response, signal)) return { response };
     const { response: retained, text } = await retainAdapterFailureResponse(response, signal);
     signal.throwIfAborted();
     // Require a provider size refusal and an actual image-bearing, compactable history.
@@ -150,6 +150,7 @@ export function createAnthropicImageRecovery(
       } finally { summaryRequest.releaseBodyObservation?.(); }
       const { response: summaryResponse, recordUsage: recordSummaryUsage } = summarySend;
       if (!summaryResponse.ok) {
+        if (await hasUpstreamReplayRefusal(summaryResponse, signal)) return { response: summaryResponse };
         void summaryResponse.body?.cancel().catch(() => {});
         return { response: retained };
       }

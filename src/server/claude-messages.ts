@@ -55,8 +55,11 @@ import {
   applyReplayRefusalClientHeaders,
   carryReplayRefusal,
   isReplayRefusalResponse,
+  isReplayRefusalCode,
   isTransientUpstreamStatus,
   REPLAY_REFUSED_STATUS,
+  replayRefusalResponse,
+  type ReplayRefusalCode,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
 import { isClientClosedMessage, recognizedUpstreamError, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
@@ -384,7 +387,19 @@ async function anthropicNativePassthrough(
     resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(base) }),
     req.signal,
   );
+  if (result.kind !== "response" && req.signal.aborted) {
+    return fail(499, "client_cancel", "client closed request during anthropic passthrough", "api_error", { code: "client_closed" });
+  }
   if (result.kind === "timeout") {
+    if (pathname === "/v1/messages") {
+      const refusal = replayRefusalResponse();
+      recordLocalFailureDetail(logCtx, "anthropic passthrough timed out waiting for response headers", { code: "header_timeout" });
+      finalize(refusal.status, { closeReason: "non_stream" });
+      return carryReplayRefusal(refusal, ownedAnthropicErrorResponse({
+        status: refusal.status, code: UPSTREAM_RESET_REPLAY_REFUSED_CODE, contract: "replay_refused",
+        evidence: { status: refusal.status },
+      }));
+    }
     return fail(504, "non_stream", "anthropic passthrough timed out waiting for response headers", "timeout_error", { code: "header_timeout" });
   }
   if (result.kind === "error") {
@@ -447,7 +462,8 @@ async function anthropicNativePassthrough(
           }
           // The condition is classified here from the upstream message; only the closed member is kept.
           const upstreamMessage = typeof parsed.error.message === "string" ? parsed.error.message : undefined;
-          logCtx.upstreamCondition = classifyUpstreamCondition({ status: upstream.status, type: knownType, message: upstreamMessage });
+          const code = typeof parsed.error.code === "string" ? parsed.error.code : undefined;
+          logCtx.upstreamCondition = classifyUpstreamCondition({ status: upstream.status, type: knownType, code, message: upstreamMessage });
         }
       } catch { /* Malformed errors keep the fixed status-only diagnostic. */ }
     }
@@ -461,22 +477,24 @@ async function anthropicNativePassthrough(
   let parsed: unknown;
   try { parsed = JSON.parse(text); } catch { /* non-JSON errors keep original recognition evidence */ }
   const error = isRec(parsed) && isRec(parsed.error) ? parsed.error : isRec(parsed) ? parsed : {};
-  const isError = !upstream.ok;
+  const code = typeof error.code === "string" ? error.code : undefined;
+  const replayRefusal = isReplayRefusalCode(code);
+  const status = replayRefusal ? REPLAY_REFUSED_STATUS : upstream.status;
   const originalMessage = typeof error.message === "string" ? error.message : "";
   const throughput = isThroughputLimitText(originalMessage);
   const overflow = messagesRelayedOverflowPresentation(text, parsed);
-  const clientBody = isError ? JSON.stringify(ownedAnthropicErrorPayload({ status: upstream.status,
-    overflow, ...(throughput ? { condition: "rate_limited" as const } : {}),
-    type: typeof error.type === "string" ? error.type : undefined,
-    code: typeof error.code === "string" ? error.code : undefined,
-    evidence: { status: upstream.status, type: typeof error.type === "string" ? error.type : undefined,
-      code: typeof error.code === "string" ? error.code : undefined, message: typeof error.message === "string" ? error.message : undefined },
-  })) : text;
-  const out = new Response(clientBody, {
-    status: upstream.status,
-    headers: { ...rateLimitHeaders, "Content-Type": isError ? "application/json" : messagesSuccessContentType(upstream.headers), ...(retryAfter ? { "Retry-After": retryAfter } : {}) },
+  const type = typeof error.type === "string" ? error.type : undefined;
+  const out = Response.json(ownedAnthropicErrorPayload({
+    status, type: replayRefusal ? undefined : type, code,
+    overflow: !replayRefusal && overflow, ...(throughput ? { condition: "rate_limited" as const } : {}),
+    ...(replayRefusal ? { contract: "replay_refused" as const } : {}),
+    evidence: { status: upstream.status, type, code, message: originalMessage },
+  }), {
+    status,
+    headers: { ...rateLimitHeaders, "Content-Type": "application/json", ...(retryAfter ? { "Retry-After": retryAfter } : {}) },
   });
-  return isError ? attachComboFailureEvidence(out, text) : out;
+  if (replayRefusal) applyReplayRefusalClientHeaders(out.headers);
+  return attachComboFailureEvidence(carryReplayRefusal(upstream, out), text);
 }
 
 type BoundedPassthroughBody =
@@ -575,9 +593,11 @@ export async function fetchWithHeaderDeadline(
 ): Promise<HeaderDeadlineFetchResult> {
   const deadline = makeDeadline(timeoutMs, parent);
   try {
+    if (parent?.aborted) return { kind: "error", error: parent.reason };
     const upstream = await fetchImpl(input, { ...init, redirect: "manual", signal: deadline.signal, timeout: 0 });
     return { kind: "response", upstream };
   } catch (error) {
+    if (parent?.aborted) return { kind: "error", error: parent.reason };
     if (deadline.didExpire()) return { kind: "timeout" };
     return { kind: "error", error };
   } finally {
@@ -623,6 +643,15 @@ function translationFailure(err: unknown, logCtx: RequestLogContext, logIds: { r
   const legacy = anthropicErrorBody(status, overflow ? clientMessage : originalMessage, type, code);
   return ownedAnthropicErrorResponse({ status, type, code, evidence: { status, message: originalMessage },
     localError: markProxyError({ message: clientMessage }), overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy);
+}
+
+function translatedMessagesReplayRefusal(response: Response, code: ReplayRefusalCode): Response {
+  const headers = new Headers({ "Content-Type": "application/json" });
+  applyReplayRefusalClientHeaders(headers);
+  return carryReplayRefusal(response, Response.json(ownedAnthropicErrorPayload({
+    status: REPLAY_REFUSED_STATUS, code, contract: "replay_refused", overflow: false,
+    evidence: { status: REPLAY_REFUSED_STATUS, code },
+  }), { status: REPLAY_REFUSED_STATUS, headers }));
 }
 
 /**
@@ -1349,7 +1378,7 @@ async function handleClaudeMessagesWithBudget(
   if (!response.ok) {
     // Read the shared provenance verdict before consuming and re-wrapping the body. A refusal
     // and an ordinary provider rate limit are both 429, so the status cannot distinguish them.
-    const replayRefusal = isReplayRefusalResponse(response);
+    let replayRefusal = isReplayRefusalResponse(response);
     // Re-shape the OpenAI-style error envelope into the Anthropic one, preserving status.
     let message = `upstream error (${response.status})`;
     let contextError = false;
@@ -1380,6 +1409,7 @@ async function handleClaudeMessagesWithBudget(
         if (text) message = contextError ? plain : `upstream error (${response.status}): ${text.slice(0, 400)}`;
       }
     } catch { /* keep fallback message */ }
+    replayRefusal ||= isReplayRefusalCode(originalCode);
     const upstreamRetryAfter = response.headers.get("retry-after");
     const retryAfter = replayRefusal || contextError
       ? undefined
@@ -1413,14 +1443,14 @@ async function handleClaudeMessagesWithBudget(
     if (clientRetryAfter) outHeaders.set("Retry-After", clientRetryAfter);
     else if (transient) outHeaders.set("Retry-After", "2");
     if (replayRefusal) applyReplayRefusalClientHeaders(outHeaders);
-    const decidedCode = replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : contextError ? "context_length_exceeded" : catalogRefusal ? UNDECLARED_TOOL_CALL_ERROR_CODE : undefined;
+    const decidedCode = replayRefusal ? isReplayRefusalCode(originalCode) ? originalCode : UPSTREAM_RESET_REPLAY_REFUSED_CODE : contextError ? "context_length_exceeded" : catalogRefusal ? UNDECLARED_TOOL_CALL_ERROR_CODE : undefined;
     const legacy = anthropicErrorBody(outStatus, message, undefined, decidedCode);
     const legacyBody = JSON.stringify(legacy);
     const out = new Response(JSON.stringify(ownedAnthropicErrorPayload({
       status: outStatus,
       evidence: { status: response.status, type: originalType, code: originalCode, message },
       code: decidedCode,
-      overflow: messagesOverflowPresentation((legacy.error as Rec).message),
+      overflow: !replayRefusal && messagesOverflowPresentation((legacy.error as Rec).message),
       ...(contextError && isThroughputLimitText(message) ? { condition: "rate_limited" as const } : {}),
       ...(replayRefusal ? { contract: "replay_refused" as const } : {}),
       ...(isProxyError(response) ? { localError: carryProxyError(response, { message }) } : {}),
@@ -1467,6 +1497,8 @@ async function handleClaudeMessagesWithBudget(
       return ownedAnthropicErrorResponse({ status: 502, type: "api_error", evidence: { status: 502, message },
         contract: "transport_failed", overflow: messagesRelayedOverflowPresentation("", legacy) }, legacy);
     }
+    const replayRefusalCode = failureVerdictSink.collectedReplayRefusalCode;
+    if (replayRefusalCode) return translatedMessagesReplayRefusal(response, replayRefusalCode);
     const legacy = failureVerdictSink.collected ?? message;
     const isError = legacy.type === "error";
     const translatedError = isError && typeof legacy.error === "object"
@@ -1503,6 +1535,9 @@ async function handleClaudeMessagesWithBudget(
   const status = (json as Rec)?.status;
   if (status === "failed") {
     const error = (json as { error?: { message?: string; type?: string; code?: string } }).error;
+    if (isReplayRefusalCode(error?.code)) {
+      return translatedMessagesReplayRefusal(response, error.code);
+    }
     if (error?.code === "translation_buffer_limit") {
       const originalMessage = error.message ?? "upstream translation buffer exceeded the safe limit";
       const legacy = anthropicErrorBody(413, originalMessage, "request_too_large", "translation_buffer_limit");

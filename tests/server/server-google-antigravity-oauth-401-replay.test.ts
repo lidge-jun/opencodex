@@ -8,6 +8,8 @@ import { forceRefreshOAuthAccessSnapshot, getValidAccessTokenSnapshot } from "..
 import { credentialGeneration, getAccountSet, getAuthStorePath, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
 import { startServer } from "../../src/server";
 import { handleResponses } from "../../src/server/responses";
+import { isAntigravityFaultRotatable } from "../../src/server/responses/antigravity-fault-rotation";
+import { isNonReplayableResponse } from "../../src/lib/upstream-retry";
 import type { ConsumedComboFailure } from "../../src/server/responses/core-options";
 import { ADAPTER_REGISTRY } from "../../src/adapters/registry";
 import * as requestPacing from "../../src/providers/request-pacing";
@@ -342,6 +344,13 @@ function installOAuthFetch(
 }
 
 describe("Google Antigravity OAuth upstream 401 replay", () => {
+  test.each([502, 503, 504])("a header-only no-retry %i cannot authorize an Antigravity fault hop", status => {
+    const state = { activeAdapter: { name: "google" }, genericFailovers: 0, genericFailoverLimit: 2 };
+    const refused = new Response(null, { status, headers: { "x-should-retry": "false" } });
+    expect(isNonReplayableResponse(refused)).toBe(false);
+    expect(isAntigravityFaultRotatable("google-antigravity", refused, state, true, false)).toBe(false);
+    expect(isAntigravityFaultRotatable("google-antigravity", new Response(null, { status }), state, true, false)).toBe(true);
+  });
   for (const comboAttempt of [false, true]) {
     test.each(["build", "admission"])(`preserved verify 403 uses common delivery after %s failure (combo=${comboAttempt})`, async failurePoint => {
       await seedOAuth();

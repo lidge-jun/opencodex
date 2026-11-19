@@ -28,7 +28,7 @@ ambiguous-resend gate and replay boundary, combo quota fallback and commit bound
 routing overrides, and output headroom. The endpoint and dispatch rules they build on are in
 [Responses transport](responses.md). `src/lib/errors.ts` classifies an HTTP 400 input-token-count overflow as `context_length_exceeded`, including the counted-token variant; the wording is Google's, but the shared classifier matches it for any provider. Output-token limits and protected failures retain their existing categories. Classification does not itself shorten input or authorize replay.
 
-Policy-selected turns also retain their [original candidate authorization](policy-fallback.md) through fallback and subagent recovery.
+Policy-selected turns also retain their [original candidate authorization](policy-fallback.md) through fallback and subagent recovery. HTTP replay-refusal provenance and the independent header-only no-retry hold follow the [replay refusal contract](../data-planes/replay-refusals.md).
 
 ## Chat-to-Responses message phase inference
 
@@ -83,6 +83,9 @@ counter rather than holding a second. A replacement never widens a send budget: 
 fit inside the allowance the leg already had, and it is charged to the same counter every other
 send goes through; initial Combo bookings follow the [prepaid-send contract](responses-spend.md#prepaid-initial-sends).
 Native passthrough judges the inbound body minus a `previous_response_id` this proxy already expanded from its own replay state, because the native adapter strips that id from every send; an unexpanded id still refuses. Every ambiguous refusal on that lane is logged with its stage and reason (`ambiguous-no-policy`, `ambiguous-request-not-replayable`, `ambiguous-allowance-spent`) and nothing from the body. Coverage: `tests/responses/responses-reset-replay-chained.test.ts` (#8453). It ALSO judges the physical attempt: `createPhysicalReplayGuard` fences a replacement whose outbound body or provider-executed substitution metadata is no longer self-contained, rechecked at physical dispatch after credential rebuilding; a replacement that fails that recheck is refused before the send, preserving the original stream or refusal. For native Responses SSE, a clean prelude-only EOF after uncommitted lifecycle events uses the same grant and send budget, and behind an already committed head it must agree with that head on the normalized identity subset -- status, status text, content-type media type, `openai-model` and `x-codex-turn-state` -- while a read error keeps the reset lane's existing replacement behaviour; the [combo stream boundary](responses-combo-boundaries.md) owns the rule and its reasons.
+
+A terminal HTTP refusal on a native post-header replacement settles the turn at once. The
+[combo stream boundary](responses-combo-boundaries.md) defines HTTP and SSE delivery for it.
 
 Generic translated dispatch in `src/server/responses/adapter-dispatch.ts` asks the same pre-header gate for initial and rebuilt sends, sharing the replacement grant and charging each physical send once to the existing request/workflow budgets. Adapter-owned transports and translated post-header failures are excluded. Coverage: `tests/responses/responses-translated-reset.test.ts`. The number of replacements is the request's as well. A leg reads it from `route.provider`, which
 credential rotation, OAuth refresh, transport resolution and each combo target reassign inside one
@@ -340,14 +343,14 @@ turn up to four more times, and a 429 is where the client stops.
 
 **A pre-header fetch rejection this proxy refuses to replay is a refusal this proxy made.**
 `src/lib/upstream-retry.ts` returns a marked **429** carrying its own code,
-`upstream_reset_replay_refused`. No response headers is not evidence that the model POST
+`upstream_reset_replay_refused` (the historical name also covers a POST's own header deadline). No response headers is not evidence that the model POST
 was never processed, so the decision not to replay is ours, made before any response
 existed — the same shape as `request_send_budget_exhausted`, and it takes the same status
 for the same reason. An explicitly replay-safe operation retries instead, and a provider that
 opted into `retryOnReset` may spend the request's single replacement grant; once that grant is
 gone, or the leg has no send left, or a later attempt fails any other way, the leg settles as
 this same refusal. Nothing on that path hands the client a status that invites the whole turn
-to be sent again. See [ambiguous-resend gate](#ambiguous-resend-gate).
+to be sent again. The exact own-deadline cause is terminal even under replay-safe reset policy; caller cancellation wins and GET/HEAD still throw. Coverage: `tests/server/fetch-header-timeout.test.ts` and the credential-free TCP proof `tests/server/native-remote-local-fallback.test.ts`. See [ambiguous-resend gate](#ambiguous-resend-gate).
 
 That includes what the replacement send itself answers. Once the grant is spent, the first send
 may already have run the turn, so `settleOperatorReplacement` sorts the replacement's answer, for
@@ -355,9 +358,9 @@ the pre-header row in `fetchWithResetRetry` and the WebSocket row alike:
 
 | Replacement answer | Result |
 | --- | --- |
-| 2xx | Returned unchanged. |
+| 2xx | Passed to delivery. A native failed JSON terminal with a recognized replay-refusal code uses the fixed client refusal. |
 | 307, 308, 401, 402, 408, 409, 413, 429, or any 5xx | Body released; settles as the refusal. |
-| Responses HTTP 403 with the exact [xAI OAuth Legacy privacy marker](../providers/xai-grok.md#legacy-privacy-mode-403) | Fixed privacy guidance and policy-refusal attribution with the non-replayable marker retained. |
+| Responses HTTP 403 with the exact [xAI OAuth Legacy privacy marker](../providers/xai-grok.md#legacy-privacy-mode-403) | Fixed privacy guidance and policy-refusal attribution with the non-replayable marker retained. A recognized replay-refusal code takes precedence. |
 | Any other status | Real status and non-replayability kept; bounded client projection retains allowlisted error type and code and `x-should-retry: false` when present, withholds upstream body text and all other upstream headers, and emits a fixed generic message. |
 
 The refusal set is everything that would send again: the client retry table (408, 409, 429,
@@ -452,18 +455,18 @@ instruction to send the turn again. It now reads the same two things the native 
 that came through an intermediate formatter — and never the status, which a refusal and a real
 rate limit share. The failed-envelope path in the same function restates it too, so a refusal
 arriving as `status: "failed"` is not reported as the 502 a Codex client retries four times.
-Because a re-wrap is where the in-process marker is lost, `retainReplayRefusal` and
-`carryReplayRefusal` in `src/lib/upstream-retry.ts` are what each formatter calls:
-`src/bridge/errors.ts`, `src/server/responses/passthrough-error.ts`, both Chat wrappers, the
-routed Claude Messages wrapper, and the deferred-logging re-wrap in `src/server/relay.ts`.
+The synthesizing transport assigns the in-process marker. Response wrappers use
+`carryReplayRefusal` in `src/lib/upstream-retry.ts` to preserve it. A received HTTP
+directive stops automatic resends at the header boundary. The response still carries its
+ordinary provider and quota evidence.
 
 **Dropping `Retry-After` is necessary and not sufficient.** The status stays 429 because Codex
 stops there and a 5xx invites four more sends, but the Stainless-generated clients — `openai`
 and `anthropic`, Python and Node — decide from a status table that includes 429 and compute
 their own backoff when no wait is named, so a bare 429 is still resent by most callers of this
 proxy. Every surface therefore also emits `x-should-retry: false`, the one signal those clients
-read before that table. The refusal is the only code that gets it: the WebSocket post-send
-verdicts are genuine upstream observations and keep their existing 502/504 contract. The
+read before that table. WebSocket post-send verdicts retain their existing 502/504 contract
+and the operator's explicit ambiguous-replacement policy. The
 acceptance evidence is a count, not a shape — `tests/server/replay-refusal-parity.test.ts` runs
 the proxy over a socket, drives all four surfaces with a client that implements the published
 SDK rule, and asserts one physical upstream send per logical request, with a rate-limit control
@@ -474,9 +477,9 @@ independent: zero refuses dispatch, invalid counts fail, and a stopped send is c
 A denied first combo target returns a local typed 429 `request_send_budget_exhausted` without dispatch; a denied later hop, like a ladder with no target left, retains the first confirmed HTTP 400 context refusal and its child diagnostics as `context_length_exceeded`, otherwise the last real upstream failure, without contacting that target. Every attempt keeps its usage; later fatal errors stop immediately. See [context-window refusals](responses-combo-boundaries.md#context-window-refusals).
 When no context refusal is retained and the last failure is a zero-output `max_output_tokens` limit (`zero_output_token_limit`), `exhaustedFailure` synthesizes an HTTP 200 `incomplete` terminal using the selected child's recorded usage when available. The request log retains usage from the child's original response and skips usage fields on the synthesized terminal. That mapping belongs to inspected children only: an SSE child or a run-turn child. Non-streaming native JSON is never inspected, so its own `incomplete` body is returned unchanged and this exhaustion branch never sees it. A `response.incomplete` that carries `end_turn: false` or `incomplete_details.retryable: false`, and an Anthropic `pause_turn` normalized to the same reason, stay on their target and never become this failure. Without a retained context refusal, the exception at both exits (`exhaustedFailure` in `core-combo.ts`): when that last failure is a 400/401/403 (a fallback refusing its own credential or plan), the first 429/402 eligible for quota attribution is returned, and the logical log adopts that child's diagnostics while retaining every physical attempt and its spend history. The proxy replay-refusal marker excludes a 429 from quota attribution. The non-replayable marker alone preserves quota attribution eligibility. When no target answered with quota evidence, a 503 `combo_unavailable` is considered only from target/expiry pairs snapshotted before dispatch for unexpired 429/402 cooldowns passing the picker's provider availability and cached quota checks, without evaluating request eligibility. Only this exhaustion branch evaluates snapshot targets' request eligibility, treating throws as ineligible, and its `Retry-After` uses the earliest still-active eligible snapshot expiry; non-quota cooldowns, disabled/ineligible targets and cooldowns created during this request cannot replace the fallback refusal or shorten the delay. Coverage: `tests/responses/responses-combo-exhausted-error.test.ts`.
 `src/bridge/errors.ts` retains only the allowlisted non-replayable transport codes,
-reapplies the in-process marker, attaches no `Retry-After`, and restates 429 for the refusal
-code alone so a combo or adapter formatter holding an upstream-shaped 502 cannot hand the
-client back a retryable status. Other upstream codes keep the existing classification;
+attaches no `Retry-After`, and projects the refusal codes as 429 with a fixed message and
+`x-should-retry: false`. Process-local provenance comes from the source Response when one
+exists. Other upstream codes keep the existing classification;
 cyber-policy hard blocks retain precedence. The helper, formatter and public Responses count
 regressions live in `tests/lib/upstream-retry.test.ts`,
 `tests/responses/responses-send-budget-counts.test.ts` and

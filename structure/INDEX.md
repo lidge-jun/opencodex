@@ -70,6 +70,7 @@ The wire surfaces a client actually talks to.
 | [`data-planes/claude-tool-loading.md`](data-planes/claude-tool-loading.md) | Physical-adapter tool-loading projections (Responses additional_tools and the Chat use_loaded_tool dispatcher with its response rewrite), preserved catalogs, fallback exclusions and opt-in prerequisites. |
 | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) | Ollama-shaped version/tags/show/chat/generate routes translated onto Chat Completions, their admission, native error shape and final request-log ownership. |
 | [`data-planes/error-detail.md`](data-planes/error-detail.md) | Closed error codes, upstream condition classification, numeric quota reset, closed failure detail, service tier and model identity bounds on request-log rows; response metadata header normalization and the client Retry-After format. Chat client error envelopes, literal tables, proxy-authored message provenance, collector verdicts and internal evidence channels; fixed undeclared-tool refusals, producer-owned incomplete-event origins and constructor-bounded destination labels, branded original client selectors, bounded combo exclusions and fixed retry-evidence diagnostics. Original model labels on synthetic terminal envelopes and compact/Messages ingress handoffs. Messages error envelopes, construction-registered fixed local-refusal guidance, sliced outcome comparisons and baseline client recovery outcomes across special codes and catch returns, non-2xx passthrough envelopes and unchanged 2xx passthrough bodies and original collector evidence and error-event identity, overflow/native-stream golden parity and normalized Anthropic response headers with full-fraction reset dates and success media types. |
+| [`data-planes/replay-refusals.md`](data-planes/replay-refusals.md) | Terminal replay codes, fixed HTTP and SSE projection, transport provenance, and quota evidence. |
 | [`data-planes/chat-reasoning-details.md`](data-planes/chat-reasoning-details.md) | The reasoning_details carrier that lets Chat Completions clients round-trip signed Anthropic thinking across tool steps (#7429). |
 | [`data-planes/protocol-paths.md`](data-planes/protocol-paths.md) | Shared protocol vocabulary, declared feature dispositions, the ingress-by-upstream baseline, plan/trace shapes, and protocol settings. |
 | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) | Per-account Pool wire installation identity, private secret, existence gates and fail-closed delivery. |
@@ -285,6 +286,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/client/link-home.ts` | [`remote-link.md`](remote-link.md) |
 | `src/client/link-management-relay.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/client/link-parity-reporter.ts` | [`remote-link.md`](remote-link.md) |
+| `src/client/link-relay.ts` | [`data-planes/replay-refusals.md`](data-planes/replay-refusals.md) |
 | `src/client/runtime-restart.ts` | [`remote-link.md`](remote-link.md) |
 | `src/clients/` | [`clients/integrations.md`](clients/integrations.md)<br>[`clients/qoder.md`](clients/qoder.md)<br>[`clients/client-support-matrix.md`](clients/client-support-matrix.md)<br>[`clients/t3code.md`](clients/t3code.md) |
 | `src/clients/config-export.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`clients/export-model-names.md`](clients/export-model-names.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
@@ -393,7 +395,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/lib/response-service-tier.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/lib/tool-argument-integers.ts` | [`providers-and-adapters.md`](providers-and-adapters.md) |
 | `src/lib/upstream-condition.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
-| `src/lib/upstream-retry.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/lib/upstream-retry.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md)<br>[`data-planes/replay-refusals.md`](data-planes/replay-refusals.md) |
 | `src/lib/upstream-validation-detail.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/lib/windows-owner-acl.ts` | [`codex-cli-update.md`](codex-cli-update.md)<br>[`remote-link.md`](remote-link.md) |
 | `src/link/` | [`remote-messaging.md`](remote-messaging.md)<br>[`remote-link.md`](remote-link.md) |
@@ -525,8 +527,10 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/responses/codex-ws-request.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/responses/compact.ts` | [`transports/responses-citations.md`](transports/responses-citations.md)<br>[`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/responses/core-combo.ts` | [`ops/service-logging.md`](ops/service-logging.md) |
+| `src/server/responses/fetch-helpers.ts` | [`data-planes/replay-refusals.md`](data-planes/replay-refusals.md) |
 | `src/server/responses/image-context-recovery.ts` | [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |
 | `src/server/responses/input-admission.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/server/responses/non-replayable-error.ts` | [`data-planes/replay-refusals.md`](data-planes/replay-refusals.md) |
 | `src/server/responses/opengateway-completion-guard.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
 | `src/server/responses/passthrough-build-error.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/responses/passthrough-completion.ts` | [`providers/opengateway.md`](providers/opengateway.md) |

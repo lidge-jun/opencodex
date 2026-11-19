@@ -5,7 +5,9 @@ import { redactSecretString } from "../lib/redact";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import {
   applyUpstreamRecoveryInit,
+  cancelResponseBodyBestEffort,
   fetchWithResetRetry,
+  hasUpstreamReplayRefusal, isAutomaticReplayBlocked,
   releaseResponseBodyBestEffort,
   retryBackoffDelayMs,
   sleepWithAbort,
@@ -140,7 +142,8 @@ export async function runWebSearch(
     let res = await sendOnce();
     // Checked before the 429 body is released: a budget found spent after the release could only
     // end in a send-budget error, recorded as a connection failure instead of the quota evidence.
-    for (let attempt = 0; res.status === 429 && sendsLeft > 0; attempt++) {
+    for (let attempt = 0; !res.ok; attempt++) {
+      if (await hasUpstreamReplayRefusal(res, linkedSignal.signal) || res.status !== 429 || sendsLeft <= 0) break;
       const delay = retryBackoffDelayMs(attempt, {
         baseDelayMs: SIDECAR_429_BASE_DELAY_MS,
         maxDelayMs: SIDECAR_429_MAX_DELAY_MS,
@@ -170,6 +173,11 @@ export async function runWebSearch(
     const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
     if (!res.ok) {
       recordOutcome?.(res.status);
+      if (isAutomaticReplayBlocked(res)) {
+        detachBodyGuard();
+        cancelResponseBodyBestEffort(res);
+        return { text: "", sources: [], error: `sidecar HTTP ${res.status}` };
+      }
       const t = await res.text().catch(() => "");
       detachBodyGuard();
       console.warn(`[web-search] sidecar HTTP ${res.status} for query "${query.slice(0, 80)}" (${Date.now() - t0}ms)`);

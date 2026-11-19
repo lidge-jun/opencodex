@@ -8,6 +8,8 @@ and tighter-image 413 retry. Ordinary Codex compaction follows the
 On the opt-in route, `src/server/responses/adapter-dispatch.ts`,
 `src/images/loop.ts`, and `src/web-search/loop.ts` may replace a physical
 upstream size refusal with a single image-context recovery.
+The shared replay veto prevents recovery from starting on a terminal refusal.
+A terminal refusal from the summary is delivered without sending the smaller request.
 `src/server/responses/anthropic-image-context.ts` finds an older image-bearing
 prefix on a complete user-turn boundary. Open tool calls stay with their results.
 The newest image remains in the retained context. A cut that covers developer

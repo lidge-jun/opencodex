@@ -269,6 +269,17 @@ describe("vertex retry fetch", () => {
     expect(mock.calls).toHaveLength(2);
   });
 
+  test("a headerless replay-refusal 503 never triggers a Google transient retry", async () => {
+    const body = { error: { code: "upstream_response_refused", message: "fixture diagnostic" } };
+    const upstream = Response.json(body, { status: 503, headers: { "retry-after": "0" } });
+    const mock = mockFetch([upstream, new Response("duplicate")]);
+    const response = await fetchVertexWithRetry(request, { timeoutMs: 5_000 });
+    expect(mock.calls).toHaveLength(1);
+    expect(response).toBe(upstream);
+    expect(response.headers.get("retry-after")).toBe("0");
+    expect(await response.json()).toEqual(body);
+  });
+
   test("retries without waiting for retryable response body cancellation", async () => {
     const first = new Response("overloaded", { status: 503, headers: { "Retry-After": "0" } });
     const neverSettles = new Promise<void>(() => {});
@@ -280,8 +291,14 @@ describe("vertex retry fetch", () => {
         return originalCatch(onRejected);
       },
     });
-    Object.defineProperty(first.body!, "cancel", {
-      value: () => neverSettles,
+    const trackRejection = () => Object.defineProperty(first.body!, "cancel", { value: () => neverSettles });
+    trackRejection();
+    // Bun tees the response for the bounded peek and gives the original a new body branch.
+    const clone = first.clone.bind(first);
+    spyOn(first, "clone").mockImplementation(() => {
+      const peek = clone();
+      trackRejection();
+      return peek;
     });
     const mock = mockFetch([first, new Response("ok", { status: 200 })]);
     // Retry-After is a floor over the jittered backoff (#7802), so stub the backoff sleep: the
@@ -485,7 +502,7 @@ describe("vertex retry fetch", () => {
     expect(mock.calls).toHaveLength(1);
   });
 
-  test("replays one structurally repaired request after a provider schema 400", async () => {
+  test.each([false, true])("only a replayable provider schema 400 triggers a repair (no-retry %s)", async noRetry => {
     const repairableRequest: AdapterRequest = {
       ...request,
       body: JSON.stringify({
@@ -498,13 +515,19 @@ describe("vertex retry fetch", () => {
         },
       }),
     };
-    const mock = mockFetch([
-      new Response(vertexError(400, "INVALID_ARGUMENT", "tools.0.custom.input_schema: JSON schema is invalid"), { status: 400 }),
-      new Response("ok", { status: 200 }),
-    ]);
+    const refusal = new Response(vertexError(400, "INVALID_ARGUMENT", "tools.0.custom.input_schema: JSON schema is invalid"), {
+      status: 400, headers: noRetry ? { "x-should-retry": "false" } : {},
+    });
+    const mock = mockFetch([refusal, new Response("ok", { status: 200 })]);
 
     const res = await fetchAntigravityWithRetry(repairableRequest, { timeoutMs: 5_000 });
 
+    if (noRetry) {
+      expect(mock.calls).toHaveLength(1);
+      expect(res.status).toBe(400);
+      expect(res.headers.get("x-should-retry")).toBe("false");
+      return;
+    }
     expect(res.status).toBe(200);
     expect(mock.calls).toHaveLength(2);
     const replay = JSON.parse(mock.calls[1].body as string);
@@ -788,3 +811,31 @@ describe("Google Retry-After is a lower bound (#7802)", () => {
   }
 });
 
+
+test.each([false, true])("Antigravity does not resend a terminal 429 (local marker %s)", async marked => {
+  const first = new Response("fixture throttle", {
+    status: 429, headers: { "retry-after": "0", ...(marked ? {} : { "x-should-retry": "false" }) },
+  });
+  if (marked) retry.markResponseNonReplayable(first);
+  const fixture = mockFetch([first, new Response("unexpected resend")]);
+  const response = await fetchAntigravityWithRetry(request, { returnRawErrors: true });
+  expect(fixture.calls).toHaveLength(1);
+  expect(response).toBe(first);
+});
+
+test("Antigravity settles its own response-header deadline after one POST", async () => {
+  let sends = 0;
+  const executor = (async (_input, init) => {
+    sends++;
+    if (sends > 1) return new Response("unexpected resend");
+    const signal = init!.signal!;
+    return await new Promise<Response>((_, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  }) as typeof fetch;
+  const response = await fetchAntigravityWithRetry(request, { executor, timeoutMs: 10 });
+  expect(sends).toBe(1);
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  expect(retry.isReplayRefusalResponse(response)).toBe(true);
+});

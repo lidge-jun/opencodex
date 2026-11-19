@@ -39,13 +39,13 @@ import {
   applyUpstreamRecoveryInit,
   fetchWithResetRetry,
   fetchWithTransientRetry,
-  isNonReplayableResponse, isSameTargetRetryHold,
-  isReplayRefusalCode,
+  carryReplayRefusal, hasUpstreamReplayRefusal, isAutomaticReplayBlocked, isSameTargetRetryHold,
   isReplayRefusalResponse,
+  observedReplayRefusalCode,
+  replayRefusalBodyCode,
   prepareSameTarget429Wait,
   REPLAY_REFUSAL_CLIENT_HEADERS,
   REPLAY_REFUSED_STATUS,
-  retainReplayRefusal,
   SendBudgetExhaustedError, errorDestinationLabel,
   TRANSIENT_RETRY_MAX_ATTEMPTS,
   UpstreamRetryEvidenceError,
@@ -68,7 +68,7 @@ import {
 import { fastPolicyForModel } from "../providers/service-tier";
 import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import { stampApiKeyAccountLabel } from "../providers/label";
-import { distributedKeyPhysicalFetch, distributedKeyResponseOwner } from "../providers/api-key-response-ownership";
+import { distributedKeyPhysicalFetch, distributedKeyResponseOwner, recordDistributedResponseFailure } from "../providers/api-key-response-ownership";
 import { passiveKeyPhysicalFetch } from "../providers/passive-key-observation";
 import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../providers/api-key-pause";
 import { providerAffinityGenerationIsCurrent, providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
@@ -614,9 +614,8 @@ export async function runNativeChatAttempt(
       // A replacement bought by an ambiguous reset is ONE send. Routing it back through a retry
       // helper would let that helper spend sends the operator allowance never granted, which is
       // the duplicated inference the allowance exists to bound.
-      if (singleShot) return await dispatch("connection-reset");
       const fetchWithPolicy = requestTransientPolicy ? fetchWithTransientRetry : fetchWithResetRetry;
-      return await fetchWithPolicy(
+      const response = singleShot ? await dispatch("connection-reset") : await fetchWithPolicy(
         dispatch,
         {
           abortSignal: upstream.signal,
@@ -629,6 +628,10 @@ export async function runNativeChatAttempt(
             : {}),
         },
       );
+      if (response.status === 429 || response.status === 401 || wasAccountAutoPaused(response)) {
+        await hasUpstreamReplayRefusal(response, upstream.signal);
+      }
+      return response;
     } finally {
       request.releaseBodyObservation?.();
     }
@@ -642,7 +645,7 @@ export async function runNativeChatAttempt(
     let autoPauseMoves = 0;
     for (;;) {
       const priorResponse = response;
-      for (; wasAccountAutoPaused(response) && config.providers[route.providerName]?.apiKey && autoPauseMoves < 3 && transientSendAvailable(); autoPauseMoves++) {
+      for (; wasAccountAutoPaused(response) && !isAutomaticReplayBlocked(response) && config.providers[route.providerName]?.apiKey && autoPauseMoves < 3 && transientSendAvailable(); autoPauseMoves++) {
         const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...activeProvider, _apiKeyAttempt: undefined });
         const next = fresh && (selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh);
         if (!next) break;
@@ -662,7 +665,7 @@ export async function runNativeChatAttempt(
       // limit: waiting and re-sending here is exactly the duplicate inference the refusal
       // exists to stop. It kept the same shape under the old 502 only because 502 never
       // matched this branch.
-      && !isNonReplayableResponse(response) && !isSameTargetRetryHold(response)
+      && !isAutomaticReplayBlocked(response) && !isSameTargetRetryHold(response)
       && retryPolicy && providerAffinityGenerationIsCurrent(config, route.providerName, activeProvider)
       && retries < retryPolicy.attempts
       && transientSendAvailable()
@@ -679,7 +682,7 @@ export async function runNativeChatAttempt(
     // Same reason as above, plus a second one: rotating here would write a cooldown against
     // a key that rate-limited nothing, and that false signal outlives the request.
     while ((response.status === 429 || (response.status === 401 && activeProvider._apiKeyAttempt?.distributed))
-      && responseOwnsDistributedKey && !isNonReplayableResponse(response) && hasKeyPoolFailover(activeProvider)) {
+      && responseOwnsDistributedKey && !isAutomaticReplayBlocked(response) && hasKeyPoolFailover(activeProvider)) {
       const failureStatus = response.status;
       const rotate = failureStatus === 401 ? rotateProviderTransportOn401 : rotateProviderTransportOn429;
       const rotated = rotate(config, route.providerName, activeProvider, {
@@ -706,6 +709,7 @@ export async function runNativeChatAttempt(
       if (response !== priorResponse && wasAccountAutoPaused(response)) continue;
       break;
     }
+    if (isAutomaticReplayBlocked(response)) recordDistributedResponseFailure(response, config, route.providerName, upstream.signal);
 
   } catch (error) {
     releaseRetainedRequest();
@@ -758,10 +762,13 @@ export async function runNativeChatAttempt(
       upstream.abort();
       return failLocal(499, "Client cancelled request", "client_cancelled");
     }
-    if (isXaiGrokOAuth(route.providerName, route.provider) && isXaiLegacyPrivacyError(response.status, bodyText)) {
+    // A replay code or retained transport verdict determines the fixed client envelope.
+    const refusalCode = observedReplayRefusalCode(response) ?? replayRefusalBodyCode(bodyText);
+    const replayRefusal = isReplayRefusalResponse(response) || refusalCode !== undefined;
+    if (!replayRefusal && isXaiGrokOAuth(route.providerName, route.provider) && isXaiLegacyPrivacyError(response.status, bodyText)) {
       const refusal = xaiPrivacyModeRefusal(logCtx);
       finishLog(refusal.status);
-      return refusal;
+      return carryReplayRefusal(response, refusal);
     }
     const detail = activeAdapter.formatErrorBody?.(response.status, response.headers, bodyText) ?? "";
     let upstreamType: string | undefined;
@@ -792,18 +799,11 @@ export async function runNativeChatAttempt(
           : response.status >= 500 ? "server_error" : "invalid_request_error"),
       message,
     );
-    // The verdict is read once, from the response that carries it and from the code a
-    // re-wrapped body kept -- never from the status, which a real rate limit shares.
-    const replayRefusal = isReplayRefusalResponse(response) || isReplayRefusalCode(upstreamCode);
-    if (isCyberPolicyCode(upstreamCode) || classified.code === CYBER_POLICY_ERROR_CODE) {
+    if (replayRefusal) {
+      classified.code = refusalCode ?? UPSTREAM_RESET_REPLAY_REFUSED_CODE;
+    } else if (isCyberPolicyCode(upstreamCode) || classified.code === CYBER_POLICY_ERROR_CODE) {
       classified.code = CYBER_POLICY_ERROR_CODE;
       classified.type = cyberPolicyErrorType(upstreamType);
-    } else if (replayRefusal) {
-      // 429 classifies as a rate limit and a rate limit already carries a code, so the branch
-      // below -- which only fills an EMPTY code -- could never restore this one. Without it the
-      // client is told the provider throttled the turn, when what happened is that this proxy
-      // declined to send it a second time.
-      classified.code = UPSTREAM_RESET_REPLAY_REFUSED_CODE;
     } else if (upstreamCode === "model_not_found") {
       classified.code = "model_not_found";
       classified.type = "invalid_request_error";
@@ -826,6 +826,7 @@ export async function runNativeChatAttempt(
     finishLog(status, classified.message);
     const rewritten = new Response(JSON.stringify(ownedChatErrorPayload({ status, type: classified.type, code: classified.code,
       evidence: { status: response.status, type: upstreamType, code: upstreamCode ?? undefined, message: upstreamMessage ?? detail },
+      contract: replayRefusal ? "replay_refused" : undefined,
       localReason: wasAccountAutoPaused(response) ? "credentials_paused" : undefined })), {
       status,
       headers: {
@@ -835,7 +836,7 @@ export async function runNativeChatAttempt(
       },
     });
     attachComboFailureEvidence(rewritten, JSON.stringify(chatCompletionsErrorBody(status, classified.message, classified.type, classified.code)));
-    return replayRefusal ? retainReplayRefusal(rewritten) : rewritten;
+    return carryReplayRefusal(response, rewritten);
   }
 
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";

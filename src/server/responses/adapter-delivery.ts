@@ -27,7 +27,7 @@ import { noteKiroServedSuccess } from "../../providers/kiro-usage";
 import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
 import { readDisplaySafeErrorText, normalizeUpstreamErrorText } from "./core-errors";
 import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
-import { isNonReplayableResponse } from "../../lib/upstream-retry";
+import { isAutomaticReplayBlocked, isNonReplayableResponse } from "../../lib/upstream-retry";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { currentTurnToolBridgeMaps, guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
 import { guardCompactionSummary } from "../../responses/compaction-summary";
@@ -108,7 +108,7 @@ export async function deliverAdapterResponse(
         if (isProxyError(response)) rememberProxyErrorMessage(logCtx, error.message ?? error.safeText, { status: response.status, type: error.type ?? "upstream_error", code: error.code, presentation: proxyErrorPresentation(response) });
         yield { type: "error", status: response.status, message: error.message ?? error.safeText,
           errorType: error.type ?? "upstream_error", ...(error.code ? { code: error.code } : {}),
-          ...(nonReplayable ? { retryable: false } : {}) };
+          ...(isAutomaticReplayBlocked(response) ? { retryable: false } : {}) };
         return;
       }
       try {
@@ -131,7 +131,7 @@ export async function deliverAdapterResponse(
         yield { type: "error", message: error.message,
           status: 504, errorType: "upstream_error", code: "upstream_stall_timeout" };
       }
-    }, () => transportState.activeAdapter.name, !isNonReplayableResponse(upstreamResponse), upstreamResponse);
+    }, () => transportState.activeAdapter.name, !isAutomaticReplayBlocked(upstreamResponse), upstreamResponse);
 
   const clientToolCatalog = requestState.clientToolCatalogRestriction && route.provider.authMode !== "forward"
     ? requestState.clientToolCatalogRestriction : undefined;

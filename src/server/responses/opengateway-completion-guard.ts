@@ -1,5 +1,5 @@
 import { guardResponseBodyInactivity } from "../../lib/response-body-inactivity";
-import { isNonReplayableResponse } from "../../lib/upstream-retry";
+import { isAutomaticReplayBlocked } from "../../lib/upstream-retry";
 import { isPlainObject } from "../responses-snapshot-codec";
 import { BoundedSseFrameBuffer, joinSseFrameBytes } from "../sse-frame-buffer";
 import { sseDataPayload } from "../sse-payload-rewrite";
@@ -218,7 +218,7 @@ export async function guardOpenGatewayCompletion(response: Response, options: Op
   catch { return response; }
   if (!isPlainObject(body)) return response;
   const canReplay = options.retryEnabled !== false && process.env[EMPTY_COMPLETION_RETRY_ENV] !== "0"
-    && selfContainedResponsesBody(body) && !isNonReplayableResponse(response);
+    && selfContainedResponsesBody(body) && !isAutomaticReplayBlocked(response);
   let selected = response;
   for (let attempt = 0; ; attempt++) {
     const initial = attempt === 0;

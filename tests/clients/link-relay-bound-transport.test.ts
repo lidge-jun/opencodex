@@ -57,6 +57,36 @@ async function withHttpPeer(handler: RequestListener, run: (port: number) => Pro
 }
 
 describe("connection-bound link relay", () => {
+  test.each(["preflight reset", "data reset", "data upgrade"])("real relay preserves the data-dispatch boundary on %s", async failure => {
+    const sent = failure !== "preflight reset";
+    let probes = 0, dataRequests = 0;
+    await withHttpPeer((req, res) => {
+      const url = new URL(req.url!, "http://peer");
+      if (url.pathname === LINK_RELAY_AUTH_PATH) {
+        probes++;
+        if (!sent) { req.socket.destroy(); return; }
+        res.writeHead(204, { "x-opencodex-link-proof": linkRelayProof(fp, "listener", keyId, linkId,
+          url.searchParams.get("nonce")!)! });
+        res.end(); return;
+      }
+      dataRequests++;
+      if (failure === "data upgrade") {
+        res.writeHead(101, { Connection: "Upgrade", Upgrade: "fixture" });
+        res.end();
+      } else req.socket.destroy();
+    }, async port => {
+      const response = await relayLinkDataRequest(new Request("http://127.0.0.1/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" }, body: '{"input":"fixture"}',
+      }), target(port), { tunnel: HOME_INITIATED_LINK_TUNNEL });
+      expect(probes).toBe(1); expect(dataRequests).toBe(sent ? 1 : 0);
+      expect(response.status).toBe(sent ? 429 : 503);
+      expect(response.headers.get("x-should-retry")).toBe(sent ? "false" : null);
+      if (sent) expect(response.headers.get("retry-after")).toBeNull();
+      const body = await response.json();
+      expect(sent ? body.error.code : body.code).toBe(sent ? "upstream_reset_replay_refused" : "home_unreachable");
+    });
+  });
+
   test("direction and both identities are authenticated", () => {
     const nonce = "c".repeat(64);
     const caller = linkRelayProof(fp, "caller", keyId, linkId, nonce);

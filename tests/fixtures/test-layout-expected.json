@@ -1308,6 +1308,7 @@
   "remote-workspace-session-binding.test.ts": "clients", "remote-workspace-sessions.test.ts": "clients",
   "remote-workspace-tool-bridge.test.ts": "clients", "remote-workspace.test.ts": "clients",
   "remove-tree-helper.test.ts": "lib",
+  "native-remote-local-fallback.test.ts": "server",
   "fixture-teardown-helper.test.ts": "ci-workflows", "replay-refusal-parity.test.ts": "server",
   "fixture-windows-runtime-preload.test.ts": "ci-workflows",
   "repo-hygiene.test.ts": "ci-workflows", "request-decompress.test.ts": "usage",

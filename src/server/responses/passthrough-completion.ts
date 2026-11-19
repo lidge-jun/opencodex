@@ -3,6 +3,8 @@ import { formatErrorResponse } from "../../bridge";
 import type { MainQuotaDispatch } from "../../codex/main-account-cache";
 import { isLocalUpstream } from "../../lib/local-upstream";
 import { guardResponseBodyInactivity, markResponseBodyInactivityGuarded } from "../../lib/response-body-inactivity";
+import { carryObservedReplayRefusal, isReplayRefusalProjection, isReplayRefusalResponse, retainReplayRefusal } from "../../lib/upstream-retry";
+import { isXaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
 import { explicitStallTimeoutMs, resolveStallTimeoutMs } from "../../stall-timeout";
 import type { OcxConfig } from "../../types";
 import { recordKeyWireAttemptUsage, usageFromResponsesPayload, type RequestLogContext } from "../request-log";
@@ -74,6 +76,7 @@ export function selectPassthroughResetResponse(
     signal: AbortSignal;
     allowMissingContentType: boolean;
     delivery: ResetSelectionDelivery;
+    grokOAuthLogCtx?: Pick<RequestLogContext, "causeHint">;
   },
 ): Promise<Response> {
   const openGateway = options.request.url === "https://apis.opengateway.ai/v1/responses"
@@ -81,8 +84,13 @@ export function selectPassthroughResetResponse(
   const stallMs = resolveStallTimeoutMs(options.config.stallTimeoutSec, { localUpstream: isLocalUpstream(options.request.url) });
   // The same budget, but reported as a stall only when the operator set it explicitly (#8206).
   const explicitBudget = explicitStallTimeoutMs(options.config.stallTimeoutSec) > 0;
-  const protect = (source: Response): Response =>
-    carryResponseToolOwnership(source, guardResponseBodyInactivity(source, options.signal, stallMs, { explicitBudget }).response);
+  const protect = (source: Response): Response => {
+    const guarded = guardResponseBodyInactivity(source, options.signal, stallMs, { explicitBudget }).response;
+    // This response still belongs to the exchange and carries its raw quota headers.
+    carryObservedReplayRefusal(source, guarded);
+    if (isReplayRefusalResponse(source)) retainReplayRefusal(guarded);
+    return carryResponseToolOwnership(source, guarded);
+  };
   const quotaOwner = (): MainQuotaDispatch | undefined =>
     admission.authCtx.kind === "main" ? admission.authCtx.mainQuotaDispatch : undefined;
   const originalOwner = quotaOwner();
@@ -94,9 +102,12 @@ export function selectPassthroughResetResponse(
     const replacement = await recover(error, stage, signal, accepts);
     if (!replacement) return null;
     replacementOwner = quotaOwner();
+    // Owned projections already hold their complete body and keep their identity for delivery.
+    if (isXaiPrivacyModeRefusal(replacement) || isReplayRefusalProjection(replacement)) return replacement;
     return protect(replacement);
   }, {
     allowMissingContentType: options.allowMissingContentType,
+    grokOAuthLogCtx: options.grokOAuthLogCtx,
     // The collector's silence clock sees only delivered bytes; a combo parent holds the head itself.
     keepalive: options.delivery === "buffered-json" ? "upstream-activity" : options.delivery === "combo-child" ? "none" : "periodic",
     inspectionWindowMs: options.delivery === "direct-stream" ? DIRECT_RESET_INSPECTION_WINDOW_MS : undefined,

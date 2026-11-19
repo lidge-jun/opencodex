@@ -136,7 +136,8 @@ export function sidecarLoopTerminalEvent(
   }
   const overflow = sidecarLoopOverflowEvent(failure);
   if (overflow || failure.event) return overflow;
-  if (classifyError(failure.status, "upstream_error", failure.message).code !== "context_length_exceeded") return undefined;
+  if (!failure.nonReplayable
+    && classifyError(failure.status, "upstream_error", failure.message).code !== "context_length_exceeded") return undefined;
   const rateLimited = failure.upstreamCode === "rate_limit_exceeded";
   return {
     type: "error",

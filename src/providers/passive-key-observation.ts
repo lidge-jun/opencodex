@@ -5,6 +5,7 @@ import { isPassiveKeyDeferred, isPassiveKeyTransparent, PASSIVE_KEY_SEND } from 
 import { isKeychainReference, passiveKeychainGeneration, peekResolvedProviderKey, resolveProviderApiKeyPassively } from "./api-key-resolve";
 import { passiveKeyLimits, type PassiveKeyProvider } from "./quota/passive-key-limits";
 import { extractPassiveWireModel } from "./quota/passive-wire-model";
+import { isReplayRefusalResponse } from "../lib/upstream-retry";
 
 const destinations = new Map<string, PassiveKeyProvider>([
   ["https://api.openai.com", "openai"], ["https://api.anthropic.com", "anthropic"],
@@ -202,7 +203,7 @@ export function passiveKeyPhysicalFetch(
       const reused = seenResponses.has(response);
       seenResponses.add(response);
       try {
-        if (reservation && !reused && (!isKeychainReference(snapshot._apiKeyAttempt!.reference!) || (generation !== undefined && generation === passiveKeychainGeneration(snapshot._apiKeyAttempt!.reference!, key))) && stillConfigured(config, name, snapshot, home)) {
+        if (reservation && !reused && !isReplayRefusalResponse(response) && (!isKeychainReference(snapshot._apiKeyAttempt!.reference!) || (generation !== undefined && generation === passiveKeychainGeneration(snapshot._apiKeyAttempt!.reference!, key))) && stillConfigured(config, name, snapshot, home)) {
           reservation.record(response.headers, Date.now(), response.status);
         }
       } catch { /* Passive display evidence must not fail the proxied response. */ }

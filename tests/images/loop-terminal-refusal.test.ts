@@ -6,6 +6,7 @@ import type { ProviderAdapter } from "../../src/adapters/base";
 import type { AdapterEvent, OcxParsedRequest, OcxUsage } from "../../src/types";
 import type { ImageBridgePlan } from "../../src/images/types";
 import { runWithImageBridge } from "../../src/images/loop";
+import { markResponseNonReplayable } from "../../src/lib/upstream-retry";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -96,4 +97,36 @@ test.each(cases)("a refused image_gen iteration stops and meters usage: %j", asy
   if (terminalRefusalAsFailed) expect(text).toContain('"code":"invalid_prompt"');
   else expect(text).toContain(`"reason":"${reason}"`);
   expect(text).not.toContain("event: response.completed");
+});
+
+test.each([false, true])("image bridge does not resend a terminal 429 (local marker %s)", async marked => {
+  let sends = 0, rotations = 0;
+  const adapter: ProviderAdapter = {
+    name: "mock-refusal",
+    buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
+    async fetchResponse() {
+      sends++;
+      if (sends > 1) return new Response("unexpected resend", { status: 400 });
+      const response = new Response("fixture quota", {
+        status: 429, headers: marked ? {} : { "x-should-retry": "false" },
+      });
+      if (marked) markResponseNonReplayable(response);
+      return response;
+    },
+    async *parseStream() { throw new Error("must not parse a rejected response"); },
+  };
+  const response = await runWithImageBridge({
+    parsed: { modelId: "fixture", context: { messages: [], tools: [] }, stream: true, options: {} },
+    adapter,
+    plan: { provider: {} as never, auth: { baseUrl: "https://api.x.ai", token: "fixture" },
+      model: "fixture", toolNames: new Set(["image_gen"]) } as ImageBridgePlan,
+    incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget() },
+    retryOn429Policy: { enabled: true, attempts: 1, intervalMs: 1, maxIntervalMs: 1, respectRetryAfter: false },
+    on429: async () => { rotations++; return { adapter, recoveryKind: "key-429" }; },
+  });
+  expect(await response.text()).toContain("429");
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  expect(sends).toBe(1);
+  expect(rotations).toBe(0);
 });

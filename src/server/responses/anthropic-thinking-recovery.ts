@@ -6,7 +6,7 @@ import { isLikelyRealAnthropicThinkingSignature } from "../../adapters/anthropic
 import type { AdapterEvent, OcxParsedRequest } from "../../types";
 import { upstreamErrorMessageFromPayload } from "../../lib/errors";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
-import { isNonReplayableResponse } from "../../lib/upstream-retry";
+import { isAutomaticReplayBlocked, isNonReplayableResponse, isReplayRefusalCode, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE } from "../../lib/upstream-retry";
 import { rememberReasoningReplayOpaqueBlobRejection } from "../../responses/reasoning-replay-cache";
 import { prepareOpaqueBlobRecovery, type OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
 
@@ -68,7 +68,7 @@ export function createAnthropicThinkingRecovery(
   };
 
   const prepareHttp = async (response: Response, adapterName: string, attempt = parsed): Promise<boolean> => {
-    if (signal.aborted || !canRetry() || response.status !== 400 || isNonReplayableResponse(response)
+    if (signal.aborted || !canRetry() || response.status !== 400 || isAutomaticReplayBlocked(response)
       || adapterName !== "anthropic" || guard.attempted
       || parsed._stripReasoningEncryptedContent === true || !carriesThinkingState(attempt)) return false;
     try {
@@ -148,10 +148,14 @@ export function createAnthropicThinkingRecovery(
     if (nonReplayable) response = await sanitizeNonReplayableUpstreamError(response, abortSignal);
     const text = await readDisplaySafeErrorText(response, abortSignal, `Provider error ${response.status}`);
     const error = normalizeUpstreamErrorText(text, `Provider error ${response.status}`);
+    if (isReplayRefusalCode(error.code)) return {
+      type: "error", status: REPLAY_REFUSED_STATUS, errorType: "upstream_error", code: error.code,
+      message: REPLAY_REFUSAL_MESSAGE, retryable: false,
+    };
     if (proxyErrorContext && isProxyError(response)) rememberProxyErrorMessage(proxyErrorContext, error.message ?? error.safeText, { status: response.status, type: error.type ?? "upstream_error", code: error.code, presentation: proxyErrorPresentation(response) });
     return { type: "error", status: response.status, message: error.message ?? error.safeText,
       errorType: error.type ?? "upstream_error", ...(error.code ? { code: error.code } : {}),
-      ...(nonReplayable ? { retryable: false } : {}) };
+      ...(isAutomaticReplayBlocked(response) ? { retryable: false } : {}) };
   };
   return { prepareHttp, prepareEvent: prepare, observeIteration, projectHttpFailure, wrap, rememberSuccess };
 }

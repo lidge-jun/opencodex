@@ -24,7 +24,7 @@ completion (including reasoning-only output) becomes `incomplete/max_output_toke
 output tokens exhaust the requested limit. A malformed empty terminal fails as `invalid_completion`.
 Otherwise replay requires explicit `store: false`, complete input and client-executed tools only,
 as judged by `selfContainedResponsesBody` on the outbound body. Hosted/unknown tools, continuation,
-background mode and nonreplayable responses prevent replay. This destination defaults to recovery;
+background mode, nonreplayable responses and an explicit `x-should-retry: false` header prevent replay. This destination defaults to recovery;
 `emptyCompletionRetry: false` and `OCX_EMPTY_COMPLETION_RETRY=0` disable it.
 `src/server/responses/passthrough-completion.ts` connects one replacement to the existing send
 budget, pacing, accounting and abort path. Even a replacement HTTP 503 or connection reset cannot
@@ -36,13 +36,15 @@ lifecycle or terminal snapshot whose aggregate `output_text` is neither absent, 
 holds at most 1 MiB, 1,024 events/chunks or 30 seconds, then hands the held prefix and pending read
 to the consumer without cancelling a healthy source. Consumed/cancelled prefix references are
 released; terminal disposal and consumer cancellation do not await upstream cleanup. SSE inactivity
-keeps the existing stall-timeout policy. When reset preflight is active, its source and any accepted
-reset replacement are guarded before preflight, so the clock follows upstream reads rather than
+keeps the existing stall-timeout policy. When reset preflight is active, its source and accepted
+upstream replacement bodies are guarded before preflight, so the clock follows upstream reads rather than
 synthetic keepalives or held combo frames; canonical buffered JSON shares that guard
-([combo stream boundary](../transports/responses-combo-boundaries.md)). The completion guard skips only the duplicate clock for
-that initial selected body; a later empty-completion retry gets its own guard. Its first hold is
-shortened by the time reset selection already held the head, so both holds share the 30-second
-bound. Rewritten responses preserve tool ownership.
+([combo stream boundary](../transports/responses-combo-boundaries.md)). The inactivity wrapper
+carries the synthetic replay-refusal marker and any probed wire refusal code through reset
+selection and preserves genuine quota headers for accounting. The completion guard skips the
+duplicate clock for the initial selected body. A later empty-completion retry gets its own guard.
+Reset selection time counts toward the first hold, so both holds share the 30-second bound.
+Rewritten responses preserve tool ownership.
 `tests/responses/opengateway-completion-receipts.test.ts` covers wire outcomes and resource release;
 `tests/responses/empty-completion-core.test.ts` and `tests/responses/empty-completion-hardening.test.ts`
 cover integration and replay barriers. Other destinations and translated retry defaults are unchanged.

@@ -51,6 +51,15 @@ function head(text: string): { event: string; data: { type: string; response: Re
 }
 
 describe("OpenGateway completion exact-head receipts", () => {
+  test.each([false, true])("review: a header-only no-retry empty completion sends no replacement (stream %s)", async stream => {
+    const source = stream ? sse([{ type: "response.completed", response: snapshot() }]) : Response.json(snapshot());
+    source.headers.set("x-should-retry", "false");
+    const f = await run(source);
+    await f.result.text();
+    expect(f.retries).toBe(0);
+    expect(f.result.headers.get("x-should-retry")).toBe("false");
+  });
+
   test("lifecycle output_text evidence keeps the original stream (#8333)", async () => {
     const created = { type: "response.created", response: { id: "resp_1", object: "response", status: "in_progress", output: [], output_text: "already produced" } };
     const f = await run(sse([created, { type: "response.completed", response: snapshot() }]));

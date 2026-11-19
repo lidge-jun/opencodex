@@ -142,7 +142,7 @@ import {
   streamingIncompleteResponse,
 } from "./context-overflow";
 import { mandatoryResponsesReasoningReplayUnavailable } from "./core-replay";
-import { isReplayRefusalResponse, settleOperatorReplacement, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../lib/upstream-retry";
+import { isReplayRefusalCode, isReplayRefusalResponse, settleOperatorReplacement, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../lib/upstream-retry";
 import { attributeFinalRequest } from "../request-log-failure-attribution";
 import { createComboProtocolLanes, dispatchNativeComboChild } from "./core-combo-native";
 import { createJevModelInvoker } from "./jev-model-invoke";
@@ -1517,7 +1517,7 @@ export async function executeComboResponses(
       // Numeric 429 is a client replay policy here, not an upstream quota observation.
       childLog.causeHint = "transport-ambiguous";
       childLog.terminalSource = "synthetic";
-      childLog.errorCode = attempt.errorCode = UPSTREAM_RESET_REPLAY_REFUSED_CODE;
+      childLog.errorCode = attempt.errorCode = isReplayRefusalCode(failure.upstreamCode) ? failure.upstreamCode : UPSTREAM_RESET_REPLAY_REFUSED_CODE;
     }
     if (failure.upstreamCode === "input_admission_refused" && attempt.sendCount === 0) {
       attempt.errorCode = failure.upstreamCode;

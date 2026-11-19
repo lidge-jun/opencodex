@@ -3,10 +3,10 @@ import {
   isNonReplayableUpstreamCode,
   isReplayRefusalCode,
   markResponseNonReplayable,
-  REPLAY_REFUSED_STATUS,
-  retainReplayRefusal,
+  projectReplayRefusal,
 } from "../lib/upstream-retry";
 import { formatClientRetryAfter } from "../lib/client-retry-after";
+import { ownedChatErrorPayload } from "../lib/client-error-body";
 import {
   adapterFailureFromMessage,
   classifyError,
@@ -45,7 +45,7 @@ export function formatErrorResponse(
   status: number,
   type: string,
   message: string,
-  options?: { code?: string | null; retryAfter?: string | null; classified?: boolean; upstreamCode?: string | null },
+  options?: { code?: string | null; retryAfter?: string | null; classified?: boolean; upstreamCode?: string | null; fixedMessage?: boolean },
 ): Response {
   const validationStatus = status === 400 || status === 422;
   const error = classifyError(status, type, message);
@@ -92,13 +92,20 @@ export function formatErrorResponse(
   const replayBlocked = error.code !== CYBER_POLICY_ERROR_CODE
     && isNonReplayableUpstreamCode(options?.code);
   if (replayBlocked) error.code = options!.code!;
-  // The replay refusal owns its status as well as its code. A combo or adapter formatter
-  // reaches here holding the upstream-shaped status it was about to report, and inheriting
-  // that would hand the client a 5xx it is configured to retry four times.
+  if (replayBlocked && isReplayRefusalCode(error.code)) {
+    const refusal = projectReplayRefusal(error.code);
+    markResponseNonReplayable(refusal);
+    return refusal;
+  }
   const finalStatus = error.code === CYBER_POLICY_ERROR_CODE
     ? 400
-    : error.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE ? 503
-      : isReplayRefusalCode(error.code) ? REPLAY_REFUSED_STATUS : status;
+    : error.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE ? 503 : status;
+  if (options?.fixedMessage) {
+    error.message = ownedChatErrorPayload({
+      status: finalStatus, code: error.code,
+      evidence: { status: finalStatus, type: error.type, code: error.code ?? undefined },
+    }).error.message;
+  }
   const headers = new Headers({ "Content-Type": "application/json" });
   // Re-emitted as an integer this proxy formats; the incoming text is never echoed.
   const retryAfter = formatClientRetryAfter(options?.retryAfter);
@@ -109,11 +116,6 @@ export function formatErrorResponse(
     && retryAfter.length <= 128) {
     headers.set("Retry-After", retryAfter);
   }
-  // The refusal's client policy, restated here for the same reason its status is: this
-  // formatter is the last thing several adapter and combo paths touch before the client,
-  // and no wait of its own does not stop a client that retries every 429 by default.
-  const refusal = isReplayRefusalCode(error.code) && replayBlocked;
-  if (refusal) applyReplayRefusalClientHeaders(headers);
   if (error.code === REQUIRED_TOOL_CONTRACT_CODE && finalStatus === 400) applyReplayRefusalClientHeaders(headers);
   const response = new Response(JSON.stringify({ error }), {
     status: finalStatus,
@@ -124,10 +126,6 @@ export function formatErrorResponse(
       ? options.upstreamCode : options?.classified ? null : options?.code ?? null);
   }
   if (replayBlocked) markResponseNonReplayable(response);
-  // Re-wrapping is where the refusal loses its provenance: combo failure consumption parses
-  // the JSON and builds a new Response, and the code alone does not tell a later quota
-  // recorder that no upstream produced this status. Carry the narrower marker across too.
-  if (refusal) retainReplayRefusal(response);
   return response;
 }
 

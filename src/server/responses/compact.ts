@@ -118,6 +118,13 @@ import {
   fetchWithTransientRetry,
   applyUpstreamRecoveryInit,
   isNonReplayableResponse,
+  isAutomaticReplayBlocked,
+  hasUpstreamReplayRefusal,
+  isReplayRefusalResponse,
+  carryReplayRefusal,
+  projectReplayRefusal,
+  replayRefusalBodyCode,
+  UPSTREAM_RESET_REPLAY_REFUSED_CODE,
   SendBudgetExhaustedError, errorDestinationLabel,
   TRANSIENT_RETRY_MAX_ATTEMPTS,
   type UpstreamSendRecovery,
@@ -188,7 +195,6 @@ import { passiveKeyPhysicalFetch } from "../../providers/passive-key-observation
 import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../../providers/api-key-pause";
 import { providerAffinityGenerationIsCurrent, providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../../providers/api-key-selection";
 import { stampApiKeyAccountLabel } from "../../providers/label";
-import { shouldAttemptImageTierRetry } from "../image-retry";
 import { resolveProviderTransport } from "../../providers/xai-transport";
 import type { WsData } from "../ws-bridge";
 import { codexAccountSelectionForTurn, registerTurn, trackStreamLifetime, unregisterTurn } from "../lifecycle";
@@ -644,7 +650,7 @@ export async function bufferCompactResponse(
       void upstream.body?.cancel(signal.reason).catch(() => undefined);
       return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
     }
-    if (!upstream.body) return new Response(null, { status: upstream.status, statusText: upstream.statusText, headers });
+    if (!upstream.body) return carryReplayRefusal(upstream, new Response(null, { status: upstream.status, statusText: upstream.statusText, headers }));
     const declaredLength = Number(upstream.headers.get("content-length"));
     if (Number.isFinite(declaredLength) && declaredLength > COMPACT_RESPONSE_MAX_BYTES) {
       void upstream.body.cancel("compact_response_too_large").catch(() => undefined);
@@ -661,7 +667,7 @@ export async function bufferCompactResponse(
     });
     if (signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
     if (result.oversized) return compactResponseTooLargeError();
-    return new Response(result.bytes, { status: upstream.status, statusText: upstream.statusText, headers });
+    return carryReplayRefusal(upstream, new Response(result.bytes, { status: upstream.status, statusText: upstream.statusText, headers }));
   } catch (error) {
     if (signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
     if (error instanceof DOMException && error.name === "TimeoutError") {
@@ -1405,6 +1411,7 @@ export async function handleResponsesCompact(
       && (authCtx.kind === "main-pool" || authCtx.kind === "pool")
       && !gatewayTransport
       && usesCodexForwardPoolAuth(authCtx, compactProvider)
+      && !await hasUpstreamReplayRefusal(upstream, req.signal)
       && !req.signal.aborted
     ) {
       await upstream.body?.cancel().catch(() => undefined);
@@ -1532,15 +1539,12 @@ export async function handleResponsesCompact(
     // — reporting exhausted retries while another pool account sat idle (#913).
     if (
       (upstream.status === 429 || upstream.status === 402 || wasAccountAutoPaused(upstream))
-      // A replay refusal this proxy synthesized carries 429 for the client's benefit only.
-      // It is not pool quota evidence, and the alternate account below is another send of a
-      // compact turn that may already have been processed.
-      && !isNonReplayableResponse(upstream)
       && (!storedPool401ReplayAttempted || wasAccountAutoPaused(upstream))
       && !gatewayTransport
       && usesCodexForwardPoolAuth(authCtx, route.provider)
       && !authCtx.fixedAccount
       && route.codexAccountMode
+      && !await hasUpstreamReplayRefusal(upstream, req.signal)
       && !req.signal.aborted
     ) {
       const firstRetryAfter = upstream.headers.get("retry-after");
@@ -1645,6 +1649,7 @@ export async function handleResponsesCompact(
       && outcomeCtx === authCtx
       && !req.signal.aborted
       && !conversationCarriesUploadedFiles(raw)
+      && !await hasUpstreamReplayRefusal(upstream, req.signal)
       && !await shouldRetryCodexPoolAccountQuota(upstream, req.signal)
     ) {
       const firstStatus = upstream.status;
@@ -1727,7 +1732,8 @@ export async function handleResponsesCompact(
     // The client-facing 429 of a synthesized replay refusal says nothing about this
     // account's quota. Pool accounting keeps reading it as the transport failure it is,
     // which is also what it recorded before the status was corrected for the client.
-    const replayRefused = isNonReplayableResponse(upstream);
+    const replayRefused = isReplayRefusalResponse(upstream);
+    const refusalCode = replayRefusalBodyCode(bufferedErrorText);
     const explicitQuotaStatus = !replayRefused
       && (buffered.status === 429 || buffered.status === 402);
     const bodyInferredQuota = !replayRefused
@@ -1764,7 +1770,7 @@ export async function handleResponsesCompact(
       inspectResponseLogJson(logCtx, compactText);
       if (!options.compactionRoutingOverride) forgetCompactHandoffRoute(req, admission);
       rememberServingConversationStateIssuer(outcomeCtx, codexPoolAffinityKey(req.headers));
-    } else if (!options.compactionRoutingOverride && quotaFailure && (!storedPool401ReplayAttempted || wasAccountAutoPaused(upstream))) {
+    } else if (!refusalCode && !isAutomaticReplayBlocked(upstream) && !options.compactionRoutingOverride && quotaFailure && (!storedPool401ReplayAttempted || wasAccountAutoPaused(upstream))) {
       const fallbackModel = compactHandoffRoute(req, admission, raw.model);
       if (fallbackModel && !req.signal.aborted) {
         const fallbackReq = new Request(req.url, {
@@ -1784,7 +1790,10 @@ export async function handleResponsesCompact(
             // the holder. Forwarding `options` alone was not enough: the child minted its own.
             { ...options, sendBudget },
           );
-          if (fallback.ok || fallback.status === 499) return fallback;
+          if (fallback.ok || fallback.status === 499 || isAutomaticReplayBlocked(fallback)) {
+            void buffered.body?.cancel().catch(() => undefined);
+            return fallback;
+          }
           await fallback.body?.cancel().catch(() => undefined);
         } catch {
           // The previous-model rejection is the authoritative failure when the
@@ -1793,7 +1802,11 @@ export async function handleResponsesCompact(
       }
     }
     // A native compact 404 falls back to a regular Responses compaction turn.
-    if (buffered.status !== 404) return buffered;
+    if (buffered.status !== 499 && (refusalCode || replayRefused)) {
+      void buffered.body?.cancel().catch(() => undefined);
+      return carryReplayRefusal(upstream, projectReplayRefusal(refusalCode ?? UPSTREAM_RESET_REPLAY_REFUSED_CODE));
+    }
+    if (buffered.status !== 404 || isAutomaticReplayBlocked(upstream)) return buffered;
     } finally {
       releaseUpstreamHostAdmission(compactHostAdmissionLease);
       releaseCodexAuthContextProbeLease(authCtx);

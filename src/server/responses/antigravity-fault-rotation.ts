@@ -1,4 +1,4 @@
-import { isNonReplayableResponse } from "../../lib/upstream-retry";
+import { isAutomaticReplayBlocked } from "../../lib/upstream-retry";
 
 /**
  * Whether an Antigravity 502/503/504 that outlived the same-account transient ladder may be
@@ -19,6 +19,7 @@ export function isAntigravityFaultRotatable(
   return providerName === "google-antigravity" && [502, 503, 504].includes(response.status)
     && state.activeAdapter.name === "google"
     && poolActivated && !faultRotationAttempted
-    && !isNonReplayableResponse(response)
+    // A header-only hold forbids this resend even without proxy-owned refusal provenance.
+    && !isAutomaticReplayBlocked(response)
     && state.genericFailovers < state.genericFailoverLimit;
 }

@@ -104,6 +104,7 @@ describe("fetchWithTransientRetry", () => {
     expect(isNonReplayableUpstreamCode("upstream_no_response")).toBe(true);
     expect(isNonReplayableUpstreamCode("upstream_closed_before_response")).toBe(true);
     expect(isNonReplayableUpstreamCode("upstream_reset_replay_refused")).toBe(true);
+    expect(isNonReplayableUpstreamCode("upstream_response_refused")).toBe(true);
     expect(isNonReplayableUpstreamCode("upstream_error")).toBe(false);
     expect(isNonReplayableUpstreamCode(undefined)).toBe(false);
   });

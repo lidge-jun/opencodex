@@ -221,6 +221,9 @@ describe("Responses fetch-helper import boundary", () => {
       "../../lib/proxy-env",
       "../../lib/redact",
       "../../lib/upstream-http-version",
+      // Replay verdicts stay in the transport leaf: abort/context-overflow-verdict/error-destination/
+      // redact -> redact-folding; none imports server or adapters.
+      "../../lib/upstream-retry",
       // Import-free plugin rewrite slot (src/plugins/upstream-hooks.ts).
       "../../plugins/upstream-hooks",
       "../../providers/request-pacing",
