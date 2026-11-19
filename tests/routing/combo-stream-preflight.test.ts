@@ -121,6 +121,17 @@ describe("review: last_error refusal boundary", () => {
 });
 
 describe("combo stream preflight", () => {
+  test.each([
+    { type: "error", status: 503, error: { code: "server_is_overloaded" }, replayUnsafe: true },
+    { type: "response.failed", response: { error: { code: "server_is_overloaded" }, output: [], replayUnsafe: true } },
+  ])("a replay-unsafe terminal leaves the original response on the chosen leg", async terminal => {
+    const input = sse({ type: "response.created", response: { id: "r1", output: [] } }, terminal);
+    const original = await input.clone().text();
+    const result = await preflightComboStreamResponse(input, { model: "m1", provider: "a" });
+    expect(result.kind).toBe("accepted");
+    expect(await result.response.text()).toBe(original);
+  });
+
   test.each(["silence", "comment", "lifecycle"] as const)("buffered collector counts upstream activity, not timer heartbeats (%s)", async activity => {
     jest.useFakeTimers();
     let source!: ReadableStreamDefaultController<Uint8Array>;

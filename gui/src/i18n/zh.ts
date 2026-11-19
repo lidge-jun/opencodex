@@ -3261,6 +3261,8 @@ export const zh: Record<TKey, string> = {
   "pws.xaiChatOptIn": "为 Grok 4.5 和 4.6 使用 Chat Completions",
   "pws.xaiChatOptInDesc": "关闭时使用 Responses，即 OAuth Responses 请求的默认协议。其他 Grok 模型和服务层级行为不变。",
   "pws.xaiChatOptInMixed": "只有一个模型使用 Chat。",
+  "pws.subscriptionRetries": "输出前使用同一模型重试的次数",
+  "pws.subscriptionRetriesDefault": "默认（主账号不重试）",
   "pws.cursorTransport": "Cursor 传输协议",
   "pws.cursorTransportHttp2": "HTTP/2（默认）",
   "pws.cursorTransportHttp1": "HTTP/1.1（代理兼容）",

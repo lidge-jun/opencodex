@@ -383,7 +383,8 @@ describe("native gateway transport", () => {
     { label: "custom configured total", policy: { enabled: true, attempts: 2 }, canonical: false, used: 1, expected: 1 },
     { label: "custom default", policy: undefined, canonical: false, used: 0, expected: 3 },
     { label: "custom disabled", policy: { enabled: false, attempts: 1 }, canonical: false, used: 0, expected: 3 },
-    { label: "canonical retains ladder", policy: { enabled: true, attempts: 1 }, canonical: true, used: 0, expected: 3 },
+    { label: "canonical default retains ladder", policy: undefined, canonical: true, used: 0, expected: 3 },
+    { label: "canonical configured one", policy: { enabled: true, attempts: 1 }, canonical: true, used: 0, expected: 1 },
   ])("v1 transient retry honors key-auth policy and shared budget: $label", async row => {
     let sends = 0;
     globalThis.fetch = (async (_url, _init) => {

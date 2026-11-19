@@ -10,14 +10,16 @@ import { clearAccountQuota, setAccountQuotaFromParsed } from "../../src/codex/qu
 import { clearCodexUpstreamHealth, clearThreadAccountMap, getCodexUpstreamHealth } from "../../src/codex/routing";
 import { clearUpstreamHostHealth } from "../../src/codex/upstream-host-health";
 import { handleResponses } from "../../src/server/responses";
-import { handleResponsesCompact } from "../../src/server/responses/compact";
+import { COMPACT_RESPONSE_MAX_BYTES, handleResponsesCompact } from "../../src/server/responses/compact";
 import { CLIENT_ERROR_CONTRACTS } from "../../src/lib/client-error-body";
 import {
   createRequestExecutionBudget,
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
+  type RequestExecutionBudget,
   type RequestSendObserver,
 } from "../../src/lib/request-execution-budget";
 import { clearPoolRecoveryState } from "../../src/routing/probe-lease";
+import { configureSharedSpendLedger, DEFAULT_SPEND_RESERVATION_POLICY, sharedSpendLedger } from "../../src/lib/spend-reservation-ledger";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -131,7 +133,7 @@ function poolConfig(extra: Partial<OcxConfig> = {}): OcxConfig {
   } as OcxConfig;
 }
 
-async function compact(options: {
+async function compactResponse(options: {
   config?: OcxConfig;
   model?: string;
   budget?: ReturnType<typeof createRequestExecutionBudget>;
@@ -145,8 +147,12 @@ async function compact(options: {
     body: JSON.stringify({ model: options.model ?? "gpt-5.5", input: [{ role: "user", content: "compact this" }] }),
     ...(options.signal ? { signal: options.signal } : {}),
   });
-  const response = await handleResponsesCompact(request, options.config ?? poolConfig(), logCtx, undefined, undefined,
+  return handleResponsesCompact(request, options.config ?? poolConfig(), logCtx, undefined, undefined,
     options.budget ? { sendBudget: options.budget } : undefined);
+}
+
+async function compact(options?: Parameters<typeof compactResponse>[0]) {
+  const response = await compactResponse(options);
   return { response, body: await response.text() };
 }
 
@@ -245,6 +251,153 @@ test("malformed retained compact input is rejected before a pooled credential re
 });
 
 describe("native compact moves a surviving transient 5xx to one alternate account (#6969)", () => {
+  const oneSendCallerBudget = (): RequestExecutionBudget => ({
+    ...createRequestExecutionBudget(),
+    used: 0,
+    remainingBaseSends(cap) { return Math.max(0, Math.min(cap, 1 - this.used)); },
+    reserveDispatch: () => ({ allowed: false, reason: "total-exhausted" }),
+  });
+
+  test.each([{ label: "without opt-in", attempts: undefined }, { label: "with a three-send opt-in", attempts: 3 }])(
+    "native compact honors a one-send caller budget $label", async ({ attempts }) => {
+      const config = poolConfig();
+      config.providers.openai!.transientRetryOn5xx = attempts === undefined ? undefined : { attempts };
+      const budget = oneSendCallerBudget();
+      upstream(overloaded(), overloaded(), compacted);
+      const { response, body } = await compact({ config, budget });
+      expect(sends).toEqual(["Bearer work-access"]);
+      expect(budget.used).toBe(1);
+      expect(response.status).toBe(503);
+      expect(body).toContain("server_is_overloaded");
+    },
+  );
+
+  test.each(["spendEnforced", "workflowCountObserved"] as const)("native compact refuses opaque caller accounting (%s)", async flag => {
+    const config = poolConfig();
+    config.providers.openai!.transientRetryOn5xx = { attempts: 3 };
+    const budget = { ...oneSendCallerBudget(), [flag]: true };
+    upstream(compacted);
+    const { response, body } = await compact({ config, budget });
+    expect(response.status).toBe(429);
+    expect(body).toContain("request_send_budget_exhausted");
+    expect(sends).toEqual([]);
+    expect(budget.used).toBe(0);
+  });
+
+  test("a configured one-send cap preserves the upstream overload without moving accounts", async () => {
+    const config = poolConfig();
+    config.providers.openai!.transientRetryOn5xx = { attempts: 1 };
+    upstream(overloaded(), compacted);
+    const { response, body } = await compact({ config });
+    expect(response.status).toBe(503);
+    expect(body).toContain("server_is_overloaded");
+    expect(sends).toEqual(["Bearer work-access"]);
+  });
+
+  test.each([429, 404])("a configured one-send cap preserves compact HTTP %i without recovery", async status => {
+    const config = poolConfig();
+    config.providers.openai!.transientRetryOn5xx = { attempts: 1 };
+    upstream(() => Response.json({ error: { message: "Compact refusal" } }, { status }), compacted);
+    const { response, body } = await compact({ config });
+    expect(response.status).toBe(status);
+    expect(body).toContain("Compact refusal");
+    expect(sends).toEqual(["Bearer work-access"]);
+  });
+
+  test("native compact funds an opted-in fourth send on the same account", async () => {
+    const config = poolConfig();
+    config.providers.openai!.transientRetryOn5xx = { attempts: 4 };
+    upstream(overloaded(), overloaded(), overloaded(), compacted);
+    const { response } = await compact({ config });
+    expect(response.status).toBe(200);
+    expect(sends).toEqual(Array(4).fill("Bearer work-access"));
+  });
+
+  test.each([100, 400])("native compact reserves each opted-in send before dispatch with a %i-token ceiling", async ceiling => {
+    configureSharedSpendLedger({ ...DEFAULT_SPEND_RESERVATION_POLICY, pool: { maxTokens: ceiling } });
+    const ledger = sharedSpendLedger();
+    const config = poolConfig({ codexAccounts: [{ id: WORK, label: WORK }] });
+    config.providers.openai!.transientRetryOn5xx = { attempts: 4 };
+    config.providers.openai!.requestPacing = { enabled: true, maxConcurrentRequests: 1 };
+    const logCtx: RequestLogContext = { model: "", provider: "", spendInputEstimateTokens: 100 };
+    upstream(() => {
+      expect(ledger.snapshot("pool", "openai")?.reserved).toBe(100 * sends.length);
+      if (sends.length === 1 && ceiling === 100) {
+        // In-flight retries keep the captured ceiling even after an operator raises it.
+        configureSharedSpendLedger({ ...DEFAULT_SPEND_RESERVATION_POLICY, pool: { maxTokens: 400 } });
+      }
+      return sends.length === 4 ? compacted() : Response.json({
+        error: { type: "server_error", code: "server_is_overloaded", message: `Upstream refusal ${sends.length}` },
+      }, { status: 503 });
+    });
+
+    const { response, body } = await compact({ config, logCtx });
+    expect(sends).toEqual(Array(ceiling / 100).fill("Bearer work-access"));
+    if (ceiling === 100) {
+      expect(response.status).toBe(503);
+      expect(JSON.parse(body).error).toMatchObject({ code: "server_is_overloaded", message: "Upstream refusal 1" });
+    } else {
+      expect(response.status).toBe(200);
+    }
+    logCtx.spendTracker!.settle(undefined);
+    expect(ledger.snapshot("pool", "openai")).toMatchObject({ reserved: 0, unresolved: ceiling });
+  });
+
+  async function compactWithPacingAndSpentRetry(refusal: Answer, stallTimeoutSec?: number) {
+    configureSharedSpendLedger({ ...DEFAULT_SPEND_RESERVATION_POLICY, pool: { maxTokens: 100 } });
+    const config = poolConfig({ codexAccounts: [{ id: WORK, label: WORK }], stallTimeoutSec });
+    config.providers.openai!.transientRetryOn5xx = { attempts: 4 };
+    config.providers.openai!.requestPacing = { enabled: true, maxConcurrentRequests: 1 };
+    const logCtx: RequestLogContext = { model: "", provider: "", spendInputEstimateTokens: 100 };
+    upstream(refusal, compacted);
+    const response = await compactResponse({ config, logCtx });
+    expect(sends).toEqual(["Bearer work-access"]);
+    logCtx.spendTracker!.settle(undefined);
+    return response;
+  }
+
+  test("a spend-denied paced retry retains all 70,080 bytes of the native compact refusal", async () => {
+    const refusal = new Uint8Array(70_080).fill(0x61);
+    refusal.set(new TextEncoder().encode("Upstream compact refusal\n"));
+    refusal[refusal.length - 1] = 0xff;
+    const response = await compactWithPacingAndSpentRetry(() => new Response(refusal, {
+      status: 503, headers: { "content-type": "application/octet-stream" },
+    }));
+    expect(response.status).toBe(503);
+    expect(response.headers.get("content-type")).toBe("application/octet-stream");
+    const delivered = new Uint8Array(await response.arrayBuffer());
+    expect(delivered.byteLength).toBe(refusal.byteLength);
+    expect(delivered).toEqual(refusal);
+  });
+
+  test.each([{ label: "declared", declared: true }, { label: "observed", declared: false }])(
+    "a spend-denied paced retry reports a $label oversized native compact refusal", async ({ declared }) => {
+      const response = await compactWithPacingAndSpentRetry(() => new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(16 * 1024));
+          if (!declared) controller.enqueue(new Uint8Array(COMPACT_RESPONSE_MAX_BYTES));
+          controller.close();
+        },
+      }), {
+        status: 503,
+        headers: declared ? { "content-length": String(COMPACT_RESPONSE_MAX_BYTES + 1) } : {},
+      }));
+      expect(response.status).toBe(502);
+      expect(await response.json()).toMatchObject({ error: { code: "compact_response_too_large" } });
+    },
+  );
+
+  test("a spend-denied paced retry reports a stalled native compact refusal", async () => {
+    let cancellations = 0;
+    const response = await compactWithPacingAndSpentRetry(() => new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(16 * 1024)); },
+      cancel() { cancellations++; },
+    }), { status: 503 }), 1);
+    expect(response.status).toBe(504);
+    expect(await response.json()).toMatchObject({ error: { code: "upstream_stall_timeout" } });
+    expect(cancellations).toBe(1);
+  });
+
   test("A's ladder, then B from the final recovery reserve, serves the compact", async () => {
     upstream(overloaded(), overloaded(), overloaded(), compacted);
     const { response } = await compact();

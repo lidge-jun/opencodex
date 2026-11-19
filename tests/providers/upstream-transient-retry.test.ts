@@ -56,7 +56,7 @@ describe("transientRetryPolicyFor", () => {
     expect(transientRetryPolicyFor({ ...base, transientRetryOn5xx: { attempts: 5 } })).toEqual({ enabled: true, attempts: 5 });
   });
 
-  test("only key-auth openai-chat and openai-responses qualify", () => {
+  test("key-auth adapters and canonical ChatGPT forward qualify", () => {
     // The Responses passthrough lane reads this policy now, so a key-auth provider on that
     // adapter can tune its own ladder. Before #4893 it was rejected here AND ignored there,
     // so the option was inert in both directions while the same provider on `openai-chat`
@@ -71,13 +71,19 @@ describe("transientRetryPolicyFor", () => {
     for (const adapter of ["anthropic", "google"]) {
       expect(transientRetryPolicyFor({ ...base, adapter, transientRetryOn5xx: {} } as unknown as OcxProviderConfig)).toBeNull();
     }
-    // Fail closed on credential shape: OAuth/forward/local are never replayed here. Asserted for
-    // both admitted adapters, because this is what keeps the ChatGPT forward pool on the default
-    // ladder now that the Responses lane consults the policy at all.
+    expect(transientRetryPolicyFor({
+      ...base, adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex",
+      transientRetryOn5xx: { attempts: 6 },
+    })).toEqual({ enabled: true, attempts: 6 });
+    expect(transientRetryPolicyFor({
+      ...base, adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex",
+      transientRetryOn5xx: { enabled: true },
+    })).toBeNull();
+    // A custom forward destination does not gain an opt-in retry ladder.
     for (const adapter of ["openai-chat", "openai-responses"]) {
       for (const authMode of ["oauth", "forward", "local"]) {
         expect(transientRetryPolicyFor({
-          ...base, adapter, authMode, transientRetryOn5xx: {},
+          ...base, adapter, authMode, baseUrl: "https://custom.example/v1", transientRetryOn5xx: {},
         } as unknown as OcxProviderConfig)).toBeNull();
       }
     }

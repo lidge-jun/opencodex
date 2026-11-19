@@ -57,6 +57,7 @@
         "src/lib/abort.ts",
         "src/lib/local-upstream.ts",
         "src/lib/bounded-body.ts",
+        "src/server/responses/compact-response-body.ts",
         "src/server/",
         "src/web-search/header-deadline.ts",
         "src/clients/config-export.ts",

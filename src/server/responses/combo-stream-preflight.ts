@@ -17,6 +17,7 @@ import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import type { RequestFailureStage } from "../../lib/request-failure-model";
 import type { RequestLogContext } from "../request-log";
 import { carryResponseToolOwnership } from "./response-tool-ownership";
+import { responsesFrameIsReplayUnsafe } from "./codex-ws-wire";
 import { createSseInspector, isNativePassthroughSseResponse } from "../relay";
 import { sseDataPayload } from "../sse-payload-rewrite";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
@@ -436,6 +437,7 @@ function retryableZeroOutputTerminal(payload: unknown, context?: object): boolea
  */
 export function comboStreamPayloadCommitsOutput(payload: unknown): boolean {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return true;
+  if (responsesFrameIsReplayUnsafe(payload as Record<string, unknown>)) return true;
   const type = (payload as { type?: unknown }).type;
   if (typeof type !== "string") return true;
   if (PRE_OUTPUT_CONTROL_EVENTS.has(type)) {
@@ -444,7 +446,6 @@ export function comboStreamPayloadCommitsOutput(payload: unknown): boolean {
     const event = payload as Record<string, unknown>;
     const conflictingStatus = (status: unknown) => status != null && status !== "queued" && status !== "in_progress";
     if (Object.keys(event).some(key => !PRE_OUTPUT_EVENT_FIELDS.has(key))) return true;
-    if (Object.hasOwn(event, "replayUnsafe") && event.replayUnsafe !== false) return true;
     if (event.sequence_number !== undefined && !(typeof event.sequence_number === "number"
       && Number.isSafeInteger(event.sequence_number) && event.sequence_number >= 0)) return true;
     if (event.error != null || event.last_error != null || event.incomplete_details != null
@@ -458,7 +459,6 @@ export function comboStreamPayloadCommitsOutput(payload: unknown): boolean {
       if (Object.keys(snapshot).some(key => !PRE_OUTPUT_SNAPSHOT_FIELDS.has(key))) return true;
       if (!snapshotMetadataIsSafe(snapshot)) return true;
       if (snapshot.output !== undefined && (!Array.isArray(snapshot.output) || snapshot.output.length > 0)) return true;
-      if (Object.hasOwn(snapshot, "replayUnsafe") && snapshot.replayUnsafe !== false) return true;
       if (snapshot.error != null || snapshot.last_error != null || snapshot.incomplete_details != null
         || conflictingStatus(snapshot.status)) return true;
       if (snapshot.completed_at != null || (snapshot.end_turn != null && snapshot.end_turn !== false)
@@ -689,15 +689,19 @@ export async function preflightComboStreamResponse(
     onParsedPayload: payload => {
       if (terminalStatus !== undefined || outputCommitted || retryableTerminalPayload) return;
       try {
-        if (payload !== null && typeof payload === "object" && !Array.isArray(payload)
-          && (payload as { type?: unknown }).type === "response.created") responseCreated = true;
+        const event = payload !== null && typeof payload === "object" && !Array.isArray(payload)
+          ? payload as Record<string, unknown> : undefined;
+        if (event && responsesFrameIsReplayUnsafe(event)) {
+          outputCommitted = true;
+          return;
+        }
+        if (event?.type === "response.created") responseCreated = true;
         const verdict = failedTerminalReplayVerdict(payload);
         // The default combo classifier still projects a pre-output policy refusal to its
         // HTTP 400 contract. A caller-provided recovery callback must never retry it.
         const projectPolicy = verdict === "policy" && retryableTerminal === undefined;
         const retryable = (verdict === undefined || projectPolicy) && retryableTerminalFor(payload);
-        const matchedBareError = retryable && payload !== null && typeof payload === "object"
-          && !Array.isArray(payload) && (payload as { type?: unknown }).type === "error";
+        const matchedBareError = retryable && event?.type === "error";
         // A zero-output bare error is terminal evidence. Explicit client errors stay
         // committed; unknown and retryable upstream failures may advance the combo.
         const heldReasoning = options?.requiredToolPrelude && requiredToolReasoningPrelude(payload);
@@ -716,8 +720,7 @@ export async function preflightComboStreamResponse(
           // failure may discard a terminal-only text snapshot that was held in its entirety.
           if (output !== undefined && (!Array.isArray(output) || output.length > 0) && !contractFailure) outputCommitted = true;
         }
-        if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
-        if (retryable) retryableTerminalPayload = payload as Record<string, unknown>;
+        if (retryable) retryableTerminalPayload = event;
       } catch {
         // The generic inspector swallows observer errors. Replay requires a successful proof
         // of no effects, so a failed classification keeps this attempt and its original bytes.

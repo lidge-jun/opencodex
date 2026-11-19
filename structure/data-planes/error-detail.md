@@ -272,15 +272,15 @@ The shared builders live in `src/combos/resolve.ts`, `src/server/admission-model
 `src/server/responses/input-admission.ts` and `src/oauth/generic-account-failover.ts`.
 `src/lib/upstream-retry.ts` owns the retry constructors. For a transient 5xx, `fetchWithTransientRetry`
 does not resend a response whose bounded body prefix proves context overflow. It reads at most 16,384
-bytes from a clone within 250ms or until cancellation, leaving the returned body intact. A complete
-probe without a verdict retains the normal retry. For a replay-unsafe request, an inconclusive transient
-5xx or 429 probe [blocks another send and removes client retry advice](replay-refusals.md#resend-and-quota-evidence).
+bytes from a clone within 250ms or until cancellation, leaving the returned body intact.
+A complete probe without a verdict retains the normal retry. For replay-unsafe requests, see [inconclusive probes](replay-refusals.md#resend-and-quota-evidence).
 Hypothetical, negated, question-form and configuration-failure mentions are excluded per sentence
 so they cannot hide a definite overflow in another sentence. A throttle worded only as
 "too many tokens" is not a verdict. An explicit "prompt is too long" remains a verdict when no throughput signal is present.
 Body inspection time does not count toward the upstream slow-attempt budget, and empty chunks cannot
-starve the deadline or cancellation. The retry and cancellation
-contracts are exercised in `tests/lib/upstream-retry.test.ts`.
+starve the deadline or cancellation. `tests/lib/upstream-retry.test.ts` covers retry and cancellation.
+Before a spend-guarded retry, paced responses release their body lease by retaining bounded raw bytes via an optional caller-supplied reader.
+The retained body carries read failures for the receiver's usual error policy, and retry accounting keeps the upstream status.
 `InvalidSendBudgetError` displays only a finite non-negative number or `invalid`.
 `UpstreamRetryEvidenceError` uses fixed retry-evidence wording and retains the original rejection
 only as `Error.cause`. Chat request-read failures keep typed local size/encoding messages; other
