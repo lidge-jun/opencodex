@@ -1,3 +1,5 @@
+import { oauthSubscriptionMaker } from "../combos/suggestion-channel";
+import { isCanonicalOpenAiForwardProvider } from "../providers/openai-forward-destination";
 import { providerRelativeSendPathConfigError } from "../config/provider-relative-send-path";
 import { contextTierRecordConfigError, modelCapabilitiesConfigError, providerInputModalitiesConfigError } from "../config/provider-validation";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
@@ -1475,6 +1477,8 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       ...editor.providers[name],
       hasApiKey: !!provider.apiKey,
       hasHeaders: !!provider.headers && Object.keys(provider.headers).length > 0,
+      ...(provider.authMode === "oauth" ? { knownSubscriptionOAuth: oauthSubscriptionMaker({ ...provider, name }) !== undefined } : {}),
+      ...(provider.authMode === "forward" ? { canonicalOpenAiForward: isCanonicalOpenAiForwardProvider(provider) } : {}),
     };
     const registry = getProviderRegistryEntry(name);
     const vertex = (provider.adapter === "google" && effectiveGoogleMode(name, provider) === "vertex")

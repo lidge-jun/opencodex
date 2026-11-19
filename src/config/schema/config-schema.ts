@@ -419,6 +419,9 @@ export const configSchema = z.object({
   }).optional().catch(undefined),
   // Model ids excluded from the Grok Build managed block (dashboard switches).
   grokExcludedModels: z.array(z.string()).optional(),
+  // Providers the dashboard's suggested combos leave out (Combos page).
+  comboSuggestionExcludedProviders: z.array(z.string().trim().min(1).max(256)).max(256)
+    .transform((names) => [...new Set(names)]).optional().catch(undefined),
   // Invalid values degrade to undefined ("auto") instead of failing the whole
   // parse: a hand-edited typo must never trip the backup-and-defaults repair
   // path below and wipe providers/pool accounts. Warning emitted in loadConfig.
