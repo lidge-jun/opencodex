@@ -270,14 +270,13 @@ rows to client or catalog model identities and validated provider ids, omitting 
 is interpolated into those local messages. No serialized flag, code or header mints identity.
 The shared builders live in `src/combos/resolve.ts`, `src/server/admission-model-scope.ts`,
 `src/server/responses/input-admission.ts` and `src/oauth/generic-account-failover.ts`. See [combo output headroom](../transports/responses-failover.md#combo-output-headroom) for the strict pre-dispatch gate, including the input margin and reserve when `max_output_tokens` is omitted.
-`src/lib/upstream-retry.ts` owns the retry constructors. Its transient ladder parses Retry-After once for deadline and backoff, accepting decimal digits (including zero) or the three UTC forms in `src/lib/http-date.ts` (past dates give zero). For a transient 5xx, `fetchWithTransientRetry`
-does not resend a response whose bounded body prefix proves context overflow. It reads at most 16,384
-bytes from a clone within 250ms or until cancellation, leaving the returned body intact. Event streams
-and bodies without an observed verdict retain the normal retry; a verdict observed before a slow or
-endless body stalls still stops retry. Hypothetical, negated, question-form and configuration-failure
-mentions are excluded per sentence in the unwrapped provider message, so they cannot hide a definite
-overflow in another sentence. A throttle worded only as "too many tokens" is not a verdict, while an
-explicit "prompt is too long" remains a verdict when no throughput signal is present.
+`src/lib/upstream-retry.ts` parses Retry-After once for deadline and backoff. It accepts decimal digits
+(including zero) and the three UTC forms in `src/lib/http-date.ts`. Past dates give zero.
+`fetchWithTransientRetry` stops on a transient 5xx whose bounded body prefix proves context overflow. It reads at most 16,384
+bytes from a clone within 250 ms or until cancellation, leaving the original body intact. Event streams and bodies without a
+verdict retain the normal retry. An observed verdict still stops retry if the body later stalls. Hypothetical, negated, question-form
+and configuration-failure mentions are excluded per sentence in the unwrapped provider message. A throttle worded only as "too
+many tokens" is insufficient. An explicit "prompt is too long" suffices in the absence of a throughput signal.
 Body inspection time does not count toward the upstream slow-attempt budget, and empty chunks cannot
 starve the deadline or cancellation. `tests/lib/upstream-retry.test.ts` covers retry and cancellation.
 Before a spend-guarded retry, paced responses release their body lease by retaining bounded raw bytes via an optional caller-supplied reader.
