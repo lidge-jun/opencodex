@@ -31,6 +31,8 @@ export interface ReasoningEnvelope {
    * so replay needs it even though the visible summary was suppressed.
    */
   txt?: string;
+  /** The item's visible summary is a display copy of the raw text in `txt`. */
+  rawSummary?: true;
   /**
    * Kiro's reasoning blob from `reasoningContentEvent`: a KMS-encrypted value that is opaque to the
    * proxy (the GPT-5.6 family sends it as `signature`, other models as the base64
@@ -160,6 +162,7 @@ export function decodeReasoningEnvelope(encryptedContent: string, budget?: Trans
       const txt = (parsed as { txt?: unknown }).txt;
       const hasTxt = typeof txt === "string";
       if (hasTxt) envelope.txt = txt;
+      if (hasTxt && (parsed as { rawSummary?: unknown }).rawSummary === true) envelope.rawSummary = true;
       const krc = (parsed as { krc?: unknown }).krc;
       if (typeof krc === "string" && krc.length > 0) envelope.krc = krc;
       const nat = decodeNativeReasoning((parsed as { nat?: unknown }).nat);

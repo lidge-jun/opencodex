@@ -24,6 +24,7 @@ import {
 import { safeOriginLabel, fetchWithHeaderTimeout, providerFetch } from "./fetch-helpers";
 import type { AdapterRequest } from "../../adapters/base";
 import { classifyPoolRecoveryDispatch } from "../../routing/probe-lease";
+import { transientRetryPolicyFor } from "../../providers/key-failover";
 import { formatErrorResponse } from "../../bridge";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { upstreamErrorMessageFromPayload, isRateLimitOrQuotaFailureMessage } from "../../lib/errors";
@@ -165,18 +166,25 @@ export function recordCodexPreOutputRefusalOutcome(
 }
 
 /**
- * The pre-output refusal hold for one Pool send starting now (#6969), or undefined. Pool forward
- * sends only, and never a combo child, whose own stream preflight already advances on a zero-output
+ * The pre-output refusal hold for Pool and explicitly opted-in canonical main sends (#6969).
+ * Never used for a combo child, whose own stream preflight already advances on a zero-output
  * terminal. Every projection a send produces must later pass through
  * {@link PoolPreOutputRefusals.restore}.
  */
-export function poolPreOutputRefusalHold(
+export function subscriptionPreOutputRefusalHold(
   authCtx: CodexAuthContext,
   provider: OcxProviderConfig,
   connectMs: number,
   comboAttempt: boolean | undefined,
 ): CodexWsPreOutputRefusalHold | undefined {
-  return !comboAttempt && usesCodexForwardPoolAuth(authCtx, provider) ? codexWsPreOutputRefusalHold(connectMs) : undefined;
+  if (comboAttempt) {
+    return undefined;
+  }
+  if (usesCodexForwardPoolAuth(authCtx, provider) || (authCtx.kind === "main"
+    && isCanonicalOpenAiForwardProvider(provider) && transientRetryPolicyFor(provider))) {
+    return codexWsPreOutputRefusalHold(connectMs);
+  }
+  return undefined;
 }
 
 /**
@@ -524,6 +532,8 @@ export interface CodexPoolAccountRetryArgs {
   firstAuthCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
   firstResponse: Response;
   outcomeStatus: number;
+  /** Remaining physical sends under the explicit provider total, if configured. */
+  configuredSendsRemaining?: number;
   /**
    * Forbid resolving a DIFFERENT account for this retry.
    *
@@ -725,6 +735,11 @@ export async function retryCodexPoolOnAlternateAccount(
       writerGeneration: firstAuthCtx.writerGeneration,
     });
   };
+  if (args.configuredSendsRemaining === 0) {
+    recordWrappedQuotaOutcome();
+    recordUnmovedTransientOutcome();
+    return { kind: "no-alternate" };
+  }
   if (outcomeStatus === 400 && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(route.modelId)) {
     invalidateCodexModelEntitlementsForAccount(firstAuthCtx.accountId);
     let refreshed;
@@ -777,6 +792,7 @@ export async function retryCodexPoolOnAlternateAccount(
     const decision = executionBudget.reserveDispatch({
       sendClass: "account-failover",
       targetKey: `${route.providerName}|${route.modelId}|alternate-account`,
+      freshRetrySpend: args.configuredSendsRemaining !== undefined,
     });
     if (!decision.allowed) {
       recordUnmovedTransientOutcome();
@@ -986,15 +1002,10 @@ export async function retryCodexPoolOnAlternateAccount(
   // other legs use. Folding the account id in made every rung read as a target change, which
   // spent the one cross-account slot a real move needs on a same-account replay.
   const ladderTargetKey = `${route.providerName}|${route.modelId}`;
-  // The ladder keeps its OWN bound rather than drawing on what the request has left. Clamping it
-  // to the shared total looked right and broke a working, pinned path: #2097 fixes this recovery
-  // at eight same-account dispatches (tests/server/server-auth.test.ts), and a request that has
-  // already spent sends would silently stop short of it. Reconciling an eight-send same-account
-  // ladder with a four-send request total is a policy decision, not a clamp to add in passing.
-  // Every physical rung still needs the workflow's allowance, including the first same-account
-  // retry and a rung admitted by that historical request-local exception.
-  const maxRetrySends = retrySameConfirmedAccount ? 7 : 1;
-  const sameAccountRecovery = retrySameConfirmedAccount && executionBudget
+  // Unconfigured #2097 recovery keeps its historical exception. Configured recovery uses
+  // ordinary request permits, so a tighter caller or combo budget can still stop the ladder.
+  const maxRetrySends = Math.min(retrySameConfirmedAccount ? 7 : 1, args.configuredSendsRemaining ?? Infinity);
+  const sameAccountRecovery = args.configuredSendsRemaining === undefined && retrySameConfirmedAccount && executionBudget
     ? createBoundedSameTargetRecovery(executionBudget, ladderTargetKey, maxRetrySends) : undefined;
   const workflowObserved = sameAccountRecovery?.workflowCountObserved
     ?? (executionBudget && hasWorkflowSendObserver(executionBudget));
@@ -1024,8 +1035,7 @@ export async function retryCodexPoolOnAlternateAccount(
   let upstreamResponse = firstResponse;
   try {
     while (true) {
-      // A same-account rung uses its bounded recovery owner. Only an account move takes the
-      // ordinary final-recovery reserve and the pool-wide recovery window.
+      // Only an account move can draw the final-recovery reserve and the pool-wide recovery window.
       if (accountMovePermit) {
         // The pool-wide recovery window is consulted BEFORE the request-local permit is used.
         // `reserveDispatch` charges at reservation time and `release()` is the only way back, so
@@ -1046,7 +1056,11 @@ export async function retryCodexPoolOnAlternateAccount(
           return { kind: "no-alternate" };
         }
       }
-      const rung = sameAccountRecovery?.reserve();
+      const rung = sameAccountRecovery ? sameAccountRecovery.reserve()
+        : retrySameConfirmedAccount && executionBudget ? executionBudget.reserveDispatch({
+          sendClass: "transient", targetKey: executionBudget.lastTargetKey ?? ladderTargetKey,
+          freshRetrySpend: true,
+        }) : undefined;
       if (rung && !rung.allowed) {
         if (retrySendCount > 0) break;
         releaseCodexAuthContextProbeLease(retryAuthCtx);

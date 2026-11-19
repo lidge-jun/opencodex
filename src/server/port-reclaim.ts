@@ -8,9 +8,11 @@
  */
 import { execFile, execFileSync } from "node:child_process";
 import { readFile, readdir, readlink } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { verifyPidIdentity } from "../config/process-state";
 import { isProcessAlive, killProxy } from "../lib/process-control";
+import { resolveTrustedWindowsSystemDirectory } from "../lib/windows-elevation";
 import { isPortAvailable, type WaitForPortOptions } from "./ports";
 import { dropWindowsTcpRowsForLocalPort } from "./windows-tcp-drop";
 
@@ -360,6 +362,30 @@ export function scanListenPidsForAddress(port: number, address = "127.0.0.1"): L
   return { ok: true, pids: [...pids] };
 }
 
+/** Bind a stamp-less runtime to a unique listener at its recorded address and port. */
+export async function ownsLegacyStopBind(port: number, pid: number, address: string): Promise<boolean> {
+  const want = bareListenAddress(address);
+  const wildcard = want === "0.0.0.0" || want === "::";
+  if (process.platform === "linux" && wildcard) {
+    return (await inspectListener(port, pid, {}, want)).kind === "match";
+  }
+  try {
+    const scan = process.platform === "win32"
+      ? { ok: true as const, listeners: parseListenEntriesFromNetstat(execFileSync(
+        join(resolveTrustedWindowsSystemDirectory(), "netstat.exe"), ["-ano"], {
+          encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: OWNER_LOOKUP_TIMEOUT_MS,
+          maxBuffer: MAX_PROC_NET_BYTES, windowsHide: true,
+        }), port) }
+      : scanListenEntries(port);
+    if (!scan.ok) return false;
+    const pids = new Set(scan.listeners.filter(entry => entry.address === want || (wildcard && entry.address === "*"))
+      .map(entry => entry.pid));
+    return pids.size === 1 && pids.has(pid);
+  } catch {
+    return false;
+  }
+}
+
 /** Best-effort PIDs currently LISTENing on `port`. Empty on probe failure. */
 export function listListenPids(port: number): number[] {
   const scan = scanListenPids(port);
@@ -373,12 +399,21 @@ const MAX_PROCESS_FDS = 4_096;
 
 /** The exact IPv4 listener the Child relay contacts; ::1 and wildcard binds are not proof. */
 export function parseProcLoopbackListenInodes(tcp: string, tcp6: string, port: number): string[] {
+  return parseProcListenInodes(tcp, tcp6, port, "127.0.0.1");
+}
+
+type ProcBind = "127.0.0.1" | "0.0.0.0" | "::";
+
+function parseProcListenInodes(tcp: string, tcp6: string, port: number, bind: ProcBind): string[] {
   const wantedPort = port.toString(16).toUpperCase().padStart(4, "0");
   const inodes = new Set<string>();
+  // Linux reports IPv4-mapped addresses in native word order.
   for (const [content, wantedAddress] of [
-    [tcp, "0100007F"],
-    [tcp6, "0000000000000000FFFF00000100007F"], // ::ffff:127.0.0.1 in proc word order
+    [tcp, bind === "127.0.0.1" ? "0100007F" : bind === "0.0.0.0" ? "00000000" : ""],
+    [tcp6, bind === "127.0.0.1" ? "0000000000000000FFFF00000100007F"
+      : bind === "::" ? "00000000000000000000000000000000" : ""],
   ] as const) {
+    if (!wantedAddress) continue;
     for (const line of content.split(/\r?\n/).slice(1)) {
       const fields = line.trim().split(/\s+/);
       const [address, hexPort] = (fields[1] ?? "").toUpperCase().split(":");
@@ -432,10 +467,19 @@ export interface LoopbackOwnerLookupIo {
  * Only match proves the expected PID; mismatch, inspection failure and timeout remain distinct.
  * elapsedMs uses a monotonic clock by default, and no raw OS output is returned.
  */
-export async function inspectIpv4LoopbackListener(
+export function inspectIpv4LoopbackListener(
   port: number,
   expectedPid: number,
   io: LoopbackOwnerLookupIo = {},
+): Promise<LoopbackOwnerLookupResult> {
+  return inspectListener(port, expectedPid, io, "127.0.0.1");
+}
+
+async function inspectListener(
+  port: number,
+  expectedPid: number,
+  io: LoopbackOwnerLookupIo,
+  procBind: ProcBind,
 ): Promise<LoopbackOwnerLookupResult> {
   const now = io.nowMs ?? (() => performance.now());
   const startedAt = now();
@@ -453,7 +497,7 @@ export async function inspectIpv4LoopbackListener(
         throw error;
       });
       if (tcp.length > MAX_PROC_NET_BYTES || tcp6.length > MAX_PROC_NET_BYTES) return false;
-      const inodes = parseProcLoopbackListenInodes(tcp, tcp6, port);
+      const inodes = parseProcListenInodes(tcp, tcp6, port, procBind);
       if (inodes.length !== 1) return false;
       const fdDir = `/proc/${expectedPid}/fd`;
       const fds = await (io.listFds ?? readdir)(fdDir);

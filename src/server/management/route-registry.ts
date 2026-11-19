@@ -226,6 +226,10 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "DELETE", path: "/api/combos", module: "server/management/combo-routes", mutates: true },
   { method: "GET", path: "/api/combos", module: "server/management/combo-routes", mutates: false },
   { method: "PUT", path: "/api/combos", module: "server/management/combo-routes", mutates: true },
+  // server/management/combo-suggestion-routes
+  { method: "GET", path: "/api/combo-suggestions", module: "server/management/combo-suggestion-routes", mutates: false, exempt: { reason: "gui-only", why: "Combo suggestions exist only on the dashboard's Combos page; the CLI has no suggestion view to filter." } },
+  { method: "PUT", path: "/api/combo-suggestions", module: "server/management/combo-suggestion-routes", mutates: true, exempt: { reason: "gui-only", why: "Combo suggestions exist only on the dashboard's Combos page; the CLI has no suggestion view to filter." } },
+  { method: "POST", path: "/api/combo-suggestions/save", module: "server/management/combo-suggestion-routes", mutates: true, exempt: { reason: "gui-only", why: "Saves additions from dashboard suggestions against current config policy." } },
   // server/management/decision-routes
   { method: "GET", path: "/api/combos/decision-discovery", module: "server/management/decision-routes", mutates: false },
   { method: "POST", path: "/api/combos/decision-test", module: "server/management/decision-routes", mutates: true },
@@ -339,6 +343,10 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   // server/management/cursor-integration-routes
   { method: "GET", path: "/api/native-integrations/cursor", module: "server/management/cursor-integration-routes", mutates: false },
   { method: "GET", path: "/api/native-integrations/cursor/local-installer", module: "server/management/cursor-integration-routes", mutates: false },
+  // server/management/gateway-client-routes
+  { method: "GET", path: "/api/gateway-clients", module: "server/management/gateway-client-routes", mutates: false },
+  { method: "POST", path: "/api/gateway-clients/{id}/connect", module: "server/management/gateway-client-routes", mutates: true, mechanism: "regex" },
+  { method: "POST", path: "/api/gateway-clients/{id}/disconnect", module: "server/management/gateway-client-routes", mutates: true, mechanism: "regex" },
   // server/management/oauth-account-routes
   { method: "DELETE", path: "/api/keys", module: "server/management/oauth-account-routes", mutates: true },
   { method: "DELETE", path: "/api/keys/rotate", module: "server/management/oauth-account-routes", mutates: true },

@@ -1,14 +1,15 @@
 import type { ClientFacingModelLabel } from "../../lib/error-destination";
+import type { HostedAdvisorSelection } from "../../claude/inbound-content-options";
 import type { CodexAccountModelRefusal } from "../../combos/failover";
 import type { NativeResponseControl } from "./native-response-control";
-import type { AdapterEvent, OcxUsage, OcxProviderContinuationState, OcxConfig } from "../../types";
+import type { AdapterEvent, OcxUsage, OcxProviderContinuationState, OcxConfig, OcxProviderConfig } from "../../types";
 import type { RouteResult } from "../../router";
 import type { SingleUseDispatchPermit } from "../../lib/request-execution-budget";
 import type { CodexAuthPolicyConfig, CodexAuthContext } from "../../codex/auth-context";
 import type { AdmissionLease } from "../../lib/admission";
 import type { DataPlaneAdmission } from "../auth-cors";
 import type { AdmissionModelScope } from "../admission-model-scope";
-import { resolveCodexModelEntitlements } from "../../codex/model-entitlements";
+import type { resolveCodexModelEntitlements } from "../../codex/model-entitlements";
 import type { ResponsesTerminalStatus } from "../../bridge";
 import type { ResponsesTerminalRepairScheduler } from "../responses-terminal-repair";
 import type { BunRuntimeGateInput } from "./ws-upstream";
@@ -25,8 +26,14 @@ import type { RequestLogContext } from "../request-log";
 import type { UpstreamHostAdmissionLease } from "../../codex/upstream-host-health";
 import type { AccountLease } from "../../oauth/kiro-account-load";
 import type { PolicyRequestScope } from "./policy-request-scope";
+import type { SpendAdmissionPolicy } from "../../lib/spend-reservation-ledger";
 import type { OcxParsedRequest } from "../../types";
 import type { PolicyRequestEvidence } from "../../routing/evaluator";
+
+export interface HostedAdvisorSpendScope {
+  readonly ceilings: SpendAdmissionPolicy;
+  optionalWithheld: boolean;
+}
 
 export interface ConsumedComboFailure {
   response: Response;
@@ -37,6 +44,8 @@ export interface ConsumedComboFailure {
   malformedResponseFormat?: boolean;
   /** Complete bounded-envelope OpenRouter opaque-400 verdict captured before display truncation. */
   openRouterOpaque400?: boolean;
+  /** Complete bounded-envelope unoffered-tool-call verdict captured before display truncation. */
+  unofferedToolCallRefusal?: boolean;
   /** Complete bounded-envelope provider moderation verdict captured before display truncation. */
   providerModerationRefusal?: boolean;
   /** Structured upstream `error.code` when present in the failure body. */
@@ -214,6 +223,10 @@ export interface HandleResponsesOptions {
   nativeReasoningMint?: { owner?: NativeReasoningOwner };
   /** The Claude client's typed `web_search_*` / `web_fetch_*` declarations; kept only for `inboundWire: "anthropic"`. */
   anthropicServerTools?: readonly Record<string, unknown>[];
+  /** The original Messages choice names a typed hosted Advisor, possibly with a duplicate name. */
+  anthropicHostedAdvisorSelection?: HostedAdvisorSelection;
+  /** Hosted work shares this state across routing candidates and translated combo children. */
+  hostedAdvisorSpendScope?: HostedAdvisorSpendScope;
   /** The Claude client's replayable server-tool exchanges (`replayedAnthropicServerBlocks`); same scope. */
   anthropicServerReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>;
   /** The caller's cached system prefix (`systemCachePrefix`); same scope. */
@@ -226,6 +239,16 @@ export interface HandleResponsesOptions {
   protocolSource?: import("./core-combo-native").ComboProtocolSource;
   /** Internal transport identity for route-scoped upstream compatibility policy. */
   inboundTransport?: "websocket";
+  /** ACP refusal signal captured from the original HTTP request, before any bridge translation. */
+  agyAcpUnattendedHttpTurn?: boolean;
+  /**
+   * Set by the HTTP `/v1/responses` ingress only: a streaming combo turn whose target selection
+   * outlasts `COMBO_SELECTION_KEEPALIVE_THRESHOLD_MS` commits a 200 SSE head and sends keepalive
+   * comments (#8326). `clock` is a test seam; production uses the global timers.
+   */
+  comboSelectionKeepalive?: {
+    clock?: { setTimeout(callback: () => void, ms: number): unknown; clearTimeout(handle: unknown): void };
+  };
   /**
    * Claude replay may add native-main auth so OpenAI sidecars remain available.
    * Strip only that internal credential when the final route is a noncanonical
@@ -251,6 +274,9 @@ export interface HandleResponsesOptions {
    * can carry the binding to the context that writes the row.
    */
   onBridgeUsageBound?: () => void;
+  /** A web-search deadline has been recorded on the child before its failure is emitted. */
+  onWebSearchLocalFailure?: () => void;
+  onHostedWebSearchStream?: () => void;
   /** Child-owned prepaid initial send; capacity remains charged until dispatch or unsent release. */
   comboInitialSend?: { permit: SingleUseDispatchPermit; producerOwned?: boolean };
   /** Exact externally booked combo hop, used for its child's spend preflight and send reports. */
@@ -296,11 +322,12 @@ export interface HandleResponsesOptions {
    * Terminal advisor marker: true when the inbound request IS the advisor sidecar's own loopback
    * consultation. The advisor planner then never plans a consultation — a depth cap of 1 that
    * keeps Worker → Advisor → Advisor recursion impossible (same structure as
-   * {@linkcode visionDescribeTerminal}). The Chat surface detects the raw
-   * `x-opencodex-advisor-internal` header before its bridge rebuilds headers and carries the
-   * fact through this flag.
+   * {@linkcode visionDescribeTerminal}). The Chat surface validates the capability and registered
+   * policy before its bridge rebuilds headers and carries the fact through this flag.
    */
   advisorInternal?: boolean;
+  /** A local Chat helper authenticated through its registered process capability. */
+  internalSidecarCall?: boolean;
   /**
    * Set only by the Chat and Messages ingresses when `protocols.rollout.directEncoders` is on and
    * the settled route is one non-Responses target. Adapter delivery then encodes the adapter
@@ -319,6 +346,11 @@ export interface HandleResponsesOptions {
   responsesFileImage?: boolean;
   /** Set only by the Chat or Messages ingress on an eligible Antigravity route; see {@link DirectRequestOption}. */
   directRequest?: DirectRequestOption;
+}
+
+/** The internal Responses handoff for /responses/compact keeps the endpoint's global budgets. */
+export function responsesTimeoutProvider(options: HandleResponsesOptions, provider: OcxProviderConfig): OcxProviderConfig | undefined {
+  return options.compactionRecoveryKind === "compaction-v1" ? undefined : provider;
 }
 
 /** Values shared by the call, not a bag of mutable pipeline state. */

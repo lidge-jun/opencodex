@@ -191,6 +191,21 @@ when that runtime's own stop/update is permitted and succeeds, not to every cros
 
 ## The dashboard update worker
 
+### Managed source release checks
+
+The dashboard and `ocx system update check` use `GET /api/update/check`. For source
+installs, `src/update/managed-release.ts` requires an operator-provided `OCX_MANAGED_RELEASE=1`.
+The plain Node launcher in `bin/ocx.mjs` captures it in the proof-bound context before
+Bun loads project dotenv. `src/cli/launcher-context.ts` requires that context for managed
+release mode and removes the marker from `process.env` before dispatch.
+The scheduler uses the read-only npm lookup on demand. A successful check reports
+`managed_release` without a command.
+A failed lookup reports `latest_unavailable` so the caller can retry. Unmarked source
+checkouts retain their `git pull` guidance. The check in `src/update/job.ts` keeps every
+source install ineligible for dashboard jobs.
+
+### Worker lifecycle
+
 `src/update/service-home-authority.ts` distinguishes matching service homes, a known foreign
 registration, unknown evidence and confirmed absence. It combines service-state resolution with
 the unattended native ownership inspector and the lifecycle SQLite-home comparison; physical

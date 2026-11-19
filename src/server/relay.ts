@@ -11,9 +11,11 @@ import {
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
+import { ExplicitBodyStallError } from "../lib/response-body-inactivity";
 import { carryPacedStream, pacedQueuingStrategy } from "../lib/paced-stream";
 import { carryReplayRefusal, isReplayRefusalResponse } from "../lib/upstream-retry";
 import { isUsageDebugEnabled } from "../usage/debug";
+import { ESTIMATED_USAGE_HEADER } from "./responses/estimated-usage";
 import {
   addRequestLog,
   addFinalRequestLog,
@@ -133,14 +135,18 @@ export function relayWithAbort(
 
 export function buildFailedTailPayload(err: unknown, maskCredential?: (text: string) => string): string {
   const translatorOverflow = isTranslatorBudgetExceededError(err);
+  // The operator's explicit stall budget expired: report the stall terminal the adapter paths use.
+  // A guard on a default budget (reset selection with the field unset) keeps its earlier reset tail.
+  const stalled = err instanceof ExplicitBodyStallError;
   const raw = translatorOverflow
     ? "upstream translation buffer exceeded the safe limit"
+    : stalled ? err.message
     : `Upstream stream terminated unexpectedly: ${err instanceof Error ? err.message : String(err)}`;
   // Exact mask before pattern redaction, which could split a credential and hide it from the mask.
   const message = redactSecretString(maskCredential?.(raw) ?? raw).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS);
   const failure = {
     type: "upstream_error",
-    code: translatorOverflow ? "translation_buffer_limit" : "upstream_reset",
+    code: translatorOverflow ? "translation_buffer_limit" : stalled ? "upstream_stall_timeout" : "upstream_reset",
     message,
   };
   return JSON.stringify({
@@ -913,6 +919,7 @@ export function trackSseForRequestLog(
     onTerminal: reportTerminal,
     logCtx,
     onFirstOutput,
+    collectUsage: () => logCtx?.clientSseUsageAlreadyInspected !== true,
   });
 
   return new ReadableStream<Uint8Array>({
@@ -1163,6 +1170,8 @@ export type SseInspector = {
 export type SseInspectorHandlers = {
   onTerminal?: (status: ResponsesTerminalStatus, httpStatusOverride?: number) => void;
   logCtx?: RequestLogContext;
+  /** Client-side reinspection leaves usage to the native raw-body observer. */
+  collectUsage?: boolean | (() => boolean);
   onCompletedResponse?: (response: { id?: unknown; output?: unknown; status?: unknown }) => void;
   /** A reconstructed snapshot for any valid terminal kind; unlike persistence, includes failures. */
   onTerminalResponse?: (
@@ -1388,7 +1397,8 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
       }
     }
     if (!reported && handlers.logCtx) {
-      inspectResponseLogSsePayloadParsed(handlers.logCtx, payload, parsed);
+      const collectUsage = typeof handlers.collectUsage === "function" ? handlers.collectUsage() : handlers.collectUsage;
+      inspectResponseLogSsePayloadParsed(handlers.logCtx, payload, parsed, collectUsage);
     }
     // Before any terminal handling: a consumer deciding on the whole turn must observe this
     // payload even when the terminal snapshot that follows no longer mentions it.
@@ -1877,6 +1887,7 @@ const PASSTHROUGH_DROP_HEADERS: ReadonlySet<string> = new Set([
   "te",
   "trailer",
   "upgrade",
+  ESTIMATED_USAGE_HEADER,
 ]);
 
 export interface CodexSafetyBufferingFilterOptions {

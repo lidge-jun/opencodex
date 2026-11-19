@@ -28,18 +28,19 @@ function config(overrides: Partial<OcxConfig> = {}): OcxConfig {
   };
 }
 
-function plan(input: OcxConfig) {
+function plan(input: OcxConfig, routedTransport: "http" | "runTurn" = "http") {
   const parsed = parseRequest({
     model: "routed/model",
     input: "Search current docs",
     stream: true,
     tools: [{ type: "web_search" }],
   });
+  const options = { providerName: "routed", routedTransport };
   return planWebSearch(
     input,
     parsed,
     false,
-    routedProvider,
+    input.providers.routed!,
     "model",
     {
       providerName: "openai",
@@ -48,6 +49,7 @@ function plan(input: OcxConfig) {
       authContext: { kind: "main", accountId: null },
       headers: new Headers({ authorization: "Bearer chatgpt" }),
     },
+    options,
   );
 }
 
@@ -105,5 +107,14 @@ describe("routed-model web-search inactivity timeout", () => {
       routedModelStallTimeoutMs: 240_000,
       stallTimeoutSec: 330,
     });
+  });
+
+  test.each([
+    { transport: "http", watchdogSec: 1_230 },
+    { transport: "runTurn", watchdogSec: 330 },
+  ] as const)("$transport watchdog with a provider header override is $watchdogSec seconds", ({ transport, watchdogSec }) => {
+    const input = config();
+    input.providers.routed = { ...routedProvider, connectTimeoutMs: 1_200_000 };
+    expect(plan(input, transport)?.stallTimeoutSec).toBe(watchdogSec);
   });
 });

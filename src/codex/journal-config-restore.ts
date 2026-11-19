@@ -3,6 +3,7 @@ import { chmodSync, closeSync, fsyncSync, mkdtempSync, openSync, writeFileSync }
 import { join } from "node:path";
 import { hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import { isOcxRoutingMarkerLine } from "./injected-marker";
+import { CODEX_CONFIG_PATH, defaultCodexCatalogPathForConfig, sameCodexCatalogPath } from "./paths";
 import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "./subagent-defaults";
 import { rootAssignmentKey, rootSourceLines, sourceAssignment, sourceText } from "./toml-source-lines";
 
@@ -87,9 +88,9 @@ function fields(content: string): Map<string, Field> {
 
 export function captureJournalConfigFields(content: string, ownership: Ownership): JournalConfigFields {
   const captured: JournalConfigFields = {};
+  const recorded = recordedValues(ownership);
   for (const [key, span] of fields(content)) {
-    const recorded = recordedValues(ownership).get(key);
-    if (isDeepStrictEqual(span.value, recorded) || key === "model_provider" && span.value === "opencodex"
+    if (matchesInjectedField(key, span.value, recorded.get(key)) || key === "model_provider" && span.value === "opencodex"
       || key === "model_providers.opencodex" || key === "profiles.opencodex") captured[key] = span.text;
   }
   // Injection removes the root selection and old inline OCX profiles in URL-only mode.
@@ -97,14 +98,61 @@ export function captureJournalConfigFields(content: string, ownership: Ownership
   return captured;
 }
 
+/** Root routing URLs OpenCodex writes. `model_catalog_json` is excluded: injection keeps and records a user catalog path. */
+export type InjectedRootKey = "openai_base_url" | "experimental_realtime_ws_base_url";
+export type InjectedRootHistory = Partial<Record<InjectedRootKey, string[]>>;
+const INJECTED_ROOT_KEYS: readonly InjectedRootKey[] = ["openai_base_url", "experimental_realtime_ws_base_url"];
+export const INJECTED_ROOT_HISTORY_LIMIT = 8;
+
+/** Only string arrays for the known keys count; the journal is read from disk. */
+export function parseInjectedRootHistory(recorded: unknown): InjectedRootHistory {
+  const history: InjectedRootHistory = {};
+  if (typeof recorded !== "object" || recorded === null) return history;
+  for (const key of INJECTED_ROOT_KEYS) {
+    const values = (recorded as Record<string, unknown>)[key];
+    if (!Array.isArray(values)) continue;
+    const strings = values.filter((value): value is string => typeof value === "string" && value.length > 0);
+    if (strings.length) history[key] = strings.slice(-INJECTED_ROOT_HISTORY_LIMIT);
+  }
+  return history;
+}
+
+/** Append the values an injection wrote, newest last, deduplicated, bounded per key. */
+export function appendInjectedRootHistory(
+  recorded: unknown,
+  written: Partial<Record<InjectedRootKey, string | null | undefined>>,
+): InjectedRootHistory {
+  const history = parseInjectedRootHistory(recorded);
+  for (const key of INJECTED_ROOT_KEYS) {
+    const value = written[key];
+    if (typeof value !== "string" || !value) continue;
+    history[key] = [...(history[key] ?? []).filter(entry => entry !== value), value].slice(-INJECTED_ROOT_HISTORY_LIMIT);
+  }
+  return history;
+}
+
 interface Ownership {
   injectedConfigFields?: JournalConfigFields;
   injectedOpenaiBaseUrl?: string | null;
   injectedRealtimeWsBaseUrl?: string | null;
   injectedCatalogPath?: string | null;
+  injectedCatalogBinding?: string | null;
   injectedRootWebSearch?: string | null;
   replacedRootWebSearch?: string | null;
   injectedSubagentDefaults?: WrittenSubagentDefaults | null;
+  injectedRootHistory?: unknown;
+}
+
+/** Older records selected a catalog artifact even when the operator owned the binding. */
+export function ownedJournalCatalogBinding(journal: Ownership): string | null {
+  if (journal.injectedCatalogBinding !== undefined) {
+    return typeof journal.injectedCatalogBinding === "string" && journal.injectedCatalogBinding
+      ? journal.injectedCatalogBinding : null;
+  }
+  const path = journal.injectedCatalogPath;
+  return typeof path === "string" && path
+    && sameCodexCatalogPath(CODEX_CONFIG_PATH, path, defaultCodexCatalogPathForConfig(CODEX_CONFIG_PATH))
+    ? path : null;
 }
 
 function recordedValues(journal: Ownership): Map<string, unknown> {
@@ -112,10 +160,17 @@ function recordedValues(journal: Ownership): Map<string, unknown> {
   for (const [key, value] of [
     ["openai_base_url", journal.injectedOpenaiBaseUrl],
     ["experimental_realtime_ws_base_url", journal.injectedRealtimeWsBaseUrl],
-    ["model_catalog_json", journal.injectedCatalogPath],
+    ["model_catalog_json", ownedJournalCatalogBinding(journal)],
     ["web_search", journal.injectedRootWebSearch],
   ] as const) if (typeof value === "string") values.set(key, value);
   return values;
+}
+
+function matchesInjectedField(key: string, value: unknown, injected: unknown): boolean {
+  if (key === "model_catalog_json" && typeof value === "string" && value && typeof injected === "string" && injected) {
+    return sameCodexCatalogPath(CODEX_CONFIG_PATH, value, injected);
+  }
+  return isDeepStrictEqual(value, injected);
 }
 
 /** Three-way restore: an edited preference stays; an edited routing field blocks hand-back. */
@@ -125,6 +180,10 @@ export function restoreJournalConfigFields(current: string, original: string, jo
     if (!defaults.ok) return null;
     current = defaults.content;
     const now = fields(current), before = fields(original);
+    const catalog = now.get("model_catalog_json");
+    const ownedCatalog = ownedJournalCatalogBinding(journal);
+    const canRestoreCatalog = ownedCatalog !== null && (journal.injectedCatalogBinding !== undefined
+      || !catalog || matchesInjectedField("model_catalog_json", catalog.value, ownedCatalog));
     if (journal.replacedRootWebSearch) {
       const replaced = fields(journal.replacedRootWebSearch).get("web_search");
       if (!replaced) return null;
@@ -133,6 +192,7 @@ export function restoreJournalConfigFields(current: string, original: string, jo
     const expected = new Map<string, unknown>();
     if (journal.injectedConfigFields) {
       for (const [key, text] of Object.entries(journal.injectedConfigFields)) {
+        if (key === "model_catalog_json" && !canRestoreCatalog) continue;
         if (text === null) { expected.set(key, undefined); continue; }
         const parsed = fields(text);
         const field = parsed.get(key);
@@ -144,6 +204,14 @@ export function restoreJournalConfigFields(current: string, original: string, jo
       // authorizes removal; a whole-file hash alone never authorizes a guessed URL.
       for (const [key, value] of recordedValues(journal)) expected.set(key, value);
       if (now.get("model_provider")?.value === "opencodex") expected.set("model_provider", "opencodex");
+    }
+    // A present root URL an injection under this journal wrote is ours even when the Codex app
+    // rewrote it back to an earlier injection's value. Only the current file is reinterpreted;
+    // a snapshot value that coincides with one may be the user's and is restored as it was.
+    const history = parseInjectedRootHistory(journal.injectedRootHistory);
+    for (const key of INJECTED_ROOT_KEYS) {
+      const present = now.get(key)?.value;
+      if (typeof present === "string" && history[key]?.includes(present)) expected.set(key, present);
     }
     const { bom, lines } = rootSourceLines(current);
     if (recoverOwnedEdits) {
@@ -159,6 +227,7 @@ export function restoreJournalConfigFields(current: string, original: string, jo
     const append: string[] = [];
     const eol = lines.find(line => line.eol)?.eol || "\n";
     for (const key of new Set([...now.keys(), ...expected.keys()])) {
+      if (key === "model_catalog_json" && !canRestoreCatalog) continue;
       const present = now.get(key), prior = before.get(key);
       if (isDeepStrictEqual(present?.value, prior?.value)) continue;
       if (!expected.has(key)) {
@@ -167,7 +236,7 @@ export function restoreJournalConfigFields(current: string, original: string, jo
       }
       const injected = expected.get(key);
       if (isDeepStrictEqual(injected, prior?.value)) continue; // never owned
-      if (!isDeepStrictEqual(present?.value, injected)) {
+      if (!matchesInjectedField(key, present?.value, injected)) {
         if (key === "model" || key.startsWith("agents.") || key === "web_search") continue;
         if (!recoverOwnedEdits) return null;
       }

@@ -48,9 +48,7 @@ import {
   accountQuotaInflight,
   explicitAccountEpoch,
   explicitAccountReader,
-  explicitQuotaConfig,
-  explicitQuotaDestination,
-  explicitQuotaIdentity,
+  explicitQuotaConfig, explicitQuotaDestination, explicitQuotaIdentity, quotaCredentialIdentity,
   accountQuotaProbeSkip, getTokenForAccountQuotaProbe,
   hasPassiveAccountQuota,
   hydrateAccountQuotaCache,
@@ -364,7 +362,7 @@ async function readExplicitAccountQuota(provider: string, accountId: string, con
   const credential = getAccountCredential(provider, accountId);
   if (!credential || credential.access !== accessToken) return null;
   // Pair the post-renewal credential with the destination captured before renewal.
-  const identity = explicitQuotaIdentity(provider, accountId, config);
+  const identity = quotaCredentialIdentity(provider, accountId, credential, config);
   const isCurrent = () => epoch === explicitAccountEpoch
     && identity === explicitQuotaIdentity(provider, accountId, configured);
   if (!isCurrent()) return null;
@@ -402,10 +400,12 @@ async function fetchExplicitAccountQuota(provider: string, accountId: string, fo
     const current = epoch === explicitAccountEpoch && isCurrent();
     const quota = current && result && typeof result !== "symbol" ? result.quota : null;
     const empty = result === AUTHORITATIVE_EMPTY_QUOTA;
+    const retained = current && result !== TERMINAL_QUOTA_FAILURE && !empty
+      && lastGood && Date.now() - lastGood.updatedAt < LAST_GOOD_MAX_AGE_MS ? lastGood : null;
     const entry: AccountQuotaCacheEntry = {
       ts: Date.now(),
-      quota: quota ?? (current && result !== TERMINAL_QUOTA_FAILURE && !empty
-        && lastGood && Date.now() - lastGood.updatedAt < LAST_GOOD_MAX_AGE_MS ? lastGood : null),
+      quota: quota ?? retained,
+      quotaOwnerIsCurrent: quota ? isCurrent : retained ? cached?.quotaOwnerIsCurrent : undefined,
       ...(!current || (!quota && !empty) ? { unavailable: true as const } : {}),
       identity: read?.identity ?? identity,
       isCurrent: () => epoch === explicitAccountEpoch && isCurrent(),
@@ -472,6 +472,7 @@ async function fetchAccountQuota(
       const entry: AccountQuotaCacheEntry = {
         ts: Date.now(),
         quota: cached?.quota ?? null,
+        quotaOwnerIsCurrent: cached?.quotaOwnerIsCurrent,
         unavailable: true,
         ...(provider === "kiro" ? { identity: kiroIdentity } : {}),
         ...(provider === "google-antigravity" ? { isCurrent: antigravityIsCurrent } : {}),
@@ -513,7 +514,7 @@ async function fetchAccountQuota(
       const entry: AccountQuotaCacheEntry = {
         ts: Date.now(), quota,
         ...(provider === "kiro" ? { identity: kiroIdentity } : {}),
-        ...(provider === "google-antigravity" ? { isCurrent: antigravityIsCurrent } : {}),
+        ...(provider === "google-antigravity" ? { isCurrent: antigravityIsCurrent, quotaOwnerIsCurrent: antigravityIsCurrent } : {}),
       };
       if (mayCommitAccountQuotaKey(key, writerGeneration)
         && entry.isCurrent?.() !== false

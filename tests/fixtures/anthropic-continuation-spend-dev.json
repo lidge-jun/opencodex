@@ -1,0 +1,13 @@
+{
+  "source": "64bfd29355bae9a6dfd9726c369b7371d222852e",
+  "buffered": {
+    "success": [{ "send": 1, "kind": "lost" }, { "send": 2, "kind": "settle", "tokens": 77 }],
+    "unmetered400": [{ "send": 1, "kind": "lost" }, { "send": 2, "kind": "settle", "tokens": 33 }],
+    "metered400": [{ "send": 1, "kind": "lost" }, { "send": 2, "kind": "settle", "tokens": 5037 }]
+  },
+  "streaming": {
+    "success": [{ "send": 1, "kind": "lost" }, { "send": 2, "kind": "settle", "tokens": 77 }],
+    "unmetered400": [{ "send": 1, "kind": "lost" }, { "send": 2, "kind": "settle", "tokens": 33 }],
+    "metered400": [{ "send": 1, "kind": "lost" }, { "send": 2, "kind": "settle", "tokens": 5037 }]
+  }
+}

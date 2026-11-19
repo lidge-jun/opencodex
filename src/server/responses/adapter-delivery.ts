@@ -1,5 +1,5 @@
 import { proxyErrorPresentation, isProxyError, rememberProxyErrorMessage } from "../../lib/client-error-body";
-import type { ResponsesRequestContext } from "./core-options";
+import { responsesTimeoutProvider, type ResponsesRequestContext } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
 import type { ResponsesSidecarAuth } from "./request-sidecar-auth";
@@ -9,6 +9,7 @@ import type { AdapterExchange } from "./adapter-dispatch";
 import type { AdapterContinuations } from "./adapter-continuation";
 import { guardTerminalEventStream } from "./terminal-guard";
 import { guardEmptyCompletionEventStream } from "./empty-completion-guard";
+import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "../../lib/errors";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse } from "../../bridge";
 import type { OcxProviderContinuationState, AdapterEvent } from "../../types";
 import { rememberResponseState } from "../../responses/state";
@@ -20,7 +21,7 @@ import {
   readResponseStreamWithInactivity,
   ResponseBodyInactivityError,
 } from "../../lib/response-body-inactivity";
-import { resolveStallTimeoutMs } from "../../stall-timeout";
+import { providerStallTimeoutSec, resolveStallTimeoutMs } from "../../stall-timeout";
 import { clientEncoderForDelivery, deliverClientEncodedResponse } from "../inference/client-encoder-delivery";
 import { noteKiroServedSuccess } from "../../providers/kiro-usage";
 import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
@@ -30,6 +31,8 @@ import { isNonReplayableResponse } from "../../lib/upstream-retry";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { currentTurnToolBridgeMaps, guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
 import { guardCompactionSummary } from "../../responses/compaction-summary";
+import { settleAnthropicPerMessageEffort } from "../../adapters/anthropic/per-message-effort";
+import { adapterResponseSpendObserver } from "./request-spend";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function deliverAdapterResponse(
@@ -75,6 +78,8 @@ export async function deliverAdapterResponse(
     fetchGuardedEmptyCompletionRetry,
     isContinuationBodyStall,
   } = continuationState;
+  const preserveEmptyCompletionRetryError = (event: AdapterEvent) =>
+    (event.type === "error" && event.code === UNDECLARED_TOOL_CALL_ERROR_CODE) || isContinuationBodyStall(event);
   const { emptyCompletionGuardEnabled } = completionPolicy;
   const {
     cancelResponseCompletion,
@@ -83,8 +88,10 @@ export async function deliverAdapterResponse(
     notifyResponseComplete,
   } = responseEffects;
   const { routedCompaction } = sidecarState;
-  const bodyInactivityMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream });
+  const stallTimeoutSec = () => providerStallTimeoutSec(config, responsesTimeoutProvider(options, route.provider));
+  const bodyInactivityMs = resolveStallTimeoutMs(stallTimeoutSec(), { localUpstream });
   const upstreamRequestsStream = parsed.stream || isCanonicalOpenAiForwardProvider(route.provider);
+  const observeInitialSpend = adapterResponseSpendObserver(upstreamResponse);
   const recoverThinkingSignature = (events: AsyncIterable<AdapterEvent>): AsyncIterable<AdapterEvent> =>
     thinkingSignatureRecovery.wrap(events, async function* () {
       const result = await refetchThinkingSignature();
@@ -105,7 +112,8 @@ export async function deliverAdapterResponse(
         return;
       }
       try {
-        const bodyInactivityMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream: adapterExchange.localUpstream });
+        const observeRetrySpend = adapterResponseSpendObserver(response);
+        const bodyInactivityMs = resolveStallTimeoutMs(stallTimeoutSec(), { localUpstream: adapterExchange.localUpstream });
         const retryEvents = upstreamRequestsStream
           ? readResponseStreamWithInactivity(response, upstream.signal, bodyInactivityMs,
             guarded => transportState.activeAdapter.parseStream(guarded, translatorBudget, logCtx.activeTierMetadata))
@@ -114,6 +122,7 @@ export async function deliverAdapterResponse(
                 guarded => transportState.activeAdapter.parseResponse!(guarded, translatorBudget, logCtx.activeTierMetadata));
             })();
         for await (const event of retryEvents) {
+          observeRetrySpend?.(event);
           options.onCompactionRecoveryAdapterEvent?.(event);
           yield event;
         }
@@ -149,6 +158,7 @@ export async function deliverAdapterResponse(
           bodyInactivityMs,
           response => transportState.activeAdapter.parseStream(response, translatorBudget, logCtx.activeTierMetadata, { completedToolBlocks: outputItemIds !== undefined }),
         )) {
+          observeInitialSpend?.(event);
           options.onCompactionRecoveryAdapterEvent?.(event);
           yield event;
         }
@@ -197,7 +207,7 @@ export async function deliverAdapterResponse(
       ? guardEmptyCompletionEventStream({
           firstEvents: advisorStream,
           continuation: fetchGuardedEmptyCompletionRetry,
-          preserveRetryError: isContinuationBodyStall,
+          preserveRetryError: preserveEmptyCompletionRetryError,
         })
       : advisorStream;
     const catalogGuardedEventStream = guardEmptyToolCatalogStream(completionGuardedEventStream, clientToolCatalog, translatorBudget);
@@ -208,6 +218,7 @@ export async function deliverAdapterResponse(
     // direct client encoder from the fold of the same events.
     const onCompletedResponse = (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => {
       if (!options.abortSignal?.aborted) thinkingSignatureRecovery.rememberSuccess(response);
+      settleAnthropicPerMessageEffort(parsed, response, transportState.activeAdapter.name);
       const served = transportState.sentOAuthSnapshot;
       if (transportState.activeAdapter.name === "kiro" && response.status === "completed" && served
         && noteKiroServedSuccess(served.accountId, served.generation)) persistKiroAccountState();
@@ -243,7 +254,7 @@ export async function deliverAdapterResponse(
           hideRawReasoning: parsed.options.hideRawReasoning,
           toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, bareCustomToolNames, toolSearchToolNames,
         },
-        stallTimeoutSec: config.stallTimeoutSec,
+        stallTimeoutSec: stallTimeoutSec(),
         get localUpstream() { return adapterExchange.localUpstream; },
         turnAdmissionLease: options.turnAdmissionLease,
         ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
@@ -261,11 +272,12 @@ export async function deliverAdapterResponse(
         replayCacheScope: parsed._reasoningReplayScope,
         ...(outputItemIds ? { outputItemIds } : {}),
         ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
-        stallTimeoutSec: config.stallTimeoutSec,
+        stallTimeoutSec: stallTimeoutSec(),
         get localUpstream() { return adapterExchange.localUpstream; },
         hideThinkingSummary: parsed.options.hideThinkingSummary,
         chatRawReasoningVisible: options.chatRawReasoningVisible,
         hideRawReasoning: parsed.options.hideRawReasoning,
+        rawReasoningAsSummary: parsed.options.rawReasoningAsSummary,
         declaredToolNames,
         bareCustomToolNames,
         enforceDeclaredToolNames: options.inboundWire !== "chat" && options.inboundWire !== "anthropic",
@@ -315,7 +327,10 @@ export async function deliverAdapterResponse(
           response => transportState.activeAdapter.parseResponse!(response, translatorBudget, logCtx.activeTierMetadata),
         ));
       }
-      for (const event of initialEvents) options.onCompactionRecoveryAdapterEvent?.(event);
+      for (const event of initialEvents) {
+        observeInitialSpend?.(event);
+        options.onCompactionRecoveryAdapterEvent?.(event);
+      }
       const recoveredEvents: AdapterEvent[] = [];
       for await (const event of recoverThinkingSignature((async function* () { yield* initialEvents; })())) {
         recoveredEvents.push(event);
@@ -349,7 +364,7 @@ export async function deliverAdapterResponse(
         for await (const event of guardEmptyCompletionEventStream({
           firstEvents: (async function* () { yield* guardedEvents; })(),
           continuation: fetchGuardedEmptyCompletionRetry,
-          preserveRetryError: isContinuationBodyStall,
+          preserveRetryError: preserveEmptyCompletionRetryError,
         })) events.push(event);
       } else {
         events = guardedEvents;
@@ -378,6 +393,7 @@ export async function deliverAdapterResponse(
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       chatRawReasoningVisible: options.chatRawReasoningVisible,
       hideRawReasoning: parsed.options.hideRawReasoning,
+      rawReasoningAsSummary: parsed.options.rawReasoningAsSummary,
       toolNsMap,
       declaredToolNames,
       bareCustomToolNames,

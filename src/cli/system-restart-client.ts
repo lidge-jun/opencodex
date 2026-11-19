@@ -44,6 +44,12 @@ export interface BoundSystemRestartDeps {
   /** Invoking CLI version for the skew guard; defaults to this bundle's package version. */
   cliVersion?: string;
   readUpdateHome?: typeof readUpdateRestartHome;
+  /**
+   * The caller proved the runtime's image is the installed executable whose version is
+   * `cliVersion` (the headless Desktop updater, #8246). Its in-place respawn then runs those
+   * installed bytes, so a CLI-newer skew is the expected state rather than a reason to refuse.
+   */
+  respawnRunsInstalledImage?: boolean;
 }
 
 function rejected(code: string): ProxyRestartRequestOutcome {
@@ -162,7 +168,7 @@ export async function requestBoundSystemRestart(
     return rejected("restart_target_recheck_failed");
   }
   if (!sameRestartTarget(target, observed)) return rejected("restart_target_changed");
-  if (skew.relation === "cli-newer") {
+  if (skew.relation === "cli-newer" && !deps.respawnRunsInstalledImage) {
     if (!updateHome) return rejected("update_restart_home_unverified");
     try {
       if (JSON.stringify((deps.readUpdateHome ?? readUpdateRestartHome)()) !== JSON.stringify(updateHome)) {
@@ -226,14 +232,14 @@ export async function requestBoundSystemRestart(
  * A client runtime under the desktop app or a service answers 409 `restart_supervised` and keeps
  * serving (OCX-6). Read that small body and return the validated supervisor, or null.
  */
-async function supervisedRefusal(response: Response): Promise<"service" | "desktop" | "service-unproven" | null> {
+async function supervisedRefusal(response: Response): Promise<"service" | "desktop" | "service-unproven" | "legacy-flag" | null> {
   try {
     const read = await readBoundedResponseBytes(response, { maxBytes: 1024, signal: AbortSignal.timeout(SYSTEM_RESTART_REQUEST_TIMEOUT_MS) });
     if (read.oversized) return null;
     const body = JSON.parse(new TextDecoder().decode(read.bytes)) as { error?: { code?: unknown; supervisor?: unknown } } | null;
     if (body?.error?.code !== RESTART_SUPERVISED_ERROR) return null;
     const supervisor = body.error.supervisor;
-    return supervisor === "service" || supervisor === "desktop" || supervisor === "service-unproven" ? supervisor : null;
+    return supervisor === "service" || supervisor === "desktop" || supervisor === "service-unproven" || supervisor === "legacy-flag" ? supervisor : null;
   } catch {
     return null;
   }

@@ -360,13 +360,15 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = injectXaiResponsesXSearch(outBody, provider, parsed._replayPrefixLen);
         // xAI, Meta, Azure and Kimi Code (#8075) answer 400 for `output.encrypted_content`
         // instead of ignoring it; Codex Desktop asks for it on every turn (#7878).
+        // Go multiplexes backends with different include support (#8702). Use its exact
+        // destination's common compatibility policy rather than a model-name allowlist.
         // Azure also rejects this exact include entry, including on plain Responses routes.
         const isAzureResponses = provider.adapter === "azure" || provider.adapter === "azure-openai"
           || new URL(url).hostname.toLowerCase().endsWith(".openai.azure.com");
         const arkKimi = !forward && provider.arkKimiResponsesModels?.includes(parsed.modelId);
         if (arkKimi) outBody = stripArkKimiOrphanCipher(outBody);
         if (isXaiResponsesDestination(provider) || isMetaAiResponsesDestination(url) || isAzureResponses
-          || isKimiCodingResponsesHttpsUrl(url) || arkKimi) {
+          || isKimiCodingResponsesHttpsUrl(url) || arkKimi || isOpenCodeGoResponsesUrl(url)) {
           outBody = stripUnsupportedOutputInclude(outBody);
         }
         // xAI and explicitly classified compatible gateways reject these OpenAI web_search
@@ -437,6 +439,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
                 ),
                 {
                   preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true,
+                  translatorBudget,
                   dropNullContentChannel: !isOpenAiOperatedResponsesDestination(provider),
                   stripEncryptedContent: threadServingIdentityChanged || requiresPlaintextReasoningReplay(provider),
                   dropForeignItemId: parsed._dropForeignReasoningItemIds === true,

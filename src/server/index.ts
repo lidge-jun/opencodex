@@ -5,6 +5,7 @@ import { normalizeBindHostname } from "./bind-host";
 import { configureInboundBodyBudget } from "./inbound-body-admission";
 import { createAdmittedHttpTurn } from "./admitted-http-turn";
 import { isOllamaNativePath } from "./ollama-native-paths";
+import { isGeminiNativePath, parseGeminiNativePath } from "./gemini-native-paths";
 import {
   buildWarmupCompletionFrames,
   buildWsErrorFrame,
@@ -30,6 +31,7 @@ import {
 import { flushConfigDirHardeningAndReaps } from "../config/paths";
 import { trackBackgroundWork } from "../lib/background-work";
 import { migrateStartupSubagentModels } from "./subagent-models-startup";
+import { migrateStartupReserveCapability } from "./reserve-capability-startup";
 import { migrateStartupXaiResponses } from "./xai-responses-startup";
 import { migrateStartupZaiResponses } from "./zai-responses-startup";
 import { reconcileOAuthProviders } from "../oauth";
@@ -217,13 +219,13 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   // Captured before loadConfig() starts the optional ACL flight so stop() drains the same dir
   // even if OPENCODEX_HOME changes underneath a long-lived process.
   const startupConfigDir = getConfigDir();
-  const startupConfig = migrateStartupSubagentModels(
+  const startupConfig = migrateStartupReserveCapability(migrateStartupSubagentModels(
     runModelRenameStartupMigration(
       runDevinProviderMergeStartupMigration(
         runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig())),
       ),
     ),
-  );
+  ));
   // Reconcile disk-backed presets first: it replaces provider rows and must not undo
   // an in-memory wire upgrade when that upgrade's persistence is temporarily unavailable.
   reconcileOAuthProviders(startupConfig);
@@ -418,6 +420,10 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
       return req.method === "POST";
     }
     if (path === "/v1/models") return req.method === "GET";
+    // Gemini wire (#8732): `ocx connect agy` points the CLI at this socket. Same admission as the
+    // chat wire it is translated into; each Gemini path admits only its own HTTP method.
+    const gemini = parseGeminiNativePath(path);
+    if (gemini) return req.method === gemini.httpMethod;
     // Realtime voice — a directly-spawned `codex app-server` needs these for desktop voice
     // the same way it needs /v1/responses. Two shapes, same trust model as /v1/responses:
     //  - standalone sessions (codex-rs thread/realtime/start, WebSocket transport):
@@ -451,6 +457,8 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     if (rawPath === "/opencodex-session") return req.method === "GET" || req.method === "POST";
     // Ollama-compatible inference paths are data plane, not management: never via Tailscale Serve.
     if (isOllamaNativePath(rawPath)) return false;
+    // Gemini-compatible inference paths are data plane too, and /v1beta/ is never a management route.
+    if (isGeminiNativePath(rawPath) || rawPath.startsWith("/v1beta/")) return false;
     if (rawPath.startsWith("/api/")) return true;
     if (req.method !== "GET" && req.method !== "HEAD") return false;
     let decodedPath: string;

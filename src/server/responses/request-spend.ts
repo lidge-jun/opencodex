@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { RequestSendObserver } from "../../lib/request-execution-budget";
+import type { AdapterEvent } from "../../types";
 import { sharedSpendLedger, sharedSpendPolicy, type SpendReservationLedger, type SpendScopes, type SpendSeed, type SpendReservationProof, type SpendAdmissionPolicy } from "../../lib/spend-reservation-ledger";
 import { SpendLedgerOwnerError } from "../../lib/spend-ledger-owner";
 import { markLocalRequestLogRefusal, type RequestLogContext } from "../request-log";
@@ -10,6 +11,23 @@ import { currentWorkflowBudgetPolicy } from "../../lib/workflow-budget-config";
 export interface TerminalSpendUsage {
   inputTokens?: number;
   outputTokens?: number;
+}
+
+type RecordSendUsage = (usage: TerminalSpendUsage) => void;
+const adapterResponseSpend = new WeakMap<Response, RecordSendUsage>();
+
+/** Bind an image-recovery response after its retry ladder has finished reporting sends. */
+export function bindAdapterResponseSpend(response: Response, record: RecordSendUsage | undefined): void {
+  if (response.ok && record) adapterResponseSpend.set(response, record);
+}
+
+/** Observe raw adapter events before guards and bridges merge usage across sends. */
+export function adapterResponseSpendObserver(response: Response): ((event: AdapterEvent) => void) | undefined {
+  const record = adapterResponseSpend.get(response);
+  if (!record) return;
+  return event => {
+    if ("usage" in event && event.usage && adapterResponseSpend.delete(response)) record(event.usage);
+  };
 }
 
 /** Settles one request's durable spend entries once its terminal usage is known. */
@@ -29,10 +47,13 @@ export interface SpendTargetIdentity extends SpendScopes {
    * unkeyed same-scope lookup.
    */
   readonly explicitEstimate?: boolean;
+  /** An opted-in retry owns a fresh reservation using the request's estimate. */
+  readonly freshRetry?: boolean;
 }
 export interface RequestSpendReporter {
   start(seed: SpendSeed, ordinal: number): void;
   rebindTarget(target: SpendTargetIdentity, ordinal: number): boolean;
+  recordUsage(ordinal: number, usage: TerminalSpendUsage | null): void;
   report(sends: number): void;
   close(): void;
 }
@@ -49,6 +70,11 @@ export interface RequestSpendTracker extends RequestSendObserver, RequestSpendSe
   requestFinalSettlement(usage: TerminalSpendUsage | undefined): void;
 }
 
+/** Freeze only the numeric ceilings. Accounting mode is chosen at physical spend admission. */
+export function captureRequestSpendPolicy(policy: SpendAdmissionPolicy = sharedSpendPolicy()): SpendAdmissionPolicy {
+  return Object.freeze({ root: Object.freeze({ ...policy.root }), identity: Object.freeze({ ...policy.identity }), pool: Object.freeze({ ...policy.pool }) });
+}
+
 /**
  * One request's entries in the durable spend ledger (#4707).
  *
@@ -62,11 +88,9 @@ export interface RequestSpendTracker extends RequestSendObserver, RequestSpendSe
  * so one entry per increment is one entry per send -- and a dispatch path added later cannot
  * forget to book, which is how the previous wiring attempt ended up with no caller at all.
  *
- * Settlement follows what the request actually learned. The terminal usage belongs to the LAST
- * send that left, so that one settles with the real figure. Every earlier send failed without
- * reporting usage of its own and may still have been billed, so it becomes unresolved spend
- * rather than free. A request that ends with no usage at all -- a cancel, a lost stream --
- * leaves all of them unresolved, which is the conservative answer this ledger exists to give.
+ * Image-recovery receipts carry their own usage, or null if usage is unknown. For an ordinary
+ * request the last routed send keeps the aggregate terminal usage. Other unknown sends remain
+ * unresolved at their reservation estimates.
  */
 export function createRequestSpendTracker(
   logCtx: Pick<
@@ -75,6 +99,7 @@ export function createRequestSpendTracker(
   > & Partial<Pick<RequestLogContext, "localTerminalReason" | "terminalSource" | "errorCode" | "spendRefusalDetail">>,
   rootId: string | undefined,
   injected?: SpendReservationLedger,
+  capturedPolicy?: SpendAdmissionPolicy,
 ): RequestSpendTracker {
   // Resolved on the first CHARGE, not when the request is built. The shared ledger opens a
   // journal under the OpenCodex home, and a request that never dispatches -- refused at
@@ -83,6 +108,7 @@ export function createRequestSpendTracker(
   let ledgerRef: SpendReservationLedger | undefined = injected;
   const ledger = (): SpendReservationLedger => (ledgerRef ??= sharedSpendLedger());
   let admissionPolicy: SpendAdmissionPolicy | undefined;
+  const capturePolicy = (): SpendAdmissionPolicy => capturedPolicy ??= captureRequestSpendPolicy(ledgerRef?.policy);
   let initialEnforced: boolean | undefined;
   // Outstanding entries; exact dispatch reports move their reservation to the end.
   const live: string[] = [];
@@ -95,25 +121,25 @@ export function createRequestSpendTracker(
   let finalRequested = false;
   let finalUsage: TerminalSpendUsage | undefined;
   let reporters = 0;
-  const seeds = new Map<string, { seed: SpendSeed; started: boolean; reported: boolean; auxiliary: boolean; explicitEstimate: boolean; estimate?: { inputTokens: number; outputCeilingTokens: number } }>();
+  const seeds = new Map<string, { seed: SpendSeed; started: boolean; reported: boolean; auxiliary: boolean; independent: boolean; retryScopes?: SpendScopes; estimate?: { inputTokens: number; outputCeilingTokens: number } }>();
   const auxiliarySendIds = new Set<string>();
   // Abandoned capabilities retain cleanup ownership, never admission lookup.
   const retiredSeeds = new Set<SpendSeed>();
   const resolvedSendIds = new Set<string>();
   const completedSeeds = new Set<SpendSeed>();
-  const physical = new Map<number, { seed: SpendSeed; sendId?: string; reportPending?: boolean; reportComplete?: boolean; estimate?: { inputTokens: number; outputCeilingTokens: number } }>();
+  const physical = new Map<number, { seed: SpendSeed; sendId?: string; reportPending?: boolean; reportComplete?: boolean;
+    estimate?: { inputTokens: number; outputCeilingTokens: number }; usage?: TerminalSpendUsage | null }>();
   const selectedScopes = (target: SpendTargetIdentity = {}): SpendScopes => ({
     ...(rootId !== undefined ? { rootId } : {}),
     ...(target.identityId ?? logCtx.accountLogLabel ? { identityId: target.identityId ?? logCtx.accountLogLabel } : {}),
     ...(target.poolId ?? logCtx.spendPoolId ?? logCtx.provider ? { poolId: target.poolId ?? logCtx.spendPoolId ?? logCtx.provider } : {}),
   });
-  const applicable = (scopes: SpendScopes): boolean => {
-    if (initialEnforced !== undefined) return initialEnforced;
-    const policy = admissionPolicy ?? ledgerRef?.policy ?? sharedSpendPolicy();
-    return (scopes.rootId !== undefined && policy.root.maxTokens !== undefined)
-      || (scopes.identityId !== undefined && policy.identity.maxTokens !== undefined)
-      || (scopes.poolId !== undefined && policy.pool.maxTokens !== undefined);
-  };
+  const policyApplies = (policy: SpendAdmissionPolicy, scopes: SpendScopes): boolean =>
+    (scopes.rootId !== undefined && policy.root.maxTokens !== undefined)
+    || (scopes.identityId !== undefined && policy.identity.maxTokens !== undefined)
+    || (scopes.poolId !== undefined && policy.pool.maxTokens !== undefined);
+  const applicable = (scopes: SpendScopes): boolean => initialEnforced
+    ?? policyApplies(admissionPolicy ?? capturedPolicy ?? ledgerRef?.policy ?? sharedSpendPolicy(), scopes);
   const estimates = () => ({ inputTokens: logCtx.spendInputEstimateTokens ?? logCtx.usageLogInputTokens ?? 0,
     outputCeilingTokens: logCtx.spendOutputCeilingTokens ?? 0 });
   const seedState = (seed: SpendSeed) => [...seeds.values()].find(state => state.seed === seed);
@@ -129,9 +155,11 @@ export function createRequestSpendTracker(
     const ids: string[] = [];
     for (const [, entry] of entries) {
       if (!entry.sendId) return false;
-      const reported = entry.sendId === terminal && (typeof finalUsage?.inputTokens === "number" || typeof finalUsage?.outputTokens === "number");
+      // Recovery pins set null at dispatch to opt this receipt out of the aggregate fallback.
+      const usage = entry.usage === undefined && entry.sendId === terminal ? finalUsage : entry.usage;
+      const reported = typeof usage?.inputTokens === "number" || typeof usage?.outputTokens === "number";
       if (!resolvedSendIds.has(entry.sendId)) {
-        const ok = reported ? ledger().settle(entry.sendId, { inputTokens: finalUsage?.inputTokens ?? 0, outputTokens: finalUsage?.outputTokens ?? 0 })
+        const ok = reported ? ledger().settle(entry.sendId, { inputTokens: usage?.inputTokens ?? 0, outputTokens: usage?.outputTokens ?? 0 })
           : ledger().markLost(entry.sendId);
         if (!ok) return false;
         resolvedSendIds.add(entry.sendId);
@@ -249,20 +277,24 @@ export function createRequestSpendTracker(
     },
     startRequest(target) {
       if (admissionPolicy) return;
-      const policy = ledgerRef?.policy ?? sharedSpendPolicy();
-      admissionPolicy = Object.freeze({ root: Object.freeze({ ...policy.root }), identity: Object.freeze({ ...policy.identity }), pool: Object.freeze({ ...policy.pool }) });
+      admissionPolicy = capturePolicy();
       initialEnforced = applicable(selectedScopes(target));
       if (!initialEnforced) admissionPolicy = Object.freeze({ root: Object.freeze({}), identity: Object.freeze({}), pool: Object.freeze({}) });
     },
+    // Combo prepayment can fix observe-only accounting before its child has an identity.
+    // Optional hosted work still consults the original ceilings, never the live ledger policy.
+    hasCapturedSpendCeiling(target) { return policyApplies(capturePolicy(), selectedScopes(target)); },
     get enforced(): boolean { return applicable(selectedScopes()); },
     get policyStarted(): boolean { return admissionPolicy !== undefined; },
-    get spendAdmissionPolicy(): SpendAdmissionPolicy | undefined { return admissionPolicy; },
+    get spendAdmissionPolicy(): SpendAdmissionPolicy | undefined { return admissionPolicy ?? capturedPolicy; },
     ensureSeed(target, prepaidProof) {
       tracker.startRequest?.(target);
       if (resolved || finalRequested && reporters === 0) return undefined;
       const scopes = selectedScopes(target);
       if (!applicable(scopes)) return undefined;
-      const key = JSON.stringify([scopes.rootId, scopes.identityId, scopes.poolId, target.targetKey]);
+      const independent = target.explicitEstimate === true || target.freshRetry === true;
+      const key = JSON.stringify([scopes.rootId, scopes.identityId, scopes.poolId, target.targetKey,
+        ...(target.freshRetry ? [randomUUID()] : [])]);
       const existing = seeds.get(key);
       if (existing) return existing.seed;
       if (prepaidProof?.ledger === ledger()) {
@@ -275,33 +307,34 @@ export function createRequestSpendTracker(
           }
         }
       }
-      if (target.targetKey === undefined) {
+      if (target.targetKey === undefined && !target.freshRetry) {
         const same = [...seeds.entries()].find(([candidate, candidateState]) => {
           const identity = JSON.parse(candidate) as Array<string | undefined>;
-          return candidateState.explicitEstimate !== true
+          return !candidateState.independent
             && identity[0] === (scopes.rootId ?? null) && identity[1] === (scopes.identityId ?? null) && identity[2] === (scopes.poolId ?? null);
         });
         if (same) return same[1].seed;
       }
       // Rebind an unused provisional anchor before selection changes. Dispatched anchors stay
-      // live, and an explicit-estimate successor neither retires nor is retired by another leg:
+      // live, and an independent send neither retires nor is retired by another leg:
       // both directions would destroy a booking its own reporter still owns.
-      for (const [oldKey, state] of seeds) if (!state.started && !state.explicitEstimate && !target.auxiliary && target.explicitEstimate !== true) {
+      for (const [oldKey, state] of seeds) if (!state.started && !state.independent && !target.auxiliary && !independent) {
         if (!retireSeed(oldKey, state.seed)) return undefined;
       }
       // Exact prepaid proofs originate from this tracker and are found above; foreign receipts
       // cannot enroll arbitrary scopes. Normal reservation remains the only initial admission.
       if (prepaidProof && prepaidProof.ledger !== ledger()) return undefined;
-      const estimate = target.auxiliary || target.explicitEstimate ? target.estimate : undefined;
+      const estimate = target.freshRetry ? target.estimate ?? estimates()
+        : target.auxiliary || target.explicitEstimate ? target.estimate : undefined;
       const decision = ledger().reserveSeed({ sendId: randomUUID(), scopes, ...(estimate ?? estimates()), admissionPolicy }, tracker);
       if (!decision.reserved) {
         // Use the established denial mapping without making another reservation.
-        refusal(decision.denial, !target.auxiliary);
+        refusal(decision.denial, !target.auxiliary && !target.freshRetry);
         return undefined;
       }
       seededAccounting = true;
       seeds.set(key, { seed: decision.seed, started: false, reported: false, auxiliary: target.auxiliary === true,
-        explicitEstimate: target.explicitEstimate === true, estimate });
+        independent, estimate, ...(target.freshRetry ? { retryScopes: scopes } : {}) });
       return decision.seed;
     },
     releaseSeed(seed) {
@@ -331,16 +364,30 @@ export function createRequestSpendTracker(
           const owned = starts.find(start => start.ordinal === ordinal);
           if (closed || !entry || !owned || entry.sendId) throw new Error("Invalid spend reporter rebind");
           const old = seedState(entry.seed)!;
+          if (old.retryScopes) {
+            const next = selectedScopes(target);
+            if (old.retryScopes.identityId === next.identityId && old.retryScopes.poolId === next.poolId) return true;
+          }
           // A helper start is provisional until selection reaches the executor. If this is
           // the first start on its seed, abandon/rebind at NORMAL capacity before the wire.
           physical.delete(ordinal);
           old.started = [...physical.values()].some(start => start.seed === old.seed);
-          const seed = tracker.ensureSeed(target);
-          if (!seed) { starts.splice(starts.indexOf(owned), 1); return false; }
+          let seed: SpendSeed | undefined;
+          try {
+            if (old.retryScopes) tracker.releaseSeed?.(old.seed);
+            seed = tracker.ensureSeed(old.retryScopes ? { ...target, estimate: old.estimate, freshRetry: true } : target);
+          } finally {
+            if (!seed) starts.splice(starts.indexOf(owned), 1);
+          }
+          if (!seed) return false;
           physical.set(ordinal, { seed });
           owned.seed = seed;
           seedState(seed)!.started = true;
           return true;
+        },
+        recordUsage(ordinal, usage) {
+          const entry = physical.get(ordinal);
+          if (!resolved && entry && starts.some(start => start.ordinal === ordinal)) entry.usage = usage;
         },
         report(sends) {
           if (closed) return;
@@ -523,13 +570,12 @@ export function attachRequestSpendTracker(
   req: Pick<Request, "headers">,
   logCtx: RequestLogContext,
   ledger?: SpendReservationLedger,
+  capturedPolicy?: SpendAdmissionPolicy,
 ): RequestSpendTracker {
   const existing = logCtx.spendTracker as RequestSpendTracker | undefined;
   if (existing && trackerRequests.get(existing) === req) return existing;
   const rootId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
-  const tracker = ledger === undefined
-    ? createRequestSpendTracker(logCtx, rootId)
-    : createRequestSpendTracker(logCtx, rootId, ledger);
+  const tracker = createRequestSpendTracker(logCtx, rootId, ledger, capturedPolicy);
   logCtx.spendTracker = tracker;
   trackerRequests.set(tracker, req);
   return tracker;

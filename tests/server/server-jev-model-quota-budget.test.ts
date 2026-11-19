@@ -7,6 +7,7 @@ import { resolveJevComboDecision } from "../../src/combos/jev-dispatch";
 import { jevQuotaCandidates } from "../../src/combos/jev-quota-route";
 import { JEV_QUOTA_INSTRUCTION } from "../../src/combos/jev-quota";
 import { createJevModelInvoker } from "../../src/server/responses/jev-model-invoke";
+import { ESTIMATED_USAGE_HEADER } from "../../src/server/responses/estimated-usage";
 import { resetLifecycleDrainStateForTests } from "../../src/server/lifecycle";
 import { invalidateDecisionKeyQuotas, publishDecisionKeyQuota } from "../../src/providers/quota-decision-snapshot";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
@@ -136,3 +137,48 @@ test("arbitrary malformed output is never retried without quota", async () => {
   expect(result.gate).toBe("malformed");
   expect(calls).toBe(1);
 });
+
+// #7427: a response marked as carrying estimated usage is display data. The decision call settles
+// spend from what the invoker reports, so an estimate must never reach settlement or the result.
+for (const [label, headers, locallyEstimated, expected] of [
+  ["estimated", { [ESTIMATED_USAGE_HEADER]: "true" }, true, undefined],
+  ["estimated without a header", {}, true, undefined],
+  ["provider-reported", {}, false, { inputTokens: 7, outputTokens: 2 }],
+  ["provider-reported with an upstream header", { [ESTIMATED_USAGE_HEADER]: "true" }, false, { inputTokens: 7, outputTokens: 2 }],
+] as const) {
+  for (const status of ["completed", "failed", "incomplete"] as const) {
+    test(`decision call attributes ${status} usage using local provenance: ${label}`, async () => {
+      const settled: unknown[] = [];
+      const usage = { input_tokens: 7, output_tokens: 2 };
+      const invoker = createJevModelInvoker({ req: new Request("http://localhost/v1/responses"), config: config(), options: {},
+        handleResponses: async (_request, _config, log) => {
+          if (locallyEstimated) log.clientResponseUsage = "estimated";
+          log.spendTracker = { settle: (usage?: unknown) => { settled.push(usage); } } as unknown as NonNullable<typeof log.spendTracker>;
+          const response = status === "completed"
+            ? { status, usage, output: [{ type: "message", content: [{ type: "output_text", text: '{"choice":"p/0:low"}' }] }] }
+            : { status, usage };
+          if (status === "incomplete") {
+            return new Response(`data: ${JSON.stringify({ type: "response.incomplete", response })}\n\n`, {
+              headers: { ...headers, "content-type": "text/event-stream" },
+            });
+          }
+          return Response.json(
+            status === "failed" ? { ...response, error: { message: "Fixture failed" } } : response,
+            { headers },
+          );
+        } });
+      const result = invoker({ model: "p/judge", instructions: JEV_MODEL_INSTRUCTIONS, input: "{}", signal: new AbortController().signal });
+      const expectedUsage = expected ? usage : undefined;
+      if (status === "completed") {
+        expect((await result).usage).toEqual(expectedUsage);
+      } else {
+        await expect(result).rejects.toMatchObject({
+          gate: status === "failed" ? "http" : "malformed",
+          usage: expectedUsage,
+        });
+      }
+      expect(settled).toEqual([expected]);
+    });
+  }
+}
+

@@ -12,10 +12,17 @@ import { createInferenceSendBudget } from "../inference/context";
 import { finalizeOwnedTranslatorBudget, finalizeAccountLease } from "./core-lifetime";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { executeComboResponses } from "./core-combo";
+import {
+  comboSelectionKeepaliveApplies,
+  comboSelectionKeepaliveLadderOptions,
+  selectComboWithKeepalive,
+} from "./combo-selection-keepalive";
 import { registerTurn, unregisterTurn } from "../lifecycle";
 import { runWithCompactionRecovery } from "./compaction-recovery";
 import { captureAdmissionPolicy } from "../capture-admission-policy";
+import { captureHostedAdvisorSpendScope } from "./hosted-advisor-spend";
 import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
+import { isUnattendedAgyAcpHttpTurn } from "../../adapters/agy-acp/policy";
 /**
  * Route one `/v1/responses` request through the adapter pipeline: recovery loop, passthrough
  * wire, image/web-search bridges, and the terminal-guard continuation.
@@ -28,6 +35,7 @@ export async function handleResponses(
 ): Promise<Response> {
   const ownsBudget = options.translatorBudget === undefined;
   const translatorBudget = options.translatorBudget ?? createTranslatorBudget();
+  const hostedAdvisorSpendScope = captureHostedAdvisorSpendScope(options);
   const abortSignal = options.abortSignal ?? req.signal;
   const accountLoad = { lease: null as import("../../oauth/kiro-account-load").AccountLease | null,
     cancelled: abortSignal.aborted };
@@ -48,10 +56,13 @@ export async function handleResponses(
       // Capture before combo replay rebuilds the Request headers; children carry options.
       visionDescribeTerminal: options.visionDescribeTerminal === true
         || req.headers.get("x-opencodex-vision-describe") === "1",
+      agyAcpUnattendedHttpTurn: options.agyAcpUnattendedHttpTurn === true
+        || (options.inboundTransport !== "websocket" && isUnattendedAgyAcpHttpTurn(req.headers)),
       translatorBudget,
       accountLoad,
+      hostedAdvisorSpendScope,
       // Once at ingress, spend observer included: a combo child inherits the parent's holder.
-      sendBudget: options.sendBudget ?? createInferenceSendBudget(req, logCtx),
+      sendBudget: options.sendBudget ?? createInferenceSendBudget(req, logCtx, hostedAdvisorSpendScope?.ceilings),
     }, (req, config, logCtx, options) => handleResponsesInner(req, config, logCtx, options, requestDispatchers));
     const finalResponse = ownsBudget ? finalizeOwnedTranslatorBudget(response, translatorBudget, abortSignal) : response;
     if (!accountLoad.lease) { release(); return finalResponse; }
@@ -65,6 +76,22 @@ export async function handleResponses(
   }
 }
 export async function handleComboResponses(
+  req: Request,
+  rawBody: unknown,
+  comboId: string,
+  config: OcxConfig,
+  logCtx: RequestLogContext,
+  options: HandleResponsesOptions & { translatorBudget: TranslatorBudget },
+): Promise<Response> {
+  if (!comboSelectionKeepaliveApplies(rawBody, options)) return runComboLadder(req, rawBody, comboId, config, logCtx, options);
+  // A slow selection may answer with a keepalive head while the ladder below keeps running (#8326).
+  const model = (rawBody as { model?: unknown }).model;
+  return selectComboWithKeepalive(
+    hooks => runComboLadder(req, rawBody, comboId, config, logCtx, comboSelectionKeepaliveLadderOptions(options, hooks)),
+    { model: typeof model === "string" ? model : comboId, logCtx, signal: options.abortSignal, clock: options.comboSelectionKeepalive?.clock },
+  );
+}
+async function runComboLadder(
   req: Request,
   rawBody: unknown,
   comboId: string,

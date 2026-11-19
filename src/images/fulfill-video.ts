@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 import type { VideoBridgePlan, VideoCallResult } from "./types";
-import { submitVideoJob, pollVideoJob } from "./xai-video-client";
+import { submitVideoJob, pollVideoJob, type VideoProviderAuth } from "./xai-video-client";
 import { downloadVideoToArtifact, createVideoBudget, type VideoBudget } from "./artifacts";
 
 /** Parsed arguments from the model's video_gen tool call. */
@@ -20,7 +20,7 @@ const DEFAULT_VIDEO_TIMEOUT_MS = 300_000; // 5 min
 export type SleepFn = (ms: number, signal?: AbortSignal) => Promise<void>;
 export type PollVideoJobFn = (
   requestId: string,
-  auth: { baseUrl: string; token: string },
+  auth: VideoProviderAuth,
   signal?: AbortSignal,
 ) => ReturnType<typeof pollVideoJob>;
 
@@ -82,7 +82,7 @@ export function parseVideoCallArgs(raw: string):
  */
 export async function* pollVideoWithHeartbeats(
   requestId: string,
-  auth: { baseUrl: string; token: string },
+  auth: VideoProviderAuth,
   signal: AbortSignal,
   timeoutMs: number = DEFAULT_VIDEO_TIMEOUT_MS,
   /** Test seams — avoid mock.module / global setTimeout (both poison parallel Bun CI). */

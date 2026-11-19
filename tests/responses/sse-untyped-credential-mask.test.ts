@@ -1,9 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { addFinalRequestLog, inspectResponseLogSsePayload, type RequestLogContext } from "../../src/server/request-log";
 import { relaySseWithFailedTail } from "../../src/server";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/relay-eager";
 import { createForwardedEvidenceRedaction, createOutboundCredentialMask, createSynthesizedCopyMask, createTerminalErrorRedactionBlockRewrite } from "../../src/server/responses/terminal-error-redaction";
-import { OutboundCredentialRegistry, createSentValueGuard, maskSecretSpans, setOutboundCredentialRegistryForTests } from "../../src/lib/outbound-credential-registry";
+import { OutboundCredentialRegistry, SecretIndex, containsIndexedSecret, createSentValueGuard, createSentValueMask, maskSecretSpans, setOutboundCredentialRegistryForTests } from "../../src/lib/outbound-credential-registry";
+import { REDACTED_SECRET } from "../../src/lib/redact";
+import { sseDataPayload } from "../../src/server/sse-payload-rewrite";
 import { noteRelaySyntheticTail, noteRequestSentValueGuard } from "../../src/server/request-log-terminal-status";
 import { reduceBareUpstreamEvidence } from "../../src/server/bare-upstream-error";
 
@@ -534,7 +536,8 @@ describe("untyped error envelopes never carry a value this request sent", () => 
 
   test("excerpt masking of a large genuine terminal stays linear in the frame size", () => {
     // Every distinct matching window used to rescan the whole text: about 64k windows over a ~4 MB
-    // frame stalled the event loop for seconds. One marking pass keeps it to tens of milliseconds.
+    // frame stalled the event loop for seconds. Time that same excerpt masker directly; JSON/SSE
+    // serialization and the separate pattern masks are covered by the full rewrite checks below.
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     const credentials = [1, 2, 3, 4].map(seed => {
       let state = seed;
@@ -542,14 +545,44 @@ describe("untyped error envelopes never carry a value this request sent", () => 
       for (let i = 0; i < 16_000; i++) { state = (state * 1103515245 + 12345) & 0x7fffffff; value += alphabet[state % 62]; }
       return value;
     });
-    const rewrite = createTerminalErrorRedactionBlockRewrite(Object.fromEntries(credentials.map((value, i) => [`x-api-key-${i}`, value])));
+    const headers = Object.fromEntries(credentials.map((value, i) => [`x-api-key-${i}`, value]));
+    const rewrite = createTerminalErrorRedactionBlockRewrite(headers);
+    const mask = createSentValueMask(headers, REDACTED_SECRET, { credentialOnly: true, wholeText: true });
     const echoed = credentials.map(value => value.slice(0, -1)).join(" ");
-    const failed = { type: "response.failed", response: { status: "failed", error: { code: "server_error", message: echoed + " " + "z".repeat(3_900_000 - echoed.length) } } };
+    const suffix = "z".repeat(3_900_000 - echoed.length);
+    const message = echoed + " " + suffix;
     const startedAt = performance.now();
-    const out = rewrite(`event: response.failed\ndata: ${JSON.stringify(failed)}`).join("\n");
+    const masked = mask(message);
     const elapsed = performance.now() - startedAt;
-    expect(credentials.some(value => out.includes(value.slice(100, 140)))).toBe(false);
+    expect(credentials.some(value => masked.includes(value.slice(100, 140)))).toBe(false);
+    expect(masked.endsWith(" " + suffix)).toBe(true);
     expect(elapsed).toBeLessThan(1_500);
+
+    const failed = { type: "response.failed", response: { status: "failed", error: { code: "server_error", message } } };
+    const out = rewrite(`event: response.failed\ndata: ${JSON.stringify(failed)}`).join("\n");
+    expect(credentials.some(value => out.includes(value.slice(100, 140)))).toBe(false);
+    const payload = sseDataPayload(out);
+    expect(payload).not.toBeNull();
+    expect(JSON.parse(payload!).response.error.message).toBe(masked);
+  });
+
+  test("excerpt masking does not restart a whole-text search for every matching window", () => {
+    const credential = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ".repeat(4);
+    const suffix = "~".repeat(8192);
+    const text = credential.slice(0, -1) + " " + suffix;
+    const mask = createSentValueMask({ "x-api-key": credential }, REDACTED_SECRET, { credentialOnly: true, wholeText: true });
+    const indexOf = String.prototype.indexOf;
+    let restarts = 0, masked = "";
+    const scan = spyOn(String.prototype, "indexOf").mockImplementation(function (this: string, search: string, position?: number) {
+      if (String(this) === text && (position ?? 0) <= 0 && ++restarts > 8) {
+        throw new Error("excerpt masking repeatedly rescanned the whole input");
+      }
+      return indexOf.call(this, search, position);
+    });
+    try { masked = mask(text); }
+    finally { scan.mockRestore(); }
+    expect(masked).toBe(REDACTED_SECRET + " " + suffix);
+    expect(restarts).toBeLessThanOrEqual(8);
   });
 
   test("exact masking of a self-overlapping credential stays linear in the frame size", () => {
@@ -670,5 +703,88 @@ describe("untyped error envelopes never carry a value this request sent", () => 
     } finally {
       restore();
     }
+  });
+});
+
+describe("credential prefix rejection", () => {
+  test("reuses completed KMP indexes without dropping safe text or later short matches", () => {
+    const index = new SecretIndex(["abaabaaba", "xyxyxyxy", "!"]);
+    for (const text of ["keep abaabaaba / xyxyxyxy tail !", "keep xyxyxyxy / abaabaaba tail !"]) {
+      expect(maskSecretSpans(text, "[REDACTED]", index)).toBe("keep [REDACTED] / [REDACTED] tail [REDACTED]");
+    }
+  });
+
+  test.each([String.fromCharCode(0), "\t", "\n", '"', "\\", String.fromCharCode(0xd800)])("indexes raw and JSON-escaped credential prefixes (%j)", prefix => {
+    const secret = prefix + "fixture-value-12345";
+    const mask = createOutboundCredentialMask({ "x-api-key": secret });
+    for (const spelling of [secret, JSON.stringify(secret).slice(1, -1)]) {
+      expect(mask(`keep ${spelling} tail`)).toBe("keep [REDACTED] tail");
+    }
+  });
+
+  test("stops prefix lookups after all long secrets received a complete overlapping scan", () => {
+    const index = new SecretIndex(["aaaaaaaa", "aaaaaaaa"]);
+    const get = spyOn(index.byPrefix, "get");
+    try {
+      expect(maskSecretSpans(`keep ${"a".repeat(4_096)} tail`, "[REDACTED]", index)).toBe("keep [REDACTED] tail");
+      expect(get).toHaveBeenCalledTimes(1);
+    } finally {
+      get.mockRestore();
+    }
+    const mixed = new SecretIndex(["aaaaaaaa", "bbbbbbbb", "tailSAFE"]);
+    expect(maskSecretSpans(`keep ${"a".repeat(32)} / ${"b".repeat(32)} / tailSAFE done`, "[REDACTED]", mixed))
+      .toBe("keep [REDACTED] / [REDACTED] / [REDACTED] done");
+  });
+
+  test.each(["exact", "containment", "sent guard", "sent mask"] as const)("%s allocates no prefix slices at impossible starts", mode => {
+    // 'z' can start an excerpt, but 'zz' cannot. Reject before making an 8-character slice.
+    const headers = { "x-api-key": "azbcdefgh" };
+    const index = new SecretIndex(["zbcdefgh"]);
+    const guard = createSentValueGuard(headers);
+    const mask = createSentValueMask(headers, "[REDACTED]", { wholeText: true });
+    const text = "z".repeat(4_096);
+    const run = () => mode === "exact" ? maskSecretSpans(text, "[REDACTED]", index)
+      : mode === "containment" ? containsIndexedSecret(text, index)
+      : mode === "sent guard" ? guard(text) : mask(text);
+    const slice = spyOn(String.prototype, "slice");
+    let result: string | boolean;
+    let slices: number;
+    try {
+      result = run();
+      slices = slice.mock.calls.length;
+    } finally {
+      slice.mockRestore();
+    }
+    expect(result!).toBe(mode === "containment" || mode === "sent guard" ? false : text);
+    expect(slices!).toBe(0);
+  });
+
+  test.each([
+    ["az123456", String.fromCharCode(0x161, 0x17a) + "123456"],
+    [String.fromCharCode(0x161, 0x17a) + "123456", "az123456"],
+    [String.fromCharCode(0, 0x7a) + "123456", String.fromCharCode(0x100, 0x7a) + "123456"],
+    [String.fromCharCode(0xd83d, 0xde00) + "123456", String.fromCharCode(0xd83d, 0xde01) + "123456"],
+    [String.fromCharCode(0xd800, 0x7a) + "123456", String.fromCharCode(0xd900, 0x7a) + "123456"],
+  ])("low-byte collisions cannot mask another UTF-16 prefix (%j, %j)", (secret, collision) => {
+    const index = new SecretIndex([secret]);
+    const headers = { "x-api-key": secret };
+    const guard = createSentValueGuard(headers);
+    const mask = createSentValueMask(headers, "[REDACTED]", { wholeText: true });
+    const text = `keep ${collision} | ${secret} tail`;
+    const expected = `keep ${collision} | [REDACTED] tail`;
+    expect(maskSecretSpans(text, "[REDACTED]", index)).toBe(expected);
+    expect(mask(text)).toBe(expected);
+    expect([containsIndexedSecret(collision, index), guard(collision)]).toEqual([false, false]);
+    expect([containsIndexedSecret(secret, index), guard(`keep ${secret} tail`)]).toEqual([true, true]);
+  });
+
+  test("keeps short matches, overlapping excerpts and independent request indexes", () => {
+    expect(maskSecretSpans("keep ababa tail", "[REDACTED]", new SecretIndex(["aba"]))).toBe("keep [REDACTED] tail");
+    const first = createSentValueMask({ "x-api-key": "az123456789" }, "[REDACTED]", { wholeText: true });
+    const second = createSentValueMask({ "x-api-key": "xy987654321" }, "[REDACTED]", { wholeText: true });
+    const text = "keep z12345678 tail";
+    expect(first(text)).toBe("keep [REDACTED] tail");
+    expect(second(text)).toBe(text);
+    expect(first(text)).toBe("keep [REDACTED] tail");
   });
 });

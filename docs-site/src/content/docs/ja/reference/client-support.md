@@ -26,7 +26,7 @@ opencodex は、AI コーディングツールとモデルをつなぐ 1 つの�
 | Qoder CN | — | JSON | はい | OpenAI 互換（エンドポイントはクライアントが選択） | implemented | — | ローカルリスナーのみ。 |
 | WorkBuddy | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/agent-clients.test.ts)) | — | ローカルリスナーのみ。適用前にクライアント固有のチェックを実行し、拒否することがあります。 |
 | WorkBuddy AI | — | JSON | はい | Chat Completions | implemented | — | ローカルリスナーのみ。適用前にクライアント固有のチェックを実行し、拒否することがあります。 |
-| OpenCode | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export.test.ts)) | — | リモートリスナーにも対応します（API キーヘッダーを追加）。 [ガイド](/ja/guides/opencode/) |
+| OpenCode | — | JSON | はい | Responses; Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export.test.ts)) | — | リモートリスナーにも対応します（API キーヘッダーを追加）。 [ガイド](/ja/guides/opencode/) |
 | Pi | — | JSON | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export.test.ts)) | — | ローカルリスナーのみ。 [ガイド](/ja/guides/pi/) |
 | Oh My Pi (omp) | — | YAML | はい | Chat Completions; Responses (ネイティブ OpenAI モデルのみ) | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export.test.ts)) | — | ローカルリスナーのみ。自分の YAML ブロックだけを編集します。 |
 | Hermes | — | YAML | はい | Chat Completions | test-covered ([テスト](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/hermes-catalog-refresh.test.ts)) | — | リモートリスナーにも対応します（API キーヘッダーを追加）。自分の YAML ブロックだけを編集します。 |

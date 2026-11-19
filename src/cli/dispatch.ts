@@ -387,6 +387,7 @@ const commandRunners: Record<string, CommandRunner> = {
     // It is deliberately not `--code`: that name carries a secret value everywhere else in the
     // CLI (`ocx account login <provider> --code <value>`) and its operand is scrubbed from stderr.
     const codeMode = loginArgs.includes("--headless");
+    const acceptAntigravityRisk = loginArgs.includes("--accept-antigravity-risk");
     const positional = loginArgs.filter(arg => !arg.startsWith("--"));
     // 'ocx login codex' is the command people type first, and until now it answered with
     // the full provider wall because the Codex pool lives behind 'ocx account login'.
@@ -407,7 +408,7 @@ const commandRunners: Record<string, CommandRunner> = {
       return code ?? 1;
     }
     const { handleLogin } = await import("../oauth/login-cli");
-    await handleLogin(positional[0], {}, { codeMode });
+    await handleLogin(positional[0], {}, { codeMode, acceptAntigravityRisk });
     return 0;
   },
   logout: async deps => {
@@ -420,6 +421,8 @@ const commandRunners: Record<string, CommandRunner> = {
     return await cmdV2(deps.args.slice(1), { runtimeApi: { findLiveProxy: deps.findLiveProxy } }, async () => (await deps.findLiveProxy())?.port);
   },
   connect: async deps => {
+    const { isGatewayClientOperand, runGatewayClientFromArgs } = await import("./gateway-client-command");
+    if (isGatewayClientOperand(deps.args[1])) return await runGatewayClientFromArgs("connect", deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
     const { handleConnectCommand } = await import("./connect");
     return await handleConnectCommand(deps.args.slice(1));
   },
@@ -432,6 +435,8 @@ const commandRunners: Record<string, CommandRunner> = {
     return await runRemoteWorkspaceCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
   },
   disconnect: async deps => {
+    const { isGatewayClientOperand, runGatewayClientFromArgs } = await import("./gateway-client-command");
+    if (isGatewayClientOperand(deps.args[1])) return await runGatewayClientFromArgs("disconnect", deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
     const { handleDisconnectCommand } = await import("./connect");
     const code = await handleDisconnectCommand(deps.args.slice(1));
     // Token recovery refuses any live client runtime and leaves nothing to restart.
@@ -650,6 +655,11 @@ const commandRunners: Record<string, CommandRunner> = {
     return 0;
   },
   update: async deps => {
+    // #8246: the headless Windows Desktop updater has its own grammar (including --json) and never
+    // reaches the package or orchestrated updater.
+    if (deps.args.slice(1).includes("--desktop") && !hasHelpFlag(deps.args.slice(1))) {
+      return (await import("../desktop-update/cli")).runHeadlessDesktopUpdateCommand(deps.args.slice(1));
+    }
     const { isOrchestratedUpdateArgv, parseOrchestratedChildArgs } = await import("../update/orchestrated-arguments.mjs");
     if (process.env.OCX_UPDATE_ORCHESTRATED_CHILD === "1" && deps.args.slice(1).some(arg => /^--orchestrated-(expect|result)(?:=|$)/.test(arg))) {
       const child = parseOrchestratedChildArgs(deps.args.slice(1), process.env);

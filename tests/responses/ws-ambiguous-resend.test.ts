@@ -22,6 +22,8 @@ import {
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../../src/lib/upstream-retry";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
+import { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY } from "../../src/lib/spend-reservation-ledger";
+import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { BOUNDED_WS_RUNTIME, codexWsUpstreamFetch, streamingInit } from "../helpers/ws-upstream-fixtures";
@@ -280,6 +282,27 @@ describe("handleResponses replaces a dead socket's send once under retryOnReset 
     takeSpendHome();
     return handleResponses(request, config, logCtx, { codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME, sendBudget, abortSignal });
   }
+
+  test.each([100, 200])("configured WebSocket-to-HTTP replacement reserves spend with a %i-token ceiling", async maxTokens => {
+    installFake(SOCKET_DEATHS[0]![1]);
+    const ledger = createSpendReservationLedger({ policy: { ...DEFAULT_SPEND_RESERVATION_POLICY, pool: { maxTokens } } });
+    const logCtx: RequestLogContext = { model: "", provider: "openai", spendInputEstimateTokens: 100 };
+    const tracker = createRequestSpendTracker(logCtx, undefined, ledger);
+    const sendBudget = createRequestExecutionBudget(undefined, undefined, tracker);
+    const replacements = stubHttp(() => {
+      expect(ledger.snapshot("pool", "openai")?.reserved).toBe(200);
+      return completed();
+    });
+    const response = await send(turn(), forwardConfig({ retryOnReset: { enabled: true, replacements: 1 },
+      transientRetryOn5xx: { attempts: 4 } }), logCtx, sendBudget);
+    expect(FakeWebSocket.instances.flatMap(socket => socket.sent)).toHaveLength(1);
+    expect(replacements).toHaveLength(maxTokens === 100 ? 0 : 1);
+    expect(response.status).toBe(maxTokens === 100 ? 502 : 200);
+    const body = await response.text();
+    expect(body).toContain(maxTokens === 100 ? "upstream diagnostic withheld for a non-replayable failure" : "r-http");
+    tracker.settle(undefined);
+    expect(ledger.snapshot("pool", "openai")).toMatchObject({ reserved: 0, unresolved: maxTokens });
+  });
 
   describe("in pool mode", () => {
     const ACCOUNT_ID = "work";

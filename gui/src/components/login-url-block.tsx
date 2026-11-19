@@ -102,7 +102,7 @@ export type LoginHintPaste = {
  * fallback for when the browser cannot reach the loopback callback. Device
  * grants poll for approval instead: their human code is not a callback code.
  */
-export function LoginHint({ hint, paste }: { hint: LoginHintData; paste?: LoginHintPaste }) {
+export function LoginHint({ hint, paste, providerId }: { hint: LoginHintData; paste?: LoginHintPaste; providerId?: string }) {
   const t = useT();
   const deviceCopy = useCopyFeedback<string>();
 
@@ -157,7 +157,7 @@ export function LoginHint({ hint, paste }: { hint: LoginHintData; paste?: LoginH
       )}
       <LoginUrlBlock url={url} openLabel={openLabel} />
       {hint.instructions && <div className="muted text-label">{hint.instructions}</div>}
-      {paste && !deviceCode && (
+      {paste && !deviceCode && providerId !== "m365-copilot" && (
         <div className="login-hint-paste">
           <div className="muted text-label">{t("prov.pasteRedirectHint")}</div>
           <div className="login-hint-paste-row">

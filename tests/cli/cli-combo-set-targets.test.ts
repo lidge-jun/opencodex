@@ -1,5 +1,6 @@
+import { parseComboList, toPutBody } from "../../gui/src/combo-workspace-data";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { getConfigPath, saveConfig } from "../../src/config";
 import { handleComboCommand } from "../../src/cli/combo";
 import type { RuntimeApiDeps } from "../../src/cli/runtime-api";
@@ -106,4 +107,33 @@ describe("ocx combo set --targets keeps the stored strategy (#7579)", () => {
     expect(await handleComboCommand(["set", "fresh", "--targets", "fixture/m", "--json"], deps)).toBe(0);
     expect(stored().fresh).toMatchObject({ strategy: "failover", targets: [{ provider: "fixture", model: "m" }] });
   });
+});
+
+test("an ordinary dashboard save preserves a metered flag cleared by the CLI", async () => {
+  config.combos!.chain = {
+    strategy: "failover",
+    targets: [{ provider: "fixture", model: "m", metered: true }],
+  };
+  saveConfig(config);
+  const loaded = await deps.fetchImpl!("http://127.0.0.1/api/combos");
+  const draft = parseComboList(await loaded.json()).find(combo => combo.id === "chain")!;
+  expect(draft.targets[0]?.metered).toBe(true);
+
+  const targetsPath = getConfigPath() + ".targets.json";
+  writeFileSync(targetsPath, JSON.stringify([{ provider: "fixture", model: "m", metered: false }]));
+  expect(await handleComboCommand(["set", "chain", "--targets-file", targetsPath, "--json"], deps)).toBe(0);
+  expect((stored().chain!.targets as unknown[])[0]).not.toHaveProperty("metered");
+  expect(config.combos!.chain!.targets[0]?.metered).toBeFalsy();
+
+  const response = await deps.fetchImpl!("http://127.0.0.1/api/combos", {
+    method: "PUT",
+    body: JSON.stringify(toPutBody({ ...draft, displayName: "Renamed display" })),
+  });
+  expect(response.status).toBe(200);
+  expect(stored().chain).toMatchObject({
+    displayName: "Renamed display",
+    targets: [{ provider: "fixture", model: "m" }],
+  });
+  expect((stored().chain!.targets as unknown[])[0]).not.toHaveProperty("metered");
+  expect(config.combos!.chain!.targets[0]?.metered).toBeFalsy();
 });

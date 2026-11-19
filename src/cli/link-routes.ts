@@ -76,7 +76,10 @@ export async function runLinkRoutes(args: string[], deps: LinkCliDeps, request: 
       const code = error.body.error.code;
       const cause = error.body.error.cause;
       const known = typeof cause === "string" && ROUTE_CAUSES.has(cause) ? " (" + cause + ")" : "";
-      const note = code === "routes_stored_reload_failed" ? "; the routes were stored (ocx link routes --link-id " + linkId + " reads them), restart the proxy to apply them" : "";
+      const note = code === "routes_stored_reload_failed" ? "; the routes were stored (ocx link routes --link-id " + linkId + " reads them), restart the proxy to apply them"
+        // An edit now would leave the removal's copy of the record stale and the link unremovable (#8678).
+        : code === "link_retirement_pending" ? "; an unfinished removal holds this link, so its routes cannot change: finish that removal by repeating the revoke that started it (ocx link operations --json shows each entry's linkId), or end it with ocx link revoke --link-id " + linkId + " --force --yes without --operation-id"
+        : "";
       throw new RuntimeApiError("Link routes request refused (" + error.status + "): " + code + known + note, error.status, error.body);
     }
     throw error;

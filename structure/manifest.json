@@ -57,6 +57,7 @@
         "src/lib/abort.ts",
         "src/lib/local-upstream.ts",
         "src/lib/bounded-body.ts",
+        "src/server/responses/compact-response-body.ts",
         "src/server/",
         "src/web-search/header-deadline.ts",
         "src/clients/config-export.ts",
@@ -77,6 +78,13 @@
       "title": "Generic OAuth Account Pool",
       "scope": "Opt-in conversation ownership, request-local selection receipts and bounded release for generic OAuth pools.",
       "documents": ["src/oauth/", "src/server/", "src/types/"]
+    },
+    {
+      "path": "providers/m365-copilot.md",
+      "tier": 4,
+      "title": "Microsoft 365 Copilot",
+      "scope": "Native ChatHub turns, managed browser OAuth, account model discovery, images and admission evidence.",
+      "documents": ["src/adapters/m365-copilot.ts", "src/adapters/m365-copilot/", "src/oauth/m365-copilot.ts", "src/oauth/m365-copilot-browser.ts", "src/oauth/m365-copilot-web-session.ts", "src/providers/m365-copilot-models.ts", "src/providers/m365-copilot-discovery.ts", "src/providers/m365-copilot-discovery-fetch.ts", "src/codex/catalog/m365-copilot-models.ts"]
     },
     {
       "path": "overview.md",
@@ -136,6 +144,13 @@
         "src/web-search/",
         "src/config/persisted-mutation.ts"
       ]
+    },
+    {
+      "path": "codex-reserve-capability.md",
+      "tier": 4,
+      "title": "Luna Reserve Capability",
+      "scope": "codexReserveEnabled, its one-time seed from codexDesktopAuthless, and the shared writer projection.",
+      "documents": ["src/config/reserve-capability.ts", "src/config/persisted-projections.ts", "src/server/reserve-capability-startup.ts"]
     },
     {
       "path": "config-ownership.md",
@@ -278,6 +293,13 @@
       "title": "Routed-row authorship",
       "scope": "Generated routed-row ownership signals and combo catalog description overrides.",
       "documents": ["src/codex/catalog/ownership.ts"]
+    },
+    {
+      "path": "catalog-routed-defaults.md",
+      "tier": 2,
+      "title": "Routed catalog row defaults",
+      "scope": "Config-first routed-row instruction and verbosity defaults, their validation, capture and precedence.",
+      "documents": ["src/codex/catalog/routed-defaults.ts", "src/config/schema/routed-catalog-defaults.ts", "src/types/routed-catalog-defaults.ts"]
     },
     {
       "path": "subagents.md",
@@ -542,6 +564,19 @@
       ]
     },
     {
+      "path": "data-planes/gemini-inbound.md",
+      "tier": 3,
+      "title": "Gemini-Compatible Inbound",
+      "scope": "Gemini-shaped models/generateContent/streamGenerateContent routes translated onto Chat Completions, the x-goog-api-key and ?key= credential move, the native error shape, SSE and JSON-array streaming, and the Chat bridge shared with the Ollama inbound.",
+      "documents": [
+        "src/server/gemini-inbound.ts",
+        "src/server/gemini-native-paths.ts",
+        "src/server/native-chat-bridge.ts",
+        "src/server/index/gemini-routes.ts",
+        "src/protocols/codecs/gemini.ts"
+      ]
+    },
+    {
       "path": "data-planes/error-detail.md",
       "tier": 3,
       "title": "Proxy-Owned Error Detail",
@@ -607,6 +642,13 @@
       "documents": ["src/adapters/", "src/bridge/", "src/responses/", "src/claude/", "src/types/", "src/server/", "src/web-search/", "src/images/"]
     },
     {
+      "path": "providers/anthropic-per-message-effort.md",
+      "tier": 4,
+      "title": "Anthropic per-message effort",
+      "scope": "Experimental default-off effort history that keeps the Anthropic prompt cache across mid-conversation effort changes.",
+      "documents": ["src/adapters/", "src/responses/", "src/server/", "src/types/"]
+    },
+    {
       "path": "providers/anthropic-account-thresholds.md",
       "tier": 4,
       "title": "Anthropic Account Thresholds",
@@ -628,6 +670,13 @@
       "title": "OAuth Preset Reconciliation",
       "scope": "Operator limits and per-model declarations across startup reconciliation and OAuth upsert.",
       "documents": ["src/oauth/"]
+    },
+    {
+      "path": "providers/oauth-credential-siblings.md",
+      "tier": 4,
+      "title": "OAuth Credential Siblings",
+      "scope": "Provider rows that sign in through another provider's login: one auth-store slot, owner-named refresh, sibling-only login publication and last-row credential release.",
+      "documents": ["src/oauth/", "src/server/management/provider-credential-release.ts"]
     },
     {
       "path": "providers/antigravity-account-import.md",
@@ -698,6 +747,21 @@
       "scope": "Routed omitted-output caps for adapter:anthropic rows keyed by Claude model id, precedence and unknown-id fallback.",
       "documents": [
         "src/providers/anthropic-output-caps.ts"
+      ]
+    },
+    {
+      "path": "providers/anthropic-cache-lifecycle.md",
+      "tier": 4,
+      "title": "Anthropic Image-Context Recovery",
+      "scope": "Default-off one-shot image-413 recovery and its physical credential, destination, and budget fences.",
+      "documents": [
+        "src/adapters/anthropic.ts",
+        "src/images/loop.ts",
+        "src/server/responses/adapter-dispatch.ts",
+        "src/server/responses/anthropic-image-context.ts",
+        "src/server/responses/image-context-recovery.ts",
+        "src/server/responses/request-transport.ts",
+        "src/web-search/loop.ts"
       ]
     },
     {
@@ -810,6 +874,16 @@
       "documents": [
         "src/codex/",
         "src/config.ts"
+      ]
+    },
+    {
+      "path": "providers/native-main-login-retention.md",
+      "tier": 3,
+      "title": "Native-Main Login Retention",
+      "scope": "Retention of the last complete native-main login while Codex rewrites its login file, and the events that end it.",
+      "documents": [
+        "src/codex/native-main-credentials.ts",
+        "src/codex/main-account.ts"
       ]
     },
     {
@@ -1148,6 +1222,17 @@
       ]
     },
     {
+      "path": "clients/antigravity-gateway.md",
+      "tier": 5,
+      "title": "Antigravity Gateway Connect",
+      "scope": "One-click connect and disconnect of the Antigravity app and agy CLI to the OpenCodex gateway: files written, stash and restore, override precedence, refusal rules.",
+      "documents": [
+        "src/integrations/gateway-clients/",
+        "src/server/management/gateway-client-routes.ts",
+        "src/cli/gateway-client-command.ts"
+      ]
+    },
+    {
       "path": "clients/hermes.md",
       "tier": 5,
       "title": "Hermes Profiles",
@@ -1279,7 +1364,8 @@
         "src/service/orchestration.ts",
         "src/service/repair.ts",
         "src/update/index.ts",
-        "src/update/restart-ownership.ts"
+        "src/update/restart-ownership.ts",
+        "src/desktop-update/"
       ]
     },
     {
@@ -1320,7 +1406,8 @@
         "src/service/windows-stop-binding.ts",
         "src/service/windows-stop-budget.ts",
         "src/service/windows-stop-confirm.ts",
-        "src/service/windows-stop-deadline.ts"
+        "src/service/windows-stop-deadline.ts",
+        "src/service/windows-task-instance-stop.ts"
       ]
     },
     {
@@ -1366,6 +1453,16 @@
       ]
     },
     {
+      "path": "ops/windows-code-signing.md",
+      "tier": 6,
+      "title": "Windows Code Signing",
+      "scope": "SignPath Authenticode signing in the release legs and the per-release signing statement in the release body.",
+      "documents": [
+        ".github/",
+        "scripts/"
+      ]
+    },
+    {
       "path": "design-methodology.md",
       "tier": 6,
       "title": "Design Methodology For New Surfaces",
@@ -1387,9 +1484,15 @@
       "path": "remote-link.md",
       "tier": 3,
       "title": "Remote Link",
-      "scope": "SSH machine-link building blocks: OpenSSH argument policy, ssh_config candidates, tunnel lifecycle reducer, the private link store, and standalone pairing-grant delivery.",
+      "scope": "SSH machine linking, tunnel and link storage, pairing, and connected-client management relay.",
       "documents": [
         "src/link/",
+        "src/client/hub-relay.ts",
+        "src/client/hub-session.ts",
+        "src/remote/hub-management-relay.ts",
+        "src/server/hub-relay-auth.ts",
+        "src/server/index/passive-management-read.ts",
+        "src/client/machine-listener.ts",
         "src/client/link-home.ts",
         "src/client/link-parity-reporter.ts",
         "src/client/runtime-restart.ts",

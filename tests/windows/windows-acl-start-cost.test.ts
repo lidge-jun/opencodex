@@ -23,6 +23,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  hardenSecretDir,
   hardenSecretPath,
   hardenedSecretPathCountForTests,
   reattributeHardenedSecretPath,
@@ -43,6 +44,8 @@ import {
   atomicWriteFileAsync,
   setWindowsHardeningForTests,
 } from "../../src/config/atomic-write";
+
+import { setWindowsOwnerAclRunnerForTests } from "../../src/lib/windows-owner-acl";
 
 const OK: IcaclsResult = { success: true, exitCode: 0, timedOut: false, stdout: "" };
 const PRINCIPAL = {
@@ -243,4 +246,42 @@ describe("atomicWriteFile Windows ACL cost", () => {
     expect(() => atomicWriteFile(destination, '{"token":"secret"}')).toThrow(/EICACLS/);
     expect(existsSync(destination)).toBe(false);
   });
+});
+
+test("runtime directory ACL proof is reused only while its object and metadata match", () => {
+  const testDir = mkdtempSync(join(tmpdir(), "ocx-runtime-directory-acl-"));
+  const owner = "S-1-5-21-100-200-300-1001";
+  let observation = { dev: 1n, ino: 2n, ctimeNs: 3n };
+  let verified = true;
+  let reads = 0;
+  const options = { required: true, verifyExistingRuntimeDirectory: true };
+  setPlatformForTests("win32");
+  setStatForTests(() => observation);
+  setWindowsOwnerAclRunnerForTests(() => {
+    reads++;
+    return { success: verified, timedOut: false, stdout: `U|${owner}|${owner}|False\nE|0|${owner}|4100|1\nA|0|0|3|2032127|${owner}|False\nEND\n` };
+  });
+  setWindowsPrincipalRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: `${owner}\nfixture-user\n` }));
+  setIcaclsRunnerForTests(() => ({ success: false, exitCode: 1, timedOut: false, stdout: "" }));
+  try {
+    expect(hardenSecretDir(testDir, options)).toEqual({ ok: true });
+    expect(hardenSecretDir(testDir, options)).toEqual({ ok: true });
+    expect(reads).toBe(1);
+    observation = { ...observation, ctimeNs: 4n };
+    expect(hardenSecretDir(testDir, options)).toEqual({ ok: true });
+    expect(reads).toBe(2);
+    observation = { ...observation, ino: 5n };
+    verified = false;
+    expect(() => hardenSecretDir(testDir, options)).toThrow();
+    expect(reads).toBe(3);
+  } finally {
+    setPlatformForTests(null);
+    setStatForTests(null);
+    setWindowsOwnerAclRunnerForTests(null);
+    setWindowsPrincipalRunnerForTests(null);
+    setIcaclsRunnerForTests(null);
+    resetWindowsPrincipalForTests();
+    resetHardenedStateForTests();
+    rmSync(testDir, { recursive: true, force: true });
+  }
 });

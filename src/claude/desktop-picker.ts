@@ -184,7 +184,7 @@ export function createDesktopPickerController(deps: DesktopPickerControllerDeps)
     if (!supportsDesktopPicker(platform) || !existsSync(caPath)) return true;
     try {
       const sha1 = pickerCaFingerprints(readFileSync(caPath, "utf8")).sha1;
-      return (await untrustPickerCa(caPath, sha1, deps.security, platform)).ok;
+      return (await untrustPickerCa(caPath, sha1, deps.security, platform, undefined, { configDir: deps.configDir })).ok;
     } catch { return false; }
   }
 
@@ -248,7 +248,7 @@ export function createDesktopPickerController(deps: DesktopPickerControllerDeps)
       let trust = await inspectPickerTrust(pickerLeafCertPath(deps.configDir), caSha1, deps.security, platform);
       observedTrust = trust;
       if (trust !== "trusted" && options.context === "server" && options.allowTrustPrompt !== false) {
-        const added = await trustPickerCa(caPath, deps.security, platform, { pem: ca.certPem });
+        const added = await trustPickerCa(caPath, deps.security, platform, { pem: ca.certPem, configDir: deps.configDir });
         trustedByAttempt = added.ok;
         trust = await inspectPickerTrust(pickerLeafCertPath(deps.configDir), caSha1, deps.security, platform);
         observedTrust = trust;
@@ -349,7 +349,7 @@ export async function removeDesktopPickerArtifacts(options: { configDir?: string
   if (supportsDesktopPicker(platform) && existsSync(caPath)) {
     try {
       const sha1 = pickerCaFingerprints(readFileSync(caPath, "utf8")).sha1;
-      if (!(await untrustPickerCa(caPath, sha1, options.security, platform)).ok) residual.push("trust");
+      if (!(await untrustPickerCa(caPath, sha1, options.security, platform, undefined, { configDir })).ok) residual.push("trust");
     } catch { residual.push("trust"); }
   }
   return residual.length ? { ok: false, residual } : { ok: true };

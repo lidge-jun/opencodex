@@ -1,4 +1,7 @@
 {
+  "anthropic-oauth-caller-system-shape.test.ts": "adapters/anthropic",
+  "anthropic-oauth-internal-system-wire.test.ts": "adapters/anthropic",
+  "anthropic-per-message-effort.test.ts": "adapters/anthropic",
   "anthropic-active-limit-routing.test.ts": "adapters/anthropic",
   "anthropic-output-cap-by-model.test.ts": "adapters/anthropic",
   "web-search-eof.test.ts": "web-search",
@@ -21,6 +24,7 @@
   "tool-identity-hash.test.ts": "adapters",
   "eventstream-fragmentation.test.ts": "responses",
   "responses-sidecar-usage.test.ts": "responses",
+  "google-429-retry-evidence.test.ts": "adapters/google",
   "google-vertex-key-project.test.ts": "adapters/google",
   "google-stream-fragmentation.test.ts": "adapters/google",
   "provider-quota-abliteration.test.ts": "providers",
@@ -30,5 +34,11 @@
   "claude-chat-tool-dispatch.test.ts": "claude-integration",
   "claude-chat-tool-dispatch-routes.test.ts": "claude-integration",
   "anthropic-affinity-restart.test.ts": "adapters/anthropic",
-  "anthropic-affinity-store.test.ts": "adapters/anthropic"
+  "anthropic-affinity-store.test.ts": "adapters/anthropic",
+  "agy-acp-adapter.test.ts": "adapters",
+  "agy-acp-protocol.test.ts": "adapters",
+  "agy-acp-policy.test.ts": "adapters",
+  "agy-acp-config.test.ts": "config",
+  "server-agy-acp.test.ts": "server",
+  "agy-acp-routing-policy.test.ts": "routing"
 }

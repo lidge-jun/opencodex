@@ -6,9 +6,9 @@ import { configReasoningPinsConfigError } from "./config/provider-validation";
 import { recordOwnedConfigPath } from "./lib/config-ownership";
 import { assertNotRealHomeUnderTest } from "./lib/test-home-guard";
 import {
-  adoptCustomModelCatalogMigration,
-  projectCustomModelCatalogMigration,
-} from "./codex/custom-model-catalog-migration";
+  adoptPersistedConfigMigrations,
+  projectPersistedConfigMigrations,
+} from "./config/persisted-projections";
 import { refreshConfigDerivedRegistries } from "./config/derived-registries";
 import {
   clearPendingConfigDeletions,
@@ -113,6 +113,7 @@ export {
 } from "./config/proxy-env";
 export {
   requestPacingConfigError,
+  providerTimeoutOverrideConfigError,
   providerWebSearchBridgeConfigError,
   providerModelCostsConfigError,
   sanitizeModelCostsForDisplay,
@@ -176,6 +177,7 @@ import {
   sanitizeAutoReviewForLoad,
   sanitizeRetryOn429ForLoad,
   sanitizeAnthropicSidecarInstanceForLoad,
+  sanitizeAgyAcpForLoad,
   sanitizeModelCostsForLoad,
   sanitizeCapabilityDeclarationsForLoad,
   warnInheritedFastWireConflicts,
@@ -233,6 +235,7 @@ function loadConfigUnobserved(): OcxConfig {
     sanitizeAutoReviewForLoad(parsed);
     sanitizeRetryOn429ForLoad(parsed);
     sanitizeAnthropicSidecarInstanceForLoad(parsed);
+    sanitizeAgyAcpForLoad(parsed);
     sanitizeModelCostsForLoad(parsed);
     sanitizeCapabilityDeclarationsForLoad(parsed);
     const result = configSchema.safeParse(parsed);
@@ -270,6 +273,7 @@ function loadConfigUnobserved(): OcxConfig {
     // discarding it entirely, so pool accounts and providers survive a missing
     // field like defaultProvider.
     const merged = mergeConfigDefaults(parsed);
+    sanitizeAgyAcpForLoad(merged);
     const retryResult = configSchema.safeParse(merged);
     if (retryResult.success) {
       warnConfigRepaired(configPath, result.error);
@@ -355,7 +359,7 @@ export function initializePersistedConfigIfMissing(
     const persisted = withConfigMutationLockSync((): OcxConfig | "exists" | "invalid" => {
       const current = observeInitialConfigState();
       if (current !== "missing") return current;
-      const projected = projectCustomModelCatalogMigration(undefined, projectConfigRebaseProvenance(config));
+      const projected = projectPersistedConfigMigrations(undefined, projectConfigRebaseProvenance(config));
       normalizeAccountAutoPauseRevisions(undefined, projected);
       // Creating config.json never introduces a telemetry decision: one made before the file existed
       // is held in telemetry-state.json, where another process may have replaced it (see
@@ -372,7 +376,7 @@ export function initializePersistedConfigIfMissing(
       return projected;
     });
     if (typeof persisted === "string") return persisted;
-    adoptCustomModelCatalogMigration(config, persisted);
+    adoptPersistedConfigMigrations(config, persisted);
     if (telemetry?.carried) adoptPersistedTelemetry(config, telemetry.value);
     if (persisted.configRebaseProvenance === undefined) delete config.configRebaseProvenance;
     else config.configRebaseProvenance = structuredClone(persisted.configRebaseProvenance);
@@ -393,14 +397,14 @@ export function saveConfig(config: OcxConfig): void {
   assertNotRealHomeUnderTest(getConfigDir());
   withConfigMutationLockSync(() => {
     const onDisk = readRawConfigJson();
-    const withProvenance = projectCustomModelCatalogMigration(
+    const withProvenance = projectPersistedConfigMigrations(
       onDisk,
       projectConfigRebaseProvenance(config),
     );
     // Telemetry consent is owned by the file, as in the live save (see carryPersistedTelemetry).
     const telemetry = carryPersistedTelemetry(withProvenance, onDisk);
     if (persistConfigUnlocked(withProvenance)) bumpGenerationForCooperatingConfigWrite();
-    adoptCustomModelCatalogMigration(config, withProvenance);
+    adoptPersistedConfigMigrations(config, withProvenance);
     if (telemetry.carried) adoptPersistedTelemetry(config, telemetry.value);
     if (withProvenance.configRebaseProvenance === undefined) delete config.configRebaseProvenance;
     else config.configRebaseProvenance = structuredClone(withProvenance.configRebaseProvenance);

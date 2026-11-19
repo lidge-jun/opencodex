@@ -552,6 +552,49 @@ fn detach_expect_link_finishes_its_own_detach_killed_while_it_restored_an_interr
 }
 
 #[test]
+fn detach_expect_link_finishes_its_own_detach_killed_after_cleanup_complete() {
+    // release() marks the record cleanup complete, then removes it. A bound detach of A killed between the two leaves
+    // (A, cleanup complete) with no state and no rollback: only release() writes that phase, so the next bound detach of A
+    // finishes it, and a bound detach of another link still refuses it (#8696).
+    let homes = Homes::new("owner-link-cleanup-complete-killed");
+    let _home = homes.attach(LINK_A);
+    let mut cmd = child_command(
+        &homes.ocx,
+        &homes.codex,
+        homes.port,
+        &["detach", "--purge", "--json", "--expect-link", LINK_A],
+    );
+    let barrier = Barrier::new(&homes.scratch.0, "detach-cleanup-complete");
+    barrier.apply(&mut cmd, "release-after-cleanup-complete");
+    let mut child = spawn_with_creds(cmd);
+    assert!(
+        barrier.wait_reached("release-after-cleanup-complete", Duration::from_secs(20)),
+        "detach never reached release-after-cleanup-complete"
+    );
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert_eq!(homes.owner()["phase"], "cleanup-complete");
+    assert_eq!(homes.owner()["linkId"], LINK_A);
+    assert!(!homes.state_path().exists());
+    assert!(
+        !homes
+            .ocx
+            .join("child")
+            .join("attach-rollback.json")
+            .exists()
+    );
+    assert_refused_untouched(&homes, LINK_B, 5, "conflict");
+    let (code, report, stderr) = homes.detach_expect(LINK_A);
+    assert_eq!(code, 0, "report={report} stderr={stderr}");
+    assert_eq!(report["linkId"], LINK_A);
+    assert_eq!(
+        fs::read(homes.codex.join("config.toml")).unwrap(),
+        ORIGINAL_CONFIG
+    );
+    assert!(!homes.owner_path().exists());
+}
+
+#[test]
 fn a_reattach_interrupted_after_its_state_write_never_restores_the_previous_link() {
     let homes = Homes::new("owner-link-reattach-late");
     let _home = homes.attach(LINK_A);

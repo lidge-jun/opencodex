@@ -9,6 +9,7 @@
  */
 import { resolveSubagentForceModel } from "../claude/subagent-model";
 import { spawn } from "node:child_process";
+import { withClaudeContextSettings } from "./claude-context-settings";
 import { loadConfig } from "../config";
 import { injectClaudeAgentDefs } from "../claude/agents-inject";
 import { CLAUDE_ALIAS_PREFIX_CURRENT, CLAUDE_ALIAS_PREFIX_CURRENT_V2, CLAUDE_ALIAS_PREFIX_V1, CLAUDE_ALIAS_PREFIX_V2 } from "../claude/alias";
@@ -41,9 +42,9 @@ import { withoutSupervisorMarkers } from "../lib/supervisor-markers";
 
 /**
  * The environment of the detached `ocx start` that `ocx claude` launches (the spawn adds the runtime
- * provenance stamp): an ordinary owner. It
- * carries OCX_SERVICE=1 but no service manager's marker, which is how a restart tells it apart from
- * a manager-launched process (src/client/runtime-restart.ts classifyClientRestartSupervisor).
+ * provenance stamp): an ordinary owner. It carries OCX_SERVICE=1 but no service manager's marker, so a
+ * manager-launched process is told apart from it; a client runtime cannot tell it from a service registered before
+ * the marker existed, and its restart is refused as legacy-flag (src/client/runtime-restart.ts, #8545).
  */
 export function claudeProxyStartEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return withoutSupervisorMarkers(withoutSiblingMarker({ ...base, OCX_SERVICE: "1" }));
@@ -915,7 +916,10 @@ export async function cmdClaude(args: string[]): Promise<number> {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`⚠ Claude agent definitions could not be synced: ${message}`);
   }
-  return spawnClaude(args, env);
+  const launch = withClaudeContextSettings(args, env, config, contextWindows, process.env, {
+    selectors: gateway?.models.map(model => model.id) ?? [],
+  });
+  return spawnClaude(launch.args, launch.env);
 }
 
 async function launchNativeClaude(config: OcxConfig, args: string[], notice: string): Promise<number> {

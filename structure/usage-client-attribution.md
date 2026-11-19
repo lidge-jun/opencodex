@@ -1,5 +1,7 @@
 # Usage client attribution
 
+The [scoped Hub management relay](remote-link.md#hub-transport-relay) uses the same enrolled-key usage projection as `GET /v1/usage`, including post-read authorization and omission of account breakdowns and ledger-wide window metadata.
+
 `src/usage/client.ts` defines the closed client-attribution roster and recognizes bounded
 request-header signatures without retaining the header values. HTTP request contexts in
 `src/server/index/` and the Responses WebSocket handshake carry that observational label through
@@ -9,7 +11,7 @@ cannot replace the inbound label. The label is caller-supplied evidence, not an 
 decision. New direct log writes without a valid client record `unknown`; reading an older row
 without the field still preserves its absence. The live log detaches mutable caller rows so a
 later caller mutation cannot replace a recorded client with raw text; frozen normalized rows with
-only data properties can retain their identity. Client values and bounded failure details are
+only data properties can retain their identity. Client values and [bounded failure details](data-planes/error-detail.md#proxy-owned-error-detail) are
 captured before error projection, and normalizing a new write also preserves any existing
 attempt-loss marker.
 `tests/usage/usage-client-attribution.test.ts` and
@@ -42,12 +44,17 @@ row offset during ingest, and `readUsageLedgerRowsAtOffsets` re-reads only the s
 same identity, row-ceiling and torn-suffix rules. The first filtered query after the index is missing
 or invalid pays one cooperative full ingest; appends ingest only new bytes, and every later filter
 reuses the projection. Candidate offsets are selected and consumed in bounded keyset pages, with a
-timer yield between pages; each page rechecks the published generation before it is read, so broad
-filters neither retain the complete offset set nor monopolize the event loop. A replaced, truncated
+timer yield between pages; each page rechecks the published generation before it is read. Within a
+page, decoding and accumulation share the scanner's 8 ms cooperative slice, with one row atomic and
+cancellation checked after yielding. The accumulator consumes rows directly instead of retaining a
+page of parsed entries. A replaced, truncated
 or same-size rewritten ledger rebuilds it, a write
 observed during a row read re-verifies the selected bytes before publishing them, and a recorded
 offset that no longer frames a complete row drops the projection instead of serving a partial
 answer. `usage.jsonl` stays authoritative and is never truncated or rewritten.
+Row callbacks are provisional until validation completes; failed rebuilds discard their accumulator
+and failed appends discard their clone. A verification pass clears the cached read window, yields
+between rows, and rejects identity, size or revision changes during that pass before publication.
 
 Each candidate page is one keyset statement per branch, and every branch index is ordered
 `(generation, <equality prefix>, byte_offset, ...)` so its own `ORDER BY byte_offset LIMIT` is

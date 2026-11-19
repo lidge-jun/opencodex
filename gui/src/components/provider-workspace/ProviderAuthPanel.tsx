@@ -11,6 +11,8 @@ import { formatAccountPauseTooltip } from "../../account-pause-display";
 import { IconLock, IconRefresh, IconTrash } from "../../icons";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { oauthAccountDisplayLabel, providerAuthSurface } from "../../provider-workspace/auth";
+import { oauthCredentialSlot } from "../../../../src/oauth/credential-siblings";
+import { oauthLabel } from "../../pages/providers-shared";
 import { displayAccountId } from "../../lib/privacy";
 import AccountAutoSwitchControl from "../AccountAutoSwitchControl";
 import {
@@ -22,6 +24,7 @@ import {
 } from "../../oauth-health-display";
 import CodexAccountPool from "../CodexAccountPool";
 import AnthropicAccountPoolSettings from "./AnthropicAccountPoolSettings";
+import ClaudeNativePassthroughSetting from "./ClaudeNativePassthroughSetting";
 import { LoginHint as LoginHintView } from "../login-url-block";
 import { OpenBrowserPrefToggle } from "../open-browser-pref-toggle";
 import ProviderAccountQuota from "./ProviderAccountQuota";
@@ -35,6 +38,8 @@ import { kiroSkipReasonKey } from "../../kiro-device-login-helpers";
 import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../../api";
 import { useRenderTargetCapture } from "../../use-render-target-capture";
 import KiroDeviceLoginDialog from "../KiroDeviceLoginDialog";
+import OAuthTosWarningModal from "../OAuthTosWarningModal";
+import { oauthRiskAcknowledgementBody } from "../../oauth-tos-risk";
 import type {
   AccountLoadState,
   OAuthAccountRow,
@@ -224,6 +229,12 @@ export default function ProviderAuthPanel({
   const [importStatus, setImportStatus] = useState<"idle" | "invalid" | "failed" | "complete">("idle");
   const [importResult, setImportResult] = useState<CockpitImportResult | null>(null);
   const importFileRef = useRef<HTMLInputElement>(null);
+  // An imported Antigravity credential carries the same Google account-ban risk as a login, so
+  // the import goes through the same warning dialog. The acknowledgement is never armed ahead of
+  // a pick: every chosen file, whether through the button or the input reached directly, is held
+  // here and imported only from that file's own Continue. Nothing can carry an earlier acceptance
+  // over to a later selection, whatever the engine does with the picker's cancel and focus events.
+  const [importWarning, setImportWarning] = useState<{ file: File } | null>(null);
   const [manualCode, setManualCode] = useState("");
   const [manualCodeBusy, setManualCodeBusy] = useState(false);
   const [manualCodeMsg, setManualCodeMsg] = useState("");
@@ -307,7 +318,9 @@ export default function ProviderAuthPanel({
 
   if (!surface || !authHandlers) return null;
 
-  const hintForThis = loginHint?.provider === item.name ? loginHint : null;
+  // A shared-login row (Kimi (Responses)) signs in through its owner, so its flow is keyed by the owner.
+  const loginOwner = oauthCredentialSlot(item.name);
+  const hintForThis = loginHint?.provider === loginOwner ? loginHint : null;
   // Paste fallback for when the browser cannot reach the loopback callback
   // (remote dashboard, SSH, blocked localhost). A rejected paste reports why and
   // leaves the flow running, so the user can correct it and try again.
@@ -325,7 +338,7 @@ export default function ProviderAuthPanel({
       const res = await targetFetch(loginCapture, `${apiBase}/api/oauth/login/code`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: item.name, input }),
+        body: JSON.stringify({ provider: loginOwner, input }),
       });
       if (!isApiTargetCaptureCurrent(loginCapture)) {
         setManualCodeOk(false);
@@ -370,8 +383,12 @@ export default function ProviderAuthPanel({
     }
   };
 
-  const importCockpitFile = async (file: File | undefined) => {
+  const importCockpitFile = async (file: File | undefined, acknowledged: boolean) => {
     if (!file || importBusy) return;
+    if (!acknowledged) {
+      setImportWarning({ file });
+      return;
+    }
     setImportBusy(true);
     setImportStatus("idle");
     setImportResult(null);
@@ -391,7 +408,7 @@ export default function ProviderAuthPanel({
       const response = await targetFetch(capture, `${apiBase}/api/oauth/accounts/import`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: "google-antigravity", format: "cockpit-tools", document }),
+        body: JSON.stringify({ provider: "google-antigravity", format: "cockpit-tools", document, ...oauthRiskAcknowledgementBody("google-antigravity", acknowledged) }),
       });
       if (!response.ok) {
         setImportStatus("failed");
@@ -459,6 +476,10 @@ export default function ProviderAuthPanel({
             onUpdateProvider={onUpdateProvider}
           />
         )}
+        {/* An API-key Anthropic row has no pool card, but the global switch still applies to Claude Code. */}
+        {item.name === "anthropic" && !isOauth && (
+          <ClaudeNativePassthroughSetting key={`${apiBase}:passthrough`} apiBase={apiBase} targetKey={targetKey} />
+        )}
         {isOauth && (
           <>
             {isAnthropicPool && (
@@ -470,6 +491,10 @@ export default function ProviderAuthPanel({
                 accountCount={accounts.length}
                 onThresholdChange={threshold => { void authHandlers?.onAccountPoolThreshold?.(item.name, threshold); }}
               />
+            )}
+            {/* Global Claude Code setting; it decides whether Claude Code's own traffic reaches the pool above. */}
+            {item.name === "anthropic" && (
+              <ClaudeNativePassthroughSetting key={`${apiBase}:passthrough`} apiBase={apiBase} targetKey={targetKey} />
             )}
             {item.name === "google-antigravity" && (
               <div className="pwi-auth-add-key">
@@ -486,13 +511,28 @@ export default function ProviderAuthPanel({
                     className="sr-only"
                     aria-describedby="cockpit-import-description cockpit-import-status"
                     disabled={importBusy}
-                    onChange={event => { void importCockpitFile(event.currentTarget.files?.[0]); }}
+                    onChange={event => { void importCockpitFile(event.currentTarget.files?.[0], false); }}
                   />
                 </div>
                 <button type="button" className="btn btn-ghost btn-sm" disabled={importBusy}
                   onClick={() => importFileRef.current?.click()}>
                   {importBusy ? t("pws.cockpitImporting") : t("pws.cockpitImportChooseFile")}
                 </button>
+                {importWarning && (
+                  <OAuthTosWarningModal
+                    providerId="google-antigravity"
+                    providerLabel="Google Antigravity"
+                    onCancel={() => {
+                      setImportWarning(null);
+                      if (importFileRef.current) importFileRef.current.value = "";
+                    }}
+                    onContinue={() => {
+                      const pending = importWarning;
+                      setImportWarning(null);
+                      void importCockpitFile(pending.file, true);
+                    }}
+                  />
+                )}
                 <div id="cockpit-import-status" role="status" aria-live="polite">
                   {importStatus === "invalid" && t("pws.cockpitImportInvalid")}
                   {importStatus === "failed" && t("pws.cockpitImportFailed")}
@@ -535,6 +575,7 @@ export default function ProviderAuthPanel({
                 <div className="pwi-auth-wait-copy">
                   <div className="pwi-auth-wait-title">{t("prov.waitingBrowser")}</div>
                   <LoginHintView
+                    providerId={item.name}
                     hint={{
                       url: hintForThis.url,
                       deviceCode: hintForThis.deviceCode,
@@ -551,7 +592,7 @@ export default function ProviderAuthPanel({
                     }}
                   />
                   {authHandlers.onCancelLogin && (
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => void authHandlers.onCancelLogin?.(item.name)}>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => void authHandlers.onCancelLogin?.(loginOwner)}>
                       {t("common.cancel")}
                     </button>
                   )}
@@ -580,6 +621,12 @@ export default function ProviderAuthPanel({
                     {t("pws.retryAccounts")}
                   </button>
                 )}
+              </div>
+            )}
+            {accounts.length > 0 && oauthCredentialSlot(item.name) !== item.name && (
+              // A shared-login row (Kimi (Responses)) lists its owner's accounts: every control below acts on them.
+              <div className="pwi-auth-state" role="note">
+                {t("pws.sharedAccountsNote", { provider: oauthLabel(oauthCredentialSlot(item.name)) })}
               </div>
             )}
             {accounts.length > 0 && (

@@ -257,7 +257,7 @@ Con `stream: false` o no `stream`, los mismos eventos del adaptador se recopilan
 
 Cuando un proveedor filtra o trunca una respuesta, una llamada de herramienta inconclusa permanece `incomplete` tanto en JSON como en SSE. La salida parcial se conserva, y el puente no emite un evento de finalización de argumento para esa llamada abierta. Las llamadas ya completadas mantienen su estado. Esto preserva el resultado del proveedor.
 
-En el cable de transmisión de Responses, una parada explícita de filtro de contenido no reproducible de Anthropic (`refusal` / `content_filter`) o Kiro (`CONTENT_FILTERED` / `GUARDRAIL_INTERVENED`) termina con `response.failed`, `error.code: "invalid_prompt"` y `retryable: false`. Esto evita que los clientes que reintentan flujos incompletos vuelvan a enviar el contexto rechazado. Se conservan el uso y la salida parcial. Los sidecars de búsqueda e imagen web se detienen sin ejecutar llamadas de esa iteración rechazada o preguntar al modelo nuevamente, en cada cable entrante.
+En el cable de transmisión de Responses, una parada explícita de filtro de contenido no reintentable de Anthropic (`refusal` / `content_filter`), Kiro (`CONTENT_FILTERED` / `GUARDRAIL_INTERVENED`) o Antigravity ACP (`refusal`) termina con `response.failed`, `error.code: "invalid_prompt"` y `retryable: false`. Esto evita que los clientes que reintentan flujos incompletos vuelvan a enviar el contexto rechazado. Se conservan el uso y la salida parcial. Los sidecars de búsqueda e imagen web se detienen sin ejecutar llamadas de esa iteración rechazada o preguntar al modelo nuevamente, en cada cable entrante.
 
 Responses JSON almacenado temporalmente retiene `status: "incomplete"`; Chat Completions retiene `finish_reason: "content_filter"`, y Messages retiene `stop_reason: "refusal"`. Un filtro de contenido sin un veredicto explícito no reintentable, límites de token, puestos y EOF mantienen su comportamiento incompleto existente.
 
@@ -268,6 +268,8 @@ En la implementación pendiente de `dev` para #4112, un final aguas arriba HTTP 
 Para el paso a través de HTTP / SSE nativo, una cancelación de cliente sin un terminal ascendente observado se registra como `499` con `closeReason: "client_cancel"` y no penaliza el grupo de cuentas. Esto se aplica tanto a la inspección de salida como al relé ansioso, incluido el tráfico de reescritura Windows, incluso cuando la lectura aguas arriba se rechaza antes de que se ejecute el gancho de cancelación del cuerpo de respuesta. Un terminal capturado durante el drenaje de desconexión posterior limitado conserva su resultado real.
 
 Si falla la reescritura de paso a través nativa, incluso cuando excede el presupuesto de la memoria intermedia de traducción, el relé informa del fallo sin esperar a que finalice la inspección ascendente. Cancela el trabajo ascendente y emite `response.failed` seguido de `data: [DONE]`; un desbordamiento de presupuesto utiliza el código de error `translation_buffer_limit`.
+
+Al filtrar resultados de herramientas repetidos, Cursor, xAI Responses y Qoder retienen las líneas que podrían ser sobres de herramientas repetidos hasta distinguirlas de la prosa. Una línea sin resolver tiene un límite de 65.536 unidades de código UTF-16, incluidos los espacios en blanco finales. Superar este límite termina el turno sin publicar el texto retenido ni una finalización correcta. Cursor y xAI informan de `translation_buffer_limit`; Qoder utiliza su rechazo existente no reintentable `vendor_scaffold_detected`. La prosa ordinaria y los ejemplos en bloques de código cerrados que no superan el límite se conservan.
 
 Responses SSE acepta terminaciones de líneas CR, LF y CRLF, incluidas las terminaciones mixtas y la división de CRLF en trozos de red. La validación de herramientas, la traducción de chat, la inspección de terminales y la proyección WebSocket utilizan los mismos límites de eventos. Una terminación solo CR no espera a que se cierre la conexión ascendente.
 
@@ -579,7 +581,7 @@ Los errores usan la envolvente del dialecto del cliente cuando es necesario, per
 | --- | --- | --- |
 | 401 | `authentication_error` | Una credencial de admisión proxy requerida no está disponible o no es válida |
 | 403 | `origin_rejected` | Una solicitud de plano de datos Responses / OpenAI o una actualización WebSocket provienen de un origen no permitido |
-| 503 | `combo_unavailable` | Todos los objetivos del combo seleccionado no están disponibles, en tiempo de reutilización, desactivados o no son elegibles |
+| 503 | `combo_unavailable` | Todos los objetivos del combo seleccionado no están disponibles, en tiempo de reutilización, desactivados o no son elegibles. `error.combo` incluye la clase de causa y los recuentos de destinos; consulte [¿Por qué tengo `combo_unavailable`?](/es/guides/combos/#why-do-i-get-combo_unavailable) |
 | 400 | `unreadable_encrypted_agent_task` | Una tarea de trabajador encriptada v2 no tiene un objetivo canónico ChatGPT elegible o un objetivo de autenticación de clave directa Responses explícitamente confiable con `allowEncryptedV2AgentTasks: true` que puede consumirlo |
 | 426 | `upgrade_required` | El Responses WebSocket transporte está desactivado o la actualización falló; use HTTP |
 

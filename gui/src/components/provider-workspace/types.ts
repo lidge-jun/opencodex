@@ -146,6 +146,7 @@ export type ProviderUpdatePatch = {
   allowPrivateNetwork?: boolean;
   preserveResponsesReasoningContent?: boolean;
   liveModels?: boolean;
+  transientRetryOn5xx?: { enabled?: boolean; attempts?: number } | null;
   upstreamHttpVersion?: "auto" | "http1.1" | "h1" | "http2" | "h2" | null;
   requestPacing?: WorkspaceItem["requestPacing"] | null;
   /** Dedicated field: the API PATCHes it alone for the canonical `openai` provider. */

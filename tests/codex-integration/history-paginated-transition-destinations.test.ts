@@ -205,8 +205,8 @@ describe("paginated transition destinations (#5321)", () => {
     // exist as a table and that table has to point here.
     expect(config.model_provider).toBe("opencodex");
     expect(destinationOf(config, config.model_provider as string)).toBe(PROXY_BASE_URL);
-    expect(config.model_catalog_json).toBe(catalogPath);
-    expect(existsSync(config.model_catalog_json as string)).toBe(true);
+    expect(config.model_catalog_json).toBe("opencodex-catalog.json");
+    expect(existsSync(join(codexHome, config.model_catalog_json as string))).toBe(true);
     // Preserving those destinations may not cost a history byte or a row: the ordinals in a
     // paginated rollout belong to Codex's own writer.
     for (const [path, bytes] of rollouts) expect(readFileSync(path, "utf8")).toBe(bytes);

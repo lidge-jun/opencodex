@@ -12,7 +12,7 @@ import { inspectDesktopSupervision } from "../service/desktop-supervision.mjs";
 import { collectStartupHealth, startupHealthReadBudgetMs, type StartupHealth } from "../codex/autostart-health";
 import { getCodexRoutingKind } from "../codex/inject";
 import { missingOwnedCatalogPath } from "../codex/inject/config-toml";
-import { CODEX_CONFIG_PATH } from "../codex/paths";
+import { CODEX_CONFIG_PATH, activeCodexConfigPath } from "../codex/paths";
 import { diagnoseCodexShim } from "../codex/shim";
 import { displayCodexRuntimePath, effortClampAppliesToRuntime, liveRemovedEfforts, loadLastEffortClamp, resolveCodexRuntime } from "../codex/runtime";
 import { packageVersion } from "./help";
@@ -38,6 +38,7 @@ import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability"
 import { fetchBoundLocalManagementRead } from "../server/local-management-read-client";
 import { collectAppliedCodexSettingsStatus, type CliAppliedCodexSettingsStatus } from "./status-codex-settings";
 import { installDetectionStatus, type InstallDetectionStatus } from "./status-install";
+import { windowsDesktopInstall, withDesktopSkewAdvice } from "../desktop-update/install";
 import { collectLocalCredentials, type LocalCredentialSnapshot } from "../local-credentials/inventory";
 import { collectLinkConnectionGeneration } from "./status-link";
 
@@ -832,8 +833,8 @@ export function statusDeadProxyLines(json: StatusRoutingView): string[] {
  */
 export function detectMissingCodexCatalogPath(): string | null {
   try {
-    if (!existsSync(CODEX_CONFIG_PATH)) return null;
-    return missingOwnedCatalogPath(readFileSync(CODEX_CONFIG_PATH, "utf8"));
+    const configPath = activeCodexConfigPath();
+    return missingOwnedCatalogPath(readFileSync(configPath, "utf8"), configPath);
   } catch {
     return null;
   }
@@ -944,7 +945,9 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
   const pid = resolveStatusPid(live, pidFile);
   // No extra request: findLiveProxy's identity probe already parsed and validated the
   // healthz body, so the version came back with the liveness result.
-  const versionSkew = computeVersionSkew(packageVersion(), live?.version);
+  // #8246: on a Windows Desktop installation a newer CLI means the MSI installed an update that the
+  // running runtime has not picked up; the warning says so with the command that finishes it.
+  const versionSkew = withDesktopSkewAdvice(computeVersionSkew(packageVersion(), live?.version), windowsDesktopInstall(), live?.source);
   // OCX-6: what this machine applied and, on a Child, when its runtime started. Additive and
   // always present (null when unknown), so `schemaVersion` stays 1.
   const appliedCodexSettings = await collectAppliedCodexSettingsStatus(config, live);
