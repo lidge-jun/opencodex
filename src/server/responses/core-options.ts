@@ -92,6 +92,8 @@ export interface ClientEncoderOption {
   stream: boolean;
   model: string;
   inputTokenFloor?: number;
+  /** Chat only: the client set `stream_options.include_usage`. */
+  includeUsage?: boolean;
   /**
    * `direct` when the request side also skipped the internal Responses body (the Antigravity
    * direct lane), so the attempt's request path is traced as `[inbound, ir, upstream]`.

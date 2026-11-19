@@ -578,6 +578,20 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     hiddenLegs += pendingLegs;
     pendingLegs = 0;
   };
+  // After a terminal re-ask an incomplete or failed terminal carries the summed usage, like the
+  // plain guard (#8877). Taking the final leg first leaves the bridge's onUsage one sum to report.
+  const withReaskSum = (events: AdapterEvent[]): AdapterEvent[] => {
+    if (terminalContinuations === 0) return events;
+    const index = events.findIndex(event => event.type === "incomplete" || event.type === "error"
+      || (event.type === "done" && isTruncatedStopReason(event.stopReason)));
+    const terminal = events[index];
+    if (terminal?.type !== "incomplete" && terminal?.type !== "error" && terminal?.type !== "done") return events;
+    takeUsage(terminal.usage);
+    if (!hiddenUsage) return events;
+    const summed = [...events];
+    summed[index] = { ...terminal, usage: withTerminalUsageMetadata(hiddenUsage, terminal.usage) };
+    return summed;
+  };
   let accountRefusalOutputStarted = false;
   const connectTimeoutMs = deps.connectTimeoutMs ?? 200_000;
   const routedModelStallTimeoutMs = deps.routedModelStallTimeoutMs ?? 200_000;
@@ -1350,7 +1364,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                 && isTruncatedStopReason(terminalEvent.stopReason)) {
                 // A provider refusal or truncation is authoritative, even without text.
                 // Preserve it once; neither an empty-answer retry nor a generic 502 applies.
-                yield* replay(split.passthrough.slice(split.streamedPassthroughCount));
+                yield* replay(withReaskSum(split.passthrough.slice(split.streamedPassthroughCount)));
                 return;
               }
               if (terminalEvent?.type === "done"
@@ -1388,7 +1402,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             }
             // Live-streamed leading events are exactly the first N passthrough entries — replay
             // only the buffered tail so nothing reaches the client twice.
-            yield* replay(split.passthrough.slice(split.streamedPassthroughCount));
+            yield* replay(withReaskSum(split.passthrough.slice(split.streamedPassthroughCount)));
             return;
           }
           takeUsage(terminalUsage(split.passthrough));
@@ -1460,7 +1474,13 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               : e instanceof LoopError && deps.thinkingRecovery
                 ? { type: "error", status: e.status, errorType: "upstream_error", message: e.message }
                 : { type: "error", message: e instanceof Error ? e.message : String(e) });
-          // The bridge reports an error only if it carries usage. Settle exactly once.
+          // The bridge reports an error only if it carries usage. Settle exactly once: after a
+          // terminal re-ask the failed terminal itself carries the sum (#8877), and the bridge
+          // reports it; otherwise the hidden legs are reported here.
+          if (!event.usage && hiddenUsage && terminalContinuations > 0 && event.type === "error") {
+            yield { ...event, usage: withTerminalUsageMetadata(hiddenUsage, errorUsage) };
+            return;
+          }
           if (!event.usage && hiddenUsage) deps.onUsage?.(withTerminalUsageMetadata(hiddenUsage, errorUsage));
           yield event;
           return;

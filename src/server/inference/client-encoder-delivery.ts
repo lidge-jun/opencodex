@@ -230,7 +230,8 @@ export async function deliverClientEncodedResponse(input: ClientEncodedDelivery)
     hooks,
   };
   const encoded = encoder.protocol === "chat"
-    ? encodeChatCompletionSse(events, { ...encodeOptions, failureVerdictSink, proxyErrorContext: logCtx, get localUpstream() { return input.localUpstream; } })
+    ? encodeChatCompletionSse(events, { ...encodeOptions, failureVerdictSink, proxyErrorContext: logCtx, includeUsage: encoder.includeUsage === true,
+      get localUpstream() { return input.localUpstream; } })
     : encodeAnthropicMessageSse(events, {
       ...encodeOptions,
       failureVerdictSink: encoder.stream ? undefined : messagesFailureVerdictSink,

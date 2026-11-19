@@ -14,7 +14,7 @@ import type { ResponsesTransport } from "./request-transport";
 import type { ResponsesSidecarAuth } from "./request-sidecar-auth";
 import type { ResponsesSendBudget } from "./request-send-budget";
 import type { AdapterExchange } from "./adapter-dispatch";
-import type { OcxParsedRequest, AdapterEvent } from "../../types";
+import type { OcxParsedRequest, AdapterEvent, OcxUsage } from "../../types";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import type { AdapterRequest } from "../../adapters/base";
 import {
@@ -837,7 +837,8 @@ export function createAdapterContinuations(
     }
   };
 
-  const fetchGuardedEmptyCompletionRetry = (): AsyncIterable<AdapterEvent> => {
+  // The delivery's onHiddenUsage, so a re-ask inside the retry keeps its legs off the client terminal (#8877).
+  const fetchGuardedEmptyCompletionRetry = (onHiddenUsage?: (usage: OcxUsage) => void): AsyncIterable<AdapterEvent> => {
     const retryEvents = fetchTerminalGuardContinuation(parsed, "empty-completion", true);
     const terminalGuardedRetry = terminalGuardEnabled
       ? guardTerminalEventStream({
@@ -846,6 +847,7 @@ export function createAdapterContinuations(
           adapterName: transportState.activeAdapter.name,
           maxAutoContinuations: 1,
           continuation: next => fetchTerminalGuardContinuation(next, undefined, !parsed.stream),
+          onHiddenUsage,
         })
       : retryEvents;
     return parsed._advisorGuard
