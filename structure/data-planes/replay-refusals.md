@@ -28,11 +28,15 @@ adapter status, `retryable` flag or overflow-like diagnostic. Only successful fr
 publishes this verdict to its collector. A matching collected terminal returns the same fixed
 429 envelope and retry veto; an unmatched raw record cannot borrow that verdict. Streaming
 delivery preserves the fixed error code and wording without changing committed HTTP headers.
-`src/server/responses/non-replayable-error.ts` sets that flag and preserves the exact public
-codes on native Responses failed terminals and error-bearing completed or incomplete
-terminals while replacing upstream diagnostics with fixed text. An explicit replay veto on
-an error-bearing completed or incomplete terminal also keeps the failure code and uses
-the fixed buffered failed-completion diagnostic. The upstream-owned `upstream_no_response` and `upstream_closed_before_response` retain
+`src/server/responses/non-replayable-error.ts` projects the same verdict for direct and
+Combo native Responses. A failed terminal or an error-bearing completed or incomplete
+terminal with a recognized refusal code or explicit veto carries fixed error text and
+`response.retryable: false`. Projection replaces both error carriers and keeps only
+recognized codes in `incomplete_details.reason`. Buffered delivery applies
+`x-should-retry: false`, removes `Retry-After`, and uses HTTP 429 for recognized codes
+or the existing status for an uncoded veto. Combo preserves the projected body when
+it consumes a failed member, and accounting reads the upstream evidence.
+The upstream-owned `upstream_no_response` and `upstream_closed_before_response` retain
 their status and retry policy. After a link relay has committed response headers, a later stream
 failure cannot replace the original HTTP status; the body can end abruptly instead. See
 [Remote Link](../remote-link.md) for the pre-header and post-header distinction.

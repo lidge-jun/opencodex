@@ -3,7 +3,7 @@ import { httpStatusFromTerminalError, responsesCompletionError } from "../../lib
 import {
   applyReplayRefusalClientHeaders, withheldReplayDiagnostic, carryReplayRefusal, carryReplayRefusalToClient, hasClientReplayVeto, hasNoRetryDirective, hasUpstreamReplayRefusal, invitesResendAfterReplacement, isNonReplayableResponse,
   isNonReplayableUpstreamCode, replayRefusalVerdict, isReplayRefusalProjection, isReplayRefusalResponse, replayRefusalBodyCode,
-  isTerminalResetReplacement, markResponseNonReplayable, observedReplayRefusalCode, projectReplayRefusal, UPSTREAM_RESET_REPLAY_REFUSED_CODE,
+  isTerminalResetReplacement, markResponseNonReplayable, observedReplayRefusalCode, projectReplayRefusal, retainReplayRefusal, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE, isReplayRefusalCode, UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../../lib/upstream-retry";
 import { isXaiLegacyPrivacyError, isXaiPrivacyModeRefusal, xaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
 import type { RequestFailureCause } from "../../usage/telemetry-contract";
@@ -104,45 +104,86 @@ export async function sanitizeNonReplayableUpstreamError(
   return carryProxyError(response, safe);
 }
 
+const projectedNativeTerminalResponses = new WeakSet<Response>();
+
+export function markProjectedNativeTerminalResponse(response: Response, coded: boolean): Response {
+  projectedNativeTerminalResponses.add(response);
+  if (coded) retainReplayRefusal(response);
+  else markResponseNonReplayable(response);
+  return response;
+}
+
+export function isProjectedNativeTerminalResponse(response: Response): boolean {
+  return projectedNativeTerminalResponses.has(response);
+}
+
 export const NON_REPLAYABLE_COMPLETION_MESSAGE = "Upstream reported a non-replayable failed completion.";
 
-/** Project recognized refusals on every native stream, and withhold diagnostics on terminal replay vetoes. */
-export function rewriteNonRetryableFailurePayload(payload: string, comboAttempt: boolean, maskCode: (value: string) => string): string {
+function safeIncompleteDetails(value: unknown) {
+  const reason = (value as { reason?: unknown } | null | undefined)?.reason;
+  return reason === "max_output_tokens" || reason === "content_filter" || isReplayRefusalCode(reason)
+    ? { reason } : undefined;
+}
+
+/** The same terminal verdict owns the frame and any HTTP metadata still open for editing. */
+export function projectNativeTerminalReplayVeto(
+  verdict: ReturnType<typeof replayRefusalVerdict> & { inconclusive?: boolean },
+  mode: "streamed" | "buffered",
+  upstream: { type?: unknown; code?: unknown } | undefined,
+  reasons: { root?: unknown; response?: unknown },
+  status: number,
+  maskCode: (value: string) => string,
+) {
+  const { refusalCode, explicitVeto } = verdict;
+  if (!refusalCode && !explicitVeto) return;
+  const type = typeof upstream?.type === "string" ? upstream.type : undefined;
+  const code = typeof upstream?.code === "string" ? upstream.code : undefined;
+  const errorStatus = httpStatusFromTerminalError({ type, code });
+  const safe = ownedChatErrorPayload({ status: errorStatus, type, code, evidence: { status: errorStatus, type, code } }).error;
+  const error = refusalCode
+    ? { type: "upstream_error", code: refusalCode, message: REPLAY_REFUSAL_MESSAGE }
+    : { type: safe.type, code: code === undefined ? safe.code : maskCode(code), message: NON_REPLAYABLE_COMPLETION_MESSAGE };
+  return {
+    rootIncompleteDetails: safeIncompleteDetails(reasons.root),
+    fields: { incomplete_details: safeIncompleteDetails(reasons.response), retryable: false as const, error, last_error: error },
+    http: mode === "buffered"
+      ? { status: refusalCode ? REPLAY_REFUSED_STATUS : status, coded: refusalCode !== undefined, applyHeaders: applyReplayRefusalClientHeaders }
+      : undefined,
+  };
+}
+
+export type NativeTerminalReplayHttpEdits = NonNullable<NonNullable<ReturnType<typeof projectNativeTerminalReplayVeto>>["http"]>;
+
+export function rewriteNonRetryableFailurePayload(
+  payload: string, comboAttempt: boolean, maskCode: (value: string) => string = value => value,
+  buffered?: { status: number; onProjection: (edits: NativeTerminalReplayHttpEdits) => void },
+): string {
   try {
-    const event = JSON.parse(payload) as {
-      type?: unknown; error?: unknown; last_error?: unknown;
-      incomplete_details?: unknown; message?: unknown; cause?: unknown; details?: unknown;
-      response?: Record<string, unknown>;
-    };
+    const event = JSON.parse(payload) as Record<string, unknown> & { response?: Record<string, unknown> };
     const terminalType = event?.type;
     if (terminalType !== "response.failed" && terminalType !== "response.completed" && terminalType !== "response.incomplete") return payload;
     const failed = terminalType === "response.failed";
     const upstream = failed ? terminalErrorRecords(event)[0] : responsesCompletionError(event, terminalType);
-    const { refusalCode, explicitVeto: veto } = replayRefusalVerdict(event);
-    const refusal = refusalCode !== undefined;
-    if (!failed && !upstream && !refusal) return payload;
-    if (!refusal && !(failed ? comboAttempt && (veto || isNonReplayableUpstreamCode(upstream?.code)) : veto)) return payload;
-    const type = typeof upstream?.type === "string" ? upstream.type : undefined;
-    const code = refusalCode ?? (typeof upstream?.code === "string" ? upstream.code : undefined);
-    const status = httpStatusFromTerminalError({ type, code });
-    const { message, type: safeType, code: safeCode } = ownedChatErrorPayload({
-      status, type, code, evidence: { status, type, code },
-    }).error;
-    const error = !failed && !refusal
-      ? { type: safeType, code: code === undefined ? safeCode : maskCode(code), message: NON_REPLAYABLE_COMPLETION_MESSAGE }
-      : { type: safeType, code: safeCode, message };
+    const verdict = replayRefusalVerdict(event);
+    if (!failed && !upstream && !verdict.refusalCode) return payload;
     const { error: _error, last_error: _lastError, message: _message, cause: _cause, details: _details,
       incomplete_details: rootIncompleteDetails, ...root } = event;
-    const rootReason = (rootIncompleteDetails as { reason?: unknown } | null | undefined)?.reason;
     const { message: _responseMessage, cause: _responseCause, details: _responseDetails,
       incomplete_details: incompleteDetails, ...response } = event.response ?? {};
-    const reason = (incompleteDetails as { reason?: unknown } | null | undefined)?.reason;
-    return JSON.stringify({ ...root,
-      ...(typeof rootReason === "string" ? { incomplete_details: { reason: rootReason } } : {}),
-      response: { ...response,
-      ...(typeof reason === "string" ? { incomplete_details: { reason } } : {}),
-      retryable: false, error, last_error: error,
-    } });
+    const projection = projectNativeTerminalReplayVeto({
+      ...verdict,
+      explicitVeto: verdict.explicitVeto || (failed && comboAttempt && isNonReplayableUpstreamCode(upstream?.code)),
+    }, buffered ? "buffered" : "streamed", upstream,
+    { root: rootIncompleteDetails, response: incompleteDetails },
+    buffered?.status ?? 200, maskCode);
+    if (!projection) return payload;
+    const projected = JSON.stringify({
+      ...root,
+      incomplete_details: projection.rootIncompleteDetails,
+      response: { ...response, ...projection.fields },
+    });
+    if (projection.http) buffered?.onProjection(projection.http);
+    return projected;
   } catch {
     return payload;
   }

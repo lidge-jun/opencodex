@@ -1406,7 +1406,7 @@ data: ${JSON.stringify(terminal)}
     const frames = body.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
     expect(frames.filter(frame => frame.type === "response.failed")).toMatchObject([{
       response: { status: "failed", output: [], retryable: false,
-        error: { code: error.code, message: "The provider failed to complete the request." } },
+        error: { code: error.code, message: "Upstream reported a non-replayable failed completion." } },
     }]);
     expect(body).not.toContain(error.message);
   } finally { release(); }
@@ -1522,6 +1522,89 @@ test.each([{ code: "upstream_response_refused" }, { retryable: false }])(
         ...("code" in cause ? { error: { code: cause.code, message: CLIENT_ERROR_CONTRACTS.replay_refused } } : {}),
       });
       expect(body).not.toContain(diagnostic);
+    } finally { release(); }
+  },
+);
+
+const projectionCases = ["first/model", "combo/pair"].flatMap(model =>
+  [true, false].flatMap(stream =>
+    ["failed", "completed", "incomplete"].flatMap(status =>
+      ["coded", "nested veto"].map(verdict => ({ model, stream, status, verdict })))));
+const projectionControls = ["first/model", "combo/pair"].flatMap(model =>
+  [true, false].flatMap(stream => [
+    { model, stream, status: "completed", verdict: "clean" },
+    { model, stream, status: "completed", verdict: "boolean only" },
+    { model, stream, status: "incomplete", verdict: "token limit" },
+    { model, stream, status: "failed", verdict: "ordinary failure" },
+  ]));
+
+test.each([...projectionCases, ...projectionControls])(
+  "native terminal projection %j",
+  async ({ model, stream, status, verdict }) => {
+    const coded = verdict === "coded";
+    const veto = coded || verdict === "nested veto";
+    const diagnostic = "fixture projection diagnostic";
+    const code = coded ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : "invalid_value";
+    const error = { code, type: "invalid_request_error", message: diagnostic,
+      ...(verdict === "nested veto" ? { cause: { retryable: false } } : {}) };
+    const type = `response.${status}`;
+    const safeReason = status === "incomplete" && coded ? "content_filter"
+      : status === "completed" && coded ? code
+      : status === "failed" && coded ? "max_output_tokens" : undefined;
+    const snapshot = {
+      id: "resp_projection", object: "response", status, output: [],
+      ...(veto ? { error, last_error: error, incomplete_details: { reason: safeReason ?? diagnostic } } : {}),
+      ...(verdict === "ordinary failure" ? { error } : {}),
+      ...(verdict === "boolean only" ? { retryable: false } : {}),
+      ...(verdict === "token limit" ? { incomplete_details: { reason: "max_output_tokens" } } : {}),
+    };
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends++;
+      const output = !veto && stream
+        ? 'data: {"type":"response.output_text.delta","delta":"visible fixture"}\n\n' : "";
+      return new Response(`${output}event: ${type}\ndata: ${JSON.stringify({ type, response: snapshot, ...(veto && { incomplete_details: { reason: diagnostic } }) })}\n\n`, {
+        headers: { "content-type": "text/event-stream", "retry-after": "60" },
+      });
+    }) as typeof fetch;
+    const config = comboReplayConfig();
+    for (const provider of Object.values(config.providers)) Object.assign(provider, {
+      baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward",
+      codexAccountMode: "direct", upstreamWebsocket: false,
+    });
+    const release = acquireOwnedSpendHome();
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json", authorization: "Bearer fixture-forward-token" },
+        body: JSON.stringify({ model, stream, store: false, ...RESPONSES_TURN }),
+      }), config, { model: "", provider: "" });
+      const body = await response.text();
+      const projected = stream
+        ? body.split("\n").filter(line => line.startsWith("data: {"))
+          .map(line => JSON.parse(line.slice(6))).find(frame => frame.type === type)?.response
+        : JSON.parse(body);
+      expect(sends).toBe(1);
+      if (!veto) {
+        if (verdict === "ordinary failure") expect(projected.error).toMatchObject({ code, message: diagnostic });
+        else expect(projected).toMatchObject(snapshot);
+        expect(response.headers.get("x-should-retry")).not.toBe("false");
+        return;
+      }
+      expect(projected?.incomplete_details?.reason).toBe(safeReason);
+      const safeError = { code, message: coded ? REPLAY_REFUSAL_MESSAGE : "Upstream reported a non-replayable failed completion." };
+      expect({
+        errors: [projected?.error, projected?.last_error],
+        retryable: projected?.retryable,
+        diagnostic: body.includes(diagnostic),
+        status: response.status,
+        retry: stream ? undefined : response.headers.get("x-should-retry"),
+        retryAfter: stream ? undefined : response.headers.get("retry-after"),
+      }).toMatchObject({
+        errors: [safeError, safeError], retryable: false, diagnostic: false,
+        status: stream ? 200 : coded ? 429 : status === "completed" ? 400 : 200,
+        retry: stream ? undefined : "false",
+        retryAfter: stream ? undefined : null,
+      });
     } finally { release(); }
   },
 );

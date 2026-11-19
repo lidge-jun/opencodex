@@ -27,9 +27,12 @@ combo fallback. A Responses SSE error with `retryable: false` stops automatic re
 an opaque-state rebuild. A terminal refusal on an authorized Responses replacement uses fixed
 error text on both native and translated routes. Native Responses keeps an observed replacement
 refusal code even if the replacement body fails during delivery. Caller cancellation takes
-precedence. Native Responses JSON with `status: "failed"`
-and native `response.failed` stream events use the same fixed error text for recognized replay-refusal
-codes. The stream event carries `response.retryable: false`. Native and translated Responses
+precedence. Direct and Combo native Responses use fixed error text for replay refusals on failed
+terminals and on completed or incomplete terminals with an error. Stream events carry
+`response.retryable: false`. Buffered responses include `x-should-retry: false` and omit
+`Retry-After`. Recognized replay-refusal codes use HTTP 429. Other explicit vetoes keep the
+existing status. Only recognized incomplete reason codes are exposed on these terminals.
+Native and translated Responses
 and native Messages honor recognized refusal codes in HTTP 429 bodies before retrying on the
 same key. Genuine upstream rate limits still inform the sending account's cooldown.
 Translated Responses also checks replacement errors for refusal codes before rotating credentials.

@@ -34,8 +34,8 @@ import {
   relayWithAbort,
 } from "../relay";
 import { isUsageDebugEnabled } from "../../usage/debug";
-import { applyReplayRefusalClientHeaders, carryReplayRefusal, replayRefusalVerdict, isNonReplayableResponse, isReplayRefusalResponse, isTerminalResetReplacement, markResponseNonReplayable, projectReplayRefusal, REPLAY_REFUSED_STATUS, replayRefusalBodyCode } from "../../lib/upstream-retry";
-import { NON_REPLAYABLE_COMPLETION_MESSAGE, projectResponsesUpstreamRefusal, rewriteNonRetryableFailurePayload, sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
+import { carryReplayRefusal, replayRefusalVerdict, isNonReplayableResponse, isReplayRefusalResponse, isTerminalResetReplacement, markResponseNonReplayable, projectReplayRefusal, replayRefusalBodyCode } from "../../lib/upstream-retry";
+import { type NativeTerminalReplayHttpEdits, markProjectedNativeTerminalResponse, projectNativeTerminalReplayVeto, projectResponsesUpstreamRefusal, rewriteNonRetryableFailurePayload, sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 import { sliceChunks, teeWithBoundedInspection } from "../inspection-tee";
 import { markPacedStream } from "../../lib/paced-stream";
 import { LINK_PACED_SLICE_BYTES, linkTurnPacesReads } from "../link-turn";
@@ -887,8 +887,10 @@ export async function deliverPassthroughResponse(
       noteRequestSentValueGuard(logCtx, repeatsSentValue);
       const synthesizedCopyMask = createSynthesizedCopyMask(nativeExchange.request.headers, repeatsSentValue);
       // Compose payload rewrites into one pass.
+      let terminalReplayHttp: NativeTerminalReplayHttpEdits | undefined;
       const payloadRewrites = [
-        (payload: string) => rewriteNonRetryableFailurePayload(payload, options.comboAttempt === true, synthesizedCopyMask),
+        (payload: string) => rewriteNonRetryableFailurePayload(payload, options.comboAttempt === true, synthesizedCopyMask,
+          canonicalBufferedJson ? { status: upstreamResponse.status, onProjection: edits => { terminalReplayHttp = edits; } } : undefined),
         rewriteResponsesIncompleteReasonJson,
         createImageGenCallRestoreRewrite(imageGenCallAliases),
         // #3217: a call whose namespace repeats its own name is unroutable in codex-rs.
@@ -1084,19 +1086,23 @@ export async function deliverPassthroughResponse(
           logCtx.terminalSource = "upstream";
           reportNativeTerminal?.("failed", status);
           const defaults = bufferedErrorDefaults(status);
-          const { refusalCode, explicitVeto: veto } = replayRefusalVerdict(payload);
+          const frame = payload as { incomplete_details?: unknown; response?: { incomplete_details?: unknown } };
+          const projection = projectNativeTerminalReplayVeto(
+            replayRefusalVerdict(payload), "buffered", error,
+            { root: frame.incomplete_details, response: frame.response?.incomplete_details },
+            status, synthesizedCopyMask,
+          );
           const clientError = {
             type: synthesizedCopyMask(error.type ?? defaults.type),
-            code: refusalCode ?? synthesizedCopyMask(logCtx.terminalErrorCode ?? error.code ?? defaults.code),
-            message: veto ? NON_REPLAYABLE_COMPLETION_MESSAGE
-              : synthesizedCopyMask(error.message ?? "upstream reported a failed completion"),
+            code: synthesizedCopyMask(logCtx.terminalErrorCode ?? error.code ?? defaults.code),
+            message: synthesizedCopyMask(error.message ?? "upstream reported a failed completion"),
           };
           const failureHeaders = sanitizePassthroughHeaders(headers, passthroughHeaderOptions);
           failureHeaders.set("content-type", "application/json");
-          if (veto) applyReplayRefusalClientHeaders(failureHeaders);
-          const response = markPreinspectedJsonResponse(formatPassthroughUpstreamError(
-            status, JSON.stringify({ error: clientError }), { headers: failureHeaders },
-          ));
+          projection?.http?.applyHeaders(failureHeaders);
+          const response = markPreinspectedJsonResponse(projection?.http
+            ? markProjectedNativeTerminalResponse(Response.json(projection.fields, { status: projection.http.status, headers: failureHeaders }), projection.http.coded)
+            : formatPassthroughUpstreamError(status, JSON.stringify({ error: clientError }), { headers: failureHeaders }));
           // The provider already ended the turn before this JSON projection chose an HTTP status.
           markResponseNonReplayable(response);
           return response;
@@ -1285,14 +1291,13 @@ export async function deliverPassthroughResponse(
 
         const jsonHeaders = sanitizePassthroughHeaders(headers, passthroughHeaderOptions);
         jsonHeaders.set("content-type", "application/json");
-        const { refusalCode } = replayRefusalVerdict(client.terminal.response);
-        if (refusalCode !== undefined) applyReplayRefusalClientHeaders(jsonHeaders);
+        terminalReplayHttp?.applyHeaders(jsonHeaders);
         const snapshot = new Response(clientJson, {
-          status: refusalCode === undefined ? upstreamResponse.status : REPLAY_REFUSED_STATUS,
-          statusText: refusalCode === undefined ? upstreamResponse.statusText : undefined,
+          status: terminalReplayHttp?.status ?? upstreamResponse.status,
+          statusText: terminalReplayHttp === undefined ? upstreamResponse.statusText : undefined,
           headers: jsonHeaders,
         });
-        if (refusalCode !== undefined) markResponseNonReplayable(snapshot);
+        if (terminalReplayHttp) markProjectedNativeTerminalResponse(snapshot, terminalReplayHttp.coded);
         return markPreinspectedJsonResponse(snapshot);
       }
 

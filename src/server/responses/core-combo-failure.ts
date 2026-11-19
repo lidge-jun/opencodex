@@ -1,3 +1,4 @@
+import { isProjectedNativeTerminalResponse } from "./non-replayable-error";
 import { recordUpstreamProviderErrorDetail, recordUpstreamValidationDetail, type FailureDetail } from "../request-log-failure-detail";
 import { carryPolicyCandidateRefusal } from "./policy-request-scope";
 import { comboFailureEvidence, carryProxyError, carryProxyErrorPresentation, proxyErrorPresentation } from "../../lib/client-error-body";
@@ -62,6 +63,7 @@ export async function consumeComboFailure(
 ): Promise<ConsumedComboFailure> {
   // Read before the body: the marker lives on this Response object, and the failure below is
   // rebuilt as a new one that would otherwise lose it.
+  const projectedTerminal = isProjectedNativeTerminalResponse(response);
   let nonReplayable = isAutomaticReplayBlocked(response);
   const vetoIncompleteBody = () => {
     if (!rawUpstream || nonReplayable) return;
@@ -96,7 +98,7 @@ export async function consumeComboFailure(
   try {
     const legacy = comboFailureEvidence(response);
     if (legacy !== undefined) void response.body?.cancel().catch(() => undefined);
-    const body = await readBoundedResponseBody(legacy === undefined ? response : new Response(legacy), { signal, reportUtf8Validity: serverError });
+    const body = await readBoundedResponseBody(legacy === undefined ? (projectedTerminal ? response.clone() : response) : new Response(legacy), { signal, reportUtf8Validity: serverError });
     if (!body.displaySafe || body.truncated) vetoIncompleteBody();
     // A 5xx body counts as quota or classification evidence only when it decoded as valid
     // UTF-8, matching shouldRetryCodexPoolAccountQuota. A malformed byte keeps the status-only
@@ -203,7 +205,7 @@ export async function consumeComboFailure(
     now,
     includeDefault: false,
   });
-  const failureResponse = replayRefusal
+  const failureResponse = projectedTerminal ? response : replayRefusal
     ? projectReplayRefusal(isReplayRefusalCode(upstreamCode) ? upstreamCode : UPSTREAM_RESET_REPLAY_REFUSED_CODE)
     : scopeRefusalBody !== undefined
     ? new Response(scopeRefusalBody, { status: 403, headers: { "Content-Type": "application/json" } })
