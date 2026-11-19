@@ -1,4 +1,5 @@
 import { assistantReplayContent } from "../../responses/assistant-replay";
+import { isTruncatedStopReason } from "../../responses/truncated-stop-reason";
 import { sumCreditReadings } from "../../usage/credit-billing";
 import type {
   AdapterEvent,
@@ -179,7 +180,9 @@ export interface GuardedEventStreamOptions {
    * Receives the usage of the legs the guard re-asked, so the caller can meter them. When it is
    * set, a successful terminal carries only the final leg's usage: clients size their context
    * window from it, and every leg re-sends the whole conversation, so a sum reads as a context
-   * about twice its real size (#8877). Without it, the terminal carries the sum of every leg.
+   * about twice its real size (#8877). A truncated `done` (rendered incomplete), an
+   * `incomplete` or `error` terminal, and a final leg without usage carry the sum of every leg
+   * and hand nothing to this callback. Without it, the terminal always carries the sum.
    */
   onHiddenUsage?: (usage: OcxUsage) => void;
 }
@@ -295,7 +298,7 @@ export async function* guardTerminalEventStream(options: GuardedEventStreamOptio
             usage: mergeUsage(accumulatedUsage, event.usage, continuations > 0) };
           return;
         }
-        if (options.onHiddenUsage && accumulatedUsage && event.usage) {
+        if (options.onHiddenUsage && accumulatedUsage && event.usage && !isTruncatedStopReason(event.stopReason)) {
           options.onHiddenUsage(accumulatedUsage);
           yield event;
           return;

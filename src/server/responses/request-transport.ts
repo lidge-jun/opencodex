@@ -11,6 +11,7 @@ import { buildResponsesTransport } from "../../adapters/openai-responses/transpo
 import { anthropicBillingPhysicalFetch } from "../../providers/anthropic-billing-ownership";
 import { passiveKeyPhysicalFetch } from "../../providers/passive-key-observation";
 import { captureCurrentPhysicalSendUsage, rebindPhysicalSend, recordCurrentPhysicalSendUsage } from "../../lib/request-execution-budget";
+import { withMissingCreditReading } from "../../usage/credit-billing";
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
 import { anthropicRatePolicyFor } from "../../oauth/anthropic-rate-limit-policy";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
@@ -699,14 +700,22 @@ export async function prepareResponsesTransport(
   const trackGuardedOAuthAttemptUsage = (): void => {
     if (route.provider.authMode === "oauth") guardedOAuthAttemptOrdinal = logCtx.activeAttempt?.ordinal;
   };
+  // Attempts that dispatched a parsed leg with no usage: their parser-built credit total is
+  // incomplete however many other legs reported one (#8452).
+  const attemptsMissingCredit = new WeakSet<NonNullable<typeof logCtx.activeAttempt>>();
+  const markMissingCredit = (attempt: typeof logCtx.activeAttempt): void => {
+    if (attempt?.usage && attemptsMissingCredit.has(attempt)) attempt.usage = withMissingCreditReading(attempt.usage);
+  };
   const bindKeyUsageFromBridge = (usage: OcxUsage | undefined): void => {
     logCtx.usageFromBridge = true;
     if (logCtx.activeAttempt && sealedCredentialRefusals.has(logCtx.activeAttempt)) return;
     if (usesApiKeyAccount(route.provider)) {
       if (!logCtx.activeAttempt?.usage && usage) recordKeyAttemptUsage(logCtx, usage);
+      markMissingCredit(logCtx.activeAttempt);
       logCtx.usage = logCtx.activeAttempt?.usage;
     } else if (guardedOAuthAttemptOrdinal !== undefined && logCtx.activeAttempt?.ordinal !== guardedOAuthAttemptOrdinal) {
       // The bridge can sum across accounts. The parser already bound each response before rotation.
+      markMissingCredit(logCtx.activeAttempt);
       logCtx.usage = logCtx.activeAttempt?.usage;
     } else if (usage) {
       logCtx.usage = usage;
@@ -799,12 +808,36 @@ export async function prepareResponsesTransport(
     // Observe terminals before search/image loops or continuation guards hide earlier rounds.
     // Each adapter parser is called once per physical response; bridge totals are client-only.
     const observedResponses = new WeakSet<object>();
+    const parserOwnsUsage = (): boolean => usesApiKeyAccount(provider) || guardedOAuthAttemptOrdinal !== undefined;
     const observeUsage = (event: AdapterEvent, response: object): void => {
-      if ((usesApiKeyAccount(provider) || guardedOAuthAttemptOrdinal !== undefined)
-        && "usage" in event && event.usage && !observedResponses.has(response)) {
+      if (parserOwnsUsage() && "usage" in event && event.usage && !observedResponses.has(response)) {
         observedResponses.add(response);
         recordKeyAttemptUsage(logCtx, event.usage);
+        markMissingCredit(logCtx.activeAttempt);
       }
+    };
+    // One parse is one physical response. Its usage settles the send that produced it (#8902),
+    // and a response that reports none leaves its issuing attempt's credits incomplete (#8452).
+    const observeLeg = () => {
+      const recordSpend = logCtx.spendTracker?.captureRoutedSendUsage?.();
+      const attempt = logCtx.activeAttempt;
+      let reported = false;
+      const end = (): void => {
+        if (reported || !attempt || !parserOwnsUsage()) return;
+        attemptsMissingCredit.add(attempt);
+        markMissingCredit(attempt);
+      };
+      return {
+        event(event: AdapterEvent): void {
+          if (!reported && "usage" in event && event.usage) {
+            reported = true;
+            recordSpend?.(event.usage);
+          }
+          // Before the consumer binds the terminal's usage, which can precede this parse's close.
+          if (event.type === "done" || event.type === "incomplete" || event.type === "error") end();
+        },
+        end,
+      };
     };
     // Counted at the one seam every adapter parse passes, and counted for EVERY event rather
     // than only usage-bearing ones: the number this pairs with is the frame count the client
@@ -822,13 +855,19 @@ export async function prepareResponsesTransport(
     };
     const parseStream = resolved.parseStream.bind(resolved);
     resolved.parseStream = async function* (...args) {
-      for await (const event of parseStream(...args)) { observeEvent(event, args[0]); yield event; }
+      const leg = observeLeg();
+      // A guard stops reading at the terminal, which closes this generator early.
+      try {
+        for await (const event of parseStream(...args)) { observeEvent(event, args[0]); leg.event(event); yield event; }
+      } finally { leg.end(); }
     };
     if (resolved.parseResponse) {
       const parseResponse = resolved.parseResponse.bind(resolved);
       resolved.parseResponse = async (...args) => {
+        const leg = observeLeg();
         const events = await parseResponse(...args);
-        events.forEach(event => observeEvent(event, args[0]));
+        events.forEach(event => { observeEvent(event, args[0]); leg.event(event); });
+        leg.end();
         return events;
       };
     }

@@ -17,6 +17,7 @@ import { saveCredential, setActiveAccount, getAccountSet } from "../../src/oauth
 import { clearAnthropicAccountPoolState, formatAnthropicProviderForLog } from "../../src/oauth/anthropic-routing";
 import { deriveOAuthProviderConfig } from "../../src/providers/derive";
 import { readUsageEntries } from "../../src/usage/log";
+import { parseSpendJournalRecord, SPEND_LEDGER_JOURNAL_FILENAME } from "../../src/lib/spend-reservation-ledger";
 
 let releaseInheritedSpendHome: (() => void) | undefined;
 // Taken per inherited-home dispatch because one row below installs a different home.
@@ -214,7 +215,7 @@ describe("server terminal guard integration", () => {
       for (const name of ["a", "b"]) await saveCredential("anthropic", {
         access: `fixture-access-${name}`, refresh: `fixture-refresh-${name}`,
         expires: Date.now() + 3_600_000, accountId: `fixture-account-${name}`, source: "oauth",
-      }, { addAccount: true });
+      });
       const [firstAccount, replacementAccount] = getAccountSet("anthropic")!.accounts.map(account => account.id);
       await setActiveAccount("anthropic", firstAccount!);
       const model = "claude-sonnet-4-6";
@@ -258,6 +259,15 @@ describe("server terminal guard integration", () => {
         { provider: formatAnthropicProviderForLog("anthropic", replacementAccount), sends: 1, status: 200,
           input: reported ? 20 : undefined, output: reported ? 3 : undefined },
       ]);
+      const journal = Bun.file(join(home, SPEND_LEDGER_JOURNAL_FILENAME));
+      const records = await journal.exists() ? (await journal.text()).trim().split("\n").map(parseSpendJournalRecord) : [];
+      // #8902: account A's first send settles its own 12 tokens, the usage-less 429 stays
+      // unresolved, and account B's send settles only what it reported.
+      const dispatched = records.flatMap(record => record?.kind === "dispatch" ? [record.send] : []);
+      expect(records.flatMap(record => record?.kind === "settle" ? [{ send: dispatched.indexOf(record.send) + 1, tokens: record.tokens }]
+        : record?.kind === "lost" ? [{ send: dispatched.indexOf(record.send) + 1, tokens: "lost" }] : [])
+        .sort((a, b) => a.send - b.send)).toEqual([{ send: 1, tokens: 12 }, { send: 2, tokens: "lost" },
+        { send: 3, tokens: reported ? 23 : "lost" }]);
     } finally {
       releaseInheritedSpendHome?.();
       releaseInheritedSpendHome = undefined;

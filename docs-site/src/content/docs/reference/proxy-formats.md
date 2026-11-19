@@ -542,13 +542,17 @@ When available, `input_tokens_details` can also include `cache_write_tokens`. Th
 detail objects are a compatibility guarantee for strict Responses clients; zero can mean "not
 reported," not necessarily "the provider performed no such work."
 
-When the terminal continuation guard re-asks within a turn, a completion that reports usage shows
-the final leg's usage for that re-ask. In Chat Completions, this includes `prompt_tokens`, which
-reflects the context sent on the final leg. A hosted-search Chat re-ask follows the same rule. The
-request log and the spend ledger include reported usage from every leg, and the send budget counts
-every leg. If OAuth recovery switches accounts, each attempt records the usage reported by its own
-account. An incomplete or failed upstream terminal retains the accumulated usage, as does a final
-leg that reports no usage of its own.
+When the terminal continuation guard re-asks within a turn, a successful completion that reports
+usage shows the final leg's usage for that re-ask. In Chat Completions, this includes
+`prompt_tokens`, which reflects the context sent on the final leg. A hosted-search Chat re-ask
+follows the same rule. When an empty-completion retry re-asks, the reported usage also includes the
+discarded empty attempt. A response that ends incomplete or failed shows the usage summed across
+the legs, and so does a final leg that reports no usage of its own. An incomplete response includes
+one stopped at the output token limit. The request log includes reported usage from every leg once,
+and the send budget counts every leg. The spend ledger settles each leg's send with the usage that
+leg reported. A send that reported no usage stays unresolved at its reservation. If OAuth recovery
+switches accounts, each attempt records the usage reported by its own account. If a leg reports no
+usage, that attempt's provider credit total is marked incomplete.
 
 For Anthropic upstreams, a reported `usage.output_tokens_details.thinking_tokens` is preserved as
 Responses `output_tokens_details.reasoning_tokens` and Chat `completion_tokens_details.reasoning_tokens`,

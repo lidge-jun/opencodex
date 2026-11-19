@@ -293,8 +293,9 @@ describe("terminal guard", () => {
     });
   });
 
-  // A final leg cut at max_tokens is still the prompt the conversation continues from.
-  test("a final leg stopped at max_tokens still reports only its own usage beside onHiddenUsage", async () => {
+  // A final leg cut at max_tokens is rendered as an incomplete terminal, so the client sees the
+  // summed usage there, like an incomplete or error event, and nothing is hidden.
+  test("a final leg stopped at max_tokens keeps the summed usage and hides nothing", async () => {
     const hidden: unknown[] = [];
     const actual: AdapterEvent[] = [];
     for await (const event of guardTerminalEventStream({
@@ -311,8 +312,8 @@ describe("terminal guard", () => {
       onHiddenUsage: usage => hidden.push(usage),
     })) actual.push(event);
 
-    expect(hidden).toEqual([{ inputTokens: 10, outputTokens: 2 }]);
-    expect(actual.at(-1)).toEqual({ type: "done", stopReason: "max_tokens", usage: { inputTokens: 20, outputTokens: 3 } });
+    expect(hidden).toEqual([]);
+    expect(actual.at(-1)).toMatchObject({ type: "done", stopReason: "max_tokens", usage: { inputTokens: 30, outputTokens: 5 } });
   });
 
   test("keeps the hidden legs on the terminal when the final leg reports no usage", async () => {
