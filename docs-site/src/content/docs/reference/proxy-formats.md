@@ -820,6 +820,10 @@ the snapshot is `{ "version": 1, "models": [] }`; connected Desktop apply treats
 unavailable and does not write a replacement profile. Old hubs returning an ordinary catalog
 instead of version 1 are unsupported; the client does not fall back to locally generated IDs.
 
+If a newer discovery supersedes the request, the hub returns HTTP 503 with the error code
+`desktop_snapshot_busy` and `Retry-After: 1`. Connected apply leaves the existing Desktop
+profile byte-for-byte intact.
+
 The snapshot remains a read-only model-list contract; it is not a key-rotation or profile-upload
 API. Connected Desktop key migration, recovery and disconnect operate through the existing client
 lifecycle. Rotation preserves model entries and selections; CLI `rotation` distinguishes

@@ -1,4 +1,5 @@
 import { hasHumanDashboardSession } from "./consent-session";
+import { runPassiveReadSync } from "../../lib/passive-read";
 import { isAnthropicOAuthInstance, configuredAnthropicInstance, type AnthropicInstanceId } from "../../providers/anthropic-instance";
 import { resolveAnthropicAccountPoolConfig } from "../../oauth/anthropic-pool-config";
 import { persistAnthropicPoolPatch, writeAnthropicPoolSettings } from "./anthropic-pool-settings";
@@ -248,6 +249,8 @@ function genericOAuthProviderConfig(provider: string, config: ManagementContext[
   const definition = OAUTH_PROVIDERS[provider];
   return definition?.resolveProviderConfig?.(config) ?? definition?.providerConfig;
 }
+
+let accountProbeRunning = false;
 
 export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, principal, syncClaudeAgentDefsBestEffort } = ctx;
@@ -605,7 +608,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // path rather than rejected -- the GUI sends it for every provider on a manual
     // refresh, and a 400 would report an error for what is simply a no-op.
     const passiveQuota = url.searchParams.get("quota") === "1" && quotaMode === "passive";
-    if (!wantQuota && !passiveQuota) return jsonResponse(projectAccounts());
+    if (!wantQuota && !passiveQuota) {
+      // The Antigravity CLI probe resolves its target through this GET before posting the probe.
+      const projected = provider === "google-antigravity" ? runPassiveReadSync(projectAccounts) : projectAccounts();
+      return jsonResponse(projected);
+    }
     const forceRefresh = url.searchParams.get("refresh") === "1";
     // Probing may refresh the active credential and mark needsReauth — project health
     // from the post-probe store so the response is not stale.
@@ -1092,6 +1099,32 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { anthropicRoutingFor } = await import("../../oauth/anthropic-routing");
     const cleared = anthropicRoutingFor(provider).clearAnthropicAccountCooldown(accountId);
     return jsonResponse({ ok: true, cleared });
+  }
+
+  // Read-only per-account probe: each stored account's own access token, one upstream request,
+  // no refresh and no store write. Omitting accountId probes the whole roster.
+  if (url.pathname === "/api/oauth/accounts/probe" && req.method === "POST") {
+    if (principal !== "admin-token" && principal !== "gui-session") {
+      return jsonResponse({ error: "account probe requires management authorization" }, 403);
+    }
+    const body = await readManagementJsonBodyOr(req, {});
+    if (!isPlainRecord(body)) return jsonResponse({ error: "body must be an object" }, 400);
+    const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
+    if (provider !== "google-antigravity") return jsonResponse({ error: "account probe is not supported for this provider" }, 400);
+    if (body.accountId !== undefined && (typeof body.accountId !== "string" || !body.accountId.trim())) {
+      return jsonResponse({ error: "accountId must be a non-empty string" }, 400);
+    }
+    const accountId = typeof body.accountId === "string" ? body.accountId.trim() : undefined;
+    if (accountProbeRunning) return jsonResponse({ error: "an account probe is already running" }, 409);
+    accountProbeRunning = true;
+    try {
+      const { probeAntigravityAccounts } = await import("../../providers/quota/antigravity-account-probe");
+      const results = await probeAntigravityAccounts({ accountId, signal: req.signal });
+      if (!results) return jsonResponse({ error: "account not found" }, 404);
+      return jsonResponse({ provider, probedAt: new Date().toISOString(), results });
+    } finally {
+      accountProbeRunning = false;
+    }
   }
 
   if (url.pathname === "/api/oauth/accounts/import" && req.method === "POST") {

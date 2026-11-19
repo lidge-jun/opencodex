@@ -46,6 +46,7 @@ const USAGE = `Usage:
   ocx models preset apply <provider> [--all] [--json]
   ocx models new-policy [on|off|admit] [--provider <name>] [--json]
   ocx models new-arrivals [--json]
+  ocx models discover <provider> [--json]
 ${MODELS_CONTEXT_USAGE}
   ocx models shadow <status|set> [model|-] [--enabled <on|off>] [--json]
   ocx models auto-review <status|set> [model|-] [--enabled <on|off>] [--json]
@@ -528,6 +529,36 @@ async function newArrivals(argv: string[], deps: RuntimeApiDeps): Promise<void> 
   printData(result.recentArrivals, wantsJson, lines.length ? lines : ["no recent model arrivals"]);
 }
 
+interface DiscoverResult {
+  ok: boolean; provider: string; applicable?: boolean; reason?: string;
+  discovery?: { status: string; reason?: string; httpStatus?: number } | null;
+  liveModelCount?: number | null;
+  newArrivals?: Array<{ id: string; at: string; state: string }>;
+  recentArrivals?: Array<{ id: string; at: string; state: string }>;
+}
+
+async function discover(argv: string[], deps: RuntimeApiDeps): Promise<number | void> {
+  const args = [...argv]; const wantsJson = takeFlag(args, "--json");
+  const provider = args.shift()?.trim();
+  if (!provider) throw new CliUsageError("provider is required", USAGE);
+  rejectArgs(args, USAGE);
+  const result = await runtimeRequest<DiscoverResult>("/api/model-discovery/refresh", {
+    method: "POST", body: JSON.stringify({ provider }),
+  }, deps);
+  const lines: string[] = [];
+  if (result.applicable === false) lines.push(`${provider}: live discovery is off for this provider (${result.reason ?? "static catalog"})`);
+  else {
+    const status = result.discovery?.status === "failed"
+      ? `failed (${result.discovery.reason ?? "unknown"}${result.discovery.httpStatus ? ` ${result.discovery.httpStatus}` : ""})`
+      : result.discovery?.status ?? "unknown";
+    lines.push(`${provider}: discovery ${status}; ${result.liveModelCount ?? "?"} live models; ${result.newArrivals?.length ?? 0} new`);
+    for (const row of result.newArrivals ?? []) lines.push(`  new  ${provider}/${row.id}  [${row.state}]  ${row.at}`);
+  }
+  printData(result, wantsJson, lines);
+  // The server answers 200 with a failed discovery; scripts still need a nonzero exit.
+  if (result.applicable !== false && result.discovery?.status === "failed") return 1;
+}
+
 async function context(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const action = (args.shift() ?? "status").toLowerCase();
@@ -648,6 +679,7 @@ export async function handleModelsRuntimeCommand(sub: string, argv: string[], de
   else if (sub === "preset") action = () => preset(argv, deps);
   else if (sub === "new-policy") action = () => newPolicy(argv, deps);
   else if (sub === "new-arrivals") action = () => newArrivals(argv, deps);
+  else if (sub === "discover") action = () => discover(argv, deps);
   else if (sub === "context") action = () => context(argv, deps);
   else if (sub === "shadow") action = () => shadow(argv, deps);
   else if (sub === "auto-review") action = () => autoReview(argv, deps);

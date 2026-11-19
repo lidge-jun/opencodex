@@ -1065,6 +1065,30 @@ token re-login or a plain account-list re-read. `--json` returns
 failures exit 1; an upstream quota probe that fails or times out degrades to a null or stale report
 instead (exit 0), matching the dashboard's quota bars.
 
+### `ocx account probe google-antigravity [id|alias] [--json]`
+
+Read-only per-account check for Google Antigravity. Each account gets one
+`retrieveUserQuotaSummary` request with its own stored access token, under the CLI fingerprint, and
+the result is classified as `ok`, `rate_limited`, `verification_required`, `suspended`,
+`permission_denied` or `error` (with the HTTP status and a recognized reason code). Two outcomes are decided
+locally and send nothing: `paused` (the account is paused; resume it to test it) and `token_expired`
+(the stored token has expired). The probe never refreshes a token, never writes the auth store and
+never changes pause, active, cooldown or health state. The dashboard's **Test** and **Test all**
+buttons on the Antigravity account quota table call the same endpoint, `POST /api/oauth/accounts/probe`.
+The table shows each account’s plan, remaining quota by pool, reset times, and account actions.
+If a quota refresh fails, the table keeps the cached quota and shows the failure and read times.
+A batch runs up to four checks at a time. Wait for the current check to finish before starting another.
+
+### `ocx models discover <provider> [--json]`
+
+Runs the provider's live model discovery now instead of waiting for the next scheduled refresh, and
+prints how many live models it saw and which ones are new. It is the same action as **Discover now**
+under the provider's settings (`POST /api/model-discovery/refresh`). If discovery is already running
+for that provider, the action reports it is in progress (HTTP 409, `discovery_in_progress`) without
+contacting the provider. For 30 seconds after a failed fetch, the action reports that failure
+and keeps the last good list without contacting the provider again. The separate Codex catalog
+sync can pick up the refreshed list. Providers without live discovery report that discovery is off.
+
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
 Controls the `openai` Codex pool threshold, or stores a threshold for a generic OAuth pool. `on` stores 80%, `off` stores 0%, and `threshold <n>` accepts 0–100. A generic pool threshold steers selection only while `pool.kernel` is on with `strategy: "fill-first"`; with the flag off, saving one does not enable threshold-based switching. It never changes the provider enablement override or disables reactive 429 rotation. `status` and mutation output for generic pools use the confirmed server response. For generic pools, `poolEnabled` is the stored provider override (`null` means unspecified), not inherited effective state; `inert: true` means the threshold is stored but not applied, `inert: false` means the pool is applying it, and an absent `inert` is an unknown capability, which never reports `enabled: true`. API-key providers and invalid values are rejected.
