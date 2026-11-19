@@ -6,6 +6,7 @@ import { resolveMainAccountHardLockThresholds } from "../../codex/main-account-h
 import { getMainAccountExternalUsageWarning } from "../../codex/main-account-external-usage";
 import { getObservedMainQuotaIdentityKey } from "../../codex/main-account-cache";
 import { compactionRoutingSchema, memoryModelsSchema, reasoningRetentionSchema } from "../../config/schema/leaf-validators";
+import { agyAcpUnattendedTargetIssues } from "../../config/schema/agy-acp-references";
 import { compactionRecoverySchema } from "../../config/schema/compaction-recovery";
 import { mainAccountHardLockFallbackSchema } from "../../config/schema/main-account-hard-lock-fallback";
 import { anthropicSidecarPatchError } from "../../config/schema/anthropic-account-pool";
@@ -342,7 +343,7 @@ export async function syncEnabledClientIntegrations(
   }
 
   if (stale()) return out;
-  const { refreshOwnedCatalogIntegrations } = await import("../../integrations/catalog-refresh");
+  const { catalogRefreshClientIds, refreshOwnedCatalogIntegrations } = await import("../../integrations/catalog-refresh");
   const refreshOwned = deps.refreshOwnedCatalogIntegrations ?? refreshOwnedCatalogIntegrations;
   out.push(...await refreshOwned({
     models: async () => {
@@ -351,9 +352,7 @@ export async function syncEnabledClientIntegrations(
     },
     config,
     port,
-  }, unattended
-    ? ["mcode", "pi", "aside", "raycast", "omo", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]
-    : ["mcode", "pi", "aside", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"],
+  }, catalogRefreshClientIds(unattended ? "unattended" : "serverSync"),
   ...unattended ? [{ refreshOnly: true, admit }] as const : []));
 
   return out;
@@ -705,6 +704,15 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
     let authlessIsEnabled = false, clientCompactionIsEnabled = false, fastRowsIsEnabled = false;
     let desktopSwitchesChanged = false, fastRowsChanged = false, reserveIsEnabled = false, reserveChanged = false;
     const refusal = await settleConfigRoot(configRoot(), () => {
+      if (memoryModels?.success || compactionRouting?.success) {
+        const issue = agyAcpUnattendedTargetIssues({
+          ...config,
+          ...(memoryModels?.success ? { memoryModels: memoryModels.data } : {}),
+          ...(compactionRouting?.success ? { compactionRouting: compactionRouting.data } : {}),
+        }).find(({ path }) => (path[0] === "memoryModels" && memoryModels?.success)
+          || (path[0] === "compactionRouting" && compactionRouting?.success));
+        if (issue) return jsonResponse({ error: `${issue.path.join(".")}: ${issue.message}` }, 400);
+      }
       if (hardLockThresholds) {
         hardLockThresholds = { ...config.codexMainAccountHardLockThresholds, ...hardLockThresholds };
         const defaults = resolveMainAccountHardLockThresholds(undefined);

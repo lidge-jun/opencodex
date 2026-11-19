@@ -1,4 +1,4 @@
-import { CODEX_INTERNAL_OPENAI_MODELS } from "./codex/control-plane-models";
+import { isBareOpenAiFamilyModel } from "./codex/control-plane-models";
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "./types";
 import { createHash } from "node:crypto";
 import { peekAuthStore } from "./oauth/store";
@@ -327,11 +327,7 @@ function crossProviderRedirectTarget(config: OcxConfig, providerName: string, va
   }
 }
 
-/** Exported for the main-account hard-lock fallback: only this family is ever redirected. */
-export function isBareOpenAiFamilyModel(modelId: string): boolean {
-  return !modelId.includes("/")
-    && (/^(?:gpt-|o1-|o3-|o4-)/.test(modelId) || CODEX_INTERNAL_OPENAI_MODELS.has(modelId));
-}
+export { isBareOpenAiFamilyModel } from "./codex/control-plane-models";
 
 function routeResult(
   config: OcxConfig | undefined,

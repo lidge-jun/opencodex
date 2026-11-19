@@ -102,6 +102,10 @@ only without retaining ledger rows in memory, mapping providers to `PROVIDER_KIN
 via `src/usage/request-outcome.ts`, and decomposing usage into five disjoint token buckets
 (`inputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `outputTokens`, `reasoningTokens`) whose
 sum matches `usageDisplayTotalTokens` in `src/usage/totals.ts`.
+Combo rows attribute each attempt to its own provider and model. When a non-combo attempt with
+usage names a different provider or model from the request row, telemetry attributes each
+token-bearing attempt separately. This includes recovery usage before a continuation refusal.
+Top-level outcome counts still count each request once.
 
 `src/telemetry/payload.ts` resolves the install channel and validates the built payload with
 `validateTelemetryPayloadV1`. `src/telemetry/sender.ts` posts to the constant collector URL

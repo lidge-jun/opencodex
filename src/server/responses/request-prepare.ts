@@ -1,6 +1,7 @@
 import { responseReplayOwnerKey } from "../../responses/state/replay-owner";
 import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { attributePhysicalAttempt } from "../request-log-failure-attribution";
 import { failLinkTurnExpansion, markLinkTurnMissing, observeLinkTurnExpansion } from "../link-turn";
 import { inputAdmissionRefusalMessage } from "./input-admission";
 import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
@@ -90,7 +91,8 @@ import { anthropicSessionKeyFromParts } from "../../oauth/anthropic-routing";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { bindTurnTerminationScope, rememberDeliveredFinalAnswer } from "../../responses/turn-termination";
-import { noteCodexSelectionAffinity, observeCacheDiagnosticInbound, rebindCacheDiagnosticBody, requestLogSpeedLabel, readConfiguredCodexServiceTier } from "../request-log";
+import { beginRequestAttempt, finishRequestAttempt, markLocalRequestLogRefusal, noteAttemptSend, noteCodexSelectionAffinity, observeCacheDiagnosticInbound, rebindCacheDiagnosticBody, requestLogSpeedLabel, readConfiguredCodexServiceTier, usageFromResponsesPayload } from "../request-log";
+import type { PersistedUsageAttempt } from "../../usage/log";
 import type { RouteResult } from "../../router";
 import {
   captureRouteStaticPolicy,
@@ -1013,6 +1015,10 @@ export async function prepareResponsesRequest(
   };
   let selectedForwardHeaders = req.headers;
   let subagentFallbackAccountId = config.activeCodexAccountId ?? null;
+  // A typed fact for providers that refuse fallback-routed turns (the Antigravity ACP policy): set only
+  // where a fallback actually moves the route (a selection that keeps the requested model is not one),
+  // never inferred from headers, models or tools.
+  let subagentFallbackSelected = false;
   let subagentFallbackAccountPreview: SubagentPoolAccountPreview | undefined;
   let subagentFallbackModelEligibleAccountIdsForModel: SubagentModelEligibleAccountIds | undefined;
   let subagentQuotaFailureModel = parsed.modelId;
@@ -1109,6 +1115,7 @@ export async function prepareResponsesRequest(
     );
     if (fallback?.refusal) return fallback.refusal;
     if (fallback) {
+      if (fallback.to !== fallback.from) subagentFallbackSelected = true;
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo = fallback.to;
       if (isInjectionDebugEnabled()) {
@@ -1145,6 +1152,7 @@ export async function prepareResponsesRequest(
   }
 
   let recoveryFailureReason: AgentTaskRecoveryFailureReason | undefined;
+  let recoveryAttempts: PersistedUsageAttempt[] | undefined;
   // Native fallback and explicitly trusted direct Responses routes can consume ciphertext,
   // so recover only after final route selection.
   //
@@ -1177,7 +1185,24 @@ export async function prepareResponsesRequest(
         (body as { input?: unknown } | undefined)?.input,
         agentTaskRecovery,
         config,
-        { parentThreadId, abortSignal: options.abortSignal },
+        {
+          parentThreadId,
+          abortSignal: options.abortSignal,
+          onSend: hasUnexpandedPreviousResponse ? ({ model, status, durationMs, usage }) => {
+            const attempts = recoveryAttempts ??= [];
+            const ordinal = (logCtx.attempts?.length ?? 0) + attempts.length + 1;
+            const attempt = beginRequestAttempt(ordinal, OPENAI_CODEX_PROVIDER_ID, model, "openai-responses");
+            noteAttemptSend(attempt, undefined);
+            finishRequestAttempt(attempt, status ?? 502, durationMs, usageFromResponsesPayload(usage));
+            if (status === undefined) {
+              attempt.failureStage = "pre-header";
+              attempt.failureCause = "transport-ambiguous";
+            } else {
+              attributePhysicalAttempt(attempt);
+            }
+            attempts.push(attempt);
+          } : undefined,
+        },
       );
       recovered = result.recovered;
       recoveryFailureReason = result.recovered ? undefined : result.reason;
@@ -1334,6 +1359,7 @@ export async function prepareResponsesRequest(
           })();
           if (fallback?.refusal) return fallback.refusal;
           if (fallback) {
+            if (fallback.to !== fallback.from) subagentFallbackSelected = true;
             (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
             (logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo = fallback.to;
             if (isInjectionDebugEnabled()) {
@@ -1446,8 +1472,8 @@ export async function prepareResponsesRequest(
   }
 
   // The canonical ChatGPT backend rejects previous_response_id, so a local replay miss leaves no
-  // safe way to recover the omitted history. Fail before auth, adapter construction, or upstream
-  // I/O instead of stripping the id and silently forwarding a context-free delta (#702).
+  // safe way to recover the omitted history. Fail before dispatching the continuation itself
+  // instead of stripping the id and silently forwarding a context-free delta (#702).
   // Codex recognizes previous_response_not_found on WebSocket errors and reconnects with its
   // full input. A generic invalid_request_error instead terminates the task after cache expiry.
   if (
@@ -1455,9 +1481,18 @@ export async function prepareResponsesRequest(
     && isCanonicalOpenAiForwardProvider(route.provider)
   ) {
     markLinkTurnMissing(logCtx);
+    const code = "previous_response_not_found";
+    logCtx.provider = route.providerName;
+    logCtx.model = route.modelId;
+    logCtx.errorCode = code;
+    // A recovery send already finished on its own model and status. Keep it off activeAttempt,
+    // which the log finalizer stamps with the continuation's terminal outcome.
+    if (recoveryAttempts) (logCtx.attempts ??= []).push(...recoveryAttempts);
+    if (logCtx.attempts?.some(attempt => attempt.sendCount > 0)) logCtx.terminalSource = "synthetic";
+    else markLocalRequestLogRefusal(logCtx, code);
     return markProxyError(formatErrorResponse(
       400,
-      "previous_response_not_found",
+      code,
       "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
     ));
   }
@@ -1751,6 +1786,7 @@ export async function prepareResponsesRequest(
       subagentFallbackAccountId = value;
     },
     subagentQuotaFailureModel,
+    subagentFallbackSelected,
     poolAffinityKey,
     clientRequestedStream,
     substituteMainCredential,

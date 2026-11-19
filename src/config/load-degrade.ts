@@ -11,6 +11,7 @@ import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import { mainAccountHardLockFallbackError } from "./schema/main-account-hard-lock-fallback";
 import { fallbackPolicyError } from "./schema/fallback-policy";
 import { anthropicSidecarConfigError } from "./schema/anthropic-account-pool";
+import { agyAcpProviderFieldIssues, agyAcpUnattendedTargetIssues } from "./schema/agy-acp-references";
 import {
   modelPinnedEffortsConfigError,
   pinnedReasoningEffortConfigError,
@@ -197,6 +198,70 @@ export function warnDegradedMemoryModels(rawParsed: unknown, validated: OcxConfi
     if ((raw as Record<string, unknown>)[phase] !== undefined && validated.memoryModels[phase] === undefined) {
       console.warn("\u26a0\ufe0f  config.json memoryModels." + phase + " is invalid (expected { model, reasoningEffort? } with a nonblank model) \u2014 that phase keeps its existing route, which may include shadow-call interception");
     }
+  }
+}
+
+/** Repair ACP-specific provider fields and unattended selectors on disk reads. */
+export function sanitizeAgyAcpForLoad(
+  parsed: unknown,
+  warn: (message: string) => void = message => console.warn(`⚠️  config.json ${message}`),
+): void {
+  const root = rawConfigRecord(parsed);
+  if (!root) return;
+  const report = (issue: ReturnType<typeof agyAcpProviderFieldIssues>[number], repair: string): void => {
+    const path = issue.path.map(segment => typeof segment === "string"
+      ? redactSecretString(segment).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g,
+        ch => "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0"))
+      : segment).join(".");
+    warn(path + ": " + issue.message + " " + repair);
+  };
+  // Fallback issues are indexed into their original arrays. Remove later entries first.
+  for (const issue of agyAcpUnattendedTargetIssues(root).reverse()) {
+    const [section, field, index] = issue.path;
+    if (section === "memoryModels" && typeof field === "string") {
+      const memory = rawConfigRecord(root.memoryModels);
+      if (memory) delete memory[field];
+    } else if (section === "injectionModel") {
+      root.syncCodexSubagentDefaults = false;
+    } else if (section === "compactionRouting") {
+      const compaction = rawConfigRecord(root.compactionRouting);
+      if (compaction && Array.isArray(compaction.triggers)) {
+        const remaining = compaction.triggers.filter(trigger => trigger !== "auto");
+        if (remaining.length) compaction.triggers = remaining;
+        else delete root.compactionRouting;
+      }
+    } else if (section === "shadowCallIntercept") {
+      const shadow = rawConfigRecord(root.shadowCallIntercept);
+      if (shadow) shadow.enabled = false;
+    } else if (section === "subagentModelFallback" && Array.isArray(root.subagentModelFallback) && typeof field === "number") {
+      root.subagentModelFallback.splice(field, 1);
+    } else if (section === "subagentModelFallbackByModel" && typeof field === "string" && typeof index === "number") {
+      const byModel = rawConfigRecord(root.subagentModelFallbackByModel);
+      const fallback = byModel?.[field];
+      if (byModel && Array.isArray(fallback)) {
+        fallback.splice(index, 1);
+        if (fallback.length === 0) delete byModel[field];
+      }
+    }
+    const repair = section === "injectionModel" ? "Disabling managed subagent default sync on load."
+      : section === "compactionRouting" ? "Ignoring the automatic compaction trigger on load."
+      : "Ignoring this target on load.";
+    report(issue, repair);
+  }
+  const providers = rawConfigRecord(root.providers);
+  // Apply indexed removals from the end so earlier model entries retain their indices.
+  for (const issue of agyAcpProviderFieldIssues(root).reverse()) {
+    const [, name, field, entry] = issue.path;
+    if (typeof name !== "string" || typeof field !== "string") continue;
+    const provider = rawConfigRecord(providers?.[name]);
+    if (!provider) continue;
+    const value = provider[field];
+    if (field === "models" && Array.isArray(value) && typeof entry === "number") value.splice(entry, 1);
+    else if (field === "modelAliases" && typeof entry === "string") {
+      const aliases = rawConfigRecord(value);
+      if (aliases) delete aliases[entry];
+    } else delete provider[field];
+    report(issue, "Ignoring this provider setting on load.");
   }
 }
 

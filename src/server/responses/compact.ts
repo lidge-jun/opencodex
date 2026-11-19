@@ -33,6 +33,8 @@ import { parseRequest } from "../../responses/parser";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
 import { applyReasoningRetention, appendRetentionNotice, type ReasoningRetentionResult } from "../../responses/reasoning-retention";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
+import { isUnattendedAgyAcpHttpTurn } from "../../adapters/agy-acp/policy";
+import { agyAcpPreflightResponse } from "./agy-acp-preflight";
 import { repairUrlCitationAnnotations, stripProviderInputItemMetadata } from "../../adapters/openai-responses/request-strips";
 import { expandPreviousResponseInput, previousResponseProviderState, rememberResponseState } from "../../responses/state";
 import { repairLegacyDottedToolCallNames } from "../../responses/legacy-dotted-tool-name-repair";
@@ -1800,6 +1802,15 @@ export async function handleResponsesCompact(
 
   // ROUTED model: run the v2 synthetic-compaction turn internally (appends COMPACT_PROMPT, no
   // tools) and decode the resulting ocx1 envelope into plain v1 replacement-history items.
+  const agyAcpUnattendedHttpTurn = isUnattendedAgyAcpHttpTurn(req.headers, raw);
+  // A direct refusal has no summarizer, so it must not create a reasoning archive.
+  if (agyAcpUnattendedHttpTurn && !route.combo && route.routeKind !== "policy" && route.provider.adapter === "agy-acp") {
+    const refusal = agyAcpPreflightResponse({
+      adapterName: route.provider.adapter, requestHeaders: req.headers, forwardHeaders: req.headers,
+      body: raw, unattendedHttpTurn: true, comboAttempt: false, internalDecisionCall: false, subagentFallback: false, logCtx,
+    });
+    if (refusal) return refusal;
+  }
   const rawInputItems = Array.isArray(raw.input) ? (raw.input as unknown[]) : [];
   // Keep readable reasoning local until success, outside the summarizer request.
   // Opaque compaction responses below keep their original protocol and ciphertext.
@@ -1840,7 +1851,12 @@ export async function handleResponsesCompact(
     // fallback spend four more.
     // internalReq keeps only FORWARD_HEADERS, so the caller principal is resolved from req.
     const replayPrincipal = { clientPrincipalId: resolveContextPrincipal(req, config, admission) };
-    const response = await handleResponses(internalReq, config, logCtx, { clientModelLabel: options.clientModelLabel, abortSignal: req.signal, turnAdmissionLease, sendBudget, compactionRecoveryKind: "compaction-v1", compactionRoutingOverride: options.compactionRoutingOverride, advisorAdmissionPolicy: options.advisorAdmissionPolicy, replayPrincipal, ...(admission ? { admission } : {}) });
+    const response = await handleResponses(internalReq, config, logCtx, {
+      clientModelLabel: options.clientModelLabel, abortSignal: req.signal, turnAdmissionLease, sendBudget,
+      compactionRecoveryKind: "compaction-v1", compactionRoutingOverride: options.compactionRoutingOverride,
+      advisorAdmissionPolicy: options.advisorAdmissionPolicy, replayPrincipal, agyAcpUnattendedHttpTurn,
+      ...(admission ? { admission } : {}),
+    });
     if (req.signal.aborted) {
       void response.body?.cancel(req.signal.reason).catch(() => undefined);
       return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");

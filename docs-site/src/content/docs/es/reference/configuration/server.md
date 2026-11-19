@@ -259,6 +259,9 @@ x-opencodex-api-key: your-secret-token
 | `/v1/messages` | aceptado | aceptado | aceptado |
 | `/v1/messages/count_tokens` | aceptado | aceptado | aceptado |
 | `/v1/models` | aceptado | aceptado | aceptado |
+| `/v1/usage/windows` | aceptado | aceptado | no aceptado |
+
+Las ventanas de cuota requieren una clave configurada para un solo proveedor y todos sus modelos. Consulta [Uso desde un cliente conectado](/es/guides/remote-hub/#usage-from-a-connected-client).
 
 Responses y Chat Completions aceptan una credencial reconocida del plano de datos en `x-opencodex-api-key` o, si ese encabezado dedicado falta o queda vacío tras quitar los espacios, en `Authorization: Bearer`. Un encabezado dedicado no vacío tras quitar los espacios tiene prioridad aunque sea inválido: un bearer válido no corrige ese rechazo. Un bearer ajeno no concede admisión al proxy, y estas rutas no aceptan `x-api-key`. Las `apiKeys` generadas por el dashboard y el token compartido de datos se comparan en tiempo constante; las credenciales administrativas no conceden admisión a modelos.
 
@@ -561,7 +564,7 @@ Esta configuración rige `/v1/messages`, `/v1/messages/count_tokens`, el lanzado
 
 | Clave | Tipo | Predeterminado | Descripción |
 | --- | --- | --- | --- |
-| `claudeCode.bodyStallSec?` | `number` | `90` | El presupuesto de inactividad del cuerpo pasa a través de nativo en segundos mientras una lectura está pendiente, no la duración total. Mínimo 1; exactamente `0` desactiva. |
+| `claudeCode.bodyStallSec?` | `number` | `90` | Tiempo máximo de inactividad del cuerpo, en segundos, durante una lectura pendiente en el modo nativo. Los bytes entrantes renuevan el plazo de la transmisión aunque el siguiente evento SSE aún esté incompleto. Mínimo 1. El valor exacto `0` desactiva el límite. |
 | `claudeCode.bodyMaxBytes?` | `number` | `67108864` | Tapa corporal de paso natural acumulativa para respuestas transmitidas y tamponadas. Exactamente `0` se deshabilita. |
 | `claudeCode.compatibility?` | `"shadow" \| "enforce"` | Sin configurar | Admisión de compatibilidad opcional para solicitudes `/v1/messages` traducidas. `shadow` registra características no compatibles y continúa; `enforce` devuelve un 400 en forma de Anthropic antes de la inferencia. El paso a través de Native Anthropic permanece sin cambios. |
 | `claudeCode.authMode?` | `"proxy" \| "subscription"` | Automático | Cómo maneja el lanzamiento el `ANTHROPIC_AUTH_TOKEN`. Detecta automáticamente cada lanzamiento; nunca se anula un valor explícito. |

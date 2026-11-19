@@ -18,6 +18,48 @@ reset silence ticks when it changes, including terminal continuations and signat
 `src/server/responses/fetch-helpers.ts` awaits admission only when the executor has a pacing seam,
 so wrapping an unpaced physical send adds no yield between final credential validation and dispatch.
 
+## Provider-scoped budgets
+
+`providers.<name>.connectTimeoutMs` and `providers.<name>.stallTimeoutSec` (declared in
+`src/types/provider.ts`) override the global values for one provider. `src/stall-timeout.ts`
+`providerConnectTimeoutMs` / `providerStallTimeoutSec` return the provider value when it is set,
+including `0`, and fall back to the global setting when omitted. On ordinary routed HTTP
+adapter sends and streams, local/public defaults apply when both settings are omitted.
+For routed adapter streams, the direct Chat and Messages encoders and the Responses bridge
+measure stall time between parsed adapter events. The HTTP body reader also has a separate
+inactivity clock for waits between body chunks.
+Responses passthrough uses global budgets, including header timing in the shared OAuth/key
+dispatch. Native Chat/Messages and compact also use global settings. The `compaction-v1` marker
+keeps the global budgets when compact hands off to the Responses pipeline, including HTTP
+retries and streaming `runTurn` delivery. Each `runTurn` adapter owns its transport deadlines.
+The proxy applies the provider stall budget to ordinary streaming `runTurn` delivery.
+Buffered `runTurn` has no provider stall watchdog.
+
+The image/video bridge in `src/images/loop.ts` uses 200 seconds for either omitted model budget.
+An explicit zero disables the corresponding model clock, including raw-body inactivity for HTTP
+and collection inactivity for `runTurn`. Client cancellation and the independent generation
+deadlines still apply. `src/web-search/progress-stream.ts` keeps its separate consumer and
+post-terminal drain deadlines when raw-body inactivity is disabled. The routed HTTP search loop
+uses the provider header setting and includes it in the outer watchdog budget. The streaming
+`runTurn` search loop sizes its outer watchdog without an HTTP header allowance. Both retain a positive
+budget sized to cover the bridge's component deadlines, including when the provider stall
+setting is zero. Load degrades malformed provider values to "inherit" (`leaf-validators.ts`).
+
+Both fields are editor-owned in `src/server/auth-cors.ts`. The shared provider management
+validator requires integers from 0 through 2147483647 ms or 2147483 seconds respectively.
+Canonical OpenAI validates both overrides from the original input before comparing the seed
+with those two overrides omitted from the comparison copy.
+`src/server/management/provider-overwrite-carry.ts` retains an omitted POST override from
+the latest live same-name row. Its PATCH mask deletes either override on explicit `null` and
+refuses invalid values before persistence. See [Durable provider PATCH](../gui-and-management-api.md#durable-provider-patch).
+`tests/responses/provider-upstream-deadlines.test.ts` covers override, inherit and per-provider
+disable for ordinary requests, and the global clocks for compact HTTP retries, buffered bodies
+and streaming `runTurn`. It also covers the parsed-event deadline on all three client wires,
+the web-search plan and write validation.
+`tests/server/management-provider-compat-carry.test.ts` covers canonical POST, POST carry and
+PATCH validation. `tests/images/loop.test.ts` and
+`tests/web-search/web-search-progress-stream.test.ts` cover disabled model timers and cancellation.
+
 `src/lib/local-upstream.ts` classifies HTTP(S) destinations without DNS: exact case-insensitive
 `localhost` (optional trailing dot), unspecified IPv4 `0.0.0.0`, IPv4 loopback/private/link-local,
 IPv6 loopback/link-local/unique-local and IPv4-mapped equivalents, plus `.local`/`.lan` names.

@@ -172,6 +172,10 @@ export interface OcxParsedRequest {
   _providerContinuationCandidate?: OcxProviderContinuationState;
   /** Exact process-local route owner attached to newly persisted provider state. */
   _providerContinuationOwner?: OcxProviderContinuationOwner;
+  /** Serving owner of image history that was summarized within this request. */
+  _anthropicImageOwner?: OcxProviderContinuationOwner;
+  /** Internal image recovery summary that must bypass native adaptive thinking defaults. */
+  _anthropicImageSummary?: true;
   /**
    * The hosted `{type:"web_search", ...}` tool config, stashed when Codex enables web search. Routed
    * (non-OpenAI) providers can't run it server-side, so the proxy re-exposes it as a function tool and

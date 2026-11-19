@@ -188,16 +188,16 @@ The Windows client lifecycle lock reuses a successful private runtime-directory 
 Native toggle, management/CLI apply, desired reconciliation, startup and picker writers follow the [config-directory hardening barrier](../config.md#opencodex-home-and-live-process-state). Cleanup gates each SQLite lease separately across OS untrust; profile and snapshot writes re-enter after trust/discovery. Admission expires within one ACL deadline without mutation or loss of retained-child ownership. `withFirstPartySecretsSettled` maps timeout to `ca_unavailable` with allowlisted `ca`/`ETIMEDOUT` diagnostics; CA startup never retries this as lease contention, and picker refusal releases its transition lock. Reconciliation and token-producing rollback leaves receive the barrier from their async caller; a CA refusal never wrote settings and needs no settings rollback. `tests/claude-integration/claude-intercept-acl-barrier.test.ts` gates parent flights and drives deadlines without sleeps. Diagnostics exclude raw exceptions, ACL output, PEMs and tokens.
 The authority primitive accepts `validityDays` from 1 through 3650 for short-lived callers; omitted values preserve the existing 3650-day CA lifetime. This parameter does not install trust or rotate an existing authority.
 
-Gateway remains the default Desktop mode. On macOS and Windows, picker intent defaults on only within the chosen first-party mode: either an explicit Desktop integration `false` or `claudeCode.intercept.picker: false` disables it. Default intent does not install certificate trust; startup and status only inspect trust, and explicit activation owns installation.
+Gateway remains the default Desktop mode. On macOS, Windows and Linux, picker intent defaults on only within the chosen first-party mode: either an explicit Desktop integration `false` or `claudeCode.intercept.picker: false` disables it. Default intent does not install certificate trust; startup and status only inspect trust, and explicit activation owns installation.
 
-When the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` on macOS, or on Windows with picker intent or an applied profile requiring recovery,
+When the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` on macOS, or on Windows and Linux with picker intent or an applied profile requiring recovery,
 wires Claude Desktop picker mode: a second loopback CONNECT proxy on the dedicated picker proxy
 port (`getClaudeInterceptState()?.pickerProxyPort`), used as Desktop's pinned egress proxy. Desktop
 also hands that proxy to the Claude Code processes it spawns, and the two trust different CAs, so
 the tunnel is chosen per client from the CONNECT head: a tunnel without a browser User-Agent (Claude
 Code, trusting only the intercept CA) gets the `api.anthropic.com` intercept and every other target
 blind, never the picker; a tunnel with Chromium's `Mozilla/` User-Agent (the app, trusting only the
-login keychain on macOS or the current-user Root store on Windows) is asked of the picker runtime (`src/claude/intercept/picker-runtime.ts`), which
+login keychain on macOS, the current-user Root store on Windows, the user NSS database on Linux) is asked of the picker runtime (`src/claude/intercept/picker-runtime.ts`), which
 blind-tunnels every target except `claude.ai:443`.
 Production always uses the configured adjacent ports. Lifecycle tests inject only the CONNECT
 factory and bind the real handlers on kernel-assigned ports; this preserves request handling while
@@ -208,9 +208,9 @@ any local process already reaches (the `api.anthropic.com` intercept is on the C
 too; the `claude.ai` relay verifies upstream and adds no credential) and breaks only its own TLS,
 because each terminator presents a certificate only its intended client trusts. `claude.ai:443` is
 intercepted only while the runtime's cached
-decision is armed: macOS or Windows, persisted resolved Desktop mode first-party, Desktop intent on,
+decision is armed: macOS, Windows or Linux, persisted resolved Desktop mode first-party, Desktop intent on,
 `claudeCode.intercept.picker !== false`, no disarm latch, listener up, and the current picker CA
-trusted in the OS store (`picker-trust.ts`): the login keychain on macOS, the current-user Root store on Windows by exact fingerprint with a verified leaf. A loopback TCP front in `picker-listener.ts`
+trusted in the OS store (`picker-trust.ts`): the login keychain on macOS, the current-user Root store on Windows by exact fingerprint with a verified leaf, the Chromium-selected user NSS database on Linux. A loopback TCP front in `picker-listener.ts`
 reads ClientHello ALPN through `src/claude/intercept/client-hello.ts`, reassembling across TCP
 splits and up to 16 TLS records within 64 KiB of wire bytes and a 10-second deadline. It splices
 the untouched connection to an HTTP/2 server when the client offers `h2`, or to the native
@@ -260,7 +260,7 @@ name constraints permitting only `claude.ai` and excluding every IPv4 and IPv6 a
 signing identity is protected by the OS credential store and scoped to the canonical config directory;
 normal restarts reuse the same validated certificate and key. No plaintext picker signing key is
 stored in that directory; public certificates and non-secret identity metadata remain under
-`<OPENCODEX_HOME>/claude-picker/`. Every unbound intercept startup attempt makes a best-effort cleanup of legacy `ca.key` before eligibility checks, including client role, disabled routing/interception, and ephemeral public ports; cleanup failures do not block startup. See the [runtime lifecycle contract](../runtime.md#claude-intercept-pair). Linux skips picker CA, credential-store and proxy construction entirely; the main intercept pair remains available.
+`<OPENCODEX_HOME>/claude-picker/`. Every unbound intercept startup attempt makes a best-effort cleanup of legacy `ca.key` before eligibility checks, including client role, disabled routing/interception, and ephemeral public ports; cleanup failures do not block startup. See the [runtime lifecycle contract](../runtime.md#claude-intercept-pair). Linux, like Windows, constructs the picker CA, credential store and proxy only with picker intent or an applied profile requiring recovery; otherwise the main intercept pair alone starts. Each Linux picker root is installed under its own NSS nickname (`opencodex Claude Desktop Picker CA <SHA-1>`). Cleanup uses that nickname only and confirms the outgoing DER is absent across the whole database.
 On restart the lifecycle keeps the applied profile and restores through the controller with
 `allowTrustPrompt: false`. An unchanged approved identity with an available credential store needs
 no macOS Certificate Trust Settings add/remove operation. Missing, revoked or unknown trust leaves the picker pending; restart and status never install trust. Explicit `on`, `trust`, or first-party apply completes the trust step, including the Windows current-user Root confirmation when needed.
@@ -275,12 +275,12 @@ predecessor before writing the credential, verifies readback, then commits metad
 it removes the journal last. Recovery requires matching journal/store identity; missing initialized
 credentials, unavailable storage or inconsistent metadata fail closed without publishing a replacement.
 Gateway/off startup does not read or initialize an OS picker credential unless an applied picker
-profile needs recovery. Both macOS and Windows retain a dormant runtime/controller for explicit activation;
-Windows without picker intent or an applied profile defers relay binding and refresh. Activation uses the same persistent authority path.
+profile needs recovery. macOS, Windows and Linux retain a dormant runtime/controller for explicit activation;
+Windows and Linux without picker intent or an applied profile defer relay binding and refresh. Activation uses the same persistent authority path.
 On macOS trust is added without a policy string: Chromium
 skips host-scoped trust settings, so `inspectPickerTrust` treats a current CA whose exported user
 trust settings carry `kSecTrustSettingsPolicyString` as untrusted and an explicit trust step replaces it; an
-export it cannot read makes trust `unknown`, which never arms. On Windows trust is the current-user Root store entry matching the exact fingerprint with a verified leaf. The PowerShell runner terminates its child on timeout or output-read failure and preserves the failure category. A rotated-out picker certificate is removed from the login keychain on macOS or the current-user Root store on Windows as its replacement is published, and a failed removal stops the picker arming. Publication of `ca.pem` and `ca-owner.json` happens only inside the
+export it cannot read makes trust `unknown`, which never arms. On Windows trust is the current-user Root store entry matching the exact fingerprint with a verified leaf. The PowerShell runner terminates its child on timeout or output-read failure and preserves the failure category. On Linux `src/claude/intercept/picker-trust-linux.ts` selects Chromium’s NSS database. An existing `~/.pki/nssdb` takes priority, then the path is `${XDG_DATA_HOME:-$HOME/.local/share}/pki/nssdb`. Trust requires an unambiguous matching picker root with the SSL `C` flag. The database directory and files must be owned by the current user, without group or world writes or symlinks. Installation checks for `certutil` before creating the selected database. A missing `certutil` (libnss3-tools or nss-tools) reports `unsupported`. The runner terminates the child on timeout or output overflow. A rotated-out picker certificate is removed from the login keychain on macOS, the current-user Root store on Windows or the user NSS database on Linux as its replacement is published, and a failed removal stops the picker arming. Publication of `ca.pem` and `ca-owner.json` happens only inside the
 `ca.lock.sqlite` lock (`picker-ca.ts`): lock acquisition is reported separately from the
 callback, so a busy lock publishes nothing, and a missing or mismatched owner record for our own
 certificate is rewritten under the lock so a second process cannot rotate out a live owner's
@@ -291,11 +291,11 @@ During legacy migration, before a replacement changes `ca.pem`, the outgoing cer
 SHA-1/SHA-256 go to `pending-untrust.json` (mode 0600, no key material); only one such record may
 exist, and a default `ensurePickerCa` call (the controller's enable/trust path) refuses while it
 does. Activation (`runtime.ts` and the controller via `picker-ca-startup.ts` and `picker-ca-cleanup.ts`) drains that record before and after
-migration: it defers without calling `security` while the recorded certificate is still published by
-a live owner, untrusts a private temporary copy of the public PEM otherwise, and acknowledges the
-exact record only after a confirmed removal, so a failure survives process replacement and is
-retried by the next start. While the drain is incomplete and a Desktop picker profile is applied, the
-lifecycle binds a blind-only CONNECT relay (`interceptHosts: []`, every tunnel blind) on the
+migration. When a live owner still publishes the recorded certificate, the drain defers. Otherwise it
+untrusts a private copy of the public PEM and acknowledges the exact record after confirmed removal or absence.
+On Linux, trust installation holds the authority lock and records the CA fingerprint, canonical NSS path and device/inode identities of the directory and `cert9.db` in `linux-trust-store.json` before adding trust. Rotation copies the store identity to the pending record. Both records and their state directory must be owned by the current user and lack group or other write permissions. The reader checks the journal’s device and inode against the opened descriptor and reads from that descriptor. Cleanup retains the record if its bound store is missing, unsafe or replaced. For an older record without a binding, cleanup checks the legacy, default XDG and current XDG databases. When the exact root is found in one database, cleanup records that identity under the authority lock before deleting. A retry can then confirm absence in the bound store. Multiple matching databases leave the unbound record pending. If the scan finds nothing to remove, cleanup reports how to retry with the original `XDG_DATA_HOME`.
+Linux cleanup verifies the pending root's constraints and fingerprint. For same-subject certutil exports, a read-only lookup of the NSS SQL token binds the nickname to its DER. Ambiguous reads and alternate nicknames keep the pending record. Cleanup verifies the exact DER before deletion and checks absence and surviving trust attributes afterward. While the drain is
+incomplete and a profile is applied, the lifecycle binds a blind-only CONNECT relay on the
 profile's recorded `egressProxyUrl` port instead of the picker: Desktop keeps its network path, no
 TLS is terminated, no trust is added, and the profile row, its previous selection and the retry
 intent stay untouched. A port held by another process is not taken over; the relay start fails with

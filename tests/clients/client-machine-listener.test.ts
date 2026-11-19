@@ -4,16 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "bun";
 import { startMachineListener } from "../../src/client/machine-listener";
+import { writeHubCredential } from "../../src/client/hub-session";
 import { handleMachineApi } from "../../src/client/machine-api";
 import { serveGuiFile } from "../../src/server/gui-static";
 import type { OcxClientConnectionConfig, OcxConfig } from "../../src/types";
-import { RemoteWorkspaceSessionService } from "../../src/remote-control/workspace-sessions";
-import type { RemoteWorkspaceHub } from "../../src/remote-control/workspace-hub";
-import { handleManagementAPI } from "../../src/server/management-api";
-import { createManagementSessionControl, type ManagementAuthState } from "../../src/server/management-auth";
+import type { ManagementAuthState } from "../../src/server/management-auth";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
-import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
+import { replaceServiceApiTokenFile, serviceApiTokenFingerprint, writeServiceApiTokenFile } from "../../src/lib/service-secrets";
 import type { ClientLinkSupervisorStatus } from "../../src/client/link-tunnel";
 import * as clientState from "../../src/client/state";
 
@@ -86,102 +84,28 @@ async function guiHeaders(server: Server<unknown>, mutation = false): Promise<He
 }
 
 describe("client machine listener", () => {
-  test("relayed workspace prompt acknowledges acceptance before the model turn completes", async () => {
-    const oldEnabled = process.env.OCX_REMOTE_WORKSPACE_ENABLED;
-    process.env.OCX_REMOTE_WORKSPACE_ENABLED = "1";
-    const deviceId = "11111111-1111-4111-8111-111111111111";
-    const rootId = "22222222-2222-4222-8222-222222222222";
-    let finish!: () => void;
-    const held = new Promise<void>(resolve => { finish = resolve; });
-    let completed = false;
-    let observeCompletion = false;
-    let terminal!: () => void;
-    const settled = new Promise<void>(resolve => { terminal = resolve; });
-    const hub = {
-      listDevices: () => [{ id: deviceId, name: "Executor", roots: [{ id: rootId, label: "Project" }], capabilities: ["workspace.read"], online: true }],
-      connection: () => ({
-        capabilities: () => ["workspace.read"],
-        openSession: async () => ({ isOnline: () => true, invoke: async () => ({ ok: true, value: null }) }),
-        closeSession: async () => {},
-      }),
-    } as unknown as RemoteWorkspaceHub;
-    const sessions = new RemoteWorkspaceSessionService(hub, [{
-      profile: "codex", available: async () => ({ available: true }),
-      start: async () => ({ threadId: "relay-thread", prompt: async () => { await held; completed = true; }, stop: async () => { finish(); } }),
-    }], Date.now, {
-      load: () => null,
-      save: state => { if (observeCompletion && state.sessions.some(session => session.status === "ready")) terminal(); },
+  test("refuses dashboard workspace reads and prompts before any Hub call", async () => {
+    let upstreamCalls = 0;
+    const server = startMachineListener(0, {
+      state: connection("relay"), managementAuthState: authState(),
+      fetchImpl: (async () => { upstreamCalls++; return Response.json({ unexpected: true }); }) as typeof fetch,
     });
-    const hubConfig = { port: 0, hostname: "0.0.0.0", runtimeRole: "hub", hub: { managementPublicOrigin: "https://hub.example.test" }, defaultProvider: "none", providers: {} } as OcxConfig;
-    let deadline: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const created = await sessions.create({ profile: "codex", deviceId, rootId });
-      observeCompletion = true;
-      // The hub-side session the relayed request stands in for: minted by the
-      // operator pairing flow, so consent-bearing mutations may proceed. The
-      // machine listener itself only relays headers; pairing proof lives here.
-      const hubAuth: ManagementAuthState = {
-        available: true,
-        token: "ocx_admin_hub_fixture",
-        source: "environment",
-        sessions: new Map(),
-        pairingGrants: new Map(),
-      };
-      const hubSessionControl = createManagementSessionControl(hubAuth);
-      const server = startMachineListener(0, {
-        state: connection("relay"), managementAuthState: authState(),
-        fetchImpl: (async (input, init) => {
-          const request = new Request(String(input), init);
-          request.headers.set("Host", new URL(request.url).host);
-          return await handleManagementAPI(request, new URL(request.url), hubConfig, {
-            remoteWorkspaceHub: hub, remoteWorkspaceSessions: sessions,
-          }, "gui-session", hubSessionControl) ?? new Response(null, { status: 404 });
-        }) as typeof fetch,
-      });
-      servers.push(server);
-      const local = await guiHeaders(server, true);
-      hubAuth.sessions.set("ocx_session_hub", {
-        serverOrigin: "https://hub.example.test",
-        browserOrigin: local.get("X-OpenCodex-GUI-Origin")!,
-        csrfToken: "fixture-hub-csrf",
-        expiresAt: Date.now() + 60_000,
-        issuance: "pairing",
-      });
-      hubConfig.corsAllowOrigins = [local.get("Origin")!];
-      const headers = new Headers({
-        Origin: local.get("Origin")!, "Content-Type": "application/json",
-        "X-OpenCodex-Machine-Session": local.get("X-OpenCodex-API-Key")!,
-        "X-OpenCodex-Machine-GUI-Origin": local.get("X-OpenCodex-GUI-Origin")!,
-        "X-OpenCodex-Machine-CSRF-Token": local.get("X-OpenCodex-CSRF-Token")!,
-        "X-OpenCodex-API-Key": "ocx_session_hub",
-        "X-OpenCodex-GUI-Origin": local.get("X-OpenCodex-GUI-Origin")!,
-        "X-OpenCodex-CSRF-Token": "fixture-hub-csrf",
-      });
-      const prefix = "/api/machine/hub-relay/api/remote-workspace/sessions";
-      const acknowledged = await Promise.race([
-        fetch(new URL(`${prefix}/${created.id}/prompt`, server.url), { method: "POST", headers, body: JSON.stringify({ prompt: "Held turn" }) }),
-        new Promise<never>((_resolve, reject) => { deadline = setTimeout(() => reject(new Error("relay waited for model completion")), 5_000); }),
-      ]);
-      expect(acknowledged.status).toBe(202);
-      const accepted = await acknowledged.json() as { id: string; status: string; events: Array<{ sequence: number }> };
-      expect(accepted.id).toBe(created.id);
-      expect(accepted.status).toBe("running");
-      expect(completed).toBe(false);
-      const cursor = accepted.events.at(-1)!.sequence;
-      finish();
-      await settled;
-      const poll = await fetch(new URL(prefix, server.url), { headers });
-      const state = await poll.json() as { sessions: Array<{ status: string; events: Array<{ sequence: number }> }> };
-      expect(state.sessions[0]!.status).toBe("ready");
-      expect(state.sessions[0]!.events.at(-1)!.sequence).toBeGreaterThan(cursor);
-    } finally {
-      clearTimeout(deadline);
-      finish();
-      await sessions.stopAll();
-      if (oldEnabled === undefined) delete process.env.OCX_REMOTE_WORKSPACE_ENABLED;
-      else process.env.OCX_REMOTE_WORKSPACE_ENABLED = oldEnabled;
-    }
-  }, 15_000);
+    servers.push(server);
+    const local = await guiHeaders(server, true);
+    const headers = {
+      Origin: local.get("Origin")!,
+      "X-OpenCodex-Machine-Session": local.get("X-OpenCodex-API-Key")!,
+      "X-OpenCodex-Machine-GUI-Origin": local.get("X-OpenCodex-GUI-Origin")!,
+      "X-OpenCodex-Machine-CSRF-Token": local.get("X-OpenCodex-CSRF-Token")!,
+      "X-OpenCodex-API-Key": "ocx_session_hub",
+    };
+    const prefix = "/api/machine/hub-relay/api/remote-workspace/sessions";
+    expect((await fetch(new URL(prefix, server.url), { headers })).status).toBe(404);
+    expect((await fetch(new URL(prefix + "/fixture/prompt", server.url), {
+      method: "POST", headers, body: JSON.stringify({ prompt: "Fixture turn" }),
+    })).status).toBe(404);
+    expect(upstreamCalls).toBe(0);
+  });
 
   test("binds IPv4 loopback and default-denies shared/data-plane routes", async () => {
     const server = startMachineListener(0, { state: connection(), managementAuthState: authState() });
@@ -190,15 +114,18 @@ describe("client machine listener", () => {
     expect((await fetch(new URL("/healthz", server.url))).status).toBe(200);
     expect((await fetch(new URL("/readyz", server.url))).status).toBe(200);
     expect((await fetch(new URL("/opencodex-session", server.url))).headers.get("content-type")).toContain("text/html");
+    // Data plane, GUI routes and unknown machine paths stay local 404s.
     for (const path of [
-      "/v1/responses", "/v1/models", "/v1/catalog", "/api/config", "/api/usage",
-      "/api/oauth/providers", "/lab", "/oauth/callback", "/api/machine/unknown",
+      "/v1/responses", "/v1/models", "/v1/catalog", "/lab", "/oauth/callback", "/api/machine/unknown",
     ]) {
       const response = await fetch(new URL(path, server.url), { method: path === "/v1/responses" ? "POST" : "GET" });
       expect(response.status).toBe(404);
       expect((await response.json()).error).toBe("not_found");
     }
-    expect((await fetch(new URL("/api/machine/hub-relay/api/config", server.url))).status).toBe(404);
+    // Bare management paths require local authority. Direct transport has no GUI relay.
+    for (const path of ["/api/config", "/api/usage", "/api/oauth/providers", "/api/machine/hub-relay/api/config"]) {
+      expect({ path, status: (await fetch(new URL(path, server.url))).status }).toEqual({ path, status: path.startsWith("/api/machine/") ? 404 : 401 });
+    }
     // A known machine endpoint with an unsupported method now reaches the
     // authenticated method restriction instead of collapsing to a bare 404.
     expect((await fetch(new URL("/api/machine/status", server.url), { method: "POST" })).status).toBe(401);
@@ -677,5 +604,278 @@ describe("client machine listener in link mode", () => {
     expect(readFileSync(file, "utf8")).toBe(content);
     // Served locally: the Child's own evidence, never relayed to the Home.
     expect(upstream).toHaveLength(0);
+  });
+
+});
+
+describe("hub client management relay", () => {
+  const storedHubSession = {
+    kind: "relay" as const,
+    token: `ocx_hub_relay_${"s".repeat(43)}`,
+  };
+
+  test.each([
+    ["unauthenticated account read", "GET", "/api/codex-auth/accounts"],
+    ["unauthenticated mutation", "POST", "/api/config"],
+  ])("refuses an %s before hub credential use", async (_name, method, path) => {
+    writeHubCredential(storedHubSession, connection());
+    let upstreamCalls = 0;
+    const server = startMachineListener(0, {
+      state: connection(), managementAuthState: authState(),
+      fetchImpl: (async () => {
+        upstreamCalls++;
+        return Response.json({ unexpected: true });
+      }) as typeof fetch,
+    });
+    servers.push(server);
+    const response = await fetch(new URL(path, server.url), { method });
+    expect({ status: response.status, upstreamCalls }).toEqual({ status: 401, upstreamCalls: 0 });
+  });
+
+  test("a machine GUI session alone cannot use the stored hub credential", async () => {
+    let upstreamCalls = 0;
+    const server = startMachineListener(0, {
+      state: connection("relay"), managementAuthState: authState(),
+      fetchImpl: (async () => {
+        upstreamCalls++;
+        return Response.json({ unexpected: true });
+      }) as typeof fetch,
+    });
+    servers.push(server);
+    const local = await guiHeaders(server);
+    writeHubCredential(storedHubSession, connection("relay"));
+    const headers = {
+      "X-OpenCodex-Machine-Session": local.get("X-OpenCodex-API-Key")!,
+      "X-OpenCodex-Machine-GUI-Origin": local.get("X-OpenCodex-GUI-Origin")!,
+    };
+    const response = await fetch(new URL("/api/machine/hub-relay/api/usage", server.url), { headers });
+    expect({ status: response.status, upstreamCalls }).toEqual({ status: 401, upstreamCalls: 0 });
+  });
+
+  test.each([
+    ["/api/usage", "hub", 200, 1],
+    ["/api/quota-pool", "hub", 200, 1],
+    ["/opencodex-session", "local", 401, 0],
+  ] as const)("keeps caller and local admin credentials separate at %s (%s)", async (path, authority, status, calls) => {
+    const auth = authState();
+    if (!auth.available) throw new Error("fixture auth unavailable");
+    const rawToken = authority === "local" ? auth.token : `ocx_admin_${"h".repeat(43)}`;
+    const forwarded: Array<string | null> = [];
+    const server = startMachineListener(0, {
+      state: connection("relay"), managementAuthState: auth,
+      fetchImpl: (async (_input, init) => {
+        forwarded.push(new Headers(init?.headers).get("x-opencodex-api-key"));
+        return Response.json({ ok: true });
+      }) as typeof fetch,
+    });
+    servers.push(server);
+    const local = await guiHeaders(server);
+    const response = await fetch(new URL(`/api/machine/hub-relay${path}`, server.url), {
+      headers: {
+        "X-OpenCodex-Machine-Session": local.get("X-OpenCodex-API-Key")!,
+        "X-OpenCodex-Machine-GUI-Origin": local.get("X-OpenCodex-GUI-Origin")!,
+        "X-OpenCodex-API-Key": rawToken,
+      },
+    });
+    expect({ status: response.status, calls: forwarded.length }).toEqual({ status, calls });
+    if (calls) expect(forwarded).toEqual([rawToken]);
+  });
+
+  test("only the caller's two CSRF-bound sessions can sign out on the Hub", async () => {
+    const { loadConfig, saveConfig } = await import("../../src/config");
+    const { startServer } = await import("../../src/server");
+    const hubAuth = authState();
+    if (!hubAuth.available) throw new Error("fixture auth unavailable");
+    let hubOrigin = "";
+    let upstreamCalls = 0;
+    const machine = startMachineListener(0, {
+      state: connection("relay"), managementAuthState: authState(),
+      fetchImpl: (async (input, init) => {
+        upstreamCalls++;
+        const target = new URL(String(input));
+        return fetch(hubOrigin + target.pathname + target.search, init);
+      }) as typeof fetch,
+    });
+    servers.push(machine);
+    const browserOrigin = machine.url.origin;
+    saveConfig({
+      ...loadConfig(), runtimeRole: "hub", corsAllowOrigins: [browserOrigin],
+      apiKeys: [{ id: "fixture-enrolled", name: "fixture-enrolled", key: "fixture-data-key", createdAt: "2026-01-01T00:00:00.000Z" }],
+    });
+    const hub = startServer(0, { managementAuthState: hubAuth });
+    try {
+      hubOrigin = new URL(`http://127.0.0.1:${hub.port}`).origin;
+      const token = "ocx_session_hub_logout_fixture";
+      hubAuth.sessions.set(token, {
+        serverOrigin: hubOrigin, browserOrigin, csrfToken: "hub-logout-csrf",
+        expiresAt: Date.now() + 60_000, issuance: "loopback",
+      });
+      const local = await guiHeaders(machine, true);
+      const headers = {
+        Origin: browserOrigin,
+        "X-OpenCodex-Machine-Session": local.get("X-OpenCodex-API-Key")!,
+        "X-OpenCodex-Machine-GUI-Origin": local.get("X-OpenCodex-GUI-Origin")!,
+        "X-OpenCodex-Machine-CSRF-Token": local.get("X-OpenCodex-CSRF-Token")!,
+        "X-OpenCodex-API-Key": token,
+        "X-OpenCodex-GUI-Origin": browserOrigin,
+        "X-OpenCodex-CSRF-Token": "hub-logout-csrf",
+      };
+      const path = "/api/session/logout";
+      const logout = (overrides: Partial<typeof headers> = {}, relayPath = "/api/machine/hub-relay" + path) =>
+        fetch(new URL(relayPath, machine.url), { method: "POST", headers: { ...headers, ...overrides } });
+      const wrongMachineCsrf = await logout({ "X-OpenCodex-Machine-CSRF-Token": "wrong" });
+      const leaseLogout = await logout({ "X-OpenCodex-API-Key": storedHubSession.token });
+      const bareLogout = await logout({}, path);
+      expect(upstreamCalls).toBe(0);
+      const wrongHubCsrf = await logout({ "X-OpenCodex-CSRF-Token": "wrong" });
+      expect(hubAuth.sessions.has(token)).toBe(true);
+      const response = await logout();
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ok: true });
+      expect(hubAuth.sessions.has(token)).toBe(false);
+      expect([wrongMachineCsrf.status, leaseLogout.status, bareLogout.status, wrongHubCsrf.status]).toEqual([401, 401, 404, 401]);
+      expect((await fetch(hubOrigin + "/api/provider-quotas", {
+        headers: { "X-OpenCodex-API-Key": token, "X-OpenCodex-GUI-Origin": browserOrigin },
+      })).status).toBe(401);
+    } finally {
+      await hub.stop(true);
+    }
+  });
+
+  test.each([false, true])("blocks client stop without forwarding (prefixed: %s)", async prefixed => {
+    const auth = authState();
+    if (!auth.available) throw new Error("fixture auth unavailable");
+    let upstreamCalls = 0;
+    const server = startMachineListener(0, {
+      state: connection("relay"), managementAuthState: auth,
+      fetchImpl: (async () => {
+        upstreamCalls++;
+        return Response.json({ unexpected: true });
+      }) as typeof fetch,
+    });
+    servers.push(server);
+    const local = await guiHeaders(server, true);
+    writeHubCredential(storedHubSession, connection("relay"));
+    const headers: Record<string, string> = prefixed ? {
+      Origin: local.get("Origin")!,
+      "X-OpenCodex-Machine-Session": local.get("X-OpenCodex-API-Key")!,
+      "X-OpenCodex-Machine-GUI-Origin": local.get("X-OpenCodex-GUI-Origin")!,
+      "X-OpenCodex-Machine-CSRF-Token": local.get("X-OpenCodex-CSRF-Token")!,
+      "X-OpenCodex-API-Key": storedHubSession.token,
+    } : { "X-OpenCodex-API-Key": auth.token };
+    const prefix = prefixed ? "/api/machine/hub-relay" : "";
+    const cases = [
+      ["POST", "/api/stop"], ["POST", "/api/Stop"], ["POST", "/Api/STOP"],
+      ["POST", "/api//stop"], ["POST", "/api/stop/"], ["POST", "/api/%73top"],
+      ["POST", "/api/st%6fp"], ["POST", "/api/%2fstop"], ["POST", "/api/%2573top"],
+      ["GET", "/api/codex-auth/Accounts"], ["GET", "/api/codex-auth//accounts"],
+      ["GET", "/api/codex-auth/accounts/"], ["GET", "/api/codex-auth/%61ccounts"],
+      ["GET", "/api/codex-auth/accounts?unknown=1"],
+      ["GET", "/api/oauth/accounts?provider=openai&provider=anthropic"],
+      ["GET", "/api/usage?%72efresh=1"],
+    ];
+    const observed = [];
+    for (const [method, path] of cases) {
+      const response = await fetch(new URL(prefix + path, server.url), { method, headers });
+      observed.push([path, response.status, upstreamCalls]);
+    }
+    expect(observed).toEqual(cases.map(([, path]) => [path, 404, 0]));
+  });
+
+  test.each([
+    ["Host", "unexpected.example.test", false],
+    ["Origin", "https://unexpected.example.test", false],
+    ["Host", "unexpected.example.test", true],
+    ["Origin", "https://unexpected.example.test", true],
+  ] as const)("rejects a foreign %s (%s, prefixed: %j)", async (header, value, prefixed) => {
+    const auth = authState();
+    if (!auth.available) throw new Error("fixture auth unavailable");
+    let upstreamCalls = 0;
+    const server = startMachineListener(0, {
+      state: connection("relay"), managementAuthState: auth,
+      fetchImpl: (async () => {
+        upstreamCalls++;
+        return Response.json({ unexpected: true });
+      }) as typeof fetch,
+    });
+    servers.push(server);
+    const local = await guiHeaders(server);
+    writeHubCredential(storedHubSession, connection());
+    const credentials: Record<string, string> = prefixed ? {
+      "X-OpenCodex-Machine-Session": local.get("X-OpenCodex-API-Key")!,
+      "X-OpenCodex-Machine-GUI-Origin": local.get("X-OpenCodex-GUI-Origin")!,
+      "X-OpenCodex-API-Key": storedHubSession.token,
+    } : { "X-OpenCodex-API-Key": auth.token };
+    const headers = new Headers(credentials);
+    if (prefixed && header === "Origin") headers.delete("X-OpenCodex-Machine-Session");
+    headers.set(header, value);
+    const path = prefixed ? "/api/machine/hub-relay/api/usage" : "/api/usage";
+    const response = await fetch(new URL(path, server.url), { headers });
+    expect({ status: response.status, upstreamCalls }).toEqual({ status: 403, upstreamCalls: 0 });
+  });
+
+  test.each([
+    ["POST", "/api/config"],
+    ["GET", "/api/config"],
+    ["GET", "/api/codex-auth/accounts?refresh=1"],
+  ])("reserves the stored session for allowlisted reads (%s %s)", async (method, path) => {
+    const auth = authState();
+    if (!auth.available) throw new Error("fixture auth unavailable");
+    const owner = connection();
+    writeHubCredential(storedHubSession, owner);
+    let upstreamCalls = 0;
+    const server = startMachineListener(0, {
+      state: owner, managementAuthState: auth,
+      fetchImpl: (async () => {
+        upstreamCalls++;
+        return Response.json({ unexpected: true });
+      }) as typeof fetch,
+    });
+    servers.push(server);
+    const response = await fetch(new URL(path, server.url), {
+      method, headers: { "X-OpenCodex-API-Key": auth.token },
+    });
+    expect({ status: response.status, upstreamCalls }).toEqual({ status: 404, upstreamCalls: 0 });
+  });
+
+  test("relays an admin-authenticated account read and answers machine routes locally", async () => {
+    const enrolled = writeServiceApiTokenFile(`ocx_data_${"d".repeat(40)}`);
+    const owner = { ...connection(), tokenFingerprint: enrolled.fingerprint };
+    const publish = (client: OcxClientConnectionConfig) =>
+      writeFileSync(join(root, "config.json"), JSON.stringify({ port: 10100, providers: {}, runtimeRole: "client", client }));
+    publish(owner);
+    writeHubCredential(storedHubSession, owner);
+    const auth = authState();
+    if (!auth.available) throw new Error("fixture auth unavailable");
+    const sent: Array<{ url: string; apiKey: string | null }> = [];
+    const server = startMachineListener(0, {
+      state: owner, managementAuthState: auth,
+      fetchImpl: (async (input, init) => {
+        sent.push({ url: String(input), apiKey: new Headers(init?.headers).get("x-opencodex-api-key") });
+        return Response.json({ accounts: [{ id: "chatgpt-1" }] });
+      }) as typeof fetch,
+    });
+    servers.push(server);
+    const relayed = await fetch(new URL("/api/codex-auth/accounts", server.url), {
+      headers: { "X-OpenCodex-API-Key": auth.token },
+    });
+    expect(relayed.status).toBe(200);
+    expect(await relayed.json()).toEqual({ accounts: [{ id: "chatgpt-1" }] });
+    expect(sent).toEqual([{ url: "https://hub.example.test/api/hub-relay/read/api/codex-auth/accounts", apiKey: storedHubSession.token }]);
+
+    const replacement = replaceServiceApiTokenFile(`ocx_data_${"e".repeat(40)}`);
+    const rotated = { ...owner, tokenFingerprint: replacement.fingerprint };
+    const rotatedCredential = { ...storedHubSession, token: `ocx_hub_relay_${"b".repeat(43)}` };
+    publish(rotated);
+    writeHubCredential(rotatedCredential, rotated);
+    const afterRotation = await fetch(new URL("/api/codex-auth/accounts", server.url), {
+      headers: { "X-OpenCodex-API-Key": auth.token },
+    });
+    expect(afterRotation.status).toBe(200);
+    expect(sent.at(-1)?.apiKey).toBe(rotatedCredential.token);
+
+    sent.length = 0;
+    expect((await fetch(new URL("/api/machine/status", server.url), { headers: await guiHeaders(server) })).status).toBe(200);
+    expect(sent).toHaveLength(0);
   });
 });

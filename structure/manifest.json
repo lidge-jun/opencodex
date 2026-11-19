@@ -729,6 +729,21 @@
       ]
     },
     {
+      "path": "providers/anthropic-cache-lifecycle.md",
+      "tier": 4,
+      "title": "Anthropic Image-Context Recovery",
+      "scope": "Default-off one-shot image-413 recovery and its physical credential, destination, and budget fences.",
+      "documents": [
+        "src/adapters/anthropic.ts",
+        "src/images/loop.ts",
+        "src/server/responses/adapter-dispatch.ts",
+        "src/server/responses/anthropic-image-context.ts",
+        "src/server/responses/image-context-recovery.ts",
+        "src/server/responses/request-transport.ts",
+        "src/web-search/loop.ts"
+      ]
+    },
+    {
       "path": "providers/anthropic-key-billing.md",
       "tier": 4,
       "title": "Anthropic API-key Billing Recovery",
@@ -1437,9 +1452,15 @@
       "path": "remote-link.md",
       "tier": 3,
       "title": "Remote Link",
-      "scope": "SSH machine-link building blocks: OpenSSH argument policy, ssh_config candidates, tunnel lifecycle reducer, the private link store, and standalone pairing-grant delivery.",
+      "scope": "SSH machine linking, tunnel and link storage, pairing, and connected-client management relay.",
       "documents": [
         "src/link/",
+        "src/client/hub-relay.ts",
+        "src/client/hub-session.ts",
+        "src/remote/hub-management-relay.ts",
+        "src/server/hub-relay-auth.ts",
+        "src/server/index/passive-management-read.ts",
+        "src/client/machine-listener.ts",
         "src/client/link-home.ts",
         "src/client/link-parity-reporter.ts",
         "src/client/runtime-restart.ts",

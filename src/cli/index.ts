@@ -168,7 +168,7 @@ import { startArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
 import { abandonedTeardownIsSafeToFinish, assertConnectedClientStopSupported, classifyStopRole, clearRestoredStopReceipts, configuredStopEndpoint, connectedClientStopSkipLine, isRegisteredServiceStopTarget, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, proveStandaloneStopRecord, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary, stopOwnershipRefused, unclassifiedStopTarget, unsupportedConnectedStop, verifyConnectedStopTarget, type LinkStopPreflight, type StopTargetProof } from "./stop-restore";
 import { stopRestoreWriteGuard } from "./stop-restore-guard";
-import { startClientRuntimeUnderOwnershipLease } from "./client-start-fence";
+import { startConnectedClientWithOwnershipFence } from "./client-start-fence";
 import { recoverStartJournalAfterOwnerRecheck, recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
 import { handledSignalExitCode } from "../lib/handled-signal-exit";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
@@ -491,14 +491,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     if (rotationGate.kind === "recovery-required" || rotationGate.kind === "unsafe") {
       throw new Error(clientStartupRefusalMessage(rotationGate.reason));
     }
-    const { startClientRuntime } = await import("../client/runtime");
-    // Same lease-held owner recheck as the server path below: this branch binds and publishes too.
-    await startClientRuntimeUnderOwnershipLease({
-      acquireLease: () => acquireOwnershipMutationLease(serviceStatePaths()),
-      decide: () => serviceChildOwnershipDecisionForClassifiedChild(supervisedServiceChild),
-      stayOut: refusal => { console.error("❌ " + refusal); process.exit(serviceStayOutExitCode()); },
-      start: afterPublish => startClientRuntime({ port: requestedPort, block: options.block, afterPublish }),
-    });
+    await startConnectedClientWithOwnershipFence({ connection: clientState.value, siblingStart, supervisedServiceChild, requestedPort, block: options.block });
     return;
   }
 

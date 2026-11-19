@@ -37,6 +37,9 @@ Fetch-based Anthropic model iterations use the [thinking-signature recovery cont
 
 Fetch-based Anthropic image bridge account recovery follows [the revoked-token contract](../providers/anthropic-account-pool.md#revoked-oauth-access-token-recovery), including output commitment and send-budget gates.
 
+The [provider timeout policy](../transports/timeouts.md#provider-scoped-budgets) covers the
+routed model iterations. Image and video generation use separate tool deadlines.
+
 ## Video bridge destination
 
 `planVideoBridge` in `src/images/plan.ts` decides where `video_gen` submit and poll requests go and

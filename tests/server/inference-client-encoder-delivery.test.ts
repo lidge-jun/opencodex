@@ -299,6 +299,7 @@ describe("deliverAdapterResponse through a client encoder", () => {
       } as unknown as Args[0],
       {
         parsed,
+        route: { provider: { adapter: "anthropic", baseUrl: "https://upstream.test" } },
         translatorBudget: createTestTranslatorBudget(),
         toolBridgeMaps,
         rememberKiroDeliveredFinalAnswer: () => {},

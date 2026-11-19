@@ -10,6 +10,7 @@ use crate::platform::{
 use crate::relay_auth::token_fingerprint_hex;
 
 pub const CHILD_STATE_SCHEMA: &str = "ocx.child.state/1";
+pub(crate) const CATALOG_FILENAME: &str = "opencodex-catalog.json";
 
 #[derive(Debug, Clone)]
 pub struct ChildPaths {
@@ -48,7 +49,7 @@ impl ChildPaths {
     }
 
     pub fn codex_catalog_path(&self) -> PathBuf {
-        self.codex_home.join("opencodex-catalog.json")
+        self.codex_home.join(CATALOG_FILENAME)
     }
 
     pub fn codex_models_cache_path(&self) -> PathBuf {

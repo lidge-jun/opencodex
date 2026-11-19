@@ -265,9 +265,12 @@ export function createDailyTelemetryAccumulator(day: string): DailyTelemetryAccu
       errors[cause as TelemetryFailureCause] = (errors[cause as TelemetryFailureCause] ?? 0) + 1;
     }
 
-    if (entry.provider === "combo" && entry.attempts && entry.attempts.length > 0) {
-      for (const attempt of entry.attempts) {
-        addModelAttribution(attempt.provider, attempt.model, attempt.usage);
+    const attempts = entry.attempts;
+    const isCombo = entry.provider === "combo";
+    if (attempts?.length && (isCombo || attempts.some(attempt => attempt.usage
+      && (attempt.provider !== entry.provider || attempt.model !== entry.model)))) {
+      for (const attempt of attempts) {
+        if (isCombo || attempt.usage) addModelAttribution(attempt.provider, attempt.model, attempt.usage);
       }
     } else {
       addModelAttribution(entry.provider, entry.model, entry.usage);

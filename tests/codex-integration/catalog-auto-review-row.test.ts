@@ -218,7 +218,9 @@ test("an explicit override may target the hidden reviewer without stamping that 
 
 test("router keeps the exact reviewer wire id and fails without canonical OpenAI", () => {
   expect([...CODEX_INTERNAL_OPENAI_MODELS]).toEqual([reviewer]);
-  expect(readFileSync(repoPath("src/router.ts"), "utf8")).toMatch(/import\s*\{[^}]*\bCODEX_INTERNAL_OPENAI_MODELS\b[^}]*\}\s*from\s*["']\.\/codex\/control-plane-models["']/);
+  // The router takes the bare-family predicate from control-plane-models, which owns the reserved set.
+  expect(readFileSync(repoPath("src/router.ts"), "utf8")).toMatch(/import\s*\{[^}]*\b(?:CODEX_INTERNAL_OPENAI_MODELS|isBareOpenAiFamilyModel)\b[^}]*\}\s*from\s*["']\.\/codex\/control-plane-models["']/);
+  expect(readFileSync(repoPath("src/codex/control-plane-models.ts"), "utf8")).toMatch(/CODEX_INTERNAL_OPENAI_MODELS\.has\(modelId\)/);
   expect(routeModel(nativeConfig, reviewer)).toMatchObject({ providerName: "openai", modelId: reviewer });
   expect(() => routeModel(otherConfig, reviewer)).toThrow(NoEnabledOpenAiProviderError);
 });

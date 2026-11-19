@@ -80,6 +80,7 @@ import { MIN_USAGE_LEDGER_MAX_BYTES } from "../../usage/retention-contract";
 // parser here would cycle back through config loading and run Cursor detection during validation.
 import { COMBO_NAMESPACE, comboConfigIssues, lexicalDecisionModelBase } from "../../combos/types";
 import { routingProfileIssues } from "../../routing/profile";
+import { agyAcpConfigIssues } from "./agy-acp-references";
 import { POLICY_NAMESPACE } from "../../routing/profile-namespace";
 import { providerDestinationConfigError } from "../../lib/destination-policy";
 import { providerTlsProfileConfigError } from "../../lib/provider-tls-profile";
@@ -418,6 +419,9 @@ export const configSchema = z.object({
   }).optional().catch(undefined),
   // Model ids excluded from the Grok Build managed block (dashboard switches).
   grokExcludedModels: z.array(z.string()).optional(),
+  // Providers the dashboard's suggested combos leave out (Combos page).
+  comboSuggestionExcludedProviders: z.array(z.string().trim().min(1).max(256)).max(256)
+    .transform((names) => [...new Set(names)]).optional().catch(undefined),
   // Invalid values degrade to undefined ("auto") instead of failing the whole
   // parse: a hand-edited typo must never trip the backup-and-defaults repair
   // path below and wipe providers/pool accounts. Warning emitted in loadConfig.
@@ -942,6 +946,13 @@ export const configSchema = z.object({
         }
       }
     }
+  }
+  for (const issue of agyAcpConfigIssues(config as Parameters<typeof agyAcpConfigIssues>[0])) {
+    // Preserve non-provider identifiers for load-time salvage; diagnostics mask them at serialization.
+    const path = issue.path[0] === "providers"
+      ? issue.path.map(segment => typeof segment === "string" ? redactSecretString(segment) : segment)
+      : issue.path;
+    ctx.addIssue({ code: "custom", path, message: issue.message });
   }
   const routingProfiles = (config as { routingProfiles?: unknown }).routingProfiles;
   if (routingProfiles !== undefined) {

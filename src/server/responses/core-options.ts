@@ -2,14 +2,14 @@ import type { ClientFacingModelLabel } from "../../lib/error-destination";
 import type { HostedAdvisorSelection } from "../../claude/inbound-content-options";
 import type { CodexAccountModelRefusal } from "../../combos/failover";
 import type { NativeResponseControl } from "./native-response-control";
-import type { AdapterEvent, OcxUsage, OcxProviderContinuationState, OcxConfig } from "../../types";
+import type { AdapterEvent, OcxUsage, OcxProviderContinuationState, OcxConfig, OcxProviderConfig } from "../../types";
 import type { RouteResult } from "../../router";
 import type { SingleUseDispatchPermit } from "../../lib/request-execution-budget";
 import type { CodexAuthPolicyConfig, CodexAuthContext } from "../../codex/auth-context";
 import type { AdmissionLease } from "../../lib/admission";
 import type { DataPlaneAdmission } from "../auth-cors";
 import type { AdmissionModelScope } from "../admission-model-scope";
-import { resolveCodexModelEntitlements } from "../../codex/model-entitlements";
+import type { resolveCodexModelEntitlements } from "../../codex/model-entitlements";
 import type { ResponsesTerminalStatus } from "../../bridge";
 import type { ResponsesTerminalRepairScheduler } from "../responses-terminal-repair";
 import type { BunRuntimeGateInput } from "./ws-upstream";
@@ -239,6 +239,8 @@ export interface HandleResponsesOptions {
   protocolSource?: import("./core-combo-native").ComboProtocolSource;
   /** Internal transport identity for route-scoped upstream compatibility policy. */
   inboundTransport?: "websocket";
+  /** ACP refusal signal captured from the original HTTP request, before any bridge translation. */
+  agyAcpUnattendedHttpTurn?: boolean;
   /**
    * Set by the HTTP `/v1/responses` ingress only: a streaming combo turn whose target selection
    * outlasts `COMBO_SELECTION_KEEPALIVE_THRESHOLD_MS` commits a 200 SSE head and sends keepalive
@@ -272,6 +274,9 @@ export interface HandleResponsesOptions {
    * can carry the binding to the context that writes the row.
    */
   onBridgeUsageBound?: () => void;
+  /** A web-search deadline has been recorded on the child before its failure is emitted. */
+  onWebSearchLocalFailure?: () => void;
+  onHostedWebSearchStream?: () => void;
   /** Child-owned prepaid initial send; capacity remains charged until dispatch or unsent release. */
   comboInitialSend?: { permit: SingleUseDispatchPermit; producerOwned?: boolean };
   /** Exact externally booked combo hop, used for its child's spend preflight and send reports. */
@@ -340,6 +345,11 @@ export interface HandleResponsesOptions {
   responsesFileImage?: boolean;
   /** Set only by the Chat or Messages ingress on an eligible Antigravity route; see {@link DirectRequestOption}. */
   directRequest?: DirectRequestOption;
+}
+
+/** The internal Responses handoff for /responses/compact keeps the endpoint's global budgets. */
+export function responsesTimeoutProvider(options: HandleResponsesOptions, provider: OcxProviderConfig): OcxProviderConfig | undefined {
+  return options.compactionRecoveryKind === "compaction-v1" ? undefined : provider;
 }
 
 /** Values shared by the call, not a bag of mutable pipeline state. */

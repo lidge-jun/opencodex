@@ -23,6 +23,7 @@ import { chatConversationToIr, chatIrRouteEvidence, withDirectChatConversation, 
 import { antigravityDirectDeclineReason } from "./antigravity-direct-eligibility";
 import { normalizeChatImageParts } from "../chat/image-parts";
 import { chatHasInstructionImage } from "../adapters/claude-cli/instruction-images";
+import { AGY_ACP_INTERACTIVE_ONLY, AGY_ACP_LOCAL_ONLY, isUnattendedAgyAcpHttpTurn } from "../adapters/agy-acp/policy";
 import {
   chatCompletionsErrorResponse,
   collectChatCompletion,
@@ -498,6 +499,7 @@ async function handleChatCompletionsWithBudget(
   // Caller-owned only: stored-main enrichment below is sidecar authority, never Direct authority.
   const callerDirectAuth = captureCallerDirectAuth(req.headers, config);
   let openAiSidecarAuth = nativeCallerAuth;
+  const agyAcpUnattendedHttpTurn = isUnattendedAgyAcpHttpTurn(req.headers, chatBody);
   const headers = new Headers({ "content-type": "application/json" });
   // Internal bridge metadata; the Go resolver scopes and hashes it before upstream use.
   const openCodeSession = req.headers.get("x-opencode-session");
@@ -562,6 +564,7 @@ async function handleChatCompletionsWithBudget(
   const finalizeNativeLog = createFinalRequestLog(logIds, logCtx).finish;
   const upstream = await handleResponses(internalReq, config, logCtx, {
     clientModelLabel: clientFacingModelLabel(requestedModel),
+    agyAcpUnattendedHttpTurn,
     openAiSidecarAuth,
     allowStoredOpenAiSidecarAuth: !!(callerAuthorizationRoute && settledRoute
       && !isCanonicalOpenAiForwardProvider(settledRoute.provider)),
@@ -701,6 +704,9 @@ async function handleChatCompletionsWithBudget(
       // Structured model_not_found must win over classifyError's generic remaps.
       classified.code = "model_not_found";
       classified.type = "invalid_request_error";
+    } else if (upstream.status === 403 && isProxyError(upstream) && (upstreamCode === AGY_ACP_INTERACTIVE_ONLY || upstreamCode === AGY_ACP_LOCAL_ONLY)) {
+      classified.code = upstreamCode;
+      classified.type = "permission_error";
     } else if (upstreamCode === UNDECLARED_TOOL_CALL_ERROR_CODE) {
       // The guard's deterministic refusal keeps its wire identity — same code the
       // streamed `response.failed` frame and the Anthropic surface carry.

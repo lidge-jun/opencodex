@@ -1,3 +1,4 @@
+import { isAllowedRequestOrigin } from "../server/auth-cors";
 import { recordLinkDiagnostic } from "../link/diagnostics";
 import type { Server } from "bun";
 import { loadConfig } from "../config";
@@ -18,6 +19,8 @@ import { isLinkConnection, readClientConnectionState } from "./state";
 import { handleMachineApi, type HubReachability, type MachineApiDeps } from "./machine-api";
 import { MACHINE_GUI_ORIGIN_HEADER, requireMachineAuth } from "./machine-auth";
 import { HUB_RELAY_REQUEST_BODY_MAX_BYTES, relayHubManagementRequest } from "./hub-relay";
+import { currentHubRelayAdmission } from "./hub-session";
+import { hubRelayBootstrapAllowed, hubRelayLogoutAllowed, hubRelayReadAllowed, hubRelayRequestTarget } from "../remote/hub-management-relay";
 import { createLinkKeySource, handleLinkIngress, type LinkIngress, type LinkKeySourceDeps } from "./link-ingress";
 import type { LinkTunnelGate } from "./link-relay";
 import { createLinkWebsocketRelay, type LinkWebsocketRelayDeps } from "./link-websocket";
@@ -49,6 +52,11 @@ import { clientRestartRollbackAction } from "./runtime-restart";
 import { isLinkConnectionGeneration } from "../link/relay-auth";
 
 const VERSION = packageVersion("0.0.0");
+/** Machine, Link, and stop paths are reserved for the local runtime. */
+function clientLocalApiPath(pathname: string): boolean {
+  return pathname === "/api/machine" || pathname.startsWith("/api/machine/")
+    || pathname === "/api/stop" || pathname === "/api/link/status" || pathname === LINK_DIAGNOSTICS_ROUTE;
+}
 const GUI_SPA_PATHS = new Set([
   "/dashboard", "/startup", "/providers", "/models", "/subagents",
   "/logs", "/usage", "/storage", "/codex-set", "/integrations",
@@ -107,6 +115,13 @@ function machinePolicyConfig(config: OcxConfig): OcxConfig {
   return { ...config, hostname: "127.0.0.1" };
 }
 
+/** Bare management candidates enter the Hub client's authentication and route policy. */
+function relayedManagementPath(url: URL, linkMode: boolean): boolean {
+  if (linkMode) return false;
+  if (url.pathname.startsWith("/api/machine/hub-relay/")) return false;
+  return url.pathname.startsWith("/api/") && !clientLocalApiPath(url.pathname);
+}
+
 export function machineRouteAllowed(url: URL, req: Request, relayEnabled: boolean, linkMode = false): boolean {
   if (req.headers.get("upgrade")) return false;
   if (linkMode && linkRouteAllowed(url, req)) return true;
@@ -119,6 +134,8 @@ export function machineRouteAllowed(url: URL, req: Request, relayEnabled: boolea
   if (linkMode && (req.method === "GET" || req.method === "HEAD") && (path === "/api/link/status" || path === LINK_DIAGNOSTICS_ROUTE)) return true;
   if (req.method === "POST" && (path === "/api/machine/sync" || path === "/api/machine/shim" || path === "/api/machine/disconnect")) return true;
   if (relayEnabled && path.startsWith("/api/machine/hub-relay/")) return true;
+  // CLI reads go through this listener even when the browser uses the direct Hub transport.
+  if (relayedManagementPath(url, linkMode)) return true;
   // Known machine endpoints are admitted for every method so an unsupported
   // method reaches the authenticated method restriction (403) instead of a
   // bare 404 that hides the endpoint entirely.
@@ -240,6 +257,10 @@ export function startMachineListener(
         const linkBody = isLinkConnectionGeneration(connectionGeneration) ? { state: "available", connectionGeneration } : { state: "available" };
         return Response.json({ ...identity, status: "ready", ...facts, ...(link ? { link: linkBody } : {}) });
       }
+      if ((relayedManagementPath(url, linkMode) || (relayEnabled && url.pathname.startsWith("/api/machine/hub-relay/")))
+        && !isAllowedRequestOrigin(req, config)) {
+        return Response.json({ error: "origin_rejected" }, { status: 403 });
+      }
       if (url.pathname.startsWith("/api/machine/hub-relay/")) {
         if (!relayEnabled) return json404(req);
         const prefix = "/api/machine/hub-relay";
@@ -265,11 +286,46 @@ export function startMachineListener(
         }
         const authError = requireMachineAuth(req, managementAuth, config);
         if (authError) return authError;
-        const suffix = `${url.pathname.slice(prefix.length)}${url.search}`;
+        const callerCredential = req.headers.get("x-opencodex-api-key");
+        if (managementPrincipal(req, managementAuth, config)
+          || (!callerCredential && url.pathname !== `${prefix}/opencodex-session`)) {
+          return Response.json({ error: "caller hub credential required" }, { status: 401 });
+        }
+        const raw = hubRelayRequestTarget(req);
+        if (!raw.startsWith(prefix + "/")) return json404(req);
+        const suffix = raw.slice(prefix.length);
+        if (!hubRelayReadAllowed(req.method, suffix) && !hubRelayBootstrapAllowed(req.method, suffix)
+          && !hubRelayLogoutAllowed(req.method, suffix)) return json404(req);
         const response = await relayHubManagementRequest(req, suffix, {
           managementUrl: connection.managementUrl,
           browserOrigin: req.headers.get(MACHINE_GUI_ORIGIN_HEADER) ?? req.headers.get("Origin") ?? "",
         }, { fetchImpl: deps.fetchImpl });
+        if (response.status === 401) hubReachability = "unauthorized";
+        else if (response.status >= 500) hubReachability = "offline";
+        else hubReachability = "online";
+        return response;
+      }
+      // A loopback bootstrap grants the machine GUI session. Only the local admin token
+      // grants access to the persisted Hub relay credential.
+      if (relayedManagementPath(url, linkMode)) {
+        const localPrincipal = managementPrincipal(req, managementAuth, config);
+        const localAdmin = localPrincipal === "admin-token";
+        if (!localAdmin) {
+          const authError = requireMachineAuth(req, managementAuth, config);
+          if (authError) return authError;
+          if (localPrincipal || !req.headers.get("x-opencodex-api-key")) {
+            return Response.json({ error: "caller hub credential required" }, { status: 401 });
+          }
+        }
+        const suffix = hubRelayRequestTarget(req);
+        if (!hubRelayReadAllowed(req.method, suffix)) return json404(req);
+        const readCredential = localAdmin
+          ? (method: string, target: string) => currentHubRelayAdmission(connection, method, target)
+          : undefined;
+        const response = await relayHubManagementRequest(req, suffix, {
+          managementUrl: connection.managementUrl,
+          browserOrigin: req.headers.get(MACHINE_GUI_ORIGIN_HEADER) ?? req.headers.get("Origin") ?? "",
+        }, { fetchImpl: deps.fetchImpl, readCredential });
         if (response.status === 401) hubReachability = "unauthorized";
         else if (response.status >= 500) hubReachability = "offline";
         else hubReachability = "online";

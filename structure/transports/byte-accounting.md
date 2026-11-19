@@ -379,6 +379,7 @@ The decoded and raw passes
 retain the original-offset mapping and mask a credential-bearing element through the rest
 of the input. `tests/lib/redact.test.ts` counts delimiter searches and scanned characters across doubled inputs
 without a machine-speed deadline, as well as malformed and escaped credential coverage.
+The redactor masks bare Hub relay leases and values carried by `X-OpenCodex-API-Key`.
 
 `src/server/response-log-body.ts` forwards raw response chunks on downstream demand.
 Diagnostic retention is limited to 32 MiB for JSON and an 8 KiB prefix for other

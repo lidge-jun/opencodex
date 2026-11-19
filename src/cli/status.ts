@@ -12,7 +12,7 @@ import { inspectDesktopSupervision } from "../service/desktop-supervision.mjs";
 import { collectStartupHealth, startupHealthReadBudgetMs, type StartupHealth } from "../codex/autostart-health";
 import { getCodexRoutingKind } from "../codex/inject";
 import { missingOwnedCatalogPath } from "../codex/inject/config-toml";
-import { CODEX_CONFIG_PATH } from "../codex/paths";
+import { CODEX_CONFIG_PATH, activeCodexConfigPath } from "../codex/paths";
 import { diagnoseCodexShim } from "../codex/shim";
 import { displayCodexRuntimePath, effortClampAppliesToRuntime, liveRemovedEfforts, loadLastEffortClamp, resolveCodexRuntime } from "../codex/runtime";
 import { packageVersion } from "./help";
@@ -833,8 +833,8 @@ export function statusDeadProxyLines(json: StatusRoutingView): string[] {
  */
 export function detectMissingCodexCatalogPath(): string | null {
   try {
-    if (!existsSync(CODEX_CONFIG_PATH)) return null;
-    return missingOwnedCatalogPath(readFileSync(CODEX_CONFIG_PATH, "utf8"));
+    const configPath = activeCodexConfigPath();
+    return missingOwnedCatalogPath(readFileSync(configPath, "utf8"), configPath);
   } catch {
     return null;
   }

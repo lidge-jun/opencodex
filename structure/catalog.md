@@ -75,7 +75,7 @@ provider-wide fallback. Exact model output limits precede the provider default o
   generated metadata for historical accounting—never enter dashboard or Codex pickers;
 - strips native-only service tier and WebSocket metadata unless the final routed provider/model
   explicitly enables the verified OpenAI-compatible service tier;
-- backs up the pristine catalog once per catalog: the copy is keyed by a hash of the catalog path
+- backs up the pristine catalog once per catalog: the copy is keyed by a hash of the [config-resolved catalog path](config.md#config-injection)
   (`catalog-backup-<id>.json`), and the legacy unsuffixed `catalog-backup.json` is retained in
   addition for the default catalog, so a restore resolves the backup for the catalog it is restoring
   rather than assuming a single file; restoration omits retired bare and trusted account-qualified

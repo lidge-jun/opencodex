@@ -167,7 +167,7 @@ unknown 表示 opencodex 无法确定设置是否仍指向自己的代理。外�
 
 ### Picker 模式：在第一方 Code 标签页中显示 opencodex 模型
 
-Picker 模式是第一方模式的一部分。在 macOS 和 Windows 上选择第一方时默认开启；设置
+Picker 模式是第一方模式的一部分。在 macOS、Windows 和 Linux 上选择第一方时默认开启；设置
 `claudeCode.intercept.picker: false` 后会保持关闭。它会修改第一方 Desktop 的 Code 标签页模型选择器，
 按名称列出可用的 opencodex 模型。首次开启时，macOS 可能会要求你在登录钥匙串中、Windows 可能会要求你在当前用户根存储中信任本地证书颁发机构。
 该颁发机构限制为 `claude.ai` 及其子域名。可导出的签名身份由 OS 凭据存储保护，普通重启会复用同一证书和密钥。
@@ -178,8 +178,7 @@ OpenCodex 配置目录中不保存明文 Picker 签名密钥。受限 CA 的完�
 
 从旧身份进行一次性迁移时，清除原有信任可能需要同意。清理未完成时，Picker 不可用，已应用的配置档案
 会使用不解密的中继。macOS 还可能单独要求解锁钥匙串或批准应用访问凭据，重启或升级时也可能出现这些提示。Windows 上显式 `on` 或 `trust` 可能显示添加根的确认。
-Linux 仍不支持 Picker，不会启动 Picker CA、凭据存储或代理工作。主要 Claude 拦截功能仍可用，
-其本地 CA 文件受到所有者、符号链接、文件权限及 Windows ACL 检查保护。
+在 Linux 上显式启用 Picker 时，`certutil` 会将受限的 Picker CA 添加到用户的 NSS 数据库并设为受信任。
 
 Picker 模式开启期间，Claude Desktop 通过 OpenCodex 访问网络。如果 OpenCodex 停止，Desktop 会处于离线状态，
 直到你完全重启 Desktop 或关闭 Picker 模式。使用 `ocx claude desktop picker status` 查看状态，使用

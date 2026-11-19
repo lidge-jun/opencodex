@@ -10,6 +10,30 @@ import {
 const DEFAULT_POST_TERMINAL_DRAIN_TIMEOUT_MS = 5_000;
 const DEFAULT_CONSUMER_TIMEOUT_MS = 300_000;
 
+/** Feed the SSE stall watchdog during a bounded sidecar await. */
+export async function* withHeartbeats<T>(promise: Promise<T>, signal?: AbortSignal): AsyncGenerator<AdapterEvent, T> {
+  const tracked = promise.then(value => ({ value }));
+  for (;;) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let wake: () => void;
+    const heartbeat = new Promise<undefined>(resolve => {
+      wake = () => resolve(undefined);
+      timer = setTimeout(wake, 1_000);
+      signal?.addEventListener("abort", wake, { once: true });
+      if (signal?.aborted) wake();
+    });
+    let result: { value: T } | undefined;
+    try { result = await Promise.race([tracked, heartbeat]); }
+    finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", wake!);
+    }
+    signal?.throwIfAborted();
+    if (result) return result.value;
+    yield { type: "heartbeat" };
+  }
+}
+
 export class RoutedModelInactivityError extends Error {
   readonly timeoutMs: number;
 
@@ -43,6 +67,7 @@ export class WebSearchAdapterEventError extends Error {
 
 export interface ParseStreamWithProgressOptions {
   preserveAdapterError?: boolean;
+  /** Upstream raw-byte inactivity budget. Zero disables this timer. */
   inactivityTimeoutMs: number;
   translatorBudget: TranslatorBudget;
   signal?: AbortSignal;
@@ -161,7 +186,9 @@ export async function* parseStreamWithProgress(
   parseStream: ParseStream,
   options: ParseStreamWithProgressOptions,
 ): AsyncGenerator<AdapterEvent> {
-  const inactivityTimeoutMs = normalizeTimeout(options.inactivityTimeoutMs, "inactivityTimeoutMs");
+  const inactivityTimeoutMs = options.inactivityTimeoutMs === 0
+    ? 0
+    : normalizeTimeout(options.inactivityTimeoutMs, "inactivityTimeoutMs");
   const postTerminalDrainTimeoutMs = normalizeTimeout(
     options.postTerminalDrainTimeoutMs ?? DEFAULT_POST_TERMINAL_DRAIN_TIMEOUT_MS,
     "postTerminalDrainTimeoutMs",
@@ -230,7 +257,7 @@ export async function* parseStreamWithProgress(
 
   // Count only active upstream-wait time; a blocked downstream handoff has its own deadline.
   const armInactivity = (): void => {
-    if (settled || consumerBlocked || terminalSeen || inactivityTimer !== undefined) return;
+    if (inactivityTimeoutMs === 0 || settled || consumerBlocked || terminalSeen || inactivityTimer !== undefined) return;
     if (inactivityRemainingMs <= 0) {
       fail(new RoutedModelInactivityError(inactivityTimeoutMs));
       return;

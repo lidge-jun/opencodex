@@ -311,12 +311,12 @@ at the terminal frame. `executeComboResponses` therefore passes each child `onBr
 the combo sets `usageFromBridge` and `usage` on its own context; a binding that came earlier waits
 for the commit, and a child that fails or never commits forwards nothing. Without that, the row
 and the settlement would read the usage back off the bridged Responses wire, which carries no
-`providerCredits` and derives its input count from the context checkpoint.
+`providerCredits` and derives its input count from the context checkpoint. Native Responses children publish raw usage and `usageWireParsed` through the committed terminal callback before parent settlement, including terminals arriving after the commit copy. Their client-facing preflight leaves usage collection to the original inspector, including when it converts a zero-output terminal into a retryable failure. If selection already committed a keepalive head, the outer log tap also leaves usage to that raw observer once the selected native response is known; it still records terminal and error metadata. On zero-output exhaustion, the child log supplies settlement usage and the synthesized client terminal supplies only delivery metadata to the log tap. `tests/responses/responses-combo-estimated-usage-spend.test.ts` covers both relay modes, early and late terminals, actual usage, the durable journal and the next HTTP admission.
 
-Unconfigured requests preserve the legacy counter observer: reservations increment the send
-counter, refunds decrement it, and named reports reconcile prepaid sends. Enforced requests use
-the seed and physical-start protocol below across Responses, native Messages and native Chat.
-Each transport claims immediately before inference I/O and retains a producer through completion.
+Unconfigured requests keep the legacy counter observer. Reservations increment the send counter,
+refunds decrement it, and named reports reconcile prepaid sends. Enforced Responses, native Messages
+and native Chat sends claim immediately before inference I/O and retain a producer through completion.
+Direct [Anthropic image-context recovery](../providers/anthropic-cache-lifecycle.md) uses a separate seed for each leg.
 
 A request fixes its enforcement mode and physical-send limit L at its first actual spend admission
 or start. Translated turns carrying hosted Advisor tools or replay capture numeric ceilings at
@@ -454,10 +454,10 @@ Legacy direct charges still infer dispatch from a later charge and leave their n
 open. Report order updates terminal attribution; unrelated pending reservations remain independent.
 `tests/lib/spend-pool-continuity.test.ts` covers reversed child reports and exact-pool cancellation.
 
-Settlement follows what the request learned. The terminal usage belongs to the last send that
-left, so that one settles with the real figure; every earlier send failed without reporting usage
-of its own and may still have been billed, so it becomes unresolved spend rather than free. A
-request that reports no usage at all leaves all of them unresolved. A pre-output Grok/Devin 429
+Once the image-context summary dispatches, the original 413 and the pinned sends in that recovery
+flow settle from their own receipts, including usage reported in HTTP failures. Each such receipt
+with unknown usage remains unresolved at its reservation estimate. Ordinary requests continue to
+settle aggregate terminal usage on the last routed send. A pre-output Grok/Devin 429
 binds usage carried by its error event before returning the HTTP refusal, just as the ordinary
 streaming and buffered bridges bind terminal usage. If deferred settlement reaches a tracker with reserved sends after its ledger lease ends, only `SPEND_LEDGER_OWNER_NOT_HELD` is dropped with the discarded ledger. Other owner and storage failures propagate with pending send IDs intact so settlement can be retried.
 

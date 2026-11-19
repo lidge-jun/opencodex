@@ -152,9 +152,9 @@ recipient, sender, ciphertexts) rather than a delimiter-joined string, so no fie
 a boundary. One fixed-endpoint request forwards separate parts, and assignment
 replacement compares the complete original item snapshot before splicing the run. Recovery output
 is model-transcribed plaintext, not cryptographic fidelity proof. An opt-in `retries` bound — off
-by default and capped at two extra sends — re-issues the same admitted request only on a transient
-upstream status or a transport failure, inside the same deadline and shared flight; terminal
-statuses, invalid output, and budget exhaustion keep the bounded refusal reasons unchanged.
+by default and capped at two extra sends — re-issues the admitted request only on a transient status
+or transport failure, within the same deadline and shared flight. The request that starts the flight
+owns its [recovery attempt telemetry](transports/response-turn-membership.md). Cache hits and requests joining the flight do not claim its sends.
 Recovery recognises all four codex-rs message types (NEW_TASK, MESSAGE, FOLLOWUP_TASK,
 FINAL_ANSWER); a FINAL_ANSWER envelope may omit the Task name line, in which case the
 structured recipient is not cross-checked because the envelope names no recipient, and
