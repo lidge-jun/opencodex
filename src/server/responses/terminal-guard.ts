@@ -246,7 +246,7 @@ export async function* guardTerminalEventStream(options: GuardedEventStreamOptio
     let retainedContentChars = 0;
     let retainedText = "";
     let analysisEnabled = (options.adapterName === "anthropic" || options.adapterName === "openai-chat")
-      && continuations < maxContinuations;
+      && maxContinuations > 0 && (continuations < maxContinuations || options.adapterName === "openai-chat");
     let terminalSeen = false;
     for await (const event of source) {
       // Liveness markers and tool argument fragments are passed through to the bridge, but
@@ -280,6 +280,12 @@ export async function* guardTerminalEventStream(options: GuardedEventStreamOptio
             return;
           }
           break;
+        }
+        if (normalStop && analysis.decision === "continue" && options.adapterName === "openai-chat") {
+          yield { type: "error", status: 502, code: "terminal_continuation_failed",
+            message: "Provider announced work again without calling a tool", errorType: "server_error",
+            usage: mergeUsage(accumulatedUsage, event.usage, continuations > 0) };
+          return;
         }
         const usage = mergeUsage(accumulatedUsage, event.usage, continuations > 0);
         yield usage ? { ...event, usage } : event;

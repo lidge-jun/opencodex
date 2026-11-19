@@ -932,6 +932,8 @@
   "effort-policy.test.ts": "codex-integration", "empty-completion-core.test.ts": "responses",
   "empty-completion-guard.test.ts": "responses", "empty-completion-hardening.test.ts": "responses",
   "search-empty-completion.test.ts": "responses",
+  "search-terminal-continuation-budget.test.ts": "responses",
+  "search-terminal-continuation.test.ts": "responses",
   "empty-tool-output-annotation.test.ts": "adapters", "ensure-desired-integrations-race.test.ts": "cli",
   "error-fidelity.test.ts": "server", "errors-adapter-failure.test.ts": "server",
   "eventstream-decoder.test.ts": "responses", "eventstream-fragmentation.test.ts": "responses", "exa-web-search.test.ts": "providers",
