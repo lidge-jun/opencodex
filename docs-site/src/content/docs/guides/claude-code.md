@@ -1360,7 +1360,9 @@ set (automatic with `ocx claude`). Run `ocx claude` to refresh the gateway model
 
 **200k context ceiling despite big model** — Select the `[1m]` variant in the picker, or enable
 auto-context (on by default). If the picker shows no `[1m]` row, the model's effective catalog context
-window may be below the fixed 829,800-token floor.
+window may be below the fixed 829,800-token floor. If `ocx claude` reports a timeout loading model
+context information, it skips automatic `[1m]` marking for that launch. The warning does not mean
+that the provider reduced the model's context limit.
 
 **High token count from skill loads** — The bundled `claude-api` skill (~136k tokens) auto-loads
 on Claude model mentions. This is normal for native passthrough; on routed models, opencodex stubs

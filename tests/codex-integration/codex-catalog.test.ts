@@ -626,6 +626,25 @@ describe("combo catalog capability intersection", () => {
       .toEqual([]);
   });
 
+  test("matches raw and encoded exclusions without treating bare routed ids as exclusions", () => {
+    const models = [
+      { provider: "vendor", id: "org/raw-hidden" },
+      { provider: "vendor", id: "org/encoded-hidden" },
+      { provider: "vendor", id: "org/bare-visible" },
+      { provider: "other", id: "org/raw-hidden" },
+      { provider: "combo", id: "native-route", alias: "native-alias", nativeAlias: true },
+    ];
+    const config = {
+      disabledModels: ["vendor/org/raw-hidden", "vendor/org-encoded-hidden", "org/bare-visible", "native-alias"],
+      providers: { vendor: {}, other: {} },
+    };
+    expect(filterCatalogVisibleModels(models, config)).toEqual(models.slice(2));
+    expect(filterCatalogVisibleModels(models, {
+      ...config,
+      disabledModels: [...config.disabledModels, "combo/native-route"],
+    })).toEqual(models.slice(2, 4));
+  });
+
   test("filters dashboard-hidden provider models before catalog sync", () => {
     const models = [
       { provider: "vendor", id: "visible-model" },
