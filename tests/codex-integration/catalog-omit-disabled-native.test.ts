@@ -196,6 +196,7 @@ test("retained sync and serve-options omit the same rows without changing routed
   const next = config(true);
   saveConfig(next);
   expect((await syncCatalogModels(next, { allowWhenDesiredDisabled: true })).refreshOutcome).toBe("committed");
+  invalidateCodexModelsCache({ allowWhenDesiredDisabled: true });
   const server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
   try {
     const response = await fetch(new URL("/v1/models?client_version=0.160.0", server.url));
