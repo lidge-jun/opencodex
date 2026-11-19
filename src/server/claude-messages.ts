@@ -434,12 +434,12 @@ async function anthropicNativePassthrough(
     return fail(499, "client_cancel", "client closed request during anthropic passthrough", "api_error", { code: "client_closed" });
   }
   if (bodyResult.kind === "stall") {
-    return fail(504, "body_stall", boundedMessagesDisplayCount(Math.round(bodyGuard.stallMs / 1000)) !== undefined ? `anthropic passthrough body stalled: no upstream bytes for ${boundedMessagesDisplayCount(Math.round(bodyGuard.stallMs / 1000))}s` : "anthropic passthrough body stalled", "timeout_error",
-      { code: "body_stall", value: bodyGuard.stallMs });
+    return carryReplayRefusal(upstream, fail(504, "body_stall", boundedMessagesDisplayCount(Math.round(bodyGuard.stallMs / 1000)) !== undefined ? `anthropic passthrough body stalled: no upstream bytes for ${boundedMessagesDisplayCount(Math.round(bodyGuard.stallMs / 1000))}s` : "anthropic passthrough body stalled", "timeout_error",
+      { code: "body_stall", value: bodyGuard.stallMs }));
   }
   if (bodyResult.kind === "overflow") {
-    return fail(502, "body_overflow", boundedMessagesDisplayCount(bodyGuard.maxBytes) !== undefined ? `anthropic passthrough body exceeded ${boundedMessagesDisplayCount(bodyGuard.maxBytes)} bytes` : "anthropic passthrough body exceeded the safe limit", "api_error",
-      { code: "body_overflow", value: bodyGuard.maxBytes });
+    return carryReplayRefusal(upstream, fail(502, "body_overflow", boundedMessagesDisplayCount(bodyGuard.maxBytes) !== undefined ? `anthropic passthrough body exceeded ${boundedMessagesDisplayCount(bodyGuard.maxBytes)} bytes` : "anthropic passthrough body exceeded the safe limit", "api_error",
+      { code: "body_overflow", value: bodyGuard.maxBytes }));
   }
   const text = bodyResult.text;
   if (upstream.ok) {

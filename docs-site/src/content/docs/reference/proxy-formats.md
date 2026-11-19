@@ -29,15 +29,18 @@ error text on both native and translated routes. Native Responses keeps an obser
 refusal code even if the replacement body fails during delivery. Caller cancellation takes
 precedence. Native Responses JSON with `status: "failed"`
 and native `response.failed` stream events use the same fixed error text for recognized replay-refusal
-codes. The stream event carries `response.retryable: false`. Native Responses and native Messages
-honor recognized refusal codes in HTTP 429 bodies before retrying on the same key. Genuine upstream
-rate limits still inform account cooldowns.
+codes. The stream event carries `response.retryable: false`. Native and translated Responses
+and native Messages honor recognized refusal codes in HTTP 429 bodies before retrying on the
+same key. Genuine upstream rate limits still inform the sending account's cooldown.
 
 If the proxy cannot complete a retry-safety check on an upstream transient 5xx or 429
 body, it stops automatic retries for requests without an independent replay guarantee.
 Responses, Compact, Chat Completions and routed Messages include `x-should-retry: false`
 and omit `Retry-After` on those errors. The original upstream headers still inform quota
 and cooldown tracking.
+
+Native Anthropic Messages passthrough preserves an explicit upstream `x-should-retry: false`
+when its body guard returns HTTP 504 for a stall or HTTP 502 for exceeding the byte limit.
 
 When a non-streaming Messages request folds a Responses stream or direct provider events with
 a recognized replay refusal, it returns the same code and fixed message in an HTTP 429 Messages error.

@@ -12,9 +12,11 @@ import { clearRequestLogsForTests, getRequestLogEntries } from "../../src/server
 import {
   REPLAY_REFUSAL_NO_RETRY_HEADER,
   REPLAY_REFUSAL_NO_RETRY_VALUE,
+  REPLAY_REFUSAL_MESSAGE,
   REPLAY_REFUSED_STATUS,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
   isReplayRefusalResponse,
+  replayRefusalResponse,
   requireClientReplayVeto,
 } from "../../src/lib/upstream-retry";
 import { DEFAULT_RETRYABLE_429_RETRY_AFTER_SEC } from "../../src/lib/retry-after";
@@ -32,7 +34,7 @@ import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { cachedDeniedCodexAccountIdsForModel, resetCodexModelEntitlementCacheForTests } from "../../src/codex/model-entitlements";
 import { clearAccountQuota, updateAccountQuota } from "../../src/codex/auth-api";
 import { clearCodexUpstreamHealth } from "../../src/codex/routing";
-import { clearGenericFailoverHealth, genericFailoverRetryAfterSeconds } from "../../src/oauth/generic-account-failover";
+import { clearGenericFailoverHealth, eligibleFailoverAccounts, genericFailoverRetryAfterSeconds } from "../../src/oauth/generic-account-failover";
 
 /**
  * The acceptance unit for the ambiguous-resend refusal is not the shape of one response: it is
@@ -255,6 +257,44 @@ for (const wire of [
   });
 }
 
+for (const stopAt of ["initial", "same-key", "rotated-key"] as const) {
+  test.each(["coded", "inconclusive"] as const)(`routed reset-only 429 blocks recovery on the %s ${stopAt} response`, async verdict => {
+    const config = parityConfig();
+    const provider = config.providers.native!;
+    provider.apiKeyPool = [{ id: "primary", key: provider.apiKey! }, { id: "backup", key: "sk-fixture-backup" },
+      { id: "spare", key: "sk-fixture-spare" }];
+    provider.transientRetryOn5xx = { enabled: false };
+    provider.retryOn429 = { enabled: stopAt !== "rotated-key", attempts: 2, intervalMs: 100, maxIntervalMs: 100, respectRetryAfter: false };
+    const release = acquireOwnedSpendHome();
+    const sends: Array<string | null> = [];
+    const refusalSend = stopAt === "initial" ? 1 : 2;
+    globalThis.fetch = (async (input, init) => {
+      expect(new URL(String(input)).hostname).toBe(UPSTREAM_HOST);
+      sends.push(new Headers(init?.headers).get("authorization"));
+      const ordinary = { error: { code: "rate_limit_exceeded", message: "fixture diagnostic" } };
+      const refusal = { error: { code: "upstream_response_refused", message: "fixture diagnostic" } };
+      const payload = sends.length !== refusalSend ? ordinary
+        : verdict === "coded" ? refusal : { padding: "x".repeat(70_000), ...refusal };
+      return Response.json(payload, { status: 429, headers: { "retry-after": "37" } });
+    }) as typeof fetch;
+    try {
+      saveConfig(config);
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "native/model", stream: false, store: false, ...RESPONSES_TURN }),
+      }), config, { model: "", provider: "" });
+      const { error } = await response.json();
+      expect({ sends: sends.length, status: response.status, veto: response.headers.get("x-should-retry"),
+        wait: response.headers.get("retry-after") }).toEqual({ sends: refusalSend, status: 429, veto: "false", wait: null });
+      expect(sends[0]).toMatch(/^Bearer /);
+      if (stopAt === "same-key") expect(sends[1]).toBe(sends[0]);
+      if (stopAt === "rotated-key") expect(sends[1]).not.toBe(sends[0]);
+      if (verdict === "coded") expect(error).toMatchObject({ code: "upstream_response_refused", message: REPLAY_REFUSAL_MESSAGE });
+      else expect(error.message).toBe("Provider error 429: upstream diagnostic withheld for a non-replayable failure");
+    } finally { release(); }
+  });
+}
+
 test("managed native Messages serializes a retained client replay veto", async () => {
   const config = parityConfig();
   config.protocols = { rollout: { managedMessagesNative: true } };
@@ -456,30 +496,43 @@ test.each([false, true])("passive evidence: native no-retry model refusal record
   } finally { release(); resetCodexModelEntitlementCacheForTests(); clearAccountQuota(); clearCodexUpstreamHealth(); }
 });
 
-test("passive evidence: native no-retry OAuth 429 cools the sender without selecting or sending a sibling", async () => {
+test.each([
+  { adapter: "openai-responses", synthetic: false },
+  { adapter: "openai-chat", synthetic: false },
+  { adapter: "openai-chat", synthetic: true },
+] as const)("passive evidence: $adapter no-retry OAuth 429 cools only the issuer (synthetic=$synthetic)", async ({ adapter, synthetic }) => {
   clearGenericFailoverHealth();
   for (let index = 0; index < 2; index++) await saveCredential("cursor", { access: `fixture-${index}`, refresh: "",
-    expires: Date.now() + 3_600_000, accountId: `fixture-${index}` }, { addAccount: true });
+    expires: Date.now() + 3_600_000, accountId: `fixture-${index}` });
   const before = getAccountSet("cursor");
-  let sends = 0;
-  globalThis.fetch = (async input => {
+  const sends: Array<string | null> = [];
+  globalThis.fetch = (async (input, init) => {
     if (new URL(String(input)).hostname !== "api2.cursor.sh") throw new Error("Unexpected fixture destination");
-    sends++;
+    sends.push(new Headers(init?.headers).get("authorization"));
+    if (synthetic) return replayRefusalResponse();
     return Response.json({ error: { message: "Fixture rate limit" } },
       { status: 429, headers: { "x-should-retry": "false", "retry-after": "120" } });
   }) as typeof fetch;
-  const config = { port: 0, defaultProvider: "cursor", providers: { cursor: { adapter: "openai-responses",
+  const config = { port: 0, defaultProvider: "cursor", providers: { cursor: { adapter,
     authMode: "oauth", baseUrl: "https://api2.cursor.sh", proxy: "direct", models: ["model"],
-    modelAdapters: { model: "openai-responses" } } } } as OcxConfig;
+    modelAdapters: { model: adapter } } } } as OcxConfig;
   saveConfig(config);
   const release = acquireOwnedSpendHome();
   try {
     const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST",
       body: JSON.stringify({ model: "cursor/model", stream: false, store: false, ...RESPONSES_TURN }),
     }), config, { model: "", provider: "" });
-    expect({ sends, status: response.status }).toEqual({ sends: 1, status: 429 });
     await response.text();
-    expect(genericFailoverRetryAfterSeconds("cursor")).toBeGreaterThan(110);
+    expect({ sends: sends.length, status: response.status, veto: response.headers.get("x-should-retry"),
+      wait: response.headers.get("retry-after") }).toEqual({ sends: 1, status: 429, veto: "false", wait: null });
+    expect(sends[0]).toMatch(/^Bearer fixture-[01]$/);
+    const issuer = before!.accounts.find(account => `Bearer ${account.credential.access}` === sends[0]);
+    const eligible = eligibleFailoverAccounts("cursor");
+    const accountIds = before!.accounts.map(account => account.id);
+    expect(issuer).toBeDefined();
+    expect(eligible.sort()).toEqual(accountIds.filter(id => synthetic || id !== issuer!.id).sort());
+    if (synthetic) expect(genericFailoverRetryAfterSeconds("cursor")).toBeNull();
+    else expect(genericFailoverRetryAfterSeconds("cursor")).toBeGreaterThan(110);
     expect(getAccountSet("cursor")).toEqual(before);
   } finally { release(); clearGenericFailoverHealth(); }
 });

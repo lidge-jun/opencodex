@@ -112,6 +112,39 @@ function vertexError(code: number, status: string, message: string): string {
 }
 
 describe("vertex retry fetch", () => {
+  test.each([false, true])("an inconclusive 503 probe blocks a second POST (raw=%s)", async returnRawErrors => {
+    const payload = JSON.stringify({ padding: "x".repeat(17_000), error: { message: "fixture diagnostic" } });
+    const upstream = new Response(payload, { status: 503, headers: { "retry-after": "7" } });
+    const { calls } = mockFetch([upstream, new Response("unexpected second send")]);
+    const wait = spyOn(retry, "sleepWithAbort").mockImplementation(async () => {});
+    try {
+      const response = await fetchVertexWithRetry(request, { returnRawErrors });
+      expect({ sends: calls.length, status: response.status }).toEqual({ sends: 1, status: 503 });
+      expect(calls[0]?.method).toBe("POST");
+      expect(wait).not.toHaveBeenCalled();
+      if (returnRawErrors) {
+        expect(response).toBe(upstream);
+        expect(retry.hasClientReplayVeto(response)).toBe(true);
+        expect(response.headers.get("retry-after")).toBe("7");
+        expect(response.headers.get("x-should-retry")).toBeNull();
+        expect(await response.text()).toBe(payload);
+      } else {
+        expect(response.headers.get("x-should-retry")).toBe("false");
+        expect(response.headers.get("retry-after")).toBeNull();
+        expect(await response.text()).toStartWith("Vertex AI");
+      }
+    } finally { wait.mockRestore(); }
+  });
+
+  test("a caller abort during the 503 probe takes precedence over a raw error", async () => {
+    const caller = new AbortController();
+    const reason = new DOMException("fixture caller cancelled", "AbortError");
+    const body = new ReadableStream<Uint8Array>({ pull() { caller.abort(reason); } }, { highWaterMark: 0 });
+    const { calls } = mockFetch([new Response(body, { status: 503 })]);
+    await expect(fetchVertexWithRetry(request, { abortSignal: caller.signal, returnRawErrors: true })).rejects.toBe(reason);
+    expect(calls).toHaveLength(1);
+  });
+
   test("Google preserves the executor TypeError after its header deadline", async () => {
     const original = new TypeError("google executor deadline rejection");
     let sends = 0;

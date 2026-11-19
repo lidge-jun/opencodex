@@ -58,7 +58,7 @@ import {
 import {
   fetchWithTransientRetry,
   fetchWithResetRetry,
-  carryReplayRefusal, isAutomaticReplayBlocked, isNonReplayableResponse, isReplayRefusalCode,
+  carryReplayRefusal, isAutomaticReplayBlocked, isNonReplayableResponse, isReplayRefusalCode, isReplayRefusalResponse,
   hasUpstreamReplayRefusal,
   isSameTargetRetryHold, isTerminalResetReplacement,
   applyUpstreamRecoveryInit,
@@ -627,10 +627,8 @@ export async function prepareAdapterExchange(
     const rebuildAndRefetch = async (
       recovery: AttemptRecoveryKind,
       /**
-       * Called at the dispatch boundary — after the request is rebuilt and shaped, immediately
-       * before the send. A caller holding a reserved hop confirms it here rather than before the
-       * rebuild, because a build failure returns `{ failed }` without ever reaching the wire and
-       * a permit confirmed earlier would keep the charge for a send that never happened.
+       * Confirm a reserved hop at dispatch, after shaping succeeds, so a build failure
+       * leaves the permit unused and refundable.
        */
       onDispatch?: () => void,
       preserveFailureResponse?: Response,
@@ -704,7 +702,7 @@ export async function prepareAdapterExchange(
             transportState.noteRoutedAttemptSend(retryEstimate, recovery);
             const producer = adapterDispatchBudget?.beginSpendProducer?.();
             try {
-            return await withProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal, pacingSlot => {
+            const response = await withProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal, pacingSlot => {
               // The dispatch boundary is HERE, not before the pacing wait: that wait can reject for
               // an abort, a saturated queue, an expired slot or a removed provider, and none of
               // those reach the wire. Confirming earlier would hold the charge for a send that the
@@ -733,14 +731,12 @@ export async function prepareAdapterExchange(
                 }),
               });
             });
+            if (response.status === 429) await hasUpstreamReplayRefusal(response, upstream.signal, { requireCompleteBody: true });
+            return response;
             } finally { producer?.close(); }
           }
-          // #2643 review: this leg used to call fetchWithHeaderTimeout directly, so an
-          // opted-in provider's transient-5xx policy applied to the initial send and to
-          // native chat but was silently bypassed here — a 429 that recovered into a
-          // retryable 503 got no retry on the Responses path. Route it through the same
-          // selection, and pass what is LEFT of the request-scoped budget rather than a
-          // fresh one, so a recovery loop cannot multiply total upstream sends.
+          // Recovery uses the same transient policy as the first send (#2643) and draws
+          // from the remaining request-scoped budget.
           const refetchTransientPolicy = transientRetryPolicyFor(route.provider);
           const refetchWithPolicy = (route.provider.adapter === "google" || refetchTransientPolicy)
             ? fetchWithTransientRetry
@@ -816,6 +812,7 @@ export async function prepareAdapterExchange(
             if (parsed._anthropicImageOwner && sendBudgetState.adapterSendBudget?.spendEnforced) {
               bindAdapterResponseSpend(response, refetchReporter?.recordUsage);
             }
+            if (response.status === 429) await hasUpstreamReplayRefusal(response, upstream.signal, { requireCompleteBody: true });
             return response;
           } finally {
             // Refund only a reservation whose send never reached its admission boundary.
@@ -919,7 +916,7 @@ export async function prepareAdapterExchange(
     };
    // Keep recovery kinds in sync with the native Responses `passthroughRecovery:` loop above.
    recovery: for (;;) {
-      if (!upstreamResponse.ok) await hasUpstreamReplayRefusal(upstreamResponse, upstream.signal);
+      await hasUpstreamReplayRefusal(upstreamResponse, upstream.signal, { requireCompleteBody: upstreamResponse.status === 429 });
       await rejectAnthropicPerMessageEffort(parsed, upstreamResponse, upstream.signal);
       const modelRotation = isAutomaticReplayBlocked(upstreamResponse) ? undefined : await antigravityDenial.recover(upstreamResponse,
         transportState.replayOAuthCredentialSnapshot ?? transportState.sentOAuthSnapshot, {
@@ -938,8 +935,12 @@ export async function prepareAdapterExchange(
         upstreamResponse = recovered; continue recovery;
       }
 
-      // Preserve the terminal verdict through adapter and combo error formatting.
-      // This also covers a reset reached by a 401/429/413 recovery refetch.
+      // A genuine 429 still informs the issuer's cooldown when recovery is vetoed.
+      if (upstreamResponse.status === 429 && isAutomaticReplayBlocked(upstreamResponse)
+        && !isReplayRefusalResponse(upstreamResponse) && transportState.genericFailoverAccountId) {
+        rotateGenericOAuthAccountOn429(config, route.providerName, transportState.genericFailoverAccountId,
+          upstreamResponse.headers.get("retry-after"), Date.now(), route.modelId, false);
+      }
       if (isNonReplayableResponse(upstreamResponse)) {
         try {
           return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal, {

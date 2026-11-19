@@ -52,12 +52,14 @@ and Google HTTP check the directive and a bounded peek for refusal codes before 
 resends. Google keeps original evidence when raw errors are requested; display normalization
 retains the veto and projects recognized codes to the fixed refusal. Native Chat, Responses,
 Compact, Messages, continuation and sidecar paths also honor the veto.
-The transient ladder checks 429s even at budget exhaustion. Native Chat and managed native
-Messages also check 429s on their reset-only paths. The peek recognizes root, `error` and
+The transient ladder checks 429s even at budget exhaustion. Native Chat, managed native
+Messages and translated Responses also check 429s on their reset-only paths. Translated
+Responses checks each 429 returned by recovery before a same-key retry or key or account rotation.
+The peek recognizes root, `error` and
 `last_error` codes, preserves an observed code through a later failed read, and leaves the raw
 response available for quota observation. A refusal stops both same-key and pool recovery.
 
-Sidecar recovery, the transient ladder's 429 handoff, and the native Chat and managed Messages
+Sidecar recovery, Google HTTP retry and repair, the transient ladder's 429 handoff, and the
 reset-only 429 paths treat a size-limited, timed-out or failed body probe as insufficient evidence
 for another send. They preserve the original body and quota provenance while blocking recovery.
 An independently replay-safe transient operation
@@ -71,11 +73,14 @@ observation. Responses and Compact, native and translated Chat, and managed nati
 Messages project the veto as `x-should-retry: false` and omit `Retry-After`. Responses withholds
 the upstream diagnostic text in its non-replayable error projection.
 
-Native Responses also records the sent generation's model denial and generic OAuth cooldown
-without selecting another credential. A no-retry verdict does not suppress fenced
+Native and translated Responses record a genuine no-retry 429 against the sending OAuth
+account's cooldown without selecting another credential. Native Responses also records the sent
+generation's model denial. A no-retry verdict does not suppress fenced
 revoked/verify-account bookkeeping or effort-pending cleanup. Native Anthropic OAuth attributes
 a genuine 429 to the credential that sent the request even when the directive prevents rotation.
 The Anthropic error formatter preserves the exact directive and omits `Retry-After`.
+Native Messages passthrough also preserves an explicit upstream veto on a body-stall 504 or a
+body-cap 502.
 
 ## Replacement and preflight boundaries
 
