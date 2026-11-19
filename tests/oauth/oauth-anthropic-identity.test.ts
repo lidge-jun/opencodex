@@ -1374,6 +1374,32 @@ test.each(["anthropic", "anthropic2"] as const)("%s login cannot persist a refre
   expect(getAccountSet(provider)!.accounts.map(row => row.credential.refresh)).toEqual([owner.refresh]);
 });
 
+test.each(["anthropic", "anthropic2"] as const)("%s reauth refuses a sibling's refresh token and accepts its own", async provider => {
+  const target = orgCredential("synthetic-target", ORG_A);
+  const sibling = emailOnlyCredential("synthetic-sibling", ORG_B);
+  const targetId = (await storeModule.saveCredentialWithReceipt(provider, target))!.accountId;
+  const siblingId = (await storeModule.saveCredentialWithReceipt(provider, sibling))!.accountId;
+  expect(siblingId).not.toBe(targetId);
+  const storedSibling = getAccountCredential(provider, siblingId)!;
+  expect(storedSibling.accountId).toBeUndefined();
+
+  const authFile = Bun.file(storeModule.getAuthStorePath());
+  const before = await authFile.bytes();
+  const fresh = orgCredential("synthetic-reauth", ORG_A);
+  const login = spyOn(OAUTH_PROVIDERS[provider]!, "login");
+  try {
+    login.mockResolvedValue({ ...fresh, refresh: storedSibling.refresh });
+    await expect(runLogin(provider, {}, { reauthAccountId: targetId }))
+      .rejects.toThrow("This Anthropic refresh token already belongs to another slot. Try signing in again.");
+    expect(await authFile.bytes()).toEqual(before);
+
+    login.mockResolvedValue({ ...fresh, refresh: target.refresh });
+    await runLogin(provider, {}, { reauthAccountId: targetId });
+    expect(getAccountCredential(provider, targetId)).toMatchObject({ access: fresh.access, refresh: target.refresh });
+    expect(getAccountCredential(provider, siblingId)).toEqual(storedSibling);
+  } finally { login.mockRestore(); }
+});
+
 test("UUID recovery preserves an unidentified active row when continuity is unavailable", async () => {
   await saveCredential("anthropic", { access: "synthetic-legacy", refresh: "synthetic-legacy-refresh", expires: 1 });
   const legacy = anthropicRows()[0]!;

@@ -223,8 +223,8 @@ tienen correo ni UUID de cuenta. Un inicio de sesión posterior con un UUID conf
 actualizar la única cuenta sin UUID cuyo correo y organización coincidan. Las autorizaciones deben
 compartir un token de actualización o el perfil de la cuenta guardada debe confirmar el mismo UUID.
 Sin esa confirmación, el inicio de sesión conserva la cuenta existente y puede añadir otra con un
-token de actualización distinto. Si otra cuenta del pool ya tiene ese token, el inicio de sesión
-se detiene y te pide que vuelvas a intentarlo. Si coinciden varias
+token de actualización distinto. Si otra cuenta del pool ya tiene el token recibido, tanto el inicio
+de sesión como la reautenticación se detienen y te piden que vuelvas a intentarlo. Si coinciden varias
 cuentas en la organización confirmada, el inicio de sesión se detiene sin cambiar ninguna. Para
 reautenticar la cuenta correcta, usa
 `ocx account login anthropic --id <account-id> --reauth`. Si Claude solo proporciona el correo

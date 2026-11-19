@@ -979,6 +979,13 @@ function retainAnthropicExchangeScope(fresh: OAuthCredentials, previous?: OAuthC
   return retained && !fresh.anthropicOrganizationScope ? { ...fresh, anthropicOrganizationScope: retained } : fresh;
 }
 
+/** The caller holds the auth-store writer lock. Each slot refreshes its own grant. */
+function assertAnthropicRefreshTokenOwnership(accounts: readonly ProviderAccount[], accountId: string, refresh: string): void {
+  if (refresh && accounts.some(account => account.id !== accountId && account.credential.refresh === refresh)) {
+    throw new Error("This Anthropic refresh token already belongs to another slot. Try signing in again.");
+  }
+}
+
 export async function saveCredentialWithReceipt(
   provider: string,
   cred: OAuthCredentials,
@@ -1105,10 +1112,7 @@ export async function saveCredentialWithReceipt(
     const updatedSet = store[provider];
     const savedAccount = updatedSet?.accounts.find(account => account.id === accountId);
     if (savedAccount && isAnthropicInstanceId(provider)) {
-      // Refresh locks are per slot, so two slots cannot safely share a rotating grant.
-      if (safe.refresh && updatedSet.accounts.some(account => account.id !== accountId && account.credential.refresh === safe.refresh)) {
-        throw new Error("This Anthropic refresh token already belongs to another slot. Try signing in again.");
-      }
+      assertAnthropicRefreshTokenOwnership(updatedSet.accounts, accountId, safe.refresh);
       savedAccount.credential = retainAnthropicExchangeScope(savedAccount.credential, previousAccounts.get(accountId)?.credential);
     }
     const activeAccount = updatedSet?.accounts.find(account => account.id === updatedSet.activeAccountId);
@@ -1405,7 +1409,12 @@ export async function saveAccountCredential(
     const account = set?.accounts.find(a => a.id === accountId);
     if (!set || !account) return;
     opts.assertAccounts?.(set.accounts);
-    account.credential = isAnthropicInstanceId(provider) ? retainAnthropicExchangeScope(safe, account.credential) : safe;
+    if (isAnthropicInstanceId(provider)) {
+      assertAnthropicRefreshTokenOwnership(set.accounts, accountId, safe.refresh);
+      account.credential = retainAnthropicExchangeScope(safe, account.credential);
+    } else {
+      account.credential = safe;
+    }
     written = true;
     if (opts.rotateLoginId) account.loginId = randomUUID();
     delete account.needsReauth;

@@ -347,7 +347,8 @@ or account UUID. A later sign-in with a confirmed account UUID can update the si
 without a UUID whose email and organization match. The grants must share a refresh token or the
 saved account's profile must confirm the same account UUID. Without that confirmation, sign-in
 keeps the existing account and can add a separate one with a distinct refresh token. If another slot
-in the pool already holds the incoming refresh token, sign-in stops and asks you to try again.
+in the pool already holds the incoming refresh token, sign-in and reauthentication stop and ask you
+to try again.
 If several accounts match in the confirmed
 organization, sign-in stops without changing any of them. To reauthenticate the intended account, use
 `ocx account login anthropic --id <account-id> --reauth`. When Claude supplies only email and
