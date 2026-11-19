@@ -309,6 +309,73 @@ describe("optional native compatibility runtime", () => {
     } finally { complete?.(); launchSpy.mockRestore(); }
   });
 
+  test("a build refresh during a failed activation readback still fences the runtime and revokes the trial", async () => {
+    let current: DesktopAppInstall = assessedInstall();
+    let probe!: ReturnType<typeof createInstalledBuildProbe>;
+    const io = fixture(true, undefined, undefined, () => (probe = createInstalledBuildProbe(async () => current)));
+    await io.runtime.start();
+    const pacUrl = io.runtime.getPacUrl()!;
+    const port = /PROXY 127\.0\.0\.1:(\d+)/.exec(await fetch(pacUrl).then(response => response.text()))![1];
+    const read = () => fetch("https://chatgpt.com/backend-api/wham/usage", {
+      proxy: `http://127.0.0.1:${port}`, tls: { ca: io.authority.certPem },
+    }).then(response => response.json());
+    await read(); expect((await io.runtime.apply(true)).accepted).toBe(true);
+    let entered!: () => void, complete!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const launchSpy = spyOn(packageLauncher, "launchWindowsCodexCompatibilityAsync").mockImplementation(() => new Promise(resolve => {
+      complete = () => resolve({ status: "refused", reason: "activation_failed" }); entered();
+    }));
+    const invalidate = spyOn(UsageRelayController.prototype, "invalidateContext");
+    try {
+      const launching = io.runtime.launch().then(value => ({ value }), error => ({ error }));
+      await started;
+      // A concurrent proof refresh advances the build revision while the readback is pending.
+      current = { ...assessedInstall(), proof: { ...assessedInstall().proof!, executableHash: "e".repeat(64) } };
+      expect(await probe.check()).toBe(true);
+      expect(invalidate).not.toHaveBeenCalled();
+      complete();
+      const outcome = await launching;
+      expect("value" in outcome && outcome.value.status === "started").toBe(false);
+      // The launch itself fenced the runtime: no further Stop is needed to close the connection.
+      expect(io.runtime.status().phase).toBe("off");
+      expect(invalidate).toHaveBeenCalled();
+      expect(readDesktopCompatibilityLaunch()).toBeNull();
+      await expect(fetch(pacUrl)).rejects.toThrow();
+      await expect(read()).rejects.toThrow();
+    } finally { complete?.(); invalidate.mockRestore(); launchSpy.mockRestore(); }
+  });
+
+  test("a caller that verified a newer build revision cannot receive success from an older pending launch", async () => {
+    let current: DesktopAppInstall = assessedInstall();
+    let probe!: ReturnType<typeof createInstalledBuildProbe>;
+    const io = fixture(true, undefined, undefined, () => (probe = createInstalledBuildProbe(async () => current)));
+    await io.runtime.start();
+    let entered!: () => void, complete!: () => void, launches = 0;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const success = { status: "started" as const, pid: 4321, packageFullName: assessedInstall().proof!.packageFullName };
+    const launchSpy = spyOn(packageLauncher, "launchWindowsCodexCompatibilityAsync").mockImplementation(() => {
+      if (++launches > 1) return Promise.resolve(success);
+      return new Promise(resolve => { complete = () => resolve(success); entered(); });
+    });
+    try {
+      const older = io.runtime.launch().then(value => ({ value }), error => ({ error }));
+      await started;
+      current = { ...assessedInstall(), proof: { ...assessedInstall().proof!, executableHash: "e".repeat(64) } };
+      // The first check after the change revokes the trial; the next one verifies the newer revision.
+      await expect(io.runtime.launch()).rejects.toThrow("build_unverified");
+      const newerRevision = probe.binding().revision;
+      const newer = io.runtime.launch().then(value => ({ value }), error => ({ error }));
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(probe.binding().revision).toBe(newerRevision);
+      complete();
+      for (const result of await Promise.all([older, newer])) {
+        expect(result).toHaveProperty("error");
+        expect(String((result as { error: unknown }).error)).toContain("desktop_compatibility_build_unverified");
+      }
+      expect(launches).toBe(1);
+    } finally { complete?.(); launchSpy.mockRestore(); }
+  });
+
   for (const completion of ["success", "rejection"] as const) {
     test(`late ${completion} from a replaced runtime cannot invalidate its successor`, async () => {
       let hold = false, entered!: () => void, resolveOld!: (value: boolean) => void, rejectOld!: (error: Error) => void;

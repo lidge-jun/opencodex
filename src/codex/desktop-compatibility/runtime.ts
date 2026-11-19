@@ -77,7 +77,7 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
   let closing: Promise<void> | null = null;
   let pendingCleanup: (() => Promise<void>) | null = null;
   let releaseOwner: (() => void) | null = null;
-  let pendingLaunch: { owner: OwnedRuntime; abort: AbortController;
+  let pendingLaunch: { owner: OwnedRuntime; abort: AbortController; revision: number | null;
     result: ReturnType<typeof launchWindowsCodexCompatibilityAsync> } | null = null;
   const status = () => ({ phase, supported: platform === "win32", running: owned !== null, contextFailure,
     ...(buildProbe ? { buildAssessment: buildProbe.lastResult() ?? (previousBuildAssessment ? { ...previousBuildAssessment } : null) } : {}),
@@ -213,12 +213,13 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
       const verified = await checkContext();
       if (!verified) throw new Error(`desktop_compatibility_${contextFailure}`);
       if (owned !== current || phase !== "running") throw new Error("desktop_compatibility_not_running");
-      if (verified.binding && buildProbe?.binding().revision !== verified.binding.revision) {
+      const revision = verified.binding?.revision ?? null;
+      if (revision !== null && buildProbe?.binding().revision !== revision) {
         throw new Error("desktop_compatibility_build_unverified");
       }
       if (!pendingLaunch || pendingLaunch.owner !== current) {
         const abort = new AbortController();
-        pendingLaunch = { owner: current, abort,
+        pendingLaunch = { owner: current, abort, revision,
           result: launchWindowsCodexCompatibilityAsync(current.pacUrl, verified.binding?.build ?? null, { signal: abort.signal }) };
       }
       const launch = pendingLaunch;
@@ -227,10 +228,12 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
       finally { if (pendingLaunch === launch) pendingLaunch = null; }
       // An old child cannot report success or stop a runtime that replaced its owner.
       if (owned !== current || phase !== "running") throw new Error("desktop_compatibility_not_running");
-      if (verified.binding && buildProbe?.binding().revision !== verified.binding.revision) {
-        throw new Error("desktop_compatibility_build_unverified");
-      }
+      // Success binds to the revision the child launched, which every joined caller must share.
+      const stale = launch.revision !== revision || (revision !== null && buildProbe?.binding().revision !== revision);
+      // A failed or indeterminate activation may have left a process on the managed connection,
+      // so its still-current runtime is fenced even when the build revision moved meanwhile.
       if (result.status === "refused" && result.reason === "activation_failed") await stop();
+      if (stale) throw new Error("desktop_compatibility_build_unverified");
       return result;
     },
     /** Internal native launch context; management status never returns the control endpoint. */

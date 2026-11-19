@@ -1278,7 +1278,8 @@ close any Codex window left running. If runtime status reports `cleanup-required
 **Stop observation** again and confirm that the runtime is `off`. Once cleanup succeeds,
 start observation and select **Open Codex** to restore the managed connection. Then wait for
 a fresh eligible exhaustion snapshot before confirming a new trial. Follow this sequence even
-if activation failed before a Codex window opened.
+if activation failed before a Codex window opened, or if the installed package changed while
+**Open Codex** was waiting; a launch never reports success for a package that changed meanwhile.
 
 ### Transport coverage and recovery evidence
 

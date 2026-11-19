@@ -1061,7 +1061,10 @@ before reporting success. Runtime-owned launch uses an asynchronous child, so PA
 requests remain serviceable while the full proof runs. Stop aborts and drains that child before
 another runtime can start. A refused or indeterminate package activation revokes the account-wide
 trial and initiates cleanup of the compatibility runtime and its managed connections. Closure
-is confirmed only after cleanup succeeds. This also applies to a managed Codex restart.
+is confirmed only after cleanup succeeds. This also applies to a managed Codex restart, and to an
+activation that fails after a proof refresh changed the verified build. A launch reports success
+only for the build revision it started with; a request that verified a different revision
+receives `build_unverified` instead.
 OpenCodeX leaves any PID returned by activation alone. Check `runtime.phase` in the response:
 if cleanup fails, HTTP 409 includes `cleanup-required`; retry Stop and confirm `off` before
 starting again. After successful cleanup, callers can start directly. For either activation

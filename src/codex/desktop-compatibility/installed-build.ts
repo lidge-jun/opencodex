@@ -5,7 +5,7 @@ import { isTestHomeGuardArmed } from "../../lib/test-home-guard";
 import { resolveTrustedWindowsPowerShellExe } from "../../lib/windows-elevation";
 import type { DesktopAppInstall } from "../desktop-app/types";
 import { CLOSE_WINDOWS_PACKAGE_FILES, CODEX_EXECUTABLE_SIGNER, CODEX_PACKAGE_FAMILY, CODEX_STORE_PUBLISHER,
-  MEASURE_WINDOWS_PACKAGE_FILES, OPEN_WINDOWS_PACKAGE_FILES, READ_WINDOWS_PACKAGE_MANIFEST, WINDOWS_PACKAGE_PROOF_FUNCTIONS } from "./windows-package-proof";
+  MEASURE_WINDOWS_PACKAGE_FILES, OPEN_WINDOWS_PACKAGE_FILES, WINDOWS_PACKAGE_PROOF_FUNCTIONS } from "./windows-package-proof";
 export { DESKTOP_PACKAGE_PATH_GUARD_SCRIPT } from "./windows-package-proof";
 
 // Baseline with completed native acceptance evidence; admission is proof-based below,
@@ -32,11 +32,11 @@ export interface VerifiedDesktopPackage extends DesktopAppInstall {
   readonly signerThumbprint: string;
 }
 
-// Compatibility-only read. The verified image and manifest stay read-locked through publication.
+// Compatibility-only read. The verified image and manifest stay read-locked through publication;
+// the observation is built before any file is opened, so a failed proof still reports its version.
 export const DESKTOP_PACKAGE_PROOF_SCRIPT = [
   WINDOWS_PACKAGE_PROOF_FUNCTIONS,
   "$p=Get-DesktopPackage",
-  READ_WINDOWS_PACKAGE_MANIFEST,
   "$observation=@{id=$p.PackageFamilyName;root=$p.InstallLocation;relaunch=$p.PackageFamilyName+'!App'}",
   "try {",
   OPEN_WINDOWS_PACKAGE_FILES,

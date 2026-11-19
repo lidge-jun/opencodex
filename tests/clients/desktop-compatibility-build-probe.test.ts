@@ -9,6 +9,7 @@ import type { DesktopPackageObservation as DesktopAppInstall } from "../../src/c
 import { desktopPackageObservation } from "../helpers/desktop-package-observation";
 import { hostedWindowsQuarantine } from "../helpers/windows-ci-quarantine";
 import { OPEN_WINDOWS_PACKAGE_FILES, WINDOWS_PACKAGE_PROOF_FUNCTIONS } from "../../src/codex/desktop-compatibility/windows-package-proof";
+import { WINDOWS_COMPATIBILITY_ACTIVATION_SCRIPT } from "../../src/codex/desktop-compatibility/windows-package-command";
 
 const installed = desktopPackageObservation;
 
@@ -186,6 +187,24 @@ test("manifest and canonical executable facts are required while an official new
   expect(DESKTOP_PACKAGE_PROOF_SCRIPT).toContain("Get-DesktopPackageHash $exeStream");
   expect(DESKTOP_PACKAGE_PROOF_SCRIPT).toContain("ChatGPT.exe");
   expect(DESKTOP_PACKAGE_PROOF_SCRIPT).not.toContain("Activate");
+});
+
+test("the manifest is read once, under its validated held handle, before the executable proof", () => {
+  for (const script of [DESKTOP_PACKAGE_PROOF_SCRIPT, WINDOWS_COMPATIBILITY_ACTIVATION_SCRIPT]) {
+    const read = script.indexOf("Get-AppxPackageManifest");
+    expect(script.split("Get-AppxPackageManifest")).toHaveLength(2);
+    for (const before of ["$manifestChain=Assert-DesktopPackagePath $manifestPath", "$manifestStream=[IO.File]::Open(",
+      "Unexpected package file size"]) {
+      expect(script.indexOf(before)).toBeGreaterThanOrEqual(0);
+      expect(read).toBeGreaterThan(script.indexOf(before));
+    }
+    for (const after of ["Assert-DesktopPackageContent $p", "Get-AuthenticodeSignature -LiteralPath $exePath"]) {
+      expect(read).toBeLessThan(script.indexOf(after));
+    }
+  }
+  // The diagnostic observation still exists before any file is opened.
+  expect(DESKTOP_PACKAGE_PROOF_SCRIPT.indexOf("$observation=@{"))
+    .toBeLessThan(DESKTOP_PACKAGE_PROOF_SCRIPT.indexOf("$manifestStream=[IO.File]::Open("));
 });
 
 test("same-version package proof changes and failure advance a private ABA fence", async () => {

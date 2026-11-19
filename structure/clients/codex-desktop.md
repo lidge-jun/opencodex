@@ -237,8 +237,11 @@ to verify the installed contents through Windows' signed MSIX package integrity 
 ([AppxBlockMap.xml and AppxSignature.p7x](https://learn.microsoft.com/en-us/windows/msix/package/signing-package-overview#package-integrity-enforcement)).
 It independently requires Windows Authenticode status Valid for the expected OpenAI code-signing
 subject on `ChatGPT.exe`. The manifest and executable stay open with read-only sharing during
-these checks. The probe compares their handle-resolved paths to the registered paths, checks their
-ancestors for reparse points, and hashes their bytes with SHA-256 from the held handles. Any
+these checks; the manifest's application entry and identity are read only after its path is
+validated and its handle is held, before the content and signer checks. A failed proof still
+reports the observed package version. The probe compares their handle-resolved paths to the
+registered paths, checks their ancestors for reparse points, and hashes their bytes with SHA-256
+from the held handles. Any
 unavailable, failed or inconsistent check refuses admission. The probe coalesces concurrent
 checks, refreshes proof on each new check and aborts and reaps its bounded child on shutdown.
 Background refresh runs once a minute in Observe, every ten seconds during Apply and stops at
@@ -253,9 +256,12 @@ replaces the observation context and fences off late completions.
 Both compatibility launch entry points pass the approved build to the activation command.
 Runtime-owned launch runs process discovery and full activation proof in asynchronous children,
 leaving PAC and relay requests serviceable. Concurrent launch requests share the owned pending
-child. Stop aborts and drains it before releasing runtime ownership; completion rechecks the
-runtime and build revision before accepting success or initiating cleanup. The synchronous
-managed-restart adapter retains its separate existing execution contract.
+child, which is bound to the build revision it launched. Stop aborts and drains it before
+releasing runtime ownership. Completion rechecks the runtime, then initiates cleanup after a
+refused or indeterminate activation even if the build revision moved meanwhile, and only then
+refuses success to any caller whose verified revision differs from the launched one or from the
+current probe. The synchronous managed-restart adapter retains its separate existing execution
+contract.
 The managed restart also checks the captured runtime generation and build revision after the stop
 ladder. Before activation, the command rechecks the live registration and the full proof against
 the approved package while holding the two files open. Windows activates by AUMID. Readback uses
