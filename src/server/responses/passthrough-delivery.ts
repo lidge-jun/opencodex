@@ -36,7 +36,7 @@ import {
 } from "../relay";
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { applyReplayRefusalClientHeaders, carryReplayRefusal, isReplayRefusalCode, isNonReplayableResponse, isReplayRefusalResponse, isTerminalResetReplacement, markResponseNonReplayable, projectReplayRefusal, replayRefusalBodyCode } from "../../lib/upstream-retry";
-import { projectResponsesUpstreamRefusal, rewriteNonRetryableFailurePayload, sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
+import { NON_REPLAYABLE_COMPLETION_MESSAGE, projectResponsesUpstreamRefusal, rewriteNonRetryableFailurePayload, sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 import { sliceChunks, teeWithBoundedInspection } from "../inspection-tee";
 import { markPacedStream } from "../../lib/paced-stream";
 import { LINK_PACED_SLICE_BYTES, linkTurnPacesReads } from "../link-turn";
@@ -882,9 +882,14 @@ export async function deliverPassthroughResponse(
         && parsed._responseModelId !== parsed.modelId
         ? createResponsesModelPayloadRewrite(parsed._responseModelId)
         : undefined;
+      // Copy a boundary synthesizes from upstream evidence, and the row's copy, also refuse any value
+      // this request sent, decided from its own headers.
+      const repeatsSentValue = createSentValueGuard(nativeExchange.request.headers);
+      noteRequestSentValueGuard(logCtx, repeatsSentValue);
+      const synthesizedCopyMask = createSynthesizedCopyMask(nativeExchange.request.headers, repeatsSentValue);
       // Compose payload rewrites into one pass.
       const payloadRewrites = [
-        (payload: string) => rewriteNonRetryableFailurePayload(payload, options.comboAttempt === true),
+        (payload: string) => rewriteNonRetryableFailurePayload(payload, options.comboAttempt === true, synthesizedCopyMask),
         rewriteResponsesIncompleteReasonJson,
         createImageGenCallRestoreRewrite(imageGenCallAliases),
         // #3217: a call whose namespace repeats its own name is unroutable in codex-rs.
@@ -922,11 +927,6 @@ export async function deliverPassthroughResponse(
         }, { dispose: () => plaintextInspector.dispose() })
         : undefined;
       const maskCredential = createOutboundCredentialMask(nativeExchange.request.headers);
-      // Copy a boundary synthesizes from upstream evidence, and the row's copy, also refuse any value
-      // this request sent, decided from its own headers.
-      const repeatsSentValue = createSentValueGuard(nativeExchange.request.headers);
-      noteRequestSentValueGuard(logCtx, repeatsSentValue);
-      const synthesizedCopyMask = createSynthesizedCopyMask(nativeExchange.request.headers, repeatsSentValue);
       const forwardedEvidenceRedaction = createForwardedEvidenceRedaction(nativeExchange.request.headers, maskCredential);
       const requiredStreamEvidence = { replayUnsafe: !!webSearchBridgePlan };
       const normalizeRequiredToolItem = (item: unknown) => {
@@ -1089,7 +1089,7 @@ export async function deliverPassthroughResponse(
           const clientError = {
             type: synthesizedCopyMask(error.type ?? defaults.type),
             code: isReplayRefusalCode(error.code) ? error.code : synthesizedCopyMask(logCtx.terminalErrorCode ?? error.code ?? defaults.code),
-            message: veto ? "Upstream reported a non-replayable failed completion."
+            message: veto ? NON_REPLAYABLE_COMPLETION_MESSAGE
               : synthesizedCopyMask(error.message ?? "upstream reported a failed completion"),
           };
           const failureHeaders = sanitizePassthroughHeaders(headers, passthroughHeaderOptions);

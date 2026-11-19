@@ -1411,3 +1411,55 @@ data: ${JSON.stringify(terminal)}
     expect(body).not.toContain(error.message);
   } finally { release(); }
 });
+
+test.each([
+  { model: "bridged/model", event: "response.completed", scenario: "refusal" },
+  { model: "bridged/model", event: "response.completed", scenario: "veto" },
+  { model: "bridged/model", event: "response.incomplete", scenario: "refusal" },
+  { model: "bridged/model", event: "response.completed", scenario: "success" },
+  { model: "combo/pair", event: "response.completed", scenario: "refusal" },
+  { model: "combo/pair", event: "response.incomplete", scenario: "veto" },
+  { model: "combo/pair", event: "response.completed", scenario: "success" },
+])("$model projects $event with $scenario", async ({ model, event, scenario }) => {
+  const config = model === "combo/pair" ? comboReplayConfig() : parityConfig();
+  const diagnostic = "fixture upstream terminal diagnostic";
+  const code = "fixture_provider_failure";
+  const refusalCode = "upstream_response_refused";
+  const terminal = { type: event, response: {
+    id: "resp_terminal", object: "response", output: [],
+    status: event === "response.incomplete" ? "incomplete" : "completed",
+    ...(scenario === "success" ? { error: null, last_error: null } : {
+      error: { code, message: diagnostic, ...(scenario === "veto" ? { retryable: false } : {}) },
+      ...(scenario === "refusal" ? { last_error: { code: refusalCode, message: diagnostic } } : {}),
+    }),
+  } };
+  let sends = 0;
+  globalThis.fetch = (async () => {
+    sends++;
+    return new Response(`event: ${event}\ndata: ${JSON.stringify(terminal)}\n\n`, {
+      headers: { "content-type": "text/event-stream" },
+    });
+  }) as typeof fetch;
+  const release = acquireOwnedSpendHome();
+  try {
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model, stream: true, store: false, ...RESPONSES_TURN }),
+    }), config, { model: "", provider: "" });
+    const body = await response.text();
+    expect({ sends, status: response.status }).toEqual({ sends: 1, status: 200 });
+    const frames = body.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+    const terminals = frames.filter(frame => frame.type === event);
+    if (scenario === "success") {
+      expect(terminals).toEqual([terminal]);
+    } else {
+      const error = scenario === "refusal"
+        ? { code: refusalCode, message: CLIENT_ERROR_CONTRACTS.replay_refused }
+        : { code, message: "Upstream reported a non-replayable failed completion." };
+      expect(terminals).toMatchObject([{
+        response: { status: terminal.response.status, retryable: false, error, last_error: error },
+      }]);
+      expect(body).not.toContain(diagnostic);
+    }
+  } finally { release(); }
+});

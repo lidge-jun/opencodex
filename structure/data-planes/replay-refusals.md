@@ -29,8 +29,10 @@ publishes this verdict to its collector. A matching collected terminal returns t
 429 envelope and retry veto; an unmatched raw record cannot borrow that verdict. Streaming
 delivery preserves the fixed error code and wording without changing committed HTTP headers.
 `src/server/responses/non-replayable-error.ts` sets that flag and preserves the exact public
-codes on native Responses failed terminals while replacing upstream diagnostics with fixed
-text. The upstream-owned `upstream_no_response` and `upstream_closed_before_response` retain
+codes on native Responses failed terminals and error-bearing completed or incomplete
+terminals while replacing upstream diagnostics with fixed text. An explicit replay veto on
+an error-bearing completed or incomplete terminal also keeps the failure code and uses
+the fixed buffered failed-completion diagnostic. The upstream-owned `upstream_no_response` and `upstream_closed_before_response` retain
 their status and retry policy. After a link relay has committed response headers, a later stream
 failure cannot replace the original HTTP status; the body can end abruptly instead. See
 [Remote Link](../remote-link.md) for the pre-header and post-header distinction.

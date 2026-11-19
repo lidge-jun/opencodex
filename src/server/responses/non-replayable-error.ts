@@ -7,6 +7,7 @@ import {
 } from "../../lib/upstream-retry";
 import { isXaiLegacyPrivacyError, isXaiPrivacyModeRefusal, xaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
 import type { RequestFailureCause } from "../../usage/telemetry-contract";
+import { responsesFrameRetryVeto, terminalErrorRecords } from "./codex-ws-wire";
 import { clientCancelledResponse, readDisplaySafeErrorText } from "./core-errors";
 
 const UPSTREAM_ERROR_TYPES = new Set([
@@ -103,27 +104,32 @@ export async function sanitizeNonReplayableUpstreamError(
   return carryProxyError(response, safe);
 }
 
-/** Project recognized refusals on every native stream, plus other non-retryable combo failures. */
-export function rewriteNonRetryableFailurePayload(payload: string, comboAttempt: boolean): string {
+export const NON_REPLAYABLE_COMPLETION_MESSAGE = "Upstream reported a non-replayable failed completion.";
+
+/** Project recognized refusals on every native stream, and withhold diagnostics on terminal replay vetoes. */
+export function rewriteNonRetryableFailurePayload(payload: string, comboAttempt: boolean, maskCode: (value: string) => string): string {
   try {
-    type ErrorRecord = { type?: unknown; code?: unknown };
     const event = JSON.parse(payload) as {
-      type?: unknown; retryable?: unknown; error?: ErrorRecord; last_error?: ErrorRecord;
-      response?: { retryable?: unknown; error?: ErrorRecord; last_error?: ErrorRecord };
+      type?: unknown; error?: unknown; last_error?: unknown;
+      response?: Record<string, unknown>;
     };
-    if (event?.type !== "response.failed") return payload;
-    const candidates = [event.response?.error, event.error, event.response?.last_error, event.last_error];
-    const upstream = candidates.find(error => isReplayRefusalCode(error?.code)) ?? candidates.find(error => error != null);
-    const nonRetryable = event.response?.retryable === false || event.retryable === false
-      || isNonReplayableUpstreamCode(upstream?.code);
-    if (!isReplayRefusalCode(upstream?.code) && !(comboAttempt && nonRetryable)) return payload;
+    const failed = event?.type === "response.failed";
+    if (!failed && event?.type !== "response.completed" && event?.type !== "response.incomplete") return payload;
+    const candidates = terminalErrorRecords(event);
+    if (!failed && candidates.length === 0) return payload;
+    const upstream = candidates.find(error => isReplayRefusalCode(error.code)) ?? candidates[0];
+    const refusal = isReplayRefusalCode(upstream?.code);
+    const veto = responsesFrameRetryVeto(event) !== undefined;
+    if (!refusal && !(failed ? comboAttempt && (veto || isNonReplayableUpstreamCode(upstream?.code)) : veto)) return payload;
     const type = typeof upstream?.type === "string" ? upstream.type : undefined;
     const code = typeof upstream?.code === "string" ? upstream.code : undefined;
     const status = httpStatusFromTerminalError({ type, code });
     const { message, type: safeType, code: safeCode } = ownedChatErrorPayload({
       status, type, code, evidence: { status, type, code },
     }).error;
-    const error = { type: safeType, code: safeCode, message };
+    const error = !failed && !refusal
+      ? { type: safeType, code: code === undefined ? safeCode : maskCode(code), message: NON_REPLAYABLE_COMPLETION_MESSAGE }
+      : { type: safeType, code: safeCode, message };
     const { error: _error, last_error: _lastError, ...root } = event;
     return JSON.stringify({ ...root, response: { ...event.response, retryable: false, error, last_error: error } });
   } catch {
