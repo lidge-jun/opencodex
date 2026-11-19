@@ -1161,8 +1161,9 @@ export async function prepareResponsesTransport(
               passiveKeyPhysicalFetch(distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider), route.providerName, route.provider, target), config, route.providerName, route.provider),
               input,
               { ...physicalInit, redirect: "manual",
-                ...physicalSendObserverInit(observeAutoPause, target, !explicitAttemptCommit && deferAttemptNote ? () => {
-                  commitKeyAttemptSend();
+                ...physicalSendObserverInit(observeAutoPause, target, (!explicitAttemptCommit && deferAttemptNote) || pinned ? () => {
+                  // An explicit caller commit has already published this attempt at dispatch.
+                  if (!explicitAttemptCommit) commitKeyAttemptSend();
                   // A pinned receipt keeps its estimate until this send reports usage.
                   if (pinned) recordCurrentPhysicalSendUsage(null);
                 } : undefined,

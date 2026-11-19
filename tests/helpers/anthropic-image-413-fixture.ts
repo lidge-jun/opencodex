@@ -123,7 +123,7 @@ export async function fixture(options: {
     const spendRecords = options.spendCeiling !== undefined && await journal.exists()
       ? (await journal.text()).trim().split("\n").map(parseSpendJournalRecord)
       : undefined;
-    return { sent, response: upstream, text, spendRecords,
+    return { sent, response: upstream, text, spendRecords, logCtx,
       spendSnapshot: spendRecords && sharedSpendLedger().snapshot("pool", providerName),
       spendDispatchCount: spendRecords?.filter(record => record?.kind === "dispatch").length };
   } finally {
