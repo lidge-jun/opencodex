@@ -118,7 +118,7 @@ round trip; `tests/server/upstream-error-detail-boundaries.test.ts` drives nativ
 passthrough and both Messages lanes against an upstream that echoes its credential, and checks the live
 row, `usage.jsonl`, hydration and console output.
 
-The combo ladder checks the resolved child route against both the ingress model scope and the current configured-key scope. A local scope refusal uses the original client selector.
+The combo ladder checks the resolved child route against both the ingress model scope and the current configured-key scope. A refused member is skipped for an eligible sibling first; when none remains, the local scope refusal uses the original client selector.
 
 ## Service tier and model identity
 

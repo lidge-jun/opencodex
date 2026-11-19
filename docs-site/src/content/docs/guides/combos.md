@@ -24,6 +24,14 @@ Mark a pay-per-use combo target with `"metered": true` when it follows subscript
 
 Request headers cannot grant consent. Model/provider scopes still apply. This covers initial selection, failover and recovery across combo strategies, compaction, Messages, Chat Completions and WebSocket requests, and a subagent model fallback naming a combo alias. A collapsed fallback tries a usable unmetered target before refusing. Unmarked targets retain existing behavior; metering is declared by the operator rather than detected automatically.
 
+A request rechecks consent and its key's model scope immediately before each paid send: the JEV
+decision call and every target attempt, including failover, retries and pinned sends. Revoking
+consent or narrowing a key's scope therefore stops sends the request has not made yet. A target that
+no longer qualifies is skipped and another eligible target may serve the request; when none remains,
+the request ends with the usual `combo_unavailable` or scope refusal. Other combo edits, such as
+capabilities, the Vision Sidecar, protocol settings or the target list, apply from the next request.
+A request already in progress keeps the settings it started with.
+
 For example, a failover chain can target Anthropic OAuth, then Cursor, then `{ "provider": "anthropic-apikey", "model": "claude-opus-5-5", "metered": true }`. Without consent, exhaustion returns the last unmetered error, with exceptions for [confirmed context overflow](#context-window-refusals) and quota refusals: an earlier 429 or 402 quota refusal takes precedence over a later 400, 401 or 403. If the subscription target returns 429 and Cursor then refuses with 401 or 403, the caller receives the subscription's 429, because the spent subscription explains the failure and Cursor's credential refusal does not. Dashboard saves retain omitted target metering and combo consent; explicitly setting either to false clears it. These consent fields are configured through the config file or API; the combo flag is also available through the CLI, while the dashboard does not expose it.
 
 ## 60-second quickstart
@@ -1209,8 +1217,8 @@ cooldown set by a 401 or 403), `transient` (any other cooldown), `unsupported` (
 request, including a mandatory `tool_choice` no target preserves) and `unavailable` (provider missing or
 disabled). `targets` counts the configured targets, `attempted` the targets dispatched to a child attempt (a child may refuse before any upstream send), and `causes`
 how many targets fell in each class. The object never names the combo, a provider, a model or upstream text.
-Claude Messages and Chat Completions also return HTTP 503 with `combo_unavailable` in their own error
-shapes.
+Claude Messages also returns HTTP 503 with `combo_unavailable` in its own error shape. Chat Completions
+returns HTTP 503 with type `server_error` and code `server_is_overloaded`.
 For cooldowns, follow an observed `Retry-After` value first;
 Codex reset headers also take precedence over `cooldownMs`.
 If neither upstream signal is usable, the configured `cooldownMs` applies, or the upstream fallback applies
