@@ -1593,6 +1593,25 @@
       ]
     },
     {
+      "path": "transports/upload-reduction.md",
+      "tier": 3,
+      "title": "Optional Codex Upload Reduction",
+      "scope": "Opt-in lossy historical image/tool slimming and acknowledged native WS input-prefix deltas.",
+      "documents": [
+        "src/server/responses/history-slim.ts",
+        "src/server/responses/codex-ws-incremental.ts",
+        "src/server/responses/ws-upstream.ts",
+        "src/server/responses/codex-ws-exchange.ts",
+        "src/server/responses/codex-ws-pool.ts",
+        "src/server/responses/codex-ws-session.ts",
+        "src/server/responses/codex-ws-request.ts",
+        "src/server/responses/fetch-helpers.ts",
+        "src/config/",
+        "src/lib/state-store-registrations.ts",
+        "src/server/management/system-routes.ts"
+      ]
+    },
+    {
       "path": "telemetry.md",
       "tier": 5,
       "title": "Telemetry",

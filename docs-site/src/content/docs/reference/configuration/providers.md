@@ -124,7 +124,7 @@ The Z.ai quota probe recognizes the international coding Chat base
 `https://api.z.ai/api/v1`. All three read quota from the international monitor with
 Bearer authentication; this does not change the inference URL or imply different
 quota consumption between adapters. Existing BigModel CN monitor selection remains
-separate. Full request URLs such as `/api/v1/responses` are not provider base URLs.
+separate. Full request URLs such as `/api/v1/responses` are not provider base URLs. See [Codex upload reduction options](/reference/configuration/codex-upload-reduction/) for WebSocket reuse and history slimming.
 
 ## Provider-related top-level fields
 
