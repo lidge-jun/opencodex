@@ -61,7 +61,11 @@ Grok and Claude stay pointed at the proxy that was already running. With a separ
 `OPENCODEX_HOME`, startup checks the default home's runtime record and managed Grok and
 Codex loopback destinations for a live opencodex owner before syncing. A custom home with
 no live owner still syncs normally; explicit `ocx sync` and `ocx grok apply` remain available.
-Stopping that sibling with `ocx stop` or a signal leaves their configuration alone as well. While it runs, the proxy also
+Stopping that sibling with `ocx stop` or a signal leaves their configuration alone as well.
+If the sibling serves a saved Remote Link, `ocx stop` verifies the running instance and its
+Link ownership and stops only that process. Unverified Link ownership or conflicting service
+manager approval leaves the process running and reports an ownership refusal.
+While it runs, the proxy also
 keeps Codex pointed at itself: when the opencodex routing in `~/.codex/config.toml` names another
 local port where no opencodex has answered for about 20 seconds (an instance that re-pointed it and
 then died, for example), the proxy re-points Codex at its own port and prints one warning. Codex
@@ -82,11 +86,33 @@ ocx start --socks5-off
 
 ### `ocx stop [--json] [--deadline-ms <ms>]`
 
-An unsupervised Link Child handling a shutdown signal restores native Codex and managed Grok before releasing its listener, rechecking the served connection before each write. Service/Desktop supervision, sibling ownership, restart/recycle handoff and pending parent stop receipts preserve integrations. Shutdown rejects bound restart with `409 runtime_stopping`. Forced termination can bypass signal handlers; parent `ocx stop` restoration remains necessary. To route Codex through Home again after such a stop, start the Child (`ocx start`, or `ocx service start` for an installed service) and then run `ocx sync --restart-codex`. Starting alone does not reapply routing. A sync run while the Child is stopped still reapplies routing, which points Codex at a listener that is not running, so start the Child first.
+An unsupervised Link Child handling a shutdown signal removes file integrations created by the Link, then restores native Codex and managed Grok before releasing its listener, rechecking the served connection before each write. Pre-existing standalone file integrations and user edits are preserved. During that unsupervised signal cleanup, if file cleanup or native Codex/Grok restoration is refused, including unverified ownership, the listener stays bound with synchronization paused; repair the reported configuration or ownership evidence and retry `ocx stop`. To leave Home after a refused stop, `ocx disconnect --recover-config --yes` completes configuration recovery and restarts the retained Child as standalone OpenCodex. A stop or recovery still in progress continues to refuse restart. Service/Desktop supervision, sibling ownership and restart/recycle handoff preserve integrations. The Child defers native Codex and Grok restoration only when a verified running parent stop owns the matching receipt. File cleanup and its synchronization fence still run before the listener is released. A stale or unreadable receipt alone keeps the listener bound and the recovery evidence intact. Shutdown rejects bound restart with `409 runtime_stopping`.
+
+An explicit `ocx stop` verifies that the running Child still serves the saved Link connection and supports the stop fence, then removes Link-created file integrations before stopping the process or service. If the saved connection is invalid, has changed owners, or file cleanup is refused, the command stops before terminating anything. Repair the saved connection or the reported ownership evidence and retry. The command also refuses before termination if an older recovery record would prevent native restoration; repair the reported evidence and retry. Native Codex/Grok restoration is then attempted by the stopping command after the Child exits. A refusal at that stage reports incomplete restoration and preserves recovery evidence; the listener is already stopped. Forced termination can bypass signal handlers; parent `ocx stop` restoration remains necessary. To route Codex through Home again after such a stop, start the Child (`ocx start`, or `ocx service start` for an installed service) and then run `ocx sync --restart-codex`. Starting alone does not reapply routing. With Home available, sync also reapplies its enabled file integrations. A sync run while the Child is stopped still reapplies routing, which points Codex at a listener that is not running, so start the Child first.
+
+The stopping command must record its recovery receipt before asking a service manager or process to stop. Linux requires kernel pidfd support for direct termination. On macOS, the direct path sends a single SIGTERM. If the direct stop fails, check the Child’s terminal or supervisor for the reason, repair the reported evidence, and retry `ocx stop`.
+
+If a Remote Link Child is still running an older version without the stop fence, such as v2.100.4, the current CLI refuses to stop it. To keep the saved Home connection:
+
+1. Close Codex, Grok and other clients routed through the Child before releasing its port.
+2. Stop the old runtime using its original owner. Press Ctrl+C in its foreground terminal, use Stop and quit its Desktop supervisor, or run `ocx stop` from the **old installation** for a background service, including Windows Task Scheduler.
+3. With the old runtime down, run `ocx stop` from the **current installation**, using the same `OPENCODEX_HOME` and client homes. This completes file-route cleanup and keeps the saved connection. Keep clients closed and resolve any restoration errors before continuing. On Linux this also works without a reachable systemd user manager when the installer unit and service installation records are absent and the known local endpoints are down.
+4. Start the current runtime with `ocx start`, `ocx service start` for an installed service, or the updated Desktop app for a Desktop-managed runtime. Run `ocx sync --restart-codex` once the Child is serving.
 
 Stop the running proxy (by PID), remove the PID file, and restore native Codex for standalone owners. If a managed
 background service is installed, `ocx stop` also stops it first so it cannot respawn the proxy.
-On a connected hub client, `ocx stop` leaves Codex routing, its
+If the listener cannot prove its role, a standalone runtime record can still authorize the ordinary stop
+when its recorded process creation identity matches the live PID and there is no Link evidence.
+An older record without a creation identity requires a same-user OpenCodex start process that owns
+the recorded listener. A wildcard record requires a wildcard listener, and an IPv4 loopback record
+requires an exact loopback listener. On Linux and macOS, the process home and the caller's home
+must resolve to the same directory, including through symlinks. Windows uses the
+owner SID, start arguments, and exact listener ownership because CIM does not expose the process environment.
+The CLI leaves the process running if it cannot establish that match or verify a supervisor.
+If a live tracked PID could still be a Link Child, `ocx stop` leaves it running until it can verify
+its role or tie the PID to a matching service registration. Run `ocx service status` to identify
+its supervisor, or check the foreground terminal. Repair the runtime or saved Link records and retry.
+A native client that cannot prove whether it serves a Link or Hub connection refuses to stop. Update and restart older native clients through their supervisor, then retry. On a connected hub client, `ocx stop` leaves Codex routing, its
 model catalog and the Grok config as they are, including after a successful API stop: the connection
 owns them, and `ocx start` serves them again without re-injecting routing. Use `ocx disconnect` to hand Codex back to its own account. If Codex on a connected
 client already reads native routing, `ocx status` names `ocx sync --restart-codex` to point it back.
@@ -105,7 +131,9 @@ read. Older or unverified runtimes are refused before
 stop actions. Update/restart that runtime through its supervisor and retry; use `ocx disconnect`
 only when you intend to release the connection-owned integrations.
 Repeated stops of an already-stopped client confirm service-manager inactivity and absence at the
-known local endpoints before returning the normal not-running result.
+known local endpoints before returning the normal not-running result. With configured port `0`,
+the recorded runtime port supplies the endpoint; without a concrete recorded endpoint, the stop
+refuses because runtime absence cannot be proved.
 While the OpenCodex desktop app is running, `ocx stop` does not keep the proxy down: the app treats
 it as an unexpected exit and starts a proxy again, within seconds for one it started and after about
 a minute for one it had only attached to. Use the app's tray **Stop proxy** (for a proxy the app

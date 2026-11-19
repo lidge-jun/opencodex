@@ -1,7 +1,7 @@
 /** Cross-process admission for Link sync while its local runtime shuts down. */
 import { lstatSync } from "node:fs";
 import { ConfigMutationLockError, withConfigMutationLockSync } from "../config";
-import { getRuntimePortPath, isValidRuntimePortState, writeRuntimePort, type RuntimePortState } from "../config/process-state";
+import { getRuntimePortPath, isValidRuntimePortState, writeRuntimePort, type ClientStopOwner, type RuntimePortState } from "../config/process-state";
 import { readBoundedRegularFileSync } from "../lib/bounded-file-read";
 
 export class ClientSyncRuntimeError extends Error {
@@ -10,7 +10,7 @@ export class ClientSyncRuntimeError extends Error {
   }
 }
 
-function readSyncRuntime(): RuntimePortState | null {
+export function readSyncRuntime(): RuntimePortState | null {
   const path = getRuntimePortPath();
   try { lstatSync(path); }
   catch (error) {
@@ -43,14 +43,33 @@ export function assertRouteIntentPort(port: number): void {
 }
 
 /** The same C transaction excludes every sync commit; never mark a replacement runtime. */
-export function markClientRuntimeStopping(expected: Required<Pick<RuntimePortState, "pid" | "port" | "attestationSecret">>): void {
+export function markClientRuntimeStopping(
+  expected: Required<Pick<RuntimePortState, "pid" | "port" | "attestationSecret">>, stopOwner?: ClientStopOwner,
+): void {
   withConfigMutationLockSync(() => {
     const current = readSyncRuntime();
     if (!current || current.pid !== expected.pid || current.port !== expected.port
       || current.attestationSecret !== expected.attestationSecret) {
       throw new ClientSyncRuntimeError("client_runtime_changed");
     }
-    if (!current.clientStopping) writeRuntimePort({ ...current, clientStopping: true });
+    if (!current.clientStopping || (stopOwner && !Bun.deepEquals(current.clientStopOwner, stopOwner, true))) {
+      writeRuntimePort({ ...current, clientStopping: true, ...(stopOwner ? { clientStopRequested: true, clientStopOwner: stopOwner } : {}) });
+    }
+  });
+}
+
+/** Finish only this parent's exact-runtime stop; sync stays fenced until its process exits. */
+export function finishClientRuntimeStop(
+  expected: Required<Pick<RuntimePortState, "pid" | "port" | "attestationSecret">>, stopOwner: ClientStopOwner,
+): void {
+  withConfigMutationLockSync(() => {
+    const current = readSyncRuntime();
+    if (current?.pid === expected.pid && current.port === expected.port
+      && current.attestationSecret === expected.attestationSecret && current.clientStopRequested === true
+      && Bun.deepEquals(current.clientStopOwner, stopOwner, true)) {
+      const { clientStopOwner: _finished, ...retained } = current;
+      writeRuntimePort({ ...retained, clientStopRequested: false });
+    }
   });
 }
 
