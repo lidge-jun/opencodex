@@ -711,6 +711,23 @@ La aplicación orquestada sale con 0 cuando el resultado está verificado o ya e
 
 Las instalaciones independientes compiladas, incluido el paquete de escritorio MSI Windows, se actualizan a través de **Buscar actualizaciones...** en OpenCodex Desktop, con `ocx update --desktop` en una instalación de Desktop para Windows (que verifica el MSI publicado con la clave del actualizador de la aplicación, lo instala sin interfaz y reinicia el proxy que sigue sirviendo la versión anterior; consulta la guía de la aplicación de escritorio), o reinstalando el binario independiente desde [GitHub Lanzamientos](https://github.com/lidge-jun/opencodex/releases). `ocx system update check` reporta `installer: "standalone"`, `canUpdate: false` y `reason: "standalone_install"` con esa guía. `ocx update` sin `--desktop` sale sin éxito con la misma pista; no ejecuta una actualización de gestor de paquetes para el ejecutable compilado. Una comprobación de fuente genuina todavía reporta `installer: "source"` y `reason: "source_checkout"`.
 
+Si el host ya usa un actualizador externo, por ejemplo un temporizador de systemd
+que despliega y activa versiones del código fuente en `/opt/opencodex/releases/`,
+configura `OCX_MANAGED_RELEASE=1` en el entorno del servicio del proxy e inicia
+el proxy con el lanzador `ocx` de Node de la versión activa. Por ejemplo, configura
+el servicio para ejecutar `node /opt/opencodex/current/bin/ocx.mjs start` y haz que
+el actualizador reinicie el servicio después de cambiar el enlace `current`. El
+lanzador obtiene este ajuste antes de iniciar Bun. El archivo `.env` del proyecto
+no puede activar este modo. El administrador del host proporciona el actualizador y sus directorios
+de versiones. El nombre del directorio por sí solo no activa este modo y la
+variable de entorno no instala ni programa un actualizador.
+
+El panel y `ocx system update check` pueden comparar la versión instalada con el
+canal de npm seleccionado. Si la consulta se completa, se obtienen
+`installer: "source"`, `canUpdate: false` y `reason: "managed_release"`, sin
+una sugerencia de ejecutar `git pull`. Si npm no devuelve la última versión, se
+obtiene `reason: "latest_unavailable"` y el panel permite reintentar la consulta.
+
 #### Actualización de Desktop para Windows sin interfaz
 
 ```bash

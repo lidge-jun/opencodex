@@ -40,6 +40,7 @@ describe("standalone update checks", () => {
     const deps: RefreshDeps = {
       current: () => "2.84.0", install: () => "standalone",
       ownership: () => ({ installer: "standalone" }), guidance: () => null,
+      managedReleaseDirectory: () => true,
       lookup, now: Date.now, disabled: () => false,
       read: () => null, write: () => { throw new Error("must not write package cache"); },
       setTimer: timer as typeof setTimeout, clearTimer: clearTimeout,

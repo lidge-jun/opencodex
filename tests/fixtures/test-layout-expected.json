@@ -1532,6 +1532,7 @@
   "update-mise-launcher-target.test.ts": "update", "update-mise.test.ts": "update",
   "update-mise-node-runtime.test.ts": "update", "update-pnpm.test.ts": "update", "update-pnpm-global-store.test.ts": "update",
   "update-refresh.test.ts": "update", "update-restart-lease.test.ts": "update",
+  "update-managed-release.test.ts": "update",
   "update-stop-classification.test.ts": "update", "update-stop-first.test.ts": "update",
   "update-config-preflight.test.ts": "update",
   "update-teardown-handover.test.ts": "update",
