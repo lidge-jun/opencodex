@@ -636,16 +636,18 @@ servir y que el combo elija por solicitud:
 - **Audio.** El destino debe declarar entrada de audio y usar un protocolo capaz de transportarla.
   Las solicitudes Chat de un combo de unión admiten audio WAV o MP3 en línea. Si ningún destino
   puede aceptarlo, el proxy responde HTTP 400 antes del envío.
-- **Contexto.** Antes de elegir, el proxy estima los tokens de entrada de la solicitud con el mismo
-  estimador que usa su admisión de contexto (sobrestima un poco a propósito) y omite un destino cuyo
-  límite de entrada no puede contenerlos. Una ventana desconocida es elegible para esta comprobación.
-  Los turnos de compactación están exentos de este filtro. El proxy comprueba primero el consentimiento
+- **Contexto.** Antes de elegir, el proxy aplica la misma comprobación que la admisión de cada destino
+  del combo ([rechazos por ventana de contexto](#context-window-refusals)): la estimación de entrada,
+  con su margen de 1,1×, debe caber en el límite de entrada del destino, y esa estimación más la
+  reserva de salida debe caber en su ventana. Se omite el destino que no la supera, aunque su ventana
+  pudiera contener solo la entrada. Una ventana desconocida es elegible para esta comprobación. Los
+  turnos de compactación están exentos de este filtro. El proxy comprueba primero el consentimiento
   para los destinos de pago medido.
 - **Esfuerzo.** Con `"adaptive"`, un esfuerzo del llamador que falta en la escala conocida de un destino
   se baja al nivel más alto de ese destino que no lo supere (`xhigh` en un destino low/medium/high se
   envía como `high`). Un esfuerzo inferior a toda la escala usa el nivel admitido más bajo.
 - **Orden de degradación.** El filtro de capacidades solo considera destinos que cumplen el consentimiento para el uso medido, el alcance de modelos, la selección obligatoria de herramientas y los requisitos del protocolo. Si falla una descripción necesaria, el combo omite ese envío y prueba los demás destinos elegibles que pueden procesar las imágenes. Aplica `onUnservable` cuando se agotan esas opciones. El proxy registra la omisión de imágenes como advertencia y escribe los niveles de esfuerzo solicitado y enviado en el registro de depuración.
-- **Nada puede servir.** Cuando la ventana de ningún destino puede contener la entrada,
+- **Nada puede servir.** Cuando ningún destino puede contener la entrada junto con su reserva de salida,
   `onUnservable: "degrade"` (el valor predeterminado) la envía al destino con la ventana más grande, con
   la misma admisión flexible que recibe una solicitud directa, y registra una advertencia. Cuando hay
   destinos que pueden contenerla pero ninguno puede tomar su imagen, `"degrade"` la despacha igualmente:

@@ -1019,15 +1019,17 @@ and have the combo pick per request instead:
 - **Audio.** A target must declare audio input and use a wire that can carry it. Union Chat
   requests can include inline WAV or MP3 audio. If none of the targets can take the audio, the
   proxy returns HTTP 400 without dropping it.
-- **Context.** Before picking, the proxy estimates the request's input tokens with the same estimator
-  its context admission uses (it overcounts slightly on purpose) and skips a target whose input limit
-  cannot hold them. A target with an unknown window remains eligible on context. Compaction turns
-  are exempt from the context check. The proxy evaluates these limits after checking metered consent.
+- **Context.** Before picking, the proxy applies the check each combo target's own admission makes
+  ([context-window refusals](#context-window-refusals)): the input estimate, with its 1.1× margin,
+  must fit the target's input limit, and that estimate plus the output reserve must fit its window.
+  A target that fails is skipped, even when its window could hold the input alone. A target with an
+  unknown window remains eligible on context. Compaction turns are exempt from the context check.
+  The proxy evaluates these limits after checking metered consent.
 - **Effort.** Under `"adaptive"`, a caller effort that a target's known ladder lacks maps to
   that target's highest rung at or below it (`xhigh` on a low/medium/high target is sent as `high`).
   A request below the entire ladder uses the lowest supported rung.
 - **Order of degradation.** Capability filtering considers only targets that meet metered consent, model scope, mandatory tool selection, and protocol requirements. If a required description fails, the combo skips that send and tries the remaining eligible image-serving targets. It applies `onUnservable` when those choices are exhausted. The proxy logs image omission as a warning and effort adjustments at debug level with the requested and sent rungs.
-- **Nothing can serve.** When no target's window can hold the input, `onUnservable: "degrade"` (the
+- **Nothing can serve.** When no target can hold the input and its output reserve, `onUnservable: "degrade"` (the
   default) sends it to the target with the largest window, under the same loose admission a direct
   request gets, and logs a warning. When targets can hold it but every one is unable to take its
   image, `"degrade"` dispatches anyway: the target replaces each image with an omission note and the
