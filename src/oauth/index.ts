@@ -101,7 +101,7 @@ import { newerClaudeCredentialForInstance, captureAnthropicCredentialOwnerForIns
 import { anthropicSubscriptionLabel } from "../providers/anthropic-subscription";
 import { mergeOAuthOrganizationName, normalizeOAuthPlan, mergeOAuthPlan, oauthOrganizationNameSummary, withMergedOAuthLabels } from "./plan";
 import { mergeAnthropicIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
-import { anthropicReauthSlotGuard, observeAnthropicSlotOrganizations } from "./anthropic-login-slot";
+import { anthropicReauthSlotGuard, anthropicSlotEmailsMatch, observeAnthropicSlotOrganizations } from "./anthropic-login-slot";
 import { AnthropicCrossInstanceDuplicateError, AnthropicLocalCliImportError, assertAnthropicCredentialSource } from "./store-anthropic-instance";
 export interface OAuthAccessSnapshot {
   workbuddy?: import("./types").WorkBuddyOAuthMetadata;
@@ -1693,9 +1693,9 @@ export async function runLogin(
           .filter(account => account.id !== opts.reauthAccountId).map(account => account.credential))
         : existing.accountId && cred.accountId
           ? existing.accountId === cred.accountId
-          : existing.email && cred.email
-            ? existing.email.trim().toLowerCase() === cred.email.trim().toLowerCase()
-            : false;
+          : isAnthropicOAuthInstance(provider)
+            ? anthropicSlotEmailsMatch(existing.email, cred.email)
+            : Boolean(existing.email && cred.email && existing.email.trim().toLowerCase() === cred.email.trim().toLowerCase());
       if (!identityMatches) throw new OAuthReauthIdentityMismatchError();
       const assertAccounts = isAnthropicOAuthInstance(provider) ? anthropicReauthSlotGuard(opts.reauthAccountId, cred,
         await observeAnthropicSlotOrganizations(getAccountSet(provider)?.accounts ?? [], cred)) : undefined;

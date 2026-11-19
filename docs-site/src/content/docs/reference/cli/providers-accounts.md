@@ -341,11 +341,14 @@ the login still preserves an active account whose confirmed organization differs
 If Claude confirms the organization and supplies an email address without an account UUID, sign-in
 can update the single account with a matching email in that organization. The part before `@` and
 internationalized domains match exactly after trimming surrounding whitespace. Other domains are
-compared without regard to ASCII case. If the only account with that email has an unknown
-organization, sign-in preserves it and can add a separate account. If several accounts match in
-the confirmed organization, sign-in stops without changing any of them. Signing in again succeeds
-once Claude returns the account profile; until then, reauthenticate the intended account with
-`ocx account login anthropic --id <account-id> --reauth`, or remove the duplicate with
+compared without regard to ASCII case. If no account matches in the confirmed organization, sign-in
+adds a separate account and preserves existing accounts, including older entries without an email
+or account UUID. If several accounts match in the confirmed organization, sign-in stops without
+changing any of them. To reauthenticate the intended account, use
+`ocx account login anthropic --id <account-id> --reauth`. When Claude supplies only email and
+organization, reauthentication requires a matching email and a confirmed matching organization on
+the existing account. If its organization is unknown, retry when Claude can return the account
+profile. You can remove a duplicate with
 `ocx account remove anthropic <account-id> --yes`.
 If an account changes during organization verification and the writer cannot confirm its current
 organization, retry the login or Claude Code credential import.

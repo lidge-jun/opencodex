@@ -47,6 +47,11 @@ function slotEmail(email: string | undefined): string | undefined {
   return trimmed.slice(0, separator + 1) + domain.toLowerCase();
 }
 
+export function anthropicSlotEmailsMatch(left: string | undefined, right: string | undefined): boolean {
+  const email = slotEmail(left);
+  return email !== undefined && email === slotEmail(right);
+}
+
 function slotOrganization({ id, credential }: ProviderAccount, observed: AnthropicSlotOrganizations): string | undefined {
   const stored = anthropicOrganization(credential);
   if (stored) return stored;
@@ -165,10 +170,14 @@ export function anthropicReauthSlotGuard(
     const targetAccountUuid = slotAccountUuid(target.credential);
     if (targetAccountUuid && accountUuid && targetAccountUuid !== accountUuid) throw new OAuthReauthIdentityMismatchError();
     if (!organization) return;
-    // An email-only grant still names its organization; only the sibling match needs the account UUID.
     const targetOrganization = slotOrganization(target, observed);
+    if (!accountUuid) {
+      if (targetOrganization !== organization || !anthropicSlotEmailsMatch(target.credential.email, incoming.email)) {
+        throw new OAuthReauthIdentityMismatchError();
+      }
+      return;
+    }
     if (targetOrganization ? targetOrganization !== organization : observed.has(target.id)) throw new OAuthReauthIdentityMismatchError();
-    if (!accountUuid) return;
     const siblingConflict = accounts.some(row => {
       const prior = observed.get(row.id);
       if (row.id === accountId || (slotAccountUuid(row.credential) ?? prior?.accountUuid) !== accountUuid) return false;

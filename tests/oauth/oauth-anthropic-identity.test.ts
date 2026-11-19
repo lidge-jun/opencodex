@@ -672,6 +672,53 @@ test("an email-only reauth of an organization slot refuses a grant for another o
   } finally { OAUTH_PROVIDERS.anthropic!.login = original; }
 });
 
+test.each([
+  { scenario: "ASCII local-part case", storedEmail: "shared@example.test", email: "Shared@example.test", organization: ORG_A },
+  { scenario: "Unicode domain spelling", storedEmail: "shared@bücher.example.test", email: "shared@Bücher.example.test", organization: ORG_A },
+  { scenario: "IDN A-label spelling", storedEmail: "shared@xn--bcher-kva.example.test", email: "shared@XN--BCHER-KVA.example.test", organization: ORG_A },
+  { scenario: "unknown target organization", storedEmail: "shared@example.test", email: "shared@Example.Test", organization: undefined },
+])("scoped email-only reauth preserves the roster on $scenario", async ({ storedEmail, email, organization }) => {
+  await saveCredential("anthropic", { ...orgCredential("synthetic-original", organization), email: storedEmail });
+  const before = getAccountSet("anthropic")!;
+  const original = OAUTH_PROVIDERS.anthropic!.login;
+  const access = "synthetic-reauth";
+  let writerReached = false;
+  OAUTH_PROVIDERS.anthropic!.login = async () => ({
+    access, refresh: "synthetic-reauth-refresh", expires: Date.now() + 3600_000, source: "oauth", email,
+    anthropicOrganizationScope: { v: 1, organizationUuid: ORG_A, bearerSha256: proof(access).bearerSha256 },
+  });
+  try {
+    await expect(runLogin("anthropic", {} as OAuthController, { reauthAccountId: before.activeAccountId }, {
+      loadConfig: () => ({ port: 10100, defaultProvider: "openai", openaiProviderTierVersion: 2, providers: {} }),
+      saveConfig: () => {},
+      saveAccountCredential: (...args) => {
+        writerReached = true;
+        return saveAccountCredential(...args);
+      },
+    })).rejects.toBeInstanceOf(OAuthReauthIdentityMismatchError);
+    expect(writerReached).toBe(organization === undefined);
+    expect(getAccountSet("anthropic")).toEqual(before);
+  } finally { OAUTH_PROVIDERS.anthropic!.login = original; }
+});
+
+test("scoped email-only reauth rechecks the current email under the writer lock", async () => {
+  await saveCredential("anthropic", orgCredential("synthetic-original", ORG_A));
+  const before = getAccountSet("anthropic")!;
+  const slot = before.accounts[0]!;
+  const access = "synthetic-reauth";
+  const incoming: OAuthCredentials = {
+    access, refresh: "synthetic-reauth-refresh", expires: Date.now() + 3600_000, source: "oauth",
+    email: slot.credential.email,
+    anthropicOrganizationScope: { v: 1, organizationUuid: ORG_A, bearerSha256: proof(access).bearerSha256 },
+  };
+  const assertAccounts = anthropicReauthSlotGuard(slot.id, incoming, new Map());
+  await saveAccountCredential("anthropic", slot.id, { ...slot.credential, email: "Shared@example.test" });
+  const changed = getAccountSet("anthropic")!;
+  await expect(saveAccountCredential("anthropic", slot.id, incoming, { assertAccounts }))
+    .rejects.toBeInstanceOf(OAuthReauthIdentityMismatchError);
+  expect(getAccountSet("anthropic")).toEqual(changed);
+});
+
 test("own-grant refresh keeps the stored organization and never discards a rotated grant over it", () => {
   const stored = orgCredential("synthetic-old", ORG_A);
   const fresh = orgCredential("synthetic-new");
@@ -1107,6 +1154,7 @@ test.each<{
   email?: string;
   storedEmail?: string;
   legacy?: boolean;
+  unidentified?: boolean;
 }>([
   { scenario: "reuses an exact same-organization email", outcome: "reuse" },
   { scenario: "reuses a trimmed email with an ASCII domain case variant", email: " shared@Example.Test ", outcome: "reuse" },
@@ -1117,12 +1165,13 @@ test.each<{
   { scenario: "preserves a slot with a differently spelled IDN A-label", storedEmail: "shared@xn--bcher-kva.example.test", email: "shared@XN--BCHER-KVA.example.test", outcome: "add" },
   { scenario: "adds a different-organization slot", organization: ORG_B, outcome: "add" },
   { scenario: "preserves a legacy slot with the same email and unknown organization", legacy: true, outcome: "add" },
+  { scenario: "preserves an unidentified active row during normal sign-in", unidentified: true, outcome: "add" },
   { scenario: "refuses ambiguous same-organization slots", outcome: "refuse" },
 ])("email-only browser login $scenario when the profile is unavailable", async ({
-  organization = ORG_A, email = "shared@example.test", storedEmail = "shared@example.test", legacy, outcome,
+  organization = ORG_A, email = "shared@example.test", storedEmail = "shared@example.test", legacy, unidentified, outcome,
 }) => {
-  const credential = { ...orgCredential("synthetic-org-a", ORG_A), email: storedEmail };
-  if (legacy) {
+  const credential = { ...orgCredential("synthetic-org-a", ORG_A), email: unidentified ? undefined : storedEmail };
+  if (legacy || unidentified) {
     credential.accountId = undefined;
     credential.anthropicIdentity = undefined;
   }
@@ -1131,7 +1180,7 @@ test.each<{
   const before = getAccountSet("anthropic")!;
   const original = before.accounts[0]!;
   if (outcome === "refuse") expect(before.accounts).toHaveLength(2);
-  if (legacy) expect(anthropicOrganization(original.credential)).toBeUndefined();
+  if (legacy || unidentified) expect(anthropicOrganization(original.credential)).toBeUndefined();
 
   let profileReads = 0;
   globalThis.fetch = (async (_url, init) => {
@@ -1147,7 +1196,7 @@ test.each<{
   const login = runLogin("anthropic", {
     onAuth: ({ url }) => { state = new URL(url).searchParams.get("state"); },
     onManualCodeInput: async () => `synthetic-code#${state}`,
-  }, { codeMode: true, forceLogin: true }, { loadConfig: config, saveConfig: () => {} });
+  }, { codeMode: true, ...(unidentified ? {} : { forceLogin: true }) }, { loadConfig: config, saveConfig: () => {} });
 
   if (outcome === "refuse") {
     await expect(login).rejects.toThrow("Multiple Anthropic login slots match");

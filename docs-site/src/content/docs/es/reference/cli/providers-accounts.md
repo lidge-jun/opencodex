@@ -216,11 +216,14 @@ Si Claude confirma la organización y proporciona un correo electrónico sin el 
 el inicio de sesión puede actualizar la única cuenta con un correo coincidente en esa organización.
 Tras quitar los espacios al principio y al final, la parte anterior a `@` y los dominios
 internacionalizados deben coincidir exactamente. En los demás dominios se ignoran las diferencias
-entre mayúsculas y minúsculas ASCII. Si la única cuenta con ese correo tiene una organización
-desconocida, se conserva y se puede añadir una cuenta nueva. Si coinciden varias cuentas en la
-organización confirmada, el inicio de sesión se detiene sin cambiar ninguna. Volver a iniciar sesión
-funciona cuando Claude devuelve el perfil de la cuenta; mientras tanto, reautentica la cuenta
-correcta con `ocx account login anthropic --id <account-id> --reauth` o elimina el duplicado con
+entre mayúsculas y minúsculas ASCII. Si ninguna cuenta coincide en la organización confirmada,
+el inicio de sesión añade una cuenta y conserva las existentes, incluidas las antiguas que no
+tienen correo ni UUID de cuenta. Si coinciden varias cuentas en la organización confirmada, el
+inicio de sesión se detiene sin cambiar ninguna. Para reautenticar la cuenta correcta, usa
+`ocx account login anthropic --id <account-id> --reauth`. Si Claude solo proporciona el correo
+y la organización, ambos deben coincidir con los de la cuenta existente y su organización debe
+estar confirmada. Si la organización es desconocida, vuelve a intentarlo cuando Claude pueda
+devolver el perfil de la cuenta. Puedes eliminar un duplicado con
 `ocx account remove anthropic <account-id> --yes`.
 Si una cuenta cambia durante la comprobación y ya no se puede confirmar su organización, repite la operación.
 La reautenticación rechaza una autorización para otra organización confirmada o para una que ya

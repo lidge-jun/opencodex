@@ -24,7 +24,7 @@ import { notifyAuthStoreLoaded } from "../lib/decision-quota-sink";
 import { isPassiveRead } from "../lib/passive-read";
 import { accountPauseDetailsSchema, accountPauseEvidenceSchema } from "../config/schema/account-auto-pause";
 import { mergeOAuthOrganizationName, normalizeOAuthOrganizationName, normalizeOAuthPlan, mergeOAuthPlan, withMergedOAuthLabels } from "./plan";
-import { anthropicOrganizationsConflict, normalizeAnthropicIdentity, normalizeAnthropicOrganizationScope,
+import { anthropicOrganization, anthropicOrganizationsConflict, normalizeAnthropicIdentity, normalizeAnthropicOrganizationScope,
   mergeAnthropicIdentity } from "./anthropic-identity";
 import { findAnthropicImportSlot, findAnthropicLoginSlot, observeAnthropicSlotOrganizations } from "./anthropic-login-slot";
 import { normalizeWorkBuddyMetadata } from "../providers/workbuddy";
@@ -1055,10 +1055,13 @@ export async function saveCredentialWithReceipt(
         // active identity-less row in place prevents a stale duplicate that stays selectable
         // and would re-refresh into a second row with the same identity.
         const active = set.accounts.find(a => a.id === set.activeAccountId);
+        const scopedAnthropicEmailOnly = isAnthropicInstanceId(provider) && !safe.accountId
+          && !safe.anthropicIdentity && anthropicOrganization(safe) !== undefined;
         // Kiro rows of one organization differ only by user: while another row shares the profile,
         // an unmatched Kiro login claims an identity-less slot only as the same CLI session (#6641).
         const legacyUpgrade = active !== undefined && active.credential.accountId === undefined
           && active.credential.email === undefined
+          && !scopedAnthropicEmailOnly
           && (!isAnthropicInstanceId(provider) || !anthropicOrganizationsConflict(active.credential, safe))
           && (provider !== "kiro" || (Boolean(safe.refresh) && active.credential.refresh === safe.refresh)
             || !set.accounts.some(a => safe.accountId !== undefined && a.credential.accountId === safe.accountId));
