@@ -17,7 +17,7 @@ import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import type { RequestFailureStage } from "../../lib/request-failure-model";
 import type { RequestLogContext } from "../request-log";
 import { carryResponseToolOwnership } from "./response-tool-ownership";
-import { responsesFrameIsReplayUnsafe, responsesFrameRetryVeto, terminalErrorRecords } from "./codex-ws-wire";
+import { incompleteDetailsVetoReplay, responsesFrameIsReplayUnsafe, responsesFrameRetryVeto, terminalErrorRecords } from "./codex-ws-wire";
 import { createSseInspector, isNativePassthroughSseResponse } from "../relay";
 import { sseDataPayload } from "../sse-payload-rewrite";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
@@ -251,7 +251,7 @@ function comboStreamDegeneratePrelude(payload: unknown, commentaryItemIds: Set<s
 
 function incompleteCarriersVetoReplay(...carriers: Array<Record<string, unknown> | undefined>): boolean {
   return carriers.some(carrier => carrier?.end_turn === false
-    || recordValue(carrier?.incomplete_details)?.retryable === false);
+    || incompleteDetailsVetoReplay(carrier));
 }
 
 function classifyIncompleteReplayReason(

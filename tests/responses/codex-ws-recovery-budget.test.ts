@@ -102,6 +102,7 @@ test.each([
   ['ordinary miss', missing, undefined],
   ['retryable false', { ...missing, response: { retryable: false } }, 'upstream_response_refused'],
   ['error retryable false', { ...missing, error: { ...missing.error, retryable: false } }, 'upstream_response_refused'],
+  ['nested incomplete retryable false', { ...missing, response: { incomplete_details: { retryable: false } } }, 'upstream_response_refused'],
   ['last_error retryable false', { ...missing, last_error: { retryable: false } }, 'upstream_response_refused'],
   ['header veto', { ...missing, headers: { 'X-Should-Retry': 'false', 'Retry-After': '30' } }, 'upstream_response_refused'],
   ['recognized refusal', { ...missing, last_error: { code: 'upstream_reset_replay_refused' } }, 'upstream_reset_replay_refused'],

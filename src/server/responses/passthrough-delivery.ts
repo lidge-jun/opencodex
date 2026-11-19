@@ -1,3 +1,4 @@
+import { responsesFrameRetryVeto } from "./codex-ws-wire";
 import { clientFacingModelText } from "../../lib/error-destination";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
@@ -34,7 +35,7 @@ import {
   relayWithAbort,
 } from "../relay";
 import { isUsageDebugEnabled } from "../../usage/debug";
-import { carryReplayRefusal, isNonReplayableResponse, isReplayRefusalResponse, isTerminalResetReplacement, markResponseNonReplayable, projectReplayRefusal, replayRefusalBodyCode } from "../../lib/upstream-retry";
+import { applyReplayRefusalClientHeaders, carryReplayRefusal, isReplayRefusalCode, isNonReplayableResponse, isReplayRefusalResponse, isTerminalResetReplacement, markResponseNonReplayable, projectReplayRefusal, replayRefusalBodyCode } from "../../lib/upstream-retry";
 import { projectResponsesUpstreamRefusal, rewriteNonRetryableFailurePayload, sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 import { sliceChunks, teeWithBoundedInspection } from "../inspection-tee";
 import { markPacedStream } from "../../lib/paced-stream";
@@ -1084,13 +1085,16 @@ export async function deliverPassthroughResponse(
           logCtx.terminalSource = "upstream";
           reportNativeTerminal?.("failed", status);
           const defaults = bufferedErrorDefaults(status);
+          const veto = responsesFrameRetryVeto(payload) !== undefined;
           const clientError = {
             type: synthesizedCopyMask(error.type ?? defaults.type),
-            code: synthesizedCopyMask(logCtx.terminalErrorCode ?? error.code ?? defaults.code),
-            message: synthesizedCopyMask(error.message ?? "upstream reported a failed completion"),
+            code: isReplayRefusalCode(error.code) ? error.code : synthesizedCopyMask(logCtx.terminalErrorCode ?? error.code ?? defaults.code),
+            message: veto ? "Upstream reported a non-replayable failed completion."
+              : synthesizedCopyMask(error.message ?? "upstream reported a failed completion"),
           };
           const failureHeaders = sanitizePassthroughHeaders(headers, passthroughHeaderOptions);
           failureHeaders.set("content-type", "application/json");
+          if (veto) applyReplayRefusalClientHeaders(failureHeaders);
           const response = markPreinspectedJsonResponse(formatPassthroughUpstreamError(
             status, JSON.stringify({ error: clientError }), { headers: failureHeaders },
           ));

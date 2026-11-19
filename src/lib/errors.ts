@@ -1,3 +1,4 @@
+import { isReplayRefusalCode } from "./upstream-retry";
 import { formatRetryAfterAdvice, parseRetryAfterFromMessage } from "./retry-delay";
 import { isMetaMusePlanFailure, META_MUSE_PLAN_REFUSAL_MESSAGE } from "../providers/meta-muse-plan-refusal";
 
@@ -105,18 +106,20 @@ export function responsesCompletionError(payload: unknown): CompletionError | un
   if (event.type !== "response.completed") return undefined;
   const nonblank = (value: unknown): string | undefined =>
     typeof value === "string" && value.trim() ? value : undefined;
+  let firstError: CompletionError | undefined;
   for (const candidate of [event.error, event.last_error, event.response?.error, event.response?.last_error]) {
     if (typeof candidate === "string") {
-      if (nonblank(candidate)) return { message: candidate };
+      if (nonblank(candidate)) firstError ??= { message: candidate };
     } else if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
       const record = candidate as Record<string, unknown>;
       const type = nonblank(record.type);
       const code = nonblank(record.code);
       const message = nonblank(record.message);
-      if (type || code || message) return { type, code, message };
+      if (isReplayRefusalCode(code)) return { type, code, message };
+      if (type || code || message) firstError ??= { type, code, message };
     }
   }
-  return undefined;
+  return firstError;
 }
 
 /** First nonblank string across the canonical upstream error paths, in priority order. */

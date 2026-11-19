@@ -139,3 +139,10 @@ Body inspection time does not count toward the upstream slow-attempt budget, and
 starve the deadline or cancellation. `tests/lib/upstream-retry.test.ts` covers retry and cancellation.
 Before a spend-guarded retry, paced responses release their body lease by retaining bounded raw bytes via an optional caller-supplied reader.
 The retained body carries read failures for the receiver's usual error policy, and retry accounting keeps the upstream status.
+
+Buffered Responses delivery treats an error-bearing `response.completed` as a failed turn.
+A recognized refusal code in any event or snapshot error record selects the fixed HTTP 429.
+An explicit retry veto on a generic failed completion preserves its failure status and code,
+withholds the upstream diagnostic, and sends `x-should-retry: false` without `Retry-After`.
+Combo preflight and WebSocket cache-miss recovery both honor
+`incomplete_details.retryable: false` on the event or response snapshot before recovery.

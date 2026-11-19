@@ -223,11 +223,18 @@ export function terminalErrorRecords(payload: Record<string, unknown>): Record<s
   return [response?.error, payload.error, response?.last_error, payload.last_error].filter(plainRecord);
 }
 
+export function incompleteDetailsVetoReplay(carrier: Record<string, unknown> | undefined): boolean {
+  const details = carrier?.incomplete_details;
+  return plainRecord(details) && details.retryable === false;
+}
+
 /** Envelope-level vetoes can carry a stream policy refusal. Error-level vetoes only block replay. */
-export function responsesFrameRetryVeto(payload: Record<string, unknown>): "envelope" | "error" | undefined {
+export function responsesFrameRetryVeto(payload: unknown): "envelope" | "error" | undefined {
+  if (!plainRecord(payload)) return;
   const response = plainRecord(payload.response) ? payload.response : undefined;
   if (payload.retryable === false || response?.retryable === false) return "envelope";
-  if (terminalErrorRecords(payload).some(error => error.retryable === false)) return "error";
+  if (incompleteDetailsVetoReplay(payload) || incompleteDetailsVetoReplay(response)
+    || terminalErrorRecords(payload).some(error => error.retryable === false)) return "error";
 }
 
 /** Only an absent mark or boolean false permits replay, on both the event and its snapshot. */
