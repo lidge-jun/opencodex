@@ -274,6 +274,33 @@ Las filas de solicitudes fallidas pueden incluir diagnósticos `upstreamErrorTyp
 
 `GET /api/logs` acepta un opaco opcional `cursor` de su respuesta anterior. La envoltura conserva `logs`, `total`, `generatedAt` y `timeZone`, y añade `cursor` y `reset`. Sin un cursor devuelve la ventana filtrada completa. Un prefijo válido sin cambios devuelve solo las filas anexas; `reset: true` reemplaza la ventana del cliente después de editar, desalojar, consultar cambios o reiniciar. Los cursores no válidos devuelven HTTP 400 con `error.code: "invalid_cursor"`. La autenticación no ha cambiado. El panel de control vuelve a las instantáneas completas de los servidores más antiguos. Esto reduce los bytes de respuesta para ventanas estables; la proyección del servidor permanece limitada por el tamaño de ventana actual.
 
+Las respuestas de los registros y del historial omiten `usage.providerCredits` en las solicitudes y los intentos con una lectura de créditos inválida o incompleta. Una lectura de cero se devuelve como `0`.
+
+Cuando está disponible, `displayMetrics.cost.estimate` puede incluir un objeto opcional `billing`
+que describe la base del cálculo.
+
+- `{ "source": "provider-credits", "providerCredits": <number>, "creditPriceUsd": <number> }` indica
+  que el total es `providerCredits x creditPriceUsd`. Los campos de costo por tokens son valores
+  de relleno y se omiten al mostrar el desglose. Una lectura de cero conserva un costo de cero.
+  Si faltan la lectura y la salida cuando se aplica el precio por crédito, el costo no está disponible.
+- `{ "source": "mixed" }` indica que un Combo combina formas de cobro o precios por crédito
+  diferentes. El total suma los intentos y cada intento conserva su propio desglose.
+
+La ausencia de `billing` en una estimación disponible indica un cálculo por tokens. Una fila
+registrada antes de configurar el precio puede recibir una estimación por créditos a la tarifa
+actual si conserva una lectura válida. Si hay salida y falta la lectura, se puede usar la
+estimación por tokens. Los clientes pueden mostrar el desglose por tokens cuando no hay
+`billing`. En una estimación por créditos, `tokens` es `null` si no se pudo normalizar el desglose.
+
+Cuando faltan la lectura y la salida, o no se puede calcular un importe representable a partir
+de los créditos y el precio, se devuelve
+`{ "kind": "unavailable", "reason": "credit_cost_unrepresentable" }`. El total de un Combo usa
+ese motivo si lo presenta un intento apto para el cálculo. En los demás casos de intentos
+sin precio, el total del Combo devuelve `combo_attempt_unavailable`. Una fila o un intento
+calculado por tokens devuelve `invalid_usage` si su recuento supera el límite de tarificación.
+Consulta
+[Créditos por solicitud de Kiro](/es/guides/kiro-request-credits/#límites-y-valores-no-representables).
+
 Los valores `/api/logs` `displayMetrics.decodeTokPerSecond` exitosos llevan `timingBasis: "generation-window" | "legacy-post-visible-output"` junto con `kind`, `value` y `estimated: true`; los valores de intento identifican su propia ventana. Los resultados no disponibles mantienen su `reason` existente y sin base de tiempo. El campo se deriva solo en el tiempo de lectura: el JSONL almacenado, el `tokPerSecond` de extremo a extremo, los DTO de historial de solicitudes y el rendimiento agregado no cambian. Los DTO más antiguos pueden omitir el campo; los clientes deben tratar la base de tiempo como desconocida en ese caso. El panel de control nombra estos métodos **Ventana de generación** y **Después de la salida visible**, con **Tiempo desconocido** para una base faltante o desconocida. Los detalles de la solicitud muestran **Velocidad de salida durante la generación (est.)**, **Velocidad de salida después de la primera salida visible (est.)** o **Tasa de salida (est.; método de temporización desconocido)** y una explicación visible del método de temporización cuando hay una tasa disponible.
 
 | Método y ruta | Finalidad | Errores notables |

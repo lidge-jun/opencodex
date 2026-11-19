@@ -39,7 +39,10 @@ async function drive(passes: AdapterEvent[][], maxSearches = 1, clientAdvisor = 
       events = passes[Math.min(requests.length - 1, passes.length - 1)]!;
       return { url: "https://worker.test/v1", method: "POST", headers: {}, body: "{}" };
     },
-    fetchResponse: async () => new Response("fixture"),
+    fetchResponse: async (_request, ctx) => {
+      ctx?.onPhysicalSend?.({ ordinal: 1 });
+      return new Response("fixture");
+    },
     async *parseStream() { yield* events; },
   };
   const response = await runWithWebSearch({

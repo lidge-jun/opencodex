@@ -773,6 +773,11 @@ export interface OcxProviderConfig {
    */
   modelCosts?: Record<string, ProviderCostOverlay>;
   /**
+   * USD per provider credit (for example Kiro credits). For a model with a matched token price
+   * and a valid `providerCredits` reading, the estimate uses credits × this price.
+   */
+  creditPriceUsd?: number;
+  /**
    * Provider-wide auto-review (approval) model for routed models of this provider.
    *
    * The value is a catalog selector: either a bare model id of this provider
