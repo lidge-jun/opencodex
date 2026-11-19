@@ -364,6 +364,18 @@ export function credentialGeneration(cred: OAuthCredentials): string {
   return createHash("sha256").update(JSON.stringify([cred.refresh, cred.access, cred.expires, ...(cred.workbuddy ? [cred.workbuddy] : []), ...(cred.m365 ? [cred.m365] : [])])).digest("hex");
 }
 
+function anthropicCredentialFingerprint(account: ProviderAccount): string {
+  return JSON.stringify([credentialGeneration(account.credential), account.credential.source,
+    account.credential.accountId, account.loginId, account.addedAt]);
+}
+
+/** Opaque ownership for evidence. The revision distinguishes replacements that restore identical bytes. */
+export function anthropicCredentialEvidenceKey(account: ProviderAccount): string {
+  return createHash("sha256").update(JSON.stringify([
+    account.credentialRevision?.sequence, account.credentialRevision?.id, anthropicCredentialFingerprint(account),
+  ])).digest("hex");
+}
+
 /** Load and normalize the OAuth auth store with hardened permissions, and hand the result to the opt-in decision-quota slot (a no-op unless JEV quota signals are active). */
 function loadAuthStoreInternal(): { store: AuthStore; hadLegacy: boolean } {
   const path = getAuthStorePath();
@@ -713,6 +725,11 @@ function normalizeAccount(value: unknown): ProviderAccount | null {
     && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate.loginId)) {
     account.loginId = candidate.loginId;
   }
+  const revision = candidate.credentialRevision;
+  if (revision && Number.isSafeInteger(revision.sequence) && revision.sequence > 0
+    && typeof revision.id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(revision.id)) {
+    account.credentialRevision = { sequence: revision.sequence, id: revision.id };
+  }
   if (candidate.loginOrigin === "kiro-device") account.loginOrigin = candidate.loginOrigin;
   return account;
 }
@@ -898,6 +915,10 @@ export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValue
       accountId: set.activeAccountId,
       revision: set.selectionRevision,
       accountIds: set.accounts.map(account => account.id),
+      credentialRevisions: isAnthropicInstanceId(provider) ? new Map(set.accounts.map(account => [account.id, {
+        fingerprint: anthropicCredentialFingerprint(account),
+        revision: account.credentialRevision && { ...account.credentialRevision },
+      }])) : undefined,
     }]));
     const result = await fn(store);
     // Only providers whose credentials this mutation actually removed leave the downgrade
@@ -913,6 +934,19 @@ export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValue
         continue;
       }
       const replaced = before?.set !== after;
+      if (isAnthropicInstanceId(provider)) {
+        for (const account of after.accounts) {
+          const previous = before?.credentialRevisions?.get(account.id);
+          // Only this lock assigns revisions. A restored snapshot cannot reinstate an old proof.
+          if (!replaced && previous?.fingerprint === anthropicCredentialFingerprint(account)) {
+            account.credentialRevision = previous.revision;
+          } else {
+            const sequence = (previous?.revision?.sequence ?? 0) + 1;
+            if (!Number.isSafeInteger(sequence)) throw new Error("OAuth credential revision exhausted");
+            account.credentialRevision = { sequence, id: randomUUID() };
+          }
+        }
+      }
       const removed = before?.accountIds.some(id => !after.accounts.some(account => account.id === id));
       if (replaced || removed || before?.accountId !== after.activeAccountId) {
         // Replacement/rollback must never restore a previous generation. A common

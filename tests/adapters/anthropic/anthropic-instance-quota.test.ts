@@ -288,16 +288,116 @@ async function seedWeightedAnthropicQuota() {
   const evidence = (now = Date.now()) => cache.getAnthropicResetNearQuota(instance, id, now);
   const weight = (now = Date.now()) => resetNearWeightOf(ids, accountId =>
     cache.getAnthropicResetNearQuota(instance, accountId, now), now)?.(id) ?? 1;
+  const original = f.store.getAccountCredential(instance, id)!;
   const rotate = async () => {
-    const original = f.store.getAccountCredential(instance, id)!;
     expect(await f.store.saveAccountCredential(instance, id, {
       ...original, access: "synthetic-quota-rotated-access", refresh: "synthetic-quota-rotated-refresh",
       anthropicIdentity: undefined,
     })).toBe(true);
   };
   expect(weight()).toBe(2);
-  return { instance, id, observedAt, evidence, weight, rotate };
+  return { instance, id, original, observedAt, evidence, weight, rotate };
 }
+
+function planUsageResponse(): Response {
+  const resetsAt = new Date(Date.now() + 3_600_000).toISOString();
+  return Response.json({
+    five_hour: { utilization: 30, resets_at: resetsAt },
+    seven_day: { utilization: 30, resets_at: resetsAt },
+    limits: [],
+  });
+}
+
+test.each([false, true])("Anthropic weighted evidence stays retired on credential reuse (new login ID: %s)", async rotateLoginId => {
+  const { instance, id, original, weight, rotate } = await seedWeightedAnthropicQuota();
+  const oldLoginId = f.store.getAccountSet(instance)!.accounts.find(row => row.id === id)!.loginId;
+  const { fetchAnthropicAccountQuota } = await import("../../../src/providers/quota/anthropic-account-quota");
+  expect(await f.store.setAccountAlias(instance, id, "Renamed seat")).toBe(true);
+  expect(weight()).toBe(2);
+  await rotate();
+  expect(weight()).toBe(1);
+  await f.store.saveAccountCredential(instance, id, original, { rotateLoginId });
+  const newLoginId = f.store.getAccountSet(instance)!.accounts.find(row => row.id === id)!.loginId;
+  expect(newLoginId !== oldLoginId).toBe(rotateLoginId);
+  expect(weight()).toBe(1);
+  globalThis.fetch = (async () => planUsageResponse()) as typeof fetch;
+  expect((await fetchAnthropicAccountQuota(instance, id, true, f.config)).quota?.fiveHourPercent).toBe(30);
+  expect(weight()).toBe(2);
+});
+
+test.each(["account", "provider"] as const)("Anthropic %s refresh rejects a response dispatched before credential reuse", async scope => {
+  const { instance, id, original, weight, rotate } = await seedWeightedAnthropicQuota();
+  const { fetchAnthropicAccountQuota } = await import("../../../src/providers/quota/anthropic-account-quota");
+  const { fetchAnthropicQuota } = await import("../../../src/providers/quota/vendor-probes-oauth");
+  const started = anthropicInstanceBarrier();
+  const finish = anthropicInstanceBarrier();
+  let sends = 0;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const sentOriginal = new Headers(init?.headers).get("authorization") === `Bearer ${original.access}`;
+    expect(sentOriginal).toBe(true);
+    sends++;
+    started.release();
+    await finish.wait;
+    return planUsageResponse();
+  }) as typeof fetch;
+  const pending = scope === "account"
+    ? fetchAnthropicAccountQuota(instance, id, true, f.config).then(entry => entry.quota)
+    : fetchAnthropicQuota(instance, f.config);
+  const outcome = observePending(pending);
+  try {
+    await waitForDispatch(started, outcome);
+    await rotate();
+    await f.store.saveAccountCredential(instance, id, original);
+  } finally {
+    finish.release();
+    await outcome;
+  }
+  expect(sends).toBe(1);
+  expect(pendingValue(await outcome)).toBeNull();
+  expect(f.quota.getCachedProviderAccountQuota(instance, id)).toBeNull();
+  expect(weight()).toBe(1);
+});
+
+test("Anthropic account and provider refreshes both stamp fresh weighted plan evidence", async () => {
+  const { instance, id, evidence, weight } = await seedWeightedAnthropicQuota();
+  const { fetchAnthropicAccountQuota } = await import("../../../src/providers/quota/anthropic-account-quota");
+  const { fetchAnthropicQuota } = await import("../../../src/providers/quota/vendor-probes-oauth");
+  globalThis.fetch = (async () => planUsageResponse()) as typeof fetch;
+  const expectFreshWeight = () => {
+    expect(evidence()).toMatchObject({
+      fiveHourPercent: 30, weeklyPercent: 30, fiveHourObservedAt: expect.any(Number), weeklyObservedAt: expect.any(Number),
+    });
+    expect(weight()).toBe(2);
+  };
+  cache.clearAccountQuotaCache();
+  expect((await fetchAnthropicAccountQuota(instance, id, true, f.config)).quota?.fiveHourPercent).toBe(30);
+  expectFreshWeight();
+  cache.clearAccountQuotaCache();
+  expect(await fetchAnthropicQuota(instance, f.config)).not.toBeNull();
+  expectFreshWeight();
+});
+
+test("persisted Anthropic quota stays retired after credential reuse and cache hydration", async () => {
+  const { instance, id, original, weight, rotate } = await seedWeightedAnthropicQuota();
+  const { settleAccountQuotaPersistForTests } = await import("../../../src/providers/account-quota-disk");
+  let flush!: () => void;
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void) => {
+    flush = callback;
+    return 0;
+  }) as typeof setTimeout);
+  try { cache.persistAccountQuotaCache(); } finally { timer.mockRestore(); }
+  flush();
+  await settleAccountQuotaPersistForTests();
+  cache.clearAccountQuotaCache();
+  cache.hydrateAccountQuotaCache();
+  expect(f.quota.getCachedProviderAccountQuota(instance, id)?.fiveHourPercent).toBe(30);
+  expect(weight()).toBe(1); // Hydration never restores live observation clocks.
+  await rotate();
+  await f.store.saveAccountCredential(instance, id, original);
+  cache.clearAccountQuotaCache();
+  cache.hydrateAccountQuotaCache();
+  expect(f.quota.getCachedProviderAccountQuota(instance, id)).toBeNull();
+});
 
 test.each(["before", "after"] as const)("failed Anthropic usage probe retains weight only until credential rotation %s the probe", async rotation => {
   const { instance, id, weight, rotate } = await seedWeightedAnthropicQuota();

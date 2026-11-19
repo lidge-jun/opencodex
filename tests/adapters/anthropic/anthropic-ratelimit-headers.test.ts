@@ -814,7 +814,9 @@ describe("Anthropic known-reset expiry", () => {
     // The fired callback admits its write after any overlapping config-root ACL flight (#7815).
     await settleAccountQuotaPersistForTests();
     const disk = JSON.parse(readFileSync(join(home, "provider-account-quota-cache.json"), "utf8"));
-    expect(disk.rows[`anthropic\u0000${id}`]).toEqual({ fiveHourPercent: 41, updatedAt: start });
+    expect(disk.rows[`anthropic\u0000${id}`]).toEqual({
+      fiveHourPercent: 41, updatedAt: start, anthropicCredentialKey: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
     expect(disk.rows["zai\u0000untouched"]).toEqual(saved);
   });
 });

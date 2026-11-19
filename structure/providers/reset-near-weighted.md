@@ -17,8 +17,9 @@ only when its reported duration is exactly five hours.
 
 `src/oauth/anthropic-routing.ts` ranks candidates for the eligible instance and model route. A
 keyless turn keeps the healthy active account without advancing the weighted ring. The strategy
-uses fixed usage cutoffs. `src/providers/quota/account-cache.ts` retains separate clocks for the
-shared five-hour and weekly bars. In both pools, carrying a bar forward during a partial update
+uses fixed usage cutoffs. `src/providers/quota/account-cache.ts` stamps separate clocks for the
+shared five-hour and weekly bars on account and provider refresh. Both clocks belong to the
+credential revision that supplied their readings. In both pools, carrying a bar forward during a partial update
 preserves its original observation time. An Anthropic probe that only retires monthly extra usage
 keeps those clocks for unchanged plan bars that still belong to the current credential.
 Hydrated display snapshots lack live observation clocks.

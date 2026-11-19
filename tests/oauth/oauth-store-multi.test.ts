@@ -642,6 +642,29 @@ describe("multi-account auth store", () => {
     expect(listAccounts("anthropic")[0]?.alias).toBeUndefined();
   });
 
+  test("Anthropic auth store advances the persisted credential revision for login, rotation, and import", async () => {
+    const original = cred({ accountId: "synthetic-anthropic-revision" });
+    await saveCredential("anthropic", original);
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    const readRevision = () => listAccounts("anthropic").find(account => account.id === id)!.credentialRevision!;
+    const first = readRevision();
+    expect(first.sequence).toBe(1);
+    await setAccountAlias("anthropic", id, "Renamed seat");
+    expect(readRevision()).toEqual(first);
+    await mergeAccountCredential("anthropic", id, original);
+    expect(readRevision()).toEqual(first);
+    await mergeAccountCredential("anthropic", id, { ...original, refresh: "synthetic-rotated-refresh" });
+    const rotated = readRevision();
+    expect(rotated.sequence).toBe(first.sequence + 1);
+    expect(rotated.id).not.toBe(first.id);
+    expect(await upsertCredentialByIdentity("anthropic", original)).toBe("updated");
+    const imported = readRevision();
+    expect(imported.sequence).toBe(rotated.sequence + 1);
+    expect(imported.id).not.toBe(first.id);
+    await saveAccountCredential("anthropic", id, original, { rotateLoginId: true });
+    expect(readRevision().sequence).toBe(imported.sequence + 1);
+  });
+
   test("saveAccountCredential persists refresh for a non-active account without switching active", async () => {
     await saveCredential("xai", cred({ email: "a@example.com", accountId: "acct-a" }));
     await saveCredential("xai", cred({ email: "b@example.com", accountId: "acct-b", access: "access-b" }));

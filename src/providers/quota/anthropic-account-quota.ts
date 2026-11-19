@@ -12,7 +12,7 @@ import {
   accountCacheKey, accountQuotaInflight, captureProviderAccountQuotaEpoch,
   commitAnthropicAccountQuota, getCurrentAccountQuotaEntry, getTokenForAccountQuotaProbe,
   hydrateAccountQuotaCache, mayCommitAccountQuotaKey, normalizeAnthropicQuota,
-  persistAccountQuotaCache, retainAnthropicAccountProbeQuota, stampAnthropicUsageObservation, type AccountQuotaCacheEntry,
+  persistAccountQuotaCache, anthropicAccountProbeEvidence, type AccountQuotaCacheEntry,
 } from "./account-cache";
 
 /**
@@ -71,11 +71,7 @@ export async function fetchAnthropicAccountQuota(
   const publish = (result: AnthropicQuotaRecoveryResult | null, failure?: QuotaFailureCode): AccountQuotaCacheEntry => {
     const isCurrent = result?.isCurrent ?? flightCurrent;
     const ts = Date.now();
-    const incoming = result?.quota;
-    const evidence = incoming ? {
-      quota: stampAnthropicUsageObservation(normalizeAnthropicQuota(incoming, ts), incoming),
-      quotaOwnerIsCurrent: isCurrent,
-    } : retainAnthropicAccountProbeQuota(instance, accountId, incoming === null, ts);
+    const evidence = anthropicAccountProbeEvidence(instance, accountId, ts, result ?? undefined);
     const entry: AccountQuotaCacheEntry = {
       ts, ...evidence, isCurrent,
       ...result?.failureFields,
