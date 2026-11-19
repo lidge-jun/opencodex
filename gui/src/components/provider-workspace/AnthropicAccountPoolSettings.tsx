@@ -58,8 +58,9 @@ function enabledStatus(
   threshold: number,
   quotaWindow: AccountPoolQuotaWindow,
 ): string {
-  const window = t(QUOTA_WINDOW_LABEL_KEYS[quotaWindow]);
   if (strategy === "round-robin") return t("anthropicPool.enabledRoundRobinDesc");
+  if (strategy === "reset-near-weighted") return t("accountPool.strategyHintResetNearWeighted");
+  const window = t(QUOTA_WINDOW_LABEL_KEYS[quotaWindow]);
   if (strategy === "fill-first") {
     return threshold === 0
       ? t("anthropicPool.enabledFillFirstNoThresholdDesc")
@@ -244,6 +245,7 @@ export default function AnthropicAccountPoolSettings({
   const stickyLimit = state?.stickyLimit ?? DEFAULT_ACCOUNT_POOL_STICKY_LIMIT;
   const quotaWindow = state?.quotaWindow ?? DEFAULT_ACCOUNT_POOL_QUOTA_WINDOW;
   const nativeMessages = state?.nativeMessages ?? true;
+  const usesConfigurableQuotaWindow = strategy !== "reset-near-weighted";
   // The window is inert ONLY under round-robin, which never scores a usage bar at any stage.
   //
   // A 0 threshold is not inertness: it disables PROACTIVE usage-based switching, but
@@ -331,7 +333,7 @@ export default function AnthropicAccountPoolSettings({
 
       {enabled && state && (
         <>
-          <label className="field anthropic-pool-card__field">
+          {usesConfigurableQuotaWindow && <label className="field anthropic-pool-card__field">
             <span className="field-label">{t("anthropicPool.threshold")}</span>
             <input
               className="input mono"
@@ -363,7 +365,7 @@ export default function AnthropicAccountPoolSettings({
               }}
             />
             <div className="card-sub" style={{ marginTop: 4 }}>{t("anthropicPool.thresholdHelp")}</div>
-          </label>
+          </label>}
 
           <AccountPoolStrategyControls
             strategy={strategy}
@@ -405,7 +407,7 @@ export default function AnthropicAccountPoolSettings({
             }}
           />
 
-          <div className="field anthropic-pool-card__field anthropic-pool-card__field--quota-window">
+          {usesConfigurableQuotaWindow && <div className="field anthropic-pool-card__field anthropic-pool-card__field--quota-window">
             <span className="field-label">{t("accountPool.quotaWindow")}</span>
             <Select
               id="anthropic-pool-quota-window"
@@ -433,7 +435,7 @@ export default function AnthropicAccountPoolSettings({
             <div className="card-sub" style={{ marginTop: 4 }}>
               {quotaWindowInert ? t("accountPool.quotaWindowInert") : t("accountPool.quotaWindowHint")}
             </div>
-          </div>
+          </div>}
         </>
       )}
 

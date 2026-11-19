@@ -29,6 +29,16 @@ catalog-driven refreshes, and the hub's `wantsDesktopConfig` export, which conne
 write verbatim. The decode registry keeps hidden routes, so a running Desktop session that still
 sends a just-hidden alias keeps routing.
 
+`src/server/index/serve-options.ts` checks whether the shared discovery inputs are still current.
+`src/server/index/anthropic-model-listing.ts` renders the Desktop snapshot and Anthropic listings,
+and installs Desktop aliases only while those inputs are current.
+When discovery is superseded or uses a detached policy projection, the Desktop config endpoint
+returns HTTP 503 with `desktop_snapshot_busy` and `Retry-After: 1`. Connected apply leaves the
+current profile byte-identical.
+Anthropic discovery with Desktop IDs still returns the visible rows whose IDs resolve to the same
+routes through the installed registry. `tests/server/server-new-model-policy-arrival.test.ts`
+covers cold and warm retries, alias registry isolation, and entitlement withdrawal.
+
 When a hidden row was a family default, the first remaining member of that family takes the role.
 Defaults are moved back to the front, which keeps the order `renderDesktopProfile` writes. A
 selection that would leave the list empty writes the full list and logs a warning, because Desktop

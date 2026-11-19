@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -136,6 +137,7 @@ export const pt: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Não foi possível salvar os limites de fluxo de trabalho.",
   "workflowBudget.saved": "Limites de fluxo de trabalho salvos.",
   ...desktopCompatibilityCopy("pt"),
+  ...accountProbeCopy("pt"),
   ...shellV2Copy("pt"),
   ...codexCliUpdateCopy("pt"),
   ...remoteLinkDiagnosticsCopy("pt"),
@@ -1343,6 +1345,7 @@ export const pt: Record<TKey, string> = {
   "logs.detail.protocol.none": "Nenhum dado de caminho registrado para esta requisição.",
   "logs.detail.section.performance": "Desempenho",
   "logs.detail.section.cost": "Equivalente ao preço de tabela da API",
+  "logs.detail.section.costBilled": "Custo estimado",
   "logs.detail.section.attempts": "Tentativas do combo",
   "logs.detail.section.usage": "Uso bruto",
   "logs.detail.ttft": "TTFT",
@@ -1360,6 +1363,11 @@ export const pt: Record<TKey, string> = {
   "logs.detail.reason.ttft_missing": "Nenhum tempo até o primeiro token foi registrado para esta requisição, portanto não há janela de decodificação para medir.",
   "logs.detail.reason.decode_window_too_short": "A janela de saída medida foi inferior a um segundo, curta demais para estimar a taxa de decodificação.",
   "logs.detail.costTotal": "Equivalente ao preço de tabela",
+  "logs.detail.creditBasis": "Base de cobrança",
+  "logs.detail.creditCharge": "{credits} créditos × {price} por crédito",
+  "logs.detail.creditMixed": "Misto — as tentativas não foram todas cobradas da mesma forma, ou os créditos não podem ser expressos como um único número; só o custo por tentativa tem detalhamento.",
+  "logs.detail.creditTotal": "Total calculado por créditos",
+  "logs.detail.mixedTotal": "Total combinado (base por tentativa)",
   "logs.detail.totalTokens": "Total de tokens",
   "logs.detail.matchedKey": "Chave de preço correspondente",
   "logs.detail.priceSource": "Fonte do preço",
@@ -1439,6 +1447,7 @@ export const pt: Record<TKey, string> = {
   "logs.detail.reason.invalid_cache_breakdown": "Os detalhes de tokens de cache conflitam com o total de tokens de entrada.",
   "logs.detail.reason.invalid_usage": "O uso contém um valor de token inválido.",
   "logs.detail.reason.combo_attempt_unavailable": "Pelo menos uma tentativa do combo não pôde ser precificada.",
+  "logs.detail.reason.credit_cost_unrepresentable": "Não há uma leitura de créditos utilizável ou não é possível calcular o valor com a quantidade de créditos e o preço unitário.",
   "logs.detail.estimate.usage_estimated": "O uso do provedor é estimado.",
   "logs.detail.estimate.cache_detail_missing": "Os detalhes de cache estavam indisponíveis; a entrada é uma estimativa de limite superior.",
   "logs.detail.estimate.expected_price_overlay": "Foi usado um preço de tabela esperado verificado.",
@@ -2077,6 +2086,7 @@ export const pt: Record<TKey, string> = {
   "pws.healthCooldownHint": "Aguarde o fim do cooldown. Não teste esta conta ainda.",
   "pws.healthLabel.rateLimited": "Limite de requisições atingido",
   "pws.healthLabel.quotaLimited": "Cota esgotada",
+  "pws.healthLabel.accountSuspended": "Conta suspensa",
   "pws.healthLabel.reauthRequired": "Reautenticação necessária",
   "pws.healthLabel.refreshFailed": "Falha na renovação",
   "pws.healthLabel.metadataMismatch": "Metadados divergentes",
@@ -2085,6 +2095,7 @@ export const pt: Record<TKey, string> = {
   "pws.healthLabel.credentialConflict": "Conflito de credenciais",
   "pws.healthSummary.rateLimited": "{provider} {account}: limite de requisições atingido até {until}. O roteamento desta conta fica pausado até lá.",
   "pws.healthSummary.quotaLimited": "{provider} {account}: cota esgotada até {until}. O roteamento desta conta fica pausado até lá.",
+  "pws.healthSummary.accountSuspended": "{provider} {account}: o provedor suspendeu esta conta. Recorra da suspensão junto ao provedor antes de entrar novamente.",
   "pws.healthSummary.reauthRequired": "{provider} {account}: reautenticação necessária.",
   "pws.healthSummary.credentialConflict": "{provider} {account}: conflito de credenciais.",
   "pws.healthSummary.metadataMismatch": "{provider} {account}: metadados divergentes.",
@@ -2965,7 +2976,9 @@ export const pt: Record<TKey, string> = {
   "accountPool.strategy": "Estratégia de rotação",
   "accountPool.strategyDesc": "Como o OpenCodex atribui uma conta a uma tarefa nova/sem vínculo.",
   "accountPool.strategyResetFirst": "Reinício mais próximo primeiro",
+  "accountPool.strategyResetNearWeighted": "Ponderado pela renovação mais próxima",
   "accountPool.strategyHintResetFirst": "Prefere o reinício de 5 horas ou semanal futuro mais próximo entre as contas abaixo do limite de uso. As tarefas vinculadas seguem a política de afinidade configurada. Cotas independentes por modelo usam a ordenação por cota.",
+  "accountPool.strategyHintResetNearWeighted": "A conta que atende aos critérios e tem a renovação semanal mais próxima recebe cerca de metade das novas atribuições. Se nenhuma conta atender aos critérios, as atribuições são distribuídas por igual.",
   "accountPool.strategyQuota": "Cota",
   "accountPool.strategyRoundRobin": "Round-robin",
   "accountPool.strategyFillFirst": "Fill-first",

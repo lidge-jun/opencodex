@@ -30,7 +30,7 @@ Agent 設定控制要廣告哪個 Codex 協作介面，以及 opencodex 如何�
 
 呼叫方必須使用 Responses，最終目的地必須是標準 ChatGPT Codex forward 傳輸：`adapter: "openai-responses"`、`authMode: "forward"`，以及確切網址 `https://chatgpt.com/backend-api/codex`。API 金鑰 provider、自訂相容閘道、其他最終 provider 及非 Responses 呼叫不會被改寫。啟用編譯也影響既有 V2 工作階段後續的合格請求；既有密文不會被解密，已儲存歷史不會改寫，停用也不會刪除歷史、provider 請求或本機回應／除錯狀態中已保留的副本。HTTPS 與驗證仍啟用。
 
-啟用任一設定時，本機重放需要相同獲准的 opencodex 呼叫方身分及請求自身非空白的 `thread-id`；否則須省略 `previous_response_id` 並重送完整對話。啟用期間保留的狀態停用後仍維持綁定。預設 `v1` 對未綁定狀態保留原有父執行緒範圍續接行為。
+啟用任一設定時，持久保存的本機重放狀態只供相同獲准的 opencodex 呼叫方身分及請求自身非空白的 `thread-id` 使用。沒有 opencodex 呼叫方身分的 loopback Responses WebSocket 可在記憶體中保留該連線及自身 `thread-id` 的歷史。新回應若超出重放預算，代理會略過該回應的保留，並保留現有的重放項目。無法重放時，請省略 `previous_response_id` 並重送完整對話。啟用期間保留的狀態停用後仍維持綁定。預設 `v1` 對未綁定狀態保留原有父執行緒範圍續接行為。
 
 管理 API 暴露 `GET`/`PUT /api/v2`、`/api/injection-model`、`/api/effort-caps`、`/api/subagent-models` 與 `/api/subagent-model-fallback`。注入模型更新為部分更新；自訂 prompt 是該 API 的 `prompt` 欄位。
 

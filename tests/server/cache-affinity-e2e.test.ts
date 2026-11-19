@@ -622,6 +622,30 @@ describe("provider cache affinity (end-to-end)", () => {
     expect(second.cacheAffinity).toBe("kept");
   });
 
+  test.each([
+    ["empty error object", { error: {} }],
+    ["empty last_error string", { last_error: "" }],
+    ["null error fields", { error: { type: null, code: null, message: null } }],
+  ] as const)("combo binds cache affinity after a placeholder completion (%s)", async (_name, placeholder) => {
+    const config = makeConfig();
+    config.combos = { affinity: { strategy: "failover", targets: [{ provider: "affinity-compact", model: "test" }] } };
+    saveConfig(config);
+    const event = { type: "response.completed", response: { id: "resp_affinity", status: "completed", ...placeholder,
+      output: [{ type: "message", id: "msg_affinity", role: "assistant", status: "completed",
+        content: [{ type: "output_text", text: "fixture reply" }] }] } };
+    globalThis.fetch = (async () => new Response(`data: ${JSON.stringify(event)}\n\n`, {
+      headers: { "content-type": "text/event-stream" },
+    })) as typeof fetch;
+    const log: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json", "thread-id": "placeholder-affinity" },
+      body: JSON.stringify({ model: "combo/affinity", input: "hello", stream: true, store: false }),
+    }), config, log);
+    await response.text();
+    addFinalRequestLog(nextRequestLogId(), Date.now(), log, response.status);
+    expect({ outcome: log.cacheAffinity, entry: boundEntryIdForLane(log.affinityLane) }).toEqual({ outcome: "bound", entry: "a" });
+  });
+
   test.each(["responses", "chat", "messages", "compact", "combo"])(
     "a Hermes-only identity is log-only on %s",
     async (wire) => {

@@ -48,9 +48,9 @@ async function post(wire: string, cfg: OcxConfig, admission: DataPlaneAdmission,
 }
 for (const wire of ["responses", "chat", "messages", "compact"]) {
   test(`${wire}: local operator opt-in permits metered targets, default and spoofed consent deny`, async () => {
-    expect(await post(wire, config(), local, spoof)).toBe(wire === "messages" ? 529 : 503);
+    expect(await post(wire, config(), local, spoof)).toBe(503);
     expect(sent).toEqual([]);
-    expect(await post(wire, config(false), local)).toBe(wire === "messages" ? 529 : 503);
+    expect(await post(wire, config(false), local)).toBe(503);
     expect(sent).toEqual([]);
     await post(wire, config(true), local);
     expect(sent).toEqual(["paid"]);
@@ -58,7 +58,7 @@ for (const wire of ["responses", "chat", "messages", "compact"]) {
   test(`${wire}: public listener ignores combo opt-in, including secondary loopback; opted-in key still works`, async () => {
     const cfg = { ...config(true), hostname: "0.0.0.0" };
     for (const admission of [local, keyed, { kind: "environment", source: "bearer" } as const]) {
-      expect(await post(wire, cfg, admission, spoof)).toBe(wire === "messages" ? 529 : 503);
+      expect(await post(wire, cfg, admission, spoof)).toBe(503);
       expect(sent).toEqual([]);
     }
     cfg.apiKeys![0] = { ...issued, allowMeteredComboTargets: true };

@@ -70,6 +70,8 @@ export type OAuthAccountRow = AccountQuotaReading & {
   active: boolean;
   expiresAt?: number;
   needsReauth?: boolean;
+  /** `verify_account`: upstream asked to verify the account rather than refusing the refresh token. */
+  needsReauthReason?: string;
   autoSelectable?: boolean;
   skipReason?: "needs_reauth" | "paused" | "suspended" | "cooldown" | "quota_exhausted";
   paused?: boolean;
@@ -79,6 +81,8 @@ export type OAuthAccountRow = AccountQuotaReading & {
   autoSwitchThreshold?: number;
   effectiveAutoSwitchThreshold?: number;
   plan?: string | null;
+  /** Anthropic: display-only name of the organization the grant serves. */
+  organizationName?: string;
   health?: { status: OAuthAccountHealthStatus; reason?: string; until?: string };
   healthLabel?: string;
   healthSummary?: string;

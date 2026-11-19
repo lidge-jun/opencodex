@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -134,6 +135,7 @@ export const ko: Record<TKey, string> = {
   "workflowBudget.saveFailed": "워크플로 한도를 저장하지 못했습니다.",
   "workflowBudget.saved": "워크플로 한도를 저장했습니다.",
   ...desktopCompatibilityCopy("ko"),
+  ...accountProbeCopy("ko"),
   ...shellV2Copy("ko"),
   ...codexCliUpdateCopy("ko"),
   ...remoteLinkDiagnosticsCopy("ko"),
@@ -1329,6 +1331,7 @@ export const ko: Record<TKey, string> = {
   "logs.detail.protocol.none": "이 요청에는 기록된 경로 데이터가 없습니다.",
   "logs.detail.section.performance": "성능",
   "logs.detail.section.cost": "API 정가 환산치",
+  "logs.detail.section.costBilled": "추정 비용",
   "logs.detail.section.attempts": "Combo 시도",
   "logs.detail.section.usage": "원본 usage",
   "logs.detail.ttft": "TTFT",
@@ -1346,6 +1349,11 @@ export const ko: Record<TKey, string> = {
   "logs.detail.reason.ttft_missing": "이 요청은 첫 토큰까지 걸린 시간이 기록되지 않아서 측정할 디코드 구간이 없어요.",
   "logs.detail.reason.decode_window_too_short": "측정된 출력 구간이 1초도 안 돼서 디코드 속도를 추정하기엔 너무 짧아요.",
   "logs.detail.costTotal": "정가 환산치",
+  "logs.detail.creditBasis": "청구 기준",
+  "logs.detail.creditCharge": "크레딧 {credits}개 × 크레딧당 {price}",
+  "logs.detail.creditMixed": "혼합 — 시도별 청구 방식이 같지 않거나 크레딧 합계를 하나의 숫자로 표시할 수 없어서, 내역은 시도별 비용에만 있어요.",
+  "logs.detail.creditTotal": "크레딧 청구 합계",
+  "logs.detail.mixedTotal": "합산 총액(시도별 기준)",
   "logs.detail.totalTokens": "전체 토큰",
   "logs.detail.matchedKey": "매칭된 가격 키",
   "logs.detail.priceSource": "가격 출처",
@@ -1425,6 +1433,7 @@ export const ko: Record<TKey, string> = {
   "logs.detail.reason.invalid_cache_breakdown": "캐시 토큰 상세가 전체 입력 토큰과 모순됩니다.",
   "logs.detail.reason.invalid_usage": "usage에 유효하지 않은 토큰 값이 있습니다.",
   "logs.detail.reason.combo_attempt_unavailable": "하나 이상의 combo 시도 비용을 계산할 수 없습니다.",
+  "logs.detail.reason.credit_cost_unrepresentable": "사용할 수 있는 크레딧 측정값이 없거나 크레딧 수와 단가로 금액을 계산할 수 없어요.",
   "logs.detail.estimate.usage_estimated": "프로바이더 usage가 추정치입니다.",
   "logs.detail.estimate.cache_detail_missing": "캐시 상세가 없어 입력 전액을 상한으로 추정했습니다.",
   "logs.detail.estimate.expected_price_overlay": "검증된 expected 정가를 사용했습니다.",
@@ -2386,7 +2395,9 @@ export const ko: Record<TKey, string> = {
   "accountPool.strategy": "로테이션 전략",
   "accountPool.strategyDesc": "OpenCodex가 새 작업/바인딩 없는 작업에 계정을 배정하는 방식입니다.",
   "accountPool.strategyResetFirst": "가장 가까운 초기화 우선",
+  "accountPool.strategyResetNearWeighted": "가장 가까운 초기화에 가중치",
   "accountPool.strategyHintResetFirst": "사용량 임계값 미만인 계정 중 다음 5시간·주간 초기화가 가장 가까운 계정을 고릅니다. 연결된 작업은 설정된 어피니티 정책을 따릅니다. 독립 모델 한도에는 사용량 순서를 적용합니다.",
+  "accountPool.strategyHintResetNearWeighted": "조건을 충족하는 계정 중 주간 한도가 가장 먼저 초기화되는 계정에 새 할당의 약 절반을 배정합니다. 해당 계정이 없으면 균등하게 순환 배정합니다.",
   "accountPool.strategyQuota": "할당량",
   "accountPool.strategyRoundRobin": "라운드로빈",
   "accountPool.strategyFillFirst": "필 퍼스트",
@@ -3305,6 +3316,7 @@ export const ko: Record<TKey, string> = {
   "pws.doctorCopyUnavailable": "클립보드를 사용할 수 없음",
   "pws.healthLabel.rateLimited": "요청 한도 초과",
   "pws.healthLabel.quotaLimited": "할당량 제한",
+  "pws.healthLabel.accountSuspended": "계정 정지",
   "pws.healthLabel.reauthRequired": "재인증 필요",
   "pws.healthLabel.refreshFailed": "새로고침 실패",
   "pws.healthLabel.metadataMismatch": "메타데이터 불일치",
@@ -3313,6 +3325,7 @@ export const ko: Record<TKey, string> = {
   "pws.healthLabel.credentialConflict": "자격 증명 충돌",
   "pws.healthSummary.rateLimited": "{provider} {account}: {until}까지 요청 한도 초과. 그전까지 이 계정 라우팅이 일시 중지됩니다.",
   "pws.healthSummary.quotaLimited": "{provider} {account}: {until}까지 할당량 제한. 그전까지 이 계정 라우팅이 일시 중지됩니다.",
+  "pws.healthSummary.accountSuspended": "{provider} {account}: 제공업체가 이 계정을 정지했습니다. 다시 로그인하기 전에 제공업체에 이의를 제기하세요.",
   "pws.healthSummary.reauthRequired": "{provider} {account}: 재인증이 필요합니다.",
   "pws.healthSummary.credentialConflict": "{provider} {account}: 자격 증명 충돌.",
   "pws.healthSummary.metadataMismatch": "{provider} {account}: 메타데이터 불일치.",

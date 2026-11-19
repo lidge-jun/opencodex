@@ -5,7 +5,7 @@ import { getValidAccessToken } from "../../oauth";
 import { loadConfig } from "../../config";
 import { configuredAnthropicInstance, type AnthropicInstanceId } from "../anthropic-instance";
 import { isAnthropicPoolEnabledFor } from "../../oauth/anthropic-pool-config";
-import { captureOAuthAccountSelection, credentialGeneration, getAccountCredential, getAccountSet } from "../../oauth/store";
+import { anthropicCredentialEvidenceKey, captureOAuthAccountSelection, getAccountCredential, getAccountSet } from "../../oauth/store";
 import { hydrateKiroAccountState, persistKiroAccountState } from "../kiro-account-state-disk";
 import { kiroProbeCurrent, kiroProbeIdentity } from "./kiro-account-probe";
 import { fetchMuseKeyQuotaSnapshot } from "../muse-key-quota";
@@ -47,7 +47,7 @@ import {
   hydrateAccountQuotaCache,
   mayCommitAccountQuotaKey,
   persistAccountQuotaCache,
-  withoutAnthropicMonthlyFallback,
+  anthropicAccountProbeEvidence,
 } from "./account-cache";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import type { ProviderQuota, ProviderQuotaWindow } from "../quota-types";
@@ -286,7 +286,7 @@ export async function fetchAnthropicUsageProbeForInstance(
   // Recovery evidence must be requested after the claimed cooldown. Joining an older request
   // can return after the 429 while still describing provider state from before that refusal.
   const accounts = getAccountSet(instance)?.accounts.filter(row => row.credential.access === accessToken) ?? [];
-  const credentialIdentity = accounts.map(row => [row.id, row.loginId, row.addedAt, credentialGeneration(row.credential)]);
+  const credentialIdentity = accounts.map(row => [row.id, anthropicCredentialEvidenceKey(row)]);
   const key = `${instance}\0${captureProviderAccountQuotaEpoch(instance)}\0${JSON.stringify(credentialIdentity)}\0${accessToken}`;
   const joinable = requireFreshDispatch ? undefined : anthropicUsageInflight.get(key);
   if (joinable) return joinable;
@@ -308,7 +308,7 @@ export async function fetchAnthropicUsageProbeForInstance(
 function anthropicPoolState(config: OcxConfig, instance: AnthropicInstanceId): string {
   const accounts = getAccountSet(instance)?.accounts ?? [];
   return JSON.stringify([isAnthropicPoolEnabledFor(config, instance),
-    accounts.map(row => [row.id, row.paused === true, row.needsReauth === true])]);
+    accounts.map(row => [row.id, row.paused === true, row.needsReauth === true, anthropicCredentialEvidenceKey(row)])]);
 }
 
 /**
@@ -398,10 +398,10 @@ export async function fetchAnthropicQuota(provider: string, config: OcxConfig = 
   if (stillOwnsToken && anthropicCurrent() && mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
     // The snapshot writer serializes the whole cache, including other accounts on a cold start.
     hydrateAccountQuotaCache();
-    const cached = quota ?? withoutAnthropicMonthlyFallback(getCachedProviderAccountQuota(instance, probedAccountId));
+    const ts = Date.now();
+    const evidence = anthropicAccountProbeEvidence(instance, probedAccountId, ts, result);
     commitAnthropicAccountQuota(probedAccountKey, {
-      ts: Date.now(), quota: cached, isCurrent: anthropicCurrent, ...result.failureFields,
-      quotaOwnerIsCurrent: quota ? anthropicCurrent : accountQuotaCache.get(probedAccountKey)?.quotaOwnerIsCurrent,
+      ts, ...evidence, isCurrent: anthropicCurrent, ...result.failureFields,
     }, quota?.monthlyPercent === undefined, result.dispatch);
     result.publishDecisionQuota();
     persistAccountQuotaCache();

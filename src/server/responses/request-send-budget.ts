@@ -139,7 +139,7 @@ export function createResponsesSendBudget(
   const noteTransientSends = (used: number): void => recordTransientSends(used, pendingHopPermit ?? inheritedPermit);
   const physicalSendReporter = (permit?: SingleUseDispatchPermit, explicitContinuation = false,
     wireEstimate?: { inputTokens: number; outputCeilingTokens: number },
-    targetKey = explicitContinuation ? `native-continuation:${crypto.randomUUID()}` : undefined) => {
+    receiptOwned = false, targetKey = explicitContinuation ? `native-continuation:${crypto.randomUUID()}` : undefined) => {
     let unreportedWorkflowStarts = 0;
     const reporter = createPhysicalSendReporter(sendBudget, () => ({ ...responsesSpendTarget(logCtx),
       ...(targetKey ? { targetKey } : {}),
@@ -149,7 +149,7 @@ export function createResponsesSendBudget(
       const prepaid = Math.min(unreportedWorkflowStarts, Math.max(0, charged));
       unreportedWorkflowStarts -= prepaid;
       if (!physicalWorkflowAccounting) chargeWorkflowSends(workflowRootId, charged - prepaid);
-    }, { explicitContinuation });
+    }, { explicitContinuation, receiptOwned });
     if (compactHandoffSendCeiling !== undefined && !explicitContinuation && reporter.beforeSend) {
       const beforeSend = reporter.beforeSend;
       let prepaid = permit !== undefined;
@@ -159,7 +159,7 @@ export function createResponsesSendBudget(
         return true;
       };
     }
-    if (workflowRootId && !physicalWorkflowAccounting) {
+    if (!receiptOwned && workflowRootId && !physicalWorkflowAccounting) {
       const beforeSend = reporter.beforeSend, close = reporter.close;
       let closed = false;
       reporter.beforeSend = reserveRetrySpend => {
@@ -176,7 +176,8 @@ export function createResponsesSendBudget(
     return reporter;
   };
   // Capture at helper creation, before another leg can replace the pending handoff.
-  const transientSendReporter = (permit = pendingHopPermit ?? inheritedPermit) => physicalSendReporter(permit);
+  const transientSendReporter = (permit = pendingHopPermit ?? inheritedPermit, receiptOwned = false) =>
+    physicalSendReporter(permit, false, undefined, receiptOwned);
   // A helper owns a fresh booking, never a routed leg's permit or target-local retry counter.
   const dispatchSidecarSend: AuxiliaryModelSend = async (target, dispatch) => {
     if (!isRequestExecutionBudget(sendBudget)) {
@@ -422,7 +423,7 @@ export function createResponsesSendBudget(
     imageRecoverySendReporter: (body: string, maxOutputTokens: number) => {
       // Each leg needs its own seed at normal capacity, on the ordinary physical-send counter.
       const reporter = physicalSendReporter(undefined, false, { inputTokens: estimateTokens(body, logCtx.model),
-        outputCeilingTokens: maxOutputTokens }, `image-413:${crypto.randomUUID()}`);
+        outputCeilingTokens: maxOutputTokens }, false, `image-413:${crypto.randomUUID()}`);
       const beforeSend = reporter.beforeSend;
       reporter.beforeSend = () => {
         const target = responsesSpendTarget(logCtx);

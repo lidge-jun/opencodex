@@ -1,3 +1,4 @@
+import { completeIncrementalFrame, recordIncrementalDispatch, type IncrementalPlan } from "./codex-ws-incremental";
 import { NativeSteeringError } from "./native-steering";
 import { NativeContinuationRefusalError } from "./native-continuation-refusal";
 import { mergeSteeringContinuation } from "./native-steering-settings";
@@ -18,6 +19,7 @@ import { UPGRADE_DEADLINE_MS, CODEX_WS_LIVENESS_PING_INTERVAL_MS, CODEX_WS_RESPO
   markCodexWsPreOutputRefusal, responsesFrameIsReplayUnsafe, type CodexWsPreOutputRefusalHold } from "./codex-ws-wire";
 
 interface ExchangeOptions {
+  incrementalPlan?: IncrementalPlan;
   nativeControl?: NativeResponseControl;
   beforeContinuation?: () => Promise<void>;
   session: CodexWsSession;
@@ -27,7 +29,12 @@ interface ExchangeOptions {
   sseFallback: typeof globalThis.fetch;
   onQuota?: CodexWsQuotaObserver;
   beforeDispatch?: (headers: Headers) => void;
-  onPhysicalDispatch?: () => void;
+  /**
+   * Physical-send admission, handed the frame text that actually leaves on this send: the delta
+   * frame for an incremental send, the full create for its cache-miss recovery (#8453 replay guard).
+   */
+  onPhysicalDispatch?: (frameText: string) => void;
+  recoverPhysicalSend?: (send: () => Promise<void>) => Promise<boolean>;
   onContinuationDispatch?: (frame: { body: Record<string, unknown>; text: string }) => void;
   /** Bun version string the caller gated on; stamped onto the stage record. */
   bunVersion?: string;
@@ -123,7 +130,10 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
   const { session, url, init, prepared, sseFallback, onQuota, beforeDispatch, bunVersion, nativeControl, beforeContinuation,
     preOutputRefusalHold } = options;
   const metadataContext = options.metadataContext ?? {};
-  const { frameText, headers } = prepared;
+  const { headers } = prepared;
+  let frameText = prepared.frameText;
+  let incrementalPlan = options.incrementalPlan;
+  let recoveryAdmissionPending = false;
   const signal = init.signal ?? undefined;
   return new Promise<Response>((resolve, reject) => {
     const ws = session.socket;
@@ -564,7 +574,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         failStream(error);
         return;
       }
-      try { options.onPhysicalDispatch?.(); } catch (error) {
+      try { options.onPhysicalDispatch?.(frameText); } catch (error) {
         // Admission refused before the frame left. This is a pre-open rejection,
         // not a transport failure and not an authorization to replay over SSE.
         settledPreOpen = true;
@@ -577,6 +587,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       }
       try {
         ws.send(frameText);
+        if (incrementalPlan) recordIncrementalDispatch(incrementalPlan);
         sentAt = Date.now();
       } catch {
         if (received || responseCommitted) {
@@ -607,6 +618,10 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
 
     const onMessage = (event: MessageEvent) => {
       if (!controller || terminal) return;
+      if (recoveryAdmissionPending) {
+        failStream("codex websocket received data during cache-miss recovery admission");
+        return;
+      }
       received = true;
       if (!responseCommitted) armSilence();
       upstreamFrames += 1;
@@ -626,7 +641,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         return;
       }
       let replayUnsafe = false;
-      const normalized = normalizeResponsesWsRelayEvent(text, refusalEligible && sent && !responseCommitted
+      const normalized = normalizeResponsesWsRelayEvent(text, (refusalEligible || incrementalPlan?.delta) && sent && !responseCommitted
         ? payload => { replayUnsafe = responsesFrameIsReplayUnsafe(payload); }
         : undefined);
       if (!normalized) {
@@ -671,6 +686,59 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
           else correlation?.accept(normalized.payload);
         } catch (error) { failStream(error); return; }
         if (replayUnsafe) commitResponse();
+        // An authoritative refusal before any response activity means the synthesized ID was
+        // not accepted. The retained full create belongs to this exchange's admitted caller.
+        // Never replay caller-owned IDs, committed output, foreign identities or unknown sends.
+        const cacheMissStatus = codexWsWrapperStatus(normalized.payload);
+        if (incrementalPlan?.delta && sent && !responseCommitted && !deferredCommit && relayedEvents === 0
+          && type === "error" && normalized.payload.stream_id === undefined
+          && normalized.payload.response_id === undefined && normalized.payload.response === undefined
+          && record(normalized.payload.error) && normalized.payload.error.code === "previous_response_not_found"
+          && ((!Object.hasOwn(normalized.payload, "status") && !Object.hasOwn(normalized.payload, "status_code"))
+            || (cacheMissStatus !== undefined && cacheMissStatus >= 400 && cacheMissStatus < 500))) {
+          frameText = incrementalPlan.fullFrameText;
+          incrementalPlan = { ...incrementalPlan, frameText, delta: false, sentBytes: incrementalPlan.fullBytes };
+          if (signal?.aborted) { onAbort(); return; }
+          recoveryAdmissionPending = true;
+          void (async () => {
+            await beforeContinuation?.();
+            if (terminal || responseCommitted) return;
+            if (signal?.aborted) { onAbort(); return; }
+            const send = async () => {
+              if (codexWsCreateFrameExceedsLimit(frameText)) {
+                terminal = true;
+                cleanup();
+                session.dispose();
+                try { controller!.close(); } catch { /* unused stream already closed */ }
+                // Await the physical HTTP admission before committing its result.
+                resolve(await sseFallback(url, init));
+                return;
+              }
+              beforeDispatch?.(new Headers(headers));
+              if (signal?.aborted) { onAbort(); return; }
+              // The recovery is the full create, so that is the frame the replay guard records.
+              options.onPhysicalDispatch?.(frameText);
+              if (terminal || signal?.aborted) return;
+              recoveryAdmissionPending = false;
+              ws.send(frameText);
+              recordIncrementalDispatch(incrementalPlan!);
+              sentAt = Date.now();
+            };
+            const allowed = options.recoverPhysicalSend ? await options.recoverPhysicalSend(send) : (await send(), true);
+            if (!allowed) {
+              terminal = true;
+              cleanup();
+              session.dispose();
+              try { controller.close(); } catch { /* unused stream already closed */ }
+              const rejection = wrappedRejectionResponse({ type: "error", status: cacheMissStatus ?? 400,
+                error: normalized.payload.error, headers: normalized.payload.headers }, metadata?.snapshot() ?? new Headers(), metadataContext);
+              if (!rejection) throw new Error("Invalid cache-miss refusal");
+              markCodexWsPreludeProjection(rejection);
+              resolve(rejection);
+            }
+          })().catch(error => { if (terminal && !responseCommitted) reject(error); else failStream(error); });
+          return;
+        }
         const holdOpen = refusalEligible && sent && !responseCommitted;
         if (holdOpen) noteRefusalIdentity(normalized.payload);
         // Correlation must run first: a reused socket's foreign-stream error settles as a
@@ -751,6 +819,9 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         // count — the happy path never pays it.
         if (committedResponse) {
           markCodexWsStage(committedResponse, stageRecord(null));
+        }
+        if (completedId && incrementalPlan && type === "response.completed") {
+          completeIncrementalFrame(incrementalPlan, (normalized.payload as { response?: unknown }).response);
         }
         session.release(completedId);
         if (refusalStatus !== undefined && refusalHeaders && refusalPrelude && !responseCommitted) {

@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -136,6 +137,7 @@ export const en = {
   "workflowBudget.saveFailed": "Could not save workflow limits.",
   "workflowBudget.saved": "Workflow limits saved.",
   ...desktopCompatibilityCopy("en"),
+  ...accountProbeCopy("en"),
   ...shellV2Copy("en"),
   ...codexCliUpdateCopy("en"),
   ...remoteLinkDiagnosticsCopy("en"),
@@ -1348,6 +1350,7 @@ export const en = {
   "logs.detail.protocol.none": "No path data recorded for this request.",
   "logs.detail.section.performance": "Performance",
   "logs.detail.section.cost": "API list-price equivalent",
+  "logs.detail.section.costBilled": "Estimated cost",
   "logs.detail.section.attempts": "Combo attempts",
   "logs.detail.section.usage": "Raw usage",
   "logs.detail.ttft": "TTFT",
@@ -1365,6 +1368,11 @@ export const en = {
   "logs.detail.reason.ttft_missing": "No time-to-first-token was recorded for this request, so there is no decode window to measure.",
   "logs.detail.reason.decode_window_too_short": "The measured output window was under a second, which is too short to estimate a decode rate from.",
   "logs.detail.costTotal": "List-price equivalent",
+  "logs.detail.creditBasis": "Billing basis",
+  "logs.detail.creditCharge": "{credits} credits × {price} per credit",
+  "logs.detail.creditMixed": "Mixed — the attempts were not all billed the same way, or their combined credits cannot be stated as one number; only per-attempt costs have a split.",
+  "logs.detail.creditTotal": "Credit-priced total",
+  "logs.detail.mixedTotal": "Combined total (per-attempt basis)",
   "logs.detail.totalTokens": "Total tokens",
   "logs.detail.matchedKey": "Matched price key",
   "logs.detail.priceSource": "Price source",
@@ -1444,6 +1452,7 @@ export const en = {
   "logs.detail.reason.invalid_cache_breakdown": "Cache token details conflict with total input tokens.",
   "logs.detail.reason.invalid_usage": "Usage contains an invalid token value.",
   "logs.detail.reason.combo_attempt_unavailable": "At least one combo attempt could not be priced.",
+  "logs.detail.reason.credit_cost_unrepresentable": "There is no usable credit reading, or the amount cannot be calculated from the credit count and unit price.",
   "logs.detail.estimate.usage_estimated": "Provider usage is estimated.",
   "logs.detail.estimate.cache_detail_missing": "Cache details were unavailable; input is an upper-bound estimate.",
   "logs.detail.estimate.expected_price_overlay": "A verified expected list price was used.",
@@ -2093,6 +2102,7 @@ export const en = {
   "pws.healthCooldownHint": "Wait until the cooldown ends. Do not probe this account yet.",
   "pws.healthLabel.rateLimited": "Rate limited",
   "pws.healthLabel.quotaLimited": "Quota limited",
+  "pws.healthLabel.accountSuspended": "Account suspended",
   "pws.healthLabel.reauthRequired": "Reauthentication required",
   "pws.healthLabel.refreshFailed": "Refresh failed",
   "pws.healthLabel.metadataMismatch": "Metadata mismatch",
@@ -2101,6 +2111,7 @@ export const en = {
   "pws.healthLabel.credentialConflict": "Credential conflict",
   "pws.healthSummary.rateLimited": "{provider} {account}: rate limited until {until}. Routing for this account is paused until then.",
   "pws.healthSummary.quotaLimited": "{provider} {account}: quota limited until {until}. Routing for this account is paused until then.",
+  "pws.healthSummary.accountSuspended": "{provider} {account}: the provider suspended this account. Appeal with the provider before signing in again.",
   "pws.healthSummary.reauthRequired": "{provider} {account}: reauthentication required.",
   "pws.healthSummary.credentialConflict": "{provider} {account}: credential conflict.",
   "pws.healthSummary.metadataMismatch": "{provider} {account}: metadata mismatch.",
@@ -2995,7 +3006,9 @@ export const en = {
   "accountPool.strategy": "Rotation strategy",
   "accountPool.strategyDesc": "How OpenCodex assigns an account to a new/unbound task.",
   "accountPool.strategyResetFirst": "Soonest reset first",
+  "accountPool.strategyResetNearWeighted": "Weighted by nearest reset",
   "accountPool.strategyHintResetFirst": "Prefer the nearest future 5-hour or weekly reset among accounts below the usage threshold. Bound tasks follow the configured affinity policy. Independent model quotas use quota ordering.",
+  "accountPool.strategyHintResetNearWeighted": "Gives about half of new assignments to the qualifying account with the nearest weekly reset. Without a qualifying account, assignments rotate evenly.",
   "accountPool.strategyQuota": "Quota",
   "accountPool.strategyRoundRobin": "Round-robin",
   "accountPool.strategyFillFirst": "Fill-first",

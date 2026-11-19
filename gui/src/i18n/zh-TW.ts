@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -132,6 +133,7 @@ export const zhTW: Record<TKey, string> = {
   "workflowBudget.saveFailed": "無法儲存工作流程限制。",
   "workflowBudget.saved": "工作流程限制已儲存。",
   ...desktopCompatibilityCopy("zh-TW"),
+  ...accountProbeCopy("zh-TW"),
   ...shellV2Copy("zh-TW"),
   ...codexCliUpdateCopy("zh-TW"),
   ...remoteLinkDiagnosticsCopy("zh-TW"),
@@ -1102,6 +1104,7 @@ export const zhTW: Record<TKey, string> = {
   "logs.detail.section.basic": "基本資訊",
   "logs.detail.section.performance": "效能",
   "logs.detail.section.cost": "API 標價折算",
+  "logs.detail.section.costBilled": "預估費用",
   "logs.detail.section.attempts": "Combo 嘗試",
   "logs.detail.section.usage": "原始 usage",
   "logs.detail.ttft": "TTFT",
@@ -1119,6 +1122,11 @@ export const zhTW: Record<TKey, string> = {
   "logs.detail.reason.ttft_missing": "此請求沒有記錄第一個 token 的時間，因此沒有可測量的解碼區間。",
   "logs.detail.reason.decode_window_too_short": "測得的輸出區間不到一秒，太短，無法估算解碼速率。",
   "logs.detail.costTotal": "標價折算",
+  "logs.detail.creditBasis": "計費依據",
+  "logs.detail.creditCharge": "{credits} 個點數 × 每個 {price}",
+  "logs.detail.creditMixed": "混合——各次嘗試的計費方式並不一致，或其點數無法合併為單一數字，因此只有每次嘗試的費用才有明細。",
+  "logs.detail.creditTotal": "點數計費總額",
+  "logs.detail.mixedTotal": "合計總額（依每次嘗試）",
   "logs.detail.totalTokens": "Token 總數",
   "logs.detail.matchedKey": "符合的 jawcode 鍵",
   "logs.detail.priceSource": "價格來源",
@@ -1141,6 +1149,7 @@ export const zhTW: Record<TKey, string> = {
   "logs.detail.reason.invalid_cache_breakdown": "快取 token 明細與輸入 token 總數衝突。",
   "logs.detail.reason.invalid_usage": "Usage 包含無效的 token 值。",
   "logs.detail.reason.combo_attempt_unavailable": "至少一次 Combo 嘗試無法計價。",
+  "logs.detail.reason.credit_cost_unrepresentable": "缺少可用的點數讀數，或無法根據點數和單價計算此費用。",
   "logs.detail.estimate.usage_estimated": "供應商 usage 為估算值。",
   "logs.detail.estimate.cache_detail_missing": "缺少快取明細；輸入費用按上限估算。",
   "logs.detail.estimate.expected_price_overlay": "使用了已驗證的 Expected 標價。",
@@ -1748,6 +1757,7 @@ export const zhTW: Record<TKey, string> = {
   "pws.healthCooldownHint": "請等到冷卻結束。暫時不要探測此帳號。",
   "pws.healthLabel.rateLimited": "已限速",
   "pws.healthLabel.quotaLimited": "配額受限",
+  "pws.healthLabel.accountSuspended": "帳戶已停權",
   "pws.healthLabel.reauthRequired": "需要重新認證",
   "pws.healthLabel.refreshFailed": "重新整理失敗",
   "pws.healthLabel.metadataMismatch": "後設資料不符合",
@@ -1756,6 +1766,7 @@ export const zhTW: Record<TKey, string> = {
   "pws.healthLabel.credentialConflict": "憑證衝突",
   "pws.healthSummary.rateLimited": "{provider} {account}：限速至 {until}。在此之前將暫停該帳號的路由。",
   "pws.healthSummary.quotaLimited": "{provider} {account}：配額限制至 {until}。在此之前將暫停該帳號的路由。",
+  "pws.healthSummary.accountSuspended": "{provider} {account}：供應商已停用此帳戶。請先向供應商提出申訴，再重新登入。",
   "pws.healthSummary.reauthRequired": "{provider} {account}：需要重新認證。",
   "pws.healthSummary.credentialConflict": "{provider} {account}：憑證衝突。",
   "pws.healthSummary.metadataMismatch": "{provider} {account}：後設資料不符合。",
@@ -2225,7 +2236,9 @@ export const zhTW: Record<TKey, string> = {
   "accountPool.strategy": "輪換策略",
   "accountPool.strategyDesc": "新會話如何從帳號池中選擇帳號。",
   "accountPool.strategyResetFirst": "額度即將重設優先",
+  "accountPool.strategyResetNearWeighted": "依最近的額度重設加權",
   "accountPool.strategyHintResetFirst": "在低於用量門檻的帳號中，優先選擇下次5小時或週額度重設最早的帳號。已綁定任務遵循設定的親和策略。獨立模型額度按用量排序。",
+  "accountPool.strategyHintResetNearWeighted": "將約一半的新分配交給符合條件且每週額度最先重設的帳戶。沒有符合條件的帳戶時，依序平均分配。",
   "accountPool.strategyQuota": "配額",
   "accountPool.strategyRoundRobin": "輪詢",
   "accountPool.strategyFillFirst": "填滿優先",

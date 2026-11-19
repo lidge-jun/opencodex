@@ -20,6 +20,8 @@ export class PinnedHttpError extends Error {
 export interface PinnedHttpRequestOptions {
   headers?: HeadersInit;
   maxBytes?: number;
+  /** Opt in to streaming 4xx/5xx bodies, bounded on the wire and after decoding. */
+  maxErrorBytes?: number;
   /** Optional deadline for establishing the TCP connection and, for HTTPS, completing TLS. */
   connectTimeoutMs?: number;
   /** Optional deadline from connection establishment until response headers arrive. */
@@ -153,7 +155,6 @@ function pinnedHttpRequest(
   const firstByteTimeoutMs = options?.firstByteTimeoutMs ?? legacyIdleTimeoutMs;
   const inactivityTimeoutMs = options?.inactivityTimeoutMs ?? legacyIdleTimeoutMs;
   const legacyFirstByteDisabled = usesLegacyIdleTimeout && legacyIdleTimeoutMs === 0;
-  const maxBytes = options?.maxBytes;
   const headers = new Headers(options?.headers);
   headers.set("host", parsed.host);
   // This transport assembles the response itself, so a coding it did not ask for becomes its own
@@ -246,7 +247,11 @@ function pinnedHttpRequest(
         }
       }
 
-      if (status < 200 || status >= 300) {
+      const errorBodyLimit = status >= 400 && status < 600 ? options?.maxErrorBytes : undefined;
+      const maxBytes = errorBodyLimit === undefined
+        ? options?.maxBytes : Math.min(options?.maxBytes ?? errorBodyLimit, errorBodyLimit);
+
+      if ((status < 200 || status >= 300) && errorBodyLimit === undefined) {
         try { response.destroy(); } catch { /* ignore */ }
         try { req?.destroy(); } catch { /* ignore */ }
         if (settled) return;

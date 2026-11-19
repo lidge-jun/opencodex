@@ -43,6 +43,7 @@ both JSON and SSE conversions; ordinary locally hidden envelope text remains und
 redacted blocks in order for the internal continuation builders in
 `src/server/responses/terminal-guard.ts` and `src/server/responses/advisor-slot.ts`.
 Search sidecar Responses text follows the shared [identity snapshot reconciliation contract](../data-planes/search.md).
+The fetch-based search loop records each Messages worker leg after final provider admission, including hosted Advisor requests subject to the send-time credential guard.
 
 The hosted tool loops in `src/web-search/loop.ts`, `src/web-search/run-turn-loop.ts` and
 `src/images/loop.ts` reconstruct progress events as signed thinking parts. Search's early

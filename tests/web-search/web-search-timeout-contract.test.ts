@@ -140,7 +140,10 @@ describe("web-search timeout runtime contracts", () => {
     const adapter: ProviderAdapter = {
       name: "erroring-error-body",
       buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
-      fetchResponse: async () => new Response(errorBody, { status: 418 }),
+      fetchResponse: async (_req, ctx) => {
+        ctx?.onPhysicalSend?.({ ordinal: 1 });
+        return new Response(errorBody, { status: 418 });
+      },
       formatErrorBody: () => {
         formatterCalls++;
         return "formatter must not run";
@@ -176,7 +179,10 @@ describe("web-search timeout runtime contracts", () => {
     const adapter: ProviderAdapter = {
       name: "throwing-error-body-reader",
       buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
-      fetchResponse: async () => new Response(errorBody, { status: 418 }),
+      fetchResponse: async (_req, ctx) => {
+        ctx?.onPhysicalSend?.({ ordinal: 1 });
+        return new Response(errorBody, { status: 418 });
+      },
       formatErrorBody: () => {
         formatterCalls++;
         return "formatter must not run";
@@ -249,7 +255,10 @@ describe("web-search timeout runtime contracts", () => {
     const adapter: ProviderAdapter = {
       name: "silent-body",
       buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
-      fetchResponse: async () => silentResponse(() => { sourceCancels++; }),
+      fetchResponse: async (_req, ctx) => {
+        ctx?.onPhysicalSend?.({ ordinal: 1 });
+        return silentResponse(() => { sourceCancels++; });
+      },
       parseStream: parseBodyThen([{ type: "done" }]),
       async parseResponse() { return [{ type: "done" }]; },
     };
@@ -340,7 +349,10 @@ describe("web-search timeout runtime contracts", () => {
     const adapter: ProviderAdapter = {
       name: "client-cancel",
       buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
-      fetchResponse: async () => silentResponse(() => { sourceCancels++; }),
+      fetchResponse: async (_req, ctx) => {
+        ctx?.onPhysicalSend?.({ ordinal: 1 });
+        return silentResponse(() => { sourceCancels++; });
+      },
       parseStream: parseBodyThen([{ type: "done" }]),
       async parseResponse() { return [{ type: "done" }]; },
     };

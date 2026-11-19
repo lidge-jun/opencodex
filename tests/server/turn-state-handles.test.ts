@@ -9,6 +9,8 @@ import {
   resolveTurnStateHandle, runTurnStateCallerScope, TURN_STATE_MISMATCH_NOTICE, turnStateBinding,
 } from "../../src/server/turn-state-handles";
 import type { OcxConfig } from "../../src/types";
+import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
+import { redirectCanonicalCodexTo } from "../helpers/pool-retry-harness";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -87,6 +89,7 @@ describe("turn-state handles", () => {
 
 describe("the server redeems a handle only for the same caller, provider and account", () => {
   const originalFetch = globalThis.fetch;
+  const originalWebSocket = globalThis.WebSocket;
   const previousHome = process.env.OPENCODEX_HOME;
   let home = "";
   let forwarded: Array<{ headers: Headers; body?: Record<string, unknown> }> = [];
@@ -103,6 +106,7 @@ describe("the server redeems a handle only for the same caller, provider and acc
   });
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    globalThis.WebSocket = originalWebSocket;
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
     removeTreeWithRetry(home);
   });
@@ -110,6 +114,8 @@ describe("the server redeems a handle only for the same caller, provider and acc
   const bearer = `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "turn-state-fixture", exp: Math.floor(Date.now() / 1000) + 3600 })}`;
   function captureUpstream(server: { url: URL }): void {
     const local = new URL(server.url).origin;
+    // Keep speculative native WSS on the same synthetic HTTP/SSE upstream.
+    redirectCanonicalCodexTo(local);
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input instanceof Request ? input.url : String(input);
       if (url.startsWith(local)) return originalFetch(input, init);
@@ -159,7 +165,7 @@ describe("the server redeems a handle only for the same caller, provider and acc
   for (const transport of ["HTTP", "WebSocket"] as const) {
     for (const [name, binding, expected] of CASES) {
       test(`${transport}: ${name}`, async () => {
-        const server = startServer(0);
+        const server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("turn-state fixture") });
         captureUpstream(server);
         const warn = spyOn(console, "warn");
         try {

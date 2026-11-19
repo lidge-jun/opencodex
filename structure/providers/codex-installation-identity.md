@@ -48,6 +48,7 @@ metadata-free frames; main and main-pool remain outside this validation.
 apply the same identity to HTTP headers and a cloned client-metadata map. The serialized body feeds
 `src/server/responses/codex-ws-request.ts`; WebSocket preparation preserves these existence gates.
 The inbound `buildResponsesWsData` contract in `src/server/ws-bridge.ts` keeps the observational usage client separate from the admitted replay principal. `src/server/index/serve-options.ts` passes both; client classification never grants replay authority.
+For an unidentified loopback WebSocket, the upgrade also mints a separate opaque replay scope bound to its own thread. `src/server/index/websocket-handler.ts` retains it only for that socket and releases it before cancelling on close. It grants no credential, history or notes authority; keyed callers retain the durable principal path. The [Responses replay contract](../transports/responses.md) defines its memory-only retention and refusal boundaries.
 `src/server/responses/codex-ws-pool.ts` includes immutable outgoing headers and account in its reuse
 identity. `src/server/ws-bridge.ts` isolates explicit Pool header overrides as well.
 Its inbound handshake snapshot also retains caller-supplied `user-agent` and

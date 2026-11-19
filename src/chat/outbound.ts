@@ -27,6 +27,7 @@ import {
   UNDECLARED_TOOL_CALL_ERROR_CODE,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
+import { normalizedClientExtraContent } from "../responses/provider-opaque-metadata";
 import { truncationReasonFor } from "../responses/truncated-stop-reason";
 import { createSseBlockBuffer, sseDataPayload } from "../server/sse-payload-rewrite";
 import { reasoningDetailEntriesForItem } from "./reasoning-details";
@@ -297,7 +298,11 @@ function refusalTranslationError(): ChatCompletionsStreamError {
 export function responsesSseToChatCompletionsSse(
   upstream: ReadableStream<Uint8Array>,
   model: string,
-  opts: { translatorBudget: TranslatorBudget; failureVerdictSink?: FailureVerdictSink; proxyErrorContext?: object },
+  opts: {
+    translatorBudget: TranslatorBudget; failureVerdictSink?: FailureVerdictSink; proxyErrorContext?: object;
+    /** The client set `stream_options.include_usage`: a failed terminal's usage precedes its error frame. */
+    includeUsage?: boolean;
+  },
 ): ReadableStream<Uint8Array> {
   const translatorBudget = opts.translatorBudget;
   const encoder = new TextEncoder();
@@ -559,7 +564,7 @@ export function responsesSseToChatCompletionsSse(
         // non-empty streamed arguments; genuinely empty calls have no buffered content.
         return candidate.length > 0 || streamed.length === 0 ? candidate : streamed;
       };
-      const emitToolCall = (toolIndex: number, callId: string, name: string, args: string) => {
+      const emitToolCall = (toolIndex: number, callId: string, name: string, args: string, extra?: unknown) => {
         if (!callId || emittedToolIndexes.has(toolIndex)) return;
         emittedToolIndexes.add(toolIndex);
         ensureRole();
@@ -572,6 +577,8 @@ export function responsesSseToChatCompletionsSse(
               id: callId,
               type: "function",
               function: { name, arguments: args },
+              // Provider-opaque state (a Gemini thought signature) for the client to echo back.
+              ...(normalizedClientExtraContent(extra) ?? {}),
             }],
           },
           finish_reason: null,
@@ -626,8 +633,17 @@ export function responsesSseToChatCompletionsSse(
         terminated = true;
         releaseRefusals();
       };
-      const fail = (message: string, details?: ChatCompletionsStreamFailure) => {
+      const fail = (message: string, details?: ChatCompletionsStreamFailure, usage?: unknown) => {
         if (terminated) return;
+        // A failed turn ends in an {error} frame, never the finish chunk that carries usage, so an
+        // include_usage client gets the failed terminal's usage on its own chunk first.
+        if (opts.includeUsage && isRec(usage)) {
+          try {
+            const frame = chunkBase(id, model, created);
+            frame.usage = chatCompletionsUsage(usage);
+            emit(frame);
+          } catch { /* the error frame below still ends the stream */ }
+        }
         terminated = true;
         failed = true;
         releaseRefusals();
@@ -784,7 +800,7 @@ export function responsesSseToChatCompletionsSse(
               // done event was omitted, and replace-style clients still get a complete object.
               const args = resolveFinalArguments(item.arguments, streamedArgs);
               replaceToolArguments(toolIndex, args);
-              emitToolCall(toolIndex, callId, finalName, args);
+              emitToolCall(toolIndex, callId, finalName, args, item.extra_content);
             }
             break;
           }
@@ -807,14 +823,15 @@ export function responsesSseToChatCompletionsSse(
               // failures, not early finishes: emit an error frame and close WITHOUT
               // [DONE] instead of a success-looking stop/tool_calls + [DONE].
               fail(outcome.originalFailMessage, { contract: "stream_incomplete",
-                proxyAuthored: hasProxyIncomplete(opts.proxyErrorContext ?? upstream, details.reason, details.message) });
+                proxyAuthored: hasProxyIncomplete(opts.proxyErrorContext ?? upstream, details.reason, details.message) }, response.usage);
             }
             break;
           }
           case "response.failed": {
             const response = isRec(data.response) ? data.response : {};
             const failure = chatCompletionsFailedResponse(isRec(response.error) ? response.error : {});
-            fail(failure.message, { ...failure.details, proxyAuthored: hasProxyErrorMessage(opts.proxyErrorContext, failure.message, failure.details) });
+            fail(failure.message, { ...failure.details, proxyAuthored: hasProxyErrorMessage(opts.proxyErrorContext, failure.message, failure.details) },
+              response.usage);
             break;
           }
           default:
@@ -975,6 +992,7 @@ export function responsesJsonToChatCompletion(json: unknown, model: string, tran
           name: typeof raw.name === "string" ? raw.name : "",
           arguments: typeof raw.arguments === "string" ? raw.arguments : "{}",
         },
+        ...(normalizedClientExtraContent(raw.extra_content) ?? {}),
       };
       // A complete buffered call still obeys the same per-call cap as live deltas.
       // Reserve before serializing, then transfer ownership to the complete call.
@@ -1129,7 +1147,7 @@ export async function collectChatCompletion(
   let reasoning = "";
   const reasoningDetails: Rec[] = [];
   const retainedBytes = { content: 0, refusal: 0, reasoning: 0, reasoningDetails: 0 };
-  const toolCalls = new Map<number, { id: string; name: string; arguments: string; argumentBytes: number }>();
+  const toolCalls = new Map<number, { id: string; name: string; arguments: string; argumentBytes: number; extra?: Rec }>();
   // Per-call budget scopes (2 MiB/call enforced by the budget): the map key is the
   // wire index, which is stable across deltas and present before the call id.
   const callScope = (index: number) => `chat_collect_${index}`;
@@ -1228,6 +1246,8 @@ export async function collectChatCompletion(
               translatorBudget.openCall(callScope(index));
             }
             if (typeof tc.id === "string") current.id = tc.id;
+            const extra = normalizedClientExtraContent(tc.extra_content);
+            if (extra) current.extra = extra;
             const fn = isRec(tc.function) ? tc.function : {};
             // Done-frame final arguments are authoritative last-write-wins snapshots.
             if (typeof fn.name === "string" && fn.name.length > 0) current.name = fn.name;
@@ -1298,6 +1318,7 @@ export async function collectChatCompletion(
           id: tc.id || `call_${uuid().slice(0, 16)}`,
           type: "function",
           function: { name: tc.name, arguments: tc.arguments },
+          ...(tc.extra ?? {}),
           };
           const copyBytes = Buffer.byteLength(JSON.stringify(copy));
           translatorBudget.chargeRetained(copyBytes, { kind: "retained_collectors" });

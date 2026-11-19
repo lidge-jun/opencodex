@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -135,6 +136,7 @@ export const de: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Workflow-Limits konnten nicht gespeichert werden.",
   "workflowBudget.saved": "Workflow-Limits gespeichert.",
   ...desktopCompatibilityCopy("de"),
+  ...accountProbeCopy("de"),
   ...shellV2Copy("de"),
   ...codexCliUpdateCopy("de"),
   ...remoteLinkDiagnosticsCopy("de"),
@@ -1290,6 +1292,7 @@ export const de: Record<TKey, string> = {
   "logs.detail.protocol.none": "Für diese Anfrage wurden keine Pfaddaten aufgezeichnet.",
   "logs.detail.section.performance": "Leistung",
   "logs.detail.section.cost": "API-Listenpreis-Äquivalent",
+  "logs.detail.section.costBilled": "Geschätzte Kosten",
   "logs.detail.section.attempts": "Combo-Versuche",
   "logs.detail.section.usage": "Roh-Nutzung",
   "logs.detail.ttft": "TTFT",
@@ -1307,6 +1310,11 @@ export const de: Record<TKey, string> = {
   "logs.detail.reason.ttft_missing": "Für diese Anfrage wurde keine Zeit bis zum ersten Token erfasst, es gibt also kein Dekodierfenster zum Messen.",
   "logs.detail.reason.decode_window_too_short": "Das gemessene Ausgabefenster lag unter einer Sekunde und ist zu kurz für eine Schätzung der Dekodierrate.",
   "logs.detail.costTotal": "Listenpreis-Äquivalent",
+  "logs.detail.creditBasis": "Abrechnungsgrundlage",
+  "logs.detail.creditCharge": "{credits} Credits × {price} pro Credit",
+  "logs.detail.creditMixed": "Gemischt — die Versuche wurden nicht gleich abgerechnet, oder ihre Credits lassen sich nicht als eine Zahl angeben; die Aufteilung ist nur je Versuch belegt.",
+  "logs.detail.creditTotal": "Über Credits abgerechnete Summe",
+  "logs.detail.mixedTotal": "Gesamtsumme (je Versuch)",
   "logs.detail.totalTokens": "Tokens gesamt",
   "logs.detail.matchedKey": "Zugeordneter Preisschlüssel",
   "logs.detail.priceSource": "Preisquelle",
@@ -1386,6 +1394,7 @@ export const de: Record<TKey, string> = {
   "logs.detail.reason.invalid_cache_breakdown": "Cache-Token-Details widersprechen den Eingabe-Tokens.",
   "logs.detail.reason.invalid_usage": "Die Nutzung enthält einen ungültigen Token-Wert.",
   "logs.detail.reason.combo_attempt_unavailable": "Mindestens ein Combo-Versuch konnte nicht bepreist werden.",
+  "logs.detail.reason.credit_cost_unrepresentable": "Es fehlt ein verwendbarer Credit-Messwert oder der Betrag lässt sich aus Credit-Anzahl und Einzelpreis nicht berechnen.",
   "logs.detail.estimate.usage_estimated": "Die Anbieternutzung ist geschätzt.",
   "logs.detail.estimate.cache_detail_missing": "Cache-Details fehlen; Eingabe ist als Obergrenze geschätzt.",
   "logs.detail.estimate.expected_price_overlay": "Ein verifizierter Expected-Listenpreis wurde verwendet.",
@@ -2342,7 +2351,9 @@ export const de: Record<TKey, string> = {
   "accountPool.strategy": "Rotationsstrategie",
   "accountPool.strategyDesc": "Wie OpenCodex einer neuen/ungebundenen Aufgabe ein Konto zuweist.",
   "accountPool.strategyResetFirst": "Nächste Rücksetzung zuerst",
+  "accountPool.strategyResetNearWeighted": "Gewichtet nach nächster Rücksetzung",
   "accountPool.strategyHintResetFirst": "Unterhalb der Nutzungsschwelle wird die nächste 5-Stunden- oder Wochenrücksetzung bevorzugt. Gebundene Aufgaben folgen der konfigurierten Affinitätsregel. Unabhängige Modellkontingente werden nach Nutzung geordnet.",
+  "accountPool.strategyHintResetNearWeighted": "Das geeignete Konto mit der nächsten wöchentlichen Rücksetzung erhält etwa die Hälfte der neuen Zuweisungen. Ist kein Konto geeignet, werden die Zuweisungen gleichmäßig verteilt.",
   "accountPool.strategyQuota": "Kontingent",
   "accountPool.strategyRoundRobin": "Round-Robin",
   "accountPool.strategyFillFirst": "Fill-first",
@@ -3258,6 +3269,7 @@ export const de: Record<TKey, string> = {
   "pws.doctorCopyUnavailable": "Zwischenablage nicht verfügbar",
   "pws.healthLabel.rateLimited": "Ratelimit",
   "pws.healthLabel.quotaLimited": "Kontingent begrenzt",
+  "pws.healthLabel.accountSuspended": "Konto gesperrt",
   "pws.healthLabel.reauthRequired": "Erneute Anmeldung erforderlich",
   "pws.healthLabel.refreshFailed": "Aktualisierung fehlgeschlagen",
   "pws.healthLabel.metadataMismatch": "Metadaten stimmen nicht überein",
@@ -3266,6 +3278,7 @@ export const de: Record<TKey, string> = {
   "pws.healthLabel.credentialConflict": "Anmeldedaten-Konflikt",
   "pws.healthSummary.rateLimited": "{provider} {account}: ratelimited bis {until}. Routing für dieses Konto ist bis dahin pausiert.",
   "pws.healthSummary.quotaLimited": "{provider} {account}: Kontingent begrenzt bis {until}. Routing für dieses Konto ist bis dahin pausiert.",
+  "pws.healthSummary.accountSuspended": "{provider} {account}: Der Anbieter hat dieses Konto gesperrt. Lege beim Anbieter Einspruch ein, bevor du dich erneut anmeldest.",
   "pws.healthSummary.reauthRequired": "{provider} {account}: erneute Anmeldung erforderlich.",
   "pws.healthSummary.credentialConflict": "{provider} {account}: Anmeldedaten-Konflikt.",
   "pws.healthSummary.metadataMismatch": "{provider} {account}: Metadaten stimmen nicht überein.",

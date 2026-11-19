@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -134,6 +135,7 @@ export const ja: Record<TKey, string> = {
   "workflowBudget.saveFailed": "ワークフロー上限を保存できませんでした。",
   "workflowBudget.saved": "ワークフロー上限を保存しました。",
   ...desktopCompatibilityCopy("ja"),
+  ...accountProbeCopy("ja"),
   ...shellV2Copy("ja"),
   ...codexCliUpdateCopy("ja"),
   ...remoteLinkDiagnosticsCopy("ja"),
@@ -1231,6 +1233,7 @@ export const ja: Record<TKey, string> = {
   "logs.detail.protocol.none": "このリクエストには経路データが記録されていません。",
   "logs.detail.section.performance": "パフォーマンス",
   "logs.detail.section.cost": "API 定価相当額",
+  "logs.detail.section.costBilled": "推定コスト",
   "logs.detail.section.attempts": "コンボの試行",
   "logs.detail.section.usage": "生の使用量",
   "logs.detail.ttft": "TTFT",
@@ -1248,6 +1251,11 @@ export const ja: Record<TKey, string> = {
   "logs.detail.reason.ttft_missing": "このリクエストでは最初のトークンまでの時間が記録されていないため、測定できるデコード区間がありません。",
   "logs.detail.reason.decode_window_too_short": "計測された出力区間が1秒未満で、デコード速度を推定するには短すぎます。",
   "logs.detail.costTotal": "定価相当額",
+  "logs.detail.creditBasis": "課金の根拠",
+  "logs.detail.creditCharge": "{credits} クレジット × 1 クレジットあたり {price}",
+  "logs.detail.creditMixed": "混在 — 試行ごとに課金方法が異なるか、クレジット合計を 1 つの数値で示せないため、内訳は試行ごとの費用にのみあります。",
+  "logs.detail.creditTotal": "クレジット課金の合計",
+  "logs.detail.mixedTotal": "合計（試行ごとの基準）",
   "logs.detail.totalTokens": "合計トークン",
   "logs.detail.matchedKey": "一致した価格キー",
   "logs.detail.priceSource": "価格ソース",
@@ -1327,6 +1335,7 @@ export const ja: Record<TKey, string> = {
   "logs.detail.reason.invalid_cache_breakdown": "キャッシュトークンの詳細が合計入力トークンと矛盾しています。",
   "logs.detail.reason.invalid_usage": "使用量に無効なトークン値が含まれています。",
   "logs.detail.reason.combo_attempt_unavailable": "少なくとも 1 つのコンボ試行に価格を設定できませんでした。",
+  "logs.detail.reason.credit_cost_unrepresentable": "利用可能なクレジット計測値がないか、クレジット数と単価から金額を計算できません。",
   "logs.detail.estimate.usage_estimated": "プロバイダーの使用量は推定です。",
   "logs.detail.estimate.cache_detail_missing": "キャッシュの詳細が利用できませんでした; 入力は上限の推定です。",
   "logs.detail.estimate.expected_price_overlay": "検証済みの予想定価が使用されました。",
@@ -1960,6 +1969,7 @@ export const ja: Record<TKey, string> = {
   "pws.doctorCopyUnavailable": "クリップボードを利用できません",
   "pws.healthLabel.rateLimited": "レート制限中",
   "pws.healthLabel.quotaLimited": "クォータ制限中",
+  "pws.healthLabel.accountSuspended": "アカウント停止",
   "pws.healthLabel.reauthRequired": "再認証が必要です",
   "pws.healthLabel.refreshFailed": "更新に失敗しました",
   "pws.healthLabel.metadataMismatch": "メタデータの不一致",
@@ -1968,6 +1978,7 @@ export const ja: Record<TKey, string> = {
   "pws.healthLabel.credentialConflict": "資格情報の競合",
   "pws.healthSummary.rateLimited": "{provider} {account}: {until} までレート制限中です。それまでこのアカウントのルーティングは停止します。",
   "pws.healthSummary.quotaLimited": "{provider} {account}: {until} までクォータ制限中です。それまでこのアカウントのルーティングは停止します。",
+  "pws.healthSummary.accountSuspended": "{provider} {account}：プロバイダーがこのアカウントを停止しました。再ログインする前に、プロバイダーに異議を申し立ててください。",
   "pws.healthSummary.reauthRequired": "{provider} {account}: 再認証が必要です。",
   "pws.healthSummary.credentialConflict": "{provider} {account}: 資格情報の競合があります。",
   "pws.healthSummary.metadataMismatch": "{provider} {account}: メタデータが一致しません。",
@@ -2816,7 +2827,9 @@ export const ja: Record<TKey, string> = {
   "accountPool.strategy": "ローテーション戦略",
   "accountPool.strategyDesc": "OpenCodex が新規/未紐付けタスクへアカウントを割り当てる方法です。",
   "accountPool.strategyResetFirst": "リセットが近い順",
+  "accountPool.strategyResetNearWeighted": "最も近いリセットを重み付け",
   "accountPool.strategyHintResetFirst": "使用率のしきい値未満から、次の5時間枠または週次枠のリセットが最も近いアカウントを選びます。紐付け済みタスクは設定されたアフィニティ方針に従います。独立したモデル枠は使用率順です。",
+  "accountPool.strategyHintResetNearWeighted": "条件を満たすアカウントのうち、週次リセットが最も近いものに新規割り当ての約半分を振り分けます。条件を満たすアカウントがなければ、均等に割り当てます。",
   "accountPool.strategyQuota": "クォータ",
   "accountPool.strategyRoundRobin": "ラウンドロビン",
   "accountPool.strategyFillFirst": "フィルファースト",

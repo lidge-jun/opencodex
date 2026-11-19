@@ -75,7 +75,6 @@ import { publicOAuthErrorPresentation, OAuthAccountPausedError, OAuthLoginRequir
 import { getAccountSet, markAccountNeedsReauthIfGeneration } from "../../oauth/store";
 import { tryKiroAlternateAfterTerminalRefresh } from "../../oauth/kiro-terminal-failover";
 import { classifyKiroRefusal } from "../../adapters/kiro-refusal";
-import { classifyAntigravityRefusal } from "../../adapters/antigravity-refusal";
 import { normalizeFinalKiroHttpError } from "../../adapters/kiro-retry";
 import { noteKiroMonthlyRefusal } from "../../providers/kiro-usage";
 import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
@@ -122,7 +121,7 @@ import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import { chargeWorkflowSends } from "../../lib/workflow-budget";
 import { hasWorkflowSendObserver } from "../../lib/request-execution-budget";
-import { isAntigravityAccessDeniedRefusal, isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
+import { captureAntigravityQuarantineTrust, classifyAntigravityQuarantine, isAntigravityAccessDeniedRefusal, isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
 import { createAntigravityModelDenialRecovery, recoverAntigravityAccount } from "./antigravity-model-denial-recovery";
 import { isAntigravityFaultRotatable } from "./antigravity-fault-rotation";
 import { adapterSendBudgetRefusal } from "../workflow-refusal";
@@ -276,6 +275,7 @@ export async function prepareAdapterExchange(
   const antigravityPoolActivated = route.providerName === "google-antigravity"
     && isGenericOAuthFailoverEnabled(config, route.providerName);
   const antigravityDenial = createAntigravityModelDenialRecovery();
+  const antigravityQuarantineTrust = captureAntigravityQuarantineTrust(route.providerName);
   // One immutable, body-safe outbound request per same-target sequence (URL, serialized body,
   // Reuse the cached body while the parsed request, credential, wire and tier are unchanged.
   const handoffReplay = transportState.credentialReplayHandoff;
@@ -1682,8 +1682,7 @@ export async function prepareAdapterExchange(
         && route.providerName === "google-antigravity"
         && transportState.genericFailoverAccountId
       ) {
-        const refusal = classifyAntigravityRefusal(upstreamResponse.status,
-          await readDisplaySafeErrorText(upstreamResponse.clone(), upstream.signal, ""));
+        const refusal = await classifyAntigravityQuarantine(upstreamResponse, route.provider, antigravityQuarantineTrust, upstream.signal);
         if (refusal.kind === "other") break;
         const sent = transportState.sentOAuthSnapshot;
         const failedAccountId = transportState.genericFailoverAccountId;
@@ -1692,7 +1691,7 @@ export async function prepareAdapterExchange(
         // snapshot there is no owner for this write, so skip marking.
         if (!sent || sent.accountId !== failedAccountId) break;
         try {
-          await markAccountNeedsReauthIfGeneration(route.providerName, failedAccountId, sent.generation, undefined, "verify_account");
+          await markAccountNeedsReauthIfGeneration(route.providerName, failedAccountId, sent.generation, undefined, refusal.kind);
         } catch {
           // A failed quarantine write must preserve the refusal, not authorize another send.
           break recovery;

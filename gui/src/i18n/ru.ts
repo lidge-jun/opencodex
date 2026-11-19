@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -134,6 +135,7 @@ export const ru: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Не удалось сохранить лимиты рабочих процессов.",
   "workflowBudget.saved": "Лимиты рабочих процессов сохранены.",
   ...desktopCompatibilityCopy("ru"),
+  ...accountProbeCopy("ru"),
   ...shellV2Copy("ru"),
   ...codexCliUpdateCopy("ru"),
   ...remoteLinkDiagnosticsCopy("ru"),
@@ -1307,6 +1309,7 @@ export const ru: Record<TKey, string> = {
   "logs.detail.protocol.none": "Для этого запроса данные о пути не записаны.",
   "logs.detail.section.performance": "Производительность",
   "logs.detail.section.cost": "Эквивалент стоимости по прайс-листу API",
+  "logs.detail.section.costBilled": "Оценочная стоимость",
   "logs.detail.section.attempts": "Попытки комбо",
   "logs.detail.section.usage": "Сырые данные использования",
   "logs.detail.ttft": "TTFT",
@@ -1324,6 +1327,11 @@ export const ru: Record<TKey, string> = {
   "logs.detail.reason.ttft_missing": "Для этого запроса не записано время до первого токена, поэтому измерять нечего.",
   "logs.detail.reason.decode_window_too_short": "Измеренное окно вывода длилось меньше секунды — слишком мало для оценки скорости декодирования.",
   "logs.detail.costTotal": "Эквивалент по прайс-листу",
+  "logs.detail.creditBasis": "Основание начисления",
+  "logs.detail.creditCharge": "{credits} кредитов × {price} за кредит",
+  "logs.detail.creditMixed": "Смешанно — попытки тарифицированы по-разному, либо их кредиты нельзя выразить одним числом; разбивка есть только по попыткам.",
+  "logs.detail.creditTotal": "Сумма по кредитам",
+  "logs.detail.mixedTotal": "Итог (по попыткам)",
   "logs.detail.totalTokens": "Всего токенов",
   "logs.detail.matchedKey": "Совпавший ключ цены",
   "logs.detail.priceSource": "Источник цены",
@@ -1403,6 +1411,7 @@ export const ru: Record<TKey, string> = {
   "logs.detail.reason.invalid_cache_breakdown": "Детализация кэш-токенов противоречит общему числу входных токенов.",
   "logs.detail.reason.invalid_usage": "В данных использования есть некорректное значение токенов.",
   "logs.detail.reason.combo_attempt_unavailable": "Не удалось рассчитать стоимость как минимум одной попытки комбо.",
+  "logs.detail.reason.credit_cost_unrepresentable": "Нет пригодного значения расхода кредитов или сумму нельзя рассчитать по количеству кредитов и цене за кредит.",
   "logs.detail.estimate.usage_estimated": "Данные об использовании от провайдера — оценочные.",
   "logs.detail.estimate.cache_detail_missing": "Детализация кэша недоступна; входные токены оценены по верхней границе.",
   "logs.detail.estimate.expected_price_overlay": "Использована подтверждённая ожидаемая цена из прайс-листа.",
@@ -2052,6 +2061,7 @@ export const ru: Record<TKey, string> = {
   "pws.doctorCopyUnavailable": "Буфер обмена недоступен",
   "pws.healthLabel.rateLimited": "Ограничение частоты",
   "pws.healthLabel.quotaLimited": "Ограничение квоты",
+  "pws.healthLabel.accountSuspended": "Аккаунт заблокирован",
   "pws.healthLabel.reauthRequired": "Требуется повторная аутентификация",
   "pws.healthLabel.refreshFailed": "Ошибка обновления",
   "pws.healthLabel.metadataMismatch": "Несоответствие метаданных",
@@ -2060,6 +2070,7 @@ export const ru: Record<TKey, string> = {
   "pws.healthLabel.credentialConflict": "Конфликт учётных данных",
   "pws.healthSummary.rateLimited": "{provider} {account}: ограничение частоты до {until}. Маршрутизация этой учётной записи приостановлена до этого времени.",
   "pws.healthSummary.quotaLimited": "{provider} {account}: квота ограничена до {until}. Маршрутизация этой учётной записи приостановлена до этого времени.",
+  "pws.healthSummary.accountSuspended": "{provider} {account}: провайдер заблокировал этот аккаунт. Обжалуйте блокировку у провайдера, прежде чем снова входить в аккаунт.",
   "pws.healthSummary.reauthRequired": "{provider} {account}: требуется повторная аутентификация.",
   "pws.healthSummary.credentialConflict": "{provider} {account}: конфликт учётных данных.",
   "pws.healthSummary.metadataMismatch": "{provider} {account}: несоответствие метаданных.",
@@ -2908,7 +2919,9 @@ export const ru: Record<TKey, string> = {
   "accountPool.strategy": "Стратегия ротации",
   "accountPool.strategyDesc": "Как OpenCodex назначает аккаунт новой/непривязанной задаче.",
   "accountPool.strategyResetFirst": "Ближайший сброс первым",
+  "accountPool.strategyResetNearWeighted": "Взвешивание по ближайшему сбросу",
   "accountPool.strategyHintResetFirst": "Среди аккаунтов ниже порога выбирается ближайший сброс 5-часовой или недельной квоты. Привязанные задачи следуют настроенной политике привязки. Независимые квоты моделей упорядочиваются по использованию.",
+  "accountPool.strategyHintResetNearWeighted": "Подходящий аккаунт с ближайшим еженедельным сбросом получает около половины новых назначений. Если подходящих аккаунтов нет, назначения распределяются поровну по очереди.",
   "accountPool.strategyQuota": "Квота",
   "accountPool.strategyRoundRobin": "Round-robin",
   "accountPool.strategyFillFirst": "Fill-first",

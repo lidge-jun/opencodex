@@ -59,6 +59,7 @@ describe("protocol settings resolution", () => {
         managedMessagesNativeOAuth: false,
         directEncoders: false,
         antigravityDirect: true,
+        geminiNativeAntigravity: false,
         shadowPlan: false,
       },
     });
@@ -89,6 +90,7 @@ describe("protocol settings resolution", () => {
     expect(protocolPolicyRevision(cfg({ port: 1234 }))).toBe(base);
     expect(protocolPolicyRevision(cfg({ protocols: { unrepresentable: "reject" } }))).not.toBe(base);
     expect(protocolPolicyRevision(cfg({ claudeCode: { enabled: false } }))).not.toBe(base);
+    expect(protocolPolicyRevision(cfg({ protocols: { rollout: { geminiNativeAntigravity: true } } }))).not.toBe(base);
     expect(base).toMatch(/^p1-[0-9a-f]{8}$/);
   });
 });
@@ -175,4 +177,27 @@ test("raw pool DTOs resolve absent to true, malformed to false and unsupported t
     expect(unifiedPoolSettingsDto(config, "compatible", "generic").nativeMessages).toBeNull();
   }
   expect(unifiedPoolSettingsDto(cfg({ providers: {} }), "anthropic", "anthropic").nativeMessages).toBe(true);
+});
+
+test("Gemini Antigravity native passthrough accepts only a boolean rollout opt-in", () => {
+  for (const value of [true, false]) {
+    const protocols = { rollout: { geminiNativeAntigravity: value } };
+    const candidate = validateConfigCandidate({
+      defaultProvider: "fixture",
+      providers: { fixture: { adapter: "openai-chat", baseUrl: "https://provider.invalid/v1", apiKey: "fixture-key" } },
+      protocols,
+    });
+    if (!candidate.ok) throw new Error(candidate.error);
+    expect(candidate.config.protocols?.rollout?.geminiNativeAntigravity).toBe(value);
+    expect(configSchema.shape.protocols.parse(protocols)).toEqual(protocols);
+  }
+  for (const value of ["true", null, 1, {}]) {
+    const protocols = { rollout: { geminiNativeAntigravity: value } };
+    const candidate = validateConfigCandidate({ protocols });
+    expect(candidate).toMatchObject({ ok: false, error: expect.stringContaining("schema_invalid: protocols") });
+    expect(configSchema.shape.protocols.parse(protocols)?.rollout?.geminiNativeAntigravity).toBe(false);
+  }
+  expect(configSchema.shape.protocols.parse(undefined)).toBeUndefined();
+  expect(configSchema.shape.protocols.parse({ rollout: { geminiNativeAntigravity: true, shadowPlan: "invalid" } })
+    ?.rollout?.geminiNativeAntigravity).toBe(false);
 });

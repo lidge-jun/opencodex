@@ -93,3 +93,19 @@ describe("request log attempt identity", () => {
     });
   });
 });
+
+test("only dispatched attempts participate in credit completeness", () => {
+  const metered = beginRequestAttempt(1, "kiro", "model-a", "kiro");
+  noteAttemptSend(metered, undefined);
+  finishRequestAttempt(metered, 200, 8, { inputTokens: 10, outputTokens: 2, providerCredits: 3 });
+  const local = {
+    ...beginRequestAttempt(2, "local", "model-b", "openai-chat"),
+    locallyAnswered: true, usageStatus: "reported" as const, usage: { inputTokens: 0, outputTokens: 0 },
+  };
+  const silent = beginRequestAttempt(3, "kiro", "model-a", "kiro");
+  noteAttemptSend(silent, undefined);
+  finishRequestAttempt(silent, 502, 1);
+
+  expect(aggregateAttemptUsage([metered, local]).usage?.providerCredits).toBe(3);
+  expect(aggregateAttemptUsage([metered, local, silent]).usage?.providerCredits).toBe(-1);
+});
