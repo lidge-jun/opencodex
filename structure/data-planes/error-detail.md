@@ -505,7 +505,20 @@ delay. A final error uses one full JSON parse and the shared private diagnostic 
 `src/lib/messages-error-body.ts`: truthy top-level message, otherwise whole-value serialization,
 with the pinned SDK's parsed-or-raw SSE fallback. Empty named errors retain generic SDK dispatch.
 `src/lib/messages-sse-error-presentation.ts` renders closed type/code/message literals and carries
-complete-frame construction identity. The single pre-echo flag authorizes owned data under the
+complete-frame construction identity. While looking for `message_start`, the native model echo
+uses the shared byte delimiter scanner for CR, LF, CRLF and mixed blank lines. A blank line
+ending in CR completes the frame immediately. A subsequent LF belongs to that delimiter and
+is relayed for ordinary frames. The scanner grows incomplete frame storage geometrically and
+reads through fragments until a frame is ready, the scan window ends, or EOF arrives. It scans
+at most 64 KiB of raw bytes, including any LF continuation within the window. A complete
+`message_start` ending at the limit can be rewritten. Frames that need bytes beyond the
+limit are relayed unchanged, regardless of upstream chunk boundaries. The echo joins SSE
+data fields with LF before parsing JSON. It writes the rewritten payload to the first data
+field and leaves later data fields empty, preserving control lines and all line endings.
+Starts whose last event field is `error` retain their canonical form.
+The native Messages tap
+refreshes its pending-read stall deadline on each nonempty raw chunk before frame buffering.
+The single pre-echo flag authorizes owned data under the
 existing message_start name; guard replacements retire that flag. Local guard and tap products
 keep their original observer bytes and separate fixed client products. Stall/cap text omits numbers;
 reader errors omit exception suffixes. Guard callbacks, tap accounting/settlement, budgets,
@@ -527,6 +540,8 @@ success/internal row and explicitly lists the ten changed error-response normali
 `tests/server/messages-sse-error-filter.test.ts`,
 `tests/server/messages-sse-error-lifecycle.test.ts` and the Messages SSE integration siblings cover
 first-field eligibility, formatting, bounds, identity handoffs, teardown and both exceptions.
+The native and builtin differential lanes expect the overwritten error field and final ping
+field to survive the model echo while every other byte matches the recorded baseline.
 `tests/claude-integration/messages-sse-control-fields.test.ts` covers final-error fields and rename replay.
 `tests/claude-integration/messages-sse-continuation.test.ts` checks later-event and EOF delivery after
 a suppressed split-CRLF continuation; pull completion depends on actual client output.
