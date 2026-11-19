@@ -50,6 +50,19 @@ describe("redactSecretString", () => {
     }
   });
 
+  test("unframed ASCII still masks minted OpenCodex credentials", () => {
+    const fold = spyOn(folding, "foldForMatching");
+    try {
+      for (const token of ["ocx_admin_" + "a".repeat(43), "ocx_data_" + "0".repeat(40), "ocxrw_" + "B".repeat(43)]) {
+        expect(redactSecretString(token)).toBe(REDACTED_SECRET);
+        expect(redactSecretString(`token ${token} leaked`)).toBe(`token ${REDACTED_SECRET} leaked`);
+      }
+      expect(fold).not.toHaveBeenCalled();
+    } finally {
+      fold.mockRestore();
+    }
+  });
+
   test("ASCII folding preserves every byte and original offset, including literal escape syntax (#7846)", () => {
     const ascii = Array.from({ length: 128 }, (_, code) => String.fromCharCode(code)).join("");
     for (const decode of [true, false]) {
