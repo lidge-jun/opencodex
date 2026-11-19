@@ -11,7 +11,7 @@ El [servidor MCP de colas](#mcp-queue-host) descrito a continuación es independ
 
 ## Servidor MCP de colas
 
-Ejecuta `ocx message mcp` solo cuando quieras que un cliente MCP, como Claude Code o Claude Desktop, descubra hilos almacenados de Codex y les envíe texto a la cola. Este servidor se comunica mediante stdio, no abre ningún listener de red ni se registra automáticamente en clientes. Configura el cliente MCP con una CLI de Codex explícita y un directorio personal existente:
+Ejecuta `ocx message mcp` cuando quieras que un cliente MCP, como la CLI de Claude Code o la pestaña Code de Claude Desktop, descubra hilos almacenados de Codex y les envíe texto a la cola. Este servidor se comunica mediante stdio, no abre ningún listener de red ni se registra automáticamente en clientes. Configura el cliente MCP con una CLI de Codex explícita y un directorio personal existente:
 
 ```json
 {
@@ -29,6 +29,8 @@ Ejecuta `ocx message mcp` solo cuando quieras que un cliente MCP, como Claude Co
 ```
 
 Sustituye ambas rutas por las rutas locales reales y usa una ruta absoluta para `ocx` si el cliente no hereda PATH. Esta primera versión admite macOS y Linux; Windows se rechaza explícitamente.
+
+Consulta la [configuración de los clientes y la prueba de ida y vuelta](/reference/cli/messaging/#send-from-claude-code-and-check-the-reply). El archivo de proyecto `.mcp.json` se aplica a las sesiones de Code.
 
 - `codex_threads` enumera como máximo 50 hilos almacenados y no archivados. Para obtener otra página, pasa `nextCursor` como `cursor`. Devuelve identificadores y nombres, sin historial, vista previa ni directorios de trabajo. `liveStateVerified: false` significa que no demuestra que el hilo esté abierto en la aplicación ni listo para procesar un mensaje.
 - `codex_queue_message` acepta un UUID exacto `threadId` y un `message`. Envía solo mensajes autorizados por el usuario. El texto junto con la etiqueta fija de par tiene un límite de 16 KiB; se rechazan el texto vacío y NUL. No se adivinan nombres ni se cambia el modelo. Tampoco se conceden permisos ni se generan respuestas automáticas.
