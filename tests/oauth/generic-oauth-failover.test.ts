@@ -1,4 +1,4 @@
-import { readResponsesCoreSource } from "../helpers/responses-core-source";
+import { readResponsesCoreModule, readResponsesCoreSource } from "../helpers/responses-core-source";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
@@ -559,12 +559,12 @@ describe("sidecar on429 wiring", () => {
     // The counts differ by rotator because the recovery sites differ, and each number is a
     // statement about which providers can recover where:
     //
-    //   generic  = 7: streaming loop, continuation loop, sidecar hook, runTurn preflight,
+    //   generic  = 8: streaming loop, continuation loop, sidecar hook, runTurn preflight,
     //                native Responses passthrough, plus the combo failure attribution in
     //                core-combo.ts, which sends nothing: it records the refused account the
     //                request budget left uncooled and spares the combo target only when the
-    //                rotator names a sibling. The seventh call passively attributes a
-    //                replay-blocked passthrough 429, with commitSelection=false and no send.
+    //                rotator names a sibling. Translated and native dispatch each passively
+    //                attribute a replay-blocked 429, with commitSelection=false and no send.
     //                The Antigravity 403 verify-account
     //                arm deliberately does NOT use this rotator: a verification refusal
     //                must not record rate-limit cooldown semantics, so it moves via
@@ -587,17 +587,29 @@ describe("sidecar on429 wiring", () => {
     //
     // Adding a recovery site means deciding, deliberately, which rotators it needs and
     // updating the matching number. That decision is the thing this test exists to force.
-    const passiveStart = coreSource.indexOf("if (upstreamResponse.status === 429 && !isReplayRefusalResponse(upstreamResponse)");
-    expect(passiveStart).toBeGreaterThan(-1);
-    const passiveEnd = coreSource.indexOf("// Native Responses returns", passiveStart);
-    expect(passiveEnd).toBeGreaterThan(passiveStart);
-    const passive = coreSource.slice(passiveStart, passiveEnd);
-    expect(passive).toContain("isAutomaticReplayBlocked(upstreamResponse) && transportState.genericFailoverAccountId");
-    expect(passive).toMatch(/rotateGenericOAuthAccountOn429\(config, route\.providerName, transportState\.genericFailoverAccountId,\s*upstreamResponse\.headers\.get\("retry-after"\), Date\.now\(\), route\.modelId, false\)/);
-    expect(passive.match(rotators.generic)).toHaveLength(1);
-    expect(passive).not.toMatch(/reserveCredentialHop\(|rebuildAndRefetch\(|applyFailoverSnapshot\(/);
-    expect(counts.generic).toBe(7);
-    expect(counts.generic! - (passive.match(rotators.generic) ?? []).length).toBe(6);
+    const passiveSites = [
+      ["passthrough-dispatch.ts", "if (upstreamResponse.status === 429 && !isReplayRefusalResponse(upstreamResponse)", "// Native Responses returns"],
+      ["adapter-dispatch.ts", "if (upstreamResponse.status === 429 && isAutomaticReplayBlocked(upstreamResponse)", "if (isNonReplayableResponse(upstreamResponse))"],
+    ] as const;
+    let passiveCalls = 0;
+    for (const [file, start, end] of passiveSites) {
+      const source = readResponsesCoreModule(file);
+      const passiveStart = source.indexOf(start);
+      expect(passiveStart, file).toBeGreaterThan(-1);
+      const passiveEnd = source.indexOf(end, passiveStart);
+      expect(passiveEnd, file).toBeGreaterThan(passiveStart);
+      const passive = source.slice(passiveStart, passiveEnd);
+      expect(passive).toContain("isAutomaticReplayBlocked(upstreamResponse)");
+      expect(passive).toContain("!isReplayRefusalResponse(upstreamResponse)");
+      expect(passive).toMatch(/&& transportState\.genericFailoverAccountId\) \{/);
+      expect(passive).toMatch(/rotateGenericOAuthAccountOn429\(config, route\.providerName, transportState\.genericFailoverAccountId,\s*upstreamResponse\.headers\.get\("retry-after"\), Date\.now\(\), route\.modelId, false\)/);
+      const calls = passive.match(rotators.generic) ?? [];
+      expect(calls, file).toHaveLength(1);
+      expect(passive).not.toMatch(/reserveCredentialHop\(|rebuildAndRefetch\(|applyFailoverSnapshot\(|\b(?:fetch|refetch|send)\w*\(/i);
+      passiveCalls += calls.length;
+    }
+    expect(counts.generic).toBe(8);
+    expect(counts.generic! - passiveCalls).toBe(6);
     expect(counts.anthropic).toBe(3);
     expect(counts.key).toBe(8);
   });

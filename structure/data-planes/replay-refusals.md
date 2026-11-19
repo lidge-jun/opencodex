@@ -18,8 +18,9 @@ TimeoutErrors retain their existing status.
 
 Native and translated HTTP delivery preserve the fixed 429 envelope, exact code and
 `x-should-retry: false` across JSON rewraps, including combo and Messages conversion.
-The envelope omits `Retry-After`. The translated Messages collector preserves this policy
-when a Responses SSE terminal pairs a recognized refusal code with `response.retryable: false`.
+The envelope omits `Retry-After`. The translated Messages SSE writer and collector preserve
+the fixed payload when a Responses SSE terminal pairs a recognized refusal code with
+`response.retryable: false`. The collector also applies the HTTP retry veto.
 The direct Messages writer also retains recognized refusal codes, independently of a conflicting
 adapter status, `retryable` flag or overflow-like diagnostic. Only successful frame admission
 publishes this verdict to its collector. A matching collected terminal returns the same fixed
@@ -54,14 +55,16 @@ retains the veto and projects recognized codes to the fixed refusal. Native Chat
 Compact, Messages, continuation and sidecar paths also honor the veto.
 The transient ladder checks 429s even at budget exhaustion. Native Chat, managed native
 Messages and translated Responses also check 429s on their reset-only paths. Translated
-Responses checks each 429 returned by recovery before a same-key retry or key or account rotation.
+Responses checks replacement errors before a same-key retry or key or account rotation,
+including a consecutive 401 in the key pool.
 The peek recognizes root, `error` and
 `last_error` codes, preserves an observed code through a later failed read, and leaves the raw
 response available for quota observation. A refusal stops both same-key and pool recovery.
 
-Sidecar recovery, Google HTTP retry and repair, the transient ladder's 429 handoff, and the
-reset-only 429 paths treat a size-limited, timed-out or failed body probe as insufficient evidence
-for another send. They preserve the original body and quota provenance while blocking recovery.
+Kiro endpoint fallback and throttle recovery, sidecar recovery, Google HTTP retry and repair,
+the transient ladder's 429 handoff, and the reset-only 429 paths treat a size-limited, timed-out
+or failed body probe as insufficient evidence for another send. They preserve the original body
+and quota provenance while blocking recovery. Kiro's client formatter applies the retry veto.
 An independently replay-safe transient operation
 keeps its explicit exception. In `src/web-search/header-deadline.ts`, local pacing and bounded
 post-header body inspection pause the iteration's cumulative response-header clock; caller

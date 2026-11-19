@@ -683,6 +683,8 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
   `runtime.{region}.kiro.dev` URL follows the imported credential's API region; only that canonical
   shape is eligible for one budgeted fallback to `q.{region}.amazonaws.com` after an endpoint,
   signature, DNS, or connection failure, or HTTP 502/503/504 received before output.
+  After an HTTP error, Kiro requires a conclusive replay-safety check before endpoint fallback
+  or throttle recovery. An inconclusive check yields `x-should-retry: false` without `Retry-After`.
 - Owns replay-safe connection-reset recovery, that single eligible endpoint fallback, one OAuth
   refresh/replay after HTTP 401, and bounded recovery for transient Kiro 429s. A shared cooldown and
   single post-cooldown probe prevent concurrent requests from exhausting independent retry budgets;

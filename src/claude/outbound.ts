@@ -18,7 +18,7 @@ import { ADVISOR_SERVER_TOOL_NAME, isAdvisorCallInput, isAdvisorResultContent } 
  */
 import { createHash } from "node:crypto";
 import { httpStatusFromTerminalError, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
-import { isReplayRefusalCode, isTransientUpstreamStatus, type ReplayRefusalCode } from "../lib/upstream-retry";
+import { isReplayRefusalCode, isTransientUpstreamStatus, REPLAY_REFUSED_STATUS, type ReplayRefusalCode } from "../lib/upstream-retry";
 import {
   isTranslatorBudgetExceededError,
   TRANSLATOR_MAX_TURN_BYTES,
@@ -614,7 +614,10 @@ export function responsesSseToAnthropicSse(
         const type = code === "translation_buffer_limit" ? "request_too_large"
           : upstreamDerived && isTransientUpstreamStatus(status) ? "overloaded_error" : anthropicErrorType(status);
         const legacy = anthropicErrorBody(status, message, type, code);
-        const payload = ownedAnthropicErrorPayload({ status, type, code, evidence: evidence ?? { status, message },
+        const payload = replayRefusalCode ? ownedAnthropicErrorPayload({
+          status: REPLAY_REFUSED_STATUS, code: replayRefusalCode, contract: "replay_refused",
+          evidence: { status: REPLAY_REFUSED_STATUS, code: replayRefusalCode },
+        }) : ownedAnthropicErrorPayload({ status, type, code, evidence: evidence ?? { status, message },
           overflow: messagesOverflowPresentation((legacy.error as Rec).message),
           condition: code === "context_length_exceeded" && isThroughputLimitText(message) ? "rate_limited" : undefined, contract,
           ...(local ? { localError: markProxyError({ message }, proxyMessagePresentation(opts.proxyErrorContext, message, { type: evidence?.type, code: evidence?.code ?? code })) } : {}),

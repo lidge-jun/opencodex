@@ -10,6 +10,7 @@ import {
   abortError,
   cancelResponseBodyBestEffort,
   carryReplayRefusal,
+  carryReplayRefusalToClient,
   fetchWithAttemptDeadline,
   hasUpstreamReplayRefusal,
   isAutomaticReplayBlocked,
@@ -222,7 +223,8 @@ async function fetchWithResetRecovery(
             throw error;
           }
         }) as typeof globalThis.fetch, { refusePostDeadline: true }));
-        await hasUpstreamReplayRefusal(response, ctx.abortSignal);
+        await hasUpstreamReplayRefusal(response, ctx.abortSignal, { requireCompleteBody: true });
+        if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
         return response;
       } catch (error) {
         if (ctx.abortSignal?.aborted || !isConnectionResetError(error) || attempt === RESET_ATTEMPTS - 1) throw error;
@@ -272,10 +274,11 @@ export async function normalizeFinalKiroHttpError(res: Response, signal?: AbortS
     cancelResponseBodyBestEffort(res);
     return carryReplayRefusal(res, projectReplayRefusal(refusalCode));
   }
-  return normalizeUpstreamHttpErrorResponse(res, {
+  const normalized = await normalizeUpstreamHttpErrorResponse(res, {
     signal,
     formatMessage: payloadText => safeKiroHttpErrorMessage(res.status, res.headers, payloadText),
   });
+  return carryReplayRefusalToClient(res, normalized);
 }
 
 async function inspectKiroThrottle(
@@ -383,7 +386,7 @@ export async function fetchKiroWithRetry(request: AdapterRequest, ctx: KiroFetch
         const finalResponse = throttle?.response ?? response;
         return ctx.returnRawErrors
           ? finalResponse
-          : carryReplayRefusal(finalResponse, await normalizeFinalKiroHttpError(finalResponse, ctx.abortSignal));
+          : normalizeFinalKiroHttpError(finalResponse, ctx.abortSignal);
       }
 
       const claim = claimKiroThrottleProbe(throttle.delayMs, probeToken);

@@ -33,10 +33,15 @@ reconocidos. El evento incluye `response.retryable: false`. Las rutas nativas de
 Messages respetan los códigos de rechazo reconocidos en el cuerpo de las respuestas HTTP 429
 antes de reintentar con la misma clave. Los límites de frecuencia reales del proveedor siguen
 influyendo en las pausas temporales de las cuentas.
+Responses traducido también comprueba si las respuestas de reemplazo incluyen un código de
+rechazo antes de rotar credenciales.
 
 Si una solicitud de Messages sin streaming recibe un rechazo de reenvío reconocido al
 procesar un flujo de Responses o eventos directos del proveedor, devuelve el mismo código y mensaje fijo en un error HTTP 429
 de Messages, con `x-should-retry: false` y sin `Retry-After`.
+En Messages traducido con streaming, un evento `response.failed` con
+`response.retryable: false` y un código reconocido conserva el código y el mensaje fijo en
+el error SSE. El flujo conserva el estado HTTP ya enviado al cliente.
 
 Si ya se envió una solicitud de inferencia por la ruta nativa de Anthropic Messages y se agota
 el plazo para recibir los encabezados del proveedor, el proxy devuelve HTTP 429 con

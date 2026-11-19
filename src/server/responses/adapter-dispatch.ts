@@ -731,7 +731,7 @@ export async function prepareAdapterExchange(
                 }),
               });
             });
-            if (response.status === 429) await hasUpstreamReplayRefusal(response, upstream.signal, { requireCompleteBody: true });
+            await hasUpstreamReplayRefusal(response, upstream.signal, { requireCompleteBody: response.status === 429 });
             return response;
             } finally { producer?.close(); }
           }
@@ -812,7 +812,7 @@ export async function prepareAdapterExchange(
             if (parsed._anthropicImageOwner && sendBudgetState.adapterSendBudget?.spendEnforced) {
               bindAdapterResponseSpend(response, refetchReporter?.recordUsage);
             }
-            if (response.status === 429) await hasUpstreamReplayRefusal(response, upstream.signal, { requireCompleteBody: true });
+            await hasUpstreamReplayRefusal(response, upstream.signal, { requireCompleteBody: response.status === 429 });
             return response;
           } finally {
             // Refund only a reservation whose send never reached its admission boundary.
@@ -1162,10 +1162,8 @@ export async function prepareAdapterExchange(
             try { void failedResponse.body?.cancel().catch(() => {}); } catch { /* closed */ }
           }
           upstreamResponse = result;
-          // A recovery refetch can itself die on an ambiguous pre-header reset, and the refusal
-          // that answers it is a 429. Every arm below keys on 429, so letting it fall through
-          // hands the marked refusal to the next waiting arm and replays the send it exists to
-          // stop. Re-enter the loop guard instead, which returns it unchanged.
+          // A replacement can carry a refusal at either the same status or a different one.
+          // Re-enter the recovery guard before this loop or a later arm can send again.
           if (isAutomaticReplayBlocked(upstreamResponse)) continue recovery;
         } finally {
           if (billingHop) { sendBudgetState.pendingHopPermit = undefined; billingHop.permit?.release(); }

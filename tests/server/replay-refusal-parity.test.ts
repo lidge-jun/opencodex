@@ -317,8 +317,12 @@ test("managed native Messages serializes a retained client replay veto", async (
   } finally { await proxy.stop(true); }
 });
 
-for (const wire of ["responses", "messages"] as const) for (const replacement of [false, true]) {
-  test(`review: ${wire} key recovery stops on a header-only no-retry 401 (replacement ${replacement})`, async () => {
+const key401Cases = [
+  { wire: "responses", carrier: "header" }, { wire: "messages", carrier: "header" },
+  { wire: "responses", carrier: "body" },
+] as const;
+for (const { wire, carrier } of key401Cases) for (const replacement of [false, true]) {
+  test(`${wire} key recovery stops on a ${carrier} replay veto in a 401 (replacement ${replacement})`, async () => {
     const config = parityConfig();
     config.protocols = { rollout: { managedMessagesNative: true } };
     const provider = config.providers.native!;
@@ -327,11 +331,14 @@ for (const wire of ["responses", "messages"] as const) for (const replacement of
       { id: "primary", key: "sk-native" }, { id: "backup", key: "sk-review-backup" },
       { id: "unused", key: "sk-review-unused" },
     ];
-    let sends = 0;
-    const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => {
-      sends++;
-      return Response.json({ error: { type: "authentication_error", message: "Fixture authentication refusal" } },
-        { status: 401, headers: !replacement || sends > 1 ? { "x-should-retry": "false" } : {} });
+    const attempts: (string | null)[] = [];
+    const code = "upstream_response_refused";
+    const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => {
+      attempts.push(request.headers.get("authorization") ?? request.headers.get("x-api-key"));
+      const veto = attempts.length === (replacement ? 2 : 1);
+      return Response.json({ error: { type: "authentication_error", message: "Fixture authentication refusal",
+        code: veto && carrier === "body" ? code : "invalid_api_key",
+      } }, { status: 401, headers: veto && carrier === "header" ? { "x-should-retry": "false" } : {} });
     } });
     try {
       for (const provider of Object.values(config.providers)) {
@@ -345,10 +352,16 @@ for (const wire of ["responses", "messages"] as const) for (const replacement of
         const request = new Request(`http://localhost/v1/${wire}`, { method: "POST", headers: { "content-type": "application/json" },
           body: JSON.stringify({ model: "native/model", stream: false, store: false, ...(wire === "messages" ? CLAUDE_TURN : RESPONSES_TURN) }) });
         const response = await (wire === "messages" ? handleClaudeMessages : handleResponses)(request, config, { model: "", provider: "" });
-        const payload = await response.text();
-        expect({ sends, status: response.status, payload }).toMatchObject({ sends: replacement ? 2 : 1, status: 401 });
-        expect(response.status).toBe(401);
+        const payload = await response.json();
+        expect({ sends: attempts.length, status: response.status }).toEqual({
+          sends: replacement ? 2 : 1, status: carrier === "body" ? 429 : 401,
+        });
+        if (replacement) expect(new Set(attempts).size).toBe(2);
+        if (carrier === "body") expect(payload).toEqual({ error: {
+          type: "upstream_error", code, message: REPLAY_REFUSAL_MESSAGE,
+        } });
         expect(response.headers.get("x-should-retry")).toBe("false");
+        expect(response.headers.get("retry-after")).toBeNull();
       } finally { release(); }
     } finally { await upstream.stop(true); }
   });
@@ -1264,10 +1277,10 @@ test("hardening: a no-retry combo 403 is sanitized even with the local scope err
   } finally { release(); }
 });
 
-test.each([
+for (const stream of [false, true]) test.each([
   ["upstream_reset_replay_refused", "invalid_request_error"],
   ["upstream_response_refused", "upstream_error"],
-])("translated Messages folds %s into a terminal HTTP refusal", async (code, type) => {
+])(`translated Messages retains %s with stream=${stream}`, async (code, type) => {
   const terminal = { type: "response.failed", response: {
     id: "resp_refused", status: "failed", output: [], retryable: false,
     error: { type, code, message: "prompt is too long: provider-private-detail" },
@@ -1279,17 +1292,27 @@ test.each([
   try {
     const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: "bridged/model", stream: false, ...CLAUDE_TURN }),
+      body: JSON.stringify({ model: "bridged/model", stream, ...CLAUDE_TURN }),
     }), parityConfig(), { model: "", provider: "" });
     expect(sends()).toBe(1);
-    expect(response.status).toBe(429);
-    expect(response.headers.get("x-should-retry")).toBe("false");
-    expect(response.headers.get("retry-after")).toBeNull();
-    expect(sdkWouldRetry(response)).toBe(false);
-    expect(isReplayRefusalResponse(response)).toBe(false);
-    expect(await response.json()).toEqual({ type: "error", error: {
+    expect(response.status).toBe(stream ? 200 : 429);
+    const expected = { type: "error", error: {
       type: "rate_limit_error", code, message: CLIENT_ERROR_CONTRACTS.replay_refused,
-    } });
+    } };
+    if (stream) {
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      const [event, data, ...rest] = (await response.text()).trimEnd().split("\n");
+      expect(event).toBe("event: error");
+      expect(rest).toHaveLength(0);
+      expect(data).toStartWith("data: ");
+      expect(JSON.parse(data!.slice("data: ".length))).toEqual(expected);
+    } else {
+      expect(response.headers.get("x-should-retry")).toBe("false");
+      expect(response.headers.get("retry-after")).toBeNull();
+      expect(sdkWouldRetry(response)).toBe(false);
+      expect(isReplayRefusalResponse(response)).toBe(false);
+      expect(await response.json()).toEqual(expected);
+    }
   } finally { release(); }
 });
 

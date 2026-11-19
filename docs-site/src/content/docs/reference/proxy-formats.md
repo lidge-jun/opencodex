@@ -32,6 +32,11 @@ and native `response.failed` stream events use the same fixed error text for rec
 codes. The stream event carries `response.retryable: false`. Native and translated Responses
 and native Messages honor recognized refusal codes in HTTP 429 bodies before retrying on the
 same key. Genuine upstream rate limits still inform the sending account's cooldown.
+Translated Responses also checks replacement errors for refusal codes before rotating credentials.
+
+When translated Messages receives a recognized refusal in `response.failed` with
+`response.retryable: false`, the SSE error includes the same fixed message and error code.
+The stream keeps the HTTP status already sent to the client.
 
 If the proxy cannot complete a retry-safety check on an upstream transient 5xx or 429
 body, it stops automatic retries for requests without an independent replay guarantee.
