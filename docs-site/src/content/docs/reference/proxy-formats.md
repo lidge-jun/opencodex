@@ -828,7 +828,8 @@ Thinking replay and prompt-cache work remain separate in [#3719](https://github.
 
 Gemini clients, such as the google-genai SDK with a custom base URL, the `agy` CLI or a client reading
 `GOOGLE_GEMINI_BASE_URL`, can reach the configured provider routes in Google's REST shape. The proxy
-translates each request onto its Chat Completions path, so the route behind it can be any provider.
+normally translates generation onto its Chat Completions path, so the route behind it can be any
+provider. Eligible Antigravity generation can use [native passthrough](#native-gemini-with-antigravity) when enabled.
 Authenticate with a proxy API key in `x-goog-api-key` or a `?key=` query parameter; the key is removed
 from the URL and headers before the request is logged or forwarded. Errors use Google's
 `{ "error": { "code", "message", "status" } }` shape.
@@ -1123,31 +1124,35 @@ A repair must decode to a JSON object. Valid JSON values containing those tags a
 
 ## Native Gemini with Antigravity
 
-The Gemini-compatible API translates requests through OpenCodex by default. For direct Gemini
-JSON with Antigravity, enable the canonical `google-antigravity` provider, sign in with
-`ocx login google-antigravity`, and set `ocx_native=true` on a generation request. Use a concrete
-`gemini-*` model from that provider. For example:
+Enable the canonical `google-antigravity` provider, sign in with `ocx login google-antigravity`,
+and add this optional setting to OpenCodex's JSON config:
 
-- `POST /v1beta/models/google-antigravity/gemini-3.8-flash-medium:generateContent?ocx_native=true`
-- `POST /v1beta/models/google-antigravity/gemini-3.8-flash-medium:streamGenerateContent?ocx_native=true&alt=sse`
+```json
+{
+  "protocols": {
+    "rollout": {
+      "geminiNativeAntigravity": true
+    }
+  }
+}
+```
 
-On an authenticated listener, send the OpenCodex admission key in `x-goog-api-key` or
-`x-opencodex-api-key`. The upstream token and project come from OpenCodex's active Antigravity
-account. `GET /v1beta/models` lists configured routes under the caller's model scope.
-Use the provider-qualified selector from the catalog to select Antigravity explicitly.
+The default is off. Use the usual Gemini-compatible API at `/v1beta` with
+`x-goog-api-key` or `?key=` for an OpenCodex admission key. An eligible selector such as
+`google-antigravity/gemini-3.8-flash` uses the native leg for `generateContent` and
+`streamGenerateContent`. The proxy chooses the Cloud Code Assist model from the resolved
+route and uses the active OAuth account's token and project. Other providers and `/v1`
+requests use the Chat bridge.
 
-The native path preserves original JSON fields, including large integers, function arguments and
-thought signatures, through the Cloud Code Assist envelope. Streams use SSE with `alt=sse` and a
-streamed JSON array otherwise. Other providers, aliases, combos and effort selectors do not
-enter the native path.
+The proxy preserves successful request and response JSON source, including unknown fields,
+large integers, function arguments, and thought signatures. Streaming uses SSE with
+`alt=sse` or a streamed JSON array otherwise. `GET /v1beta/models` and model lookup keep the
+configured, scoped catalog and also expose eligible native wire aliases that route back
+to their Antigravity model.
 
-Bodies and SSE events are capped at 16 MiB; a lower `maxInboundBodyBytes` also applies to requests.
-Send identity-encoded JSON. Compressed requests are rejected. Uploads have an independent idle
-limit (default 300 seconds), even when upstream stall detection is disabled. OC's connection and stall timeouts,
-key scopes, active-turn admission and provider pacing apply. One upstream 401 can refresh the
-same account and retry once before any response is delivered; stream failures never replay output.
-Request history records status, latency and admission identity, with token usage unreported.
-Workflow send ceilings include the initial send and 401 recovery. Requests with an applicable
-root, identity or pool token-spend ceiling receive 503 (`gemini_native_spend_limits_unsupported`);
-use a translated OC route when token-spend accounting is required.
-Interactions and `countTokens` are unsupported on this native path.
+Send identity-encoded JSON. Request and buffered response bodies and SSE events have a
+16 MiB cap. A lower `maxInboundBodyBytes` also applies to requests. Upload inactivity has
+its own timeout. The first send and up to one 401 recovery on the same account count
+against workflow physical-send ceilings. Applicable root, identity, or pool token ceilings
+return 503 with `gemini_native_spend_limits_unsupported` because native token spend is
+unreported. Turn off the opt-in to use token-spend accounting on this Gemini route.

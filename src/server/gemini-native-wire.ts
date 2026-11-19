@@ -1,6 +1,7 @@
 /** Gemini payloads remain source text: parsing is validation, never serialization. */
 export const GEMINI_NATIVE_MAX_BYTES = 16 * 1024 * 1024;
 export const GEMINI_NATIVE_ERROR_CODE = "gemini_native_upstream_error";
+const SAFE_UPSTREAM_ERROR = '{"error":{"code":502,"message":"Antigravity upstream rejected the request","status":"INTERNAL"}}';
 
 export function validateGeminiObject(raw: string): void {
   const value: unknown = JSON.parse(raw);
@@ -63,9 +64,10 @@ export function geminiSseTransform(
   const complete = () => nativeError || (candidates.size ? [...candidates.values()].every(Boolean) : blocked);
   function observe(raw: string) {
     const value = JSON.parse(raw) as { candidates?: Array<{ index?: number; finishReason?: string }>; error?: unknown; promptFeedback?: { blockReason?: string } };
-    if (!nativeError && value.error && typeof value.error === "object" && !Array.isArray(value.error)) {
+    if (Object.hasOwn(value, "error")) {
       nativeError = true;
       try { onNativeError?.(); } catch { /* Observational callbacks never change delivery. */ }
+      return SAFE_UPSTREAM_ERROR;
     }
     blocked ||= !!value.promptFeedback?.blockReason;
     if (value.candidates !== undefined && !Array.isArray(value.candidates)) throw new Error("invalid Gemini candidates");
@@ -75,6 +77,7 @@ export function geminiSseTransform(
       if (!Number.isSafeInteger(index) || index < 0 || candidates.size >= 1024 && !candidates.has(index)) throw new Error("invalid Gemini candidate index");
       candidates.set(index, candidates.get(index) === true || typeof candidate.finishReason === "string" && candidate.finishReason.length > 0);
     }
+    return raw;
   }
   function emit(controller: TransformStreamDefaultController<Uint8Array>) {
     if (data.length) {
@@ -82,8 +85,7 @@ export function geminiSseTransform(
       if (payload.trim() === "[DONE]") {
         if (!complete()) throw new Error("premature Gemini stream terminator");
       } else {
-        const response = unwrapGeminiResponse(payload);
-        observe(response);
+        const response = observe(unwrapGeminiResponse(payload));
         if (format === "sse") {
           controller.enqueue(encoder.encode(`data: ${response.replaceAll("\n", "\ndata: ")}\n\n`));
         } else {

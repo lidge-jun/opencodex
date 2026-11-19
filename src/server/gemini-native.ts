@@ -4,7 +4,7 @@ import { getAccountSet, getAccountCredentialWithStatus } from "../oauth/store";
 import { getProviderRegistryEntry } from "../providers/registry";
 import { sendTrackingRequestSlot, waitForProviderRequestSlot, RequestPacingQueueOverloadError, RequestPacingProviderRemovedError } from "../providers/request-pacing";
 import { antigravityUserAgentForWireModel } from "../adapters/google-antigravity-wire";
-import { fetchWithAttemptDeadline } from "../lib/upstream-retry";
+import { fetchWithAttemptDeadline, releaseResponseBodyBestEffort } from "../lib/upstream-retry";
 import { reserveWorkflowSend } from "../lib/workflow-budget";
 import { currentWorkflowBudgetPolicy } from "../lib/workflow-budget-config";
 import { spendPolicyFromConfig } from "../lib/spend-reservation-ledger";
@@ -32,19 +32,18 @@ export interface GeminiNativeDeps {
   refresh: (snapshot: OAuthAccessSnapshot) => Promise<OAuthAccessSnapshot>;
   fetch: typeof globalThis.fetch;
 }
-const defaults: GeminiNativeDeps = {
+const defaults: Omit<GeminiNativeDeps, "fetch"> = {
   access: async () => {
     const set = getAccountSet(GEMINI_NATIVE_PROVIDER);
     if (!set) throw new OAuthLoginRequiredError(GEMINI_NATIVE_PROVIDER);
     return getValidAccessSnapshotForAccount(GEMINI_NATIVE_PROVIDER, set.activeAccountId, { requireUsableAccount: true });
   }, refresh: forceRefreshOAuthAccessSnapshot,
-  fetch: globalThis.fetch,
 };
 
 /** Active-account native leg; no internal messages, tool-schema repair or model rewriting. */
 export async function handleGeminiNative(
   req: Request, config: OcxConfig, model: string, streamFormat: "sse" | "array" | undefined,
-  lease: ActiveTurnLease, deps: GeminiNativeDeps = defaults, logCtx?: RequestLogContext,
+  lease: ActiveTurnLease, deps: GeminiNativeDeps = { ...defaults, fetch: globalThis.fetch }, logCtx?: RequestLogContext,
 ): Promise<Response> {
   const rootId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
   // This source-preserving path does not yet book or settle token spend. Refuse applicable
@@ -140,7 +139,8 @@ export async function handleGeminiNative(
         }, config.connectTimeoutMs ?? 200_000, ac.signal, true, deps.fetch);
       });
       if (upstream.status !== 401 || attempt === 1) break;
-      await upstream.body?.cancel();
+      await releaseResponseBodyBestEffort(upstream.body, ac.signal);
+      ac.signal.throwIfAborted();
       access = await deps.refresh(access);
     }
     if (!upstream) throw new Error("missing upstream response");
@@ -176,8 +176,10 @@ export async function handleGeminiNative(
     const text = await readGeminiText(body, GEMINI_NATIVE_MAX_BYTES, ac.signal);
     if (text === null) return geminiNativeError(502, "Gemini upstream response exceeds the body limit");
     const response = unwrapGeminiResponse(text);
-    const error: unknown = (JSON.parse(response) as { error?: unknown }).error;
-    if (error && typeof error === "object" && !Array.isArray(error)) noteNativeError();
+    if (Object.hasOwn(JSON.parse(response), "error")) {
+      noteNativeError();
+      return geminiNativeError(502, "Antigravity upstream rejected the request");
+    }
     return new Response(response, { headers: { "Content-Type": "application/json" } });
   } catch (error) {
     ac.abort(); finish();

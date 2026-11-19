@@ -1,138 +1,220 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { saveCredential } from "../../src/oauth/store";
 import { startServer } from "../../src/server";
-import { rawJsonMember } from "../../src/server/gemini-native-wire";
-import { getRequestLogEntries } from "../../src/server/request-log";
+import { nativeGeminiDestination } from "../../src/server/gemini-native-catalog";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
-const provider = "google-antigravity";
-const model = "gemini-3.8-flash-medium";
-const qualifiedModel = `${provider}/${model}`;
-const generationPath = `/v1beta/models/${qualifiedModel}:generateContent`;
-const streamingPath = `/v1beta/models/${qualifiedModel}:streamGenerateContent`;
-const key = "ocx_data_" + "1".repeat(40);
-const blockedModelKey = "ocx_data_" + "2".repeat(40);
-const blockedProviderKey = "ocx_data_" + "3".repeat(40);
-const accessToken = "fixture-antigravity-access";
-const projectId = "fixture-antigravity-project";
-const raw = '{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"candidateCount":2},"opaque":9007199254740993123}';
-const first = '{"candidates":[{"index":0,"content":{"parts":[{"thoughtSignature":"fixture-signature"}]}}],"opaque":9007199254740993123}';
-const terminal = '{"candidates":[{"index":0,"finishReason":"STOP"}]}';
-const oldHome = process.env.OPENCODEX_HOME;
-const oldDataToken = process.env.OPENCODEX_API_AUTH_TOKEN;
-let home = "";
-let upstream: ReturnType<typeof Bun.serve>;
-let server: ReturnType<typeof startServer>;
-const sends: Array<{ path: string; auth: string | null; key: string | null; body: string }> = [];
+const MODEL = "gemini-3.8-flash";
+const WIRE_MODEL = "gemini-3.8-flash-medium";
+const PROVIDER = "google-antigravity";
+const TARGET = `${PROVIDER}/${MODEL}`;
+const CCA = "https://daily-cloudcode-pa.googleapis.com";
+const CHAT = "https://chat-fixture.invalid";
+const GOOGLE_KEY = "fixture-local-ingress-key";
+const OAUTH_TOKEN = "fixture-google-oauth-access";
+const SCOPE_KEY = "ocx_data_" + "d".repeat(40);
+const MODEL_SCOPE_KEY = "ocx_data_" + "b".repeat(40);
+const RAW = '{"contents":[{"role":"user","parts":[{"text":"hello"}]}], "future":9007199254740993123}';
+const PAYLOAD = '{"candidates":[{"content":{"role":"model","parts":[{"text":"hello"}]},"finishReason":"STOP"}],"future":9007199254740993123}';
+const originalFetch = globalThis.fetch;
+const previousEnv = {
+  OPENCODEX_HOME: process.env.OPENCODEX_HOME,
+  OPENCODEX_API_AUTH_TOKEN: process.env.OPENCODEX_API_AUTH_TOKEN,
+};
+const seen: Array<{ url: URL; headers: Headers; body: string }> = [];
+let home: string;
 
 beforeAll(async () => {
-  home = mkdtempSync(join(tmpdir(), "ocx-gemini-native-route-"));
+  home = mkdtempSync(join(tmpdir(), "ocx-native-gemini-routes-"));
   process.env.OPENCODEX_HOME = home;
-  process.env.OPENCODEX_API_AUTH_TOKEN = "ocx_data_gemini_native_fixture";
-  upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
-    const url = new URL(req.url);
-    if (req.method !== "POST") return new Response(null, { status: 404 });
-    sends.push({ path: url.pathname + url.search, auth: req.headers.get("authorization"),
-      key: req.headers.get("x-opencodex-api-key") ?? req.headers.get("x-goog-api-key"), body: await req.text() });
-    if (url.pathname.endsWith(":streamGenerateContent")) {
-      return new Response(`data: {"response":${first}}\n\ndata: {"response":${terminal}}\n\n`,
-        { headers: { "content-type": "text/event-stream" } });
-    }
-    return new Response(`{"response":${first}}`);
-  } });
-  const scopes = [
-    { allowedProviders: [provider], allowedModels: [qualifiedModel] },
-    { allowedProviders: [provider], allowedModels: [`${provider}/gemini-3.8-flash-high`] },
-    { allowedProviders: ["google"], allowedModels: [model] },
-  ];
-  saveConfig({
-    port: 0, hostname: "0.0.0.0", defaultProvider: provider,
-    providers: { [provider]: { adapter: "google", authMode: "oauth", googleMode: "cloud-code-assist",
-      baseUrl: upstream.url.origin, allowPrivateNetwork: true, models: [model] } },
-    apiKeys: [key, blockedModelKey, blockedProviderKey].map((secret, index) => ({
-      id: `gemini-native-key-${index}`, key: secret, name: `Gemini fixture ${index}`, createdAt: "2026-01-01T00:00:00.000Z", ...scopes[index],
-    })),
-  } as OcxConfig);
-  await saveCredential(provider, {
-    access: accessToken, refresh: "fixture-antigravity-refresh", expires: Date.now() + 3_600_000,
-    accountId: "fixture-antigravity-account", projectId, source: "oauth",
+  process.env.OPENCODEX_API_AUTH_TOKEN = GOOGLE_KEY;
+  await saveCredential(PROVIDER, {
+    access: OAUTH_TOKEN, refresh: "fixture-google-oauth-refresh",
+    expires: Date.now() + 3_600_000, accountId: "fixture-google-account",
+    projectId: "fixture-google-project", source: "oauth",
   });
-  server = startServer(0);
 });
-
-afterAll(async () => {
-  await server?.stop(true);
-  upstream?.stop(true);
-  if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = oldHome;
-  if (oldDataToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-  else process.env.OPENCODEX_API_AUTH_TOKEN = oldDataToken;
+afterAll(() => {
+  for (const [key, value] of Object.entries(previousEnv)) {
+    if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  }
   if (home) removeTreeWithRetry(home);
 });
 
-function generate(path: string, headers: Record<string, string> = { "x-goog-api-key": key }) {
-  return fetch(new URL(path, server.url), {
-    method: "POST", headers: { "content-type": "application/json", ...headers }, body: raw,
-  });
+beforeEach(() => {
+  seen.length = 0;
+  const fixtureFetch: typeof fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.hostname === "127.0.0.1" || url.hostname === "localhost") return originalFetch(input, init);
+    if (url.origin !== CCA && url.origin !== CHAT) throw new Error("unexpected external fetch in Gemini fixture");
+    if (init?.method !== "POST" || !url.pathname.includes("generateContent") && !url.pathname.includes("streamGenerateContent") && !url.pathname.endsWith("/chat/completions")) {
+      return Response.json({ models: [], data: [] });
+    }
+    seen.push({ url, headers: new Headers(init.headers), body: String(init.body) });
+    if (url.origin === CHAT) {
+      return Response.json({
+        id: "chatcmpl-gemini-route-fixture", object: "chat.completion", created: 1, model: MODEL,
+        choices: [{ index: 0, message: { role: "assistant", content: "translated" }, finish_reason: "stop" }],
+      });
+    }
+    const envelope = `{"project":"fixture-private-project","response":${PAYLOAD}}`;
+    if (url.pathname.endsWith(":streamGenerateContent")) {
+      return new Response(`data: ${envelope}\n\n`, { headers: { "content-type": "text/event-stream" } });
+    }
+    return new Response(envelope, { headers: { "content-type": "application/json", "set-cookie": "fixture-private" } });
+  }, { preconnect: originalFetch.preconnect });
+  globalThis.fetch = fixtureFetch;
+});
+afterEach(() => { globalThis.fetch = originalFetch; });
+
+function config(flag?: boolean): OcxConfig {
+  return {
+    port: 0, hostname: "0.0.0.0", defaultProvider: PROVIDER,
+    providers: {
+      [PROVIDER]: { adapter: "google", authMode: "oauth", baseUrl: CCA, googleMode: "cloud-code-assist", models: [MODEL, WIRE_MODEL] },
+      fx: { adapter: "openai-chat", authMode: "key", baseUrl: CHAT + "/v1", apiKey: "fixture-chat-access", models: [MODEL] },
+    },
+    ...(flag === undefined ? {} : { protocols: { rollout: { geminiNativeAntigravity: flag } } }),
+    apiKeys: [
+      { id: "gemini-scope", name: "Gemini scope", key: SCOPE_KEY, createdAt: "2026-01-01T00:00:00.000Z", allowedProviders: ["fx"] },
+      { id: "gemini-model-scope", name: "Gemini model scope", key: MODEL_SCOPE_KEY, createdAt: "2026-01-01T00:00:00.000Z",
+        allowedProviders: [PROVIDER], allowedModels: [`${PROVIDER}/gemini-4-argon`] },
+    ],
+  };
 }
+async function withServer(cfg: OcxConfig, run: (base: URL) => Promise<void>) {
+  saveConfig(cfg);
+  const server = startServer(0);
+  try { await run(server.url); } finally { await server.stop(true); }
+}
+const key = { "x-goog-api-key": GOOGLE_KEY };
+const generation = (model = TARGET, method = "generateContent", version = "v1beta") => `/${version}/models/${model}:${method}`;
+const post = (base: URL, path: string, headers: Record<string, string> = key) =>
+  originalFetch(new URL(path, base), { method: "POST", headers: { "content-type": "application/json", ...headers }, body: RAW });
+const get = (base: URL, path: string, headers: Record<string, string> = key) =>
+  originalFetch(new URL(path, base), { headers });
 
-test("the shared Gemini route preserves original JSON only for opted-in Antigravity generation", async () => {
-  const count = sends.length;
-  for (const path of [generationPath, generationPath + "?ocx_native=false",
-    generationPath.replace("/v1beta/", "/v1/") + "?ocx_native=true",
-    generationPath.replace(provider + "/", "agy/") + "?ocx_native=true"]) {
-    const translated = await generate(path);
-    expect(translated.status).toBe(400); // The compatibility codec rejects candidateCount > 1.
-    await translated.text();
-  }
-  expect(sends).toHaveLength(count);
-  const response = await generate(generationPath + `?ocx_native=true&key=${key}`, {});
-  expect(response.status).toBe(200);
-  expect(await response.text()).toBe(first);
-  const send = sends[count]!;
-  expect(sends).toHaveLength(count + 1);
-  expect(send).toMatchObject({ path: "/v1internal:generateContent", auth: "Bearer " + accessToken, key: null });
-  expect(rawJsonMember(send.body, "request")).toBe(raw);
-  expect(JSON.parse(send.body)).toMatchObject({ model, project: projectId });
-  const requestId = response.headers.get("x-opencodex-request-id");
-  expect(requestId).toBeTruthy();
-  expect(getRequestLogEntries().filter(row => row.requestId === requestId)).toMatchObject([
-    { provider, model, requestedModel: qualifiedModel, apiKeyId: "gemini-native-key-0", status: 200 },
-  ]);
+test("opted-in Gemini routes preserve native JSON and replace every ingress credential", async () => {
+  await withServer(config(true), async base => {
+    const response = await post(base, generation() + `?key=${GOOGLE_KEY}`, {});
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-opencodex-request-id")).toBeTruthy();
+    expect(response.headers.has("set-cookie")).toBe(false);
+    expect(await response.text()).toBe(PAYLOAD);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.url.href).toBe(CCA + "/v1internal:generateContent");
+    expect(seen[0]!.headers.get("authorization")).toBe("Bearer " + OAUTH_TOKEN);
+    expect(seen[0]!.headers.has("x-goog-api-key")).toBe(false);
+    expect(seen[0]!.headers.has("x-opencodex-api-key")).toBe(false);
+    expect(seen[0]!.body).toContain(`"request":${RAW}`);
+    expect(JSON.parse(seen[0]!.body)).toMatchObject({ model: WIRE_MODEL, project: "fixture-google-project" });
+  });
 });
 
-test("opted-in generation still enforces shared auth, origin and destination scope", async () => {
-  const count = sends.length;
-  const path = generationPath + "?ocx_native=true";
-  for (const [headers, status] of [
-    [{}, 401],
-    [{ "x-goog-api-key": key, origin: "https://evil.invalid" }, 403],
-    [{ "x-goog-api-key": blockedModelKey }, 403],
-    [{ "x-goog-api-key": blockedProviderKey }, 403],
-  ] as const) {
-    const refused = await generate(path, headers);
-    expect(refused.status).toBe(status);
-    await refused.text();
+test("flag off, v1, and a Gemini model on another provider use the Chat bridge", async () => {
+  for (const flag of [undefined, false, true]) {
+    await withServer(config(flag), async base => {
+      const path = flag === true ? generation(TARGET, "generateContent", "v1") : generation() + "?ocx_native=true";
+      const translated = await post(base, path);
+      expect(translated.status).toBe(200);
+      expect(await translated.json()).not.toHaveProperty("future");
+      expect(seen.at(-1)?.body).not.toContain(RAW);
+      const other = await post(base, generation(`fx/${MODEL}`));
+      expect(other.status).toBe(200);
+      expect(await other.text()).toContain("translated");
+      expect(seen.at(-1)?.url.origin).toBe(CHAT);
+      expect(JSON.parse(seen.at(-1)!.body)).toMatchObject({ model: MODEL, messages: [{ role: "user", content: "hello" }] });
+    });
   }
-  expect(sends).toHaveLength(count);
 });
 
-test("native streaming keeps the Gemini client's SSE or JSON-array framing", async () => {
-  const count = sends.length;
-  const sse = await generate(streamingPath + "?ocx_native=true&alt=sse");
-  expect(sse.status).toBe(200);
-  expect(sse.headers.get("content-type")).toContain("text/event-stream");
-  expect(await sse.text()).toBe(`data: ${first}\n\ndata: ${terminal}\n\n`);
-  const array = await generate(streamingPath + "?ocx_native=true");
-  expect(array.status).toBe(200);
-  expect(array.headers.get("content-type")).toContain("application/json");
-  expect(await array.text()).toBe(`[\n${first},\n${terminal}\n]`);
-  expect(sends.slice(count).map(send => send.path)).toEqual([
-    "/v1internal:streamGenerateContent?alt=sse", "/v1internal:streamGenerateContent?alt=sse",
-  ]);
+test("a Google OAuth clone and an overridden wire cannot take the canonical native leg", () => {
+  const cfg = config(true);
+  const canonical = cfg.providers[PROVIDER]!;
+  const req = new Request("http://localhost/v1beta/models");
+  expect(nativeGeminiDestination(cfg, req, TARGET)?.wireModel).toBe(WIRE_MODEL);
+  cfg.providers.mirror = { ...canonical };
+  expect(nativeGeminiDestination(cfg, req, `mirror/${MODEL}`)).toBeUndefined();
+  canonical.modelAdapters = { [MODEL]: "openai-responses" };
+  expect(nativeGeminiDestination(cfg, req, TARGET)).toBeUndefined();
+});
+
+test("native streaming preserves records in both Gemini response formats", async () => {
+  await withServer(config(true), async base => {
+    const path = generation(TARGET, "streamGenerateContent");
+    const sse = await post(base, path + "?alt=sse");
+    expect(sse.headers.get("content-type")).toContain("text/event-stream");
+    expect(await sse.text()).toBe(`data: ${PAYLOAD}\n\n`);
+    const discoverySse = await post(base, path + "?$alt=sse");
+    expect(discoverySse.headers.get("content-type")).toContain("text/event-stream");
+    expect(await discoverySse.text()).toBe(`data: ${PAYLOAD}\n\n`);
+    const json = await post(base, path);
+    expect(json.headers.get("content-type")).toContain("application/json");
+    expect(await json.text()).toBe(`[\n${PAYLOAD}\n]`);
+    expect(seen.map(call => call.url.href)).toEqual(Array(3).fill(CCA + "/v1internal:streamGenerateContent?alt=sse"));
+  });
+});
+
+test("native selection shares key, origin, host, and model-scope refusals", async () => {
+  await withServer(config(true), async base => {
+    for (const [headers, status, errorStatus] of [
+      [{}, 401, "UNAUTHENTICATED"],
+      [{ "x-goog-api-key": "wrong" }, 401, "UNAUTHENTICATED"],
+      [{ ...key, origin: "https://foreign.example" }, 403, "PERMISSION_DENIED"],
+      [{ "x-goog-api-key": SCOPE_KEY }, 403, "PERMISSION_DENIED"],
+      [{ "x-goog-api-key": MODEL_SCOPE_KEY }, 403, "PERMISSION_DENIED"],
+    ] as const) {
+      const response = await post(base, generation(), { ...headers });
+      expect(response.status).toBe(status);
+      expect(await response.json()).toMatchObject({ error: { code: status, status: errorStatus } });
+    }
+    expect(seen).toHaveLength(0);
+    expect((await get(base, generation())).headers.get("allow")).toBe("POST");
+    expect((await get(base, "/v1beta/interactions")).status).toBe(404);
+  });
+  await withServer({ ...config(true), hostname: "127.0.0.1" }, async base => {
+    const headers = { ...key, host: "rebind.example" };
+    const response = await post(base, generation(), headers);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { code: 403, status: "PERMISSION_DENIED" } });
+    expect((await get(base, "/v1beta/models", headers)).status).toBe(403);
+    expect(seen).toHaveLength(0);
+  });
+});
+
+test("model lookup and discovery expose only scoped, routable native wire aliases", async () => {
+  const cfg = config(true);
+  cfg.providers[PROVIDER]!.defaultMaxOutputTokens = 4096;
+  await withServer(cfg, async base => {
+    const response = await get(base, "/v1beta/models");
+    const payload = await response.json() as { models: Array<{ name: string }> };
+    const names = payload.models.map(model => model.name);
+    expect(names).toContain(`models/${WIRE_MODEL}`);
+    expect(names).toContain(`models/${TARGET}`);
+    expect(names).toContain(`models/fx/${MODEL}`);
+    const one = await get(base, `/v1beta/models/${WIRE_MODEL}`);
+    expect(one.status).toBe(200);
+    const alias = {
+      name: `models/${WIRE_MODEL}`,
+      outputTokenLimit: 4096,
+      supportedGenerationMethods: ["generateContent", "streamGenerateContent", "countTokens"],
+    };
+    expect(await one.json()).toMatchObject(alias);
+    expect(payload.models.find(model => model.name === alias.name)).toMatchObject(alias);
+    const count = await post(base, generation(WIRE_MODEL, "countTokens"));
+    expect(count.status).toBe(200);
+    expect((await count.json() as { totalTokens: number }).totalTokens).toBeGreaterThan(0);
+    const scoped = { "x-goog-api-key": SCOPE_KEY };
+    const filtered = await get(base, "/v1beta/models", scoped);
+    expect(await filtered.json()).toMatchObject({ models: [{ name: `models/fx/${MODEL}` }] });
+    expect((await get(base, `/v1beta/models/${WIRE_MODEL}`, scoped)).status).toBe(404);
+    expect((await post(base, generation(WIRE_MODEL, "countTokens"), scoped)).status).toBe(404);
+    expect((await get(base, "/v1beta/models/gemini-no-such-model")).status).toBe(404);
+    expect(seen).toHaveLength(0);
+  });
 });

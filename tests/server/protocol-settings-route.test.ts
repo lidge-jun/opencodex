@@ -103,6 +103,16 @@ describe("PATCH /api/protocols/settings", () => {
     expect(body.settings.rollout).toMatchObject({ directEncoders: true, shadowPlan: true, nativeChatCombos: false });
   });
 
+  test("the Gemini rollout switch persists and is returned by management settings", async () => {
+    const h = harness();
+    for (const geminiNativeAntigravity of [true, false]) {
+      const res = await patch(h, { rollout: { geminiNativeAntigravity } });
+      expect(res.status).toBe(200);
+      expect(h.saves.at(-1)?.protocols?.rollout?.geminiNativeAntigravity).toBe(geminiNativeAntigravity);
+      expect(await res.json()).toMatchObject({ settings: { rollout: { geminiNativeAntigravity } } });
+    }
+  });
+
   test("the OAuth native-Messages switch cannot be turned on without the key-auth one", async () => {
     const h = harness();
     const res = await patch(h, { rollout: { managedMessagesNativeOAuth: true } });

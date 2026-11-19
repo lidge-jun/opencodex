@@ -1,46 +1,47 @@
 # Native Gemini Inbound
 
-The [Gemini-compatible ingress](gemini-inbound.md#native-antigravity-passthrough) owns route
-registration, discovery, and admission. Its generation handler in `src/server/index/gemini-routes.ts`
-selects this path for an opted-in `/v1beta` request that resolves a concrete Gemini model to the
-canonical `google-antigravity` provider. The same admission policy scopes the actual wire model.
-`src/server/gemini-native.ts` uses the enabled canonical `google-antigravity` provider and its
-active, usable OAuth account. Snapshot token and project stay together, including after one
-401-triggered refresh of the rejected generation. OC's provider pacing applies to each physical
-send, including workflow physical-send reservation for the initial dispatch and 401 recovery.
-After pacing, each physical send rechecks the captured account for pause, reauthentication or
-removal, including on 401 recovery; a queued request cannot outlive those account controls.
-Applicable root, identity or pool token-spend ceilings are refused before dispatch with 503 and
-`gemini_native_spend_limits_unsupported`, because native token spend is unreported.
-Redirects are manual; destination policy checks the configured base URL. Ingress credentials
-and arbitrary request headers never go upstream. There is no transient inference replay.
+The [Gemini-compatible dispatcher](gemini-inbound.md) owns every path, listener decision and
+admission check. In `src/server/index/gemini-routes.ts`, the native leg is available only for
+`/v1beta` generation with `protocols.rollout.geminiNativeAntigravity: true` and a concrete Gemini
+route to the enabled, canonical `google-antigravity` OAuth provider in Cloud Code Assist mode.
+Requests outside those conditions use the Chat bridge. Advisor and sidecar capability requests
+use the bridge for their inherited-policy checks.
 
-`src/server/gemini-native-wire.ts` validates JSON objects but embeds the original request source
-under the CCA `request` member. It extracts the response member by source offsets, preserving
-unknown fields, integer precision, number spelling, tool arguments and thought signatures.
-Neither direction passes through internal Messages/Responses conversion, model aliases,
-effort rewriting, schema repair, signature replay caches or built-in tool emulation.
+The native leg checks the captured admission model scope against the resolved destination.
+`src/server/gemini-native-catalog.ts` also projects scoped native wire aliases from the configured
+Gemini catalog. An alias is listed or served by point lookup only when routing the alias selects
+the native leg and maps to that same wire ID. Discovery is configuration-only. Generation
+resolves the Antigravity wire model from the route before accessing OAuth.
 
-The native path handles `generateContent` and `streamGenerateContent`. The upstream stream is SSE.
-Clients receive SSE with `alt=sse` and a streamed JSON array otherwise. Each unwrapped response
-retains its source JSON as the handler regenerates frame delimiters and discards keepalive comments.
-UTF-8 and CR/LF delimiters can span chunks. Missing/duplicate wrappers, malformed or oversized
-frames, incomplete final frames and EOF before all observed candidates finish terminate delivery,
-with no resend after output. A blocked prompt or native error is also terminal; `[DONE]` alone is not.
+`src/server/gemini-native.ts` uses the active, usable OAuth account. The token and project come
+from the same snapshot, including after one 401-triggered refresh. Each physical send uses
+provider pacing and reserves one workflow send, including recovery. At the point of dispatch
+both sends recheck the account for pause, reauthentication and removal. Applicable root,
+identity, or pool token-spend ceilings refuse the request with 503 and
+`gemini_native_spend_limits_unsupported`. The native leg does not settle token spend. The
+destination policy checks the base URL and redirects remain manual. Only proxy-constructed
+headers and the bound OAuth credential go upstream.
 
-Request and buffered response bodies and each SSE event have a 16 MiB ceiling; a lower configured
-`maxInboundBodyBytes` also narrows request admission. Compressed requests are rejected with 415.
-Header waits use `connectTimeoutMs`; upstream body inactivity uses `stallTimeoutSec`, with
-non-positive values disabling that upstream timer. Client upload inactivity has a separate timer
-that resets per chunk and clears before OAuth/pacing; a disabled upstream timer leaves the default
-300-second upload protection in place. Upload inactivity returns 408.
-Request abort, shutdown, stream cancellation, failure and EOF release their turn and transport
-owners. Native parsing does not borrow the translator budget or retain replay state.
+`src/server/gemini-native-wire.ts` validates the JSON object and embeds the original request
+under the CCA `request` member. It extracts successful `response` members by source offsets
+so unknown fields, integer precision, number spelling, tool arguments and thought signatures
+survive. CCA SSE is reframed as Gemini SSE with `alt=sse` and as a streamed JSON array otherwise.
+Malformed or oversized events, missing or duplicate envelopes, incomplete final events and
+EOF before all observed candidates finish terminate delivery without a replay. A blocked prompt
+or native error can also end the stream. Successful payloads are preserved while in-band errors
+are replaced with a fixed Gemini error. HTTP failures retain only bounded numeric retry advice.
 
-`src/server/gemini-native-log.ts` records delivery status, latency, client and admission identity
-without inspecting payloads or retaining prompts/signatures. Token usage and pricing are unreported. Native SSE and buffered error objects are forwarded unchanged but
-settle the delivery log as failed without copying the upstream error message.
-Upstream HTTP errors use a fixed native JSON error and retain only a numeric Retry-After.
+Request and buffered response bodies and each SSE event have a 16 MiB ceiling. A lower
+`maxInboundBodyBytes` narrows the request limit. Compressed requests are refused with 415.
+Headers use `connectTimeoutMs` and upstream body inactivity uses `stallTimeoutSec`, with
+non-positive values disabling that upstream timer. Upload inactivity has an independent timer
+that resets per chunk and clears before OAuth and pacing. Disabling upstream stalls leaves the
+default 300-second upload timeout in effect. A stalled upload returns 408. Cancellation,
+shutdown, failure and EOF release the turn and transport. Native parsing owns no replay state.
 
-Coverage: `tests/server/gemini-native-wire.test.ts`, `tests/server/gemini-native.test.ts` and
-`tests/server/gemini-native-routes.test.ts`.
+`src/server/gemini-native-log.ts` records final status, latency, client and admission identity.
+Native errors fail the request-log row. Payloads, provider diagnostics and token usage are
+omitted from the log.
+
+Coverage lives in `tests/server/gemini-native-routes.test.ts`,
+`tests/server/gemini-native-wire.test.ts` and `tests/server/gemini-native.test.ts`.

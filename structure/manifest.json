@@ -552,10 +552,11 @@
       "path": "data-planes/gemini-native.md",
       "tier": 3,
       "title": "Native Gemini Inbound",
-      "scope": "Source-preserving Gemini requests over the Antigravity OAuth transport.",
+      "scope": "Opt-in source-preserving Gemini requests over Antigravity OAuth within the shared Gemini ingress.",
       "documents": [
         "src/server/gemini-native.ts",
         "src/server/gemini-native-wire.ts",
+        "src/server/gemini-native-catalog.ts",
         "src/server/gemini-native-log.ts",
         "src/server/index/gemini-routes.ts"
       ]

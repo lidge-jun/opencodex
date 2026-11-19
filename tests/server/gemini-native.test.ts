@@ -59,6 +59,27 @@ test("401 refreshes the rejected snapshot once and cancels its response", async 
   expect(response.status).toBe(200);
   expect(calls).toBe(2); expect(refreshes).toBe(1); expect(cancelled).toBe(true);
 });
+test("cancellation while discarding a 401 detaches a stalled body without refreshing", async () => {
+  const ac = new AbortController();
+  const cancel = Promise.withResolvers<void>();
+  let refreshes = 0;
+  const pending = run(request(undefined, ac.signal), {
+    access: async () => old,
+    refresh: async () => { refreshes++; return fresh; },
+    fetch: transport(() => new Response(new ReadableStream({
+      cancel() { queueMicrotask(() => ac.abort()); return cancel.promise; },
+    }), { status: 401 })),
+  });
+  try {
+    const status = await Promise.race([pending.then(response => response.status), Bun.sleep(200).then(() => 0)]);
+    expect(status).toBe(499);
+    expect(refreshes).toBe(0);
+  } finally {
+    cancel.resolve();
+    await pending;
+  }
+});
+
 test("persistent 401 is terminal and safe error headers retain numeric Retry-After", async () => {
   let calls = 0, refreshes = 0;
   const response = await run(request(), {
@@ -219,7 +240,7 @@ test("a token spend ceiling enabled during setup is rechecked before physical di
   expect(getActiveTurnCount()).toBe(baseline);
 });
 
-test("native SSE errors retain their payload while delivery logs record failure", async () => {
+test("native SSE errors redact upstream diagnostics and delivery logs record failure", async () => {
   const { logGeminiNativeDelivery } = await import("../../src/server/gemini-native-log");
   const { getRequestLogEntries } = await import("../../src/server/request-log");
   const req = request();
@@ -234,7 +255,11 @@ test("native SSE errors retain their payload while delivery logs record failure"
     }, context);
     const delivery = logGeminiNativeDelivery(response, req, id, Date.now(), context);
     expect(delivery.status).toBe(200);
-    expect(await delivery.text()).toBe(`data: ${payload}\n\n`);
+    const delivered = await delivery.text();
+    expect(delivered).not.toContain("opaque upstream diagnostic");
+    expect(JSON.parse(delivered.slice("data: ".length))).toEqual({
+      error: { code: 502, message: "Antigravity upstream rejected the request", status: "INTERNAL" },
+    });
     const row = getRequestLogEntries().find(entry => entry.requestId === id);
     expect(context).toMatchObject({ errorCode: "gemini_native_upstream_error" });
     expect(row).toMatchObject({ status: 502, terminalStatus: "failed", errorCode: "upstream_server_error", terminalSource: "upstream" });
@@ -369,7 +394,7 @@ test("queued native sends recheck paused, reauth and removed accounts before ini
   expect(getActiveTurnCount()).toBe(baseline);
 });
 
-test("buffered native errors preserve original JSON and log failure without retaining diagnostics", async () => {
+test("buffered native errors redact upstream diagnostics and log failure", async () => {
   const { logGeminiNativeDelivery } = await import("../../src/server/gemini-native-log");
   const { getRequestLogEntries } = await import("../../src/server/request-log");
   const req = request(), lease = tryAdmitTurn(undefined, req.signal)!;
@@ -382,7 +407,10 @@ test("buffered native errors preserve original JSON and log failure without reta
       fetch: transport(() => new Response(`{"response":${payload}}`)),
     }, context);
     const delivery = logGeminiNativeDelivery(response, req, id, Date.now(), context);
-    expect(delivery.status).toBe(200); expect(await delivery.text()).toBe(payload);
+    expect(delivery.status).toBe(502);
+    expect(await delivery.json()).toEqual({
+      error: { code: 502, message: "Antigravity upstream rejected the request", status: "UNAVAILABLE" },
+    });
     const row = getRequestLogEntries().find(entry => entry.requestId === id);
     expect(row).toMatchObject({ status: 502, terminalStatus: "failed", errorCode: "upstream_server_error", terminalSource: "upstream" });
     expect(JSON.stringify(row)).not.toContain("private buffered diagnostic");

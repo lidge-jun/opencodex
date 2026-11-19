@@ -197,6 +197,12 @@ El proveedor con clave API `commandcode` usa Chat Completions para la mayoría d
 
 ## `google`
 
+La entrada compatible con Gemini en `/v1beta` puede conservar el JSON original al generar
+contenido mediante el proveedor OAuth canónico `google-antigravity`. Activa
+`protocols.rollout.geminiNativeAntigravity: true` para que se aplique después del enrutamiento y
+la admisión. La opción está desactivada por defecto.
+Consulta [Gemini nativo con Antigravity](/es/reference/proxy-formats/#native-gemini-with-antigravity).
+
 **Objetivos:** Google **Gemini**, **Vertex AI**, y la Antigravity **Asistencia de código en la nube**. AI Studio utiliza
 `/v1beta/models/{model}:streamGenerateContent`; los otros modos usan sus puntos finales nativos Google.
 **Auth:** clave API, Vertex ADC o Google Antigravity OAuth, seleccionado por `googleMode`.

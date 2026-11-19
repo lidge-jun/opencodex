@@ -2,8 +2,10 @@
 
 Gemini clients (the google-genai SDK with a custom base URL, `agy` with its `genai` gateway wire
 protocol, `GOOGLE_GEMINI_BASE_URL`) can use configured provider routes through the Gemini REST
-shape. By default it translates onto the [Chat Completions inbound](inbound-compat.md) path,
-like the [Ollama inbound](ollama-inbound.md).
+shape. Like the [Ollama inbound](ollama-inbound.md) it is a translation onto the
+[Chat Completions inbound](inbound-compat.md) path by default. The default-off
+[Antigravity OAuth passthrough](gemini-native.md) runs after the same admission for eligible
+`/v1beta` generation. Eligible native wire aliases augment the model catalog when enabled.
 
 `src/server/gemini-native-paths.ts` classifies a path: `GET /v1beta/models`,
 `GET /v1beta/models/{model}`, and `POST /v1beta/models/{model}:{method}` or
@@ -144,15 +146,6 @@ emission. The bridge disposes the translator on success, failure, or cancellatio
 `x-opencodex-interaction-stored: true|false` (exposed to browsers) whenever a store was requested. `GET`
 returns the stored resource with its input steps and `previous_interaction_id`; `DELETE` answers `{}`;
 cancel answers 400 for an owned interaction (nothing runs in the background) and 404 otherwise.
-
-## Native Antigravity passthrough
-
-A request to either `/v1beta` generation method can set `ocx_native=true`. The shared dispatcher
-selects the [native transport](gemini-native.md) if the normal route preflight resolves an exact
-`gemini-*` wire model to canonical `google-antigravity`, and the selector is that model ID or its
-canonical provider-qualified form. The translated path handles other providers and selectors.
-The native branch uses the same auth, origin, body, active-turn and workflow admission, and
-validates the resolved destination against the captured model scope before OAuth or dispatch.
 
 ## Coverage
 
