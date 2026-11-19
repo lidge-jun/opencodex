@@ -7,7 +7,7 @@ This page holds section 3 of the [Providers](/guides/providers/) guide: the buil
 and the provider-specific notes that go with them. Auth modes, account logins, and local providers
 stay on that page.
 
-opencodex ships 110 built-in presets: 88 key-based, 18 OAuth, three local, and one default
+opencodex ships 111 built-in presets: 89 key-based, 18 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -100,6 +100,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | TokenLab | `https://api.tokenlab.sh/v1` |
 | Modelflare | `https://modelflare.dev/v1` |
 | AI Stupid Level | `https://aistupidlevel.info/v1` |
+| AI/ML API | `https://api.aimlapi.com/v1` |
 | cheapaimodel | `https://api.cheapaimodel.ai/v1` |
 | OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
@@ -219,6 +220,16 @@ response header names the model that answered. Routing modes declare a 262,144-t
 output tokens, which hold for any model the router picks. The router accepts text only, so for a
 routing mode or pinned model at the preset destination the proxy hands images to the vision sidecar instead of sending them. Its Anthropic
 Messages endpoint is a passthrough to Anthropic without routing, so the preset does not use it.
+
+**AI/ML API**, operated by Boiler Labs FZ-LLC under its [Terms of Service](https://aimlapi.com/terms-and-conditions),
+is an OpenAI-compatible gateway at `https://api.aimlapi.com/v1`. Create an [API key](https://aimlapi.com/app/keys),
+then select **AI/ML API** in `ocx init` or the dashboard's **Add provider** picker, or run
+`ocx provider add aimlapi`. Provide the key directly or as `${AIMLAPI_API_KEY}`.
+The preset uses Chat Completions and preserves vendor-prefixed model IDs, such as
+`openai/gpt-5.6-terra` (the default). Live discovery filters the public `GET /v1/models` catalog
+to Chat Completions entries. The public catalog cannot validate API keys.
+Requests to the preset destination carry the `X-AIMLAPI-Source` attribution header. It is removed
+when the preset is configured with another origin.
 
 **cheapaimodel** is a pay-per-token API gateway for open-weight models (DeepSeek, GLM, Kimi) and
 Grok, operated by LINKOVA PTE. LTD. Create an [API key](https://console.cheapaimodel.ai/keys) on a
