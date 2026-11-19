@@ -836,6 +836,7 @@ export async function executeResponsesSidecars(
       connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
       routedModelStallTimeoutMs: wsPlan.routedModelStallTimeoutMs,
       stallTimeoutSec: wsPlan.stallTimeoutSec, proxyErrorContext: logCtx,
+      onLocalFailure: options.onWebSearchLocalFailure,
       streamRoutedModelOutput: wsPlan.streamRoutedModelOutput,
       on429: rotateSidecarProviderOn429,
       onRotatedUsage: billRotatedUsage,
@@ -858,6 +859,7 @@ export async function executeResponsesSidecars(
         notifyResponseComplete(response);
       },
     });
+    if (loopResponse.ok && parsed.stream) options.onHostedWebSearchStream?.();
     const wsScopeRefusal = sidecarScopeRefusal(loopResponse);
     if (wsScopeRefusal) return wsScopeRefusal;
     // A routed Anthropic model whose last pool account refused on spent quota fails the loop's

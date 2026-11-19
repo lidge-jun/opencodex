@@ -2,7 +2,7 @@ import { responseReplayOwnerKey } from "../../responses/state/replay-owner";
 import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { comboLogLabel, comboTargetLogLabel } from "../../combos/resolve";
 import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
-import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { carryLocalFailureState, projectLocalModelRefusalLog, upstreamErrorIsLocal } from "../request-log-failure-detail";
 import { carryProxyErrorContext, hasProxyErrorMessage, markProxyError } from "../../lib/client-error-body";
 import { isXaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
 import { classifyUpstreamCondition } from "../../lib/upstream-condition";
@@ -562,6 +562,7 @@ export async function executeComboResponses(
       activeAttempt: undefined,
       activeAttemptStartedAt: undefined,
     });
+    carryLocalFailureState(childLog, logCtx);
     if (requestedModel !== responseModel) {
       projectLocalModelRefusalLog(logCtx, clientModelLabel);
       logCtx.model = responseModel; logCtx.requestedModel = responseModel;
@@ -1260,11 +1261,18 @@ export async function executeComboResponses(
     };
     const completedTarget = { provider: pick.target.provider, model: pick.target.model };
     const writerGeneration = pick.writerGeneration;
+    const completedPick = pick;
+    const settleSuccess = () => {
+      noteComboSuccess(comboId, combo, completedPick.target, writerGeneration);
+      settleComboReprobeSuccess(completedPick);
+    };
+    let hostedWebSearchStream = false;
     let consumedChildFailure: ConsumedComboFailure | undefined;
     let preflightModelRefusal: CodexAccountModelRefusal | undefined;
     const callbackGate = createChildPassthroughCallbackGate({
       ...options,
       onResponseComplete: model => {
+        if (hostedWebSearchStream) settleSuccess();
         // The live config can change while the child is streaming. Never retain credentials.
         const currentCombo = getCombo(config, comboId);
         const provider = config.providers[completedTarget.provider];
@@ -1346,6 +1354,10 @@ export async function executeComboResponses(
         onBridgeUsageBound: () => {
           childUsageBound = true;
           forwardChildUsage();
+        },
+        onHostedWebSearchStream: () => { hostedWebSearchStream = true; },
+        onWebSearchLocalFailure: () => {
+          if (childCommitted) carryLocalFailureState(childLog, logCtx);
         },
         // Attempt-relative TTFT is recorded HERE (not via childLog.firstOutputMs — a later
         // Object.assign(logCtx, childLog) would overwrite the request-relative value).
@@ -1430,8 +1442,7 @@ export async function executeComboResponses(
         childLog.accountLogLabel,
       );
       attemptRetained = true;
-      noteComboSuccess(comboId, combo, pick.target, pick.writerGeneration);
-      settleComboReprobeSuccess(pick);
+      if (!hostedWebSearchStream) settleSuccess();
       carryProxyErrorContext(childLog, logCtx);
       Object.assign(logCtx, childLog, {
         client: logCtx.client,
@@ -1445,6 +1456,7 @@ export async function executeComboResponses(
         activeAttemptStartedAt: segmentStartedAt(),
         resolvedModel: childLog.resolvedModel ?? childLog.model,
       });
+      carryLocalFailureState(childLog, logCtx);
       options.onCodexAuthContextResolved?.(resolvedAuth);
       options.setTerminalOutcomeRecorder?.(terminalRecorder);
       callbackGate.commit();
@@ -1510,8 +1522,9 @@ export async function executeComboResponses(
     lastFailure = failure.response;
     lastFailureUpstreamCode = failure.upstreamCode;
     toolChoiceRefusalsOnly = (toolChoiceRefusalsOnly ?? true) && isMandatoryToolChoiceRefusal(failure.response);
-    // A real target failure ends the session pin; the next turn is decided afresh (#7525).
-    jevPin?.forget();
+    const localDeadline = failure.response.status === 504 && upstreamErrorIsLocal(childLog);
+    // A real target failure ends the session pin (#7525).
+    if (!localDeadline) jevPin?.forget();
     if (!quotaFailure && !replayRefusal && (lastFailure.status === 429 || lastFailure.status === 402)) {
       quotaFailure = lastFailure;
       quotaFailedChildLog = childLog;
@@ -1535,7 +1548,7 @@ export async function executeComboResponses(
     // send that already ran the turn, so no later target may receive it, whatever its status says.
     const failureDecision = failure.nonReplayable || spentReplacement
       ? "stop"
-      : isPolicyCandidateRefusal(failure.response) ? "hop"
+      : localDeadline || isPolicyCandidateRefusal(failure.response) ? "hop"
       : comboFailureDecision(failure.response.status, failure.classificationText, {
         code: failure.upstreamCode,
         rootCode: failure.upstreamRootCode,
@@ -1612,7 +1625,7 @@ export async function executeComboResponses(
     }
     // A bare status made a revoked credential read as a provider outage. Log the classified
     // condition (a closed member), never upstream-authored code or message text.
-    const failureReason = classifyUpstreamCondition({
+    const failureReason = localDeadline ? undefined : classifyUpstreamCondition({
       status: failure.response.status, code: failure.upstreamCode, type: failure.upstreamType, message: failure.upstreamMessage,
     });
     console.warn(
@@ -1622,7 +1635,7 @@ export async function executeComboResponses(
     const failureNow = Date.now();
     const attemptedTargets = pick.attempted;
     // Legacy privacy mode is specific to the serving account.
-    const failureCooldownScope = xaiPrivacyRefusal || isPolicyCandidateRefusal(failure.response) ? "none" : comboFailureCooldownScope(failure.response.status, failure.classificationText, {
+    const failureCooldownScope = localDeadline || xaiPrivacyRefusal || isPolicyCandidateRefusal(failure.response) ? "none" : comboFailureCooldownScope(failure.response.status, failure.classificationText, {
       code: failure.upstreamCode,
       malformedResponseFormat: failure.malformedResponseFormat,
       openRouterOpaque400: failure.openRouterOpaque400,
@@ -1653,7 +1666,7 @@ export async function executeComboResponses(
       resetAt: codexLocalRefusal ? undefined : failure.resetAt,
       cooldownMs: combo.cooldownMs,
       now: failureNow,
-      cooldownScope: failureCooldownScope,
+      recordFailure: !localDeadline, cooldownScope: failureCooldownScope,
       eligible: targetEligible,
       status: failure.response.status,
       code: failure.upstreamCode,

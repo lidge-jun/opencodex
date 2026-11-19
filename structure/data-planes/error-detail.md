@@ -24,7 +24,19 @@ through the disk reader. A row keeps:
   none, and a stored condition is kept only under the same rules. Text set through
   `recordLocalFailureDetail` is not upstream evidence unless the caller passes `upstreamEvidence: true`
   (the Messages passthrough restating an upstream status and closed type); `upstreamErrorIsLocal` keeps
-  it out of the final row's evidence. The Messages passthrough classifies the condition where it parses the
+  it out of the final row's evidence, including the upstream code/type diagnostics of the failed frame the
+  proxy wrote itself and any condition already stored on the context.
+  `src/server/request-log-terminal-status.ts` captures terminal status and suppresses upstream
+  service warnings when the local provenance marker is present. The web-search loop records its
+  header deadline, routed-model byte stall and downstream handoff deadline as `header_timeout`,
+  `generation_timeout` and `turn_inactivity` respectively. The row keeps the bounded
+  `failureDetail` and omits `upstreamCondition`. A body stall retains `failureCause: upstream-fault` and `terminalSource: upstream`.
+  A context reused across attempts drops the previous attempt's local verdict at the attempt
+  boundary (`takeLocalFailureState` in policy fallback, compaction recovery and the opaque-blob reset) and
+  puts it back only when that attempt is rolled back without dispatching (`restoreLocalFailureState`).
+  A Responses combo carries that local verdict when it adopts a child. A deadline recorded after
+  the child commits is forwarded before the terminal frame reaches the request logger.
+  The Messages passthrough classifies the condition where it parses the
   upstream error and stores only the member on the context (`upstreamCondition`), so a native Anthropic
   overflow is recorded as `context_overflow`. `classifyUpstreamCondition` reads status, bounded structured
   tokens and, for 4xx only, fixed lowercase keyword sets. HTTP 401 is authoritative. The exact transport

@@ -25,6 +25,7 @@ import { runExaWebSearch } from "./exa-executor";
 import type { WebSearchBackendId } from "./index";
 import { pacingHeaderDeadline } from "./header-deadline";
 import { redactSecretString } from "../lib/redact";
+import { recordLocalFailureDetail, type FailureDetail } from "../server/request-log-failure-detail";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, isSameTargetRetryHold, SendBudgetExhaustedError } from "../lib/upstream-retry";
 import { unwrapUpstreamRetryEvidenceError } from "../codex/auth-context";
@@ -334,10 +335,18 @@ class LoopError extends Error {
     message: string,
     readonly event?: Extract<AdapterEvent, { type: "error" }>,
     readonly detail?: Pick<SidecarLoopFailure, "upstreamCode" | "nonReplayable" | "verifiedPlanRefusal">,
+    /** A deadline this proxy enforced; logged as local failure detail, never as upstream evidence. */
+    readonly localFailure?: FailureDetail,
   ) {
     super(message);
     this.name = "LoopError";
   }
+}
+
+/** The response-header deadline verdict; the wire status and text are the pre-existing ones. */
+function headerDeadlineError(connectTimeoutMs: number): LoopError {
+  return new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during web-search`,
+    undefined, undefined, { code: "header_timeout", value: connectTimeoutMs });
 }
 
 function loopFailure(e: LoopError): SidecarLoopFailure {
@@ -393,6 +402,8 @@ export interface WebSearchLoopDeps {
   connectTimeoutMs?: number;
   /** Continuous routed-model response-body raw-byte inactivity deadline. Default 200000ms. */
   routedModelStallTimeoutMs?: number;
+  /** Best-effort notification before publication. Observer exceptions leave the timeout response intact. */
+  onLocalFailure?: () => void;
   /**
    * Effective bridge stall deadline for this turn (seconds). Computed by planWebSearch
    * (webSearchStallTimeoutSec) to cover response-header wait, routed-model body inactivity, and one
@@ -486,6 +497,14 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   const messages: OcxMessage[] = [...parsed.context.messages];
   const replaySnapshots = new Set<AnthropicReplaySnapshot>();
   const loopT0 = Date.now();
+  // A deadline this proxy enforced ends the turn: the row keeps its closed detail and the same text
+  // is no longer read as upstream evidence. The context text is the one the wire carries, so the
+  // status-derived error code and every retry decision read exactly what they read before.
+  const recordLocalLoopFailure = (e: unknown): void => {
+    if (!(e instanceof LoopError) || !e.localFailure || !deps.proxyErrorContext) return;
+    recordLocalFailureDetail(deps.proxyErrorContext as { upstreamError?: string; failureDetail?: FailureDetail }, e.message, e.localFailure);
+    try { deps.onLocalFailure?.(); } catch { /* Keep the original timeout response. */ }
+  };
   let allTools = adapter.name === "anthropic" ? anthropicDeclaredTools(parsed) : parsed.context.tools ?? [];
   let activeToolChoice = parsed.options.toolChoice;
   let forcedNudgeAdded = false;
@@ -733,8 +752,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           return replacement;
         } catch (error) {
           if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
-          if (headerDeadline.didExpire()) throw new LoopError(504,
-            `Provider response-header timeout after ${connectTimeoutMs}ms during web-search`);
+          if (headerDeadline.didExpire()) throw headerDeadlineError(connectTimeoutMs);
           const refusal = unwrapUpstreamRetryEvidenceError(error);
           if (refusal instanceof HostedAdvisorSpendRefusal) throw new LoopError(400, refusal.message, refusal.event());
           if (error instanceof LoopError || error instanceof SendBudgetExhaustedError || isTranslatorBudgetExceededError(error)) throw error;
@@ -840,9 +858,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       return { ...prepared, recover };
     } catch (error) {
       if (isTranslatorBudgetExceededError(error) || error instanceof SendBudgetExhaustedError) throw error;
-      if (headerDeadline.didExpire()) {
-        throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during web-search`);
-      }
+      if (headerDeadline.didExpire()) throw headerDeadlineError(connectTimeoutMs);
       if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
       const refusal = unwrapUpstreamRetryEvidenceError(error);
       if (refusal instanceof HostedAdvisorSpendRefusal) throw new LoopError(400, refusal.message, refusal.event());
@@ -929,8 +945,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         throw new LoopError(event.status ?? 502, event.message, event);
       }
       if (error instanceof LoopError) throw error;
-      if (error instanceof RoutedModelInactivityError) throw new LoopError(504, error.message);
-      if (error instanceof WebSearchConsumerInactivityError) throw new LoopError(504, error.message);
+      if (error instanceof RoutedModelInactivityError) throw new LoopError(504, error.message, undefined, undefined,
+        { code: "generation_timeout", value: error.timeoutMs });
+      if (error instanceof WebSearchConsumerInactivityError) throw new LoopError(504, error.message, undefined, undefined,
+        { code: "turn_inactivity", value: error.timeoutMs });
       if (error instanceof WebSearchStreamProtocolError) throw new LoopError(502, error.message);
       throw new LoopError(502, `Provider stream error: ${error instanceof Error ? error.message : String(error)}`);
     } finally { releaseCapture(); }
@@ -1142,6 +1160,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   } catch (e) {
     if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
     if (e instanceof LoopError) {
+      recordLocalLoopFailure(e);
       const failure = loopFailure(e);
       const failed = markSidecarContextOverflow(jsonError(e.status, e.message, e.event), failure);
       if (failure.verifiedPlanRefusal) markVerifiedModelNotInPlanResponse(failed);
@@ -1316,6 +1335,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         } catch (e) {
           // The bridge reports no usage for either error; the iterations already sent still count.
           if (hiddenUsage) deps.onUsage?.(hiddenUsage);
+          recordLocalLoopFailure(e);
           if (isTranslatorBudgetExceededError(e)) {
             yield {
               type: "error",

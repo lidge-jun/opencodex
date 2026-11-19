@@ -1667,9 +1667,9 @@ function writeFinalRequestLog(
     ...(meta?.terminalStatus ? { terminalStatus: meta.terminalStatus } : {}),
     ...(closeReason ? { closeReason } : {}),
     ...(logCtx.upstreamError && !upstreamErrorIsLocal(logCtx) ? { upstreamError: logCtx.upstreamError } : {}), ...(logCtx.failureDetail ? { failureDetail: logCtx.failureDetail } : {}),
-    ...(logCtx.upstreamCondition ? { upstreamCondition: logCtx.upstreamCondition } : {}),
-    ...upstreamDiagnosticLogFields(logCtx),
-    usageStatus,
+    ...(logCtx.upstreamCondition && !upstreamErrorIsLocal(logCtx) ? { upstreamCondition: logCtx.upstreamCondition } : {}),
+    // A local verdict's failed frame is proxy-authored; its code/type are not upstream diagnostics.
+    ...(upstreamErrorIsLocal(logCtx) ? {} : upstreamDiagnosticLogFields(logCtx)), usageStatus,
     ...(loggedUsage ? { usage: loggedUsage } : {}),
     ...(totalTokens !== undefined ? { totalTokens } : {}),
     ...(attempts !== undefined ? { attempts } : {}),
