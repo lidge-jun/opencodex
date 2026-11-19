@@ -61,13 +61,17 @@ function oldestOf(owner: string): string | undefined {
   return undefined;
 }
 
+export function interactionEntryBytes(entry: Pick<StoredInteraction, "history" | "resource">): number {
+  return Buffer.byteLength(JSON.stringify(entry.history)) + Buffer.byteLength(JSON.stringify(entry.resource));
+}
+
 /** Store an interaction. Returns false when it is too large to keep; the answer is unaffected. */
 export function rememberInteraction(
   entry: { id: string; owner: string; history: Record<string, unknown>[]; resource: Record<string, unknown> },
   now = Date.now(),
   maxBytes = MAX_INTERACTION_BYTES,
 ): boolean {
-  const bytes = Buffer.byteLength(JSON.stringify(entry.history)) + Buffer.byteLength(JSON.stringify(entry.resource));
+  const bytes = interactionEntryBytes(entry);
   if (bytes > Math.min(maxBytes, MAX_INTERACTION_BYTES)) return false;
   drop(entry.id);
   sweep(now);

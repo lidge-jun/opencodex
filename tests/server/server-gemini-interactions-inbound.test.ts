@@ -14,7 +14,7 @@ const ADMIN_TOKEN = "admin-secret-for-interactions";
 const PROVIDER_KEY = "provider-fixture-key";
 const saved = { home: process.env.OPENCODEX_HOME, data: process.env.OPENCODEX_API_AUTH_TOKEN, admin: process.env.OPENCODEX_ADMIN_AUTH_TOKEN };
 let home = "";
-let mode: "text" | "tools" | "error400" | "reasoning" = "text";
+let mode: "text" | "tools" | "error400" | "reasoning" | "oversize" = "text";
 let seen: { auth: string | null; url: string; body: Record<string, unknown> }[] = [];
 let upstream: ReturnType<typeof Bun.serve>;
 
@@ -39,6 +39,10 @@ beforeAll(() => {
       : mode === "reasoning"
         ? [chunk([{ index: 0, delta: { role: "assistant", reasoning_content: "think" } }]), chunk([{ index: 0, delta: { content: "Hello" } }])]
         : [chunk([{ index: 0, delta: { role: "assistant", content: "Hel" } }]), chunk([{ index: 0, delta: { content: "lo" } }])];
+    if (mode === "oversize") {
+      for (let i = 0; i < 3; i++) frames.push(chunk([{ index: 0, delta: { content: "x".repeat(256 * 1024) } }]));
+      frames.push(chunk([{ index: 0, delta: { content: "tail" } }]));
+    }
     frames.push(chunk([{ index: 0, delta: {}, finish_reason: finish }]), chunk([], { usage }), "data: [DONE]\n\n");
     return new Response(frames.join(""), { headers: { "content-type": "text/event-stream" } });
   } });
@@ -187,6 +191,17 @@ describe("Gemini Interactions inbound", () => {
     });
   });
 
+  test("caller safety_settings is a typed 400 through both aliases before any send", async () => {
+    await withServer(async base => {
+      for (const prefix of ["/v1beta", "/v1"]) {
+        const res = await post(base, prefix + "/interactions", { model: "fx/m1", input: "hi", safety_settings: [] });
+        expect(res.status).toBe(400);
+        expect(await res.json()).toEqual({ error: { code: 400, message: "safety_settings is not supported", status: "INVALID_ARGUMENT" } });
+      }
+      expect(seen).toHaveLength(0);
+    });
+  });
+
   test("an unknown previous_interaction_id is a Google 404 before any send", async () => {
     await withServer(async base => {
       const res = await post(base, "/v1beta/interactions", { model: "fx/m1", previous_interaction_id: "ocx-int-0", input: [{ type: "function_result", call_id: "c9", result: "ok" }] });
@@ -308,11 +323,56 @@ describe("Gemini Interactions state", () => {
     });
   });
 
+  test("an answer exceeding the live store allowance finishes SSE without storing a partial turn", async () => {
+    mode = "oversize";
+    saveConfig({ ...config(), maxInboundBodyBytes: 1024 * 1024 });
+    await withServer(async base => {
+      const path = "/v1beta/interactions";
+      const res = await post(base, path, { model: "fx/m1", input: "hi", stream: true });
+      const records = await events(res);
+      const text = records.flatMap(record => record.delta?.type === "text" ? [record.delta.text as string] : []).join("");
+      expect(text).toBe("Hello" + "x".repeat(768 * 1024) + "tail");
+      expect(records.at(-1)).toMatchObject({ event_type: "interaction.completed", interaction: { status: "completed" } });
+      expect((await fetch(new URL(path + "/" + records[0]!.interaction.id, base), { headers: googKey })).status).toBe(404);
+    });
+  });
+
   test("store:false is served but not kept", async () => {
     await withServer(async base => {
       const created = await (await post(base, "/v1beta/interactions", { model: "fx/m1", input: "hi", store: false })).json() as Record<string, any>;
       expect((await fetch(new URL("/v1beta/interactions/" + created.id, base), { headers: googKey })).status).toBe(404);
       expect((await post(base, "/v1beta/interactions", { model: "fx/m1", input: "again", previous_interaction_id: created.id })).status).toBe(404);
+    });
+  });
+
+  test("interaction resources and chain misses are never cacheable under either key header", async () => {
+    withOtherKey();
+    await withServer(async base => {
+      for (const prefix of ["/v1beta", "/v1"]) {
+        for (const header of ["x-goog-api-key", "x-opencodex-api-key"]) {
+          const path = prefix + "/interactions";
+          const owner = { [header]: DATA_TOKEN };
+          const other = { [header]: OTHER_KEY };
+          const created = await post(base, path, { model: "fx/m1", input: "private" }, owner);
+          const { id } = await created.json() as { id: string };
+          const resource = new URL(path + "/" + id, base);
+          const noStore = async (res: Response, status: number) => {
+            expect(res.status).toBe(status);
+            expect(res.headers.get("cache-control")).toBe("no-store");
+            if (!res.bodyUsed) await res.text();
+          };
+          await noStore(created, 200);
+          await noStore(await fetch(resource), 401);
+          await noStore(await fetch(resource, { headers: owner }), 200);
+          await noStore(await fetch(resource, { headers: other }), 404);
+          await noStore(await post(base, resource.pathname + "/cancel", {}, owner), 400);
+          await noStore(await post(base, resource.pathname + "/cancel", {}, other), 404);
+          await noStore(await post(base, path, { model: "fx/m1", input: "again", previous_interaction_id: id }, other), 404);
+          await noStore(await fetch(resource, { method: "DELETE", headers: other }), 404);
+          await noStore(await fetch(resource, { method: "DELETE", headers: owner }), 200);
+          await noStore(await fetch(resource, { headers: owner }), 404);
+        }
+      }
     });
   });
 

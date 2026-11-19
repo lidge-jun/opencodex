@@ -11,7 +11,7 @@ import { admissionFields, isAllowedRequestOrigin, resolveApiAuth, resolveRespons
 import { withCallerSessionIdentity } from "../caller-session-identity";
 import { captureAdmissionPolicy } from "../capture-admission-policy";
 import { isDraining } from "../lifecycle";
-import { geminiRouteAllowHeader, geminiRouteAllows, parseGeminiNativePath } from "../gemini-native-paths";
+import { geminiRouteAllowHeader, geminiRouteAllows, parseGeminiNativePath, type GeminiNativeRoute } from "../gemini-native-paths";
 import { geminiError, handleGeminiCountTokens, handleGeminiGeneration, handleGeminiModel, handleGeminiModels, toGeminiRefusal } from "../gemini-inbound";
 import { handleGeminiInteraction, handleGeminiInteractionResource } from "../gemini-interactions-inbound";
 import { nextRequestLogId, type RequestLogContext } from "../request-log";
@@ -39,6 +39,15 @@ function withProxyCredential(req: Request, url: URL): Request {
 export async function dispatchGeminiRoute(original: Request, url: URL, deps: GeminiRouteDeps): Promise<Response | undefined> {
   const route = parseGeminiNativePath(url.pathname);
   if (!route) return undefined;
+  const response = await handleGeminiRoute(route, original, url, deps);
+  if (route.kind === "interactions" || route.kind === "interaction" || route.kind === "interaction-cancel") {
+    // A cached success or miss must never cross the interaction owner's credential boundary.
+    response.headers.set("Cache-Control", "no-store");
+  }
+  return response;
+}
+
+async function handleGeminiRoute(route: GeminiNativeRoute, original: Request, url: URL, deps: GeminiRouteDeps): Promise<Response> {
   const { config, policy } = deps;
   if (!geminiRouteAllows(route, original.method)) {
     const refused = geminiError(405, `method ${original.method} not allowed`);

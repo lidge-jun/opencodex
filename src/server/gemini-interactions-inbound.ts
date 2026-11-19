@@ -11,6 +11,7 @@ import {
   chatCompletionAnswer,
   consumeInteractionsChatChunk,
   createInteractionsStreamState,
+  disposeInteractionsStream,
   encodeInteractionsEvents,
   chainInput,
   interactionAssistantMessage,
@@ -31,7 +32,7 @@ import { handleChatCompletions } from "./chat-completions";
 import { geminiError } from "./gemini-inbound";
 import { commitCancelled, drainedInnerErrorMessage, internalChatRequest, streamNativeFromChat, type NativeLogIds } from "./native-chat-bridge";
 import { createNativeFinalLog, type NativeFinalLog } from "./native-final-log";
-import { forgetInteraction, recallInteraction, rememberInteraction } from "./gemini-interactions-store";
+import { forgetInteraction, interactionEntryBytes, MAX_INTERACTION_BYTES, recallInteraction, rememberInteraction } from "./gemini-interactions-store";
 import { resolveContextPrincipal, type DataPlaneAdmission } from "./auth-cors";
 import { preflightOllamaRoute } from "./ollama-route-policy";
 import { DecompressedBodyTooLargeError, readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
@@ -176,18 +177,28 @@ async function bufferedInteraction(meta: InteractionMeta, inner: Response, final
 }
 
 function streamInteraction(meta: InteractionMeta, body: ReadableStream<Uint8Array>, finalLog: NativeFinalLog, signal: AbortSignal, keep?: Keep): Response {
-  const state = createInteractionsStreamState(meta);
+  const budget = createTranslatorBudget();
+  const remainingEntryBytes = keep?.owner === undefined ? 0 : Math.min(keep.maxBytes, MAX_INTERACTION_BYTES) - interactionEntryBytes({
+    history: keep.history,
+    resource: { ...interactionResource(meta, { content: "", reasoning: "", calls: [], status: "completed" }), steps: keep.inputSteps },
+  });
+  const state = createInteractionsStreamState(meta, budget, remainingEntryBytes);
   return streamNativeFromChat({
+    dispose: () => disposeInteractionsStream(state),
     contentType: "text/event-stream",
     chunk: parsed => encodeInteractionsEvents(consumeInteractionsChatChunk(state, parsed)),
     terminal() {
       const answer = interactionsStreamAnswer(state);
       if (!answer) return { ok: false, error: "request did not complete" };
+      const { status, usage } = answer;
       // frames() runs only after the inner path settled successfully.
       return { ok: true, frames: () => {
         const updated = interactionTimestamp();
-        if (keep) remember(keep, meta, answer, interactionResource(meta, answer, updated));
-        return encodeInteractionsEvents(interactionsStreamTerminal(state, answer, updated));
+        if (keep && state.retained) {
+          const retained = interactionsStreamAnswer(state)!;
+          remember(keep, meta, retained, interactionResource(meta, retained, updated));
+        }
+        return encodeInteractionsEvents(interactionsStreamTerminal(state, { status, usage }, updated));
       } };
     },
     failure: message => encodeInteractionsEvents(interactionsStreamFailure(state, 502, message)),

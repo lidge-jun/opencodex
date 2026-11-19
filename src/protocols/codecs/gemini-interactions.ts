@@ -3,13 +3,14 @@
  *
  * Request side: an Interactions create body becomes one Chat Completions body. Unknown fields are
  * ignored (the API grows them often); a field this proxy cannot honor and that would change the
- * answer (an agent, background execution, a hosted tool, non-text output) is a typed 400 instead of
- * a silent drop. `safety_settings` and `service_tier` are ignored on purpose, as on the
- * generateContent surface: the routed provider, which may not be Google, applies its own policy. Response side: a buffered Chat completion becomes an Interaction resource, and a
+ * answer (an agent, background execution, a hosted tool, non-text output, safety_settings) is a
+ * typed 400. The routed provider applies its own safety policy. Response side: a buffered Chat
+ * completion becomes an Interaction resource, and a
  * Chat SSE chunk sequence becomes the Interactions SSE vocabulary (interaction.created, step.start,
  * step.delta, step.stop, interaction.completed). Field names follow
  * https://ai.google.dev/api/interactions-api; usage uses its total_* names.
  */
+import { isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
 import { GeminiCodecError, MAX_GEMINI_TOOL_CALLS, normalizeSchema } from "./gemini";
 
 type Obj = Record<string, unknown>;
@@ -311,7 +312,7 @@ function responseFormat(value: unknown): Obj | undefined {
   return { type: "json_schema", json_schema: { name: "response", schema: schema(object(format.schema, "response_format schema")) } };
 }
 
-const UNSUPPORTED_FIELDS = ["webhook_config", "environment", "agent_config"] as const;
+const UNSUPPORTED_FIELDS = ["webhook_config", "environment", "agent_config", "safety_settings"] as const;
 
 /** Project an Interactions create body onto a Chat Completions plan. */
 export function interactionsToChat(input: unknown): InteractionsRequestPlan {
@@ -492,22 +493,95 @@ export function chatCompletionAnswer(input: unknown): InteractionAnswer {
 export interface InteractionsSseEvent { event: string; data: Obj }
 
 type StreamTool = { id?: string; name: string; arguments: string; signature?: string };
+type RetainedAnswer = Pick<InteractionAnswer, "reasoning" | "content" | "calls"> & {
+  bytes: number;
+  remainingEntryBytes: number;
+};
+const RETAINED_SCOPE = { kind: "retained_collectors" } as const;
+
 export interface InteractionsStreamState {
   meta: InteractionMeta;
+  budget: TranslatorBudget;
   created: boolean;
   index: number;
   open?: "thought" | "model_output";
-  reasoning: string;
-  content: string;
+  retained?: RetainedAnswer;
   finishReason?: unknown;
   usage?: Obj;
   tools: Map<number, StreamTool>;
+  toolMetadataBytes: number;
   toolsEmitted: boolean;
-  calls: InteractionAnswer["calls"];
 }
 
-export function createInteractionsStreamState(meta: InteractionMeta): InteractionsStreamState {
-  return { meta, created: false, index: -1, reasoning: "", content: "", tools: new Map(), toolsEmitted: false, calls: [] };
+export function createInteractionsStreamState(meta: InteractionMeta, budget: TranslatorBudget, remainingEntryBytes = 0): InteractionsStreamState {
+  const retained = remainingEntryBytes > 0
+    ? { reasoning: "", content: "", calls: [], bytes: 0, remainingEntryBytes }
+    : undefined;
+  return { meta, budget, created: false, index: -1, retained, tools: new Map(), toolMetadataBytes: 0, toolsEmitted: false };
+}
+
+function discardRetainedAnswer(state: InteractionsStreamState): void {
+  if (!state.retained) return;
+  state.budget.releaseRetained(state.retained.bytes, RETAINED_SCOPE);
+  state.retained = undefined;
+}
+
+function reserveStoredOutput(state: InteractionsStreamState, liveBytes: number, entryBytes: number): RetainedAnswer | undefined {
+  const retained = state.retained;
+  if (!retained) return undefined;
+  if (entryBytes <= retained.remainingEntryBytes) {
+    try {
+      state.budget.chargeRetained(liveBytes, RETAINED_SCOPE);
+      retained.bytes += liveBytes;
+      retained.remainingEntryBytes -= entryBytes;
+      return retained;
+    } catch (error) {
+      if (!isTranslatorBudgetExceededError(error)) throw error;
+    }
+  }
+  // Storage is best effort. Drop the prefix and keep emitting the full wire response.
+  discardRetainedAnswer(state);
+  return undefined;
+}
+
+function retainStreamText(state: InteractionsStreamState, field: "reasoning" | "content", value: string): void {
+  if (!state.retained) return;
+  const bytes = Buffer.byteLength(value);
+  const encodedBytes = Buffer.byteLength(JSON.stringify(value)) - 2;
+  // Answer text appears in both the Chat history and the resource. Thoughts appear only in the resource.
+  const retained = reserveStoredOutput(state, bytes, field === "content" ? 2 * encodedBytes : encodedBytes);
+  if (retained) retained[field] += value;
+}
+
+function retainStreamCall(state: InteractionsStreamState, call: InteractionAnswer["calls"][number], args: string): void {
+  if (!state.retained) return;
+  const metadata = [call.id, call.name, call.signature ?? ""];
+  const argsBytes = Buffer.byteLength(args);
+  const bytes = argsBytes + metadata.reduce((total, value) => total + Buffer.byteLength(value), 0);
+  const entryBytes = argsBytes + Buffer.byteLength(JSON.stringify(args)) - 2
+    + metadata.reduce((total, value) => total + 2 * (Buffer.byteLength(JSON.stringify(value)) - 2), 0);
+  reserveStoredOutput(state, bytes, entryBytes)?.calls.push(call);
+}
+
+/** Release the fragment buffer once the whole calls have been emitted, or when the stream stops. */
+function releaseStreamTools(state: InteractionsStreamState): void {
+  for (const index of state.tools.keys()) state.budget.closeCall(String(index));
+  state.tools.clear();
+  state.budget.releaseRetained(state.toolMetadataBytes, { kind: "tool_args" });
+  state.toolMetadataBytes = 0;
+}
+
+export function disposeInteractionsStream(state: InteractionsStreamState): void {
+  discardRetainedAnswer(state);
+  releaseStreamTools(state);
+  state.budget.dispose();
+}
+
+function chargeToolMetadata(state: InteractionsStreamState, value: string, previous = ""): void {
+  const delta = Buffer.byteLength(value) - Buffer.byteLength(previous);
+  if (delta > 0) state.budget.chargeRetained(delta, { kind: "tool_args" });
+  if (delta < 0) state.budget.releaseRetained(-delta, { kind: "tool_args" });
+  state.toolMetadataBytes += delta;
 }
 
 function sse(event: string, data: Obj): InteractionsSseEvent {
@@ -551,7 +625,7 @@ export function consumeInteractionsChatChunk(state: InteractionsStreamState, inp
     const value = text(thought, "Chat reasoning");
     if (value) {
       openStep(state, "thought", events);
-      state.reasoning += value;
+      retainStreamText(state, "reasoning", value);
       events.push(sse("step.delta", { index: state.index, delta: { type: "thought_summary", content: { type: "text", text: value } } }));
     }
   }
@@ -559,7 +633,7 @@ export function consumeInteractionsChatChunk(state: InteractionsStreamState, inp
     const value = text(delta.content, "Chat content");
     if (value) {
       openStep(state, "model_output", events);
-      state.content += value;
+      retainStreamText(state, "content", value);
       events.push(sse("step.delta", { index: state.index, delta: { type: "text", text: value } }));
     }
   }
@@ -574,14 +648,26 @@ export function consumeInteractionsChatChunk(state: InteractionsStreamState, inp
       if (call.id !== undefined) {
         const id = text(call.id, "tool id", true);
         if (current.id && current.id !== id) throw new Error("Conflicting tool id");
+        chargeToolMetadata(state, id, current.id);
         current.id = id;
       }
       const signature = callSignature(call);
-      if (signature) current.signature = signature;
+      if (signature) {
+        chargeToolMetadata(state, signature, current.signature);
+        current.signature = signature;
+      }
       if (call.function !== undefined) {
         const fn = object(call.function, "tool function");
-        if (fn.name !== undefined) current.name += text(fn.name, "tool name");
-        if (fn.arguments !== undefined) current.arguments += text(fn.arguments, "tool arguments");
+        if (fn.name !== undefined) {
+          const name = text(fn.name, "tool name");
+          chargeToolMetadata(state, name);
+          current.name += name;
+        }
+        if (fn.arguments !== undefined) {
+          const args = text(fn.arguments, "tool arguments");
+          state.budget.chargeRetained(Buffer.byteLength(args), { kind: "tool_args", callId: String(index) });
+          current.arguments += args;
+        }
       }
       state.tools.set(index, current);
     }
@@ -602,10 +688,12 @@ export function consumeInteractionsChatChunk(state: InteractionsStreamState, inp
         }
         state.index++;
         events.push(sse("step.start", { index: state.index, step: { type: "function_call", id, name, arguments: {} } }));
-        events.push(sse("step.delta", { index: state.index, delta: { type: "arguments_delta", arguments: JSON.stringify(args) } }));
+        const wireArgs = JSON.stringify(args);
+        events.push(sse("step.delta", { index: state.index, delta: { type: "arguments_delta", arguments: wireArgs } }));
         events.push(sse("step.stop", { index: state.index }));
-        state.calls.push({ id, name, arguments: args, ...(tool.signature ? { signature: tool.signature } : {}) });
+        retainStreamCall(state, { id, name, arguments: args, ...(tool.signature ? { signature: tool.signature } : {}) }, wireArgs);
       }
+      releaseStreamTools(state);
       state.toolsEmitted = true;
     }
   }
@@ -616,11 +704,12 @@ export function consumeInteractionsChatChunk(state: InteractionsStreamState, inp
 export function interactionsStreamAnswer(state: InteractionsStreamState): InteractionAnswer | undefined {
   const status = interactionStatus(state.finishReason);
   if (!status || (state.tools.size > 0 && !state.toolsEmitted)) return undefined;
-  return { reasoning: state.reasoning, content: state.content, calls: state.calls, status, ...(state.usage ? { usage: state.usage } : {}) };
+  const { retained, usage } = state;
+  return { reasoning: retained?.reasoning ?? "", content: retained?.content ?? "", calls: retained?.calls ?? [], status, ...(usage ? { usage } : {}) };
 }
 
 /** The closing events. Call only after the outer handler confirms settlement. */
-export function interactionsStreamTerminal(state: InteractionsStreamState, answer: InteractionAnswer, updated = state.meta.created): InteractionsSseEvent[] {
+export function interactionsStreamTerminal(state: InteractionsStreamState, answer: Pick<InteractionAnswer, "status" | "usage">, updated = state.meta.created): InteractionsSseEvent[] {
   const events = createdEvent(state);
   closeStep(state, events);
   const { id, model, created } = state.meta;

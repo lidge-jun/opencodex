@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import {
   InteractionsCodecError,
   chatCompletionAnswer,
@@ -90,7 +91,13 @@ describe("Interactions request → Chat", () => {
   });
 
   test("background:false and unknown benign fields are accepted", () => {
-    expect(interactionsToChat({ model: "m", input: "x", background: false, service_tier: "flex", safety_settings: [] }).inputMessages).toEqual([{ role: "user", content: "x" }]);
+    expect(interactionsToChat({ model: "m", input: "x", background: false, service_tier: "flex" }).inputMessages).toEqual([{ role: "user", content: "x" }]);
+  });
+
+  test("safety_settings is rejected even when empty or null", () => {
+    for (const safety_settings of [[], null, [{ category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_LOW_AND_ABOVE" }]]) {
+      refused({ model: "m", input: "x", safety_settings }, "safety_settings is not supported");
+    }
   });
 
   test("store, stream and previous_interaction_id are recorded on the plan", () => {
@@ -168,10 +175,13 @@ describe("Chat → Interaction", () => {
 });
 
 describe("Chat stream → Interactions events", () => {
+  let budget: ReturnType<typeof createTranslatorBudget>;
+  beforeEach(() => { budget = createTranslatorBudget(); });
+  afterEach(() => { budget.dispose(); });
   const types = (events: { event: string }[]) => events.map(event => event.event);
 
   test("reasoning then text: created, thought step, output step, completed with usage", () => {
-    const state = createInteractionsStreamState(meta);
+    const state = createInteractionsStreamState(meta, budget);
     const events = [
       ...consumeInteractionsChatChunk(state, chunk({ role: "assistant" })),
       ...consumeInteractionsChatChunk(state, chunk({ reasoning_content: "think" })),
@@ -196,7 +206,7 @@ describe("Chat stream → Interactions events", () => {
   });
 
   test("streamed tool calls arrive whole at finish as function_call steps", () => {
-    const state = createInteractionsStreamState(meta);
+    const state = createInteractionsStreamState(meta, budget, 1024);
     const events = [
       ...consumeInteractionsChatChunk(state, chunk({ tool_calls: [{ index: 0, id: "call_1", function: { name: "look", arguments: "{\"q\":" } }] })),
       ...consumeInteractionsChatChunk(state, chunk({ tool_calls: [{ index: 0, function: { name: "up", arguments: "\"x\"}" } }] })),
@@ -208,11 +218,33 @@ describe("Chat stream → Interactions events", () => {
     expect(interactionsStreamAnswer(state)).toMatchObject({ status: "requires_action", calls: [{ id: "call_1", name: "lookup", arguments: { q: "x" } }] });
   });
 
+  test("a stream without storage emits text and reasoning without collecting an answer", () => {
+    const state = createInteractionsStreamState(meta, budget, 0);
+    const events = consumeInteractionsChatChunk(state, chunk({ reasoning_content: "think", content: "hello" }, "stop"));
+    expect(types(events).filter(event => event === "step.delta")).toHaveLength(2);
+    expect(interactionsStreamAnswer(state)).toMatchObject({ status: "completed", reasoning: "", content: "", calls: [] });
+    expect(budget.snapshot().highWaterBytes).toBe(0);
+  });
+
+  test("storage charges live UTF-8 bytes, then drops its answer at the cap while streaming", () => {
+    const state = createInteractionsStreamState(meta, budget, 9);
+    consumeInteractionsChatChunk(state, chunk({ reasoning_content: "é", content: "ab" }));
+    expect(budget.snapshot().currentBytes).toBe(4);
+    const overCap = consumeInteractionsChatChunk(state, chunk({ content: "\"\"" }));
+    expect(overCap.at(-1)?.data.delta).toEqual({ type: "text", text: "\"\"" });
+    expect(budget.snapshot().currentBytes).toBe(0);
+    consumeInteractionsChatChunk(state, chunk({ content: "tail" }, "stop"));
+    const answer = interactionsStreamAnswer(state)!;
+    expect(answer).toMatchObject({ status: "completed", reasoning: "", content: "" });
+    expect(interactionsStreamTerminal(state, answer).at(-1)?.event).toBe("interaction.completed");
+    expect(budget.snapshot().highWaterBytes).toBe(4);
+  });
+
   test("no terminal before a finish; failure frames still open with interaction.created", () => {
-    const state = createInteractionsStreamState(meta);
+    const state = createInteractionsStreamState(meta, budget);
     consumeInteractionsChatChunk(state, chunk({ content: "partial" }));
     expect(interactionsStreamAnswer(state)).toBeUndefined();
-    const fresh = createInteractionsStreamState(meta);
+    const fresh = createInteractionsStreamState(meta, budget);
     expect(interactionsStreamFailure(fresh, 502, "request did not complete").map(event => event.data)).toEqual([
       { event_type: "interaction.created", interaction: { id: meta.id, object: "interaction", status: "in_progress", model: "fx/m1", created: meta.created, updated: meta.created } },
       { event_type: "error", error: { code: "internal", message: "request did not complete" } },

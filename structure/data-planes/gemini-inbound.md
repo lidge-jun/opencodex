@@ -96,9 +96,9 @@ turns and `{text}`/`{parts}` system instructions; `system_instruction`; `functio
 forcing it, as the generateContent codec does); a text `response_format`. A thought step's signature
 rides to the next function call as `extra_content.google.thought_signature`. A `function_result` whose
 call is not in the input is reported to the handler, which refuses it until stored history exists.
-Refused with 400 rather than silently changed: `agent`, `background: true`, `webhook_config`, `environment`, `agent_config`, hosted tools, non-text
-content or output. `service_tier` and `safety_settings` are ignored, as on the generateContent surface: the routed
-provider, which need not be Google, applies its own policy. A conversation-level `system`/`developer` turn stays at
+The create path refuses `agent`, `background: true`, `webhook_config`, `environment`,
+`agent_config`, `safety_settings`, hosted tools, input other than text and images, and non-text
+output with a typed 400. The routed provider applies its own safety policy. `service_tier` is ignored. A conversation-level `system`/`developer` turn stays at
 its position in the conversation; only `system_instruction` leads it.
 
 Answers carry `object: "interaction"`, `ocx-int-` ids with 128 random bits, and `status`
@@ -119,7 +119,8 @@ then answers 404 and the client resends history). The owner is the salted princi
 key the caller presented, resolved with `resolveContextPrincipal` so a key presented on a loopback bind
 still names its own owner, or one shared `loopback` owner for a keyless loopback caller; rotating a key
 mints a new principal, so its earlier chains answer 404. A lookup, delete or cancel by any other owner is
-indistinguishable from a missing id. Bounds: 24 hours from the last write (expiry is lazy, on the next
+indistinguishable from a missing id. The dispatcher sets `Cache-Control: no-store` on both
+Interactions aliases, including successes and owner-scoped misses. Bounds: 24 hours from the last write (expiry is lazy, on the next
 write or lookup), 1,000 entries and 64 MiB in total, 200 entries and 16 MiB per owner, and per entry the smaller of 8 MiB and the inbound body limit, since a larger history
 could never be chained. A write evicts only its own owner's oldest entries, at the owner and the global limits;
 when the store is full and the writer owns nothing to evict, the interaction is not kept (the answer is unaffected
@@ -134,7 +135,10 @@ a pending call of the stored turn's last answer and lead the input, otherwise 40
 those pending calls is dropped so nothing is duplicated upstream. A turn is stored only after it settles:
 buffered after the inner path settled, streamed inside the terminal `frames()` that the bridge calls only
 on success, so failed, cancelled and unsettled turns are not kept, and a storing error never fails the
-answer. `store: false` turns are served and not kept. Buffered answers report
+answer. The streaming translator collects full output only for a storable turn and charges retained
+bytes as they arrive. Reaching the per-entry limit drops the retained output while streaming continues.
+Tool fragments needed to emit a whole call are budgeted independently of storage and released after
+emission. The bridge disposes the translator on success, failure, or cancellation. Buffered answers report
 `x-opencodex-interaction-stored: true|false` (exposed to browsers) whenever a store was requested. `GET`
 returns the stored resource with its input steps and `previous_interaction_id`; `DELETE` answers `{}`;
 cancel answers 400 for an owned interaction (nothing runs in the background) and 404 otherwise.
