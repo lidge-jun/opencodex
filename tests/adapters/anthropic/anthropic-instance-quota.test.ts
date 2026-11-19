@@ -7,6 +7,7 @@ import {
 } from "../../helpers/anthropic-instance-fixture";
 import type { AnthropicInstanceId } from "../../../src/providers/anthropic-instance-id";
 import type { GenerationContext } from "../../../src/lib/state-store-sweeper";
+import { resetNearWeightOf } from "../../../src/routing/machine-weighted-routing";
 
 let f: AnthropicInstanceFixture;
 let cache: typeof import("../../../src/providers/quota/account-cache");
@@ -260,6 +261,94 @@ afterEach(async () => {
   await f.dispose();
   // dispose's provider-only clears schedule writes; the all-cache clear only cancels them.
   cache.clearAccountQuotaCache();
+});
+
+async function seedWeightedAnthropicQuota() {
+  const instance = "anthropic";
+  const id = f.ids[0];
+  await f.store.saveCredential(instance, {
+    access: "synthetic-quota-third-access", refresh: "synthetic-quota-third-refresh",
+    expires: Date.now() + 3_600_000, source: "oauth",
+    accountId: "55555555-5555-4555-8555-555555555555",
+  });
+  await f.store.setActiveAccount(instance, id);
+  const ids = f.store.getAccountSet(instance)!.accounts.map(row => row.id);
+  expect(ids).toHaveLength(3);
+  const observedAt = Math.floor(Date.now() / 1000) * 1000 - 60_000;
+  const observedClock = spyOn(Date, "now").mockReturnValue(observedAt);
+  try {
+    const reset = String((observedAt + 3_600_000) / 1000);
+    cache.recordAnthropicAccountQuotaFromHeadersForInstance(instance, id, new Headers({
+      "anthropic-ratelimit-unified-5h-utilization": "0.30",
+      "anthropic-ratelimit-unified-5h-reset": reset,
+      "anthropic-ratelimit-unified-7d-utilization": "0.30",
+      "anthropic-ratelimit-unified-7d-reset": reset,
+    }), sweeper.captureConfigGeneration(), 200);
+  } finally { observedClock.mockRestore(); }
+  const evidence = (now = Date.now()) => cache.getAnthropicResetNearQuota(instance, id, now);
+  const weight = (now = Date.now()) => resetNearWeightOf(ids, accountId =>
+    cache.getAnthropicResetNearQuota(instance, accountId, now), now)?.(id) ?? 1;
+  const rotate = async () => {
+    const original = f.store.getAccountCredential(instance, id)!;
+    expect(await f.store.saveAccountCredential(instance, id, {
+      ...original, access: "synthetic-quota-rotated-access", refresh: "synthetic-quota-rotated-refresh",
+      anthropicIdentity: undefined,
+    })).toBe(true);
+  };
+  expect(weight()).toBe(2);
+  return { instance, id, observedAt, evidence, weight, rotate };
+}
+
+test.each(["before", "after"] as const)("failed Anthropic usage probe retains weight only until credential rotation %s the probe", async rotation => {
+  const { instance, id, weight, rotate } = await seedWeightedAnthropicQuota();
+  const { fetchAnthropicAccountQuota } = await import("../../../src/providers/quota/anthropic-account-quota");
+  const rotateFirst = rotation === "before";
+  if (rotateFirst) {
+    await rotate();
+    expect(weight()).toBe(1);
+  }
+  globalThis.fetch = (async () => Response.json({}, { status: 500 })) as typeof fetch;
+  const entry = await fetchAnthropicAccountQuota(instance, id, true, f.config);
+  expect(entry).toMatchObject({ unavailable: true, quotaFailure: "upstream_error" });
+  expect(weight()).toBe(rotateFirst ? 1 : 2);
+  if (rotateFirst) expect(entry.quota).toBeNull();
+  else {
+    await rotate();
+    expect(weight()).toBe(1);
+  }
+});
+
+test.each([
+  ["account", "unchanged"], ["account", "rotated"],
+  ["provider", "unchanged"], ["provider", "rotated"],
+] as const)("Anthropic %s monthly retirement keeps original plan clocks only for the same owner (%s credential)", async (scope, credential) => {
+  const { instance, id, observedAt, evidence, weight, rotate } = await seedWeightedAnthropicQuota();
+  const rotated = credential === "rotated";
+  if (rotated) {
+    await rotate();
+    expect(weight()).toBe(1);
+  }
+  globalThis.fetch = (async () => Response.json({ extra_usage: { is_enabled: false } })) as typeof fetch;
+  if (scope === "account") {
+    const { fetchAnthropicAccountQuota } = await import("../../../src/providers/quota/anthropic-account-quota");
+    await fetchAnthropicAccountQuota(instance, id, true, f.config);
+  } else {
+    const { fetchAnthropicQuota } = await import("../../../src/providers/quota/vendor-probes-oauth");
+    expect(await fetchAnthropicQuota(instance, f.config)).toBeNull();
+  }
+  const entry = cache.accountQuotaCache.get(cache.accountCacheKey(instance, id));
+  expect(entry).toMatchObject({ unavailable: true, quotaFailure: "response_unusable" });
+  expect(weight()).toBe(rotated ? 1 : 2);
+  if (rotated) {
+    expect(entry?.quota).toBeNull();
+  } else {
+    expect(evidence()).toMatchObject({
+      fiveHourPercent: 30, weeklyPercent: 30, fiveHourObservedAt: observedAt, weeklyObservedAt: observedAt,
+    });
+    expect(weight(observedAt + 15 * 60_000 + 1)).toBe(1);
+    await rotate();
+    expect(weight()).toBe(1);
+  }
 });
 
 test("controlled dispatch reports premature settlement instead of orphaning its started barrier", async () => {

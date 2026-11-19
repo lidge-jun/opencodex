@@ -54,8 +54,19 @@ const anthropicUsageClocks = new WeakMap<ProviderQuota, Pick<ResetNearQuota, "fi
 export function stampAnthropicUsageObservation(
   quota: ProviderQuota | null, incoming?: ProviderQuota | null, previous?: ProviderQuota | null,
 ): ProviderQuota | null {
-  if (!quota || !incoming) return quota;
+  if (!quota) return quota;
   const clocks = previous ? anthropicUsageClocks.get(previous) : undefined;
+  if (!incoming) {
+    if (previous && clocks && quota !== previous) {
+      anthropicUsageClocks.set(quota, {
+        fiveHourObservedAt: quota.fiveHourPercent !== undefined && quota.fiveHourPercent === previous.fiveHourPercent
+          && quota.fiveHourResetAt === previous.fiveHourResetAt ? clocks.fiveHourObservedAt : undefined,
+        weeklyObservedAt: quota.weeklyPercent !== undefined && quota.weeklyPercent === previous.weeklyPercent
+          && quota.weeklyResetAt === previous.weeklyResetAt ? clocks.weeklyObservedAt : undefined,
+      });
+    }
+    return quota;
+  }
   anthropicUsageClocks.set(quota, {
     fiveHourObservedAt: incoming.fiveHourPercent !== undefined ? incoming.updatedAt : clocks?.fiveHourObservedAt,
     weeklyObservedAt: incoming.weeklyPercent === undefined && incoming.weeklyResetAt === undefined ? clocks?.weeklyObservedAt
@@ -296,23 +307,42 @@ export function accountCacheKey(provider: string, accountId: string): string {
  * Synchronous last-good per-account quota read for routing. Never probes the network.
  * Returns null when nothing is cached (or the cached row has no bars).
  */
-function getCurrentAccountQuotaEntry(provider: string, accountId: string): AccountQuotaCacheEntry | undefined {
+export function getCurrentAccountQuotaEntry(provider: string, accountId: string): AccountQuotaCacheEntry | undefined {
   const entry = accountQuotaCache.get(accountCacheKey(provider, accountId));
+  if (entry?.isCurrent?.() === false) return undefined;
   if (provider === "kiro") {
     const account = getAccountSet("kiro")?.accounts.find(row => row.id === accountId);
     if (!account || entry?.identity !== kiroEvidenceIdentity(account)) return undefined;
   }
-  if (isAnthropicInstanceId(provider) && entry?.anthropicCredentialGeneration) {
-    const credential = getAccountCredential(provider, accountId);
-    if (!credential || credentialGeneration(credential) !== entry.anthropicCredentialGeneration) return undefined;
+  if (isAnthropicInstanceId(provider)) {
+    if (entry?.quotaOwnerIsCurrent !== entry?.isCurrent && entry?.quotaOwnerIsCurrent?.() === false) return undefined;
+    if (entry?.anthropicCredentialGeneration) {
+      const credential = getAccountCredential(provider, accountId);
+      if (!credential || credentialGeneration(credential) !== entry.anthropicCredentialGeneration) return undefined;
+    }
   }
-  if (entry?.isCurrent && !entry.isCurrent()) return undefined;
   return entry;
 }
 
 export function getCachedProviderAccountQuota(provider: string, accountId: string): ProviderQuota | null {
   const entry = getCurrentAccountQuotaEntry(provider, accountId);
   return isAnthropicInstanceId(provider) ? normalizeAnthropicQuota(entry?.quota, Date.now()) : entry?.quota ?? null;
+}
+
+/** A probe without new meters can carry forward evidence under its original owner. */
+export function retainAnthropicAccountProbeQuota(
+  instance: AnthropicInstanceId, accountId: string, retireMonthly: boolean, now: number,
+): Pick<AccountQuotaCacheEntry, "quota" | "quotaOwnerIsCurrent" | "anthropicCredentialGeneration"> {
+  const retained = getCurrentAccountQuotaEntry(instance, accountId);
+  const previous = retained?.quota ?? null;
+  const meters = retireMonthly ? withoutAnthropicMonthlyFallback(previous) : previous;
+  const quota = stampAnthropicUsageObservation(normalizeAnthropicQuota(meters, now), undefined, previous);
+  if (!quota) return { quota: null };
+  return {
+    quota,
+    quotaOwnerIsCurrent: retained?.quotaOwnerIsCurrent,
+    anthropicCredentialGeneration: retained?.anthropicCredentialGeneration,
+  };
 }
 
 /** Client-facing reads require positive ownership. Kiro's persisted login identity is rechecked by the cache reader. */
@@ -412,6 +442,7 @@ export function recordAnthropicAccountQuotaFromHeadersForInstance(
   const credential = getAccountCredential(instance, accountId);
   const generation = credential && credentialGeneration(credential);
   const previous = candidate?.isCurrent?.() === false
+    || (candidate?.quotaOwnerIsCurrent !== candidate?.isCurrent && candidate?.quotaOwnerIsCurrent?.() === false)
     || candidate?.anthropicCredentialGeneration && candidate.anthropicCredentialGeneration !== generation ? undefined : candidate;
   if (observed.customWindows) observeAnthropicFamilyQuota(accountId, observed.customWindows, observed.updatedAt);
   const quota = {

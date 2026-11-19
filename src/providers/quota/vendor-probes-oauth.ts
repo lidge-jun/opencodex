@@ -47,7 +47,7 @@ import {
   hydrateAccountQuotaCache,
   mayCommitAccountQuotaKey,
   persistAccountQuotaCache,
-  withoutAnthropicMonthlyFallback,
+  retainAnthropicAccountProbeQuota,
 } from "./account-cache";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import type { ProviderQuota, ProviderQuotaWindow } from "../quota-types";
@@ -398,10 +398,11 @@ export async function fetchAnthropicQuota(provider: string, config: OcxConfig = 
   if (stillOwnsToken && anthropicCurrent() && mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
     // The snapshot writer serializes the whole cache, including other accounts on a cold start.
     hydrateAccountQuotaCache();
-    const cached = quota ?? withoutAnthropicMonthlyFallback(getCachedProviderAccountQuota(instance, probedAccountId));
+    const ts = Date.now();
+    const evidence = quota ? { quota, quotaOwnerIsCurrent: anthropicCurrent }
+      : retainAnthropicAccountProbeQuota(instance, probedAccountId, true, ts);
     commitAnthropicAccountQuota(probedAccountKey, {
-      ts: Date.now(), quota: cached, isCurrent: anthropicCurrent, ...result.failureFields,
-      quotaOwnerIsCurrent: quota ? anthropicCurrent : accountQuotaCache.get(probedAccountKey)?.quotaOwnerIsCurrent,
+      ts, ...evidence, isCurrent: anthropicCurrent, ...result.failureFields,
     }, quota?.monthlyPercent === undefined, result.dispatch);
     result.publishDecisionQuota();
     persistAccountQuotaCache();

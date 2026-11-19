@@ -235,13 +235,12 @@ quota epoch, configured row, account incarnation and login identity are unchange
 `src/providers/quota/account-cache.ts` are per instance, so clearing Pool 2 quota never
 invalidates the primary pool. With the pool on and two or more accounts, `fetchAnthropicQuota` (`src/providers/quota/vendor-probes-oauth.ts`) reports a display-only estimate via `aggregateCodexPoolCapacity`: seats weigh 1, inactive seats use their last-good row (no extra probes), paused, reauth or stale seats count as incomplete coverage. Every Anthropic report is current only while the pool switch and each seat's id, paused and reauth state are unchanged; pool off or one account keeps the active report. Quota reset detection observes the active seat's own reading (`observedQuotaFor`), never the estimate, which has no reset times (`tests/providers/provider-anthropic-pool-capacity.test.ts`).
 
-A failed probe names one closed `quotaFailure` code from
-`src/providers/quota/failure-codes.ts`: `account_unavailable` when no usable credential could
-be obtained (no request is sent), the HTTP status class (`access_denied`, `rate_limited`,
-`upstream_error`, `redirect_blocked`), `response_unusable` for a body with no usable quota,
-and `timeout` or `transport_error` for a thrown dispatch. Both probe writers cache `unavailable: true`
-and `quotaFailure: "response_unusable"` on retirement-only responses. Ownership and cooldown refusals
-set no code. The code requires a current flight, carries no upstream text and never changes account health or `needsReauth`.
+Each failed probe names one closed `quotaFailure` code from `src/providers/quota/failure-codes.ts`: `account_unavailable` if a credential is unusable (no request is sent), the HTTP status class (`access_denied`, `rate_limited`, `upstream_error`, `redirect_blocked`), `response_unusable` for a body without usable quota, or `timeout` or `transport_error` for a thrown dispatch.
+Both probe writers cache `unavailable: true` and `quotaFailure: "response_unusable"` on retirement-only responses.
+Ownership and cooldown refusals set no code. The code requires a current flight, carries no upstream text and never changes account health or `needsReauth`.
+Live bars kept after a failed or retirement-only probe retain their original credential fence.
+A retirement-only result preserves the original observation times of unchanged plan bars for
+[weighted routing](reset-near-weighted.md).
 
 `src/providers/anthropic-reset-grant-ledger.ts` names the journal by instance:
 `anthropic-reset-grant-ledger.json` keeps the primary pool's existing bytes and records,
