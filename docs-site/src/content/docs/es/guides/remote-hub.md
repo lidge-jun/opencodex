@@ -81,9 +81,62 @@ La rotación mantiene las claves de datos antiguas y nuevas válidas durante un 
 
 `ocx connect` y `ocx connect status` comprueban la disponibilidad del catálogo contra el primer entorno de ejecución local válido de Codex en orden de selección. Los candidatos preferidos fallidos pueden retroceder, pero las alternativas de menor prioridad no se prueban después de que se selecciona un entorno de ejecución válido. Esta comprobación deja la selección de entorno de ejecución guardada sin cambios. General `ocx status` todavía descubre alternativas para el diagnóstico en entorno de ejecución.
 
-Un cliente no almacena credenciales de proveedor y ningún catálogo propio, por lo que su tienda de configuración y credenciales locales están vacías por diseño, y leerlas como la verdad produce una respuesta segura y errónea sobre lo que el concentrador puede servir. En un cliente conectado `ocx status` por lo tanto conduce con `State from hub <origin>` y fuentes las líneas de OAuth - inicios de sesión, proveedores y modelos delegables desde el concentrador sobre el plano de datos, etiquetando las líneas que realmente describen esta máquina `(local)`: el proxy, el servicio, el binario Codex y la shim, y los puertos locales. `ocx status --json` lleva la misma respuesta que `runtimeRole` más un bloque `remoteHub` cuyo `stateSource` es `hub`, `cache` o `unavailable`, nunca el propio estado del cliente. Un concentrador más antiguo que no sirve `/v1/hub-state` informa `unavailable` con una instrucción para actualizar el concentrador en lugar de volver silenciosamente al estado de inicio de sesión local, y `ocx config show` en un cliente imprime una nota `_remoteHub` que indica las credenciales y la disponibilidad del modelo en vivo en el concentrador. La lectura de concentrador utiliza solo la clave de datos por cliente; ningún token de administrador y ningún secreto de proveedor llegan a un cliente.
+Un cliente no almacena credenciales de proveedor y ningún catálogo propio, por lo que su tienda de configuración y credenciales locales están vacías por diseño, y leerlas como la verdad produce una respuesta segura y errónea sobre lo que el concentrador puede servir. En un cliente conectado `ocx status` por lo tanto conduce con `State from hub <origin>` y fuentes las líneas de OAuth - inicios de sesión, proveedores y modelos delegables desde el concentrador sobre el plano de datos, etiquetando las líneas que realmente describen esta máquina `(local)`: el proxy, el servicio, el binario Codex y la shim, y los puertos locales. `ocx status --json` lleva la misma respuesta que `runtimeRole` más un bloque `remoteHub` cuyo `stateSource` es `hub`, `cache` o `unavailable`, nunca el propio estado del cliente. Un concentrador más antiguo que no sirve `/v1/hub-state` informa `unavailable` con una instrucción para actualizar el concentrador en lugar de volver silenciosamente al estado de inicio de sesión local, y `ocx config show` en un cliente imprime una nota `_remoteHub` que indica las credenciales y la disponibilidad del modelo en vivo en el concentrador. Esta lectura del concentrador utiliza solo la clave de datos del cliente. Los secretos de los proveedores permanecen en el concentrador.
 
 `ocx status` realiza una solicitud de estado de concentrador en vivo solo cuando la conexión guardada aún coincide con la instantánea de estado y el archivo de token de datos coincide con esa conexión. Si falla la comprobación, se salta la solicitud y muestra el estado del concentrador en caché coincidente, o `unavailable` si no existe caché coincidente.
+
+<a id="management-reads-from-a-connected-client"></a>
+
+### Lecturas de administración desde un cliente conectado
+
+`ocx account list` se autentica ante el servicio del cliente con el token de administración
+local. Durante el registro con un código de emparejamiento o un token de administración, el
+concentrador emite una credencial de lectura independiente. El cliente solo guarda esa
+credencial en `hub-management-session.json`, con modo `0600` en POSIX o acceso exclusivo del
+propietario en Windows. Cada lectura también demuestra la posesión de la clave de datos
+registrada vigente. El concentrador comprueba el método, la ruta y la consulta exactos antes de
+servir datos guardados o en caché. Si faltan datos en caché, la lectura no inicia consultas ni
+actualizaciones en los proveedores.
+
+| Método | Ruta local | Parámetros permitidos |
+| --- | --- | --- |
+| GET, HEAD | `/api/codex-auth/accounts` | — |
+| GET, HEAD | `/api/codex-auth/active` | — |
+| GET, HEAD | `/api/oauth/providers` | — |
+| GET, HEAD | `/api/oauth/accounts` | `provider` (obligatorio) |
+| GET, HEAD | `/api/providers/keys` | `name` (obligatorio, identificadores por posición y estado) |
+| GET, HEAD | `/api/provider-quotas` | — |
+| GET, HEAD | `/api/quota-pool` | `refresh` (se acepta y se ignora) |
+| GET, HEAD | `/api/usage` | `range`, `surface`, `provider`, `model`, `since`, `until` |
+
+La lista de claves muestra la posición y el estado activo o pausado de cada fila. Los
+identificadores persistentes, las etiquetas y la gestión de claves se consultan directamente en
+el concentrador. El grupo de cuotas sirve el contrato en caché `ocx.quota-pool/1` que usa GOAT.
+
+Con la credencial guardada, el informe de uso se limita a la clave registrada y omite el desglose por cuenta.
+`ocx usage` en un cliente conectado sigue usando su informe en el plano de datos.
+El reenvío del panel aplica la misma tabla y comprueba la sesión local y las cabeceras `Host`
+y `Origin`. Usa la sesión del usuario en el concentrador, con el emparejamiento en
+`/api/machine/hub-relay/opencodex-session`. El cierre de sesión del panel usa
+`POST /api/machine/hub-relay/api/session/logout` con las sesiones del usuario en el cliente y
+el concentrador y sus respectivos tokens CSRF. La credencial de lectura no permite cerrar sesión.
+Abre el panel del concentrador para realizar otros cambios y operaciones administrativas.
+`ocx stop` actúa sobre el proceso local.
+
+Las lecturas autenticadas renuevan la vigencia de cinco minutos de inactividad. Mientras
+el servicio del cliente está en ejecución, hace una lectura pasiva cada minuto para renovarla.
+La rotación sustituye la credencial e invalida en el concentrador la
+generación anterior de la clave. Si el concentrador está disponible, `ocx disconnect` revoca
+la credencial de reenvío allí y elimina el archivo local. Si no se puede confirmar la
+revocación, la desconexión local se completa y el concentrador deja caducar la credencial
+cinco minutos después de la última lectura autenticada. La clave de datos registrada se
+revoca por separado, como se indica arriba.
+
+`ocx connect status` informa del archivo local. Si la credencial caduca por inactividad o
+el concentrador se reinicia, las lecturas con la credencial guardada devuelven `401`.
+Usa un código nuevo con `ocx connect rotate --pairing-code-stdin` para obtener otra
+credencial. El origen del navegador del cliente debe estar en `corsAllowOrigins` del
+concentrador para el emparejamiento.
 
 <a id="linux-systemd-or-macos-launchd"></a>
 

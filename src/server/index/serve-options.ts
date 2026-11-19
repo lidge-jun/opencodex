@@ -175,6 +175,11 @@ import {
   requireManagementAuth,
 } from "../management-auth";
 import {
+  HUB_RELAY_CREDENTIAL_PATH, HUB_RELAY_ENROLLMENT_ID_HEADER, HUB_RELAY_READ_PREFIX, hubRelayReadTarget,
+} from "../../remote/hub-management-relay";
+import { issueHubRelayCredential, revokeHubRelayCredential } from "../hub-relay-auth";
+import { dispatchPassiveManagementRead } from "./passive-management-read";
+import {
   LOCAL_ATTESTATION_CHALLENGE_HEADER,
   LOCAL_ATTESTATION_PROOF_HEADER,
   createLocalAttestationProof,
@@ -659,6 +664,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       }
 
       if (url.pathname.startsWith("/api/")) {
+        if (url.pathname === HUB_RELAY_CREDENTIAL_PATH && req.method === "DELETE") {
+          return withManagementCors(revokeHubRelayCredential(managementAuth, req, config), req, config);
+        }
         const localManagementAuth = {
           attestationSecret: localAttestationSecret,
           pid: process.pid,
@@ -670,6 +678,27 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // gate used. Consent-bearing routes need this: request headers are forgeable
         // by anything holding the admin token, the credential is not.
         const principal = managementPrincipal(req, managementAuth, config, localManagementAuth) ?? undefined;
+        if (url.pathname === HUB_RELAY_CREDENTIAL_PATH) {
+          const response = principal === "admin-token"
+            || (principal === "gui-session" && managementSessionControl.isPaired(req, config))
+            ? issueHubRelayCredential(managementAuth, req, config)
+            : Response.json({ error: "hub relay enrollment authority required" }, { status: 403 });
+          return withManagementCors(response, req, config);
+        }
+        if (url.pathname.startsWith(HUB_RELAY_READ_PREFIX + "/")) {
+          const target = hubRelayReadTarget(req);
+          if (config.runtimeRole !== "hub" || !target
+            || (principal !== "hub-relay-read" && principal !== "gui-session" && principal !== "admin-token")) {
+            return withManagementCors(Response.json({ error: "hub relay read refused" }, { status: 404 }), req, config);
+          }
+          const keyId = principal === "hub-relay-read" ? req.headers.get(HUB_RELAY_ENROLLMENT_ID_HEADER) : null;
+          if (principal === "hub-relay-read" && !keyId) {
+            return withManagementCors(Response.json({ error: "hub relay enrollment required" }, { status: 401 }), req, config);
+          }
+          const enrollment = keyId ? { keyId, stillAdmitted: () => managementPrincipal(req, managementAuth, config) === "hub-relay-read" } : undefined;
+          const response = await dispatchPassiveManagementRead(req.method, target, config, requestManagementApiDeps, undefined, { enrollment });
+          return withManagementCors(response, req, config);
+        }
         if (url.pathname === GUI_PAIR_PATH || url.pathname === DESKTOP_GUI_PAIR_PATH) {
           if (url.pathname === DESKTOP_GUI_PAIR_PATH && (!trustedLoopbackForIngress(ingress, config.hostname ?? "127.0.0.1")
             || !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(requestServer.requestIP(req)?.address ?? "")

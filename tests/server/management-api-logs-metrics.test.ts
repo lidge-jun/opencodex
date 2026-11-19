@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { usageLogPath } from "../../src/usage/log";
+import { protectedHomeForTests } from "../../src/lib/test-home-guard";
 import {
   addRequestLog,
   clearRequestLogsForTests,
@@ -305,19 +306,16 @@ describe("GET /api/logs display metrics", () => {
     expect(resolvedTarget).toBe(join(testDir, "usage.jsonl"));
     expect(readFileSync(resolvedTarget, "utf-8")).toContain(requestId);
 
-    // The default location (what the resolver returns with no OPENCODEX_HOME
-    // override) must never be the write target for this suite.
-    const previousHome = process.env.OPENCODEX_HOME;
-    delete process.env.OPENCODEX_HOME;
-    try {
-      const defaultTarget = usageLogPath();
-      expect(defaultTarget).not.toBe(resolvedTarget);
-      if (existsSync(defaultTarget)) {
-        expect(readFileSync(defaultTarget, "utf-8")).not.toContain(requestId);
-      }
-    } finally {
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
+    // The fixture must stay clear of both the protected home and the sandbox's default.
+    const protectedHome = protectedHomeForTests();
+    expect(protectedHome).toBeTruthy();
+    expect(resolvedTarget).not.toBe(usageLogPath(protectedHome!));
+    const sandboxHome = process.env.HOME;
+    if (!sandboxHome || sandboxHome === process.env.OCX_REAL_HOME) throw new Error("test HOME was not isolated");
+    const defaultTarget = usageLogPath(join(sandboxHome, ".opencodex"));
+    expect(defaultTarget).not.toBe(resolvedTarget);
+    if (existsSync(defaultTarget)) {
+      expect(readFileSync(defaultTarget, "utf-8")).not.toContain(requestId);
     }
   });
 });
