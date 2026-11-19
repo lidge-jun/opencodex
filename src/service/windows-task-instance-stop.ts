@@ -77,10 +77,10 @@ try {
   foreach ($target in $verified) {
     if ($stopClock.ElapsedMilliseconds -ge $stopBeforeMs) { 'failed'; return }
     $attempted = $true
-    [Console]::WriteLine('stop-attempted')
-    [Console]::Out.Flush()
-    if ($stopClock.ElapsedMilliseconds -ge $stopBeforeMs) { 'failed'; return }
-    $target.Instance.Stop()
+    try { $target.Instance.Stop() } finally {
+      [Console]::WriteLine('stop-attempted')
+      [Console]::Out.Flush()
+    }
   }
   'ended'
 } catch {

@@ -87,7 +87,7 @@ manager still running is `survived` (`unbound-wrapper` when the survivor was nev
 is `survived` while the proxy is still alive after the service reports stopped. The authorizer
 variant `guardedStopWindowsServiceChecked` runs its authorizer at entry, before each manager stop and before each terminate and
 reports a refusal as `WindowsCheckedStopRefusedError` with what had already happened. For Task
-Scheduler it reauthorizes after validating the helper proof, before sending `stop` on stdin. The
+Scheduler it reauthorizes after validating the helper proof, before sending `stop-before` on stdin. The
 helper and outer deadlines must still be open after authorization. The helper starts its
 monotonic clock before sending proof. The parent measures from proof receipt and sends the
 earlier deadline as a cutoff on that clock. Time spent delivering approval and refreshing
