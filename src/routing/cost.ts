@@ -58,7 +58,7 @@ export function costEvidenceForCandidate(input: CostEvidenceInput): RouteCostEvi
   return {
     estimatedUsd: estimate.cost.total,
     priceSource,
-    incomplete: estimate.estimated || priceSource === "expected",
+    incomplete: estimate.estimated || priceSource === "expected" || priceSource === "models-dev" || priceSource === "openrouter",
     ...(limitUsd !== undefined ? { limitUsd } : {}),
   };
 }

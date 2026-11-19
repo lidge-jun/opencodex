@@ -21,7 +21,6 @@ import { getConfigDir } from "../config/paths";
 import { readBoundedResponseBytes } from "../lib/bounded-body";
 import { trackBackgroundWork } from "../lib/background-work";
 import { isPassiveRead } from "../lib/passive-read";
-import { capabilityInferenceKey } from "../providers/model-capability-inference";
 import type { Cost4 } from "./expected-prices";
 import { bumpPriceCatalogVersion } from "./price-catalog-version";
 import { validCost4 } from "./user-cost-validation";
@@ -59,9 +58,31 @@ const FILENAME = "price-catalog-cache.json";
 /** Original vendors only: a reseller's listing is not the model's own price. */
 const MODELS_DEV_VENDORS = ["anthropic", "openai", "google", "deepseek", "moonshotai", "minimax", "zai", "xai", "mistral", "xiaomi", "stepfun", "alibaba"];
 
-/** Same-model key: `cn:` channel prefix, `vendor/` prefix, case, dot-vs-hyphen and `[...]` suffix are ignored. */
+const KNOWN_CHANNEL_PREFIX = /^cn:/i;
+const normalizeVendor = (value: string): string => value.toLowerCase().replaceAll("-", "");
+
+/**
+ * Same-model key: only known channel prefixes (`cn:`), case, dot-vs-hyphen and a `[...]` suffix
+ * are normalized. Model `:tag` suffixes (e.g. `qwen3:8b`) and any single `vendor/` prefix stay
+ * intact so lookups require vendor agreement (#3136).
+ */
 export function priceCatalogKey(modelId: string): string {
-  return capabilityInferenceKey(modelId.replace(/^[a-z0-9_-]+:/i, ""));
+  const stripped = modelId.trim().replace(KNOWN_CHANNEL_PREFIX, "").replace(/\[[^\]]*\]$/, "");
+  const slash = stripped.indexOf("/");
+  if (slash > 0 && slash < stripped.length - 1) {
+    const vendor = stripped.slice(0, slash);
+    const tail = stripped.slice(slash + 1);
+    if (!tail.includes("/")) return `${vendor.toLowerCase()}/${tail.toLowerCase().replaceAll(".", "-")}`;
+  }
+  return stripped.toLowerCase().replaceAll(".", "-");
+}
+
+function splitVendorKey(key: string): { vendor?: string; bare: string } {
+  const slash = key.indexOf("/");
+  if (slash <= 0 || slash === key.length - 1) return { bare: key };
+  const tail = key.slice(slash + 1);
+  if (tail.includes("/")) return { bare: key };
+  return { vendor: key.slice(0, slash), bare: tail };
 }
 
 const record = (v: unknown): Record<string, unknown> | undefined =>
@@ -100,7 +121,10 @@ const SOURCES: readonly SourceDef[] = [
         for (const [id, value] of Object.entries(record(record(root?.[vendor])?.models) ?? {})) {
           const cost = record(record(value)?.cost);
           const cost4 = priced(rate(cost?.input), rate(cost?.output), rate(cost?.cache_read), rate(cost?.cache_write));
-          if (cost4 && id.length <= 256) addRow(out, priceCatalogKey(id), { cost4, vendor, vendorModelId: id });
+          if (cost4 && id.length <= 256) {
+            const { bare } = splitVendorKey(priceCatalogKey(id));
+            addRow(out, bare, { cost4, vendor, vendorModelId: id });
+          }
         }
       }
       return settle(out);
@@ -119,7 +143,8 @@ const SOURCES: readonly SourceDef[] = [
         if (typeof id !== "string" || id.length > 256 || id.includes(":") || id.startsWith("openrouter/") || !id.includes("/")) continue;
         const p = record(row?.pricing);
         const cost4 = priced(perMillion(p?.prompt), perMillion(p?.completion), perMillion(p?.input_cache_read), perMillion(p?.input_cache_write));
-        if (cost4) addRow(out, priceCatalogKey(id), { cost4, vendor: id.slice(0, id.indexOf("/")), vendorModelId: id });
+        const parsed = splitVendorKey(priceCatalogKey(id));
+        if (cost4 && parsed.vendor) addRow(out, parsed.bare, { cost4, vendor: id.slice(0, id.indexOf("/")), vendorModelId: id });
       }
       return settle(out);
     },
@@ -187,15 +212,17 @@ function persist(dir: string, s: State): void {
   try { atomicWriteFile(join(dir, FILENAME), JSON.stringify(file) + "\n"); } catch { /* Memory still serves lookups. */ }
 }
 
-/** Synchronous lookup: the first source in registry order that holds the key. */
+/** Synchronous lookup: the first source in registry order that holds the key and matches any claimed vendor. */
 export function lookupCatalogPrice(modelId: string, dir = getConfigDir()): CatalogPrice | null {
   const key = priceCatalogKey(modelId);
   if (!key) return null;
+  const { vendor: claimedVendor, bare } = splitVendorKey(key);
+  if (!bare) return null;
   const s = stateFor(dir);
   for (const def of SOURCES) {
     const snap = s.snapshots.get(def.id);
-    const row = snap?.prices.get(key);
-    if (snap && row) {
+    const row = snap?.prices.get(bare);
+    if (snap && row && (!claimedVendor || normalizeVendor(row.vendor) === normalizeVendor(claimedVendor))) {
       return { source: def.id, cost4: row.cost4, vendor: row.vendor, vendorModelId: row.vendorModelId, fetchedAt: row.fetchedAt ?? snap.fetchedAt, url: def.url };
     }
   }
@@ -280,9 +307,10 @@ function mergeKeys(s: State, def: SourceDef, parsed: ReadonlyMap<string, Row>, k
   const next = new Map(before?.prices ?? []);
   let added = 0;
   for (const key of keys) {
-    const row = parsed.get(key);
-    if (row && !next.has(key)) {
-      next.set(key, { ...row, fetchedAt: at });
+    const { vendor: claimedVendor, bare } = splitVendorKey(key);
+    const row = parsed.get(bare);
+    if (row && (!claimedVendor || normalizeVendor(row.vendor) === normalizeVendor(claimedVendor)) && !next.has(bare)) {
+      next.set(bare, { ...row, fetchedAt: at });
       added++;
     }
   }

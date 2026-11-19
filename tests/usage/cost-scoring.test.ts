@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync} from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { costEvidenceForCandidate, costScore } from "../../src/routing/cost";
 import { evaluatePolicyProfile, COST_UNKNOWN_PENALTY_SCORE } from "../../src/routing/evaluator";
 import type { OcxConfig } from "../../src/types";
+import { resetPriceCatalogForTests } from "../../src/usage/price-catalog";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 let testDir = "";
@@ -17,6 +18,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetPriceCatalogForTests();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (testDir) removeTreeWithRetry(testDir);
@@ -175,5 +177,38 @@ describe("cost-aware scoring (RI-08)", () => {
     ]);
     expect(result.trace.candidates[0]!.cost).toBeDefined();
     expect(result.trace.candidates[0]!.score!.components.cost).toBeDefined();
+  });
+
+  test("background price catalog sources (models-dev, openrouter) are incomplete for routing limits", () => {
+    writeFileSync(join(testDir, "price-catalog-cache.json"), JSON.stringify({
+      version: 1,
+      sources: {
+        "models-dev": {
+          fetchedAt: Date.now(),
+          prices: {
+            "catalog-md": { cost4: { input: 2, output: 10, cacheRead: 0, cacheWrite: 0 }, vendor: "deepseek", vendorModelId: "catalog-md" },
+          },
+        },
+        openrouter: {
+          fetchedAt: Date.now(),
+          prices: {
+            "catalog-or": { cost4: { input: 1, output: 5, cacheRead: 0, cacheWrite: 0 }, vendor: "acme", vendorModelId: "acme/catalog-or" },
+          },
+        },
+      },
+    }));
+    resetPriceCatalogForTests();
+    const reportedUsage = { inputTokens: 1000, outputTokens: 100 };
+    for (const [model, expectedSource] of [["catalog-md", "models-dev"], ["catalog-or", "openrouter"]] as const) {
+      const evidence = costEvidenceForCandidate({
+        provider: "a",
+        model,
+        usage: reportedUsage,
+        usageStatus: "reported",
+        limitUsd: 0.000001,
+      });
+      expect(evidence.priceSource).toBe(expectedSource);
+      expect(evidence.incomplete).toBe(true);
+    }
   });
 });

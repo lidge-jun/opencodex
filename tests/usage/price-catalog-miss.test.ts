@@ -190,6 +190,21 @@ describe("price catalog miss path", () => {
     expect(resolveMatchedPrice("acme-relay", "late-model-7")).toMatchObject({ source: "models-dev", cost4: { input: 2, output: 3 } });
   });
 
+  test("a vendor-prefixed miss merges only when the catalog vendor agrees, and preserves :tag keys", async () => {
+    await refreshPriceCatalogs();
+    sandbox.feeds.serve(MODELS_DEV_URL, {
+      deepseek: { models: { "late-model-8": { cost: { input: 2, output: 3 } } } },
+      alibaba: { models: { "qwen3:8b": { cost: { input: 0.2, output: 0.6 } } } },
+    });
+    expect(resolveCatalogPrice("openai/late-model-8")).toBeNull();
+    expect(resolveCatalogPrice("deepseek/late-model-8")).toBeNull();
+    expect(resolveCatalogPrice("qwen3:8b")).toBeNull();
+    await drainMisses();
+    expect(lookupCatalogPrice("deepseek/late-model-8")?.cost4).toMatchObject({ input: 2, output: 3 });
+    expect(lookupCatalogPrice("openai/late-model-8")).toBeNull();
+    expect(lookupCatalogPrice("qwen3:8b")?.cost4).toMatchObject({ input: 0.2, output: 0.6 });
+  });
+
   test("without an injected fetch the test environment never reaches the network", async () => {
     setPriceCatalogFetchForTests(null);
     resolveCatalogPrice("zephyr-flash-2");

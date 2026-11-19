@@ -10,7 +10,7 @@ import {
   setPriceCatalogFetchForTests,
 } from "../../src/usage/price-catalog";
 import { priceCatalogVersion } from "../../src/usage/price-catalog-version";
-import { feedFetch, installCatalogSandbox, MODELS_DEV_URL, OPENROUTER_URL } from "../helpers/price-catalog-fixtures";
+import { feedFetch, installCatalogSandbox, MODELS_DEV_URL, modelsDevFeed, OPENROUTER_URL } from "../helpers/price-catalog-fixtures";
 
 const sandbox = installCatalogSandbox();
 const cacheFile = () => join(sandbox.dir, "price-catalog-cache.json");
@@ -18,23 +18,56 @@ const cacheFile = () => join(sandbox.dir, "price-catalog-cache.json");
 describe("price catalog key matching", () => {
   test.each([
     ["cn:zephyr-flash-2", "zephyr-flash-2"],
-    ["zd/zephyr-flash-2", "zephyr-flash-2"],
-    ["deepseek-ai/Zephyr-Flash-2", "zephyr-flash-2"],
+    ["deepseek/Zephyr-Flash-2", "deepseek/zephyr-flash-2"],
     ["ZEPHYR.FLASH.2", "zephyr-flash-2"],
-    ["cn:acme/Moon-Pro-3.1[1m]", "moon-pro-3-1"],
-  ])("%s collapses to %s", (id, key) => {
+    ["cn:moonshotai/Moon-Pro-3.1[1m]", "moonshotai/moon-pro-3-1"],
+    ["qwen3:8b", "qwen3:8b"],
+    ["qwen3.5:397b", "qwen3-5:397b"],
+  ])("%s normalizes to %s", (id, key) => {
     expect(priceCatalogKey(id)).toBe(key);
   });
 
-  test("a channel prefix, vendor prefixes, case and dots all find the same row", async () => {
+  test("the cn: channel prefix, matching vendor prefixes, case and dots all find the same row", async () => {
     await refreshPriceCatalogs();
-    for (const id of ["zephyr-flash-2", "cn:zephyr-flash-2", "zd/zephyr-flash-2", "deepseek-ai/Zephyr-Flash-2", "ZEPHYR-FLASH-2"]) {
+    for (const id of ["zephyr-flash-2", "cn:zephyr-flash-2", "deepseek/Zephyr-Flash-2", "cn:deepseek/Zephyr-Flash-2", "ZEPHYR-FLASH-2"]) {
       expect(lookupCatalogPrice(id)?.vendorModelId, id).toBe("zephyr-flash-2");
     }
     expect(lookupCatalogPrice("Moon-Pro-3.1")?.cost4).toEqual({ input: 1.5, output: 6, cacheRead: 0, cacheWrite: 0 });
-    expect(lookupCatalogPrice("moon-pro-3-1")?.vendor).toBe("moonshotai");
+    expect(lookupCatalogPrice("cn:moonshotai/Moon-Pro-3.1[1m]")?.vendor).toBe("moonshotai");
     expect(lookupCatalogPrice("grok-quill-5.5")?.cost4).toEqual({ input: 2, output: 8, cacheRead: 0.5, cacheWrite: 0 });
+    expect(lookupCatalogPrice("x-ai/Grok-Quill-5.5")?.vendorModelId).toBe("Grok-Quill-5.5");
     expect(lookupCatalogPrice("unknown-model-9")).toBeNull();
+  });
+
+  test("colon tags like qwen3:8b stay intact and cross-vendor or nested prefixes stay unmatched (#3136)", async () => {
+    const base = modelsDevFeed() as Record<string, { models: Record<string, unknown> }>;
+    sandbox.feeds.serve(MODELS_DEV_URL, {
+      ...base,
+      deepseek: { models: { ...base.deepseek!.models, "8b": { cost: { input: 9, output: 9 } } } },
+    });
+    await refreshPriceCatalogs();
+    expect(lookupCatalogPrice("qwen3:8b")).toBeNull();
+    expect(lookupCatalogPrice("8b")?.vendorModelId).toBe("8b");
+    for (const mismatched of [
+      "openai/zephyr-flash-2",
+      "zd/zephyr-flash-2",
+      "deepseek-ai/Zephyr-Flash-2",
+      "a/deepseek/zephyr-flash-2",
+      "cn:acme/Moon-Pro-3.1[1m]",
+      "openai/orb-only-7",
+    ]) {
+      expect(lookupCatalogPrice(mismatched), mismatched).toBeNull();
+    }
+    expect(lookupCatalogPrice("x-ai/grok-quill-5.5")?.vendor).toBe("xai");
+    expect(lookupCatalogPrice("acme/orb-only-7")?.source).toBe("openrouter");
+
+    sandbox.feeds.serve(MODELS_DEV_URL, {
+      alibaba: { models: { "qwen3:8b": { cost: { input: 0.2, output: 0.6 } }, "8b": { cost: { input: 9, output: 9 } } } },
+    });
+    await refreshPriceCatalogs({ force: true });
+    expect(lookupCatalogPrice("qwen3:8b")?.cost4).toMatchObject({ input: 0.2, output: 0.6 });
+    expect(lookupCatalogPrice("alibaba/qwen3:8b")?.vendorModelId).toBe("qwen3:8b");
+    expect(lookupCatalogPrice("openai/qwen3:8b")).toBeNull();
   });
 
   test("a key claimed by two rows with different prices in one source answers nothing", async () => {

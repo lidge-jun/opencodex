@@ -71,12 +71,15 @@ describe("price resolution tiers", () => {
     expect(resolveMatchedPrice("acme", "zephyr-flash-2")?.source).toBe("models-dev");
   });
 
-  test("a vendor prefix and a channel prefix on the logged id still reach the catalog price", async () => {
+  test("a matching vendor prefix and the cn: channel prefix reach the catalog price, while cross-vendor prefixes stay unpriced", async () => {
     configure({ acme: {} });
     await loadCatalog();
-    for (const id of ["cn:zephyr-flash-2", "zd/zephyr-flash-2", "Zephyr.Flash.2"]) {
+    for (const id of ["cn:zephyr-flash-2", "deepseek/zephyr-flash-2", "Zephyr.Flash.2"]) {
       expect(resolveMatchedPrice("acme", id)?.cost4.input, id).toBe(0.1);
     }
+    expect(resolveMatchedPrice("acme", "openai/zephyr-flash-2")).toBeNull();
+    expect(resolveMatchedPrice("acme", "zd/zephyr-flash-2")).toBeNull();
+    expect(resolveMatchedPrice("acme", "qwen3:8b")).toBeNull();
   });
 });
 
