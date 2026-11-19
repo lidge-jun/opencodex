@@ -657,6 +657,9 @@ this block through `PUT /api/settings`; send `compactionRecovery: null` to remov
 file edit should follow the normal stopped-proxy configuration workflow. This setting does not
 change sign-in, the conversation's ordinary model, Codex's provider ID, or the desktop composer.
 
+When the emergency model returns a failure that disallows retry, OpenCodex sends a standard
+error with `x-should-retry: false`. Provider diagnostics stay out of the client response.
+
 Recovery does not replay after cancellation, semantic output, tool side effects, an exhausted
 send budget, or an authentication, admission or policy refusal. Generic `400` errors do not
 enable fallback. Devin answers an oversized history with an opaque pre-output

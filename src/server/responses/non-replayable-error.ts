@@ -1,7 +1,7 @@
 import { carryProxyError, ownedChatErrorPayload } from "../../lib/client-error-body";
 import { httpStatusFromTerminalError } from "../../lib/errors";
 import {
-  applyReplayRefusalClientHeaders, carryReplayRefusal, hasNoRetryDirective, invitesResendAfterReplacement, isNonReplayableResponse,
+  applyReplayRefusalClientHeaders, carryReplayRefusal, hasClientReplayVeto, hasNoRetryDirective, invitesResendAfterReplacement, isNonReplayableResponse,
   isNonReplayableUpstreamCode, isReplayRefusalCode, isReplayRefusalProjection, isReplayRefusalResponse, replayRefusalBodyCode,
   isTerminalResetReplacement, markResponseNonReplayable, observedReplayRefusalCode, projectReplayRefusal, UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../../lib/upstream-retry";
@@ -55,6 +55,7 @@ export async function sanitizeNonReplayableUpstreamError(
   }
   if (isXaiPrivacyModeRefusal(response) && !signal.aborted && !response.bodyUsed && !response.body?.locked) {
     markResponseNonReplayable(response);
+    if (hasClientReplayVeto(response)) applyReplayRefusalClientHeaders(response.headers);
     return response;
   }
   const text = await readDisplaySafeErrorText(response, signal, "");
@@ -87,7 +88,7 @@ export async function sanitizeNonReplayableUpstreamError(
     message: `Provider error ${response.status}: upstream diagnostic withheld for a non-replayable failure`,
   } });
   const headers = new Headers({ "content-type": "application/json" });
-  if (hasNoRetryDirective(response)) applyReplayRefusalClientHeaders(headers);
+  if (hasClientReplayVeto(response) || hasNoRetryDirective(response)) applyReplayRefusalClientHeaders(headers);
   const safe = new Response(response.status === 304 ? null : body, {
     status: response.status, headers,
   });

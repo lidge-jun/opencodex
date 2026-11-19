@@ -59,6 +59,10 @@ keeps its explicit exception. In `src/web-search/header-deadline.ts`, local paci
 post-header body inspection pause the iteration's cumulative response-header clock; caller
 cancellation remains active. Uncertain body classification never authorizes a resend.
 
+For an inconclusive transient 5xx probe, the ladder records a client veto in process while keeping
+the original response available for quota observation. Responses projects the veto as
+`x-should-retry: false` with fixed error text and omits `Retry-After`.
+
 Native Responses also records the sent generation's model denial and generic OAuth cooldown
 without selecting another credential. A no-retry verdict does not suppress fenced
 revoked/verify-account bookkeeping or effort-pending cleanup. Native Anthropic OAuth attributes
@@ -78,6 +82,10 @@ The selector also keeps the fixed projection of a verified
 Combo preflight checks both `error` and `last_error` on the root and nested response. A recognized
 refusal outranks a generic sibling error, and caller-supplied retry classifiers cannot override
 it. Usage ownership remains with the native tap or bridge when present.
+
+When an emergency compaction attempt carries a replay veto, compaction recovery publishes a
+fixed HTTP or buffered failed-terminal envelope with the client veto. Only exact public error
+codes can survive projection.
 
 ## Anthropic image recovery
 

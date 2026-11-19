@@ -55,6 +55,18 @@ export function isNonReplayableResponse(response: Response): boolean {
   return nonReplayableResponses.has(response);
 }
 
+// A local replay veto can require a client directive without rewriting the quota evidence.
+const clientReplayVetoes = new WeakSet<Response>();
+
+export function requireClientReplayVeto(response: Response): void {
+  markResponseNonReplayable(response);
+  clientReplayVetoes.add(response);
+}
+
+export function hasClientReplayVeto(response: Response): boolean {
+  return clientReplayVetoes.has(response);
+}
+
 /** A wire retry directive is independent of who produced the error or its quota provenance. */
 export function hasNoRetryDirective(response: Pick<Response, "headers">): boolean {
   return response.headers.get(REPLAY_REFUSAL_NO_RETRY_HEADER) === REPLAY_REFUSAL_NO_RETRY_VALUE;
@@ -216,6 +228,7 @@ export function carryObservedReplayRefusal(source: Response, rewrapped: Response
 export function carryReplayRefusal<T extends Response>(source: Response, rewrapped: T): T {
   if (isTerminalResetReplacement(source)) markTerminalResetReplacement(rewrapped);
   if (sameTargetRetryHolds.has(source)) sameTargetRetryHolds.add(rewrapped);
+  if (hasClientReplayVeto(source)) clientReplayVetoes.add(rewrapped);
   carryObservedReplayRefusal(source, rewrapped);
   if (source !== rewrapped && hasNoRetryDirective(source)) applyReplayRefusalClientHeaders(rewrapped.headers);
   if (isReplayRefusalResponse(source)) return retainReplayRefusal(rewrapped);
@@ -1006,8 +1019,8 @@ export async function fetchWithTransientRetry(
     if (observation === "refusal" || observation === "overflow") return res;
     if (observation === "inconclusive" && opts.replaySafe !== true) {
       // An unread suffix can carry the refusal. Keep the real response for attribution and
-      // delivery, while preventing this or any outer recovery loop from resending the turn.
-      markResponseNonReplayable(res);
+      // require the same no-replay verdict from recovery loops and client delivery.
+      requireClientReplayVeto(res);
       return res;
     }
     // Checked before cancelResponseBodyBestEffort so an already-aborted caller never receives

@@ -503,6 +503,21 @@ describe("translated reset replay boundaries and accounting", () => {
     expect(result.grantSpent).toBe(false);
   });
 
+  test("an inconclusive transient body suppresses client and upstream retries", async () => {
+    const raw = Response.json({ padding: "x".repeat(17_000), error: {
+      type: "server_error", code: "server_error", message: "private diagnostic",
+    } }, { status: 503, headers: { "retry-after": "23", "x-provider-quota": "7" } });
+    const result = await probe({ provider: { transientRetryOn5xx: { attempts: 2 } }, answer: () => raw });
+    expect(result.bodies).toHaveLength(1);
+    expect(result.status).toBe(503);
+    expect(JSON.parse(result.text)).toEqual({ error: { type: "server_error", code: "server_error",
+      message: "Provider error 503: upstream diagnostic withheld for a non-replayable failure" } });
+    expect(result.headers.get("x-should-retry")).toBe("false");
+    expect(result.headers.get("retry-after")).toBeNull();
+    expect(raw.headers.get("x-should-retry")).toBeNull();
+    expect(raw.headers.get("x-provider-quota")).toBe("7");
+  });
+
   test.each([false, true])("a prepaid compaction slot is counted once (exact policy %s)", async exact => {
     const result = await probe({ prepaid: true, resets: 0, used: 2,
       provider: exact ? { transientRetryOn5xx: { attempts: 3 } } : {}, answer: () => chatSuccess() });
