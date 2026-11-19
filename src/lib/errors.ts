@@ -95,7 +95,10 @@ export function namesModelNotInPlanCode(code: string | null | undefined): boolea
 type CompletionError = { type?: string; code?: string; message?: string };
 
 /** Meaningful error evidence on either carrier overrides an SSE completion. */
-export function responsesCompletionError(payload: unknown): CompletionError | undefined {
+export function responsesCompletionError(
+  payload: unknown,
+  terminalType: "response.completed" | "response.incomplete" = "response.completed",
+): CompletionError | undefined {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
   const event = payload as {
     type?: unknown;
@@ -103,7 +106,7 @@ export function responsesCompletionError(payload: unknown): CompletionError | un
     last_error?: unknown;
     response?: { error?: unknown; last_error?: unknown };
   };
-  if (event.type !== "response.completed") return undefined;
+  if (event.type !== terminalType) return undefined;
   const nonblank = (value: unknown): string | undefined =>
     typeof value === "string" && value.trim() ? value : undefined;
   let firstError: CompletionError | undefined;

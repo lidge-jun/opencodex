@@ -1,5 +1,5 @@
 import { carryProxyError, ownedChatErrorPayload } from "../../lib/client-error-body";
-import { httpStatusFromTerminalError } from "../../lib/errors";
+import { httpStatusFromTerminalError, responsesCompletionError } from "../../lib/errors";
 import {
   applyReplayRefusalClientHeaders, carryReplayRefusal, carryReplayRefusalToClient, hasClientReplayVeto, hasNoRetryDirective, hasUpstreamReplayRefusal, invitesResendAfterReplacement, isNonReplayableResponse,
   isNonReplayableUpstreamCode, isReplayRefusalCode, isReplayRefusalProjection, isReplayRefusalResponse, replayRefusalBodyCode,
@@ -113,11 +113,14 @@ export function rewriteNonRetryableFailurePayload(payload: string, comboAttempt:
       type?: unknown; error?: unknown; last_error?: unknown;
       response?: Record<string, unknown>;
     };
-    const failed = event?.type === "response.failed";
-    if (!failed && event?.type !== "response.completed" && event?.type !== "response.incomplete") return payload;
-    const candidates = terminalErrorRecords(event);
-    if (!failed && candidates.length === 0) return payload;
-    const upstream = candidates.find(error => isReplayRefusalCode(error.code)) ?? candidates[0];
+    const terminalType = event?.type;
+    if (terminalType !== "response.failed" && terminalType !== "response.completed" && terminalType !== "response.incomplete") return payload;
+    const failed = terminalType === "response.failed";
+    const candidates = failed ? terminalErrorRecords(event) : [];
+    const upstream = failed
+      ? candidates.find(error => isReplayRefusalCode(error.code)) ?? candidates[0]
+      : responsesCompletionError(event, terminalType);
+    if (!failed && !upstream) return payload;
     const refusal = isReplayRefusalCode(upstream?.code);
     const veto = responsesFrameRetryVeto(event) !== undefined;
     if (!refusal && !(failed ? comboAttempt && (veto || isNonReplayableUpstreamCode(upstream?.code)) : veto)) return payload;

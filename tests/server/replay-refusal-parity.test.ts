@@ -1413,6 +1413,10 @@ data: ${JSON.stringify(terminal)}
 });
 
 test.each([
+  { model: "bridged/model", event: "response.completed", scenario: "event-string-error" },
+  { model: "bridged/model", event: "response.completed", scenario: "response-string-error" },
+  { model: "bridged/model", event: "response.incomplete", scenario: "string-last-error" },
+  { model: "bridged/model", event: "response.completed", scenario: "empty-error" },
   { model: "bridged/model", event: "response.completed", scenario: "refusal" },
   { model: "bridged/model", event: "response.completed", scenario: "veto" },
   { model: "bridged/model", event: "response.incomplete", scenario: "refusal" },
@@ -1425,14 +1429,23 @@ test.each([
   const diagnostic = "fixture upstream terminal diagnostic";
   const code = "fixture_provider_failure";
   const refusalCode = "upstream_response_refused";
-  const terminal = { type: event, response: {
-    id: "resp_terminal", object: "response", output: [],
-    status: event === "response.incomplete" ? "incomplete" : "completed",
-    ...(scenario === "success" ? { error: null, last_error: null } : {
-      error: { code, message: diagnostic, ...(scenario === "veto" ? { retryable: false } : {}) },
-      ...(scenario === "refusal" ? { last_error: { code: refusalCode, message: diagnostic } } : {}),
-    }),
-  } };
+  const terminal = {
+    type: event,
+    ...(scenario === "event-string-error" ? { retryable: false, error: diagnostic } : {}),
+    response: {
+      id: "resp_terminal", object: "response", output: [],
+      status: event === "response.incomplete" ? "incomplete" : "completed",
+      ...(scenario === "success" && { error: null, last_error: null }),
+      ...(scenario === "empty-error" && { error: {}, retryable: false }),
+      ...(scenario === "response-string-error" && { error: diagnostic, retryable: false }),
+      ...(scenario === "string-last-error" && { last_error: diagnostic, retryable: false }),
+      ...(scenario === "veto" && { error: { code, message: diagnostic, retryable: false } }),
+      ...(scenario === "refusal" && {
+        error: { code, message: diagnostic },
+        last_error: { code: refusalCode, message: diagnostic },
+      }),
+    },
+  };
   let sends = 0;
   globalThis.fetch = (async () => {
     sends++;
@@ -1450,12 +1463,12 @@ test.each([
     expect({ sends, status: response.status }).toEqual({ sends: 1, status: 200 });
     const frames = body.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
     const terminals = frames.filter(frame => frame.type === event);
-    if (scenario === "success") {
+    if (scenario === "success" || scenario === "empty-error") {
       expect(terminals).toEqual([terminal]);
     } else {
       const error = scenario === "refusal"
         ? { code: refusalCode, message: CLIENT_ERROR_CONTRACTS.replay_refused }
-        : { code, message: "Upstream reported a non-replayable failed completion." };
+        : { ...(scenario === "veto" && { code }), message: "Upstream reported a non-replayable failed completion." };
       expect(terminals).toMatchObject([{
         response: { status: terminal.response.status, retryable: false, error, last_error: error },
       }]);

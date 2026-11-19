@@ -144,6 +144,9 @@ The retained body carries read failures for the receiver's usual error policy, a
 
 Buffered Responses delivery treats an error-bearing `response.completed` as a failed turn.
 A recognized refusal code in any event or snapshot error record selects the fixed HTTP 429.
+Streamed `response.completed` and `response.incomplete` use the buffered completion's error
+classifier on both carriers. A nonblank string or a record with a nonblank type, code, or message
+is meaningful. A veto alone leaves an otherwise clean completion unchanged.
 An explicit retry veto on a generic failed completion preserves its failure status and code,
 withholds the upstream diagnostic, and sends `x-should-retry: false` without `Retry-After`.
 Combo preflight and WebSocket cache-miss recovery both honor
