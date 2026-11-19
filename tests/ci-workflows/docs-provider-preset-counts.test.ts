@@ -8,7 +8,7 @@
  * failed, because both numbers read as plausible and no check compared them to the registry.
  *
  * AGENTS.md calls this class out directly: prefer deriving a count from the thing it describes
- * over restating it. The counts here are derived from PROVIDER_REGISTRY, so the next preset that
+ * over restating it. The catalog counts derive from PROVIDER_REGISTRY and wizard counts from deriveInitProviders(), so the next preset that
  * lands fails this test in every locale at once instead of drifting.
  *
  * Each page is anchored by a locale-specific fragment rather than a number, so a reworded
@@ -16,10 +16,12 @@
  * nobody can locate is a sentence nobody is checking.
  */
 import { describe, expect, test } from "bun:test";
+import { deriveInitProviders } from "../../src/providers/derive";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { repoPath } from "../helpers/repo-root";
 
 const TOTAL = PROVIDER_REGISTRY.length;
+const INIT_PRESETS = deriveInitProviders().length;
 const KEY_PRESETS = PROVIDER_REGISTRY.filter(entry => entry.authKind === "key").length;
 
 /** Guides state the total and the key-based split on one line. */
@@ -35,17 +37,17 @@ const GUIDES = [
   { locale: "zh-tw", path: "docs-site/src/content/docs/zh-tw/guides/providers.md", anchor: "個 key-based" },
 ] as const;
 
-/** Quickstarts state the total only. */
+/** Quickstarts count selectable wizard presets, excluding deprecated registry rows and custom. */
 const QUICKSTARTS = [
-  { locale: "es", path: "docs-site/src/content/docs/es/getting-started/quickstart.md", anchor: "preajustes del registro integrado" },
-  { locale: "en", path: "docs-site/src/content/docs/getting-started/quickstart.md", anchor: "built-in registry presets" },
-  { locale: "ja", path: "docs-site/src/content/docs/ja/getting-started/quickstart.md", anchor: "組み込みレジストリプリセット" },
-  { locale: "ko", path: "docs-site/src/content/docs/ko/getting-started/quickstart.md", anchor: "내장 레지스트리 프리셋" },
-  { locale: "fr", path: "docs-site/src/content/docs/fr/getting-started/quickstart.md", anchor: "préréglages intégrés au registre" },
-  { locale: "ru", path: "docs-site/src/content/docs/ru/getting-started/quickstart.md", anchor: "встроенных пресетов реестра" },
+  { locale: "es", path: "docs-site/src/content/docs/es/getting-started/quickstart.md", anchor: "preajustes integrados disponibles" },
+  { locale: "en", path: "docs-site/src/content/docs/getting-started/quickstart.md", anchor: "selectable built-in presets" },
+  { locale: "ja", path: "docs-site/src/content/docs/ja/getting-started/quickstart.md", anchor: "選択可能な組み込みプリセット" },
+  { locale: "ko", path: "docs-site/src/content/docs/ko/getting-started/quickstart.md", anchor: "선택 가능한 내장 프리셋" },
+  { locale: "fr", path: "docs-site/src/content/docs/fr/getting-started/quickstart.md", anchor: "préréglages intégrés sélectionnables" },
+  { locale: "ru", path: "docs-site/src/content/docs/ru/getting-started/quickstart.md", anchor: "доступных встроенных пресетов" },
   { locale: "tr", path: "docs-site/src/content/docs/tr/getting-started/quickstart.md", anchor: "önayardan birini" },
-  { locale: "zh-cn", path: "docs-site/src/content/docs/zh-cn/getting-started/quickstart.md", anchor: "个预设中选择一个" },
-  { locale: "zh-tw", path: "docs-site/src/content/docs/zh-tw/getting-started/quickstart.md", anchor: "個預設中選擇一個" },
+  { locale: "zh-cn", path: "docs-site/src/content/docs/zh-cn/getting-started/quickstart.md", anchor: "个可选内置预设中选择一个" },
+  { locale: "zh-tw", path: "docs-site/src/content/docs/zh-tw/getting-started/quickstart.md", anchor: "個可選內建預設中選擇一個" },
 ] as const;
 
 const STRUCTURE = {
@@ -64,6 +66,8 @@ describe("documented provider preset counts match the registry", () => {
   test("the registry is the only source of the numbers under test", () => {
     // A derived count that collapsed to zero would make every assertion below vacuous.
     expect(TOTAL).toBeGreaterThan(0);
+    expect(INIT_PRESETS).toBeGreaterThan(0);
+    expect(INIT_PRESETS).toBeLessThanOrEqual(TOTAL);
     expect(KEY_PRESETS).toBeGreaterThan(0);
     expect(KEY_PRESETS).toBeLessThanOrEqual(TOTAL);
   });
@@ -77,9 +81,9 @@ describe("documented provider preset counts match the registry", () => {
   }
 
   for (const quickstart of QUICKSTARTS) {
-    test(`${quickstart.locale} quickstart states ${TOTAL} presets`, async () => {
+    test(`${quickstart.locale} quickstart states ${INIT_PRESETS} selectable presets`, async () => {
       const line = await anchoredLine(quickstart.path, quickstart.anchor);
-      expect(line, `${quickstart.path} total`).toContain(String(TOTAL));
+      expect(line, `${quickstart.path} selectable presets`).toContain(String(INIT_PRESETS));
     });
   }
 

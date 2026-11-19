@@ -9,7 +9,24 @@ de cuentas y los proveedores locales siguen en esa página.
 
 Para rotar cuentas de suscripción, consulta [`reset-near-weighted`](/es/reference/configuration/providers/#reset-near-weighted) en los grupos OAuth de Codex y Anthropic. Los grupos de claves API usan sus propios [ajustes de selección de claves](/es/reference/configuration/providers/).
 
-opencodex incluye 111 preajustes integrados: 89 con clave, 18 OAuth, tres locales y uno predeterminado de reenvío a ChatGPT. El selector **Añadir proveedor** abre el formulario del proveedor con clave, valida la credencial cuando el proveedor permite comprobarla y la guarda; cada proveedor tiene su propia validación. Entre ellos:
+opencodex incluye 112 preajustes integrados: 90 con clave, 18 OAuth, tres locales y uno predeterminado de reenvío a ChatGPT. El selector **Añadir proveedor** abre el formulario del proveedor con clave, valida la credencial cuando el proveedor permite comprobarla y la guarda; cada proveedor tiene su propia validación. Entre ellos:
+
+**[OpenDesign Go](https://go.open-design.ai/)** ofrece acceso a modelos por suscripción mediante una
+clave API del espacio de trabajo. Para utilizarlo:
+
+1. Elige un plan Go en el sitio del proveedor y crea una clave API en el espacio de trabajo que
+   tenga acceso a ese plan. Consulta la [guía oficial de configuración](https://open-design.ai/help/cloud-api/).
+2. En el panel de opencodex, abre **Añadir proveedor**, busca **OpenDesign Go** e introduce esa
+   clave. El preajuste utiliza el adaptador `openai-chat` y `https://amr-link.open-design.ai/v1`.
+3. Carga los modelos disponibles para la clave y selecciona uno descubierto, por ejemplo
+   `deepseek-v4.1-flash` si tu espacio de trabajo lo incluye. El nombre enrutado es
+   `opendesign-go/deepseek-v4.1-flash`; opencodex envía al proveedor el identificador de modelo sin prefijo.
+4. Conecta tu cliente siguiendo la [guía de clientes](/es/reference/client-support/) y envía una
+   solicitud breve al modelo seleccionado.
+
+El catálogo se obtiene de `/models` con la clave del espacio de trabajo; la disponibilidad y los
+límites de uso dependen del plan. Este preajuste usa Chat Completions mediante el adaptador existente.
+No inicia sesión en una cuenta de OpenDesign ni muestra las ventanas de cuota de la suscripción.
 
 **ClinePass** utiliza una clave API de Cline con el [catálogo oficial de suscripción](https://docs.cline.bot/getting-started/clinepass) y el [punto final de Chat Completions](https://docs.cline.bot/api/chat-completions), operados por Cline Bot Inc. bajo [los términos de Cline](https://cline.bot/tos). Un id enrutado como `cline-pass/cline-pass/kimi-k3` es intencional: el primer segmento selecciona el proveedor de opencodex, mientras que `cline-pass/kimi-k3` es el identificador de modelo completo que se envía aguas arriba. La cuota de ClinePass se comparte por cuenta entre límites rotativos de 5 horas, semanales y mensuales. Una sonda en vivo del 2026-08-13 verificó que todos los modelos estáticos de ClinePass aceptan `low`, `medium`, `high`, `xhigh` y `max` en el límite de entrada de la pasarela. opencodex conserva los niveles solicitados; cualquier normalización específica del backend sigue siendo responsabilidad de ClinePass.
 
@@ -25,6 +42,7 @@ opencodex incluye 111 preajustes integrados: 89 con clave, 18 OAuth, tres locale
 | --- | --- |
 | **OpenAI (clave API)** | `https://api.openai.com/v1` |
 | **Anthropic (clave API)** | `https://api.anthropic.com` |
+| OpenDesign Go | `https://amr-link.open-design.ai/v1` |
 | **OpenRouter** | `https://openrouter.ai/api/v1` |
 | **Cline** | `https://api.cline.bot/api/v1` |
 | **ClinePass** | `https://api.cline.bot/api/v1` |
