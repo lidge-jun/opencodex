@@ -1364,6 +1364,23 @@ the `canApply` and `reason` fields describe eligibility.
 
 Compiled standalone installs, including the Windows MSI Desktop bundle, are updated through **Check for Updates…** in OpenCodex Desktop, by `ocx update --desktop` on a Windows Desktop installation (below), or by reinstalling the standalone binary from [GitHub Releases](https://github.com/lidge-jun/opencodex/releases). `ocx system update check` reports `installer: "standalone"`, `canUpdate: false`, and `reason: "standalone_install"` with that guidance. `ocx update` without `--desktop` exits unsuccessfully with the same hint; it does not run a package-manager update for the compiled executable. A genuine source checkout still reports `installer: "source"` and `reason: "source_checkout"`.
 
+If your host already uses an external updater, such as a systemd timer that deploys
+and switches versioned source trees under `/opt/opencodex/releases/`, set
+`OCX_MANAGED_RELEASE=1` in the proxy service environment and start the proxy through
+the `ocx` Node launcher from the active release. For example, configure the service
+to run `node /opt/opencodex/current/bin/ocx.mjs start` and have the updater restart
+the service after switching the `current` link. The launcher captures the setting
+before Bun starts. A project `.env` cannot enable this mode.
+The host operator supplies the updater and its release directories. The directory
+name alone does not enable this mode, and the environment variable does not install
+or schedule an updater.
+
+The dashboard and `ocx system update check` can then compare the installed version
+with the selected npm channel. A successful lookup reports
+`installer: "source"`, `canUpdate: false`, and `reason: "managed_release"`
+without a `git pull` hint. If npm cannot supply the latest version, the check
+reports `reason: "latest_unavailable"` and the dashboard offers a retry.
+
 #### Headless Windows Desktop update
 
 ```bash
