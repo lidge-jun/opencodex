@@ -285,6 +285,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (requiresAntigravityRiskAcknowledgement(provider) && !hasAntigravityRiskAcknowledgement(body)) {
       return jsonResponse(antigravityRiskRefusalBody(), 403);
     }
+    if (provider === "m365-copilot") {
+      const { shouldOpenBrowserForLogin } = await import("../../oauth/open-browser-choice");
+      if (!shouldOpenBrowserForLogin(body.openBrowser, config)) {
+        return jsonResponse({ error: "Microsoft 365 Copilot sign-in requires an isolated window in a supported local browser." }, 400);
+      }
+    }
     // Omitted mode is the localhost-callback flow this route has always run.
     if (body.mode !== undefined && body.mode !== "callback" && body.mode !== "code") {
       return jsonResponse({ error: "mode must be \"callback\" or \"code\"" }, 400);
@@ -351,7 +357,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const persistedBaseline = readConfigDiagnostics().config;
       // addAccount / reauth forces a fresh browser identity (skips local-CLI token import).
       // The xAI device caller also needs its own flow identity for polling.
-      const flowId = codeMode || (provider === "xai" && device) ? randomUUID() : undefined;
+      const flowId = codeMode || provider === "m365-copilot" || (provider === "xai" && device) ? randomUUID() : undefined;
       const { url: authUrl, instructions, deviceCode, expiresAt } = await startLoginFlow(provider, {
         forceLogin: body.addAccount === true || reauth,
         ...(accountId ? { reauthAccountId: accountId } : {}),
@@ -416,7 +422,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const result = cancelKiroDeviceLogin(body.flowId, principal ?? "admin-token");
       return result ? jsonResponse(result) : jsonResponse({ error: "unknown login flow" }, 404);
     }
-    if (provider === "xai" && body.flowId !== undefined && (typeof body.flowId !== "string" || body.flowId.length > 128)) return jsonResponse({ error: "unknown login flow" }, 404);
+    if ((provider === "m365-copilot" || (provider === "xai" && body.flowId !== undefined))
+      && (typeof body.flowId !== "string" || !body.flowId.trim() || body.flowId.length > 128)) return jsonResponse({ error: "unknown login flow" }, 404);
     const { cancelLoginFlow } = await import("../../oauth");
     // Without a flow id this cancels the provider's newest in-flight login, which is what the
     // single-user GUI has always meant by "Cancel". A host running concurrent code logins for
@@ -439,6 +446,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     const consentRequired = metaMuseConsentRequired(provider, ctx);
     if (consentRequired) return consentRequired;
+    if (provider === "m365-copilot") return jsonResponse({ ok: false, error: "no_pending_login" }, 409);
     const flowId = typeof body.flowId === "string" ? body.flowId : undefined;
     const maskEmails = emailMaskingEnabled(config);
     // Only a code flow of THIS provider gets the outcome-waiting contract; that flow is single-use,
@@ -501,7 +509,17 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // Resolved here, at the request boundary that already holds the config, and passed down.
     // getLoginStatus stays free of config I/O. This route does not re-mask afterwards: it
     // consumes the already-projected status rather than redacting a second time.
-    const status = getLoginStatus(provider, emailMaskingEnabled(config), provider === "xai" ? url.searchParams.get("flowId") ?? undefined : undefined);
+    const flowId = url.searchParams.get("flowId") ?? undefined;
+    if (provider === "m365-copilot") {
+      const maskEmails = emailMaskingEnabled(config);
+      if (flowId === undefined && url.searchParams.get("summary") === "1") {
+        return jsonResponse(getLoginStatus(provider, maskEmails, ""));
+      }
+      if (!flowId || flowId.length > 128) return jsonResponse({ error: "unknown login flow" }, 404);
+      const status = getLoginStatus(provider, maskEmails, flowId);
+      return status.flowId === flowId ? jsonResponse(status) : jsonResponse({ error: "unknown login flow" }, 404);
+    }
+    const status = getLoginStatus(provider, emailMaskingEnabled(config), provider === "xai" ? flowId : undefined);
     return jsonResponse(status);
   }
 

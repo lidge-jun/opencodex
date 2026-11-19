@@ -399,3 +399,7 @@ En Vertex y Antigravity, HTTP 400 o `INVALID_ARGUMENT`/firma dentro de 200 limpi
 - Gemini 4 Argon conserva el nivel de pensamiento al pedir resúmenes.
 
 Cursor puede diferir herramientas, incluida `exec`, mediante `GetDynamicTools`/`CallDynamicTool`; la guía de code mode usa `opencodex-responses` y el nombre listado sin recomendar un shell no expuesto. Una firma tardía recibe índice propio tras cerrar su elemento, sin duplicar texto o dejar herramientas abiertas; el replay solo la asocia a salida asistente adyacente y comprueba IDs si existen.
+
+## Microsoft 365 Copilot
+
+El adaptador `m365-copilot` usa `runTurn` para ejecutar turnos nativos mediante el WebSocket de Microsoft ChatHub. Reutiliza la conversión de herramientas de Chat y emite los eventos habituales de OpenCodex. Funciona sin un servidor de compatibilidad adicional. Consulta la [configuración y las limitaciones](/es/guides/m365-copilot/).

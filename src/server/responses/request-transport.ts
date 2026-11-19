@@ -936,6 +936,14 @@ export async function prepareResponsesTransport(
           refused = true;
           throw new Error("Account selection changed before turn admission");
         }
+        const beforeCredentialSend = (): void => {
+          incoming.abortSignal?.throwIfAborted();
+          incoming.beforeCredentialSend?.();
+          if (!selectionIsCurrent(binding)) {
+            refused = !sent;
+            throw new Error("Account selection changed before turn dispatch");
+          }
+        };
         const beforePhysicalSend = (): void => {
           incoming.abortSignal?.throwIfAborted();
           if (sent) {
@@ -943,10 +951,7 @@ export async function prepareResponsesTransport(
               && !selectionIsCurrent(binding)) throw new Error("API key became unavailable during the turn");
             return;
           }
-          if (!selectionIsCurrent(binding)) {
-            refused = true;
-            throw new Error("Account selection changed before the first turn dispatch");
-          }
+          beforeCredentialSend();
           incoming.beforePhysicalSend?.();
           commitKeyAttemptSend();
           sent = true;
@@ -958,7 +963,7 @@ export async function prepareResponsesTransport(
           accountAutoPause: (name, provider, headers) => captureAccountAutoPauseAttempt(name, provider, { config, oauth: binding?.kind === "oauth" ? binding.snapshot : undefined }, headers),
           beforeDispatch: beforePhysicalSend,
         });
-        await run(requestParsed, { ...incoming, pacingSlot: attemptSlot, providerFetch: fetch, beforePhysicalSend }, event => { if (!refused) emit(event); });
+        await run(requestParsed, { ...incoming, pacingSlot: attemptSlot, providerFetch: fetch, beforePhysicalSend, beforeCredentialSend }, event => { if (!refused) emit(event); });
       } catch (error) {
         if (!refused) throw error;
       } finally {
