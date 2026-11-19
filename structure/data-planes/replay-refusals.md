@@ -52,7 +52,9 @@ other rewraps still need client projection. An upstream wire code selects the fi
 message and allowlisted headers. A wire directive blocks automatic resends when headers
 arrive. Both signals preserve genuine upstream quota evidence.
 
-The shared predicate gates retries, credential recovery and same-request fallbacks. Kiro
+The shared predicate gates retries, credential recovery and same-request fallbacks. It reads
+verdicts from the root and response envelopes and follows error carriers, details and causes.
+Echoed request data has no authority over retry decisions. Kiro
 and Google HTTP check the directive and a bounded peek for refusal codes before adapter
 resends. Google keeps original evidence when raw errors are requested; display normalization
 retains the veto and projects recognized codes to the fixed refusal. Native Chat, Responses,
@@ -122,7 +124,10 @@ codes can survive projection.
 errors and parsed error events. A recognized code in an error envelope selects HTTP 429
 where the client uses an HTTP error status. An explicit header or body veto or an
 inconclusive bounded probe selects fixed text with the original error status. A parsed
-error without a status uses 502 for the uncoded veto. Responses keeps its failed terminal
+error without a status uses 502 for the uncoded veto. Choice-level Chat failures inherit
+the enclosing retry verdict, and buffered Anthropic errors retain a valid error status.
+A continuation body read or parse failure retains an explicit header or already observed
+verdict. Responses keeps its failed terminal
 envelope, and buffered Responses adds the client veto header. Both Chat encoders and the
 translated Messages paths preserve the verdict in the terminal, and their buffered folds
 return the error status with `x-should-retry: false` and no Retry-After. Quota observation

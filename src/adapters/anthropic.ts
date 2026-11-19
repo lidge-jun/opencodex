@@ -1738,9 +1738,14 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       };
       if (json.type === "error" || json.error != null || json.last_error != null) {
         const verdict = replayRefusalVerdict(json);
-        if (verdict.retryable === false || hasNoRetryDirective(response)) return finishWithEvents([{
-          type: "error", message: "Anthropic error", ...verdict, usage: usageFromAnthropic(json.usage),
-        }]);
+        if (verdict.retryable === false || hasNoRetryDirective(response)) {
+          const error = json.error ?? json.last_error;
+          const status = isAnthropicRecord(error) ? error.status : undefined;
+          return finishWithEvents([{
+            type: "error", message: "Anthropic error", ...verdict, usage: usageFromAnthropic(json.usage),
+            ...(typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599 ? { status } : {}),
+          }]);
+        }
       }
       const rawContent: unknown = json.content;
       // `content` is claimed model output inside a well-formed response, so it is governed by the

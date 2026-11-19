@@ -814,25 +814,27 @@ export function createAdapterContinuations(
       return;
     }
 
-    try {
-      const projectFailure = (event: AdapterEvent, current: Response): AdapterEvent => {
-        if (event.type !== "error") return event;
-        if (isReplayRefusalCode(event.code)) return {
-          ...event, status: REPLAY_REFUSED_STATUS, errorType: "upstream_error",
-          message: REPLAY_REFUSAL_MESSAGE, retryable: false,
-        };
-        if (hasClientReplayVeto(current) || hasNoRetryDirective(current) ||
-          (event.retryable === false && !isCyberPolicyCode(event.code))) {
-          const status = event.status !== undefined && Number.isInteger(event.status) && event.status >= 400 && event.status <= 599 ? event.status : 502;
-          return { type: "error", status, message: withheldReplayDiagnostic(status), retryable: false, usage: event.usage };
-        }
-        return event;
+    const projectFailure = (event: AdapterEvent, current: Response): AdapterEvent => {
+      if (event.type !== "error") return event;
+      if (isReplayRefusalCode(event.code)) return {
+        ...event, status: REPLAY_REFUSED_STATUS, errorType: "upstream_error",
+        message: REPLAY_REFUSAL_MESSAGE, retryable: false,
       };
+      if (hasClientReplayVeto(current) || hasNoRetryDirective(current) ||
+        (event.retryable === false && !isCyberPolicyCode(event.code))) {
+        const status = event.status !== undefined && Number.isInteger(event.status) && event.status >= 400 && event.status <= 599 ? event.status : 502;
+        return { type: "error", status, message: withheldReplayDiagnostic(status), retryable: false, usage: event.usage };
+      }
+      return event;
+    };
+    let parsingResponse = response;
+    try {
       // Each successful continuation owns a fresh pending-read deadline and an abort
       // listener that can cancel its reader even while the parser holds the body lock.
       // The shared signal is not aborted on timeout: this generator must still emit
       // the error that the already-live Responses bridge turns into a terminal.
       const parse = async function* (current: Response): AsyncGenerator<AdapterEvent> {
+        parsingResponse = current;
         const bodyInactivityMs = resolveStallTimeoutMs(providerStallTimeoutSec(config, responsesTimeoutProvider(options, route.provider)), { localUpstream: isLocalUpstream(transportState.sameTargetRequest?.url ?? route.provider.baseUrl) });
         if (!current.ok) {
           yield projectFailure(await adapterExchange.thinkingSignatureRecovery.projectHttpFailure(current, upstream.signal), current);
@@ -863,7 +865,13 @@ export function createAdapterContinuations(
       // Classify the thrown error before reading signal state: cancelling the stalled
       // source can synchronously abort the shared signal, which would otherwise report
       // this timeout as a client cancellation.
-      if (error instanceof ResponseBodyInactivityError) {
+      const code = observedReplayRefusalCode(parsingResponse);
+      if (code || hasClientReplayVeto(parsingResponse) || hasNoRetryDirective(parsingResponse)) {
+        yield projectFailure({
+          type: "error", message: "", code,
+          status: error instanceof ResponseBodyInactivityError ? 504 : undefined,
+        }, parsingResponse);
+      } else if (error instanceof ResponseBodyInactivityError) {
         const event: AdapterEvent = { type: "error", message: error.message, status: 504,
           errorType: "upstream_error", code: "upstream_stall_timeout" };
         Object.defineProperty(event, continuationBodyStall, { value: true, enumerable: true });

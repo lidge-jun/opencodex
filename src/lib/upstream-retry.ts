@@ -158,14 +158,17 @@ export function isReplayRefusalCode(code: unknown): code is ReplayRefusalCode {
 /** Inspect an error envelope, including nested causes, without recursing on the JS stack. */
 export function replayRefusalVerdict(payload: unknown): { code?: ReplayRefusalCode; retryable?: false } {
   let veto = false;
-  const pending = [payload];
+  const root = payload as Record<string, unknown> | null | undefined;
+  const response = root?.response;
+  const pending = [response, payload];
   while (pending.length > 0) {
     const entry = pending.pop();
     if (!entry || typeof entry !== "object") continue;
     const record = entry as Record<string, unknown>;
     if (isReplayRefusalCode(record.code)) return { code: record.code, retryable: false };
     veto ||= record.retryable === false;
-    for (const value of Object.values(record)) pending.push(value);
+    pending.push(record.error, record.last_error, record.incomplete_details, record.cause);
+    if (entry !== payload && entry !== response) pending.push(record.details);
   }
   return veto ? { retryable: false } : {};
 }

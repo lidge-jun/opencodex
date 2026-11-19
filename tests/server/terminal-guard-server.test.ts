@@ -517,15 +517,25 @@ describe("server terminal guard integration", () => {
           ...cases.filter(entry => entry.status === 200).map(entry => ({ ...entry, anthropic200: true })),
           { status: 429, verdict: "ordinary", anthropic200: false },
         );
+        if (path !== "messages") matrix.push({ status: 200, verdict: "choice-veto", anthropic200: false });
+        if (!stream && path !== "messages") matrix.push({
+          status: 200, verdict: path === "responses" ? "malformed" : "unreadable", anthropic200: false,
+        });
+        if (!stream && path === "responses") matrix.push(
+          { status: 503, verdict: "echoed-tool-example", anthropic200: false },
+          { status: 200, verdict: "anthropic-status", anthropic200: true },
+        );
         test.each(matrix)(
           `${path} stream=${stream} direct=${directEncoders} continuation $status $verdict anthropic200=$anthropic200`, async ({ status, verdict, anthropic200 }) => {
           takeInheritedSpendHome();
           const chat = path === "chat/completions";
           const messages = path === "messages";
           const parsedFailure = status === 200;
-          const openAiChat = (parsedFailure && !anthropic200) || messages;
+          const echoedToolExample = verdict === "echoed-tool-example";
+          const parseFailure = verdict === "malformed" || verdict === "unreadable";
+          const openAiChat = (parsedFailure && !anthropic200) || messages || echoedToolExample;
           const coded = verdict.startsWith("upstream_");
-          const veto = verdict !== "ordinary";
+          const veto = verdict !== "ordinary" && !echoedToolExample;
           globalThis.fetch = (async () => {
             calls += 1;
             if (calls === 1) {
@@ -541,17 +551,30 @@ describe("server terminal guard integration", () => {
                 stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 2 },
               });
             }
+            if (echoedToolExample && calls === 3) return Response.json({
+              choices: [{ message: { tool_calls: [{ id: "call_1", type: "function",
+                function: { name: "exec_command", arguments: "{}" } }] }, finish_reason: "tool_calls" }],
+              usage: { prompt_tokens: 20, completion_tokens: 3 },
+            });
             const error = { message: "fixture diagnostic",
               ...(coded ? status === 200 && verdict === "upstream_response_refused"
                 ? { code: verdict } : { last_error: { code: verdict } } : {}),
-              ...(verdict === "retryable" ? { retryable: false } : {}),
+              ...(verdict === "retryable" || verdict === "anthropic-status" ? { retryable: false } : {}),
+              ...(verdict === "anthropic-status" ? { status: 403 } : {}),
             };
-            const payload = { ...(verdict === "inconclusive" ? { padding: "x".repeat(32_000) } : {}),
-              error, ...(parsedFailure ? anthropic200
+            const payload = { ...(echoedToolExample ? { tools: [{ examples: [{ retryable: false }] }] } : {}),
+              ...(verdict === "inconclusive" ? { padding: "x".repeat(32_000) } : {}),
+              ...(verdict === "choice-veto"
+                ? { retryable: false, choices: [{ finish_reason: "error", error }] }
+                : { error }), ...(parsedFailure ? anthropic200
                 ? { type: "error", usage: { input_tokens: 20, output_tokens: 3 } }
                 : { usage: { prompt_tokens: 20, completion_tokens: 3 } } : {}) };
             const headers = new Headers(veto ? { "retry-after": "30" } : {});
-            if (verdict === "header") headers.set("x-should-retry", "false");
+            if (verdict === "header" || parseFailure) headers.set("x-should-retry", "false");
+            if (verdict === "malformed") return new Response('{"fixture diagnostic":', { headers });
+            if (verdict === "unreadable") return new Response(new ReadableStream({
+              start(controller) { controller.error(new Error("fixture diagnostic")); },
+            }), { headers });
             if (parsedFailure && (stream || chat || messages)) {
               headers.set("content-type", "text/event-stream");
               return new Response(`data: ${JSON.stringify(payload)}\n\n`, { headers });
@@ -560,6 +583,8 @@ describe("server terminal guard integration", () => {
           }) as typeof fetch;
           const tool = { name: "exec_command", description: "run a command", parameters: { type: "object" } };
           const input = "请检查这个问题并修复代码";
+          const routeConfig = openAiChat ? openAiChatConfig(true) : config;
+          if (echoedToolExample) routeConfig.providers["glm-gw"]!.transientRetryOn5xx = { attempts: 2 };
           const log: RequestLogContext = { model: "", provider: "" };
           const response = await (chat ? handleChatCompletions : messages ? handleClaudeMessages : handleResponses)(
             new Request(`http://localhost/v1/${path}`, {
@@ -573,22 +598,31 @@ describe("server terminal guard integration", () => {
                     tools: [{ name: tool.name, description: tool.description, input_schema: tool.parameters }] }
                     : { input, tools: [{ type: "function", ...tool }] }),
               }),
-            }), { ...(openAiChat ? openAiChatConfig(true) : config), protocols: { rollout: { directEncoders } } } as OcxConfig, log);
+            }), { ...routeConfig, protocols: { rollout: { directEncoders } } } as OcxConfig, log);
           const body = await response.text();
           const frames = stream ? body.split("\n").filter(line => line.startsWith("data: {"))
             .map(line => JSON.parse(line.slice(6))) : [];
           const terminal = stream ? chat || messages ? frames.find(frame => frame.error)
             : frames.find(frame => frame.type === "response.failed")?.response : JSON.parse(body);
+          if (echoedToolExample) {
+            expect(calls).toBe(3);
+            expect(response.headers.get("x-should-retry")).toBeNull();
+            expect(terminal).toMatchObject({ status: "completed", output: expect.arrayContaining([
+              expect.objectContaining({ type: "function_call", name: "exec_command" }),
+            ]) });
+            expect(log.usage).toMatchObject({ inputTokens: 30, outputTokens: 5 });
+            return;
+          }
           expect(calls).toBe(2);
-          const inputTokens = parsedFailure ? 30 : 10;
-          const outputTokens = parsedFailure ? 5 : 2;
+          const inputTokens = parsedFailure && !parseFailure ? 30 : 10;
+          const outputTokens = parsedFailure && !parseFailure ? 5 : 2;
           expect(log.usage).toMatchObject({ inputTokens, outputTokens });
           if (chat && stream) {
             expect(frames.filter(frame => frame.usage).map(frame => frame.usage))
               .toEqual([expect.objectContaining({ prompt_tokens: inputTokens, completion_tokens: outputTokens })]);
           }
           expect(response.headers.get("retry-after")).toBeNull();
-          const errorStatus = coded ? 429 : parsedFailure ? 502 : status;
+          const errorStatus = coded ? 429 : verdict === "anthropic-status" ? 403 : parsedFailure ? 502 : status;
           if (coded) expect(terminal?.error).toMatchObject({ code: verdict, message: REPLAY_REFUSAL_MESSAGE });
           else if (veto) expect(terminal?.error?.message).toBe(`Provider error ${errorStatus}: upstream diagnostic withheld for a non-replayable failure`);
           else if (chat) expect(terminal?.error).toMatchObject({ code: "rate_limit_exceeded" });

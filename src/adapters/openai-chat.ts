@@ -420,7 +420,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           error?: unknown;
         };
         if (choice.finish_reason === "error") {
-          const event = upstreamErrorEvent(choice.error, pendingUsage);
+          const event = upstreamErrorEvent(choice.error, pendingUsage, { ...chunk, error: choice.error });
           debugProviderDiagnostic("openai-chat", "stream-error", { message: event.message });
           return yield* terminateWithError(event);
         }
@@ -734,7 +734,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           return [invalidChoicesEvent(usage)];
         }
         const choice = rawChoice;
-        if (choice.finish_reason === "error") return [upstreamErrorEvent(choice.error, usage)];
+        if (choice.finish_reason === "error") return [upstreamErrorEvent(choice.error, usage, { ...payload, error: choice.error })];
         if (!choice.message) return [{ type: "error", message: "upstream response contained no choices", ...(usage ? { usage } : {}) }];
         // `!choice.message` splits this input class on TRUTHINESS, not on shape: `null` and `0` fail
         // closed here, while `"text"`, `true` and `[{...}]` pass and every property read below yields
