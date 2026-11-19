@@ -29,7 +29,8 @@ const DISCOVERED_WIRES = [
   ...["low", "medium", "high"].map(tier => `${NEON}-${tier}`),
 ];
 const RAW = '{"contents":[{"role":"user","parts":[{"text":"hello"}]}], "future":9007199254740993123}';
-const PAYLOAD = '{"candidates":[{"content":{"role":"model","parts":[{"text":"hello"}]},"finishReason":"STOP"}],"future":9007199254740993123}';
+const PAYLOAD = '{"candidates":[{"content":{"role":"model","parts":[{"text":"hello"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":12,"toolUsePromptTokenCount":5,"candidatesTokenCount":7,"thoughtsTokenCount":3,"cachedContentTokenCount":4},"future":9007199254740993123}';
+const USAGE = { inputTokens: 17, outputTokens: 10, cachedInputTokens: 4, reasoningOutputTokens: 3 };
 const originalFetch = globalThis.fetch;
 const previousEnv = {
   OPENCODEX_HOME: process.env.OPENCODEX_HOME,
@@ -128,6 +129,7 @@ test("opted-in Gemini routes preserve native JSON and replace every ingress cred
     expect(response.headers.has("set-cookie")).toBe(false);
     expect(await response.text()).toBe(PAYLOAD);
     const log = getRequestLogEntries().find(row => row.requestId === response.headers.get("x-opencodex-request-id"));
+    expect(log).toMatchObject({ usageStatus: "reported", usage: USAGE, totalTokens: 27 });
     expect(log?.protocolTrace).toMatchObject({
       inbound: "gemini",
       upstream: "gemini",
@@ -188,6 +190,10 @@ test("native streaming preserves records in both Gemini response formats", async
     const json = await post(base, path);
     expect(json.headers.get("content-type")).toContain("application/json");
     expect(await json.text()).toBe(`[\n${PAYLOAD}\n]`);
+    for (const res of [sse, discoverySse, json]) {
+      const log = getRequestLogEntries().find(row => row.requestId === res.headers.get("x-opencodex-request-id"));
+      expect(log).toMatchObject({ usageStatus: "reported", usage: USAGE, totalTokens: 27 });
+    }
     expect(seen.map(call => call.url.href)).toEqual(Array(3).fill(CCA + "/v1internal:streamGenerateContent?alt=sse"));
   });
 });

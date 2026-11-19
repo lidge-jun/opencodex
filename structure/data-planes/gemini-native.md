@@ -46,8 +46,11 @@ shutdown, failure and EOF release the turn and transport. Native parsing owns no
 
 `src/server/gemini-native-log.ts` records final status, latency, client and admission identity.
 Native errors fail the request-log row. A physical send marks the [protocol trace](protocol-paths.md)
-as native Gemini, which the dashboard uses for its protocol badge. Payloads, provider diagnostics
-and token usage are omitted from the log.
+as native Gemini, which the dashboard uses for its protocol badge. Successful buffered responses
+and complete streams supply normalized token counts through the shared Google usage parser.
+For a stream, only its last valid cumulative snapshot is recorded. The dashboard derives its
+end-to-end token rate from output tokens and request duration. Payloads and provider diagnostics
+are omitted from the log.
 
 Coverage lives in `tests/server/gemini-native-routes.test.ts`,
 `tests/server/gemini-native-wire.test.ts` and `tests/server/gemini-native.test.ts`.

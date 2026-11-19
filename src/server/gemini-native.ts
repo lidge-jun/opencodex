@@ -1,9 +1,10 @@
-import type { OcxConfig } from "../types";
+import type { OcxConfig, OcxUsage } from "../types";
 import { markNativeGeminiProtocol } from "../protocols/trace";
 import { getValidAccessSnapshotForAccount, forceRefreshOAuthAccessSnapshot, OAuthLoginRequiredError, OAuthAccountPausedError, OAuthTokenRefreshBusyError, OAuthTokenRefreshStaleError, type OAuthAccessSnapshot } from "../oauth";
 import { getAccountSet, getAccountCredentialWithStatus } from "../oauth/store";
 import { getProviderRegistryEntry } from "../providers/registry";
 import { sendTrackingRequestSlot, waitForProviderRequestSlot, RequestPacingQueueOverloadError, RequestPacingProviderRemovedError } from "../providers/request-pacing";
+import { usageFromGemini } from "../adapters/google-usage";
 import { antigravityUserAgentForWireModel } from "../adapters/google-antigravity-wire";
 import { fetchWithAttemptDeadline, releaseResponseBodyBestEffort } from "../lib/upstream-retry";
 import { reserveWorkflowSend } from "../lib/workflow-budget";
@@ -90,6 +91,7 @@ export async function handleGeminiNative(
   const noteNativeError = () => {
     if (logCtx) { logCtx.errorCode = GEMINI_NATIVE_ERROR_CODE; logCtx.terminalSource = "upstream"; }
   };
+  const noteUsage = logCtx ? (usage: OcxUsage) => { logCtx.usage = usage; } : undefined;
   let upstream: Response | undefined;
   try {
     const maxBytes = Math.min(GEMINI_NATIVE_MAX_BYTES, config.maxInboundBodyBytes ?? GEMINI_NATIVE_MAX_BYTES);
@@ -182,15 +184,20 @@ export async function handleGeminiNative(
     const credentials = [...boundCredentials];
     if (streamFormat) {
       const headers = { "Content-Type": streamFormat === "sse" ? "text/event-stream" : "application/json", "Cache-Control": "no-cache" };
-      return new Response(body.pipeThrough(geminiSseTransform(GEMINI_NATIVE_MAX_BYTES, noteNativeError, streamFormat, credentials)), { headers });
+      return new Response(body.pipeThrough(geminiSseTransform(
+        GEMINI_NATIVE_MAX_BYTES, { onNativeError: noteNativeError, onUsage: noteUsage }, streamFormat, credentials,
+      )), { headers });
     }
     const text = await readGeminiText(body, GEMINI_NATIVE_MAX_BYTES, ac.signal);
     if (text === null) return geminiNativeError(502, "Gemini upstream response exceeds the body limit");
     const response = unwrapGeminiResponse(text);
-    if (Object.hasOwn(JSON.parse(response), "error") || containsGeminiCredential(response, credentials)) {
+    const payload = JSON.parse(response) as { usageMetadata?: unknown };
+    if (Object.hasOwn(payload, "error") || containsGeminiCredential(response, credentials)) {
       noteNativeError();
       return geminiNativeError(502, "Antigravity upstream rejected the request");
     }
+    const usage = usageFromGemini(payload.usageMetadata);
+    if (usage) noteUsage?.(usage);
     return new Response(response, { headers: { "Content-Type": "application/json" } });
   } catch (error) {
     ac.abort(); finish();

@@ -1,3 +1,6 @@
+import { usageFromGemini } from "../adapters/google-usage";
+import type { OcxUsage } from "../types";
+
 /** Gemini payloads remain source text: parsing is validation, never serialization. */
 export const GEMINI_NATIVE_MAX_BYTES = 16 * 1024 * 1024;
 export const GEMINI_NATIVE_ERROR_CODE = "gemini_native_upstream_error";
@@ -74,10 +77,15 @@ export function wrapGeminiRequest(raw: string, model: string, project: string): 
   return `${envelope.slice(0, -1)},"request":${raw}}`;
 }
 
+interface GeminiStreamObservers {
+  onNativeError?: () => void;
+  onUsage?: (usage: OcxUsage) => void;
+}
+
 /** Decode bounded upstream SSE events and frame the unwrapped JSON for the client. */
 export function geminiSseTransform(
   maxBytes = GEMINI_NATIVE_MAX_BYTES,
-  onNativeError?: () => void,
+  observers?: GeminiStreamObservers,
   format: "sse" | "array" = "sse",
   credentials: readonly string[] = [],
 ): TransformStream<Uint8Array, Uint8Array> {
@@ -86,15 +94,24 @@ export function geminiSseTransform(
   let lineParts: string[] = [], data: string[] = [], eventBytes = 0, afterCR = false;
   const candidates = new Map<number, boolean>();
   let terminal = false, blocked = false, arrayOpened = false;
+  let usage: OcxUsage | undefined;
+  const reportUsage = () => {
+    if (!usage) return;
+    try { observers?.onUsage?.(usage); } catch { /* Observational callbacks never change delivery. */ }
+  };
   const complete = () => candidates.size ? [...candidates.values()].every(Boolean) : blocked;
   const closeArray = (controller: TransformStreamDefaultController<Uint8Array>) => {
     if (format === "array") controller.enqueue(encoder.encode("\n]"));
   };
   function observe(raw: string) {
-    const value = JSON.parse(raw) as { candidates?: Array<{ index?: number; finishReason?: string }>; error?: unknown; promptFeedback?: { blockReason?: string } };
+    const value = JSON.parse(raw) as {
+      candidates?: Array<{ index?: number; finishReason?: string }>;
+      promptFeedback?: { blockReason?: string };
+      usageMetadata?: unknown;
+    };
     if (Object.hasOwn(value, "error") || containsGeminiCredential(raw, credentials)) {
       terminal = true;
-      try { onNativeError?.(); } catch { /* Observational callbacks never change delivery. */ }
+      try { observers?.onNativeError?.(); } catch { /* Observational callbacks never change delivery. */ }
       return SAFE_UPSTREAM_ERROR;
     }
     blocked ||= !!value.promptFeedback?.blockReason;
@@ -105,6 +122,7 @@ export function geminiSseTransform(
       if (!Number.isSafeInteger(index) || index < 0 || candidates.size >= 1024 && !candidates.has(index)) throw new Error("invalid Gemini candidate index");
       candidates.set(index, candidates.get(index) === true || typeof candidate.finishReason === "string" && candidate.finishReason.length > 0);
     }
+    if (observers?.onUsage) usage = usageFromGemini(value.usageMetadata) ?? usage;
     return raw;
   }
   function emit(controller: TransformStreamDefaultController<Uint8Array>) {
@@ -112,6 +130,7 @@ export function geminiSseTransform(
       const payload = data.join("\n");
       if (payload.trim() === "[DONE]") {
         if (!complete()) throw new Error("premature Gemini stream terminator");
+        reportUsage();
         terminal = true;
       } else {
         const response = observe(unwrapGeminiResponse(payload));
@@ -168,6 +187,7 @@ export function geminiSseTransform(
       if (tail) lineParts.push(tail);
       if (lineParts.join("").trim() || data.length) throw new Error("truncated Gemini SSE event");
       if (!complete()) throw new Error("incomplete Gemini generation");
+      reportUsage();
       closeArray(controller);
     },
   });

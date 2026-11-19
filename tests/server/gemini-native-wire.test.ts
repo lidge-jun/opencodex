@@ -1,4 +1,4 @@
-import { expect, spyOn, test } from "bun:test";
+import { expect, mock, spyOn, test } from "bun:test";
 import { geminiSseTransform, rawJsonMember, unwrapGeminiResponse, wrapGeminiRequest } from "../../src/server/gemini-native-wire";
 
 const response = '{"candidates":[{"finishReason":"STOP","content":{"parts":[{"thoughtSignature":"a+/=","functionCall":{"args":{"n":9007199254740993123}}}]}}],"future":1.000e+40,"promptFeedback":{"blockReason":"SAFETY"}}';
@@ -13,14 +13,16 @@ test("envelope extraction handles escaped keys, nesting, braces in strings and r
     expect(() => unwrapGeminiResponse(raw)).toThrow();
   }
 });
-async function transform(text: string, chunk = 1, limit?: number): Promise<string> {
+async function transform(
+  text: string, chunk = 1, limit?: number, observers?: Parameters<typeof geminiSseTransform>[1],
+): Promise<string> {
   const bytes = new TextEncoder().encode(text);
   let offset = 0;
   const body = new ReadableStream<Uint8Array>({ pull(c) {
     if (offset === bytes.length) { c.close(); return; }
     c.enqueue(bytes.slice(offset, offset + chunk)); offset = Math.min(bytes.length, offset + chunk);
   } });
-  return new Response(body.pipeThrough(geminiSseTransform(limit))).text();
+  return new Response(body.pipeThrough(geminiSseTransform(limit, observers))).text();
 }
 test("SSE accepts byte-split UTF8, CRLF, comments and multiple events", async () => {
   const frame = `: ping\r\ndata: {"response":${response}}\r\n\r\n`;
@@ -76,4 +78,30 @@ test("fragmented 1 MiB SSE lines perform only linear UTF-8 encoding work", async
   expect(result!).toBe(`data: ${raw}\n\n`);
   // Input plus output are about 2 MiB; re-encoding retained prefixes would exceed 500 MiB.
   expect(encodedBytes).toBeLessThan(frame.length * 3);
+});
+
+test("native SSE reports the final cumulative usage once, retaining all original frames", async () => {
+  const frames = [
+    '{"candidates":[{"index":0}],"usageMetadata":{"promptTokenCount":19,"candidatesTokenCount":2}}',
+    '{"candidates":[{"index":0,"finishReason":"STOP"}]}',
+    '{"usageMetadata":{"promptTokenCount":19,"candidatesTokenCount":6,"thoughtsTokenCount":9,"future":9007199254740993123}}',
+    '{"usageMetadata":{"candidatesTokenCount":"unreported"}}',
+  ];
+  const upstream = frames.map(json => `data: {"response":${json}}\n\n`).join("");
+  for (const terminator of ["", "data: [DONE]\n\n"]) {
+    const onUsage = mock();
+    const result = await transform(upstream + terminator, 7, undefined, { onUsage });
+    expect(result).toBe(frames.map(json => `data: ${json}\n\n`).join(""));
+    expect(onUsage).toHaveBeenCalledTimes(1);
+    expect(onUsage).toHaveBeenCalledWith({ inputTokens: 19, outputTokens: 15, reasoningOutputTokens: 9 });
+  }
+});
+
+test("native SSE does not report partial usage when the response fails", async () => {
+  const frame = 'data: {"response":{"candidates":[{"index":0}],"usageMetadata":{"promptTokenCount":19,"candidatesTokenCount":2}}}\n\n';
+  const onUsage = mock();
+  await expect(transform(frame, 7, undefined, { onUsage })).rejects.toThrow("incomplete Gemini generation");
+  const error = 'data: {"response":{"error":{"message":"rejected"}}}\n\n';
+  await transform(frame + error, 7, undefined, { onUsage });
+  expect(onUsage).not.toHaveBeenCalled();
 });
