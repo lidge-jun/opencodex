@@ -320,6 +320,7 @@ test("managed native Messages serializes a retained client replay veto", async (
 const key401Cases = [
   { wire: "responses", carrier: "header" }, { wire: "messages", carrier: "header" },
   { wire: "responses", carrier: "body" },
+  { wire: "responses", carrier: "inconclusive" }, { wire: "messages", carrier: "inconclusive" },
 ] as const;
 for (const { wire, carrier } of key401Cases) for (const replacement of [false, true]) {
   test(`${wire} key recovery stops on a ${carrier} replay veto in a 401 (replacement ${replacement})`, async () => {
@@ -336,7 +337,9 @@ for (const { wire, carrier } of key401Cases) for (const replacement of [false, t
     const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => {
       attempts.push(request.headers.get("authorization") ?? request.headers.get("x-api-key"));
       const veto = attempts.length === (replacement ? 2 : 1);
-      return Response.json({ error: { type: "authentication_error", message: "Fixture authentication refusal",
+      return Response.json({
+        ...(veto && carrier === "inconclusive" ? { padding: "x".repeat(17_000) } : {}),
+        error: { type: "authentication_error", message: "Fixture authentication refusal",
         code: veto && carrier === "body" ? code : "invalid_api_key",
       } }, { status: 401, headers: veto && carrier === "header" ? { "x-should-retry": "false" } : {} });
     } });
@@ -437,7 +440,7 @@ for (const replacement of [false, true]) {
   });
 }
 
-test.each(["header", "error", "root", "last_error"] as const)("native Responses %s no-retry 401 never refreshes OAuth", async carrier => {
+test.each(["header", "error", "root", "last_error", "inconclusive"] as const)("native Responses %s no-retry 401 never refreshes OAuth", async carrier => {
   await saveCredential("cursor", { access: "fixture-access", refresh: "", expires: Date.now() + 3_600_000,
     accountId: "fixture-account" });
   let sends = 0;
@@ -446,7 +449,8 @@ test.each(["header", "error", "root", "last_error"] as const)("native Responses 
     if (url.hostname !== "api2.cursor.sh") throw new Error("Unexpected fixture destination");
     sends++;
     const code = "upstream_response_refused";
-    return Response.json({ error: { message: "Fixture authentication refusal", type: "authentication_error",
+    return Response.json({ ...(carrier === "inconclusive" ? { padding: "x".repeat(17_000) } : {}),
+      error: { message: "Fixture authentication refusal", type: "authentication_error",
       ...(carrier === "error" ? { code } : {}) },
       ...(carrier === "root" ? { code } : {}), ...(carrier === "last_error" ? { last_error: { code } } : {}),
     }, { status: 401, headers: carrier === "header" ? { "x-should-retry": "false" } : undefined });
@@ -466,8 +470,9 @@ test.each(["header", "error", "root", "last_error"] as const)("native Responses 
         body: JSON.stringify({ model: "cursor/model", stream: false, store: false, ...RESPONSES_TURN }),
       }), config, { model: "", provider: "" });
       const payload = await response.text();
-      expect({ sends, status: response.status, payload }).toMatchObject({ sends: 1, status: carrier === "header" ? 401 : 429 });
-      if (carrier !== "header") expect(JSON.parse(payload).error.code).toBe("upstream_response_refused");
+      const bodyCoded = carrier !== "header" && carrier !== "inconclusive";
+      expect({ sends, status: response.status }).toEqual({ sends: 1, status: bodyCoded ? 429 : 401 });
+      if (bodyCoded) expect(JSON.parse(payload).error.code).toBe("upstream_response_refused");
       expect(response.headers.get("x-should-retry")).toBe("false");
       expect(refresh).not.toHaveBeenCalled();
     } finally { release(); }

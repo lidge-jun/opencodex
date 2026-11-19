@@ -194,6 +194,26 @@ test("pooled compact keeps quota evidence when an inconclusive 429 vetoes client
   expect(getCodexUpstreamHealth(OTHER)?.lastFailureStatus).toBeUndefined();
 });
 
+test.each([false, true])("pooled compact keeps a coded 402 without switching accounts (inconclusive=%s)", async inconclusive => {
+  const raw = Response.json({
+    ...(inconclusive ? { padding: "x".repeat(17_000) } : {}),
+    error: { code: "upstream_response_refused", message: "fixture diagnostic" },
+  }, { status: 402, headers: { "retry-after": "30" } });
+  upstream(() => raw, compacted);
+  const { response, body } = await compact();
+  expect(sends).toEqual(["Bearer work-access"]);
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  expect(response.headers.get("retry-after")).toBeNull();
+  expect(JSON.parse(body).error).toEqual({
+    type: "upstream_error", code: "upstream_response_refused", message: CLIENT_ERROR_CONTRACTS.replay_refused,
+  });
+  expect(raw.headers.get("retry-after")).toBe("30");
+  expect(getCodexUpstreamHealth(WORK)?.lastFailureStatus).toBe(402);
+  expect(getCodexUpstreamHealth(WORK)?.cooldownUntil).toBeGreaterThan(Date.now());
+  expect(getCodexUpstreamHealth(OTHER)?.lastFailureStatus).toBeUndefined();
+});
+
 test("malformed retained compact input does not poison pooled account health", async () => {
   const config = poolConfig();
   const healthBefore = [WORK, OTHER].map(id => getCodexUpstreamHealth(id));

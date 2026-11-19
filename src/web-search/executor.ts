@@ -143,7 +143,7 @@ export async function runWebSearch(
     // Checked before the 429 body is released: a budget found spent after the release could only
     // end in a send-budget error, recorded as a connection failure instead of the quota evidence.
     for (let attempt = 0; !res.ok; attempt++) {
-      if (await hasUpstreamReplayRefusal(res, linkedSignal.signal) || res.status !== 429 || sendsLeft <= 0) break;
+      if (await hasUpstreamReplayRefusal(res, linkedSignal.signal, { requireCompleteBody: res.status === 429 }) || res.status !== 429 || sendsLeft <= 0) break;
       const delay = retryBackoffDelayMs(attempt, {
         baseDelayMs: SIDECAR_429_BASE_DELAY_MS,
         maxDelayMs: SIDECAR_429_MAX_DELAY_MS,

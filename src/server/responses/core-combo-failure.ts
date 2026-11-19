@@ -34,7 +34,7 @@ import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { formatErrorResponse } from "../../bridge";
 import { upstreamCodeForComboFailure } from "../../bridge/errors";
 import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../adapters/ollama-native";
-import { carryReplayRefusal, carryReplayRefusalToClient, hasClientReplayVeto, hasNoRetryDirective, isAutomaticReplayBlocked, isReplayRefusalCode, isReplayRefusalResponse, markResponseNonReplayable, observedReplayRefusalCode, projectReplayRefusal, replayRefusalBodyCode, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../lib/upstream-retry";
+import { carryReplayRefusal, carryReplayRefusalToClient, hasClientReplayVeto, hasNoRetryDirective, isAutomaticReplayBlocked, isReplayRefusalCode, isReplayRefusalResponse, markResponseNonReplayable, observedReplayRefusalCode, projectReplayRefusal, replayRefusalBodyCode, requireClientReplayVeto, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../lib/upstream-retry";
 import { MODEL_NOT_ALLOWED_FOR_KEY } from "../admission-model-scope";
 import { usageFromResponsesPayload } from "../request-log";
 import type { ResponsesTerminalStatus } from "../../bridge";
@@ -63,6 +63,11 @@ export async function consumeComboFailure(
   // Read before the body: the marker lives on this Response object, and the failure below is
   // rebuilt as a new one that would otherwise lose it.
   let nonReplayable = isAutomaticReplayBlocked(response);
+  const vetoIncompleteBody = () => {
+    if (!rawUpstream || nonReplayable) return;
+    nonReplayable = true;
+    requireClientReplayVeto(response);
+  };
   const syntheticRefusal = isReplayRefusalResponse(response);
   let replayRefusal = syntheticRefusal;
   let wireRefusalCode = observedReplayRefusalCode(response);
@@ -92,6 +97,7 @@ export async function consumeComboFailure(
     const legacy = comboFailureEvidence(response);
     if (legacy !== undefined) void response.body?.cancel().catch(() => undefined);
     const body = await readBoundedResponseBody(legacy === undefined ? response : new Response(legacy), { signal, reportUtf8Validity: serverError });
+    if (!body.displaySafe || body.truncated) vetoIncompleteBody();
     // A 5xx body counts as quota or classification evidence only when it decoded as valid
     // UTF-8, matching shouldRetryCodexPoolAccountQuota. A malformed byte keeps the status-only
     // fallback, with one exception: a cyber-policy refusal must still stop the combo, so the
@@ -157,6 +163,7 @@ export async function consumeComboFailure(
     }
   } catch (error) {
     if (signal?.aborted) throw error;
+    vetoIncompleteBody();
     classificationText = fallback;
   }
   // A wire replay veto is the delivery/attempt identity, even when preserved

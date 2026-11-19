@@ -543,6 +543,32 @@ describe("combo stream preflight", () => {
     expect(await result.response.text()).toContain('"retryable":false');
   });
 
+  test.each([
+    { error: { code: "upstream_response_refused" } },
+    { last_error: { code: "upstream_reset_replay_refused" } },
+    { retryable: false, error: { code: "server_is_overloaded" } },
+    { error: { code: "server_is_overloaded", retryable: false } },
+    { response: { retryable: false, error: { code: "server_is_overloaded" } } },
+  ])("a bare SSE refusal bypasses the custom retry classifier (case %#)", async fields => {
+    const payload = { type: "error", status: 503, ...fields };
+    const classify = jest.fn(() => true);
+    const result = await preflightComboStreamResponse(sse(payload), { model: "m1", provider: "a" }, classify);
+    expect(result.kind).toBe("accepted");
+    expect(classify).not.toHaveBeenCalled();
+    expect(await result.response.text()).toBe(`data: ${JSON.stringify(payload)}\n\n`);
+  });
+
+  test("a no-retry stream head bypasses the custom retry classifier", async () => {
+    const response = sse({ type: "error", status: 503, error: { code: "server_is_overloaded" } });
+    response.headers.set("x-should-retry", "false");
+    const classify = jest.fn(() => true);
+    const result = await preflightComboStreamResponse(response, { model: "m1", provider: "a" }, classify);
+    expect(result.kind).toBe("accepted");
+    expect(result.response).toBe(response);
+    expect(classify).not.toHaveBeenCalled();
+    await result.response.text();
+  });
+
   test("default preflight retries zero-output bare errors without structured status", async () => {
     expect(comboStreamPayloadCommitsOutput({ type: "error" })).toBe(true);
     for (const [payload, status] of [

@@ -24,7 +24,7 @@ import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 import { REQUIRED_TOOL_CONTRACT_CODE } from "../../lib/errors";
 import { attachComboFailureEvidence, isPausedTurn } from "../../lib/client-error-body";
 import { requiredToolReasoningPrelude } from "./combo-required-tool-stream";
-import { carryReplayRefusal, applyReplayRefusalClientHeaders, isNonReplayableUpstreamCode, markTerminalResetReplacement, ProtocolPreOutputEof } from "../../lib/upstream-retry";
+import { carryReplayRefusal, applyReplayRefusalClientHeaders, isAutomaticReplayBlocked, isNonReplayableUpstreamCode, markTerminalResetReplacement, ProtocolPreOutputEof } from "../../lib/upstream-retry";
 import { carryPacedStream, pacedQueuingStrategy } from "../../lib/paced-stream";
 import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 
@@ -316,7 +316,6 @@ function bareErrorIsRetryable(payload: unknown): boolean {
     return false;
   }
   const event = payload as Record<string, unknown>;
-  if (event.retryable === false) return false;
   // The record selection, the opaque verdict and the code conflict rule are shared with the HTTP
   // consumer; only the carrier (one parsed frame here, one body there) differs.
   const record = envelopeErrorRecord(event);
@@ -361,13 +360,17 @@ function terminalErrorRecords(payload: Record<string, unknown>): Record<string, 
 }
 
 export function failedTerminalReplayVerdict(payload: unknown): "blocked" | "policy" | undefined {
-  if (!isRecord(payload) || (payload.type !== "response.failed" && payload.status !== "failed")) return;
+  if (!isRecord(payload)) return;
+  const bare = payload.type === "error";
+  const failed = payload.type === "response.failed" || payload.status === "failed";
+  if (!bare && !failed && payload.type !== "response.incomplete" && payload.status !== "incomplete") return;
   const response = isRecord(payload.response) ? payload.response : payload;
   const errors = terminalErrorRecords(payload);
-  if (errors.some(error => isNonReplayableUpstreamCode(error.code))) return "blocked";
+  if (isNonReplayableUpstreamCode(payload.code) || errors.some(error => isNonReplayableUpstreamCode(error.code))) return "blocked";
   if (payload.retryable === false || response.retryable === false) {
-    return errors.some(error => typeof error.code === "string" && isTerminalRefusalCode(error.code)) ? "policy" : "blocked";
+    return !bare && failed && errors.some(error => typeof error.code === "string" && isTerminalRefusalCode(error.code)) ? "policy" : "blocked";
   }
+  if (errors.some(error => error.retryable === false)) return "blocked";
 }
 
 function retryableZeroOutputTerminal(payload: unknown, context?: object): boolean {
@@ -655,7 +658,7 @@ export async function preflightComboStreamResponse(
   const contentType = response.headers.get("content-type");
   const isEventStream = hasResponseMediaType(response.headers, "text/event-stream")
     || (!contentType && options?.allowMissingContentType === true);
-  if (!response.ok || !response.body) {
+  if (isAutomaticReplayBlocked(response) || !response.ok || !response.body) {
     return { kind: "accepted", response };
   }
   if (!isEventStream) {

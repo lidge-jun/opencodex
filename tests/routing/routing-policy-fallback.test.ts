@@ -79,6 +79,21 @@ describe("policy candidate fallback", () => {
   let previousHome: string | undefined;
   beforeEach(() => { previousHome = process.env.OPENCODEX_HOME; home = mkdtempSync(join(tmpdir(), "ocx-policy-fallback-")); process.env.OPENCODEX_HOME = home; });
   afterEach(() => { if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome; removeTreeWithRetry(home); });
+  test.each([401, 402, 403, 429, 503])("an inconclusive HTTP %d body never opens a policy hop", async status => {
+    const payload = { padding: "x".repeat(70_000), error: { code: "upstream_response_refused" } };
+    const original = Response.json(payload, { status });
+    let sends = 0;
+    const response = await handleResponsesWithPolicyFallback(request(), fixtureConfig(), {}, {}, {
+      runCore: async (req, _config, context, options) => {
+        options.onRequestBodyParsed?.(await req.json());
+        context.routeDecision = policyTrace();
+        return ++sends === 1 ? original : Response.json({ status: "completed" });
+      },
+    });
+    expect(sends).toBe(1);
+    expect(response).toBe(original);
+    expect(await response.json()).toEqual(payload);
+  });
   test.each([401, 402, 429, "local"] as const)("synthetic failure attribution across candidates (%s)", async outcome => {
     clearProviderCacheAffinityForTests();
     const lane = "policy-terminal-source";

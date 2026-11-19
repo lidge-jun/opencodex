@@ -74,7 +74,7 @@ export function createAnthropicThinkingRecovery(
     if (signal.aborted || !canRetry() || response.status !== 400 || isAutomaticReplayBlocked(response)
       || adapterName !== "anthropic" || guard.attempted
       || parsed._stripReasoningEncryptedContent === true || !carriesThinkingState(attempt)) return false;
-    if (await hasUpstreamReplayRefusal(response, signal)) return false;
+    if (await hasUpstreamReplayRefusal(response, signal, { requireCompleteBody: true })) return false;
     try {
       const body = await readBoundedResponseBody(response.clone(), { signal });
       if (!body.displaySafe || body.truncated) return false;

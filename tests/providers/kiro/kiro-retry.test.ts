@@ -5,7 +5,7 @@ import {
   noteKiroTransientThrottle,
   resetKiroThrottleStateForTests,
 } from "../../../src/adapters/kiro-retry";
-import { hasClientReplayVeto } from "../../../src/lib/upstream-retry";
+import { hasClientReplayVeto, isReplayRefusalResponse, REPLAY_REFUSAL_MESSAGE } from "../../../src/lib/upstream-retry";
 
 const realFetch = globalThis.fetch;
 
@@ -347,6 +347,27 @@ describe("kiro retry fetch", () => {
       message: "The upstream exchange did not complete reliably. The request may already have been processed; automatic replay was stopped.",
     } });
   });
+
+  test.each([
+    { code: "upstream_response_refused", padding: "" },
+    { code: "upstream_reset_replay_refused", padding: "x".repeat(17_000) },
+  ])(
+    "a Kiro 503 with both a header veto and $code projects the exact refusal code",
+    async ({ code, padding }) => {
+      const payload = { padding, error: { code, message: "fixture diagnostic" } };
+      const upstream = Response.json(payload, {
+        status: 503, headers: { "x-should-retry": "false", "retry-after": "7" },
+      });
+      const mock = mockFetch([upstream, new Response("duplicate")]);
+      const displayed = await fetchKiroWithRetry(request);
+      expect(mock.urls).toEqual([request.url]);
+      expect(displayed.status).toBe(429);
+      expect(displayed.headers.get("x-should-retry")).toBe("false");
+      expect(displayed.headers.get("retry-after")).toBeNull();
+      expect(isReplayRefusalResponse(displayed)).toBe(false);
+      expect(await displayed.json()).toEqual({ error: { type: "upstream_error", code, message: REPLAY_REFUSAL_MESSAGE } });
+    },
+  );
 
   for (const status of [429, 503]) for (const returnRawErrors of [true, false]) {
     test(`an inconclusive replay probe stops Kiro recovery for ${status} (raw=${returnRawErrors})`, async () => {

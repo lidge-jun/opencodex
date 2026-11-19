@@ -735,7 +735,7 @@ export async function prepareAdapterExchange(
                 }),
               });
             });
-            await hasUpstreamReplayRefusal(response, upstream.signal, { requireCompleteBody: response.status === 429 });
+            await hasUpstreamReplayRefusal(response, upstream.signal, { requireCompleteBody: true });
             return response;
             } finally { producer?.close(); }
           }
@@ -817,7 +817,7 @@ export async function prepareAdapterExchange(
             if (parsed._anthropicImageOwner && sendBudgetState.adapterSendBudget?.spendEnforced) {
               bindAdapterResponseSpend(response, refetchReporter?.recordUsage);
             }
-            await hasUpstreamReplayRefusal(response, upstream.signal, { requireCompleteBody: response.status === 429 });
+            await hasUpstreamReplayRefusal(response, upstream.signal, { requireCompleteBody: true });
             return response;
           } finally {
             // Refund only a reservation whose send never reached its admission boundary.
@@ -921,7 +921,7 @@ export async function prepareAdapterExchange(
     };
    // Keep recovery kinds in sync with the native Responses `passthroughRecovery:` loop above.
    recovery: for (;;) {
-      await hasUpstreamReplayRefusal(upstreamResponse, upstream.signal, { requireCompleteBody: upstreamResponse.status === 429 });
+      await hasUpstreamReplayRefusal(upstreamResponse, upstream.signal, { requireCompleteBody: true });
       await rejectAnthropicPerMessageEffort(parsed, upstreamResponse, upstream.signal);
       const modelRotation = isAutomaticReplayBlocked(upstreamResponse) ? undefined : await antigravityDenial.recover(upstreamResponse,
         transportState.replayOAuthCredentialSnapshot ?? transportState.sentOAuthSnapshot, {

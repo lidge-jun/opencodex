@@ -1142,7 +1142,7 @@ export async function retryCodexPoolOnAlternateAccount(
       // single-retry path -- every flagship model, which is the #4906 case -- records it too
       // rather than only the gated ladder below. Without this the pool learns nothing from a
       // refusal and the next request repeats the same selection.
-      await hasUpstreamReplayRefusal(upstreamResponse, upstream.signal);
+      await hasUpstreamReplayRefusal(upstreamResponse, upstream.signal, { requireCompleteBody: true });
       const retryModelDenial = await observeCodexPoolAccountModel400Denial(
         upstreamResponse,
         route.modelId,

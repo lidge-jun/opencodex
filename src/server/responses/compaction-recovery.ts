@@ -1,5 +1,5 @@
 import { clientFacingModelText } from "../../lib/error-destination";
-import { ownedChatErrorPayload } from "../../lib/client-error-body";
+import { isProxyError, ownedChatErrorPayload } from "../../lib/client-error-body";
 import type { AdapterEvent, OcxConfig } from "../../types";
 import { carryResponseToolOwnership } from "./response-tool-ownership";
 import { routeConcreteModel, type RouteResult } from "../../router";
@@ -195,7 +195,8 @@ export async function runWithCompactionRecovery(
       if (replayUnsafe) markResponseNonReplayable(response);
       return keep(response);
     }
-    const failure = await consumeComboFailure(response, signal);
+    if (adapterError?.retryable === false) requireClientReplayVeto(response);
+    const failure = await consumeComboFailure(response, signal, Date.now(), undefined, !isProxyError(response));
     response = failure.response;
     const code = token(adapterError?.code) ?? token(failure.upstreamCode);
     const errorType = token(adapterError?.errorType) ?? token(failure.upstreamType);

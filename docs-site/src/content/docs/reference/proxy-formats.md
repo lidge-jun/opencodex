@@ -23,8 +23,8 @@ should select among several targets.
 ## Replay refusals
 
 When an upstream failure carries `x-should-retry: false`, the proxy stops automatic retries and
-combo fallback. A zero-output Responses failure with `response.retryable: false` also stops combo
-and compaction fallback. A terminal refusal on an authorized Responses replacement uses fixed
+combo fallback. A Responses SSE error with `retryable: false` stops automatic recovery, including
+an opaque-state rebuild. A terminal refusal on an authorized Responses replacement uses fixed
 error text on both native and translated routes. Native Responses keeps an observed replacement
 refusal code even if the replacement body fails during delivery. Caller cancellation takes
 precedence. Native Responses JSON with `status: "failed"`
@@ -38,8 +38,9 @@ When translated Messages receives a recognized refusal in `response.failed` with
 `response.retryable: false`, the SSE error includes the same fixed message and error code.
 The stream keeps the HTTP status already sent to the client.
 
-If the proxy cannot complete a retry-safety check on an upstream transient 5xx or 429
-body, it stops automatic retries for requests without an independent replay guarantee.
+If the proxy cannot complete a retry-safety check on an upstream error body, it stops automatic
+retries for requests without an independent replay guarantee. This includes Compact account
+failover after HTTP 402.
 Responses, Compact, Chat Completions and routed Messages include `x-should-retry: false`
 and omit `Retry-After` on those errors. The original upstream headers still inform quota
 and cooldown tracking.

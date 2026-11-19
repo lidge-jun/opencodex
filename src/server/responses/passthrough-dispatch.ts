@@ -1178,11 +1178,8 @@ export async function preparePassthroughExchange(
 
     // Keep recovery kinds in sync with the generic `recovery:` loop below.
     passthroughRecovery: for (;;) {
-      // These statuses sit outside the transient retry ladder's body probe. Observe
-      // their veto before credential, request-shape or effort recovery can resend.
-      if ([400, 401, 402, 403, 413, 422].includes(upstreamResponse.status)) {
-        await hasUpstreamReplayRefusal(upstreamResponse, upstream.signal);
-      }
+      // Credential and request-shape recovery use the same veto even on reset-only sends.
+      await hasUpstreamReplayRefusal(upstreamResponse, upstream.signal, { requireCompleteBody: true });
       if (!isAutomaticReplayBlocked(upstreamResponse) && wasAccountAutoPaused(upstreamResponse) && route.provider.authMode !== "forward") {
         const recovered = await recoverAutoPausedAccount({ requestKey: transportState, reserve: reserveCredentialHop,
           remaining: transientSendCapFor(transientRetryPolicyFor(route.provider)?.attempts, sendBudgetState.targetSendsUsed),
@@ -1465,6 +1462,9 @@ export async function preparePassthroughExchange(
       }
     }
 
+    if (oauth401ReplayAttempted) {
+      await hasUpstreamReplayRefusal(upstreamResponse, upstream.signal, { requireCompleteBody: true });
+    }
     if (upstreamResponse.status === 429 && !isReplayRefusalResponse(upstreamResponse)
       && isAutomaticReplayBlocked(upstreamResponse) && transportState.genericFailoverAccountId) {
       // The real refusal still informs later account selection. Record its cooldown
@@ -1621,6 +1621,7 @@ export async function preparePassthroughExchange(
         return transportFailureResponse(err);
       }
       if (retryFrom && upstreamResponse === retryFrom) break passthroughRecovery;
+      await hasUpstreamReplayRefusal(upstreamResponse, upstream.signal, { requireCompleteBody: true });
     }
     const keyRotation = await rotatePassthroughKeyOn429({ config, route, parsed, response: upstreamResponse, adapterName: transportState.adapter.name, budgetSpent: () => sendBudgetExhausted(transientSendAttempts()), refetch: () => rebuildAndRefetch("key-429") }); if (keyRotation) { if ("failed" in keyRotation) return keyRotation.failed; upstreamResponse = keyRotation; continue passthroughRecovery; }
     const captureAffinityResponse = (

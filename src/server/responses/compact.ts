@@ -1321,7 +1321,7 @@ export async function handleResponsesCompact(
       && (authCtx.kind === "main-pool" || authCtx.kind === "pool")
       && !gatewayTransport
       && usesCodexForwardPoolAuth(authCtx, compactProvider)
-      && !await hasUpstreamReplayRefusal(upstream, req.signal)
+      && !await hasUpstreamReplayRefusal(upstream, req.signal, { requireCompleteBody: true })
       && !req.signal.aborted
     ) {
       const canReplay = !configuredSendBudgetExhausted();
@@ -1475,7 +1475,7 @@ export async function handleResponsesCompact(
       && usesCodexForwardPoolAuth(authCtx, route.provider)
       && !authCtx.fixedAccount
       && route.codexAccountMode
-      && !await hasUpstreamReplayRefusal(upstream, req.signal)
+      && !await hasUpstreamReplayRefusal(upstream, req.signal, { requireCompleteBody: true })
       && !req.signal.aborted
     ) {
       const firstRetryAfter = upstream.headers.get("retry-after");
@@ -1593,7 +1593,7 @@ export async function handleResponsesCompact(
       && outcomeCtx === authCtx
       && !req.signal.aborted
       && !conversationCarriesUploadedFiles(raw)
-      && !await hasUpstreamReplayRefusal(upstream, req.signal)
+      && !await hasUpstreamReplayRefusal(upstream, req.signal, { requireCompleteBody: true })
       && !await shouldRetryCodexPoolAccountQuota(upstream, req.signal)
     ) {
       const firstStatus = upstream.status;
@@ -1670,6 +1670,8 @@ export async function handleResponsesCompact(
       upstream.headers.get("x-codex-secondary-reset-at"),
       upstream.headers.get("x-codex-tertiary-reset-at"),
     ].filter(Boolean);
+    // An alternate's failure can still reach the model handoff or native 404 fallback.
+    await hasUpstreamReplayRefusal(upstream, req.signal, { requireCompleteBody: true });
     const buffered = await bufferCompactResponse(upstream, req.signal, config.stallTimeoutSec, isLocalUpstream(compactUrl));
     const bufferedErrorText = buffered.ok
       ? ""

@@ -3584,13 +3584,17 @@ describe("server combo failover 030 activation matrix", () => {
     await expectCancelledAttemptReceipt(config, { provider: "a", model: "m1", adapter: "test-response" });
   });
 
-  test("oversized ordinary failure is canceled once, leaks no prefix, and advances", async () => {
+  test("oversized ordinary failure is canceled once and never advances to a backup", async () => {
     const hostile = `hostile-prefix-${"x".repeat(70_000)}`;
     let reads = 0;
     let cancels = 0;
+    let backupSends = 0;
     customFetchResponse = async request => {
       const model = (JSON.parse(String(request.body)) as { model?: string }).model;
-      if (model === "m2") return chatSuccess("safe backup", "m2");
+      if (model === "m2") {
+        backupSends++;
+        return chatSuccess("unexpected backup", "m2");
+      }
       return new Response(new ReadableStream<Uint8Array>({
         start(controller) {
           reads += 1;
@@ -3604,10 +3608,12 @@ describe("server combo failover 030 activation matrix", () => {
       b: provider("test-response", "https://test.invalid/v1", "key-b"),
     });
     const response = await postLogged(config);
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(response.headers.get("retry-after")).toBeNull();
     const text = await response.text();
-    expect(text).toContain("safe backup");
     expect(text).not.toContain("hostile-prefix");
+    expect(backupSends).toBe(0);
     expect(reads).toBe(1);
     expect(cancels).toBe(1);
     const attempt = (await latestAttemptReceipts(config)).usage.attempts?.[0];
@@ -3615,7 +3621,7 @@ describe("server combo failover 030 activation matrix", () => {
     expect(attempt).not.toHaveProperty("usage");
   });
 
-  test("stalled passthrough JSON is canceled at five seconds and advances once", async () => {
+  test("stalled passthrough JSON is canceled at five seconds without a backup send", async () => {
     let reads = 0;
     let cancels = 0;
     let bHits = 0;
@@ -3641,12 +3647,13 @@ describe("server combo failover 030 activation matrix", () => {
     const started = performance.now();
     const response = await postLogged(config);
     const elapsed = performance.now() - started;
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(response.headers.get("retry-after")).toBeNull();
     const text = await response.text();
-    expect(text).toContain("bounded backup");
     expect(text).not.toContain("hostile-stalled-prefix");
     await within(cancelled.promise);
-    expect([reads, cancels, bHits]).toEqual([1, 1, 1]);
+    expect([reads, cancels, bHits]).toEqual([1, 1, 0]);
     expect(elapsed).toBeGreaterThanOrEqual(4_500);
     const attempt = (await latestAttemptReceipts(config)).usage.attempts?.[0];
     expect(attempt).toMatchObject({ provider: "a", status: 429, usageStatus: "unreported" });

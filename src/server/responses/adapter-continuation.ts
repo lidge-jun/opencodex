@@ -190,6 +190,7 @@ export function createAdapterContinuations(
   const terminalGuardEnabled = (transportState.activeAdapter.name === "anthropic"
       || (transportState.activeAdapter.name === "openai-chat" && route.provider.terminalContinuationGuard === true))
     && !options.comboAttempt && !routedCompaction;
+  let continuationReplayVetoed = false;
   /**
    * One bounded internal re-ask for Anthropic end_turn-without-tool-call turns. Replays the
    * continuation on a 429 with the same-key retry budget (hoisted per request), then falls
@@ -203,6 +204,10 @@ export function createAdapterContinuations(
     // Ordinary terminal continuations have already delivered output; empty retries opt in.
     allowAccountRefusal = false,
   ): AsyncGenerator<AdapterEvent> {
+    if (continuationReplayVetoed) {
+      yield { type: "error", status: 502, message: "The provider declined further automatic recovery.", retryable: false };
+      return;
+    }
     let response: Response | undefined;
     let refusalPendingReplay: Response | undefined;
     let replaySetupFailed = false;
@@ -344,19 +349,24 @@ export function createAdapterContinuations(
         builtContinuationRequest.releaseBodyObservation?.();
       }
     };
+    const fetchObservedContinuation = async (recoveryKind?: AttemptRecoveryKind): Promise<Response> => {
+      const current = await fetchContinuation(recoveryKind);
+      await hasUpstreamReplayRefusal(current, upstream.signal, { requireCompleteBody: true });
+      continuationReplayVetoed ||= isAutomaticReplayBlocked(current);
+      return current;
+    };
     while (true) {
       try {
         const recoveryKind = nextContinuationRecoveryKind;
         nextContinuationRecoveryKind = undefined;
-        response = await fetchContinuation(recoveryKind);
-        if (!response.ok) await hasUpstreamReplayRefusal(response, upstream.signal);
+        response = await fetchObservedContinuation(recoveryKind);
         bindAnthropicRejectionResponse(transportState.sameTargetRequest, response);
         if (initialRecoveryKind === "empty-completion" && !isAutomaticReplayBlocked(response) && await adapterExchange.thinkingSignatureRecovery.prepareHttp(
           response, transportState.activeAdapter.name, nextParsed,
         )) {
           try { void response.body?.cancel().catch(() => {}); } catch { /* closed */ }
           invalidateSameTargetRequest();
-          response = await fetchContinuation("opaque-blob-rejection");
+          response = await fetchObservedContinuation("opaque-blob-rejection");
         }
         if (refusalPendingReplay) {
           try { void refusalPendingReplay.body?.cancel().catch(() => {}); } catch { /* already closed */ }
@@ -815,7 +825,7 @@ export function createAdapterContinuations(
       };
       yield* adapterExchange.thinkingSignatureRecovery.wrap(parse(response), async function* () {
         invalidateSameTargetRequest();
-        yield* parse(await fetchContinuation("opaque-blob-rejection"));
+        yield* parse(await fetchObservedContinuation("opaque-blob-rejection"));
       }, () => transportState.activeAdapter.name,
       initialRecoveryKind === "empty-completion" && !isAutomaticReplayBlocked(response), response, nextParsed);
     } catch (error) {

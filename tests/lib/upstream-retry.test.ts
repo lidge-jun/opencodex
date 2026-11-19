@@ -959,6 +959,30 @@ describe("ambiguous reset safety through error formatting", () => {
     expect(cancelled).toBe(true);
   });
 
+  test("the transient ladder checks its final 503 before handing it to a fallback caller", async () => {
+    const wire = Response.json({ padding: "x".repeat(17_000), error: { code: "upstream_response_refused" } },
+      { status: 503, headers: { "retry-after": "45" } });
+    const mock = mockDoFetch([wire]);
+    const response = await fetchWithTransientRetry(mock.doFetch, { attempts: 1 });
+    expect(mock.calls).toHaveLength(1);
+    expect(response).toBe(wire);
+    expect(isAutomaticReplayBlocked(response)).toBe(true);
+    expect(hasClientReplayVeto(response)).toBe(true);
+    expect(response.headers.get("retry-after")).toBe("45");
+    expect((await response.json()).error.code).toBe("upstream_response_refused");
+  });
+
+  test.each(["Text/Event-Stream", "text/plain"])("an HTTP SSE error labeled %s vetoes further recovery", async contentType => {
+    const wire = new Response('event: error\ndata: {"type":"error","retryable":false}\n\n', {
+      status: 503, headers: { "content-type": contentType },
+    });
+    const mock = mockDoFetch([wire, new Response("unexpected retry")]);
+    const response = await fetchWithTransientRetry(mock.doFetch);
+    expect(response).toBe(wire);
+    expect(mock.calls).toHaveLength(1);
+    expect(hasClientReplayVeto(response)).toBe(true);
+  });
+
   test("the transient ladder returns the last coded 429 with its raw quota evidence", async () => {
     const body = { error: { code: "upstream_response_refused", message: "fixture quota" } };
     const wire = Response.json(body, { status: 429, headers: { "retry-after": "45" } });

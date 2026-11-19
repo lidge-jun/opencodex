@@ -1,5 +1,6 @@
 import type { AdapterEvent, OcxConfig, OcxUsage } from "../../types";
 import { sanitizeLogMetadataString } from "../../lib/redact";
+import { isNonReplayableUpstreamCode } from "../../lib/upstream-retry";
 
 /**
  * Empty-completion guard for Responses turns (port of codex-router's
@@ -310,7 +311,8 @@ export async function* guardEmptyCompletionEventStream(
         return;
       }
       if (event.type === "error") {
-        if (event.replaySafeBeforeOutput === true && retries < maxRetries) {
+        const vetoed = event.retryable === false || isNonReplayableUpstreamCode(event.code);
+        if (!vetoed && event.replaySafeBeforeOutput === true && retries < maxRetries) {
           // The upstream failed the turn before any text or tool call (#6876: Vertex dropped a
           // malformed function call). Nothing actionable reached the client, so this is the same
           // replay-safe shape as an empty completion: retry the identical turn once.
@@ -326,7 +328,7 @@ export async function* guardEmptyCompletionEventStream(
           terminalSeen = true;
           break;
         }
-        if (retries > 0 && event.status !== 499 && event.replaySafeBeforeOutput !== true
+        if (!vetoed && retries > 0 && event.status !== 499 && event.replaySafeBeforeOutput !== true
           && !options.preserveRetryError?.(event)) {
           // The retry failed upstream. Its body cannot reach the client (the
           // 200 head went out with the first attempt), so state the failure in

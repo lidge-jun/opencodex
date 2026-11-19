@@ -260,6 +260,31 @@ describe("routed compaction emergency integration", () => {
     } finally { translatorBudget.dispose(); }
   });
 
+  test("an adapter stream veto still stops compaction fallback after HTTP projection", async () => {
+    const error = { type: "server_error", code: "server_error", message: "fixture upstream diagnostic" };
+    sourceEvents = [{ type: "error", status: 502, code: error.code, message: error.message,
+      errorType: error.type, retryable: false }];
+    const original = request();
+    const translatorBudget = createTranslatorBudget();
+    const budget = createRequestExecutionBudget();
+    try {
+      const response = await runWithCompactionRecovery(
+        original, settings(), { model: "", provider: "" }, { translatorBudget, sendBudget: budget },
+        async (sent, config, log, options) => {
+          const result = await handleResponses(sent, config, log, { ...options, compactionRecoveryAttempted: true });
+          if (sent !== original) return result;
+          await result.text();
+          return Response.json({ error }, { status: 502 });
+        },
+      );
+      expect(calls.map(call => call.model)).toEqual(["swe-2"]);
+      expect(budget.used).toBe(1);
+      expect(response.status).toBe(502);
+      expect(response.headers.get("x-should-retry")).toBe("false");
+      await response.text();
+    } finally { translatorBudget.dispose(); }
+  });
+
   test("the actual fallback Request strips inbound auth and account headers", async () => {
     const original = request();
     let fallbackHeaders: Headers | undefined;

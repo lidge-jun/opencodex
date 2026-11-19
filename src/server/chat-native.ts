@@ -630,13 +630,7 @@ export async function runNativeChatAttempt(
             : {}),
         },
       );
-      if (response.status === 429) {
-        if (singleShot || !requestTransientPolicy) {
-          await hasUpstreamReplayRefusal(response, upstream.signal, { requireCompleteBody: true });
-        }
-      } else if (response.status === 401 || wasAccountAutoPaused(response)) {
-        await hasUpstreamReplayRefusal(response, upstream.signal);
-      }
+      await hasUpstreamReplayRefusal(response, upstream.signal, { requireCompleteBody: true });
       return response;
     } finally {
       request.releaseBodyObservation?.();

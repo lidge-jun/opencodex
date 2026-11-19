@@ -78,8 +78,10 @@ export function createAnthropicImageRecovery(
 ): AnthropicImageRecovery {
   return async (response, parsed, adapter, signal) => {
     if (recoveryAttempted.has(translatorBudget) || adapter.name !== "anthropic" || parsed._compactionRequest
-      || response.status !== 413 || isProxyError(response) || await hasUpstreamReplayRefusal(response, signal)) return { response };
+      || response.status !== 413 || isProxyError(response)) return { response };
+    const vetoed = await hasUpstreamReplayRefusal(response, signal, { requireCompleteBody: true });
     signal.throwIfAborted();
+    if (vetoed) return { response };
     const owner = parsed._providerContinuationOwner;
     const pin = transport.pinAnthropicImageRecovery(response);
     if (!owner || !pin || !sameProviderContinuationOwner(owner, pin.owner)) return { response };

@@ -70,11 +70,15 @@ keeps its explicit exception. In `src/web-search/header-deadline.ts`, local paci
 post-header body inspection pause the iteration's cumulative response-header clock; caller
 cancellation remains active. Uncertain body classification never authorizes a resend.
 
-For an inconclusive transient 5xx or 429 probe on a replay-unsafe request, the retry path records
+For an inconclusive HTTP error probe on a replay-unsafe request, including 401, 402, 403, 429
+and transient 5xx, the retry path records
 a client veto in process and keeps the original status, body and headers available for quota
 observation. Responses and Compact, native and translated Chat, and managed native and translated
 Messages project the veto as `x-should-retry: false` and omit `Retry-After`. Responses withholds
-the upstream diagnostic text in its non-replayable error projection.
+the upstream diagnostic text in its non-replayable error projection. Compact keeps the original
+account's quota evidence when this check blocks a 402 account move. Kiro also checks for a
+recognized public refusal code during bounded client formatting when the header has already
+vetoed a resend.
 
 Native and translated Responses record a genuine no-retry 429 against the sending OAuth
 account's cooldown without selecting another credential. Native Responses also records the sent
@@ -96,8 +100,9 @@ The selector also keeps the fixed projection of a verified
 [xAI Legacy 403](../providers/xai-grok.md#legacy-privacy-mode-403).
 
 Combo preflight checks both `error` and `last_error` on the root and nested response. A recognized
-refusal outranks a generic sibling error, and caller-supplied retry classifiers cannot override
-it. Usage ownership remains with the native tap or bridge when present.
+refusal outranks a generic sibling error. Bare error frames and wrapped failed terminals with
+`retryable: false` bypass caller-supplied recovery classifiers, including opaque-state recovery.
+Usage ownership remains with the native tap or bridge when present.
 
 When an emergency compaction attempt carries a replay veto, compaction recovery publishes a
 fixed HTTP or buffered failed-terminal envelope with the client veto. Only exact public error
@@ -105,8 +110,8 @@ codes can survive projection.
 
 ## Anthropic image recovery
 
-`src/server/responses/image-context-recovery.ts` checks the complete bounded 413 payload again
-before a summary send, because the earlier small probe can omit a trailing refusal code.
+`src/server/responses/image-context-recovery.ts` requires a conclusive 413 probe before a
+summary send. A larger bounded delivery read can still project a trailing refusal code.
 A refusal on the summary stops the image resend. Already observed summary usage still settles
 its physical-send receipt before fixed error projection, and internal summary text never becomes
 the requested answer. A parser failure cannot erase an already recognized refusal code.

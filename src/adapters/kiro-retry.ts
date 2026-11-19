@@ -12,12 +12,14 @@ import {
   carryReplayRefusal,
   carryReplayRefusalToClient,
   fetchWithAttemptDeadline,
+  hasNoRetryDirective,
   hasUpstreamReplayRefusal,
   isAutomaticReplayBlocked,
   isConnectionResetError,
   isReplayRefusalProjection,
   observedReplayRefusalCode,
   projectReplayRefusal,
+  replayRefusalBodyCode,
   retryBackoffDelayMs,
   sleepWithAbort,
 } from "../lib/upstream-retry";
@@ -269,15 +271,24 @@ async function inspectEndpointHttpFailure(
 
 export async function normalizeFinalKiroHttpError(res: Response, signal?: AbortSignal): Promise<Response> {
   if (isReplayRefusalProjection(res)) return res;
-  const refusalCode = observedReplayRefusalCode(res);
+  let refusalCode = observedReplayRefusalCode(res);
   if (refusalCode !== undefined) {
     cancelResponseBodyBestEffort(res);
     return carryReplayRefusal(res, projectReplayRefusal(refusalCode));
   }
   const normalized = await normalizeUpstreamHttpErrorResponse(res, {
     signal,
-    formatMessage: payloadText => safeKiroHttpErrorMessage(res.status, res.headers, payloadText),
+    formatMessage: payloadText => {
+      // The wire directive settled replay at headers. The bounded display read can still
+      // recover the exact public code from the final response.
+      if (hasNoRetryDirective(res)) refusalCode = replayRefusalBodyCode(payloadText);
+      return safeKiroHttpErrorMessage(res.status, res.headers, payloadText);
+    },
   });
+  if (refusalCode !== undefined) {
+    cancelResponseBodyBestEffort(normalized);
+    return carryReplayRefusal(res, projectReplayRefusal(refusalCode));
+  }
   return carryReplayRefusalToClient(res, normalized);
 }
 

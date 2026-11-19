@@ -933,7 +933,7 @@ async function peekBodyText(res: Response, maxBytes: number, deadlineMs: number,
  * "Too many tokens, please wait" is a throttle that the retry exists for.
  */
 async function observeRetryBody(res: Response, signal?: AbortSignal, checkOverflow = true): Promise<"clear" | "refusal" | "overflow" | "inconclusive"> {
-  if ((res.headers.get("content-type") ?? "").includes("text/event-stream")) return "inconclusive";
+  if ((res.headers.get("content-type") ?? "").toLowerCase().includes("text/event-stream")) return "inconclusive";
   try {
     const { text, complete } = await withPausedResponseHeaderDeadline(signal,
       () => peekBodyText(res, CONTEXT_OVERFLOW_PEEK_BYTES, CONTEXT_OVERFLOW_PEEK_MS, signal));
@@ -942,8 +942,10 @@ async function observeRetryBody(res: Response, signal?: AbortSignal, checkOverfl
       wireReplayRefusals.set(res, code);
       return "refusal";
     }
+    // A gateway may omit or mislabel the media type on an HTTP SSE error.
+    if (!complete || /^(?:(?:event|id|retry)?:[^\n]*\n)*data:[ \t]*\{/.test(text.trimStart())) return "inconclusive";
     if (checkOverflow && text.length > 0 && isDefiniteContextOverflow(res.status, text, retryContextOverflowMessage)) return "overflow";
-    return complete ? "clear" : "inconclusive";
+    return "clear";
   } catch {
     return "inconclusive";
   }
@@ -1050,8 +1052,9 @@ export async function fetchWithTransientRetry(
     // for the origin; retrying it here is the automatic resend the marker exists to forbid.
     // An upstream that answers with the exact `x-should-retry: false` verdict has said the same
     // thing about its own failure, so the ladder stops and hands the response back untouched.
-    if (sent >= budget || res.ok || !isTransientUpstreamStatus(res.status) || isAutomaticReplayBlocked(res)) return res;
-    if (opts.abortSignal?.aborted || Date.now() - attemptStart > slowAttemptMs) return res;
+    if (!isTransientUpstreamStatus(res.status) || isAutomaticReplayBlocked(res) || opts.abortSignal?.aborted) return res;
+    // Later recovery owns its own budget. Give it the verdict even when this ladder has no send left.
+    const canRetry = sent < budget && Date.now() - attemptStart <= slowAttemptMs;
     const observation = await observeRetryBody(res, opts.abortSignal);
     if (observation === "refusal" || observation === "overflow") return res;
     if (observation === "inconclusive" && opts.replaySafe !== true) {
@@ -1062,7 +1065,7 @@ export async function fetchWithTransientRetry(
     }
     // Checked before cancelResponseBodyBestEffort so an already-aborted caller never receives
     // a response whose body we just cancelled.
-    if (opts.abortSignal?.aborted) return res;
+    if (!canRetry || opts.abortSignal?.aborted) return res;
     const instructedDelay = retryAfterDelayMs(res.headers);
     // The deadline is the CALLER'S, not this module's default. Reading the constant directly
     // broke it in both directions: a caller with a 30s budget slept the full 45s an upstream

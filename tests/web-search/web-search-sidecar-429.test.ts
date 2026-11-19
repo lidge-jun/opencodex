@@ -100,6 +100,19 @@ describe("web-search sidecar 429 replays", () => {
     expect(outcome).toEqual({ text: "", sources: [], error: "sidecar HTTP 429" });
   });
 
+  test("an inconclusive sidecar 429 records quota without another send", async () => {
+    let calls = 0;
+    const recorded: Array<number | string> = [];
+    const outcome = await searchWith(async () => {
+      if (++calls > 1) return sseDone();
+      return Response.json({ padding: "x".repeat(17_000), error: { code: "upstream_response_refused" } },
+        { status: 429, headers: { "retry-after": "0" } });
+    }, 30_000, value => recorded.push(value));
+    expect(calls).toBe(1);
+    expect(recorded).toEqual([429]);
+    expect(outcome).toEqual({ text: "", sources: [], error: "sidecar HTTP 429" });
+  });
+
   test("a persistent 429 ends with the 429 after bounded attempts", async () => {
     let calls = 0;
     const outcome = await searchWith(async () => {

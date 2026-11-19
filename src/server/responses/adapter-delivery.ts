@@ -72,6 +72,7 @@ export async function deliverAdapterResponse(
     responseStateOptions,
   } = requestState;
   const { upstreamResponse, upstream, cleanupUpstreamAbort, localUpstream, thinkingSignatureRecovery, refetchThinkingSignature } = adapterExchange;
+  const replayAllowed = !isAutomaticReplayBlocked(upstreamResponse);
   const {
     terminalGuardEnabled,
     fetchTerminalGuardContinuation,
@@ -183,7 +184,7 @@ export async function deliverAdapterResponse(
       }
     })();
     const recoveredEvents = recoverThinkingSignature(initialEventStream);
-    const eventStream = terminalGuardEnabled
+    const eventStream = terminalGuardEnabled && replayAllowed
       ? guardTerminalEventStream({
           parsed,
           firstEvents: recoveredEvents,
@@ -197,7 +198,7 @@ export async function deliverAdapterResponse(
     // expert model, and re-dispatches the worker. Sits inside the empty-completion guard so an
     // advisor-only turn never reads as an empty completion, and outside the bridge so the
     // synthetic call never reaches the client.
-    const advisorStream = parsed._advisorGuard
+    const advisorStream = replayAllowed && parsed._advisorGuard
       ? parsed._advisorGuard({
           parsed,
           translatorBudget,
@@ -214,7 +215,7 @@ export async function deliverAdapterResponse(
           firstEvents: advisorStream,
           continuation: fetchGuardedEmptyCompletionRetry,
           preserveRetryError: preserveEmptyCompletionRetryError,
-          replayAllowed: !isAutomaticReplayBlocked(upstreamResponse),
+          replayAllowed,
         })
       : advisorStream;
     const catalogGuardedEventStream = guardEmptyToolCatalogStream(completionGuardedEventStream, clientToolCatalog, translatorBudget);
@@ -343,7 +344,7 @@ export async function deliverAdapterResponse(
         recoveredEvents.push(event);
       }
       let guardedEvents: AdapterEvent[];
-      if (terminalGuardEnabled) {
+      if (terminalGuardEnabled && replayAllowed) {
         guardedEvents = [];
         for await (const event of guardTerminalEventStream({
           parsed,
@@ -356,7 +357,7 @@ export async function deliverAdapterResponse(
         guardedEvents = recoveredEvents;
       }
       // Optional advisor guard — same semantics as the streaming branch above.
-      if (parsed._advisorGuard) {
+      if (replayAllowed && parsed._advisorGuard) {
         const advisorEvents: AdapterEvent[] = [];
         for await (const event of parsed._advisorGuard({
           parsed,
@@ -372,7 +373,7 @@ export async function deliverAdapterResponse(
           firstEvents: (async function* () { yield* guardedEvents; })(),
           continuation: fetchGuardedEmptyCompletionRetry,
           preserveRetryError: preserveEmptyCompletionRetryError,
-          replayAllowed: !isAutomaticReplayBlocked(upstreamResponse),
+          replayAllowed,
         })) events.push(event);
       } else {
         events = guardedEvents;

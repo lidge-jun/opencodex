@@ -73,7 +73,11 @@ export function responsesFailedUsageResponse(onBodyRead: () => void, status: num
   const response = new Response(body, { status, headers: { "content-type": "application/json", ...headers } });
   Object.defineProperty(response, "body", {
     configurable: true,
-    get() { onBodyRead(); return body; },
+    get() {
+      onBodyRead();
+      // A retry-safety probe can tee the response before delivery takes its reader.
+      return Reflect.get(Response.prototype, "body", response);
+    },
   });
   return response;
 }

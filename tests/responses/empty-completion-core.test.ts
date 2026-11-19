@@ -480,7 +480,7 @@ describe("empty-completion core integration", () => {
     expect(runTurnCalls).toBe(1);
   });
 
-  test("an identical empty retry still receives terminal-guard repair", async () => {
+  test.each([false, true])("terminal-guard repair after an empty retry honors the reply's header veto (%s)", async veto => {
     attemptEvents = [
       [{ type: "done" }],
       [{ type: "text_delta", text: "我接下来会修改相关文件。" }, { type: "done" }],
@@ -493,6 +493,15 @@ describe("empty-completion core integration", () => {
     ];
     const guarded = config("test-http");
     guarded.providers.fixture!.terminalContinuationGuard = true;
+    if (veto) {
+      const provider = guarded.providers.fixture as OcxProviderConfig & { fetch: typeof fetch };
+      const original = provider.fetch;
+      provider.fetch = (async (...args) => {
+        const response = await original(...args);
+        if (httpCalls === 2) response.headers.set("x-should-retry", "false");
+        return response;
+      }) as typeof fetch;
+    }
     const req = new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -508,6 +517,12 @@ describe("empty-completion core integration", () => {
     const response = await handleResponses(req, guarded, { model: "", provider: "" });
     const body = await response.text();
 
+    if (veto) {
+      expect(httpCalls).toBe(2);
+      expect(builtBodies).toHaveLength(1);
+      expect(body).toContain('"retryable":false');
+      return;
+    }
     expect(httpCalls).toBe(3);
     expect(builtBodies).toHaveLength(2);
     expect(builtBodies[1]).not.toBe(builtBodies[0]);
