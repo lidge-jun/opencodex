@@ -117,7 +117,8 @@ export function resolveCodingAgentBinary(
   which: WhichFn = whichFromPath,
 ): string | undefined {
   const cached = binaryCache.get(profile.providerId);
-  if (cached) return cached;
+  // A package update can replace a previously resolved path with a launcher shim.
+  if (cached && (profile.providerId !== "claude-cli" || which("claude") === cached)) return cached;
   let dispatcher: string | undefined;
   for (const candidate of profile.binaryCandidates) {
     const resolved = which(candidate);

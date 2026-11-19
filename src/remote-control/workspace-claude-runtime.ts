@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { remoteWorkspaceDeveloperInstructions } from "./workspace-tools";
+import { findNativePosixClaude, supportsClaudeShim } from "../claude/native-executable";
 import { findExecutableOnPath } from "./workspace-executable";
 import {
   remoteWorkspaceProcessInvocation,
@@ -77,7 +78,7 @@ export class ClaudeRemoteWorkspaceRuntimeFactory implements RemoteWorkspaceRunti
   async available(): Promise<{ available: boolean; version?: string; reason?: string }> {
     const command = this.options.command && this.options.command.length > 0
       ? this.options.command[0]
-      : findExecutableOnPath("claude");
+      : (supportsClaudeShim() ? findNativePosixClaude() : findExecutableOnPath("claude"));
     return command
       ? { available: true, ...(this.options.version ? { version: this.options.version } : {}) }
       : { available: false, reason: "Claude Code is not installed on this Hub." };
@@ -87,7 +88,7 @@ export class ClaudeRemoteWorkspaceRuntimeFactory implements RemoteWorkspaceRunti
     const configuredCommand = this.options.command && this.options.command.length > 0
       ? [...this.options.command]
       : null;
-    const executable = configuredCommand?.[0] ?? findExecutableOnPath("claude");
+    const executable = configuredCommand?.[0] ?? (supportsClaudeShim() ? findNativePosixClaude() : findExecutableOnPath("claude"));
     if (!executable) throw new Error("Claude Code is not installed on this Hub");
     const commandPrefix = configuredCommand ?? [executable];
     const isolation = mkdtempSync(join(tmpdir(), "ocx-remote-claude-"));

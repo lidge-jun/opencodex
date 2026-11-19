@@ -18,7 +18,7 @@ export function skipsCodexShimAutoRestore(command: string | undefined, args: str
   // A Home's link-bound disconnect (--expect-link) must refuse a mismatch with nothing changed, repairs included.
   if (command === "disconnect" && args.some(arg => arg === "--expect-link" || arg.startsWith("--expect-link="))) return true;
   // The launcher owns shim handoff after classifying routing, including native fast paths.
-  if (command === "codex") return true;
+  if (command === "codex" || command === "claude-shim" || (command === "internal" && args[1] === "claude-shim-launch")) return true;
   // Exec admission only observes the selected target; it must never repair a shim first.
   if (command === "internal" && args[1] === "codex-exec-target") return true;
   // `lab` is read-only inspection; it must not trigger shim side effects.

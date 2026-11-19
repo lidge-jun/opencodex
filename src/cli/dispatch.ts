@@ -609,6 +609,10 @@ const commandRunners: Record<string, CommandRunner> = {
     await windowsTrayCommand(deps.args.slice(1));
     return Number(process.exitCode ?? 0);
   },
+  "claude-shim": async deps => {
+    const { manageClaudeShim } = await import("../claude/command-shim");
+    return manageClaudeShim(deps.args.slice(1));
+  },
   "codex-shim": async deps => {
     const { codexShimStatus, diagnoseCodexShim, installCodexShimAsync, uninstallCodexShimAsync } = await import("../codex/shim");
     switch (deps.args[1]) {

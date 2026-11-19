@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { claudeConfigDir } from "./gateway-cache";
+import { findNativePosixClaude, supportsClaudeShim } from "./native-executable";
 import { commandInvocation } from "../lib/win-exec";
 
 const VERSION_PROBE_TIMEOUT_MS = 1_500;
@@ -30,7 +31,9 @@ export function probeInstalledClaudeCodeVersion(): Promise<string | null> {
   const now = performance.now();
   if (cachedProbe?.key === key && cachedProbe.expiresAt > now) return cachedProbe.result;
 
-  const invocation = commandInvocation("claude", ["--version"]);
+  const executable = supportsClaudeShim() ? findNativePosixClaude() : "claude";
+  if (!executable) return Promise.resolve(null);
+  const invocation = commandInvocation(executable, ["--version"]);
   const result = new Promise<string | null>(resolve => {
     const child = execFile(invocation.file, invocation.args, { ...invocation.options, maxBuffer: 4096 }, (error, stdout) => {
       clearTimeout(deadline);

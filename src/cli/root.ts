@@ -42,6 +42,7 @@ export function parseCliHead(argv: string[]): CliHead {
   const command = argv[0];
   const args = argv;
   // Codex owns its forwarded grammar; wrapper documentation is `ocx help codex`.
+  if (command === "internal" && args[1] === "claude-shim-launch") return { kind: "command", command, args };
   if (command === "codex") return { kind: "command", command, args };
   if (command === "update" && isOrchestratedUpdateArgv(args.slice(1))) return { kind: "command", command, args };
   if (command === "--version" || command === "-v" || command === "version") {

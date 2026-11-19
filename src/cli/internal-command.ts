@@ -31,6 +31,13 @@ function optionValue(args: readonly string[], name: string): string | undefined 
  */
 export async function handleInternalCommand(args: readonly string[], execBoundary: CodexExecBoundaryAsyncDeps = {}): Promise<number> {
   const sub = args[0];
+  if (sub === "claude-shim-launch") {
+    if (args[1] !== "--") return 2;
+    const { hasManagedClaudeShim } = await import("../claude/command-shim");
+    if (!hasManagedClaudeShim()) { console.error("Claude shim is unavailable or changed. Check ocx claude-shim status."); return 1; }
+    const { cmdClaude } = await import("./claude");
+    return cmdClaude(args.slice(2), true);
+  }
   if (sub === "codex-exec-target") {
     const bundled = args[1] === "--bundle-root";
     const root = bundled ? args[2] : undefined;
