@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { buildClientConfig } from "../../src/clients/config-export";
 import type { ExportModel, PiGeneratedConfig } from "../../src/clients/config-export/contracts";
 import { PI_SYNC_ROUTE, refreshPiThroughServer } from "../../src/cli/pi-sync";
+import { catalogRefreshClientIds } from "../../src/integrations/catalog-refresh";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { PI_SYNC_PATH, setIntegrationMutationFlightTestHooks, setIntegrationPathTestHooks } from "../../src/server/management/integration-routes";
@@ -82,10 +83,12 @@ describe("ocx sync refreshes Pi through the serving proxy", () => {
 
   test("the CLI's local refresh list no longer rebuilds Pi", () => {
     const source = readFileSync(repoPath("src", "cli", "sync-command.ts"), "utf8");
-    const list = /refreshOwnedCatalogIntegrations\([\s\S]*?\}, \[([^\]]*)\]\)/.exec(source)?.[1] ?? "";
-    expect(list).toContain('"mcode"');
-    expect(list).not.toContain('"pi"');
-    expect(source).toContain("refreshPiThroughServer");
+    expect(source).toMatch(/refreshOwnedCatalogIntegrations\(\{[\s\S]*?\},\s*catalogRefreshClientIds\("cliSync"\)\)/);
+    const list = catalogRefreshClientIds("cliSync");
+    expect(list).toContain("mcode");
+    expect(list).toContain("dsh");
+    expect(list).not.toContain("pi");
+    expect(source).toMatch(/await refreshPiThroughServer\(/);
     expect(PI_SYNC_ROUTE).toBe(PI_SYNC_PATH);
   });
 });

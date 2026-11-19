@@ -166,7 +166,7 @@ export function carryReplayRefusal<T extends Response>(source: Response, rewrapp
 }
 
 // 1 initial + 2 retries: the pool may hold more than one stale socket.
-const RESET_RETRY_MAX_ATTEMPTS = 3;
+export const RESET_RETRY_MAX_ATTEMPTS = 3;
 const RESET_RETRY_BASE_DELAY_MS = 150;
 const RESET_RETRY_MAX_DELAY_MS = 1_000;
 
@@ -408,7 +408,7 @@ export function isConnectionResetError(err: unknown): boolean {
     || msg.includes("connection reset by peer");
 }
 
-function retryAfterDelayMs(headers: Headers): number | undefined {
+export function retryAfterDelayMs(headers: Headers): number | undefined {
   const raw = headers.get("retry-after")?.trim();
   if (!raw) return undefined;
   const seconds = Number(raw);
@@ -534,7 +534,7 @@ export interface ResetRetryOptions {
    * uncounted but UNCOUNTABLE: the callback existed on a type those call sites never reach.
    */
   onSendsConsumed?: ((sends: number) => void) & {
-    beforeSend?: () => boolean;
+    beforeSend?: (reserveRetrySpend?: boolean) => boolean;
     close?: () => void;
     execute?: <T>(run: () => Promise<T>) => Promise<T>;
   };
@@ -561,6 +561,12 @@ export interface ResetRetryOptions {
 }
 
 export interface TransientRetryOptions extends ResetRetryOptions {
+  /** Require a fresh spend reservation for replacement sends when this ladder is enforcing spend. */
+  reserveRetrySpend?: () => boolean;
+  /** Read the preceding paced response under the receiving path's body policy. */
+  readRetryResponseBody?: PacedRetryBodyReader;
+  /** This leg starts with a recovery send. Keep the preceding response until admission. */
+  retryFrom?: Response;
   /** Test seam: per-attempt slow budget override (defaults to TRANSIENT_RETRY_SLOW_ATTEMPT_MS). */
   slowAttemptMs?: number;
   /**
@@ -572,6 +578,24 @@ export interface TransientRetryOptions extends ResetRetryOptions {
    * it; a caller that can genuinely wait longer says so and is not cut short.
    */
   retryAfterCeilingMs?: number;
+}
+
+export type PacedRetryBodyReader = (response: Response, signal?: AbortSignal) => Promise<Uint8Array<ArrayBuffer>>;
+
+type PacedRetryRetention = (signal?: AbortSignal, readBody?: PacedRetryBodyReader) => Promise<Response>;
+const pacedRetryResponses = new WeakMap<Response, PacedRetryRetention>();
+
+/** The pacing owner can materialize its response and return its body lease before a retry. */
+export function registerPacedRetryResponse(response: Response, retain: PacedRetryRetention): void {
+  pacedRetryResponses.set(response, retain);
+}
+
+export function retainPacedRetryResponse(
+  response: Response,
+  signal?: AbortSignal,
+  readBody?: PacedRetryBodyReader,
+): Response | Promise<Response> {
+  return pacedRetryResponses.get(response)?.(signal, readBody) ?? response;
 }
 
 /** `offline-resend` is the single send after an offline wait (#7958), never a reset retry. */
@@ -846,10 +870,17 @@ export async function fetchWithTransientRetry(
   // `transientRetryOn5xx` policy is the first one that does, and multiplying load against an
   // already-failing provider is worse than not retrying at all.
   let sent = 0;
+  let retainedResponse = opts.retryFrom;
+  const adoptReplacement = (response: Response): Response => {
+    if (retainedResponse && retainedResponse !== response) cancelResponseBodyBestEffort(retainedResponse);
+    retainedResponse = undefined;
+    return response;
+  };
   const countedFetch: ReplayableFetch = (recovery) => {
     // Incremented BEFORE the await so a rejected send still consumes budget; counting only
     // successes would let a reset storm loop without bound.
-    if (opts.onSendsConsumed?.beforeSend && !opts.onSendsConsumed.beforeSend()) throw new SendBudgetExhaustedError(opts.destination ?? (opts.label ? errorDestinationLabel(opts.label) : undefined));
+    const reserveRetrySpend = retainedResponse !== undefined || sent > 0 && opts.reserveRetrySpend?.() === true;
+    if (opts.onSendsConsumed?.beforeSend?.(reserveRetrySpend) === false) throw new SendBudgetExhaustedError(opts.destination ?? (opts.label ? errorDestinationLabel(opts.label) : undefined));
     sent += 1;
     const run = () => doFetch(recovery);
     return opts.onSendsConsumed?.execute ? opts.onSendsConsumed.execute(run) : run();
@@ -877,14 +908,14 @@ export async function fetchWithTransientRetry(
   let attemptStart = Date.now();
   // Time spent waiting for the network to return is not part of the resend's own attempt.
   const offlineWait = opts.offlineWait;
-  let res = await fetchWithResetRetry(countedFetch, {
+  let res = adoptReplacement(await fetchWithResetRetry(countedFetch, {
     ...innerResetOptions(),
     ...(offlineWait ? { offlineWait: async (error: unknown, signal?: AbortSignal) => {
       const resumed = await offlineWait(error, signal);
       if (resumed) attemptStart = Date.now();
       return resumed;
     } } : {}),
-  });
+  }));
   for (let attempt = 0; sent < budget; attempt++) {
     // A non-replayable gateway status was settled after the request body had already left
     // for the origin; retrying it here is the automatic resend the marker exists to forbid.
@@ -921,14 +952,16 @@ export async function fetchWithTransientRetry(
       headers: res.headers,
       retryAfterIsLowerBound: true,
     });
-    cancelResponseBodyBestEffort(res);
-    // Throws on abort (see sleepWithAbort): the rejection propagates, and the body we just
-    // cancelled belonged to a response we were discarding anyway.
+    // Funded retries can lose spend admission during backoff. Keep the upstream refusal
+    // readable until the replacement is admitted.
+    if (opts.reserveRetrySpend?.()) {
+      retainedResponse = await retainPacedRetryResponse(res, opts.abortSignal, opts.readRetryResponseBody);
+    } else cancelResponseBodyBestEffort(res);
     await sleepWithAbort(delay, opts.abortSignal);
     attemptStart = Date.now();
     transientStatuses.push(res.status);
     try {
-      res = await fetchWithResetRetry(countedFetch, innerResetOptions(), "transient-5xx");
+      res = adoptReplacement(await fetchWithResetRetry(countedFetch, innerResetOptions(), "transient-5xx"));
     } catch (err) {
       // Keep the prior 5xx evidence attached: the origin already responded, so
       // this rejection is not pre-connection and must not classify as neutral.
@@ -939,7 +972,13 @@ export async function fetchWithTransientRetry(
   }
   // Budget exhausted: the last response is returned with its body intact.
   return res;
+  } catch (err) {
+    if (!(err instanceof SendBudgetExhaustedError) || !retainedResponse) throw err;
+    const preceding = retainedResponse;
+    retainedResponse = undefined;
+    return preceding;
   } finally {
+    if (retainedResponse) cancelResponseBodyBestEffort(retainedResponse);
     try { opts.onSendsConsumed?.(sent); } finally { opts.onSendsConsumed?.close?.(); }
   }
 }

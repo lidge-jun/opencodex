@@ -8,6 +8,10 @@ import type { ProviderRequestSlot } from "../providers/request-pacing";
 /** Metadata about the caller's incoming request, for auth-forwarding adapters. */
 export interface IncomingMeta {
   headers: Headers;
+  /** Client ingress transport, carried from the Responses bridge. */
+  inboundTransport?: "websocket";
+  /** Internal ACP refusal signal from the original HTTP turn. */
+  agyAcpUnattendedHttpTurn?: boolean;
   /** Canonical routed provider identity for provider-specific wire fields. */
   providerName?: string;
   /** Trusted caller has durable structural replay ownership for earlier completed tools. */
@@ -21,13 +25,26 @@ export interface IncomingMeta {
   /** Combo children must surface a pre-output refusal so the selector can try the next target. */
   comboAttempt?: boolean;
   /**
+   * Subagent fallback selected this route (request-prepare records the decision). A typed fact, never
+   * inferred from headers or models; the Antigravity ACP provider refuses such turns (plan 080).
+   */
+  subagentFallback?: boolean;
+  /**
+   * A combo's internal decision call (JEV) dispatched this turn. Combo machinery, not a person; it is
+   * not a combo member, so it has its own fact. The Antigravity ACP provider refuses it (plan 080).
+   */
+  internalDecisionCall?: boolean;
+  /**
    * Provider-scoped fetch prepared by the Responses router. Stateful transports that emit more
    * than one physical HTTP request per logical turn must reuse it so every request participates in
    * the same pacing queue and custom provider fetch seam.
+   * Native sockets require explicit socket-route authority; HTTP transparency is insufficient.
    */
   providerFetch?: typeof globalThis.fetch;
   /** Synchronous selection fence for adapter-owned sends; call after async setup, before dispatch. */
   beforePhysicalSend?: () => void;
+  /** Recheck credential authority without recording a physical dispatch. */
+  beforeCredentialSend?: () => void;
   /**
    * Image-normalization ladder bias for upstream-413 tightened retries: every image
    * starts one tier lower (devlog/260714_image_normalization_pipeline/030). Consumed by

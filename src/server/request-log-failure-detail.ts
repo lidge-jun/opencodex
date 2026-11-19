@@ -1,4 +1,5 @@
-import { upstreamValidationIssues } from "../lib/upstream-validation-detail";
+import { upstreamValidationIssues, type ValidationIssue } from "../lib/upstream-validation-detail";
+import { isDeveloperRoleRejection } from "../lib/developer-role-rejection";
 import { clientFacingModelText, errorDestinationText, providerErrorDestinationLabel } from "../lib/error-destination";
 import { knownModelIdentity } from "../lib/model-identity";
 /**
@@ -41,6 +42,40 @@ export function upstreamErrorIsLocal(logCtx: object): boolean {
   return localOnly.has(logCtx);
 }
 
+/** One attempt's local verdict on a reused context: the proxy-text mark and the detail recorded with it. */
+export interface LocalFailureState { local: boolean; detail?: FailureDetail }
+
+/**
+ * End an attempt on a context the next attempt reuses: drop its local verdict so the next attempt's
+ * upstream evidence counts again. Returns the verdict so a rolled-back attempt can restore it.
+ */
+export function takeLocalFailureState(logCtx: { failureDetail?: FailureDetail }): LocalFailureState {
+  if (!localOnly.delete(logCtx)) return { local: false };
+  const detail = logCtx.failureDetail;
+  delete logCtx.failureDetail;
+  return detail ? { local: true, detail } : { local: true };
+}
+
+/** Put back the verdict a rolled-back attempt replaced; a non-local verdict only clears the mark. */
+export function restoreLocalFailureState(logCtx: { failureDetail?: FailureDetail }, state: LocalFailureState): void {
+  if (!state.local) {
+    localOnly.delete(logCtx);
+    return;
+  }
+  localOnly.add(logCtx);
+  if (state.detail) logCtx.failureDetail = state.detail;
+}
+
+/** Carry a selected attempt's local verdict across request-log contexts. */
+export function carryLocalFailureState(
+  source: { upstreamError?: string; failureDetail?: FailureDetail },
+  target: { upstreamError?: string; failureDetail?: FailureDetail },
+): void {
+  const local = upstreamErrorIsLocal(source);
+  restoreLocalFailureState(target, { local, detail: source.failureDetail });
+  if (local) target.upstreamError = source.upstreamError;
+}
+
 const INCOMPLETE_REASONS: Readonly<Record<string, readonly [string, FailureDetailCode]>> = {
   max_output_tokens: ["Output reached the requested token limit (max_output_tokens)", "output_limit"],
   upstream_stall_timeout: ["Upstream stalled: no data for the stall-timeout window (upstream_stall_timeout)", "stall_timeout"],
@@ -80,20 +115,36 @@ export function projectLocalModelRefusalLog(
     || decision.selected && (!known(decision.selected.model) || !providerKnown(decision.selected.provider)))) logCtx.routeDecision = undefined;
 }
 
-/** Capture bounded schema facts before a 4xx is replaced by the client-facing error policy. */
-export function recordUpstreamValidationDetail(logCtx: { failureDetail?: FailureDetail }, status: number, payload: unknown): void {
+const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+/**
+ * The closed pair a developer-role rejection records (#8864); the dashboard already renders it. A fresh
+ * array per row, because a valid list is stored by reference and must not be shared between rows.
+ */
+const developerRoleValidation = (): ValidationIssue[] => [{ field: "messages.role", type: "enum" }];
+
+/**
+ * Capture bounded schema facts before a 4xx is replaced by the client-facing error policy. Only a caller
+ * holding the provider's own body sets `providerBody`, which also reads its message once for a
+ * developer-role rejection; a body this proxy formatted keeps validation-only capture.
+ */
+export function recordUpstreamValidationDetail(
+  logCtx: { failureDetail?: FailureDetail }, status: number, payload: unknown, options: { providerBody?: boolean } = {},
+): void {
   if (status < 400 || status >= 500) return;
   let parsed = payload;
   if (typeof payload === "string") {
     if (payload.length > 256 * 1024) return;
     try { parsed = JSON.parse(payload); } catch { return; }
   }
-  const validation = upstreamValidationIssues(parsed);
+  const record = isRecord(parsed) ? parsed : undefined;
+  const nested = record && isRecord(record.error) ? record.error : undefined;
+  const message = typeof nested?.message === "string" ? nested.message
+    : typeof record?.message === "string" ? record.message : typeof record?.error === "string" ? record.error : undefined;
+  // Read once to choose the closed pair; the message itself is dropped here.
+  const validation = upstreamValidationIssues(parsed)
+    ?? (options.providerBody && isDeveloperRoleRejection(status, message) ? developerRoleValidation() : undefined);
   if (!validation) return;
-  const record = parsed as Record<string, unknown>;
-  const nested = record.error !== null && typeof record.error === "object" && !Array.isArray(record.error)
-    ? record.error as Record<string, unknown> : undefined;
-  logCtx.failureDetail = boundedFailureDetail({ code: "provider_error", type: nested?.type ?? record.type, validation });
+  logCtx.failureDetail = boundedFailureDetail({ code: "provider_error", type: nested?.type ?? record?.type, validation });
 }
 
 /**
@@ -112,7 +163,7 @@ export function recordUpstreamProviderErrorDetail(
 ): void {
   if (status < 400 || status >= 600) return;
   const before = logCtx.failureDetail;
-  recordUpstreamValidationDetail(logCtx, status, payload);
+  recordUpstreamValidationDetail(logCtx, status, payload, { providerBody: true });
   if (logCtx.failureDetail !== before) { providerDetails.set(logCtx, logCtx.failureDetail!); return; }
   let type = response ? providerFailureDetailOf(response)?.type : undefined;
   if (type === undefined) {

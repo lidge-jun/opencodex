@@ -11,6 +11,7 @@ import type {
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { prepareResponsesRequest } from "./request-prepare";
 import { prepareResponsesTransport } from "./request-transport";
+import { initialHostedAdvisorSpendRefusal } from "./hosted-advisor-spend";
 import { prepareResponsesSidecarAuth } from "./request-sidecar-auth";
 import { createResponsesEffects } from "./response-effects";
 import { createResponsesSendBudget } from "./request-send-budget";
@@ -27,6 +28,7 @@ import { formatErrorResponse } from "../../bridge";
 import { InvalidRetainedCompactionSummary, prepareCompactionRetention } from "./compaction-retention";
 import { responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
 import { markResponseNonReplayable } from "../../lib/upstream-retry";
+import { agyAcpPreflightResponse } from "./agy-acp-preflight";
 
 /** Compose request phases while retaining the original admission-finally ownership. */
 export async function handleResponsesInner(
@@ -48,6 +50,15 @@ export async function handleResponsesInner(
     if (requestState instanceof Response) return requestState;
     const transportState = await prepareResponsesTransport(requestContext, admissionState, requestState);
     if (transportState instanceof Response) return markProxyError(transportState);
+    const agyAcpRefusal = agyAcpPreflightResponse({
+      adapterName: transportState.runTurnAdapter.name, requestHeaders: req.headers,
+      forwardHeaders: requestState.selectedForwardHeaders, body: requestState.parsed._rawBody, comboAttempt: options.comboAttempt === true,
+      internalDecisionCall: options.internalDecisionCall === true, subagentFallback: requestState.subagentFallbackSelected,
+      inboundTransport: options.inboundTransport, unattendedHttpTurn: options.agyAcpUnattendedHttpTurn, logCtx,
+    });
+    if (agyAcpRefusal) return agyAcpRefusal;
+    const hostedAdvisorRefusal = initialHostedAdvisorSpendRefusal(requestContext, requestState, transportState);
+    if (hostedAdvisorRefusal) return hostedAdvisorRefusal;
     if (transportState.runTurnAdapter.name === "claude-cli") {
       const instructionImage = options.chatInstructionImage || options.responsesInstructionImage
         || responsesHasInstructionImage(requestState.parsed._rawBody)

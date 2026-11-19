@@ -6,7 +6,8 @@ import { boundedMessagesDisplayCount, ownedAnthropicErrorPayload, ownedAnthropic
 import { attachComboFailureEvidence, isProxyError, markProxyError } from "../lib/client-error-body";
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused } from "../oauth/account-auto-pause";
 import { createPhysicalSendReporter, reportDispatchSends, type RequestExecutionBudget, type SingleUseDispatchPermit } from "../lib/request-execution-budget";
-import { createInferenceSendBudget } from "./inference/context";
+import { createInferenceSendBudget, expandInferenceOAuthSendBudget } from "./inference/context";
+import { GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST } from "../oauth/generic-account-failover";
 /**
  * Managed native Messages lane (PF-08, behind `protocols.rollout.managedMessagesNative`).
  *
@@ -49,6 +50,7 @@ import type { AdmissionLease } from "../lib/admission";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { classifyError } from "../lib/errors";
 import { relaySseWithPayloadRewrite } from "./sse-payload-rewrite";
+import { EMPTY_BYTES, joinSseFrameBytes, sseDelimiterLengthAt } from "./sse-frame-buffer";
 import { redactSecretString } from "../lib/redact";
 import { formatClientRetryAfter, resolveClientRetryAfter } from "../lib/retry-after";
 import { enrichOpenCodeZenUpstreamMessage } from "../providers/opencode-zen-rate-limit";
@@ -242,8 +244,10 @@ export function createNativeMessagesComboSource(input: Omit<HandleNativeMessages
   };
 }
 
-/** Relay an upstream body unchanged, recording first output on its first non-empty chunk once `ready`. */
-function observeFirstChunk(body: ReadableStream<Uint8Array>, onFirst: () => void, ready = () => true): ReadableStream<Uint8Array> {
+/** Relay bytes unchanged, observing raw progress and recording first output once `ready`. */
+function observeNativeMessagesChunks(
+  body: ReadableStream<Uint8Array>, onFirst?: () => void, ready = () => true, onChunk?: () => void,
+): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   let seen = false;
   return new ReadableStream<Uint8Array>({
@@ -253,9 +257,12 @@ function observeFirstChunk(body: ReadableStream<Uint8Array>, onFirst: () => void
         controller.close();
         return;
       }
-      if (!seen && value.byteLength > 0 && ready()) {
-        seen = true;
-        onFirst();
+      if (value.byteLength > 0) {
+        onChunk?.();
+        if (!seen && onFirst && ready()) {
+          seen = true;
+          onFirst();
+        }
       }
       controller.enqueue(value);
     },
@@ -269,18 +276,34 @@ function observeFirstChunk(body: ReadableStream<Uint8Array>, onFirst: () => void
 const MODEL_ECHO_SCAN_BYTES = 64 * 1024;
 
 /** The `message_start` frame with `message.model` set to `model`, or undefined for any other frame. */
-function messageStartWithModel(frame: string, model: string): string | undefined {
-  const data = frame
-    .split("\n")
+function messageStartWithModel(frame: string, model: string): { text: string; canonicalError: boolean } | undefined {
+  const lines = frame.split(/\r\n|\r|\n/);
+  const data = lines
     .map(line => sseFieldValue(line, "data"))
     .filter((value): value is string => value !== null)
-    .join("");
+    .join("\n");
   if (!data) return undefined;
   let parsed: unknown;
   try { parsed = JSON.parse(data); } catch { return undefined; }
   if (!isRec(parsed) || parsed.type !== "message_start" || !isRec(parsed.message)) return undefined;
   parsed.message.model = model;
-  return `event: message_start\ndata: ${JSON.stringify(parsed)}\n\n`;
+  const replacement = `data: ${JSON.stringify(parsed)}`;
+  // Keep the original canonical framing for error-tagged starts. The final filter
+  // separately determines whether the upstream error tag qualifies for normalization.
+  const event = lines.map(line => sseFieldValue(line, "event")).findLast(value => value !== null);
+  if (event === "error") {
+    return { text: `event: message_start\n${replacement}\n\n`, canonicalError: true };
+  }
+  let replaced = false;
+  const text = frame.replace(/[^\r\n]*(?:\r\n|\r|\n)/g, line => {
+    const ending = line.match(/(?:\r\n|\r|\n)$/)![0];
+    if (sseFieldValue(line.slice(0, -ending.length), "data") === null) return line;
+    // Retain a field on this line so adjacent CR and LF terminators cannot fuse.
+    if (replaced) return "data:" + ending;
+    replaced = true;
+    return replacement + ending;
+  });
+  return { text, canonicalError: false };
 }
 
 /**
@@ -288,56 +311,119 @@ function messageStartWithModel(frame: string, model: string): string | undefined
  * (`responsesSseToAnthropicSse` is given the requested model). Works on bytes: frames before and
  * including `message_start` are split on the blank line, and everything after is relayed as is.
  */
-function echoRequestedModel(body: ReadableStream<Uint8Array>, model: string, frames: MessagesSseFrameContext): ReadableStream<Uint8Array> {
+export function echoRequestedModel(body: ReadableStream<Uint8Array>, model: string, frames: MessagesSseFrameContext): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
-  let pending = new Uint8Array(0);
+  let carry = EMPTY_BYTES;
+  let carryLength = 0;
+  let scanFrom = 0;
   let scanning = true;
   let scanned = 0;
-  const frameEnd = (bytes: Uint8Array): number => {
-    for (let i = 0; i + 1 < bytes.length; i++) if (bytes[i] === 10 && bytes[i + 1] === 10) return i + 2;
-    return -1;
+  let pendingLf: "relay" | "drop" | undefined;
+  const take = (suffix: Uint8Array): Uint8Array => {
+    if (carryLength === 0) return suffix;
+    const frame = joinSseFrameBytes([carry.subarray(0, carryLength), suffix]);
+    carry = EMPTY_BYTES;
+    carryLength = 0;
+    return frame;
+  };
+  const retain = (suffix: Uint8Array): void => {
+    if (suffix.byteLength === 0) return;
+    const nextLength = carryLength + suffix.byteLength;
+    if (nextLength > carry.byteLength) {
+      const grown = new Uint8Array(Math.min(MODEL_ECHO_SCAN_BYTES, Math.max(1024, nextLength, carry.byteLength * 2)));
+      grown.set(carry.subarray(0, carryLength));
+      carry = grown;
+    }
+    carry.set(suffix, carryLength);
+    carryLength = nextLength;
   };
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        if (pending.length > 0) controller.enqueue(pending);
-        pending = new Uint8Array(0);
-        controller.close();
-        return;
-      }
-      if (!scanning) {
-        controller.enqueue(value);
-        return;
-      }
-      scanned += value.byteLength;
-      const joined = new Uint8Array(pending.length + value.byteLength);
-      joined.set(pending);
-      joined.set(value, pending.length);
-      pending = joined;
-      let end: number;
-      while (scanning && (end = frameEnd(pending)) !== -1) {
-        const frame = pending.subarray(0, end);
-        pending = pending.subarray(end);
-        const rewritten = messageStartWithModel(decoder.decode(frame), model);
-        if (rewritten !== undefined) {
-          const bytes = encoder.encode(rewritten);
-          if (messagesSseEchoRenamedError(decoder.decode(frame))) frames.register(bytes, { echoRenamedError: true });
+      // Keep reading until there is something to enqueue or the upstream closes.
+      while (true) {
+        const { done, value: chunk } = await reader.read();
+        if (done) {
+          if (carryLength > 0) controller.enqueue(take(EMPTY_BYTES));
+          controller.close();
+          return;
+        }
+        if (chunk.byteLength === 0) continue;
+        const scanBytes = Math.min(chunk.byteLength, MODEL_ECHO_SCAN_BYTES - scanned);
+        if (scanning) scanned += scanBytes;
+        let continuationBytes = 0;
+        let value = chunk;
+        let relayedLf = false;
+        if (pendingLf && chunk[0] === 10) {
+          relayedLf = pendingLf === "relay";
+          if (relayedLf) controller.enqueue(chunk.subarray(0, 1));
+          continuationBytes = 1;
+          value = chunk.subarray(1);
+        }
+        pendingLf = undefined;
+        if (value.byteLength === 0) {
+          if (scanned === MODEL_ECHO_SCAN_BYTES) scanning = false;
+          if (relayedLf) return;
+          continue;
+        }
+        if (!scanning) {
+          controller.enqueue(value);
+          return;
+        }
+        const carried = carryLength;
+        const length = carried + Math.max(0, scanBytes - continuationBytes);
+        const byteAt = (index: number): number => index < carried ? carry[index]! : value[index - carried]!;
+        let start = 0;
+        let index = scanFrom;
+        while (index < length) {
+          const delimiter = sseDelimiterLengthAt(index, length, byteAt);
+          if (delimiter === undefined) break;
+          if (delimiter === 0) {
+            index += 1;
+            continue;
+          }
+          const end = index + delimiter;
+          const endsOnCr = end === length && byteAt(end - 1) === 13;
+          const frame = take(value.subarray(Math.max(0, start - carried), end - carried));
+          start = end;
+          index = end;
+          const decoded = decoder.decode(frame);
+          const rewritten = messageStartWithModel(decoded, model);
+          // A bare CR completes the frame now. A later LF belongs to that same delimiter.
+          if (endsOnCr) {
+            if (end - carried === value.byteLength) {
+              pendingLf = rewritten?.canonicalError ? "drop" : "relay";
+            } else if (rewritten?.canonicalError && value[end - carried] === 10) {
+              start += 1;
+            }
+          }
+          if (rewritten === undefined) {
+            controller.enqueue(frame);
+            continue;
+          }
+          const bytes = encoder.encode(rewritten.text);
+          if (rewritten.canonicalError && messagesSseEchoRenamedError(decoded)) frames.register(bytes, { echoRenamedError: true });
           controller.enqueue(bytes);
           scanning = false;
-        } else {
-          controller.enqueue(frame);
+          break;
         }
-      }
-      if (scanning && scanned > MODEL_ECHO_SCAN_BYTES) scanning = false;
-      if (!scanning && pending.length > 0) {
-        controller.enqueue(pending);
-        pending = new Uint8Array(0);
+        const suffix = value.subarray(Math.max(0, start - carried));
+        if (!scanning || scanned === MODEL_ECHO_SCAN_BYTES) {
+          scanning = false;
+          const remaining = take(suffix);
+          if (remaining.byteLength > 0) controller.enqueue(remaining);
+          if (relayedLf || start > 0 || remaining.byteLength > 0) return;
+          continue;
+        }
+        scanFrom = index - start;
+        retain(suffix);
+        if (relayedLf || start > 0) return;
       }
     },
     cancel(reason) {
+      carry = EMPTY_BYTES;
+      carryLength = 0;
       return reader.cancel(reason);
     },
   });
@@ -460,7 +546,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
   };
   // After preflight, first output waits for a content frame the log tap has seen.
   const watchFirstOutput = (body: ReadableStream<Uint8Array>) => onFirstOutput
-    ? observeFirstChunk(body, onFirstOutput, () => logCtx.generationStartedAt !== undefined) : body;
+    ? observeNativeMessagesChunks(body, onFirstOutput, () => logCtx.generationStartedAt !== undefined) : body;
   const localOAuthFailure = (error: unknown): Response | null => {
     if (error instanceof AnthropicAccountCooldownError) {
       const scope = error.routePosition === undefined ? "All Anthropic OAuth accounts" : "Anthropic OAuth accounts for this model route";
@@ -566,7 +652,15 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
   if (oauthBinding) logCtx.provider = formatAnthropicProviderForLog(route.providerName, oauthBinding.snapshot.accountId, config);
   const spendTracker = options.sendBudget ? undefined : attachRequestSpendTracker(req, logCtx);
   const physicalBudget = options.sendBudget ?? createInferenceSendBudget(req, logCtx);
+  // Freeze funding before any refusal cools an account; selection still checks live eligibility.
+  const fundedAccounts = oauthBinding ? Math.min(new Set([
+    oauthBinding.snapshot.accountId,
+    ...anthropicRoutingFor(oauthBinding.instance).getEligibleAnthropicAccounts(Date.now(), route.modelId),
+  ]).size, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST) : 0;
+  const oauthFailoverLimit = Math.max(ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST, fundedAccounts - 1);
+  if (oauthBinding) expandInferenceOAuthSendBudget(physicalBudget, fundedAccounts);
   // Observe-only spend is already booked by the tracker; count billing sends without booking again.
+  const priorSends = Math.max(0, physicalBudget.used - (options.comboDispatchPermit ? 1 : 0));
   let physicalSendsUsed = 0;
   let activeRequest: AnthropicMessagesPassthroughRequest;
   let retainedRequestBytes = 0;
@@ -638,6 +732,10 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
     options.sendBudget ? Math.min(sharedSendCap, options.sendBudget.remainingBaseSends(sharedSendCap)
       + (!initialSendStarted && options.comboDispatchPermit ? 1 : 0)) : Number.POSITIVE_INFINITY,
   );
+  const oauthPhysicalSendAvailable = (): boolean =>
+    Math.max(priorSends + physicalSendsUsed, physicalBudget.used, physicalBudget.physicalStarted ?? 0)
+      < Math.min(physicalBudget.policy.maxTotalModelSends, physicalBudget.physicalLimit ?? Number.POSITIVE_INFINITY)
+        + (!initialSendStarted && options.comboDispatchPermit ? 1 : 0);
   const transientSendAvailable = (): boolean => remainingTransientSends() > 0;
   const selector: NativeMessagesSelector = options.selector ?? {};
   const nativeOAuthRouteIsCurrent = (binding: NativeOAuthBinding): boolean => {
@@ -662,6 +760,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
   /** Send the native Messages request under the transient retry policy, re-validating the selected OAuth account or API key at the dispatch boundary. */
   const send = async (recovery?: "rate-limit-429" | "oauth-401" | "oauth-account-403" | "key-429" | "key-401"): Promise<Response> => {
     const remaining = remainingTransientSends();
+    if (oauthBinding && !oauthPhysicalSendAvailable()) throw new SendBudgetExhaustedError();
     if (options.sendBudget && remaining <= 0) throw new SendBudgetExhaustedError();
     if (requestTransientPolicy && remaining <= 0) {
       throw markProxyError(new Error("native Messages transient send budget exhausted before recovery dispatch"));
@@ -937,7 +1036,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
           return resolved.decision;
         },
         signal: upstream.signal, requestKey: oauthRetryKey,
-        canRetry: transientSendAvailable() && oauthFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
+        canRetry: transientSendAvailable() && oauthFailovers < oauthFailoverLimit && oauthPhysicalSendAvailable(),
       });
       if (!nextAccountId) break;
       const recovery = response.status === 401 ? "oauth-401" : response.status === 403 ? "oauth-account-403" : "rate-limit-429";
@@ -1022,13 +1121,17 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
   if (contentType.includes("text/event-stream") && response.body) {
     // `upstream` follows req.signal and is also what shutdown and turn release abort, so both
     // the client leaving and this lane's own abort read as a cancel, not as a failed stream.
+    const rawActivity: { refresh?: () => void } = {};
     const bodyGuard = {
       ...resolvePassthroughBodyGuard(config, upstream.signal),
       ...(activeProvider.anthropicEofTolerance === true ? { eofTolerant: true } : {}),
+      rawActivity,
     };
     const replay = { committed: false, pending: false };
     const raw = options.sendBudget ? observeNativeMessagesReplayBoundary(response.body, logCtx, replay) : response.body;
-    const observed = logIds && onFirstOutput ? observeFirstChunk(raw, onFirstOutput) : raw;
+    const firstOutput = logIds ? onFirstOutput : undefined;
+    const observed = firstOutput || bodyGuard.stallMs > 0
+      ? observeNativeMessagesChunks(raw, firstOutput, undefined, () => rawActivity.refresh?.()) : raw;
     const renamed = activeRequest.oauthToolNames
       ? restoreOAuthToolNamesInSse(observed, activeRequest.oauthToolNames, translatorBudget)
       : observed;
@@ -1058,8 +1161,8 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
       }, bodyGuard, frames, nativeInstance ? clientFilter : undefined);
       // A configured Messages provider words an oversized-input refusal its own way; Claude Code
       // compacts only on Anthropic's wording (devlog/_plan/261009_claude_1m_default/010). The
-      // rewrite buffers whole frames, so it sits after the tap: stall detection keeps timing raw
-      // upstream bytes. Real Anthropic pools refuse pre-stream in that wording and keep one relay.
+      // rewrite buffers whole frames, so it sits after the tap. The raw observer feeds the tap's
+      // stall deadline before any frame buffering. Real Anthropic pools keep one client relay.
       const clientStream = nativeInstance ? relayed : relaySseWithPayloadRewrite(relayed, claudeOverflowSsePayload, translatorBudget, messagesSseFrameHooks(frames), clientFilter);
       let delivered = retainUpstreamMessagesRequestId(new Response(clientStream, {
         status: 200,

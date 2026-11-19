@@ -8,6 +8,8 @@ import { repoPath } from "../helpers/repo-root";
 import { relaySseWithBlockRewrite } from "../../src/server/sse-payload-rewrite";
 import { ToolEnvelopeEchoFilter, stripToolEnvelopeEcho } from "../../src/lib/tool-envelope-echo-filter";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { TranslatorBudgetExceededError } from "../../src/lib/translator-budget";
+import { deliverPassthroughResponse } from "../../src/server/responses/passthrough-delivery";
 
 const frame = (type: string, fields: Record<string, unknown>): string =>
   `event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`;
@@ -27,6 +29,56 @@ const snapshot = (text: string) => ({
 });
 
 describe("xAI Responses upstream tool-envelope echoes", () => {
+  test.each([true, false])("JSON delivery refuses overflow only for armed requests (armed=%s)", async armed => {
+    const raw = `[Tool Result]${" ".repeat(64 * 1024)}\nprivate-fixture`;
+    const request = new Request("http://127.0.0.1/v1/responses", { method: "POST" });
+    const budget = createTestTranslatorBudget();
+    let remembered = 0;
+    type Args = Parameters<typeof deliverPassthroughResponse>;
+    try {
+      const result = await deliverPassthroughResponse(
+        { req: request, config: { providers: {} }, logCtx: { model: "", provider: "" }, options: {} } as Args[0],
+        { authCtx: { kind: "none" } } as Args[1],
+        { parsed: { stream: false, modelId: "grok-4.6", _rawBody: armed ? { previous_response_id: "fixture_previous" } : {} },
+          clientRequestedStream: false, translatorBudget: budget, route: {
+            provider: { adapter: "openai-responses", baseUrl: "https://api.x.ai/v1" },
+            providerName: "fixture", modelId: "grok-4.6", staticPolicy: { model: {} },
+          } } as Args[2],
+        { requestBindings: new Map() } as Args[3], {},
+        { plaintextV2AgentMessageToolNames: new Set(), plaintextV2AgentMessageAliasedToolNames: new Set(),
+          routedMuseToolNameAliases: new Map(), routedNamespaceToolAliases: new Map(),
+          commitReasoningReplayServingRoute() {}, recordTerminalOutcomes: false,
+        } as Args[5],
+        { upstreamResponse: Response.json(snapshot(raw)), upstream: new AbortController(), request, connectMs: 0,
+          imageGenCallAliases: new Map(), selfNamedNamespaceScrubAuthorization: new Set(), authorizedBareNamespaceToolAliases: new Map(),
+          routedCustomToolNames: new Set(), routedCustomToolRepairNames: new Set(), declaredWireToolNames: new Set(),
+          routedToolSearchNames: new Set(), functionRepairSchemas: new Map(), declaredNamelessClientCallTypes: new Set(),
+          providerExecutedCallTypes: new Set(), declaredBareWireToolNames: new Set(), recoverableBareCustomWireToolNames: new Set(),
+          undeclaredToolGuardActive: true, rememberPassthroughResponse: true, rememberPassthroughResponseChecked() { remembered++; },
+          noteInspectedPayload() {}, normalizeFunctionCompletionJson: (value: string) => value, outboundRequestBody: "{}",
+        } as Args[6],
+      );
+      expect(result.status).toBe(armed ? 502 : 200);
+      const body = await result.json();
+      if (armed) {
+        expect(body).toMatchObject({ error: { type: "upstream_error", code: "translation_buffer_limit" } });
+        expect(JSON.stringify(body)).not.toContain("private-fixture");
+      } else expect(body).toEqual(snapshot(raw));
+      expect(remembered).toBe(armed ? 0 : 1);
+    } finally { budget.dispose(); }
+  });
+
+  test("pending-marker overflow fails the relay before a completed snapshot can be stored", async () => {
+    const raw = `[Tool Result]${"\u2003".repeat(64 * 1024)}\nprivate-fixture`;
+    let cached: Record<string, unknown> | undefined;
+    await expect(relay([
+      frame("response.output_text.delta", { delta: "[Tool Result]" }),
+      frame("response.output_text.delta", { delta: raw.slice("[Tool Result]".length) }),
+      frame("response.completed", { response: snapshot(raw) }),
+    ].join(""), response => { cached = response; })).rejects.toThrow(TranslatorBudgetExceededError);
+    expect(cached).toBeUndefined();
+  });
+
   test("split marker after prose is withheld from deltas, done, terminal and continuation", async () => {
     const raw = "Done.\n  [Tool Result]\nsecret\n";
     let cached: Record<string, unknown> | undefined;

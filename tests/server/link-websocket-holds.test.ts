@@ -513,4 +513,10 @@ describe("paced reads on the relay (#8601)", () => {
     const s = harness().open();
     expect(s.ws!.data.linkTurnObserver?.(1).pacedReads).toBe(true);
   });
+
+  test("a link socket is never a local peer, although its tunnel arrives on loopback", () => {
+    const s = harness().open();
+    // Read by local-only providers (src/lib/request-peer-scope.ts, the Antigravity ACP provider).
+    expect(s.ws!.data.peerLocal).toBe(false);
+  });
 });

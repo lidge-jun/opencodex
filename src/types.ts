@@ -11,6 +11,7 @@ export {
   isCodeModeMcpDirectName,
   toolChoiceAliases,
   createToolChoiceResolver,
+  isQualifiedToolChoiceName,
   toolChoiceCandidates,
   toolAllowedByChoice,
   resolveToolChoiceWireName,
@@ -154,6 +155,8 @@ export type {
   CodexAccount,
   CodexAccountCredentials,
   CodexAccountCredentialRecord,
+  CodexAccountLoginConfig,
+  CodexAuthMethod,
 } from "./types/accounts";
 
 export type { OcxTelemetryConfig, OcxTelemetryDecision } from "./types/telemetry";

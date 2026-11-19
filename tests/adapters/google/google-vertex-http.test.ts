@@ -325,6 +325,158 @@ describe("vertex retry fetch", () => {
     expect(rate.calls).toHaveLength(2);
   });
 
+  // Cloud Code Assist answers a request-shape or policy rejection with a bare
+  // RESOURCE_EXHAUSTED — no Retry-After, no details[], no rate-limit wording — and the ladder's
+  // blind replay sent the same body three times per turn for a refusal only a changed request
+  // could clear. Evidence, not the status code, decides whether a replay can help.
+  for (const [name, fetchResponse] of [["Vertex", fetchVertexWithRetry], ["Antigravity", fetchAntigravityWithRetry]] as const) {
+    test(`${name} does NOT replay a 429 that carries no retry evidence`, async () => {
+      const bare = vertexError(429, "RESOURCE_EXHAUSTED", "Resource has been exhausted (e.g. check quota).");
+      const mock = mockFetch([new Response(bare, { status: 429 }), new Response("unexpected replay", { status: 200 })]);
+      const res = await fetchResponse(request, { timeoutMs: 5_000 });
+      expect(res.status).toBe(429);
+      expect(await res.text()).toContain("rate limit exceeded");
+      expect(mock.calls).toHaveLength(1);
+    });
+
+    test(`${name} still replays a 429 whose structured reason names the rate limit`, async () => {
+      // Neutral message text: neither the quota needles nor the transient patterns match, so the
+      // ErrorInfo reason is the only evidence present.
+      const detailed = JSON.stringify({
+        error: {
+          code: 429,
+          status: "RESOURCE_EXHAUSTED",
+          message: "Try again shortly.",
+          details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "RATE_LIMIT_EXCEEDED" }],
+        },
+      });
+      const mock = mockFetch([
+        new Response(detailed, { status: 429 }),
+        new Response("ok", { status: 200 }),
+      ]);
+      const waits = spyOn(retry, "sleepWithAbort").mockImplementation(async () => {});
+      try {
+        const res = await fetchResponse(request, { timeoutMs: 5_000 });
+        expect(res.status).toBe(200);
+        expect(mock.calls).toHaveLength(2);
+      } finally { waits.mockRestore(); }
+    });
+
+    test(`${name} treats an explicit retryDelay of 0s as evidence`, async () => {
+      const zeroDelay = JSON.stringify({
+        error: {
+          code: 429,
+          status: "RESOURCE_EXHAUSTED",
+          message: "Try again shortly.",
+          details: [{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "0s" }],
+        },
+      });
+      const mock = mockFetch([new Response(zeroDelay, { status: 429 }), new Response("ok", { status: 200 })]);
+      const waits = spyOn(retry, "sleepWithAbort").mockImplementation(async () => {});
+      try {
+        const res = await fetchResponse(request, { timeoutMs: 5_000 });
+        expect(res.status).toBe(200);
+        expect(mock.calls).toHaveLength(2);
+      } finally { waits.mockRestore(); }
+    });
+
+    test(`${name} unwraps the error[] array spelling for the structured reason`, async () => {
+      const arrayEnvelope = JSON.stringify({
+        error: [{
+          code: 429,
+          status: "RESOURCE_EXHAUSTED",
+          message: "Try again shortly.",
+          details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "RATE_LIMIT_EXCEEDED" }],
+        }],
+      });
+      const mock = mockFetch([new Response(arrayEnvelope, { status: 429 }), new Response("ok", { status: 200 })]);
+      const waits = spyOn(retry, "sleepWithAbort").mockImplementation(async () => {});
+      try {
+        const res = await fetchResponse(request, { timeoutMs: 5_000 });
+        expect(res.status).toBe(200);
+        expect(mock.calls).toHaveLength(2);
+      } finally { waits.mockRestore(); }
+    });
+
+    test(`${name} replays the documented pay-as-you-go capacity wording`, async () => {
+      // Google documents "Resource exhausted. Please try again later." as retryable with
+      // truncated exponential backoff, and it carries no header, no details and no rate wording.
+      const documented = vertexError(429, "RESOURCE_EXHAUSTED", "Resource exhausted. Please try again later.");
+      const mock = mockFetch([new Response(documented, { status: 429 }), new Response("ok", { status: 200 })]);
+      const waits = spyOn(retry, "sleepWithAbort").mockImplementation(async () => {});
+      try {
+        const res = await fetchResponse(request, { timeoutMs: 5_000 });
+        expect(res.status).toBe(200);
+        expect(mock.calls).toHaveLength(2);
+      } finally { waits.mockRestore(); }
+    });
+
+    test(`${name} does NOT treat rate wording inside a field violation as evidence`, async () => {
+      const violation = JSON.stringify({
+        error: {
+          code: 429,
+          status: "RESOURCE_EXHAUSTED",
+          message: "Request rejected.",
+          details: [{
+            "@type": "type.googleapis.com/google.rpc.BadRequest",
+            fieldViolations: [{ field: "tools[0]", description: "rate limit metadata in schema" }],
+          }],
+        },
+      });
+      const mock = mockFetch([new Response(violation, { status: 429 }), new Response("unexpected replay", { status: 200 })]);
+      const res = await fetchResponse(request, { timeoutMs: 5_000 });
+      expect(res.status).toBe(429);
+      expect(mock.calls).toHaveLength(1);
+    });
+
+    test(`${name} does NOT read a foreign detail named like ErrorInfo`, async () => {
+      // Full-segment comparison: a foreign type whose LAST SEGMENT is also "ErrorInfo" must not
+      // pass the type check, or any relay could mint a replayable verdict.
+      for (const type of [
+        "type.example.com/relay.PolicyDenial",
+        "type.example.com/relay.notgoogle.rpc.ErrorInfo",
+      ]) {
+        const foreign = JSON.stringify({
+          error: {
+            code: 429,
+            status: "RESOURCE_EXHAUSTED",
+            message: "Request rejected.",
+            details: [{ "@type": type, reason: "RATE_LIMIT_EXCEEDED" }],
+          },
+        });
+        const mock = mockFetch([new Response(foreign, { status: 429 }), new Response("unexpected replay", { status: 200 })]);
+        const res = await fetchResponse(request, { timeoutMs: 5_000 });
+        expect(res.status).toBe(429);
+        expect(mock.calls).toHaveLength(1);
+      }
+    });
+
+    test(`${name} does NOT read a retry delay from a detail that is not RetryInfo`, async () => {
+      const foreign = JSON.stringify({
+        error: {
+          code: 429,
+          status: "RESOURCE_EXHAUSTED",
+          message: "Request rejected.",
+          details: [{ "@type": "type.example.com/relay.PolicyDenial", retryDelay: "0s" }],
+        },
+      });
+      const mock = mockFetch([new Response(foreign, { status: 429 }), new Response("unexpected replay", { status: 200 })]);
+      const res = await fetchResponse(request, { timeoutMs: 5_000 });
+      expect(res.status).toBe(429);
+      expect(mock.calls).toHaveLength(1);
+    });
+
+    test(`${name} replays plain-text wording with no JSON envelope`, async () => {
+      const mock = mockFetch([new Response("Too many requests, slow down", { status: 429 }), new Response("ok", { status: 200 })]);
+      const waits = spyOn(retry, "sleepWithAbort").mockImplementation(async () => {});
+      try {
+        const res = await fetchResponse(request, { timeoutMs: 5_000 });
+        expect(res.status).toBe(200);
+        expect(mock.calls).toHaveLength(2);
+      } finally { waits.mockRestore(); }
+    });
+  }
+
   test("does not retry a non-retryable 400 and classifies the body", async () => {
     const mock = mockFetch([new Response(vertexError(400, "INVALID_ARGUMENT", "bad model"), { status: 400 })]);
     const res = await fetchVertexWithRetry(request, { timeoutMs: 5_000 });

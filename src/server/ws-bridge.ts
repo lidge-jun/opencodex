@@ -51,6 +51,11 @@ export interface WsData {
   turnId?: number; // monotonically increasing per socket; prevents stale frames after replacement turns
   /** Fixed-size logical session lane derived at the HTTP upgrade boundary. */
   sessionLaneId?: string;
+  /**
+   * The upgrade came from a loopback peer on a local listener (src/lib/request-peer-scope.ts).
+   * Fixed at the handshake; only `true` counts as local, so an absent value is denied.
+   */
+  readonly peerLocal?: boolean;
   /** Discriminator: Responses reframing vs transparent live/realtime sideband relay. */
   kind?: "responses" | "live-sideband" | "remote-workspace-agent";
   remoteWorkspaceConnection?: { receive(raw: string | Uint8Array): void };

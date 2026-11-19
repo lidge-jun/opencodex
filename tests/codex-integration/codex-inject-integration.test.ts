@@ -858,7 +858,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     // What the picker reads is the decoded TOML value, not the raw file text. A Windows path
     // is written as a basic string with escaped separators, so asserting on the raw text
     // compared an unescaped path against escaped bytes and failed on Windows only.
-    expect(readRootTomlString(written, "model_catalog_json")).toBe(catalogPath);
+    expect(readRootTomlString(written, "model_catalog_json")).toBe("opencodex-catalog.json");
     expect(readFileSync(rollout, "utf8")).toBe(bytes);
   });
 
@@ -1167,6 +1167,30 @@ describe("injectCodexConfig integration (Design B)", () => {
 
     const profile = readFileSync(join(codexHome, "opencodex.config.toml"), "utf8");
     expect(profile).toContain('model_catalog_json = "custom-catalog.json"');
+  });
+
+  test.each(["unbound", "legacy absolute"])("uses a portable sibling catalog and reinjects idempotently from %s", (binding) => {
+    const configPath = join(codexHome, "config.toml");
+    const profilePath = join(codexHome, "opencodex.config.toml");
+    const catalogPath = join(codexHome, "opencodex-catalog.json");
+    const original = 'model = "gpt-5.5"\n' + (binding === "legacy absolute"
+      ? `model_catalog_json = ${JSON.stringify(catalogPath)}\n`
+      : "");
+    writeFileSync(configPath, original);
+    writeFileSync(catalogPath, '{"models":[]}\n');
+
+    expect(JSON.parse(runInject(codexHome, ocxHome).stdout).success).toBe(true);
+    const config = readFileSync(configPath, "utf8");
+    const profile = readFileSync(profilePath, "utf8");
+    expect(readRootTomlString(config, "model_catalog_json")).toBe("opencodex-catalog.json");
+    expect(readRootTomlString(profile, "model_catalog_json")).toBe("opencodex-catalog.json");
+
+    expect(JSON.parse(runInject(codexHome, ocxHome).stdout).success).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toBe(config);
+    expect(readFileSync(profilePath, "utf8")).toBe(profile);
+
+    expect(JSON.parse(runRestore(codexHome, ocxHome).stdout).success).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toBe(original);
   });
 
   test("removes a stale OpenCodex catalog assignment with a trailing comment", () => {

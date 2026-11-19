@@ -12,10 +12,22 @@ diagnostic fields. Windows service-wrapper messages retain their wrapper format.
 `src/combos/resolve.ts` and `src/server/responses/core-combo.ts` name combos by their
 position in configuration and targets by position plus the validated provider-id label from
 `src/lib/error-destination.ts`. Failure, cooldown-wait, reprobe and JEV debug lines omit raw
-combo aliases, model ids and URLs. `src/combos/request.ts` effort diagnostics retain the
+combo aliases, model ids and URLs. JEV effort decision lines retain failed gates and decision usage
+if the pinned target becomes unavailable before dispatch. The pin reason reflects the final selection.
+`src/combos/request.ts` effort diagnostics retain the
 validated provider and closed effort/capability fields, with no model field. Operational
 selection and cooldown keys remain internal. `tests/responses/chat-error-body-normalization.test.ts`
 covers failure, wait, last-resort, reprobe and effort diagnostic output.
+
+When ladder exhaustion returns a child response, the combo's logical row takes diagnostics from that
+child. A synthetic exhaustion response can retain child diagnostics. For example, the quota-cooldown
+snapshot exit can adopt the last failed child's diagnostics before returning a synthetic 503 with
+quota cooldown advice. Only HTTP 402 and 429 qualify as retained quota responses, and the replay
+refusal marker excludes those refusals from quota retention. An HTTP 504 from a
+[local web-search deadline](../data-planes/error-detail.md) is ineligible by status and carries
+no upstream condition in the combo warning. The [combo fallback policy](../fallback-policy.md)
+defines when a committed hosted-search stream counts as a target success.
+Each physical attempt remains in the row's attempt history.
 
 ## Retention
 

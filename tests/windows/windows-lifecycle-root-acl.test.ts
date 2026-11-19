@@ -176,7 +176,8 @@ for (const async of [false, true]) {
     expect(result.ok).toBe(true);
     expect(budgets).toEqual([60, 60, 60]);
   });
-  test(`verified ${async ? "async" : "sync"} calls create no mutation or timeout memo`, async () => {
+  test(`verified ${async ? "async" : "sync"} calls reuse the descriptor proof without mutation or timeout memos`, async () => {
+    setStatForTests(() => ({ dev: 1n, ino: 2n, ctimeNs: 3n }));
     let probes = 0;
     const verify = () => { probes++; return { ...OK, stdout: descriptor() }; };
     setWindowsOwnerAclRunnerForTests(verify);
@@ -184,7 +185,7 @@ for (const async of [false, true]) {
     for (let i = 0; i < 2; i++) {
       if (async) await hardenSecretDirAsync(root, options); else hardenSecretDir(root, options);
     }
-    expect(probes).toBe(2);
+    expect(probes).toBe(1);
     expect(hardenedSecretDirCountForTests()).toBe(0);
     expect(timedOutSecretPathCountForTests()).toBe(0);
     expect(commands).toEqual([]);

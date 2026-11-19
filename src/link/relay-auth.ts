@@ -10,6 +10,7 @@ export const LINK_RELAY_SESSION_HEADER = "x-opencodex-link-session";
 export const LINK_RELAY_PROBE_HEADER = "x-opencodex-link-probe";
 export const LINK_RELAY_AUTH_VERSION = "2";
 export const LINK_RELAY_AUTH_TIMEOUT_MS = 5_000;
+export const LINK_RELAY_AUTH_FAILED_CODE = "link_relay_auth_failed";
 /**
  * An additive part of a Home's relay-auth answer: which tunnel connection the proof crossed, as
  * `<Home runtime instance>:<tunnel generation>`, bound to the same nonce and link key by its own

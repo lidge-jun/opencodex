@@ -226,7 +226,8 @@ export const OPENAI_API_GPT56_REASONING_EFFORTS = ["low", "medium", "high", "xhi
  * (https://developers.openai.com/api/docs/models/gpt-6.1-sol, checked 2026-09-30).
  */
 // GPT-6.1 Terra (2026-10-26): same API limits; its none..max ladder is set per model.
-export const OPENAI_GPT6_MODELS = ["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"];
+// GPT-6.2 Sol and Astra publish the same API limits and disallow none.
+export const OPENAI_GPT6_MODELS = ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"];
 /*
  * Meta Model API (https://api.meta.ai/v1) — published ladder, deliberately NOT the
  * house set. dev.meta.ai/docs/reasoning lists "none", "minimal", "low", "medium",
@@ -334,6 +335,8 @@ export const OPENROUTER_GPT56_CONTEXT_WINDOWS = {
   "openai/gpt-6-luna": OPENROUTER_GPT56_CONTEXT_WINDOW,
   // Live /api/v1/models on 2026-09-30: context_length 1,050,000, max_completion_tokens 128,000.
   "openai/gpt-6.1-sol": OPENROUTER_GPT56_CONTEXT_WINDOW,
+  "openai/gpt-6.2-sol": 1_050_000,
+  "openai/gpt-6.2-astra": 1_050_000,
   // OpenRouter listing checked 2026-10-27: context_length 1,050,000.
   "openai/gpt-6.1-terra": OPENROUTER_GPT56_CONTEXT_WINDOW,
 };

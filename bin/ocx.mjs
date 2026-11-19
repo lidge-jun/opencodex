@@ -1580,6 +1580,8 @@ function createNodeLaunchContext() {
     version: 1,
     proof: launchProof,
     anthropicEnvSlots: preBunAnthropicSlots,
+    // Running this shim under Bun can already have loaded project dotenv.
+    managedRelease: process.versions.bun === undefined && process.env.OCX_MANAGED_RELEASE === "1",
     codexCliInspectionEnv: codexCliUpdateInspectionContext ? {
       codexCliPath: preBunCodexCliPath,
       path: preBunPath,

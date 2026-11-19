@@ -24,6 +24,7 @@ import {
 } from "../../oauth-health-display";
 import CodexAccountPool from "../CodexAccountPool";
 import AnthropicAccountPoolSettings from "./AnthropicAccountPoolSettings";
+import ClaudeNativePassthroughSetting from "./ClaudeNativePassthroughSetting";
 import { LoginHint as LoginHintView } from "../login-url-block";
 import { OpenBrowserPrefToggle } from "../open-browser-pref-toggle";
 import ProviderAccountQuota from "./ProviderAccountQuota";
@@ -475,6 +476,10 @@ export default function ProviderAuthPanel({
             onUpdateProvider={onUpdateProvider}
           />
         )}
+        {/* An API-key Anthropic row has no pool card, but the global switch still applies to Claude Code. */}
+        {item.name === "anthropic" && !isOauth && (
+          <ClaudeNativePassthroughSetting key={`${apiBase}:passthrough`} apiBase={apiBase} targetKey={targetKey} />
+        )}
         {isOauth && (
           <>
             {isAnthropicPool && (
@@ -486,6 +491,10 @@ export default function ProviderAuthPanel({
                 accountCount={accounts.length}
                 onThresholdChange={threshold => { void authHandlers?.onAccountPoolThreshold?.(item.name, threshold); }}
               />
+            )}
+            {/* Global Claude Code setting; it decides whether Claude Code's own traffic reaches the pool above. */}
+            {item.name === "anthropic" && (
+              <ClaudeNativePassthroughSetting key={`${apiBase}:passthrough`} apiBase={apiBase} targetKey={targetKey} />
             )}
             {item.name === "google-antigravity" && (
               <div className="pwi-auth-add-key">
@@ -566,6 +575,7 @@ export default function ProviderAuthPanel({
                 <div className="pwi-auth-wait-copy">
                   <div className="pwi-auth-wait-title">{t("prov.waitingBrowser")}</div>
                   <LoginHintView
+                    providerId={item.name}
                     hint={{
                       url: hintForThis.url,
                       deviceCode: hintForThis.deviceCode,

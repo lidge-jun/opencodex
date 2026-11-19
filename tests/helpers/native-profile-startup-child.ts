@@ -10,6 +10,10 @@ import {
 } from "../../src/codex/native-profile-startup";
 import type { NativeProfileKey, NativeProfileKeyProvider } from "../../src/codex/native-profile-types";
 import { startServer } from "../../src/server";
+import { installNetworkEgressGuard } from "./network-egress-guard";
+
+// This child runs without tests/preload.ts; its token refresh reached auth.openai.com (#8848).
+installNetworkEgressGuard();
 
 const launchedAt = Number(process.env.NATIVE_STARTUP_LAUNCHED_AT ?? Date.now());
 

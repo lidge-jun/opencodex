@@ -89,6 +89,7 @@ export function containsExcerptWindow(text: string, windows: ReadonlySet<string>
 interface SentValueIndex {
   wholeCredential: Set<string>;
   credentialWindows: Set<string>;
+  credentialStarts: Uint8Array;
   contained: string[];
   overflow: boolean;
 }
@@ -117,7 +118,27 @@ function indexSentValues(headers: Record<string, string>, credentialOnly = false
       }
     }
   }
-  return { wholeCredential, credentialWindows, contained, overflow };
+  return { wholeCredential, credentialWindows, credentialStarts: prefixStartBytes(credentialWindows), contained, overflow };
+}
+
+/** An 8 KiB rejection filter for two UTF-16 low bytes; collisions still need an exact lookup. */
+function prefixStartBytes(values: Iterable<string>): Uint8Array {
+  let starts: Uint8Array | undefined;
+  for (const value of values) {
+    const pair = prefixPair(value, 0);
+    starts ??= new Uint8Array(8_192);
+    starts[pair >>> 3]! |= 1 << (pair & 7);
+  }
+  return starts ?? new Uint8Array(0);
+}
+
+function prefixPair(text: string, at: number): number {
+  return ((text.charCodeAt(at) & 255) << 8) | (text.charCodeAt(at + 1) & 255);
+}
+
+function mayStartPrefix(text: string, at: number, starts: Uint8Array): boolean {
+  const pair = prefixPair(text, at);
+  return (starts[pair >>> 3]! & (1 << (pair & 7))) !== 0;
 }
 
 function scanHead(text: string): string {
@@ -125,13 +146,14 @@ function scanHead(text: string): string {
 }
 
 export function createSentValueGuard(headers: Record<string, string>): (text: string) => boolean {
-  const { wholeCredential, credentialWindows, contained, overflow } = indexSentValues(headers);
+  const { wholeCredential, credentialWindows, credentialStarts, contained, overflow } = indexSentValues(headers);
   const containedIndex = new SecretIndex(contained);
   return (text) => {
     if (overflow) return true;
     const head = scanHead(text);
     if (wholeCredential.has(head)) return true;
     for (let at = 0; at + CREDENTIAL_SUBSTRING_MIN_LENGTH <= head.length; at++) {
+      if (!mayStartPrefix(head, at, credentialStarts)) continue;
       if (credentialWindows.has(head.slice(at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH))) return true;
     }
     return markSubstringSpans(head, containedIndex, undefined) !== undefined;
@@ -154,7 +176,7 @@ export function createSentValueMask(
   // header values (a content type, a user agent) are ordinary text that must stay readable.
   // `wholeText`: read and return all of the text (linear work), for genuine Responses terminals whose
   // output must not be cut; the default reads and returns only the guard's scan window.
-  const { wholeCredential, credentialWindows, contained, overflow } = indexSentValues(headers, options.credentialOnly);
+  const { wholeCredential, credentialWindows, credentialStarts, contained, overflow } = indexSentValues(headers, options.credentialOnly);
   const containedIndex = new SecretIndex(contained);
   return (text) => {
     if (overflow) return replacement;
@@ -164,6 +186,7 @@ export function createSentValueMask(
     // text length however many distinct windows match (a rescan per window would be quadratic).
     let covered: Uint8Array | undefined;
     for (let at = 0; at + CREDENTIAL_SUBSTRING_MIN_LENGTH <= head.length; at++) {
+      if (!mayStartPrefix(head, at, credentialStarts)) continue;
       if (!credentialWindows.has(head.slice(at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH))) continue;
       covered ??= new Uint8Array(head.length);
       covered.fill(1, at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH);
@@ -194,6 +217,8 @@ export function maskSecretSpans(text: string, replacement: string, substrings: I
  */
 export class SecretIndex {
   readonly byPrefix = new Map<string, string[]>();
+  readonly prefixStarts: Uint8Array;
+  readonly longSecretCount: number;
   readonly shortByLength = new Map<number, Set<string>>();
   readonly bordered = new Map<string, boolean>();
 
@@ -211,7 +236,13 @@ export class SecretIndex {
         this.shortByLength.set(secret.length, group);
       }
     }
-    for (const group of this.byPrefix.values()) group.sort((a, b) => a.length - b.length);
+    let longSecretCount = 0;
+    for (const group of this.byPrefix.values()) {
+      group.sort((a, b) => a.length - b.length);
+      longSecretCount += group.length;
+    }
+    this.longSecretCount = longSecretCount;
+    this.prefixStarts = prefixStartBytes(this.byPrefix.keys());
   }
 }
 
@@ -236,6 +267,7 @@ function markSubstringSpans(text: string, index: SecretIndex, initial: Uint8Arra
   const budget = { steps: MATCH_WORK_PER_CHAR * n + MATCH_WORK_FLOOR };
   const scanned = new Set<string>();
   for (let at = 0; at + CREDENTIAL_SUBSTRING_MIN_LENGTH <= n; at++) {
+    if (!mayStartPrefix(text, at, index.prefixStarts)) continue;
     const group = index.byPrefix.get(text.slice(at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH));
     if (group === undefined) continue;
     for (const secret of group) {
@@ -262,6 +294,9 @@ function markSubstringSpans(text: string, index: SecretIndex, initial: Uint8Arra
         budget.steps -= n - at;
         if (budget.steps < 0) return covered.fill(1);
         markOverlappingOccurrences(text, secret, at, covered);
+        // KMP already marked every later occurrence. Once every long secret has had that scan,
+        // walking the remaining prefixes can only rediscover secrets in `scanned`.
+        if (scanned.size === index.longSecretCount) return covered;
         continue;
       }
       covered.fill(1, at, at + secret.length);
@@ -287,6 +322,7 @@ export function containsIndexedSecret(text: string, index: SecretIndex): boolean
   if (index.byPrefix.size === 0) return false;
   let budget = MATCH_WORK_PER_CHAR * n + MATCH_WORK_FLOOR;
   for (let at = 0; at + CREDENTIAL_SUBSTRING_MIN_LENGTH <= n; at++) {
+    if (!mayStartPrefix(text, at, index.prefixStarts)) continue;
     const group = index.byPrefix.get(text.slice(at, at + CREDENTIAL_SUBSTRING_MIN_LENGTH));
     if (group === undefined) continue;
     for (const secret of group) {

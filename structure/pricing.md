@@ -63,7 +63,7 @@ policy-only edits invalidate price memoization and usage caches; identical reloa
 `tests/server/model-costs-pricing-cache.test.ts` exercises warmed cache invalidation and reset.
 These settings affect estimates, not upstream billing or official catalog price lists.
 
-Only reported or estimated usage is priced by `src/usage/cost.ts`. Partial tokens on an unreported or unsupported attempt do not establish its full cost. `src/usage/summary.ts` marks a multi-attempt request unpriced when any potentially billed attempt lacks measured usage, while a refusal before generation without usage remains a known zero. Measured attempts retain their individual estimates.
+Only reported or estimated usage is priced by `src/usage/cost.ts`. Partial tokens on an unreported or unsupported attempt do not establish its full cost. `src/usage/summary.ts` marks a multi-attempt request unpriced when any potentially billed attempt lacks measured usage, including a `transport-ambiguous` send. A confirmed upstream refusal before generation without usage remains a known zero. Measured attempts retain their individual estimates.
 
 ## Automatic prices and sources
 
@@ -77,14 +77,17 @@ true; `sourceRef` is the feed URL and `verifiedAt` the fetch time. A user price,
 all-zero rates, is never replaced or scaled.
 
 `src/usage/price-catalog.ts` owns the two public lists. A model matches a row by
-`priceCatalogKey`: the `cn:` channel prefix, any `vendor/` or `zd/` prefix, case, dots versus
-hyphens and a `[...]` suffix are ignored. Within one source, two rows with the same key and
-different prices make the key ambiguous and store nothing for it. models.dev rows count only for the
-model's own vendor providers (resellers are ignored); its rates are already per 1M tokens. OpenRouter
-rows come from `data[]`, skip ids that contain `:` (such as `:free`) or start with `openrouter/`,
-and multiply the per-token strings by 1,000,000. Rows with both input and output zero, or any invalid
-rate, are skipped. Lookup is synchronous from `<configDir>/price-catalog-cache.json` (loaded lazily,
-a missing or corrupt file means no catalog) and never touches the network.
+`priceCatalogKey`: only the known `cn:` channel prefix, case, dots versus hyphens and a `[...]`
+suffix are normalized, while `:tag` suffixes (such as `qwen3:8b`) stay intact and a single
+`vendor/` prefix is preserved so lookups require the claimed vendor to match the row's vendor (with
+case and dashes normalized as in `src/usage/cost.ts`; doubly-slashed ids stay unmatched). Within one
+source, two rows with the same bare key and different prices make the key ambiguous and store
+nothing for it. models.dev rows count only for the model's own vendor providers (resellers are
+ignored); its rates are already per 1M tokens. OpenRouter rows come from `data[]`, skip ids that
+contain `:` (such as `:free`) or start with `openrouter/`, and multiply the per-token strings by
+1,000,000. Rows with both input and output zero, or any invalid rate, are skipped. Lookup is
+synchronous from `<configDir>/price-catalog-cache.json` (loaded lazily, a missing or corrupt file
+means no catalog) and never touches the network.
 `src/usage/price-catalog-version.ts` holds the version counter that
 `userCostOverlayVersion()` folds in, so the estimate memo and the usage caches rebuild when a
 snapshot changes.

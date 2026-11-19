@@ -4,12 +4,12 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer, connect } from "node:net";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { applyCodexCliUpdate, verifyInstalledCodexVersion, type CodexCliApplyDeps } from "../../src/codex/cli-update-apply";
 import { admitCodexCliUpdateJob, finishCodexCliUpdateJob, runCodexCliUpdateJob, type CodexCliUpdateJobDto } from "../../src/codex/cli-update-job";
 import { createCodexCliUpdatePlan } from "../../src/codex/cli-update-plan";
 import { acquireCodexCliApplyLease } from "../../src/codex/cli-update-lease";
-import { createCodexCliApplyFixture, waitForApplyAdmission, writeFixtureNpmWrapper } from "../helpers/codex-cli-apply-fixture";
+import { createCodexCliApplyFixture, resolveCodexCliFixtureNode, waitForApplyAdmission, writeFixtureNpmWrapper } from "../helpers/codex-cli-apply-fixture";
 import { fixtureArtifactSet } from "../helpers/codex-cli-apply-artifact";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -42,7 +42,7 @@ async function approved(f: ReturnType<typeof fixture>, deps = depsFor(f)) {
   return plan.planId!;
 }
 function cli(f: ReturnType<typeof fixture>, args: string[]) {
-  const result = spawnSync(Bun.which("node")!, [repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", ...args, "--json"], {
+  const result = spawnSync(f.node, [repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", ...args, "--json"], {
     cwd: f.root, encoding: "utf8", env: f.env, timeout: 60_000,
   });
   expect(result.error).toBeUndefined(); expect(result.status).toBe(0);
@@ -60,15 +60,10 @@ function fixtureInWorkspaceScratch() {
 }
 
 function managementTestEnv(f: ReturnType<typeof fixture>) {
-  const node = Bun.which("node");
-  if (!node) throw new Error("fixture node executable unavailable");
-  const home = f.home;
+  const { node, home } = f;
   const configDir = join(home, "ocx");
   const env: NodeJS.ProcessEnv = {
-    PATH: [join(f.root, "bin"), join(f.prefix, "bin"), dirname(node), "/usr/bin", "/bin"].join(":"),
-    HOME: home, CODEX_HOME: join(home, ".codex"), TMPDIR: f.temporaryRoot, TEMP: f.temporaryRoot, TMP: f.temporaryRoot,
-    OPENCODEX_HOME: configDir, CODEX_CLI_PATH: f.launcher, OPENCODEX_BUN_PATH: process.execPath,
-    OCX_NO_DESKTOP_HANDOFF: "1", NODE_COMPILE_CACHE: join(f.root, "node-compile-cache"),
+    ...f.env,
     XDG_CONFIG_HOME: join(home, "xdg-config"), XDG_CACHE_HOME: join(home, "xdg-cache"), XDG_DATA_HOME: join(home, "xdg-data"),
   };
   return { node, configDir, env };
@@ -279,7 +274,7 @@ test("HTTP fixture npm wrapper returns all metadata under an ESM ancestor", () =
   const root = createCodexCliTestRoot("ocx-http-npm-module-"); roots.push(root);
   writeFileSync(join(root, "package.json"), JSON.stringify({ private: true, type: "module" }));
   const fakeBin = join(root, "bin"); mkdirSync(fakeBin);
-  const node = Bun.which("node"); if (!node) throw new Error("fixture node unavailable");
+  const node = resolveCodexCliFixtureNode();
   const f = fixtureArtifactSet("linux", "x64");
   const main = { ...f.mainManifest, dist: { integrity: f.artifacts.main.integrity, tarball: f.artifacts.main.tarball } };
   const backing = { name: f.artifacts.backing.name, version: f.artifacts.backing.version,
@@ -287,7 +282,7 @@ test("HTTP fixture npm wrapper returns all metadata under an ESM ancestor", () =
   const metadata = { "@openai/codex@latest": main, "@openai/codex@1.1.0": main,
     ["@openai/codex@" + backing.version]: backing };
   const installTrace = join(root, "install-trace.jsonl");
-  writeFixtureNpmWrapper(fakeBin, node, join(root, "unused-npm.cjs"), metadata, {}, installTrace);
+  writeFixtureNpmWrapper(fakeBin, join(root, "unused-npm.cjs"), metadata, {}, installTrace);
   gateFixtureNpmInstall({ root });
   const env: NodeJS.ProcessEnv = { ...process.env, NODE_COMPILE_CACHE: join(root, "node-cache") };
   for (const key of Object.keys(env)) if (["node_options", "node_path", "node_v8_coverage", "node_redirect_warnings"].includes(key.toLowerCase())) delete env[key];

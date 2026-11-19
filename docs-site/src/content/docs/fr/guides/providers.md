@@ -310,7 +310,7 @@ existante n'est pas concernée.
 
 ## 3. Catalogue des clés API
 
-opencodex fournit 108 préréglages intégrés : 87 à clé, 17 OAuth, trois locaux et un préréglage par défaut de
+opencodex fournit 110 préréglages intégrés : 88 à clé, 18 OAuth, trois locaux et un préréglage par défaut de
 transfert ChatGPT. Dans le tableau de bord, le sélecteur **Ajouter un fournisseur** ouvre le tableau de bord du
 fournisseur à clé, valide la clé et l'enregistre ; la validation dépend du fournisseur. Parmi les entrées notables :
 
@@ -650,7 +650,7 @@ reste une passerelle à clé ou jeton d'abonnement sur son point de terminaison 
 Copilot présente un catalogue qui utilise plusieurs protocoles : ces modèles (`gpt-5.3-codex`, `gpt-5.4`,
 `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) rejettent
 `/chat/completions` pour le trafic d'agent. opencodex route donc ces modèles sur l'API Responses par défaut,
-tandis que tous les autres modèles Copilot restent sur Chat Completions. L'ordre de priorité est le suivant :
+tandis que tous les autres modèles Copilot restent sur Chat Completions. `gpt-6-sol`, `gpt-6-luna`, `gpt-6.2-sol`, `gpt-6.2-astra` utilisent aussi Responses comme valeur par défaut préventive intégrée ; aucun rejet n'a été observé pour eux et la présence des modèles GPT-6.2 dans Copilot n'est pas vérifiée. L'ordre de priorité est le suivant :
 verrouillage explicite du protocole → entrée [`modelAdapters`](/fr/reference/configuration/providers/) définie
 par l'utilisateur → valeur par défaut du registre → adaptateur commun au fournisseur. Pour faire passer par
 Responses un modèle dépourvu de valeur par défaut intégrée, par exemple `gpt-5.4-nano`, définissez

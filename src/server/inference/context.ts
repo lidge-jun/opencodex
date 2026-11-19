@@ -3,6 +3,7 @@ import { TRANSIENT_RETRY_MAX_ATTEMPTS, type TransientSendBudget } from "../../li
 import { GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST } from "../../oauth/generic-account-failover";
 import type { RequestLogContext } from "../request-log";
 import { attachRequestSpendTracker } from "../responses/request-spend";
+import type { SpendAdmissionPolicy } from "../../lib/spend-reservation-ledger";
 
 // Only ingress owns an expandable policy. Exact caller budgets and combo-derived scopes
 // never enter this map, even when their policy happens to equal the default profile.
@@ -19,9 +20,10 @@ const ingressPolicies = new WeakMap<TransientSendBudget, {
 export function createInferenceSendBudget(
   req: Pick<Request, "headers">,
   logCtx: RequestLogContext,
+  capturedPolicy?: SpendAdmissionPolicy,
 ): RequestExecutionBudget {
   const policy = { ...CODEX_TEXT_GUARDED_BUDGET_POLICY };
-  const budget = createRequestExecutionBudget(policy, undefined, attachRequestSpendTracker(req, logCtx));
+  const budget = createRequestExecutionBudget(policy, undefined, attachRequestSpendTracker(req, logCtx, undefined, capturedPolicy));
   ingressPolicies.set(budget, policy);
   return budget;
 }
@@ -32,12 +34,26 @@ export function createInferenceSendBudget(
  * GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST × TRANSIENT_RETRY_MAX_ATTEMPTS.
  */
 export function expandInferenceOAuthSendBudget(budget: TransientSendBudget | undefined, accounts: number): void {
-  if (!budget) return;
+  const fundedAccounts = Number.isSafeInteger(accounts) && accounts >= 2 ? Math.min(accounts, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST) : 0;
+  expandIngressSendBudget(budget, fundedAccounts * TRANSIENT_RETRY_MAX_ATTEMPTS);
+}
+
+/** Fund an explicitly configured standalone ChatGPT retry ladder before any send. */
+export function fundChatGptRetryAttempts(budget: TransientSendBudget | undefined, attempts: number): void {
+  if (Number.isInteger(attempts) && attempts > TRANSIENT_RETRY_MAX_ATTEMPTS && attempts <= 10) {
+    expandIngressSendBudget(budget, attempts);
+  }
+}
+
+function expandIngressSendBudget(budget: TransientSendBudget | undefined, sends: number): void {
+  if (!budget) {
+    return;
+  }
   const policy = ingressPolicies.get(budget);
-  if (!policy || budget.used !== 0 || ("physicalStarted" in budget && Number(budget.physicalStarted) > 0)) return;
+  if (!policy || budget.used !== 0 || ("physicalStarted" in budget && Number(budget.physicalStarted) > 0)) {
+    return;
+  }
   ingressPolicies.delete(budget);
-  if (accounts < 2 || !Number.isSafeInteger(accounts)) return;
-  const sends = Math.min(accounts, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST) * TRANSIENT_RETRY_MAX_ATTEMPTS;
   policy.baseSendAllowance = Math.max(policy.baseSendAllowance, sends);
   policy.maxTotalModelSends = Math.max(policy.maxTotalModelSends, sends);
 }

@@ -28,6 +28,20 @@ Every physical attempt retains its own send count and usage. Coverage: `tests/he
 (registered by `tests/server/server-combo-failover-e2e.test.ts`), `tests/server/server-combo-reasoning-replay-eligibility.test.ts`
 and `tests/responses/responses-combo-exhausted-error.test.ts`.
 
+## Unoffered tool-call refusals
+
+`isUnofferedToolCallRefusal` in `src/combos/failover.ts` recognizes the provider verdicts for
+target-local model failures: that a model called a function the request never offered (`The model
+called a function that was not offered in tools.`) alongside the parser control-marker refusal
+(`The model returned an unexpected parser control marker; no output was published.`). The match is
+anchored to each sentence inside a bounded envelope walk — closed code/type/param sets (applied again inside an object-valued `param`), competing
+diagnostic carriers and a contradicting root message all fail closed — so quoted or reflected
+occurrences cannot impersonate the verdict. `consumeComboFailure` classifies the intact bounded body
+and passes the verdict through `unofferedToolCallRefusal`, because the 500-character display prefix
+would leave a long envelope unparseable. Like the other pre-output 400 hops it advances the combo
+without cooling the target: the model hallucinated the call or control marker on this target, the
+request itself fit, and the refusal arrives before any output commits. Coverage: `tests/routing/combo-unoffered-tool-refusal.test.ts`.
+
 ## Buffered required-tool contract
 
 Before selection, `src/server/responses/core-combo.ts` excludes resolved Meta Responses destinations
@@ -136,6 +150,7 @@ Explicit non-SSE types pass through unread, including parameters or longer subty
 event-stream token. A caller can still opt into inspecting a response without a content type. Non-streaming
 JSON from a native (non-runTurn) child is therefore never inspected here: an empty `max_output_tokens`
 limit in such a body is returned to the client unchanged, and only SSE and runTurn children fail over on it.
+A process-marked native stream has a raw-body observer, so this downstream inspector keeps terminal, output and error classification but does not collect usage again. Client display estimates stay outside the [spend contract](responses-spend.md#durable-spend-reservations); unmarked upstream/reset preflight retains normal usage inspection.
 
 Native post-header reset recovery shares that boundary, because it is asking the same question
 about the same bytes. With `replayReadErrors`, the preflight reports the stage it observed —
@@ -146,6 +161,8 @@ resend gate decides. Control frames (`response.in_progress`, `response.queued`,
 not advance the stage. Once output commits the stream or a terminal ends inspection, a later read
 error belongs to the relay and never reaches the resend gate. A lifecycle event with output, an error, incomplete details, a contradictory
 status, a replay-unsafe mark, unknown event or snapshot fields, or unsafe nested metadata commits the original stream.
+Snapshot selector types are validated without coercion. A replay-classification exception also
+commits the original stream, preserving its bytes and preventing a replacement attempt.
 An SSE event name that conflicts with its JSON type, an opaque frame,
 or an unfinished output/error/terminal frame on a rejected read also keeps the original bytes and
 read error; the last SSE event field is authoritative. A clean EOF before output or a terminal is offered only to the native reset recovery

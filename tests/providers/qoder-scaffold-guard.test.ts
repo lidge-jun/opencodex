@@ -23,6 +23,23 @@ function collect(): { events: AdapterEvent[]; emit: (event: AdapterEvent) => voi
   return { events, emit: event => { events.push(event); } };
 }
 
+test.each([
+  { type: "done", stopReason: "stop" },
+  { type: "thinking_delta", thinking: "Reasoning." },
+] satisfies AdapterEvent[])("refuses a trailing lone CR at the replay budget on $type", boundary => {
+  const { events, emit } = collect();
+  const guard = guardQoderScaffolding(emit);
+  const marker = "[Tool Result]";
+  guard({ type: "text_delta", text: marker.padEnd(64 * 1024) });
+  guard({ type: "text_delta", text: "\r" });
+  expect(events).toEqual([]);
+  guard(boundary);
+  guard({ type: "done", stopReason: "stop" });
+  expect(events).toEqual([expect.objectContaining({
+    type: "error", status: 502, code: QODER_SCAFFOLD_ERROR_CODE, retryable: false,
+  })]);
+});
+
 function textOf(events: AdapterEvent[]): string {
   return events.map(event => (event.type === "text_delta" ? event.text : "")).join("");
 }
@@ -279,6 +296,21 @@ describe("guardQoderScaffolding", () => {
 
 
 describe("Qoder replay envelope refusal (#7517)", () => {
+  test("refuses an unresolved marker at its budget without emitting an echo or successful terminal", () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "Safe answer.\n" });
+    guard({ type: "text_delta", text: "[Tool Result]" });
+    for (let i = 0; i < 64; i++) guard({ type: "text_delta", text: "\u2003".repeat(1024) });
+    guard({ type: "text_delta", text: "\nprivate-fixture" });
+    guard({ type: "done", stopReason: "stop" });
+    expect(textOf(events)).toBe("Safe answer.\n");
+    expect(events.filter(event => event.type === "error")).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ type: "error", code: QODER_SCAFFOLD_ERROR_CODE, status: 502, retryable: false });
+    expect(events.some(event => event.type === "done")).toBe(false);
+    expect(JSON.stringify(events)).not.toContain("private-fixture");
+  });
+
   for (const marker of ["[Tool call: probe (call_id: call_fixture) with args: ", "[Tool Result]\n", "[Tool Error]\n", "[tool_result]\n", "[Tool Call]\n"]) {
     for (const size of [1, 2, 7, 64]) test(`refuses ${marker.trim()} split in ${size}-character deltas`, () => {
       const { events, emit } = collect();

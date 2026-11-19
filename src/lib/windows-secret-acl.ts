@@ -54,6 +54,7 @@ import {
 } from "./windows-user-principal";
 
 const hardenedDirectories = new Map<string, HardenedIdentity>();
+const verifiedRuntimeDirectories = new Map<string, HardenedIdentity>();
 const hardenedPaths = new Map<string, HardenedIdentity>();
 /** Elevated-stage memos are kept apart from the secret ones: the ACL shapes differ. */
 const hardenedStageDirectories = new Map<string, HardenedIdentity>();
@@ -732,6 +733,7 @@ export function setNowForTests(fn: (() => number) | null): void {
 /** Test seam: clear memo/failure caches between cases. */
 export function resetHardenedStateForTests(): void {
   hardenedDirectories.clear();
+  verifiedRuntimeDirectories.clear();
   hardenedPaths.clear();
   hardenedStageDirectories.clear();
   hardenedStagePaths.clear();
@@ -1004,13 +1006,20 @@ function shouldVerifyExistingAcl(): boolean {
   return env["OPENCODEX_ACL_VERIFY_EXISTING"] === "1";
 }
 
+function rememberRuntimeDirectoryAcl(targetPath: string, before: PathObservation | null, verified: boolean, deadline: number): boolean {
+  const after = observe(targetPath);
+  if (!verified || before === null || after === null || !sameObservation(before, after) || nowFn() >= deadline) return false;
+  // Keep this stricter descriptor proof separate from the general harden memo.
+  verifiedRuntimeDirectories.set(targetPath, after);
+  return true;
+}
+
 function existingAclAlreadyCompliant(targetPath: string, directory: boolean, deadline: number, strictDirectory = false): boolean {
   if (strictDirectory) {
+    if (memoSatisfied(verifiedRuntimeDirectories, targetPath)) return true;
     const before = observe(targetPath);
     const verified = verifyWindowsEntriesAcl([{ path: targetPath, directory: true, policy: "private-runtime-directory" }], deadline - nowFn());
-    const after = observe(targetPath);
-    // No name-only fallback or success memo: this proof belongs to this observation only.
-    return verified && before !== null && after !== null && sameObservation(before, after) && nowFn() < deadline;
+    return rememberRuntimeDirectoryAcl(targetPath, before, verified, deadline);
   }
   if (!shouldVerifyExistingAcl()) return false;
   const identity = cachedCurrentWindowsIdentity();
@@ -1039,10 +1048,10 @@ async function existingAclAlreadyCompliantAsync(
   strictDirectory = false,
 ): Promise<boolean> {
   if (strictDirectory) {
+    if (memoSatisfied(verifiedRuntimeDirectories, targetPath)) return true;
     const before = observe(targetPath);
     const verified = await verifyWindowsEntriesAclAsync([{ path: targetPath, directory: true, policy: "private-runtime-directory" }], deadline - nowFn());
-    const after = observe(targetPath);
-    return verified && before !== null && after !== null && sameObservation(before, after) && nowFn() < deadline;
+    return rememberRuntimeDirectoryAcl(targetPath, before, verified, deadline);
   }
   if (!shouldVerifyExistingAcl()) return false;
   const identity = cachedCurrentWindowsIdentity();
@@ -1387,7 +1396,11 @@ function hardenEntry(
 ): HardenResult {
   // Observed absence retires the memo. Leaving it would let a later file at this
   // path satisfy the cache if the filesystem ever hands back a matching identity.
-  if (!existsSync(targetPath)) { cache.delete(targetPath); return { ok: true }; }
+  if (!existsSync(targetPath)) {
+    cache.delete(targetPath);
+    if (directory) verifiedRuntimeDirectories.delete(targetPath);
+    return { ok: true };
+  }
   if (effectivePlatform() !== "win32") return { ok: true };
   if (memoSatisfied(cache, targetPath)) return { ok: true };
   const deadline = nowFn() + resolveHardenDeadlineMs(opts.deadlineMs);
@@ -1442,7 +1455,11 @@ function hardenEntryAsync(
   cache: Map<string, HardenedIdentity>,
   extraReadAces: readonly string[],
 ): Promise<HardenResult> {
-  if (!existsSync(targetPath)) { cache.delete(targetPath); return Promise.resolve({ ok: true }); }
+  if (!existsSync(targetPath)) {
+    cache.delete(targetPath);
+    if (directory) verifiedRuntimeDirectories.delete(targetPath);
+    return Promise.resolve({ ok: true });
+  }
   if (effectivePlatform() !== "win32" || memoSatisfied(cache, targetPath)) return Promise.resolve({ ok: true });
   return startTrackedAsyncAclWork(targetPath,
     () => runHardenEntryAsync(targetPath, directory, opts, cache, extraReadAces)).work;

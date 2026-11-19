@@ -190,7 +190,7 @@ unknown, ayarların hâlâ opencodex vekiline işaret edip etmediğinin belirlen
 
 ### Picker modu: first-party Code sekmesinde opencodex modelleri
 
-Picker modu first-party modunun bir parçasıdır. macOS ve Windows'ta first-party seçildiğinde varsayılan olarak
+Picker modu first-party modunun bir parçasıdır. macOS, Windows ve Linux'ta first-party seçildiğinde varsayılan olarak
 açıktır; `claudeCode.intercept.picker: false` ayarlanırsa kapalı kalır. First-party Desktop'ın Code
 sekmesindeki model seçiciyi değiştirerek kullanılabilir opencodex modellerini adlarıyla listeler.
 İlk etkinleştirmede macOS, giriş anahtar zincirinde, Windows ise geçerli kullanıcının kök deposunda yerel bir sertifika yetkilisine güvenmenizi isteyebilir.
@@ -205,9 +205,8 @@ güven eksik, iptal edilmiş veya bilinmiyorsa picker beklemede kalır. Güven v
 Eski bir kimlikten bir defalık geçişte önceki güveni kaldırmak için onay gerekebilir. Temizlik tamamlanana
 kadar picker kullanılamaz ve uygulanmış profil şifre çözmeyen bir aktarma kullanır. macOS ayrıca anahtar
 zincirinin kilidini açmanızı veya uygulamanın kimlik bilgilerine erişimini onaylamanızı isteyebilir;
-bu istemler yeniden başlatma veya güncelleme sonrasında da çıkabilir. Windows'ta açık `on` veya `trust` kök ekleme onayını gösterebilir. Linux'ta picker desteklenmez:
-picker CA, kimlik bilgisi deposu veya proxy işlemleri başlatılmaz. Ana Claude yakalama işlevi kullanılabilir;
-yerel CA dosyaları için sahiplik, sembolik bağlantı, dosya izinleri ve Windows ACL denetimleri uygulanır.
+bu istemler yeniden başlatma veya güncelleme sonrasında da çıkabilir. Windows'ta açık `on` veya `trust` kök ekleme onayını gösterebilir.
+Linux'ta picker açıkça etkinleştirildiğinde, `certutil` kısıtlı picker CA'sını kullanıcının NSS veritabanına güvenilen bir CA olarak ekler.
 
 Picker modu açıkken Claude Desktop ağa OpenCodex üzerinden çıkar. OpenCodex durursa Desktop, tamamen yeniden
 başlatılana veya picker modu kapatılana kadar çevrimdışı kalır. Durumu `ocx claude desktop picker status`
@@ -367,8 +366,21 @@ veya `tool_result.tool_use_id` (`a-zA-Z0-9_-` dışında karakter içeren ya da 
 bir kimlikle yeniden yazılır. Uygun kimlikler değiştirilmeden gönderilir, boş bir kimliğe yerel olarak
 400 döner.
 
-`claudeCode.nativePassthrough: false` ile devre dışı bırakın;
-`claudeCode.anthropicBaseUrl` ile başka bir yeri işaret edin.
+`claudeCode.nativePassthrough: false`, `ocx claude config set --native-passthrough off` veya
+panodaki Providers → Anthropic Claude → Accounts bölümünde Claude hesap havuzunun altında bulunan
+**Yerel Claude geçişi** anahtarıyla devre dışı bırakın;
+`claudeCode.anthropicBaseUrl` ile başka bir yeri işaret edin. Claude model seçicisinden ve Claude Desktop'tan gelen takma adlar `modelMap` öncesinde
+çözümlenir. Anahtarı ham model kimliği olan bir `modelMap` girdisi, geçiş açıkken de kapalıyken de
+isteği diğer sağlayıcıdaki hedef modele gönderir. Geçiş kapalıyken eşlemesi olmayan ham bir Claude
+model kimliği yönlendiriciye gider. Yönlendirici önce yönlendirme politikası takma adlarına,
+sonra kombo takma adlarına bakar. Eşleşme yoksa sırasıyla `defaultModel` değeri bu kimlik olan
+etkin bir sağlayıcıya, etkin bir `anthropic` veya `anthropic-*` sağlayıcısına, model listesinde bu
+kimliği içeren bir sağlayıcıya, sağlayıcı tarafındaki model takma adına ve son olarak varsayılan
+sağlayıcıya bakar. Rota bir Anthropic OAuth sağlayıcısıysa isteği OpenCodex'te kayıtlı Anthropic
+hesapları karşılar; kayıtlı ikinci bir hesap 429 durumunda yedeğe geçiş ekler ve proaktif
+[Claude OAuth hesap havuzu](#claude-oauth-hesap-havuzu-deneysel) `anthropicAccountPool.enabled` açık olduğunda uygulanır. Yönlendirme
+bir sonraki istekten itibaren ayarı izler; model yuvalarının ve bağlam pencerelerinin eşleşmesi için
+zaten çalışan Claude Code oturumlarını yeniden başlatın.
 
 ## Uzak hub'a bağlı Claude Desktop
 
@@ -536,7 +548,15 @@ Claude Code, tanımadığı herhangi bir model için 200k token hesabı yapar.
    rotasındaki Claude modelleri için gerçek 1M).
 2. Görüşmenin bu noktada otomatik olarak özetlenmesi için
    `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (varsayılan `829800`, aralık
-   `100000`–`1000000`) enjekte edilir.
+   `100000`–`1000000`) enjekte edilir. Proxy üzerinden başlatılan `ocx claude`,
+   katalogda daha küçük pencereler olduğunda `--settings` ile her model için ayrı
+   eşik ayarlayabilir. Bağımsız değişkenler uzunluk sınırını aşarsa ortam değişkeni kullanılır.
+
+Oluşturulan JSON, Claude Code'un komut satırı ayarları kapsamında uygulanır. Bu kapsam yerel, proje ve kullanıcı ayar dosyalarından daha yüksek, yönetilen ayarlardan daha düşük önceliğe sahiptir. `--settings <file>` veya `--autocompact` verildiğinde JSON oluşturulmaz. Başlatıcı, açıkça verilen `--settings` argümanlarını olduğu gibi iletir ve dosyaları Claude Code işler.
+
+Bu seçeneklerden biri JSON oluşturmayı atladığında başlatıcı, otomatik bağlamın ayarladığı `CLAUDE_CODE_AUTO_COMPACT_WINDOW` değerini korur. Değişkeni açıkça dışa aktarmak da JSON oluşturmayı atlar ve değeri korur. Claude Code, bu değişkenin geçerli bir değerine `--autocompact` seçeneğinden ve kaydedilmiş sıkıştırma ayarlarından daha yüksek öncelik verir. Bir dosyanın sıkıştırma ayarlarını kullanmak için `claudeCode.autoContext` değerini `false` yaparak otomatik eklemeyi kapatın, dışa aktarılmış `CLAUDE_CODE_AUTO_COMPACT_WINDOW` değişkenini kaldırın ve `--settings <file>` seçeneğini verin. [Claude Code'un otomatik sıkıştırma önceliğine](https://code.claude.com/docs/en/model-config#set-the-auto-compact-window) bakın.
+
+Seçenek değerleri ve `--` sonrasındaki argümanlar dahil herhangi bir argüman bir Remote Control komutuyla veya takma adıyla (`remote-control`, `rc`, `bridge`, `remote` ya da `sync`) tam olarak eşleşirse başlatıcı üretilen ayarları atlar ve özgün argümanları ve başlatma ortamını korur.
 
 Üç yapılandırma durumu:
 

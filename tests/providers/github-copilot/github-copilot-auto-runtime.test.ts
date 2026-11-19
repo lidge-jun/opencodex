@@ -86,7 +86,7 @@ async function accounts() {
   return { a, b };
 }
 /** Return an Auto provider config and send ledger; options drive refusal, expiry, rotation, and tool events through both inference wires. */
-function fixture(options: { pauseRefusal?: boolean; chatOnly?: boolean; nativeExpiry?: boolean; nativeFirst?: boolean; native429?: boolean; onNativeCancel?: () => void; chatRefresh?: boolean; closedNativeBody?: boolean; renewedChatRefusal?: boolean; rotate?: boolean; rotateAt?: number; tool?: boolean; key?: boolean; refusal?: number; negotiationRefusal?: number; negotiationRefusalAt?: number; alwaysRefuse?: boolean; advanceAfterIntent?: () => void | Promise<void>; onSession?: (count: number) => void | Promise<void>; malformedSessionAt?: number; negotiationRetryAfter?: string; replyText?: string; onInference?: (count: number) => void | Promise<void> } = {}) {
+function fixture(options: { pauseRefusal?: boolean; chatOnly?: boolean; nativeExpiry?: boolean; nativeFirst?: boolean; native429?: boolean; onNativeCancel?: () => void; chatRefresh?: boolean; closedNativeBody?: boolean; renewedChatRefusal?: boolean; rotate?: boolean; rotateAt?: number; tool?: boolean; key?: boolean; refusal?: number; negotiationRefusal?: number; negotiationRefusalAt?: number; alwaysRefuse?: boolean; advanceAfterIntent?: () => void | Promise<void>; onSession?: (count: number) => void | Promise<void>; malformedSessionAt?: number; negotiationRetryAfter?: string; replyText?: string; reasoningText?: string; onInference?: (count: number) => void | Promise<void> } = {}) {
   const sent: Array<{ host: string; path: string; token: string | null; body: any; signal?: AbortSignal | null }> = [];
   let inferenceCount = 0;
   let sessionCount = 0;
@@ -145,15 +145,17 @@ function fixture(options: { pauseRefusal?: boolean; chatOnly?: boolean; nativeEx
     if (options.chatRefresh && inferenceCount === 1) return Response.json({ error: { message: "refresh" } }, { status: 401 });
     if (options.rotate && inferenceCount === (options.rotateAt ?? 1)) return Response.json({ error: { message: "limited" } }, { status: options.refusal ?? 429, headers: { "retry-after": "1" } });
     if (destination.pathname === "/responses") return Response.json({ id: "resp-fixture", model, object: "response", status: "completed",
-      output: [{ id: "msg-fixture", type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] }],
+      output: [...(options.reasoningText ? [{ id: "rs-fixture", type: "reasoning", summary: [],
+        content: [{ type: "reasoning_text", text: options.reasoningText }] }] : []),
+        { id: "msg-fixture", type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] }],
       usage: { input_tokens: 2, output_tokens: 1 } });
     if (options.renewedChatRefusal && destination.pathname === "/chat/completions")
       return Response.json({ error: { message: "must-not-echo" } }, { status: 401 });
     if ((options.chatOnly || options.nativeFirst || options.nativeExpiry) && !body.stream) return Response.json({ id: "chat-fixture", model,
-      choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+      choices: [{ message: { role: "assistant", content: "ok", reasoning_content: options.reasoningText }, finish_reason: "stop" }],
       usage: { prompt_tokens: 2, completion_tokens: 1 } });
     const tool = options.tool && inferenceCount === (options.nativeFirst ? 2 : 1);
-    const delta = tool ? { tool_calls: [{ index: 0, id: "call_lookup", type: "function", function: { name: "lookup", arguments: '{"name":"file"}' } }] } : { content: options.replyText ?? "ok" };
+    const delta = tool ? { tool_calls: [{ index: 0, id: "call_lookup", type: "function", function: { name: "lookup", arguments: '{"name":"file"}' } }] } : { content: options.replyText ?? "ok", reasoning_content: options.reasoningText };
     return new Response(`data: ${JSON.stringify({ id: "chat-fixture", model, choices: [{ index: 0, delta, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ id: "chat-fixture", model, choices: [{ index: 0, delta: {}, finish_reason: tool ? "tool_calls" : "stop" }] })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
   }) as typeof fetch;
   const config: OcxConfig = { port: 0, defaultProvider: "github-copilot", providers: { "github-copilot": {
@@ -165,6 +167,30 @@ function fixture(options: { pauseRefusal?: boolean; chatOnly?: boolean; nativeEx
   return { config, sent, get cancelledNativeBodies() { return cancelledNativeBodies; }, get refreshCount() { return refreshCount; } };
 }
 describe("Copilot Auto through the Responses pipeline", () => {
+  test.each(["initial Chat", "initial Responses", "retry to Chat"] as const)(
+    "rawReasoningAsSummary follows the negotiated wire (%s)", async selection => {
+      const { b } = await accounts();
+      if (!selection.startsWith("retry")) await setActiveAccount("github-copilot", b);
+      const raw = "verbatim Copilot reasoning";
+      const f = fixture({
+        chatOnly: selection === "initial Chat", nativeFirst: selection === "retry to Chat",
+        reasoningText: raw,
+      });
+      f.config.providers["github-copilot"]!.rawReasoningAsSummary = true;
+      const response = await handleResponses(request("hello", false, { model: "github-copilot/gpt-5.4" }), f.config, {});
+      expect(response.status).toBe(200);
+      const { output } = await response.json() as { output: Array<{ type: string; summary: unknown; content?: unknown }> };
+      const inference = f.sent.filter(call => ["/responses", "/chat/completions"].includes(call.path));
+      const chat = selection.endsWith("Chat");
+      const finalPath = chat ? "/chat/completions" : "/responses";
+      expect(inference.map(call => call.path)).toEqual(selection.startsWith("retry")
+        ? ["/responses", finalPath] : [finalPath]);
+      if (!selection.startsWith("retry")) expect(inference[0]!.body.model).toBe("gpt-5.4");
+      const item = output.find(entry => entry.type === "reasoning");
+      expect(item?.summary).toEqual(chat ? [{ type: "summary_text", text: raw }] : []);
+      expect(item?.content).toEqual(chat ? undefined : [{ type: "reasoning_text", text: raw }]);
+    });
+
   test.each(["Chat", "Messages"])("%s retains the local mandatory-tool refusal after Copilot OAuth refresh", async wire => {
     await accounts();
     const f = fixture({ chatRefresh: true, chatOnly: true });

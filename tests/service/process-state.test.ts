@@ -9,6 +9,7 @@ import {
   isOcxCommandLine,
   isLikelyOcxProcess,
   isOcxStartCommandLine,
+  readProcessCommandLine,
   ocxStartProcessCacheSizeForTests,
   parsePidFile,
   readPid,
@@ -149,6 +150,24 @@ describe("proxy process-state ownership", () => {
     });
     expect(isLikelyOcxProcess(4242)).toBe(true);
     expect(calls).toEqual([trustedWmic, trustedPowerShell, trustedPowerShell]);
+  });
+
+  test("Windows command-line fallbacks share the caller's remaining budget", () => {
+    const trustedSystem32 = join(testDir, "trusted", "System32");
+    const powershell = join(trustedSystem32, "WindowsPowerShell", "v1.0", "powershell.exe");
+    mkdirSync(dirname(powershell), { recursive: true });
+    writeFileSync(powershell, "", { mode: 0o755 });
+    setProcessCommandLinePlatformForTests("win32");
+    setTrustedWindowsSystemDirectoryResolverForTests(() => trustedSystem32);
+    let remainingMs = 3_100;
+    const timeouts: number[] = [];
+    setProcessCommandLineExecForTests((_executable, _args, options) => {
+      timeouts.push(options.timeout);
+      remainingMs -= options.timeout;
+      throw new Error("probe timed out");
+    });
+    expect(readProcessCommandLine(4242, () => remainingMs)).toBeUndefined();
+    expect(timeouts).toEqual([3_000, 100]);
   });
 
   test("a native Windows command-line read verifies the runtime when the CIM probe overruns", () => {

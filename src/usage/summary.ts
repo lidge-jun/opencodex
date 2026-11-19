@@ -860,15 +860,16 @@ function blankRequestCounts(): UsageRequestCounts {
 /**
  * A usage-less attempt that provably cost nothing: it never reached upstream, or upstream refused it
  * with an HTTP error before any output (providers do not bill a pre-generation 429/401/5xx). One
- * whose stream began, aborted, or ended without a status may have generated billed tokens, so it
- * stays an unknown cost. A request made only of such zeros carries neither fact and counts unpriced.
+ * whose stream began, aborted, or lost the connection before a confirmed status may have billed
+ * tokens, so its cost stays unknown. A request made only of known zeros carries neither fact and counts unpriced.
  */
 function spentNothing(attempt: NonNullable<PersistedUsageEntry["attempts"]>[number] | undefined): boolean {
   if (!attempt || attempt.usage) return false;
   if (attempt.sendCount === 0 || attempt.locallyAnswered === true) return true;
-  // A 499 is the client hanging up on a send upstream may already be generating for.
+  // A client cancellation or ambiguous disconnect may leave generation running upstream.
   return attempt.status >= 400 && attempt.status !== 499
-    && attempt.streamAborted !== true && attempt.firstOutputMs === undefined;
+    && attempt.failureCause !== "transport-ambiguous" && attempt.streamAborted !== true
+    && attempt.firstOutputMs === undefined;
 }
 
 function bumpRequestCounts(counts: UsageRequestCounts, facts: number, amount = 1): void {

@@ -139,8 +139,8 @@ test("fixture cleanup restores env and attempts later roots when a removal throw
   removeTreeWithRetry(first);
 });
 
-test("Linux skips all picker effects while still discarding legacy key", async () => {
-  for (const platform of ["linux"] as const) {
+test("an unsupported platform skips all picker effects while still discarding legacy key", async () => {
+  for (const platform of ["freebsd"] as const) {
     const { root, config } = setup();
     config.claudeCode!.desktopMode = "first-party";
     mkdirSync(join(root, "claude-picker"));

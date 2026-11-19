@@ -25,6 +25,7 @@ import { configuredOutboundFetch } from "../../lib/proxy-env";
 import { isLoopbackUrl, rewriteUpstream } from "../../plugins/upstream-hooks";
 import {
   describeProviderEgressForLog,
+  bindProviderSocketRoute,
   markEgressTransparentExecutor,
   providerEgressSendInit,
   providerEgressIsExplicit,
@@ -57,7 +58,7 @@ const PHYSICAL_DISPATCH = Symbol.for("opencodex.physical-dispatch");
 const PHYSICAL_SEND_OBSERVER = Symbol.for("opencodex.physical-send-observer");
 const PHYSICAL_SEND_GUARD = Symbol.for("opencodex.physical-send-guard");
 export type AccountAutoPauseObserver = ((response: Response) => Promise<Response>) & {
-  physical?: (sameDestination: boolean, headers: Headers) => void;
+  physical?: (sameDestination: boolean, headers: Headers, destination: string) => void;
 };
 /** Init fragment that reports the final send of the observer's attempt; empty when nothing observes. */
 export function physicalSendObserverInit(observer: AccountAutoPauseObserver | undefined, target: string, onPhysicalSend?: () => void,
@@ -66,7 +67,7 @@ export function physicalSendObserverInit(observer: AccountAutoPauseObserver | un
   let noted = false;
   return physical || onPhysicalSend || onFinalSend ? { [PHYSICAL_SEND_OBSERVER]: (destination: string, headers: Headers) => {
     if (onPhysicalSend && !noted) { onPhysicalSend(); noted = true; }
-    physical?.(destination === target, headers);
+    physical?.(destination === target, headers, destination);
     onFinalSend?.(destination === target, headers);
   } } : {};
 }
@@ -507,6 +508,7 @@ export function providerFetch(
     unpacedFetch: Object.assign(unpaced, { preconnect }),
   });
   markEgressTransparentExecutor(paceAware as unknown as typeof globalThis.fetch);
+  if (customExecutor === undefined && transport === base && !options.dispatchOverride) bindProviderSocketRoute(paceAware, providerName, provider);
   return paceAware;
 }
 

@@ -32,6 +32,9 @@ export const CODEBUDDY_GLOBAL_MODELS = [
   "gpt-6.1-sol",
   // 261027 preemptive: GPT-6.1 Terra (mirrors CodeBuddy's GPT-6.1 Sol seed; provider listing unverified).
   "gpt-6.1-terra",
+  // 261118 preemptive: GPT-6.2 Sol and Astra (mirror CodeBuddy's GPT-6.1 Sol seed; provider listing unverified).
+  "gpt-6.2-sol",
+  "gpt-6.2-astra",
   "gpt-5.5",
   "gpt-5.4",
   "gpt-5.3-codex",
@@ -85,6 +88,8 @@ export const CODEBUDDY_GLOBAL_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gpt-6-luna": 1_000_000,
   "gpt-6.1-sol": 1_000_000,
   "gpt-6.1-terra": 1_000_000,
+  "gpt-6.2-sol": 1_000_000,
+  "gpt-6.2-astra": 1_000_000,
   "gpt-5.5": 1_000_000,
   "gpt-5.4": 272_000,
   "gpt-5.3-codex": 272_000,
@@ -109,6 +114,8 @@ export const CODEBUDDY_GLOBAL_MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = 
   "gpt-6-luna": 128_000,
   "gpt-6.1-sol": 128_000,
   "gpt-6.1-terra": 128_000,
+  "gpt-6.2-sol": 128_000,
+  "gpt-6.2-astra": 128_000,
   "gpt-5.5": 72_000,
   "gpt-5.4": 128_000,
   "gpt-5.3-codex": 128_000,
@@ -129,6 +136,8 @@ export const CODEBUDDY_GLOBAL_MODEL_REASONING_EFFORTS: Record<string, string[]> 
   "gpt-6-luna": ["low", "medium", "high", "xhigh"],
   "gpt-6.1-sol": ["low", "medium", "high", "xhigh"],
   "gpt-6.1-terra": ["low", "medium", "high", "xhigh"],
+  "gpt-6.2-sol": ["low", "medium", "high", "xhigh"],
+  "gpt-6.2-astra": ["low", "medium", "high", "xhigh"],
   "glm-5.3": ["low", "high", "max"],
   "glm-5.2": ["high", "xhigh"],
 };
@@ -141,6 +150,8 @@ export const CODEBUDDY_GLOBAL_MODEL_DEFAULT_REASONING_EFFORTS: Record<string, st
   "gpt-6-luna": "high",
   "gpt-6.1-sol": "high",
   "gpt-6.1-terra": "high",
+  "gpt-6.2-sol": "high",
+  "gpt-6.2-astra": "high",
   "glm-5.3": "high",
   "glm-5.2": "high",
 };

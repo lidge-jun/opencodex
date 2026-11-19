@@ -12,7 +12,7 @@ import type {
   OcxToolCall,
   OcxReasoningReplayScopeRef,
 } from "../types";
-import { createToolChoiceResolver, namespacedToolName } from "../types";
+import { namespacedToolName } from "../types";
 import { responsesRequestSchema } from "./schema";
 import { providerMetadataFromResponsesFunctionCall } from "./provider-opaque-metadata";
 import { lookupReplayThoughtSignature } from "./thought-signature-replay";
@@ -27,7 +27,7 @@ import { buildImageTool, extractHostedImageGeneration, IMAGE_GEN_TOOL_NAME } fro
 import { toolSearchDescription, toolSearchParameters } from "./tool-search-compat";
 
 import { isObj, inputContentParts, outputTextOf, outputToToolResultContent, toolOutputContainsEncryptedContent } from "./parser-content";
-import { mapToolChoice, buildTools, customToolNamespaces } from "./parser-tools";
+import { mapToolChoice, buildTools, customToolNamespaces, explicitToolChoices } from "./parser-tools";
 import { parseTextFormat } from "./parser-text-format";
 import { externalTaskInputContent } from "./task-input";
 import { normalizeVisualizationContext } from "./visualization-directives";
@@ -247,6 +247,7 @@ export function parseRequest(
   // With search declared, replayed hosted cells become web_search call/output pairs (#7269).
   const webSearchReplay = webSearch && Array.isArray(data.input) ? rewriteReplayedWebSearchCells(data.input) : undefined;
   const systemPrompt: string[] = [];
+  const proxySystemPrompt: NonNullable<OcxContext["proxySystemPrompt"]> = [];
   // Responses reasoning siblings belong to the following assistant, including across call items.
   // Keep them off the message list until that assistant arrives; turn boundaries clear the array.
   const pendingReasoning: Array<{ part: OcxThinkingContent; envelopeSigned: boolean }> = [];
@@ -282,6 +283,12 @@ export function parseRequest(
     // receives the parent's copy verbatim, so the identity sentence inside it names the parent
     // unless it is renamed here, where the destination model is known.
     systemPrompt.push(nameDestinationText(data.instructions, data.model));
+    // The plaintext checkpoint framer can append the note to the caller's instructions.
+    // Keep that block intact for other adapters and record only the suffix the proxy added.
+    if (data.instructions !== parsed.data.instructions) {
+      const callerLength = parsed.data.instructions?.trim() ? parsed.data.instructions.length : 0;
+      proxySystemPrompt.push({ blockIndex: 0, suffix: data.instructions.slice(callerLength) });
+    }
   }
 
   if (typeof data.input === "string") {
@@ -692,30 +699,25 @@ export function parseRequest(
   // #6764: the decoded checkpoint is ordinary user text on this route. Say in the system prompt
   // what it is, so a retained earlier request that it reports as completed is not repeated.
   // A compaction request is a summarizer turn and must not be told to continue.
-  if (decodedCheckpoint && !compactionRequest) systemPrompt.push(CHECKPOINT_CONTINUATION_NOTE);
+  if (decodedCheckpoint && !compactionRequest) {
+    proxySystemPrompt.push({ blockIndex: systemPrompt.length, suffix: CHECKPOINT_CONTINUATION_NOTE });
+    systemPrompt.push(CHECKPOINT_CONTINUATION_NOTE);
+  }
   const context: OcxContext = {
     ...(systemPrompt.length > 0 ? { systemPrompt } : {}),
+    ...(proxySystemPrompt.length > 0 ? { proxySystemPrompt } : {}),
     messages,
     ...(mergedTools.length > 0 ? { tools: mergedTools } : {}),
   };
 
-  const options: OcxRequestOptions = {};
+  const options: OcxRequestOptions = explicitToolChoices(data.tool_choice, mergedTools);
   if (data.max_output_tokens !== undefined) options.maxOutputTokens = data.max_output_tokens;
   if (data.temperature !== undefined) options.temperature = data.temperature;
   if (data.top_p !== undefined) options.topP = data.top_p;
   if (data.stop !== undefined && data.stop !== null) {
     options.stopSequences = typeof data.stop === "string" ? [data.stop] : data.stop;
   }
-  const tc = mapToolChoice(data.tool_choice);
-  if (tc && typeof tc === "object") {
-    const selectors = "allowedTools" in tc ? tc.allowedTools : [tc.name];
-    const resolver = createToolChoiceResolver(mergedTools);
-    for (const selector of selectors) {
-      if (resolver.candidateCount(selector) > 1) {
-        throw new Error(`ambiguous tool_choice name: ${selector}`);
-      }
-    }
-  }
+  const tc = mapToolChoice(data.tool_choice, mergedTools);
   if (tc !== undefined) options.toolChoice = tc;
   if (data.parallel_tool_calls !== undefined) options.parallelToolCalls = data.parallel_tool_calls;
   // Upstream codex-rs converts "ultra" to "max" at the inference boundary (core/src/client.rs

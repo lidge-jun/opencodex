@@ -426,7 +426,8 @@ export async function dispatchNativeComboChild(input: {
     attempt,
     startedAt,
     seal: label => sealRequestAttemptIdentity(attempt, childLog.provider, childLog.providerAdapter ?? attempt.adapter, label),
-    finish: (status, usage) => finishRequestAttempt(attempt, status, Date.now() - startedAt, usage),
+    // A rotation inside the child seals the earlier account and moves the segment start forward.
+    finish: (status, usage) => finishRequestAttempt(attempt, status, Date.now() - (childLog.activeAttemptStartedAt ?? startedAt), usage),
   };
   const child = {
     route: plan.route,

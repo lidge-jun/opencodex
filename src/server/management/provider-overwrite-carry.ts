@@ -4,8 +4,11 @@ import {
   retryOnResetPolicyConfigError,
   transientRetryOn5xxPolicyConfigError,
 } from "../../config/load-degrade";
+import { providerTimeoutOverrideConfigError } from "../../config/schema/leaf-validators";
 import type { OcxProviderConfig } from "../../types";
 import { providerModelDiscoveryConfigError } from "../../providers/model-discovery-config";
+
+const TIMEOUT_OVERRIDE_FIELDS = ["connectTimeoutMs", "stallTimeoutSec"] as const;
 
 /**
  * The retry policies. They are the one carried group the PATCH field mask did not know, and they
@@ -71,6 +74,7 @@ export const PROVIDER_COMPAT_CARRY_FIELDS = [
 
 export const PROVIDER_DISPLAY_CARRY_FIELDS = [
   "hideRawReasoning",
+  "rawReasoningAsSummary",
   // The Anthropic thinking display policy (#8363) is operator configuration the dashboard form
   // cannot send either, so an unrelated save must not silently return the model to the default.
   "thinkingDisplay",
@@ -78,7 +82,12 @@ export const PROVIDER_DISPLAY_CARRY_FIELDS = [
   // The experimental Anthropic per-message effort switch (#6895) is operator configuration the form
   // cannot send; an unrelated save must not silently turn it off.
   "perMessageEffort",
+  // The dashboard form omits these operator-configured transport budgets.
+  ...TIMEOUT_OVERRIDE_FIELDS,
 ] as const satisfies readonly (keyof OcxProviderConfig)[];
+
+/** Display policies that are plain booleans and can share one validation/patch branch. */
+const PROVIDER_BOOLEAN_DISPLAY_FIELDS = ["hideRawReasoning", "rawReasoningAsSummary"] as const satisfies readonly (keyof OcxProviderConfig)[];
 
 export type ProviderCompatCarryField = typeof PROVIDER_COMPAT_CARRY_FIELDS[number];
 type ProviderDisplayCarryField = typeof PROVIDER_DISPLAY_CARRY_FIELDS[number];
@@ -145,7 +154,7 @@ export function providerOverwriteKeepsDestination(
 }
 
 /**
- * Carry the stored display policy on every overwrite, then the omitted compatibility settings
+ * Carry omitted operator settings on every overwrite, then the omitted compatibility settings
  * only when the destination is unchanged. `live` must be the row read after
  * the route's DNS await, so a PATCH that saved one of them during the wait is kept.
  */
@@ -193,8 +202,10 @@ export function providerCompatFieldConfigError(provider: Record<string, unknown>
   if (provider.singleLeadingSystemMessage !== undefined && typeof provider.singleLeadingSystemMessage !== "boolean") {
     return "singleLeadingSystemMessage must be a boolean";
   }
-  const hideRawReasoning = provider.hideRawReasoning;
-  if (hideRawReasoning !== undefined && typeof hideRawReasoning !== "boolean") return "hideRawReasoning must be a boolean";
+  for (const field of PROVIDER_BOOLEAN_DISPLAY_FIELDS) {
+    const value = provider[field];
+    if (value !== undefined && typeof value !== "boolean") return `${field} must be a boolean`;
+  }
   const preserveResponses = provider.preserveResponsesReasoningContent;
   if (preserveResponses !== undefined && typeof preserveResponses !== "boolean") return "preserveResponsesReasoningContent must be a boolean";
   const promoteAdditionalTools = provider.promoteAdditionalTools;
@@ -246,11 +257,12 @@ export function applyProviderCompatPatchFields(
     else return { error: "singleLeadingSystemMessage must be a boolean" };
     touched = true;
   }
-  if (Object.hasOwn(rawBody, "hideRawReasoning")) {
-    const value = rawBody.hideRawReasoning;
-    if (value === null) delete next.hideRawReasoning;
-    else if (typeof value === "boolean") next.hideRawReasoning = value;
-    else return { error: "hideRawReasoning must be a boolean" };
+  for (const field of PROVIDER_BOOLEAN_DISPLAY_FIELDS) {
+    if (!Object.hasOwn(rawBody, field)) continue;
+    const value = rawBody[field];
+    if (value === null) delete next[field];
+    else if (typeof value === "boolean") next[field] = value;
+    else return { error: `${field} must be a boolean` };
     touched = true;
   }
   if (Object.hasOwn(rawBody, "preserveResponsesReasoningContent")) {
@@ -307,6 +319,19 @@ export function applyProviderCompatPatchFields(
       const error = RETRY_POLICY_VALIDATORS[field](value);
       if (error) return { error };
       next[field] = structuredClone(value) as OcxProviderConfig[typeof field];
+    }
+    touched = true;
+  }
+  for (const field of TIMEOUT_OVERRIDE_FIELDS) {
+    if (!Object.hasOwn(rawBody, field)) continue;
+    const value = rawBody[field];
+    if (value === null) {
+      delete next[field];
+    } else {
+      const error = providerTimeoutOverrideConfigError({ [field]: value });
+      if (error) return { error };
+      // A named, non-null JSON field can only pass validation with an integer.
+      next[field] = value as number;
     }
     touched = true;
   }
