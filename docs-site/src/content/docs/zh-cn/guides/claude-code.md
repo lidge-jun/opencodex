@@ -339,7 +339,14 @@ v1 别名按字面解码（历史上 model ID 中包含的两字符序列 `~s` /
 1. 启动环境槽位会在目录中的有效窗口大于 200k **且**至少达到所配置的自动压缩阈值时带上
    `[1m]` 标记。发现列表和 Desktop 选择器条目不跟随该阈值：它们使用固定的 829,800 token 下限（Anthropic 路由上的 Claude 模型必须真正达到 1M）。
 2. 系统会注入 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`（默认 `829800`，范围 `100000`–`1000000`），
-   使对话在该位置自动进行摘要。
+   使对话在该位置自动进行摘要。经代理运行 `ocx claude` 时，如果模型目录中有更小的窗口，
+   启动器可以通过 `--settings` 为各模型设置压缩阈值。参数超出启动器的长度限制时，仍使用环境变量。
+
+生成的 JSON 属于 Claude Code 的命令行设置，优先级高于本地、项目及用户设置文件，低于托管设置。传入 `--settings <file>` 或 `--autocompact` 会跳过 JSON 生成。启动器原样传递显式指定的 `--settings` 参数，由 Claude Code 处理文件。
+
+使用任一选项跳过 JSON 生成时，如果自动上下文设置了 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`，启动器会保留该环境变量。显式导出该变量也会跳过 JSON 生成并保留其值。在 Claude Code 中，该变量的有效值优先于 `--autocompact` 和已保存的压缩设置。要使用文件中的压缩设置，请将 `claudeCode.autoContext` 设为 `false` 以关闭自动注入，取消导出的 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`，然后传入 `--settings <file>`。参见 [Claude Code 自动压缩设置的优先级](https://code.claude.com/docs/en/model-config#set-the-auto-compact-window)。
+
+只要有一个参数（包括选项值和 `--` 后的参数）与 Remote Control 命令或别名（`remote-control`、`rc`、`bridge`、`remote` 或 `sync`）完全匹配，启动器就会跳过生成的设置，并保留原始参数和启动环境。
 
 配置有三种状态：
 

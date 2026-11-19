@@ -209,7 +209,7 @@ ocx claude
 | `ANTHROPIC_BASE_URL` | `http://127.0.0.1:<port>` |
 | `ANTHROPIC_AUTH_TOKEN` | Only when the proxy requires an API key — otherwise it is NOT set, so your claude.ai login (subscription + connectors) stays active |
 | `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` | `1` (native `/model` picker discovery) |
-| `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Auto-context compaction threshold (default `829800`); only injected when auto-context is enabled |
+| `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Auto-context compaction threshold (default `829800`); when smaller catalog windows need per-model limits, routed `ocx claude` uses session-only `--settings` instead |
 | `ANTHROPIC_MODEL` | `claudeCode.model` (optional) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (optional; legacy `ANTHROPIC_SMALL_FAST_MODEL` too) |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`; on a subscription launch an unset slot gets the native `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`, so `--model opus`, `sonnet` and `fable` keep their 1M context |
@@ -826,8 +826,35 @@ default) fixes that:
    **and** at least the configured auto-compact threshold. Discovery and Desktop picker rows do not follow
    that threshold: they use the fixed 829,800-token floor (a genuine 1M for Claude models on an
    Anthropic route).
-2. `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (default `829800`, range `100000`–`1000000`) is injected so
-   the conversation auto-summarizes at that point.
+2. The default compact window is `829800` (range `100000`–`1000000`). When the live catalog
+   includes smaller windows, `ocx claude` passes session-only `--settings`: the default stays
+   unchanged and each smaller model selector gets 95% of its known window, provided that value
+   is within the client's supported range. Switching with `/model` selects the corresponding
+   compact window. No Claude Code settings file is written. With no eligible smaller window,
+   the launcher retains the existing `CLAUDE_CODE_AUTO_COMPACT_WINDOW` injection.
+   Generated keys are limited to gateway-discovered model IDs and the launcher's model slots.
+   The launcher uses the existing environment variable if the generated JSON exceeds 4,000
+   characters on Windows or 32,000 elsewhere. On Windows it also falls back if the escaped
+   arguments together exceed 7,000 characters, leaving room for the command shim and shell wrapper.
+
+Generated JSON uses Claude Code's command-line settings scope, above local, project, and user
+files and below managed settings. Passing `--settings <file>` or `--autocompact` skips the
+generated JSON. The launcher forwards explicit `--settings` arguments as supplied and leaves
+file handling to Claude Code.
+
+When either flag skips JSON generation, the launcher keeps the legacy
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` if auto-context supplies it. An explicitly exported value
+also skips generation and stays in the launch environment. Claude Code gives a usable
+value of this variable precedence over `--autocompact` and saved compact settings.
+To use the compact policy from a file, set `claudeCode.autoContext` to `false` to stop automatic
+injection, unset any exported `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, and pass `--settings <file>`.
+See [Claude Code's auto-compact precedence](https://code.claude.com/docs/en/model-config#set-the-auto-compact-window).
+
+Generated per-model settings apply to routed `ocx claude` sessions. The launcher skips them and keeps the original arguments and launch environment if any argument
+exactly matches a Remote Control command or alias (`remote-control`, `rc`, `bridge`, `remote`, or `sync`),
+including option values and arguments after `--`.
+The `--remote-control` session option still supports generated settings. The `modelUsage.contextWindow`
+accounting field can differ from the working compact window shown by `/context`.
 
 Three config states:
 
