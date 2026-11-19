@@ -218,6 +218,18 @@ export function codexWsPreOutputRefusalHold(connectMs: number, now = Date.now())
   return { maxMs: Math.min(CODEX_WS_PRE_OUTPUT_REFUSAL_HOLD_MAX_MS, half), until: now + half };
 }
 
+export function terminalErrorRecords(payload: Record<string, unknown>): Record<string, unknown>[] {
+  const response = plainRecord(payload.response) ? payload.response : undefined;
+  return [response?.error, payload.error, response?.last_error, payload.last_error].filter(plainRecord);
+}
+
+/** Envelope-level vetoes can carry a stream policy refusal. Error-level vetoes only block replay. */
+export function responsesFrameRetryVeto(payload: Record<string, unknown>): "envelope" | "error" | undefined {
+  const response = plainRecord(payload.response) ? payload.response : undefined;
+  if (payload.retryable === false || response?.retryable === false) return "envelope";
+  if (terminalErrorRecords(payload).some(error => error.retryable === false)) return "error";
+}
+
 /** Only an absent mark or boolean false permits replay, on both the event and its snapshot. */
 export function responsesFrameIsReplayUnsafe(payload: Record<string, unknown>): boolean {
   const marked = (frame: Record<string, unknown>) => Object.hasOwn(frame, "replayUnsafe") && frame.replayUnsafe !== false;

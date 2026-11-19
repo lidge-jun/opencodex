@@ -17,7 +17,7 @@ import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import type { RequestFailureStage } from "../../lib/request-failure-model";
 import type { RequestLogContext } from "../request-log";
 import { carryResponseToolOwnership } from "./response-tool-ownership";
-import { responsesFrameIsReplayUnsafe } from "./codex-ws-wire";
+import { responsesFrameIsReplayUnsafe, responsesFrameRetryVeto, terminalErrorRecords } from "./codex-ws-wire";
 import { createSseInspector, isNativePassthroughSseResponse } from "../relay";
 import { sseDataPayload } from "../sse-payload-rewrite";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
@@ -354,23 +354,18 @@ function heldOnlyOutput(...outputs: unknown[]): boolean {
     && !Array.isArray(item) && ["message", "reasoning"].includes((item as { type?: unknown }).type as string));
 }
 
-function terminalErrorRecords(payload: Record<string, unknown>): Record<string, unknown>[] {
-  const response = isRecord(payload.response) ? payload.response : undefined;
-  return [response?.error, payload.error, response?.last_error, payload.last_error].filter(isRecord);
-}
-
 export function failedTerminalReplayVerdict(payload: unknown): "blocked" | "policy" | undefined {
   if (!isRecord(payload)) return;
   const bare = payload.type === "error";
   const failed = payload.type === "response.failed" || payload.status === "failed";
   if (!bare && !failed && payload.type !== "response.incomplete" && payload.status !== "incomplete") return;
-  const response = isRecord(payload.response) ? payload.response : payload;
   const errors = terminalErrorRecords(payload);
   if (isNonReplayableUpstreamCode(payload.code) || errors.some(error => isNonReplayableUpstreamCode(error.code))) return "blocked";
-  if (payload.retryable === false || response.retryable === false) {
+  const veto = responsesFrameRetryVeto(payload);
+  if (veto === "envelope") {
     return !bare && failed && errors.some(error => typeof error.code === "string" && isTerminalRefusalCode(error.code)) ? "policy" : "blocked";
   }
-  if (errors.some(error => error.retryable === false)) return "blocked";
+  if (veto) return "blocked";
 }
 
 function retryableZeroOutputTerminal(payload: unknown, context?: object): boolean {

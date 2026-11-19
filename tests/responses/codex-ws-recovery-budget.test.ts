@@ -101,6 +101,8 @@ async function warmCombo() {
 test.each([
   ['ordinary miss', missing, undefined],
   ['retryable false', { ...missing, response: { retryable: false } }, 'upstream_response_refused'],
+  ['error retryable false', { ...missing, error: { ...missing.error, retryable: false } }, 'upstream_response_refused'],
+  ['last_error retryable false', { ...missing, last_error: { retryable: false } }, 'upstream_response_refused'],
   ['header veto', { ...missing, headers: { 'X-Should-Retry': 'false', 'Retry-After': '30' } }, 'upstream_response_refused'],
   ['recognized refusal', { ...missing, last_error: { code: 'upstream_reset_replay_refused' } }, 'upstream_reset_replay_refused'],
   ['root refusal code', { ...missing, code: 'upstream_response_refused' }, 'upstream_response_refused'],
@@ -118,6 +120,9 @@ test.each([
     ? { sends: 1, charged: 1, started: 1, recorded: 1, status: 429 }
     : { sends: 2, charged: 2, started: 2, recorded: 1, status: 200 });
   if (code) {
+    expect(log.activeAttempt?.recoveryKinds).toEqual([]);
+    expect(log.activeAttempt?.recoveryWithheld ?? []).toEqual([]);
+    expect(log.attempts).toEqual([expect.objectContaining({ ordinal: 1, sendCount: 1, recoveryKinds: [] })]);
     expect(response.headers.get('x-should-retry')).toBe('false');
     expect(response.headers.get('retry-after')).toBeNull();
     expect(JSON.parse(body).error).toMatchObject({ code, message: REPLAY_REFUSAL_MESSAGE });

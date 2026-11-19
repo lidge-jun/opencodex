@@ -627,20 +627,31 @@ describe("sidecar on429 wiring", () => {
     expect(arm).not.toContain("rotateGenericOAuthAccountOn429(");
     // Marking stays generation-fenced: no unfenced fallback may re-quarantine a
     // credential that rotated after the 403 was sent.
-    expect(arm).toContain("sent = await quarantineAntigravityVerificationRefusal(upstreamResponse, route.providerName,");
-    expect(arm).toContain("transportState.genericFailoverAccountId, transportState.sentOAuthSnapshot, upstream.signal)");
+    expect(arm).toContain("sent = await quarantineAntigravityRefusal(upstreamResponse, route.providerName, route.provider,");
+    expect(arm).toContain("transportState.genericFailoverAccountId, transportState.sentOAuthSnapshot, antigravityQuarantineTrust, upstream.signal)");
     expect(arm).toContain("if (!sent) break;");
-    expect(arm.indexOf("quarantineAntigravityVerificationRefusal(")).toBeLessThan(arm.indexOf("rotateAntigravityAccountOnAuthRefusal("));
+    expect(arm.indexOf("quarantineAntigravityRefusal(")).toBeLessThan(arm.indexOf("rotateAntigravityAccountOnAuthRefusal("));
     const quarantineSource = readFileSync(repoPath("src/server/responses/antigravity-validation-refusal.ts"), "utf8");
-    const quarantineStart = quarantineSource.indexOf("export async function quarantineAntigravityVerificationRefusal");
+    const quarantineStart = quarantineSource.indexOf("export async function quarantineAntigravityRefusal");
     expect(quarantineStart).toBeGreaterThan(-1);
     const quarantineEnd = quarantineSource.indexOf("/** Match only", quarantineStart);
     expect(quarantineEnd).toBeGreaterThan(quarantineStart);
     const quarantine = quarantineSource.slice(quarantineStart, quarantineEnd);
     expect(quarantine).toContain('if (response.status !== 403 || providerName !== "google-antigravity" || !sent || sent.accountId !== accountId) return;');
-    expect(quarantine).toContain('if (!body.displaySafe || body.truncated || classifyAntigravityRefusal(response.status, body.text).kind === "other") return;');
-    expect(quarantine).toContain('markAccountNeedsReauthIfGeneration(providerName, sent.accountId, sent.generation, undefined, "verify_account")');
-    expect(arm + quarantine).not.toMatch(/\bmarkAccountNeedsReauth\(/);
+    const vetoStart = coreSource.indexOf("if (isAutomaticReplayBlocked(upstreamResponse)) {");
+    expect(vetoStart).toBeGreaterThan(-1);
+    const vetoEnd = coreSource.indexOf("bindAnthropicRejectionResponse", vetoStart);
+    expect(vetoEnd).toBeGreaterThan(vetoStart);
+    const vetoArm = coreSource.slice(vetoStart, vetoEnd);
+    expect(vetoArm).toContain("await quarantineAntigravityRefusal(upstreamResponse, route.providerName, route.provider,");
+    expect(vetoArm).toContain("transportState.genericFailoverAccountId, transportState.sentOAuthSnapshot, antigravityQuarantineTrust, upstream.signal)");
+    expect(vetoArm).toContain("break recovery;");
+    expect(vetoArm).not.toContain("rotateAntigravityAccountOnAuthRefusal(");
+    expect(quarantine).toContain("const refusal = await classifyAntigravityQuarantine(response, provider, trust, signal);");
+    expect(quarantine).toContain('if (refusal.kind === "other") return;');
+    expect(quarantine).toContain("markAccountNeedsReauthIfGeneration(providerName, sent.accountId, sent.generation, undefined, refusal.kind)");
+    expect(quarantineSource).toContain('classifyAntigravityRefusal(response.status, await readDisplaySafeErrorText(response.clone(), signal, ""))');
+    expect(arm + vetoArm + quarantine).not.toMatch(/\bmarkAccountNeedsReauth\(/);
     // Cross-account thought signatures are not a source-text claim. The dispatch
     // test in server-google-antigravity-oauth-401-replay proves account A's
     // durable signature is absent from the sibling replay.

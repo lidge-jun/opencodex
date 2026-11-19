@@ -20,7 +20,7 @@ import { UPGRADE_DEADLINE_MS, CODEX_WS_LIVENESS_PING_INTERVAL_MS, CODEX_WS_RESPO
   codexWsCreateFrameExceedsLimit, codexWsFailureDetail, codexWsPreResponseFailure, markCodexWsStage, codexWsOcxVersion,
   markCodexWsSocketDeath, codexWsWrapperStatus, isCodexWsTerminalEvent, type CodexWsFailureStage, type CodexWsStageRecord,
   type CodexWsTerminalEvent, codexWsPreOutputRefusalStatus, isEmptyCodexWsLifecycleEvent, codexWsFrameResponseIds,
-  markCodexWsPreOutputRefusal, responsesFrameIsReplayUnsafe, type CodexWsPreOutputRefusalHold } from "./codex-ws-wire";
+  markCodexWsPreOutputRefusal, responsesFrameIsReplayUnsafe, responsesFrameRetryVeto, type CodexWsPreOutputRefusalHold } from "./codex-ws-wire";
 
 interface ExchangeOptions {
   incrementalPlan?: IncrementalPlan;
@@ -126,7 +126,7 @@ function cacheMissReplayRefusal(payload: Record<string, unknown>, prelude: Heade
     if (record(carrier) && isReplayRefusalCode(carrier.code)) return carrier.code;
   }
   const headers = record(payload.headers) ? payload.headers : {};
-  if (payload.retryable === false || response?.retryable === false
+  if (responsesFrameRetryVeto(payload)
     || prelude.get(REPLAY_REFUSAL_NO_RETRY_HEADER) === REPLAY_REFUSAL_NO_RETRY_VALUE
     || Object.entries(headers).some(([name, value]) =>
       name.toLowerCase() === REPLAY_REFUSAL_NO_RETRY_HEADER
