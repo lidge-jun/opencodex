@@ -614,8 +614,8 @@ export async function preparePassthroughExchange(
       }
       // The snapshot callback opts the inspector into output reconstruction. Compaction
       // has no continuation cache, so use the parsed terminal here without adding retention.
-      if (responseEffects.plaintextV2AgentMessageToolNames.size === 0 && !rememberPassthroughResponse && payload && typeof payload === "object"
-        && "type" in payload && payload.type === "response.completed"
+      if (responseEffects.plaintextV2AgentMessageToolNames.size === 0 && !rememberPassthroughResponse
+        && terminal === "completed" && inspectedTerminal === "completed" && payload && typeof payload === "object"
         && "response" in payload && payload.response && typeof payload.response === "object"
         && !Array.isArray(payload.response)) {
         rememberPassthroughResponseChecked(payload.response as Record<string, unknown>);

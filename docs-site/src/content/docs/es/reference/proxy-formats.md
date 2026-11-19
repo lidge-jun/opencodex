@@ -36,6 +36,12 @@ comportamiento. Las rutas nativas directas siguen siendo un ámbito separado. La
 
 Con `stream: true`, los destinos nativos Responses de un combo también rechazan una elección obligatoria o por nombre incumplida con `required_tool_contract_unsatisfied`. La elección del cliente sigue siendo vinculante aunque un destino filtre la herramienta o reduzca la elección saliente a `none`. Las sustituciones configuradas por imágenes alojadas solo satisfacen la elección original si se aplican a la solicitud realmente enviada, también después de revalidarla en cola. Una respuesta completa de solo texto retenida puede avanzar a otro destino elegible. Los eventos conocidos de razonamiento se retienen como máximo un segundo desde el primero; los siguientes no amplían el plazo. Al vencer, se libera el flujo y se fija el destino, conservando cualquier lectura pendiente del proveedor. El texto, los eventos de herramientas, la salida opaca o desconocida y los límites del búfer también fijan el destino. Los selectores de namespace y los ecos de llamadas comparten la restauración autorizada de alias. Después de ese límite, la ausencia de llamadas produce `response.failed` sin solicitar otro destino; la salida y el uso ya entregados se conservan. La evidencia de ejecución alojada también impide la repetición aunque la instantánea final la omita. Auto/none, los resultados incompletos y los contratos desconocidos conservan sus reglas.
 
+Si un evento `response.completed` o su respuesta anidada comunica un fallo en `error` o `last_error`,
+el combo conserva ese destino. Los clientes de streaming reciben el evento terminal del proveedor.
+Los clientes que esperan una respuesta completa reciben un error JSON con el estado HTTP
+correspondiente. OpenCodex registra el fallo y el uso declarado sin guardar la respuesta para
+reutilizarla mediante `previous_response_id`.
+
 <a id="required-tools-on-translated-chat-routes"></a>
 
 ## Herramientas obligatorias en rutas Chat traducidas

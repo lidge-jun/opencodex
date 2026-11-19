@@ -178,6 +178,8 @@
   "responses-undeclared-tool-guard-inbound.test.ts": "responses",
     "messages-request-id-endpoint.test.ts": "claude-integration",
     "subscription-reserve.test.ts": "claude-integration",
+    "combo-committed-terminal-cooldown.test.ts": "routing",
+    "combo-stream-prelude-guards.test.ts": "routing",
     "combo-cooldown-persistence.test.ts": "routing",
     "combo-unoffered-tool-refusal.test.ts": "routing",
   "anthropic-revoked-token.test.ts": "adapters/anthropic",
