@@ -196,6 +196,7 @@ export async function consultAdvisor(
       body: JSON.stringify(requestBody),
       signal: linkedSignal.signal,
       redirect: "manual",
+      proxy: false,
     });
     const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
     try {

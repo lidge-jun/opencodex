@@ -70,6 +70,8 @@ export interface OcxParsedRequest {
   _rawBody?: unknown;
   /** Trusted ingress provenance: preserve Chat's tool defaults only on the final Responses wire. */
   _chatCompletionsInput?: boolean;
+  /** Server-owned request provenance. All system text on this turn belongs at system priority. */
+  _proxyOwnedSystemPrompt?: true;
   /** Claude replay tags, retained only until each route binding verifies them. */
   _nativeReasoningReplay?: ReadonlyMap<string, string>;
   _nativeReasoningBoundOwner?: NativeReasoningOwner;
@@ -252,6 +254,9 @@ export interface OcxParsedRequest {
 
 export interface OcxContext {
   systemPrompt?: string[];
+  /** Proxy-authored suffixes in systemPrompt (including any joining separator). Keeping their
+   * provenance lets adapters relocate caller text while preserving the original system layout. */
+  proxySystemPrompt?: { blockIndex: number; suffix: string }[];
   messages: OcxMessage[];
   tools?: OcxTool[];
 }
