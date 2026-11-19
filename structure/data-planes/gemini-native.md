@@ -8,10 +8,11 @@ Requests outside those conditions use the Chat bridge. Advisor and sidecar capab
 use the bridge for their inherited-policy checks.
 
 The native leg checks the captured admission model scope against the resolved destination.
-`src/server/gemini-native-catalog.ts` also projects scoped native wire aliases from the configured
-Gemini catalog. An alias is listed or served by point lookup only when routing the alias selects
-the native leg and maps to that same wire ID. Discovery is configuration-only. Generation
-resolves the Antigravity wire model from the route before accessing OAuth.
+`src/server/gemini-native-catalog.ts` extends the configured Gemini catalog with visible Gemini
+models from the existing Antigravity discovery cache. List, lookup and token counting apply
+the same route and key checks. Wire aliases are published only when routing the alias selects
+the native leg and maps to that same wire ID. These reads reuse the cached roster and start no
+upstream discovery. Generation resolves the Antigravity wire model before accessing OAuth.
 
 `src/server/gemini-native.ts` uses the active, usable OAuth account. The token and project come
 from the same snapshot, including after one 401-triggered refresh. Each physical send uses

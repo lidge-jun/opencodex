@@ -2,6 +2,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:te
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fetchProviderModels } from "../../src/codex/catalog/provider-models";
+import { clearModelCache } from "../../src/codex/model-cache";
 import { saveConfig } from "../../src/config";
 import { saveCredential } from "../../src/oauth/store";
 import { startServer } from "../../src/server";
@@ -20,6 +22,12 @@ const GOOGLE_KEY = "fixture-local-ingress-key";
 const OAUTH_TOKEN = "fixture-google-oauth-access";
 const SCOPE_KEY = "ocx_data_" + "d".repeat(40);
 const MODEL_SCOPE_KEY = "ocx_data_" + "b".repeat(40);
+const HYDROGEN = "gemini-4-hydrogen";
+const NEON = "gemini-4-neon";
+const DISCOVERED_WIRES = [
+  ...["low", "medium", "high", "xhigh"].map(tier => `${HYDROGEN}-${tier}`),
+  ...["low", "medium", "high"].map(tier => `${NEON}-${tier}`),
+];
 const RAW = '{"contents":[{"role":"user","parts":[{"text":"hello"}]}], "future":9007199254740993123}';
 const PAYLOAD = '{"candidates":[{"content":{"role":"model","parts":[{"text":"hello"}]},"finishReason":"STOP"}],"future":9007199254740993123}';
 const originalFetch = globalThis.fetch;
@@ -29,6 +37,7 @@ const previousEnv = {
 };
 const seen: Array<{ url: URL; headers: Headers; body: string }> = [];
 let home: string;
+let discoveryWires: string[];
 
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), "ocx-native-gemini-routes-"));
@@ -49,10 +58,17 @@ afterAll(() => {
 
 beforeEach(() => {
   seen.length = 0;
+  discoveryWires = [];
   const fixtureFetch: typeof fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.hostname === "127.0.0.1" || url.hostname === "localhost") return originalFetch(input, init);
     if (url.origin !== CCA && url.origin !== CHAT) throw new Error("unexpected external fetch in Gemini fixture");
+    if (url.origin === CCA && url.pathname === "/v1internal:fetchAvailableModels" && discoveryWires.length > 0) {
+      return Response.json({
+        models: Object.fromEntries(discoveryWires.map(id => [id, {}])),
+        agentModelSorts: [{ groups: [{ modelIds: discoveryWires }] }],
+      });
+    }
     if (init?.method !== "POST" || !url.pathname.includes("generateContent") && !url.pathname.includes("streamGenerateContent") && !url.pathname.endsWith("/chat/completions")) {
       return Response.json({ models: [], data: [] });
     }
@@ -93,6 +109,10 @@ async function withServer(cfg: OcxConfig, run: (base: URL) => Promise<void>) {
   const server = startServer(0);
   try { await run(server.url); } finally { await server.stop(true); }
 }
+function discoverFixtureModels(cfg: OcxConfig) {
+  return fetchProviderModels(PROVIDER, { ...cfg.providers[PROVIDER]!, fetch: globalThis.fetch }, 60_000);
+}
+
 const key = { "x-goog-api-key": GOOGLE_KEY };
 const generation = (model = TARGET, method = "generateContent", version = "v1beta") => `/${version}/models/${model}:${method}`;
 const post = (base: URL, path: string, headers: Record<string, string> = key) =>
@@ -132,6 +152,9 @@ test("flag off, v1, and a Gemini model on another provider use the Chat bridge",
       const translated = await post(base, path);
       expect(translated.status).toBe(200);
       expect(await translated.json()).not.toHaveProperty("future");
+      const log = getRequestLogEntries().find(row => row.requestId === translated.headers.get("x-opencodex-request-id"));
+      expect(log).toBeDefined();
+      expect(log?.protocolTrace?.inbound).not.toBe("gemini");
       expect(seen.at(-1)?.body).not.toContain(RAW);
       const other = await post(base, generation(`fx/${MODEL}`));
       expect(other.status).toBe(200);
@@ -235,4 +258,72 @@ test("model lookup and discovery expose only scoped, routable native wire aliase
     expect((await get(base, "/v1beta/models/gemini-no-such-model")).status).toBe(404);
     expect(seen).toHaveLength(0);
   });
+});
+
+test("Gemini discovery and lookup reuse live Antigravity models and exact wire tiers", async () => {
+  const cfg = config(true);
+  discoveryWires = DISCOVERED_WIRES;
+  try {
+    await withServer(cfg, async base => {
+      await discoverFixtureModels(cfg);
+      const openaiCatalog = await get(base, "/v1/models", { "x-opencodex-api-key": GOOGLE_KEY });
+      expect(openaiCatalog.status).toBe(200);
+      expect(await openaiCatalog.json()).toMatchObject({ data: expect.arrayContaining([
+        expect.objectContaining({ id: `${PROVIDER}/${HYDROGEN}` }),
+        expect.objectContaining({ id: `${PROVIDER}/${NEON}` }),
+      ]) });
+
+      const response = await get(base, "/v1beta/models");
+      const { models } = await response.json() as { models: Array<{ name: string }> };
+      for (const selector of [`${PROVIDER}/${HYDROGEN}`, `${PROVIDER}/${NEON}`, ...DISCOVERED_WIRES]) {
+        const listed = models.filter(model => model.name === `models/${selector}`);
+        expect(listed).toHaveLength(1);
+        const lookup = await get(base, `/v1beta/models/${selector}`);
+        expect(lookup.status).toBe(200);
+        expect(await lookup.json()).toEqual(listed[0]);
+        expect((await get(base, `/v1beta/models/${selector}`, { "x-goog-api-key": SCOPE_KEY })).status).toBe(404);
+        expect((await get(base, `/v1beta/models/${selector}`, { "x-goog-api-key": MODEL_SCOPE_KEY })).status).toBe(404);
+      }
+      expect(models.map(model => model.name)).not.toContain(`models/${NEON}-xhigh`);
+      expect((await get(base, `/v1beta/models/${NEON}-xhigh`)).status).toBe(404);
+
+      const send = await post(base, generation(`${HYDROGEN}-xhigh`));
+      expect(send.status).toBe(200);
+      expect(await send.text()).toBe(PAYLOAD);
+      expect(JSON.parse(seen.at(-1)!.body).model).toBe(`${HYDROGEN}-xhigh`);
+    });
+  } finally {
+    clearModelCache(PROVIDER);
+  }
+});
+
+test("Gemini lists discovered families only when the rollout and model visibility allow them", async () => {
+  discoveryWires = DISCOVERED_WIRES;
+  for (const restriction of ["rollout", "disabled", "selection"] as const) {
+    const cfg = config(restriction !== "rollout");
+    if (restriction === "disabled") cfg.disabledModels = [`${PROVIDER}/${HYDROGEN}`, `${PROVIDER}/${NEON}-medium`];
+    if (restriction === "selection") cfg.providers[PROVIDER]!.selectedModels = [`${NEON}-high`];
+    try {
+      await withServer(cfg, async base => {
+        const discovered = await discoverFixtureModels(cfg);
+        expect(discovered.map(model => model.id)).toContain(NEON);
+        const response = await get(base, "/v1beta/models");
+        const { models } = await response.json() as { models: Array<{ name: string }> };
+        const names = models.map(model => model.name);
+        const excluded = [`${PROVIDER}/${HYDROGEN}`, `${HYDROGEN}-high`];
+        if (restriction !== "selection") excluded.push(`${NEON}-medium`);
+        for (const selector of excluded) {
+          expect(names).not.toContain(`models/${selector}`);
+          expect((await get(base, `/v1beta/models/${selector}`)).status).toBe(404);
+        }
+        if (restriction !== "rollout") {
+          expect(names).toContain(`models/${PROVIDER}/${NEON}`);
+          expect(names).toContain(`models/${NEON}-high`);
+          expect((await get(base, `/v1beta/models/${NEON}-high`)).status).toBe(200);
+        }
+      });
+    } finally {
+      clearModelCache(PROVIDER);
+    }
+  }
 });

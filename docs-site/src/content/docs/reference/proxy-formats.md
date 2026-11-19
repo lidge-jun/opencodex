@@ -1155,10 +1155,12 @@ requests use the Chat bridge.
 
 The proxy preserves successful request and response JSON source, including unknown fields,
 large integers, function arguments, and thought signatures. Streaming uses SSE with
-`alt=sse` or a streamed JSON array otherwise. `GET /v1beta/models` and model lookup keep the
-configured, scoped catalog and also expose eligible native wire aliases that route back
-to their Antigravity model. Requests sent through the native path show **Gemini → Gemini · Native**
-in the dashboard's request logs.
+`alt=sse` or a streamed JSON array otherwise. `GET /v1beta/models` and model lookup include
+eligible, live-discovered Gemini models from the Antigravity discovery cache alongside configured
+models. Refresh the Antigravity model list in OpenCodex to populate the cache. Native wire aliases
+are available when the exact selector routes to that Antigravity model and the admission key
+allows it. Requests sent through the native path show **Gemini → Gemini · Native** in the
+dashboard's request logs.
 
 If an upstream payload contains bound account credentials, the proxy returns a generic
 Gemini error. A valid upstream `[DONE]` or a Gemini error ends stream delivery.
