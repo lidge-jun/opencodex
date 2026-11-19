@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act, useEffect, useRef, useState } from "react";
 import type { Root } from "react-dom/client";
+import { deriveProviderPresets } from "../../src/providers/derive";
 import { LanguageProvider } from "../src/i18n/provider";
 import { useT } from "../src/i18n/shared";
 import AddProviderModal from "../src/components/AddProviderModal";
@@ -39,7 +40,7 @@ let polledFlowIds: Array<string | null> = [];
 const PRESETS = [
   { id: "claude", label: "Claude", adapter: "anthropic", baseUrl: "https://api.anthropic.com", auth: "oauth", oauthProvider: "claude" },
   { id: "gemini", label: "Gemini", adapter: "gemini", baseUrl: "https://generativelanguage.googleapis.com", auth: "oauth", oauthProvider: "gemini" },
-  { id: "m365-copilot", label: "Microsoft 365 Copilot", adapter: "m365-copilot", baseUrl: "https://substrate.office.com/m365Copilot", auth: "oauth", oauthProvider: "m365-copilot" },
+  deriveProviderPresets().find(preset => preset.id === "m365-copilot")!,
 ];
 
 beforeEach(() => {
@@ -420,6 +421,13 @@ test("a proxy-owned login is polled past the dashboard's own browser budget", ()
   // a dashboard budget shorter than that cancelled flows that were still live.
   expect(serverOwnedLoginAttempts(OAUTH_LOGIN_POLL_INTERVAL_MS) * OAUTH_LOGIN_POLL_INTERVAL_MS)
     .toBeGreaterThan(12 * 60_000);
+});
+
+test("Add Provider shows the supported browsers for Microsoft 365 Copilot sign-in", async () => {
+  await mountModal();
+  await act(async () => { clickByText("Microsoft 365 Copilot"); });
+  expect(host.textContent).toContain("Chrome, Chromium or Edge");
+  expect(host.textContent).not.toContain("Firefox");
 });
 
 test("the add-provider pane keeps a proxy-owned login cancellable after pagehide", async () => {
