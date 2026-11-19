@@ -240,19 +240,21 @@ const liveX64 = process.platform !== "win32" || process.arch !== "x64";
 
 const portablePowerShell = Bun.which("pwsh");
 
-// The three budgets run in one test that shares one 60 s window: a slow first PowerShell start may use
+// The budgets run in one test that shares one 60 s window: a slow first PowerShell start may use
 // most of it, but a hang still fails inside the 120 s Linux batch deadline, naming the active budget.
 // "cap-reached" is the hosted-runner regression: the loop's own 1.5 s budget is fresh, but the
 // helper has already used the snapshot cap's owner window, so no owner read may start.
+// "cap-during-owner" passes the cap's owner cutoff while the first owner read is in flight, so its
+// refresh read must not start either.
 test.skipIf(process.platform !== "win32" && !portablePowerShell)("owner enrichment prioritizes this home and retains every row", async () => {
   const deadline = Date.now() + 60_000;
-  for (const budget of ["available", "expired", "expires-during-owner", "cap-reached"] as const) {
+  for (const budget of ["available", "expired", "expires-during-owner", "cap-reached", "cap-during-owner"] as const) {
     try { await ownerEnrichmentCase(budget, deadline); }
     catch (error) { throw new Error("budget=" + budget + ": " + (error instanceof Error ? error.message : String(error)), { cause: error }); }
   }
 }, 65_000);
 
-async function ownerEnrichmentCase(budget: "available" | "expired" | "expires-during-owner" | "cap-reached", deadline: number): Promise<void> {
+async function ownerEnrichmentCase(budget: "available" | "expired" | "expires-during-owner" | "cap-reached" | "cap-during-owner", deadline: number): Promise<void> {
   const powershell = process.platform === "win32" ? resolveTrustedWindowsPowerShellExe() : portablePowerShell!;
   const launcher = Buffer.from(windowsLauncherVbsPath(), "utf8").toString("base64");
   // A cap equal to the reserve puts the owner cutoff at the helper's own start.
@@ -268,6 +270,7 @@ async function ownerEnrichmentCase(budget: "available" | "expired" | "expires-du
     "    CreationDate = [datetime]'2026-11-12T01:02:03Z' } } };",
     "function Invoke-CimMethod { param($InputObject, $MethodName, $ErrorAction, $OperationTimeoutSec)",
     "  $script:ownerReads++; " + (budget === "expires-during-owner" ? "$ownerBudget.Clock.ElapsedMilliseconds = 1500; " : "")
+      + (budget === "cap-during-owner" ? "$ownerBudget.Until = [DateTime]::UtcNow.AddMinutes(-1); " : "")
       + "@{ Sid = $currentSid; ReturnValue = 0 } };",
     "$rows = & { " + script + " };",
     "[pscustomobject]@{ Snapshot = $rows; OwnerReads = $script:ownerReads; RefreshReads = $script:refreshReads } | ConvertTo-Json -Compress",
@@ -286,7 +289,7 @@ async function ownerEnrichmentCase(budget: "available" | "expired" | "expires-du
   const rows = parseWindowsProcessSnapshot(result.Snapshot)!;
   expect(rows).toHaveLength(40);
   expect(rows.map(row => row.pid)).toEqual(Array.from({ length: 40 }, (_, index) => index + 1));
-  expect(result.OwnerReads).toBe(budget === "available" ? 32 : budget === "expires-during-owner" ? 1 : 0);
+  expect(result.OwnerReads).toBe(budget === "available" ? 32 : budget === "expires-during-owner" || budget === "cap-during-owner" ? 1 : 0);
   const refreshed = budget === "available" ? 32 : 0;
   expect(result.RefreshReads).toBe(refreshed);
   expect(rows[39]!.foreignOwner).toBe(budget === "available" ? false : null);
