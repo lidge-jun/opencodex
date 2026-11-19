@@ -38,7 +38,6 @@ import { UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../lib/upstream-retry";
 import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
 export { registerCommittedTerminalCooldownHandler } from "./request-log-committed-terminal";
 import { reportCommittedTerminalCooldown } from "./request-log-committed-terminal";
-import type { CommittedIncompleteReason } from "../combos/failover";
 import type { UpstreamCondition } from "../lib/upstream-condition";
 import { boundedServiceTier, errorDetailFor, projectErrorDetail } from "../usage/error-detail";
 import { incompleteReasonDetail, upstreamErrorIsLocal, type FailureDetail } from "./request-log-failure-detail";
@@ -197,11 +196,9 @@ export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequest
   shadowCallRewrittenFrom?: string;
   /** Internal structural combo identity; omitted from RequestLogEntry/JSONL. */
   comboId?: string;
-  /** Target configuration from combo selection (e.g. alias selector); omitted from JSONL. */
+  /** Serving combo target (as selected), its writer generation and output ceiling; omitted from JSONL. */
   comboTarget?: { provider: string; model: string };
-  /** Writer generation from combo selection; omitted from JSONL. */
   comboWriterGeneration?: number;
-  /** Resolved output token ceiling of the selected combo target; omitted from JSONL. */
   comboTargetOutputCeiling?: number | null;
   requestedEffort?: string;
   effectiveEffort?: string;
@@ -288,7 +285,7 @@ export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequest
   errorCode?: string;
   /** Structured reason from `response.incomplete`; internal-only input to log classification. */
   terminalIncompleteReason?: string;
-  committedIncompleteReason?: CommittedIncompleteReason | null;
+  committedIncompleteReason?: import("../combos/failover").CommittedIncompleteReason | null;
   affinity?: CodexAffinityMove;
   /** Why the binding was kept, moved, or released (#4546). */
   affinityReason?: CodexAffinityReason;
