@@ -922,8 +922,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       retainModels: p.retainModels,
       omitReasoningEffortWithToolsModels: p.omitReasoningEffortWithToolsModels,
       upstreamHttpVersion: p.upstreamHttpVersion,
-      // As configured: unset on canonical `openai` means upstream WebSocket, so never coerce to false.
-      upstreamWebsocket: p.upstreamWebsocket,
+      transientRetryOn5xx: p.transientRetryOn5xx,
+      upstreamWebsocket: p.upstreamWebsocket, // Unset keeps upstream WebSocket enabled for canonical OpenAI.
       authMode: p.authMode,
       apiKeyTransport: p.apiKeyTransport,
       disabled: p.disabled === true,

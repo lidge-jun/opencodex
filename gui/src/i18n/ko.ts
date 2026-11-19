@@ -3288,6 +3288,8 @@ export const ko: Record<TKey, string> = {
   "pws.xaiChatOptIn": "Grok 4.5와 4.6에 Chat Completions 사용",
   "pws.xaiChatOptInDesc": "끄면 Responses를 사용합니다. OAuth Responses 요청의 기본값입니다. 다른 Grok 모델과 티어 동작은 바뀌지 않습니다.",
   "pws.xaiChatOptInMixed": "한 모델만 Chat을 사용합니다.",
+  "pws.subscriptionRetries": "출력 전 같은 모델 재시도 횟수",
+  "pws.subscriptionRetriesDefault": "기본값 (메인 계정 재시도 끔)",
   "pws.cursorTransport": "Cursor 전송",
   "pws.cursorTransportHttp2": "HTTP/2 (기본값)",
   "pws.cursorTransportHttp1": "HTTP/1.1 (프록시 호환)",

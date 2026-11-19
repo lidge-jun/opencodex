@@ -34,12 +34,26 @@ export function createInferenceSendBudget(
  * GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST × TRANSIENT_RETRY_MAX_ATTEMPTS.
  */
 export function expandInferenceOAuthSendBudget(budget: TransientSendBudget | undefined, accounts: number): void {
-  if (!budget) return;
+  const fundedAccounts = Number.isSafeInteger(accounts) && accounts >= 2 ? Math.min(accounts, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST) : 0;
+  expandIngressSendBudget(budget, fundedAccounts * TRANSIENT_RETRY_MAX_ATTEMPTS);
+}
+
+/** Fund an explicitly configured standalone ChatGPT retry ladder before any send. */
+export function fundChatGptRetryAttempts(budget: TransientSendBudget | undefined, attempts: number): void {
+  if (Number.isInteger(attempts) && attempts > TRANSIENT_RETRY_MAX_ATTEMPTS && attempts <= 10) {
+    expandIngressSendBudget(budget, attempts);
+  }
+}
+
+function expandIngressSendBudget(budget: TransientSendBudget | undefined, sends: number): void {
+  if (!budget) {
+    return;
+  }
   const policy = ingressPolicies.get(budget);
-  if (!policy || budget.used !== 0 || ("physicalStarted" in budget && Number(budget.physicalStarted) > 0)) return;
+  if (!policy || budget.used !== 0 || ("physicalStarted" in budget && Number(budget.physicalStarted) > 0)) {
+    return;
+  }
   ingressPolicies.delete(budget);
-  if (accounts < 2 || !Number.isSafeInteger(accounts)) return;
-  const sends = Math.min(accounts, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST) * TRANSIENT_RETRY_MAX_ATTEMPTS;
   policy.baseSendAllowance = Math.max(policy.baseSendAllowance, sends);
   policy.maxTotalModelSends = Math.max(policy.maxTotalModelSends, sends);
 }

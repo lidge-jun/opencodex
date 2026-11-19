@@ -1944,6 +1944,8 @@ export const ja: Record<TKey, string> = {
   "pws.xaiChatOptIn": "Grok 4.5 と 4.6 で Chat Completions を使用",
   "pws.xaiChatOptInDesc": "オフにすると Responses を使用します。OAuth Responses リクエストの既定値です。他の Grok モデルと tier 動作は変わりません。",
   "pws.xaiChatOptInMixed": "片方のモデルのみ Chat を使用しています。",
+  "pws.subscriptionRetries": "出力前に同じモデルで再試行する回数",
+  "pws.subscriptionRetriesDefault": "既定（メインアカウントの再試行なし）",
   "pws.cursorTransport": "Cursor トランスポート",
   "pws.cursorTransportHttp2": "HTTP/2（デフォルト）",
   "pws.cursorTransportHttp1": "HTTP/1.1（プロキシ互換）",
