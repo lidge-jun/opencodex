@@ -828,7 +828,8 @@ export async function prepareResponsesTransport(
       let reported = false;
       let readings = 0;
       const releaseReadings = observeResponseSendReadings(response, reading => {
-        if (reading) recordSpend?.(reading, readings === 0 ? "issuing" : "newest");
+        // An absent reading marks its send unmetered, so no aggregate can settle it either.
+        recordSpend?.(reading ?? null, readings === 0 ? "issuing" : "newest");
         readings++;
       });
       const end = (): void => {

@@ -8,6 +8,11 @@
  * instead, keyed by the response its parse was handed, as soon as that response is fully read.
  * The transport binds each reading to the send that produced it, and a send whose response
  * reported nothing stays unresolved at its reservation.
+ *
+ * A reading is what the provider reported for that response, never a local estimate. A parser
+ * that only estimated a response's usage (for the client and the request log) reports undefined
+ * for it: the send is then marked unmetered, and neither the estimate nor the aggregate fallback
+ * that settles a request's last send with its terminal total can settle it.
  */
 export interface ResponseSendReading {
   inputTokens?: number;
@@ -27,8 +32,9 @@ export function observeResponseSendReadings(response: object, sink: ReadingSink)
 
 /**
  * Report the reading of the physical response the parse of `response` just finished reading, or
- * undefined when that response reported none. Call once per physical response, in send order,
- * before the parse dispatches its next send and before it yields its terminal.
+ * undefined when that response reported none of its own (an estimate is none). Call once per
+ * physical response, in send order, before the parse dispatches its next send and before it
+ * yields its terminal.
  */
 export function reportResponseSendReading(response: object, reading: ResponseSendReading | undefined): void {
   sinks.get(response)?.(reading);

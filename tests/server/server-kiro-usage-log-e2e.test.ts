@@ -296,21 +296,36 @@ describe("Kiro usage reaches the ledger as Kiro reported it, on every inbound wi
 // its own response. When the retry gets an unmetered HTTP failure, the terminal carries only send
 // 1's reading: send 1 settles with it and the retry stays unresolved at its reservation, instead of
 // send 1's tokens being booked against the retry.
-for (const ceiling of [false, true]) for (const retry of ["metered", "unmetered"] as const) {
-  const title = retry === "metered"
-    ? "a Kiro retry dispatched inside the parse settles each send with its own reading"
-    : "an unmetered Kiro retry failure leaves the retry unresolved and settles send 1 with its reading";
-  test(`${title} (pool ceiling: ${ceiling})`, async () => {
+//
+// A retry whose response carries no tokenUsage frame (an empty HTTP 200 body, or a completion with
+// only a credit meter) gets a locally estimated usage for the client and the request log. That
+// estimate is not a provider reading: the retry stays unresolved rather than settling with it, and
+// the aggregate fallback cannot settle it with the terminal's total minus send 1 either.
+const kiroRetryRows = {
+  metered: { title: "a Kiro retry dispatched inside the parse settles each send with its own reading",
+    terminal: "response.completed", settled: [1550, 1550], lost: 0 },
+  unmetered: { title: "an unmetered Kiro retry failure leaves the retry unresolved and settles send 1 with its reading",
+    terminal: "response.failed", settled: [1550], lost: 1 },
+  empty: { title: "an empty HTTP 200 Kiro retry leaves the retry unresolved instead of settling its local estimate",
+    terminal: "response.incomplete", settled: [1550], lost: 1 },
+  estimated: { title: "a Kiro retry without a tokenUsage frame leaves the retry unresolved instead of settling its local estimate",
+    terminal: "response.completed", settled: [1550], lost: 1 },
+} as const;
+for (const ceiling of [false, true]) for (const [retry, row] of Object.entries(kiroRetryRows)) {
+  test(`${row.title} (pool ceiling: ${ceiling})`, async () => {
     const release = acquireOwnedSpendHome();
     try {
       if (ceiling) configureSharedSpendLedger(spendPolicyFromConfig({ pool: { maxTokens: 10_000_000 } }, undefined, ["fixture"]));
-      const turns = kiroTwoLegTurn(true);
+      const turns = kiroTwoLegTurn(retry !== "estimated");
       let sends = 0;
       globalThis.fetch = (async (input: RequestInfo | URL) => {
         if ((input instanceof Request ? input.url : String(input)) !== CHAT_ENDPOINT) throw new Error("unexpected network target");
         sends++;
         if (retry === "unmetered" && sends === 2) {
           return new Response(JSON.stringify({ message: "Improperly formed request." }), { status: 400, headers: { "content-type": "application/json" } });
+        }
+        if (retry === "empty" && sends === 2) {
+          return new Response(streamOf([]), { headers: { "content-type": "application/vnd.amazon.eventstream" } });
         }
         return new Response(streamOf(turns.shift() ?? []), { headers: { "content-type": "application/vnd.amazon.eventstream" } });
       }) as typeof fetch;
@@ -324,16 +339,14 @@ for (const ceiling of [false, true]) for (const retry of ["metered", "unmetered"
       const budget = createRequestExecutionBudget({ maxTotalModelSends: 4, baseSendAllowance: 4, finalRecoveryAllowance: 0,
         maxAlternateTargetSends: 0, maxTargetTransitions: 0 }, undefined, attachRequestSpendTracker(request, log));
       const response = await handleResponses(request, config, log, { sendBudget: budget });
-      expect(await response.text()).toContain(retry === "metered" ? "response.completed" : "response.failed");
+      expect(await response.text()).toContain(row.terminal);
       log.spendTracker?.settle(log.usage);
       const journal = Bun.file(join(testDir, SPEND_LEDGER_JOURNAL_FILENAME));
       const records = await journal.exists() ? (await journal.text()).trim().split("\n").map(parseSpendJournalRecord) : [];
       expect({ sends, dispatched: records.filter(record => record?.kind === "dispatch").length,
         settled: records.flatMap(record => record?.kind === "settle" ? [record.tokens] : []),
         lost: records.filter(record => record?.kind === "lost").length })
-        .toEqual(retry === "metered"
-          ? { sends: 2, dispatched: 2, settled: [1550, 1550], lost: 0 }
-          : { sends: 2, dispatched: 2, settled: [1550], lost: 1 });
+        .toEqual({ sends: 2, dispatched: 2, settled: row.settled, lost: row.lost });
     } finally {
       release();
     }

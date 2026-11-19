@@ -59,10 +59,16 @@ interface KiroAttemptResult extends KiroAttemptParseResult {
   releaseRetained(): void;
 }
 
-/** The usage the one physical response an attempt parsed reported, if it reported any. */
+/**
+ * The token usage Kiro reported for the one physical response an attempt parsed, if it reported
+ * any. A response without a tokenUsage frame (an empty body, a credit meter alone) still gets a
+ * local estimate for the client and the request log, but an estimate is not a reading and must
+ * not settle the send that produced it.
+ */
 function attemptReading(result: KiroAttemptParseResult): OcxUsage | undefined {
   const terminal = result.terminal;
-  return terminal && "usage" in terminal && terminal.usage ? terminal.usage : result.usage;
+  const usage = terminal && "usage" in terminal && terminal.usage ? terminal.usage : result.usage;
+  return usage?.upstreamReported === true && !usage.estimated ? usage : undefined;
 }
 
 interface KiroAttemptRetention {
@@ -1333,6 +1339,8 @@ export async function* parseKiroStream(
         () => { fallbackSends++; },
       );
     } catch (err) {
+      // A retry the factory already sent read nothing back: mark it unmetered.
+      if (fallbackSends > 0) reportResponseSendReading(response, undefined);
       yield* firstResult.drainDeferred(dropHeldProse);
       firstAssistantText = "";
       firstResult.assistantText = "";
@@ -1365,6 +1373,8 @@ export async function* parseKiroStream(
     firstResult.releaseCollectors();
     fallback.releaseRequestBody?.();
     if (!fallback.response.ok) {
+      // An HTTP failure body carries no usage: the retry stays unresolved at its reservation.
+      reportResponseSendReading(response, undefined);
       yield* firstResult.drainDeferred(dropHeldProse);
       const payload = await readDisplaySafeErrorPayloadText(fallback.response, fallback.abortSignal);
       const failure = classifyKiroHttpError(fallback.response.status, fallback.response.headers, payload);

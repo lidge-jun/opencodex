@@ -555,7 +555,8 @@ switches accounts, each attempt records the usage reported by its own account. I
 usage, that attempt's provider credit total is marked incomplete. A provider retry sent while a
 response is still being read, such as Kiro's completion retry, settles with the usage its own
 response reported, and the first send keeps its own reading. A retry whose response reports no
-usage stays unresolved at its reservation. A streamed Chat Completions turn that fails
+token usage of its own stays unresolved at its reservation, even when the client and the request
+log show a local estimate for it. A streamed Chat Completions turn that fails
 ends in an error frame instead of a finish chunk. If the client set
 `stream_options.include_usage`, a chunk with empty `choices` carrying the failed turn's usage comes
 right before that error frame. A non-streaming Chat error body has no usage field.
