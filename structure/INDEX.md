@@ -101,6 +101,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 | [`providers/opengateway.md`](providers/opengateway.md) | Preset discovery, paired Responses tool-result projection and bounded empty-completion recovery. |
 | [`providers/jev-decision.md`](providers/jev-decision.md) | JEV Combo decision methods (TypeSafe, self-hosted System One rows, opencodex models), the decision request path, dashboard surfaces, and the content-free statistics projection. |
 | [`providers/anthropic-output-caps.md`](providers/anthropic-output-caps.md) | Routed omitted-output caps for adapter:anthropic rows keyed by Claude model id, precedence and unknown-id fallback. |
+| [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) | Default-off one-shot image-413 recovery and its physical credential, destination, and budget fences. |
 | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) | Exact billing refusal evidence, immutable physical credential ownership, pacing provenance and bounded pre-output key recovery. |
 | [`providers/workbuddy.md`](providers/workbuddy.md) | Browser login, account-bound refresh and catalogs, fixed-origin Chat transport, tool continuity and display-only credit balances. |
 | [`providers/dsh-account.md`](providers/dsh-account.md) | Explicit read-only DSH credential import, verified account identity, disabled refresh, pinned inference and probe destinations, and authoritative-empty quota. |
@@ -226,6 +227,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/adapters/anthropic-rejection-memo.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
 | `src/adapters/anthropic-replay.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
 | `src/adapters/anthropic-tool-catalog.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
+| `src/adapters/anthropic.ts` | [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |
 | `src/adapters/base.ts` | [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md) |
 | `src/adapters/dsh-account.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
 | `src/adapters/kiro/` | [`providers/kiro.md`](providers/kiro.md) |
@@ -366,6 +368,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/github/` | [`runtime.md`](runtime.md) |
 | `src/grok/` | [`runtime.md`](runtime.md) |
 | `src/images/` | [`runtime.md`](runtime.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md) |
+| `src/images/loop.ts` | [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |
 | `src/index.ts` | [`runtime.md`](runtime.md) |
 | `src/integrations/` | [`clients/export-model-names.md`](clients/export-model-names.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`clients/hermes.md`](clients/hermes.md)<br>[`clients/qoder.md`](clients/qoder.md)<br>[`clients/client-support-matrix.md`](clients/client-support-matrix.md)<br>[`clients/t3code.md`](clients/t3code.md) |
 | `src/lab/` | [`runtime.md`](runtime.md)<br>[`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
@@ -512,22 +515,24 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/responses/` | [`data-planes/claude-tool-loading.md`](data-planes/claude-tool-loading.md) |
 | `src/server/responses/account-auto-pause-recovery.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/server/responses/adapter-delivery.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`transports/max-output-completion.md`](transports/max-output-completion.md) |
-| `src/server/responses/adapter-dispatch.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
+| `src/server/responses/adapter-dispatch.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |
 | `src/server/responses/advisor-plan-slot.ts` | [`advisor.md`](advisor.md) |
 | `src/server/responses/advisor-question.ts` | [`advisor.md`](advisor.md) |
 | `src/server/responses/advisor-slot.ts` | [`advisor.md`](advisor.md) |
+| `src/server/responses/anthropic-image-context.ts` | [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |
 | `src/server/responses/anthropic-thinking-recovery.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
 | `src/server/responses/codex-ws-pool.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/responses/codex-ws-request.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/responses/compact.ts` | [`transports/responses-citations.md`](transports/responses-citations.md)<br>[`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/responses/core-combo.ts` | [`ops/service-logging.md`](ops/service-logging.md) |
+| `src/server/responses/image-context-recovery.ts` | [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |
 | `src/server/responses/input-admission.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/server/responses/opengateway-completion-guard.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
 | `src/server/responses/passthrough-build-error.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/responses/passthrough-completion.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
 | `src/server/responses/passthrough-dispatch.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
 | `src/server/responses/request-prepare.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
-| `src/server/responses/request-transport.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`account-auto-pause.md`](account-auto-pause.md) |
+| `src/server/responses/request-transport.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md)<br>[`account-auto-pause.md`](account-auto-pause.md) |
 | `src/server/responses/run-turn-execution.ts` | [`transports/max-output-completion.md`](transports/max-output-completion.md) |
 | `src/server/responses/turn-membership.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
 | `src/server/safe-response-headers.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
@@ -604,6 +609,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/vision/` | [`runtime.md`](runtime.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md) |
 | `src/web-search/` | [`runtime.md`](runtime.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md) |
 | `src/web-search/header-deadline.ts` | [`transports/timeouts.md`](transports/timeouts.md) |
+| `src/web-search/loop.ts` | [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |
 | `tests/` | [`ops/test-sandbox-cleanup.md`](ops/test-sandbox-cleanup.md) |
 
 ### Not described by any doc

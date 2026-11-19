@@ -56,6 +56,7 @@ import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { bindRouteReasoningReplayScope, adapterNeedsForcedContinuation, adapterNeedsToolCallContinuation } from "./core-replay";
 import { namespacedToolName, toolChoiceCandidates } from "../../types";
 import { providerFetch } from "./fetch-helpers";
+import { createAnthropicImageRecovery } from "./image-context-recovery";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { recordAdapterReasoning, recordAdapterTier } from "../request-log";
 import { assignNativeLogConversationId, normalizeLogConversationId } from "../request-log-conversation";
@@ -77,6 +78,7 @@ export async function executeResponsesSidecars(
     | "inboundWire"
     | "selectedForwardHeaders"
     | "translatorBudget"
+    | "completedToolBlocks"
     | "clientToolCatalogRestriction"
     | "toolBridgeMaps"
     | "rememberKiroDeliveredFinalAnswer"
@@ -102,6 +104,7 @@ export async function executeResponsesSidecars(
     | "resolveSelectionAdapter"
     | "resolveCopilotSelection"
     | "oauthDispatch"
+    | "pinAnthropicImageRecovery"
     | "noteRoutedAttemptSend"
     | "bindKeyUsageFromBridge"
     | "hostedAdvisorSpendGuard"
@@ -115,7 +118,7 @@ export async function executeResponsesSidecars(
     | "notifyResponseComplete"
     | "cancelResponseCompletion"
   >,
-  sendBudgetState: Pick<ResponsesSendBudget, "initialSendAllowance" | "sendBudgetExhausted" | "hasCapturedSpendCeiling" | "reserveCredentialHop" | "refundableAdapterDispatchBudget" | "adapterDispatchBudget" | "adapterSendBudget" | "noteInitialDispatch" | "noteAdapterPhysicalSend" | "noteAdapterRecoveryWithheld" | "pendingHopPermit" | "dispatchSidecarSend">,
+  sendBudgetState: Pick<ResponsesSendBudget, "initialSendAllowance" | "sendBudgetExhausted" | "hasCapturedSpendCeiling" | "reserveCredentialHop" | "refundableAdapterDispatchBudget" | "adapterDispatchBudget" | "adapterSendBudget" | "noteInitialDispatch" | "noteAdapterPhysicalSend" | "noteAdapterRecoveryWithheld" | "pendingHopPermit" | "dispatchSidecarSend" | "remainingTransientSendBudget" | "targetSendsUsed" | "imageRecoverySendReporter">,
 ) {
   const { config, options, logCtx } = requestContext;
   const antigravityPoolActivated = requestState.route.providerName === "google-antigravity"
@@ -536,6 +539,13 @@ export async function executeResponsesSidecars(
     });
     return { adapter: rotatedAdapter, recoveryKind };
   };
+  const recoverImageContext = route.provider.anthropicImageContextRecovery === true && transportState.adapter.name === "anthropic"
+    ? createAnthropicImageRecovery(requestContext, requestState, transportState, sendBudgetState, config.connectTimeoutMs ?? 200_000)
+    : undefined;
+  // Legacy sidecar sends under spend enforcement do not carry an authoritative physical receipt.
+  const imageRecovery: typeof recoverImageContext = recoverImageContext && ((response, ...args) =>
+    sendBudgetState.adapterDispatchBudget?.spendEnforced === true
+      ? Promise.resolve({ response }) : recoverImageContext(response, ...args));
   // One guard follows the active sidecar across all iterations. Enforced spend has no
   // authoritative receipt for earlier legacy sends, so recovery cannot claim headroom there.
   const thinkingRecovery = createAnthropicThinkingRecovery(parsed,
@@ -635,6 +645,7 @@ export async function executeResponsesSidecars(
       parsed, adapter: transportState.adapter,
       chatRawReasoningVisible: options.chatRawReasoningVisible,
       ...(transportState.adapter.name === "anthropic" ? { thinkingRecovery } : {}),
+      ...(imageRecovery ? { imageRecovery } : {}),
       clientToolCatalogRestriction: route.provider.authMode === "forward" ? undefined : requestState.clientToolCatalogRestriction,
       incomingMeta: { headers: requestState.selectedForwardHeaders, providerName: route.providerName, abortSignal: options.abortSignal, translatorBudget, ...(options.comboInitialSend ? { providerFetch: imageProviderFetch } : {}), ...sidecarBudget.incomingMeta },
       onProducerStart: sidecarBudget.takeProducerOwnership,
@@ -766,6 +777,7 @@ export async function executeResponsesSidecars(
       ...(webSearchAdvisor ? { advisor: createAdvisorSidecarStep(webSearchAdvisor as Parameters<typeof createAdvisorSidecarStep>[0]) } : {}),
       chatRawReasoningVisible: options.chatRawReasoningVisible,
       ...(transportState.adapter.name === "anthropic" ? { thinkingRecovery } : {}),
+      ...(imageRecovery ? { imageRecovery } : {}),
       clientToolCatalogRestriction: route.provider.authMode === "forward" ? undefined : requestState.clientToolCatalogRestriction,
       onIterationEnd: sidecarBudget.releaseUnsentHop,
       fetchForRequest: (request, iterParsed, adapter, recovery) => providerFetch(route.provider, options.codexWsRuntimeIdentity, {

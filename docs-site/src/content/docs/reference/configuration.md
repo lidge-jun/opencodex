@@ -109,6 +109,12 @@ resolve that variable at request time. For outbound proxying, an already-set `HT
 
 Routing has its own ordered resolution rules; see [Routing](/reference/configuration/routing/).
 
+### Anthropic image-context recovery
+
+Set `anthropicImageContextRecovery: true` on the Anthropic provider to enable recovery after an image 413.
+The setting defaults to off. See [the Anthropic adapter](/reference/adapters/#anthropic) for limits
+and billing behavior.
+
 ## Configuration domains
 
 - [Providers](/reference/configuration/providers/) — provider entries, authentication, endpoints,

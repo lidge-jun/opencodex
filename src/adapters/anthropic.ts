@@ -22,6 +22,7 @@ import type {
 } from "../types";
 import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName } from "../types";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION, applyClaudeToolPrefix, stripClaudeToolPrefix } from "../oauth/anthropic";
+import { sameProviderContinuationOwner } from "../responses/provider-continuation";
 import { parseDataUrl } from "./image";
 import { enforceAnthropicImageLimits } from "./anthropic-image-guard";
 import { normalizeAnthropicImages } from "./anthropic-image-normalize";
@@ -988,6 +989,10 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
     formatErrorBody: formatAnthropicErrorBody,
 
     async buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta) {
+      if (parsed._anthropicImageOwner && (!parsed._providerContinuationOwner
+        || !sameProviderContinuationOwner(parsed._anthropicImageOwner, parsed._providerContinuationOwner))) {
+        throw new Error("Anthropic image context no longer belongs to the selected account.");
+      }
       if (typeof provider.apiKey !== "string" || provider.apiKey.trim() === "") {
         if (isOAuth) {
           throw new Error("anthropic oauth token missing — run ocx login anthropic");
@@ -1163,7 +1168,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         delete body.top_p;
       }
 
-      if (nativeOpus55 && !reasoningControlsUnsupported && thinkingEnabled !== false) {
+      if (nativeOpus55 && !reasoningControlsUnsupported && thinkingEnabled !== false && !parsed._anthropicImageSummary) {
         // An explicit per-request summary (concise/detailed) still forces summarized (#7881).
         body.thinking = summaryRequested || thinkingDisplayPolicy === "summarized"
           ? { type: "adaptive", display: "summarized" }

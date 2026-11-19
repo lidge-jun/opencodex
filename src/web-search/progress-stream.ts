@@ -10,6 +10,30 @@ import {
 const DEFAULT_POST_TERMINAL_DRAIN_TIMEOUT_MS = 5_000;
 const DEFAULT_CONSUMER_TIMEOUT_MS = 300_000;
 
+/** Feed the SSE stall watchdog during a bounded sidecar await. */
+export async function* withHeartbeats<T>(promise: Promise<T>, signal?: AbortSignal): AsyncGenerator<AdapterEvent, T> {
+  const tracked = promise.then(value => ({ value }));
+  for (;;) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let wake: () => void;
+    const heartbeat = new Promise<undefined>(resolve => {
+      wake = () => resolve(undefined);
+      timer = setTimeout(wake, 1_000);
+      signal?.addEventListener("abort", wake, { once: true });
+      if (signal?.aborted) wake();
+    });
+    let result: { value: T } | undefined;
+    try { result = await Promise.race([tracked, heartbeat]); }
+    finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", wake!);
+    }
+    signal?.throwIfAborted();
+    if (result) return result.value;
+    yield { type: "heartbeat" };
+  }
+}
+
 export class RoutedModelInactivityError extends Error {
   readonly timeoutMs: number;
 

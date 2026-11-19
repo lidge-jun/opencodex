@@ -103,12 +103,12 @@ export function createResponsesSendBudget(
   };
   const noteTransientSends = (used: number): void => recordTransientSends(used, pendingHopPermit ?? inheritedPermit);
   const physicalSendReporter = (permit?: SingleUseDispatchPermit, explicitContinuation = false,
-    continuationEstimate?: { inputTokens: number; outputCeilingTokens: number }) => {
+    wireEstimate?: { inputTokens: number; outputCeilingTokens: number },
+    targetKey = explicitContinuation ? `native-continuation:${crypto.randomUUID()}` : undefined) => {
     let unreportedWorkflowStarts = 0;
-    const targetKey = explicitContinuation ? `native-continuation:${crypto.randomUUID()}` : undefined;
     const reporter = createPhysicalSendReporter(sendBudget, () => ({ ...responsesSpendTarget(logCtx),
       ...(targetKey ? { targetKey } : {}),
-      ...(continuationEstimate ? { estimate: continuationEstimate, explicitEstimate: true } : {}) }), permit, charged => {
+      ...(wireEstimate ? { estimate: wireEstimate, explicitEstimate: true } : {}) }), permit, charged => {
       noteTargetSends(Math.max(0, charged));
       options.onCompactionRecoverySendsReported?.(charged);
       const prepaid = Math.min(unreportedWorkflowStarts, Math.max(0, charged));
@@ -383,6 +383,19 @@ export function createResponsesSendBudget(
     /401|429|oauth|rate-limit|key/.test(recovery) ? "auth-recovery" : "repair";
 
   return {
+    imageRecoverySendReporter: (body: string, maxOutputTokens: number) => {
+      // Each leg needs its own seed at normal capacity, on the ordinary physical-send counter.
+      const reporter = physicalSendReporter(undefined, false, { inputTokens: estimateTokens(body, logCtx.model),
+        outputCeilingTokens: maxOutputTokens }, `image-413:${crypto.randomUUID()}`);
+      const beforeSend = reporter.beforeSend;
+      reporter.beforeSend = () => {
+        const target = responsesSpendTarget(logCtx);
+        // A legacy or observe-only holder may know the ceiling without being able to reserve.
+        if (adapterSendBudget?.spendEnforced !== true && hasCapturedSpendCeiling(target)) return false;
+        return beforeSend?.() !== false;
+      };
+      return reporter;
+    },
     workflowRootId,
     noteTransientSends,
     transientSendReporter,

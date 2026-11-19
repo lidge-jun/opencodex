@@ -1331,6 +1331,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   thinkingBudgetModels: "editor",
   escapeBuiltinToolNames: "editor",
   anthropicEofTolerance: "editor",
+  anthropicImageContextRecovery: "editor",
   forwardAdvisorTool: "editor",
   perMessageEffort: "editor",
   noVisionModels: "editor",
