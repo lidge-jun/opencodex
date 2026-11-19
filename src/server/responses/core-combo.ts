@@ -428,6 +428,8 @@ export async function executeComboResponses(
   // capabilities, sidecars, protocols or the roster apply to the next request. Only spend
   // authority is read live, from the root config that management writes replace.
   const admissionSnapshot = snapshotComboAdmission(config, comboId);
+  // Every image probe and the child it admits plan with these request-start sidecar settings.
+  const comboVisionSidecar = { settings: admissionSnapshot.vision };
   const liveConfig = advisorPlanRootConfig(config);
   // Resolve against the original request once; every bridge candidate receives the same trusted
   // result after its provisional Authorization is removed, including an explicitly keyless result.
@@ -666,7 +668,8 @@ export async function executeComboResponses(
         && (options.anthropicHostedAdvisorSelection !== "selected" || !!route && admitsHostedAdvisor(
           route.provider, scopedAnthropicServerTools(admissionScope, route, options.anthropicServerTools), parsed?.context.tools,
         )),
-      (route, parsed) => canDescribeComboImages({ config, req, options: { ...options, admissionScope } }, route, parsed));
+      (route, parsed) => canDescribeComboImages(
+        { config, req, options: { ...options, admissionScope, comboVisionSidecar } }, route, parsed));
     if (capability.unservable === "audio") {
       return formatErrorResponse(400, "invalid_request_error", "No target of this combo can accept audio input");
     }
@@ -1478,6 +1481,7 @@ export async function executeComboResponses(
         // parent arrived with.
         sendBudget: targetSendBudget,
         comboAttempt: true,
+        comboVisionSidecar,
         ...(omittingImages ? { comboOmitImages: true }
           : capability.requiresVisionPlan(pick.target) ? { comboRequiresVisionPlan: true } : {}),
         ...(capability.unservable === "context" ? { comboContextDegraded: true } : {}),

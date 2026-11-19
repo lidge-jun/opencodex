@@ -82,7 +82,7 @@ export function snapshotComboAdmission(config: OcxConfig, comboId: string) {
     ])),
     providerContextCaps: copyMetadata(dataValue(config, "providerContextCaps")) as OcxConfig["providerContextCaps"],
     vision: vision && pickMetadata(vision, [
-      "enabled", "backend", "model", "anthropicInstance", "maxDescriptionsPerTurn", "timeoutMs",
+      "enabled", "backend", "model", "anthropicInstance", "maxDescriptionsPerTurn", "timeoutMs", "reasoning",
     ]),
   };
 }

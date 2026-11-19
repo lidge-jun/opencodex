@@ -2,7 +2,7 @@ import { CodexInstallationIdUnavailableError } from "../../codex/installation-id
 import type { ResponsesRequestContext } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
-import type { OcxParsedRequest } from "../../types";
+import type { OcxConfig, OcxParsedRequest } from "../../types";
 import type { ComboTargetRoute } from "../../combos/request-capability";
 import { ComboVisionDescriptionUnavailableError, policyCandidateRefusalResponse } from "./policy-request-scope";
 import { intersectAdmissionModelScopes, resolveAdmissionModelScope } from "../admission-model-scope";
@@ -38,6 +38,12 @@ import {
 } from "../../codex/auth-context";
 
 type SidecarRequestContext = Pick<ResponsesRequestContext, "options" | "config" | "req">;
+
+/** The config vision planning reads: a combo request plans with its request-start sidecar settings. */
+export function responsesVisionConfig({ config, options }: Pick<SidecarRequestContext, "config" | "options">): OcxConfig {
+  const admitted = options.comboVisionSidecar;
+  return admitted ? { ...config, visionSidecar: admitted.settings } : config;
+}
 
 async function resolveResponsesOpenAiSidecar(
   { options, config, req }: SidecarRequestContext,
@@ -80,7 +86,7 @@ async function resolveResponsesOpenAiSidecar(
         // Account-qualified native routes are passthrough, so their in-turn helper is vision.
         // Scope its cooldown and outcome to the helper model, not the routed text model.
         ...(route.codexAccountId !== undefined
-          ? { exactAccount: { accountId: route.codexAccountId, modelId: resolveOpenAiVisionModel(config) } }
+          ? { exactAccount: { accountId: route.codexAccountId, modelId: resolveOpenAiVisionModel(responsesVisionConfig({ config, options })) } }
           : {}),
         beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
       },
@@ -107,7 +113,7 @@ function responsesVisionPlan(
   openAiSidecar: ResolvedOpenAiForwardSidecar | undefined,
 ) {
   const admissionScope = visionAdmissionScope(config, options);
-  const plan = planVisionSidecar(config, provider, modelId, parsed, openAiSidecar, {
+  const plan = planVisionSidecar(responsesVisionConfig({ config, options }), provider, modelId, parsed, openAiSidecar, {
     admission: options.admission, codexAuthPolicy: options.codexAuthPolicy, providerName,
     admissionScope,
   });
@@ -132,7 +138,7 @@ export async function canDescribeComboImages(
   parsed: OcxParsedRequest,
 ): Promise<boolean> {
   if (context.options.visionDescribeTerminal) return false;
-  const openAiSidecar = shouldResolveOpenAiVisionSidecar(context.config, route.provider, route.modelId, parsed, route.providerName,
+  const openAiSidecar = shouldResolveOpenAiVisionSidecar(responsesVisionConfig(context), route.provider, route.modelId, parsed, route.providerName,
     visionAdmissionScope(context.config, context.options))
     ? await resolveResponsesOpenAiSidecar(context, route) : undefined;
   try {
@@ -168,7 +174,7 @@ export async function prepareResponsesSidecarAuth(
   const preserveCompactionPrefix = routedCompaction && transportState.adapter.name === "anthropic";
   if (routedCompaction) parsed.context.messages = omitEarlierCompactionImages(parsed.context.messages);
   const needsOpenAiVision = !skipVision
-    && shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed, route.providerName,
+    && shouldResolveOpenAiVisionSidecar(responsesVisionConfig(requestContext), route.provider, route.modelId, parsed, route.providerName,
       visionAdmissionScope(config, options));
   // LOCAL PATCH (runturn-websearch): runTurn adapters can run the web-search
   // sidecar through src/web-search/run-turn-loop.ts, so resolve the helper

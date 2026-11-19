@@ -59,15 +59,18 @@ export function makeConfig(choice: string, decisions: string[], sessionPin: bool
   };
 }
 
-type ChildOptions = Parameters<ResponsesDispatchers["handleResponses"]>[3];
-export type Child = (body: Record<string, unknown>, complete: () => void, options: ChildOptions) => Response | Promise<Response>;
+export type ChildOptions = Parameters<ResponsesDispatchers["handleResponses"]>[3];
+/** `config` is the config object the combo handed to the child dispatcher. */
+export type Child = (
+  body: Record<string, unknown>, complete: () => void, options: ChildOptions, config: OcxConfig,
+) => Response | Promise<Response>;
 
 /** Children complete like a real stream: the completion callback runs before the response returns. */
 function dispatchers(child: Child): ResponsesDispatchers {
   return {
-    async handleResponses(request, _config, _logCtx, options) {
+    async handleResponses(request, config, _logCtx, options) {
       const body = await request.json() as Record<string, unknown>;
-      return child(body, () => options?.onResponseComplete?.(String(body.model)), options);
+      return child(body, () => options?.onResponseComplete?.(String(body.model)), options, config);
     },
     async handleComboResponses() {
       throw new Error("nested combo dispatch is not expected");
@@ -114,9 +117,9 @@ export async function turn(config: OcxConfig, options: {
       } : {}),
       ...(options.admission ? { admission: options.admission } : {}),
       ...(options.signal ? { abortSignal: options.signal } : {}),
-    }, dispatchers((childBody, complete, childOptions) => {
+    }, dispatchers((childBody, complete, childOptions, childConfig) => {
       options.models?.push(String(childBody.model));
-      return child(childBody, complete, childOptions);
+      return child(childBody, complete, childOptions, childConfig);
     }));
   } finally {
     budget.dispose();

@@ -269,7 +269,10 @@ dispatching a child or repeating the decision. Responses, Chat and Messages fina
 through the terminal HTTP response. Every child dispatch, including a pin reused without a paid
 decision, passes the [dispatch-time consent and scope check](../runtime.md#request-local-target-compatibility).
 Dispatch uses the admitted combo policy, including the refusal or omission rule if a required
-image description fails. The turn captures JEV effort ownership at ingress so the
+image description fails. Every image-description probe and the child it admits plan with the
+snapshot's Vision Sidecar settings (`comboVisionSidecar`, read through `responsesVisionConfig` in
+`src/server/responses/request-sidecar-auth.ts`); only the helper credential resolves live.
+The turn captures JEV effort ownership at ingress so the
 wire effort and its request log label follow the same mode.
 
 `sessionPin: { ttlMs }` is an opt-in, JEV-only Combo field (#7525); `src/combos/jev-session-pin-config.ts`
