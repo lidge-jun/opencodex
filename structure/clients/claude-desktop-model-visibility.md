@@ -29,7 +29,9 @@ catalog-driven refreshes, and the hub's `wantsDesktopConfig` export, which conne
 write verbatim. The decode registry keeps hidden routes, so a running Desktop session that still
 sends a just-hidden alias keeps routing.
 
-`src/server/index/serve-options.ts` installs Desktop aliases from current shared discovery inputs.
+`src/server/index/serve-options.ts` checks whether the shared discovery inputs are still current.
+`src/server/index/anthropic-model-listing.ts` renders the Desktop snapshot and Anthropic listings,
+and installs Desktop aliases only while those inputs are current.
 When discovery is superseded or uses a detached policy projection, the Desktop config endpoint
 returns HTTP 503 with `desktop_snapshot_busy` and `Retry-After: 1`. Connected apply leaves the
 current profile byte-identical.
