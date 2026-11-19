@@ -28,8 +28,6 @@ lazily, caches a failed load as unavailable, and closes every handle in a `final
 - an exit watch: a handle opened at bind time and polled with `WaitForSingleObject(handle, 0)`;
 - the Task Scheduler service host PID through `QueryServiceStatusEx` on `Schedule`, only while it runs.
 
-The Link Child process fallback uses the same handle-bound termination primitive with the same-user CIM creation time at microsecond precision. If handle binding cannot be verified, it refuses the fallback.
-
 Windows ARM64, other platforms and any test that simulates a platform get no native API.
 `src/service/windows-process-evidence.ts` is the facade the operations use. Its process snapshot is
 one capped PowerShell snapshot that emits UTF-8 JSON and uses ISO UTC for `CreationDate`.

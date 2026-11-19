@@ -1639,7 +1639,6 @@
   "grok-47-build-fast-metadata.test.ts": "providers/xai", "grok-47-fast-model.test.ts": "providers/xai",
   "grok-47-fast-model-wire.test.ts": "providers/xai", "client-link-connect.test.ts": "clients",
   "client-link-relay.test.ts": "clients", "client-link-runtime.test.ts": "clients", "client-link-stop.test.ts": "clients",
-  "client-link-stop-recovery.test.ts": "clients", "client-link-stop-sibling.test.ts": "clients",
   "link-routes.test.ts": "clients", "client-link-state.test.ts": "clients",
   "client-link-status.test.ts": "clients", "client-link-teardown.test.ts": "clients", "client-disconnect-recovery.test.ts": "clients", "client-disconnect-desktop-refusals.test.ts": "clients",
   "client-link-tunnel.test.ts": "clients", "link-ports.test.ts": "clients",

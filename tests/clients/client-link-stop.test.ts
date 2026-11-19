@@ -1,146 +1,46 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fixturePath, repoPath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { hostedWindowsQuarantine } from "../helpers/windows-ci-quarantine";
-import { runStop } from "../helpers/client-link-stop";
 
-test("Link signal drains Home-created Pi and OpenCode routes before listener release", async () => {
-  const report = await runStop({ mode: "runtime", fileClients: ["pi", "opencode"], fileOnly: true, osSignal: process.platform !== "win32" });
-  expect(report.result).toEqual({ atListenerStop: true });
-  for (const client of ["pi", "opencode"]) {
-    expect(report.fileOwnedBytes[client]).toContain("fixture/home-model");
-    expect(JSON.parse(report.fileAfter[client])).toMatchObject({ fixtureUserSetting: "keep" });
-    expect(report.fileAfter[client]).not.toContain("fixture/home-model");
-    expect(report.fileAfter[client]).not.toContain("127.0.0.1");
+async function runStop(options: Record<string, unknown>) {
+  const root = mkdtempSync(join(tmpdir(), "ocx-link-stop-"));
+  const home = join(root, "ocx");
+  const child = Bun.spawn([process.execPath, fixturePath("client-link-stop-runner.ts")], {
+    cwd: repoPath(), stdin: new Blob([JSON.stringify(options)]), stdout: "pipe", stderr: "pipe",
+    env: { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: join(root, "codex"), OCX_SERVICE: "", OCX_SERVICE_MANAGED: "0" },
+  });
+  const timeout = setTimeout(() => child.kill(), 15_000);
+  try {
+    if (options.osSignal) {
+      const deadline = Date.now() + 10_000;
+      while (!existsSync(join(home, "ready")) && child.exitCode === null && Date.now() < deadline) await Bun.sleep(10);
+      if (!existsSync(join(home, "ready"))) throw new Error("fixture did not publish its signal-ready listener");
+      child.kill("SIGTERM");
+    }
+    const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    if (options.expectedFailure || options.expectedRefusal) {
+      expect(exit, stdout).toBe(options.expectedFailure ? 1 : 0);
+      expect(stderr).toContain("Link Child Codex routing restore refused");
+    } else if (String(options.preserve).startsWith("restart-rollback")) {
+      expect(exit, stdout).toBe(0);
+      expect(stderr.trim()).toBe("[client] restart: the replacement did not start (not_ready); this runtime keeps serving");
+    } else expect({ exit, stderr }, stdout).toEqual({ exit: 0, stderr: "" });
+    const report = JSON.parse(readFileSync(join(home, "result.json"), "utf8"));
+    const atExit = JSON.parse(readFileSync(join(home, "exit.json"), "utf8"));
+    for (const field of ["after", "profileAfter", "journalRetained", "journalHomeBound", "catalogAfter", "grokAfter", "protectedUnchanged"]) {
+      expect(atExit[field], `no late restoration after listener release: ${field}`).toEqual(report[field]);
+    }
+    return report;
+  } finally {
+    clearTimeout(timeout);
+    if (child.exitCode === null) { child.kill(); await child.exited; }
+    removeTreeWithRetry(root);
   }
-  expect(report.protectedUnchanged).toBe(true);
-}, 20_000);
-
-test("a fenced stop with proved file absence needs no file token mutation", async () => {
-  const report = await runStop({ mode: "runtime", fileOnly: true, removeToken: true });
-  expect(report.result).toEqual({ atListenerStop: true });
-  expect(report.protectedUnchanged).toBe(false);
-}, 20_000);
-
-test("a missing token still refuses an owned file route and retains the listener", async () => {
-  const report = await runStop({ mode: "runtime", fileOnly: true, fileClients: ["pi"], removeToken: true, observeFileRefusal: true, expectedFileRefusal: true });
-  expect(report.result).toEqual({ refused: true, bound: true, stopping: true });
-  expect(report.fileAfter).toEqual(report.fileOwnedBytes);
-}, 20_000);
-
-test("an already-started Home file sync cannot reapply a route after signal cleanup", async () => {
-  const report = await runStop({ mode: "runtime", fileClients: ["pi"], fileOnly: true, lateFileSync: true });
-  expect(report.fileLateResult).toContain("client_runtime_stopping");
-  expect(report.fileAfter.pi).not.toContain("127.0.0.1");
-  expect(report.fileAfter.pi).not.toContain("fixture/late-home-model");
-  expect(report.protectedUnchanged).toBe(true);
-}, 20_000);
-
-test("a Link stop keeps a file integration that was owned before connection", async () => {
-  const report = await runStop({ mode: "runtime", fileClients: ["pi"], fileStandalone: true, fileOnly: true });
-  expect(report.fileAfter).toEqual(report.fileOwnedBytes);
-  expect(report.protectedUnchanged).toBe(true);
-}, 20_000);
-
-test("a conflicting file route keeps the stopping listener until repair and a second signal", async () => {
-  const report = await runStop({ mode: "runtime", fileClients: ["pi"], fileConflict: true, repairFileRefusal: true, fileOnly: true });
-  expect(report.fileRefusal).toMatchObject({ bound: true, stopping: true });
-  expect(JSON.parse(report.fileRefusal.before.pi).providers.opencodex.apiKey).toBe("operator-edited-placeholder");
-  expect(report.fileAfter.pi).not.toContain("127.0.0.1");
-  expect(JSON.parse(report.fileAfter.pi)).toMatchObject({ fixtureUserSetting: "keep" });
-  expect(report.result).toEqual({ atListenerStop: true });
-  expect(report.protectedUnchanged).toBe(true);
-}, 20_000);
-
-test("the parent stop drains Home-created file routes while its verified listener stays bound", async () => {
-  const report = await runStop({ mode: "file-preflight", fileClients: ["pi", "opencode"] });
-  expect(report.result).toEqual({ outcome: null, bound: true, stopping: true });
-  expect(report.fileAfter.pi).not.toContain("127.0.0.1");
-  expect(report.fileAfter.opencode).not.toContain("127.0.0.1");
-  expect(report.after).toBe(report.before);
-  expect(report.protectedUnchanged).toBe(true);
-}, 20_000);
-
-test("a parent stop with no current file routes fences a later Home enable", async () => {
-  const report = await runStop({ mode: "file-preflight", fileClients: ["pi"], deferFileApply: true });
-  expect(report.result).toEqual({ outcome: null, bound: true, stopping: true });
-  expect(report.fileLateResult).toBe("client_runtime_stopping");
-  expect(report.fileAfter.pi).toBe(report.fileOwnedBytes.pi);
-  expect(report.fileAfter.pi).not.toContain("127.0.0.1");
-  expect(report.protectedUnchanged).toBe(true);
-}, 20_000);
-
-test("offline Link cleanup preserves the connection on Linux without a user manager or unit", async () => {
-  const report = await runStop({ mode: "offline-stop", fileClients: ["pi"] });
-  expect(report.result).toEqual({ exitCode: 0 });
-  expect(report.fileAfter.pi).not.toContain("127.0.0.1");
-  expect(report.protectedUnchanged).toBe(true);
-}, 20_000);
-
-test("offline Link cleanup refuses an installed Linux unit when its manager is unreadable", async () => {
-  const report = await runStop({ mode: "offline-stop", fileClients: ["pi"], installedUnit: true, expectedUnsupportedStop: true });
-  expect(report.result).toEqual({ exitCode: 1 });
-  expect(report.fileAfter).toEqual(report.fileOwnedBytes);
-}, 20_000);
-
-test.skipIf(process.platform === "win32")("offline Link cleanup refuses a dangling service record with an unreadable manager", async () => {
-  const report = await runStop({ mode: "offline-stop", fileClients: ["pi"], danglingServiceRecord: true, expectedUnsupportedStop: true });
-  expect(report.result).toEqual({ exitCode: 1 });
-  expect(report.fileAfter).toEqual(report.fileOwnedBytes);
-}, 20_000);
-
-test("the parent preflight refuses a conflicting file route without releasing its listener", async () => {
-  const report = await runStop({ mode: "file-preflight", fileClients: ["pi"], fileConflict: true, expectedFileRefusal: true });
-  expect(report.result).toMatchObject({ outcome: { ok: false, summary: { runtimeDown: false, proxy: "ownership-refused" } }, bound: true, stopping: true });
-  expect(JSON.parse(report.fileAfter.pi).providers.opencodex.apiKey).toBe("operator-edited-placeholder");
-  expect(report.after).toBe(report.before);
-  expect(report.protectedUnchanged).toBe(true);
-}, 20_000);
-
-test("ocx stop refuses a file conflict before any service stop, signal or kill fallback", async () => {
-  const report = await runStop({ mode: "file-stop", fileClients: ["pi"], fileConflict: true, expectedFileRefusal: true });
-  expect(report.result).toEqual({ exitCode: 1, calls: { service: 0, killed: 0 }, bound: true, stopping: true });
-  expect(JSON.parse(report.fileAfter.pi).providers.opencodex.apiKey).toBe("operator-edited-placeholder");
-  expect(report.after).toBe(report.before);
-  expect(report.protectedUnchanged).toBe(true);
-}, 20_000);
-
-test("failure to finalize a retained parent fence does not replace the original stop refusal", async () => {
-  const report = await runStop({ mode: "file-stop", fileClients: ["pi"], fileConflict: true, finalizeFailure: true, expectedFileRefusal: true });
-  expect(report.result).toEqual({ exitCode: 1, calls: { service: 0, killed: 0 }, bound: true, stopping: true, activeStop: true });
-  expect(JSON.parse(report.fileAfter.pi).providers.opencodex.apiKey).toBe("operator-edited-placeholder");
-}, 20_000);
-
-test("ocx stop refuses an attested older Link runtime before file, service or process changes", async () => {
-  const report = await runStop({ mode: "file-stop", fileClients: ["pi"], oldStopCapability: true, expectedUnsupportedStop: true });
-  expect(report.result).toEqual({ exitCode: 1, calls: { service: 0, killed: 0 }, bound: true, stopping: false });
-  expect(report.fileAfter).toEqual(report.fileOwnedBytes);
-  expect(report.after).toBe(report.before);
-  expect(report.protectedUnchanged).toBe(true);
-}, 20_000);
-
-test("file cleanup refuses a connection replaced across its asynchronous writer boundary", async () => {
-  const report = await runStop({ mode: "file-preflight", fileClients: ["pi"], fileOwnerChange: true, expectedFileRefusal: true });
-  expect(report.result).toMatchObject({ outcome: { ok: false }, bound: true, stopping: true });
-  expect(report.fileAfter).toEqual(report.fileOwnedBytes);
-  expect(report.after).toBe(report.before);
-  expect(report.protectedUnchanged).toBe(false);
-}, 20_000);
-
-test("repeated file cleanup retains the connection for a later explicit Home sync", async () => {
-  const report = await runStop({ mode: "file-cycle", fileClients: ["pi", "opencode"] });
-  expect(report.result).toMatchObject({ first: true, second: true });
-  for (const client of ["pi", "opencode"]) {
-    expect(report.result.stopped[client]).not.toContain("127.0.0.1");
-    expect(report.fileAfter[client]).toContain("fixture/home-model");
-    expect(JSON.parse(report.fileAfter[client])).toMatchObject({ fixtureUserSetting: "keep" });
-  }
-  expect(report.result.reapplied.every((row: { outcome: string }) => row.outcome === "current")).toBe(true);
-  expect(report.protectedUnchanged).toBe(true);
-}, 20_000);
+}
 
 for (const signal of process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"]) {
   test(`native Link ${signal} restores its owned Codex routing before listener release`, async () => {
@@ -188,28 +88,13 @@ test("native hub signal exit preserves the connection-owned route", async () => 
 }, 20_000);
 
 test("native Link signal refuses a connection swapped after runtime publication", async () => {
-  const report = await runStop({ mode: "runtime", mutation: "connection", observeFileRefusal: true, expectedFileRefusal: true });
-  expect(report.result).toEqual({ refused: true, bound: true, stopping: true });
+  const report = await runStop({ mode: "runtime", mutation: "connection", expectedFailure: true });
+  expect(report.result).toEqual({ atListenerStop: true });
   expect(report.after).toBe(report.before);
   expect(report.profileAfter).toBe(report.profileBefore);
   expect(report.journalRetained).toBe(true);
   expect(report.protectedUnchanged).toBe(true);
 }, 20_000);
-
-for (const mutation of ["journal", "process-journal", "unverified"]) {
-  test(`native Codex refusal retains the Link listener after file cleanup (${mutation})`, async () => {
-    const report = await runStop({ mode: "runtime", mutation, fileClients: ["pi"], observeNativeRefusal: true, expectedRefusal: true });
-    expect(report.result).toEqual({ refused: true, bound: true, stopping: true });
-    expect(report.after).toBe(report.before);
-    expect(report.profileAfter).toBe(report.profileBefore);
-    expect(report.journalRetained).toBe(true);
-    expect(report.protectedUnchanged).toBe(true);
-    expect(report.catalogAfter).toEqual(JSON.parse(report.catalogBefore));
-    expect(report.grokAfter).toBe(report.grokBefore);
-    expect(report.fileAfter.pi).not.toContain("127.0.0.1");
-    expect(JSON.parse(report.fileAfter.pi)).toMatchObject({ fixtureUserSetting: "keep" });
-  }, 20_000);
-}
 
 test("owned Link full restore is idempotent and retains connection credentials", async () => {
   const report = await runStop({ mode: "helper", repeat: true });
@@ -269,22 +154,50 @@ test("Link API teardown preserves the merged parent deferral contract", async ()
 });
 
 test("parent Link teardown retains the merged full restoration contract", async () => {
-  const report = await runStop({ mode: "parent", fileClients: ["pi"] });
+  const report = await runStop({ mode: "parent" });
   expect(report.result).toEqual({ historyOnly: false, historyDeferred: false, other: false });
   expect(report.after).toBe('model = "native"\n');
   expect(report.journalRetained).toBe(false);
   expect(report.protectedUnchanged).toBe(true);
   expect(report.catalogAfter.models).toEqual([{ slug: "fixture-native", visibility: "list" }]);
   expect(report.grokAfter).toBe('theme = "fixture"\n');
-  expect(report.fileAfter.pi).not.toContain("127.0.0.1");
 });
 
-test("post-stop restore reports unowned Link file receipts despite disconnected saved state", async () => {
-  const report = await runStop({ mode: "parent", fileClients: ["pi"], stopConnectionDrift: "disconnected",
-    expectedUnownedFileRecovery: true });
-  expect(report.result.other).toBe(true);
-  expect(report.fileAfter).toEqual(report.fileOwnedBytes);
-});
+for (const preserve of ["service", "desktop", "receipt", "sibling"]) {
+  test(`native Link signal preserves ${preserve} restoration ownership`, async () => {
+    const report = await runStop({ mode: "runtime", preserve });
+    expect(report.after).toBe(report.before);
+    expect(report.profileAfter).toBe(report.profileBefore);
+    expect(report.journalRetained).toBe(true);
+    expect(report.protectedUnchanged).toBe(true);
+    expect(report.catalogAfter).toEqual(JSON.parse(report.catalogBefore));
+    expect(report.grokAfter).toBe(report.grokBefore);
+  }, 20_000);
+}
+
+test("a pending restart admission cannot leave routing behind on signal shutdown", async () => {
+  const report = await runStop({ mode: "runtime", preserve: "restart" });
+  expect(report.after).toBe('model = "native"\n');
+  expect(report.journalRetained).toBe(false);
+  expect(report.catalogAfter.models).toEqual([{ slug: "fixture-native", visibility: "list" }]);
+  expect(report.grokAfter).toBe('theme = "fixture"\n');
+}, 20_000);
+
+test.each(["restart-rollback", "restart-rollback-recycle"])("signal shutdown joins %s before restoring", async preserve => {
+  const report = await runStop({ mode: "runtime", preserve });
+  expect(report.after).toBe('model = "native"\n');
+  expect(report.journalRetained).toBe(false);
+  expect(report.catalogAfter.models).toEqual([{ slug: "fixture-native", visibility: "list" }]);
+  expect(report.grokAfter).toBe('theme = "fixture"\n');
+}, 20_000);
+
+test("a scheduled recycle cannot skip restoration or spawn after signal shutdown", async () => {
+  const report = await runStop({ mode: "runtime", preserve: "recycle-pending" });
+  expect(report.after).toBe('model = "native"\n');
+  expect(report.journalRetained).toBe(false);
+  expect(report.catalogAfter.models).toEqual([{ slug: "fixture-native", visibility: "list" }]);
+  expect(report.grokAfter).toBe('theme = "fixture"\n');
+}, 20_000);
 
 for (const mutation of ["connection", "selection", "rotation", "hub", "prior-catalog", "api-key", "token", "management", "link-id"]) {
   test(`served-connection guard rechecks ${mutation} at each write and freezes its snapshot`, async () => {
@@ -313,10 +226,9 @@ for (const retryError of ["busy", "locked", "exhausted", "permission", "unwrappe
   });
 }
 
-for (const runtimeRecord of ["absent", "invalid", "foreign", "explicit-stop-unfenced"]) {
+for (const runtimeRecord of ["absent", "invalid", "foreign"]) {
   test(`signal refuses restoration when its runtime record is ${runtimeRecord}`, async () => {
-    const report = await runStop({ mode: "runtime", runtimeRecord, observeFileRefusal: true, expectedFileRefusal: true });
-    expect(report.result).toEqual({ refused: true, bound: true, stopping: false });
+    const report = await runStop({ mode: "runtime", runtimeRecord, expectedFailure: true });
     expect(report.after).toBe(report.before);
     expect(report.profileAfter).toBe(report.profileBefore);
     expect(report.catalogAfter).toEqual(JSON.parse(report.catalogBefore));
@@ -325,7 +237,7 @@ for (const runtimeRecord of ["absent", "invalid", "foreign", "explicit-stop-unfe
   }, 20_000);
 }
 
-for (const preserve of ["service", "desktop", "sibling"]) {
+for (const preserve of ["service", "desktop", "receipt", "sibling"]) {
   test(`${preserve} signal preservation does not require a restoration sync fence`, async () => {
     const report = await runStop({ mode: "runtime", preserve, runtimeRecord: "absent" });
     expect(report.after).toBe(report.before);
