@@ -236,10 +236,10 @@ For Cloud Code Assist routed `claude-*` models, the complete matched `functionRe
 precedes its sibling images in the same user turn; images keep call order, MIME types and bytes.
 Interleaving an image before the remaining responses makes CCA Claude reject the batch as missing
 later tool results. Single-call and text-only batches keep their existing shape. CCA Gemini,
-non-Claude CCA models, AI Studio and Vertex models other than Gemini 4 Argon, Carbon and Hydrogen retain interleaved image siblings.
+non-Claude CCA models, AI Studio, Vertex Gemini 2.x and non-Gemini Vertex models retain interleaved image siblings.
 `tests/adapters/google/google-tool-result-adjacency.test.ts` checks the final compiled request
 for three parallel calls, reversed results, distinct images and route isolation.
-For Vertex `gemini-4-argon`, `gemini-4-carbon` and `gemini-4-hydrogen`, matched results carry representable data-URL images inside
+For Vertex Gemini 3 and later (`/^gemini-(?:[3-9]|\d{2,})(?:[.-]|$)/i`, including `gemini-3.8-flash`, `gemini-4-argon`, `gemini-4-carbon`, `gemini-4-hydrogen`, `gemini-4-neon` and future live-discovered models), matched results carry representable data-URL images inside
 `functionResponse.parts`, preserving each image's call ownership. Sibling images on that route can
 produce a misleading "Requests ending with a model turn are not supported" error even when the
 last turn is `user`. When an adjacent orphan batch contains representable images on that route,

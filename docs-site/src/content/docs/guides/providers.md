@@ -287,7 +287,7 @@ eligible Enterprise accounts. Cloud Code Assist serves Argon only to the Antigra
 OpenCodex sends every Gemini 4 model request and model discovery with the CLI User-Agent
 (`antigravity/cli/1.3.4`) and keeps the IDE User-Agent for every other model. Gemini 4 Hydrogen (low, medium, high by default, and xhigh) appears on `google-antigravity` only when your account's model list includes it, each level mapping to its `gemini-4-hydrogen-*` wire model; requesting `max` or `ultra` also selects xhigh.
 
-Vertex AI model discovery, its credential rules and how Gemini 4 Argon, Carbon and Hydrogen
+Vertex AI model discovery, its credential rules and how Vertex Gemini 3+ models (including Gemini 4 Argon, Carbon, Hydrogen and Neon)
 receive tool images are described in [Google Vertex AI](/guides/google-vertex/).
 
 For Gemini on Antigravity, including Argon, provider-marked thought summaries stay separate
