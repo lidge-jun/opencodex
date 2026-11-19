@@ -356,6 +356,9 @@ x-opencodex-api-key: your-secret-token
 | `/v1/messages` | accepted | accepted | accepted |
 | `/v1/messages/count_tokens` | accepted | accepted | accepted |
 | `/v1/models` | accepted | accepted | accepted |
+| `/v1/usage/windows` | accepted | accepted | not accepted |
+
+Usage windows require a configured key scoped to one provider and all of its models. See [Usage from a connected client](/guides/remote-hub/#usage-from-a-connected-client).
 
 Responses and Chat Completions accept a recognized data-plane credential in `x-opencodex-api-key` or, when that dedicated header is absent, empty or whitespace-only, in `Authorization: Bearer`. A nonempty dedicated header, after trimming whitespace, takes precedence even if invalid; a valid bearer does not rescue it. An unrelated bearer is not a proxy admission credential, and `x-api-key` is not accepted on these routes. Dashboard-generated `apiKeys` and the shared data token are compared in constant time; management credentials do not grant model admission.
 
@@ -768,7 +771,7 @@ These settings govern `/v1/messages`, `/v1/messages/count_tokens`, the `ocx clau
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `claudeCode.bodyStallSec?` | `number` | `90` | Native-passthrough body inactivity budget in seconds while a read is pending, not total duration. Minimum 1; exactly `0` disables. |
+| `claudeCode.bodyStallSec?` | `number` | `90` | Native-passthrough body inactivity budget in seconds while a read is pending. Incoming bytes refresh the streaming deadline even when the next SSE event is incomplete. Minimum 1. Exactly `0` disables. |
 | `claudeCode.bodyMaxBytes?` | `number` | `67108864` | Cumulative native-passthrough body cap for streamed and buffered responses. Exactly `0` disables. |
 | `claudeCode.compatibility?` | `"shadow" \| "enforce"` | unset | Optional compatibility admission for translated `/v1/messages` requests. `shadow` records unsupported features and continues; `enforce` returns an Anthropic-shaped 400 before inference. Native Anthropic passthrough remains unchanged. |
 | `claudeCode.authMode?` | `"proxy" \| "subscription"` | auto | How launch handles `ANTHROPIC_AUTH_TOKEN`. Auto detects auth each launch; an explicit value is never overridden. |

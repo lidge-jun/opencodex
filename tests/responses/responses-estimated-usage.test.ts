@@ -8,6 +8,7 @@ import type { RequestLogContext } from "../../src/server/request-log";
 import { spendLedgerOwnerSnapshot } from "../../src/lib/spend-ledger-owner";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { markEgressTransparentExecutor } from "../../src/lib/provider-egress";
 
 // #7427: a per-provider opt-in adds estimated usage when the provider omits it. The estimate is
 // marked by a response header and never reaches the request log, spend or quota accounting.
@@ -50,7 +51,10 @@ function sse(body: Record<string, unknown>, terminal = "response.completed"): Re
 
 async function send(cfg: OcxConfig, stream: boolean, upstream: Response, options: HandleResponsesOptions = {}) {
   release ??= acquireOwnedSpendHome();
-  globalThis.fetch = (async () => upstream) as unknown as typeof fetch;
+  globalThis.fetch = markEgressTransparentExecutor((async () => upstream) as unknown as typeof fetch);
+  // This fixture owns the wire even when the test host has an inherited SOCKS proxy.
+  cfg.providers.fixture!.fetch = globalThis.fetch;
+  cfg.providers.fixture!.proxy = "direct";
   const log = { model: "", provider: "" } as RequestLogContext;
   const response = await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST", headers: { "content-type": "application/json" },
@@ -113,6 +117,17 @@ test("JSON: provider usage is not marked as estimated", async () => {
   expect(response.headers.get(ESTIMATED_USAGE_HEADER)).toBeNull();
   expect(terminal.usage).toEqual(usage);
   expect(log.usage).toMatchObject({ inputTokens: 5, outputTokens: 6 });
+});
+
+test("native delivery strips upstream estimate headers and retains reported usage", async () => {
+  const usage = { input_tokens: 5, output_tokens: 6, total_tokens: 11 };
+  for (const stream of [false, true]) {
+    const upstream = stream ? sse(completed(usage)) : Response.json(completed(usage));
+    upstream.headers.set(ESTIMATED_USAGE_HEADER, "true");
+    const { response, log } = await send(config(false), stream, upstream);
+    expect(response.headers.get(ESTIMATED_USAGE_HEADER)).toBeNull();
+    expect(log.usage).toMatchObject({ inputTokens: 5, outputTokens: 6 });
+  }
 });
 
 // A 200 body is not a finished turn: a failed or still-running response keeps its missing usage.

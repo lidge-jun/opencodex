@@ -2,6 +2,7 @@ import type { RequestLogContext } from "../request-log";
 import type { HandleResponsesOptions } from "./core-options";
 import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import { readDisplaySafeErrorText } from "./core-errors";
+import { isNativePassthroughSseResponse } from "../relay";
 
 /**
  * How long a streaming combo may spend choosing a child before the client gets a response head
@@ -152,6 +153,10 @@ export function selectComboWithKeepalive(
       return;
     }
     if (response.ok && hasResponseMediaType(response.headers, "text/event-stream")) {
+      // The outer tap already exists when selection finishes. Decide from the selected
+      // response's process-owned marker before its first byte reaches that tap. The
+      // native child's original inspector still publishes real usage through its callback.
+      context.logCtx.clientSseUsageAlreadyInspected = isNativePassthroughSseResponse(response);
       setSource(response.body);
       return;
     }

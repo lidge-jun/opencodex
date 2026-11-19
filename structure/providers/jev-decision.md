@@ -46,7 +46,7 @@ same bounded state and option map, under the same deadline, bounds, and fail-ope
 `src/server/responses/jev-model-invoke.ts` runs that choice as a fresh internal `/v1/responses` turn
 with `tools: []`, its own send budget and turn lease, the parent's admission scope only, explicit null
 caller credentials, no caller headers or history, a 1024-token `max_output_tokens` ceiling that
-also sizes the spend reservation, and a 64 KiB bounded response; it is flagged
+also sizes the spend reservation, and a 64 KiB bounded response. The invoker uses the child context's process-owned usage provenance when attributing usage. The call is flagged
 `internalDecisionCall`, which `src/server/responses/request-prepare.ts` uses to keep caller-scoped
 memory and shadow-call rewrites off the decision turn and to refuse JEV Combo reentry. Save-time
 recursion and route checks live in
@@ -148,11 +148,17 @@ The sole-key policy fingerprint stays private; multiple-key/current-account repo
 pool evidence. Root/generation changes and account deletion retire rows. No timer or refresher is
 activated by evidence reads. Credential changes become visible through existing owners.
 
-`src/providers/quota-decision-publication.ts` projects subscription windows. Anthropic raw
+`src/providers/quota-decision-publication.ts` projects measured quota windows. Anthropic raw
 usage/header projections and Codex raw reset validity/producer clocks stay separate from unchanged display and hard-policy parsing; scoped family
 windows require producer-validated structure. Captured generations and cooldown/family fences
-reject late observations. Partial responses retain omitted windows with their own original clocks;
-authoritative enumerations replace them. Codex pool writers require dispatched live provenance;
+reject late observations. Partial responses retain omitted windows with their own original clocks,
+except for Anthropic’s monthly fallback, which each accepted observation replaces. A recognized Anthropic
+plan row with no usable meter or an explicit extra-usage disable retires the monthly fallback while retaining
+all other advisory windows and their clocks. A monthly-only observation replaces older plan evidence. Serving
+headers, including those from a validated sidecar send, publish under the sending credential generation.
+Monthly-only probes yield to plan evidence committed after physical dispatch, and older probes yield to a newer
+accepted monthly dispatch, including when readers share a probe. Authoritative enumerations replace all windows.
+Codex pool writers require dispatched live provenance;
 native-main writer objects bind the observed bearer generation. Display-only and disk-carried
 rows cannot republish advisory evidence. Producer/store bounds overflow to unknown, not a
 truncated supposedly exhaustive pool.
@@ -176,7 +182,9 @@ window per account, then the best usable pool tier in stable order. Observations
 healthy; all usable accounts must be known nearly exhausted before the pool can be. Existing
 Anthropic model routes restrict the loaded roster; Codex pause/reauth/terminal validation and
 main usability observations exclude unusable rows. Reserve without its own bars is unknown.
-Credits, API, USD, Spark and unscoped display bars never contribute. Sole-key reports reuse each
+Anthropic’s enabled extra-usage cap can supply an undated monthly signal when the usage payload
+contains no recognized plan window. It contributes only to advisory ranking. API, USD, Spark,
+other credit bars and unscoped display bars are excluded. Sole-key reports reuse each
 producer's existing 0-100 normalized bars (the provider quota guard's inputs); Anthropic/Codex raw
 observations outside 0-100 are ignored rather than clamped. Sole-key evidence is dropped when the
 ordinary key resolver next observes a changed credential, including its observe-only quiet variant; advisory quota evidence reads never resolve keys.
@@ -224,6 +232,10 @@ force-default invariant is unchanged. With the opt-in `"client"` the decision st
 ordinary Combo policy resolves effort (including a nested-only caller `reasoning.effort`), the caller `service_tier` is kept, and the requested-effort label records no JEV transition.
 Provider pins, caps and wire normalization still run afterward in both modes. `tests/responses/jev-initial-effort-wire.test.ts` pins both modes on both lanes
 and `tests/routing/jev-quota-config.test.ts` pins that an update omitting `jevEffortMode` preserves it.
+A `decide` JEV Combo advertises an empty reasoning effort ladder in the Codex catalog. In
+`client` mode, it advertises the ordinary Combo intersection. `deriveComboCatalogModel` in
+`src/codex/catalog/aggregation.ts` owns this projection, and
+`tests/codex-integration/codex-catalog-jev-effort.test.ts` checks the emitted rows.
 A tool-loop continuation sends no decision request ([Combo tool-loop continuation](../transports/native-reasoning-retention.md#combo-tool-loop-continuation)), so under `decide` it keeps the turn's effort: `src/server/responses/combo-session-recall.ts` stores the applied effort beside the lane's completed target, and `core-combo.ts` reapplies it on both lanes while `jevChoiceEfforts` still offers it for that target. A target that completed by failover stores none, and `client` never stores or reads one, so both keep ordinary Combo policy. On Messages inbound a continuation that carries an effort takes the bridge, like the decided first request.
 > Decision record: [ADR-8041](../decisions/ADR-8041-jev-effort-mode.md)
 A retryable failure rebuilds later targets from the untouched request under ordinary Combo policy, without

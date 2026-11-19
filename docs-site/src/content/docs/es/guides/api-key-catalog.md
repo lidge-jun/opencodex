@@ -7,7 +7,9 @@ Esta página contiene la sección 3 de la guía de [Proveedores](/es/guides/prov
 con clave API incluidos y las notas específicas de cada proveedor. Los modos de autenticación, los inicios de sesión
 de cuentas y los proveedores locales siguen en esa página.
 
-opencodex incluye 108 preajustes integrados: 87 con clave, 17 OAuth, tres locales y uno predeterminado de reenvío a ChatGPT. El selector **Añadir proveedor** abre el formulario del proveedor con clave, valida la credencial y la guarda; cada proveedor tiene su propia validación. Entre ellos:
+Para rotar cuentas de suscripción, consulta [`reset-near-weighted`](/es/reference/configuration/providers/#reset-near-weighted) en los grupos OAuth de Codex y Anthropic. Los grupos de claves API usan sus propios [ajustes de selección de claves](/es/reference/configuration/providers/).
+
+opencodex incluye 111 preajustes integrados: 89 con clave, 18 OAuth, tres locales y uno predeterminado de reenvío a ChatGPT. El selector **Añadir proveedor** abre el formulario del proveedor con clave, valida la credencial cuando el proveedor permite comprobarla y la guarda; cada proveedor tiene su propia validación. Entre ellos:
 
 **ClinePass** utiliza una clave API de Cline con el [catálogo oficial de suscripción](https://docs.cline.bot/getting-started/clinepass) y el [punto final de Chat Completions](https://docs.cline.bot/api/chat-completions), operados por Cline Bot Inc. bajo [los términos de Cline](https://cline.bot/tos). Un id enrutado como `cline-pass/cline-pass/kimi-k3` es intencional: el primer segmento selecciona el proveedor de opencodex, mientras que `cline-pass/kimi-k3` es el identificador de modelo completo que se envía aguas arriba. La cuota de ClinePass se comparte por cuenta entre límites rotativos de 5 horas, semanales y mensuales. Una sonda en vivo del 2026-08-13 verificó que todos los modelos estáticos de ClinePass aceptan `low`, `medium`, `high`, `xhigh` y `max` en el límite de entrada de la pasarela. opencodex conserva los niveles solicitados; cualquier normalización específica del backend sigue siendo responsabilidad de ClinePass.
 
@@ -73,6 +75,7 @@ opencodex incluye 108 preajustes integrados: 87 con clave, 17 OAuth, tres locale
 | Modelflare | `https://modelflare.dev/v1` |
 | AI Stupid Level | `https://aistupidlevel.info/v1` |
 | cheapaimodel | `https://api.cheapaimodel.ai/v1` |
+| AbliteratedLLM | `https://api.abliteratedllm.dev/v1` |
 | OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -358,10 +361,52 @@ OpenCodex puede gastar una suscripción de Claude a través del propio arnés de
 - **Indicación del sistema:** el sistema de la persona que llama y las indicaciones del desarrollador reemplazan el preajuste Claude Code (`--system-prompt-file`), por lo que el turno responde al contrato del cliente en lugar del personaje del arnés. El indicador plegado se organiza en un archivo privado por turno (modo `0600`) y se pasa por ruta, porque los argumentos de proceso son legibles en todo el mundo a través de la lista de procesos; una solicitud que no lleva ni un sistema ni un indicador de desarrollador obtiene solo las instrucciones de repetición de conversación fijas.
 - **Almacenamiento en caché de conversación:** cada mensaje se reproduce como un bloque de texto estable separado, con el mensaje actual formateado de manera idéntica a su representación histórica posterior. La larga historia se corta solo en los puntos de control de mensajes completos. Los catálogos de herramientas se serializan de manera determinista. Claude Code controla los puntos de interrupción de caché, por lo que esto hace posible la reutilización de caché rápida sin garantizarlo.
 - **Propiedad de la herramienta:** cuando la solicitud lleva herramientas, un catálogo aislado de solo captura MCP expone solo las herramientas seleccionadas del cliente (el mismo puente que CodeBuddy usa). El CLI captura la llamada y el turn termina allí; aprobación, sandboxing, ejecución y el resultado devuelto se queda con Codex, Pi, u otro cliente. Las herramientas integradas y todos los demás servidores MCP permanecen desactivados.
-- **Límites de suscripción:** antes de cada lanzamiento OpenCodex pide el punto final de uso de Anthropic, con el propio inicio de sesión del CLI leído en la memoria, si la ventana de 5 horas, semanal o específica del modelo del plan está llena. Un plan agotado es rechazado localmente con HTTP 429 `claude_subscription_cooldown` y un `Retry-After` para el reinicio, en lugar de comenzar un CLI que fallaría. La respuesta se almacena en caché durante un minuto en `claude-usage-admission.json` bajo el OpenCodex home (solo porcentajes, tiempos de reinicio y una clave de cuenta hash). Si el cheque no puede ejecutarse, el turno continúa.
+- **Límites de suscripción y uso adicional de pago:** OpenCodex consulta el endpoint de uso de
+  Anthropic con la sesión de la propia CLI. Guarda durante un minuto como máximo el agotamiento
+  detectado de la cuota de 5 horas, semanal o específica del modelo, para detectar una recarga o
+  un restablecimiento de cuota antes de la fecha anterior. Si el uso adicional está habilitado
+  explícitamente y no se indica que se haya alcanzado el límite de uso adicional, la CLI oficial
+  decide si el saldo y el límite de gasto permiten la solicitud. OpenCodex no presume que haya saldo
+  ni activa el uso de pago. Si el uso adicional está deshabilitado o agotado, no se ofrece esa vía.
+  OpenCodex considera agotado el límite de uso adicional cuando se informa de un 100 % de uso,
+  cuando los créditos consumidos alcanzan un límite mensual positivo o cuando el límite mensual
+  es explícitamente cero. Si la propia CLI indica que se alcanzó un límite, este se respeta hasta
+  la fecha de restablecimiento registrada. En los demás casos, un plan agotado devuelve HTTP 429
+  `claude_subscription_cooldown` con `Retry-After`. La caché privada guarda porcentajes,
+  fechas de restablecimiento, el estado del uso adicional y un hash de la clave de cuenta,
+  sin credenciales ni importes del saldo. Si la consulta no está disponible, decide la CLI.
 - **Destino:** la fila canónica nombra `https://api.anthropic.com` porque ahí es donde aterriza el tráfico de la suscripción. OpenCodex nunca envía esa solicitud en sí, y anular la URL base falla en cerrarse en lugar de entregar el turno a otro entorno.
 
 > **Términos:** este preajuste gasta su suscripción Claude a través del propio CLI de Anthropic. Si conducir ese arnés sin cabeza desde un proxy se ajusta a los términos de su plan es una pregunta entre usted y Anthropic. OpenCodex no convierte el inicio de sesión en una clave API y no reproduce la identidad CLI de HTTP.
+
+## Antigravity CLI (ACP, local)
+
+OpenCodex puede usar una suscripción de Google Antigravity a través de la propia CLI de Google en lugar de reproducir una credencial de Antigravity. El preajuste `antigravity-acp` inicia la Antigravity CLI oficial como `agy acp --sandbox` una vez por turno y se comunica con ella mediante el Agent Client Protocol por stdin y stdout:
+
+```json
+{
+  "providers": {
+    "antigravity-acp": {
+      "adapter": "agy-acp",
+      "baseUrl": "https://antigravity.google/docs/cli/acp"
+    }
+  }
+}
+```
+
+- **Requisitos:** Antigravity CLI 1.5.3 o posterior en `PATH` (o `OPENCODEX_AGY_BIN` con su ruta absoluta), con la sesión iniciada una vez en el host del proxy mediante `agy acp --login` o una sesión interactiva de `agy`. Si falla el inicio de sesión antes de comenzar la respuesta, la respuesta HTTP es 401 con el código `agy_login_required`. Si la respuesta ya se está transmitiendo, el flujo de eventos incluye `agy_login_required`.
+- **Sin credenciales guardadas:** la CLI es dueña de su inicio de sesión de Google. OpenCodex nunca lo lee, lo guarda ni lo reenvía, y la fila rechaza una clave API, un grupo de claves, la conmutación de cuentas o un ajuste OAuth. Hay una sola cuenta, la de la CLI, y no hay rotación. Al seleccionar este preajuste en `ocx init`, se omite la pregunta sobre la clave API. `ocx login antigravity-acp` muestra el comando para iniciar sesión en el host.
+- **Solo uso interactivo:** las respuestas del personal de Google en el foro de desarrolladores permiten que una aplicación personal inicie el binario oficial `agy acp` para la propia cuenta del usuario cuando el uso es interactivo y dirigido por el usuario, no un grupo de trabajadores desatendido ni un bucle de agente automatizado, y remiten las cargas programáticas a una clave API de Gemini o a Vertex AI ([respuesta del foro](https://discuss.ai.google.dev/t/tos-clarification-is-t3-code-official-antigravity-acp-agent-permitted-under-the-antigravity-terms-of-service/192027/2), [respuesta del foro](https://discuss.ai.google.dev/t/policy-question-omp-hosting-unmodified-antigravity-acp-for-one-user/199753)). OpenCodex aplica lo que puede saber con certeza: rechaza con HTTP 403 `agy_acp_interactive_only` un turno de subagente de Codex (`x-codex-parent-thread-id`), un turno que Codex marca como hilo generado o como su proceso de memoria, un miembro de combo, la llamada interna de decisión de un combo y una ruta elegida por la reserva de subagentes, y la configuración rechaza este proveedor como destino de combo, como `decisionModel` de un combo, como reserva de subagentes, como modelo predeterminado de subagentes administrados, como destino de compactación automática, como fase de `memoryModels` o como destino de `shadowCallIntercept`. La compactación manual sí admite ACP.
+- **Conexiones locales en el host del proxy:** OpenCodex determina si la solicitud es local según el origen de la conexión observada y el listener que la recibe. Las conexiones de la LAN, los enlaces del hub y el listener de gestión del hub se rechazan con HTTP 403 `agy_acp_local_only`. Las cabeceras de reenvío reconocidas, como `Forwarded`, `X-Forwarded-For`, `X-Real-IP`, `Via`, `CF-Connecting-IP` y `Tailscale-User-Login`, también provocan el rechazo. Solo en el listener público se rechazan además las conexiones desde direcciones declaradas en `dashboardTrustedProxy.proxyAddresses`. Un intermediario en loopback sin declarar o un reenvío de puerto por SSH puede parecer local si no transmite ninguna cabecera de reenvío reconocida. Declara el proxy inverso para el listener público o evita reenviar este puerto. Evita reenviar también los otros listeners locales, ya que ese ajuste solo protege el listener público.
+- **Solo modelos Gemini:** la lista estática es `gemini-3.8-flash`, `gemini-4-argon` y `gemini-3.7-flash`. En cada turno el modelo también debe ser un modelo Gemini que ofrezca la CLI, confirmado antes de enviar el prompt; cualquier otro se rechaza. El esfuerzo de razonamiento de Codex selecciona el nivel de pensamiento de la CLI (`xhigh` selecciona Extra). OpenCodex enmascara las credenciales que reconoce en las respuestas y el texto de razonamiento de la CLI.
+- **Espacio de trabajo y permisos:** cada turno se ejecuta en un directorio privado nuevo y vacío fuera del directorio de OpenCodex. El motor de permisos de la CLI pregunta antes de cada comando y antes de acceder a archivos fuera de ese directorio, y OpenCodex rechaza todas esas solicitudes. `--sandbox` pide a la CLI que ejecute sus comandos de terminal en su sandbox del sistema; Google documenta que no tiene efecto donde ese sandbox no está disponible (por ejemplo Windows 10 o algunos contenedores Linux), así que es un refuerzo adicional, no una garantía. Las reglas de permiso que configures en tus propios ajustes de agy siguen aplicándose sin preguntar.
+  En Windows, OpenCodex exige una lista de control de acceso privada para el directorio antes de iniciar la CLI.
+  La comprobación de versión y cada turno usan espacios de trabajo separados dentro del directorio temporal del
+  sistema. Una vez iniciada la CLI, OpenCodex espera a que terminen su proceso principal y su grupo de procesos en POSIX,
+  o a que se termine el árbol de procesos y se cierre el proceso principal en Windows, antes de eliminar el espacio de
+  trabajo. Si no puede confirmar la limpieza, registra una advertencia, conserva el espacio de trabajo y da por fallido el
+  turno afectado. Los espacios de trabajo conservados pueden acumularse tras fallos repetidos.
+- **Solo texto:** los prompts de ACP llevan texto, así que las herramientas de función del cliente y las imágenes no se ofrecen al modelo, y el uso de herramientas propio de la CLI queda dentro de la CLI.
 
 <a id="a6api-credit-quota"></a>
 
@@ -491,6 +536,8 @@ Ollama actualmente documenta salidas estructuradas como no compatibles en Ollama
 ## Cambios del catálogo y cuotas
 
 **cheapaimodel** es una pasarela de pago por token para modelos abiertos DeepSeek, GLM y Kimi, y Grok, operada por LINKOVA PTE. LTD. Crea una [clave API](https://console.cheapaimodel.ai/keys) con saldo prepago USD y elige el preajuste en init/dashboard u `ocx provider add cheapaimodel`, con clave o `${CHEAPAIMODEL_API_KEY}`. Usa `https://api.cheapaimodel.ai/v1` y [Chat Completions](https://cheapaimodel.ai/docs/api/create-chat-completion) para todos los clientes, no sus rutas Responses/Messages. Descubre por [`GET /v1/models`](https://cheapaimodel.ai/docs/api/list-models), que devuelve 401 sin clave válida. Incluye `deepseek-v4-1-flash`, predeterminado, `glm-5.3`, `glm-5.3-flash`, `kimi-k3` y `grok-4.7`. GLM 5.3 es solo texto; sus imágenes van al sidecar. Kimi K3 usa muestreo propio y no recibe `temperature` ni `top_p`. Se aplican sus [términos](https://cheapaimodel.ai/terms) y [privacidad](https://cheapaimodel.ai/privacy).
+
+**AbliteratedLLM** es una API de pago por token para modelos abiertos abliterados (sin rechazos) y de serie, con saldo prepago en USD por tarjeta o criptomoneda. Crea una [clave API](https://abliteratedllm.dev/dashboard/keys) y elige **AbliteratedLLM** en `ocx init` o **Añadir proveedor**, o ejecuta `ocx provider add abliteratedllm`, con la clave o la referencia `${ABLITERATEDLLM_API_KEY}`. El preajuste usa [Chat Completions](https://abliteratedllm.dev/docs/chat-completions) en `https://api.abliteratedllm.dev/v1` para todos los clientes, no sus rutas Responses (sin estado) ni Anthropic Messages, y usa una lista de modelos predefinida: el [`GET /v1/models`](https://abliteratedllm.dev/docs/models) público responde sin clave y no puede validarla, así que el descubrimiento en vivo está desactivado. `glm-5.3-flash-abliterated` es el predeterminado. El 2026-11-15, `GET /v1/models` listaba 15 modelos: `glm-5.3-flash-abliterated`, el único abliterado (marcado `variant: "abliterated"`), y 14 con `provider_label: "Stock model"`, los pesos originales de cada fabricante. Ninguno llevaba la etiqueta "Official DeepSeek API", la que la política de privacidad usa para las solicitudes reenviadas a la API propia de DeepSeek; los modelos listados, incluidos los de DeepSeek, se ejecutan en Fireworks AI con retención cero de datos. `glm-5.3` y `glm-5.3-fast` son solo texto, así que sus imágenes van al sidecar de visión. `reasoning_effort` se envía como `low`, `medium` o `high`; los niveles superiores se envían como `high`. Se aplican las [condiciones](https://abliteratedllm.dev/terms) y la [política de privacidad](https://abliteratedllm.dev/privacy) de AbliteratedLLM.
 
 El rechazo HTTP 403 de Meta a una clave Muse Code fuera de su cliente es una restricción del plan sobre una credencial válida, no caducidad ni rechazo de clave. Volver a iniciar sesión no lo soluciona; usa `meta-model` con clave de pago por uso. La protección frente a una respuesta vacía de otros gateways conserva un snapshot con `output_text` agregado; ausente, null o vacío aún permite el reintento acotado. No cambia los demás proveedores ni sus políticas.
 

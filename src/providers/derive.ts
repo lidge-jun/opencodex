@@ -1,3 +1,4 @@
+import { isAgyAcpProvider } from "../config/schema/agy-acp-references";
 import type { CodexAccountMode, OcxProviderConfig } from "../types";
 import { COST_VENDOR_PRIORITY, getModelMetadata, getModelMetadataCaseInsensitive } from "../generated/model-metadata";
 import { cloneFastWire } from "./fastwire";
@@ -73,6 +74,7 @@ export interface DerivedInitProvider {
   adapter: string;
   baseUrl: string;
   kind: "forward" | "oauth" | "key" | "local";
+  keyOptional?: boolean;
   codexAccountMode?: CodexAccountMode;
   dashboardUrl?: string;
   defaultModel?: string;
@@ -323,7 +325,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
     if (entry.authKind !== "key") continue;
     // A deprecated route cannot complete a login, but its entry must stay resolvable for
     // configs saved while it still worked.
-    if (entry.deprecated) continue;
+    if (entry.deprecated || isAgyAcpProvider(entry.id, entry)) continue;
     if (!entry.dashboardUrl) throw new Error(`Registry key provider missing dashboardUrl: ${entry.id}`);
     const liveModels = registryEntrySupportsLiveModelDiscovery(entry) ? entry.liveModels : false;
     out[entry.id] = {
@@ -385,6 +387,7 @@ export function deriveInitProviders(): DerivedInitProvider[] {
     adapter: entry.adapter,
     baseUrl: entry.baseUrl,
     kind: entry.authKind,
+    ...(entry.keyOptional ? { keyOptional: true } : {}),
     ...(entry.codexAccountMode ? { codexAccountMode: entry.codexAccountMode } : {}),
     ...(entry.dashboardUrl ? { dashboardUrl: entry.dashboardUrl } : {}),
     ...(entry.defaultModel ? { defaultModel: entry.defaultModel } : {}),
@@ -765,6 +768,7 @@ function customPreset(): DerivedProviderPreset {
 
 function formatInitLabel(entry: ProviderRegistryEntry): string {
   if (entry.authKind === "forward") return "OpenAI — ChatGPT login (no key; account pool default, Direct selectable)";
+  if (entry.adapter === "agy-acp") return `${entry.label} — subscription CLI (no API key)`;
   if (entry.authKind === "oauth") {
     if (entry.id === "xai") return "xAI (Grok) — account login";
     if (entry.id === "anthropic") return "Anthropic (Claude) — account login";

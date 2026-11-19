@@ -1,4 +1,5 @@
 {
+  "machine-weighted-routing.test.ts": "routing",
   "combo-cooldown-reprobe.test.ts": "codex-integration",
   "server-combo-stream-hosted-tool-contract.test.ts": "server",
   "server-combo-stream-send-contract.test.ts": "server",

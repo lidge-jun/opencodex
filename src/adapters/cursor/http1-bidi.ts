@@ -6,6 +6,7 @@ import { withUpstreamHttpVersionValue } from "../../lib/upstream-http-version";
 import { isPreConnectReachabilityError } from "../../lib/upstream-reachability";
 import { BidiRequestIdSchema } from "./gen/agent_pb";
 import { consumeConnectFrames, encodeConnectFrame } from "./framing";
+import { fetchWithPhysicalSendReceipt } from "../../lib/executor-physical-send-receipt";
 
 const CURSOR_RUN_SSE_PATH = "/agent.v1.AgentService/RunSSE";
 const CURSOR_BIDI_APPEND_PATH = "/aiserver.v1.BidiService/BidiAppend";
@@ -29,6 +30,7 @@ export interface CursorHttp1BidiOptions {
   translatorBudget: TranslatorBudget;
   callbacks: CursorHttp1BidiCallbacks;
   fetch?: typeof globalThis.fetch;
+  onRunDispatch?: () => void;
 }
 
 interface PendingAppend {
@@ -251,13 +253,16 @@ export class CursorHttp1BidiConnection {
     const requestId = toBinary(BidiRequestIdSchema, create(BidiRequestIdSchema, {
       requestId: this.options.requestId,
     }));
-    const response = await this.fetchImpl(url, this.http1Init(url, {
+    const init = this.http1Init(url, {
       method: "POST",
       headers: this.commonHeaders("application/connect+proto"),
       body: bunFetchBody(encodeConnectFrame(requestId)),
       redirect: "manual",
       signal: this.abortController.signal,
-    }));
+    });
+    const response = await (this.options.onRunDispatch
+      ? fetchWithPhysicalSendReceipt(this.fetchImpl, url, init, this.options.onRunDispatch)
+      : this.fetchImpl(url, init));
     if (response.status !== 200) {
       void response.body?.cancel().catch(() => undefined);
       throw cursorHttp1Error("RunSSE", response.status);

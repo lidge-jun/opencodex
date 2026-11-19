@@ -1,5 +1,7 @@
 # CLI management and discovery
 
+Connected Hub clients can use the local admin token for the [scoped passive management reads](remote-link.md#hub-transport-relay). Relay key rows retain active and paused status for account listing and use positional display IDs. The stored relay lease is provisioned during connect and replaced after a committed key rotation.
+
 `src/cli/` contains the terminal management interface. Process ownership, startup, stop and service contracts remain in [Runtime](runtime.md); this document owns command discovery, help, management-client presentation and the generated operating reference.
 
 `ocx v2 mode v2-plaintext` requires `--acknowledge-plaintext-agent-messages` when entering the mode, locally or with `--live`. Local selection admission re-reads the mode and rechecks entry consent before either native or proxy writes, so a mode changed during the wait cannot reuse earlier idempotent permission. Generic config set/import refuse a new plaintext-mode entry and direct the operator to that coordinated transition; already-active restoration and exits remain allowed. The live client sends a scoped acknowledgment and validates the returned mode, capability and plaintext state. Its global feature remains disabled; the [surface contract](subagent-capacity.md#multi-agent-surface-selection) defines task-text retention and unchanged transport authentication. Existing independent plaintext preferences are preserved when leaving the mode.
@@ -141,6 +143,9 @@ For Codex pool login with `--code -`, the start response determines whether code
 
 `src/cli/capabilities-integrations.ts` declares `commandcode restore` and its dedicated restore/preview routes separately from generic integration restore. Its generated operating reference preserves the client-bound command, supported flags, and refusal on older proxies without those routes.
 
+The same capability catalog declares `connect antigravity` and `connect agy` separately. Only the
+[Antigravity desktop app connection](clients/antigravity-gateway.md#target-and-the-secret-rule) accepts `--model`.
+
 `src/cli/integration-input.ts` shares pure profile paths/validation and owns exact optional Droid-map/fingerprint and [export naming](clients/export-model-names.md) grammar. `src/cli/integration-preview.ts` handles explicit preview and new-option writes; `src/cli/integration-plan-dto.ts` validates value-free plans without runtime imports from GUI/planner/writer code. The original direct mutation bodies remain when new options are absent. Refused and no-op previews are completed observations; stale commits return a re-preview instruction without adopting a replacement token. The server owns coordinated binding and writes.
 
 `src/cli/integration-journal.ts` addresses exact global/Aside/profile history with an explicit confirmation. It reports retired records separately from incomplete snapshot cleanup. `src/cli/integration-aside-sync.ts` retains the existing attested helper and its original dependency object rather than selecting a different transport through synthesized baseUrl. Empty, malformed and partial outcomes remain distinct. New fixed runtime requests reject redirects; this is not a global legacy transport rewrite. An empty sync prints guidance instead of a bare no-op: `src/cli/aside-profile-recovery.ts` names the status command and the preview-then-enable commands, and `ocx integration client status --client aside` (list or `--profile`) adds those commands with the real ID for each profile that is off with a stale block. The text issues no request and enables nothing; `--json` output is unchanged.
@@ -182,6 +187,8 @@ window labels identify resets while separate display text carries the amounts an
 The operating guide's eight-domain workflow table is navigation rather than parity measurement. Handwritten JSON, recipe, recovery and target docs qualify bounded windows, model-only search, partial/default results and human-only/session actions. Generated chapter counts still derive exclusively from capability declarations. Each chapter renders mutation and JSON mode together so additive declarations retain all metadata within the chapter line budget. File integration help includes Gentle Shell through the `gentle-shell` client target.
 
 ## ocx command selection
+
+`src/cli/claude-context-settings.ts` preserves the original arguments and launch environment and skips generated per-model compact settings if any argument exactly matches `remote-control`, `rc`, `bridge`, `remote`, or `sync`, including option values and arguments after `--`. The `--remote-control` session option still supports generated settings.
 
 `capabilities --contracts` and `update` remain on the invoked package path even when a Desktop command record is present.
 All `capabilities` calls, sync calls and update calls carrying orchestration flags skip root automatic Codex shim repair, including malformed calls. Sync holds a separate home-scoped sync/update mutex for its work and performs eligible shim repair only after acquiring it.

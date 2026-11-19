@@ -5,6 +5,7 @@
  * command is spawned and no FFI is loaded.
  */
 import { describe, expect, spyOn, test } from "bun:test";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -317,6 +318,9 @@ function Invoke-CimMethod {
       "([pscustomobject]@{ User = @{ Value = $script:sid }; Name = 'HOST\\test' })");
   expect(helper).toContain("$service = New-Object -ComObject FixtureScheduler");
   expect(helper).not.toContain("Schedule.Service");
+  // All eight launches share one 60 s window (each capped at the spawn budget), so a hang fails here
+  // with the active scenario named, inside the 120 s Linux batch deadline.
+  const deadline = Date.now() + 60_000;
   for (const [scenario, status, stopped] of [
     ["verified", "ended", "42,43"],
     ["replaced", "unverified-registration", ""],
@@ -327,10 +331,14 @@ function Invoke-CimMethod {
     ["hidden", "unverified-registration", ""],
     ["idle", "not-running", ""],
   ]) {
-    const script = "$args = @('" + scenario + "'); " + fixture + "\n& {\n" + helper + "\n}\n'Stopped=' + ($script:stopped -join ',')";
+    // Production runs the helper alone, which silences progress before its first module use. The fixture
+    // runs first here and its Add-Member/[pscustomobject] calls autoload Microsoft.PowerShell.Utility, which
+    // writes a "Preparing modules for first use" CLIXML progress record to stderr on a cold runner.
+    const script = "$ProgressPreference = 'SilentlyContinue'; $args = @('" + scenario + "'); " + fixture + "\n& {\n" + helper + "\n}\n'Stopped=' + ($script:stopped -join ',')";
     const child = Bun.spawn([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand",
       Buffer.from(script, "utf16le").toString("base64")], {
-      stdio: ["pipe", "pipe", "pipe"], windowsHide: true, timeout: 5_000,
+      stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
+      timeout: Math.max(1_000, Math.min(SPAWN_BUDGET_MS, deadline - Date.now())),
     });
     child.stdin.write(scenario === "rejected" ? "\n" : "stop\n");
     child.stdin.end();
@@ -340,7 +348,7 @@ function Invoke-CimMethod {
     expect({ scenario, stderr, code, output: stdout.trim().split(/\r?\n/).slice(-2) })
       .toEqual({ scenario, stderr: "", code: 0, output: [status, "Stopped=" + stopped] });
   }
-}, 20_000);
+}, 65_000);
 
 describe("Part B port sampler and listener identity", () => {
   test("free, listening, unreadable, and an exited owner's row is cleared", async () => {

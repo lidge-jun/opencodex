@@ -283,7 +283,7 @@ describe("Vertex Argon tool-result images", () => {
       content: [{ type: "text", text: "failed again" }, image("Yg==")], isError: true, timestamp: 0 });
     const body = await wire(messages);
     expect(body.contents.at(-2)).toEqual({ role: "user", parts: [{ functionResponse: {
-      id: "call_shell_1", name: "shell_command", response: { result: "failed[image]" }, parts: [inline()],
+      id: "call_shell_1", name: "shell_command", response: { error: "failed[image]" }, parts: [inline()],
     } }] });
     expect(body.contents.at(-1)).toEqual({ role: "user", parts: [
       { text: "[tool_result without adjacent tool_use: shell_command (call_shell_1)]\nfailed again[image]" }, inline("Yg=="),

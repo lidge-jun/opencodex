@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { connect, createServer } from "node:tls";
 import { createCertificateAuthority, createLocalInterceptCa, issueServerLeaf, mintAuthorityWithExtensionsForTests } from "../../src/claude/intercept/local-ca";
 import { drainPendingPickerCaUntrust } from "../../src/claude/intercept/picker-ca-cleanup";
+import { LINUX_TRUST_TRUNCATED } from "../../src/claude/intercept/picker-trust-linux";
 import {
   acknowledgePendingPickerCaUntrust, acceptsPickerAuthority, ensurePickerCa, issuePickerLeaf, pickerCaCertPath, pickerCaFingerprints,
   pickerCaOwnerPath, pickerCaPendingUntrustPath, pickerLeafCertPath, pickerStateDir,
@@ -515,6 +516,49 @@ test("failed untrust leaves the pending record byte-for-byte intact", async () =
   expect(drained).toBe(false);
   expect(calls).toContain("remove-trusted-cert");
   expect(readFileSync(path)).toEqual(before);
+});
+
+test("on Linux a truncated NSS listing keeps the pending record byte-for-byte intact", async () => {
+  const dir = tempDir();
+  ensurePickerCa(dir);
+  const old = createCertificateAuthority({ commonName: PICKER_CA_COMMON_NAME, permittedDnsNames: [PICKER_HOST] });
+  writeFileSync(pickerCaCertPath(dir), old.certPem);
+  ensurePickerCa(dir, { rotation: "startup" });
+  const path = pickerCaPendingUntrustPath(dir);
+  const before = readFileSync(path);
+  const home = join(dir, "home");
+  mkdirSync(join(home, ".pki", "nssdb"), { recursive: true });
+  const calls: string[][] = [];
+  const drained = await drainPendingPickerCaUntrust(dir, async args => {
+    calls.push([...args]);
+    return { code: null, stdout: "", stderr: LINUX_TRUST_TRUNCATED };
+  }, "linux", home);
+  expect(drained).toBe(false);
+  expect(calls.map(call => call[0])).toEqual(["-L"]);
+  expect(readFileSync(path)).toEqual(before);
+});
+
+test("on Linux an NSS directory stat failure keeps the pending removal record", async () => {
+  const dir = tempDir();
+  try {
+    ensurePickerCa(dir);
+    writeFileSync(pickerCaCertPath(dir), mintPickerCa().certPem);
+    ensurePickerCa(dir, { rotation: "startup" });
+    const path = pickerCaPendingUntrustPath(dir);
+    const before = readFileSync(path);
+    // An overlong path component fails stat even when the tests run as root.
+    const home = join(dir, "h".repeat(512));
+    const calls: string[][] = [];
+    const drained = await drainPendingPickerCaUntrust(dir, async args => {
+      calls.push([...args]);
+      return { code: 0, stdout: "", stderr: "" };
+    }, "linux", home);
+    expect(drained).toBe(false);
+    expect(calls).toEqual([]);
+    expect(readFileSync(path)).toEqual(before);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("cached ensure repairs a missing owner so a peer cannot rotate a live CA", async () => {

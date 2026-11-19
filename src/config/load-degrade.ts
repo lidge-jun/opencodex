@@ -1,4 +1,3 @@
-import { setCodexWsReuseAcrossTurns } from "./codex-ws-reuse-setting";
 import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
 import { chmodSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -10,7 +9,9 @@ import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility"
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import { mainAccountHardLockFallbackError } from "./schema/main-account-hard-lock-fallback";
 import { fallbackPolicyError } from "./schema/fallback-policy";
+import { subscriptionReserveConfigError } from "./schema/subscription-reserve";
 import { anthropicSidecarConfigError } from "./schema/anthropic-account-pool";
+import { agyAcpProviderFieldIssues, agyAcpUnattendedTargetIssues } from "./schema/agy-acp-references";
 import {
   modelPinnedEffortsConfigError,
   pinnedReasoningEffortConfigError,
@@ -57,6 +58,7 @@ import {
   spendSchema,
   telemetryConfigSchema,
   chatgptDesktopConfigIssue,
+  isValidCreditPriceUsd,
 } from "./schema/leaf-validators";
 import { hasWarnedInheritedFastWireConflict, markWarnedInheritedFastWireConflict } from "./warn-memo";
 
@@ -146,7 +148,6 @@ export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxCon
   if (nativeReasoningRetentionConfigError(rawParsed)) console.warn("⚠️  invalid nativeReasoningRetention disabled; model and account switch allowances remain off");
   if (workflowBudgetConfigError(rawParsed)) console.warn("⚠️  invalid workflowBudget ignored; the built-in workflow ceilings stay in force");
   if (routedCatalogDefaultsConfigError(rawParsed)) console.warn("⚠️  invalid routedCatalogDefaults ignored; routed catalog rows keep their derived values");
-  setCodexWsReuseAcrossTurns(validated.codexWsReuseAcrossTurns === true);
   const retentionWarning = degradedReasoningRetentionWarning(rawParsed, validated);
   if (retentionWarning) console.warn(retentionWarning);
   if (compactionRecoveryConfigError(rawParsed)) console.warn("⚠️  invalid compactionRecovery disabled; the original compaction failure is preserved");
@@ -154,6 +155,7 @@ export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxCon
   if (blockedModelRedirectsError(rawParsed)) console.warn("⚠️  invalid blockedModelRedirects ignored; provider routing remains available");
   if (mainAccountHardLockFallbackError(rawParsed)) console.warn("⚠️  invalid codexMainAccountHardLockFallback ignored; the main-account hard lock still refuses while blocked");
   if (fallbackPolicyError(rawParsed)) console.warn("⚠️  invalid fallback leaves ignored; those scopes keep today's fallback behavior");
+  if (subscriptionReserveConfigError(rawParsed)) console.warn("⚠️  invalid subscriptionReserve disabled; Claude subscription routing remains available");
   const chatgptDesktop = chatgptDesktopConfigIssue(rawParsed);
   if (chatgptDesktop) console.warn(`⚠️  config.json ${chatgptDesktop} — the whole chatgptDesktop block is ignored, so the ChatGPT desktop integration reads as off`);
   warnDegradedStreamMode(rawParsed, validated);
@@ -197,6 +199,70 @@ export function warnDegradedMemoryModels(rawParsed: unknown, validated: OcxConfi
     if ((raw as Record<string, unknown>)[phase] !== undefined && validated.memoryModels[phase] === undefined) {
       console.warn("\u26a0\ufe0f  config.json memoryModels." + phase + " is invalid (expected { model, reasoningEffort? } with a nonblank model) \u2014 that phase keeps its existing route, which may include shadow-call interception");
     }
+  }
+}
+
+/** Repair ACP-specific provider fields and unattended selectors on disk reads. */
+export function sanitizeAgyAcpForLoad(
+  parsed: unknown,
+  warn: (message: string) => void = message => console.warn(`⚠️  config.json ${message}`),
+): void {
+  const root = rawConfigRecord(parsed);
+  if (!root) return;
+  const report = (issue: ReturnType<typeof agyAcpProviderFieldIssues>[number], repair: string): void => {
+    const path = issue.path.map(segment => typeof segment === "string"
+      ? redactSecretString(segment).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g,
+        ch => "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0"))
+      : segment).join(".");
+    warn(path + ": " + issue.message + " " + repair);
+  };
+  // Fallback issues are indexed into their original arrays. Remove later entries first.
+  for (const issue of agyAcpUnattendedTargetIssues(root).reverse()) {
+    const [section, field, index] = issue.path;
+    if (section === "memoryModels" && typeof field === "string") {
+      const memory = rawConfigRecord(root.memoryModels);
+      if (memory) delete memory[field];
+    } else if (section === "injectionModel") {
+      root.syncCodexSubagentDefaults = false;
+    } else if (section === "compactionRouting") {
+      const compaction = rawConfigRecord(root.compactionRouting);
+      if (compaction && Array.isArray(compaction.triggers)) {
+        const remaining = compaction.triggers.filter(trigger => trigger !== "auto");
+        if (remaining.length) compaction.triggers = remaining;
+        else delete root.compactionRouting;
+      }
+    } else if (section === "shadowCallIntercept") {
+      const shadow = rawConfigRecord(root.shadowCallIntercept);
+      if (shadow) shadow.enabled = false;
+    } else if (section === "subagentModelFallback" && Array.isArray(root.subagentModelFallback) && typeof field === "number") {
+      root.subagentModelFallback.splice(field, 1);
+    } else if (section === "subagentModelFallbackByModel" && typeof field === "string" && typeof index === "number") {
+      const byModel = rawConfigRecord(root.subagentModelFallbackByModel);
+      const fallback = byModel?.[field];
+      if (byModel && Array.isArray(fallback)) {
+        fallback.splice(index, 1);
+        if (fallback.length === 0) delete byModel[field];
+      }
+    }
+    const repair = section === "injectionModel" ? "Disabling managed subagent default sync on load."
+      : section === "compactionRouting" ? "Ignoring the automatic compaction trigger on load."
+      : "Ignoring this target on load.";
+    report(issue, repair);
+  }
+  const providers = rawConfigRecord(root.providers);
+  // Apply indexed removals from the end so earlier model entries retain their indices.
+  for (const issue of agyAcpProviderFieldIssues(root).reverse()) {
+    const [, name, field, entry] = issue.path;
+    if (typeof name !== "string" || typeof field !== "string") continue;
+    const provider = rawConfigRecord(providers?.[name]);
+    if (!provider) continue;
+    const value = provider[field];
+    if (field === "models" && Array.isArray(value) && typeof entry === "number") value.splice(entry, 1);
+    else if (field === "modelAliases" && typeof entry === "string") {
+      const aliases = rawConfigRecord(value);
+      if (aliases) delete aliases[entry];
+    } else delete provider[field];
+    report(issue, "Ignoring this provider setting on load.");
   }
 }
 
@@ -433,6 +499,24 @@ export function sanitizeModelCostsForLoad(parsed: unknown, warn: (message: strin
       delete p.modelCosts;
       warn(`⚠️  config.json providers.${safeProviderName}.modelCosts has no valid rows left — removing the overlay`);
     }
+  }
+}
+
+/**
+ * Load-time degradation for `providers.<name>.creditPriceUsd`, mirroring
+ * {@link sanitizeModelCostsForLoad}: an invalid hand-edited price is dropped with a warning
+ * instead of failing the parse and falling back to defaults. The schema still rejects it on writes.
+ */
+export function sanitizeCreditPriceForLoad(parsed: unknown, warn: (message: string) => void = console.warn): void {
+  if (!parsed || typeof parsed !== "object") return;
+  const providers = (parsed as Record<string, unknown>).providers;
+  if (!providers || typeof providers !== "object" || Array.isArray(providers)) return;
+  for (const provider of Object.values(providers as Record<string, unknown>)) {
+    if (!provider || typeof provider !== "object" || Array.isArray(provider)) continue;
+    const p = provider as Record<string, unknown>;
+    if (p.creditPriceUsd === undefined || isValidCreditPriceUsd(p.creditPriceUsd)) continue;
+    delete p.creditPriceUsd;
+    warn("⚠️  config.json provider has an invalid creditPriceUsd — ignoring the credit price");
   }
 }
 

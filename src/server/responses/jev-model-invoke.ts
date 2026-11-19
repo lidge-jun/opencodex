@@ -12,7 +12,6 @@ import { tryAdmitTurn } from "../lifecycle";
 import type { RequestLogContext } from "../request-log";
 import { createSseInspector } from "../relay";
 import type { HandleResponsesOptions } from "./core-options";
-import { ESTIMATED_USAGE_HEADER } from "./estimated-usage";
 
 type HandleResponses = (
   req: Request,
@@ -179,8 +178,8 @@ export function createJevModelInvoker(context: JevModelInvokerContext): JevModel
       }
       const bounded = await readBoundedResponseBytes(response, { maxBytes: JEV_MAX_RESPONSE_BYTES, signal });
       if (bounded.oversized) throw new JevModelInvokeError("malformed", "decision response too large");
-      // A marked response carries an estimate for a client's display, never spend evidence.
-      const includeUsage = !response.headers.has(ESTIMATED_USAGE_HEADER);
+      // Apply process-owned provenance before decoding either a success or a failed terminal.
+      const includeUsage = !childLog.clientResponseUsage;
       const result = hasResponseMediaType(response.headers, "text/event-stream")
         ? decodeSse(bounded.bytes, includeUsage)
         : (() => {

@@ -205,6 +205,8 @@ to the bare tool name the request declared (`default.Read` → `Read`).
 | Streaming dictation | `WS /v1/audio/transcriptions/stream` | Not applicable | Desktop dictation JSON events |
 | Voice and Realtime | `POST /v1/live`, `POST /v1/realtime/calls` | Relayed call-creation response | A separate sideband WebSocket relays frames in both directions |
 | Responses compaction | `POST /v1/responses/compact` | Replacement-history JSON | Not applicable |
+| Gemini API | `POST /v1beta/models/{model}:generateContent` | Gemini response JSON | `:streamGenerateContent` SSE with `alt=sse`, otherwise one JSON array |
+| Gemini Interactions | `POST /v1beta/interactions` | `interaction` JSON | Interactions SSE events |
 
 ## File transcription
 
@@ -421,8 +423,8 @@ completion event for that open call. Calls already completed keep their status. 
 the provider outcome.
 
 On the Responses streaming wire, an explicit non-retryable content-filter stop from
-Anthropic (`refusal` / `content_filter`) or Kiro (`CONTENT_FILTERED` /
-`GUARDRAIL_INTERVENED`) ends with `response.failed`, `error.code: "invalid_prompt"`,
+Anthropic (`refusal` / `content_filter`), Kiro (`CONTENT_FILTERED` /
+`GUARDRAIL_INTERVENED`) or Antigravity ACP (`refusal`) ends with `response.failed`, `error.code: "invalid_prompt"`,
 and `retryable: false`. This prevents clients that retry incomplete streams from
 resending the refused context. Usage and partial output are preserved. Web-search
 and image sidecars stop without executing calls from that refused iteration or
@@ -821,6 +823,48 @@ standard fallback, preserving user fields and later valid selections. Conflicts 
 recovery prevent a completion claim. Restart Desktop to load disk changes; disconnect does not
 automatically revoke the hub key. See [Claude Desktop lifecycle](/guides/claude-code/).
 Thinking replay and prompt-cache work remain separate in [#3719](https://github.com/lidge-jun/opencodex/issues/3719).
+
+## Gemini API: `/v1beta/models` and `/v1beta/interactions`
+
+Gemini clients, such as the google-genai SDK with a custom base URL, the `agy` CLI or a client reading
+`GOOGLE_GEMINI_BASE_URL`, can reach the configured provider routes in Google's REST shape. The proxy
+translates each request onto its Chat Completions path, so the route behind it can be any provider.
+Authenticate with a proxy API key in `x-goog-api-key` or a `?key=` query parameter; the key is removed
+from the URL and headers before the request is logged or forwarded. Errors use Google's
+`{ "error": { "code", "message", "status" } }` shape.
+
+- `GET /v1beta/models` lists `models/<provider>/<model>` for the routes the key may use, and
+  `GET /v1beta/models/{model}` returns one. A model includes `inputTokenLimit` and `outputTokenLimit`
+  when they are known. For `inputTokenLimit`, provider input and context-window overrides take precedence,
+  followed by the matching `customModels[].contextWindow` and generated model metadata.
+- `:generateContent` and `:streamGenerateContent`, under `/v1beta/models/` or `/v1/models/`, translate
+  `contents`, `systemInstruction`, inline images, function declarations and calls, and
+  `generationConfig`. Thought signatures on `functionCall` parts are carried in both directions. With
+  `alt=sse` the stream is SSE; without it the answer is one JSON array, as Google's REST API sends it.
+  Hosted Gemini tools are ignored. A `candidateCount` other than 1, non-image inline data and file parts
+  are refused with 400.
+- `:countTokens` returns `{ "totalTokens": n }` from a local estimate and sends nothing upstream.
+  `:embedContent` and `:batchEmbedContents` answer 501.
+- `POST /v1beta/interactions`, or `POST /v1/interactions`, creates an interaction from `input` (text,
+  base64 images, or steps including `function_call` and `function_result`), `system_instruction`,
+  `function` tools, `generation_config` and a text `response_format`. A stream uses the Interactions
+  events `interaction.created`, `step.start`, `step.delta`, `step.stop` and `interaction.completed`. A
+  turn that ends in function calls has status `requires_action`. Fields the proxy cannot honor are
+  refused with 400: `agent`, `background: true`, `webhook_config`, `environment`, `agent_config`,
+  `safety_settings`, hosted tools, input content other than text and images, and non-text output.
+  The routed provider applies its own safety policy.
+- `previous_interaction_id` continues a stored interaction. The proxy keeps interactions in memory only,
+  for at most 24 hours after the last write, and only the key that created one can read, continue or
+  delete it; a keyless loopback caller shares one owner. Retention is best effort: each key keeps at most
+  200 interactions and 16 MiB, the proxy keeps at most 1,000 and 64 MiB in total, and the proxy's memory
+  budget can remove interactions earlier. When the store is full, a key with nothing of its own to make
+  room with gets its answer without the interaction being kept, and so does an interaction larger than
+  8 MiB or the configured inbound body limit, whichever is smaller. A buffered answer reports whether it
+  was kept in `x-opencodex-interaction-stored: true|false`. A restart forgets them all, and a missing
+  or expired id answers 404, so a client should keep its history to resend it. A request with
+  `store: false` is not kept. `GET /v1beta/interactions/{id}` returns a stored interaction, `DELETE`
+  removes it, and `POST /v1beta/interactions/{id}/cancel` answers 400 because nothing runs in the
+  background. Both Interactions aliases return `Cache-Control: no-store`.
 
 ## `POST /v1/live` and Realtime sideband
 

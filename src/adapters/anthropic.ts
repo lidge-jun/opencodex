@@ -22,6 +22,7 @@ import type {
 } from "../types";
 import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName } from "../types";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION, applyClaudeToolPrefix, stripClaudeToolPrefix } from "../oauth/anthropic";
+import { sameProviderContinuationOwner } from "../responses/provider-continuation";
 import { parseDataUrl } from "./image";
 import { enforceAnthropicImageLimits } from "./anthropic-image-guard";
 import { normalizeAnthropicImages } from "./anthropic-image-normalize";
@@ -41,7 +42,7 @@ import { resolveReasoningCapabilities } from "../providers/reasoning-capabilitie
 import { declaresThinkingToggleWire, reasoningControlsAreUnsupported } from "./reasoning-controls";
 import { applyAgentRouterLanguageFraming, isAgentRouterEndpoint } from "./agentrouter";
 import { anthropicCacheWrite1hTokens, resolveAnthropicCacheRetention, type AnthropicCacheRetention } from "./anthropic/cache-retention";
-import { advisorServerExchange, advisorServerToolDestination, planAnthropicServerTools } from "./anthropic/advisor-tool";
+import { advisorServerExchange, advisorServerToolDestination, hostedAdvisorCredentials, planAnthropicServerTools } from "./anthropic/advisor-tool";
 import { applyAnthropicPerMessageEffort } from "./anthropic/per-message-effort";
 import { claudeFamilyVersion, rejectsCombinedSampling, rejectsForcedToolChoice, rejectsSamplingParameters, supportsExplicitThinkingDisable, usesAdaptiveThinking, usesBetweenToolsFloor } from "./anthropic-model-contract";
 
@@ -121,9 +122,47 @@ function applyCacheControlToLastText(blocks: Array<Record<string, unknown>>, cc:
   applyCacheControlToLast(blocks, cc);
 }
 
+/** Mark the first text block, the head of a relocated caller system prefix. */
+function applyCacheControlToLeadText(blocks: Array<Record<string, unknown>>, cc: CacheControl): void {
+  for (let i = 0; i < blocks.length; i++) {
+    if (blocks[i].type === "text") {
+      blocks[i] = { ...blocks[i], cache_control: cc };
+      return;
+    }
+  }
+}
+
+/**
+ * Prepend caller instructions without inserting text into a tool-result turn. Assistant-leading
+ * histories get a separate initial user turn, leaving existing call/result pairs adjacent.
+ */
+function prependTextToFirstUserMessage(messages: unknown[], texts: string[]): void {
+  const blocks = texts.map(text => ({ type: "text", text }));
+  const first = messages[0] as Record<string, unknown> | undefined;
+  if (!first || first.role !== "user") {
+    messages.unshift({ role: "user", content: blocks });
+    return;
+  }
+  if (typeof first.content === "string") {
+    first.content = [...blocks, { type: "text", text: first.content }];
+    return;
+  }
+  if (Array.isArray(first.content)) {
+    first.content = [...blocks, ...(first.content as unknown[])];
+    return;
+  }
+  messages.unshift({ role: "user", content: blocks });
+}
+
 type PromptCachingOptions = {
   maxExplicitBreakpoints?: number;
   skipLastUser?: boolean;
+  /**
+   * The caller's system prompt travels as the head of the first user turn (OAuth). Cache that
+   * prefix instead of the single identity block in the top-level system array, so independent
+   * requests that share the caller prompt can reuse it.
+   */
+  relocatedSystemPrefix?: boolean;
   /** The last system block is the caller's uncached per-turn tail; mark the block before it. */
   uncachedSystemTail?: boolean;
 };
@@ -159,9 +198,17 @@ function applyPromptCaching(
   }
   if (used >= explicitLimit) return;
 
-  // 2. system
+  // 2. system, or the caller prefix relocated to the first user turn
   const system = body.system as Array<Record<string, unknown>> | undefined;
-  if (system && system.length > 0) {
+  const relocated = options.relocatedSystemPrefix === true ? messages?.[0] : undefined;
+  if (relocated !== undefined && relocated.role === "user") {
+    if (typeof relocated.content === "string") {
+      relocated.content = [{ type: "text", text: relocated.content, cache_control: cc }];
+    } else if (Array.isArray(relocated.content) && relocated.content.length > 0) {
+      applyCacheControlToLeadText(relocated.content as Array<Record<string, unknown>>, cc);
+    }
+    used++;
+  } else if (system && system.length > 0) {
     const i = system.length - (options.uncachedSystemTail && system.length > 1 ? 2 : 1);
     system[i] = { ...system[i], cache_control: cc };
     used++;
@@ -566,11 +613,17 @@ export function anthropicBaseRequestHeaders(stream: boolean | undefined): Record
   };
 }
 
+/** The configured credential used by the non-OAuth Messages serializer. */
+export function anthropicApiKeyForRequest(provider: OcxProviderConfig): string | undefined {
+  return provider.authMode !== "oauth" && typeof provider.apiKey === "string" ? provider.apiKey : undefined;
+}
+
 /** Key-auth credential placement: `x-api-key`, or a bearer when the provider asks for one. */
 export function applyAnthropicKeyAuth(headers: Record<string, string>, provider: OcxProviderConfig): void {
-  if (typeof provider.apiKey !== "string") return;
-  if (anthropicKeyUsesBearer(provider)) headers["Authorization"] = `Bearer ${provider.apiKey}`;
-  else headers["x-api-key"] = provider.apiKey;
+  const apiKey = anthropicApiKeyForRequest(provider);
+  if (apiKey === undefined) return;
+  if (anthropicKeyUsesBearer(provider)) headers["Authorization"] = `Bearer ${apiKey}`;
+  else headers["x-api-key"] = apiKey;
 }
 
 export function resolveTranslatedAnthropicSessionKey(parsed: OcxParsedRequest, incoming?: IncomingMeta): string | undefined {
@@ -764,7 +817,8 @@ function messagesToAnthropicFormat(
   parsed: OcxParsedRequest,
   toolNames: { toWire: (name: string) => string },
   serverReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>,
-): { system: string[]; messages: unknown[] } {
+  relocateCallerSystem = false,
+): { system: string[]; callerSystem: string[]; messages: unknown[] } {
   // The client's server-tool exchanges go back ahead of the block they preceded. Their anchors are
   // unique in the caller's history (replayedAnthropicServerBlocks drops repeated ones); each is used once.
   const pendingReplay = new Map(serverReplay);
@@ -791,7 +845,17 @@ function messagesToAnthropicFormat(
     undefined,
     tool => toolNames.toWire(namespacedToolName(tool.namespace, tool.name)),
   );
-  const systemParts = [...(parsed.context.systemPrompt ?? []), ...(toolCatalogNudge ? [toolCatalogNudge] : [])];
+  const { systemPrompt = [], proxySystemPrompt = [] } = parsed.context;
+  const promptParts = relocateCallerSystem && proxySystemPrompt.length > 0
+    ? systemPrompt.flatMap((text, blockIndex) => {
+      const owned = proxySystemPrompt.find(part => part.blockIndex === blockIndex);
+      if (!owned) return [text];
+      const caller = text.slice(0, -owned.suffix.length);
+      return caller ? [caller] : [];
+    })
+    : systemPrompt;
+  const toolGuidance = toolCatalogNudge ? [toolCatalogNudge] : [];
+  const systemParts = relocateCallerSystem ? promptParts : [...promptParts, ...toolGuidance];
   // End a block at the caller's cached prefix so its breakpoint skips the per-turn tail.
   const prefix = parsed._anthropicSystemCachePrefix
     ? identifyRoutedModel(parsed._anthropicSystemCachePrefix, parsed.modelId) : undefined;
@@ -799,7 +863,12 @@ function messagesToAnthropicFormat(
   const texts = prefix && head?.startsWith(`${prefix}\n\n`)
     ? [prefix, [head.slice(prefix.length + 2), ...systemParts.slice(1)].join("\n\n")]
     : [systemParts.join("\n\n")];
-  const system = texts.map(text => identifyRoutedModel(text, parsed.modelId)).filter(Boolean);
+  const normalized = texts.map(text => identifyRoutedModel(text, parsed.modelId)).filter(Boolean);
+  const callerSystem = relocateCallerSystem ? normalized : [];
+  const system = relocateCallerSystem
+    ? [...proxySystemPrompt.map(({ suffix }) => suffix.trimStart()), ...toolGuidance]
+      .map(text => identifyRoutedModel(text, parsed.modelId)).filter(Boolean)
+    : normalized;
   const messages: unknown[] = [];
 
   for (let i = 0; i < parsed.context.messages.length; i++) {
@@ -938,7 +1007,7 @@ function messagesToAnthropicFormat(
     messages.push({ role: "user", content: "(continue)" });
   }
 
-  return { system, messages };
+  return { system, callerSystem, messages };
 }
 
 function toolsToAnthropicFormat(parsed: OcxParsedRequest, toolNames: { toWire: (name: string) => string }): unknown[] | undefined {
@@ -982,6 +1051,10 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
     formatErrorBody: formatAnthropicErrorBody,
 
     async buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta) {
+      if (parsed._anthropicImageOwner && (!parsed._providerContinuationOwner
+        || !sameProviderContinuationOwner(parsed._anthropicImageOwner, parsed._providerContinuationOwner))) {
+        throw new Error("Anthropic image context no longer belongs to the selected account.");
+      }
       if (typeof provider.apiKey !== "string" || provider.apiKey.trim() === "") {
         if (isOAuth) {
           throw new Error("anthropic oauth token missing — run ocx login anthropic");
@@ -993,8 +1066,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       // Advisor also reaches a gateway that opted in with forwardAdvisorTool (advisor-tool.ts).
       const serverToolPlan = planAnthropicServerTools(provider, parsed._anthropicServerTools, parsed._anthropicServerReplay,
         new Set(parsed.context.tools?.map(tool => tool.name)), usesNativeAnthropicEndpoint(provider));
-      const { system, messages } = messagesToAnthropicFormat(parsed, toolNames,
-        serverToolPlan.replay);
+      const { system, callerSystem, messages } = messagesToAnthropicFormat(parsed, toolNames,
+        serverToolPlan.replay, isOAuth && provider.anthropicOAuthUserInstructions === true && !parsed._proxyOwnedSystemPrompt);
       // Before image normalization, so the framing block is present for every downstream pass.
       if (isAgentRouterEndpoint(provider.baseUrl)) applyAgentRouterLanguageFraming(messages);
       // Primary image layer: resize/re-encode to fit Anthropic limits without dropping
@@ -1026,12 +1099,20 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         stream: parsed.stream,
         max_tokens: parsed.options.maxOutputTokens ?? omittedMaxTokens,
       };
+      let relocatedCallerSystem = false;
       if (isOAuth) {
         // Claude OAuth (Pro/Max) requires the first system block to be the Claude Code identity.
+        // A captured OpenCode request was rejected with caller instructions in top-level
+        // system, but accepted with those instructions in user content. Proxy guidance keeps
+        // system-role priority even when caller instructions move.
         body.system = [
           { type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION },
           ...system.map(text => ({ type: "text", text })),
         ];
+        if (callerSystem.length > 0) {
+          prependTextToFirstUserMessage(messages, callerSystem);
+          relocatedCallerSystem = true;
+        }
       } else if (system.length > 0) {
         body.system = system.map(text => ({ type: "text", text }));
       }
@@ -1157,7 +1238,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         delete body.top_p;
       }
 
-      if (nativeOpus55 && !reasoningControlsUnsupported && thinkingEnabled !== false) {
+      if (nativeOpus55 && !reasoningControlsUnsupported && thinkingEnabled !== false && !parsed._anthropicImageSummary) {
         // An explicit per-request summary (concise/detailed) still forces summarized (#7881).
         body.thinking = summaryRequested || thinkingDisplayPolicy === "summarized"
           ? { type: "adaptive", display: "summarized" }
@@ -1243,6 +1324,11 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       const headers = anthropicBaseRequestHeaders(parsed.stream);
       if (isOAuth) applyAnthropicOAuthAuth(headers, provider.apiKey, resolveTranslatedAnthropicSessionKey(parsed, incoming));
       else applyAnthropicKeyAuth(headers, provider);
+      const advisorCredential = serverToolPlan.betas.length > 0
+        ? headers.Authorization !== undefined
+          ? { header: "authorization" as const, value: headers.Authorization }
+          : { header: "x-api-key" as const, value: headers["x-api-key"]! }
+        : undefined;
       if (provider.headers) Object.assign(headers, provider.headers);
       mergeAnthropicBetaHeader(headers, [...(fastSpeed?.betas ?? []), ...(progressUpdates ? ["thinking-display-updates-2026-08-18"] : []), ...serverToolPlan.betas]);
 
@@ -1255,6 +1341,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       applyPromptCaching(body, cc, {
         maxExplicitBreakpoints: explicitLimit,
         skipLastUser: !!automaticPromptCaching,
+        relocatedSystemPrefix: relocatedCallerSystem,
         uncachedSystemTail: system.length > 1,
       });
       enforceCacheControlLimit(body, explicitLimit);
@@ -1277,6 +1364,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         ),
       };
       captureAnthropicRejectionPayloads(request, body, incoming?.translatorBudget);
+      if (advisorCredential) hostedAdvisorCredentials.set(request, advisorCredential);
       return request;
     },
 

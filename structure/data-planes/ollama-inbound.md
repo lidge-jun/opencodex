@@ -36,7 +36,11 @@ linear in the request size. `src/server/ollama-inbound.ts` calls
 and workflow identity headers (`session_id`, `session-id`, `thread-id`, `x-session-id`,
 `x-codex-parent-thread-id`, so the workflow root's spend ceiling still applies) and the client
 signal, linked to the same session lane; authorization, cookies and admission keys never cross the
-hop. Native error bodies are a fixed message chosen by HTTP status (`ollamaInnerErrorMessage`);
+hop. The [shared Chat bridge](gemini-inbound.md#gemini-compatible-inbound) carries the ACP
+classification from the original HTTP headers as an internal boolean. Ollama rejects unknown
+body fields such as `client_metadata` during native validation. ACP policy refusals return a
+native 403 before any `agy` version probe or ACP process start.
+Native error bodies use a fixed message chosen by HTTP status (`ollamaInnerErrorMessage`);
 upstream-authored error text is never forwarded. Response headers are generated, never copied:
 `content-type`, `Retry-After` reformatted by `ollamaRetryAfter` as an integer of seconds (at most
 3600) or dropped, `Allow` on 405, an `x-opencodex-local-refusal` constant looked up from the known
@@ -90,3 +94,6 @@ upstream echoing a prefixless provider key never reaches the body, headers or ei
 `tests/server/protocol-trace-suppression.test.ts`. Listener denial is pinned in
 `tests/server/loopback-listener-integration.test.ts` and `tests/clients/link-routes.test.ts`, and
 fencing in `tests/ci-workflows/package-tree-integrity.test.ts`.
+
+`tests/server/server-agy-acp.test.ts` checks ACP policy on Ollama chat and generate using the fake
+`agy` fixture.

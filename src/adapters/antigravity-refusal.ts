@@ -2,6 +2,7 @@
 import { BOUNDED_BODY_MAX_BYTES } from "../lib/bounded-body";
 import { registerProviderResponseProvenance } from "../providers/request-pacing";
 import { parseUpstreamJsonPayload } from "./upstream-http-error";
+import { ANTIGRAVITY_TOS_VIOLATION_PREFIX } from "./google-errors";
 
 /** Trusted only at the original Google body boundary; never serialized or inferred from display text. */
 const modelNotFoundResponses = new WeakMap<Response, true>();
@@ -30,7 +31,7 @@ export function markAntigravityModelNotFound(response: Response, requestBody: st
   modelNotFoundResponses.set(response, true);
 }
 
-export type AntigravityRefusalKind = "verify_account" | "other";
+export type AntigravityRefusalKind = "verify_account" | "tos_violation" | "other";
 export interface AntigravityRefusal { kind: AntigravityRefusalKind }
 
 const VERIFY_ACCOUNT_WORDS = [
@@ -51,6 +52,9 @@ export function classifyAntigravityRefusal(status: number, bodyText: string): An
   if (status !== 403) return { kind: "other" };
   if (Buffer.byteLength(bodyText, "utf8") > BOUNDED_BODY_MAX_BYTES)
     return { kind: "other" };
+  // The suspension marker exists only when the Google adapter saw a typed TOS_VIOLATION body
+  // (google-errors.ts); it leads the normalized text, so upstream prose cannot produce it.
+  if (bodyText.startsWith(`${ANTIGRAVITY_TOS_VIOLATION_PREFIX}: `)) return { kind: "tos_violation" };
   const lower = bodyText.toLowerCase();
   if (VERIFY_ACCOUNT_WORDS.some(word => lower.includes(word))) return { kind: "verify_account" };
   return { kind: "other" };

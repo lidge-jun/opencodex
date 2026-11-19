@@ -5,6 +5,7 @@ import {
   type TranslatorBudget,
 } from "../../lib/translator-budget";
 import type { AdapterEvent, OcxMessage, OcxUsage } from "../../types";
+import { withMissingCreditReading } from "../../usage/credit-billing";
 import { mergeUsage } from "./terminal-guard";
 
 export const MAX_ADVISOR_RETAINED_EVENTS = 4_096;
@@ -16,6 +17,7 @@ export class AdvisorRetention {
   private historyBytes = 0;
   private copyBytes = 0;
   private usageBytes = 0;
+  private dispatchedLegs = 0;
   private events = 0;
   private calls = 0;
 
@@ -30,17 +32,23 @@ export class AdvisorRetention {
 
   /** Usage can alias a terminal payload. Keep its own owner after the raw leg ends. */
   usage(first: OcxUsage | undefined, second: OcxUsage | undefined): OcxUsage | undefined {
-    if (!second) return first;
+    const hasEarlierLeg = this.dispatchedLegs++ > 0;
+    const snapshot = second ?? first;
+    if (!snapshot) return undefined;
+    const missingReading = hasEarlierLeg && (!first || !second)
+      && snapshot.providerCredits !== undefined && snapshot.providerCredits !== -1;
+    if (!second && !missingReading) return first;
     // Two-input merge materializes a new object. Reserve before merging, including
     // a conservative bound for concatenation if a provider supplied malformed scalars.
-    const bytes = first
+    const bytes = first && second
       ? (jsonUtf8Bytes(first) + jsonUtf8Bytes(second)) * 2 + 256
-      : jsonUtf8Bytes(second) + 1;
+      : jsonUtf8Bytes(snapshot) + (missingReading ? 3 : 1);
     this.charge(bytes, "request_copies");
     this.copyBytes += bytes;
     let retained = 0;
     try {
-      const merged = mergeUsage(first, second);
+      const merged = first && second ? mergeUsage(first, second)
+        : missingReading ? withMissingCreditReading(snapshot) : snapshot;
       const measured = jsonUtf8Bytes(merged, bytes) + 1;
       if (measured > bytes) throw new TranslatorBudgetExceededError("request_copies", TRANSLATOR_MAX_TURN_BYTES);
       retained = measured;

@@ -361,6 +361,13 @@ describe("install identity, aggregation, disjoint tokens, and scheduler", () => 
       },
     ];
 
+    const ordinary = fixtureEntries[0]!;
+    ordinary.attempts = [{
+      ordinal: 1, provider: ordinary.provider, model: ordinary.model, adapter: "anthropic",
+      status: 200, durationMs: ordinary.durationMs, sendCount: 1, recoveryKinds: [],
+      usageStatus: "reported", usage: ordinary.usage,
+    }];
+
     writeFileSync(
       join(home, "usage.jsonl"),
       fixtureEntries.map(row => JSON.stringify(row)).join("\n") + "\n",

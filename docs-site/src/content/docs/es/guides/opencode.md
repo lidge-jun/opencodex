@@ -35,6 +35,16 @@ Actualiza una integración administrada o vuelve a exportar una instantánea man
 
 <a id="reasoning-effort"></a>
 
+## Protocolo por modelo
+
+Ambos bloques envían solicitudes a `/v1/responses` de forma predeterminada. V1 usa `@ai-sdk/openai`
+y V2 usa `@opencode/ai/providers/openai-compatible-responses`. Si un modelo se enruta directamente a un
+proveedor de Chat Completions que usa autenticación por clave o autenticación local, su configuración
+individual cambia a `/v1/chat/completions` (`provider.npm` en V1, `package` en V2). Así sus turnos conservan
+el protocolo del proveedor. Los modelos nativos de OpenAI, los combos, las políticas de enrutamiento y
+los modelos cuya ruta no se puede resolver usan Responses. Actualiza una integración gestionada o
+vuelve a exportar una configuración manual para aplicar un cambio de protocolo.
+
 ## Esfuerzo de razonamiento
 
 OpenCode ofrece el esfuerzo de razonamiento mediante *variantes* del modelo. opencodex genera una variante por cada esfuerzo declarado, incluido `none` cuando el modelo admite explícitamente desactivar el razonamiento. La selección llega al proxy como esfuerzo de razonamiento, además de mostrarse en el selector. Las asignaciones de esfuerzo al proveedor de origen que existan en opencodex siguen aplicándose.

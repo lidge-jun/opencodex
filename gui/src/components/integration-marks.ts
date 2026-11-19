@@ -43,7 +43,7 @@ const NATIVE_MARKS: Record<Exclude<OverviewClientId, ExportClientId>, string> = 
  * vendor publishes nothing usable, and `ClientMark` renders a monogram for it.
  * Gentle Shell uses that fallback, which `integration-marks.test.ts` pins.
  */
-export const INTEGRATION_MARKS: Record<OverviewClientId, string | null> = {
+export const INTEGRATION_MARKS: Record<OverviewClientId | "antigravity", string | null> = {
   ...NATIVE_MARKS,
   opencode: CLIENT_MARKS.opencode ?? null,
   pi: CLIENT_MARKS.pi ?? null,
@@ -70,6 +70,8 @@ export const INTEGRATION_MARKS: Record<OverviewClientId, string | null> = {
   workbuddy: null,
   "workbuddy-ai": null,
   t3code: CLIENT_MARKS.t3code ?? null,
+  // The Antigravity tab is a gateway-client switch, not an overview row.
+  antigravity: "/provider-icons/antigravity-color.svg",
 };
 
 /**

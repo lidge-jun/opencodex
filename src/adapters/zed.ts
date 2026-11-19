@@ -7,6 +7,7 @@ import { createOpenAIChatAdapter } from "./openai-chat";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
 import { liftZedAdditionalTools, translateZedOpenAiStream } from "./zed-openai-stream";
 import { zedDiagnosticUsage } from "./zed-diagnostic-usage";
+import { adapterSupportExecutor } from "../lib/executor-physical-send-receipt";
 import { createAdapterPhysicalSend } from "./physical-send";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { createTranslatorBudget, releaseTranslatedEvent, retainTranslatedEvent, type TranslatorBudget } from "../lib/translator-budget";
@@ -415,7 +416,7 @@ export function createZedAdapter(provider: OcxProviderConfig, cacheRetention?: A
     buildRequest,
     async fetchResponse(request, ctx) {
       if (!credentials) throw new Error("Zed request credentials were not initialized");
-      const fetchFn = ctx?.executor ?? globalThis.fetch;
+      const fetchFn = adapterSupportExecutor(ctx?.executor ?? globalThis.fetch);
       const send = createAdapterPhysicalSend(ctx);
       let completionAttempts = 0;
       return zedLlmFetch(credentials, "/completions", {

@@ -42,6 +42,7 @@ import { getProviderRegistryEntry, providerMatchesRegistryTransport, providerMod
 import { resolveOpenAiVirtualModel } from "../../providers/openai-virtual-models";
 import { COST4_RATE_KEYS, isValidCost4Rate, isValidPromptLengthPricing, copyPromptLengthPricing } from "../../usage/user-cost-overlays";
 import { MAX_COST4_RATE } from "../../usage/expected-prices";
+import { isValidCreditPriceBound } from "../../usage/credit-billing";
 import {
   DECLARABLE_HOSTED_TOOL_TYPES,
   declaredUnsupportedHostedTools,
@@ -155,6 +156,29 @@ const requestPacingSchema = z.object({
   || (value.models !== undefined && Object.keys(value.models).length > 0), {
   message: "enabled request pacing needs a provider, model, or key rule, or round-robin selection",
 });
+
+/** Upper bounds for provider-scoped upstream budgets: the largest setTimeout delay, in ms. */
+export const PROVIDER_CONNECT_TIMEOUT_MAX_MS = 2_147_483_647;
+export const PROVIDER_STALL_TIMEOUT_MAX_SEC = 2_147_483;
+
+/**
+ * Validate provider-scoped `connectTimeoutMs` / `stallTimeoutSec` on a strict write. Absent is
+ * valid (inherit the global value); otherwise each must be an integer from 0 (disabled for this
+ * provider) to its maximum. Returns null when valid, else a human-readable error.
+ */
+export function providerTimeoutOverrideConfigError(provider: Record<string, unknown>): string | null {
+  for (const [field, max] of [
+    ["connectTimeoutMs", PROVIDER_CONNECT_TIMEOUT_MAX_MS],
+    ["stallTimeoutSec", PROVIDER_STALL_TIMEOUT_MAX_SEC],
+  ] as const) {
+    const value = provider[field];
+    if (value === undefined) continue;
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > max) {
+      return `${field} must be an integer from 0 to ${max}`;
+    }
+  }
+  return null;
+}
 
 export function requestPacingConfigError(value: unknown): string | null {
   if (value === undefined) return null;
@@ -327,6 +351,7 @@ export const providerConfigSchema = z.object({
   accountAutoPause: accountAutoPausePolicySchema.optional(),
   apiKeyPool: z.array(z.object({ id: z.string(), key: z.string(), label: z.string().optional(), addedAt: z.number().optional(), disabled: z.boolean().optional(), pauseRevision: z.string().optional(), pauseDetails: accountPauseDetailsSchema.optional() }).passthrough()).optional(),
   anthropicAccountPool: anthropicAccountPoolSchema,
+  anthropicImageContextRecovery: z.boolean().optional(),
   // Raw diagnostics/writes reject malformed provenance; tolerant loads preserve the custom row.
   anthropicOAuthInstance: z.literal("anthropic2").optional().catch(undefined),
   modelCapabilities: modelCapabilitiesSchema.optional(),
@@ -364,10 +389,14 @@ export const providerConfigSchema = z.object({
     modelCount: z.number().int().nonnegative().optional(),
   }).optional().catch(undefined),
   requestPacing: requestPacingSchema.optional().catch(undefined),
+  // Provider-scoped header/body budgets; a malformed hand edit degrades to "inherit the global".
+  connectTimeoutMs: z.number().int().min(0).max(PROVIDER_CONNECT_TIMEOUT_MAX_MS).optional().catch(undefined),
+  stallTimeoutSec: z.number().int().min(0).max(PROVIDER_STALL_TIMEOUT_MAX_SEC).optional().catch(undefined),
   mcpMaxTools: z.number().int().positive().optional(),
   mcpMaxSchemaBytes: z.number().int().positive().optional(),
   mcpMaxResultBytes: z.number().int().positive().optional(),
   apiKeyTransport: z.enum(["x-api-key", "bearer"]).optional(),
+  anthropicOAuthUserInstructions: z.boolean().optional(),
   responsesPath: z.string().min(1).optional(),
   chatCompletionsPath: z.string().min(1).optional(),
   statelessResponses: z.boolean().optional(),
@@ -460,6 +489,7 @@ export const providerConfigSchema = z.object({
   messagePhaseInference: z.boolean().optional(),
   estimateMissingUsage: z.boolean().optional(),
   hideRawReasoning: z.boolean().optional(),
+  rawReasoningAsSummary: z.boolean().optional(),
   forwardAdvisorTool: z.boolean().optional(),
   perMessageEffort: z.boolean().optional(),
   // Invalid blocks degrade to "absent" rather than failing the whole config load: an unusable
@@ -477,6 +507,16 @@ export const providerConfigSchema = z.object({
 
 
 export { providerRelativeSendPathConfigError } from "../provider-relative-send-path";
+
+/**
+ * A credit price is a finite number of USD per provider credit, zero or more, and small enough
+ * that `credits x price` stays representable for any admissible credit count. Bounding the price
+ * alone is not enough — see `src/usage/credit-billing.ts` — so the bound is chosen to keep the
+ * product inside the safe range rather than merely finite.
+ */
+export function isValidCreditPriceUsd(value: unknown): value is number {
+  return isValidCreditPriceBound(value);
+}
 
 /**
  * Validate `providers.<name>.modelCosts`: a plain object keyed by exact model

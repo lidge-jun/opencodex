@@ -1,3 +1,4 @@
+import type { AnthropicImageRecovery } from "../server/responses/image-context-recovery";
 import { bindAnthropicRejectionResponse } from "../adapters/anthropic-rejection-memo";
 import { anthropicDeclaredTools } from "../adapters/anthropic-tool-catalog";
 import { enableAnthropicReplayCapture, takeAnthropicReplay, bindAnthropicReplay, type AnthropicReplaySnapshot } from "../adapters/anthropic-replay";
@@ -13,6 +14,7 @@ import { isTruncatedStopReason } from "../responses/truncated-stop-reason";
 import { bridgeToResponsesSSE } from "../bridge";
 import { guardEmptyToolCatalogStream, type ClientToolCatalogRestriction } from "../lib/empty-tool-catalog";
 import { emptyCompletionRetryFailedEvent, mergeUsage } from "../server/responses/empty-completion-guard";
+import { withMissingCreditReading } from "../usage/credit-billing";
 import { markSidecarContextOverflow, sidecarLoopTerminalEvent, upstreamErrorCode, type SidecarLoopFailure } from "../server/responses/context-overflow";
 import { markVerifiedModelNotInPlanResponse, MODEL_NOT_IN_PLAN_CODE, UNDECLARED_TOOL_CALL_ERROR_CODE, verifiedPlanRefusalMessage } from "../lib/errors";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
@@ -24,8 +26,11 @@ import { runExaWebSearch } from "./exa-executor";
 import type { WebSearchBackendId } from "./index";
 import { pacingHeaderDeadline } from "./header-deadline";
 import { redactSecretString } from "../lib/redact";
+import { recordLocalFailureDetail, type FailureDetail } from "../server/request-log-failure-detail";
 import { readBoundedResponseBody } from "../lib/bounded-body";
-import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, isSameTargetRetryHold, SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, isSameTargetRetryHold, RESET_RETRY_MAX_ATTEMPTS, SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { unwrapUpstreamRetryEvidenceError } from "../codex/auth-context";
+import { HostedAdvisorSpendRefusal } from "../server/responses/policy-request-scope";
 import { rateLimitRetryDelayMs } from "../providers/key-failover";
 import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import {
@@ -34,7 +39,7 @@ import {
   TranslatorBudgetExceededError,
 } from "../lib/translator-budget";
 import { formatWebSearchResults } from "./format-result";
-import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchConsumerInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "./progress-stream";
+import { parseStreamWithProgress, withHeartbeats, RoutedModelInactivityError, WebSearchConsumerInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "./progress-stream";
 import { WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 import { newSidecarSearchCellId, rememberSidecarSearch, restoreSidecarSearchResults } from "./sidecar-search-replay";
 import {
@@ -193,23 +198,6 @@ async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
   for (const e of events) yield e;
 }
 
-/**
- * Keeps the Responses bridge alive while an internal sidecar await is pending. Rejections retain
- * their original error, and each timeout is cleared on completion, failure, or generator return.
- */
-async function* withHeartbeats<T>(promise: Promise<T>): AsyncGenerator<AdapterEvent, T> {
-  const tracked = promise.then(value => ({ value }));
-  for (;;) {
-    let timer: number | undefined;
-    const heartbeat = new Promise<undefined>(resolve => { timer = setTimeout(resolve, 1_000); });
-    let result: { value: T } | undefined;
-    try { result = await Promise.race([tracked, heartbeat]); }
-    finally { if (timer) clearTimeout(timer); }
-    if (result) return result.value;
-    yield { type: "heartbeat" };
-  }
-}
-
 function terminalUsage(events: AdapterEvent[]): OcxUsage | undefined {
   for (const e of events) if (e.type === "done" || e.type === "incomplete") return e.usage;
   return undefined;
@@ -220,6 +208,15 @@ function countersOnly(usage: OcxUsage | undefined): OcxUsage | undefined {
   if (!usage) return undefined;
   const { contextTotalTokens: _context, rawUsage: _raw, ...counters } = usage;
   return counters;
+}
+
+function withTerminalUsageMetadata(cumulative: OcxUsage, terminal: OcxUsage | undefined): OcxUsage {
+  const { contextTotalTokens: _context, rawUsage: _raw, ...counters } = cumulative;
+  return {
+    ...counters,
+    ...(terminal?.contextTotalTokens !== undefined ? { contextTotalTokens: terminal.contextTotalTokens } : {}),
+    ...(terminal?.rawUsage !== undefined ? { rawUsage: terminal.rawUsage } : {}),
+  };
 }
 
 /**
@@ -348,10 +345,18 @@ class LoopError extends Error {
     message: string,
     readonly event?: Extract<AdapterEvent, { type: "error" }>,
     readonly detail?: Pick<SidecarLoopFailure, "upstreamCode" | "nonReplayable" | "verifiedPlanRefusal">,
+    /** A deadline this proxy enforced; logged as local failure detail, never as upstream evidence. */
+    readonly localFailure?: FailureDetail,
   ) {
     super(message);
     this.name = "LoopError";
   }
+}
+
+/** The response-header deadline verdict; the wire status and text are the pre-existing ones. */
+function headerDeadlineError(connectTimeoutMs: number): LoopError {
+  return new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during web-search`,
+    undefined, undefined, { code: "header_timeout", value: connectTimeoutMs });
 }
 
 function loopFailure(e: LoopError): SidecarLoopFailure {
@@ -407,6 +412,8 @@ export interface WebSearchLoopDeps {
   connectTimeoutMs?: number;
   /** Continuous routed-model response-body raw-byte inactivity deadline. Default 200000ms. */
   routedModelStallTimeoutMs?: number;
+  /** Best-effort notification before publication. Observer exceptions leave the timeout response intact. */
+  onLocalFailure?: () => void;
   /**
    * Effective bridge stall deadline for this turn (seconds). Computed by planWebSearch
    * (webSearchStallTimeoutSec) to cover response-header wait, routed-model body inactivity, and one
@@ -424,17 +431,26 @@ export interface WebSearchLoopDeps {
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
   onUsage?: (usage: OcxUsage | undefined) => void;
   proxyErrorContext?: object;
+  /** Sizes the ingress-owned model-send allowance before the first dispatch. */
+  configureModelSendAllowance?: (baseSends: number) => void;
   /**
    * After an `on429` rotation, offered the usage of the hidden iterations the left credential
-   * served. Returning true means it was billed to that credential's attempt, so `onUsage` will not
+   * served, including undefined when no usage arrived. Returning true hands off the old attempt,
+   * so `onUsage` will not
    * report it again.
    */
-  onRotatedUsage?: (usage: OcxUsage) => boolean;
+  onRotatedUsage?: (usage: OcxUsage | undefined) => boolean;
   /** Observe the exact adapter request selected for each routed-model iteration. */
   onRequestBuilt?: (request: AdapterRequest) => void;
   /** Request-scoped executor retains the core's selection binding across loop retries. */
   thinkingRecovery?: ReturnType<typeof createAnthropicThinkingRecovery>;
-  fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest, adapter: ProviderAdapter, recovery?: AttemptRecoveryKind) => typeof globalThis.fetch;
+  imageRecovery?: AnthropicImageRecovery;
+  /** A receipt-aware executor calls onPhysicalDispatch after final local admission, once per send. */
+  fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest, adapter: ProviderAdapter,
+    recovery: AttemptRecoveryKind | undefined, onPhysicalDispatch: () => void) =>
+      typeof globalThis.fetch & { reportsPhysicalDispatch?: true };
+  /** Observe finalized worker sends from both generic and adapter-owned transports. */
+  onPhysicalSend?: IncomingMeta["onPhysicalSend"];
   /** Called before each routed-model dispatch in the loop, for attempt telemetry. Same-target 429 replays pass the `rate-limit-429` recovery kind. */
   onAttemptSend?: (recovery?: AttemptRecoveryKind) => void;
   /**
@@ -454,6 +470,7 @@ export interface WebSearchLoopDeps {
    * A rotation may cross ACCOUNTS, not just keys, and the attempt row is where an operator reads
    * which one happened. A rotator that knows which kind it performed returns it alongside the
    * adapter -- the same `{ adapter, recoveryKind }` shape `onCredentialError` already uses below.
+   * The usage snapshot includes any dispatched refusal before this hook can seal the attempt.
    */
   on429?: (
     retryAfterHeader: string | null,
@@ -461,6 +478,7 @@ export interface WebSearchLoopDeps {
     retryParsed?: OcxParsedRequest,
     // A 403 requires this complete response; status-only callbacks retain 429 semantics.
     originalResponse?: Response,
+    hiddenUsage?: OcxUsage,
   ) =>
     | { adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind }
     | null
@@ -499,6 +517,14 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   const messages: OcxMessage[] = [...parsed.context.messages];
   const replaySnapshots = new Set<AnthropicReplaySnapshot>();
   const loopT0 = Date.now();
+  // A deadline this proxy enforced ends the turn: the row keeps its closed detail and the same text
+  // is no longer read as upstream evidence. The context text is the one the wire carries, so the
+  // status-derived error code and every retry decision read exactly what they read before.
+  const recordLocalLoopFailure = (e: unknown): void => {
+    if (!(e instanceof LoopError) || !e.localFailure || !deps.proxyErrorContext) return;
+    recordLocalFailureDetail(deps.proxyErrorContext as { upstreamError?: string; failureDetail?: FailureDetail }, e.message, e.localFailure);
+    try { deps.onLocalFailure?.(); } catch { /* Keep the original timeout response. */ }
+  };
   let allTools = adapter.name === "anthropic" ? anthropicDeclaredTools(parsed) : parsed.context.tools ?? [];
   let activeToolChoice = parsed.options.toolChoice;
   let forcedNudgeAdded = false;
@@ -525,7 +551,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   // An authorized Chat empty-completion retry adds its own iteration (see completionRetries in the
   // loop bound), so ordinary iterations, including repeat placeholders for a failed query that never
   // advance searchesExecuted, cannot use up the slot the retry needs.
-  const HARD_CAP = maxSearches + 3 + (deps.advisor ? MAX_ADVISOR_CONTINUATIONS_PER_REQUEST : 0);
+  const forcedAnswerRetries = 1;
+  const HARD_CAP = maxSearches + 2 + forcedAnswerRetries + (deps.advisor ? MAX_ADVISOR_CONTINUATIONS_PER_REQUEST : 0);
   let emptyAnswerRetries = 0;
   let completionRetries = 0;
   // Every iteration re-sends the full context, but only the last one's terminal reaches the bridge.
@@ -534,6 +561,20 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   // keeps the last iteration's usage: Codex and Claude Code size the context window from it, and
   // a sum would read as a context several times larger and trigger early auto-compaction.
   let hiddenUsage: OcxUsage | undefined;
+  let hiddenLegs = 0;
+  let pendingLegs = 0;
+  let errorUsage: OcxUsage | undefined;
+  const mergePendingUsage = (previous: OcxUsage | undefined, usage: OcxUsage | undefined): OcxUsage | undefined => {
+    if (pendingLegs === 0) return previous;
+    const reading = pendingLegs > 1 ? withMissingCreditReading(usage) : usage;
+    return mergeUsage(previous, reading, hiddenLegs > 0);
+  };
+  const takeUsage = (usage: OcxUsage | undefined): void => {
+    if (pendingLegs === 0) return;
+    hiddenUsage = mergePendingUsage(countersOnly(hiddenUsage), usage);
+    hiddenLegs += pendingLegs;
+    pendingLegs = 0;
+  };
   let accountRefusalOutputStarted = false;
   const connectTimeoutMs = deps.connectTimeoutMs ?? 200_000;
   const routedModelStallTimeoutMs = deps.routedModelStallTimeoutMs ?? 200_000;
@@ -560,6 +601,12 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   // configured replay count in total (a per-round reset would multiply it by maxSearches).
   const rateLimitRetryPolicy = deps.retryOn429Policy ?? null;
   let rateLimitRetries = 0;
+  // The 429 ladder and thinking-signature recovery are request-scoped. Each
+  // model dispatch can use its transport's full retry ladder.
+  deps.configureModelSendAllowance?.((deps.adapter.hostedIterationSendLimit ?? RESET_RETRY_MAX_ATTEMPTS) * (
+    HARD_CAP + Number(Boolean(deps.emptyCompletionRetry))
+    + (rateLimitRetryPolicy?.attempts ?? 0) + Number(Boolean(deps.thinkingRecovery))
+  ));
 
   const requireSuccessfulHeaders = async (prepared: IterationResponse): Promise<void> => {
     if (!prepared.response.ok) {
@@ -659,6 +706,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
        * header deadline. The caller owns same-target 429 replays and key rotation around it.
        */
       const fetchOnce = async (requestAdapter: ProviderAdapter, recovery?: AttemptRecoveryKind): Promise<IterationResponse> => {
+        errorUsage = undefined;
         let request: AdapterRequest;
         if (cachedRequest !== undefined && cachedAdapter === requestAdapter) {
           request = cachedRequest;
@@ -677,19 +725,39 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           cachedRequest = request;
           cachedAdapter = requestAdapter;
         }
-        const requestFetch = headerDeadline.pacedFetch(deps.fetchForRequest?.(request, iterParsed, requestAdapter, recovery) ?? routedProviderFetch);
         let response: Response;
+        let awaitingHeaders = true;
+        let physicalSends = 0;
+        let dispatchCandidate: { recovery?: AttemptRecoveryKind } | undefined;
+        const onPhysicalDispatch = () => {
+          if (!dispatchCandidate) return;
+          const send = dispatchCandidate;
+          dispatchCandidate = undefined;
+          // An adapter-owned stream retry's usage is already combined by its parser.
+          if (awaitingHeaders) pendingLegs++;
+          const receipt = { ...send, ordinal: ++physicalSends };
+          if (requestAdapter.fetchResponse) deps.incomingMeta.onPhysicalSend?.(receipt);
+          deps.onPhysicalSend?.(receipt);
+        };
+        const routedExecutor = deps.fetchForRequest?.(request, iterParsed, requestAdapter, recovery, onPhysicalDispatch);
+        const executor = routedExecutor ?? routedProviderFetch;
+        const noteDispatchCandidate = (recovery?: AttemptRecoveryKind) => {
+          dispatchCandidate = recovery ? { recovery } : {};
+          if (!routedExecutor?.reportsPhysicalDispatch) onPhysicalDispatch();
+        };
         try {
           if (requestAdapter.fetchResponse) {
-            deps.onAttemptSend?.(recovery);
             response = await requestAdapter.fetchResponse(request, {
               abortSignal: headerDeadline.signal,
               timeoutMs: connectTimeoutMs,
               returnRawErrors: true,
               stream: true,
               sendBudget: deps.incomingMeta.sendBudget,
-              onPhysicalSend: deps.incomingMeta.onPhysicalSend,
-              executor: requestFetch,
+              onPhysicalSend: send => {
+                if (awaitingHeaders && send.ordinal === 1) deps.onAttemptSend?.(recovery);
+                noteDispatchCandidate(send.recovery ?? recovery);
+              },
+              executor: headerDeadline.pacedFetch(executor),
               onRecoveryWithheld: deps.incomingMeta.onRecoveryWithheld,
             });
           } else {
@@ -698,7 +766,11 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                 // Record every helper-driven send (the callback runs for the first attempt and
                 // each connection-reset replay); preserve the caller's recovery kind
                 // (rate-limit-429 / key-429) when the retry layer supplies none.
-                deps.onAttemptSend?.(retryRecovery ?? recovery);
+                const requestFetch = headerDeadline.pacedFetch(executor, () => {
+                  const attemptRecovery = retryRecovery ?? recovery;
+                  deps.onAttemptSend?.(attemptRecovery);
+                  noteDispatchCandidate(attemptRecovery);
+                });
                 const h = new Headers(request.headers);
                 if (!h.has("accept-encoding")) h.set("accept-encoding", "identity");
                 // A connection-reset replay must leave the half-closed pooled socket, not just
@@ -718,6 +790,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             );
           }
         } finally {
+          awaitingHeaders = false;
           request.releaseBodyObservation?.();
         }
         bindAnthropicRejectionResponse(request, response);
@@ -746,8 +819,9 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           return replacement;
         } catch (error) {
           if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
-          if (headerDeadline.didExpire()) throw new LoopError(504,
-            `Provider response-header timeout after ${connectTimeoutMs}ms during web-search`);
+          if (headerDeadline.didExpire()) throw headerDeadlineError(connectTimeoutMs);
+          const refusal = unwrapUpstreamRetryEvidenceError(error);
+          if (refusal instanceof HostedAdvisorSpendRefusal) throw new LoopError(400, refusal.message, refusal.event());
           if (error instanceof LoopError || error instanceof SendBudgetExhaustedError || isTranslatorBudgetExceededError(error)) throw error;
           throw new LoopError(502, `Provider unreachable: ${error instanceof Error ? error.message : String(error)}`);
         } finally {
@@ -798,10 +872,15 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           && (isAnthropicInstanceId(deps.incomingMeta?.providerName) || deps.incomingMeta?.providerName === "google-antigravity")
           && !accountRefusalOutputStarted)
         || (iterParsed._kiroAuthContext && (prepared.response.status === 400 || prepared.response.status === 403))) && deps.on429) {
+        const refusalUsage = mergePendingUsage(countersOnly(hiddenUsage), undefined);
         const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers,
-          iterParsed, prepared.response);
+          iterParsed, prepared.response, refusalUsage);
         if (!rotated) break;
-        if (hiddenUsage && deps.onRotatedUsage?.(hiddenUsage)) hiddenUsage = undefined;
+        takeUsage(undefined);
+        if (hiddenLegs > 0 && deps.onRotatedUsage?.(hiddenUsage)) {
+          hiddenUsage = undefined;
+          hiddenLegs = 0;
+        }
         const retainRefusal = prepared.response.status === 403
           && deps.incomingMeta?.providerName === "google-antigravity" && rotated.recoveryKind === "oauth-account-403";
         // Keep the bounded refusal readable until the sibling actually returns headers.
@@ -825,7 +904,19 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         prepared = replacement;
       }
 
-      if (await deps.thinkingRecovery?.prepareHttp(prepared.response, prepared.responseAdapter.name, iterParsed)) {
+      let imageReplacement: AdapterRequest | undefined;
+      if (deps.imageRecovery && prepared.response.status === 413) {
+        headerDeadline.clear();
+        const recovered = yield* withHeartbeats(deps.imageRecovery(prepared.response, iterParsed, prepared.responseAdapter, signal), signal);
+        prepared.response = recovered.response;
+        imageReplacement = recovered.request;
+        if (recovered.response.ok && imageReplacement) {
+          messages.splice(0, messages.length, ...iterParsed.context.messages);
+          parsed._anthropicImageOwner = iterParsed._anthropicImageOwner;
+          cachedRequest = imageReplacement;
+        }
+      }
+      if (!imageReplacement && await deps.thinkingRecovery?.prepareHttp(prepared.response, prepared.responseAdapter.name, iterParsed)) {
         try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* closed */ }
         cachedRequest = undefined;
         cachedAdapter = undefined;
@@ -839,10 +930,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       return { ...prepared, recover };
     } catch (error) {
       if (isTranslatorBudgetExceededError(error) || error instanceof SendBudgetExhaustedError) throw error;
-      if (headerDeadline.didExpire()) {
-        throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during web-search`);
-      }
+      if (headerDeadline.didExpire()) throw headerDeadlineError(connectTimeoutMs);
       if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
+      const refusal = unwrapUpstreamRetryEvidenceError(error);
+      if (refusal instanceof HostedAdvisorSpendRefusal) throw new LoopError(400, refusal.message, refusal.event());
       if (error instanceof LoopError || error instanceof RequestPacingQueueOverloadError) throw error;
       throw new LoopError(502, `Provider unreachable: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -888,7 +979,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         translatorBudget,
         preserveAdapterError: deps.thinkingRecovery !== undefined,
         // A pass that fails was still billed; the error path reports it with the hidden passes.
-        onErrorUsage: usage => { hiddenUsage = mergeUsage(hiddenUsage, usage); },
+        onErrorUsage: usage => {
+          errorUsage = usage;
+          takeUsage(usage);
+        },
       })) {
         if (event.type === "done") {
           anthropicReplay = takeAnthropicReplay(event);
@@ -926,8 +1020,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         throw new LoopError(event.status ?? 502, event.message, event);
       }
       if (error instanceof LoopError) throw error;
-      if (error instanceof RoutedModelInactivityError) throw new LoopError(504, error.message);
-      if (error instanceof WebSearchConsumerInactivityError) throw new LoopError(504, error.message);
+      if (error instanceof RoutedModelInactivityError) throw new LoopError(504, error.message, undefined, undefined,
+        { code: "generation_timeout", value: error.timeoutMs });
+      if (error instanceof WebSearchConsumerInactivityError) throw new LoopError(504, error.message, undefined, undefined,
+        { code: "turn_inactivity", value: error.timeoutMs });
       if (error instanceof WebSearchStreamProtocolError) throw new LoopError(502, error.message);
       throw new LoopError(502, `Provider stream error: ${error instanceof Error ? error.message : String(error)}`);
     } finally { releaseCapture(); }
@@ -1139,6 +1235,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   } catch (e) {
     if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
     if (e instanceof LoopError) {
+      recordLocalLoopFailure(e);
       const failure = loopFailure(e);
       const failed = markSidecarContextOverflow(jsonError(e.status, e.message, e.event), failure);
       if (failure.verifiedPlanRefusal) markVerifiedModelNotInPlanResponse(failed);
@@ -1206,7 +1303,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               && !split.passthrough.some(event => event.type === "error" || event.type === "incomplete")
               && !signal.aborted && !split.hasMalformedToolCall && !split.hasRealToolCall
               && split.streamedPassthroughCount === 0 && !hasVisibleAssistantText(split.passthrough)) {
-              hiddenUsage = mergeUsage(hiddenUsage, final.usage);
+              takeUsage(final.usage);
               if (completionRetries++ === 0) { yield { type: "heartbeat" }; continue; }
               throw new LoopError(502, "Provider completed without usable output after one retry", emptyCompletionRetryFailedEvent());
             }
@@ -1238,8 +1335,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                   stopReason: terminalEvent.stopReason,
                   eventTypes: [...new Set(split.passthrough.map(event => event.type))],
                 }));
-                hiddenUsage = mergeUsage(hiddenUsage, terminalEvent.usage);
-                if (!split.hasMalformedToolCall && !split.hasRealToolCall && emptyAnswerRetries === 0) {
+                takeUsage(terminalEvent.usage);
+                if (!split.hasMalformedToolCall && !split.hasRealToolCall && emptyAnswerRetries < forcedAnswerRetries) {
                   emptyAnswerRetries++;
                   console.warn("[web-search-loop] empty forced answer — retrying once with tool calls disabled");
                   yield { type: "heartbeat" };
@@ -1261,7 +1358,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             yield* replay(split.passthrough.slice(split.streamedPassthroughCount));
             return;
           }
-          hiddenUsage = mergeUsage(hiddenUsage, terminalUsage(split.passthrough));
+          takeUsage(terminalUsage(split.passthrough));
           if (split.calls.some(call => call.kind === "advisor")) {
             const continuationError = deps.advisor!.beginLeg();
             if (continuationError) {
@@ -1311,27 +1408,28 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           }
           if (split.calls.some(call => call.kind === "advisor")) yield { type: "assistant_boundary" };
         } catch (e) {
-          // The bridge reports no usage for either error; the iterations already sent still count.
-          if (hiddenUsage) deps.onUsage?.(hiddenUsage);
-          if (isTranslatorBudgetExceededError(e)) {
-            yield {
+          recordLocalLoopFailure(e);
+          takeUsage(e instanceof LoopError ? e.event?.usage : undefined);
+          const event: AdapterEvent = isTranslatorBudgetExceededError(e)
+            ? {
               type: "error",
               status: 502,
               errorType: "upstream_error",
               code: e.code,
               message: "upstream translation buffer exceeded the safe limit",
-            };
-          } else {
-            if (e instanceof SendBudgetExhaustedError) yield { type: "error", status: 429,
-              errorType: "rate_limit_error", code: e.code, message: e.message, retryable: false };
+            }
+            : e instanceof SendBudgetExhaustedError
+              ? { type: "error", status: 429, errorType: "rate_limit_error", code: e.code, message: e.message, retryable: false }
             // A later iteration's overflow ends the turn as the main path's terminal
             // context_length_exceeded, so Codex compacts instead of resending (#7316).
-            else yield (e instanceof LoopError ? sidecarLoopTerminalEvent(loopFailure(e)) : undefined)
+            : (e instanceof LoopError ? sidecarLoopTerminalEvent(loopFailure(e)) : undefined)
               ?? (e instanceof LoopError && e.event ? e.event
               : e instanceof LoopError && deps.thinkingRecovery
                 ? { type: "error", status: e.status, errorType: "upstream_error", message: e.message }
                 : { type: "error", message: e instanceof Error ? e.message : String(e) });
-          }
+          // The bridge reports an error only if it carries usage. Settle exactly once.
+          if (!event.usage && hiddenUsage) deps.onUsage?.(withTerminalUsageMetadata(hiddenUsage, errorUsage));
+          yield event;
           return;
         }
       }
@@ -1362,9 +1460,19 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       chatRawReasoningVisible: deps.chatRawReasoningVisible,
       hideRawReasoning: parsed.options.hideRawReasoning,
+      rawReasoningAsSummary: parsed.options.rawReasoningAsSummary,
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
-      ...(deps.onUsage ? { onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(mergeUsage(countersOnly(hiddenUsage), usage)) } : {}),
+      ...(deps.onUsage ? {
+        onUsage: (usage: OcxUsage | undefined) => {
+          if (pendingLegs > 0) {
+            deps.onUsage?.(mergePendingUsage(countersOnly(hiddenUsage), usage));
+            return;
+          }
+          // The error path already settled this leg's counters; retain only its terminal metadata.
+          deps.onUsage?.(hiddenUsage ? withTerminalUsageMetadata(hiddenUsage, usage) : usage);
+        },
+      } : {}),
       ...(deps.onCompletedResponse ? { onCompletedResponse: deps.onCompletedResponse } : {}),
     },
   );

@@ -285,6 +285,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (requiresAntigravityRiskAcknowledgement(provider) && !hasAntigravityRiskAcknowledgement(body)) {
       return jsonResponse(antigravityRiskRefusalBody(), 403);
     }
+    if (provider === "m365-copilot") {
+      const { shouldOpenBrowserForLogin } = await import("../../oauth/open-browser-choice");
+      if (!shouldOpenBrowserForLogin(body.openBrowser, config)) {
+        return jsonResponse({ error: "Microsoft 365 Copilot sign-in requires an isolated window in a supported local browser." }, 400);
+      }
+    }
     // Omitted mode is the localhost-callback flow this route has always run.
     if (body.mode !== undefined && body.mode !== "callback" && body.mode !== "code") {
       return jsonResponse({ error: "mode must be \"callback\" or \"code\"" }, 400);
@@ -351,7 +357,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const persistedBaseline = readConfigDiagnostics().config;
       // addAccount / reauth forces a fresh browser identity (skips local-CLI token import).
       // The xAI device caller also needs its own flow identity for polling.
-      const flowId = codeMode || (provider === "xai" && device) ? randomUUID() : undefined;
+      const flowId = codeMode || provider === "m365-copilot" || (provider === "xai" && device) ? randomUUID() : undefined;
       const { url: authUrl, instructions, deviceCode, expiresAt } = await startLoginFlow(provider, {
         forceLogin: body.addAccount === true || reauth,
         ...(accountId ? { reauthAccountId: accountId } : {}),
@@ -416,7 +422,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const result = cancelKiroDeviceLogin(body.flowId, principal ?? "admin-token");
       return result ? jsonResponse(result) : jsonResponse({ error: "unknown login flow" }, 404);
     }
-    if (provider === "xai" && body.flowId !== undefined && (typeof body.flowId !== "string" || body.flowId.length > 128)) return jsonResponse({ error: "unknown login flow" }, 404);
+    if ((provider === "m365-copilot" || (provider === "xai" && body.flowId !== undefined))
+      && (typeof body.flowId !== "string" || !body.flowId.trim() || body.flowId.length > 128)) return jsonResponse({ error: "unknown login flow" }, 404);
     const { cancelLoginFlow } = await import("../../oauth");
     // Without a flow id this cancels the provider's newest in-flight login, which is what the
     // single-user GUI has always meant by "Cancel". A host running concurrent code logins for
@@ -439,6 +446,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     const consentRequired = metaMuseConsentRequired(provider, ctx);
     if (consentRequired) return consentRequired;
+    if (provider === "m365-copilot") return jsonResponse({ ok: false, error: "no_pending_login" }, 409);
     const flowId = typeof body.flowId === "string" ? body.flowId : undefined;
     const maskEmails = emailMaskingEnabled(config);
     // Only a code flow of THIS provider gets the outcome-waiting contract; that flow is single-use,
@@ -501,7 +509,17 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // Resolved here, at the request boundary that already holds the config, and passed down.
     // getLoginStatus stays free of config I/O. This route does not re-mask afterwards: it
     // consumes the already-projected status rather than redacting a second time.
-    const status = getLoginStatus(provider, emailMaskingEnabled(config), provider === "xai" ? url.searchParams.get("flowId") ?? undefined : undefined);
+    const flowId = url.searchParams.get("flowId") ?? undefined;
+    if (provider === "m365-copilot") {
+      const maskEmails = emailMaskingEnabled(config);
+      if (flowId === undefined && url.searchParams.get("summary") === "1") {
+        return jsonResponse(getLoginStatus(provider, maskEmails, ""));
+      }
+      if (!flowId || flowId.length > 128) return jsonResponse({ error: "unknown login flow" }, 404);
+      const status = getLoginStatus(provider, maskEmails, flowId);
+      return status.flowId === flowId ? jsonResponse(status) : jsonResponse({ error: "unknown login flow" }, 404);
+    }
+    const status = getLoginStatus(provider, emailMaskingEnabled(config), provider === "xai" ? flowId : undefined);
     return jsonResponse(status);
   }
 
@@ -535,6 +553,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   if (url.pathname === "/api/oauth/accounts" && req.method === "GET") {
     const provider = oauthCredentialSlot((url.searchParams.get("provider") ?? "").trim().toLowerCase());
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    const showOrganizationName = principal === "gui-session" || principal === "admin-token";
     const quotaMode = providerOAuthAccountQuotaMode(provider);
     const quotaProvider = config.providers[provider];
     const { getAccountSet } = await import("../../oauth/store");
@@ -554,7 +573,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const current = getLoginStatus(provider, maskEmails);
       return {
         ...(provider === "anthropic2" ? { provider } : {}), activeAccountId: current.activeAccountId ?? null,
-        accounts: (current.accounts ?? []).map(summary => {
+        accounts: (current.accounts ?? []).map(({ organizationName, ...summary }) => {
           const full = set?.accounts.find(account => account.id === summary.id);
           const health = full
             ? projectStoredOAuthAccountHealth(provider, full)
@@ -566,8 +585,10 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
           // `maskedLabel` stays masked for tray surfaces; `accountLabel` follows privacy.maskEmails.
           const accountLabel = accountDisplayLabel(full?.credential.email, maskEmails);
           return { ...summary, ...(maskedLabel ? { maskedLabel } : {}), ...(accountLabel ? { accountLabel } : {}),
+            ...(showOrganizationName && organizationName ? { organizationName } : {}),
             ...oauthAccountHealthFields(provider, summary.id, health), quotaMode,
-            ...(supportsPause ? { paused: full?.paused === true, ...(full?.pauseDetails ? { pauseDetails: full.pauseDetails } : {}) } : {}),
+            ...(supportsPause ? { paused: full?.paused === true, ...(full?.pauseDetails ? { pauseDetails: full.pauseDetails,
+              ...(full.pauseEvidence ? { pauseEvidence: full.pauseEvidence } : {}) } : {}) } : {}),
             ...(isAnthropicOAuthInstance(provider) && supportsPause ? { autoSwitchThresholdOverride: full?.autoSwitchThresholdOverride ?? null,
               effectiveAutoSwitchThreshold: effectiveAnthropicAccountThresholdForInstance(provider as AnthropicInstanceId, config, full),
               autoSwitchThreshold: effectiveAnthropicAccountThresholdForInstance(provider as AnthropicInstanceId, config) } : {}),
@@ -786,19 +807,18 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       if (kind !== "anthropic") return jsonResponse({ error: "nativeMessages is only part of the anthropic pool contract" }, 400);
       if (typeof fields.nativeMessages !== "boolean") return jsonResponse({ error: "nativeMessages must be a boolean" }, 400);
     }
-    // Validated by the SHARED parsers before any kind-specific write, so a bad strategy or
-    // sticky limit is refused identically whichever pool is addressed.
+    // Validate the strategy for this pool kind before any write.
     let strategy: string | undefined;
     if (fields.strategy !== undefined) {
-      // reset-first is a Codex and generic strategy. The Anthropic runtime implements only
-      // quota, round-robin and fill-first, so that kind keeps refusing it rather than storing
-      // a strategy it would silently ignore.
       const parsed = kind === "codex" ? parseCodexAccountPoolStrategy(fields.strategy)
         : kind === "generic" ? parseGenericPoolStrategy(fields.strategy, provider)
         : parseAccountPoolStrategy(fields.strategy);
-      if (parsed === null) return jsonResponse({ error: kind === "anthropic"
-        ? "strategy must be one of: quota, round-robin, fill-first"
-        : `strategy must be one of: quota, round-robin, fill-first, reset-first${kind === "generic" && provider === "kiro" ? ", least-loaded" : ""}` }, 400);
+      if (parsed === null) {
+        const extra = kind === "anthropic" ? "reset-near-weighted"
+          : kind === "codex" ? "reset-first, reset-near-weighted"
+          : provider === "kiro" ? "reset-first, least-loaded" : "reset-first";
+        return jsonResponse({ error: `strategy must be one of: quota, round-robin, fill-first, ${extra}` }, 400);
+      }
       strategy = parsed;
     }
     let stickyLimit: number | undefined;
@@ -1006,7 +1026,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (body.strategy !== undefined) {
       const parsed = parseAccountPoolStrategy(body.strategy);
       if (parsed === null) {
-        return jsonResponse({ error: "strategy must be one of: quota, round-robin, fill-first" }, 400);
+        return jsonResponse({ error: "strategy must be one of: quota, round-robin, fill-first, reset-near-weighted" }, 400);
       }
       strategy = parsed;
     }

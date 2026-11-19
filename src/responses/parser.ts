@@ -247,6 +247,7 @@ export function parseRequest(
   // With search declared, replayed hosted cells become web_search call/output pairs (#7269).
   const webSearchReplay = webSearch && Array.isArray(data.input) ? rewriteReplayedWebSearchCells(data.input) : undefined;
   const systemPrompt: string[] = [];
+  const proxySystemPrompt: NonNullable<OcxContext["proxySystemPrompt"]> = [];
   // Responses reasoning siblings belong to the following assistant, including across call items.
   // Keep them off the message list until that assistant arrives; turn boundaries clear the array.
   const pendingReasoning: Array<{ part: OcxThinkingContent; envelopeSigned: boolean }> = [];
@@ -282,6 +283,12 @@ export function parseRequest(
     // receives the parent's copy verbatim, so the identity sentence inside it names the parent
     // unless it is renamed here, where the destination model is known.
     systemPrompt.push(nameDestinationText(data.instructions, data.model));
+    // The plaintext checkpoint framer can append the note to the caller's instructions.
+    // Keep that block intact for other adapters and record only the suffix the proxy added.
+    if (data.instructions !== parsed.data.instructions) {
+      const callerLength = parsed.data.instructions?.trim() ? parsed.data.instructions.length : 0;
+      proxySystemPrompt.push({ blockIndex: 0, suffix: data.instructions.slice(callerLength) });
+    }
   }
 
   if (typeof data.input === "string") {
@@ -692,9 +699,13 @@ export function parseRequest(
   // #6764: the decoded checkpoint is ordinary user text on this route. Say in the system prompt
   // what it is, so a retained earlier request that it reports as completed is not repeated.
   // A compaction request is a summarizer turn and must not be told to continue.
-  if (decodedCheckpoint && !compactionRequest) systemPrompt.push(CHECKPOINT_CONTINUATION_NOTE);
+  if (decodedCheckpoint && !compactionRequest) {
+    proxySystemPrompt.push({ blockIndex: systemPrompt.length, suffix: CHECKPOINT_CONTINUATION_NOTE });
+    systemPrompt.push(CHECKPOINT_CONTINUATION_NOTE);
+  }
   const context: OcxContext = {
     ...(systemPrompt.length > 0 ? { systemPrompt } : {}),
+    ...(proxySystemPrompt.length > 0 ? { proxySystemPrompt } : {}),
     messages,
     ...(mergedTools.length > 0 ? { tools: mergedTools } : {}),
   };

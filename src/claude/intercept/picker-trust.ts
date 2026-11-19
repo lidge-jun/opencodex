@@ -1,12 +1,13 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { PICKER_CA_COMMON_NAME, PICKER_HOST } from "./picker-ca";
+import { PICKER_CA_COMMON_NAME, PICKER_HOST, withPublishedPickerCaLinuxTrust, type LinuxPickerTrustStore } from "./picker-ca";
 import {
   inspectPickerTrustWindows,
   trustPickerCaWindows,
   untrustPickerCaWindows,
 } from "./picker-trust-windows";
+import { inspectPickerTrustLinux, trustPickerCaLinux, untrustPickerCaLinux, type LinuxPickerUntrustResult } from "./picker-trust-linux";
 
 /** Trust is scoped to the current root fingerprint and a verified persisted leaf. */
 export type PickerTrustState = "trusted" | "untrusted" | "unsupported" | "unknown";
@@ -65,11 +66,15 @@ export async function inspectPickerTrust(
   caSha1: string,
   run: SecurityRunner = defaultSecurityRunner,
   platform: NodeJS.Platform = process.platform,
+  linuxHome?: string,
 ): Promise<PickerTrustState> {
   if (platform === "win32") {
     // The macOS default runner is never passed down: only an explicitly injected
     // runner crosses over, otherwise the Windows default powershell.exe runner runs.
     return inspectPickerTrustWindows(leafPath, caSha1, run === defaultSecurityRunner ? undefined : run);
+  }
+  if (platform === "linux") {
+    return inspectPickerTrustLinux(caSha1, run === defaultSecurityRunner ? undefined : run, linuxHome);
   }
   if (platform !== "darwin") return "unsupported";
   const keychain = loginKeychainPath();
@@ -94,10 +99,21 @@ export async function trustPickerCa(
   caPath: string,
   run: SecurityRunner = defaultSecurityRunner,
   platform: NodeJS.Platform = process.platform,
-  cert?: { pem?: string },
+  cert?: { pem?: string; configDir?: string },
+  linuxHome?: string,
 ): Promise<{ ok: boolean; reason?: "unsupported" | "declined_or_failed" }> {
   if (platform === "win32") {
     return trustPickerCaWindows(caPath, run === defaultSecurityRunner ? undefined : run, cert);
+  }
+  if (platform === "linux") {
+    const runner = run === defaultSecurityRunner ? undefined : run;
+    if (!cert?.configDir || !cert.pem) return trustPickerCaLinux(caPath, runner, cert, linuxHome);
+    try {
+      return await withPublishedPickerCaLinuxTrust(cert.configDir, cert.pem, (store, save) =>
+        trustPickerCaLinux(caPath, runner, cert, linuxHome, undefined, save, store));
+    } catch {
+      return { ok: false, reason: "declined_or_failed" };
+    }
   }
   if (platform !== "darwin") return { ok: false, reason: "unsupported" };
   // `cert.pem` is the caller-verified certificate bytes: the shared on-disk ca.pem is writable by
@@ -129,11 +145,27 @@ export async function untrustPickerCa(
   fingerprintSha1: string,
   run: SecurityRunner = defaultSecurityRunner,
   platform: NodeJS.Platform = process.platform,
-): Promise<{ ok: boolean }> {
+  linuxHome?: string,
+  linux?: { store?: LinuxPickerTrustStore; configDir?: string; bindStore?: (store: LinuxPickerTrustStore) => void },
+): Promise<LinuxPickerUntrustResult> {
   if (platform === "win32") {
     try {
       return await untrustPickerCaWindows(fingerprintSha1, run === defaultSecurityRunner ? undefined : run,
         { pem: readFileSync(caPath, "utf8") });
+    } catch { return { ok: false }; }
+  }
+  if (platform === "linux") {
+    try {
+      const pem = readFileSync(caPath, "utf8");
+      const remove = (linuxStore?: LinuxPickerTrustStore) => untrustPickerCaLinux(
+        fingerprintSha1, run === defaultSecurityRunner ? undefined : run, linuxHome,
+        { pem, linuxStore, bindStore: linux?.bindStore });
+      if (!linux?.configDir) return await remove(linux?.store);
+      return await withPublishedPickerCaLinuxTrust(linux.configDir, pem, async (store, _save, clear) => {
+        const result = await remove(store);
+        if (result.ok) clear();
+        return result;
+      });
     } catch { return { ok: false }; }
   }
   if (platform !== "darwin") return { ok: false };

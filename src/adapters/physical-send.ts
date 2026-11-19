@@ -1,3 +1,4 @@
+import { fetchWithPhysicalSendReceipt } from "../lib/executor-physical-send-receipt";
 import type { AdapterFetchContext } from "./base";
 import type { SendClass } from "../lib/request-execution-budget";
 import type { AttemptRecoveryKind } from "../usage/log";
@@ -14,7 +15,7 @@ type PacedFetch = typeof globalThis.fetch & {
 };
 
 /** One ordinal sequence per adapter fetchResponse call, across all of its inference retries.
- * Consumption starts at underlying executor invocation; its own later preflight may still fail. */
+ * Consumption starts at the guarded executor receipt. */
 export function createAdapterPhysicalSend(ctx: AdapterFetchContext = {}, fallback = globalThis.fetch) {
   const executor = (ctx.executor ?? fallback) as PacedFetch;
   let ordinal = 0;
@@ -22,7 +23,9 @@ export function createAdapterPhysicalSend(ctx: AdapterFetchContext = {}, fallbac
     url: string;
     sendClass?: SendClass;
     recovery?: AttemptRecoveryKind;
-    /** Runs only after admission, e.g. backoff and cancellation of a superseded response. */
+    /** Runs after budget reservation, before acquiring a pacing slot. */
+    beforePacing?: () => void | Promise<void>;
+    /** Runs only after pacing admission. */
     beforeDispatch?: () => void | Promise<void>;
     dispatch: (executor: typeof globalThis.fetch) => Promise<Response>;
   }): Promise<Response> => {
@@ -36,17 +39,21 @@ export function createAdapterPhysicalSend(ctx: AdapterFetchContext = {}, fallbac
     const physicalExecutor = (async (input, init) => {
       if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
       if (init?.signal?.aborted) throw abortError(init.signal);
-      const run = async (): Promise<Response> => {
+      const receipt = (): void => {
+        if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
+        if (init?.signal?.aborted) throw abortError(init.signal);
         if (dispatched || (permit && !permit.use())) throw new SendBudgetExhaustedError(errorDestinationLabel(options.url));
         dispatched = true;
         ordinal += 1;
         ctx.onPhysicalSend?.({ ordinal, ...(options.recovery ? { recovery: options.recovery } : {}) });
-        return (executor.unpacedFetch ?? executor)(input, init);
       };
+      const run = () => fetchWithPhysicalSendReceipt(executor.unpacedFetch ?? executor, input, init, receipt);
       return permit?.execute ? permit.execute(run) : run();
     }) as typeof globalThis.fetch;
     let slot: ProviderRequestSlot | undefined;
     try {
+      await options.beforePacing?.();
+      if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
       slot = (await executor.waitForPacing?.(ctx.abortSignal)) || undefined;
       if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
       await options.beforeDispatch?.();

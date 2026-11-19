@@ -1,6 +1,7 @@
 import { isolateCodexPoolAccountHeaders } from "../codex/forward-transport-headers";
 import { isUntypedBareUpstreamError } from "./bare-upstream-error";
 import type { NativeResponseControl } from "./responses/native-response-control";
+import type { ConnectionReplayScope } from "../responses/state/connection-scope";
 import type { HandleResponsesOptions } from "./responses/core-options";
 import type { ServerWebSocket } from "bun";
 import { responsesJsonEventSequence } from "./responses-json-events";
@@ -46,11 +47,23 @@ export interface WsData {
   admission?: DataPlaneAdmission;
   /** Local-only loopback replay identity; revalidated each turn without retaining its secret. */
   replayPrincipal?: HandleResponsesOptions["replayPrincipal"];
+  /**
+   * Server-minted connection replay scope for an unidentified loopback socket
+   * (src/responses/state/connection-scope.ts): opaque, memory-only, bound to the
+   * handshake's own thread-id and released on socket close. Not a credential and
+   * never visible to the client.
+   */
+  replayScope?: ConnectionReplayScope;
   authContext?: CodexAuthContext; // last resolved account decision for observability/registry cleanup
   cancel?: () => void; // cancels the in-flight stream reader/fetch
   turnId?: number; // monotonically increasing per socket; prevents stale frames after replacement turns
   /** Fixed-size logical session lane derived at the HTTP upgrade boundary. */
   sessionLaneId?: string;
+  /**
+   * The upgrade came from a loopback peer on a local listener (src/lib/request-peer-scope.ts).
+   * Fixed at the handshake; only `true` counts as local, so an absent value is denied.
+   */
+  readonly peerLocal?: boolean;
   /** Discriminator: Responses reframing vs transparent live/realtime sideband relay. */
   kind?: "responses" | "live-sideband" | "remote-workspace-agent";
   remoteWorkspaceConnection?: { receive(raw: string | Uint8Array): void };
@@ -142,6 +155,7 @@ export function buildResponsesWsData(
   sessionLaneId?: string,
   client?: UsageClient,
   replayPrincipal?: HandleResponsesOptions["replayPrincipal"],
+  replayScope?: ConnectionReplayScope,
 ): WsData {
   // Auth is handshake-time only on this path: the per-frame contexts have no
   // request headers left to re-resolve from, so the decision rides along here.
@@ -149,6 +163,7 @@ export function buildResponsesWsData(
     headers,
     admission,
     ...(replayPrincipal ? { replayPrincipal } : {}),
+    ...(replayScope ? { replayScope } : {}),
     ...(client ? { client } : {}),
     ...(admissionLease ? { admissionLease } : {}),
     ...(sessionLaneId ? { sessionLaneId } : {}),

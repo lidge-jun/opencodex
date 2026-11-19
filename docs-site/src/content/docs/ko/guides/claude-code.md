@@ -66,7 +66,7 @@ ocx claude
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | 자동 컨텍스트 압축 임곗값(기본값 `829800`). 자동 컨텍스트가 켜져 있을 때만 주입해요 |
 | `ANTHROPIC_MODEL` | `claudeCode.model` (선택 사항) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (선택 사항, 기존 `ANTHROPIC_SMALL_FAST_MODEL`도 지원) |
-| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (구독으로 실행할 때 설정하지 않으면 네이티브 `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`) |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`. 로컬에서 구독으로 실행할 때 `nativePassthrough`가 켜져 있고 컨텍스트 계산 모드가 기본값인 1M이면, 자동 표기 조건을 충족하는 미설정 슬롯에 네이티브 `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]`가 들어갑니다. Fable에는 Claude Code 2.1.290 이상이면 `claude-fable-5-2[1m]`, 버전이 더 낮거나 확인되지 않으면 `claude-fable-5-1[1m]`이 들어갑니다. `claudeCode.contextAccounting`을 `200k`로 설정하면 `[1m]`이 자동으로 붙지 않고 미설정 슬롯은 비어 있습니다. 대시보드의 수동 실행 명령은 Fable 슬롯을 설정한 경우에만 Fable을 내보냅니다. 슬롯이 비어 있으면 명령을 붙여넣은 셸에서 Claude Code가 Fable 모델을 선택합니다. |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | OpenCodex가 라우팅 별칭으로 설정한 티어 슬롯의 `/model` 라벨(예: `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`). launchd 시스템 환경과 셸 훅에도 같은 짝으로 기록합니다. 모델 ID는 별칭 그대로입니다. 직접 설정한 슬롯이나 라벨은 건드리지 않습니다 |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort`가 켜져 있으면 `1` (조건부) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch`가 설정된 경우 (조건부, 기본으로는 주입하지 않으며 Claude Code 자체 기본값을 따름) |
@@ -219,7 +219,7 @@ unknown은 설정이 아직 opencodex 프록시를 가리키는지 판단할 수
 
 ### Picker 모드: 1P Code 탭에 opencodex 모델 표시하기
 
-Picker 모드는 1P 모드의 일부예요. macOS와 Windows에서 1P를 선택하면 기본으로 켜지지만,
+Picker 모드는 1P 모드의 일부예요. macOS, Windows, Linux에서 1P를 선택하면 기본으로 켜지지만,
 `claudeCode.intercept.picker: false`를 설정하면 꺼져요. 1P Desktop의 Code 탭 모델 선택기를 바꿔서
 사용 가능한 opencodex 모델을 이름으로 보여줘요. 처음 켤 때 macOS 로그인 키체인이나 Windows 현재 사용자 Root 저장소에서 로컬 인증 기관을
 신뢰하라는 메시지가 표시될 수 있어요. 이 인증 기관은 `claude.ai`와 그 하위 도메인으로 제한돼요.
@@ -233,8 +233,7 @@ Picker는 대기 상태로 남아요. `ocx claude desktop picker on` 또는 `ocx
 이전 인증서에서 한 번 마이그레이션할 때는 기존 신뢰를 제거하기 위한 동의가 필요할 수 있어요. 정리가 끝나지
 않으면 Picker는 사용할 수 없고 적용된 프로필은 복호화하지 않는 중계로 동작해요. 키체인 잠금 해제나 앱의
 자격 증명 접근 허용은 별도의 macOS 동작이며, 재시작이나 업데이트 때도 메시지가 나올 수 있어요. Windows에서는 `on`이나 `trust`를 직접 실행할 때 루트 추가 확인이 나올 수 있어요.
-Linux에서는 Picker를 지원하지 않으며 Picker CA, 자격 증명 저장소, 프록시 작업을 시작하지 않아요.
-기본 Claude 인터셉트는 계속 사용할 수 있고, 로컬 CA 파일에 소유자, 심볼릭 링크, 파일 권한, Windows ACL 검사를 적용해요.
+Linux에서 Picker를 직접 활성화하면 `certutil`로 사용자 NSS 데이터베이스에 제한된 Picker CA를 신뢰하도록 등록해요.
 
 Picker 모드가 켜져 있는 동안 Claude Desktop의 네트워크는 OpenCodex를 거쳐요. OpenCodex가 중단되면
 Picker 모드를 끄거나 Desktop을 완전히 다시 시작할 때까지 Desktop은 오프라인이에요.
@@ -413,7 +412,15 @@ Claude Code는 알 수 없는 모델의 컨텍스트를 200k 토큰으로 계산
    `[1m]` 표식이 붙어요. 디스커버리와 Desktop 선택기 행은 그 임곗값을 따르지 않고, 고정된 829,800 토큰 하한
    (Anthropic 경로의 Claude 모델은 실제 1M)을 써요.
 2. `CLAUDE_CODE_AUTO_COMPACT_WINDOW`(기본값 `829800`, 범위 `100000`–`1000000`)를 주입해 해당
-   지점에서 대화를 자동으로 요약해요.
+   지점에서 대화를 자동으로 요약해요. 프록시를 경유하는 `ocx claude`는 카탈로그에 더 작은 컨텍스트 창이
+   있으면 `--settings`로 모델별 압축 임곗값을 설정할 수 있어요. 인수가 런처의 길이 제한을 넘으면
+   환경 변수를 사용해요.
+
+생성된 JSON은 Claude Code의 명령줄 설정 범위에 적용돼요. 로컬, 프로젝트, 사용자 설정 파일보다 우선하며 관리 설정보다는 우선순위가 낮아요. `--settings <file>`이나 `--autocompact`를 지정하면 JSON 생성을 건너뛰어요. 런처는 명시한 `--settings` 인수를 그대로 전달하고, 파일 처리는 Claude Code에 맡겨요.
+
+두 옵션 중 하나로 JSON 생성을 건너뛰면, 자동 컨텍스트가 설정한 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`는 그대로 전달돼요. 이 환경 변수를 직접 내보내도 JSON 생성이 생략되고 값은 유지돼요. Claude Code에서 이 변수의 유효한 값은 `--autocompact`와 저장된 압축 설정보다 우선해요. 파일의 압축 설정을 사용하려면 `claudeCode.autoContext`를 `false`로 설정해 자동 주입을 끄고, 내보낸 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`를 해제한 뒤 `--settings <file>`을 지정하세요. [Claude Code의 자동 압축 설정 우선순위](https://code.claude.com/docs/en/model-config#set-the-auto-compact-window)를 참고하세요.
+
+옵션 값과 `--` 뒤의 인수를 포함해 인수 하나라도 Remote Control 명령이나 별칭(`remote-control`, `rc`, `bridge`, `remote`, `sync`)과 정확히 일치하면 런처는 생성된 설정을 적용하지 않고 기존 인수와 실행 환경을 그대로 전달해요.
 
 설정 상태는 세 가지예요.
 

@@ -1,5 +1,6 @@
 import { anthropicSubscriptionLabel } from "../../../../src/providers/anthropic-subscription";
 import { anthropicInstanceRowShapeMatches, isAnthropicInstanceId } from "../../../../src/providers/anthropic-instance-id";
+import { normalizeCloudCodeAppealText, normalizeCloudCodeAppealUrl } from "../../../../src/lib/cloud-code-appeal-link";
 /**
  * ProviderAuthPanel — OAuth accounts, API-key pool, and forward-auth
  * embedding for the workspace Settings tab (WP091). Consumes WP040+WP060
@@ -575,6 +576,7 @@ export default function ProviderAuthPanel({
                 <div className="pwi-auth-wait-copy">
                   <div className="pwi-auth-wait-title">{t("prov.waitingBrowser")}</div>
                   <LoginHintView
+                    providerId={item.name}
                     hint={{
                       url: hintForThis.url,
                       deviceCode: hintForThis.deviceCode,
@@ -633,6 +635,8 @@ export default function ProviderAuthPanel({
                 {accounts.map(account => {
                   const label = oauthAccountDisplayLabel(accounts, account, t);
                   const planLabel = isAnthropicPool ? anthropicSubscriptionLabel(account.plan) : item.name === "google-antigravity" ? account.plan : undefined;
+                  // One Claude account can hold a row per organization; the name tells those rows apart.
+                  const organizationName = isAnthropicPool ? account.organizationName : undefined;
                   const switching = switchingAccountId === account.id;
                   const pausing = pausingAccountId === account.id;
                   const healthStatus = account.health?.status;
@@ -641,18 +645,20 @@ export default function ProviderAuthPanel({
                   const maskedId = displayAccountId(account.id);
                   const healthLabel = formatOAuthHealthLabel(t, account.health);
                   const healthSummary = isAnthropicPool ? null : formatOAuthHealthSummary(t, item.name, account.id, account.health);
+                  const appealUrl = account.paused ? normalizeCloudCodeAppealUrl(account.pauseEvidence?.appealUrl) : undefined;
                   return (
                   <li key={account.id} className={`pwi-auth-acct${account.active ? " pwi-auth-acct--active" : ""}`}>
                     <div className={`pwi-auth-row${account.active ? " pwi-auth-row--active" : ""}`}>
                     <button type="button" className="pwi-auth-row-main"
                       onClick={() => { if (!account.active && !account.paused && !showReauth && !inCooldown && !switchingAccountId && !pausingAccountId) void authHandlers.onSwitchAccount(item.name, account); }}
                       aria-current={account.active ? "true" : undefined}
-                      aria-label={`${label}${planLabel ? ` — ${planLabel}` : ""}${account.active ? ` — ${t("pws.accountCurrent")}` : ""}`}
+                      aria-label={`${label}${organizationName ? ` — ${organizationName}` : ""}${planLabel ? ` — ${planLabel}` : ""}${account.active ? ` — ${t("pws.accountCurrent")}` : ""}`}
                       disabled={Boolean(account.paused || showReauth || inCooldown || switchingAccountId || pausingAccountId)}>
                       <span className={`pwi-auth-dot ${showReauth ? "pwi-auth-dot--warn" : account.active && !account.paused ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
                       <span className="pwi-auth-row-copy">
                         <span className="pwi-auth-row-heading"><span className="pwi-auth-row-label">{label}</span>{planLabel && <span className="badge badge-green">{planLabel}</span>}</span>
                         {!isAnthropicPool && <span className="pwi-auth-row-secondary">{`${t("prov.accountId")}: ${maskedId}`}</span>}
+                        {organizationName && <span className="pwi-auth-row-secondary">{organizationName}</span>}
                         {healthSummary && (
                           <span className="pwi-auth-row-secondary faint">{healthSummary}</span>
                         )}
@@ -718,6 +724,11 @@ export default function ProviderAuthPanel({
                     </button>
                     </div>
                     <div className="pwi-auth-acct-quota">
+                      {appealUrl && (
+                        <a className="text-highlight underline" href={appealUrl} target="_blank" rel="noopener noreferrer">
+                          {normalizeCloudCodeAppealText(account.pauseEvidence?.appealText) ?? t("accountPause.submitAppeal")}
+                        </a>
+                      )}
                       {isAnthropicPool && account.autoSwitchThresholdOverride !== undefined
                         && account.autoSwitchThreshold !== undefined && authHandlers.onAccountThreshold && (
                         <AccountAutoSwitchControl

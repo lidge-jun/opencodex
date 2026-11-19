@@ -196,6 +196,8 @@ El catálogo ChatGPT passthrough también se superpone en las identificadores GP
 
 ## 2. Inicio de sesión de la cuenta (OAuth)
 
+Para cuentas profesionales o educativas de Microsoft, consulta la [configuración de Microsoft 365 Copilot](/es/guides/m365-copilot/).
+
 Los ajustes preestablecidos del proveedor pueden usar el inicio de sesión de la cuenta, incluido el GitHub Copilot, a través de un puente experimental no oficial de flujo de dispositivos. opencodex almacena sus credenciales en `~/.opencodex/auth.json`; los tokens actualizables se actualizan automáticamente, mientras que las claves duraderas se reutilizan hasta que el proveedor las revoca. `ocx login codex` también es aceptado, pero no es uno de estos proveedores: se dirige al grupo de cuentas Codex, el mismo flujo que `ocx account login codex`, que mantiene su propio libro de cuentas y necesita un proxy en ejecución. `chatgpt` y `openai` son alias de esa ruta.
 
 ```bash
@@ -335,6 +337,8 @@ Solo `anthropic` y `anthropic2` admiten este modo; otros proveedores responden `
 
 OAuth proveedores cuyas credenciales incluyen un ID de cuenta estable o correo electrónico pueden mantener más de un inicio de sesión. La página Proveedores muestra esas cuentas en un menú desplegable, le permite agregar otra y cambia la cuenta activa sin cerrar la sesión de las otras. Un inicio de sesión normal con una credencial sin identidad Kimi reemplaza la ranura activa, mientras que un **Añadir cuenta** explícito conserva esa ranura y activa una nueva y distinta. Las cuentas de Kiro se identifican mediante el ARN del perfil y, cuando está disponible, el correo electrónico del usuario conectado. Distintos usuarios de un perfil de organización pueden conservar credenciales separadas. `chatgpt` siempre es de una sola ranura porque las cuentas de grupo Codex tienen un libro mayor separado. Los tokens permanecen en `~/.opencodex/auth.json`; `/api/oauth/accounts` devuelve solo metadatos enmascarados.
 
+Las sesiones nuevas de Codex y del grupo OAuth de Anthropic pueden usar [`reset-near-weighted`](/es/reference/configuration/providers/#reset-near-weighted) para priorizar la cuota semanal que está a punto de renovarse. La afinidad de las sesiones activas se conserva.
+
 <a id="cockpit-tools-antigravity-import"></a>
 
 ### Importación de Antigravity desde Cockpit Tools
@@ -384,13 +388,9 @@ Para el diagnóstico de compatibilidad de cuenta-interruptor, habilitar la depur
 
 <a id="kiro-request-credits"></a>
 
-### Créditos de solicitud Kiro
+### Créditos por solicitud de Kiro
 
-En los giros habilitados para herramientas, opencodex mantiene el texto ordinario de Kiro hasta que se valide la finalización. Si Kiro termina con texto sin formato en lugar de su herramienta privada de respuesta final, todavía se ejecuta un reintento limitado y solo se muestra la respuesta final resultante. El progreso que acompaña a una llamada de herramienta real sigue siendo visible. Una respuesta final privada normal no necesita reintento de finalización.
-
-Si el filtro de seguridad de Kiro detiene un turno (`CONTENT_FILTERED`, por ejemplo el clasificador `BIO` de Claude), la solicitud termina con un rechazo que los clientes no reintentan. Los clientes Claude reciben `stop_reason: "refusal"` y Codex recibe una respuesta fallida con la categoría y explicación de Kiro. Si el filtro detiene el único reintento acotado, no se muestra una respuesta final: el progreso retenido del primer intento y el texto parcial del reintento aparecen como comentarios antes del rechazo.
-
-Cuando Kiro emite la medición de crédito, los registros de solicitudes conservan el gasto reportado como `usage.providerCredits`, incluso en el libro mayor de uso persistente. Estos son Kiro créditos; los recuentos de tokens aún pueden estimarse y el valor del crédito no reemplaza las estimaciones de costos de USD. Las solicitudes de reserva de finalización agregan sus créditos reportados. Un valor ausente significa que Kiro no reportó el uso del crédito; un cero explícito significa que no reportó ningún gasto.
+La guía [Créditos por solicitud de Kiro](/es/guides/kiro-request-credits/) describe la validación de respuestas, los rechazos del filtro de seguridad, el registro de créditos y su valoración en USD.
 
 <a id="kiro-refresh-attention"></a>
 
@@ -460,6 +460,7 @@ están en la página [Catálogo de proveedores con clave API](/es/guides/api-key
 - [CodeBuddy Code CLI oficial (Global y CN)](/es/guides/api-key-catalog/#official-codebuddy-code-cli-global--cn)
 - [Oficial Qoder CLI (Global y CN)](/es/guides/api-key-catalog/#official-qoder-cli-global--cn)
 - [Claude Code CLI (suscripción)](/es/guides/api-key-catalog/#claude-code-cli-subscription)
+- [Antigravity CLI (ACP, local)](/es/guides/api-key-catalog/#antigravity-cli-acp-local)
 - [Cuota de crédito A6API](/es/guides/api-key-catalog/#a6api-credit-quota)
 - [Plan de codificación BigModel sobre Responses](/es/guides/api-key-catalog/#bigmodel-coding-plan-over-responses)
 - [Múltiples claves API](/es/guides/api-key-catalog/#multiple-api-keys)
@@ -518,6 +519,14 @@ Los campos de proveedor están disponibles a través de la configuración, `PATC
 La sección **Límites de solicitudes** de la descripción general de proveedores muestra las barras de utilización en vivo actualizadas desde el punto final de uso/facturación de cada proveedor cuando existe uno. Las barras muestran la cantidad de una ventana (5 horas, semanal, mensual o específica del proveedor) que ya se consume.
 
 Proveedores con una consulta activa: OpenAI/Codex, Anthropic, xAI, Cursor, Kimi, Google Antigravity, OpenCode Go, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax, Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, Command Code y proveedores personalizados basados en a6api o Abliteration.
+
+**Uso mensual de Anthropic.** Las cuentas con facturación por uso, como las de Enterprise,
+pueden mostrar una barra mensual cuando Anthropic indica que el uso adicional está activado
+y no informa de ventanas del plan. La barra se muestra sin fecha de restablecimiento y desaparece
+cuando Anthropic informa de ventanas del plan o confirma que el uso adicional está desactivado.
+Si la respuesta no contiene ninguna ventana de cuota utilizable, la consulta de la cuenta sigue
+indicando que la lectura no está disponible, incluso si al actualizar la cuota del proveedor se
+recibe la misma respuesta.
 
 **Cuota de Kimi Coding Plan.** Los proveedores con inicio de sesión de cuenta o clave API que usan el endpoint canónico `https://api.kimi.com/coding/v1` consultan `/usages`. Los planes que informan `usages.limit_month_total` (o `monthTotal`) muestran una barra de uso mensual; si el total no está disponible, se utiliza `limit_month_code` (o `monthCode`). La fracción `used_ratio` / `usedRatio` debe estar en `[0, 1]` antes de convertirse en porcentaje consumido; los valores inválidos se ignoran. Un contenedor `usages` vacío o inutilizable no oculta datos mensuales válidos de otro sobre compatible. Se conserva cualquier hora de restablecimiento informada. Las ventanas existentes de cinco horas, semanales y de créditos totales de suscripción siguen siendo independientes; una ventana mensual ausente no se muestra como 0%.
 

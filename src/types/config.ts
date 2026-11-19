@@ -679,6 +679,13 @@ export interface OcxConfig extends OcxLinkHomeConfig, CodexAccountLoginConfig {
   googleAntigravityStaticCatalogVersion?: 1 | 2;
   /** Claude Code inbound + launcher settings. */
   claudeCode?: OcxClaudeCodeConfig;
+  /** Opt-in weekly reserve for explicitly marked caller-forward Claude subscription turns. */
+  subscriptionReserve?: {
+    enabled?: boolean;
+    soft?: number;
+    hard?: number;
+    targets?: string[];
+  };
   /**
    * Which public inference APIs this proxy serves. Read only through
    * `resolveApiSurfaceSettings` in `src/protocols/settings.ts`, which fails closed on a
@@ -795,6 +802,11 @@ export interface OcxConfig extends OcxLinkHomeConfig, CodexAccountLoginConfig {
    * would silently hide every future model behind a switch nobody knew to flip.
    */
   grokExcludedModels?: string[];
+  /**
+   * Provider names the dashboard's suggested combos leave out (Combos page). View-only:
+   * existing combos that name one keep routing to it.
+   */
+  comboSuggestionExcludedProviders?: string[];
   /**
    * When true, OpenAI-routed requests include `service_tier: "priority"` (fast inference).
    * When false, service_tier is stripped so requests use default speed.
@@ -1340,6 +1352,8 @@ export interface OcxConfig extends OcxLinkHomeConfig, CodexAccountLoginConfig {
   codexPinnedTransientPolicy?: "hold" | "detour-new-threads";
   /** Opt-in: retain one Codex WebSocket per account and thread across turns. Default off. */
   codexWsReuseAcrossTurns?: boolean;
+  /** Opt-in native WS upload deltas; implies cross-turn reuse. Default off. */
+  codexWsIncrementalUpload?: boolean;
   /**
    * Opt-in provider-origin circuit threshold for proven pre-connection reachability failures.
    * Default 0 (disabled); range 0..20. The circuit never counts timeouts or HTTP responses.
@@ -1363,6 +1377,8 @@ export interface OcxConfig extends OcxLinkHomeConfig, CodexAccountLoginConfig {
    * and every other destination are unchanged. Compression runs synchronously on the event loop.
    */
   upstreamRequestCompression?: "off" | "gzip" | "zstd";
+  /** Optional lossy shortening of historical native Codex images/tool text. */
+  upstreamHistorySlim?: "off" | "codex";
   /**
    * Opt-in ceiling, in bytes, on a decompressed INBOUND data-plane request body (#3573).
    *

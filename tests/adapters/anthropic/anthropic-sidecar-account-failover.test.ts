@@ -78,7 +78,8 @@ beforeAll(async () => {
       parsed: OcxParsedRequest;
       adapter: ProviderAdapter;
       incomingMeta: IncomingMeta;
-      fetchForRequest: (request: AdapterRequest, parsed: OcxParsedRequest, adapter: ProviderAdapter) => typeof fetch;
+      fetchForRequest: (request: AdapterRequest, parsed: OcxParsedRequest, adapter: ProviderAdapter,
+        recovery: AttemptRecoveryKind | undefined, onPhysicalDispatch: () => void) => typeof fetch;
       on429?: (retryAfter: string | null, headers: Headers, parsed: OcxParsedRequest, response: Response) => Promise<
         { adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind } | null
       >;
@@ -87,7 +88,7 @@ beforeAll(async () => {
       let adapter = args.adapter;
       for (let attempt = 0; attempt < 8; attempt++) {
         const request = await adapter.buildRequest(args.parsed, args.incomingMeta);
-        const response = await args.fetchForRequest(request, args.parsed, adapter)(request.url, {
+        const response = await args.fetchForRequest(request, args.parsed, adapter, undefined, () => {})(request.url, {
           method: request.method, headers: request.headers, body: request.body,
         });
         if (response.ok) return response;

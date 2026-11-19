@@ -195,11 +195,13 @@ export function fastPolicyForModel(
   providerName?: string,
   inbound: InboundWire = "responses",
   capabilityProvider?: ServiceTierCapabilityProvider,
+  effectiveAdapter?: string,
 ): ResolvedFastPolicy {
   return resolveFastPolicy(
     authorityForProvider(provider, providerName, capabilityProvider),
     modelId,
     inbound,
+    effectiveAdapter,
   );
 }
 

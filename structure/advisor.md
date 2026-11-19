@@ -79,7 +79,8 @@ multi-call pairing, overlap and lifecycle release.
   an explicitly selected hosted Advisor from the original declaration before choice lowering.
   The Responses core validates the original choice against the resolved route and admitted
   catalog. Duplicate matches return a request-wide HTTP 400 before dispatch. A declaration
-  unavailable on the current route or under its model scope refuses that candidate before dispatch.
+  unavailable on the current route, under its model scope, or under the selected credential's
+  captured token spend ceiling refuses that candidate before dispatch.
   Combo and policy fallback can try another candidate with the original declaration and choice.
   When all attempted candidates are incompatible, delivery retains the public HTTP 400.
   An admitted named choice drives Anthropic wire encoding and grants no root
@@ -125,11 +126,61 @@ reason `advisor-tool-shadowed-by-proxy-advisor` for a destination that would oth
 `planAnthropicServerTools` (`src/adapters/anthropic/advisor-tool.ts`) also withholds the completed
 Advisor history and the beta while a function tool named `advisor` owns the name, the same rule that
 keeps the web-search sidecar's `web_search` ahead of a typed search. With
-this sidecar off, the declaration reaches first-party Anthropic, or a gateway with
-`forwardAdvisorTool: true`, and its blocks round-trip to the client. Destination, replay and scope
+this sidecar off and no applicable token spend ceiling, the declaration reaches first-party
+Anthropic, or a gateway with `forwardAdvisorTool: true`, and its blocks round-trip to the client. Destination, replay and scope
 rules are in [providers and adapters](providers-and-adapters.md);
 `tests/claude-integration/claude-translated-advisor-tool.test.ts` covers both sides of the precedence
 through the Responses core.
+
+Translated turns evaluate the current send's selected identity and effective wire. An applicable
+root, identity or pool token ceiling withholds the optional hosted declaration, completed Advisor
+history and beta from that send onward, while the main model and other tools continue. The same
+rule applies when the effective Anthropic provider appends an operator credential header recognized
+by `src/providers/api-key-response-ownership.ts`, which makes credential ownership ambiguous.
+An explicit Messages selection refuses either target before vision preprocessing or worker dispatch. An
+eligible fallback candidate can still fulfill the selection. The client receives HTTP 400 if no compatible route serves the request
+before response streaming starts. During streaming, a refused continuation emits a terminal error.
+`hosted-advisor-spend.ts` and `sidecar-execution.ts` use the transport's `initialAdapterProvider`
+to check the actual authenticated target's ceilings without starting main-model accounting. The
+original translated turn owns the numeric ceiling snapshot and shares it with the default policy
+candidate and translated Combo trackers. The budget's read-only
+`hasCapturedSpendCeiling` checks the original numeric ceilings against that target, including an
+identity selected after Combo prepayment. An inherited budget can also supply its published
+snapshot for that check. See [Responses spend](transports/responses-spend.md#prepaid-initial-sends)
+for precedence. The request-owned `hostedAdvisorSpendGuard` runs in the selected adapter's
+`buildRequest` wrapper after credential admission, including sidecar copies and dispatch-time
+reselection. The builder supplies its own resolved provider and reuses the captured policy.
+Eligibility follows its effective wire, even when credential rebuilding restores a provider-wide
+adapter. Once withheld, the optional hosted tool and replay stay withheld across later credentials,
+policy candidates and translated Combo children in the same turn.
+`src/server/responses/request-transport.ts` uses the effective Anthropic serializer to bind each
+hosted Advisor request to the credential it applied, including on local-mode gateways.
+`request-spend-target.ts` keeps the hosted binding separate from ordinary accounting scopes. For
+Anthropic OAuth, the existing OAuth label function hashes the admitted serving snapshot's provider
+and account ID. This keeps same-ID accounts in separate instances distinct. Identity changes only
+when normal credential admission accepts a new snapshot. Provider display tags and generic account
+log fields stay the same.
+After upstream plugin rewrites and before the physical-send receipt, the HTTP guard requires an
+exact match and uses the same ownership classifier to reject conflicting credential headers. On
+failure, it refuses the explicit selection or rebuilds the optional request with its original
+serializer inputs and hosted Advisor withheld. The final headers omit the Advisor beta.
+Removing Advisor blocks from a validated mixed replay run preserves the other completed search
+or fetch exchanges at their original unique anchor and in their original order, subject to the
+existing destination checks.
+For a choice without an explicit hosted selection, after the final tool catalog is known, an
+unmatched named `advisor` choice becomes `auto` when spend policy has removed its hosted tool or
+replay. A named selection with an ordinary or proxy function owner keeps that owner. The delivery
+maps are rebuilt once and charged for newly usable tools;
+normal, web-search and image/video paths apply this before the adapter builds its request.
+An existing entry trace receives `advisor-tool-withheld-by-spend-policy`; unmarked
+Combo children retain the existing trace behavior. Main-model terminal usage does not independently account for
+the hosted Advisor. The proxy Advisor retains its separately budgeted consultations; see
+[Responses spend](transports/responses-spend.md). The same integration test covers all three scopes,
+streaming and buffered responses, replay, opted-in gateways, accounting and admitted identity,
+and policy changes after capture.
+`tests/responses/responses-first-send-spend-policy.test.ts` also covers target-dependent authority
+across key rotation, including a rebuilt provider whose default differs from its pinned wire,
+the web-search retry copy, post-rotation named-choice delivery and explicit hosted refusal.
 
 ## Recursion fence (server-owned authority)
 
@@ -165,9 +216,13 @@ Its random 256-bit handle is honored only beside the current process-owned capab
 or missing handles are refused. Consultation completion or failure releases the entry; abort
 revokes it immediately, even while transport work is still settling. Registration owns a frozen copy.
 The bounded scope envelope remains validated separately. Neither handle nor capability is sent upstream.
+Advisor and shared local Chat self-fetches use direct transport, including when the destination
+is the hub's non-loopback bind address. Outbound provider requests still follow provider egress policy.
 
-Routed vision carries the same frozen policy through its plan and a scoped registry entry. Its
-separate sidecar capability header authenticates inheritance without suppressing Advisor on the helper.
+Routed vision carries the same frozen policy through its plan and a scoped registry entry. The
+shared local Chat helper registers every self-fetch and attaches a frozen policy when supplied.
+Its separate sidecar capability authenticates origin and any inherited policy without suppressing
+Advisor on the helper.
 Chat intersects that registration with the host snapshot captured at authentication; missing or
 expired registrations presented with a valid capability are refused. Completion, failure and abort
 release the entry. Ordinary client headers cannot grant inherited policy authority.

@@ -1,10 +1,10 @@
 import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../codex/catalog/native-models";
-import type { OcxComboConfig, OcxComboTarget, OcxConfig } from "../types";
+import type { OcxComboConfig, OcxComboTarget } from "../types";
 
 export const COMBO_NAMESPACE = "combo";
 
 export function preservesPhysicalComboProvider(
-  config: Pick<OcxConfig, "providers" | "combos">,
+  config: { providers: Record<string, unknown>; combos?: Record<string, unknown> },
 ): boolean {
   return Object.hasOwn(config.providers, COMBO_NAMESPACE)
     && Object.keys(config.combos ?? {}).length === 0;

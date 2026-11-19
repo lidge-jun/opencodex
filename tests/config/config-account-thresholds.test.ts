@@ -6,13 +6,16 @@ import { getConfigPath, getDefaultConfig, loadConfig, readConfigDiagnostics, sav
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 let testDir = "";
 
+const inheritedConfigHome = process.env.OPENCODEX_HOME;
+
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-config-"));
   process.env.OPENCODEX_HOME = testDir;
 });
 
 afterEach(() => {
-  delete process.env.OPENCODEX_HOME;
+  if (inheritedConfigHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = inheritedConfigHome;
   if (testDir && existsSync(testDir)) removeTreeWithRetry(testDir);
   testDir = "";
 });

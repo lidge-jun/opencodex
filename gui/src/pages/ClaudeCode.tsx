@@ -49,6 +49,7 @@ function normalizeFirstPartyState(state: ClaudeCodeState): ClaudeCodeState {
     contextAccounting: normalizeContextAccounting(state.contextAccounting),
     // The GET has no separate field: the env on this read was built under the accounting it reports.
     servedContextAccounting: normalizeContextAccounting(state.servedContextAccounting ?? state.contextAccounting),
+    servedFableModel: state.servedFableModel ?? (state.tierModels && (state.tierModels.fable ?? "")),
   };
 }
 

@@ -126,7 +126,10 @@ export function publishDecisionAccountQuota(provider: string, id: string, genera
   if (roster?.root !== getConfigDir() || !roster.accounts.some(row => row.id === id && row.generation === generation)) return;
   const key = accountKey(provider, id);
   const previous = accounts.get(key);
-  const retained = partial && previous?.generation === generation ? previous.windows.filter(row => !windows.some(next => row.window === next.window)) : [];
+  // Anthropic monthly and included-plan windows come from mutually exclusive observations.
+  const monthlyFallback = provider === "anthropic" && windows.some(row => row.window === "monthly");
+  const retained = partial && !monthlyFallback && previous?.generation === generation ? previous.windows.filter(row =>
+    (provider !== "anthropic" || row.window !== "monthly") && !windows.some(next => row.window === next.window)) : [];
   accounts.set(key, { generation, windows: copyWindows([...retained, ...windows]) });
 }
 /** Read a pool's already-loaded roster with generation-matched windows; undefined when nothing is loaded for the current config root. */
