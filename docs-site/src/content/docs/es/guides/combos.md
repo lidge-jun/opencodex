@@ -736,6 +736,16 @@ Compruebe primero la gramática del alias y los nombres reservados. Un alias dup
 
 ### Rechazos por ventana de contexto
 
+Antes de enviar una solicitud a un destino de un combo de Responses con ventana de contexto y
+límite de entrada conocidos, OpenCodex aplica un margen de 1,1× a la estimación de tokens de
+entrada y redondea hacia arriba. La entrada ajustada debe caber en el límite de entrada, y la suma
+de esa entrada y la reserva de salida debe caber en la ventana de contexto. La comprobación puede
+omitir un destino aunque la solicitud no indique `max_output_tokens`. En ese caso, reserva el 10 %
+de la ventana del destino, con un mínimo de 1024 tokens y un máximo de 32 768. Si se conoce el
+límite de salida del destino, este también limita la reserva, incluso cuando la solicitud indica
+una cantidad. Si se desconoce la ventana, se aplica la comprobación de entrada habitual
+(`checkInputAdmission`).
+
 La recuperación de combos utiliza el mismo detector acotado de desbordamiento de contexto que Responses. Lee el mensaje más interno del proveedor y reconoce `context_length_exceeded`, `prompt is too long`, `input is too long for requested model` y `Please reduce the length of the messages or completion`. Los tres últimos solo cuentan cuando el mensaje comienza con ellos; en el caso de Anthropic se incluyen sus recuentos de tokens. Un error de validación que cite esas frases como valor de un parámetro o una cadena de error de SDK que las envuelva no cumplen la condición. Tampoco la cumplen un código junto a un mensaje ajeno al contexto, JSON mal formado, un error de validación de parámetros o una instrucción genérica de acortar un parámetro.
 
 La salida ya confirmada nunca se reproduce. Se mantienen la política de fallback, el consentimiento de gasto y los presupuestos de envío; cada intento físico conserva su propio uso. Si se agotan los objetivos elegibles o el presupuesto, el primer rechazo HTTP 400 de contexto confirmado tiene prioridad sobre errores reintentables posteriores, incluidos los de cuota. Un rechazo fatal posterior detiene el proceso inmediatamente.
