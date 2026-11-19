@@ -3,18 +3,17 @@ import {
   ComboVisionDescriptionUnavailableError,
   policyCandidateRefusalResponse,
 } from "../../src/server/responses/policy-request-scope";
-import { perTurnConfig, resetState, served, turn } from "../helpers/jev-session-pin";
+import { duringDecision, IMAGE_INPUT, perTurnConfig, resetState, served, turn, unionConfig, type Child } from "../helpers/jev-session-pin";
 
 beforeEach(resetState);
 afterEach(resetState);
 
-test("a failed required description follows the refreshed rejection policy", async () => {
+test("an onUnservable change during the paid decision applies to the next request", async () => {
   const payloads: Record<string, unknown>[] = [];
-  const config = perTurnConfig(["sol/gpt-5.6-sol:high"], payloads);
+  const config = unionConfig(["sol/gpt-5.6-sol:high", "sol/gpt-5.6-sol:high"], payloads);
   const combo = config.combos!.auto!;
   config.port = 9876;
   combo.targets = combo.targets.filter(target => target.provider === "sol");
-  combo.capabilityPolicy = "union";
   combo.onUnservable = "degrade";
   config.providers.sol!.inputModalities = ["text"];
   config.providers.helper = {
@@ -22,27 +21,24 @@ test("a failed required description follows the refreshed rejection policy", asy
     inputModalities: ["text", "image"], authMode: "local",
   };
   config.visionSidecar = { enabled: true, backend: "routed", model: "helper/vlm" };
-  const decide = config.providers.jev!.fetch!;
-  config.providers.jev!.fetch = (async (input, init) => {
-    config.combos!.auto = { ...combo, onUnservable: "reject" };
-    return decide(input, init);
-  }) as typeof fetch;
+  duringDecision(config, () => { config.combos!.auto = { ...combo, onUnservable: "reject" }; });
 
   const modes: string[] = [];
-  const response = await turn(config, {
-    input: [{ role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,AA==" }] }],
-    child(body, complete, options) {
-      if (options?.comboRequiresVisionPlan) {
-        modes.push("description");
-        return policyCandidateRefusalResponse(new ComboVisionDescriptionUnavailableError())!;
-      }
-      modes.push("dispatch");
-      return served(body, complete, options);
-    },
-  });
-  expect(payloads).toHaveLength(1);
-  expect(response.status).toBe(400);
-  expect(modes).toEqual(["description"]);
+  const child: Child = (body, complete, options) => {
+    if (options?.comboRequiresVisionPlan) {
+      modes.push("description");
+      return policyCandidateRefusalResponse(new ComboVisionDescriptionUnavailableError())!;
+    }
+    modes.push(options?.comboOmitImages ? "omission" : "dispatch");
+    return served(body, complete, options);
+  };
+  // The in-flight request keeps the degrade policy it was admitted with.
+  expect((await turn(config, { input: IMAGE_INPUT, child })).status).toBe(200);
+  expect(modes).toEqual(["description", "omission"]);
+  // The next request is admitted under reject.
+  expect((await turn(config, { input: IMAGE_INPUT, child })).status).toBe(400);
+  expect(modes).toEqual(["description", "omission", "description"]);
+  expect(payloads).toHaveLength(2);
 });
 
 test("post-decision admission never reads unused provider or caller credentials", async () => {

@@ -1,5 +1,3 @@
-import { normalizeComboConfig } from "../../combos";
-import { resolveProtocolSettings } from "../../protocols/settings";
 import type { OcxConfig, OcxProviderConfig, OcxComboConfig } from "../../types";
 
 const providerFields = [
@@ -62,22 +60,17 @@ export function snapshotComboAdmissionProvider(provider: OcxProviderConfig) {
   };
 }
 
-/** Compare routing and policy metadata across the asynchronous capability check. */
+/**
+ * The request-start copy combo admission reads. The capability gate awaits sidecar planning, so
+ * reading the live config afterwards could mix two configurations in one verdict. Only data
+ * properties are copied: a getter (a lazily resolved credential, say) is never invoked.
+ */
 export function snapshotComboAdmission(config: OcxConfig, comboId: string) {
   const rawCombo = dataValue(dataValue(config, "combos"), comboId);
   const providers = dataValue(config, "providers") ?? {};
   const vision = dataValue(config, "visionSidecar");
   return {
-    combo: rawCombo && normalizeComboConfig(copyMetadata(rawCombo) as OcxComboConfig),
-    protocols: resolveProtocolSettings(pickMetadata(config, ["protocols"])),
-    routing: pickMetadata(config, [
-      "hostname", "port", "unauthenticatedLoopbackListener", "defaultProvider", "defaultModelAliases",
-      "cursorEffortRows", "fastRows", "providerContextCaps", "blockedModelRedirects",
-      "codexAccountNamespaces", "codexAccountPickerEnabled", "pausedCodexAccountIds",
-      "codexMainAccountHardLock", "codexMainAccountHardLockThresholds", "codexDesktopAuthless",
-      "codexReserveEnabled", "codexReserveMigration", "runtimeRole", "creditCodexAccountIds",
-      "codexUseRemainingQuotaAccountIds",
-    ]),
+    rawCombo: rawCombo && copyMetadata(rawCombo) as OcxComboConfig,
     providers: Object.fromEntries(Object.keys(providers).flatMap(name => {
       const provider = dataValue(providers, name);
       return provider && dataValue(provider, "adapter") !== "jev-decision"
@@ -87,16 +80,14 @@ export function snapshotComboAdmission(config: OcxConfig, comboId: string) {
       "id", "provider", "modelId", "inputModalities", "contextWindow", "reasoningEfforts",
       "defaultReasoningEffort", "codexToolMode",
     ])),
+    providerContextCaps: copyMetadata(dataValue(config, "providerContextCaps")) as OcxConfig["providerContextCaps"],
     vision: vision && pickMetadata(vision, [
       "enabled", "backend", "model", "anthropicInstance", "maxDescriptionsPerTurn", "timeoutMs",
     ]),
-    callerKeys: projectRows(dataValue(config, "apiKeys"), row => {
-      const rotation = dataValue(row, "pendingRotation");
-      return {
-        ...pickMetadata(row, ["id", "createdAt", "allowedProviders", "allowedModels", "allowMeteredComboTargets"]),
-        rotation: rotation && pickMetadata(rotation, ["id", "createdAt", "expiresAt"]),
-      };
-    }),
-    accounts: projectRows(dataValue(config, "codexAccounts"), row => pickMetadata(row, ["id", "isMain", "plan", "planCredentialGeneration"])),
   };
+}
+
+/** The config with one combo's roster pinned to its request-start copy, for post-decision choices. */
+export function requestStartComboConfig(config: OcxConfig, comboId: string, rawCombo: OcxComboConfig | undefined): OcxConfig {
+  return { ...config, combos: rawCombo ? { [comboId]: rawCombo } : {} };
 }

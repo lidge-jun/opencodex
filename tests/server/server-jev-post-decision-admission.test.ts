@@ -1,159 +1,92 @@
-import { saveConfig } from "../../src/config";
-import { createTempHome } from "../helpers/temp-home";
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import * as sidecarAuth from "../../src/server/responses/request-sidecar-auth";
 import type { RequestLogContext } from "../../src/server/request-log";
-import { afterCapabilityGate, LUNA, SOL, perTurnConfig, resetState, turn } from "../helpers/jev-session-pin";
+import { duringDecision, IMAGE_INPUT, LUNA, SOL, resetState, served, turn, unionConfig, type Child } from "../helpers/jev-session-pin";
 
 beforeEach(resetState);
 afterEach(() => { mock.restore(); resetState(); });
 
-test.each([
-  ["provider read 1", 1], ["provider read 2", 2], ["provider read 3", 3],
-  ["images", 0], ["continuation", 0], ["churn", 0],
-] as const)(
-  "rechecks %s admission after the paid decision",
-  async (change, providerRead) => {
-    const payloads: Record<string, unknown>[] = [];
-    const config = perTurnConfig(["sol/gpt-5.6-sol:high", "sol/gpt-5.6-sol:low"], payloads);
-    const combo = config.combos!.auto!;
-    combo.capabilityPolicy = "union";
-    const input = change === "images"
-      ? [{ role: "user", content: [{ type: "input_image", image_url: "https://example.test/image.png" }] }]
-      : "hello ".repeat(4000);
-    const request = { input, previousResponseId: change === "continuation" ? "resp_unavailable" : undefined };
-    expect((await turn(config, request)).status).toBe(200);
+const SOL_ROUTE = SOL.provider + "/" + SOL.model;
 
-    let read = 0;
-    afterCapabilityGate(() => {
-      if (payloads.length !== 2) return;
-      read++;
-      if (change === "churn") config.providers.sol!.contextWindow = 100_000 - read * 100;
-      else if (providerRead && read < providerRead) {
-        config.combos!.auto = { ...combo, allowMeteredTargets: read % 2 === 1 };
-      } else if (providerRead) config.providers.sol!.contextWindow = 1000;
-      else config.combos!.auto = { ...combo, imageInput: "disabled" };
-    });
-
-    const models: string[] = [];
-    const log: RequestLogContext = { model: "", provider: "" };
-    const response = await turn(config, { ...request, models, log });
-    expect(payloads).toHaveLength(2);
-    expect(log.jevDecision?.usage).toMatchObject({ totalTokens: 10 });
-    expect(response.status).toBe(providerRead && providerRead < 3 ? 200 : change === "churn" || providerRead === 3 ? 503 : 400);
-    expect(models).toEqual(providerRead && providerRead < 3 ? [`${LUNA.provider}/${LUNA.model}`] : []);
-    if (change === "images" || change === "continuation") {
-      const ingress = await turn(config, request);
-      expect(response.status).toBe(ingress.status);
-      expect(await response.json()).toEqual(await ingress.json());
-      expect(payloads).toHaveLength(2);
-    }
-    if (change === "churn") expect(await response.text()).toContain("combo_unavailable");
-  },
-);
-
-test("accounts for the completed decision when admission refresh is cancelled", async () => {
+// Admission is evaluated once against the request-start snapshot. An edit made while the paid
+// decision is in flight must not change how that request is served; the next request sees it.
+test.each(["capabilities", "vision sidecar"] as const)("%s changed during the paid decision apply to the next request", async change => {
   const payloads: Record<string, unknown>[] = [];
-  const config = perTurnConfig(["sol/gpt-5.6-sol:high"], payloads);
-  config.combos!.auto!.capabilityPolicy = "union";
-  const controller = new AbortController();
-  afterCapabilityGate(() => {
-    if (payloads.length) controller.abort();
+  const config = unionConfig(["sol/gpt-5.6-sol:high", "sol/gpt-5.6-sol:high"], payloads);
+  config.providers.luna!.inputModalities = ["text"];
+  config.providers.sol!.inputModalities = change === "capabilities" ? ["text", "image"] : ["text"];
+  spyOn(sidecarAuth, "canDescribeComboImages").mockImplementation(async () => true);
+  duringDecision(config, () => {
+    if (change === "capabilities") config.providers.sol!.inputModalities = ["text"];
+    else config.visionSidecar = { enabled: false };
   });
+  const served_: string[][] = [];
+  const child: Child = (body, complete, options) => {
+    served_.push([String(body.model), options?.comboOmitImages ? "omit" : options?.comboRequiresVisionPlan ? "describe" : "native"]);
+    return served(body, complete, options);
+  };
+  expect((await turn(config, { input: IMAGE_INPUT, child })).status).toBe(200);
+  expect((await turn(config, { input: IMAGE_INPUT, child })).status).toBe(200);
+  expect(payloads).toHaveLength(2);
+  expect(served_).toEqual(change === "capabilities"
+    ? [[SOL_ROUTE, "native"], [SOL_ROUTE, "describe"]]
+    : [[SOL_ROUTE, "describe"], [SOL_ROUTE, "omit"]]);
+});
+
+test("a request cancelled during the post-decision recheck keeps its usage and sends nothing", async () => {
+  const payloads: Record<string, unknown>[] = [];
+  const config = unionConfig(["sol/gpt-5.6-sol:high"], payloads);
+  config.combos!.auto!.targets = config.combos!.auto!.targets.map(target => ({ ...target, metered: true }));
+  config.combos!.auto!.allowMeteredTargets = true;
+  const controller = new AbortController();
+  // The client disconnects while live consent is reread, after the decision has been paid for.
+  duringDecision(config, () => {
+    const combos = config.combos;
+    Object.defineProperty(config, "combos", { configurable: true, enumerable: true, get() { controller.abort(); return combos; } });
+  }, true);
   const models: string[] = [];
   const log: RequestLogContext = { model: "", provider: "" };
   expect((await turn(config, { models, log, signal: controller.signal })).status).toBe(499);
   expect(models).toEqual([]);
   expect(payloads).toHaveLength(1);
-  expect(log.jevDecision?.usage).toMatchObject({ totalTokens: 10 });
+  expect(log.jevDecision?.usage).toMatchObject({ inputTokens: 8, outputTokens: 2, totalTokens: 10 });
 });
 
-test.each(["snapshot", "vision"] as const)("retains decision usage when %s readmission throws", async failure => {
+test("an exception in the post-decision spend recheck keeps the decision usage", async () => {
   const payloads: Record<string, unknown>[] = [];
-  const config = perTurnConfig(["sol/gpt-5.6-sol:high"], payloads);
-  config.combos!.auto!.capabilityPolicy = "union";
-  const error = new Error("readmission failed");
-  for (const provider of [config.providers.sol!, config.providers.luna!]) provider.inputModalities = ["text"];
-  const decide = config.providers.jev!.fetch!;
-  config.providers.jev!.fetch = (async (input, init) => {
-    if (failure === "snapshot") {
-      config.providers.sol!.modelContextWindows = new Proxy({}, { ownKeys() { throw error; } });
-    }
-    return decide(input, init);
-  }) as typeof fetch;
-  const probe = spyOn(sidecarAuth, "canDescribeComboImages").mockImplementation(async () => {
-    if (failure === "vision" && payloads.length) throw error;
-    return false;
-  });
-  const log: RequestLogContext = { model: "", provider: "" };
+  const config = unionConfig(["sol/gpt-5.6-sol:high"], payloads);
+  config.apiKeys = [{ id: "caller", name: "caller", key: "fixture", createdAt: "2026-01-01T00:00:00.000Z" }];
+  const error = new Error("synthetic recheck failure");
+  duringDecision(config, () => {
+    Object.defineProperty(config, "apiKeys", { configurable: true, enumerable: true, get() { throw error; } });
+  }, true);
   const models: string[] = [];
-  try {
-    const response = await turn(config, { log, models, ...(failure === "vision" ? {
-      input: [{ role: "user", content: [{ type: "input_image", image_url: "https://example.test/image.png" }] }],
-    } : {}) });
-    expect(response.status).toBe(503);
-    expect(await response.text()).not.toContain(error.message);
-    expect(payloads).toHaveLength(1);
-    expect(models).toEqual([]);
-    expect(log.jevDecision?.usage).toMatchObject({ inputTokens: 8, outputTokens: 2, totalTokens: 10 });
-  } finally {
-    probe.mockRestore();
-  }
+  const log: RequestLogContext = { model: "", provider: "" };
+  const response = await turn(config, {
+    models, log, admission: { kind: "configured", source: "bearer", keyId: "caller", contextPrincipalId: "caller" },
+  });
+  expect(response.status).toBe(503);
+  const text = await response.text();
+  expect(text).toContain("combo_unavailable");
+  expect(text).not.toContain(error.message);
+  expect(payloads).toHaveLength(1);
+  expect(models).toEqual([]);
+  expect(log.jevDecision?.usage).toMatchObject({ inputTokens: 8, outputTokens: 2, totalTokens: 10 });
 });
 
 test("reads every member's capability metadata before awaiting image planning", async () => {
   const payloads: Record<string, unknown>[] = [];
-  const config = perTurnConfig(["sol/gpt-5.6-sol:high"], payloads);
-  config.combos!.auto!.capabilityPolicy = "union";
+  const config = unionConfig(["sol/gpt-5.6-sol:high"], payloads);
   for (const provider of [config.providers.sol!, config.providers.luna!]) provider.inputModalities = ["text"];
   const probes: string[] = [];
-  const probe = spyOn(sidecarAuth, "canDescribeComboImages").mockImplementation(async (_context, route) => {
-    if (payloads.length) {
-      probes.push(route.providerName);
-      if (route.providerName === LUNA.provider) config.providers.sol!.inputModalities = ["text", "image"];
-    }
+  spyOn(sidecarAuth, "canDescribeComboImages").mockImplementation(async (_context, route) => {
+    probes.push(route.providerName);
+    // Too late for this request: the gate already judged both members from its snapshot.
+    if (route.providerName === LUNA.provider) config.providers.sol!.inputModalities = ["text", "image"];
     return false;
   });
-  afterCapabilityGate(() => { config.providers.sol!.inputModalities = ["text"]; });
-  try {
-    const response = await turn(config, {
-      input: [{ role: "user", content: [{ type: "input_image", image_url: "https://example.test/image.png" }] }],
-    });
-    expect(response.status).toBe(200);
-    expect(probes).toEqual([LUNA.provider, SOL.provider]);
-  } finally {
-    probe.mockRestore();
-  }
-});
-
-test("retries readmission when saved metadata changes and returns to its original value", async () => {
-  const home = createTempHome("ocx-jev-config-generation-");
-  try {
-    const payloads: Record<string, unknown>[] = [];
-    const config = perTurnConfig(["sol/gpt-5.6-sol:high"], payloads);
-    config.combos!.auto!.capabilityPolicy = "union";
-    const decisionFetch = config.providers.jev!.fetch;
-    delete config.providers.jev!.fetch;
-    saveConfig(config);
-    let refreshes = 0;
-    afterCapabilityGate(() => {
-      if (!payloads.length || ++refreshes !== 1) return;
-      const original = config.combos;
-      config.combos = { auto: { ...original!.auto!, imageInput: "disabled" } };
-      delete config.providers.jev!.fetch;
-      try {
-        saveConfig(config);
-        config.combos = original;
-        saveConfig(config);
-      } finally {
-        config.providers.jev!.fetch = decisionFetch;
-      }
-    });
-    config.providers.jev!.fetch = decisionFetch;
-    expect((await turn(config)).status).toBe(200);
-    expect(payloads).toHaveLength(1);
-    expect(refreshes).toBe(2);
-  } finally {
-    home.remove();
-  }
+  const models: string[] = [];
+  expect((await turn(config, { input: IMAGE_INPUT, models })).status).toBe(200);
+  expect(probes).toEqual([LUNA.provider, SOL.provider]);
+  expect(models).toEqual([SOL_ROUTE]);
 });

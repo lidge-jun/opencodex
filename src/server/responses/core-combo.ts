@@ -1,4 +1,3 @@
-import { observeConfigGeneration } from "../../config/mutation-lock";
 import { advisorPlanRootConfig } from "./advisor-plan-slot";
 import { admitsHostedAdvisor, scopedAnthropicServerTools } from "../messages-native-scope";
 import { responseReplayOwnerKey } from "../../responses/state/replay-owner";
@@ -78,7 +77,7 @@ import { hasUnreadableEncryptedAgentTask } from "./encrypted-payload";
 import { eagerCodexToolCatalogSurface, warnEagerCodexToolCatalog } from "./codex-tool-catalog";
 import { clampComboCallerEffort, comboCapabilityGate } from "../../combos/request-capability";
 import { comboAdvertisesEffortUnion } from "../../combos/capability-policy";
-import { snapshotComboAdmission, snapshotComboAdmissionProvider } from "./combo-admission-snapshot";
+import { requestStartComboConfig, snapshotComboAdmission, snapshotComboAdmissionProvider } from "./combo-admission-snapshot";
 import { canDescribeComboImages } from "./request-sidecar-auth";
 import { captureRouteStaticPolicy, routeConcreteModel, comboRouteDecisionTrace } from "../../router";
 import { memoryModelRouteReason } from "./memory-models";
@@ -421,12 +420,15 @@ export async function executeComboResponses(
     provider: "combo",
     comboId,
   });
-  const liveConfig = advisorPlanRootConfig(config);
-  const ingressCombo = getCombo(liveConfig, comboId);
-  if (!ingressCombo) {
+  const combo = getCombo(config, comboId);
+  if (!combo) {
     return formatErrorResponse(404, "invalid_request_error", "Unknown combo");
   }
-  let combo = ingressCombo;
+  // Admission reads one detached copy of the request-start config. Mid-request edits to
+  // capabilities, sidecars, protocols or the roster apply to the next request. Only spend
+  // authority is read live, from the root config that management writes replace.
+  const admissionSnapshot = snapshotComboAdmission(config, comboId);
+  const liveConfig = advisorPlanRootConfig(config);
   // Resolve against the original request once; every bridge candidate receives the same trusted
   // result after its provisional Authorization is removed, including an explicitly keyless result.
   const replayPrincipal = options.replayPrincipal
@@ -434,13 +436,13 @@ export async function executeComboResponses(
   // The caller's model scope, resolved once from the request options. A capability-authenticated
   // internal request carries the caller's captured scope on options.admissionScope even though
   // its own admission is the host's broad key; recomputing from options.admission would lose it.
-  const ingressScope = options.admissionScope ?? resolveAdmissionModelScope(liveConfig, options.admission);
-  const currentAdmissionScope = () => intersectAdmissionModelScopes(ingressScope,
+  const admissionScope = options.admissionScope ?? resolveAdmissionModelScope(config, options.admission);
+  // Every paid send also needs the key's current scope: a narrowed key never widens back.
+  const currentAdmissionScope = () => intersectAdmissionModelScopes(admissionScope,
     resolveAdmissionModelScope(liveConfig, options.admission));
-  let admissionScope = ingressScope;
   // Present only when an opted-in ingress supplied a native source; otherwise every child
   // takes the bridge below exactly as before.
-  const buildProtocolLanes = (config: OcxConfig, targets: NonNullable<typeof combo>["targets"]) => createComboProtocolLanes({
+  const protocolLanes = createComboProtocolLanes({
     source: options.protocolSource,
     req,
     config,
@@ -448,9 +450,16 @@ export async function executeComboResponses(
     admissionScope,
     droidDefaultEffort: options.droidDefaultEffort,
     comboId,
-    targets,
+    targets: combo.targets,
   });
-  let protocolLanes = buildProtocolLanes(config, combo.targets);
+  // The ladder's own scope, derived from what this combo DECLARES. It shares the request-wide
+  // counter with the holder that arrived on options -- a combo child already inherited that
+  // counter, but nothing read it as a limit across targets -- while its transition and
+  // alternate-target ledgers come from the target list rather than from the single-target
+  // account-move profile (#4546).
+  const comboSendScope = isRequestExecutionBudget(options.sendBudget)
+    ? deriveSendBudgetScope(options.sendBudget, comboExecutionBudgetPolicy(combo.targets.length))
+    : undefined;
   // Expand previous_response_id before image policy and child dispatch so a
   // continuation that only references prior images still fails closed when
   // imageInput is disabled (and so targets see the full replayed input).
@@ -485,6 +494,7 @@ export async function executeComboResponses(
   // children replay a snapshot and skip theirs.
   observeLinkTurnExpansion(options.linkTurn, req, logCtx, body,
     requestedPreviousId.trim().length > 0 ? (unresolvedPrevious ? "unexpanded" : "chained") : "none");
+  // Live metered consent, checked before every paid send.
   const maySpendOnTarget = (target: (typeof combo.targets)[number]): boolean =>
     !target.metered || admissionMayUseMeteredComboTargets(liveConfig, options.admission, liveConfig.combos?.[comboId]);
   const mayUseTarget = (target: (typeof combo.targets)[number]): boolean =>
@@ -618,14 +628,14 @@ export async function executeComboResponses(
     markProxyError(formatErrorResponse(400, "invalid_request_error", "No target of this combo can accept image input"));
   const warnComboImageOmission = (): void =>
     console.warn("[opencodex] combo has no image-capable target; images will be omitted");
-  const resolveCapabilityRoute = (config: OcxConfig, target: Pick<(typeof combo.targets)[number], "provider" | "model">) => {
+  const resolveCapabilityRoute = (target: Pick<(typeof combo.targets)[number], "provider" | "model">) => {
     try {
       const route = routeConcreteModel(config, `${target.provider}/${target.model}`);
       const provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, options.inboundWire);
       return { ...route, provider };
     } catch { return undefined; }
   };
-  const admitCombo = async (snapshot?: ReturnType<typeof snapshotComboAdmission>) => {
+  const admitCombo = async () => {
     if (combo.imageInput === "disabled" && unresolvedPrevious) {
       markLinkTurnMissing(logCtx);
       return formatErrorResponse(
@@ -637,15 +647,15 @@ export async function executeComboResponses(
     if (combo.imageInput === "disabled" && comboRequestHasImageInput(body)) {
       return formatErrorResponse(400, "invalid_request_error", "This combo does not accept image input");
     }
-    const metadata = snapshot ? {
-      providers: snapshot.providers,
-      customModels: snapshot.customModels,
-      providerContextCaps: snapshot.routing.providerContextCaps,
-      visionSidecar: config === liveConfig ? snapshot.vision : config.visionSidecar,
-    } : config;
+    const metadata = {
+      providers: admissionSnapshot.providers,
+      customModels: admissionSnapshot.customModels,
+      providerContextCaps: admissionSnapshot.providerContextCaps,
+      visionSidecar: admissionSnapshot.vision,
+    };
     const capability = await comboCapabilityGate(metadata, combo, body,
       target => {
-        const route = resolveCapabilityRoute(snapshot ? liveConfig : config, target);
+        const route = resolveCapabilityRoute(target);
         return route && {
           providerName: route.providerName, modelId: route.modelId, codexAccountId: route.codexAccountId,
           provider: snapshotComboAdmissionProvider(route.provider),
@@ -667,14 +677,10 @@ export async function executeComboResponses(
     }
     return capability;
   };
-  const warnCapabilityDegradation = (reason: Exclude<Awaited<ReturnType<typeof admitCombo>>, Response>["unservable"]): void => {
-    if (reason === "image") warnComboImageOmission();
-    if (reason === "context") console.warn("[opencodex] combo has no target whose context window fits; sending to the largest");
-  };
-  const initialAdmission = await admitCombo();
-  if (initialAdmission instanceof Response) return initialAdmission;
-  let capability = initialAdmission;
-  warnCapabilityDegradation(capability.unservable);
+  const capability = await admitCombo();
+  if (capability instanceof Response) return capability;
+  if (capability.unservable === "image") warnComboImageOmission();
+  if (capability.unservable === "context") console.warn("[opencodex] combo has no target whose context window fits; sending to the largest");
   const visionRejectedTargets = new Set<string>();
   let omittingImages = capability.unservable === "image";
   const useImageDegradation = (target: (typeof combo.targets)[number]): boolean =>
@@ -754,7 +760,7 @@ export async function executeComboResponses(
     /** This request's own cooldown-reprobe reservation, carried through its failover hops. */
     cooldownReprobeTargets?: Iterable<readonly [string, number]>;
     now?: number;
-  }) => pickComboTargetWithWait(liveConfig, comboId, {
+  }) => pickComboTargetWithWait(config, comboId, {
     ...pickOptions,
     // Every pick, including the recovery picks that skip `targetEligible`, keeps metered
     // targets away from callers that may not spend on them.
@@ -863,8 +869,9 @@ export async function executeComboResponses(
   let jevDecision: JevDecision | undefined;
   let failedPinEffortDecision: JevDecision | undefined;
   if (combo.strategy === "jev" && !toolLoopPin) {
-    const jevTargetEligible = (scope: typeof admissionScope) => (target: (typeof combo.targets)[number]): boolean => {
-      if (!targetEligible(target)) return false;
+    // Live spend authority only: consent and the key's current scope.
+    const spendAllowed = (scope: typeof admissionScope) => (target: (typeof combo.targets)[number]): boolean => {
+      if (!maySpendOnTarget(target)) return false;
       if (!scope) return true;
       try {
         return routeAllowedByScope(scope, routeConcreteModel(config, `${target.provider}/${target.model}`));
@@ -872,7 +879,10 @@ export async function executeComboResponses(
         return false;
       }
     };
-    const choices = eligibleJevComboChoices(liveConfig, comboId, jevTargetEligible(currentAdmissionScope()), Date.now(), pick.cooldownReprobeTargets);
+    // The decision call is a paid send: offer only members that live consent and scope still admit.
+    const decisionScope = currentAdmissionScope();
+    const choices = eligibleJevComboChoices(config, comboId,
+      target => targetEligible(target) && spendAllowed(decisionScope)(target), Date.now(), pick.cooldownReprobeTargets);
     const first = choices[0];
     if (!first) {
       return comboUnavailable(comboId, undefined, comboExclusion(config, comboId, target =>
@@ -891,9 +901,8 @@ export async function executeComboResponses(
       choices.map(choice => choice.candidate),
       combo.decisionQuotaSignals === true ? { config, tiers: combo.decisionQuotaTiers } : undefined,
     );
-    const decide = (candidates: JevCandidate[], fallbackDecision: Pick<JevDecision, "targetKey" | "effort">) => {
-      const decisionScope = currentAdmissionScope();
-      return resolveJevComboDecision({
+    const decide = (candidates: JevCandidate[], fallbackDecision: Pick<JevDecision, "targetKey" | "effort">) =>
+      resolveJevComboDecision({
         body,
         candidates,
         fallback: fallbackDecision,
@@ -917,7 +926,6 @@ export async function executeComboResponses(
         ...(combo.decisionTimeoutMs !== undefined ? { timeoutMs: combo.decisionTimeoutMs } : {}),
         signal: options.abortSignal,
       });
-    };
     let decision: JevDecision;
     let awaitedPinEffort = false;
     if (pinReuse?.decision) {
@@ -983,47 +991,20 @@ export async function executeComboResponses(
       ...(decision.pinReason ? { pinReason: decision.pinReason } : {}),
     }) : undefined;
     let selectionUnavailable = false;
-    let refreshedRefusal: Response | undefined;
     if ((!pinReuse?.decision || pick.cooldownReprobeTargets || awaitedPinEffort) && !options.abortSignal?.aborted) {
+      // Record the paid decision before anything below can refuse or throw.
       recordDecision(failedPinEffortDecision ?? decision);
-      const previousUnservable = capability.unservable;
-      const previousCombo = combo;
-      const previousProtocolLanes = protocolLanes;
-      let currentChoices: typeof choices = [];
+      // The decided choices were admitted against the request-start snapshot. Recheck only what
+      // can change their spend: availability (cooldowns, reprobe reservations), live consent and
+      // the key's current scope. Capability edits made meanwhile apply to the next request.
+      let currentChoices: typeof choices;
       try {
-        // Retry admission locally. A paid decision can never be replayed here.
-        for (let attempt = 0; attempt < 3; attempt++) {
-          const generation = observeConfigGeneration();
-          const snapshot = snapshotComboAdmission(liveConfig, comboId);
-          admissionScope = currentAdmissionScope();
-          const currentCombo = snapshot.combo;
-          if (!currentCombo) break;
-          combo = currentCombo;
-          protocolLanes = buildProtocolLanes(liveConfig, combo.targets);
-          const result = await admitCombo(snapshot);
-          if (options.abortSignal?.aborted) {
-            refreshedRefusal = clientCancelledResponse();
-            break;
-          }
-          if (generation.kind === "unavailable" || !Bun.deepEquals(generation, observeConfigGeneration())
-            || !Bun.deepEquals(snapshot, snapshotComboAdmission(liveConfig, comboId))) continue;
-          if (result instanceof Response) {
-            refreshedRefusal = result;
-          } else {
-            capability = result;
-            omittingImages = capability.unservable === "image";
-            if (previousUnservable !== capability.unservable) warnCapabilityDegradation(capability.unservable);
-            currentChoices = eligibleJevComboChoices(liveConfig, comboId, jevTargetEligible(admissionScope), Date.now(), pick.cooldownReprobeTargets);
-            if (!currentChoices.length) refreshedRefusal = protocolLanes?.refusal();
-          }
-          break;
-        }
+        const available = new Set(eligibleJevComboChoices(requestStartComboConfig(config, comboId, admissionSnapshot.rawCombo),
+          comboId, spendAllowed(currentAdmissionScope()), Date.now(), pick.cooldownReprobeTargets)
+          .map(choice => choice.candidate.key));
+        currentChoices = choices.filter(choice => available.has(choice.candidate.key));
       } catch {
         return options.abortSignal?.aborted ? clientCancelledResponse() : comboUnavailable(comboId);
-      }
-      if (!currentChoices.length) {
-        combo = previousCombo;
-        protocolLanes = previousProtocolLanes;
       }
       const current = currentChoices.find(choice => choice.candidate.key === decision.targetKey
         && (decision.effort === null ? choice.candidate.reasoningEfforts.length === 0
@@ -1063,20 +1044,11 @@ export async function executeComboResponses(
       ...(observedDecision.usage ? { usage: observedDecision.usage } : {}),
     });
     // A completed decision belongs to the parent log even if no model can be dispatched.
-    if (refreshedRefusal) return refreshedRefusal;
     if (selectionUnavailable) {
       return comboUnavailable(comboId, undefined, comboExclusion(config, comboId, target =>
         targetEligible(target) && target.provider !== JEV_PROVIDER_ID && jevChoiceEfforts(config, target, false) !== undefined));
     }
   }
-  // The ladder's own scope, derived from what this combo DECLARES. It shares the request-wide
-  // counter with the holder that arrived on options -- a combo child already inherited that
-  // counter, but nothing read it as a limit across targets -- while its transition and
-  // alternate-target ledgers come from the target list rather than from the single-target
-  // account-move profile (#4546).
-  const comboSendScope = isRequestExecutionBudget(options.sendBudget)
-    ? deriveSendBudgetScope(options.sendBudget, comboExecutionBudgetPolicy(combo.targets.length))
-    : undefined;
   // One immutable combo selection trace, before any child dispatch; child
   // adoption below must never replace it with a concrete child route trace.
   const decision = comboRouteDecisionTrace(config, comboId, pick, responseModel);
@@ -1194,30 +1166,33 @@ export async function executeComboResponses(
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
     const firstComboTarget = comboTargetsDispatched === 0;
-    // Recheck after every async selection, before reserving or dispatching a child.
-    const selected: ComboPick = pick;
-    const liveCombo = getCombo(liveConfig, comboId);
-    const currentMember = liveCombo?.targets.find(target => targetKey(target) === targetKey(selected.target));
-    if (!currentMember || !maySpendOnTarget(currentMember)) {
-      pick = liveCombo ? await pickWithWait({
-        exclude: selected.attempted,
-        eligible: targetEligible,
-        allowCooldownReprobe: false,
-        cooldownReprobeTargets: Object.entries(selected.cooldownReprobeTargets ?? {}),
-      }) : null;
-      if (options.abortSignal?.aborted) return clientCancelledResponse();
-      if (!pick) return lastFailure ? exhaustedFailure() : comboUnavailable(comboId);
-      jevDecision = undefined;
-      toolLoopTurnEffort = undefined;
-      continue;
-    }
     // The physical destination after provider aliases and blockedModelRedirects: hops are
     // classified by where the request really goes, not by the selector the combo names.
     const targetRoute = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
+    // Every child send rechecks live metered consent and the key's current scope; a member that
+    // fails either is skipped and an eligible sibling may still run.
     const dispatchScope = currentAdmissionScope();
-    if (!routeAllowedByScope(dispatchScope, targetRoute)) {
-      return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(
-        new AdmissionModelDeniedError(clientModelLabel, targetRoute), logCtx));
+    const scopeAllowed = routeAllowedByScope(dispatchScope, targetRoute);
+    if (!scopeAllowed || !maySpendOnTarget(pick.target)) {
+      const skipped: ComboPick = pick;
+      pick = await pickWithWait({
+        exclude: skipped.attempted,
+        eligible: targetEligible,
+        allowCooldownReprobe: false,
+        cooldownReprobeTargets: Object.entries(skipped.cooldownReprobeTargets ?? {}),
+      });
+      if (options.abortSignal?.aborted) return clientCancelledResponse();
+      if (!pick) {
+        // A scope refusal keeps the child's own 403; a consent refusal ends like any exhausted ladder.
+        if (!scopeAllowed) {
+          return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(
+            new AdmissionModelDeniedError(clientModelLabel, targetRoute), logCtx));
+        }
+        return lastFailure ? exhaustedFailure() : comboUnavailable(comboId);
+      }
+      jevDecision = undefined;
+      toolLoopTurnEffort = undefined;
+      continue;
     }
     // Selection-free hard-lock preflight grants no hop. Enforce this actual first destination
     // against the locked source, after aliases and redirects resolve.
@@ -1320,8 +1295,7 @@ export async function executeComboResponses(
     // `client` keeps the decision's target but not its tier: the caller and the target ladder
     // own the wire effort, so a provider whose effort swaps the upstream model id is never
     // re-tiered mid-session and its prompt cache survives the turn.
-    // The JEV effort owner is fixed when the turn starts so its wire effort and label agree.
-    const jevEffortApplies = turnEffort !== undefined && ingressCombo.jevEffortMode !== "client";
+    const jevEffortApplies = turnEffort !== undefined && combo.jevEffortMode !== "client";
     const childInput = options.droidDefaultEffort && isPlainObject(body) ? { ...body } : body;
     applyDroidResponsesReasoningDefault(childInput, options.droidDefaultEffort, {
       provider: targetRoute.provider,
@@ -1425,7 +1399,7 @@ export async function executeComboResponses(
       onResponseComplete: model => {
         if (hostedWebSearchStream) settleSuccess();
         // The live config can change while the child is streaming. Never retain credentials.
-        const currentCombo = getCombo(liveConfig, comboId);
+        const currentCombo = getCombo(config, comboId);
         const provider = config.providers[completedTarget.provider];
         if (!options.compactionRoutingOverride && !options.mainHardLockFallbackOverride
           && Object.hasOwn(config.providers, completedTarget.provider)

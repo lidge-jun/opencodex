@@ -152,3 +152,27 @@ export function afterCapabilityGate(edit: () => void): void {
     return result;
   });
 }
+
+/** A union Combo without a session pin, so every turn pays for exactly one decision. */
+export function unionConfig(answers: string[], payloads: Array<Record<string, unknown>>): OcxConfig {
+  const config = perTurnConfig(answers, payloads);
+  delete config.combos!.auto!.sessionPin;
+  config.combos!.auto!.capabilityPolicy = "union";
+  return config;
+}
+
+/** Run a live config edit while the next paid decision call is in flight, once. */
+export function duringDecision(config: OcxConfig, edit: () => void, after = false): void {
+  const decide = config.providers.jev!.fetch!;
+  let pending = true;
+  config.providers.jev!.fetch = (async (input, init) => {
+    if (!pending) return decide(input, init);
+    pending = false;
+    if (!after) edit();
+    const response = await decide(input, init);
+    if (after) edit();
+    return response;
+  }) as typeof fetch;
+}
+
+export const IMAGE_INPUT = [{ role: "user", content: [{ type: "input_image", image_url: "https://example.test/image.png" }] }];
