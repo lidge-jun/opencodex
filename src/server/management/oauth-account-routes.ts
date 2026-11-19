@@ -553,6 +553,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   if (url.pathname === "/api/oauth/accounts" && req.method === "GET") {
     const provider = oauthCredentialSlot((url.searchParams.get("provider") ?? "").trim().toLowerCase());
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    const showOrganizationName = principal === "gui-session" || principal === "admin-token";
     const quotaMode = providerOAuthAccountQuotaMode(provider);
     const quotaProvider = config.providers[provider];
     const { getAccountSet } = await import("../../oauth/store");
@@ -572,7 +573,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const current = getLoginStatus(provider, maskEmails);
       return {
         ...(provider === "anthropic2" ? { provider } : {}), activeAccountId: current.activeAccountId ?? null,
-        accounts: (current.accounts ?? []).map(summary => {
+        accounts: (current.accounts ?? []).map(({ organizationName, ...summary }) => {
           const full = set?.accounts.find(account => account.id === summary.id);
           const health = full
             ? projectStoredOAuthAccountHealth(provider, full)
@@ -584,6 +585,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
           // `maskedLabel` stays masked for tray surfaces; `accountLabel` follows privacy.maskEmails.
           const accountLabel = accountDisplayLabel(full?.credential.email, maskEmails);
           return { ...summary, ...(maskedLabel ? { maskedLabel } : {}), ...(accountLabel ? { accountLabel } : {}),
+            ...(showOrganizationName && organizationName ? { organizationName } : {}),
             ...oauthAccountHealthFields(provider, summary.id, health), quotaMode,
             ...(supportsPause ? { paused: full?.paused === true, ...(full?.pauseDetails ? { pauseDetails: full.pauseDetails,
               ...(full.pauseEvidence ? { pauseEvidence: full.pauseEvidence } : {}) } : {}) } : {}),
@@ -805,19 +807,18 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       if (kind !== "anthropic") return jsonResponse({ error: "nativeMessages is only part of the anthropic pool contract" }, 400);
       if (typeof fields.nativeMessages !== "boolean") return jsonResponse({ error: "nativeMessages must be a boolean" }, 400);
     }
-    // Validated by the SHARED parsers before any kind-specific write, so a bad strategy or
-    // sticky limit is refused identically whichever pool is addressed.
+    // Validate the strategy for this pool kind before any write.
     let strategy: string | undefined;
     if (fields.strategy !== undefined) {
-      // reset-first is a Codex and generic strategy. The Anthropic runtime implements only
-      // quota, round-robin and fill-first, so that kind keeps refusing it rather than storing
-      // a strategy it would silently ignore.
       const parsed = kind === "codex" ? parseCodexAccountPoolStrategy(fields.strategy)
         : kind === "generic" ? parseGenericPoolStrategy(fields.strategy, provider)
         : parseAccountPoolStrategy(fields.strategy);
-      if (parsed === null) return jsonResponse({ error: kind === "anthropic"
-        ? "strategy must be one of: quota, round-robin, fill-first"
-        : `strategy must be one of: quota, round-robin, fill-first, reset-first${kind === "generic" && provider === "kiro" ? ", least-loaded" : ""}` }, 400);
+      if (parsed === null) {
+        const extra = kind === "anthropic" ? "reset-near-weighted"
+          : kind === "codex" ? "reset-first, reset-near-weighted"
+          : provider === "kiro" ? "reset-first, least-loaded" : "reset-first";
+        return jsonResponse({ error: `strategy must be one of: quota, round-robin, fill-first, ${extra}` }, 400);
+      }
       strategy = parsed;
     }
     let stickyLimit: number | undefined;
@@ -1025,7 +1026,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (body.strategy !== undefined) {
       const parsed = parseAccountPoolStrategy(body.strategy);
       if (parsed === null) {
-        return jsonResponse({ error: "strategy must be one of: quota, round-robin, fill-first" }, 400);
+        return jsonResponse({ error: "strategy must be one of: quota, round-robin, fill-first, reset-near-weighted" }, 400);
       }
       strategy = parsed;
     }

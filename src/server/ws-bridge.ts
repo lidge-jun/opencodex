@@ -19,6 +19,7 @@ import type { AudioSocketTarget } from "./audio-dictation";
 import type { CodexWebSocketActivity } from "../codex/websocket-activity";
 import { AGENT_ASSERTION_HEADER } from "../lib/authorization-scheme";
 import { isProxyError } from "../lib/client-error-body";
+import { responsesCompletionError } from "../lib/errors";
 import { WORKFLOW_LOCAL_REFUSAL_HEADER } from "../lib/workflow-budget";
 import { NativeContinuationRefusalError } from "./responses/native-continuation-refusal";
 import type { UsageClient } from "../usage/client";
@@ -260,19 +261,10 @@ export function buildWsErrorFrame(
   };
 }
 
-function payloadType(payload: string): string | null {
-  try {
-    const json = JSON.parse(payload) as { type?: unknown };
-    return typeof json.type === "string" ? json.type : null;
-  } catch {
-    return null;
-  }
-}
-
-function terminalStatusFromType(type: string): ResponsesTerminalStatus | null {
+function terminalStatusFromType(type: string, payload: unknown): ResponsesTerminalStatus | null {
   switch (type) {
     case "response.completed":
-      return "completed";
+      return responsesCompletionError(payload) == null ? "completed" : "failed";
     case "response.failed":
       return "failed";
     case "response.incomplete":
@@ -390,11 +382,10 @@ export async function pumpResponsesSseToWebSocket(
   const handlePayload = (payload: string): boolean => {
     if (!isCurrent()) return true;
     if (payload === "[DONE]") return false;
-    const type = payloadType(payload);
-    let untypedBare = false;
-    if (!type) {
-      try { untypedBare = isUntypedBareUpstreamError(JSON.parse(payload)); } catch { /* protocol error below */ }
-    }
+    let parsed: { type?: unknown } | undefined;
+    try { parsed = JSON.parse(payload); } catch { /* protocol error below */ }
+    const type = typeof parsed?.type === "string" ? parsed.type : null;
+    const untypedBare = !type && isUntypedBareUpstreamError(parsed);
     // A relayed stream follows an untyped envelope with its own response.failed, so the envelope
     // waits for it. A raw upstream body has no such tail: the envelope stays the protocol error
     // it always was and is not recorded as a verdict the client never received.
@@ -416,7 +407,7 @@ export async function pumpResponsesSseToWebSocket(
     if (terminalSeen) return true;
     sendTextFrame(ws, payload);
     if (options.untilEof && type === "response.created") lastTerminal = undefined;
-    const terminalStatus = type === "error" && options.untilEof ? "failed" : terminalStatusFromType(type);
+    const terminalStatus = type === "error" && options.untilEof ? "failed" : terminalStatusFromType(type, parsed);
     if (terminalStatus) {
       if (options.untilEof) { lastTerminal = terminalStatus; return false; }
       reportTerminal(terminalStatus);

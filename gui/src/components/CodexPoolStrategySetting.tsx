@@ -187,7 +187,7 @@ export default function CodexPoolStrategySetting({
     setSaving(true);
     setError(null);
     revisionRef.current += 1;
-    const result = await putCodexPoolStrategy(apiBase, next);
+    const result = await putCodexPoolStrategy(apiBase, next, undefined, { strategy: previousStrategy, stickyLimit: previousSticky });
     revisionRef.current += 1;
     if (result.ok) {
       setStrategy(result.strategy);

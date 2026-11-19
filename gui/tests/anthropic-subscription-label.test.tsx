@@ -5,6 +5,7 @@ import { en } from "../src/i18n/en";
 import type { TFn } from "../src/i18n/shared";
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { Window } from "happy-dom";
 import { LanguageProvider } from "../src/i18n/provider";
 import ProviderAuthPanel from "../src/components/provider-workspace/ProviderAuthPanel";
 import ProviderCurrentQuota from "../src/components/provider-workspace/ProviderCurrentQuota";
@@ -38,6 +39,29 @@ test("current quota shows subscription even when the usage read is unavailable",
   const markup = renderToStaticMarkup(<LanguageProvider><ProviderCurrentQuota reading={reading} /></LanguageProvider>);
   expect(markup).toContain(">Ultra</span>");
   expect(markup).toContain("data-quota-state=\"unavailable\"");
+});
+
+test("same-account rows show distinct organization names as literal text and omit missing names", async () => {
+  const item = { name: "anthropic", adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" } as WorkspaceItem;
+  const shared = { accountLabel: "s***d@example.test", email: "shared@example.test" };
+  const accounts: OAuthAccountRow[] = [
+    { ...shared, id: "slot-a", active: true, organizationName: "Synthetic Team" },
+    { ...shared, id: "slot-b", active: false, organizationName: "<strong>Research & Design</strong>" },
+    { ...shared, id: "slot-c", active: false },
+  ];
+  const win = new Window();
+  try {
+    win.document.body.innerHTML = renderToStaticMarkup(
+      <LanguageProvider><ProviderAuthPanel item={item} apiBase="" authHandlers={handlers} accounts={accounts} oauth={{ loggedIn: true }} /></LanguageProvider>,
+    );
+    const rows = [...win.document.querySelectorAll(".pwi-auth-acct")];
+    expect(rows.map(row => row.querySelector(".pwi-auth-row-label")?.textContent)).toEqual(accounts.map(() => shared.accountLabel));
+    expect(rows.map(row => row.querySelector(".pwi-auth-row-secondary")?.textContent)).toEqual([
+      "Synthetic Team", "<strong>Research & Design</strong>", undefined,
+    ]);
+    expect(rows[1]?.querySelector("strong")).toBeNull();
+    expect(rows[2]?.querySelector(".pwi-auth-row-secondary")).toBeNull();
+  } finally { await win.happyDOM.close(); }
 });
 
 for (const [provider, adapter, marked, privateIdentity] of [

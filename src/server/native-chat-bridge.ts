@@ -155,6 +155,8 @@ export interface NativeStreamTranslator {
   terminal(): NativeStreamTerminal;
   /** Encoded frames that end a stream that failed or did not settle. */
   failure(message: string): Uint8Array[];
+  /** Release translator-owned buffers after success, failure, or cancellation. */
+  dispose?(): void;
 }
 
 /**
@@ -176,15 +178,18 @@ export function streamNativeFromChat(translator: NativeStreamTranslator, body: R
   const end = async (controller: ReadableStreamDefaultController<Uint8Array>, failure?: string) => {
     if (ended) return;
     ended = true;
-    if (failure !== undefined) cancelInner();
+    if (failure !== undefined) {
+      cancelInner();
+      translator.dispose?.();
+    }
     const terminal = failure === undefined ? translator.terminal() : undefined;
     const settled = await finalLog.waitForInner();
-    if (cancelled || signal.aborted) {
-      commitCancelled(finalLog);
-      try { controller.close(); } catch { /* already cancelled by the client */ }
-      return;
-    }
     try {
+      if (cancelled || signal.aborted) {
+        commitCancelled(finalLog);
+        try { controller.close(); } catch { /* already cancelled by the client */ }
+        return;
+      }
       if (terminal?.ok === true && settled) {
         for (const frame of terminal.frames()) controller.enqueue(frame);
         finalLog.commit({ status: 200, terminalStatus: "completed", closeReason: "terminal" });
@@ -197,6 +202,8 @@ export function streamNativeFromChat(translator: NativeStreamTranslator, body: R
     } catch {
       // The client cancelled between settlement and the terminal frames; the row still lands once.
       commitCancelled(finalLog);
+    } finally {
+      if (failure === undefined) translator.dispose?.();
     }
   };
   // Returns how many frames were enqueued. Finish and usage chunks may enqueue nothing.
@@ -244,6 +251,7 @@ export function streamNativeFromChat(translator: NativeStreamTranslator, body: R
       if (ended) return;
       ended = true;
       cancelInner();
+      translator.dispose?.();
       await finalLog.waitForInner();
       commitCancelled(finalLog);
     },

@@ -1352,6 +1352,8 @@ export interface OcxConfig extends OcxLinkHomeConfig, CodexAccountLoginConfig {
   codexPinnedTransientPolicy?: "hold" | "detour-new-threads";
   /** Opt-in: retain one Codex WebSocket per account and thread across turns. Default off. */
   codexWsReuseAcrossTurns?: boolean;
+  /** Opt-in native WS upload deltas; implies cross-turn reuse. Default off. */
+  codexWsIncrementalUpload?: boolean;
   /**
    * Opt-in provider-origin circuit threshold for proven pre-connection reachability failures.
    * Default 0 (disabled); range 0..20. The circuit never counts timeouts or HTTP responses.
@@ -1375,6 +1377,8 @@ export interface OcxConfig extends OcxLinkHomeConfig, CodexAccountLoginConfig {
    * and every other destination are unchanged. Compression runs synchronously on the event loop.
    */
   upstreamRequestCompression?: "off" | "gzip" | "zstd";
+  /** Optional lossy shortening of historical native Codex images/tool text. */
+  upstreamHistorySlim?: "off" | "codex";
   /**
    * Opt-in ceiling, in bytes, on a decompressed INBOUND data-plane request body (#3573).
    *

@@ -197,11 +197,54 @@ ocx login anthropic --headless # no browser, no local port
 
 `--headless` ejecuta el inicio de sesión **code-display** para hosts cuyo navegador no puede llegar a la devolución de llamada de loopback del proxy (contenedores o servidores remotos). El comando muestra una URL de autorización; apruébala en cualquier navegador y pega la cadena `code#state` que muestra el proveedor. No se abre un puerto de devolución de llamada ni se inicia un navegador. Lo admiten `anthropic` y `anthropic2`. Como `xai` no tiene página de código, `--headless` inicia su autorización de dispositivo: muestra una URL y un código corto que confirmas en cualquier navegador y termina sin pegar nada. Cualquier otro proveedor termina mostrando la lista de proveedores compatibles. Para cuentas Codex usa `ocx account login codex --device`; `ocx login codex --headless` se rechaza. En el flujo code-display hay 10 minutos para pegar un único código; si falla el intercambio, inicia otra sesión. Un inicio correcto activa la cuenta del proveedor, igual que con el navegador.
 
+Si una cuenta de Claude pertenece a varias organizaciones, inicia sesión una vez por cada una y
+elígela en la pantalla de autorización de Claude. Si este equipo tiene una credencial utilizable
+de Claude Code, `ocx login anthropic` la importa sin mostrar esa pantalla; usa
+`ocx login anthropic --headless` para elegir otra organización. Cada organización confirmada tiene
+su propia cuenta en el pool, con su suscripción y sus límites. El panel muestra el nombre cuando
+Claude lo comunica al iniciar sesión o renovar el token. La lista expone ese nombre a las sesiones
+del panel y a las credenciales con permisos completos de administración.
+
+Al iniciar sesión, importar credenciales de Claude Code o reautenticar, OpenCodex comprueba con los
+tokens vigentes la organización de las cuentas anteriores que aún carecen de ese dato. Si esa
+organización sigue siendo desconocida (token caducado o comprobación fallida), el inicio de sesión
+puede reemplazar esa cuenta, como en versiones anteriores. Si su token caducó, su organización no se
+puede comprobar hasta que se renueve; una comprobación fallida con un token vigente se puede repetir
+cuando Claude pueda devolver el perfil de la cuenta. Si Claude
+comunica la organización de la nueva autorización al iniciar sesión y el perfil de la cuenta no
+está disponible, OpenCodex conserva la cuenta activa si su organización confirmada es distinta.
+Si Claude confirma la organización y proporciona un correo electrónico sin el UUID de la cuenta,
+el inicio de sesión puede actualizar la única cuenta con un correo coincidente en esa organización.
+Tras quitar los espacios al principio y al final, la parte anterior a `@` y los dominios
+internacionalizados deben coincidir exactamente. En los demás dominios se ignoran las diferencias
+entre mayúsculas y minúsculas ASCII. Si ninguna cuenta coincide en la organización confirmada,
+el inicio de sesión añade una cuenta y conserva las existentes, incluidas las antiguas que no
+tienen correo ni UUID de cuenta. Un inicio de sesión posterior con un UUID confirmado puede
+actualizar la única cuenta sin UUID cuyo correo y organización coincidan. Las autorizaciones deben
+compartir un token de actualización o el perfil de la cuenta guardada debe confirmar el mismo UUID.
+Sin esa confirmación, el inicio de sesión conserva la cuenta existente y puede añadir otra con un
+token de actualización distinto. Si otra cuenta del pool ya tiene el token recibido, tanto el inicio
+de sesión como la reautenticación se detienen y te piden que vuelvas a intentarlo. Si coinciden varias
+cuentas en la organización confirmada, el inicio de sesión se detiene sin cambiar ninguna. Para
+reautenticar la cuenta correcta, usa
+`ocx account login anthropic --id <account-id> --reauth`. Si Claude solo proporciona el correo
+y la organización, ambos deben coincidir con los de la cuenta existente, su organización debe
+estar confirmada y ninguna otra cuenta de esa organización puede tener el mismo correo. Si la
+organización es desconocida, vuelve a intentarlo cuando Claude pueda
+devolver el perfil de la cuenta. Puedes eliminar un duplicado con
+`ocx account remove anthropic <account-id> --yes`.
+Si una cuenta cambia durante la comprobación y ya no se puede confirmar su organización, repite la operación.
+La reautenticación rechaza una autorización para otra organización confirmada o para una que ya
+corresponde a otra cuenta.
+Si Claude Code renueva ambos tokens y la misma cuenta de Claude tiene otra entrada en cualquiera
+de los dos pools de Anthropic, la adopción automática exige confirmar que la cuenta existente y
+la nueva autorización corresponden a la misma organización.
+
 La reautenticación OAuth conserva la configuración del operador, como selecciones de modelo, anulaciones de precios, y preferencias de conmutación por error de cuenta. Campos de transporte/autenticación de inicio de sesión y de registro Se actualizan los metadatos del catálogo. Un proveedor de live-discovery mantiene su modelo predeterminado seleccionado; un El proveedor estático puede reemplazar un valor predeterminado que ya no existe en su catálogo actualizado.
 
 **Google Antigravity puede hacer que se desactive el acceso a Gemini y Antigravity de su cuenta Google.** El inicio de sesión de Antigravity se emite para la propia aplicación Antigravity de Google, y usuarios de herramientas de terceros han informado de que ese acceso se desactivó en sus cuentas Google con `This service has been disabled in this account for violation of Terms of Service.` Esa suspensión abarca el acceso a Gemini Code Assist y Antigravity de la cuenta Google, y recuperarlo depende del proceso de apelación de Google. Use solo una cuenta independiente que pueda permitirse perder; una clave API de Gemini (el ajuste preestablecido `google`) es la forma admitida de usar Gemini desde otras herramientas. Por eso, todas las formas de añadir una cuenta Antigravity preguntan primero. `ocx login google-antigravity`, `ocx account login google-antigravity` (incluido `--reauth`) y `ocx account import google-antigravity` muestran la advertencia y solo continúan cuando una terminal responde `y`. Una ejecución no interactiva debe pasar `--accept-antigravity-risk`, que omite la pregunta pero sigue mostrando la advertencia; sin ella, el comando termina antes de contactar con el proxy o de leer un documento de importación. Las importaciones con `--stdin` siempre necesitan la opción, porque el documento ocupa stdin. La opción se rechaza para cualquier otro proveedor, y una ejecución dirigida por un agente de programación o un ejecutor de CI se rechaza con o sin ella: solo el titular de la cuenta puede aceptar este riesgo (consulte `AGENTS_INSTALL.md`). El panel pregunta mediante una casilla que empieza sin marcar cada vez, y la API de administración rechaza un inicio de sesión o una importación de Antigravity que no lleve la confirmación.
 
-Para Antigravity, un `401` ascendente puede actualizar la credencial OAuth de la cuenta rechazada y volver a intentar la solicitud una vez. El reintento utiliza el proyecto Cloud Code Assist de esa credencial. Si la actualización falla o no hay ningún proyecto utilizable disponible, la solicitud devuelve un error de autenticación; use el flujo de reautenticación anterior. Un segundo `401` no inicia otro ciclo de refresco/reintentar. Un `403` que solicita verificar la cuenta pone en cuarentena esa credencial como `needs-reauth(verify)`; cuando la conmutación por error de la cuenta está habilitada, la solicitud puede volver a intentar en otra cuenta elegible. Complete la verificación de la cuenta de Google, luego ejecute `ocx login google-antigravity`. La actualización silenciosa del token no borra este requisito de verificación. Si OpenCodex no puede guardar la cuarentena, este intercambio de adaptador conserva el `403` original sin otro envío de recuperación; la cuenta no se ha puesto en cuarentena de forma duradera. Si no se puede construir o admitir una solicitud de hermano para el envío, el intercambio entrega el `403` original a través del formato de error normal. Un combo adjunto o una ruta de directiva aún pueden aplicar sus reglas de reserva existentes.
+Para Antigravity, un `401` ascendente puede actualizar la credencial OAuth de la cuenta rechazada y volver a intentar la solicitud una vez. El reintento utiliza el proyecto Cloud Code Assist de esa credencial. Si la actualización falla o no hay ningún proyecto utilizable disponible, la solicitud devuelve un error de autenticación; use el flujo de reautenticación anterior. Un segundo `401` no inicia otro ciclo de refresco/reintentar. Un `403` que solicita verificar la cuenta pone en cuarentena esa credencial como `needs-reauth(verify)`; cuando la conmutación por error de la cuenta está habilitada, la solicitud puede volver a intentar en otra cuenta elegible. Complete la verificación de la cuenta de Google, luego ejecute `ocx login google-antigravity`. La actualización silenciosa del token no borra este requisito de verificación. Un `403` cuyos detalles de error tipados de Google llevan `TOS_VIOLATION` significa que Google suspendió la cuenta. En solicitudes OAuth directas a Cloud Code Assist de Google, la credencial se pone en cuarentena como `needs-reauth(tos)` con el estado de salud "Account suspended", el cliente recibe el mensaje fijo `Antigravity account suspended (TOS_VIOLATION)` y la conmutación por error funciona como se describe arriba. La actualización silenciosa del token mantiene la cuenta fuera del grupo. El panel indica que la cuenta está suspendida y recomienda apelar ante Google antes de volver a iniciar sesión. Si OpenCodex no puede guardar la cuarentena, este intercambio de adaptador conserva el `403` original sin otro envío de recuperación; la cuenta no se ha puesto en cuarentena de forma duradera. Si no se puede construir o admitir una solicitud de hermano para el envío, el intercambio entrega el `403` original a través del formato de error normal. Un combo adjunto o una ruta de directiva aún pueden aplicar sus reglas de reserva existentes.
 
 Para las solicitudes de búsqueda web basadas en la búsqueda, la rotación automática de hermanos solo acepta un sobre de error Google completo y limitado que contiene `error.details[].reason === "VALIDATION_REQUIRED"` o una denegación de acceso `PERMISSION_DENIED`. La redacción de verificación por sí sola no rota. Esta recuperación con alcance de solicitud utiliza el token y el proyecto del hermano sin que persista una marca de `needs-reauth`; la cancelación, la salida comprometida, el agotamiento del presupuesto o un hermano no disponible conserva el error.
 
@@ -235,7 +278,9 @@ ocx account pool openai --json
 ocx account pool anthropic --json
 ```
 
-Estas son las lecturas de gestión en vivo. La respuesta incluye `provider`, `kind`, `supported`, la política almacenada nullable, `enabledEffective` y opcional `inert`. Sólo los campos nombrados por `supported` se pueden escribir; nulo no es falso, y una política inerte no es agrupación activa. Los umbrales cero y `enabled:false` son independientes. Utilice `--enabled on|off`, `--threshold 0..100`, `--strategy`, `--sticky 1..100` y `--quota-window` solo donde sea compatible. OpenAI no admite escrituras de agrupación/ventana habilitadas; `reset-first` es para OpenAI y grupos OAuth genéricos (nunca Anthropic), `least-loaded` solo para Kiro, y las ventanas de Anthropic son `five-hour`, `weekly`, `max-utilization`. Los campos omitidos permanecen sin cambios. Los campos de lectura DTO como rutas, concurrencia por cuenta o Anthropic `nativeMessages` no implican un setter en este comando; use solo las opciones CLI enumeradas. Un guardado que devuelve `warning: "config_bookkeeping_failed"` se persistió, pero necesita una lectura nueva para confirmar el estado en vivo.
+Estas son las lecturas de gestión en vivo. La respuesta incluye `provider`, `kind`, `supported`, la política almacenada nullable, `enabledEffective` y opcional `inert`. Sólo los campos nombrados por `supported` se pueden escribir; nulo no es falso, y una política inerte no es agrupación activa. Los umbrales cero y `enabled:false` son independientes. Utilice `--enabled on|off`, `--threshold 0..100`, `--strategy`, `--sticky 1..100` y `--quota-window` solo donde sea compatible. OpenAI no admite escrituras de agrupación/ventana habilitadas; `reset-first` es para OpenAI y grupos OAuth genéricos (nunca Anthropic), `reset-near-weighted` solo para los grupos de Codex y Anthropic, `least-loaded` solo para Kiro, y las ventanas de Anthropic son `five-hour`, `weekly`, `max-utilization`. Los campos omitidos permanecen sin cambios. Los campos de lectura DTO como rutas, concurrencia por cuenta o Anthropic `nativeMessages` no implican un setter en este comando; use solo las opciones CLI enumeradas. Un guardado que devuelve `warning: "config_bookkeeping_failed"` se persistió, pero necesita una lectura nueva para confirmar el estado en vivo.
+
+Para activar la [rotación ponderada por la próxima renovación](/es/reference/configuration/providers/#reset-near-weighted), ejecuta `ocx account pool openai --strategy reset-near-weighted` o `ocx account pool anthropic --strategy reset-near-weighted`.
 
 ```bash
 ocx account pool anthropic --threshold 80 --quota-window five-hour --json
@@ -342,7 +387,7 @@ resume <provider> <id|alias|main>  Return a paused account to automatic selectio
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
 reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged. Run on the Home; a Remote Link Child names the Home and sends no request.
-strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Pool placement strategy; least-loaded is Kiro-only.
+strategy <provider> [<quota|round-robin|fill-first|reset-near-weighted|least-loaded|reset-first>]  Pool placement strategy; least-loaded is Kiro-only.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
 remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.

@@ -490,7 +490,7 @@ describe("multi-account auth store", () => {
 
   test("new identity appends a second account and activates it", async () => {
     await saveCredential("anthropic", cred({ email: "a@example.com", accountId: "acct-a" }));
-    await saveCredential("anthropic", cred({ email: "b@example.com", accountId: "acct-b", access: "access-b" }));
+    await saveCredential("anthropic", cred({ email: "b@example.com", accountId: "acct-b", access: "access-b", refresh: "refresh-b" }));
     expect(listAccounts("anthropic").length).toBe(2);
     expect(getCredential("anthropic")?.email).toBe("b@example.com");
   });
@@ -624,7 +624,7 @@ describe("multi-account auth store", () => {
 
   test("setActiveAccount switches what getCredential returns", async () => {
     await saveCredential("anthropic", cred({ email: "a@example.com", accountId: "acct-a", access: "access-a" }));
-    await saveCredential("anthropic", cred({ email: "b@example.com", accountId: "acct-b", access: "access-b" }));
+    await saveCredential("anthropic", cred({ email: "b@example.com", accountId: "acct-b", access: "access-b", refresh: "refresh-b" }));
     const set = getAccountSet("anthropic")!;
     const idA = set.accounts.find(a => a.credential.email === "a@example.com")!.id;
     expect(await setActiveAccount("anthropic", idA)).toBe(true);
@@ -640,6 +640,29 @@ describe("multi-account auth store", () => {
     expect(getAccountSet("anthropic")!.activeAccountId).toBe(id);
     expect(await setAccountAlias("anthropic", id, undefined)).toBe(true);
     expect(listAccounts("anthropic")[0]?.alias).toBeUndefined();
+  });
+
+  test("Anthropic auth store advances the persisted credential revision for login, rotation, and import", async () => {
+    const original = cred({ accountId: "synthetic-anthropic-revision" });
+    await saveCredential("anthropic", original);
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    const readRevision = () => listAccounts("anthropic").find(account => account.id === id)!.credentialRevision!;
+    const first = readRevision();
+    expect(first.sequence).toBe(1);
+    await setAccountAlias("anthropic", id, "Renamed seat");
+    expect(readRevision()).toEqual(first);
+    await mergeAccountCredential("anthropic", id, original);
+    expect(readRevision()).toEqual(first);
+    await mergeAccountCredential("anthropic", id, { ...original, refresh: "synthetic-rotated-refresh" });
+    const rotated = readRevision();
+    expect(rotated.sequence).toBe(first.sequence + 1);
+    expect(rotated.id).not.toBe(first.id);
+    expect(await upsertCredentialByIdentity("anthropic", original)).toBe("updated");
+    const imported = readRevision();
+    expect(imported.sequence).toBe(rotated.sequence + 1);
+    expect(imported.id).not.toBe(first.id);
+    await saveAccountCredential("anthropic", id, original, { rotateLoginId: true });
+    expect(readRevision().sequence).toBe(imported.sequence + 1);
   });
 
   test("saveAccountCredential persists refresh for a non-active account without switching active", async () => {
@@ -696,7 +719,7 @@ describe("multi-account auth store", () => {
 
   test("removeCredential removes only the active account", async () => {
     await saveCredential("anthropic", cred({ email: "a@example.com", accountId: "acct-a", access: "access-a" }));
-    await saveCredential("anthropic", cred({ email: "b@example.com", accountId: "acct-b", access: "access-b" }));
+    await saveCredential("anthropic", cred({ email: "b@example.com", accountId: "acct-b", access: "access-b", refresh: "refresh-b" }));
     await removeCredential("anthropic"); // active is b
     expect(listAccounts("anthropic").length).toBe(1);
     expect(getCredential("anthropic")?.access).toBe("access-a");

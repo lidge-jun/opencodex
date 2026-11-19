@@ -795,6 +795,25 @@ For an Anthropic OAuth or Codex pool, a 429 tied to one account that the pool ha
 not cool the whole combo target. Other accounts behind that target remain available. A 429 with
 no identified, cooled pool account still cools the target, as do provider-wide failures.
 
+After a Responses combo stream commits output, an incomplete terminal can cool that target for the
+next request. The reason can appear on the terminal event or its `response` snapshot. A refusal on
+either carrier takes precedence. `upstream_stall_timeout` cools for 60 seconds. `max_output_tokens`
+cools for 10 minutes when the serving attempt reaches the routed model's known output ceiling and
+the turn is unpaused.
+Devin's preset has no output ceiling, so this output-limit cooldown requires an explicit ceiling
+in the provider configuration. An existing longer cooldown keeps its expiry.
+
+During Responses preflight, the combo can try the next eligible target if a replayable terminal
+contains only reasoning or commentary text and arrives within 1 second of the first buffered
+event, including `response.created`. Refusal content or an error on either terminal carrier commits
+the stream to the selected target and preserves the upstream verdict. This also applies when a
+native Responses completion lacks the call required by `tool_choice`.
+A refusal reason such as `content_filter` in `incomplete_details.reason` also commits it, whether
+the reason appears on the terminal event or in its `response` snapshot. Either carrier can also
+veto replay with `end_turn: false` or `incomplete_details.retryable: false`. These replay vetoes also
+apply when a streamed response completes without the call required by `tool_choice`. A final answer, tool
+call, or expiry of the hold also commits the stream.
+
 ### Last-resort targets
 
 A brief cooldown on a preferred target otherwise routes straight to whatever
