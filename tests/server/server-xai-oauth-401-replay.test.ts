@@ -120,7 +120,7 @@ async function post(server: ReturnType<typeof startServer>, model = "xai/grok-4.
   return originalFetch(new URL("/v1/responses", server.url), {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: model.startsWith("xai/") ? model : `xai/${model}`, input: "hello", stream: false }),
+    body: JSON.stringify({ model: model.includes("/") ? model : `xai/${model}`, input: "hello", stream: false }),
   });
 }
 
