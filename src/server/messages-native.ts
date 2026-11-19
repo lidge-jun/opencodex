@@ -929,7 +929,9 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
     );
     // Without a 5xx policy this path uses the reset-only helper. Inspect recovery statuses
     // before either same-key recovery or key rotation can release the body.
-    if (!requestTransientPolicy && [400, 401, 402, 429].includes(response.status)) await hasUpstreamReplayRefusal(response, upstream.signal);
+    if (!requestTransientPolicy && [400, 401, 402, 429].includes(response.status)) {
+      await hasUpstreamReplayRefusal(response, upstream.signal, { requireCompleteBody: response.status === 429 });
+    }
     return response;
   };
   const discard = (response: Response) => {

@@ -23,6 +23,7 @@ import { BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS, removeTreeAfterBackgroundWork } fr
 import { OPENAI_PROVIDER_TIER_VERSION, type OcxConfig } from "../../src/types";
 import { HOME_INITIATED_LINK_TUNNEL, relayLinkDataRequest } from "../../src/client/link-relay";
 import { handleResponses } from "../../src/server/responses";
+import { handleChatCompletions } from "../../src/server/chat-completions";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { getAccountSet, saveCredential } from "../../src/oauth/store";
@@ -199,6 +200,60 @@ test.each([
     } finally { await proxy.stop(true); }
   } finally { await upstream.stop(true); }
 });
+
+for (const wire of [
+  { path: "/v1/chat/completions", adapter: "openai-chat", turn: CHAT_TURN, handle: handleChatCompletions },
+  { path: "/v1/messages", adapter: "anthropic", turn: CLAUDE_TURN, handle: handleClaudeMessages },
+] as const) {
+  test.each([
+    { sameKeyRetry: true, inconclusive: true },
+    { sameKeyRetry: false, inconclusive: true },
+    { sameKeyRetry: true, inconclusive: false },
+    { sameKeyRetry: false, inconclusive: false },
+  ])(`reset-only ${wire.path} 429 (same-key retry=$sameKeyRetry, inconclusive=$inconclusive)`, async ({ sameKeyRetry, inconclusive }) => {
+    const config = parityConfig();
+    config.protocols = { rollout: { managedMessagesNative: true } };
+    const provider = config.providers.native!;
+    const primary = provider.apiKey!;
+    const backup = "sk-fixture-backup";
+    provider.adapter = wire.adapter;
+    provider.apiKeyPool = [{ id: "primary", key: primary }, { id: "backup", key: backup }];
+    provider.retryOn429 = { enabled: sameKeyRetry, attempts: 1, intervalMs: 100, respectRetryAfter: false };
+    const sends: Array<string | null> = [];
+    const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      sends.push(request.headers.get("x-api-key") ?? request.headers.get("authorization")?.replace(/^Bearer /, "") ?? null);
+      const ordinary = { type: "error", error: { type: "rate_limit_error", message: "fixture throttle" } };
+      // The code is also past the delivery read limit, so only the probe's veto can reach the client.
+      const payload = inconclusive && sends.length === 1
+        ? { ...ordinary, error: { ...ordinary.error, message: "x".repeat(70_000), code: "upstream_response_refused" } }
+        : ordinary;
+      return Response.json(payload, { status: 429, headers: { "retry-after": "37" } });
+    } });
+    const release = acquireOwnedSpendHome();
+    try {
+      provider.baseUrl = new URL("/v1", upstream.url).href;
+      provider.noProxy = "127.0.0.1";
+      provider.allowPrivateNetwork = true;
+      saveConfig(config);
+      const request = new Request(`http://localhost${wire.path}`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "native/model", stream: false, ...wire.turn }),
+      });
+      const response = await wire.handle(request, config, { model: "", provider: "" });
+      await response.json();
+      expect({
+        sends, status: response.status,
+        retry: response.headers.get("x-should-retry"), retryAfter: response.headers.get("retry-after"),
+      }).toEqual({
+        sends: inconclusive ? [primary] : sameKeyRetry ? [primary, primary, backup] : [primary, backup],
+        status: 429, retry: inconclusive ? "false" : null, retryAfter: inconclusive ? null : "37",
+      });
+    } finally {
+      release();
+      await upstream.stop(true);
+    }
+  });
+}
 
 test("managed native Messages serializes a retained client replay veto", async () => {
   const config = parityConfig();

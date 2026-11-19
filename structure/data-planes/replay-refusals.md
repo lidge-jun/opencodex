@@ -47,20 +47,21 @@ and Google HTTP check the directive and a bounded peek for refusal codes before 
 resends. Google keeps original evidence when raw errors are requested; display normalization
 retains the veto and projects recognized codes to the fixed refusal. Native Chat, Responses,
 Compact, Messages, continuation and sidecar paths also honor the veto.
-The transient ladder checks 429s even at budget exhaustion. Native Messages checks its
-reset-only path too. The peek recognizes root, `error` and `last_error` codes, preserves an
-observed code through a later failed read, and leaves the raw response available for quota
-observation. It stops both same-key and pool recovery.
+The transient ladder checks 429s even at budget exhaustion. Native Chat and managed native
+Messages also check 429s on their reset-only paths. The peek recognizes root, `error` and
+`last_error` codes, preserves an observed code through a later failed read, and leaves the raw
+response available for quota observation. A refusal stops both same-key and pool recovery.
 
-Sidecar recovery and the transient ladder's 429 handoff treat a size-limited, timed-out or
-failed body probe as insufficient evidence for another send. They preserve the original body
-and quota provenance while blocking recovery. An independently replay-safe transient operation
+Sidecar recovery, the transient ladder's 429 handoff, and the native Chat and managed Messages
+reset-only 429 paths treat a size-limited, timed-out or failed body probe as insufficient evidence
+for another send. They preserve the original body and quota provenance while blocking recovery.
+An independently replay-safe transient operation
 keeps its explicit exception. In `src/web-search/header-deadline.ts`, local pacing and bounded
 post-header body inspection pause the iteration's cumulative response-header clock; caller
 cancellation remains active. Uncertain body classification never authorizes a resend.
 
-For an inconclusive transient 5xx or 429 probe on a replay-unsafe request, the ladder records a
-client veto in process and keeps the original status, body and headers available for quota
+For an inconclusive transient 5xx or 429 probe on a replay-unsafe request, the retry path records
+a client veto in process and keeps the original status, body and headers available for quota
 observation. Responses and Compact, native and translated Chat, and managed native and translated
 Messages project the veto as `x-should-retry: false` and omit `Retry-After`. Responses withholds
 the upstream diagnostic text in its non-replayable error projection.

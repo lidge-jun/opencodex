@@ -825,25 +825,33 @@ test("refusal cancellation starts before replacement selection without awaiting 
   const cancellationFinished = deferred<void>();
   let cancelled = false;
   let selectedAtCancellation: string | undefined;
+  const refusal = Response.json({ type: "error", error: { type: "rate_limit_error", message: "fixture throttle" } }, {
+    status: 429, headers: { "anthropic-ratelimit-unified-5h-status": "rejected", "retry-after": "30" },
+  });
+  // The replay probe must reach EOF. Defer disposal of the original branch after it does.
+  const cancelBody = ReadableStream.prototype.cancel;
+  const cancelSpy = spyOn(ReadableStream.prototype, "cancel").mockImplementation(function (this: ReadableStream<Uint8Array>, reason) {
+    if (this !== refusal.body) return cancelBody.call(this, reason);
+    cancelled = true;
+    selectedAtCancellation = captureOAuthAccountSelection("anthropic")?.accountId;
+    return cancelBody.call(this, reason).then(() => cancellationFinished.promise);
+  });
   config.providers.anthropic!.fetch = (async (input, init) => {
     sent.push({ url: String(input), headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
     if (sent.length > 1) {
       expect(cancelled).toBe(true);
       return Response.json(MESSAGE);
     }
-    return new Response(new ReadableStream<Uint8Array>({
-      cancel() {
-        cancelled = true;
-        selectedAtCancellation = captureOAuthAccountSelection("anthropic")?.accountId;
-        return cancellationFinished.promise;
-      },
-    }), { status: 429, headers: { "anthropic-ratelimit-unified-5h-status": "rejected", "retry-after": "30" } });
+    return refusal;
   }) as typeof fetch;
   try {
     expect((await send(config, { ...BODY, stream: false })).response.status).toBe(200);
     expect(selectedAtCancellation).toBe(ids[0]);
     expect(sent).toHaveLength(2);
-  } finally { cancellationFinished.resolve(); }
+  } finally {
+    cancellationFinished.resolve();
+    cancelSpy.mockRestore();
+  }
 });
 
 test("late replaced sending credential cannot attribute refusal to its replacement", async () => {
