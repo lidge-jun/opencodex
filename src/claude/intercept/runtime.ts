@@ -216,8 +216,8 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
         const fresh = options.config;
         const platform = options.pickerPlatform ?? process.platform;
         const pickerRequired = pickerProfileApplied || pickerDesired(fresh, resolveClaudeDesktopMode(fresh, observeClaudeDesktopMode(fresh)), platform);
-        // Preserve macOS's dormant relay; Windows defers binding until enable or profile recovery.
-        pickerWired = platform !== "win32" || pickerRequired;
+        // Preserve macOS's dormant relay; Windows and Linux defer binding until enable or profile recovery.
+        pickerWired = platform === "darwin" || pickerRequired;
         if (pickerRequired) {
           await preparePersistentPickerAuthority({ configDir, store: options.pickerCaStore, security: options.pickerSecurity, platform });
         }
