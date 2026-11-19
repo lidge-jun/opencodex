@@ -87,6 +87,12 @@ function mentions(message: string, condition: keyof typeof KEYWORDS): boolean {
   return KEYWORDS[condition].some(keyword => message.includes(keyword));
 }
 
+/** Match the fixed Claude refusal, not arbitrary links or quoted validation values. */
+export function isClaudeVerificationNotice(evidence: UpstreamConditionEvidence): boolean {
+  return evidence.status === 403 && typeof evidence.message === "string"
+    && /^your account can['’]t receive replies from claude right now\. you can find the next step in the anthropic verification portal:/i.test(evidence.message);
+}
+
 function statusFallback(status: number): UpstreamCondition | undefined {
   if (status === 401) return "auth_failed";
   if (status === 403) return "access_denied";
@@ -116,7 +122,7 @@ export function classifyUpstreamCondition(evidence: UpstreamConditionEvidence): 
   if (message && status >= 400 && status < 500) {
     if (isDefiniteContextOverflow(status, evidence.message!.slice(0, MAX_MESSAGE_SCAN))) return "context_overflow";
     if (mentions(message, "location_unsupported")) return "location_unsupported";
-    if (mentions(message, "account_verification_required")) return "account_verification_required";
+    if (isClaudeVerificationNotice(evidence) || mentions(message, "account_verification_required")) return "account_verification_required";
     // A 429 that names a rate limit is a rate limit even when it also mentions quota.
     if (status === 429 && mentions(message, "rate_limited")) return "rate_limited";
     if (mentions(message, "billing_exhausted")) return "billing_exhausted";

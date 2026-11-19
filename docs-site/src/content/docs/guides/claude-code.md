@@ -1330,6 +1330,10 @@ fields; `null` resets context/blocklist/compact-window values.
 
 ## Troubleshooting
 
+**Claude Code says Anthropic requires account verification** — Open the
+[Anthropic Verification Portal](https://portal.anthropic.com/verify) and sign in to the affected account.
+OpenCodex keeps the HTTP 403 and records `account_verification_required` in its request logs for this notice.
+
 ### Windows Desktop apply reports `client_lifecycle_lock_failed`
 
 Update OpenCodex if Desktop apply stalls while many old lock files are present. Lifecycle acquisition

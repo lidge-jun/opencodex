@@ -50,7 +50,7 @@ through the disk reader. A row keeps:
   names a rate limit stays `rate_limited` even when it also mentions quota, a 5xx stays a server failure
   whatever its text says, and a bare status maps to a fixed condition. It is presentation-only; routing,
   retry and recovery keep their own classifiers in `src/lib/errors.ts`. `upstreamConditionMessage` holds the
-  proxy-written sentence for each member and names only a well-formed configured provider id.
+  proxy-written sentence for each member and names only a well-formed configured provider id. Claude’s exact verification notice on HTTP 403 maps to `account_verification_required`; Messages serves a fixed Anthropic portal link, without upstream URL parameters or account IDs.
 - `rateLimitResetAt`, finite epoch milliseconds after the request and at most eight days later, derived
   server-side from the exact Meta Muse quota sentence on a Muse 429; the dashboard quota observation in
   `gui/src/muse-limit-observation.ts` reads only this number. Legacy rows that stored the sentence recover

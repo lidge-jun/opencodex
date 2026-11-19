@@ -30,6 +30,15 @@ describe("classifyUpstreamCondition", () => {
     expect(classifyUpstreamCondition({ status: 400, message: "The model does not exist" })).toBe("model_unavailable");
   });
 
+  test("the Claude account notice is specific to a 403 and is not triggered by a quoted value or URL alone", () => {
+    const message = "Your account can't receive replies from Claude right now. You can find the next step in the Anthropic Verification Portal:";
+    expect(classifyUpstreamCondition({ status: 403, message })).toBe("account_verification_required");
+    expect(classifyUpstreamCondition({ status: 403, message: `Invalid tool name: ${message}` })).toBe("access_denied");
+    expect(classifyUpstreamCondition({ status: 403, message: "See https://portal.anthropic.com/verify" })).toBe("access_denied");
+    expect(classifyUpstreamCondition({ status: 401, message })).toBe("auth_failed");
+    expect(classifyUpstreamCondition({ status: 500, message })).toBe("upstream_failed");
+  });
+
   test.each([
     "upstream_reset_replay_refused",
     "upstream_closed_before_response",
