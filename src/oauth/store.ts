@@ -1105,6 +1105,10 @@ export async function saveCredentialWithReceipt(
     const updatedSet = store[provider];
     const savedAccount = updatedSet?.accounts.find(account => account.id === accountId);
     if (savedAccount && isAnthropicInstanceId(provider)) {
+      // Refresh locks are per slot, so two slots cannot safely share a rotating grant.
+      if (safe.refresh && updatedSet.accounts.some(account => account.id !== accountId && account.credential.refresh === safe.refresh)) {
+        throw new Error("This Anthropic refresh token already belongs to another slot. Try signing in again.");
+      }
       savedAccount.credential = retainAnthropicExchangeScope(savedAccount.credential, previousAccounts.get(accountId)?.credential);
     }
     const activeAccount = updatedSet?.accounts.find(account => account.id === updatedSet.activeAccountId);

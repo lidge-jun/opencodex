@@ -1322,11 +1322,15 @@ test.each(["shared refresh token", "matching profile UUID"] as const)(
   },
 );
 
-test("UUID recovery appends when the candidate bearer changes before the writer lock", async () => {
+test.each([
+  { outcome: "refuses a shared token", sharedRefresh: true },
+  { outcome: "appends with a distinct token", sharedRefresh: false },
+])("UUID recovery $outcome when the candidate bearer changes before the writer lock", async ({ sharedRefresh }) => {
   await saveCredential("anthropic", emailOnlyCredential("synthetic-email-only", ORG_A));
   const slot = anthropicRows()[0]!;
   const incoming = orgCredential("synthetic-incoming", ORG_A);
-  const rotated = { ...emailOnlyCredential("synthetic-rotated", ORG_A), refresh: incoming.refresh };
+  const rotated = emailOnlyCredential("synthetic-rotated", ORG_A);
+  if (sharedRefresh) rotated.refresh = incoming.refresh;
   const asked = orgProfiles({ [slot.credential.access]: ORG_A });
   const gate = deferred();
   const locked = deferred();
@@ -1336,7 +1340,7 @@ test("UUID recovery appends when the candidate bearer changes before the writer 
     store.anthropic!.accounts[0]!.credential = rotated;
   });
   await locked.promise;
-  const login = saveCredential("anthropic", incoming);
+  const login = saveCredential("anthropic", incoming).catch((error: unknown) => error);
   try {
     for (const deadline = Date.now() + 2_000; oauthMutationTailSnapshot().active < 2;) {
       if (Date.now() > deadline) throw new Error("UUID recovery did not queue behind the writer");
@@ -1347,9 +1351,27 @@ test("UUID recovery appends when the candidate bearer changes before the writer 
     gate.resolve();
     await Promise.all([held, login]);
   }
-  expect(anthropicRows()).toHaveLength(2);
+  expect(anthropicRows()).toHaveLength(sharedRefresh ? 1 : 2);
   expect(getAccountCredential("anthropic", slot.id)).toEqual(rotated);
-  expect(getAccountCredential("anthropic", getAccountSet("anthropic")!.activeAccountId)).toEqual(incoming);
+  if (sharedRefresh) {
+    expect(await login).toMatchObject({ message: "This Anthropic refresh token already belongs to another slot. Try signing in again." });
+    expect(getAccountSet("anthropic")!.activeAccountId).toBe(slot.id);
+  } else {
+    expect(getAccountCredential("anthropic", getAccountSet("anthropic")!.activeAccountId)).toEqual(incoming);
+  }
+});
+
+test.each(["anthropic", "anthropic2"] as const)("%s login cannot persist a refresh token owned by another slot", async provider => {
+  const owner = orgCredential("synthetic-owner", ORG_A);
+  await saveCredential(provider, owner);
+  const authFile = Bun.file(storeModule.getAuthStorePath());
+  const before = await authFile.text();
+  const incoming = { ...orgCredential("synthetic-other-org", ORG_B), refresh: owner.refresh };
+
+  const login = saveCredential(provider, incoming);
+  await expect(login).rejects.toThrow("Try signing in again");
+  expect(await authFile.text()).toBe(before);
+  expect(getAccountSet(provider)!.accounts.map(row => row.credential.refresh)).toEqual([owner.refresh]);
 });
 
 test("UUID recovery preserves an unidentified active row when continuity is unavailable", async () => {
