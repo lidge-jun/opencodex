@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync, type Stats } from "node:fs";
 import { validReplayOwnerKey } from "./replay-owner";
 import type {
   ResidentInput,
@@ -18,24 +18,53 @@ export interface SnapshotLoadStore {
   admitResident(id: string, candidate: ResidentResponseState): void;
 }
 
-/** Load a bounded snapshot through the supplied sink. Returns true if the file is oversized. */
-export function loadSnapshotEntries(path: string, maxBytes: number, store: SnapshotLoadStore, cutoff = -Infinity): boolean {
+interface SnapshotLoadResult {
+  oversized: boolean;
+  failed: boolean;
+  fingerprint?: string;
+}
+
+function fileFingerprint(stat: Stats | undefined): string | undefined {
+  return stat === undefined ? "absent" : stat.isFile()
+    ? `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}` : undefined;
+}
+
+function missingFile(error: unknown): boolean {
+  const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+/** A content-free stamp; an unreadable or non-regular file cannot validate cached admission. */
+export function snapshotFileFingerprint(path: string): string | undefined {
+  try { return fileFingerprint(statSync(path, { throwIfNoEntry: false })); }
+  catch (error) { return missingFile(error) ? "absent" : undefined; }
+}
+
+/** Read failures are distinct from confirmed absence: neither callers nor cleanup may finalize them. */
+export function loadSnapshotEntries(path: string, maxBytes: number, store: SnapshotLoadStore, cutoff = -Infinity): SnapshotLoadResult {
   try {
     // stat and read both follow symlinks. A FIFO or device could block or supply unbounded input.
     const stat = statSync(path, { throwIfNoEntry: false });
-    if (!stat?.isFile()) return false;
-    if (stat.size > maxBytes) return true;
-    const raw = JSON.parse(readFileSync(path, "utf-8")) as { version?: unknown; states?: unknown };
-    if ((raw.version === 1 || raw.version === 2) && Array.isArray(raw.states)) {
+    const fingerprint = fileFingerprint(stat);
+    // Confirmed absent/non-regular targets retain the existing empty-snapshot behavior.
+    // A failed stat/read is different: the catch below leaves a later load possible.
+    if (!stat?.isFile()) return { oversized: false, failed: false, fingerprint };
+    if (stat.size > maxBytes) return { oversized: true, failed: false, fingerprint };
+    const text = readFileSync(path, "utf-8");
+    let raw: { version?: unknown; states?: unknown };
+    try { raw = JSON.parse(text); }
+    catch { return { oversized: false, failed: false, fingerprint }; }
+    if (raw && (raw.version === 1 || raw.version === 2) && Array.isArray(raw.states)) {
       for (const entry of raw.states) {
         if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string") continue;
         loadSnapshotEntry(entry[0], entry[1], store, cutoff);
       }
     }
-  } catch {
-    /* best-effort snapshot recovery */
+    return { oversized: false, failed: false, fingerprint };
+  } catch (error) {
+    return missingFile(error) ? { oversized: false, failed: false, fingerprint: "absent" }
+      : { oversized: false, failed: true };
   }
-  return false;
 }
 
 /** Decode and account live cold rows without running admission or disk maintenance. */
@@ -47,8 +76,10 @@ export function stageSnapshotEntries(path: string, maxBytes: number, store: Snap
     entries.delete(id);
     entries.set(id, entry);
   };
-  const oversized = loadSnapshotEntries(path, maxBytes, { ...store, replaceMapEntry: stage, admitResident: stage }, cutoff);
-  return { path, entries, bytes, oversized };
+  const result = loadSnapshotEntries(path, maxBytes, { ...store, replaceMapEntry: stage, admitResident: stage }, cutoff);
+  let oldestCreatedAt = Infinity;
+  for (const entry of entries.values()) oldestCreatedAt = Math.min(oldestCreatedAt, entry.createdAt);
+  return { path, entries, bytes, oldestCreatedAt, ...result };
 }
 
 interface LegacySnapshotState {

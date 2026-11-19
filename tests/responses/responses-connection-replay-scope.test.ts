@@ -15,6 +15,7 @@
  */
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigDir } from "../../src/config";
@@ -42,8 +43,10 @@ import {
   pendingResponseSpillMetricsForTests,
   queuePendingResponseSpill,
   replaceWithPendingResponseSpill,
+  spillQueueSupersededSpillFor,
 } from "../../src/responses/state/spill-queue";
-import { isContextPrincipalCurrent } from "../../src/server/auth-cors";
+import { writeResponseSpillDurably } from "../../src/responses/spill-store";
+import { isContextPrincipalCurrent, resolveDataPlaneAdmissionSecret } from "../../src/server/auth-cors";
 import { CODEX_WS_ID_MAX_BYTES } from "../../src/server/responses/codex-ws-correlation";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -65,11 +68,12 @@ beforeEach(() => {
 afterEach(() => {
   setResponseStateByteCapForTests(null);
   setSpilledResponseByteCapForTests(null);
-  release();
-  try { clearResponseStateForTests(); } finally {
-    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousHome;
-    removeTreeWithRetry(home);
+  try { release(); } finally {
+    try { clearResponseStateForTests(); } finally {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(home);
+    }
   }
 });
 
@@ -129,6 +133,8 @@ test("the minted key is not a context principal and grants no data-plane authori
   const cfg = { apiKeys: [{ id: "a", key: "synthetic-a" }] } as OcxConfig;
   const { key } = mintScope();
   expect(isContextPrincipalCurrent(key, cfg)).toBe(false);
+  expect(resolveDataPlaneAdmissionSecret(key, cfg)).toBeNull();
+  expect(resolveDataPlaneAdmissionSecret("synthetic-a", cfg)).not.toBeNull();
 });
 
 test("scoped retention replays only to the same key and thread", () => {
@@ -483,13 +489,17 @@ test("eviction frees the scoped slot even when it removes a later insertion", ()
 test("a live connection scope never reaches the snapshot file", async () => {
   const { scope, key } = mintScope();
   scopedRemember("resp-conn-only", scope, key);
+  rememberResponseState({ input: [] }, { id: "resp-keyed-control", output: output("durable control") }, undefined,
+    { clientThreadId: "own-b", replayOwnerKey: ownerB });
   // Still replayable from memory — only persistence is forbidden.
   expect(JSON.stringify(replay("resp-conn-only", "own-a", key).input)).toContain("private synthetic task");
   await flushResponseState();
   await runPendingResponseStatePersistForTests();
+  expect(snapshotText()).toContain("resp-keyed-control");
   expect(snapshotText()).not.toContain("resp-conn-only");
   expect(snapshotText()).not.toContain(key);
   expect(snapshotText()).not.toContain("private synthetic task");
+  expect(JSON.stringify(replay("resp-conn-only", "own-a", key).input)).toContain("private synthetic task");
 });
 
 test("scoped mutations leave the active durable snapshot revision stable", async () => {
@@ -573,7 +583,8 @@ test("an unmeasurable connection write leaves no tombstone and no snapshot trace
     { clientThreadId: "own-a", replayOwnerKey: key, connectionScope: scope });
   const body = { previous_response_id: "resp-unserial", input: [] };
   expect(expandPreviousResponseInput(body, "own-a", key)).toBe(body);
-  expect(previousResponseReplayFailure(body)).toBeUndefined();
+  expect(previousResponseReplayFailure(body)?.reason).toBe("missing");
+  expect(responseStateMetrics().count).toBe(0);
   await runPendingResponseStatePersistForTests();
   expect(snapshotText()).not.toContain("resp-unserial");
   // Control: the durable path really does leave a replay-visible tombstone.
@@ -590,7 +601,8 @@ test("the pending-spill intake refuses a connection-owned candidate reached dire
     items: [{ type: "message", content: "conn payload" }], sizeBytes: 256,
   };
   queuePendingResponseSpill("resp-direct-queue", connCandidate);
-  replaceWithPendingResponseSpill("resp-direct-pending", connCandidate, undefined);
+  expect(replaceWithPendingResponseSpill("resp-direct-pending", connCandidate, undefined)).toBe(false);
+  expect(responseStateMetrics().count).toBe(0);
   const foreign: ResidentResponseState = {
     kind: "resident", createdAt: Date.now(),
     clientThreadId: "own-b", replayOwnerKey: ownerB,
@@ -606,13 +618,11 @@ test("the pending-spill intake refuses a connection-owned candidate reached dire
 
 test("refusing a scoped spill candidate preserves a foreign resident and its pending publication", async () => {
   const { key } = mintScope();
-  rememberResponseState({ input: [] }, { id: "resp-foreign-resident", output: output("foreign retained task") }, undefined,
-    { clientThreadId: "own-b", replayOwnerKey: ownerB });
   const foreign: ResidentResponseState = {
     kind: "resident", createdAt: Date.now(), clientThreadId: "own-b", replayOwnerKey: ownerB,
     items: output("foreign queued task"), sizeBytes: 256,
   };
-  queuePendingResponseSpill("resp-foreign-resident", foreign);
+  expect(replaceWithPendingResponseSpill("resp-foreign-resident", foreign, undefined)).toBe(true);
   const before = pendingResponseSpillMetricsForTests();
   const candidate: ResidentResponseState = {
     kind: "resident", connectionOwned: true, createdAt: Date.now(),
@@ -620,14 +630,15 @@ test("refusing a scoped spill candidate preserves a foreign resident and its pen
   };
   queuePendingResponseSpill("resp-foreign-resident", candidate);
   expect(pendingResponseSpillMetricsForTests()).toEqual(before);
-  expect(JSON.stringify(replay("resp-foreign-resident", "own-b", ownerB).input)).toContain("foreign retained task");
+  expect(JSON.stringify(replay("resp-foreign-resident", "own-b", ownerB).input)).toContain("foreign queued task");
   await flushPendingResponseSpillsForTests();
-  expect(JSON.stringify(replay("resp-foreign-resident", "own-b", ownerB).input)).toContain("foreign retained task");
+  expect(spillDirText()).toContain("foreign queued task");
+  expect(JSON.stringify(replay("resp-foreign-resident", "own-b", ownerB).input)).toContain("foreign queued task");
   expect(snapshotText() + spillDirText()).not.toContain("connection payload");
 });
 
 test("a superseded foreign publication for the same id cannot pull a scoped write to disk", async () => {
-  const { key } = mintScope();
+  const { scope, key } = mintScope();
   const foreignCandidate: ResidentResponseState = {
     kind: "resident", createdAt: Date.now(),
     clientThreadId: "own-b", replayOwnerKey: ownerB,
@@ -635,7 +646,12 @@ test("a superseded foreign publication for the same id cannot pull a scoped writ
   };
   // The off-invariant window the sink must survive: a foreign pending publication still
   // exists for the id while the scoped write lands on the same slot.
-  queuePendingResponseSpill("resp-shared", foreignCandidate);
+  const supersededSpill = writeResponseSpillDurably("resp-shared", {
+    createdAt: Date.now(), clientThreadId: "own-b", replayOwnerKey: ownerB,
+    items: output("superseded durable generation"),
+  });
+  queuePendingResponseSpill("resp-shared", foreignCandidate, { supersededSpill });
+  expect(spillQueueSupersededSpillFor("resp-shared")).toEqual(supersededSpill);
   expect(pendingResponseSpillMetricsForTests().count).toBeGreaterThan(0);
   const connCandidate: ResidentResponseState = {
     kind: "resident", connectionOwned: true, createdAt: Date.now(),
@@ -643,7 +659,7 @@ test("a superseded foreign publication for the same id cannot pull a scoped writ
     items: [{ type: "message", content: "conn payload" }], sizeBytes: 256,
   };
   // The scoped candidate lands resident and is never queued behind the foreign job.
-  expect(replaceWithPendingResponseSpill("resp-shared", connCandidate, undefined)).toBe(true);
+  scopedRemember("resp-shared", scope, key, "conn payload");
   const pending = pendingResponseSpillMetricsForTests();
   queuePendingResponseSpill("resp-shared", connCandidate);
   expect(pendingResponseSpillMetricsForTests()).toEqual(pending);
@@ -654,6 +670,122 @@ test("a superseded foreign publication for the same id cannot pull a scoped writ
   expect(disk).not.toContain(key);
   // The connection entry remains replayable from memory — memory-only, not deleted.
   expect(JSON.stringify(replay("resp-shared", "own-a", key).input)).toContain("conn payload");
+  releaseConnectionReplayScope(scope);
+  expect(responseStateMetrics().count).toBe(0);
+});
+
+test("review boundary: scope expiry during measurement leaves the eviction plan unapplied", () => {
+  const at = Date.now();
+  const clock = spyOn(Date, "now").mockReturnValue(at);
+  try {
+    const { scope, key } = mintScope();
+    for (let i = 0; i < MAX_CONNECTION_SCOPE_ENTRIES; i++) scopedRemember(`resp-live-${i}`, scope, key, "retained");
+    const before = responseContinuationRetainedStoreSnapshot();
+    rememberResponseState({ input: [] }, { id: "resp-expired-during-measure", output: [{ type: "message", role: "assistant",
+      get content() { clock.mockReturnValue(at + CONNECTION_REPLAY_SCOPE_TTL_MS); return "late write"; },
+    }] }, undefined, { clientThreadId: "own-a", replayOwnerKey: key, connectionScope: scope });
+    clock.mockReturnValue(at);
+    expect(responseContinuationRetainedStoreSnapshot()).toEqual(before);
+    expect(replay("resp-live-0", "own-a", key).input).toEqual(output("retained"));
+    expect(replay("resp-expired-during-measure", "own-a", key).input).toEqual([]);
+  } finally { clock.mockRestore(); }
+});
+
+test("review boundary: failed cold snapshot reads leave scoped admission and keyed recovery untouched", async () => {
+  setResponseStateByteCapForTests(2048);
+  rememberResponseState({ input: [] }, { id: "resp-durable-unreadable", output: output("durable recovery ".repeat(512)) },
+    undefined, { clientThreadId: "own-b", replayOwnerKey: ownerB });
+  await flushResponseState();
+  const savedSnapshot = snapshotText();
+  const savedSpills = spillDirText();
+  clearResponseStateMemoryForTests();
+  const path = join(getConfigDir(), "responses-state.json");
+  const originalRead = fs.readFileSync;
+  const failedRead = spyOn(fs, "readFileSync").mockImplementation(((file, options) => {
+    if (String(file) === path) throw Object.assign(new Error("fixture read unavailable"), { code: "EACCES" });
+    return originalRead(file, options);
+  }) as typeof fs.readFileSync);
+  const { scope, key } = mintScope();
+  try {
+    scopedRemember("resp-scoped-read-failure", scope, key);
+    expect(responseStateMetrics().count).toBe(0);
+    expect(responseStatePersistPendingForTests()).toBe(false);
+    const legacy = replay("upstream-owned-id", "own-a");
+    expect(previousResponseReplayFailure(legacy)).toBeUndefined();
+    const strict = replay("resp-durable-unreadable", "own-b", ownerB);
+    expect(previousResponseReplayFailure(strict)?.reason).toBe("missing");
+  } finally { failedRead.mockRestore(); }
+  expect(snapshotText()).toBe(savedSnapshot);
+  expect(spillDirText()).toBe(savedSpills);
+  expect(JSON.stringify(replay("resp-durable-unreadable", "own-b", ownerB).input)).toContain("durable recovery");
+  expect(replay("resp-scoped-read-failure", "own-a", key).input).toEqual([]);
+});
+
+for (const changedSnapshot of [false, true]) test(`review boundary: declined cold writes reuse budget evidence (changed snapshot=${changedSnapshot})`, async () => {
+  const restore = registerResponseBudget();
+  const path = join(getConfigDir(), "responses-state.json");
+  const originalRead = fs.readFileSync;
+  let reads = 0;
+  const read = spyOn(fs, "readFileSync").mockImplementation(((file, options) => {
+    if (String(file) === path) reads++;
+    return originalRead(file, options);
+  }) as typeof fs.readFileSync);
+  try {
+    rememberResponseState({ input: [] }, { id: "resp-keyed-cold-budget", output: output("keyed snapshot payload ".repeat(512)) },
+      undefined, { clientThreadId: "own-b", replayOwnerKey: ownerB });
+    await flushResponseState();
+    clearResponseStateMemoryForTests();
+    configureAppOwnedMemoryBudget(1024);
+    reads = 0;
+    const { scope, key } = mintScope();
+    for (let i = 0; i < 3; i++) scopedRemember(`resp-declined-${i}`, scope, key);
+    expect(reads).toBe(1);
+    expect(responseStateMetrics().count).toBe(0);
+    expect(responseStatePersistPendingForTests()).toBe(false);
+    if (changedSnapshot) writeFileSync(path, JSON.stringify({ version: 2, states: [] }));
+    else configureAppOwnedMemoryBudget(DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES);
+    scopedRemember("resp-admitted-after-change", scope, key);
+    expect(reads).toBe(2);
+    expect(replay("resp-admitted-after-change", "own-a", key).input).toEqual(output("private synthetic task"));
+    if (!changedSnapshot) expect(JSON.stringify(replay("resp-keyed-cold-budget", "own-b", ownerB).input)).toContain("keyed snapshot payload");
+  } finally { read.mockRestore(); restore(); }
+});
+
+test("review boundary: cold budget evidence expires with its oldest durable row", async () => {
+  const restore = registerResponseBudget();
+  const at = Date.now();
+  const clock = spyOn(Date, "now").mockReturnValue(at);
+  try {
+    rememberResponseState({ input: [] }, { id: "resp-expiring-durable", output: output("large durable row ".repeat(512)) },
+      undefined, { clientThreadId: "own-b", replayOwnerKey: ownerB });
+    await flushResponseState();
+    clearResponseStateMemoryForTests();
+    configureAppOwnedMemoryBudget(1024);
+    clock.mockReturnValue(at + RESPONSE_TTL_MS - 100);
+    const { scope, key } = mintScope();
+    scopedRemember("resp-before-expiry", scope, key);
+    expect(responseStateMetrics().count).toBe(0);
+    clock.mockReturnValue(at + RESPONSE_TTL_MS + 1);
+    scopedRemember("resp-after-expiry", scope, key);
+    expect(responseStateMetrics().count).toBe(1);
+    expect(replay("resp-after-expiry", "own-a", key).input).toEqual(output("private synthetic task"));
+  } finally { clock.mockRestore(); restore(); }
+});
+
+for (const expired of [false, true]) test(`review boundary: keyed completion takes priority over a colliding scoped row (expired=${expired})`, () => {
+  const at = Date.now();
+  const clock = spyOn(Date, "now").mockReturnValue(at);
+  try {
+    const { scope, key } = mintScope();
+    scopedRemember("resp-keyed-priority", scope, key, "scoped payload");
+    if (expired) clock.mockReturnValue(at + CONNECTION_REPLAY_SCOPE_TTL_MS);
+    rememberResponseState({ input: [] }, { id: "resp-keyed-priority", output: output("keyed replacement") },
+      undefined, { clientThreadId: "own-b", replayOwnerKey: ownerB });
+    expect(replay("resp-keyed-priority", "own-b", ownerB).input).toEqual(output("keyed replacement"));
+    expect(previousResponseReplayFailure(replay("resp-keyed-priority", "own-a", key))?.reason).toBe("scope_mismatch");
+    releaseConnectionReplayScope(scope);
+    expect(replay("resp-keyed-priority", "own-b", ownerB).input).toEqual(output("keyed replacement"));
+  } finally { clock.mockRestore(); }
 });
 
 test("a non-persistable body stays unstored even inside a live scope", () => {

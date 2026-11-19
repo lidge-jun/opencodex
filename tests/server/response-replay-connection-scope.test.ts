@@ -52,11 +52,12 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
   if (originalCatalog === undefined) delete process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
   else process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = originalCatalog;
-  release();
-  try { clearResponseStateForTests(); } finally {
-    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousHome;
-    removeTreeWithRetry(home);
+  try { release(); } finally {
+    try { clearResponseStateForTests(); } finally {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(home);
+    }
   }
 });
 
@@ -66,10 +67,11 @@ function config(mode: "v1" | "v2-plaintext", opts: { keyed?: boolean; combo?: bo
   return {
     defaultProvider: "native", multiAgentMode: mode,
     providers: {
-      native: { adapter: "openai-responses", baseUrl: CODEX_FORWARD_BASE_URL, authMode: "forward", upstreamWebsocket: false },
+      native: { adapter: "openai-responses", baseUrl: CODEX_FORWARD_BASE_URL, authMode: "forward", upstreamWebsocket: false,
+        fetch: ((input, init) => globalThis.fetch(input, init)) as typeof fetch },
       // Routed delegation target: a SWE/Argon-style second provider with its own upstream.
       swe: { adapter: "openai-responses", baseUrl: "https://swe-fixture.invalid/v1", authMode: "key",
-        apiKey: "swe-fixture-key", models: ["argon-1"] },
+        apiKey: "swe-fixture-key", models: ["argon-1"], fetch: ((input, init) => globalThis.fetch(input, init)) as typeof fetch },
     },
     ...(opts.keyed ? { apiKeys: [{ id: "a", key: "synthetic-a" }, { id: "b", key: "synthetic-b" }] } : {}),
     ...(opts.combo ? { combos: { owned: { strategy: "failover", targets: [{ provider: "native", model: "gpt-5.6-sol" }] } } } : {}),
@@ -220,7 +222,7 @@ test("B: the original scope and its newer response expire at the handshake deadl
   }
 });
 
-test("B: a close racing the in-flight turn refuses the late write; a reconnect cannot replay", async () => {
+for (const closed of [false, true]) test(`B: an in-flight completion retains state only for a live scope (closed=${closed})`, async () => {
   responseCounter = 0;
   const cfg = config("v2-plaintext");
   // Gate the upstream so the turn is provably still in the pipeline when the socket closes.
@@ -239,16 +241,52 @@ test("B: a close racing the in-flight turn refuses the late write; a reconnect c
   const inFlight = send(cfg, { own: "own-a" }, "websocket", scope);
   for (let i = 0; i < 1000 && sent.length === 0; i++) await new Promise(r => setTimeout(r, 1));
   expect(sent).toHaveLength(1);
-  releaseConnectionReplayScope(scope);
+  if (closed) releaseConnectionReplayScope(scope);
   releaseUpstream();
   expect((await inFlight).status).toBe(200);
-  // The completion wrote nothing the reconnect can reach — the store-level file proves the
-  // mechanism (the scoped write refuses at the liveness check), this case proves the outcome.
+  expect(responseStateMetrics().count).toBe(closed ? 0 : 1);
   const reconnect = mintConnectionReplayScope("own-a")!;
   const cont = await send(cfg, { own: "own-a", previous: "resp-conn-1" }, "websocket", reconnect);
   expect(cont.status).toBe(400);
   expect(cont.code).toBe("previous_response_not_found");
   expect(sent).toHaveLength(1);
+});
+
+for (const lane of ["direct", "combo-auto", "combo-disabled"] as const) for (const transport of ["websocket", "http"] as const) {
+  test(`review boundary: released scoped IDs cannot use a gateway's stored history (${lane}, ${transport})`, async () => {
+    responseCounter = 0;
+    const cfg = config("v2-plaintext", { combo: lane !== "direct" });
+    if (cfg.combos) cfg.combos.owned = {
+      strategy: "failover", imageInput: lane === "combo-disabled" ? "disabled" : "auto",
+      targets: [{ provider: "swe", model: "argon-1" }],
+    };
+    const { sent } = upstream();
+    const scope = mintConnectionReplayScope("own-a")!;
+    const model = lane === "direct" ? "swe/argon-1" : "combo/owned";
+    expect((await send(cfg, { own: "own-a", model, omitStore: true }, "websocket", scope)).status).toBe(200);
+    expect(responseStateMetrics().count).toBe(1);
+    releaseConnectionReplayScope(scope);
+    expect(responseStateMetrics().count).toBe(0);
+    const reconnect = mintConnectionReplayScope("own-a")!;
+    const result = await send(cfg, { own: "own-a", model, previous: "resp-conn-1", omitStore: true },
+      transport === "websocket" ? "websocket" : undefined, reconnect);
+    expect(result.status).toBe(400);
+    expect(result.code).toBe("previous_response_not_found");
+    expect(sent).toHaveLength(1);
+    const fresh = await send(cfg, { own: "own-a", model, omitStore: true }, "websocket", reconnect);
+    expect(fresh.status).toBe(200);
+    expect(sent).toHaveLength(2);
+  });
+}
+
+for (const mode of ["v1", "v2-plaintext"] as const) test(`review boundary: keyed gateway misses require local ownership only in strict mode (${mode})`, async () => {
+  responseCounter = 0;
+  const cfg = config(mode, { keyed: true });
+  const { sent } = upstream();
+  const result = await send(cfg, { own: "own-a", key: "synthetic-a", model: "swe/argon-1", previous: "unknown-gateway-id" });
+  expect(result.status).toBe(mode === "v2-plaintext" ? 400 : 200);
+  expect(sent).toHaveLength(mode === "v2-plaintext" ? 0 : 1);
+  if (mode === "v2-plaintext") expect(result.code).toBe("previous_response_not_found");
 });
 
 test("C: a keyed caller keeps the durable path even with a scope attached", async () => {

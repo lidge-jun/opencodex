@@ -1,5 +1,4 @@
-import { responseReplayOwnerKey } from "../../responses/state/replay-owner";
-import { connectionReplayScopeForThread, connectionReplayScopeOwnerKey } from "../../responses/state/connection-scope";
+import { selectResponseReplayOwner } from "./replay-owner";
 import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { comboLogLabel, comboTargetLogLabel } from "../../combos/resolve";
 import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
@@ -454,16 +453,7 @@ export async function executeComboResponses(
   const inboundClientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
   const inboundOwnThreadId = req.headers.get("thread-id")?.trim() || undefined;
   const strictReplay = options.plaintextV2Decision ?? isPlaintextV2AgentMessagesEnabled(config);
-  // Same connection-scope backfill as the direct path: only this socket's live scope may
-  // substitute for a missing caller principal, and only for the handshake thread. A
-  // credential-derived owner keeps the scope out of the path entirely.
-  const credentialOwnerKey = strictReplay ? responseReplayOwnerKey(replayPrincipal.clientPrincipalId, inboundOwnThreadId) : undefined;
-  const replayConnectionScope = credentialOwnerKey === null && options.inboundTransport === "websocket"
-    && options.admission?.kind === "loopback"
-    ? connectionReplayScopeForThread(options.replayScope, inboundOwnThreadId) : undefined;
-  const replayOwnerKey = strictReplay
-    ? (credentialOwnerKey ?? connectionReplayScopeOwnerKey(replayConnectionScope) ?? null)
-    : undefined;
+  const { replayOwnerKey, replayConnectionScope } = selectResponseReplayOwner(strictReplay, replayPrincipal.clientPrincipalId, inboundOwnThreadId, options);
   const body = expandPreviousResponseInput(rawBody, strictReplay ? inboundOwnThreadId : inboundClientThreadId, replayOwnerKey);
   const replayFailure = previousResponseReplayFailure(body);
   if (replayFailure?.reason === "scope_mismatch") {

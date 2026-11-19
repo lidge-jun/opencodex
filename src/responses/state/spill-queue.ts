@@ -26,7 +26,6 @@ import {
   type ResponseSpillWriteFailureOrigin,
 } from "./spill-failure";
 import type { ResidentResponseState, StoredResponseState } from "../state";
-import { replayScopeMatches } from "./replay-owner";
 
 const RESPONSE_SPILL_SHUTDOWN_BUDGET_MS = 5_000;
 const RESPONSE_SPILL_SHUTDOWN_FALLBACK_RESERVE_MS = 4_000;
@@ -333,14 +332,8 @@ export function replaceWithPendingResponseSpill(
   options: { directAdmission?: boolean } = {},
 ): boolean {
   if (candidate.connectionOwned === true) {
-    // Memory-only candidates never take the pending queue — including when a foreign
-    // pending publication holds a superseded ref for this id. A free slot or a same-scope
-    // or dead entry still receives the resident in place; a live foreign entry is left
-    // untouched and the write is refused.
-    if (expected === undefined || expected.kind === "spill-failed" || (expected.kind === "resident"
-      && expected.connectionOwned === true && replayScopeMatches(expected, candidate.clientThreadId, candidate.replayOwnerKey))) {
-      return requireStore().replaceMapEntry(id, candidate, expected);
-    }
+    // Only the state owner's transactional admission validates liveness, applies limits,
+    // and indexes these residents for socket-close cleanup. No spill seam may install one.
     return false;
   }
   const inheritedSpill = pendingResponseSpillById.get(id)?.supersededSpill

@@ -1,5 +1,4 @@
-import { responseReplayOwnerKey } from "../../responses/state/replay-owner";
-import { connectionReplayScopeForThread, connectionReplayScopeOwnerKey } from "../../responses/state/connection-scope";
+import { selectResponseReplayOwner } from "./replay-owner";
 import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
 import { attributePhysicalAttempt } from "../request-log-failure-attribution";
@@ -447,17 +446,7 @@ export async function prepareResponsesRequest(
   const replayPrincipal = options.replayPrincipal
     ? options.replayPrincipal.clientPrincipalId : resolveContextPrincipal(req, config, options.admission);
   const strictReplay = options.plaintextV2Decision ?? isPlaintextV2AgentMessagesEnabled(config);
-  const credentialOwnerKey = strictReplay ? responseReplayOwnerKey(replayPrincipal, inboundOwnThreadId) : undefined;
-  // A missing caller principal is backfilled only by this socket's own live connection scope
-  // (unidentified loopback, same handshake thread) — never by a header, an installation id,
-  // or another connection's minted key. Once a credential-derived owner exists the scope is
-  // not consulted at all: the keyed caller keeps the identical durable path.
-  const replayConnectionScope = credentialOwnerKey === null && options.inboundTransport === "websocket"
-    && options.admission?.kind === "loopback"
-    ? connectionReplayScopeForThread(options.replayScope, inboundOwnThreadId) : undefined;
-  const replayOwnerKey = strictReplay
-    ? (credentialOwnerKey ?? connectionReplayScopeOwnerKey(replayConnectionScope) ?? null)
-    : undefined;
+  const { replayOwnerKey, replayConnectionScope } = selectResponseReplayOwner(strictReplay, replayPrincipal, inboundOwnThreadId, options);
   const replayThreadId = strictReplay ? inboundOwnThreadId : inboundClientThreadId;
   const cursorClientThreadId = codexPoolAffinityKey(req.headers);
   const originalBody = body;

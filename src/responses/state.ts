@@ -37,7 +37,7 @@ export type { ResponseSpillWriteFailureCode, ResponseSpillWriteStatus, ResponseS
 import type { ResponseSpillWriteFailureCode, ResponseSpillWriteStatus, ResponseSpillWriteFailureOrigin } from "./state/spill-failure";
 export { responseAdmissionCountersForTests } from "./state/spill-failure";
 import { admissionCounters, noteSpillWriteFailure, noteSpillWriteSuccess, resetSpillCountersForTests, spillCounters, spillWriteHealth } from "./state/spill-failure";
-import { loadSnapshotEntries, stageSnapshotEntries, type SnapshotLoadStore } from "./state/snapshot-codec";
+import { loadSnapshotEntries, snapshotFileFingerprint, stageSnapshotEntries, type SnapshotLoadStore } from "./state/snapshot-codec";
 import { isBodyNonPersistable } from "./state/body-policy";
 export { isBodyNonPersistable, markBodyNonPersistable } from "./state/body-policy";
 export { flushPendingResponseSpillsForTests, awaitResponseSpillPublicationTailForTests, pendingResponseSpillMetricsForTests, setResponseSpillShutdownBudgetForTests, setResponseSpillAsyncAclAttemptBudgetForTests, setResponseSpillShutdownTerminalizationPassLimitForTests } from "./state/spill-queue";
@@ -468,17 +468,32 @@ function setResidentEntry(id: string, entry: ResidentInput): void {
       admissionCounters.oversizedDrops += 1;
       return;
     }
+    const plan = (coldBytes: number, coldCount: number) => {
+      const { budgetBytes, retainedBytes } = appOwnedBytesSnapshot();
+      const headroom = Math.min(byteCap() - storedResponseBytes, budgetBytes - retainedBytes) - coldBytes;
+      const countToFree = states.size + coldCount + (expected ? 0 : 1) - MAX_STORED_RESPONSES;
+      return planConnectionScopeEvictions(states, scope, id, countToFree,
+        candidate.sizeBytes - (expected?.sizeBytes ?? 0) - headroom);
+    };
+    const path = loaded ? undefined : snapshotPath();
+    const cutoff = responseExpiryCutoff(now());
+    const cached = coldSnapshotAdmission;
+    // Cache only bounded admission facts, never decoded payloads outside the memory budget.
+    // A changed file or the next durable expiry invalidates them before they can reject a write.
+    if (path && cached?.path === path && cutoff <= cached.oldestCreatedAt
+      && snapshotFileFingerprint(path) === cached.fingerprint) {
+      if (cached.conflictingId === id || !plan(cached.bytes, cached.count)) return;
+    }
     // Live cold rows protect durable response IDs and count against both byte budgets.
-    const staged = loaded ? undefined : stageSnapshotEntries(
-      snapshotPath(), SNAPSHOT_FILE_MAX_BYTES, snapshotLoadStore, responseExpiryCutoff(now()),
-    );
+    const staged = path ? stageSnapshotEntries(path, SNAPSHOT_FILE_MAX_BYTES, snapshotLoadStore, cutoff) : undefined;
+    if (staged?.failed) return;
+    if (staged?.fingerprint !== undefined) coldSnapshotAdmission = {
+      path: staged.path, fingerprint: staged.fingerprint, bytes: staged.bytes, count: staged.entries.size,
+      oldestCreatedAt: staged.oldestCreatedAt, ...(staged.entries.has(id) ? { conflictingId: id } : {}),
+    };
     if (staged?.entries.has(id)) return;
-    const { budgetBytes, retainedBytes } = appOwnedBytesSnapshot();
-    const headroom = Math.min(byteCap() - storedResponseBytes, budgetBytes - retainedBytes) - (staged?.bytes ?? 0);
-    const countToFree = states.size + (staged?.entries.size ?? 0) + (expected ? 0 : 1) - MAX_STORED_RESPONSES;
-    const evictions = planConnectionScopeEvictions(states, scope, id, countToFree,
-      candidate.sizeBytes - (expected?.sizeBytes ?? 0) - headroom);
-    if (!evictions) return;
+    const evictions = plan(staged?.bytes ?? 0, staged?.entries.size ?? 0);
+    if (!evictions || !connectionReplayScopeAcceptsEntry(scope, id, entry.replayOwnerKey, entry.clientThreadId)) return;
     if (staged) {
       recoverSnapshotTemps(staged.path);
       for (const [rowId, row] of staged.entries) replaceMapEntry(rowId, row);
@@ -614,6 +629,9 @@ const replayedInputPrefixLengths = new WeakMap<object, number>();
 const clientCarriedReplays = new WeakSet<object>(); // overlap skip: the client resent the window itself
 const replayFailures = new WeakMap<object, PreviousResponseReplayFailure>();
 let loaded = false;
+let coldSnapshotAdmission: {
+  path: string; fingerprint: string; bytes: number; count: number; oldestCreatedAt: number; conflictingId?: string;
+} | undefined;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingPersistPath: string | null = null;
 /** Single-flight gate: overlapping response-state writes serialize (#612). */
@@ -664,16 +682,20 @@ const snapshotLoadStore: SnapshotLoadStore = {
 function finishSnapshotLoad(oversized: boolean): void {
   if (oversized) admissionCounters.snapshotOversizedRefusals += 1;
   loaded = true;
+  coldSnapshotAdmission = undefined;
   try { recoverOrphanedResponseSpills(ownedSpillFileNames()); } catch { /* best effort */ }
 }
 
 /** Best-effort lazy load so durable previous_response_id chains can survive a restart. */
-function ensureLoaded(): void {
-  if (loaded) return;
+function ensureLoaded(): boolean {
+  if (loaded) return true;
   const path = snapshotPath();
+  const result = loadSnapshotEntries(path, SNAPSHOT_FILE_MAX_BYTES, snapshotLoadStore);
+  if (result.failed) return false;
   recoverSnapshotTemps(path);
-  finishSnapshotLoad(loadSnapshotEntries(path, SNAPSHOT_FILE_MAX_BYTES, snapshotLoadStore));
+  finishSnapshotLoad(result.oversized);
   pruneResponses();
+  return true;
 }
 
 /** Every file name the process still needs: live stubs, deferred unlinks, and queued publications. */
@@ -1093,10 +1115,18 @@ export function expandPreviousResponseInput(body: unknown, clientThreadId?: stri
   const request = body as Record<string, unknown>;
   const previousId = typeof request.previous_response_id === "string" ? request.previous_response_id : undefined;
   if (!previousId) return body;
-  ensureLoaded();
+  if (!ensureLoaded()) {
+    if (replayOwnerKey !== undefined) replayFailures.set(request, { code: "previous_response_not_found", reason: "missing" });
+    return body;
+  }
   pruneResponses();
   const previous = states.get(previousId);
-  if (!previous) return body;
+  if (!previous) {
+    // Strict replay needs a local ownership proof even after a scoped entry was released.
+    // Legacy callers leave the owner undefined and retain their existing upstream continuation.
+    if (replayOwnerKey !== undefined) replayFailures.set(request, { code: "previous_response_not_found", reason: "missing" });
+    return body;
+  }
   // Authorize metadata BEFORE opening a spill or exposing provider continuation state.
   if (previous.kind !== "spill-failed" && !replayScopeMatches(previous, clientThreadId, replayOwnerKey)) {
     replayFailures.set(request, { code: "previous_response_not_found", reason: "scope_mismatch" });
@@ -1156,7 +1186,7 @@ export function previousResponseConversationId(responseId: string | undefined): 
 
 export function previousResponseProviderState(responseId: string | undefined): OcxProviderContinuationState | undefined {
   if (!responseId) return undefined;
-  ensureLoaded();
+  if (!ensureLoaded()) return undefined;
   pruneResponses();
   const state = states.get(responseId);
   const providers = state?.kind === "spill-failed" ? undefined : state?.providers;
@@ -1236,10 +1266,11 @@ export function rememberResponseState(
   if ((opts?.compiledPlaintext && !validReplayOwnerKey(opts.replayOwnerKey)) || opts?.replayOwnerKey === null || (opts?.replayOwnerKey !== undefined && !validReplayOwnerKey(opts.replayOwnerKey))) return;
   const connectionScope = opts?.connectionScope;
   if (connectionScope && !connectionReplayScopeAcceptsEntry(connectionScope, response.id, opts?.replayOwnerKey, opts?.clientThreadId)) return;
-  if (!connectionScope) ensureLoaded();
+  if (!connectionScope && !ensureLoaded()) return;
   const existing = states.get(response.id);
   // Never let a colliding upstream id replace a different caller's retained response.
-  if (existing && existing.kind !== "spill-failed" && !replayScopeMatches(existing, opts?.clientThreadId, opts?.replayOwnerKey)) return;
+  if (existing && existing.kind !== "spill-failed" && !replayScopeMatches(existing, opts?.clientThreadId, opts?.replayOwnerKey)
+    && !(!connectionScope && validReplayOwnerKey(opts?.replayOwnerKey) && isConnectionOwnedResponseState(existing))) return;
   const normalizedProviderState: OcxProviderContinuationState = typeof providerState === "string"
     ? { cursor: { conversationId: providerState } }
     : structuredClone(providerState ?? {});
@@ -1318,6 +1349,7 @@ export function clearResponseStateMemoryForTests(): void {
   lastSnapshotDigest = null;
   lastSnapshotTarget = null;
   loaded = false;
+  coldSnapshotAdmission = undefined;
 }
 
 export function clearResponseStateForTests(): void {

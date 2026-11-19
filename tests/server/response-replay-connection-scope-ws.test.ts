@@ -15,7 +15,7 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handleResponses } from "../../src/server/responses";
+import { createAdmittedHttpTurn } from "../../src/server/admitted-http-turn";
 import { clearResponseStateForTests, connectionReplayScopeOwnerKey, responseStateMetrics, type ConnectionReplayScope } from "../../src/responses/state";
 import { getAdapterDefinition } from "../../src/adapters/registry";
 import { adapterNeedsForcedContinuation, adapterNeedsToolCallContinuation } from "../../src/server/responses/core-replay";
@@ -48,14 +48,15 @@ afterEach(async () => {
   globalThis.fetch = originalFetch;
   if (originalCatalog === undefined) delete process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
   else process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = originalCatalog;
-  for (const ws of sockets.splice(0)) { try { ws.close(); } catch { /* already closed */ } }
-  if (server) await server.stop(true);
-  server = null;
-  release();
-  try { clearResponseStateForTests(); } finally {
-    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousHome;
-    removeTreeWithRetry(home);
+  try {
+    for (const ws of sockets.splice(0)) { try { ws.close(); } catch { /* already closed */ } }
+    try { if (server) await server.stop(true); } finally { server = null; release(); }
+  } finally {
+    try { clearResponseStateForTests(); } finally {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(home);
+    }
   }
 });
 
@@ -63,9 +64,10 @@ function config(): OcxConfig {
   return {
     hostname: "127.0.0.1", defaultProvider: "native", multiAgentMode: "v2-plaintext", websockets: true,
     providers: {
-      native: { adapter: "openai-responses", baseUrl: CODEX_FORWARD_BASE_URL, authMode: "forward", upstreamWebsocket: false },
+      native: { adapter: "openai-responses", baseUrl: CODEX_FORWARD_BASE_URL, authMode: "forward", upstreamWebsocket: false,
+        fetch: ((input, init) => globalThis.fetch(input, init)) as typeof fetch },
       swe: { adapter: "openai-responses", baseUrl: "https://swe-fixture.invalid/v1", authMode: "key",
-        apiKey: "swe-fixture-key", models: ["argon-1"] },
+        apiKey: "swe-fixture-key", models: ["argon-1"], fetch: ((input, init) => globalThis.fetch(input, init)) as typeof fetch },
     },
     // No apiKeys: the Design-B shape. Every loopback request is admitted without a
     // credential, so resolveContextPrincipal finds nothing and the upgrade mints a scope.
@@ -109,6 +111,7 @@ function startScopeServer(cfg: OcxConfig, captured?: { scope?: ConnectionReplayS
     config: cfg, deps: {}, ingressForServer: () => "public",
     packageTreeIntegrity: { status: () => ({ ok: true }) },
     managementApiDeps: {}, inboundBodyLimitBytes: 1024 * 1024,
+    runAdmittedHttpTurn: createAdmittedHttpTurn(() => 1024 * 1024, () => Response.json({ error: "fixture busy" }, { status: 503 })),
   } as unknown as ServeOptionsContext);
   server = Bun.serve<WsData>({
     ...options, hostname: "127.0.0.1", port: 0,
@@ -119,8 +122,8 @@ function startScopeServer(cfg: OcxConfig, captured?: { scope?: ConnectionReplayS
           if (captured) captured.scope = upgrade.data.replayScope;
           return target.upgrade(request, upgrade);
         };
-        if (property === "requestIP") return target.requestIP.bind(target);
-        return Reflect.get(target, property, target);
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
       } });
       return options.fetch(req, observingServer);
     },
@@ -195,6 +198,17 @@ test("same connection replays; a second socket, a reconnect and HTTP all keep th
   expect(sent.join("")).not.toContain(key);
   expect(JSON.stringify(turn2)).not.toContain(key);
 
+  // The socket is still live and its first ID was just proven replayable. Exercise the
+  // actual HTTP ingress without transferring the connection's replay authority.
+  const http = await originalFetch(new URL("/v1/responses", server!.url), {
+    method: "POST", headers: { "content-type": "application/json", "thread-id": "own-a" },
+    body: JSON.stringify({ model: "native/gpt-5.6-sol", store: false, stream: true,
+      previous_response_id: "resp-ws-1", input: [] }),
+  });
+  expect(http.status).toBe(400);
+  expect((await http.json()).error.code).toBe("previous_response_not_found");
+  expect(sent).toHaveLength(2);
+
   // A second socket on the same thread mints a different scope: no shared authority.
   const second = await openSocket("own-a");
   const denied = await turn(second, create("resp-ws-1"));
@@ -217,14 +231,6 @@ test("same connection replays; a second socket, a reconnect and HTTP all keep th
   expect(fresh.map(f => f.type)).toContain("response.completed");
   expect(sent).toHaveLength(3);
 
-  // HTTP POST on the same thread keeps the explicit refusal too.
-  const http = await handleResponses(new Request("http://localhost/v1/responses", {
-    method: "POST", headers: { "content-type": "application/json", "thread-id": "own-a" },
-    body: JSON.stringify({ model: "native/gpt-5.6-sol", store: false, stream: true,
-      previous_response_id: "resp-ws-3", input: [] }),
-  }), cfg, { model: "", provider: "" }, { admission: LOOPBACK, inboundWire: "responses" });
-  expect(http.status).toBe(400);
-  expect(sent).toHaveLength(3);
 });
 
 test("a routed Responses store:false tool turn replays on the same socket only", async () => {
