@@ -1165,7 +1165,8 @@ dashboard's request logs. When a completed response reports token counts, the lo
 them and computes the end-to-end output rate. For models with a matched official rate, the
 `~$` column estimates the equivalent Gemini API cost from reported input, output and cache-hit
 tokens. The amount is an API price reference for Antigravity OAuth sessions.
-The log details show the named reasoning tier or explicit thinking control and the first
+The log details show the selected provider and model and the router's selection reason.
+They also show the named reasoning tier or explicit thinking control and the first
 visible output time for a stream. Decode throughput is estimated from the observed output
 window when it includes the reported reasoning output.
 

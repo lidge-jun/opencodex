@@ -136,6 +136,10 @@ test("opted-in Gemini routes preserve native JSON and replace every ingress cred
     expect(await response.text()).toBe(PAYLOAD);
     const log = getRequestLogEntries().find(row => row.requestId === response.headers.get("x-opencodex-request-id"));
     expect(log).toMatchObject({ usageStatus: "reported", usage: USAGE, totalTokens: 27, effectiveEffort: "medium" });
+    expect(log?.routeDecision).toMatchObject({
+      routeKind: "explicit-provider",
+      selected: { provider: PROVIDER, model: MODEL, reason: "explicit-provider-namespace" },
+    });
     expect(log?.protocolTrace).toMatchObject({
       inbound: "gemini",
       upstream: "gemini",
@@ -226,6 +230,7 @@ test("native selection shares key, origin, host, and model-scope refusals", asyn
         const log = getRequestLogEntries().find(row => row.requestId === requestId);
         expect(log).toBeDefined();
         expect(log?.protocolTrace).toBeUndefined();
+        expect(log?.routeDecision).toBeUndefined();
       }
     }
     expect(seen).toHaveLength(0);

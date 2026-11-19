@@ -9,6 +9,7 @@ use the bridge for their inherited-policy checks. The Google Antigravity Account
 existing rollout flag through the protocol settings PATCH.
 
 The native leg checks the captured admission model scope against the resolved destination.
+On admission it copies the router's decision into the shared request log.
 `src/server/gemini-native-catalog.ts` extends the configured Gemini catalog with visible Gemini
 models from the existing Antigravity discovery cache and the shared model visibility filter.
 List, lookup and token counting apply the same route and key checks to the advertised
