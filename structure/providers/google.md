@@ -434,10 +434,11 @@ reason is kept apart and never used for account decisions.
 `src/adapters/google-errors.ts` lets structured reasons outrank prose: `QUOTA_EXHAUSTED` and
 `INSUFFICIENT_G1_CREDITS_BALANCE` are quota exhaustion on every Google label (not retried), and `RATE_LIMIT_EXCEEDED`
 is a transient rate limit on Antigravity even when the prose sounds like quota, as CPA reads it; on AI Studio and
-Vertex the daily-quota prose still decides. In `fetchGoogleWithRetry` a delay stated only in the body is the floor
-for the next send, like a `Retry-After` header (an explicit header still wins), and a delay past the retry ceiling
-ends with the 429 carrying it as `Retry-After`; AI Studio, which returns raw upstream errors, gets the same header on
-a copy of the raw 429 (also on quota exhaustion), with Google's body and status unchanged. A 403 whose body is an object with code 403, `PERMISSION_DENIED`
+Vertex the daily-quota prose still decides. `src/adapters/google-http.ts` validates Retry-After once per retryable
+response. A valid delta-seconds value (including zero) or HTTP-date takes precedence. On a 429, an invalid or missing
+header falls back to the body delay. The effective delay supplies replay evidence and a floor for the next send.
+If it exceeds the retry ceiling, the request ends with the 429 carrying that advice as Retry-After. AI Studio keeps
+Google's body and status on raw 429s, including quota exhaustion. A 403 whose body is an object with code 403, `PERMISSION_DENIED`
 and a typed `ErrorInfo` `TOS_VIOLATION` entry becomes the fixed message
 `Antigravity account suspended (TOS_VIOLATION): ...`, which never echoes Google's appeal text; dispatch trusts only
 that leading prefix (`classifyAntigravityRefusal`) and quarantines only first-party Cloud Code Assist OAuth

@@ -1,6 +1,5 @@
 import { parseUpstreamJsonPayload, safeUpstreamErrorString, sanitizeUpstreamErrorText } from "./upstream-http-error";
 import { isLocationUnsupportedMessage } from "../lib/errors";
-import { retryAfterDelayMs } from "../lib/upstream-retry";
 import { googleErrorDetails, isAntigravityTosViolationBody } from "./google-error-details";
 
 export const ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX = "Antigravity account validation required (VALIDATION_REQUIRED)";
@@ -226,9 +225,8 @@ const GOOGLE_RETRYABLE_429_MESSAGE_NEEDLES = [
  * The ladder replays a byte-identical body after 250 ms, doubling to 2 s. That is a sensible
  * probe for a burst limit that clears, and meaningless for a refusal Google already made on the
  * request's shape: the same bytes are refused again. Only evidence in the response separates
- * the two, so this reports whether any exists — a parseable `Retry-After` header, a `RetryInfo.retryDelay`
- * / `quotaResetDelay` detail, a transient-rate-limit phrase, or a structured
- * `ErrorInfo.reason`. A 429 with none of them is reported as-is instead of being replayed.
+ * the two. When there is no validated Retry-After, check for a typed delay detail, a
+ * transient rate-limit phrase, or a structured `ErrorInfo.reason` before replaying.
  *
  * Observed Cloud Code Assist shapes behind this split (same account, minutes apart):
  * - capacity: `RESOURCE_EXHAUSTED` / "You have exhausted your capacity on this model. Resets in
@@ -238,8 +236,7 @@ const GOOGLE_RETRYABLE_429_MESSAGE_NEEDLES = [
  *   quota)." with no `details`, no `Retry-After` — replayed three times per turn, refused three
  *   times per turn.
  */
-export function hasGoogle429RetryEvidence(headers: Headers, payloadText: string): boolean {
-  if (retryAfterDelayMs(headers) !== undefined) return true;
+export function hasGoogle429BodyRetryEvidence(payloadText: string): boolean {
   if (hasGoogleRetryDelayDetail(payloadText)) return true;
   const messageText = googleMessageText(payloadText).toLowerCase();
   if (isGoogleTransientRateLimitText(messageText)) return true;

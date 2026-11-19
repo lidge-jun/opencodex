@@ -270,7 +270,7 @@ rows to client or catalog model identities and validated provider ids, omitting 
 is interpolated into those local messages. No serialized flag, code or header mints identity.
 The shared builders live in `src/combos/resolve.ts`, `src/server/admission-model-scope.ts`,
 `src/server/responses/input-admission.ts` and `src/oauth/generic-account-failover.ts`. See [combo output headroom](../transports/responses-failover.md#combo-output-headroom) for the strict pre-dispatch gate, including the input margin and reserve when `max_output_tokens` is omitted.
-`src/lib/upstream-retry.ts` owns the retry constructors. For a transient 5xx, `fetchWithTransientRetry`
+`src/lib/upstream-retry.ts` owns the retry constructors. Its transient ladder parses Retry-After once for deadline and backoff, accepting decimal digits (including zero) or the three UTC forms in `src/lib/http-date.ts` (past dates give zero). For a transient 5xx, `fetchWithTransientRetry`
 does not resend a response whose bounded body prefix proves context overflow. It reads at most 16,384
 bytes from a clone within 250ms or until cancellation, leaving the returned body intact. Event streams
 and bodies without an observed verdict retain the normal retry; a verdict observed before a slow or

@@ -1506,7 +1506,7 @@ describe("agent task recovery transient retry (#3661)", () => {
       fetches += 1;
       if (fetches === 1) {
         firstAt = Date.now();
-        return new Response("private failure", { status: 503, headers: { "retry-after": "2.5" } });
+        return new Response("private failure", { status: 503, headers: { "retry-after": "3" } });
       }
       secondAt = Date.now();
       return new Response(recoverySse("Recovered after outage."));
@@ -1514,7 +1514,7 @@ describe("agent task recovery transient retry (#3661)", () => {
     expect(await recoverEncryptedAgentTaskWithResult(req(), encryptedInput(), { retries: 1 }, routedConfig()))
       .toEqual({ recovered: true });
     expect(fetches).toBe(2);
-    // 2.5 s exceeds RECOVERY_RETRY_MAX_DELAY_MS (2 s), so a capped wait would resend sooner.
-    expect(secondAt - firstAt).toBeGreaterThanOrEqual(2_400);
+    // 3 s exceeds RECOVERY_RETRY_MAX_DELAY_MS (2 s), so a capped wait would resend sooner.
+    expect(secondAt - firstAt).toBeGreaterThanOrEqual(2_900);
   }, 10_000);
 });
