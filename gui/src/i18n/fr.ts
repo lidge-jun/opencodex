@@ -2046,6 +2046,8 @@ export const fr: Record<TKey, string> = {
   "pws.xaiChatOptIn": "Utiliser Chat Completions pour Grok 4.5 et 4.6",
   "pws.xaiChatOptInDesc": "Désactivé : Responses, le choix par défaut pour les requêtes Responses OAuth. Les autres modèles Grok et les niveaux de service restent inchangés.",
   "pws.xaiChatOptInMixed": "Un seul modèle utilise Chat.",
+  "pws.subscriptionRetries": "Tentatives supplémentaires avec le même modèle avant la sortie",
+  "pws.subscriptionRetriesDefault": "Par défaut (aucun nouvel essai pour le compte principal)",
   "pws.cursorTransport": "Transport Cursor",
   "pws.cursorTransportHttp2": "HTTP/2 (par défaut)",
   "pws.cursorTransportHttp1": "HTTP/1.1 (compatibilité proxy)",

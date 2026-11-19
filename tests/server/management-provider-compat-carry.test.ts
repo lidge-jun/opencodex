@@ -426,6 +426,27 @@ describe("PATCH and POST validate the settings they name", () => {
     });
   });
 
+  test("canonical ChatGPT retry settings survive a dashboard save and reload", async () => {
+    await withServer({ openai: { adapter: "openai-responses", authMode: "forward",
+      baseUrl: "https://chatgpt.com/backend-api/codex", codexAccountMode: "direct" } }, async url => {
+      const path = "/api/providers?name=openai";
+      const policy = { attempts: 6 };
+      expect((await send(url, path, "PATCH", { transientRetryOn5xx: policy })).status).toBe(200);
+      expect(loadConfig().providers.openai?.transientRetryOn5xx).toEqual(policy);
+      const rows = await (await fetch(new URL("/api/providers", url))).json() as Array<Record<string, unknown>>;
+      expect(rows.find(row => row.name === "openai")?.transientRetryOn5xx).toEqual(policy);
+      for (const invalid of [
+        { attempts: 0 }, { attempts: 11 }, { attempts: 1.5 },
+        { enabled: "true", attempts: 3 }, { attempts: 3, surprise: true },
+      ]) {
+        expect((await send(url, path, "PATCH", { transientRetryOn5xx: invalid })).status).toBe(400);
+        expect(loadConfig().providers.openai?.transientRetryOn5xx).toEqual(policy);
+      }
+      expect((await send(url, path, "PATCH", { transientRetryOn5xx: null })).status).toBe(200);
+      expect(loadConfig().providers.openai?.transientRetryOn5xx).toBeUndefined();
+    });
+  });
+
   test("PATCH writes and clears the three retry policies", async () => {
     await withServer({ relay: { adapter: "openai-chat", baseUrl: BASE_URL } }, async url => {
       for (const [field, value] of [

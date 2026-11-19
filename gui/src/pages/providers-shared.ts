@@ -9,6 +9,7 @@ export interface ProvidersConfig {
     defaultModel?: string;
     models?: string[];
     liveModels?: boolean;
+    transientRetryOn5xx?: { enabled?: boolean; attempts?: number };
     upstreamHttpVersion?: "auto" | "http1.1" | "h1" | "http2" | "h2";
     reasoningWireFormat?: "gateway-object";
     preserveResponsesReasoningContent?: boolean;

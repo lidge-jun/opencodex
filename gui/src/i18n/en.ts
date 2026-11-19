@@ -2073,6 +2073,8 @@ export const en = {
   "pws.xaiChatOptIn": "Use Chat Completions for Grok 4.5 and 4.6",
   "pws.xaiChatOptInDesc": "Off selects Responses. OAuth Responses requests use it by default. Other Grok models and tier behavior are unchanged.",
   "pws.xaiChatOptInMixed": "Only one model uses Chat.",
+  "pws.subscriptionRetries": "Same-model retries before output",
+  "pws.subscriptionRetriesDefault": "Default (main retries off)",
   "pws.cursorTransport": "Cursor transport",
   "pws.cursorTransportHttp2": "HTTP/2 (default)",
   "pws.cursorTransportHttp1": "HTTP/1.1 (proxy compatibility)",

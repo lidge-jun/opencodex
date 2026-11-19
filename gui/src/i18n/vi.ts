@@ -2043,6 +2043,8 @@ export const vi: Record<TKey, string> = {
   "pws.xaiChatOptIn": "Sử dụng Chat Completions cho Grok 4.5 và 4.6",
   "pws.xaiChatOptInDesc": "Tắt để chọn Responses. Các yêu cầu OAuth Responses sử dụng tuỳ chọn này theo mặc định. Các model Grok khác và hành vi của gói không bị ảnh hưởng.",
   "pws.xaiChatOptInMixed": "Chỉ có một model sử dụng Chat.",
+  "pws.subscriptionRetries": "Số lần thử lại cùng mô hình trước khi có đầu ra",
+  "pws.subscriptionRetriesDefault": "Mặc định (tài khoản chính không thử lại)",
   "pws.cursorTransport": "Cursor transport",
   "pws.cursorTransportHttp2": "HTTP/2 (mặc định)",
   "pws.cursorTransportHttp1": "HTTP/1.1 (tương thích với proxy)",

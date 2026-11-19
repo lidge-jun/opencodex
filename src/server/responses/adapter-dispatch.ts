@@ -196,6 +196,7 @@ export async function prepareAdapterExchange(
     | "claimAmbiguousResend"
     | "sendsUsed"
     | "targetSendsUsed"
+    | "compactHandoffSendCeiling"
     | "initialSendAllowance"
     | "noteInitialDispatch"
   >,
@@ -396,6 +397,8 @@ export async function prepareAdapterExchange(
     || (route.providerName === "github-copilot" && route.provider.authMode !== "forward")
     || hostedAdvisorCredentials.has(request);
   let billingRecoveryActive = false;
+  const reserveCompactRetrySpend = () => sendBudgetState.compactHandoffSendCeiling !== undefined
+    && sendBudgetState.adapterSendBudget?.spendEnforced === true;
   const genericRefetchCountsSends = () => !!sendBudgetState.workflowRootId || options.comboAttempt === true || sendBudgetState.adapterSendBudget?.spendEnforced === true
     || transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null
     || !!anthropicInstance || billingPoolRequest || billingRecoveryActive || autoPauseEnabled || imageRecovery !== undefined;
@@ -518,6 +521,7 @@ export async function prepareAdapterExchange(
           abortSignal: upstream.signal,
           label: safeHostLabel(builtInitialRequest.url), destination: errorDestinationLabel(builtInitialRequest.url),
           claimAmbiguousResend: claimPreHeaderResend,
+          reserveRetrySpend: reserveCompactRetrySpend,
           offlineWait: options.comboAttempt ? undefined : createProviderOfflineResendWait(route.providerName, route.provider, builtInitialRequest.url, config.offlineResendWaitSec),
           ...(sendBudgetState.workflowRootId || sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
             || anthropicInstance || billingPoolRequest || autoPauseEnabled || imageRecovery
@@ -804,6 +808,7 @@ export async function prepareAdapterExchange(
                 abortSignal: upstream.signal,
                 label: safeHostLabel(retryRequest.url), destination: errorDestinationLabel(retryRequest.url),
                 claimAmbiguousResend: claimPreHeaderResend,
+                reserveRetrySpend: reserveCompactRetrySpend,
                 ...(refetchAllowance
                   ? {
                     attempts: refetchAllowance.attempts,
@@ -1239,12 +1244,7 @@ export async function prepareAdapterExchange(
         }
       }
 
-      // Same-target 429 wait-and-retry (opt-in `retryOn429`, issue #487). Codex never retries
-      // 429 itself (it retries 5xx only), and single-key pools cannot use the failover below,
-      // so wait (Retry-After or the fixed interval) and replay the IDENTICAL request on the
-      // same key first. Pre-stream only: a 429 arrives before any bytes are relayed, so the
-      // replay is lossless. Runs before key failover so "primary-first" setups keep the same
-      // key on rate-limit blips; only after the attempts are exhausted does failover run.
+      // Honor retryOn429 on the same key before rotating it (#487).
       while (
         upstreamResponse.status === 429 && !isSameTargetRetryHold(upstreamResponse)
         && rateLimitPolicy !== null && providerAffinityGenerationIsCurrent(config, route.providerName, route.provider)
@@ -1252,11 +1252,11 @@ export async function prepareAdapterExchange(
         && !sendBudgetExhausted()
       ) {
         rateLimitRetries += 1;
-        // Release unread body + deliberate wait via the shared same-target helper.
         const retryAfterHeader = upstreamResponse.headers.get("retry-after");
+        const preceding = reserveCompactRetrySpend() ? await retainFailureResponse() : undefined;
         try {
           for await (const _ of prepareSameTarget429Wait({
-            body: upstreamResponse.body,
+            body: preceding ? null : upstreamResponse.body,
             signal: options.abortSignal,
             delayMs: rateLimitRetryDelayMs(rateLimitPolicy, retryAfterHeader, Date.now()),
           })) {
@@ -1267,15 +1267,15 @@ export async function prepareAdapterExchange(
           upstream.abort();
           return clientCancelledResponse();
         }
-        // Client cancellation wins over any stale timer edge: re-check before dispatching the
-        // replay so an adapter never starts work for a request the client already abandoned.
+        // Recheck cancellation after the wait.
         if (options.abortSignal?.aborted || upstream.signal.aborted) {
           cleanupUpstreamAbort();
           upstream.abort();
           return clientCancelledResponse();
         }
-       const result = await rebuildAndRefetch("rate-limit-429");
+       const result = await rebuildAndRefetch("rate-limit-429", undefined, preceding);
        if ("failed" in result) return result.failed;
+       void preceding?.body?.cancel().catch(() => undefined);
        upstreamResponse = result;
         // The refusal is a 429 too: without this the while condition is still true and the
         // next configured attempt replays it on the same target.

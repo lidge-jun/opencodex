@@ -47,6 +47,8 @@ export interface SpendTargetIdentity extends SpendScopes {
    * unkeyed same-scope lookup.
    */
   readonly explicitEstimate?: boolean;
+  /** An opted-in retry owns a fresh reservation using the request's estimate. */
+  readonly freshRetry?: boolean;
 }
 export interface RequestSpendReporter {
   start(seed: SpendSeed, ordinal: number): void;
@@ -119,7 +121,7 @@ export function createRequestSpendTracker(
   let finalRequested = false;
   let finalUsage: TerminalSpendUsage | undefined;
   let reporters = 0;
-  const seeds = new Map<string, { seed: SpendSeed; started: boolean; reported: boolean; auxiliary: boolean; explicitEstimate: boolean; estimate?: { inputTokens: number; outputCeilingTokens: number } }>();
+  const seeds = new Map<string, { seed: SpendSeed; started: boolean; reported: boolean; auxiliary: boolean; independent: boolean; retryScopes?: SpendScopes; estimate?: { inputTokens: number; outputCeilingTokens: number } }>();
   const auxiliarySendIds = new Set<string>();
   // Abandoned capabilities retain cleanup ownership, never admission lookup.
   const retiredSeeds = new Set<SpendSeed>();
@@ -290,7 +292,9 @@ export function createRequestSpendTracker(
       if (resolved || finalRequested && reporters === 0) return undefined;
       const scopes = selectedScopes(target);
       if (!applicable(scopes)) return undefined;
-      const key = JSON.stringify([scopes.rootId, scopes.identityId, scopes.poolId, target.targetKey]);
+      const independent = target.explicitEstimate === true || target.freshRetry === true;
+      const key = JSON.stringify([scopes.rootId, scopes.identityId, scopes.poolId, target.targetKey,
+        ...(target.freshRetry ? [randomUUID()] : [])]);
       const existing = seeds.get(key);
       if (existing) return existing.seed;
       if (prepaidProof?.ledger === ledger()) {
@@ -303,33 +307,34 @@ export function createRequestSpendTracker(
           }
         }
       }
-      if (target.targetKey === undefined) {
+      if (target.targetKey === undefined && !target.freshRetry) {
         const same = [...seeds.entries()].find(([candidate, candidateState]) => {
           const identity = JSON.parse(candidate) as Array<string | undefined>;
-          return candidateState.explicitEstimate !== true
+          return !candidateState.independent
             && identity[0] === (scopes.rootId ?? null) && identity[1] === (scopes.identityId ?? null) && identity[2] === (scopes.poolId ?? null);
         });
         if (same) return same[1].seed;
       }
       // Rebind an unused provisional anchor before selection changes. Dispatched anchors stay
-      // live, and an explicit-estimate successor neither retires nor is retired by another leg:
+      // live, and an independent send neither retires nor is retired by another leg:
       // both directions would destroy a booking its own reporter still owns.
-      for (const [oldKey, state] of seeds) if (!state.started && !state.explicitEstimate && !target.auxiliary && target.explicitEstimate !== true) {
+      for (const [oldKey, state] of seeds) if (!state.started && !state.independent && !target.auxiliary && !independent) {
         if (!retireSeed(oldKey, state.seed)) return undefined;
       }
       // Exact prepaid proofs originate from this tracker and are found above; foreign receipts
       // cannot enroll arbitrary scopes. Normal reservation remains the only initial admission.
       if (prepaidProof && prepaidProof.ledger !== ledger()) return undefined;
-      const estimate = target.auxiliary || target.explicitEstimate ? target.estimate : undefined;
+      const estimate = target.freshRetry ? target.estimate ?? estimates()
+        : target.auxiliary || target.explicitEstimate ? target.estimate : undefined;
       const decision = ledger().reserveSeed({ sendId: randomUUID(), scopes, ...(estimate ?? estimates()), admissionPolicy }, tracker);
       if (!decision.reserved) {
         // Use the established denial mapping without making another reservation.
-        refusal(decision.denial, !target.auxiliary);
+        refusal(decision.denial, !target.auxiliary && !target.freshRetry);
         return undefined;
       }
       seededAccounting = true;
       seeds.set(key, { seed: decision.seed, started: false, reported: false, auxiliary: target.auxiliary === true,
-        explicitEstimate: target.explicitEstimate === true, estimate });
+        independent, estimate, ...(target.freshRetry ? { retryScopes: scopes } : {}) });
       return decision.seed;
     },
     releaseSeed(seed) {
@@ -359,12 +364,22 @@ export function createRequestSpendTracker(
           const owned = starts.find(start => start.ordinal === ordinal);
           if (closed || !entry || !owned || entry.sendId) throw new Error("Invalid spend reporter rebind");
           const old = seedState(entry.seed)!;
+          if (old.retryScopes) {
+            const next = selectedScopes(target);
+            if (old.retryScopes.identityId === next.identityId && old.retryScopes.poolId === next.poolId) return true;
+          }
           // A helper start is provisional until selection reaches the executor. If this is
           // the first start on its seed, abandon/rebind at NORMAL capacity before the wire.
           physical.delete(ordinal);
           old.started = [...physical.values()].some(start => start.seed === old.seed);
-          const seed = tracker.ensureSeed(target);
-          if (!seed) { starts.splice(starts.indexOf(owned), 1); return false; }
+          let seed: SpendSeed | undefined;
+          try {
+            if (old.retryScopes) tracker.releaseSeed?.(old.seed);
+            seed = tracker.ensureSeed(old.retryScopes ? { ...target, estimate: old.estimate, freshRetry: true } : target);
+          } finally {
+            if (!seed) starts.splice(starts.indexOf(owned), 1);
+          }
+          if (!seed) return false;
           physical.set(ordinal, { seed });
           owned.seed = seed;
           seedState(seed)!.started = true;
