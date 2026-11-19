@@ -1184,8 +1184,11 @@ local HTTP authorization; cleanup, renewal, stopping and turning off startup sti
 1. Inspect status, prepare the encrypted certificate and review its fingerprint before
    registering trust. Windows may ask for confirmation. Trust applies to the current Windows
    user and allows the local relay to handle `chatgpt.com` traffic.
-2. Start observation. Save drafts, close Codex, then use **Open Codex** in this panel to launch
-   the packaged app with the managed connection. The panel never forcibly closes an existing app.
+2. Start observation with an official Microsoft Store Codex package for the current Windows user.
+   Windows must verify the package contents, and the installed `ChatGPT.exe` must have a valid
+   OpenAI Authenticode signature. If either check fails or is unavailable, repair or reinstall Codex
+   from the Microsoft Store and try again. Save drafts, close Codex, then use **Open Codex** to
+   launch the verified build with the managed connection.
 3. Only after eligible exhaustion is observed, **Run 3-minute trial** offers a separate account-wide
    consent. It adjusts two UI flags across the signed-in account, not just the selected model.
    Actual usage, credits, spending restrictions and server limits remain unchanged. A produced
@@ -1221,8 +1224,10 @@ address. The first successful start owns `codex-desktop-compatibility/connection
 the OpenCodex home. Do not delete that file as a routine restart fix: a different address
 requires launching the app with a fresh managed connection.
 
-Current support is limited to the assessed Windows build `26.924.2738.0`, native file-based
-login. HTTP/HTTPS proxies and authenticated SOCKS5 proxies are supported through the shared
+Current support requires the official Windows package proof and native file-based
+login. The observed package version is admitted by that proof rather than an exact-version
+list; the natively assessed baseline remains `26.924.2738.0`.
+HTTP/HTTPS proxies and authenticated SOCKS5 proxies are supported through the shared
 outbound policy; NO_PROXY can explicitly select a direct route. Failed proxy connections do not
 fall back to direct egress. OpenCodex managed client mode is not yet supported by these controls.
 For this desktop relay, HTTP(S) `ALL_PROXY` also applies when `HTTPS_PROXY` is unset. An invalid
@@ -1259,24 +1264,40 @@ controls for immediate changes. If a save cannot be confirmed, refresh its statu
 A running service does not establish that Codex is connected through it. A normal app launch or
 an app updater can omit the managed connection argument. Save drafts, close Codex, then use
 **Open Codex** in this panel to restore that connection. This control never closes the app for you.
-After a Codex update, an unassessed app version refuses correction until its compatibility is
-reviewed; reinstalling the certificate does not make an unassessed build supported.
+After a Codex update, the runtime checks the changed package identity before emitting a
+correction, not before every usage response; a non-200 or otherwise correction-ineligible
+response can leave an active trial in place until a periodic check or an eligible usage
+response. The identity change clears both the prior exhaustion observation and trial consent.
+Even for a proof-verified newer build, wait for a new eligible original response that establishes
+exhaustion before giving fresh consent; Apply remains unavailable until that observation arrives.
+Reinstalling the certificate does not make an unverifiable package supported.
 
 The panel can also report the last completed build check as diagnostic metadata: the package
-version this build was assessed against, the package version observed at that check, whether
-they matched, and when the check finished. It is a past observation, not a live reading of the
+version serving as the natively assessed baseline, the package version observed at that check,
+and when the check finished; the proof verdict itself is reported by the runtime status API, not
+the panel. It is a past observation, not a live reading of the
 installed package. After the service stops, the app updates, or a check is still running or was
 interrupted, it can lag the actual installation; only a completed probe refreshes it, and a
 `verified` result describes the package observed at that check, not whatever is installed now.
 
 On Windows, an explicit OpenCodex full-app restart preserves an already active loopback
 compatibility PAC argument only when the current OpenCodex process owns the serving compatibility
-runtime. A stale or foreign endpoint is refused before stopping Codex; replacement of the runtime
-during restart also prevents managed relaunch. The app launches through Windows package activation. It checks the
-package identity and routing argument after launch; unreadable or conflicting main-app routing arguments cause
-a refusal before the restart. This does not enable a compatibility mode, install a certificate,
+runtime. A stale or foreign endpoint, mismatched install, or unreadable or conflicting main-app
+routing arguments cause a refusal before stopping Codex. After stopping, OpenCodex checks the
+captured runtime and build again. Windows package activation requires the verified package full
+name and executable SHA-256. OpenCodex checks that identity and the routing argument on the
+launched process before reporting success. This does not enable a compatibility mode, install a certificate,
 or watch and restart the app automatically. Normal launches without that routing argument keep
 their existing behavior.
+
+If package activation through **Open Codex** or a managed restart cannot be verified,
+OpenCodeX revokes the trial and starts cleaning up the compatibility service. Save drafts and
+close any Codex window left running. If runtime status reports `cleanup-required`, select
+**Stop observation** again and confirm that the runtime is `off`. Once cleanup succeeds,
+start observation and select **Open Codex** to restore the managed connection. Then wait for
+a fresh eligible exhaustion snapshot before confirming a new trial. Follow this sequence even
+if activation failed before a Codex window opened, or if the installed package changed while
+**Open Codex** was waiting; a launch never reports success for a package that changed meanwhile.
 
 ### Transport coverage and recovery evidence
 

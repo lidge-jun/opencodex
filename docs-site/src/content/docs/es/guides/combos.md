@@ -576,7 +576,7 @@ La escalera anunciada del objetivo sigue siendo autorizada. Se conserva un valor
 
 En modo estricto, los niveles de esfuerzo publicados por un combo son la intersección de los niveles de sus destinos. Si un destino indica explícitamente que **no** admite control de esfuerzo, su conjunto vacío participa en la intersección y la deja vacía para todo el combo, aunque los demás destinos permitan ajustar el esfuerzo.
 
-Configure `reasoningEffortMode: "adaptive"` para excluir esos conjuntos vacíos de la intersección publicada. El selector muestra los niveles comunes de los destinos restantes; el destino sin control de esfuerzo sigue siendo elegible para el enrutamiento. Los destinos cuyos niveles son simplemente *desconocidos* se tratan como comodines en ambos modos.
+Configure `reasoningEffortMode: "adaptive"` para excluir esos conjuntos vacíos de la intersección publicada. El selector muestra los niveles comunes de los destinos restantes; el destino sin control de esfuerzo sigue siendo elegible para el enrutamiento. Los destinos cuyos niveles son simplemente *desconocidos* se tratan como comodines en ambos modos. En un Combo JEV con `jevEffortMode: "decide"`, el selector de Codex oculta el control de esfuerzo incluso si se configura `reasoningEffortMode: "adaptive"`.
 
 ```json
 {
@@ -736,6 +736,16 @@ Compruebe primero la gramática del alias y los nombres reservados. Un alias dup
 
 ### Rechazos por ventana de contexto
 
+Antes de enviar una solicitud a un destino de un combo de Responses con ventana de contexto y
+límite de entrada conocidos, OpenCodex aplica un margen de 1,1× a la estimación de tokens de
+entrada y redondea hacia arriba. La entrada ajustada debe caber en el límite de entrada, y la suma
+de esa entrada y la reserva de salida debe caber en la ventana de contexto. La comprobación puede
+omitir un destino aunque la solicitud no indique `max_output_tokens`. En ese caso, reserva el 10 %
+de la ventana del destino, con un mínimo de 1024 tokens y un máximo de 32 768. Si se conoce el
+límite de salida del destino, este también limita la reserva, incluso cuando la solicitud indica
+una cantidad. Si se desconoce la ventana, se aplica la comprobación de entrada habitual
+(`checkInputAdmission`).
+
 La recuperación de combos utiliza el mismo detector acotado de desbordamiento de contexto que Responses. Lee el mensaje más interno del proveedor y reconoce `context_length_exceeded`, `prompt is too long`, `input is too long for requested model` y `Please reduce the length of the messages or completion`. Los tres últimos solo cuentan cuando el mensaje comienza con ellos; en el caso de Anthropic se incluyen sus recuentos de tokens. Un error de validación que cite esas frases como valor de un parámetro o una cadena de error de SDK que las envuelva no cumplen la condición. Tampoco la cumplen un código junto a un mensaje ajeno al contexto, JSON mal formado, un error de validación de parámetros o una instrucción genérica de acortar un parámetro.
 
 La salida ya confirmada nunca se reproduce. Se mantienen la política de fallback, el consentimiento de gasto y los presupuestos de envío; cada intento físico conserva su propio uso. Si se agotan los objetivos elegibles o el presupuesto, el primer rechazo HTTP 400 de contexto confirmado tiene prioridad sobre errores reintentables posteriores, incluidos los de cuota. Un rechazo fatal posterior detiene el proceso inmediatamente.
@@ -781,6 +791,8 @@ Una pasada de recuperación pertenece solo a la solicitud que la reservó; las d
 Un HTTP 400 puede ser incompatibilidad local del destino. El wrapper opaco OpenRouter `Provider returned error`, `code: 400` numérico, sin `type` y con `metadata.raw: "ERROR"`, permite otro destino sin enfriarlo. Un 400 tipado sin código, un `response_format` mal formado o código raíz terminal siguen siendo terminales. Una raíz con `model_not_found`, insufficient_quota, usage_limit_exceeded, free_rate_limited, `input_admission_refused` o unsupported_input_modality no añade otro veredicto; código vacío es ausente. Un evento de error streaming sin estado pero con `code` entero 400–599 se juzga como HTTP: antes de salida, 400/409/413/422 genéricos detienen, 401/402/403 enfrían proveedor y el exceso de contexto reconocido permite alternativa.
 
 Con `jevEffortMode: "decide"`, predeterminado, el esfuerzo elegido por JEV prevalece en el primer hijo Responses y en Chat nativo activado; elimina controles de pensamiento y service_tier incompatibles. Elegir sin esfuerzo también quita un predeterminado forzado. Con `"client"`, mantiene destino y deja esfuerzo al cliente, escala y defaultEffort; defaultEffortMode force sigue prevaleciendo. Fijaciones, límites y normalización del proveedor se aplican después.
+
+En modo `"decide"`, la fila del Combo en el catálogo no anuncia niveles de esfuerzo de razonamiento ni un esfuerzo predeterminado, por lo que el selector de modelos de Codex oculta el control de esfuerzo. En modo `"client"`, la fila conserva la intersección habitual de los niveles de esfuerzo de los destinos del Combo.
 
 El enfriamiento por combo es independiente del de cuenta y persiste con expiración absoluta en `combo-cooldowns.json`. Proxies del mismo directorio no lo acortan; guardar, renombrar o borrar el combo lo limpia.
 

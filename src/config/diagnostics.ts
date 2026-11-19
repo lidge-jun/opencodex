@@ -17,6 +17,7 @@ import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility"
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import { mainAccountHardLockFallbackError } from "./schema/main-account-hard-lock-fallback";
 import { fallbackPolicyError } from "./schema/fallback-policy";
+import { subscriptionReserveConfigError } from "./schema/subscription-reserve";
 import type { OcxConfig } from "../types";
 import { anthropicAccountPoolConfigError, anthropicOAuthInstanceConfigError, anthropicSidecarConfigError } from "./schema/anthropic-account-pool";
 import { configReasoningPinsConfigError } from "./provider-validation";
@@ -160,6 +161,7 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown, repai
   if (routedCatalogDefaultsConfigError(rawParsed)) warnings.push("routedCatalogDefaults ignored: " + ROUTED_CATALOG_DEFAULTS_SHAPE_HINT + "; routed catalog rows keep their derived values");
   if (mainAccountHardLockFallbackError(rawParsed)) warnings.push("codexMainAccountHardLockFallback ignored: expected a nonblank model selector and an optional declared reasoningEffort");
   if (fallbackPolicyError(rawParsed)) warnings.push("fallback partly ignored: expected boolean model/provider switches, providers/routes/devices maps of them, and devices.<id>.localFallback; ignored leaves keep today's fallback behavior");
+  if (subscriptionReserveConfigError(rawParsed)) warnings.push("subscriptionReserve ignored: invalid weekly reserve policy");
   const quotaAutoRefreshWarning = degradedCodexQuotaAutoRefreshWarning(rawParsed, normalized);
   if (quotaAutoRefreshWarning) warnings.push(quotaAutoRefreshWarning);
   if (rawEffort !== undefined && !isClaudeSubagentEffort(rawEffort)) {
@@ -789,6 +791,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     // OCX-11: the read schema degrades a malformed fallback leaf to absent, which would silently
     // drop a refusal on the next whole-config save; the write boundary rejects it instead.
     ?? fallbackPolicyError(value)
+    ?? subscriptionReserveConfigError(value)
     ?? nativeReasoningRetentionConfigError(value)
     ?? workflowBudgetConfigError(value)
     ?? routedCatalogDefaultsConfigError(value)

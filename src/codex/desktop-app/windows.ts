@@ -14,6 +14,7 @@ import { execFileSync } from "node:child_process";
 import { sep, win32 } from "node:path";
 import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsTaskkillExe } from "../../lib/windows-elevation";
 import { activateWindowsCodexCompatibility, assertWindowsCompatibilityContext, captureWindowsCompatibilityContext } from "../desktop-compatibility/windows-package-command";
+import { READ_WINDOWS_DESKTOP_PAYLOAD, windowsDesktopPayloadEnv } from "./windows-command-payload";
 import {
   isUnderRoot,
   type DesktopAppAdapter,
@@ -93,11 +94,11 @@ function discoverPackage(exec: DesktopExec): DesktopAppInstall | null {
  * rather than by PowerShell's `StartsWith`, which is a prefix test and would
  * admit a sibling `OpenAI.Codex-evil` directory.
  */
-function listPackageProcesses(exec: DesktopExec, install: DesktopAppInstall): DesktopProcess[] | null {
-  const literal = install.root.replace(/'/g, "''");
-  const script = [
+export const WINDOWS_PACKAGE_PROCESS_SCRIPT = [
+    "$ErrorActionPreference='Stop'",
+    READ_WINDOWS_DESKTOP_PAYLOAD,
+    "$root = $payload.root.Replace('/', '\\')",
     "$ErrorActionPreference='SilentlyContinue'",
-    `$root = '${literal}'.Replace('/', '\\')`,
     "$me = ([Security.Principal.WindowsIdentity]::GetCurrent()).Name",
     "Get-CimInstance Win32_Process -Filter \"Name='ChatGPT.exe'\" |",
     "  Where-Object { $_.ExecutablePath -and $_.ExecutablePath.Replace('/', '\\').StartsWith($root, 'OrdinalIgnoreCase') } |",
@@ -111,19 +112,24 @@ function listPackageProcesses(exec: DesktopExec, install: DesktopAppInstall): De
     "      }",
     "    }",
     "  }",
-  // Statements must be newline-separated. Joining with a space concatenates
-  // `$ErrorActionPreference='SilentlyContinue' $root = '...'` into one malformed statement,
-  // which PowerShell rejects — so the probe threw and every caller read "not running" (#2557).
+  // Newlines separate PowerShell statements (#2557).
   ].join("\n");
+
+function listPackageProcesses(exec: DesktopExec, install: DesktopAppInstall): DesktopProcess[] | null {
   let stdout: string;
   try {
-    stdout = exec(resolveTrustedWindowsPowerShellExe(), ["-NoProfile", "-NonInteractive", "-Command", script], POWERSHELL_PROBE_OPTIONS);
+    stdout = exec(resolveTrustedWindowsPowerShellExe(), ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_PACKAGE_PROCESS_SCRIPT],
+      { ...POWERSHELL_PROBE_OPTIONS, env: windowsDesktopPayloadEnv({ root: install.root }) });
   } catch {
     // A probe that could not run is NOT proof the app is absent. Returning [] here made a
     // failed enumeration indistinguishable from "no targets", so the CLI reported the app as
     // not running and skipped a restart the user had explicitly asked for.
     return null;
   }
+  return parseWindowsPackageProcesses(stdout, install);
+}
+
+export function parseWindowsPackageProcesses(stdout: string, install: DesktopAppInstall): DesktopProcess[] {
   const processes: DesktopProcess[] = [];
   for (const line of stdout.split(/\r?\n/)) {
     const parsed = parseProcessLine(line, install.root);
@@ -225,14 +231,15 @@ export const windowsDesktopAppAdapter: DesktopAppAdapter = {
     exec(resolveTrustedWindowsTaskkillExe(), ["/PID", String(root.pid), "/T", "/F"], POWERSHELL_PROBE_OPTIONS);
   },
 
-  captureRelaunchContext(_exec, _install, processes): Record<string, string> {
-    return captureWindowsCompatibilityContext(processes);
+  captureRelaunchContext(_exec, install, processes): Record<string, string> {
+    return captureWindowsCompatibilityContext(processes, install);
   },
 
   relaunch(exec, install, context): void {
     if (context.codexCompatibilityPacUrl) {
-      assertWindowsCompatibilityContext(context);
-      activateWindowsCodexCompatibility(exec, install, context.codexCompatibilityPacUrl);
+      const launch = assertWindowsCompatibilityContext(context, install);
+      try { activateWindowsCodexCompatibility(exec, launch.build, launch.pacUrl); }
+      catch (error) { launch.fence(); throw error; }
       return;
     }
     // Throws on failure so the ladder reports relaunch_failed. The old code
@@ -249,4 +256,5 @@ export const windowsDefaultExec: DesktopExec = (file, args, options) => execFile
   encoding: "utf-8",
   timeout: options?.timeout ?? PROBE_TIMEOUT_MS,
   windowsHide: options?.windowsHide ?? true,
+  env: options?.env,
 });

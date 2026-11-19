@@ -232,6 +232,10 @@ force-default invariant is unchanged. With the opt-in `"client"` the decision st
 ordinary Combo policy resolves effort (including a nested-only caller `reasoning.effort`), the caller `service_tier` is kept, and the requested-effort label records no JEV transition.
 Provider pins, caps and wire normalization still run afterward in both modes. `tests/responses/jev-initial-effort-wire.test.ts` pins both modes on both lanes
 and `tests/routing/jev-quota-config.test.ts` pins that an update omitting `jevEffortMode` preserves it.
+A `decide` JEV Combo advertises an empty reasoning effort ladder in the Codex catalog. In
+`client` mode, it advertises the ordinary Combo intersection. `deriveComboCatalogModel` in
+`src/codex/catalog/aggregation.ts` owns this projection, and
+`tests/codex-integration/codex-catalog-jev-effort.test.ts` checks the emitted rows.
 A tool-loop continuation sends no decision request ([Combo tool-loop continuation](../transports/native-reasoning-retention.md#combo-tool-loop-continuation)), so under `decide` it keeps the turn's effort: `src/server/responses/combo-session-recall.ts` stores the applied effort beside the lane's completed target, and `core-combo.ts` reapplies it on both lanes while `jevChoiceEfforts` still offers it for that target. A target that completed by failover stores none, and `client` never stores or reads one, so both keep ordinary Combo policy. On Messages inbound a continuation that carries an effort takes the bridge, like the decided first request.
 > Decision record: [ADR-8041](../decisions/ADR-8041-jev-effort-mode.md)
 A retryable failure rebuilds later targets from the untouched request under ordinary Combo policy, without
