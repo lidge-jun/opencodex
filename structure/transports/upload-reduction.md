@@ -88,6 +88,11 @@ permit and subtracts that early report from its ordinary send count. Observe-onl
 sends settle the initial booking through the physical receipt. The helper's live allowance
 includes deferred reports and credits only its own unsettled prepaid booking.
 
+Before requesting a recovery slot or physical permit, the exchange checks the original
+cache-miss frame for a replay refusal code, a no-retry header or an explicit
+`retryable: false`. It projects the fixed refusal and client retry veto directly,
+retaining a recognized code even when it appeared in `last_error`.
+
 Recovery reserves a fresh seed for the selected pool and account when spend is enforced.
 The seed keeps its own estimate and stays independent of other pending reservations.
 The prepared full create supplies input pricing when the tracker lacks a positive estimate.
