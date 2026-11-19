@@ -7,6 +7,7 @@
   "responses-spill-compression.test.ts": "responses",
   "responses-estimated-usage.test.ts": "responses",
   "responses-combo-estimated-usage-spend.test.ts": "responses",
+  "machine-weighted-routing.test.ts": "routing",
     "codex-installation-live-content.test.ts": "codex-integration",
     "codex-installation-invalid-account.test.ts": "codex-integration",
     "codex-installation-sidecars.test.ts": "codex-integration",

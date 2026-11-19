@@ -898,6 +898,13 @@
       "documents": ["src/codex/routing/selection.ts"]
     },
     {
+      "path": "providers/reset-near-weighted.md",
+      "tier": 4,
+      "title": "Reset-near-weighted Account Ordering",
+      "scope": "Opt-in Codex and Anthropic placement weights, observation freshness, eligibility and affinity.",
+      "documents": ["src/routing/machine-weighted-routing.ts", "src/codex/routing/selection.ts", "src/codex/quota-observation-freshness.ts", "src/oauth/anthropic-routing.ts", "src/oauth/pool-kernel.ts", "src/providers/quota/account-cache.ts"]
+    },
+    {
       "path": "providers/openai-signed-in-preservation.md",
       "tier": 4,
       "title": "Preserve Signed-In Codex Quota",

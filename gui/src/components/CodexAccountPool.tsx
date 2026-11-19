@@ -25,7 +25,7 @@ import { redeemResetCredit } from "./codex-account-pool-handlers";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import { accountNeedsReauth } from "../oauth-health-display";
 import { useCopyFeedback } from "./use-copy-feedback";
-import { DEFAULT_ACCOUNT_POOL_STRATEGY } from "../account-pool-strategy";
+import type { AccountPoolStrategy } from "../account-pool-strategy";
 import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
 import { createBoundedFetch, type BoundedFetch } from "../bounded-fetch";
 import { isApiTargetCaptureCurrent, targetFetch } from "../api";
@@ -76,9 +76,7 @@ export default function CodexAccountPool({ apiBase, targetKey, accountModeState 
     updateFailed: t("codexAuth.autoSwitchUpdateFailed"),
     invalid: t("codexAuth.autoSwitchThresholdInvalid"),
   }, targetKey);
-  const [poolStrategy, setPoolStrategy] = useState<
-    typeof DEFAULT_ACCOUNT_POOL_STRATEGY | "round-robin" | "fill-first" | "reset-first" | null
-  >(null);
+  const [poolStrategy, setPoolStrategy] = useState<AccountPoolStrategy | null>(null);
   const { beginServerRead, acceptServerRead, rejectServerRead, hydrateServerValue } = autoSwitch;
   // A hook cannot be called conditionally, so the fallback instance is always created
   // but stays inert (no load, no polling) whenever a shared controller was injected.

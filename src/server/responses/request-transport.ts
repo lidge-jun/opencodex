@@ -1210,7 +1210,7 @@ export async function prepareResponsesTransport(
                 && current.credential.access === snapshot.accessToken
                 && credentialGeneration(current.credential) === snapshot.generation) {
                 bindAnthropicRefusalCredentialForSend(response, physicalOwner);
-                recordAnthropicAccountQuotaFromHeadersForInstance(anthropicInstance!, snapshot.accountId, response.headers, writerGeneration, response.status, route.modelId, snapshot.generation);
+                recordAnthropicAccountQuotaFromHeadersForInstance(anthropicInstance!, snapshot.accountId, response.headers, writerGeneration, response.status, route.modelId, snapshot.generation, physicalOwner.credentialKey);
               }
             } catch { /* best-effort observation cannot fail the response */ }
           }

@@ -226,6 +226,20 @@ describe("pool field masks and actual policy projection", () => {
     expect(f.calls[1]!.body).toEqual({ provider: "google-antigravity", strategy: "reset-first" });
     expect(result()).toMatchObject({ kind: "generic", strategy: "reset-first" });
   });
+  test.each([["openai", "codex"], ["anthropic", "anthropic"]] as const)("%s CLI writes and reads reset-near-weighted", async (provider, kind) => {
+    const dto = unifiedPoolSettingsDto({ port: 10100, providers: {}, defaultProvider: provider }, provider, kind);
+    const f = fixture(c => c.method === "GET" ? dto : { ...dto, ...c.body });
+    expect(await policy("pool", [provider, "--strategy", "reset-near-weighted", "--json"], f.deps)).toBe(0);
+    expect(f.calls[1]!.body).toEqual({ provider, strategy: "reset-near-weighted" });
+    expect(result()).toMatchObject({ kind, strategy: "reset-near-weighted" });
+  });
+
+  test("a generic CLI pool rejects reset-near-weighted before discovery", async () => {
+    const f = fixture();
+    expect(await policy("pool", ["google-antigravity", "--strategy", "reset-near-weighted", "--json"], f.deps)).toBe(2);
+    expect(f.calls).toHaveLength(0);
+  });
+
   test("Codex enabled rejects even dishonest supported field list", async () => {
     const dto = unifiedPoolSettingsDto({ port: 10100, providers: {}, defaultProvider: "openai" }, "openai", "codex");
     const f = fixture(() => ({ ...dto, supported: [...dto.supported, "enabled"] }));
