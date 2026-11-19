@@ -42,29 +42,31 @@ export function snapshotFileFingerprint(path: string): string | undefined {
 
 /** Read failures are distinct from confirmed absence: neither callers nor cleanup may finalize them. */
 export function loadSnapshotEntries(path: string, maxBytes: number, store: SnapshotLoadStore, cutoff = -Infinity): SnapshotLoadResult {
+  let fingerprint: string | undefined;
+  let text: string;
   try {
     // stat and read both follow symlinks. A FIFO or device could block or supply unbounded input.
     const stat = statSync(path, { throwIfNoEntry: false });
-    const fingerprint = fileFingerprint(stat);
+    fingerprint = fileFingerprint(stat);
     // Confirmed absent/non-regular targets retain the existing empty-snapshot behavior.
     // A failed stat/read is different: the catch below leaves a later load possible.
     if (!stat?.isFile()) return { oversized: false, failed: false, fingerprint };
     if (stat.size > maxBytes) return { oversized: true, failed: false, fingerprint };
-    const text = readFileSync(path, "utf-8");
-    let raw: { version?: unknown; states?: unknown };
-    try { raw = JSON.parse(text); }
-    catch { return { oversized: false, failed: false, fingerprint }; }
-    if (raw && (raw.version === 1 || raw.version === 2) && Array.isArray(raw.states)) {
-      for (const entry of raw.states) {
-        if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string") continue;
-        loadSnapshotEntry(entry[0], entry[1], store, cutoff);
-      }
-    }
-    return { oversized: false, failed: false, fingerprint };
+    text = readFileSync(path, "utf-8");
   } catch (error) {
     return missingFile(error) ? { oversized: false, failed: false, fingerprint: "absent" }
       : { oversized: false, failed: true };
   }
+  let raw: { version?: unknown; states?: unknown };
+  try { raw = JSON.parse(text); }
+  catch { return { oversized: false, failed: false, fingerprint }; }
+  if (raw && (raw.version === 1 || raw.version === 2) && Array.isArray(raw.states)) {
+    for (const entry of raw.states) {
+      if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string") continue;
+      loadSnapshotEntry(entry[0], entry[1], store, cutoff);
+    }
+  }
+  return { oversized: false, failed: false, fingerprint };
 }
 
 /** Decode and account live cold rows without running admission or disk maintenance. */
@@ -95,10 +97,12 @@ interface LegacySnapshotState {
 
 function isSpillRef(value: unknown): value is ResponseSpillRef {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const ref = value as ResponseSpillRef;
+  const ref = value as Record<string, unknown>;
   return ref.version === 1
     && typeof ref.fileName === "string"
+    && typeof ref.digest === "string"
     && /^[0-9a-f]{64}$/.test(ref.digest)
+    && typeof ref.payloadBytes === "number"
     && Number.isSafeInteger(ref.payloadBytes)
     && ref.payloadBytes >= 0;
 }

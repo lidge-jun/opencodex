@@ -96,6 +96,7 @@ import type { PersistedUsageAttempt } from "../../usage/log";
 import type { RouteResult } from "../../router";
 import {
   captureRouteStaticPolicy,
+  previewRouteModel,
   routeConcreteModel,
   routeCompactionModel,
   routeModel,
@@ -103,6 +104,7 @@ import {
   AnthropicSecondaryInstanceUnavailableError,
 } from "../../router";
 import { evidenceFromBody } from "../../routing/request-evidence";
+import { resolvePolicyProfileId } from "../../routing/profile";
 import { OPENAI_CODEX_PROVIDER_ID, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { resolveNativeReasoningRetention } from "../../config/schema/native-reasoning-retention";
 import { isThreadSpawnRequest } from "../effort-policy";
@@ -462,9 +464,33 @@ export async function prepareResponsesRequest(
     // Local replay failures require full client replay.
     if (replayFailure) {
       failLinkTurnExpansion(options.linkTurn, req, logCtx, body, replayFailure.reason);
+      const { code } = replayFailure;
+      if (strictReplay) {
+        logCtx.errorCode = code;
+        if (logCtx.attempts?.some(attempt => attempt.sendCount > 0)) logCtx.terminalSource = "synthetic";
+        else markLocalRequestLogRefusal(logCtx, code);
+        // Attribute a direct native refusal using only request metadata and a route preview.
+        // A miss never enters auth, subagent fallback or encrypted-task recovery for logging.
+        const { model, reasoning } = body as { model?: unknown; reasoning?: unknown };
+        try {
+          const parsed = parseRequest({ model, reasoning });
+          logCtx.requestedModel ??= options.mainHardLockFallbackOverride?.sourceModel
+            ?? options.compactionRoutingOverride?.sourceModel ?? parsed.modelId;
+          logCtx.requestedEffort ??= parsed.options.reasoning;
+          if (!concreteSelection && !memoryModelApplies && !shadowCallMatches
+            && !resolveComboId(config, parsed.modelId) && !resolvePolicyProfileId(config, parsed.modelId)) {
+            const preview = previewRouteModel(config, parsed.modelId);
+            if (isCanonicalOpenAiForwardProvider(preview.provider)) {
+              logCtx.provider = preview.providerName;
+              logCtx.model = preview.modelId;
+              logCtx.routeDecision = preview.routeDecision;
+            }
+          }
+        } catch { /* Unavailable attribution does not change the replay refusal. */ }
+      }
       return markProxyError(formatErrorResponse(
         400,
-        "previous_response_not_found",
+        code,
         "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
       ));
     }

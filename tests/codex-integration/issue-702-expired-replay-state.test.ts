@@ -824,6 +824,9 @@ describe("Issue #702 expired forward replay state", () => {
       socket = await openResponseSocket(server.url, headers);
       const first = await sendSocketTurn(socket, { ...turn, input: history });
       expect(first).toMatchObject({ type: "response.completed", response: { id: "resp_sol_1" } });
+      // Evict the retained history while the same socket still owns its replay scope.
+      expect(responseStateMetrics().count).toBe(1);
+      clearResponseStateMemoryForTests();
       const refused = await sendSocketTurn(socket, { ...turn, previous_response_id: "resp_sol_1", input: delta });
       expect(refused).toMatchObject({ type: "error", status: 400, error: LOCAL_REPLAY_UNAVAILABLE });
       expect(upstreamRequests).toHaveLength(1);
