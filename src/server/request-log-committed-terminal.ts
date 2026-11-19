@@ -5,6 +5,16 @@ import type { PersistedUsageAttempt } from "../usage/log";
 import type { RequestLogContext, RequestLogEntry } from "./request-log";
 import type { UpstreamErrorPayload } from "./request-log-terminal-status";
 
+/** Combo serving facts carried on RequestLogContext; internal-only, omitted from RequestLogEntry/JSONL. */
+export interface CommittedComboLogFields {
+  /** Serving combo target (as selected), its writer generation and output ceiling. */
+  comboTarget?: { provider: string; model: string };
+  comboWriterGeneration?: number;
+  comboTargetOutputCeiling?: number | null;
+  /** Closed capacity/health reason recognized from a committed terminal; null when none applies. */
+  committedIncompleteReason?: CommittedIncompleteReason | null;
+}
+
 let committedTerminalCooldownHandler: ((facts: CommittedTerminalCooldownFacts) => void) | undefined;
 
 function isRefusal(value: unknown): boolean {

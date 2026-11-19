@@ -37,7 +37,7 @@ import type { AdapterTierMetadata } from "../providers/fastwire";
 import { UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../lib/upstream-retry";
 import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
 export { registerCommittedTerminalCooldownHandler } from "./request-log-committed-terminal";
-import { reportCommittedTerminalCooldown } from "./request-log-committed-terminal";
+import { reportCommittedTerminalCooldown, type CommittedComboLogFields } from "./request-log-committed-terminal";
 import type { UpstreamCondition } from "../lib/upstream-condition";
 import { boundedServiceTier, errorDetailFor, projectErrorDetail } from "../usage/error-detail";
 import { incompleteReasonDetail, upstreamErrorIsLocal, type FailureDetail } from "./request-log-failure-detail";
@@ -127,7 +127,7 @@ export function cacheDiagnosticsObserving(): boolean {
   return cacheDiagnosticHooks()?.enabled() === true;
 }
 
-export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequestLogCarrier, RequestBodyLogContext {
+export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequestLogCarrier, RequestBodyLogContext, CommittedComboLogFields {
   model: string;
   provider: string;
   client?: UsageClient;
@@ -196,10 +196,6 @@ export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequest
   shadowCallRewrittenFrom?: string;
   /** Internal structural combo identity; omitted from RequestLogEntry/JSONL. */
   comboId?: string;
-  /** Serving combo target (as selected), its writer generation and output ceiling; omitted from JSONL. */
-  comboTarget?: { provider: string; model: string };
-  comboWriterGeneration?: number;
-  comboTargetOutputCeiling?: number | null;
   requestedEffort?: string;
   effectiveEffort?: string;
   reasoningWireField?: string;
@@ -285,7 +281,6 @@ export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequest
   errorCode?: string;
   /** Structured reason from `response.incomplete`; internal-only input to log classification. */
   terminalIncompleteReason?: string;
-  committedIncompleteReason?: import("../combos/failover").CommittedIncompleteReason | null;
   affinity?: CodexAffinityMove;
   /** Why the binding was kept, moved, or released (#4546). */
   affinityReason?: CodexAffinityReason;
