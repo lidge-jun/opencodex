@@ -322,7 +322,7 @@ function installOAuthFetch(
               ...(status.oversized ? { filler: "x".repeat(4200) } : {}),
               ...(status.reason ? { details: [{ reason: status.reason }] } : {}),
               ...(status.typedReason ? { details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: status.typedReason,
-                metadata: { appeal_url: "https://support.google.com/appeal-canary" } }] } : {}),
+                metadata: { appeal_url: "https://support.google.com/appeal-canary", appeal_url_link_text: "Open the private appeal form" } }] } : {}),
             } : {}),
           },
         }), {
@@ -496,6 +496,33 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
       const rows = getAccountSet("google-antigravity")!.accounts;
       expect(rows.filter(row => row.needsReauth)).toHaveLength(1);
       expect(rows.find(row => row.needsReauth)).toMatchObject({ needsReauthReason: "verify_account", needsReauthCause: "tos_violation" });
+    } finally { await server.stop(true); }
+  });
+
+  test("a permanent TOS 403 with one account redacts upstream appeal and credential details", async () => {
+    await seedOAuth();
+    saveConfig(antigravityConfig());
+    const account = getAccountSet("google-antigravity")!.accounts[0]!;
+    const canaries = [
+      "https://support.google.com/appeal-canary", "Open the private appeal form",
+      account.credential.access, account.credential.refresh, account.credential.accountId!, account.id,
+    ];
+    const observed = installOAuthFetch([{
+      status: 403, typedReason: "TOS_VIOLATION", message: `Service disabled. ${canaries.join(" ")}`,
+    }]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(403);
+      expect(response.headers.get("retry-after")).toBeNull();
+      const body = await response.text();
+      expect(body).toContain("Antigravity account suspended");
+      for (const canary of canaries) expect(body).not.toContain(canary);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
+      expect(observed.counts.refresh).toBe(0);
+      expect(getAccountSet("google-antigravity")!.accounts).toMatchObject([
+        { id: account.id, needsReauth: true, needsReauthCause: "tos_violation" },
+      ]);
     } finally { await server.stop(true); }
   });
 
