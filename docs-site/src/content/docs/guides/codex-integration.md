@@ -1273,8 +1273,12 @@ or watch and restart the app automatically. Normal launches without that routing
 their existing behavior.
 
 If package activation through **Open Codex** or a managed restart cannot be verified,
-OpenCodeX stops the compatibility service and revokes the trial. Start observation again,
-wait for a fresh eligible exhaustion snapshot, and confirm a new trial.
+OpenCodeX revokes the trial and starts cleaning up the compatibility service. Save drafts and
+close any Codex window left running. If runtime status reports `cleanup-required`, select
+**Stop observation** again and confirm that the runtime is `off`. Once cleanup succeeds,
+start observation and select **Open Codex** to restore the managed connection. Then wait for
+a fresh eligible exhaustion snapshot before confirming a new trial. Follow this sequence even
+if activation failed before a Codex window opened.
 
 ### Transport coverage and recovery evidence
 

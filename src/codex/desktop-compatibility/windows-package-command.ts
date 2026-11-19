@@ -1,4 +1,4 @@
-import type { DesktopAppInstall, DesktopExec, DesktopProcess } from "../desktop-app/types";
+import type { DesktopAppInstall, DesktopAsyncExec, DesktopExec, DesktopProcess } from "../desktop-app/types";
 import { READ_WINDOWS_DESKTOP_PAYLOAD, windowsDesktopPayloadEnv } from "../desktop-app/windows-command-payload";
 import { resolveTrustedWindowsPowerShellExe } from "../../lib/windows-elevation";
 import { WINDOWS_ACTIVATION_SOURCE } from "./windows-activation-source";
@@ -82,18 +82,37 @@ export function assertWindowsCompatibilityContext(context: Record<string, string
   return owner;
 }
 
-export function activateWindowsCodexCompatibility(exec: DesktopExec, build: VerifiedDesktopPackage, pacUrl: string): { pid: number; packageFullName: string } {
+function activationEnvironment(build: VerifiedDesktopPackage, pacUrl: string) {
   const pac = validatedCompatibilityPacUrl(pacUrl);
   if (build.id !== CODEX_PACKAGE_FAMILY || build.relaunch !== `${build.id}!App`) {
     throw new Error("desktop_compatibility_invalid_package");
   }
-  const env = windowsDesktopPayloadEnv({ family: build.id, root: build.root, pac, fullName: build.packageFullName,
+  return windowsDesktopPayloadEnv({ family: build.id, root: build.root, pac, fullName: build.packageFullName,
     hash: build.executableHash, manifestHash: build.manifestDigest, ancestryHash: build.ancestryIdentity,
     thumbprint: build.signerThumbprint, imageIdentity: build.executableIdentity });
+}
+
+export function activateWindowsCodexCompatibility(exec: DesktopExec, build: VerifiedDesktopPackage, pacUrl: string): { pid: number; packageFullName: string } {
+  const env = activationEnvironment(build, pacUrl);
   let text: string;
   try { text = exec(resolveTrustedWindowsPowerShellExe(), ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_COMPATIBILITY_ACTIVATION_SCRIPT],
     { timeout: 15_000, windowsHide: true, env }); }
   catch { throw new Error("desktop_compatibility_activation_unverified"); }
+  return parseActivationResult(text, build);
+}
+
+export async function activateWindowsCodexCompatibilityAsync(exec: DesktopAsyncExec, build: VerifiedDesktopPackage,
+  pacUrl: string, signal?: AbortSignal): Promise<{ pid: number; packageFullName: string }> {
+  const env = activationEnvironment(build, pacUrl);
+  let text: string;
+  try { text = await exec(resolveTrustedWindowsPowerShellExe(), ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_COMPATIBILITY_ACTIVATION_SCRIPT],
+    { timeout: 15_000, windowsHide: true, env, signal }); }
+  catch { throw new Error("desktop_compatibility_activation_unverified"); }
+  if (signal?.aborted) throw new Error("desktop_compatibility_activation_unverified");
+  return parseActivationResult(text, build);
+}
+
+function parseActivationResult(text: string, build: VerifiedDesktopPackage): { pid: number; packageFullName: string } {
   let result: unknown;
   try { result = JSON.parse(text.trim().split(/\r?\n/).at(-1) ?? ""); }
   catch { throw new Error("desktop_compatibility_activation_unverified"); }

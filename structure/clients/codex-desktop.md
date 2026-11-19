@@ -156,8 +156,9 @@ compatibility integration owner; it currently has an authenticated HTTP contract
 
 `src/codex/desktop-compatibility/runtime.ts` owns an explicit, default-off runtime.
 Construction and status do not start listeners, load credentials or enroll trust. Start
-loads an existing DPAPI key, verifies CurrentUser trust and a fresh native file-login
-identity, then creates only loopback TLS/CONNECT/PAC listeners. Admission requires a healthy
+checks routing and package proof first, then loads an existing DPAPI key, verifies CurrentUser
+trust and a fresh native file-login identity before creating loopback TLS/CONNECT/PAC listeners.
+Admission requires a healthy
 current-user Microsoft Store package with the expected Codex family, package publisher, basename
 and App entry. The package full name includes the version and participates in the trial identity.
 HTTP, identity verification and upgraded sockets use the explicit desktop egress policy
@@ -250,13 +251,19 @@ requires a new original exhaustion observation and explicit account-wide consent
 replaces the observation context and fences off late completions.
 
 Both compatibility launch entry points pass the approved build to the activation command.
+Runtime-owned launch runs process discovery and full activation proof in asynchronous children,
+leaving PAC and relay requests serviceable. Concurrent launch requests share the owned pending
+child. Stop aborts and drains it before releasing runtime ownership; completion rechecks the
+runtime and build revision before accepting success or initiating cleanup. The synchronous
+managed-restart adapter retains its separate existing execution contract.
 The managed restart also checks the captured runtime generation and build revision after the stop
 ladder. Before activation, the command rechecks the live registration and the full proof against
 the approved package while holding the two files open. Windows activates by AUMID. Readback uses
 one process handle to check the exact package full name and kernel-reported image path, then
 checks the PAC argument and the held image file's SHA-256 before returning success. A refused or
-indeterminate activation unbinds launch ownership, closes the runtime's listeners and sockets,
-and invalidates the account-wide trial and its exhaustion observation. A process may still start.
+indeterminate activation unbinds launch ownership and invalidates the account-wide trial and
+its exhaustion observation before initiating listener and socket cleanup. Closure is confirmed
+only when cleanup succeeds; a failure retains `cleanup-required` until Stop succeeds. A process may still start.
 The runtime leaves any returned PID alone. A fresh runtime start returns to Observe and requires
 another eligible exhaustion record and explicit Apply consent.
 The checks rely on Windows deployment, filesystem and code-signing trust. The executable hash
@@ -307,7 +314,13 @@ reads when a mutation result is published. Certificate status is not repeatedly 
 status polls only while the tab is active. Consent copy exists in all locale catalogs.
 Trial consent and pending withdrawal distinguish stopped response correction from unconfirmed native cache refresh; the panel never reports cache rollback as confirmed.
 The panel offers renewal only for prepared, trusted, expired or renewal-required identities. Unknown trust permits fingerprint-verified removal but not renewal; invalid keys expose neither action.
-Running-state help distinguishes a listening service from a connected native app: ordinary app launches or updates can omit the managed PAC argument. It points to explicit package launch after the user closes Codex and states that a certificate reinstall cannot authorize a build whose package check failed or whose identity changed after the check.
+The `blockedByBuild` message describes correction as unavailable, advises Store repair or
+reinstallation after repeated verification failures, and requires a successful check, fresh
+exhaustion observation and consent for a new trial. The separate running-state `reconnectHint`
+points to explicit package launch after the user saves drafts and closes Codex. As runtime facts,
+a listening service does not establish native app connectivity, ordinary launches or updates
+can omit the managed PAC argument, and a certificate reinstall cannot authorize an unverified
+or changed build. Those limitations are not additional claims about the visible help text.
 
 ## Proxy startup preference
 

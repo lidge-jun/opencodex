@@ -94,7 +94,7 @@ function discoverPackage(exec: DesktopExec): DesktopAppInstall | null {
  * rather than by PowerShell's `StartsWith`, which is a prefix test and would
  * admit a sibling `OpenAI.Codex-evil` directory.
  */
-const WINDOWS_PACKAGE_PROCESS_SCRIPT = [
+export const WINDOWS_PACKAGE_PROCESS_SCRIPT = [
     "$ErrorActionPreference='Stop'",
     READ_WINDOWS_DESKTOP_PAYLOAD,
     "$root = $payload.root.Replace('/', '\\')",
@@ -126,6 +126,10 @@ function listPackageProcesses(exec: DesktopExec, install: DesktopAppInstall): De
     // not running and skipped a restart the user had explicitly asked for.
     return null;
   }
+  return parseWindowsPackageProcesses(stdout, install);
+}
+
+export function parseWindowsPackageProcesses(stdout: string, install: DesktopAppInstall): DesktopProcess[] {
   const processes: DesktopProcess[] = [];
   for (const line of stdout.split(/\r?\n/)) {
     const parsed = parseProcessLine(line, install.root);

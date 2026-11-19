@@ -12,7 +12,7 @@ import { createNativeIdentityReader } from "./native-identity";
 import { UsageRelayController, type UsageIdentity } from "./usage-controller";
 import { createUsageControlledFetch } from "./usage-controlled-fetch";
 import { startDesktopRelay } from "./relay-listener";
-import { launchWindowsCodexCompatibility } from "./windows-package-launch";
+import { launchWindowsCodexCompatibilityAsync } from "./windows-package-launch";
 import { acquireDesktopCompatibilityRuntime, bindDesktopCompatibilityLaunch } from "./runtime-ownership";
 import { createDesktopConnectionStore, type DesktopConnectionStore } from "./connection-store";
 import { createNativeRoutingVerifier } from "./routing-preflight";
@@ -72,10 +72,13 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
   };
   const contextValid = async () => (await checkContext()) !== null;
   let phase: "off" | "starting" | "running" | "stopping" | "cleanup-required" = "off";
-  let owned: { controller: UsageRelayController; close(): Promise<void>; pacUrl: string; fingerprint: string; deadline: number } | null = null;
+  type OwnedRuntime = { controller: UsageRelayController; close(): Promise<void>; pacUrl: string; fingerprint: string; deadline: number };
+  let owned: OwnedRuntime | null = null;
   let closing: Promise<void> | null = null;
   let pendingCleanup: (() => Promise<void>) | null = null;
   let releaseOwner: (() => void) | null = null;
+  let pendingLaunch: { owner: OwnedRuntime; abort: AbortController;
+    result: ReturnType<typeof launchWindowsCodexCompatibilityAsync> } | null = null;
   const status = () => ({ phase, supported: platform === "win32", running: owned !== null, contextFailure,
     ...(buildProbe ? { buildAssessment: buildProbe.lastResult() ?? (previousBuildAssessment ? { ...previousBuildAssessment } : null) } : {}),
     ...(owned ? { fingerprint: owned.fingerprint, safetyDeadline: owned.deadline, usage: owned.controller.snapshot() } : {}) });
@@ -103,10 +106,12 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
     let pac: ReturnType<typeof Bun.serve> | undefined, timer: ReturnType<typeof setInterval> | undefined;
     let detach: (() => void) | undefined, unbindLaunch: (() => void) | undefined, controller: UsageRelayController | undefined;
     const cleanup = async () => {
+      const launch = pendingLaunch;
+      launch?.abort.abort();
       unbindLaunch?.();
       if (timer) clearInterval(timer); detach?.();
       // Abort transport before awaiting stream refresh so a stuck reader cannot retain sockets.
-      const results = await Promise.allSettled([pac?.stop(true), proxy?.close(), relay?.close(), controller?.observeOnly(), buildProbe?.close()]);
+      const results = await Promise.allSettled([pac?.stop(true), proxy?.close(), relay?.close(), controller?.observeOnly(), buildProbe?.close(), launch?.result]);
       if (results.some(result => result.status === "rejected")) throw new Error("desktop_compatibility_cleanup_incomplete");
     };
     pendingCleanup = cleanup;
@@ -211,7 +216,20 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
       if (verified.binding && buildProbe?.binding().revision !== verified.binding.revision) {
         throw new Error("desktop_compatibility_build_unverified");
       }
-      const result = launchWindowsCodexCompatibility(current.pacUrl, verified.binding?.build ?? null);
+      if (!pendingLaunch || pendingLaunch.owner !== current) {
+        const abort = new AbortController();
+        pendingLaunch = { owner: current, abort,
+          result: launchWindowsCodexCompatibilityAsync(current.pacUrl, verified.binding?.build ?? null, { signal: abort.signal }) };
+      }
+      const launch = pendingLaunch;
+      let result: Awaited<typeof launch.result>;
+      try { result = await launch.result; }
+      finally { if (pendingLaunch === launch) pendingLaunch = null; }
+      // An old child cannot report success or stop a runtime that replaced its owner.
+      if (owned !== current || phase !== "running") throw new Error("desktop_compatibility_not_running");
+      if (verified.binding && buildProbe?.binding().revision !== verified.binding.revision) {
+        throw new Error("desktop_compatibility_build_unverified");
+      }
       if (result.status === "refused" && result.reason === "activation_failed") await stop();
       return result;
     },

@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmColdSpawn } from "../helpers/cold-spawn-warmup";
-import { launchWindowsCodexCompatibility, validatedCompatibilityPacUrl } from "../../src/codex/desktop-compatibility/windows-package-launch";
+import { launchWindowsCodexCompatibility, launchWindowsCodexCompatibilityAsync, windowsCompatibilityAsyncExec, validatedCompatibilityPacUrl } from "../../src/codex/desktop-compatibility/windows-package-launch";
 import { WINDOWS_ACTIVATION_SOURCE } from "../../src/codex/desktop-compatibility/windows-activation-source";
 import { setTrustedWindowsElevationExecutablesForTests } from "../../src/lib/windows-elevation";
 import type { DesktopExec } from "../../src/codex/desktop-app/types";
@@ -181,8 +181,11 @@ describe("Codex Desktop compatibility package launch", () => {
     expect(script).toContain("::Activate($family+'!App','--proxy-pac-url='+$pac)");
     expect(io.calls).toHaveLength(2); // process probe and bound activation, without general discovery
     const activate = script.indexOf("::Activate($family");
-    expect(activate).toBeGreaterThan(script.indexOf("$p.PackageFullName -cne $fullName"));
-    expect(activate).toBeGreaterThan(script.indexOf("$executableHash -cne $hash"));
+    for (const guard of ["$p.PackageFullName -cne $fullName", "$executableHash -cne $hash"]) {
+      const offset = script.indexOf(guard);
+      expect(offset).toBeGreaterThanOrEqual(0);
+      expect(activate).toBeGreaterThan(offset);
+    }
     expect(script.indexOf("::ImageOf($processHandle,$fullName)")).toBeGreaterThan(activate);
     expect(script.indexOf("$imageHash -cne $hash")).toBeGreaterThan(activate);
     expect(readPayload(io.environments.at(-1))).toMatchObject({ fullName: packageFullName, hash: executableHash });
@@ -201,8 +204,9 @@ describe("Codex Desktop compatibility package launch", () => {
   });
 
   test("unverified activation or the wrong package publisher cannot report success", () => {
-    for (const output of ["broken", JSON.stringify({ pid: 123, packageFullName, verified: false }),
-      JSON.stringify({ pid: 123, packageFullName: "OpenAI.Codex_1.2.3.0_x64__foreign", verified: true })]) {
+    for (const output of ["broken", JSON.stringify({ pid: 123, packageFullName, executableHash, verified: false }),
+      JSON.stringify({ pid: 123, packageFullName, verified: true }),
+      JSON.stringify({ pid: 123, packageFullName: "OpenAI.Codex_1.2.3.0_x64__foreign", executableHash, verified: true })]) {
       const io = executor({ output });
       expect(launchWindowsCodexCompatibility(pac, install, { exec: io.exec, platform: "win32" })).toEqual({ status: "refused", reason: "activation_failed" });
     }
@@ -211,6 +215,47 @@ describe("Codex Desktop compatibility package launch", () => {
   test("non-Windows and armed tests never reach the real native app", () => {
     expect(launchWindowsCodexCompatibility(pac, null, { platform: "linux" })).toEqual({ status: "refused", reason: "unsupported_platform" });
     expect(launchWindowsCodexCompatibility(pac, install, { platform: "win32" })).toEqual({ status: "refused", reason: "test_environment" });
+  });
+
+  test("asynchronous runtime activation preserves the fixed scripts and proof-bound readback", async () => {
+    const sync = executor(), asyncIo = executor();
+    const expected = launchWindowsCodexCompatibility(pac, install, { exec: sync.exec, platform: "win32" });
+    const actual = await launchWindowsCodexCompatibilityAsync(pac, install, {
+      execAsync: async (...args) => asyncIo.exec(...args), platform: "win32",
+    });
+    expect(actual).toEqual(expected);
+    expect(asyncIo.calls).toEqual(sync.calls);
+    expect(asyncIo.environments.map(readPayload)).toEqual(sync.environments.map(readPayload));
+  });
+
+  test("cancellation after an asynchronous process probe prevents package activation", async () => {
+    const io = executor(), controller = new AbortController();
+    const result = await launchWindowsCodexCompatibilityAsync(pac, install, {
+      platform: "win32", signal: controller.signal,
+      execAsync: async (...args) => { const output = io.exec(...args); controller.abort(); return output; },
+    });
+    expect(result).toEqual({ status: "refused", reason: "activation_failed" });
+    expect(io.calls).toHaveLength(1);
+    expect(io.calls[0]).not.toContain("OpenCodexPackageActivation");
+  });
+
+  test("asynchronous execution yields to local service requests and drains an aborted fixture child", async () => {
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("fixture-pac") });
+    const controller = new AbortController();
+    const child = windowsCompatibilityAsyncExec(process.execPath, ["-e", "setInterval(() => {}, 1000)"],
+      { signal: controller.signal, timeout: 5000 }).then(() => ({ refused: false }), () => ({ refused: true }));
+    try {
+      expect(await fetch(`http://127.0.0.1:${server.port}`).then(response => response.text())).toBe("fixture-pac");
+      controller.abort();
+      expect((await child).refused).toBe(true);
+    } finally { controller.abort(); await child; await server.stop(true); }
+  });
+
+  test("asynchronous platform and test guards never reach a native process", async () => {
+    expect(await launchWindowsCodexCompatibilityAsync(pac, null, { platform: "linux" }))
+      .toEqual({ status: "refused", reason: "unsupported_platform" });
+    expect(await launchWindowsCodexCompatibilityAsync(pac, install, { platform: "win32" }))
+      .toEqual({ status: "refused", reason: "test_environment" });
   });
 });
 

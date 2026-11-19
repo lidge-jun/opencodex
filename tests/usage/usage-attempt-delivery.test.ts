@@ -158,4 +158,16 @@ describe("attempt delivery summary", () => {
     expect(JSON.stringify(target.deliverySummary)).not.toContain("private");
     expect(target.deliverySummary!.semanticBytes).toBe(16);
   });
+
+  test("buffered summary_text contributes the same 17 UTF-8 bytes as its SSE delta", () => {
+    const text = "private résumé!";
+    const target: AttemptDeliveryTarget = {};
+    const recorder = bindAttemptDeliveryRecorder({}, () => target);
+    recorder.noteBufferedDelivery({
+      output: [{ type: "reasoning", summary: [{ type: "summary_text", text }] }],
+    });
+    const streamed = classifyRelayedResponseEvent("response.reasoning_summary_text.delta", { delta: text });
+    expect(streamed.semanticBytes).toBe(17);
+    expect(target.deliverySummary!.semanticBytes).toBe(streamed.semanticBytes!);
+  });
 });

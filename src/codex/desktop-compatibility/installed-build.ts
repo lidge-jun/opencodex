@@ -5,7 +5,7 @@ import { isTestHomeGuardArmed } from "../../lib/test-home-guard";
 import { resolveTrustedWindowsPowerShellExe } from "../../lib/windows-elevation";
 import type { DesktopAppInstall } from "../desktop-app/types";
 import { CLOSE_WINDOWS_PACKAGE_FILES, CODEX_EXECUTABLE_SIGNER, CODEX_PACKAGE_FAMILY, CODEX_STORE_PUBLISHER,
-  MEASURE_WINDOWS_PACKAGE_FILES, OPEN_WINDOWS_PACKAGE_FILES, WINDOWS_PACKAGE_PROOF_FUNCTIONS } from "./windows-package-proof";
+  MEASURE_WINDOWS_PACKAGE_FILES, OPEN_WINDOWS_PACKAGE_FILES, READ_WINDOWS_PACKAGE_MANIFEST, WINDOWS_PACKAGE_PROOF_FUNCTIONS } from "./windows-package-proof";
 export { DESKTOP_PACKAGE_PATH_GUARD_SCRIPT } from "./windows-package-proof";
 
 // Baseline with completed native acceptance evidence; admission is proof-based below,
@@ -36,11 +36,14 @@ export interface VerifiedDesktopPackage extends DesktopAppInstall {
 export const DESKTOP_PACKAGE_PROOF_SCRIPT = [
   WINDOWS_PACKAGE_PROOF_FUNCTIONS,
   "$p=Get-DesktopPackage",
+  READ_WINDOWS_PACKAGE_MANIFEST,
+  "$observation=@{id=$p.PackageFamilyName;root=$p.InstallLocation;relaunch=$p.PackageFamilyName+'!App'}",
   "try {",
   OPEN_WINDOWS_PACKAGE_FILES,
   MEASURE_WINDOWS_PACKAGE_FILES,
-  "[pscustomobject]@{id=$p.PackageFamilyName;root=$p.InstallLocation;relaunch=$p.PackageFamilyName+'!App';proof=@{packageFullName=$p.PackageFullName;publisherId=$p.PublisherId;publisher=$p.Publisher;manifestName=[string]$manifest.Package.Identity.Name;manifestPublisher=[string]$manifest.Package.Identity.Publisher;manifestVersion=[string]$manifest.Package.Identity.Version;appId=[string]$entry.Id;executable=[string]$entry.Executable;canonicalExecutable=$exePath;manifestDigest=$digest;ancestryIdentity=$ancestry;executableIdentity=$executableIdentity;executableHash=$executableHash;signatureKind=[string]$p.SignatureKind;signerSubject=$signature.SignerCertificate.Subject;signerThumbprint=$signature.SignerCertificate.Thumbprint;contentIntegrity=$true}}|ConvertTo-Json -Depth 3 -Compress",
-  "} finally {", CLOSE_WINDOWS_PACKAGE_FILES, "}",
+  "$observation.proof=@{packageFullName=$p.PackageFullName;publisherId=$p.PublisherId;publisher=$p.Publisher;manifestName=[string]$manifest.Package.Identity.Name;manifestPublisher=[string]$manifest.Package.Identity.Publisher;manifestVersion=[string]$manifest.Package.Identity.Version;appId=[string]$entry.Id;executable=[string]$entry.Executable;canonicalExecutable=$exePath;manifestDigest=$digest;ancestryIdentity=$ancestry;executableIdentity=$executableIdentity;executableHash=$executableHash;signatureKind=[string]$p.SignatureKind;signerSubject=$signature.SignerCertificate.Subject;signerThumbprint=$signature.SignerCertificate.Thumbprint;contentIntegrity=$true}",
+  "} catch { $observation.Remove('proof') } finally {", CLOSE_WINDOWS_PACKAGE_FILES, "}",
+  "[pscustomobject]$observation|ConvertTo-Json -Depth 3 -Compress",
 ].join("\n");
 
 /** Last completed probe outcome. Only public package facts: never paths, keys or account data.
@@ -99,7 +102,7 @@ function queryInstalledPackage(signal: AbortSignal): Promise<DesktopPackageObser
         const value = error ? null : JSON.parse(stdout);
         if (value && typeof value === "object" && !Array.isArray(value) && typeof value.id === "string"
           && typeof value.root === "string" && typeof value.relaunch === "string"
-          && value.proof && typeof value.proof === "object" && !Array.isArray(value.proof)) result = value;
+          && (value.proof === undefined || (value.proof && typeof value.proof === "object" && !Array.isArray(value.proof)))) result = value;
       } catch { /* An unverifiable package never inherits a completed success. */ }
       completed = true; finish();
     });

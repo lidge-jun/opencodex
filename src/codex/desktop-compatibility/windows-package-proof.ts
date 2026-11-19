@@ -80,14 +80,19 @@ export const OPEN_WINDOWS_PACKAGE_FILES = [
   "if($exeStream.Length -lt 1 -or $exeStream.Length -gt 1073741824 -or $manifestStream.Length -lt 1 -or $manifestStream.Length -gt 1048576){throw 'Unexpected package file size'}",
 ].join("\n");
 
-export const MEASURE_WINDOWS_PACKAGE_FILES = [
-  "Assert-DesktopPackageContent $p",
-  "$signature=Get-AuthenticodeSignature -LiteralPath $exePath",
-  `if($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -cne '${CODEX_EXECUTABLE_SIGNER}'){throw 'Untrusted executable signer'}`,
+/** Package/app identity can be observed even when content or signer proof later fails. */
+export const READ_WINDOWS_PACKAGE_MANIFEST = [
   "$manifest=Get-AppxPackageManifest -Package $p.PackageFullName",
   "$entry=@($manifest.Package.Applications.Application|Where-Object {$_.Id -ceq 'App'})",
   String.raw`if($entry.Count -ne 1 -or $entry[0].Executable.Replace('/','\') -ine 'app\ChatGPT.exe'){throw 'Unexpected application entry'}; $entry=$entry[0]`,
   "if($manifest.Package.Identity.Name -cne 'OpenAI.Codex' -or $manifest.Package.Identity.Publisher -cne $p.Publisher -or $manifest.Package.Identity.Version -cne [string]$p.Version){throw 'Unexpected manifest identity'}",
+].join("\n");
+
+export const MEASURE_WINDOWS_PACKAGE_FILES = [
+  "Assert-DesktopPackageContent $p",
+  "$signature=Get-AuthenticodeSignature -LiteralPath $exePath",
+  `if($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -cne '${CODEX_EXECUTABLE_SIGNER}'){throw 'Untrusted executable signer'}`,
+  READ_WINDOWS_PACKAGE_MANIFEST,
   "$digest=Get-DesktopPackageHash $manifestStream; $executableHash=Get-DesktopPackageHash $exeStream",
   "$exe=Get-Item -LiteralPath $exePath",
   "$executableIdentity=[string]$exeStream.Length+':'+$exe.CreationTimeUtc.Ticks+':'+$exe.LastWriteTimeUtc.Ticks",

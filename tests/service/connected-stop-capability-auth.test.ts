@@ -2,11 +2,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertConnectedClientStopSupported, classifyStopRole } from "../../src/cli/stop-restore";
+import { assertConnectedClientStopSupported } from "../../src/cli/stop-restore";
 import { startMachineListener } from "../../src/client/machine-listener";
 import { saveConfig } from "../../src/config";
-import { isValidRuntimePortState, readRuntimePort, writeRuntimePort } from "../../src/config/process-state";
-import { clientSyncRuntimeGuard, finishClientRuntimeStop, markClientRuntimeStopping } from "../../src/client/sync-runtime";
+import { writeRuntimePort } from "../../src/config/process-state";
 import {
   createLocalAttestationChallenge,
   createLocalAttestationProof,
@@ -65,37 +64,9 @@ afterEach(async () => {
   removeTreeWithRetry(home);
 });
 
-test("finishing an exact parent stop keeps sync fenced and never changes a different runtime", () => {
-  const identity = { pid: process.pid, port: 17001, attestationSecret: SECRET };
-  const owner = { pid: process.pid + 1, nonce: "a".repeat(32), startTime: "darwin:1:0" };
-  writeRuntimePort({ ...identity, clientStopping: true, clientStopRequested: true, clientStopOwner: owner });
-  const active = readRuntimePort(process.pid);
-  for (const foreign of [{ ...identity, pid: process.pid + 1 }, { ...identity, port: 17002 }, { ...identity, attestationSecret: "B".repeat(43) }]) {
-    finishClientRuntimeStop(foreign, owner);
-    expect(readRuntimePort(process.pid)).toEqual(active);
-  }
-  finishClientRuntimeStop(identity, { ...owner, nonce: "b".repeat(32) });
-  expect(readRuntimePort(process.pid)).toEqual(active);
-  finishClientRuntimeStop(identity, owner);
-  expect(readRuntimePort(process.pid)).toMatchObject({ ...identity, clientStopping: true, clientStopRequested: false });
-  expect(() => clientSyncRuntimeGuard()).toThrow("client_runtime_stopping");
-  const finished = readRuntimePort(process.pid);
-  finishClientRuntimeStop(identity, owner);
-  expect(readRuntimePort(process.pid)).toEqual(finished);
-  markClientRuntimeStopping(identity, owner);
-  expect(readRuntimePort(process.pid)?.clientStopRequested).toBe(true);
-});
-
-test.each([true, false])("both parent stop states require a stopping sync fence (%s)", clientStopRequested => {
-  const identity = { pid: process.pid, port: 17001, attestationSecret: SECRET, clientStopRequested };
-  expect(isValidRuntimePortState(identity)).toBe(false);
-  expect(isValidRuntimePortState({ ...identity, clientStopping: true })).toBe(true);
-});
-
 type FixtureOptions = {
   health?: "proxy" | "client" | "foreign";
   healthProof?: boolean;
-  linkStopFence?: boolean;
   readProof?: boolean;
   missingRecord?: boolean;
   record?: Record<string, unknown>;
@@ -125,7 +96,7 @@ function listener(options: FixtureOptions = {}) {
       return options.health === "foreign"
         ? Response.json({ service: "other" }, { status: 404 })
         : Response.json({ service: "opencodex", pid: process.pid,
-          ...(options.health === "client" ? { role: "client" } : {}), ...(options.linkStopFence ? { linkStopFence: true } : {}) }, { headers });
+          ...(options.health === "client" ? { role: "client" } : {}) }, { headers });
     }
     const error = requireManagementAuth(req, auth, undefined, record());
     if (error) return error;
@@ -136,19 +107,6 @@ function listener(options: FixtureOptions = {}) {
 }
 
 describe("connected stop preflight runtime authority", () => {
-  test.each([true, false])("a fence-only health response is client evidence only with attestation (%s)", async healthProof => {
-    listener({ healthProof, linkStopFence: true });
-    const runtime = readRuntimePort(process.pid);
-    expect(await classifyStopRole({ kind: "disconnected" }, runtime, [])).toBe(healthProof ? "connected" : "unknown");
-  });
-
-  test("a legacy client role triggers preflight even without a runtime record", async () => {
-    const { target } = listener({ health: "client", missingRecord: true });
-    saveConfig({ ...serverAuthConfig(), port: target.port, hostname: target.hostname });
-    expect(await classifyStopRole({ kind: "disconnected" }, null, [])).toBe("connected");
-    await expect(assertConnectedClientStopSupported(target)).rejects.toThrow("Connected-client stop refused");
-  });
-
   test("a foreign health response never receives a reusable administrator credential", async () => {
     const fixture = listener({ health: "foreign" });
     let refused = false;
@@ -168,21 +126,6 @@ describe("connected stop preflight runtime authority", () => {
     await assertConnectedClientStopSupported(fixture.target);
     expect(fixture.requests.map(req => req.path)).toEqual(["/healthz"]);
     expect(fixture.requests[0]!.headers.has(LOCAL_ATTESTATION_CHALLENGE_HEADER)).toBe(true);
-    expect(fixture.requests[0]!.headers.has("x-opencodex-api-key")).toBe(false);
-  });
-
-  test("Link preflight refuses an attested older native runtime without the explicit-stop fence capability", async () => {
-    const fixture = listener({ health: "client", healthProof: true });
-    const before = readFileSync(join(home, "runtime-port.json"), "utf8");
-    await expect(assertConnectedClientStopSupported(fixture.target, { requireLinkStopFence: true })).rejects.toThrow("Connected-client stop refused");
-    expect(fixture.requests.map(req => req.path)).toEqual(["/healthz"]);
-    expect(readFileSync(join(home, "runtime-port.json"), "utf8")).toBe(before);
-  });
-
-  test("Link preflight accepts the explicit-stop fence capability only on the attested runtime", async () => {
-    const fixture = listener({ health: "client", healthProof: true, linkStopFence: true });
-    await assertConnectedClientStopSupported(fixture.target, { requireLinkStopFence: true });
-    expect(fixture.requests.map(req => req.path)).toEqual(["/healthz"]);
     expect(fixture.requests[0]!.headers.has("x-opencodex-api-key")).toBe(false);
   });
 

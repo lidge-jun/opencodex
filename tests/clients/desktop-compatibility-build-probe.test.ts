@@ -8,8 +8,25 @@ import { resolveTrustedWindowsPowerShellExe } from "../../src/lib/windows-elevat
 import type { DesktopPackageObservation as DesktopAppInstall } from "../../src/codex/desktop-compatibility/installed-build";
 import { desktopPackageObservation } from "../helpers/desktop-package-observation";
 import { hostedWindowsQuarantine } from "../helpers/windows-ci-quarantine";
+import { OPEN_WINDOWS_PACKAGE_FILES, WINDOWS_PACKAGE_PROOF_FUNCTIONS } from "../../src/codex/desktop-compatibility/windows-package-proof";
 
 const installed = desktopPackageObservation;
+
+test("an identified package retains its observed version after content or signer proof refuses", async () => {
+  const candidate = installed("26.1103.3517.0");
+  for (const proof of [undefined, { ...candidate.proof!, contentIntegrity: false },
+    { ...candidate.proof!, signerSubject: "CN=Foreign" }]) {
+    const probe = createInstalledBuildProbe(async () => ({ ...candidate, proof }));
+    expect(await probe.check()).toBe(false);
+    expect(probe.lastResult()).toMatchObject({ observedVersion: "26.1103.3517.0", verified: false });
+    expect(probe.binding()).toMatchObject({ identity: null, build: null });
+    await probe.close();
+  }
+  const unknown = createInstalledBuildProbe(async () => null);
+  expect(await unknown.check()).toBe(false);
+  expect(unknown.lastResult()).toMatchObject({ observedVersion: null, verified: false });
+  await unknown.close();
+});
 
 test("registration and file metadata alone cannot admit a Codex package", async () => {
   const install = installed();
@@ -115,6 +132,30 @@ describe.skipIf(process.platform !== "win32" || hostedWindowsQuarantine)("Window
   test("owned ancestor junctions and persistent retargets fail before proof publication", async () => {
     await probeOwnedAncestry(10_000);
   }, 20_000);
+
+  test("the native script publishes identified facts after a fixture content or signer refusal", async () => {
+    for (const refusal of ["content", "signer"]) {
+      const nativeFixtures = ["$ErrorActionPreference='Stop'",
+        "function Get-DesktopPackage { [pscustomobject]@{PackageFamilyName='OpenAI.Codex_2p2nqsd0c76g0';PackageFullName='OpenAI.Codex_26.1103.3517.0_x64__2p2nqsd0c76g0';InstallLocation='C:\\fixture\\OpenAI.Codex_26.1103.3517.0_x64__2p2nqsd0c76g0';Publisher='CN=fixture';Version='26.1103.3517.0'} }",
+        "function Get-AppxPackageManifest { [pscustomobject]@{Package=@{Identity=@{Name='OpenAI.Codex';Publisher='CN=fixture';Version='26.1103.3517.0'};Applications=@{Application=@(@{Id='App';Executable='app\\ChatGPT.exe'})}}} }",
+        `function Assert-DesktopPackageContent { ${refusal === "content" ? "throw 'fixture content refusal'" : ""} }`,
+        "function Get-AuthenticodeSignature { [pscustomobject]@{Status='UnknownError'} }",
+      ].join("\n");
+      // Run the shipped observation/catch/publication flow with no registered package or file I/O.
+      const script = DESKTOP_PACKAGE_PROOF_SCRIPT.replace(WINDOWS_PACKAGE_PROOF_FUNCTIONS, nativeFixtures)
+        .replace(OPEN_WINDOWS_PACKAGE_FILES, "$exeStream=$null; $manifestStream=$null; $exePath='fixture.exe'");
+      const result = await spawnTestChild([resolveTrustedWindowsPowerShellExe(), "-NoProfile", "-NonInteractive", "-Command", script],
+        { cwd: process.cwd(), deadlineMs: 10_000 });
+      expect(result).toMatchObject({ exitCode: 0, timedOut: false, reaped: true, pipesClosed: true });
+      const observation = JSON.parse(result.stdout);
+      expect(observation).not.toHaveProperty("proof");
+      const probe = createInstalledBuildProbe(async () => observation);
+      expect(await probe.check()).toBe(false);
+      expect(probe.lastResult()).toMatchObject({ observedVersion: "26.1103.3517.0", verified: false });
+      expect(probe.binding()).toMatchObject({ identity: null, build: null });
+      await probe.close();
+    }
+  }, 25_000);
 });
 
 test("manifest and canonical executable facts are required while an official newer build verifies", async () => {

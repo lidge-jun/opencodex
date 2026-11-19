@@ -237,10 +237,10 @@ describe("optional native compatibility runtime", () => {
           if (result === "indeterminate completion") throw new Error("fixture timeout");
           return JSON.stringify({ pid: 123, verified: false });
         };
-        const launch = packageLauncher.launchWindowsCodexCompatibility;
+        const launch = packageLauncher.launchWindowsCodexCompatibilityAsync;
         setTrustedWindowsElevationExecutablesForTests({ powershell: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" });
-        const launchSpy = spyOn(packageLauncher, "launchWindowsCodexCompatibility")
-          .mockImplementation((url, build) => launch(url, build, { platform: "win32", exec }));
+        const launchSpy = spyOn(packageLauncher, "launchWindowsCodexCompatibilityAsync")
+          .mockImplementation((url, build, options) => launch(url, build, { ...options, platform: "win32", execAsync: async (...args) => exec(...args) }));
         try {
           if (path === "direct launch") {
             expect(await io.runtime.launch()).toEqual({ status: "refused", reason: "activation_failed" });
@@ -270,6 +270,44 @@ describe("optional native compatibility runtime", () => {
       }, 15_000);
     }
   }
+
+  test("a pending activation keeps PAC responsive and Stop drains its child before restart", async () => {
+    const io = fixture(true, undefined, undefined, () => createInstalledBuildProbe(async () => assessedInstall()));
+    await io.runtime.start();
+    const pac = io.runtime.getPacUrl()!;
+    let entered!: () => void, complete!: () => void, aborted = false, launches = 0;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const launchSpy = spyOn(packageLauncher, "launchWindowsCodexCompatibilityAsync").mockImplementation((_url, _build, options) => {
+      launches++;
+      return new Promise(resolve => {
+        options?.signal?.addEventListener("abort", () => { aborted = true; }, { once: true });
+        complete = () => resolve({ status: "refused", reason: "activation_failed" });
+        entered();
+      });
+    });
+    try {
+      const first = io.runtime.launch().then(value => ({ value }), error => ({ error }));
+      await started;
+      const duplicate = io.runtime.launch().then(value => ({ value }), error => ({ error }));
+      expect((await fetch(pac)).status).toBe(200);
+      expect(launches).toBe(1);
+      let stopped = false;
+      const stop = io.runtime.stop().then(() => { stopped = true; });
+      expect(aborted).toBe(true);
+      expect(io.runtime.status().phase).toBe("stopping");
+      expect(stopped).toBe(false);
+      await expect(io.runtime.start()).rejects.toThrow("desktop_compatibility_busy");
+      complete();
+      await stop;
+      for (const result of await Promise.all([first, duplicate])) {
+        expect("error" in result && String(result.error)).toContain("desktop_compatibility_not_running");
+      }
+      expect(io.runtime.status().phase).toBe("off");
+      await io.runtime.start();
+      expect(io.runtime.status().phase).toBe("running");
+      expect((await fetch(io.runtime.getPacUrl()!)).status).toBe(200);
+    } finally { complete?.(); launchSpy.mockRestore(); }
+  });
 
   for (const completion of ["success", "rejection"] as const) {
     test(`late ${completion} from a replaced runtime cannot invalidate its successor`, async () => {

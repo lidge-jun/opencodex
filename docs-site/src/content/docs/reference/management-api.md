@@ -1057,11 +1057,17 @@ identity verification and upgraded sockets. NO_PROXY is honored; failures never 
 An invalid or unsupported setting returns `egress_proxy_invalid`. Start never registers a certificate or changes
 login. Launch refuses an app that is already running. It checks the verified full package name and
 executable SHA-256 before package activation, then checks the process image and routing argument
-before reporting success. A refused or indeterminate package activation stops the compatibility
-runtime, closes its managed connections, and revokes the account-wide trial. This also applies
-to a managed Codex restart. OpenCodeX leaves any PID returned by activation alone. To run another
-trial, start observation again, wait for a fresh eligible exhaustion snapshot, and explicitly
-consent to a new Apply request.
+before reporting success. Runtime-owned launch uses an asynchronous child, so PAC and relay
+requests remain serviceable while the full proof runs. Stop aborts and drains that child before
+another runtime can start. A refused or indeterminate package activation revokes the account-wide
+trial and initiates cleanup of the compatibility runtime and its managed connections. Closure
+is confirmed only after cleanup succeeds. This also applies to a managed Codex restart.
+OpenCodeX leaves any PID returned by activation alone. Check `runtime.phase` in the response:
+if cleanup fails, HTTP 409 includes `cleanup-required`; retry Stop and confirm `off` before
+starting again. After successful cleanup, callers can start directly. For either activation
+failure path, save drafts, close any Codex window left running, start observation, and select
+**Open Codex** to restore the managed connection. Then wait for a fresh eligible exhaustion
+snapshot and explicitly consent to a new Apply request.
 PAC and CONNECT ports are persisted after successful first binding and reused on restart.
 `connection_unavailable` means binding failed; `connection_invalid` or `connection_changed`
 means stored endpoint identity could not be accepted. These failures never silently rotate
@@ -1078,8 +1084,9 @@ older than the installed package, and only a completed check replaces it. `obser
 null unless discovery matched the assessed package family and entry point; an identified build
 keeps its own version, and `verified` reports whether the package passed its official package
 proof at `completedAt`, never whatever is installed later. The field is absent until the
-service creates its probe during start and `null` until that probe finishes a check; reading
-status never starts one.
+service creates its probe during start. It is `null` only when a probe exists and no completed
+assessment is available. A previous completed assessment remains visible while a replacement
+probe is pending, until a new check completes; reading status never starts a check.
 
 Apply requires a recently observed eligible exhaustion snapshot and lasts at most three minutes
 at the response layer. It changes two account-UI gate flags, not usage percentages, credits,
