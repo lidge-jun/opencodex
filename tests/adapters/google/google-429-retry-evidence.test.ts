@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import type { AdapterRequest } from "../../../src/adapters/base";
-import { fetchVertexWithRetry } from "../../../src/adapters/google-http";
+import { fetchDirectGeminiWithRetry, fetchVertexWithRetry } from "../../../src/adapters/google-http";
 import * as retry from "../../../src/lib/upstream-retry";
 
 const request: AdapterRequest = {
@@ -79,6 +79,58 @@ test("Google 429 uses an explicit zero Retry-After as evidence and still applies
 test("Google 429 honors delta-seconds Retry-After even when the body exceeds the read limit", async () => {
   const result = await send429("x".repeat(64 * 1024 + 1), "30");
   expect(result).toEqual({ status: 200, sends: 2, waits: [30_000] });
+});
+
+test("Google 429 takes the same body delay with an invalid or absent header", async () => {
+  const body = neutralBody([{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "90s" }]);
+  for (const fetchWithRetry of [fetchDirectGeminiWithRetry, fetchVertexWithRetry]) {
+    for (const header of [undefined, "garbage"]) {
+      let sends = 0;
+      const response = await fetchWithRetry(request, {
+        executor: (async () => {
+          sends++;
+          return sends === 1
+            ? new Response(body, { status: 429, headers: header === undefined ? undefined : { "retry-after": header } })
+            : new Response("unexpected replay");
+        }) as typeof fetch,
+      });
+      expect({ sends, status: response.status, retryAfter: response.headers.get("retry-after") })
+        .toEqual({ sends: 1, status: 429, retryAfter: "90" });
+      const responseBody = await response.text();
+      if (fetchWithRetry === fetchDirectGeminiWithRetry) expect(responseBody).toBe(body);
+    }
+  }
+});
+
+test("Google 429 honors a compound body delay even with an invalid header", async () => {
+  const body = neutralBody([{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", metadata: { quotaResetDelay: "1m30s" } }]);
+  expect(await send429(body, "garbage")).toEqual({ status: 429, sends: 1, waits: [] });
+});
+
+test("the last Google 429 replaces an invalid header with its typed wait", async () => {
+  const body = neutralBody([{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "90s" }]);
+  let sends = 0;
+  const sleep = spyOn(retry, "sleepWithAbort").mockResolvedValue(undefined);
+  try {
+    const response = await fetchVertexWithRetry(request, {
+      executor: (async () => ++sends < retry.TRANSIENT_RETRY_MAX_ATTEMPTS
+        ? new Response("unavailable", { status: 503 })
+        : new Response(body, { status: 429, headers: { "retry-after": "garbage" } })) as typeof fetch,
+    });
+    expect(sends).toBe(retry.TRANSIENT_RETRY_MAX_ATTEMPTS);
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("90");
+  } finally {
+    sleep.mockRestore();
+  }
+});
+
+test("Google 429 prefers an explicit zero header to a long body delay", async () => {
+  const body = neutralBody([{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "90s" }]);
+  const result = await send429(body, "0");
+  expect(result).toMatchObject({ status: 200, sends: 2 });
+  expect(result.waits).toHaveLength(1);
+  expect(result.waits[0]).toBeLessThan(1_000);
 });
 
 test("Google 429 uses an HTTP-date Retry-After for both eligibility and scheduling", async () => {

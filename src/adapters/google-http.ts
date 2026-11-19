@@ -15,6 +15,7 @@ import {
   cancelResponseBodyBestEffort,
   fetchWithAttemptDeadline,
   RETRY_AFTER_CEILING_MS,
+  retryAfterDelayMs,
   retryBackoffDelayMs,
   sleepWithAbort,
   SendBudgetExhaustedError,
@@ -92,7 +93,7 @@ export async function fetchGoogleWithRetry(
     // Refresh its destination and headers without discarding the already-repaired payload.
     if (activeRequest !== request) activeRequest = { ...activeRequest, url: request.url, method: request.method, headers: request.headers };
     try {
-      const res = await send({ url: activeRequest.url, sendClass, recovery,
+      let res = await send({ url: activeRequest.url, sendClass, recovery,
         beforePacing: async () => {
           // Admission already reserved the retry budget. Drop our old response lease
           // before waiting for capacity; never hold the next slot during backoff.
@@ -143,37 +144,23 @@ export async function fetchGoogleWithRetry(
       // A 429 may be a transient rate limit (retry), hard quota exhaustion (do NOT retry — it
       // won't recover for hours and burns retries), or a refusal no replay can change. The
       // status alone cannot tell them apart, so peek the body once and decide from evidence.
-      let delayHeaders: Headers = res.headers;
-      let bodyRetryAfter: string | undefined;
       if (res.status === 429) {
-        const peekTarget = res.clone();
-        const peek = await readDisplaySafeErrorPayloadText(peekTarget, ctx.abortSignal);
+        const peek = await readDisplaySafeErrorPayloadText(res.clone(), ctx.abortSignal);
         if (isQuotaExhaustedBody(peek, label)) {
-          if (ctx.returnRawErrors) return withBodyRetryAfter(res, extractGoogleRetryAfterSeconds(peek));
-          const normalized = await normalizeUpstreamHttpErrorResponse(res, {
+          const quota = withBodyRetryAfter(res, peek);
+          if (ctx.returnRawErrors) return quota;
+          return normalizeUpstreamHttpErrorResponse(quota, {
             signal: ctx.abortSignal,
             formatMessage: payloadText => safeGoogleHttpErrorMessage(label, res.status, payloadText || peek),
           });
-          if (!normalized.headers.has("retry-after")) {
-            const retryAfter = extractGoogleRetryAfterSeconds(peek);
-            if (retryAfter) normalized.headers.set("retry-after", retryAfter);
-          }
-          return normalized;
         }
-        // A wait stated only in the body (RetryInfo, quotaResetDelay) is the same instruction as
-        // a Retry-After header, so it floors the backoff too; an explicit header still wins.
-        if (!res.headers.has("retry-after")) {
-          bodyRetryAfter = extractGoogleRetryAfterSeconds(peek);
-          if (bodyRetryAfter) { delayHeaders = new Headers(res.headers); delayHeaders.set("retry-after", bodyRetryAfter); }
-        }
-        // The ladder below replays the same bytes. Without a Retry-After, a reset delay, a
-        // transient-rate-limit phrase, or a structured rate-limit reason, that replay is a
-        // guess: Cloud Code Assist answers request-shape rejections with a bare
-        // RESOURCE_EXHAUSTED, and the proxy turned each one into three identical sends per
-        // turn before surfacing the same refusal.
-        if (!bodyRetryAfter && !hasGoogle429RetryEvidence(res.headers, peek)) {
+        // #8897: replaying the same bytes requires evidence that the next send could succeed.
+        // A validated positive body delay also qualifies, including legacy compound durations.
+        const advised = withBodyRetryAfter(res, peek);
+        if (advised === res && !hasGoogle429RetryEvidence(res.headers, peek)) {
           return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal);
         }
+        res = advised;
       }
       // Retry-After names the earliest send Google will serve (#7802). The local maximum bounds
       // only our own backoff; it must not shorten the provider's instruction into a send it
@@ -182,14 +169,11 @@ export async function fetchGoogleWithRetry(
       const delayMs = retryBackoffDelayMs(attempt, {
         baseDelayMs: GOOGLE_RETRY_BASE_MS,
         maxDelayMs: GOOGLE_RETRY_MAX_MS,
-        headers: delayHeaders,
+        headers: res.headers,
         retryAfterIsLowerBound: true,
       });
       if (delayMs > RETRY_AFTER_CEILING_MS) {
-        if (ctx.returnRawErrors) return withBodyRetryAfter(res, bodyRetryAfter);
-        const final = await normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal);
-        if (bodyRetryAfter && !final.headers.has("retry-after")) final.headers.set("retry-after", bodyRetryAfter);
-        return final;
+        return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal);
       }
       pendingResponse = res;
       recovery = res.status === 429 ? "rate-limit-429" : "transient-5xx";
@@ -227,30 +211,24 @@ export async function fetchGoogleWithRetry(
 }
 
 /**
- * The upstream answer that ends the retry ladder. Running out of attempts stops another send; it
- * must not drop a 429's body-stated wait, so that wait rides as Retry-After on the raw or the
- * normalized answer alike (an explicit upstream header wins).
+ * The upstream answer that ends the retry ladder. Running out of attempts or send budget
+ * must still surface a 429's effective wait on raw and normalized answers.
  */
 async function finalGoogleAnswer(label: string, res: Response, request: AdapterRequest, ctx: AdapterFetchContext & { returnRawErrors?: boolean }): Promise<Response> {
-  const bodyRetryAfter = res.status === 429 && !res.headers.has("retry-after")
-    ? extractGoogleRetryAfterSeconds(await readDisplaySafeErrorPayloadText(res.clone(), ctx.abortSignal))
-    : undefined;
-  if (ctx.returnRawErrors) return withBodyRetryAfter(res, bodyRetryAfter);
-  const final = await normalizeFinalGoogleError(label, res, request, ctx.abortSignal);
-  if (bodyRetryAfter && !final.headers.has("retry-after")) final.headers.set("retry-after", bodyRetryAfter);
-  return final;
+  if (res.status === 429 && retryAfterDelayMs(res.headers) === undefined) {
+    res = withBodyRetryAfter(res, await readDisplaySafeErrorPayloadText(res.clone(), ctx.abortSignal));
+  }
+  return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, request, ctx.abortSignal);
 }
 
-/**
- * A raw upstream answer that also states its body-only retry wait as Retry-After, so callers that
- * read only the header (cooldowns, client retries) honor it. The body and status stay Google's; an
- * explicit upstream Retry-After wins. The body is unread here: only a clone was peeked.
- */
-function withBodyRetryAfter(res: Response, seconds: string | undefined): Response {
-  if (!seconds || res.headers.has("retry-after")) return res;
+/** Prefer a parseable header (including zero); otherwise surface the typed body delay. */
+function withBodyRetryAfter(res: Response, payloadText: string): Response {
+  if (retryAfterDelayMs(res.headers) !== undefined) return res;
+  const seconds = extractGoogleRetryAfterSeconds(payloadText);
+  if (seconds === undefined) return res;
   const headers = new Headers(res.headers);
   headers.set("retry-after", seconds);
-  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+  return inheritAccountAutoPauseResponse(res, new Response(res.body, { status: res.status, statusText: res.statusText, headers }));
 }
 
 /**

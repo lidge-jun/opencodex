@@ -556,9 +556,10 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
 - **Rate limits and quota follow Google's typed error details.** A `429` whose `ErrorInfo.reason` is
   `QUOTA_EXHAUSTED` or `INSUFFICIENT_G1_CREDITS_BALANCE` is quota exhaustion and is not retried; on
   Antigravity `RATE_LIMIT_EXCEEDED` is a short rate limit even when the message sounds like quota. A
-  retry delay stated only in the body (`RetryInfo.retryDelay`, `quotaResetDelay`, or "after 1h2m3s" in
-  the message) sets the earliest next attempt like a `Retry-After` header, and a delay longer than the
-  retry ceiling returns the `429` with that `Retry-After`.
+  valid `Retry-After` header, including zero, takes precedence. If it is absent or invalid, a
+  delay stated in the body (`RetryInfo.retryDelay`, `quotaResetDelay`, or "after 1h2m3s" in the
+  message) sets the earliest next attempt. A delay longer than the retry ceiling returns the
+  `429` with the effective `Retry-After`.
 - **Usage and finish outcomes are the same on every Google mode.** Reported output tokens include
   Gemini's thinking tokens (`candidatesTokenCount` plus `thoughtsTokenCount`), and input tokens include
   `toolUsePromptTokenCount`, which Google reports for search grounding and URL context. A turn that ends
