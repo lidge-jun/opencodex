@@ -1,3 +1,4 @@
+import { REPLAY_REFUSAL_MESSAGE } from "../../src/lib/upstream-retry";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -183,6 +184,62 @@ describe("server terminal guard integration", () => {
     // The 429 continuation (send 2) and its same-key replay (send 3) must be byte-identical.
     expect(requestBodies).toHaveLength(3);
     expect(requestBodies[1]).toBe(requestBodies[2]);
+  });
+
+  test.each(["upstream_response_refused", "upstream_reset_replay_refused", "inconclusive", "header"] as const)(
+    "terminal-guard continuation stops on a same-key retry with %s", async veto => {
+    takeInheritedSpendHome();
+    const retryConfig = {
+      ...config,
+      providers: {
+        "claude-se": {
+          adapter: "anthropic",
+          baseUrl: "https://example.test",
+          apiKey: "sk-test",
+          retryOn429: { attempts: 2, intervalMs: 120, respectRetryAfter: false },
+        },
+      },
+    } as unknown as OcxConfig;
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends += 1;
+      if (sends === 2) {
+        return new Response(JSON.stringify({ error: { message: "rate limited" } }), {
+          status: 429,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (sends === 3) {
+        const coded = veto.startsWith("upstream_");
+        return Response.json({
+          ...(veto === "inconclusive" ? { padding: "x".repeat(70_000) } : {}),
+          error: { ...(coded ? { code: veto } : {}), message: "fixture diagnostic" },
+        }, { status: 429, headers: {
+          "retry-after": "30", ...(veto === "header" ? { "x-should-retry": "false" } : {}),
+        } });
+      }
+      return anthropicSse(sends === 1 ? firstTurn : continuationTurn);
+    }) as typeof fetch;
+
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "se-claude-opus-4.8",
+        input: "请检查这个问题并修复代码",
+        stream: true,
+        tools: [{ type: "function", name: "exec_command", description: "run a command", parameters: { type: "object" } }],
+      }),
+    }), retryConfig, { model: "", provider: "" });
+
+    const frames = (await response.text()).split("\n")
+      .filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+    expect(sends).toBe(3);
+    const failed = frames.find(frame => frame.type === "response.failed");
+    expect(failed?.response.retryable).toBe(false);
+    if (veto.startsWith("upstream_")) {
+      expect(failed.response.error).toMatchObject({ code: veto, message: REPLAY_REFUSAL_MESSAGE });
+    }
   });
 
   test("terminal-guard continuation retry budget stays per request across key failover", async () => {

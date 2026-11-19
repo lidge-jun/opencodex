@@ -454,7 +454,7 @@ export function createAdapterContinuations(
           return;
         }
         try {
-          response = await fetchContinuation("rate-limit-429");
+          response = await fetchObservedContinuation("rate-limit-429");
         } catch (error) {
           yield continuationFailureEvent(error); return;
         }

@@ -373,7 +373,7 @@ and this proxy's credential and quota recovery (401 refresh or rotation, 402/429
 rotation). The gateway statuses in `isTransientUpstreamStatus` are only
 a subset; 429 and 529 escaped them before. An upstream gateway status carrying the exact
 `x-should-retry: false` verdict stops the transient retry ladder before its body is released and
-returns the original response unchanged; downstream bounded readers may still record its refusal code and passive evidence before client projection. A failed, timed-out, partial or SSE diagnostic probe cannot authorize a transient resend of a replay-unsafe operation. Only an explicit `replaySafe` policy may retry an inconclusive body; a recognized veto always wins.
+returns the original response unchanged; downstream bounded readers may still record its refusal code and passive evidence before client projection. A failed, timed-out, partial or SSE diagnostic probe cannot authorize a transient resend of a replay-unsafe operation. Only an explicit `replaySafe` policy may retry an inconclusive body; a recognized veto always wins. The translated continuation probes each 429 response before another same-key retry or credential rotation.
 A kept status stays the upstream's evidence for the
 caller, and the marker stops every recovery loop that checks it, such as the opaque-blob rebuild
 of a 400 or the Codex pool's gated-model retry. A combo rebuilds a failed attempt as a new
