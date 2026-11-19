@@ -358,7 +358,20 @@ OpenCodex puede gastar una suscripción de Claude a través del propio arnés de
 - **Indicación del sistema:** el sistema de la persona que llama y las indicaciones del desarrollador reemplazan el preajuste Claude Code (`--system-prompt-file`), por lo que el turno responde al contrato del cliente en lugar del personaje del arnés. El indicador plegado se organiza en un archivo privado por turno (modo `0600`) y se pasa por ruta, porque los argumentos de proceso son legibles en todo el mundo a través de la lista de procesos; una solicitud que no lleva ni un sistema ni un indicador de desarrollador obtiene solo las instrucciones de repetición de conversación fijas.
 - **Almacenamiento en caché de conversación:** cada mensaje se reproduce como un bloque de texto estable separado, con el mensaje actual formateado de manera idéntica a su representación histórica posterior. La larga historia se corta solo en los puntos de control de mensajes completos. Los catálogos de herramientas se serializan de manera determinista. Claude Code controla los puntos de interrupción de caché, por lo que esto hace posible la reutilización de caché rápida sin garantizarlo.
 - **Propiedad de la herramienta:** cuando la solicitud lleva herramientas, un catálogo aislado de solo captura MCP expone solo las herramientas seleccionadas del cliente (el mismo puente que CodeBuddy usa). El CLI captura la llamada y el turn termina allí; aprobación, sandboxing, ejecución y el resultado devuelto se queda con Codex, Pi, u otro cliente. Las herramientas integradas y todos los demás servidores MCP permanecen desactivados.
-- **Límites de suscripción:** antes de cada lanzamiento OpenCodex pide el punto final de uso de Anthropic, con el propio inicio de sesión del CLI leído en la memoria, si la ventana de 5 horas, semanal o específica del modelo del plan está llena. Un plan agotado es rechazado localmente con HTTP 429 `claude_subscription_cooldown` y un `Retry-After` para el reinicio, en lugar de comenzar un CLI que fallaría. La respuesta se almacena en caché durante un minuto en `claude-usage-admission.json` bajo el OpenCodex home (solo porcentajes, tiempos de reinicio y una clave de cuenta hash). Si el cheque no puede ejecutarse, el turno continúa.
+- **Límites de suscripción y uso adicional de pago:** OpenCodex consulta el endpoint de uso de
+  Anthropic con la sesión de la propia CLI. Guarda durante un minuto como máximo el agotamiento
+  detectado de la cuota de 5 horas, semanal o específica del modelo, para detectar una recarga o
+  un restablecimiento de cuota antes de la fecha anterior. Si el uso adicional está habilitado
+  explícitamente y no se indica que se haya alcanzado el límite de uso adicional, la CLI oficial
+  decide si el saldo y el límite de gasto permiten la solicitud. OpenCodex no presume que haya saldo
+  ni activa el uso de pago. Si el uso adicional está deshabilitado o agotado, no se ofrece esa vía.
+  OpenCodex considera agotado el límite de uso adicional cuando se informa de un 100 % de uso,
+  cuando los créditos consumidos alcanzan un límite mensual positivo o cuando el límite mensual
+  es explícitamente cero. Si la propia CLI indica que se alcanzó un límite, este se respeta hasta
+  la fecha de restablecimiento registrada. En los demás casos, un plan agotado devuelve HTTP 429
+  `claude_subscription_cooldown` con `Retry-After`. La caché privada guarda porcentajes,
+  fechas de restablecimiento, el estado del uso adicional y un hash de la clave de cuenta,
+  sin credenciales ni importes del saldo. Si la consulta no está disponible, decide la CLI.
 - **Destino:** la fila canónica nombra `https://api.anthropic.com` porque ahí es donde aterriza el tráfico de la suscripción. OpenCodex nunca envía esa solicitud en sí, y anular la URL base falla en cerrarse en lugar de entregar el turno a otro entorno.
 
 > **Términos:** este preajuste gasta su suscripción Claude a través del propio CLI de Anthropic. Si conducir ese arnés sin cabeza desde un proxy se ajusta a los términos de su plan es una pregunta entre usted y Anthropic. OpenCodex no convierte el inicio de sesión en una clave API y no reproduce la identidad CLI de HTTP.
