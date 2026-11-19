@@ -1263,7 +1263,6 @@ export const STEP_CLI_NO_VISION_MODELS = [...STEP_CLI_MODELS];
  * a depth it did not.
  */
 export const STEP_CLI_REASONING_EFFORTS = ["low", "medium", "high"];
-
 // AI Stupid Level routing modes, as listed by the authenticated GET /v1/models on 2026-10-26
 // (https://aistupidlevel.info/router/docs#strategies). Each mode picks a model per request, so it
 // declares conservative limits that hold for any pick: a 262,144-token window (the pool's smallest,
