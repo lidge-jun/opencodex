@@ -87,14 +87,14 @@ test("request list groups by session, shows dashes for unknown metrics, and mark
 test("time bar lists each measured stage in order with its label, or a note when nothing was recorded", () => {
   const [first, last] = failover.attempts!;
   const timed = {
-    ...failover, upstreamSendMs: 1010, privacyRedactionMs: 5, firstOutputMs: 1710,
+    ...failover, upstreamSendMs: 1010, firstOutputMs: 1710,
     attempts: [{ ...first!, durationMs: 1000 }, { ...last!, firstOutputMs: 700 }],
   } as unknown as RouteRow;
   const doc = render(<TimeSection row={timed} />);
   expect(doc.querySelector("h4")?.textContent).toBe("时间花在哪里");
   expect([...doc.querySelectorAll(".rl-time-legend li > span:nth-child(2)")].map(s => s.textContent)).toEqual(
-    ["隐私脱敏", "OpenCodex 内部", "之前的尝试", "等上游第一个字", "流式输出"]);
-  expect(doc.querySelectorAll(".rl-time-seg").length).toBe(5);
+    ["OpenCodex 内部", "之前的尝试", "等上游第一个字", "流式输出"]);
+  expect(doc.querySelectorAll(".rl-time-seg").length).toBe(4);
   const bare = render(<TimeSection row={{ timestamp: 1, model: "m", provider: "p", status: 200, durationMs: 50 } as unknown as RouteRow} />);
   expect(bare.querySelector(".rl-time-bar")).toBeNull();
   expect(bare.querySelector("p")?.textContent).toContain("没有记录时间分布");

@@ -13,22 +13,13 @@ describe("timeParts", () => {
     ]);
   });
 
-  test("privacy redaction is its own part and leaves the internal remainder", () => {
-    const parts = timeParts(row({
-      upstreamSendMs: 40, privacyRedactionMs: 25, attempts: [attempt({ durationMs: 1960, firstOutputMs: 500 })],
-    }));
-    expect(parts).toEqual([
-      { kind: "privacy", ms: 25 }, { kind: "internal", ms: 15 }, { kind: "upstreamWait", ms: 500 }, { kind: "streaming", ms: 1460 },
-    ]);
-  });
-
   test("failover: earlier attempts are subtracted from the time before the final attempt", () => {
     const parts = timeParts(row({
-      durationMs: 3000, upstreamSendMs: 1010, privacyRedactionMs: 5,
+      durationMs: 3000, upstreamSendMs: 1010,
       attempts: [attempt({ status: 429, durationMs: 1000 }), attempt({ durationMs: 1990, firstOutputMs: 700 })],
     }));
     expect(parts).toEqual([
-      { kind: "privacy", ms: 5 }, { kind: "internal", ms: 5 }, { kind: "earlier", ms: 1000 },
+      { kind: "internal", ms: 10 }, { kind: "earlier", ms: 1000 },
       { kind: "upstreamWait", ms: 700 }, { kind: "streaming", ms: 1290 },
     ]);
   });
@@ -57,9 +48,9 @@ describe("timeParts", () => {
 
   test("parts under 0.1 ms are dropped and negatives clamp to zero", () => {
     const parts = timeParts(row({
-      durationMs: 1000, upstreamSendMs: 0.05, privacyRedactionMs: 3, attempts: [attempt({ durationMs: 999.95, firstOutputMs: 2000 })],
+      durationMs: 1000, upstreamSendMs: 0.05, attempts: [attempt({ durationMs: 999.95, firstOutputMs: 2000 })],
     }));
-    expect(parts).toEqual([{ kind: "privacy", ms: 3 }, { kind: "upstreamWait", ms: 2000 }]);
+    expect(parts).toEqual([{ kind: "upstreamWait", ms: 2000 }]);
   });
 
   test("no usable timing returns null", () => {

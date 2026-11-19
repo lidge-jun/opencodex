@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildLiveMeter, catalogContextLimit, handleLiveMeterData, liveMeterPreflight, resetLiveMeterCatalogCacheForTests } from "../../src/server/live-meter-handler";
+import { isLiveRoutingRecentlyObserved, resetLiveRoutingObservedForTests } from "../../src/server/context-breakdown";
 import { isAllowedRequestOrigin } from "../../src/server/auth-cors";
 import { normalizeLogConversationId } from "../../src/server/request-log-conversation";
 import { clearRequestLogsForTests, getRequestLogEntries, type RequestLogEntry } from "../../src/server/request-log";
@@ -103,6 +104,7 @@ describe("catalog context limit", () => {
 });
 
 describe("data-plane admission and CORS", () => {
+  afterEach(() => resetLiveRoutingObservedForTests());
   const key = { id: "k", name: "k", key: "ocx_data_livemeterkey", createdAt: "2026-01-01" };
   const loopback = { hostname: "127.0.0.1", corsAllowOrigins: [], apiKeys: [] };
   const remote = { hostname: "0.0.0.0", corsAllowOrigins: [], apiKeys: [key] };
@@ -168,6 +170,19 @@ describe("data-plane admission and CORS", () => {
     expect(pre({ host: "127.0.0.1:1" })).toBeNull();
     expect(pre({ origin: "app://-", host: "evil.test" })).toBeNull();
   });
+
+  test("only an admitted 200 live-meter read marks live routing as observed", async () => {
+    resetLiveRoutingObservedForTests();
+    expect(isLiveRoutingRecentlyObserved()).toBe(false);
+    expect((await handleLiveMeterData(get("http://10.0.0.2:1/v1/usage/live", { origin: "app://-" }), remote, deps)).status).toBe(401);
+    expect(isLiveRoutingRecentlyObserved()).toBe(false);
+    expect((await handleLiveMeterData(get("http://127.0.0.1:1/v1/usage/live", { origin: "https://evil.test", host: "127.0.0.1:1" }), loopback, deps)).status).toBe(403);
+    expect(isLiveRoutingRecentlyObserved()).toBe(false);
+    expect((await handleLiveMeterData(get("http://127.0.0.1:1/v1/usage/live?client=bogus", { origin: "app://-", host: "127.0.0.1:1" }), loopback, deps)).status).toBe(400);
+    expect(isLiveRoutingRecentlyObserved()).toBe(false);
+    expect((await handleLiveMeterData(get("http://127.0.0.1:1/v1/usage/live", { origin: "app://-", host: "127.0.0.1:1" }), loopback, deps)).status).toBe(200);
+    expect(isLiveRoutingRecentlyObserved()).toBe(true);
+  });
 });
 
 describe("running server", () => {
@@ -185,11 +200,13 @@ describe("running server", () => {
     delete process.env.OPENCODEX_API_AUTH_TOKEN;
     saveConfig({ ...getDefaultConfig(), port: 0, hostname: "127.0.0.1", providers: {} });
     clearRequestLogsForTests();
+    resetLiveRoutingObservedForTests();
   });
   afterEach(async () => {
     await server?.stop(true);
     server = undefined;
     clearRequestLogsForTests();
+    resetLiveRoutingObservedForTests();
     for (const k of envKeys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
     codex.restore();
     await removeTreeAfterBackgroundWork(home);
@@ -217,5 +234,59 @@ describe("running server", () => {
     expect(otherPre.status).toBe(403);
     const postRes = await fetch(new URL("/v1/usage/live", base), { method: "POST", headers: app });
     expect(postRes.status).not.toBe(200);
+  }, 60000);
+
+  test("context breakdown scanning stays idle until /v1/usage/live or Live routing /api/logs?live=1 is read", async () => {
+    process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "admin-secret";
+    const admin = { "x-opencodex-api-key": "admin-secret" };
+    server = startServer(0);
+    const base = server.url;
+    const json = { "content-type": "application/json" };
+    const sendAllThreeWires = async () => {
+      await fetch(new URL("/v1/responses", base), {
+        method: "POST",
+        headers: json,
+        body: JSON.stringify({ model: "missing-model", input: "hello world from responses" }),
+      });
+      await fetch(new URL("/v1/chat/completions", base), {
+        method: "POST",
+        headers: json,
+        body: JSON.stringify({ model: "missing-model", messages: [{ role: "user", content: "hello world from chat" }] }),
+      });
+      await fetch(new URL("/v1/messages", base), {
+        method: "POST",
+        headers: json,
+        body: JSON.stringify({ model: "missing-model", max_tokens: 16, messages: [{ role: "user", content: "hello world from messages" }] }),
+      });
+    };
+
+    // Idle at startup: none of the three inbound wires scan prompt bodies.
+    await sendAllThreeWires();
+    const idleRows = getRequestLogEntries();
+    expect(idleRows.length).toBeGreaterThanOrEqual(3);
+    for (const entry of idleRows) expect(entry.contextBreakdown).toBeUndefined();
+
+    // Plain /api/logs reads (Home, Logs, CLI) do not activate scanning.
+    expect((await fetch(new URL("/api/logs?limit=5", base), { headers: admin })).status).toBe(200);
+    expect(isLiveRoutingRecentlyObserved()).toBe(false);
+
+    // Reading GET /v1/usage/live activates context-breakdown scanning for subsequent turns.
+    expect((await fetch(new URL("/v1/usage/live", base), { headers: { origin: "app://-" } })).status).toBe(200);
+    expect(isLiveRoutingRecentlyObserved()).toBe(true);
+    clearRequestLogsForTests();
+    await sendAllThreeWires();
+    const liveMeterRows = getRequestLogEntries();
+    expect(liveMeterRows.length).toBeGreaterThanOrEqual(3);
+    expect(liveMeterRows.filter(entry => entry.contextBreakdown !== undefined).length).toBe(3);
+
+    // Polling GET /api/logs?live=1 from the Live routing tab also activates scanning.
+    resetLiveRoutingObservedForTests();
+    clearRequestLogsForTests();
+    expect(isLiveRoutingRecentlyObserved()).toBe(false);
+    expect((await fetch(new URL("/api/logs?limit=5&live=1", base), { headers: admin })).status).toBe(200);
+    expect(isLiveRoutingRecentlyObserved()).toBe(true);
+    await sendAllThreeWires();
+    const liveTabRows = getRequestLogEntries();
+    expect(liveTabRows.filter(entry => entry.contextBreakdown !== undefined).length).toBe(3);
   }, 60000);
 });

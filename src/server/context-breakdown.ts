@@ -26,6 +26,27 @@ export type { ContextBreakdownV1 } from "./context-breakdown-classify";
 
 export type ContextBreakdownWire = "responses" | "messages" | "chat";
 
+/** Window during which a Live routing tab or `/v1/usage/live` read keeps breakdown scanning active. */
+export const LIVE_ROUTING_OBSERVED_TTL_MS = 120_000;
+
+let lastLiveRoutingObservedAt: number | null = null;
+
+/** Record that the Live routing tab or `GET /v1/usage/live` was read. */
+export function markLiveRoutingObserved(now = Date.now()): void {
+  if (Number.isFinite(now)) lastLiveRoutingObservedAt = now;
+}
+
+/** True while Live routing or `GET /v1/usage/live` has been read within the active window. */
+export function isLiveRoutingRecentlyObserved(now = Date.now()): boolean {
+  return lastLiveRoutingObservedAt !== null
+    && now >= lastLiveRoutingObservedAt
+    && now - lastLiveRoutingObservedAt <= LIVE_ROUTING_OBSERVED_TTL_MS;
+}
+
+export function resetLiveRoutingObservedForTests(): void {
+  lastLiveRoutingObservedAt = null;
+}
+
 export function measureContextBreakdown(body: unknown, wire: ContextBreakdownWire): ContextBreakdownV1 | undefined {
   try {
     if (!isRec(body)) return undefined;

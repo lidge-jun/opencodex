@@ -1,5 +1,12 @@
-import { describe, expect, test } from "bun:test";
-import { measureContextBreakdown, observeContextBreakdown } from "../../src/server/context-breakdown";
+import { afterEach, describe, expect, test } from "bun:test";
+import {
+  isLiveRoutingRecentlyObserved,
+  LIVE_ROUTING_OBSERVED_TTL_MS,
+  markLiveRoutingObserved,
+  measureContextBreakdown,
+  observeContextBreakdown,
+  resetLiveRoutingObservedForTests,
+} from "../../src/server/context-breakdown";
 
 /** ASCII only, so a string of n characters is exactly ceil(n / 4) tokens. */
 const tok = (s: string): number => Math.ceil(s.length / 4);
@@ -370,5 +377,25 @@ describe("observeContextBreakdown", () => {
     expect(ctx.contextBreakdown).toBeUndefined();
     observeContextBreakdown(ctx as never, { input: fill(40) }, "responses");
     expect(ctx.contextBreakdown?.parts.chat).toBe(10);
+  });
+});
+
+describe("live routing observation gate", () => {
+  afterEach(() => resetLiveRoutingObservedForTests());
+
+  test("stays inactive until marked and expires after the observation TTL", () => {
+    resetLiveRoutingObservedForTests();
+    expect(isLiveRoutingRecentlyObserved(10_000)).toBe(false);
+    markLiveRoutingObserved(Number.NaN);
+    expect(isLiveRoutingRecentlyObserved(10_000)).toBe(false);
+
+    markLiveRoutingObserved(10_000);
+    expect(isLiveRoutingRecentlyObserved(9_999)).toBe(false);
+    expect(isLiveRoutingRecentlyObserved(10_000)).toBe(true);
+    expect(isLiveRoutingRecentlyObserved(10_000 + LIVE_ROUTING_OBSERVED_TTL_MS)).toBe(true);
+    expect(isLiveRoutingRecentlyObserved(10_000 + LIVE_ROUTING_OBSERVED_TTL_MS + 1)).toBe(false);
+
+    resetLiveRoutingObservedForTests();
+    expect(isLiveRoutingRecentlyObserved(10_000)).toBe(false);
   });
 });

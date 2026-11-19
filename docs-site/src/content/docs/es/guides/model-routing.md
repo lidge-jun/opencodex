@@ -96,8 +96,9 @@ la lista de abajo, verá:
 - **La ventana de contexto.** Tokens estimados para el prompt del sistema, las herramientas, las
   skills, los archivos de memoria como `AGENTS.md` y `CLAUDE.md`, los archivos, los resultados de
   herramientas y la conversación, en una barra con la parte del prompt de cada uno, lo llena que está
-  la ventana del modelo que respondió y la tasa de aciertos de la caché de prompts. Solo se registran
-  tamaños, nunca el texto del prompt, y se guardan en memoria con el registro de solicitudes.
+  la ventana del modelo que respondió y la tasa de aciertos de la caché de prompts. El desglose del
+  contexto se mide solo mientras la pestaña o `GET /v1/usage/live` se haya leído recientemente; solo
+  se registran tamaños, nunca el texto del prompt, y se guardan en memoria con el registro de solicitudes.
 
 La lista de solicitudes agrupa por solicitud, sesión o clave API y muestra la cuenta, el modelo, el
 esfuerzo, la duración, el tiempo hasta el primer token, los tokens, la tasa de aciertos de caché, los

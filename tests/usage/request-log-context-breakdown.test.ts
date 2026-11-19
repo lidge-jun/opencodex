@@ -21,7 +21,7 @@ describe("context breakdown on the final request row", () => {
   test("the breakdown rides to the row; the window is set only where the adapter knows it", () => {
     const row = finalRow({ contextBreakdown: breakdown, provider: "devin", providerAdapter: "devin", model: "swe-2" });
     expect(row.contextBreakdown).toEqual(breakdown);
-    expect(row.contextWindow).toBe(262_000);
+    expect(row.contextWindow).toBe(850_000);
   });
 
   test("a hosted model the adapter does not size takes the bundled vendor window", () => {

@@ -65,7 +65,6 @@
 }
 .rl-time-seg { flex: 1 1 0; min-width: 2px; }
 .rl-time-side--ocx { background: var(--muted); }
-.rl-time-seg--privacy { opacity: 0.55; }
 .rl-time-side--earlier { background: var(--amber); }
 .rl-time-side--upstream { background: var(--blue); }
 .rl-time-seg--streaming { opacity: 0.55; }

@@ -16,16 +16,9 @@ describe("live routing timing on the final request row", () => {
     expect(row.upstreamSendMs).toBe(120);
   });
 
-  test("privacy redaction time passes through when a redactor measured it", () => {
-    const start = Date.now() - 50;
-    const row = finalRow(start, { activeAttemptStartedAt: start + 10, privacyRedactionMs: 3.5 });
-    expect(row.privacyRedactionMs).toBe(3.5);
-  });
-
   test("nothing is invented when the attempt start is unknown or before the request", () => {
     const start = Date.now();
     expect(finalRow(start, {}).upstreamSendMs).toBeUndefined();
     expect(finalRow(start, { activeAttemptStartedAt: start - 5 }).upstreamSendMs).toBeUndefined();
-    expect(finalRow(start, { privacyRedactionMs: -1 }).privacyRedactionMs).toBeUndefined();
   });
 });

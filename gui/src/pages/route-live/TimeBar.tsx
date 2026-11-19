@@ -10,11 +10,10 @@ import { timeParts, type TimePart, type TimePartKind, type TimeRow } from "./tim
 type Side = "ocx" | "earlier" | "upstream";
 
 const PART_SIDE: Record<TimePartKind, Side> = {
-  privacy: "ocx", internal: "ocx", earlier: "earlier", upstreamWait: "upstream", streaming: "upstream", reading: "upstream",
+  internal: "ocx", earlier: "earlier", upstreamWait: "upstream", streaming: "upstream", reading: "upstream",
 };
 
 const PART_LABEL = {
-  privacy: "routeLive.timePrivacy",
   internal: "routeLive.timeInternal",
   earlier: "routeLive.timeEarlier",
   upstreamWait: "routeLive.timeUpstreamWait",

@@ -417,10 +417,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (readyzPath !== undefined) {
           return withCors(formatErrorResponse(404, "not_found", messagesUnknownEndpointMessage(req)), req, policy);
         }
-        if (url.pathname === "/v1/usage/live") {
-          const preflight = (await import("../live-meter-handler")).liveMeterPreflight(req, policy);
-          if (preflight) return preflight;
-        }
+        if (url.pathname === "/v1/usage/live") { const r = (await import("../live-meter-handler")).liveMeterPreflight(req, policy); if (r) return r; }
         // The exact Ollama-compatible paths are data-plane routes and take data-plane CORS.
         const managementPreflight = url.pathname.startsWith("/api/") && !isOllamaNativePath(url.pathname);
         // Gemini routes are data-plane paths too (never under /api/), so they take the data-plane branch.
@@ -840,12 +837,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         );
       }
 
-      if (url.pathname === "/v1/usage/live" && req.method === "GET") {
-        // Same admission as the model routes; the module adds only the Codex desktop origin for this read.
-        const { handleLiveMeterData } = await import("../live-meter-handler");
-        return handleLiveMeterData(req, policy);
-      }
-
+      if (url.pathname === "/v1/usage/live" && req.method === "GET") return (await import("../live-meter-handler")).handleLiveMeterData(req, policy);
       if (url.pathname === "/v1/usage" && req.method === "GET") {
         const { handleHubUsage } = await import("../hub-usage");
         return handleHubUsage(req, config, policy);

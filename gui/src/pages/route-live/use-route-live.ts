@@ -10,7 +10,7 @@ export function useRouteRows(apiBase: string, active: boolean) {
   const resource = useClientResource<RouteRow[]>(
     `route-live:rows:${apiBase}`,
     async signal => {
-      const res = await fetch(`${apiBase}/api/logs?limit=${ROUTE_LIVE_ROW_CAP}`, { signal });
+      const res = await fetch(`${apiBase}/api/logs?limit=${ROUTE_LIVE_ROW_CAP}&live=1`, { signal });
       if (!res.ok) throw new Error(String(res.status));
       return parseRouteRows(await res.json());
     },

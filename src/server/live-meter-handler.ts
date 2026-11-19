@@ -14,6 +14,7 @@ import {
   type DataPlaneAdmission, type RequestPolicyView,
 } from "./auth-cors";
 import { formatErrorResponse } from "../bridge/errors";
+import { markLiveRoutingObserved } from "./context-breakdown";
 import { matchesLogConversationId } from "./request-log-conversation";
 import { getRequestLogEntries, type RequestLogEntry } from "./request-log";
 import { statSync } from "node:fs";
@@ -121,7 +122,9 @@ export async function handleLiveMeterData(req: Request, config: RequestPolicyVie
     ? isApiAuthRequired(config) || isLoopbackRequestHost(req.headers.get("Host"))
     : isAllowedRequestOrigin(req, config);
   if (!originOk) return reply(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"));
-  return reply(liveMeterResponse(new URL(req.url).searchParams, deps, admission), appRenderer);
+  const response = liveMeterResponse(new URL(req.url).searchParams, deps, admission);
+  if (response.status === 200) markLiveRoutingObserved();
+  return reply(response, appRenderer);
 }
 
 /**
