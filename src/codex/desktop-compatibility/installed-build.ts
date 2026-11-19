@@ -4,59 +4,51 @@ import { createHash } from "node:crypto";
 import { isTestHomeGuardArmed } from "../../lib/test-home-guard";
 import { resolveTrustedWindowsPowerShellExe } from "../../lib/windows-elevation";
 import type { DesktopAppInstall } from "../desktop-app/types";
+import { CLOSE_WINDOWS_PACKAGE_FILES, CODEX_EXECUTABLE_SIGNER, CODEX_PACKAGE_FAMILY, CODEX_STORE_PUBLISHER,
+  MEASURE_WINDOWS_PACKAGE_FILES, OPEN_WINDOWS_PACKAGE_FILES, WINDOWS_PACKAGE_PROOF_FUNCTIONS } from "./windows-package-proof";
+export { DESKTOP_PACKAGE_PATH_GUARD_SCRIPT } from "./windows-package-proof";
 
+// Baseline with completed native acceptance evidence; admission is proof-based below,
+// so this version never allows or denies an installed build by itself.
 export const DESKTOP_COMPATIBILITY_ASSESSED_VERSION = "26.924.2738.0";
-export const DESKTOP_COMPATIBILITY_ASSESSED_FAMILY = "OpenAI.Codex_2p2nqsd0c76g0";
+export const DESKTOP_COMPATIBILITY_ASSESSED_FAMILY = CODEX_PACKAGE_FAMILY;
 
 /** Internal observation only; never returned by management status. */
 export interface DesktopPackageObservation extends DesktopAppInstall {
   proof?: { packageFullName: string; publisherId: string; publisher: string; manifestName: string;
     manifestPublisher: string; manifestVersion: string; appId: string; executable: string;
-    canonicalExecutable: string; manifestDigest: string; executableIdentity: string; ancestryIdentity: string };
+    canonicalExecutable: string; manifestDigest: string; ancestryIdentity: string; executableIdentity: string;
+    executableHash?: string; signatureKind?: string; signerSubject?: string; signerThumbprint?: string;
+    contentIntegrity?: boolean };
 }
 
-/** Shared only with owned-path fixtures. Metadata walk, not handle-bound final-path attestation. */
-export const DESKTOP_PACKAGE_PATH_GUARD_SCRIPT = [
-  "function Assert-DesktopPackagePath([string]$Path){",
-  String.raw`if($Path.Length -gt 8192 -or $Path -notmatch '^[A-Za-z]:\\' -or [IO.Path]::GetFullPath($Path) -ine $Path){throw 'Noncanonical package path'}`,
-  "$volume=[IO.Path]::GetPathRoot($Path); $current=$volume; $parts=@($Path.Substring($volume.Length).Split('\\')|Where-Object {$_ -ne ''})",
-  "if($parts.Count -gt 128){throw 'Package ancestry too deep'}; $seen=[Collections.Generic.List[string]]::new()",
-  "for($i=-1;$i -lt $parts.Count;$i++){",
-  "if($i -ge 0){$current=Join-Path $current $parts[$i]}; $item=Get-Item -LiteralPath $current -Force",
-  "if(($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($i -lt $parts.Count-1 -and -not $item.PSIsContainer)){throw 'Reparse package ancestry'}",
-  "$seen.Add($item.FullName.ToLowerInvariant()+':'+$item.CreationTimeUtc.Ticks)",
-  "}; return ($seen -join '|')",
-  "}",
-].join("; ");
+/** The immutable native activation target, shared only inside the compatibility runtime. */
+export interface VerifiedDesktopPackage extends DesktopAppInstall {
+  readonly packageFullName: string;
+  readonly executableHash: string;
+  readonly executableIdentity: string;
+  readonly manifestDigest: string;
+  readonly ancestryIdentity: string;
+  readonly signerThumbprint: string;
+}
 
-// Compatibility-only read: do not alter general discovery or execute/activate the application.
+// Compatibility-only read. The verified image and manifest stay read-locked through publication;
+// the observation is built before any file is opened, so a failed proof still reports its version.
 export const DESKTOP_PACKAGE_PROOF_SCRIPT = [
-  "$ErrorActionPreference='Stop'; Import-Module Appx -ErrorAction Stop",
-  DESKTOP_PACKAGE_PATH_GUARD_SCRIPT,
-  "$packages=@(Get-AppxPackage -Name OpenAI.Codex)",
-  "if($packages.Count -ne 1){throw 'Package not unique'}; $p=$packages[0]",
-  // Walk from volume root down, rejecting junctions before reading the manifest/executable.
-  "$exePath=Join-Path $p.InstallLocation 'app\\ChatGPT.exe'; $manifestPath=Join-Path $p.InstallLocation 'AppxManifest.xml'",
-  "$exeChain=Assert-DesktopPackagePath $exePath; $manifestChain=Assert-DesktopPackagePath $manifestPath",
-  "$root=Get-Item -LiteralPath $p.InstallLocation; $app=Get-Item -LiteralPath (Join-Path $root.FullName 'app')",
-  "$exe=Get-Item -LiteralPath (Join-Path $app.FullName 'ChatGPT.exe')",
-  "foreach($item in @($root,$app,$exe)){if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Reparse identity'}}",
-  "if(-not $root.PSIsContainer -or -not $app.PSIsContainer -or $exe.PSIsContainer){throw 'Wrong file kind'}",
-  "$manifest=Get-AppxPackageManifest -Package $p.PackageFullName",
-  "$entry=@($manifest.Package.Applications.Application|Where-Object {$_.Id -eq 'App'})",
-  "if($entry.Count -ne 1){throw 'App not unique'}; $entry=$entry[0]",
-  "$xml=[Text.Encoding]::UTF8.GetBytes($manifest.OuterXml); if($xml.Length -gt 1048576){throw 'Manifest too large'}",
-  "$sha=[Security.Cryptography.SHA256]::Create(); try{$digest=([BitConverter]::ToString($sha.ComputeHash($xml))).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}",
-  // Revalidate the whole chain before further file reads and immediately before publication.
-  "if((Assert-DesktopPackagePath $exePath) -cne $exeChain -or (Assert-DesktopPackagePath $manifestPath) -cne $manifestChain){throw 'Package ancestry changed'}",
-  "$again=@(Get-AppxPackage -Name OpenAI.Codex); $exeAgain=Get-Item -LiteralPath $exe.FullName",
-  "if($again.Count -ne 1 -or $again[0].PackageFullName -cne $p.PackageFullName -or $again[0].Publisher -cne $p.Publisher -or $again[0].InstallLocation -ine $p.InstallLocation -or ($exeAgain.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $exeAgain.Length -ne $exe.Length -or $exeAgain.CreationTimeUtc.Ticks -ne $exe.CreationTimeUtc.Ticks -or $exeAgain.LastWriteTimeUtc.Ticks -ne $exe.LastWriteTimeUtc.Ticks){throw 'Package changed during proof'}",
-  "if((Assert-DesktopPackagePath $exePath) -cne $exeChain -or (Assert-DesktopPackagePath $manifestPath) -cne $manifestChain){throw 'Package ancestry changed'}",
-  "$sha=[Security.Cryptography.SHA256]::Create(); try{$ancestry=([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($exeChain+'|'+$manifestChain)))).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}",
-  "[pscustomobject]@{id=$p.PackageFamilyName;root=$root.FullName;relaunch=$p.PackageFamilyName+'!App';proof=@{packageFullName=$p.PackageFullName;publisherId=$p.PublisherId;publisher=$p.Publisher;manifestName=[string]$manifest.Package.Identity.Name;manifestPublisher=[string]$manifest.Package.Identity.Publisher;manifestVersion=[string]$manifest.Package.Identity.Version;appId=[string]$entry.Id;executable=[string]$entry.Executable;canonicalExecutable=$exe.FullName;manifestDigest=$digest;executableIdentity=([string]$exe.Length+':'+$exe.CreationTimeUtc.Ticks+':'+$exe.LastWriteTimeUtc.Ticks);ancestryIdentity=$ancestry}}|ConvertTo-Json -Depth 3 -Compress",
-].join("; ");
+  WINDOWS_PACKAGE_PROOF_FUNCTIONS,
+  "$p=Get-DesktopPackage",
+  "$observation=@{id=$p.PackageFamilyName;root=$p.InstallLocation;relaunch=$p.PackageFamilyName+'!App'}",
+  "try {",
+  OPEN_WINDOWS_PACKAGE_FILES,
+  MEASURE_WINDOWS_PACKAGE_FILES,
+  "$observation.proof=@{packageFullName=$p.PackageFullName;publisherId=$p.PublisherId;publisher=$p.Publisher;manifestName=[string]$manifest.Package.Identity.Name;manifestPublisher=[string]$manifest.Package.Identity.Publisher;manifestVersion=[string]$manifest.Package.Identity.Version;appId=[string]$entry.Id;executable=[string]$entry.Executable;canonicalExecutable=$exePath;manifestDigest=$digest;ancestryIdentity=$ancestry;executableIdentity=$executableIdentity;executableHash=$executableHash;signatureKind=[string]$p.SignatureKind;signerSubject=$signature.SignerCertificate.Subject;signerThumbprint=$signature.SignerCertificate.Thumbprint;contentIntegrity=$true}",
+  "} catch { $observation.Remove('proof') } finally {", CLOSE_WINDOWS_PACKAGE_FILES, "}",
+  "[pscustomobject]$observation|ConvertTo-Json -Depth 3 -Compress",
+].join("\n");
 
-/** Last completed probe outcome. Only public package facts: never paths, keys or account data. */
+/** Last completed probe outcome. Only public package facts: never paths, keys or account data.
+ * `verified` is the official-package proof verdict at `completedAt`; `assessedVersion` stays the
+ * baseline that holds native acceptance evidence, reported separately from admission. */
 export interface DesktopBuildAssessment {
   assessedVersion: string;
   observedVersion: string | null;
@@ -64,28 +56,37 @@ export interface DesktopBuildAssessment {
   completedAt: number;
 }
 
-function assessInstalledPackage(install: DesktopPackageObservation): { observedVersion: string | null; verified: boolean; identity: string | null } {
+const sha256 = /^[a-f0-9]{64}$/;
+const thumbprint = /^[A-F0-9]{40}$/;
+
+function assessInstalledPackage(install: DesktopPackageObservation) {
   const name = win32.basename(install.root);
   const parts = /^OpenAI\.Codex_(\d+\.\d+\.\d+\.\d+)_(x64|arm64|x86|neutral)_([A-Za-z0-9.-]*)_([A-Za-z0-9]+)$/.exec(name);
   const identified = install.id === DESKTOP_COMPATIBILITY_ASSESSED_FAMILY && install.relaunch === `${install.id}!App`
     && !!parts && `OpenAI.Codex_${parts[4]}` === install.id;
   const observedVersion = identified ? parts![1] : null;
   const proof = install.proof;
-  const verified = identified && observedVersion === DESKTOP_COMPATIBILITY_ASSESSED_VERSION && !!proof
+  const executableHash = proof?.executableHash, signerThumbprint = proof?.signerThumbprint;
+  // Official-package proof admits a build; the observed version stays inside the
+  // hashed identity, so an update still revokes a prior trial before correction.
+  const verified = identified && !!proof
     && /^[A-Za-z]:\\/.test(install.root) && win32.normalize(install.root) === install.root
     && proof.packageFullName === name && proof.publisherId === "2p2nqsd0c76g0"
-    && typeof proof.publisher === "string" && proof.publisher.length > 0 && proof.publisher.length <= 1024
+    && proof.publisher === CODEX_STORE_PUBLISHER && proof.signatureKind === "Store"
+    && proof.contentIntegrity === true && proof.signerSubject === CODEX_EXECUTABLE_SIGNER
     && proof.manifestName === "OpenAI.Codex" && proof.manifestPublisher === proof.publisher
     && proof.manifestVersion === observedVersion && proof.appId === "App"
     && typeof proof.executable === "string" && proof.executable.replaceAll("/", "\\").toLowerCase() === "app\\chatgpt.exe"
     && proof.canonicalExecutable === win32.join(install.root, "app", "ChatGPT.exe")
-    && /^[a-f0-9]{64}$/.test(proof.manifestDigest) && /^[a-f0-9]{64}$/.test(proof.ancestryIdentity)
-    && /^\d{1,16}:\d{1,20}:\d{1,20}$/.test(proof.executableIdentity);
-  const identity = verified && proof ? createHash("sha256").update(JSON.stringify([install.id, install.root, install.relaunch,
-    proof.packageFullName, proof.publisherId, proof.publisher, proof.manifestName, proof.manifestPublisher,
-    proof.manifestVersion, proof.appId, proof.executable, proof.canonicalExecutable, proof.manifestDigest,
-    proof.executableIdentity, proof.ancestryIdentity])).digest("hex") : null;
-  return { observedVersion, verified, identity };
+    && sha256.test(proof.manifestDigest) && sha256.test(proof.ancestryIdentity)
+    && /^\d{1,16}:\d{1,20}:\d{1,20}$/.test(proof.executableIdentity)
+    && typeof executableHash === "string" && sha256.test(executableHash)
+    && typeof signerThumbprint === "string" && thumbprint.test(signerThumbprint);
+  if (!verified) return { observedVersion, identity: null, build: null };
+  const build: VerifiedDesktopPackage = { id: install.id, root: install.root, relaunch: install.relaunch,
+    packageFullName: proof.packageFullName, executableHash, executableIdentity: proof.executableIdentity,
+    manifestDigest: proof.manifestDigest, ancestryIdentity: proof.ancestryIdentity, signerThumbprint };
+  return { observedVersion, build, identity: createHash("sha256").update(JSON.stringify(build)).digest("hex") };
 }
 
 /** Resolve only after the exact asynchronous child has closed, including abort/timeout. */
@@ -101,7 +102,7 @@ function queryInstalledPackage(signal: AbortSignal): Promise<DesktopPackageObser
         const value = error ? null : JSON.parse(stdout);
         if (value && typeof value === "object" && !Array.isArray(value) && typeof value.id === "string"
           && typeof value.root === "string" && typeof value.relaunch === "string"
-          && value.proof && typeof value.proof === "object" && !Array.isArray(value.proof)) result = value;
+          && (value.proof === undefined || (value.proof && typeof value.proof === "object" && !Array.isArray(value.proof)))) result = value;
       } catch { /* An unverifiable package never inherits a completed success. */ }
       completed = true; finish();
     });
@@ -116,13 +117,14 @@ function queryInstalledPackage(signal: AbortSignal): Promise<DesktopPackageObser
 export function createInstalledBuildProbe(query: (signal: AbortSignal) => Promise<DesktopPackageObservation | null> = queryInstalledPackage) {
   let pending: Promise<boolean> | null = null, controller: AbortController | null = null, closed = false;
   let lastResult: DesktopBuildAssessment | null = null;
-  let identity: string | null = null, revision = 0;
+  let identity: string | null = null, build: VerifiedDesktopPackage | null = null, revision = 0;
   const record = (install: DesktopPackageObservation | null) => {
-    const outcome = install ? assessInstalledPackage(install) : { observedVersion: null, verified: false, identity: null };
+    const outcome = install ? assessInstalledPackage(install) : { observedVersion: null, identity: null, build: null };
     if (outcome.identity !== identity) { identity = outcome.identity; revision++; }
+    build = outcome.build;
     lastResult = { assessedVersion: DESKTOP_COMPATIBILITY_ASSESSED_VERSION, observedVersion: outcome.observedVersion,
-      verified: outcome.verified, completedAt: Date.now() };
-    return outcome.verified;
+      verified: build !== null, completedAt: Date.now() };
+    return build !== null;
   };
   return {
     check(): Promise<boolean> {
@@ -138,11 +140,12 @@ export function createInstalledBuildProbe(query: (signal: AbortSignal) => Promis
     /** Last completed check only: an aborted or in-flight query never rewrites it. */
     lastResult(): DesktopBuildAssessment | null { return lastResult ? { ...lastResult } : null; },
     /** Private consent fence: a completed A->B->A proof is distinct from unchanged A. */
-    binding() { return { identity, revision }; },
-    async close(): Promise<void> { closed = true; identity = null; revision++; controller?.abort(); await pending; },
+    binding() { return { identity, revision, build: build && { ...build } }; },
+    async close(): Promise<void> { closed = true; identity = null; build = null; revision++; controller?.abort(); await pending; },
   };
 }
 
+// Reports the official-package proof verdict, not equality with the assessed baseline.
 export async function isAssessedDesktopInstalled(): Promise<boolean> {
   const probe = createInstalledBuildProbe();
   try { return await probe.check(); } finally { await probe.close(); }

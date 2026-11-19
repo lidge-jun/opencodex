@@ -446,6 +446,7 @@ export async function deliverPassthroughResponse(
     | "noteInspectedPayload"
     | "normalizeFunctionCompletionJson"
     | "localUpstream"
+    | "pool401OutcomeSettled"
     | "terminalOutcomeRecorded"
   >,
   dispatchSidecarSend?: AuxiliaryModelSend,
@@ -582,7 +583,7 @@ export async function deliverPassthroughResponse(
           }
           options.onNativePassthroughTerminal?.(status);
         });
-      } else if (!shouldDeferCodexResetDerivedCooldown(
+      } else if (!nativeExchange.pool401OutcomeSettled && !shouldDeferCodexResetDerivedCooldown(
         upstreamResponse,
         options.deferCodexResetDerivedCooldown,
       ) && !isReplayRefusalResponse(upstreamResponse) && !wasPermanentAccountRefusal(upstreamResponse)) {

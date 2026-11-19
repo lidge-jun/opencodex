@@ -49,8 +49,8 @@ export function registerComboContextHeadroomCases<Server>({
   });
 
   test("the same undersized target still serves a turn that declares no output allowance", async () => {
-    // The strict reserve is opt-in on the caller's declared allowance. Without one, the
-    // deliberately loose pathological-input gate still applies and nothing is skipped.
+    // Without a declared allowance the strict gate applies the default reserve (10% clamped
+    // to 1,024–32,768) and 1.1x margin; at 10k input (11k + 1,280 = 12,280), the 12.8k window still fits.
     let smallHits = 0;
     const small = serve(() => {
       smallHits += 1;

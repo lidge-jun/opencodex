@@ -13,6 +13,7 @@ import { desktopCompatibilitySchema } from "./desktop-compatibility";
 import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
 import { mainAccountHardLockFallbackSchema } from "./main-account-hard-lock-fallback";
 import { fallbackPolicySchema } from "./fallback-policy";
+import { subscriptionReserveSchema } from "./subscription-reserve";
 import {
   agentTaskRecoverySchema,
   catalogAutoRefreshSchema,
@@ -110,6 +111,8 @@ export const protocolConfigSchema = z.object({
 }).strict();
 
 export const configSchema = z.object({
+  // Malformed hand edits disable only this opt-in. Candidate writes reject them.
+  subscriptionReserve: subscriptionReserveSchema.optional().catch(undefined),
   chatgptDesktop: chatgptDesktopSchema.optional().catch(undefined),
   codexNativeSteering: z.boolean().optional().catch(false),
   codexNativeInjection: z.boolean().optional().catch(false),

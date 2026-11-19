@@ -41,6 +41,7 @@ export interface ProviderSettingsDraft {
   allowPrivateNetwork: boolean;
   preserveReasoningReplay: boolean;
   liveModels: boolean;
+  subscriptionRetries: string;
   cursorHttpVersion: "http2" | "http1.1";
   pacingEnabled: boolean;
   keyPacing: ProviderSettingsKeyPacing;
@@ -148,6 +149,14 @@ export function pacingSignature(value: WorkspaceItem["requestPacing"] | undefine
   ]);
 }
 
+function subscriptionRetries(item: WorkspaceItem): string {
+  const policy = item.transientRetryOn5xx;
+  if (policy?.attempts === undefined || policy.enabled === false) {
+    return "";
+  }
+  return String(policy.attempts - 1);
+}
+
 export function providerSettingsDraftFromItem(item: WorkspaceItem): ProviderSettingsDraft {
   const liveModelDiscoverySupported = providerSupportsLiveModelDiscovery(item.name, item);
   return {
@@ -162,6 +171,7 @@ export function providerSettingsDraftFromItem(item: WorkspaceItem): ProviderSett
     allowPrivateNetwork: item.allowPrivateNetwork ?? false,
     preserveReasoningReplay: item.preserveResponsesReasoningContent === true,
     liveModels: liveModelDiscoverySupported ? item.liveModels !== false : false,
+    subscriptionRetries: subscriptionRetries(item),
     cursorHttpVersion: effectiveCursorHttpVersion(item.upstreamHttpVersion),
     pacingEnabled: item.requestPacing?.enabled === true,
     keyPacing: {
@@ -307,6 +317,7 @@ export function providerSettingsFieldsDirty(draft: ProviderSettingsDraft, saved:
     || draft.note.trim() !== (saved.note ?? "")
     || draft.allowPrivateNetwork !== (saved.allowPrivateNetwork ?? false)
     || draft.liveModels !== savedLiveModels
+    || (saved.name === "openai" && draft.subscriptionRetries !== subscriptionRetries(saved))
     || (adapter === "cursor" && draft.cursorHttpVersion !== savedCursorHttpVersion);
 }
 
@@ -352,6 +363,9 @@ export function providerSettingsDeltaPatch(
   if (supportsReasoningReplay && draft.preserveReasoningReplay !== baseline.preserveReasoningReplay) {
     patch.preserveResponsesReasoningContent = draft.preserveReasoningReplay;
   }
+  if (saved.name === "openai" && draft.subscriptionRetries !== baseline.subscriptionRetries) {
+    patch.transientRetryOn5xx = draft.subscriptionRetries === "" ? null : { attempts: Number(draft.subscriptionRetries) + 1 };
+  }
   if (adapter === "cursor" && draft.cursorHttpVersion !== baseline.cursorHttpVersion) {
     patch.upstreamHttpVersion = draft.cursorHttpVersion === "http1.1" ? "http1.1" : null;
   }
@@ -391,6 +405,7 @@ export function rebaseProviderSettingsDraft(
     allowPrivateNetwork: pick("allowPrivateNetwork"),
     preserveReasoningReplay: pick("preserveReasoningReplay"),
     liveModels: pick("liveModels"),
+    subscriptionRetries: pick("subscriptionRetries"),
     cursorHttpVersion: pick("cursorHttpVersion"),
     pacingEnabled: pick("pacingEnabled"),
     keyPacing: pick("keyPacing"),

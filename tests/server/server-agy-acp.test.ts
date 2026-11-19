@@ -270,6 +270,82 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
     });
   }
 
+  describe("native Chat bridges", () => {
+    const geminiBody = { contents: [{ role: "user", parts: [{ text: "hello" }] }] };
+    const geminiRefusal = { error: { code: 403, message: "request not permitted", status: "PERMISSION_DENIED" } };
+    const ollamaRefusal = { error: "request not permitted" };
+    const ingresses = [
+      { path: `/v1beta/models/${model}:generateContent`, payload: geminiBody, refusal: geminiRefusal },
+      { path: `/v1beta/models/${model}:streamGenerateContent?alt=sse`, payload: geminiBody, refusal: geminiRefusal },
+      { path: "/api/chat", payload: { model, messages: [{ role: "user", content: "hello" }], stream: false }, refusal: ollamaRefusal },
+      { path: "/api/generate", payload: { model, prompt: "hello", stream: true }, refusal: ollamaRefusal },
+    ];
+    const metadataCases: Array<[string, string]> = [
+      ["memory", memoryMetadata],
+      ["memory consolidation", JSON.stringify({ request_kind: "turn", thread_source: "memory_consolidation" })],
+      ["thread spawn", spawnMetadata],
+      ["automatic compaction", compactionMetadata("auto")],
+    ];
+    const headerCases: Array<[string, Record<string, string>]> = [
+      ["memgen header", { "x-openai-memgen-request": "true" }],
+      ["memory-consolidation subagent header", { "x-openai-subagent": "memory_consolidation" }],
+      ["collab-spawn subagent header", { "x-openai-subagent": "collab_spawn" }],
+      ["parent-thread header", { "x-codex-parent-thread-id": "parent-thread" }],
+      ...metadataCases.map(([name, metadata]): [string, Record<string, string>] => [
+        `${name} metadata header`, { [turnMetadata]: metadata },
+      ]),
+    ];
+
+    for (const { path, payload, refusal } of ingresses) {
+      const gemini = path.startsWith("/v1beta/");
+      const cases: Array<{ name: string; headers: Record<string, string>; body: unknown; status: number; refusal: unknown }> =
+        headerCases.map(([name, headers]) => ({ name, headers, body: payload, status: 403, refusal }));
+      // Gemini accepts extra top-level fields. Ollama rejects unknown request fields before routing.
+      for (const [name, metadata] of metadataCases) {
+        cases.push({
+          name: `${name} body metadata`,
+          headers: {},
+          body: { ...payload, client_metadata: { [turnMetadata]: metadata } },
+          status: gemini ? 403 : 400,
+          refusal: gemini ? geminiRefusal : { error: "Unsupported request field" },
+        });
+      }
+      const send = (base: URL, body: unknown, headers: Record<string, string> = {}) => fetch(new URL(path, base), {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify(body),
+      });
+
+      test.each(cases.map(item => [item.name, item] as const))(`${path} refuses %s before any agy invocation`, async (_name, item) => {
+        saveConfig(config());
+        const server = startServer(0);
+        try {
+          const response = await send(server.url, item.body, item.headers);
+          const content = await response.text();
+          expect({ status: response.status, launches: recordedLaunches() }).toEqual({ status: item.status, launches: [] });
+          expect(JSON.parse(content)).toEqual(item.refusal);
+        } finally {
+          await server.stop(true);
+        }
+      });
+
+      test(`${path} reaches agy for an interactive request`, async () => {
+        saveConfig(config());
+        const server = startServer(0);
+        try {
+          const response = await send(server.url, payload, {
+            [turnMetadata]: JSON.stringify({ request_kind: "turn", thread_source: "user" }),
+          });
+          expect(response.status).toBe(200);
+          expect(await response.text()).toContain("fake acp answer for gemini-4-argon");
+          expect(recordedLaunches()).toEqual([["--version"], ["acp", "--sandbox"]]);
+        } finally {
+          await server.stop(true);
+        }
+      });
+    }
+  });
+
   test("Responses WebSocket refuses frame-local automatic compaction before starting agy", async () => {
     saveConfig({ ...config(), websockets: true } as OcxConfig);
     const server = startServer(0);

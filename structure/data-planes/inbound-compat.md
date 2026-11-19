@@ -456,12 +456,12 @@ Claude Code enables its message-threads beta only against first-party Anthropic,
 OpenCodex through the first-party intercept. A threaded request carries a `thread` object; a
 `continue` sends only the messages after `previous_message_id` and may leave `system` and `tools`
 to the thread Anthropic stores. `src/server/claude-messages.ts` forwards the request unchanged on
-native passthrough. On the translated path, before compatibility analysis or inference, it
-answers any `thread` object with the 400 from `src/claude/message-threads.ts`, whose
+native passthrough. Weekly reserve steering skips threaded requests. On the translated path, the
+handler answers any `thread` object with the 400 from `src/claude/message-threads.ts`, whose
 `error.details.error_code` is `thread_unsupported_request` and whose request-log error code is
 `claude_thread_unsupported`. A translated `count_tokens` request with a `thread` object gets the
-same 400, because counting the delta would undercount the conversation. Claude Code then resends the turn with the full conversation and keeps
-that model stateless for the session. Translating the delta instead would drop the task,
+same 400, because counting the delta would undercount the conversation. Claude Code then resends
+the full turn and keeps that model stateless for the session. Translating the delta would drop the task,
 instructions and earlier turns without an error.
 
 ## Shared inbound Chat image recognition
