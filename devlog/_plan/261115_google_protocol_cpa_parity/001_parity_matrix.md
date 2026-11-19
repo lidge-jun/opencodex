@@ -44,7 +44,7 @@ later unit, with the reason).
 | IN-06 | Embed methods | A-R08 | diff: 501 is honest, CPA's empty 200 is not | — | — |
 | IN-07 | Error body `{error:{code,message,status}}` with fixed text; CPA emits OpenAI-shaped bodies and forwards upstream text | A-R17 R18 R19 | diff: opencodex follows Google and never forwards upstream text | — | — |
 | IN-08 | Credential forms: `x-goog-api-key`, `?key=` moved onto the proxy header; CPA also takes `?auth_token=`, `X-Api-Key` | A-R15 R16 | diff: narrower on purpose | — | — |
-| IN-09 | `thoughtSignature` on `functionCall`/text parts carried both ways | A-R23, C-V-37 | have (3374a52e28) | P1 | 030 |
+| IN-09 | `thoughtSignature` round-trip on `functionCall` and text parts | A-R23, C-V-37 | partial: function-call parts round-trip (3374a52e28); text-part signatures are a gap | P1 | 030 |
 | IN-10 | Hosted tools (`googleSearch`, `urlContext`, `codeExecution`) are dropped silently | A-R24 | defer: changing to 400 can break the owner-accepted connectors; needs a mapping onto opencodex's search relay first | P2 | — |
 | IN-11 | `fileData` and non-image `inlineData` are 400 | A-R22 | defer: needs Chat IR document/audio parts end to end (C-V-29 lands the outbound half in 060) | P2 | — |
 | IN-12 | Model resources carry `inputTokenLimit`/`outputTokenLimit` | A-R11 | have (3374a52e28) | P2 | 030 |
@@ -95,7 +95,7 @@ later unit, with the reason).
 | AG-REPLAY | Thought-signature replay cache, clear-on-invalid, bypass sentinel, foreign-id filtering | B-S1 S4 S5 S6 | have | — | — |
 | AG-X1 | 429 classification by `google.rpc.ErrorInfo.reason` (`QUOTA_EXHAUSTED`, `RATE_LIMIT_EXCEEDED`, `INSUFFICIENT_G1_CREDITS_BALANCE`) | B-X1 | have (c07d7cc259) | P1 | 040 |
 | AG-X2 | Retry delay from `RetryInfo.retryDelay` / `quotaResetDelay` in full duration syntax (`1h2m3s`, `0.5s`), used by the transient retry loop, not only the quota branch | B-X2, C-V-46 | have (c07d7cc259) | P1 | 040 |
-| AG-X3 | 403 `PERMISSION_DENIED` + `ErrorInfo.reason=TOS_VIOLATION` is a credential-scoped terminal refusal, HTTP and in-stream | B-X3 R2 | have (c07d7cc259) | P1 | 040 |
+| AG-X3 | `PERMISSION_DENIED` + `ErrorInfo.reason=TOS_VIOLATION` is a credential-scoped terminal refusal, HTTP and in-stream | B-X3 R2 | partial: HTTP 403 has typed account handling (c07d7cc259); a TOS error in HTTP-200 SSE takes the generic stream-error path | P1 | 040 |
 | AG-R4 | A stream with only a signature and usage (no text, no call) is a failure, not an empty success | B-R4 | diff: opencodex's empty-completion guard (`src/server/responses/empty-completion-guard.ts`) owns zero-output turns (one retry when enabled, a notice otherwise); a signature-only stream is that shape | — | — |
 | AG-R7 | Input tokens include `toolUsePromptTokenCount` | B-R7 | have (3dccfa700f) | P2 | 050 |
 | AG-M1 | Tool-result images nested in `functionResponse.parts` | B-M1, C-V-28 | defer: CPA nests on CCA, but ADR-7279 extends nesting only with live upstream evidence per route, and the pinned CCA Claude "responses before images" layout was a live fix; needs an Antigravity live run | P2 | 060 |

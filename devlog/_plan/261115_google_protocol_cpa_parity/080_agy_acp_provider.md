@@ -144,13 +144,13 @@ spawn) as defense in depth. Signals:
    `src/server/responses/request-prepare.ts` (both selection sites), returned with the prepared state, and passed by
    `run-turn-execution.ts` into `IncomingMeta`; image and web-search sidecar metadata
    (`sidecar-execution.ts`, `images/loop.ts`) carry `comboAttempt` and `subagentFallback` unconditionally.
-2. Local only (403, code `agy_acp_local_only`): `src/server/request-peer-scope.ts`, an AsyncLocalStorage snapshot
-   `{local:boolean}` fixed per request or socket. HTTP: entered next to `runTurnStateCallerScope` in `serve-options.ts`
-   with `ingressForServer` and `requestServer.requestIP(req)` sampled from the native request; local only for a loopback
-   peer on `public`, `unauthenticated-loopback` or `claude-intercept`; `hub-link`, `hub-management` and `local-control`
-   (Unix socket, no inference route today) are not local. WebSocket: `WsData` gains an immutable `peerLocal` set at both
-   upgrade constructors (`serve-options.ts` ordinary upgrade, `link-websocket.ts` always false), entered in
-   `websocket-handler.ts` around each frame. No snapshot → refused. Adapter unit tests enter an explicit local scope.
+2. Local only (403, code `agy_acp_local_only`). As shipped in #8794, `src/lib/request-peer-scope.ts`
+   fixes locality per HTTP request or WebSocket at ingress. A local request requires a loopback transport peer
+   on `public`, `unauthenticated-loopback` or `claude-intercept`, without recognized forwarding headers.
+   On `public`, a peer matching `dashboardTrustedProxy` is remote even when it is loopback and sends no
+   forwarding headers. Hub and local-control ingress and requests without a snapshot fail closed.
+   `tests/server/server-agy-acp.test.ts` covers both proxy signals over HTTP and WebSocket and checks that
+   refusal precedes CLI startup.
 3. Configuration (B2), in the whole-config superRefine: an ACP provider is the canonical `antigravity-acp` id or any row
    whose effective adapter is `agy-acp`. It may not carry a populated `apiKey`, an `apiKeyPool`, account or OAuth binding
    fields, or a credential auth mode; its `models` and model aliases must be Gemini ids. References are resolved by a pure
