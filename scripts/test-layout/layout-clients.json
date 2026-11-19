@@ -171,8 +171,6 @@
   "client-link-relay.test.ts": "clients",
   "client-link-runtime.test.ts": "clients",
   "client-link-stop.test.ts": "clients",
-  "client-link-stop-recovery.test.ts": "clients",
-  "client-link-stop-sibling.test.ts": "clients",
   "link-routes.test.ts": "clients",
   "client-link-state.test.ts": "clients",
   "client-link-status.test.ts": "clients",

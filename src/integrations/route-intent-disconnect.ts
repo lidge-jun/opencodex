@@ -1,4 +1,4 @@
-/** Receipt-bound file cleanup shared by stop and disconnect. */
+/** File clients drain before disconnect removes its connection and service credential. */
 import { loadConfig } from "../config";
 import { lstatSync } from "node:fs";
 import { readClientConnectionState, sameClientConnectionOwner } from "../client/state";
@@ -8,7 +8,6 @@ import { readServiceApiTokenState } from "../lib/service-secrets";
 import { readLocalRouteIntentOff, readRouteIntentReceiptStrict, readRouteIntentUnappliedProof } from "./route-intent-state";
 import { homeRouteIntentPath } from "../client/link-home";
 import type { OcxClientConnectionConfig } from "../types";
-import type { RouteIntentReceipt } from "./route-intent-contract";
 
 /** Droid's empty-roster contribution has no selectors, so its generic classifier cannot prove absence. */
 async function droidRoutingAbsent(port: number): Promise<boolean> {
@@ -34,8 +33,9 @@ async function droidRoutingAbsent(port: number): Promise<boolean> {
   } catch { return false; }
 }
 
-/** Read-only ownership/absence proof. Callers still fence every subsequent file write. */
-export async function readConnectedFileRouteIntentForCleanup(connection: OcxClientConnectionConfig): Promise<RouteIntentReceipt | null> {
+export async function cleanupConnectedRouteIntent(
+  connection: OcxClientConnectionConfig, expected: DesktopDisconnectReceipt, lifecycleLockDeps?: ClientLifecycleLockDeps, recoverConflicts = false,
+): Promise<void> {
   const receipt = readRouteIntentReceiptStrict();
   if (!receipt) {
     let homeReceiptPresent = false;
@@ -63,25 +63,28 @@ export async function readConnectedFileRouteIntentForCleanup(connection: OcxClie
         && (!isIntegrationClientId(id) || readIntegrationState({ clientId: id, config, port: config.port, models: [], store }).state !== "absent"));
       const droidUnproved = connection.selectedClients.includes("droid") && !standalone("droid") && !await droidRoutingAbsent(config.port);
       if (homeReceiptPresent || owned || unproved || droidUnproved) {
-        throw new Error("Route intent cleanup receipt is missing; preserve the connection and repair its route ownership evidence before retrying cleanup");
+        throw new Error("Route intent cleanup receipt is missing; preserve the connection and repair its route ownership evidence before disconnect");
       }
     }
-    return null;
+    return;
   }
   // A valid unbound receipt is standalone Home state, not evidence of a Child apply.
-  if (receipt.linkId === undefined) return null;
-  if (!connection.link || receipt.linkId !== connection.link.linkId) throw new Error("Route intent cleanup receipt belongs to another context; preserve it before retrying cleanup");
-  return receipt;
-}
-
-/** Shared file-only cleanup; the caller supplies its stop or disconnect ownership fence. */
-export async function cleanupConnectedFileRouteIntent(
-  connection: OcxClientConnectionConfig, guard: () => void, lifecycleLockDeps?: ClientLifecycleLockDeps, recoverConflicts = false,
-): Promise<boolean> {
-  const receipt = await readConnectedFileRouteIntentForCleanup(connection);
-  if (!receipt || !connection.link) return false;
+  if (receipt.linkId === undefined) return;
+  if (!connection.link || receipt.linkId !== connection.link.linkId) throw new Error("Route intent cleanup receipt belongs to another context; preserve it before disconnect");
+  const guard = () => {
+    const pending = readDesktopDisconnectReceipt();
+    const current = readClientConnectionState();
+    const token = readServiceApiTokenState();
+    if (pending.kind !== "valid" || JSON.stringify(pending.value) !== JSON.stringify(expected)
+      || current.kind !== "connected" || !sameClientConnectionOwner(current.value, connection)
+      || current.value.pendingOperation || token.kind !== "present" || token.fingerprint !== connection.tokenFingerprint) {
+      throw new Error("client_disconnect_owner_changed");
+    }
+  };
   const local = loadConfig();
   const { cleanupRouteIntent } = await import("./route-intent");
+  const { stripGrokConfig } = await import("../grok/inject");
+  const { injectClaudeAgentDefs } = await import("../claude/agents-inject");
   const config = { ...local, hostname: "127.0.0.1", unauthenticatedLoopbackListener: undefined };
   // Integrations the Child owned before this link come back instead of being removed; a local
   // opt-out is the person's own later choice and wins.
@@ -93,26 +96,7 @@ export async function cleanupConnectedFileRouteIntent(
   const outcomes = await cleanupRouteIntent({ config, linkId: connection.link.linkId, document: receipt.document, models: receipt.models ?? [], beforeWrite: guard, recoverConflicts,
     withReceiptWrite: write => withClientLifecycleSync(() => { guard(); write(); }, lifecycleLockDeps),
     withFileWrites: work => withClientLifecycle(work, lifecycleLockDeps) }, standalone);
-  if (outcomes.some(row => row.outcome !== "current")) throw new Error("Route intent cleanup was partial; ownership and recovery receipts retained. Repair the conflicting client and retry cleanup.");
-  return true;
-}
-
-export async function cleanupConnectedRouteIntent(
-  connection: OcxClientConnectionConfig, expected: DesktopDisconnectReceipt, lifecycleLockDeps?: ClientLifecycleLockDeps, recoverConflicts = false,
-): Promise<void> {
-  const guard = () => {
-    const pending = readDesktopDisconnectReceipt();
-    const current = readClientConnectionState();
-    const token = readServiceApiTokenState();
-    if (pending.kind !== "valid" || JSON.stringify(pending.value) !== JSON.stringify(expected)
-      || current.kind !== "connected" || !sameClientConnectionOwner(current.value, connection)
-      || current.value.pendingOperation || token.kind !== "present" || token.fingerprint !== connection.tokenFingerprint) {
-      throw new Error("client_disconnect_owner_changed");
-    }
-  };
-  if (!await cleanupConnectedFileRouteIntent(connection, guard, lifecycleLockDeps, recoverConflicts)) return;
-  const { stripGrokConfig } = await import("../grok/inject");
-  const { injectClaudeAgentDefs } = await import("../claude/agents-inject");
+  if (outcomes.some(row => row.outcome !== "current")) throw new Error("Route intent cleanup was partial; ownership and disconnect receipts retained. Repair the conflicting client and rerun ocx disconnect.");
   withClientLifecycleSync(() => {
     guard();
     const grok = stripGrokConfig();

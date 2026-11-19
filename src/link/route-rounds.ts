@@ -20,7 +20,7 @@ import type { RouteProofHandle, RouteProofRegistry } from "./route-proof";
 import { SSH_MAX_OUTPUT_BYTES, type SshChild, type SshRunner } from "./ssh-runner";
 import { effectiveLinkRoutes, type LinkRecord } from "./store";
 import { exitCause, type TunnelCause } from "./tunnel-history";
-import type { StderrClass, TunnelEvent, TunnelState } from "./tunnel-state";
+import { classifySshStderr, type StderrClass, type TunnelEvent, type TunnelState } from "./tunnel-state";
 
 /** One route probe, supervisor clock. */
 export const ROUTE_PROBE_MS = 10_000;
@@ -84,7 +84,10 @@ export interface RouteRoundHost {
   warn(message: string): void;
 }
 
-interface RouteBook { name: string; outcome: RouteOutcomeClass | null; outcomeAt: number | null; probeFailures: number; tunnelFailures: number; eligibleAt: number }
+interface RouteBook {
+  name: string; outcome: RouteOutcomeClass | null; outcomeAt: number | null; probeFailures: number; tunnelFailures: number; eligibleAt: number;
+  remoteForwardConflict?: boolean;
+}
 
 interface Proof {
   platform?: "posix" | "windows";
@@ -130,7 +133,7 @@ export interface RouteRounds {
   begin(record: LinkRecord): boolean;
   tick(linkId: string): void;
   /** True when this child belonged to a multi-route round or proven tunnel (the exit is handled). */
-  exited(linkId: string, child: SshChild, stderr: string): boolean;
+  exited(linkId: string, child: SshChild, stderr: string, deferForwardRelease?: (resume: (allowed: boolean) => void) => boolean): boolean;
   /** Drop rounds and proofs: a stop, hold, reconnect or removal is taking the link down. */
   cancel(linkId: string): void;
   /** Forget everything about a link (removed, or no longer multi-route). */
@@ -168,12 +171,13 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
 
   const current = (linkId: string, round: Round): boolean => !stopped && links.get(linkId)?.round === round && !host.blocked(linkId);
 
-  const fail = (link: LinkRoutes, route: string, outcome: RouteOutcomeClass, kind: "probe" | "tunnel"): void => {
+  const fail = (link: LinkRoutes, route: string, outcome: RouteOutcomeClass, kind: "probe" | "tunnel", remoteForwardConflict = false): void => {
     const book = link.books.get(route);
     if (!book) return;
     const n = kind === "probe" ? ++book.probeFailures : ++book.tunnelFailures;
     book.outcome = outcome;
     book.outcomeAt = host.now();
+    book.remoteForwardConflict = remoteForwardConflict;
     book.eligibleAt = host.now() + routeCooldownMs(outcome, n, host.random);
   };
 
@@ -185,7 +189,9 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
   const endRound = (linkId: string, link: LinkRoutes): void => {
     link.round = undefined;
     host.routeProof?.forget(linkId);
-    const cls = aggregate(link);
+    const outcome = aggregate(link);
+    const cls = outcome === "forward" && [...link.books.values()].some(book => book.outcome === "forward" && book.remoteForwardConflict)
+      ? "remote_forward" : outcome;
     host.setEvent(linkId, { type: "exit", now: host.now(), stderrClass: cls }, exitCause(cls));
     host.deferRetry(linkId, minEligible(link));
   };
@@ -459,7 +465,7 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
         void attempt(linkId, link, round, phase);
       }
     },
-    exited(linkId, child, stderr) {
+    exited(linkId, child, stderr, deferForwardRelease) {
       const link = links.get(linkId);
       if (!link) return false;
       if (link.active?.child === child) {
@@ -472,13 +478,30 @@ export function createRouteRounds(host: RouteRoundHost): RouteRounds {
       const round = link.round;
       const phase = round?.phase;
       if (!round || !phase || (phase.kind !== "candidate" && phase.kind !== "halted") || phase.child !== child) return false;
+      const stderrClass = classifySshStderr(stderr);
+      const remoteRefused = phase.kind === "candidate" && phase.stopAt === undefined && phase.grantedAt === undefined
+        && (stderrClass === "remote_forward" || (phase.refused && stderrClass !== "auth" && stderrClass !== "hostkey"));
       const failure = phase.kind === "halted" ? phase.failure
-        : phase.failure ?? (phase.refused ? "forward" : routeOutcomeOfStderr(stderr));
+        : phase.failure ?? (remoteRefused ? "forward" : routeOutcomeOfStderr(stderr));
       if (phase.kind === "candidate") { phase.abort.abort(); phase.proof.handle?.dispose(); }
       host.routeProof?.forget(linkId);
       if (link.blocked === "stop_unconfirmed") link.blocked = null;
-      fail(link, phase.route, failure, "tunnel");
-      if (!stopped && !host.blocked(linkId)) next(linkId, link, round);
+      const advance = (): void => {
+        fail(link, phase.route, failure, "tunnel", remoteRefused);
+        if (current(linkId, round)) next(linkId, link, round);
+      };
+      if (remoteRefused && deferForwardRelease) {
+        const deferred: Phase = { kind: "deferred" };
+        if (deferForwardRelease(allowed => {
+          if (!current(linkId, round) || round.phase !== deferred) return;
+          if (allowed) candidate(linkId, link, round, phase.route);
+          else advance();
+        })) {
+          round.phase = deferred;
+          return true;
+        }
+      }
+      advance();
       return true;
     },
     cancel(linkId) {
