@@ -213,7 +213,7 @@ Los proveedores pueden exponer una abreviatura incorporada, como `agy` para `goo
 
 | Campo | Tipo | Descripción |
 | --- | --- | --- |
-| `adapter` | `string` | Uno de `openai-chat`, `openai-responses`, `anthropic`, `claude-cli`, `google`, `kiro`, `cursor`, `ollama-native`, `azure-openai` (o alias `azure`), `codebuddy`, `qoder`. |
+| `adapter` | `string` | Uno de `openai-chat`, `openai-responses`, `anthropic`, `claude-cli`, `step-cli`, `google`, `kiro`, `cursor`, `ollama-native`, `azure-openai` (o alias `azure`), `codebuddy`, `qoder`. |
 | `baseUrl` | `string` | URL de base ascendente API. La mayoría de los puntos finales fijos incorporados ignoran una falta de coincidencia; los ajustes preestablecidos de clave seguros contra colisiones conservan un destino personalizado con el mismo nombre más antiguo. |
 | `proxy?` | `string \| null` | Ruta de salida por proveedor. Omita que herede la decisión de proxy global; use `"direct"` o `null` para forzar la salida directa; o proporcione una URL proxy absoluta `http://`, `https://`, `socks5://` o `socks5h://`. Se rechaza una cadena vacía. |
 | `noProxy?` | `string \| string[]` | Destinos a los que este proveedor llega directamente, utilizando la sintaxis de patrón de host `NO_PROXY`. Una coincidencia pasa por alto tanto el propio proxy de este proveedor como un proxy global heredado. |
