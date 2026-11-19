@@ -43,6 +43,8 @@ export type AccountQuotaCacheEntry = {
   /** Private passive Anthropic ownership fence; not serialized with quota bars. */
   anthropicCredentialGeneration?: string;
   isCurrent?: () => boolean;
+  /** Proof for the quota itself, which may have been retained from an earlier read. Memory only. */
+  quotaOwnerIsCurrent?: () => boolean;
 };
 const validReset = (resetAt: unknown): resetAt is number => typeof resetAt === "number"
   && Number.isFinite(resetAt) && resetAt > 0 && Number.isFinite(new Date(resetAt).getTime());
@@ -291,6 +293,16 @@ export function getCachedProviderAccountQuota(provider: string, accountId: strin
   return isAnthropicInstanceId(provider) ? normalizeAnthropicQuota(entry?.quota, Date.now()) : entry?.quota ?? null;
 }
 
+/** Client-facing reads require positive ownership. Kiro's persisted login identity is rechecked by the cache reader. */
+export function getCredentialOwnedAccountQuota(provider: string, accountId: string): ProviderQuota | null {
+  hydrateAccountQuotaCache();
+  const entry = accountQuotaCache.get(accountCacheKey(provider, accountId));
+  if (provider !== "kiro" && entry?.quotaOwnerIsCurrent?.() !== true) return null;
+  const quota = getCachedProviderAccountQuota(provider, accountId);
+  if (provider === "kiro" && quota && Date.now() - quota.updatedAt >= ACCOUNT_QUOTA_TTL_MS) return null;
+  return quota;
+}
+
 /** Test-only: seed or clear the per-account quota cache without probing upstream. */
 export function setCachedProviderAccountQuotaForTests(
   provider: string,
@@ -378,6 +390,8 @@ export function recordAnthropicAccountQuotaFromHeadersForInstance(
   commitAnthropicAccountQuota(key, {
     ...previous,
     ...(generation ? { anthropicCredentialGeneration: generation, isCurrent: undefined } : {}),
+    // This merged snapshot can include unbound headers or bars carried forward from disk.
+    quotaOwnerIsCurrent: undefined,
     // Headers do not prove that the last usage probe succeeded.
     ts: previous?.ts ?? 0,
     quota: normalizeAnthropicQuota(withoutAnthropicMonthlyFallback(quota), observed.updatedAt),

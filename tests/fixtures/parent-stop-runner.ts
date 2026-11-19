@@ -42,6 +42,8 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   managerState?: "inactive" | "active" | "unknown";
   /** Commit a disconnect while the capability probe is in flight. */
   disconnectDuringProbe?: boolean;
+  /** Return an attested native Child response, then leave only its on-disk runtime record. */
+  childExitsDuringProbe?: boolean;
   /** Commit a hub connection while orphan discovery is in flight. */
   connectDuringDiscovery?: boolean;
   /** Commit a hub connection while the stop POST is in flight, before server teardown reads it. */
@@ -86,11 +88,14 @@ if (options.legacyWindowsEvidence) {
   const { readSameUserWindowsStart, setWindowsProcessNativeForTests } = await import("../../src/service/windows-process-native");
   setWindowsProcessNativeForTests({ creationTime: () => null, terminate: () => ({ status: "unavailable" }),
     openWatch: () => ({ status: "unavailable" }), scheduleServicePid: () => null,
-    sameUserStartTicks: pid => readSameUserWindowsStart(pid, {
-      open: target => target === record.pid ? 1 : 0, close: () => {},
-      fileTime: () => 134_088_768_000_000_000n, exited: () => false,
-      ownerSid: () => evidence === "foreign-sid" ? "S-1-5-21-2" : "S-1-5-21-1", currentSid: () => "S-1-5-21-1",
-    }),
+    sameUserIdentity: pid => {
+      const ticks = readSameUserWindowsStart(pid, {
+        open: target => target === record.pid ? 1 : 0, close: () => {},
+        fileTime: () => 134_088_768_000_000_000n, exited: () => false,
+        ownerSid: () => evidence === "foreign-sid" ? "S-1-5-21-2" : "S-1-5-21-1", currentSid: () => "S-1-5-21-1",
+      });
+      return ticks === null ? null : { ticks };
+    },
   });
   const windows = await import("../../src/lib/windows-elevation");
   mock.module("../../src/lib/windows-elevation", () => ({ ...windows,
@@ -366,6 +371,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
     const headers = proof ? { [LOCAL_ATTESTATION_PROOF_HEADER]: proof } : undefined;
     if (url.endsWith("/healthz")) {
       if (options.standaloneRecord) throw new Error("fixture listener cannot answer health");
+      if (options.childExitsDuringProbe) alive = false;
       return Response.json({ service: "opencodex", version: "2.93.0", pid: fakePid,
         ...(options.clientTransport === "link" && options.siblingRecord !== "standalone" ? { linkStopFence: true } : {}),
         ...(options.clientTransport && options.siblingRecord !== "standalone" && !options.serverTeardown && !options.clientServer ? { role: "client" } : {}) }, { headers });

@@ -175,6 +175,11 @@ import {
   requireManagementAuth,
 } from "../management-auth";
 import {
+  HUB_RELAY_CREDENTIAL_PATH, HUB_RELAY_ENROLLMENT_ID_HEADER, HUB_RELAY_READ_PREFIX, hubRelayReadTarget,
+} from "../../remote/hub-management-relay";
+import { issueHubRelayCredential, revokeHubRelayCredential } from "../hub-relay-auth";
+import { dispatchPassiveManagementRead } from "./passive-management-read";
+import {
   LOCAL_ATTESTATION_CHALLENGE_HEADER,
   LOCAL_ATTESTATION_PROOF_HEADER,
   createLocalAttestationProof,
@@ -208,6 +213,9 @@ import { classifyUsageClient } from "../../usage/client";
 import { isOllamaNativePath } from "../ollama-native-paths";
 import { ollamaError } from "../ollama-inbound";
 import { dispatchOllamaRoute } from "./ollama-routes";
+import { isGeminiNativePath } from "../gemini-native-paths";
+import { geminiError } from "../gemini-inbound";
+import { dispatchGeminiRoute } from "./gemini-routes";
 
 import { readyProtocolMetadata } from "../../remote/protocol";
 import { homeInstanceId, stampServedBy } from "../../remote/served-by";
@@ -365,6 +373,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         || readyzPath !== undefined
         || url.pathname.startsWith("/v1/")
         || isOllamaNativePath(url.pathname)
+        || isGeminiNativePath(url.pathname)
       )) {
         const message = "OpenCodex package files changed while this proxy was running; it restarts on its own, or run 'ocx restart' ('ocx service restart' for a background service).";
         const fencedPort = ctx.boundPort ?? requestServer.port ?? listenPort;
@@ -390,7 +399,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             }, 503, req, policy)
           : isOllamaNativePath(url.pathname)
             ? withCors(ollamaError(503, message), req, policy)
-            : packageTreeChangedResponse(req, policy, message);
+            : isGeminiNativePath(url.pathname)
+              ? withCors(geminiError(503, message), req, policy)
+              : packageTreeChangedResponse(req, policy, message);
         const headers = new Headers(response.headers);
         headers.set("Retry-After", "5");
         const challenge = fencedHealth ? req.headers.get(LOCAL_ATTESTATION_CHALLENGE_HEADER) : null;
@@ -408,6 +419,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         // The exact Ollama-compatible paths are data-plane routes and take data-plane CORS.
         const managementPreflight = url.pathname.startsWith("/api/") && !isOllamaNativePath(url.pathname);
+        // Gemini routes are data-plane paths too (never under /api/), so they take the data-plane branch.
         const allowed = managementPreflight
           ? isAllowedManagementOrigin(req, config)
           : isAllowedRequestOrigin(req, policy);
@@ -657,8 +669,15 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const native = await dispatchOllamaRoute(req, url, { config, policy, requestServer, requestMetricsLogContext, drainingResponse, runAdmittedHttpTurn });
         if (native) return native;
       }
+      if (isGeminiNativePath(url.pathname)) {
+        const native = await dispatchGeminiRoute(req, url, { config, policy, requestServer, requestMetricsLogContext, drainingResponse, runAdmittedHttpTurn });
+        if (native) return native;
+      }
 
       if (url.pathname.startsWith("/api/")) {
+        if (url.pathname === HUB_RELAY_CREDENTIAL_PATH && req.method === "DELETE") {
+          return withManagementCors(revokeHubRelayCredential(managementAuth, req, config), req, config);
+        }
         const localManagementAuth = {
           attestationSecret: localAttestationSecret,
           pid: process.pid,
@@ -670,6 +689,27 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // gate used. Consent-bearing routes need this: request headers are forgeable
         // by anything holding the admin token, the credential is not.
         const principal = managementPrincipal(req, managementAuth, config, localManagementAuth) ?? undefined;
+        if (url.pathname === HUB_RELAY_CREDENTIAL_PATH) {
+          const response = principal === "admin-token"
+            || (principal === "gui-session" && managementSessionControl.isPaired(req, config))
+            ? issueHubRelayCredential(managementAuth, req, config)
+            : Response.json({ error: "hub relay enrollment authority required" }, { status: 403 });
+          return withManagementCors(response, req, config);
+        }
+        if (url.pathname.startsWith(HUB_RELAY_READ_PREFIX + "/")) {
+          const target = hubRelayReadTarget(req);
+          if (config.runtimeRole !== "hub" || !target
+            || (principal !== "hub-relay-read" && principal !== "gui-session" && principal !== "admin-token")) {
+            return withManagementCors(Response.json({ error: "hub relay read refused" }, { status: 404 }), req, config);
+          }
+          const keyId = principal === "hub-relay-read" ? req.headers.get(HUB_RELAY_ENROLLMENT_ID_HEADER) : null;
+          if (principal === "hub-relay-read" && !keyId) {
+            return withManagementCors(Response.json({ error: "hub relay enrollment required" }, { status: 401 }), req, config);
+          }
+          const enrollment = keyId ? { keyId, stillAdmitted: () => managementPrincipal(req, managementAuth, config) === "hub-relay-read" } : undefined;
+          const response = await dispatchPassiveManagementRead(req.method, target, config, requestManagementApiDeps, undefined, { enrollment });
+          return withManagementCors(response, req, config);
+        }
         if (url.pathname === GUI_PAIR_PATH || url.pathname === DESKTOP_GUI_PAIR_PATH) {
           if (url.pathname === DESKTOP_GUI_PAIR_PATH && (!trustedLoopbackForIngress(ingress, config.hostname ?? "127.0.0.1")
             || !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(requestServer.requestIP(req)?.address ?? "")
@@ -799,6 +839,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       if (url.pathname === "/v1/usage" && req.method === "GET") {
         const { handleHubUsage } = await import("../hub-usage");
         return handleHubUsage(req, config, policy);
+      }
+
+      if (url.pathname === "/v1/usage/windows" && req.method === "GET") {
+        const { handleHubUsageWindows } = await import("../hub-usage-windows");
+        return handleHubUsageWindows(req, config, policy);
       }
 
       if (url.pathname === "/v1/hub-state" && (req.method === "GET" || req.method === "HEAD")) {

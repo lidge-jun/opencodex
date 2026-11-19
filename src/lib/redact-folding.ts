@@ -80,9 +80,18 @@ export function foldForMatching(value: string, decodeEscapes = true): { folded: 
   // through this fold repeatedly on ledger reads; keep its identity map without
   // repeating Unicode normalization and escape matching for every character.
   if (!/[^\x00-\x7f]/.test(value) && (!decodeEscapes || !/[\\%&]/.test(value))) {
-    const map = new Array<number>(value.length + 1);
-    for (let index = 0; index <= value.length; index += 1) map[index] = index;
-    return { folded: value, map };
+    let map: number[] | undefined;
+    return {
+      folded: value,
+      // Most diagnostics contain no credential label. Build offsets only if a matcher needs them.
+      get map() {
+        if (map === undefined) {
+          map = new Array<number>(value.length + 1);
+          for (let index = 0; index <= value.length; index += 1) map[index] = index;
+        }
+        return map;
+      },
+    };
   }
   let folded = "";
   const map: number[] = [];

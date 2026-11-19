@@ -311,7 +311,7 @@ at the terminal frame. `executeComboResponses` therefore passes each child `onBr
 the combo sets `usageFromBridge` and `usage` on its own context; a binding that came earlier waits
 for the commit, and a child that fails or never commits forwards nothing. Without that, the row
 and the settlement would read the usage back off the bridged Responses wire, which carries no
-`providerCredits` and derives its input count from the context checkpoint.
+`providerCredits` and derives its input count from the context checkpoint. Native Responses children publish raw usage and `usageWireParsed` through the committed terminal callback before parent settlement, including terminals arriving after the commit copy. Their client-facing preflight leaves usage collection to the original inspector, including when it converts a zero-output terminal into a retryable failure. If selection already committed a keepalive head, the outer log tap also leaves usage to that raw observer once the selected native response is known; it still records terminal and error metadata. On zero-output exhaustion, the child log supplies settlement usage and the synthesized client terminal supplies only delivery metadata to the log tap. `tests/responses/responses-combo-estimated-usage-spend.test.ts` covers both relay modes, early and late terminals, actual usage, the durable journal and the next HTTP admission.
 
 Unconfigured requests keep the legacy counter observer. Reservations increment the send counter,
 refunds decrement it, and named reports reconcile prepaid sends. Enforced Responses, native Messages

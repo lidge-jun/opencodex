@@ -17,3 +17,7 @@ only missing operator-map defaults refresh. Live discovery and request-time admi
 Regression coverage: `tests/oauth/oauth-reconcile-operator-maps.test.ts`.
 
 The pool login uses the internal `startLoginFlow` credential callback to receive its own grant after the OAuth store write. The credential stays out of public flow status. Automatic cleanup preserves the exact OAuth outcome until the pool owner settles. See [pool login policy and cancellation](openai-accounts.md#pool-login-policy-and-cancellation).
+
+## Microsoft 365 Copilot
+
+`src/oauth/m365-copilot.ts` participates in the existing protected account store, login publication and lazy-only refresh flow. Login produces an instructions-only hint because its managed browser captures the nativeclient callback directly. Its maintained alias catalog remains static across reconciliation. See [the provider contract](m365-copilot.md).

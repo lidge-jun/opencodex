@@ -4,7 +4,7 @@ import { NODE_LAUNCH_PROOF_PREFIX } from "../cli/launcher-context";
 import { parseStopApproval } from "../cli/stop-approval";
 import { readProcessCommandLine, type ClientStopOwner } from "../config/process-state";
 import { readBoundedRegularFileSync } from "../lib/bounded-file-read";
-import { windowsProcessNative } from "../service/windows-process-native";
+import { windowsProcessNative, windowsProcessPlatform } from "../service/windows-process-native";
 import { readDarwinStopArgv, readDarwinStopCwd, readDarwinStopEnvironment, readDarwinStopStart } from "./stop-darwin-process";
 
 const basename = (value: string) => value.toLowerCase().replace(/\\/g, "/").split("/").pop() ?? "";
@@ -75,8 +75,9 @@ function ocxCommandIndex(argv: readonly string[]): number | undefined {
 export function readClientStopProcessStart(pid: number): string | undefined {
   if (!Number.isInteger(pid) || pid <= 0 || pid > 0x7fffffff) return;
   try {
-    if (process.platform === "darwin") return readDarwinStopStart(pid);
-    if (process.platform === "linux") {
+    const platform = windowsProcessPlatform();
+    if (platform === "darwin") return readDarwinStopStart(pid);
+    if (platform === "linux") {
       const dir = `/proc/${pid}`;
       if (statSync(dir).uid !== process.geteuid?.()) return;
       const stat = readBoundedRegularFileSync(`${dir}/stat`, 4096).toString();
@@ -85,8 +86,8 @@ export function readClientStopProcessStart(pid: number): string | undefined {
       const boot = readBoundedRegularFileSync("/proc/sys/kernel/random/boot_id", 64).toString().trim();
       if (ticks && /^\d+$/.test(ticks) && /^[a-f0-9-]{36}$/.test(boot)) return `linux:${boot}:${ticks}`;
     }
-    if (process.platform === "win32") {
-      const ticks = windowsProcessNative()?.sameUserStartTicks?.(pid);
+    if (platform === "win32") {
+      const ticks = windowsProcessNative()?.sameUserIdentity(pid)?.ticks;
       if (typeof ticks === "bigint" && ticks > 0n && ticks <= 3155378975999999999n) return `win32:${ticks}`;
     }
   } catch { /* unreadable ownership cannot authorize a native restoration handoff */ }
@@ -136,17 +137,28 @@ const creationIdentity: Partial<Record<NodeJS.Platform, RegExp>> = {
 
 function validCreationIdentity(value: unknown): boolean {
   if (typeof value !== "string" || value.length > 80) return false;
-  const ticks = creationIdentity[process.platform]?.exec(value)?.[1];
-  return ticks !== undefined && BigInt(ticks) <= (process.platform === "win32" ? 3155378975999999999n : 0xffffffffffffffffn);
+  const platform = windowsProcessPlatform();
+  const ticks = creationIdentity[platform]?.exec(value)?.[1];
+  return ticks !== undefined && BigInt(ticks) <= (platform === "win32" ? 3155378975999999999n : 0xffffffffffffffffn);
 }
 
-/** Bracket argv with creation/UID reads so a recycled PID cannot inherit the fence. */
+/** Bind argv to the creation identity so a recycled PID cannot inherit the fence. */
 export function observeClientStopOwner({ pid, startTime, nonce }: ClientStopOwner): ClientStopOwnerStatus {
   if (!Number.isInteger(pid) || pid <= 0 || pid > 0x7fffffff
     || !validCreationIdentity(startTime)
     || typeof nonce !== "string" || !/^[a-f0-9]{32}$/.test(nonce)) return "unverified";
   try { process.kill(pid, 0); }
   catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH" ? "confirmed-stale" : "unverified"; }
+  const native = windowsProcessPlatform() === "win32" ? windowsProcessNative() : null;
+  if (native) {
+    try {
+      const identity = native.sameUserIdentity(pid, true);
+      if (!identity) return "unverified";
+      if (`win32:${identity.ticks}` !== startTime) return "confirmed-stale";
+      return pid !== process.pid && identity.commandLine && isClientStopCommandLine(identity.commandLine) ? "active" : "unverified";
+    } catch { return "unverified"; }
+  }
+  // Without a process handle for argv, bracket the read with verified creation identities.
   const before = readClientStopProcessStart(pid);
   if (before === undefined) return "unverified";
   if (before !== startTime) return "confirmed-stale";

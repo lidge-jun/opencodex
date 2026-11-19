@@ -2,6 +2,7 @@ import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
+import { gatewayClientsCopy } from "./gateway-clients-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -138,6 +139,7 @@ export const en = {
   ...shellV2Copy("en"),
   ...codexCliUpdateCopy("en"),
   ...remoteLinkDiagnosticsCopy("en"),
+  ...gatewayClientsCopy("en"),
   ...modelsV2Copy("en"),
   ...accountsV2Copy("en"),
   ...subagentsV2Copy("en"),
@@ -778,11 +780,13 @@ export const en = {
   "dash.updateCurrent": "Up to date",
   "dash.updateCommand": "Command",
   "dash.updateSource": "This is a source checkout. Update it from the terminal with the shown command.",
+  "dash.updateManaged": "Updates are automatic. This release directory is updated by the host's scheduled updater; no action is needed here.",
   "dash.updateUnavailable": "Could not read the latest version from npm. Try again later.",
   "dash.updateRetry": "Retry",
   "dash.updateRecheck": "Re-check",
   "dash.updateCannotAuto": "One-click update is unavailable ({reason}).",
   "dash.updateReason.source_checkout": "source checkout",
+  "dash.updateReason.managed_release": "managed release directory",
   "dash.updateReason.latest_unavailable": "npm registry unreachable",
   "dash.updateReason.already_latest": "already on latest",
   "dash.updateReason.externally_managed": "managed externally by mise; run the shown command",
@@ -4560,6 +4564,38 @@ export const en = {
   "remoteLink.error.policy_write_failed": "The Child policy could not be saved.",
   "remoteLink.error.runtime_role_client": "This computer is a Child; only a Home can operate Children.",
   "remoteLink.error.link_not_home_initiated": "This Child linked itself, so operate it from its own computer.",
+  "comboSuggest.edit.moveUp": "Move {name} up",
+  "comboSuggest.edit.moveDown": "Move {name} down",
+  "comboSuggest.edit.remove": "Remove {name}",
+  "comboSuggest.title": "Suggested combos",
+  "comboSuggest.lede": "Models that more than one of your providers serve under the same name. Generate a combo to route one model name across all of them.",
+  "comboSuggest.servedBy": "served by {count} providers",
+  "comboSuggest.canAdd": "can also use {providers}",
+  "comboSuggest.generate": "Generate",
+  "comboSuggest.addTo": "Add to combo",
+  "comboSuggest.dismiss": "Dismiss",
+  "comboSuggest.exclude.button": "Exclude providers…",
+  "comboSuggest.exclude.active": "Excluded: {names}",
+  "comboSuggest.exclude.head": "Leave out of suggested combos",
+  "comboSuggest.exclude.hint": "Their models join no suggested combo; combos you already made keep them.",
+  "comboSuggest.exclude.saveFailed": "Could not save the excluded providers.",
+  "comboSuggest.exclude.none": "No suggestions to show.",
+  "comboSuggest.exclude.loadFailed": "Could not load excluded providers.",
+  "comboSuggest.saveChanged": "Suggestion settings changed or could not be verified. Refresh Combos and try again.",
+  "comboSuggest.showAll": "Show all {count}",
+  "comboSuggest.showFewer": "Show fewer",
+  "comboSuggest.tier.ownSubscription": "maker's subscription",
+  "comboSuggest.tier.subscription": "subscription",
+  "comboSuggest.tier.vertex": "Vertex credit",
+  "comboSuggest.tier.metered": "pay per use",
+  "comboSuggest.draft.id": "Combo id",
+  "comboSuggest.draft.orderHint": "Tried top to bottom: subscriptions first, then Vertex credit, pay-per-use keys and relays last. Reorder or remove before saving.",
+  "comboSuggest.draft.left": "{percent}% left",
+  "comboSuggest.draft.strategy": "Strategy: failover. Change it in the row after saving.",
+  "comboSuggest.allowPaid": "Allow paid targets (required to save). These targets may bill paid credits or usage.",
+  "comboSuggest.enablePaid": "Run {command} to allow paid targets. Suggestions pick up the change on the next combo refresh.",
+  "comboSuggest.draft.save": "Save combo",
+  "comboSuggest.draft.saving": "Saving…",
 } as const;
 
 export type TKey = keyof typeof en;

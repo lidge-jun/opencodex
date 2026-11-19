@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { gatewayClientsCopy } from "../src/i18n/gateway-clients-copy";
 import { LOCALES } from "../src/i18n/shared";
 
 const LOCALE_CODES = LOCALES.map(locale => locale.code);
@@ -12,8 +13,21 @@ async function readDict(locale: string): Promise<Map<string, string>> {
   for (const m of src.matchAll(/"([^"]+)":\s*"((?:[^"\\]|\\.)*)"/g)) {
     out.set(m[1]!, m[2]!);
   }
+  // Resolve the copy the catalog actually spreads and assert that it selects its own locale.
+  const spread = src.match(/\.\.\.gatewayClientsCopy\("([^"]+)"\)/);
+  expect(spread?.[1]).toBe(locale);
+  const copy = gatewayClientsCopy(spread![1] as Parameters<typeof gatewayClientsCopy>[0]);
+  for (const [key, value] of Object.entries(copy)) {
+    out.set(key, value);
+  }
   return out;
 }
+
+test("the parity reader sees the gateway-client namespace", async () => {
+  const en = await readDict("en");
+  expect(en.get("gatewayClients.tab")).toBe("Antigravity");
+  expect(en.has("gatewayClients.connect")).toBe(true);
+});
 
 /**
  * A value with no letters once its placeholders are removed has nothing to translate: an em
@@ -182,6 +196,8 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "integrations.tab.workbuddyAi",
   // T3 Code is a product name, identical in every locale.
   "integrations.tab.t3code",
+  // Antigravity is a product name, identical in every locale.
+  "gatewayClients.tab",
   "api.clientConfig.clientT3code",
   // Command Code is a product name, identical in every locale.
   "integrations.tab.commandcode",

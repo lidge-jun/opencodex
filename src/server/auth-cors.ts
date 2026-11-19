@@ -1,3 +1,5 @@
+import { oauthSubscriptionMaker } from "../combos/suggestion-channel";
+import { isCanonicalOpenAiForwardProvider } from "../providers/openai-forward-destination";
 import { providerRelativeSendPathConfigError } from "../config/provider-relative-send-path";
 import { contextTierRecordConfigError, modelCapabilitiesConfigError, providerInputModalitiesConfigError } from "../config/provider-validation";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
@@ -10,6 +12,7 @@ import {
   providerModelCostsConfigError,
   providerWebSearchBridgeConfigError,
   requestPacingConfigError,
+  providerTimeoutOverrideConfigError,
   retryOn429PolicyConfigError,
   retryOnResetPolicyConfigError,
   sanitizeModelCostsForDisplay,
@@ -706,6 +709,8 @@ export const AUTH_MATRIX: readonly ApiAuthMatrixRow[] = [
   { endpoint: "/v1/hub-state", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
   // Usage additionally requires a configured key identity; unscoped environment keys are refused.
   { endpoint: "/v1/usage", bearer: "rejected", dedicated: "accepted", xApiKey: "rejected" },
+  // Usage windows require a configured, single-provider key with full model scope.
+  { endpoint: "/v1/usage/windows", bearer: "accepted", dedicated: "accepted", xApiKey: "rejected" },
 ];
 
 /** Whether `token` is the environment-provided management secret. */
@@ -907,6 +912,10 @@ export function providerManagementConfigError(
   }
   if (name === "chatgpt") return "provider chatgpt is reserved for internal credential compatibility";
   if (name === "openai-multi") return "provider openai-multi is reserved for legacy config migration";
+  const timeoutOverrideError = providerTimeoutOverrideConfigError(raw);
+  if (timeoutOverrideError) {
+    return `provider ${JSON.stringify(redactSecretString(name))} ${timeoutOverrideError}`;
+  }
   if (name === "openai") {
     const entry = getProviderRegistryEntry(name);
     const seed = entry ? providerConfigSeed(entry) : undefined;
@@ -951,6 +960,9 @@ export function providerManagementConfigError(
     // forwardClientHeaders is an editor-managed request-metadata overlay. It is validated
     // separately below and must not make an otherwise canonical OpenAI provider fail the seed check.
     delete canonicalCandidate.forwardClientHeaders;
+    // Timeout overrides are validated above and are independent of the canonical seed.
+    delete canonicalCandidate.connectTimeoutMs;
+    delete canonicalCandidate.stallTimeoutSec;
     // Canonical ChatGPT keeps WebSocket as the default, but an operator may
     // select the existing HTTP/SSE path without changing its auth or endpoint.
     if (raw.upstreamWebsocket !== undefined) {
@@ -1182,6 +1194,8 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   codexToolMode: "editor",
   projectContext: "editor",
   requestPacing: "editor",
+  connectTimeoutMs: "editor",
+  stallTimeoutSec: "editor",
   mcpMaxTools: "editor",
   mcpMaxSchemaBytes: "editor",
   mcpMaxResultBytes: "editor",
@@ -1345,6 +1359,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   messagePhaseInference: "editor",
   estimateMissingUsage: "editor",
   tlsProfile: "editor",
+  anthropicOAuthUserInstructions: "editor",
 } as const satisfies Record<keyof OcxProviderConfig, ProviderConfigFieldPolicy>;
 
 type ProviderFieldWithPolicy<Policy extends ProviderConfigFieldPolicy> = {
@@ -1475,6 +1490,8 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       ...editor.providers[name],
       hasApiKey: !!provider.apiKey,
       hasHeaders: !!provider.headers && Object.keys(provider.headers).length > 0,
+      ...(provider.authMode === "oauth" ? { knownSubscriptionOAuth: oauthSubscriptionMaker({ ...provider, name }) !== undefined } : {}),
+      ...(provider.authMode === "forward" ? { canonicalOpenAiForward: isCanonicalOpenAiForwardProvider(provider) } : {}),
     };
     const registry = getProviderRegistryEntry(name);
     const vertex = (provider.adapter === "google" && effectiveGoogleMode(name, provider) === "vertex")

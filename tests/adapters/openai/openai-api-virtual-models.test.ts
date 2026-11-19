@@ -421,7 +421,8 @@ describe("OpenAI API compact transport", () => {
     } finally {
       globalThis.fetch = originalFetch;
       await server.stop(true);
-      delete process.env.OPENCODEX_HOME;
+      if (moduleOriginalHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = moduleOriginalHome;
       removeTreeWithRetry(home);
     }
   }, 20_000);
@@ -573,7 +574,8 @@ describe("OpenAI API Pro transport identities", () => {
     } finally {
       globalThis.fetch = originalFetch;
       await server.stop(true);
-      delete process.env.OPENCODEX_HOME;
+      if (moduleOriginalHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = moduleOriginalHome;
       removeTreeWithRetry(home);
     }
   }, 20_000);

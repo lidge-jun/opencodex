@@ -737,3 +737,38 @@ Droid también lee el legado `config.json` y el local `settings.local.json`. Res
 **Command Code Desktop necesita su propio inicio de sesión.** Comprueba `~/.commandcode/auth.json` o `COMMAND_CODE_API_KEY` antes de mostrar un espacio de trabajo; sin ellos se queda en login. Inicia sesión allí o con `cmd login` una vez. OpenCodex nunca escribe `auth.json`: contiene credenciales reales de Command Code y otros proveedores. Activar, aplicar, reemplazar, refrescar catálogo o desactivar solo administra `providers.json` y deja ese almacén idéntico byte a byte, sin escribir el placeholder en él.
 
 T3 Code recibe IDs `provider/model` exactos y la escala declarada de esfuerzo, para elegirla y crear subagentes. Si la vista previa no tiene catálogo cargado, **Cargar catálogo y reintentar** lo lee por la carga ordinaria de la lista, no por una vista previa que lo recopile, y vuelve a pedir el plan. Aside aplica el mismo flujo a un perfil cada vez; un plan no cubre varios archivos independientes. Un conflicto abre **Conectar → Aside → Elegir perfil**; **Sincronizar todos los perfiles** es otra acción masiva sin un plan combinado.
+
+<a id="antigravity-app-and-agy-cli"></a>
+
+## App Antigravity y CLI agy
+
+La app de escritorio Antigravity de Google (2.15 y posteriores) y la CLI `agy` (1.2.15 y posteriores) pueden
+funcionar a través del gateway de OpenCodex. Conéctalas desde el panel o desde una terminal:
+
+```bash
+ocx connect antigravity --model <id>   # desktop app: ~/.antigravity/settings.json
+ocx connect agy                        # agy CLI: a marked shell function in your profiles
+ocx connect antigravity status         # or: ocx connect agy status
+ocx disconnect antigravity             # or: ocx disconnect agy
+```
+
+Usa `--model` solo con `ocx connect antigravity` para fijar el modelo predeterminado de la app de escritorio.
+
+Conectar registra lo que reemplazó. Desconectar restaura los bytes originales cuando el archivo no ha
+cambiado y, en caso contrario, revierte solo las entradas propias de OpenCodex y conserva tus otras
+ediciones. El bloque marcado de `agy` en un perfil de shell se elimina entero, incluida cualquier edición
+hecha dentro de él. Un enlace simbólico de un perfil de `agy` debe apuntar a otro perfil compatible
+de la misma familia de shells dentro de tu directorio personal. El archivo de configuración de
+Antigravity debe resolverse a la ruta exacta `~/.antigravity/settings.json`. Reinicia Antigravity, o
+abre una terminal nueva para `agy`, para aplicar un cambio. Al desconectar, `agy` omite los perfiles
+sin registro de restauración si no se pueden resolver o leer.
+`ocx uninstall` desconecta los clientes con registros de restauración guardados antes de eliminar la
+configuración. Si no puede restaurar un cliente, la desinstalación se detiene y conserva su registro.
+
+OpenCodex escribe una clave de marcador de posición, nunca una credencial real, así que se niega a
+conectar cuando el bind del proxy exige una. Un archivo con comentarios o comas finales también se rechaza
+y se deja intacto. Antigravity lee primero un `admin_settings.json` de la organización, luego las
+variables `AGY_LLM_GATEWAY_*` y después la configuración del usuario. El estado advierte sobre la
+configuración de la organización y las variables de entorno que puede ver. Solo consulta el entorno
+del proceso de OpenCodex. Si la variable se fija únicamente en el proceso de Antigravity, el estado
+no la detecta. En Windows `agy` no está probado, porque Google lo publica solo para macOS y Linux.

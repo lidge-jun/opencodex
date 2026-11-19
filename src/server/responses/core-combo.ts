@@ -1023,6 +1023,8 @@ export async function executeComboResponses(
     }
     if (lastFailure && lastFailureUpstreamCode === "zero_output_token_limit" && zeroOutputLimitFailure) {
       adoptFailedChildLog(zeroOutputLimitFailure.childLog);
+      // The terminal builder normalizes wire usage even when the child supplied none.
+      logCtx.clientResponseUsage = "synthetic";
       return wantsStream
         ? streamingIncompleteResponse(responseModel, zeroOutputLimitFailure.usage, "max_output_tokens", options.translatorBudget)
         : jsonIncompleteResponse(responseModel, zeroOutputLimitFailure.usage, "max_output_tokens");
@@ -1298,6 +1300,11 @@ export async function executeComboResponses(
         if (childLog.terminalIncompleteReason !== undefined) logCtx.terminalIncompleteReason = childLog.terminalIncompleteReason;
         if (childLog.terminalErrorCode !== undefined) logCtx.terminalErrorCode = childLog.terminalErrorCode;
         if (childLog.upstreamError !== undefined) logCtx.upstreamError = childLog.upstreamError;
+        // Raw usage may arrive after the commit copy. Publish it before spend is finalized.
+        if (childLog.usage !== undefined) {
+          logCtx.usage = childLog.usage;
+          logCtx.usageWireParsed = childLog.usageWireParsed;
+        }
         // A committed stream that ends failed is a target failure too; incomplete is an answer.
         if (status === "failed") jevPin?.forget();
         options.onNativePassthroughTerminal?.(status);

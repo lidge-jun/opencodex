@@ -28,7 +28,7 @@ lazily, caches a failed load as unavailable, and closes every handle in a `final
 - an exit watch: a handle opened at bind time and polled with `WaitForSingleObject(handle, 0)`;
 - the Task Scheduler service host PID through `QueryServiceStatusEx` on `Schedule`, only while it runs.
 
-The Link Child reads its live same-user creation proof in-process on one native handle, using `GetProcessTimes` and the token user SID. It preserves the existing .NET tick identity at microsecond precision without spawning PowerShell or caching a PID proof. The process fallback compares that identity on the same handle used for termination. Unavailable native identity or handle binding refuses promptly; it does not fall back to repeated CIM subprocesses. `tests/windows/windows-stop-owner-identity.test.ts` covers handle ownership, stale identities and an actual-Windows-only repeated-read budget.
+The Link Child reads its live same-user creation proof in-process on one native handle, using `GetProcessTimes` and the token user SID; stop-owner argv is read through that same handle by `src/config/windows-process-command-line.ts`. It preserves the existing .NET tick identity at microsecond precision without spawning PowerShell or caching a PID proof. The process fallback compares that identity on the same handle used for termination. Unavailable native identity or handle binding refuses promptly; it does not fall back to repeated CIM subprocesses. `tests/windows/windows-stop-owner-identity.test.ts` covers handle ownership, stale identities and an actual-Windows-only repeated-read budget.
 
 Windows ARM64, other platforms and any test that simulates a platform get no native API.
 `src/service/windows-process-evidence.ts` is the facade the operations use. Its process snapshot is

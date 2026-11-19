@@ -723,7 +723,9 @@ describe("durable compatibility", () => {
 
 describe("AUTH_MATRIX is true of the running server", () => {
   test("every cell matches a real request", async () => {
-    saveConfig(remoteConfig());
+    const config = remoteConfig();
+    config.apiKeys![0]!.allowedProviders = ["test"];
+    saveConfig(config);
     const server = startServer(0);
     const key = "ocx_data_attributionone";
     try {
@@ -738,7 +740,7 @@ describe("AUTH_MATRIX is true of the running server", () => {
           // from routing and the assertions below would be testing the method guard rather
           // than admission. /v1/catalog joined this set in #809.
           const isGet = row.endpoint === "/v1/models" || row.endpoint === "/v1/catalog"
-            || row.endpoint === "/v1/hub-state" || row.endpoint === "/v1/usage";
+            || row.endpoint === "/v1/hub-state" || row.endpoint === "/v1/usage" || row.endpoint === "/v1/usage/windows";
           const live = row.endpoint === "/v1/live" || row.endpoint === "/v1/realtime/calls";
           const audio = row.endpoint === "/v1/audio/transcriptions" || live ? new FormData() : null;
           if (audio) {
@@ -764,6 +766,8 @@ describe("AUTH_MATRIX is true of the running server", () => {
           // "no such model", which is proof admission let it through.)
           expect(res.status).not.toBe(405);
           if (disposition === "rejected") expect(res.status).toBe(401);
+          // The role gate runs after admission and returns a specific 404 on this non-hub.
+          if (row.endpoint === "/v1/usage/windows" && disposition === "accepted") expect(res.status).toBe(404);
           if (res.status === 404) {
             // The fixture provider is disabled, so an ADMITTED request can still
             // 404 downstream on "no such model" — that is proof admission let it
@@ -780,6 +784,7 @@ describe("AUTH_MATRIX is true of the running server", () => {
             // admission proof. Pin its distinguishing code too.
             if (row.endpoint === "/v1/hub-state") expect(body.error?.code).toBe("hub_state_not_a_hub");
             if (row.endpoint === "/v1/usage") expect(body.error?.code).toBe("hub_usage_not_a_hub");
+            if (row.endpoint === "/v1/usage/windows") expect(body.error?.code).toBe("usage_windows_not_a_hub");
           }
           const admitted = res.status !== 401;
           expect({ endpoint: row.endpoint, headers: Object.keys(headers)[0], admitted })

@@ -11,7 +11,7 @@ async function runRecovery(mode: string, scheduled = false, env = process.env, a
   const child = Bun.spawn([process.execPath, fixturePath("client-link-stop-recovery-runner.ts")], {
     cwd: repoPath(), stdin: new Blob([JSON.stringify({ mode, scheduled })]), stdout: "pipe", stderr: "pipe",
     env: { ...env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: join(root, "ocx"), CODEX_HOME: join(root, "codex"),
-      OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(root, "desktop"), OCX_SERVICE: "", OCX_SERVICE_MANAGED: "0" },
+      OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(root, "claude-desktop"), OCX_SERVICE: "", OCX_SERVICE_MANAGED: "0" },
   });
   const timeout = setTimeout(() => child.kill("SIGKILL"), 15_000);
   try {

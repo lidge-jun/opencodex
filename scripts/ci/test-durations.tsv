@@ -5,6 +5,8 @@
 # Green dev lane=all: lidge-jun/opencodex run 44386662799, c38d6eef7986b3b9acbb6e8ac17407ab84e5633e; Ubuntu jobs 135093186424,135093186236,135093186230,135093186350,135093186295; macOS jobs 135093186207,135093186360,135093186156,135093186139.
 # Additional Ubuntu PR samples: luvs01/opencodex #840 run 44448708478, 374867f6a068c50beaa2ec4e17e57876c88c87cc; jobs 135307330817,135307330808,135307330846,135307330937,135307330890. Workflow cancelled; 2/5's unfinished stop-deferred-teardown file excluded; 3/5 finished its tests but its job was cancelled.
 # Additional Ubuntu PR samples: luvs01/opencodex #841 run 44448420609, 31e5078742f928592d7f88287cdb98a688cbc975; jobs 135313932894,135313932243,135313993098,135313933788,135313933743. Successful latest-attempt job set, including retained earlier successful jobs; not a cross-platform dev dispatch.
+# Preserve verbatim all 20 duration rows added or updated by upstream 80e8952357d11ccf1421b4aa5620e781625dcdb0; overlapping older file samples are excluded, including the pre-split Link stop file.
+# Preserved upstream provenance: Ubuntu PR run 44361864364 attempts 1–2 (completed test 1–5/5 file groups with a mean weight delta of at least 8000 ms, with split Link stop weights from case timings in jobs 135009134286 and 135071742481). Earlier inputs: Ubuntu and macOS passing jobs: run 42694893702 on 4b38e9a072 (test 1-5/5: 129424126084,129424126100,129424126131,129424126088,129424126091; macos 1-4/4: 129424126216,129424126104,129424126041,129424125988); unmeasured existing rows retained
 251	tests/adapters/abort-race.test.ts
 347	tests/adapters/adapter-buffered-tool-conformance.test.ts
 269	tests/adapters/adapter-error-inline.test.ts
@@ -320,7 +322,7 @@
 49	tests/ci-workflows/release-version-line.test.ts
 349	tests/ci-workflows/release-version-sources.test.ts
 276	tests/ci-workflows/release-windows-signing-outcome.test.ts
-18532	tests/ci-workflows/release-windows-signing.test.ts
+22436	tests/ci-workflows/release-windows-signing.test.ts
 279	tests/ci-workflows/repo-hygiene.test.ts
 505	tests/ci-workflows/repo-import-resolution.test.ts
 440	tests/ci-workflows/setup-hooks.test.ts
@@ -620,7 +622,7 @@
 159	tests/cli/cli-models-reasoning.test.ts
 140	tests/cli/cli-models-runtime-dispatch.test.ts
 189	tests/cli/cli-models-set.test.ts
-28494	tests/cli/cli-models.test.ts
+36077	tests/cli/cli-models.test.ts
 180	tests/cli/cli-native-profile.test.ts
 106	tests/cli/cli-observe-logs.test.ts
 97	tests/cli/cli-observe-snapshot.test.ts
@@ -750,7 +752,9 @@
 7080	tests/clients/client-link-runtime.test.ts
 54	tests/clients/client-link-state.test.ts
 58	tests/clients/client-link-status.test.ts
-19015	tests/clients/client-link-stop.test.ts
+26066	tests/clients/client-link-stop-recovery.test.ts
+29316	tests/clients/client-link-stop-sibling.test.ts
+27800	tests/clients/client-link-stop.test.ts
 1655	tests/clients/client-link-teardown.test.ts
 4260	tests/clients/client-link-tunnel.test.ts
 5397	tests/clients/client-machine-listener.test.ts
@@ -858,7 +862,7 @@
 9183	tests/clients/link-ocx-child-conformance.test.ts
 9957	tests/clients/link-ocx-child-e2e.test.ts
 3313	tests/clients/link-ocx-child-ws-feature.test.ts
-13241	tests/clients/link-ocx-child-ws-gate.test.ts
+12110	tests/clients/link-ocx-child-ws-gate.test.ts
 69	tests/clients/link-operations-journal.test.ts
 52	tests/clients/link-parity-reporter.test.ts
 147	tests/clients/link-peer-compatibility.test.ts
@@ -949,19 +953,19 @@
 269	tests/clients/route-intent-aside.test.ts
 1348	tests/clients/route-intent-claude-surface.test.ts
 9122	tests/clients/route-intent-codex-connect-disabled.test.ts
-39857	tests/clients/route-intent-codex-transitions.test.ts
+39121	tests/clients/route-intent-codex-transitions.test.ts
 475	tests/clients/route-intent-connect-post-commit.test.ts
 3577	tests/clients/route-intent-connect-recovery.test.ts
 164	tests/clients/route-intent-connected-capabilities.test.ts
 7984	tests/clients/route-intent-connected-review.test.ts
-22221	tests/clients/route-intent-connected.test.ts
+23405	tests/clients/route-intent-connected.test.ts
 129	tests/clients/route-intent-desktop.test.ts
 5577	tests/clients/route-intent-file-originals.test.ts
 3792	tests/clients/route-intent-home-consent.test.ts
 65	tests/clients/route-intent-local-receipt.test.ts
 482	tests/clients/route-intent-materializer.test.ts
 348	tests/clients/route-intent-native-originals.test.ts
-9995	tests/clients/route-intent-native-review.test.ts
+8719	tests/clients/route-intent-native-review.test.ts
 4232	tests/clients/route-intent-offline-mode-switch.test.ts
 212	tests/clients/route-intent-overwrite.test.ts
 72	tests/clients/route-intent-parity-fallback.test.ts
@@ -1077,7 +1081,7 @@
 67	tests/codex-integration/codex-cli-installation-identity.test.ts
 59	tests/codex-integration/codex-cli-installation-targets.test.ts
 6666	tests/codex-integration/codex-cli-update-admission.test.ts
-95197	tests/codex-integration/codex-cli-update-apply.test.ts
+73199	tests/codex-integration/codex-cli-update-apply.test.ts
 2630	tests/codex-integration/codex-cli-update-artifacts.test.ts
 98	tests/codex-integration/codex-cli-update-integrity.test.ts
 74	tests/codex-integration/codex-cli-update-job-read-race.test.ts
@@ -1252,7 +1256,7 @@
 76	tests/codex-integration/codex-restart-contract-parity.test.ts
 384	tests/codex-integration/codex-restart-route.test.ts
 5392	tests/codex-integration/codex-restore-app-rewrite.test.ts
-12127	tests/codex-integration/codex-restore-later-edits.test.ts
+12456	tests/codex-integration/codex-restore-later-edits.test.ts
 198	tests/codex-integration/codex-resume-if-healthy.test.ts
 7505	tests/codex-integration/codex-retained-root-serialization.test.ts
 264	tests/codex-integration/codex-round-robin-headroom.test.ts
@@ -1378,13 +1382,13 @@
 369	tests/codex-integration/messaging-local-send.test.ts
 62	tests/codex-integration/messaging-local-socket.test.ts
 12517	tests/codex-integration/messaging-mcp-queue.test.ts
-12598	tests/codex-integration/messaging-mcp-replies.test.ts
+12618	tests/codex-integration/messaging-mcp-replies.test.ts
 210	tests/codex-integration/messaging-mcp-resume.test.ts
-64531	tests/codex-integration/messaging-mcp-wait.test.ts
+64423	tests/codex-integration/messaging-mcp-wait.test.ts
 4539	tests/codex-integration/messaging-remote-admission.test.ts
 314	tests/codex-integration/messaging-remote-contract.test.ts
 414	tests/codex-integration/messaging-remote-enrollment-gaps.test.ts
-9088	tests/codex-integration/messaging-remote-enrollment.test.ts
+3035	tests/codex-integration/messaging-remote-enrollment.test.ts
 57	tests/codex-integration/messaging-remote-forward-failure.test.ts
 2557	tests/codex-integration/messaging-remote-gaps.test.ts
 52	tests/codex-integration/messaging-remote-interop.test.ts
@@ -2543,7 +2547,7 @@
 139	tests/responses/sse-rewrite-line-endings.test.ts
 71	tests/responses/sse-unspaced-data-fields.test.ts
 2938	tests/responses/sse-untyped-credential-mask.test.ts
-5628	tests/responses/stalled-reader-memory.test.ts
+8945	tests/responses/stalled-reader-memory.test.ts
 65	tests/responses/thought-signature-credential-scope.test.ts
 370	tests/responses/turn-membership-ingress.test.ts
 90	tests/responses/turn-membership.test.ts
@@ -2922,7 +2926,7 @@
 521	tests/server/server-dashboard-trusted-proxy.test.ts
 755	tests/server/server-desktop-compatibility-startup.test.ts
 932	tests/server/server-generic-oauth-affinity.test.ts
-13527	tests/server/server-google-antigravity-oauth-401-replay.test.ts
+13985	tests/server/server-google-antigravity-oauth-401-replay.test.ts
 521	tests/server/server-google-antigravity-oauth-429-budget.test.ts
 119	tests/server/server-gui-bundle-freshness.test.ts
 212	tests/server/server-images-bodyless-content-length.test.ts
@@ -3048,7 +3052,7 @@
 57	tests/service/service-restart-replacement.test.ts
 784	tests/service/service-runtime-preflight.test.ts
 135	tests/service/service-scheduler-restart-cleanup.test.ts
-38629	tests/service/service-scheduler-restart-respawn-refusal.test.ts
+38599	tests/service/service-scheduler-restart-respawn-refusal.test.ts
 209	tests/service/service-secrets.test.ts
 257	tests/service/service-sqlite-home.test.ts
 69	tests/service/service-start-environment.test.ts
@@ -3062,7 +3066,7 @@
 10228	tests/service/shutdown-launcher.test.ts
 72	tests/service/stale-state-purge.test.ts
 51	tests/service/standalone-service.test.ts
-31870	tests/service/stop-deferred-teardown.test.ts
+48264	tests/service/stop-deferred-teardown.test.ts
 384	tests/service/stop-direct-fetch.test.ts
 1137	tests/service/stop-restoration-preflight.test.ts
 4995	tests/service/stop-restore-history-ownership.test.ts
@@ -3130,8 +3134,8 @@
 60699	tests/update/update-orchestrated-entry.test.ts
 69	tests/update/update-orchestrated-identity.test.ts
 78	tests/update/update-orchestrated-plan.test.ts
-26091	tests/update/update-orchestrated-pnpm-entry.test.ts
-22360	tests/update/update-orchestrated-pnpm-global-store-entry.test.ts
+25495	tests/update/update-orchestrated-pnpm-entry.test.ts
+21190	tests/update/update-orchestrated-pnpm-global-store-entry.test.ts
 3329	tests/update/update-orchestrated-session.test.ts
 46	tests/update/update-orchestrated-token.test.ts
 603	tests/update/update-pnpm-global-store.test.ts

@@ -264,6 +264,23 @@ Connected CLI usage follows the [client-scoped hub usage contract](../dashboard-
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](../remote-workspace.md) owns that integration.
 
 Listener startup diagnostics follow [the runtime lifecycle contract](../runtime.md#lifecycle); malformed optional listener blocks follow [config loading](../config.md#config-surface).
+## Translated Anthropic OAuth instructions
+
+Translated Anthropic OAuth requests preserve caller instructions in top-level `system` by default.
+Only operator configuration `providers.<name>.anthropicOAuthUserInstructions: true` moves
+caller-authored instructions into the first user turn and gives them user-role priority. The adapter adds an
+initial user turn for assistant-leading histories and preserves tool call and result adjacency.
+`src/adapters/anthropic.ts` keeps the compatibility identity, tool contract, checkpoint continuation
+guidance, and system prompts on proxy-originated turns in `system`. In
+`src/server/responses/request-prepare.ts`, trusted handler options identify JEV decision turns and
+Chat self-fetches (Advisor, routed vision and role sizing). Chat validates the existing process
+capability and live registration before setting those options. Request JSON and the vision
+recursion header carry no provenance. With prompt caching enabled, the relocated caller prefix
+receives an explicit breakpoint. The option applies only to translated OAuth requests.
+`tests/adapters/anthropic/anthropic-oauth-caller-system-shape.test.ts` covers default and opt-in
+request shapes. `tests/adapters/anthropic/anthropic-oauth-internal-system-wire.test.ts` covers
+proxy-originated wire placement and caller-supplied provenance lookalikes.
+
 ## Truncated tool finalization
 
 The bridge keeps an open function, custom, or tool-search call incomplete when an adapter ends with a recognized truncated stop reason. Streaming emits no argument/input completion frame for that open call, and buffered JSON applies the same status. A call already closed by its own tool-call end retains its completed state. The response remains incomplete, partial output is preserved, and truncated compaction never replaces history.
@@ -414,3 +431,7 @@ upstream `invalid_argument`.
 `src/adapters/unique-tool-call-ids.ts` forwards optional per-exchange stream context while
 retaining tool-call ID reminting; [completed tool blocks](../providers/completed-tool-blocks.md)
 require that context independently of request construction.
+
+## Microsoft 365 Copilot
+
+The `m365-copilot` registry factory in `src/adapters/registry.ts` inherits the Chat tool-lowering contract while `src/adapters/m365-copilot.ts` owns a native ChatHub `runTurn`. The Microsoft transport, account-bound sessions and managed-browser OAuth are described in [the provider contract](../providers/m365-copilot.md). No second adapter factory inventory is introduced.

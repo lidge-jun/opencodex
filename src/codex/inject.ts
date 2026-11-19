@@ -519,6 +519,7 @@ async function injectCodexConfigImpl(
       // This is the catalog artifact selected for this injection, even when config.toml
       // already points at that path and therefore needs no textual rewrite.
       injectedCatalogPath: plan.catalogPath,
+      injectedCatalogBinding: plan.injectedCatalogBinding,
     }, hooks));
     historyArtifactStageForTests?.("after-artifacts");
     // Detect migration throughout the artifact transaction, not just at entry.

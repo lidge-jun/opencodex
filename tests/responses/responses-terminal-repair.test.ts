@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import { Buffer } from "node:buffer";
 import type { ResponsesTerminalRepairPolicy } from "../../src/providers/registry";
 import { relaySseWithFailedTail } from "../../src/server/relay";
 import {
@@ -230,6 +231,64 @@ async function repairClosedText(text: string): Promise<{ output: string; cancell
 }
 
 describe("DeepSeek Responses terminal repair", () => {
+  test.each(["fragmented", "coalesced"] as const)("bounds byte-measurement work for %s frames", async shape => {
+    const delta = sse({ type: "response.output_text.delta", delta: "é한😀" + "x".repeat(shape === "fragmented" ? 64 * 1024 : 32) });
+    const wire = delta.repeat(shape === "fragmented" ? 1 : 1024)
+      + sse({ type: "response.completed", response: { status: "completed", output: [] } }) + "data: [DONE]\n\n";
+    const bytes = encoder.encode(wire);
+    const chunkSize = shape === "fragmented" ? 256 : bytes.length;
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let offset = 0; offset < bytes.length; offset += chunkSize) controller.enqueue(bytes.subarray(offset, offset + chunkSize));
+        controller.close();
+      },
+    });
+    const budget = createTestTranslatorBudget();
+    const encode = TextEncoder.prototype.encode;
+    const byteLength = Buffer.byteLength;
+    let measuredChars = 0;
+    const encoding = spyOn(TextEncoder.prototype, "encode").mockImplementation(function (input = "") {
+      measuredChars += input.length;
+      return Reflect.apply(encode, this, [input]);
+    });
+    const measuring = spyOn(Buffer, "byteLength").mockImplementation(function (input, encoding) {
+      if (typeof input === "string") measuredChars += input.length;
+      return Reflect.apply(byteLength, this, [input, encoding]);
+    });
+    let output: string;
+    try {
+      output = await readAll(relayResponsesSseWithTerminalRepair(source, new AbortController(), POLICY, budget, new ManualScheduler()));
+    } finally {
+      encoding.mockRestore();
+      measuring.mockRestore();
+    }
+    expect(output).toBe(wire);
+    expect(budget.snapshot().currentBytes).toBe(0);
+    expect(measuredChars).toBeLessThanOrEqual(6 * wire.length);
+  });
+
+  test.each([0, -1])("preserves Unicode overlap admission at the byte limit %i", async adjustment => {
+    const wire = sse({ type: "response.completed", response: { status: "completed", text: "é한😀" } });
+    const bytes = encoder.encode(wire);
+    const split = bytes.indexOf(0xc3) + 1;
+    const prefixBytes = split - 1; // The first UTF-8 byte of é stays inside TextDecoder.
+    const otherBytes = 17;
+    const budget = createTestTranslatorBudget({ maxTurnBytes: otherBytes + prefixBytes + bytes.length + adjustment });
+    budget.chargeRetained(otherBytes, { kind: "retained_collectors" });
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes.subarray(0, split));
+        controller.enqueue(bytes.subarray(split));
+        controller.close();
+      },
+    });
+    const output = readAll(relayResponsesSseWithTerminalRepair(source, new AbortController(), POLICY, budget, new ManualScheduler()));
+    if (adjustment === 0) expect(await output).toBe(wire);
+    else await expect(output).rejects.toMatchObject({ code: "translation_buffer_limit" });
+    expect(budget.snapshot().currentBytes).toBe(otherBytes);
+    budget.releaseRetained(otherBytes, { kind: "retained_collectors" });
+  });
+
   test("a healthy stream with a real terminal is relayed byte-identical", async () => {
     const lifecycle = capturedToolCallLifecycle();
     const terminal = sse({

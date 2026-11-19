@@ -18,7 +18,7 @@ const home = process.env.OPENCODEX_HOME!;
 mkdirSync(home, { recursive: true });
 const lifecycle = await import("../../src/client/lifecycle-lock");
 const lock = lifecycle.withClientLifecycleSync, asyncLock = lifecycle.withClientLifecycle;
-const lifecycleLockDeps = { lockPath: join(home, "lifecycle.sqlite") };
+const lifecycleLockDeps = { lockPath: join(dirname(home), "runtime", "lifecycle.sqlite") };
 mock.module("../../src/client/lifecycle-lock", () => ({ ...lifecycle,
   withClientLifecycleSync: (work: Parameters<typeof lock>[0], deps?: Parameters<typeof lock>[1]) => lock(work, { lockPath: deps?.lockPath ?? lifecycleLockDeps.lockPath }),
   withClientLifecycle: (work: Parameters<typeof asyncLock>[0], deps?: Parameters<typeof asyncLock>[1]) => asyncLock(work, { lockPath: deps?.lockPath ?? lifecycleLockDeps.lockPath }),
@@ -117,6 +117,11 @@ async function main() {
     }
     throw error;
   }
+  // The parent bounds setup; the existing phase watchdog starts only once the Child serves.
+  setTimeout(() => {
+    console.error(`recovery fixture timed out (${options.mode}: ${phase})`);
+    process.exit(1);
+  }, 10_000).unref();
   const pendingRecycle = options.mode === "signal-pending-recycle";
   let lastRecycleTimer: ReturnType<typeof setTimeout> | undefined;
   const scheduleAndCountTimers = () => {
@@ -222,6 +227,4 @@ async function main() {
   }
 }
 
-const deadline = setTimeout(() => { console.error(`recovery fixture timed out (${options.mode}: ${phase})`); process.exit(1); }, 10_000);
-deadline.unref();
 try { await main(); } catch (error) { console.error(error); process.exit(1); }

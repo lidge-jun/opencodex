@@ -66,6 +66,7 @@ import { trackStreamLifetime } from "../lifecycle";
 import { isAntigravityRawValidationRefusal } from "./antigravity-validation-refusal";
 import { createSidecarSendBudget } from "./sidecar-send-budget";
 import { stripReplayedSearchPairs } from "../../web-search/sidecar-search-replay";
+import { providerConnectTimeoutMs, providerStallTimeoutSec } from "../../stall-timeout";
 import { settleAnthropicPerMessageEffort, shareAnthropicPerMessageEffortTurn } from "../../adapters/anthropic/per-message-effort";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
@@ -291,6 +292,7 @@ export async function executeResponsesSidecars(
   const wsPlan = !routedCompaction
     ? planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar, {
       admission: options.admission, codexAuthPolicy: options.codexAuthPolicy, providerName: route.providerName,
+      routedTransport: transportState.adapter.runTurn ? "runTurn" : "http",
     })
     : undefined;
   const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
@@ -541,7 +543,7 @@ export async function executeResponsesSidecars(
     return { adapter: rotatedAdapter, recoveryKind };
   };
   const recoverImageContext = route.provider.anthropicImageContextRecovery === true && transportState.adapter.name === "anthropic"
-    ? createAnthropicImageRecovery(requestContext, requestState, transportState, sendBudgetState, config.connectTimeoutMs ?? 200_000)
+    ? createAnthropicImageRecovery(requestContext, requestState, transportState, sendBudgetState, providerConnectTimeoutMs(config, route.provider) ?? 200_000)
     : undefined;
   // Legacy sidecar sends under spend enforcement do not carry an authoritative physical receipt.
   const imageRecovery: typeof recoverImageContext = recoverImageContext && ((response, ...args) =>
@@ -666,8 +668,8 @@ export async function executeResponsesSidecars(
         : imgPlan
           ? clampImageMaxRounds(config.images?.maxRounds)
           : clampImageMaxRounds(config.images?.videoMaxRounds ?? 2),
-      connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
-      stallTimeoutSec: config.stallTimeoutSec, proxyErrorContext: logCtx,
+      connectTimeoutMs: providerConnectTimeoutMs(config, route.provider) ?? 200_000,
+      stallTimeoutSec: providerStallTimeoutSec(config, route.provider), proxyErrorContext: logCtx,
       waitForRequestSlot: imageProviderFetch.waitForPacing,
       fetchImpl: imageProviderFetch.unpacedFetch ?? imageProviderFetch,
       fetchForRequest: (request, iterParsed, adapter, recovery) => {
@@ -833,7 +835,7 @@ export async function executeResponsesSidecars(
       },
       recordSidecarOutcome: wsPlan.forwardSidecar?.recordOutcome,
       beforeSidecarDispatch: wsPlan.forwardSidecar?.beforeDispatch,
-      connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
+      connectTimeoutMs: providerConnectTimeoutMs(config, route.provider) ?? 200_000,
       routedModelStallTimeoutMs: wsPlan.routedModelStallTimeoutMs,
       stallTimeoutSec: wsPlan.stallTimeoutSec, proxyErrorContext: logCtx,
       onLocalFailure: options.onWebSearchLocalFailure,

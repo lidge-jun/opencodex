@@ -252,10 +252,11 @@ export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequest
    *  responsesUsage in src/bridge.ts), so SSE/JSON re-parsing must not overwrite the raw
    *  provenance — a synthetic cached_tokens:0 is NOT a measured cache read. */
   usageFromBridge?: boolean;
-  /** Set once the client-facing body carries an estimated usage the provider never sent (#7427).
-   *  The provider's own body was inspected before the estimate was added, so a later parse of
-   *  the client body must not record the estimate as provider-reported usage. */
-  usageEstimatedForClient?: boolean;
+  /** Process-owned provenance when a later parse of the client body must skip its usage.
+   *  The original provider usage, when present, is already recorded on this context. */
+  clientResponseUsage?: "estimated" | "synthetic";
+  /** A committed keepalive's native child owns raw usage; only the outer client-body log tap skips it. */
+  clientSseUsageAlreadyInspected?: boolean;
   /** Secret-redacted upstream error reason (e.g. the granular Cursor "rate limit exceeded…"
    * message) extracted from a `response.failed` SSE payload or non-streaming error body, so the
    * request log / GUI shows the actual upstream failure rather than only the HTTP-mapped code. */
@@ -1021,7 +1022,7 @@ export function catalogModelSupportsServiceTier(modelId: string, serviceTier: st
   }
 }
 
-export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unknown): void {
+export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unknown, collectUsage = true): void {
   if (!payload || typeof payload !== "object") return;
   if (logCtx.observedTerminalStatus === undefined) {
     const eventType = (payload as { type?: unknown }).type;
@@ -1052,8 +1053,9 @@ export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unk
   } else if (Object.prototype.hasOwnProperty.call(source, "service_tier")) {
     logCtx.activeTierMetadata?.observeResponseServiceTier(serviceTier);
   }
-  const usage = usageFromResponsesPayload((source as { usage?: unknown }).usage);
-  if (usage && !logCtx.usageFromBridge && !logCtx.usageEstimatedForClient) {
+  const usage = collectUsage && !logCtx.usageFromBridge && !logCtx.clientResponseUsage
+    ? usageFromResponsesPayload((source as { usage?: unknown }).usage) : undefined;
+  if (usage) {
     if (!recordKeyWireAttemptUsage(logCtx, usage)) {
       logCtx.usage = usage;
       if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
@@ -1167,12 +1169,13 @@ export function inspectResponseLogSsePayloadParsed(
   logCtx: RequestLogContext,
   payload: string | null,
   parsed: unknown | undefined,
+  collectUsage = true,
 ): void {
   if (!payload || payload.trim() === "[DONE]") return;
   const debugEnabled = isUsageDebugEnabled();
   const sseAlreadyMarked = logCtx.usageDebugBodyKind === "sse";
   if (parsed !== undefined) recordGenerationEvent(logCtx, (parsed as { type?: unknown } | null)?.type);
-  if (parsed !== undefined) applyResponseLogMetadata(logCtx, parsed);
+  if (parsed !== undefined) applyResponseLogMetadata(logCtx, parsed, collectUsage);
   else logCtx.activeTierMetadata?.markResponseUnparseable();
   captureUpstreamErrorParsed(logCtx, payload, parsed, true);
   if (debugEnabled) {
@@ -1559,11 +1562,11 @@ function writeFinalRequestLog(
     ...(attempt.deliverySummary ? { deliverySummary: { ...attempt.deliverySummary } } : {}),
   }));
   const isCombo = logCtx.comboId !== undefined && (attempts?.length ?? 0) > 0;
-  // A key or account rotation splits the attempt and clears `logCtx.usage`, so a multi-attempt
-  // request totals from its attempts, combo or not. One attempt keeps the request-level usage
-  // (and its input estimate); a locally answered row sent nothing and keeps its own.
-  const aggregate = isCombo || ((attempts?.length ?? 0) > 1 && logCtx.localTerminalReason === undefined)
-    ? aggregateAttemptUsage(attempts ?? [])
+  // Rotations split usage across attempts. A detached recovery can be the only send, with no
+  // active attempt or request-level usage. An ordinary single attempt keeps the row's usage.
+  const aggregate = attempts?.length && (isCombo || (logCtx.localTerminalReason === undefined
+    && (attempts.length > 1 || (!logCtx.activeAttempt && attempts[0]?.usage))))
+    ? aggregateAttemptUsage(attempts)
     : null;
   const loggedUsage = aggregate?.usage ?? existing.usage;
   const usageStatus = aggregate?.status ?? existing.status;

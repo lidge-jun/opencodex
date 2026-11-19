@@ -67,6 +67,7 @@ export class WebSearchAdapterEventError extends Error {
 
 export interface ParseStreamWithProgressOptions {
   preserveAdapterError?: boolean;
+  /** Upstream raw-byte inactivity budget. Zero disables this timer. */
   inactivityTimeoutMs: number;
   translatorBudget: TranslatorBudget;
   signal?: AbortSignal;
@@ -185,7 +186,9 @@ export async function* parseStreamWithProgress(
   parseStream: ParseStream,
   options: ParseStreamWithProgressOptions,
 ): AsyncGenerator<AdapterEvent> {
-  const inactivityTimeoutMs = normalizeTimeout(options.inactivityTimeoutMs, "inactivityTimeoutMs");
+  const inactivityTimeoutMs = options.inactivityTimeoutMs === 0
+    ? 0
+    : normalizeTimeout(options.inactivityTimeoutMs, "inactivityTimeoutMs");
   const postTerminalDrainTimeoutMs = normalizeTimeout(
     options.postTerminalDrainTimeoutMs ?? DEFAULT_POST_TERMINAL_DRAIN_TIMEOUT_MS,
     "postTerminalDrainTimeoutMs",
@@ -254,7 +257,7 @@ export async function* parseStreamWithProgress(
 
   // Count only active upstream-wait time; a blocked downstream handoff has its own deadline.
   const armInactivity = (): void => {
-    if (settled || consumerBlocked || terminalSeen || inactivityTimer !== undefined) return;
+    if (inactivityTimeoutMs === 0 || settled || consumerBlocked || terminalSeen || inactivityTimer !== undefined) return;
     if (inactivityRemainingMs <= 0) {
       fail(new RoutedModelInactivityError(inactivityTimeoutMs));
       return;

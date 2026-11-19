@@ -426,3 +426,7 @@ Sonlandırıcı 400 hatalarının dar bir istisnası vardır: OpenRouter'ın opa
 ## Soğuma kurtarma rezervasyonu
 
 `cooldownReprobe: { enabled: true }` ile etkinleştirilen kurtarma denemesi yalnızca onu ayıran isteğe aittir; diğer istekler kayıtlı soğuma sürelerine uymaya devam eder. Rezervasyon, soğuma beklemesi ve JEV seçimi boyunca korunur. Bekleme sırasında yeniden kullanılabilir olan hedef, soğuma kaydı değişmediyse tekrar denenebilir. Yeni bir soğuma kaydı o hedefin rezervasyonunu geçersiz kılar. Başarı yalnızca yanıt veren hedefin değişmemiş soğuma kaydını kaldırır; denenmeyen hedefler ve yeni hatalar soğuma kayıtlarını korur. Sağlayıcının devre dışı olması, kota, istek uygunluğu ve iptal kontrolleri geçerliliğini korur. [Ayarlar ve sınırlar](/guides/combos/#retry-all-cooled-targets-opt-in) bölümüne bakın.
+
+## Önerilen kombolar
+
+Kombolar çalışma alanında, birden çok sağlayıcının sunduğu model için yük devretme taslağı oluşturabilir veya mevcut komboya eksik hedef ekleyebilirsiniz. Kapatılan kartlar bu tarayıcıda gizli kalır. Hariç tutulan sağlayıcılar `config.json` dosyasındaki `comboSuggestionExcludedProviders` alanına kaydedilir. Mevcut üyeler korunur ve kullanıma göre ücretlendirilen hedeflere onay kuralları uygulanır.

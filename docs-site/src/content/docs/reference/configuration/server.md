@@ -356,6 +356,9 @@ x-opencodex-api-key: your-secret-token
 | `/v1/messages` | accepted | accepted | accepted |
 | `/v1/messages/count_tokens` | accepted | accepted | accepted |
 | `/v1/models` | accepted | accepted | accepted |
+| `/v1/usage/windows` | accepted | accepted | not accepted |
+
+Usage windows require a configured key scoped to one provider and all of its models. See [Usage from a connected client](/guides/remote-hub/#usage-from-a-connected-client).
 
 Responses and Chat Completions accept a recognized data-plane credential in `x-opencodex-api-key` or, when that dedicated header is absent, empty or whitespace-only, in `Authorization: Bearer`. A nonempty dedicated header, after trimming whitespace, takes precedence even if invalid; a valid bearer does not rescue it. An unrelated bearer is not a proxy admission credential, and `x-api-key` is not accepted on these routes. Dashboard-generated `apiKeys` and the shared data token are compared in constant time; management credentials do not grant model admission.
 
