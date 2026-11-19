@@ -8,8 +8,11 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { promisify } from "node:util";
 import { killWindowsProcessTreeAsync } from "../../src/adapters/coding-agent/process-tree";
+import { handleRuntimeEvent } from "../../src/adapters/step-cli/events";
+import { beginTurn, rememberQuery } from "../../src/adapters/step-cli/registry";
 import { StepSessionPool } from "../../src/adapters/step-cli/session-pool";
 import type { StepSessionDeps, StepSessionOptions } from "../../src/adapters/step-cli/session";
+import type { AdapterEvent } from "../../src/types";
 import {
   registerAsyncOptionalShutdownHook,
   resetOptionalShutdownHooksForTests,
@@ -18,6 +21,7 @@ import {
 import { fixturePath } from "../helpers/repo-root";
 import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { event } from "../helpers/step-cli-ownership";
 
 function options(cwd: string): StepSessionOptions {
   return { binary: process.execPath, args: [], env: { PATH: process.env.PATH ?? "",
@@ -225,7 +229,7 @@ async function controlledPool(idle = false) {
     buildOptions: () => options(cwd) }, { onEvent: () => {} }, deps);
   const ref = { handle: "previous-close", sessionId: "" };
   const session = await pool.open(ref);
-  return { pool, ref, session, child, killing, expire: () => { now = 60_001; idleCallback!(); } };
+  return { cwd, pool, ref, session, child, killing, expire: () => { now = 60_001; idleCallback!(); } };
 }
 
 for (const idle of [false, true]) {
@@ -256,6 +260,46 @@ test("shutdown propagates a cleanup failure that started before the drain", asyn
     await expect(fixture.pool.closeAll()).rejects.toThrow(/cleanup|quarantined/i);
     expect(fixture.pool.size).toBe(1);
   } finally { fixture.child.emit("close", 0, "SIGTERM"); }
+});
+
+test("a terminal event delivers done once and leaves failed cleanup to the pool", async () => {
+  const { cwd, pool, ref, session, child } = await controlledPool();
+  child.kill = () => { throw new Error("injected cleanup failure"); };
+  const endInput = spyOn(session, "endInput").mockRejectedValue(new Error("injected input-end failure"));
+  const close = spyOn(session, "close");
+  const events: AdapterEvent[] = [];
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    beginTurn(session, { ref, pool, emit: event => events.push(event), settle: () => {},
+      emittedNames: new Map(), catalogKey: "test" });
+    rememberQuery(session, "q_1");
+    const terminal = event("q_1", { type: "status", status: "turn_complete" });
+    handleRuntimeEvent(session, terminal);
+    handleRuntimeEvent(session, terminal);
+    expect(events.map(event => event.type)).toEqual(["done"]);
+    expect(endInput).toHaveBeenCalledTimes(1);
+    expect(endInput).toHaveBeenCalledWith("q_1");
+
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(close).toHaveBeenCalledTimes(1);
+    await expect(session.close()).rejects.toMatchObject({ code: "step_cli_cleanup_failed" });
+    expect(pool.get(ref)).toBeUndefined();
+    await expect(pool.open(ref)).rejects.toMatchObject({ code: "step_cli_cleanup_failed" });
+    await expect(pool.closeAll()).rejects.toMatchObject({ code: "step_cli_cleanup_failed" });
+
+    // Let the runtime report any rejection derived from the already-settled cleanup receipt.
+    await new Promise<void>(resolve => setTimeout(resolve, 0));
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+    close.mockRestore();
+    endInput.mockRestore();
+    child.emit("close", 0, null);
+    await pool.closeAll().catch(() => {});
+    await rm(cwd, { recursive: true, force: true });
+  }
 });
 
 test("a closing handle refuses replacement until cleanup is confirmed", async () => {
