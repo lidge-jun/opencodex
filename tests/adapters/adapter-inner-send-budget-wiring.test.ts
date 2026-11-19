@@ -81,8 +81,9 @@ describe("Cursor runTurn and the request send budget", () => {
     const budget = budgetOf(2);
     let transports = 0;
     const adapter = createCursorAdapter(cursorProvider, {
-      createTransport: () => {
+      createTransport: input => {
         transports += 1;
+        input.onRunDispatch?.();
         return uncommittedResetTransport();
       },
     });

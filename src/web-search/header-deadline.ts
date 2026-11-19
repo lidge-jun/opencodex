@@ -1,4 +1,5 @@
 import { clearableDeadline } from "../lib/abort";
+import { inheritAdapterSupportExecutor } from "../lib/executor-physical-send-receipt";
 import { sendTrackingRequestSlot } from "../providers/request-pacing";
 import type { ProviderFetch } from "../server/responses/fetch-helpers";
 
@@ -62,7 +63,8 @@ export function pacingHeaderDeadline(timeoutMs: number, parent: AbortSignal) {
           return unpacedFetch(input, init);
         });
       };
-      return Object.assign(wrapped, { preconnect: executor.preconnect, waitForPacing, unpacedFetch }) as ProviderFetch;
+      const paced = Object.assign(wrapped, { preconnect: executor.preconnect, waitForPacing, unpacedFetch }) as ProviderFetch;
+      return inheritAdapterSupportExecutor(paced, executor);
     },
   };
 }

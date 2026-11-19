@@ -720,9 +720,14 @@ function createRequestExecutionBudgetWithLedger(
       let producer: ReturnType<NonNullable<RequestSendObserver["beginReporter"]>> | undefined;
       let executing = false;
       let physicalOrdinal: number | undefined;
+      let selectedTarget: SpendScopes & { targetKey?: string } | undefined;
       const startPhysical = (): boolean => {
         if (observer?.enforced !== true) return auxiliary ? budget.claimWorkflowSend!(true) : budget.claimWorkflowSend!();
-        const seed = retrySeed ?? observer.ensureSeed?.(freshRetry ? { ...spendTarget, freshRetry: true } : spendTarget, spendProof);
+        const selected = { ...spendTarget, ...selectedTarget, targetKey: selectedTarget?.targetKey ?? spendTargetKey };
+        // A prepaid retry seed predates credential selection; rebook it on the selected target.
+        if (retrySeed && selectedTarget) observer.releaseSeed?.(retrySeed);
+        const seed = retrySeed && !selectedTarget ? retrySeed
+          : observer.ensureSeed?.(freshRetry || retrySeed ? { ...selected, freshRetry: true } : selected, spendProof);
         if (!seed) return false;
         const ordinal = auxiliary ? budget.claimPhysicalSend?.(true) : budget.claimPhysicalSend?.();
         if (ordinal === undefined) { observer.releaseSeed?.(seed); return false; }
@@ -739,8 +744,11 @@ function createRequestExecutionBudgetWithLedger(
           if (executing) throw new Error("Dispatch permit executor already active");
           executing = true;
           const binding: PhysicalSendReporter = () => {};
-          binding.bind = (target: SpendScopes & { targetKey?: string }) => physicalOrdinal === undefined || !producer
-            ? true : producer.rebindTarget(target, physicalOrdinal);
+          binding.bind = (target: SpendScopes & { targetKey?: string }) => {
+            if (physicalOrdinal !== undefined && producer) return producer.rebindTarget(target, physicalOrdinal);
+            selectedTarget = target;
+            return true;
+          };
           try { return await activePhysicalReporters.run(binding, run); }
           finally {
             executing = false;

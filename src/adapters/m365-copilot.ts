@@ -90,7 +90,13 @@ export function createM365CopilotAdapter(provider: OcxProviderConfig, deps: { tu
             incoming.beforeCredentialSend?.();
             incoming.beforePhysicalSend?.();
             const admission = incoming.sendBudget?.reserveDispatch({ sendClass: "initial", targetKey: "m365-copilot|" + parsed.modelId + "|" + digest(claims.oid + claims.tid) });
-            if (admission && !admission.allowed || admission?.allowed && !admission.permit.use()) throw new SendBudgetExhaustedError(providerErrorDestinationLabel("m365-copilot"));
+            if (admission && !admission.allowed) throw new SendBudgetExhaustedError(providerErrorDestinationLabel("m365-copilot"));
+            if (admission) {
+              // A refused (or throwing) final admission sends no chat frame, so its reservation must be refunded.
+              let used = false;
+              try { used = admission.permit.use(); } finally { if (!used) admission.permit.release(); }
+              if (!used) throw new SendBudgetExhaustedError(providerErrorDestinationLabel("m365-copilot"));
+            }
             incoming.onPhysicalSend?.({ ordinal: 1 });
           },
         });

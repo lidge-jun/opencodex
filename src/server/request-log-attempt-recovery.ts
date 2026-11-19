@@ -1,4 +1,26 @@
-import type { AttemptRecoveryWithheld, PersistedUsageAttempt } from "../usage/log";
+import type { AttemptRecoveryKind, AttemptRecoveryWithheld, PersistedUsageAttempt } from "../usage/log";
+import type { RequestLogContext } from "./request-log";
+
+/** An observed refusal stays terminal even when a planned replacement never reaches the wire. */
+export const sealedCredentialRefusals = new WeakSet<PersistedUsageAttempt>();
+
+/** Selection can stage a different account for spend admission before an executor uses it. */
+export function retainRefusedAccount(logCtx: RequestLogContext): boolean {
+  const attempt = logCtx.activeAttempt;
+  if (!attempt || !sealedCredentialRefusals.has(attempt)) return false;
+  logCtx.provider = attempt.provider;
+  logCtx.accountLogLabel = attempt.accountLogLabel;
+  return true;
+}
+
+/** Credential recovery starts a new attempt even when the account's opaque identity is unchanged. */
+export function credentialRecoveryStatus(recovery?: AttemptRecoveryKind): 401 | 402 | 403 | 429 | undefined {
+  if (recovery === "oauth-401" || recovery === "key-401") return 401;
+  if (recovery === "oauth-account-402") return 402;
+  if (recovery === "oauth-account-403") return 403;
+  if (recovery === "key-429" || recovery === "anthropic-oauth-429" || recovery === "oauth-account-429") return 429;
+  return undefined;
+}
 
 /**
  * Record that a recovery this attempt was eligible for did not happen.
@@ -11,7 +33,7 @@ export function noteAttemptRecoveryWithheld(
   attempt: PersistedUsageAttempt | undefined,
   reason: AttemptRecoveryWithheld,
 ): void {
-  if (!attempt) return;
+  if (!attempt || sealedCredentialRefusals.has(attempt)) return;
   if (!attempt.recoveryWithheld) attempt.recoveryWithheld = [];
   if (!attempt.recoveryWithheld.includes(reason)) attempt.recoveryWithheld.push(reason);
 }

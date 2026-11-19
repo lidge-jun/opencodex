@@ -27,7 +27,7 @@ import { pacingHeaderDeadline } from "./header-deadline";
 import { redactSecretString } from "../lib/redact";
 import { recordLocalFailureDetail, type FailureDetail } from "../server/request-log-failure-detail";
 import { readBoundedResponseBody } from "../lib/bounded-body";
-import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, isSameTargetRetryHold, SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, isSameTargetRetryHold, RESET_RETRY_MAX_ATTEMPTS, SendBudgetExhaustedError } from "../lib/upstream-retry";
 import { unwrapUpstreamRetryEvidenceError } from "../codex/auth-context";
 import { HostedAdvisorSpendRefusal } from "../server/responses/policy-request-scope";
 import { rateLimitRetryDelayMs } from "../providers/key-failover";
@@ -421,6 +421,8 @@ export interface WebSearchLoopDeps {
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
   onUsage?: (usage: OcxUsage | undefined) => void;
   proxyErrorContext?: object;
+  /** Sizes the ingress-owned model-send allowance before the first dispatch. */
+  configureModelSendAllowance?: (baseSends: number) => void;
   /**
    * After an `on429` rotation, offered the usage of the hidden iterations the left credential
    * served. Returning true means it was billed to that credential's attempt, so `onUsage` will not
@@ -459,6 +461,7 @@ export interface WebSearchLoopDeps {
     retryParsed?: OcxParsedRequest,
     // A 403 requires this complete response; status-only callbacks retain 429 semantics.
     originalResponse?: Response,
+    hiddenUsage?: OcxUsage,
   ) =>
     | { adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind }
     | null
@@ -531,7 +534,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   // An authorized Chat empty-completion retry adds its own iteration (see completionRetries in the
   // loop bound), so ordinary iterations, including repeat placeholders for a failed query that never
   // advance searchesExecuted, cannot use up the slot the retry needs.
-  const HARD_CAP = maxSearches + 3 + (deps.advisor ? MAX_ADVISOR_CONTINUATIONS_PER_REQUEST : 0);
+  const forcedAnswerRetries = 1;
+  const HARD_CAP = maxSearches + 2 + forcedAnswerRetries + (deps.advisor ? MAX_ADVISOR_CONTINUATIONS_PER_REQUEST : 0);
   let emptyAnswerRetries = 0;
   let completionRetries = 0;
   // Every iteration re-sends the full context, but only the last one's terminal reaches the bridge.
@@ -566,6 +570,12 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   // configured replay count in total (a per-round reset would multiply it by maxSearches).
   const rateLimitRetryPolicy = deps.retryOn429Policy ?? null;
   let rateLimitRetries = 0;
+  // The 429 ladder and thinking-signature recovery are request-scoped. Each
+  // model dispatch can use its transport's full retry ladder.
+  deps.configureModelSendAllowance?.((deps.adapter.hostedIterationSendLimit ?? RESET_RETRY_MAX_ATTEMPTS) * (
+    HARD_CAP + Number(Boolean(deps.emptyCompletionRetry))
+    + (rateLimitRetryPolicy?.attempts ?? 0) + Number(Boolean(deps.thinkingRecovery))
+  ));
 
   const requireSuccessfulHeaders = async (prepared: IterationResponse): Promise<void> => {
     if (!prepared.response.ok) {
@@ -806,7 +816,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           && !accountRefusalOutputStarted)
         || (iterParsed._kiroAuthContext && (prepared.response.status === 400 || prepared.response.status === 403))) && deps.on429) {
         const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers,
-          iterParsed, prepared.response);
+          iterParsed, prepared.response, hiddenUsage);
         if (!rotated) break;
         if (hiddenUsage && deps.onRotatedUsage?.(hiddenUsage)) hiddenUsage = undefined;
         const retainRefusal = prepared.response.status === 403
@@ -1261,7 +1271,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                   eventTypes: [...new Set(split.passthrough.map(event => event.type))],
                 }));
                 hiddenUsage = mergeUsage(hiddenUsage, terminalEvent.usage);
-                if (!split.hasMalformedToolCall && !split.hasRealToolCall && emptyAnswerRetries === 0) {
+                if (!split.hasMalformedToolCall && !split.hasRealToolCall && emptyAnswerRetries < forcedAnswerRetries) {
                   emptyAnswerRetries++;
                   console.warn("[web-search-loop] empty forced answer — retrying once with tool calls disabled");
                   yield { type: "heartbeat" };

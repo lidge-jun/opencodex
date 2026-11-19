@@ -324,12 +324,37 @@ La proyección JEV informa de recuentos y puertas de decisión, aplicados frente
 
 Las estadísticas JEV utilizan el mismo libro mayor de solo apéndice `usage.jsonl` y escáner cooperativo como uso ordinario. Las lecturas en frío escanean el libro mayor actual, las encuestas sin cambios no leen ningún archivo y el crecimiento verificado dobla solo el sufijo adjunto. Las solicitudes idénticas simultáneas comparten una exploración. El registro JEV persistente está cerrado y libre de contenido: ID combinado, proveedor/modelo/esfuerzo seleccionado, puerta de decisión, latencia, confianza/probabilidad opcional y uso de decisión numérica opcional. Nunca almacena mensajes, encabezados, credenciales, argumentos de herramientas o respuestas TypeSafe sin procesar. Las filas sobredimensionadas conservan el mismo diagnóstico positivo `usageIncomplete` que el punto final de uso ordinario.
 
+En los turnos enrutados de imagen y búsqueda web, `sendCount` incluye los reintentos del adaptador ante el proveedor.
+Si el reemplazo se detiene antes de enviarse al proveedor, no suma ningún envío.
+
 Los nuevos intentos xAI en `usage.jsonl` incluyen un tiempo de solicitud `credentialSource`: `grok-oauth` para el transporte de llaves resuelto Grok CLI OAuth, o `xai-api-key` para el transporte público xAI API. Esta etiqueta fija no contiene credenciales ni identificador de cuenta. Pertenece a cada elemento en `attempts`, por lo que el total de tokens agregados de un combo no debe atribuirse a su proveedor final. Los destinos personalizados y las filas históricas omiten el campo; los consumidores no deben inferir el uso de la suscripción desde la configuración actual, el nombre del modelo o la clave entrante API. El registro informa el uso, no los montos de la factura de suscripción.
 
 Los intentos de clave API también registran `accountLogLabel` como `k` seguido de 32 dígitos hexadecimales en minúsculas. La etiqueta es los primeros 128 bits de SHA-256 sobre
 `JSON.stringify(["ocx-key-account-v1", providerName, entryId ?? null, reference])`. La referencia es el valor de clave configurado que se captura para la solicitud física, antes de la resolución del entorno o del llavero. Las claves sin procesar, las referencias y los identificadores de grupo no se escriben en el campo de etiqueta. Un consumidor puede derivar la misma etiqueta de su configuración local sin resolver secretos. Cambiar una clave o referencia literal cambia la etiqueta; sustituir el secreto detrás de una referencia sin cambios mantiene la misma cuenta lógica. Los registros sin etiquetar más antiguos no se pueden atribuir de forma fiable.
 
-La selección de claves se registra después de que las solicitudes en cola se han reconstruido para la selección actual. Cuando un reintento cambia claves, `attempts` retiene un registro separado para la clave anterior, incluyendo el uso reportado de respuestas fallidas. El uso faltante sigue sin ser reportado. Los terminales adaptadores encaminados se observan antes de que los bucles de imagen/búsqueda o las protecciones de continuación combinen su uso. Los consumidores suman los intentos planos por proveedor / cuenta y no vuelven a agregar el combo total de padres. Estos registros identifican el uso; los porcentajes de cuotas de proveedores permanecen separados de las observaciones anteriores.
+La selección de claves se registra después de reconstruir las solicitudes en cola para la selección actual.
+Cuando un reintento cambia de clave, `attempts` conserva un registro separado para la clave anterior.
+Si ya se envió un intento al proveedor, la recuperación de credenciales registra un intento separado
+cuando el proxy envía el reemplazo, aunque ambos intentos tengan la misma etiqueta de cuenta. Si el
+control local del ritmo rechaza el reintento,
+la solicitud puede terminar con estado 429 mientras que su único intento ante el proveedor conserva el estado
+401. La misma regla de envío se aplica a los miembros de un combo, a los adaptadores runTurn y a la
+compactación nativa de Responses.
+Cada envío al modelo en estos turnos usa el presupuesto compartido de la solicitud, incluidos los
+reintentos y las rondas posteriores de herramientas. Si se rechaza un envío al alcanzar el límite,
+`sendCount` no aumenta. En la búsqueda web alojada directa, el presupuesto
+predeterminado cubre las rondas acotadas del modelo, incluido el reintento de respuesta forzada y los
+reintentos habilitados de recuperación, por límite de frecuencia o por reinicio de la conexión.
+En los turnos directos de imagen y vídeo alojados, el presupuesto predeterminado cubre las rondas configuradas, los reintentos por 429 en el mismo destino y los intentos de envío acotados del transporte. Los límites explícitos de envíos siguen vigentes.
+
+Cada intento conserva el uso que el proxy registra para ese envío. El reintento de Responses con OAuth de xAI
+descarta el cuerpo de la respuesta 401, por lo que el uso de ese cuerpo queda sin registrar. Si el proveedor
+no informa totales, el intento de reemplazo puede incluir una estimación basada en la solicitud reconstruida.
+`usageStatus` distingue el uso informado, estimado y sin informar. El proxy observa los resultados finales
+de los adaptadores enrutados antes de que los bucles de imagen y búsqueda o los controles de continuación
+combinen su uso. Al sumar por proveedor y cuenta, usa los intentos individuales para evitar contar de nuevo
+el total del combo. Estos registros recogen el uso. Los porcentajes de cuota son observaciones independientes
+del proveedor.
 
 `GET /api/usage` lee `~/.opencodex/usage.jsonl` desde el principio hasta la instantánea del libro mayor actual en un arranque en frío. Procesa fragmentos fijos de 1 MiB y conserva el estado agregado compacto en lugar de cada fila de solicitud normalizada. Las actualizaciones posteriores validan el límite de línea anterior y solo doblan filas completas recién añadidas. Las llamadas simultáneas comparten la misma actualización. Los predicados de rango y superficie se aplican al agregado de la fila legible, por lo que la ventana de bytes de lectura anterior y la tapa de la fila analizada no pueden omitir un prefijo de archivo anterior de los totales de 7 días, 30 días o todos los historiales. `managementUsageMaxReadBytes` sigue siendo aceptado para la compatibilidad con lectores heredados limitados, pero cambiarlo ya no expande o reduce el historial resumido por este punto final.
 

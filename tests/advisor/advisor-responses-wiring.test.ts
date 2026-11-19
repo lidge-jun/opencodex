@@ -12,6 +12,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { activateAdvisor } from "../../src/lib/advisor-activation";
 import { setAdvisorPlanFactory } from "../../src/server/responses/advisor-plan-slot";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import type { TranslatorBudget } from "../../src/lib/translator-budget";
 import { handleResponses } from "../../src/server/responses/core";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
@@ -867,18 +868,24 @@ describe("advisor responses wiring (end-to-end)", () => {
     config.webSearchSidecar = { backend: "exa", exaApiKey: "fixture-search-key" };
     loopbackInterceptor(config, { chatRequests });
 
+    // Fund all five worker turns so this fixture reaches the Advisor continuation limit.
+    const sendBudget = createRequestExecutionBudget({
+      maxTotalModelSends: 5, baseSendAllowance: 5, finalRecoveryAllowance: 0,
+      maxAlternateTargetSends: 0, maxTargetTransitions: 0,
+    });
     const response = await handleResponses(workerRequest(
       "Repeat advisor with search enabled", undefined, true, [{ type: "web_search" }],
       allowlist ? { type: "allowed_tools", mode: "required", tools: [
         { type: "function", name: "advisor" }, { type: "web_search" },
       ] } : undefined,
-    ), config, logCtx);
+    ), config, logCtx, { sendBudget });
     const body = await response.text();
     const dispatched = JSON.parse(workerBodies[0]!) as { tools?: { function?: { name?: string } }[] };
     expect(dispatched.tools?.map(tool => tool.function?.name)).toContain("web_search");
     expect(dispatched.tools?.map(tool => tool.function?.name)).toContain("advisor");
     expect(body).toContain("advisor_continuation_limit");
     expect(workerBodies).toHaveLength(5);
+    expect(sendBudget.used).toBe(5);
     // The repeated fixture question is deduplicated by the real Advisor runtime.
     expect(chatRequests).toHaveLength(1);
   });

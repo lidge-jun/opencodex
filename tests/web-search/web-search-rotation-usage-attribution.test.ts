@@ -68,8 +68,10 @@ afterAll(() => {
   mock.restore();
 });
 
-test("each attempt row carries the usage of the account that served its rounds", async () => {
-  for (const accountId of ["first", "second"]) {
+test.each([[false], [true]] as const)("attempt usage follows the credential transition (stable label: %s)", async stableLabel => {
+  // These synthetic xAI IDs share the same abbreviated display label.
+  const [first, second] = stableLabel ? ["fixture-account-719", "fixture-account-4934"] : ["first", "second"];
+  for (const accountId of [first, second]) {
     await saveCredential("xai", {
       access: `access-${accountId}`, refresh: `refresh-${accountId}`, expires: Date.now() + 3_600_000, accountId,
     });
@@ -106,12 +108,12 @@ test("each attempt row carries the usage of the account that served its rounds",
   }), config, logCtx);
   expect(response.status).toBe(200);
   await response.text();
-  expect(sends).toEqual(["Bearer access-first", "Bearer access-first", "Bearer access-second"]);
+  expect(sends).toEqual([`Bearer access-${first}`, `Bearer access-${first}`, `Bearer access-${second}`]);
 
   let entry: RequestLogEntry | undefined;
   addFinalRequestLog("req-attribution", Date.now(), logCtx, 200, undefined, logged => { entry = logged; });
   const rows = entry?.attempts ?? [];
   expect(rows).toHaveLength(2);
-  expect(rows[0]!.accountLogLabel).not.toBe(rows[1]!.accountLogLabel);
+  expect(rows[0]!.accountLogLabel === rows[1]!.accountLogLabel).toBe(stableLabel);
   expect(rows.map(row => [row.usage?.inputTokens, row.usage?.outputTokens])).toEqual([[100, 10], [300, 30]]);
 });

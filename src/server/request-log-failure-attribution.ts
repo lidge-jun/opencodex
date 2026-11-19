@@ -13,6 +13,7 @@ import { deriveRequestFailureAttribution } from "../lib/request-failure-attribut
 import { causeForRecoveryKind } from "../lib/request-failure-model";
 import type { AttemptRecoveryKind, PersistedUsageAttempt, RequestFailureCause, RequestFailureStage } from "../usage/log";
 import type { ResponsesTerminalStatus } from "../bridge";
+import { sealedCredentialRefusals } from "./request-log-attempt-recovery";
 
 /** The subset of the log context this derivation may see. Narrow on purpose. */
 export interface FinalRequestAttributionFacts {
@@ -65,9 +66,8 @@ export function attributeFinalRequest(facts: FinalRequestAttributionFacts): Stam
     locallyAnswered: facts.locallyAnswered,
     recoveryKinds: facts.attempt?.recoveryKinds ?? [],
   });
-  // The final row and the attempt that ended it describe the same exchange, so they carry the
-  // same pair rather than each deriving one from a different slice of the facts.
-  if (facts.attempt) {
+  // The logical outcome may differ from a previously sealed physical refusal.
+  if (facts.attempt && !sealedCredentialRefusals.has(facts.attempt)) {
     if (attribution?.stage) facts.attempt.failureStage = attribution.stage;
     else delete facts.attempt.failureStage;
     if (attribution?.cause) facts.attempt.failureCause = attribution.cause;

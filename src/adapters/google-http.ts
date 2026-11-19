@@ -226,6 +226,9 @@ export function fetchDirectGeminiWithRetry(
   });
 }
 
+/** Transient ladder plus one compatibility repair. */
+export const GOOGLE_HOSTED_ITERATION_SEND_LIMIT = TRANSIENT_RETRY_MAX_ATTEMPTS + 1;
+
 /** Vertex AI retry wrapper. */
 export function fetchVertexWithRetry(
   request: AdapterRequest,

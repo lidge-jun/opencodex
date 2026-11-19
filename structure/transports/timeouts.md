@@ -7,7 +7,7 @@ Claude passthrough and direct compact use this policy. `src/lib/abort.ts` keeps 
 linked after clearing or disabling the header timer; `src/server/claude-messages.ts` retains dev's
 `fetchWithHeaderDeadline` success/error cleanup and timeout provenance. Local pacing admission
 still pauses positive header clocks; `src/web-search/header-deadline.ts` distinguishes disabled
-budgets from exhausted positive budgets. Default image/search sidecar deadlines stay unchanged.
+budgets from exhausted positive budgets. The hosted-search pacing wrapper carries the separate adapter support executor while keeping inference admission and its header deadline intact. Default image/search sidecar deadlines stay unchanged.
 Native Chat/Messages, non-forward Responses (including adapter retries/continuations), and keyed
 compact start header clocks at the final send after pacing and credential/destination refresh.
 Header and subsequent body policy follow the serving URL across local/public transitions.

@@ -166,6 +166,32 @@ function respondWith(frames: Uint8Array[]): (stream: http2.ServerHttp2Stream) =>
 }
 
 describe("Cursor clean-EOF terminal gate", () => {
+  test.each([false, true])("HTTP/2 uses the guarded inference receipt at dispatch (refused=%s)", async refused => {
+    const order: string[] = [];
+    await withH2Server(stream => {
+      order.push("upstream");
+      respondWith([turnEndedFrame(), cleanConnectEndFrame()])(stream);
+    }, async baseUrl => {
+      const input = {
+        provider: { adapter: "cursor", baseUrl, apiKey: "test-token" },
+        translatorBudget: createTestTranslatorBudget(),
+        onRunDispatch: () => {
+          order.push("receipt");
+          if (refused) throw new Error("fixture guard refusal");
+        },
+      };
+      const transport = createLiveCursorTransport(input);
+      try {
+        const drainRun = async () => {
+          for await (const _message of transport.run(runRequest())) { /* drain */ }
+        };
+        if (refused) await expect(drainRun()).rejects.toThrow("fixture guard refusal");
+        else await drainRun();
+      } finally { await transport.close?.(); }
+    });
+    expect(order).toEqual(refused ? ["receipt"] : ["receipt", "upstream"]);
+  });
+
   test("EOF with an open tool call reports a truncation error, not a silent finish", async () => {
     await withH2Server(respondWith([toolCallStartedFrame("call_open_1", "apply_patch")]), async baseUrl => {
       const { messages, failure } = await drain(baseUrl, runRequest(APPLY_PATCH_TOOL));
