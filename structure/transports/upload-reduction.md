@@ -19,7 +19,8 @@ Existing stateful lanes, native controls and warmup frames retain their own owne
 Unknown, failed or incomplete completions cannot seed a future delta.
 Before any response activity, an unambiguous `previous_response_not_found` refusal of a
 proxy-synthesized delta permits one full-create resend from that request's retained frame.
-Pacing, auth and cancellation are checked again. At physical dispatch, recovery claims a slot
+Pacing, auth and cancellation are checked again. During credential replay, an admitted full create
+adds one send to the active credential attempt. At physical dispatch, recovery claims a slot
 from the owning retry helper and a fresh shared send permit, which also claims the workflow send
 ceiling (`#8149`). The permit makes a fresh spend reservation against the selected route's pool
 and account. When the request tracker lacks an input estimate, the recovery permit prices the

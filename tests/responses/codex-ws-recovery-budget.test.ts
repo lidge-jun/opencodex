@@ -34,8 +34,12 @@ class Socket extends EventTarget {
   static all: Socket[] = [];
   readyState = 0;
   frames: Record<string, any>[] = [];
-  constructor(..._args: any[]) {
-    super(); Socket.all.push(this);
+  constructor(_url: string, options?: { headers?: Record<string, string> }) {
+    super();
+    if (options?.headers?.authorization === 'Bearer fixture-rejected-access') {
+      throw new Error('fixture rejected upgrade');
+    }
+    Socket.all.push(this);
     queueMicrotask(() => { this.readyState = 1; this.dispatchEvent(new Event('open')); });
   }
   emit(payload: unknown) { this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(payload) })); }
@@ -91,6 +95,41 @@ async function warmCombo() {
   expect(Socket.all).toHaveLength(1);
   return [...initial, answer, message('next')];
 }
+
+test.each([1, 2])('stored credential replay accounts for admitted cache recovery (replay slots=%s)', async replaySlots => {
+  const prefix = [message('fixture prefix '.repeat(100))];
+  const input = [...prefix, answer, message('next')];
+  const saveToken = (accessToken: string) => saveCodexAccountCredential(account, {
+    accessToken, refreshToken: 'fixture-pool-refresh', expiresAt: Date.now() + 300_000,
+    chatgptAccountId: 'fixture-account',
+  });
+  saveToken('fixture-rejected-access');
+  const shared = budget(1 + replaySlots, true);
+  const log: RequestLogContext = { model: '', provider: '' };
+  const originalFetch = globalThis.fetch;
+  let sendsBeforeReplay = 0;
+  globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+    expect(String(input)).toBe('https://chatgpt.com/backend-api/codex/responses');
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer fixture-rejected-access');
+    sendsBeforeReplay = shared.physicalStarted;
+    // Publish the replacement as the rejected request completes, avoiding any real refresh call.
+    saveToken('fixture-pool-access');
+    const warm = await run(prefix, budget(1, false), undefined, poolConfig);
+    expect(await warm.text()).toContain('response.completed');
+    return Response.json({ error: { code: 'invalid_token' } }, { status: 401 });
+  }, { preconnect: originalFetch.preconnect }) as typeof fetch;
+  try {
+    const response = await run(input, shared, undefined, poolConfig, 'fixture', log);
+    const body = await response.text();
+    const frames = Socket.all.flatMap(socket => socket.frames);
+    expect(sendsBeforeReplay).toBe(1);
+    expect(frames[1]?.previous_response_id).toBe('fixture-response-1');
+    expect(frames).toHaveLength(1 + replaySlots);
+    expect(body).toContain(replaySlots === 2 ? 'response.completed' : 'previous_response_not_found');
+    expect(shared.used - sendsBeforeReplay).toBe(replaySlots);
+    expect(log.activeAttempt?.sendCount).toBe(replaySlots);
+  } finally { globalThis.fetch = originalFetch; }
+});
 
 for (const { pool, ceiling, recovered, maxTrackedSends } of [
   { pool: 100, ceiling: 10, recovered: false },

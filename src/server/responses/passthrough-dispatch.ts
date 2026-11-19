@@ -1093,7 +1093,7 @@ export async function preparePassthroughExchange(
           method: request.method, headers: request.headers, body: request.body,
         }, recovery), upstream.signal, sendConnectMs(), upstreamRequestsStream,
           providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-            httpOnly: canonicalBufferedJson, codexWsCaller, captureCodexWsRecovery: capturePhysicalSendRecovery, onRecoveryPhysicalDispatch: recordPhysicalSend(),
+            httpOnly: canonicalBufferedJson, codexWsCaller, captureCodexWsRecovery: capturePhysicalSendRecovery, onRecoveryPhysicalDispatch: recordPhysicalSend(() => commit(request, adapter)),
             nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
               && responseEffects.plaintextV2AgentMessageToolNames.size === 0 ? options.nativeControl : undefined,
             dispatchOverride: oauthDispatch(request, parsed, "passthrough", true),
