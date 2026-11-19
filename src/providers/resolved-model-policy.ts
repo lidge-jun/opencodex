@@ -354,9 +354,11 @@ function prepareProviderPolicy(shared: ProviderPolicyInput): (modelInput: PerMod
       ...providerPolicy,
       adapter: providerPolicy.adapter ?? provider.adapter,
       baseUrl: providerPolicy.baseUrl ?? provider.baseUrl,
-      ...(input.modelCapabilities ? { modelCapabilities: mergeReasoningModelCapabilities(
-        providerPolicy.modelCapabilities, { [input.modelId]: input.modelCapabilities },
-      ) } : {}),
+      // Reasoning reads only this model's declaration; keep the other axes without cloning the roster.
+      ...(input.modelCapabilities ? { modelCapabilities: { [input.modelId]: {
+        ...declaredModelCapabilities(providerPolicy.modelCapabilities, input.modelId),
+        ...input.modelCapabilities,
+      } } } : {}),
     }, input.modelId);
     const modelReasoningEfforts = reasoningCapabilities.supportsReasoningEffort === false ? []
       : modelValue(providerPolicy.modelReasoningEfforts) ?? providerPolicy.reasoningEfforts;
