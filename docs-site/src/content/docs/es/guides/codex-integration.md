@@ -33,7 +33,7 @@ OpenCodex serializa su configuración Codex. En Windows, un archivo mantenido te
 
 ```toml
 # root keys, before the first table
-model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
+model_catalog_json = "opencodex-catalog.json"
 # Auto-injected by opencodex (undo: ocx restore)
 openai_base_url = "http://127.0.0.1:10100/v1"
 # Auto-injected by opencodex (undo: ocx restore)
@@ -174,7 +174,7 @@ Para un `hostname` sin bucle, Codex debe enviar la cabecera de autenticación AP
 ```toml
 # root keys
 model_provider = "opencodex"
-model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
+model_catalog_json = "opencodex-catalog.json"
 
 # appended at the end of the file
 # Auto-injected by opencodex (undo: ocx restore)
@@ -216,6 +216,16 @@ Las comprobaciones de ejecución también reconocen `Codex.app` y `ChatGPT.app` 
 
 En WSL, si `CODEX_HOME` está desactivado y el directorio Linux `~/.codex` está ausente o no mantiene el estado Codex (`config.toml`, `auth.json`, `sessions`, `history.jsonl`), opencodex también comprueba un único inicio de escritorio Windows Codex en `/mnt/c/Users/*/.codex/config.toml`. Cuando existe exactamente un candidato, utiliza ese directorio para que el modo de servidor de aplicaciones WSL y el escritorio Windows Codex compartan los mismos archivos de configuración y autenticación. Establecer `CODEX_HOME` explícitamente para anular esta detección. Cuando Windows Codex Desktop ejecuta su aplicación-servidor dentro de WSL, envía el binario Linux Codex bajo esa casa como `bin/wsl/<hash>/codex`; opencodex lo encuentra allí cuando el PATH de servicio no tiene `codex`, después de cualquier entorno de ejecución y PATH configurados explícitamente.
 
+Cuando el catálogo está junto a `config.toml`, OpenCodex escribe su nombre de archivo en
+`model_catalog_json` para que tanto Codex en Windows como el servidor de aplicaciones de WSL puedan
+abrirlo desde el directorio compartido. Ejecuta `ocx sync` en Windows para actualizar una
+configuración anterior de OpenCodex que contenga una ruta absoluta de Windows. Esto también se
+aplica al sincronizar un Child ligero de Link. Un Child ligero rechaza la vinculación o la
+sincronización si `config.toml` selecciona otro catálogo o contiene TOML no válido. La instalación
+completa de OpenCodex conserva las asignaciones de catálogo personalizadas. Su perfil generado usa
+una ruta absoluta si el catálogo está en otro directorio y resuelve `~/` con respecto al directorio
+personal del usuario en macOS y Linux.
+
 Si el home de Codex existe pero Codex no ha escrito `config.toml` (por ejemplo, una nueva instalación de escritorio que nunca se ha iniciado sesión en OpenAI), opencodex crea allí un `config.toml` vacío y continúa. Si el directorio principal en sí no existe, inicie Codex una vez para que lo cree o establezca `CODEX_HOME`.
 
 Codex puede mantener el estado del subproceso respaldado por SQLite en un directorio separado. Las operaciones de la historia OpenCodex usan la misma precedencia que Codex: raíz `sqlite_home` en `config.toml`, luego `CODEX_SQLITE_HOME`, luego el efectivo `CODEX_HOME`. Los homes de SQLite relativos se resuelven desde el directorio de trabajo actual. Cuando un `CODEX_SQLITE_HOME` explícito está presente durante la instalación o reparación del servicio, el lanzador durable almacena su ruta absoluta de tiempo de instalación de modo que el proxy de segundo plano continúa direccionando la misma base de datos. Si `config.toml` o su clave raíz `sqlite_home` está ausente, OpenCodex continúa con la reserva de entorno/home. Si el archivo no se puede leer o analizar, o la clave está presente pero en blanco o no una cadena, la resolución del home de SQLite se detiene en lugar de arriesgar las operaciones del historial contra una base de datos diferente.
@@ -226,7 +236,9 @@ En el modo de proveedor dedicado, `requires_openai_auth = true` mantiene Codex A
 
 El proxy admite hasta 128 conexiones Responses WebSocket orientadas al cliente. Cuando una nueva conexión encuentra las 128 ranuras ocupadas, cierra la conexión inactiva menos recientemente utilizada para hacer espacio. Las conexiones con una respuesta activa, una herramienta de cliente pendiente o resultados de aprobación, una sesión de dirección/inyección nativa o una salida almacenada en búfer están protegidas. Si no se puede liberar ninguna conexión inactiva, la nueva conexión recibe la respuesta de capacidad `503` existente. Un cliente reclamado puede volver a conectarse para solicitudes posteriores utilizando el manejo de continuación existente. Esto sucede solo bajo presión de conexión, no necesita configuración y no cambia las conexiones de voz o la reutilización de la conexión ascendente.
 
-Si una continuación canónica hacia adelante ChatGPT hace referencia a un estado de repetición local caducado o faltante, opencodex devuelve `previous_response_not_found` antes de enviar cualquier cosa aguas arriba. El cliente Codex de WebSocket reconoce este error y puede volver a conectarse con su contexto completo retenido, incluyendo llamadas de herramientas completadas y sus resultados, dentro de su presupuesto de reintento de flujo normal. Por lo tanto, una tarea inactiva no necesita una tarea nueva únicamente porque la caché de reproducción del proxy expiró. El estado de continuación reproducido se conserva durante 24 horas y permanece limitado por su memoria, disco y límites de entrada existentes; esto no recupera el historial que el cliente ya no tiene. HTTP clientes deben manejar el error explícitamente y volver a enviar su contexto completo sin `previous_response_id`. Volver a intentar solo el mismo ID no puede recuperar el estado faltante.
+Si una continuación canónica hacia adelante ChatGPT hace referencia a un estado de repetición local caducado o faltante, opencodex devuelve `previous_response_not_found` antes de reenviar la continuación. El cliente Codex de WebSocket reconoce este error y puede volver a conectarse con su contexto completo retenido, incluyendo llamadas de herramientas completadas y sus resultados, dentro de su presupuesto de reintento de flujo normal. Por lo tanto, una tarea inactiva no necesita una tarea nueva únicamente porque la caché de reproducción del proxy expiró. El estado de continuación reproducido se conserva durante 24 horas y permanece limitado por su memoria, disco y límites de entrada existentes; esto no recupera el historial que el cliente ya no tiene. HTTP clientes deben manejar el error explícitamente y volver a enviar su contexto completo sin `previous_response_id`. Volver a intentar solo el mismo ID no puede recuperar el estado faltante.
+
+`usage.jsonl` registra el proveedor y el modelo seleccionados de ChatGPT junto con `errorCode: "previous_response_not_found"`. Si la preparación no envió ninguna solicitud de inferencia, la entrada incluye `failureCause: "local-refusal"` y la solicitud no consume cuota del modelo. Si se habilita la recuperación de tareas cifradas, esta puede enviar una solicitud de inferencia antes de que se seleccione la ruta nativa de respaldo. La entrada registra ese intento, que puede consumir cuota. El reenvío del contexto completo por parte del cliente se registra como una solicitud aparte y puede consumir cuota.
 
 El mismo rechazo se aplica cuando el estado referenciado pertenece a un ámbito de tarea cliente diferente, incluso cuando la nueva solicitud parece llevar entrada completa. El proxy no puede probar que la entrada está completa, por lo que no elimina silenciosamente `previous_response_id` ni revela si existe un estado coincidente. Cuando está activado el modo `v2-plaintext` o la opción `plaintextV2AgentMessages`, la reproducción local exige el mismo principal de OpenCodex admitido y el `thread-id` propio y no vacío de la solicitud. Un hilo principal, una dirección de loopback, una credencial del proveedor o una clave de relleno no constituyen esa identidad. Sin principal admitido o sin hilo propio, envía la conversación completa sin `previous_response_id`. Las configuraciones predeterminadas de Codex y DSH en loopback no establecen esa identidad. El estado conservado mientras cualquiera de las dos opciones está activada permanece vinculado al desactivarlas. El modo predeterminado `v1` conserva la continuación por hilo principal para el estado no vinculado, también en loopback. Esto es independiente de los ID de Responses gestionados por el proveedor nativo.
 

@@ -84,7 +84,7 @@ Codex's built-in `openai` provider id and points that provider at opencodex:
 
 ```toml
 # root keys, before the first table
-model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
+model_catalog_json = "opencodex-catalog.json"
 # Auto-injected by opencodex (undo: ocx restore)
 openai_base_url = "http://127.0.0.1:10100/v1"
 # Auto-injected by opencodex (undo: ocx restore)
@@ -401,7 +401,7 @@ uses a dedicated provider instead:
 ```toml
 # root keys
 model_provider = "opencodex"
-model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
+model_catalog_json = "opencodex-catalog.json"
 
 # appended at the end of the file
 # Auto-injected by opencodex (undo: ocx restore)
@@ -468,6 +468,16 @@ checks for a single Windows Codex Desktop home at `/mnt/c/Users/*/.codex/config.
 one candidate exists, it uses that directory so WSL app-server mode and Windows Codex Desktop share
 the same config and auth files. Set `CODEX_HOME` explicitly to override this detection. When Windows Codex Desktop runs its app-server inside WSL, it ships the Linux Codex binary under that home as `bin/wsl/<hash>/codex`; opencodex finds it there when the service PATH has no `codex`, after any explicitly configured runtime and PATH.
 
+When the catalog is beside `config.toml`, OpenCodex writes its filename as `model_catalog_json` so
+Windows Codex and the WSL app-server can both open it from the shared home. Run `ocx sync` on
+Windows to update an older OpenCodex binding that contains a Windows absolute path. This also
+applies to sync on a lightweight Link Child. The Child recognizes symlinked directories and, on
+macOS and Linux, `~/` paths that select its catalog. It refuses attach or sync while
+`config.toml` selects a different catalog or contains invalid TOML. Detach keeps the generated
+catalog if the restored config still points to it. The full OpenCodex install
+preserves custom catalog assignments. Its generated profile uses an absolute path for a catalog
+in another directory and resolves `~/` against your user home on macOS and Linux.
+
 If the Codex home exists but Codex has not written `config.toml` yet (for example a fresh Desktop install
 that was never signed in to OpenAI), opencodex creates an empty `config.toml` there and continues. If
 the home directory itself does not exist, start Codex once so it creates it, or set `CODEX_HOME`.
@@ -503,7 +513,7 @@ later requests using the existing continuation handling. This happens only under
 pressure, needs no setting, and does not change voice connections or upstream connection reuse.
 
 If a canonical ChatGPT forward continuation references expired or missing local replay state,
-opencodex returns `previous_response_not_found` before sending anything upstream. Codex's
+opencodex returns `previous_response_not_found` before forwarding the continuation. Codex's
 WebSocket client recognizes this error and can reconnect with its full retained context,
 including completed tool calls and their results, within its normal stream retry budget. An
 idle task therefore does not need a new task solely because the proxy's replay cache expired.
@@ -511,6 +521,14 @@ Replayed continuation state is retained for 24 hours and stays bounded by its ex
 disk, and entry ceilings; this does not recover history the client no longer has. HTTP clients
 must handle the error explicitly and resend their full context without `previous_response_id`.
 Retrying only the same ID cannot recover missing state.
+
+`usage.jsonl` records the selected ChatGPT provider and model with
+`errorCode: "previous_response_not_found"`. If preparation made no inference send, the row has
+`failureCause: "local-refusal"` and the request uses no model quota. Opt-in encrypted-task
+recovery can send an inference request before native fallback is selected. The Usage summary
+includes reported recovery tokens under the recovery model. If a recovery send loses its
+connection before headers, the request's full cost remains unknown even if a retry reports
+tokens. A client resend with the full context is logged separately and can use quota.
 
 The same refusal applies when the referenced state belongs to a different client task scope,
 including when the new request appears to carry complete input. The proxy cannot prove that input

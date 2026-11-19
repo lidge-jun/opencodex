@@ -1,3 +1,4 @@
+import { createAgyAcpAdapter } from "./agy-acp/adapter";
 import { createAnthropicAdapter } from "./anthropic";
 import { createWorkBuddyAdapter } from "./workbuddy";
 import { createDshAccountAdapter } from "./dsh-account";
@@ -14,6 +15,7 @@ import { createDevinAdapter } from "./devin";
 import { createGoogleAdapter } from "./google";
 import { createKiroAdapter } from "./kiro";
 import { createMimoFreeAdapter } from "./mimo-free";
+import { createM365CopilotAdapter } from "./m365-copilot";
 import { createOpenAIChatAdapter } from "./openai-chat";
 import { createOllamaNativeAdapter } from "./ollama-native";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
@@ -49,7 +51,8 @@ export type AdapterWire =
   | "kiro"
   | "cursor"
   | "devin"
-  | "zed";
+  | "zed"
+  | "agy-acp";
 
 export type AdapterMutationContract =
   | "codex-owned"
@@ -75,6 +78,10 @@ type InheritedAdapterDefinition = {
 type AdapterDefinition = DirectAdapterDefinition | InheritedAdapterDefinition;
 
 export const ADAPTER_REGISTRY = {
+  "m365-copilot": {
+    contractParent: "openai-chat",
+    create: (provider: OcxProviderConfig) => withUniqueToolCallIds(createM365CopilotAdapter(provider)),
+  },
   "workbuddy-ai": {
     contractParent: "openai-chat",
     create: (provider: OcxProviderConfig) => withUniqueToolCallIds(createWorkBuddyAdapter(provider)),
@@ -152,6 +159,13 @@ export const ADAPTER_REGISTRY = {
   qoder: {
     contractParent: "codebuddy",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createQoderAdapter(provider),
+  },
+  "agy-acp": {
+    // The official Antigravity CLI over the Agent Client Protocol (`agy acp`): one local child per
+    // turn, the CLI owns its sign-in, and the adapter is runTurn-only (plan 080, #8480).
+    wire: "agy-acp",
+    mutation: "codex-owned",
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createAgyAcpAdapter(provider),
   },
   "claude-cli": {
     // Claude Code speaks the same stream-json contract this repo already parses for CodeBuddy and

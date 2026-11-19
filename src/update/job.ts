@@ -42,6 +42,7 @@ import {
   resolvePnpmActiveLauncher,
 } from "./index";
 import type { UpdateCheckDeps } from "./check-types";
+import { managedReleaseDirectory } from "./managed-release";
 export type { UpdateCheckDeps } from "./check-types";
 import type { PnpmGlobalOwner } from "./pnpm-global-install.mjs";
 import { isNewer } from "./notify";
@@ -136,6 +137,7 @@ const defaultCheckDeps: UpdateCheckDeps = {
   detectInstall,
   detectInstallOwnership,
   latestVersion,
+  managedReleaseDirectory,
   miseUpdateCommand,
 };
 
@@ -470,16 +472,19 @@ export function checkForUpdate(
   const ownership = deps.detectInstallOwnership?.();
   const installer = ownership?.installer ?? deps.detectInstall();
   const channel = requestedChannel ?? normalizeUpdateChannel(null, current);
-  const latest = installer === "source" || installer === "standalone" ? null : deps.latestVersion(channel);
+  const managedRelease = installer === "source" && deps.managedReleaseDirectory?.() === true;
+  const latest = (installer === "source" && !managedRelease) || installer === "standalone" ? null : deps.latestVersion(channel);
   const updateAvailable = !!latest && isNewer(latest, current, channel);
   let reason: string | undefined;
-  let command = installer === "standalone" ? STANDALONE_UPDATE_HINT : installer === "source"
+  let command = installer === "standalone" ? STANDALONE_UPDATE_HINT : managedRelease ? "" : installer === "source"
     ? manualSourceCommand()
     : installer === "mise"
       ? (ownership && deps.miseUpdateCommand?.(ownership)) ?? ""
       : updateExecutionCommand(installer, channel).display;
 
-  if (installer === "source" || installer === "standalone") {
+  if (managedRelease) {
+    reason = latest ? "managed_release" : "latest_unavailable";
+  } else if (installer === "source" || installer === "standalone") {
     reason = installer === "source" ? "source_checkout" : "standalone_install";
   } else if (installer === "mise") {
     reason = command ? "externally_managed" : "external_ownership_invalid";

@@ -1,4 +1,45 @@
-import type { ServiceChildOwnershipDecision } from "../service/service-child-ownership";
+import { lstatSync } from "node:fs";
+import { isLinkConnection } from "../client/state";
+import { markSiblingStart } from "../codex/sibling-start";
+import { isMissingPathError } from "../config/atomic-write";
+import { getPidPath, getRuntimePortPath } from "../config/process-state";
+import { acquireOwnershipMutationLease } from "../service/ownership-mutation-lease.mjs";
+import { serviceChildOwnershipDecisionForClassifiedChild, type ServiceChildOwnershipDecision } from "../service/service-child-ownership";
+import { serviceStatePaths } from "../service/state";
+import { serviceStayOutExitCode } from "../service/windows-wrapper-exit";
+import { observeProxyLiveness, START_OWNERSHIP_LIVENESS } from "../server/proxy-liveness";
+import type { OcxClientConnectionConfig } from "../types";
+import { findCrossHomeOwner, markCrossHomeSibling } from "./cross-home-owner";
+
+function ownershipRecordIsAbsent(path: string): boolean {
+  try { lstatSync(path); return false; }
+  catch (error) { return isMissingPathError(error); }
+}
+
+/** Called under the publication lease, before the client can bind or write ownership records. */
+async function recheckClientStartOwnership(sibling: boolean, requestedPort?: number): Promise<number | null> {
+  const fenced = await observeProxyLiveness(START_OWNERSHIP_LIVENESS);
+  if (fenced.kind === "live") {
+    const { pid, port } = fenced.live;
+    if (process.env.OCX_SERVICE === "1") {
+      console.log(`Proxy already running (PID ${pid ?? "unknown"}, port ${port}); service wrapper staying out of the way.`);
+      return serviceStayOutExitCode();
+    }
+    // A config-port hit can be foreign even when this home has no owner. Only the
+    // explicit sibling path may disregard it, and only with fresh cross-home proof.
+    if (sibling && requestedPort !== undefined && requestedPort !== port && fenced.live.source === "config"
+      && await findCrossHomeOwner({ listener: fenced.live }) === port
+      && ownershipRecordIsAbsent(getPidPath()) && ownershipRecordIsAbsent(getRuntimePortPath())) {
+      markSiblingStart(port);
+      return null;
+    }
+    console.error(`⚠️  Proxy appeared before bind (PID ${pid ?? "unknown"}, port ${port}). Use 'ocx stop' first.`);
+    return 1;
+  }
+  if (fenced.kind === "unknown") throw new Error("Proxy ownership is unverified; client startup refused before bind.");
+  if (!sibling) await markCrossHomeSibling();
+  return null;
+}
 
 /**
  * Connected-client starts publish PID and runtime records too, so a supervised service child
@@ -33,4 +74,26 @@ export async function startClientRuntimeUnderOwnershipLease(deps: {
   } finally {
     release();
   }
+}
+
+export async function startConnectedClientWithOwnershipFence({
+  connection, siblingStart, supervisedServiceChild, requestedPort, block,
+}: {
+  connection: OcxClientConnectionConfig;
+  siblingStart: boolean;
+  supervisedServiceChild: boolean;
+  requestedPort?: number;
+  block?: boolean;
+}): Promise<void> {
+  const { startClientRuntime } = await import("../client/runtime");
+  await startClientRuntimeUnderOwnershipLease({
+    acquireLease: () => acquireOwnershipMutationLease(serviceStatePaths()),
+    decide: () => serviceChildOwnershipDecisionForClassifiedChild(supervisedServiceChild),
+    stayOut: refusal => { console.error("❌ " + refusal); process.exit(serviceStayOutExitCode()); },
+    start: async afterPublish => {
+      const refusal = await recheckClientStartOwnership(siblingStart, isLinkConnection(connection) ? undefined : requestedPort);
+      if (refusal !== null) { process.exitCode = refusal; return; }
+      await startClientRuntime({ port: requestedPort, block, afterPublish });
+    },
+  });
 }

@@ -70,6 +70,8 @@ export interface OcxParsedRequest {
   _rawBody?: unknown;
   /** Trusted ingress provenance: preserve Chat's tool defaults only on the final Responses wire. */
   _chatCompletionsInput?: boolean;
+  /** Server-owned request provenance. All system text on this turn belongs at system priority. */
+  _proxyOwnedSystemPrompt?: true;
   /** Claude replay tags, retained only until each route binding verifies them. */
   _nativeReasoningReplay?: ReadonlyMap<string, string>;
   _nativeReasoningBoundOwner?: NativeReasoningOwner;
@@ -172,6 +174,10 @@ export interface OcxParsedRequest {
   _providerContinuationCandidate?: OcxProviderContinuationState;
   /** Exact process-local route owner attached to newly persisted provider state. */
   _providerContinuationOwner?: OcxProviderContinuationOwner;
+  /** Serving owner of image history that was summarized within this request. */
+  _anthropicImageOwner?: OcxProviderContinuationOwner;
+  /** Internal image recovery summary that must bypass native adaptive thinking defaults. */
+  _anthropicImageSummary?: true;
   /**
    * The hosted `{type:"web_search", ...}` tool config, stashed when Codex enables web search. Routed
    * (non-OpenAI) providers can't run it server-side, so the proxy re-exposes it as a function tool and
@@ -248,6 +254,9 @@ export interface OcxParsedRequest {
 
 export interface OcxContext {
   systemPrompt?: string[];
+  /** Proxy-authored suffixes in systemPrompt (including any joining separator). Keeping their
+   * provenance lets adapters relocate caller text while preserving the original system layout. */
+  proxySystemPrompt?: { blockIndex: number; suffix: string }[];
   messages: OcxMessage[];
   tools?: OcxTool[];
 }

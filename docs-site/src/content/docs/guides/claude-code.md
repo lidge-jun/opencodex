@@ -424,7 +424,7 @@ hub, so `ocx claude desktop apply` there uses the gateway profile.
 
 ### Picker mode: opencodex models in the first-party Code-tab picker
 
-Picker mode is part of first-party mode. On macOS and Windows it is on by default when first-party is selected,
+Picker mode is part of first-party mode. On macOS, Windows and Linux it is on by default when first-party is selected,
 unless `claudeCode.intercept.picker: false` is set. It changes the first-party Desktop Code-tab picker
 so it lists available opencodex models by name. The first time it is enabled, macOS may ask you to
 trust a local certificate authority in the login keychain, and Windows may ask you to trust it in the current-user Root store. That authority is constrained to `claude.ai`
@@ -444,9 +444,14 @@ until cleanup succeeds; `ocx claude desktop picker status` reports that state. m
 ask you to unlock the keychain or approve an application's access to stored credentials. These native
 access prompts can still occur on restart or upgrade. On Windows, explicit `on` or `trust` may show a confirmation to add the root.
 
-Picker mode remains unsupported on Linux: OpenCodex starts no picker CA, credential-store
-or proxy work there. The main Claude intercept remains available with ownership, symlink, file-permission
-and Windows ACL checks protecting its local CA files.
+On Linux, explicit picker activation uses `certutil` to trust the constrained picker CA
+in Chromium’s user NSS database. Chromium uses an existing `~/.pki/nssdb` first, then
+`${XDG_DATA_HOME:-$HOME/.local/share}/pki/nssdb`. OpenCodex remembers the database used to install
+the CA. If that database is unavailable or removal cannot be confirmed, OpenCodex keeps the
+removal pending and retries at the next start.
+For older removal records, OpenCodex saves the NSS database identity before deleting the CA so
+it can verify removal there on retry. If cleanup reports that the original NSS database is
+unknown, restart OpenCodex with the `XDG_DATA_HOME` that was set when you installed the certificate.
 
 Picker mode allows up to 64 KiB of headers on incoming requests and ordinary HTTP
 responses, preserving browser session cookies. Larger upstream response headers return

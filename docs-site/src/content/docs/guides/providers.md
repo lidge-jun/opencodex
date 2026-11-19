@@ -360,6 +360,8 @@ The ChatGPT passthrough catalog also layers in the bare GPT-5.6 Sol/Terra/Luna s
 
 ## 2. Account login (OAuth)
 
+For Microsoft work or school accounts, see [Microsoft 365 Copilot setup](/guides/m365-copilot/).
+
 Provider presets can use account login — including GitHub Copilot via an experimental unofficial
 device-flow bridge. opencodex stores their credentials in
 `~/.opencodex/auth.json`; refreshable tokens are refreshed automatically, while durable keys are
@@ -799,6 +801,7 @@ are on the [API-key catalog](/guides/api-key-catalog/) page. Its sections:
 - [Official CodeBuddy Code CLI (Global & CN)](/guides/api-key-catalog/#official-codebuddy-code-cli-global--cn)
 - [Official Qoder CLI (Global & CN)](/guides/api-key-catalog/#official-qoder-cli-global--cn)
 - [Claude Code CLI (subscription)](/guides/api-key-catalog/#claude-code-cli-subscription)
+- [Antigravity CLI (ACP, local)](/guides/api-key-catalog/#antigravity-cli-acp-local)
 - [A6API credit quota](/guides/api-key-catalog/#a6api-credit-quota)
 - [BigModel Coding Plan over Responses](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses)
 - [Multiple API keys](/guides/api-key-catalog/#multiple-api-keys)

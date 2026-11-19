@@ -21,6 +21,14 @@ import {
 } from "../../gui/src/combo-workspace-data";
 import { comboImageBlockedTargets, comboImagesSupported, comboVisionSidecarTargets } from "../../gui/src/combo-capabilities";
 
+test("ordinary combo saves omit metered metadata from the loaded draft", () => {
+  const [draft] = parseComboList({
+    combos: [{ id: "chain", targets: [{ provider: "a", model: "m", metered: true }] }],
+  });
+  expect(draft!.targets[0]?.metered).toBe(true);
+  expect(toPutBody(draft!).combo.targets[0]).not.toHaveProperty("metered");
+});
+
 const configuredProviders = {
   a: {},
   b: {},

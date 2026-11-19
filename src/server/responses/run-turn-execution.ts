@@ -1,6 +1,6 @@
 import { formatClientRetryAfter } from "../../lib/client-retry-after";
 import { mapSpendLedgerStorageError } from "./spend-storage-error";
-import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
+import { responsesTimeoutProvider, type ResponsesRequestContext, type ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
 import type { ResponsesSidecarAuth } from "./request-sidecar-auth";
@@ -38,7 +38,7 @@ import { formatErrorResponse, bridgeToResponsesSSE, buildResponseJSON } from "..
 import { redactSecretString } from "../../lib/redact";
 import { adapterFailureFromEvent } from "../../bridge/internal";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
-import { DEFAULT_STALL_TIMEOUT_SEC, resolveStallTimeoutSec } from "../../stall-timeout";
+import { DEFAULT_STALL_TIMEOUT_SEC, providerStallTimeoutSec, resolveStallTimeoutSec } from "../../stall-timeout";
 import { jsonUtf8Bytes } from "../../lib/json-byte-size";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import {
@@ -91,6 +91,7 @@ export async function executeResponsesRunTurn(
     PreparedResponsesRequest,
     | "parsed"
     | "route"
+    | "subagentFallbackSelected"
     | "selectedForwardHeaders"
     | "translatorBudget"
     | "inboundWire"
@@ -227,6 +228,7 @@ export async function executeResponsesRunTurn(
     wsPlan = !routedCompaction
       ? planWebSearch(config, parsed, false, route.provider, route.modelId, sidecarState.openAiSidecar, {
         admission: options.admission, codexAuthPolicy: options.codexAuthPolicy, providerName: route.providerName,
+        routedTransport: "runTurn",
       })
       : undefined;
   } catch (error) {
@@ -358,8 +360,12 @@ export async function executeResponsesRunTurn(
           turnParsed,
           {
             headers: requestState.selectedForwardHeaders,
+            inboundTransport: options.inboundTransport,
+            agyAcpUnattendedHttpTurn: options.agyAcpUnattendedHttpTurn,
             abortSignal: producerAbort.signal,
             comboAttempt: options.comboAttempt === true,
+            ...(requestState.subagentFallbackSelected ? { subagentFallback: true } : {}),
+            ...(options.internalDecisionCall ? { internalDecisionCall: true } : {}),
             translatorBudget,
             providerFetch: runTurnProviderFetch,
             pacingSlot,
@@ -822,7 +828,7 @@ export async function executeResponsesRunTurn(
       try {
       void runTurn();
       let eventSource: AsyncIterable<AdapterEvent> = queue.stream();
-      const stallTimeoutSec = wsPlan?.stallTimeoutSec ?? config.stallTimeoutSec;
+      const stallTimeoutSec = wsPlan?.stallTimeoutSec ?? providerStallTimeoutSec(config, responsesTimeoutProvider(options, route.provider));
       // A disabled watchdog (0) is not a zero preflight: it would commit SSE before Devin's first
       // event and deliver a pre-output 429 in-stream. Fall back to the default finite bound.
       // A key-pool preflight must not outlast the stall budget, or a silent CLI holds the SSE

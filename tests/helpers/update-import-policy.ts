@@ -192,6 +192,7 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { runUpdateRestartWithOwnershipLease, type ServiceOwnershipResolution } from \"./restart-ownership\";",
     "import { restartServiceManagerAfterUpdate, unsettledManagerRestartFailure, unsupervisedRestartFailure, type ManagerRestartFn } from \"./job-supervised-restart\";",
     "import { type Channel, type Installer, PKG, STANDALONE_UPDATE_HINT, checkUpdatePackageIntegrity, currentVersion, defaultUpdateTag, detectInstall, detectInstallOwnership, latestVersion, miseUpdateCommand, updateCommand, updateCommandStr, resolveCurrentPnpmGlobalOwner, resolvePnpmActiveLauncher, } from \"./index\";",
+    "import { managedReleaseDirectory } from \"./managed-release\";",
     "import { isNewer } from \"./notify\";",
     "import { isRealBunBinary } from \"../lib/bun-binary-validator.mjs\";",
     "import { planWindowsTrayUpdate } from \"./tray-update-plan.mjs\";",
@@ -325,7 +326,8 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { checkForUpdate, type UpdateCheckResult } from \"./job\";",
     "import { currentVersion, defaultUpdateTag, detectInstall, detectInstallOwnership, miseUpdateCommand, type Channel, type Installer } from \"./index\";",
     "import { isSourceBuildVersion, readVersionCache, REFRESH_INTERVAL_MS, writeFreshVersionCache } from \"./notify\";",
-    "import { latestVersionAsync } from \"./async-check\";"
+    "import { latestVersionAsync } from \"./async-check\";",
+    "import { managedReleaseDirectory } from \"./managed-release\";"
   ],
   "src/update/registry-integrity.mjs": [],
   "src/update/restart-ownership.ts": [

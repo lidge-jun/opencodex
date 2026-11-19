@@ -6,7 +6,9 @@
 endpoint. `src/codex/app-server-restart-service.ts` also requests a full quit and relaunch of the
 desktop app whenever a root shell is running, because the picker is built at shell launch and an
 app-server restart cannot refresh it. A shell at or before the mtime of the catalog
-`config.toml` binds through `model_catalog_json` is provably stale. A newer shell is still
+`config.toml` binds through `model_catalog_json` is provably stale. Picker freshness resolves
+the binding relative to that config file, including the basename shared by Windows and WSL.
+A newer shell is still
 `unknown`: its start time cannot prove which binding it loaded, because an earlier sync may
 have rebound an already-existing, byte-identical catalog. An unbound config or an unreadable
 shell list or catalog mtime is unknown; an unreadable shell start time is unknown unless another

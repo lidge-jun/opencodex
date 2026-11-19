@@ -1,5 +1,7 @@
 # Usage client attribution
 
+The [scoped Hub management relay](remote-link.md#hub-transport-relay) uses the same enrolled-key usage projection as `GET /v1/usage`, including post-read authorization and omission of account breakdowns and ledger-wide window metadata.
+
 `src/usage/client.ts` defines the closed client-attribution roster and recognizes bounded
 request-header signatures without retaining the header values. HTTP request contexts in
 `src/server/index/` and the Responses WebSocket handshake carry that observational label through
@@ -9,7 +11,7 @@ cannot replace the inbound label. The label is caller-supplied evidence, not an 
 decision. New direct log writes without a valid client record `unknown`; reading an older row
 without the field still preserves its absence. The live log detaches mutable caller rows so a
 later caller mutation cannot replace a recorded client with raw text; frozen normalized rows with
-only data properties can retain their identity. Client values and bounded failure details are
+only data properties can retain their identity. Client values and [bounded failure details](data-planes/error-detail.md#proxy-owned-error-detail) are
 captured before error projection, and normalizing a new write also preserves any existing
 attempt-loss marker.
 `tests/usage/usage-client-attribution.test.ts` and

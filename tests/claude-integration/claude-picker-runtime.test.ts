@@ -115,7 +115,8 @@ describe("pickerDesired", () => {
   test("needs a supported platform, first-party, Desktop intent and no explicit picker off", () => {
     expect(pickerDesired(firstParty(), "first-party", "darwin")).toBe(true);
     expect(pickerDesired(firstParty(), "gateway", "darwin")).toBe(false);
-    expect(pickerDesired(firstParty(), "first-party", "linux")).toBe(false);
+    expect(pickerDesired(firstParty(), "first-party", "freebsd")).toBe(false);
+    expect(pickerDesired(firstParty(), "first-party", "linux")).toBe(true);
     expect(pickerDesired(firstParty(), "first-party", "win32")).toBe(true);
     expect(pickerDesired(firstParty({ claudeCode: { desktopMode: "first-party", intercept: { picker: false } } }), "first-party", "darwin")).toBe(false);
     expect(pickerDesired(firstParty({ claudeCode: { desktopMode: "first-party", intercept: { picker: true } } }), "first-party", "darwin")).toBe(true);
@@ -177,9 +178,9 @@ describe("tunnel decision", () => {
     expect(picker.selectTunnel("claude.ai", 443)).toEqual({ kind: "blind" });
   });
 
-  test("off macOS, in gateway mode or with the preference off it never intercepts or touches the keychain", async () => {
+  test("on an unsupported platform, in gateway mode or with the preference off it never intercepts or touches the keychain", async () => {
     for (const overrides of [
-      { platform: "linux" as const },
+      { platform: "freebsd" as const },
       { current: () => config({ claudeCode: { desktopMode: "gateway" } }) },
       { current: () => firstParty({ claudeCode: { desktopMode: "first-party", intercept: { picker: false } } }) },
     ]) {

@@ -1,5 +1,7 @@
 # CLI management and discovery
 
+Connected Hub clients can use the local admin token for the [scoped passive management reads](remote-link.md#hub-transport-relay). Relay key rows retain active and paused status for account listing and use positional display IDs. The stored relay lease is provisioned during connect and replaced after a committed key rotation.
+
 `src/cli/` contains the terminal management interface. Process ownership, startup, stop and service contracts remain in [Runtime](runtime.md); this document owns command discovery, help, management-client presentation and the generated operating reference.
 
 `ocx v2 mode v2-plaintext` requires `--acknowledge-plaintext-agent-messages` when entering the mode, locally or with `--live`. Local selection admission re-reads the mode and rechecks entry consent before either native or proxy writes, so a mode changed during the wait cannot reuse earlier idempotent permission. Generic config set/import refuse a new plaintext-mode entry and direct the operator to that coordinated transition; already-active restoration and exits remain allowed. The live client sends a scoped acknowledgment and validates the returned mode, capability and plaintext state. Its global feature remains disabled; the [surface contract](subagent-capacity.md#multi-agent-surface-selection) defines task-text retention and unchanged transport authentication. Existing independent plaintext preferences are preserved when leaving the mode.
@@ -140,6 +142,9 @@ For Codex pool login with `--code -`, the start response determines whether code
 ## Integration inspection, recovery and maintenance
 
 `src/cli/capabilities-integrations.ts` declares `commandcode restore` and its dedicated restore/preview routes separately from generic integration restore. Its generated operating reference preserves the client-bound command, supported flags, and refusal on older proxies without those routes.
+
+The same capability catalog declares `connect antigravity` and `connect agy` separately. Only the
+[Antigravity desktop app connection](clients/antigravity-gateway.md#target-and-the-secret-rule) accepts `--model`.
 
 `src/cli/integration-input.ts` shares pure profile paths/validation and owns exact optional Droid-map/fingerprint and [export naming](clients/export-model-names.md) grammar. `src/cli/integration-preview.ts` handles explicit preview and new-option writes; `src/cli/integration-plan-dto.ts` validates value-free plans without runtime imports from GUI/planner/writer code. The original direct mutation bodies remain when new options are absent. Refused and no-op previews are completed observations; stale commits return a re-preview instruction without adopting a replacement token. The server owns coordinated binding and writes.
 

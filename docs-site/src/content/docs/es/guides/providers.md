@@ -196,6 +196,8 @@ El catálogo ChatGPT passthrough también se superpone en las identificadores GP
 
 ## 2. Inicio de sesión de la cuenta (OAuth)
 
+Para cuentas profesionales o educativas de Microsoft, consulta la [configuración de Microsoft 365 Copilot](/es/guides/m365-copilot/).
+
 Los ajustes preestablecidos del proveedor pueden usar el inicio de sesión de la cuenta, incluido el GitHub Copilot, a través de un puente experimental no oficial de flujo de dispositivos. opencodex almacena sus credenciales en `~/.opencodex/auth.json`; los tokens actualizables se actualizan automáticamente, mientras que las claves duraderas se reutilizan hasta que el proveedor las revoca. `ocx login codex` también es aceptado, pero no es uno de estos proveedores: se dirige al grupo de cuentas Codex, el mismo flujo que `ocx account login codex`, que mantiene su propio libro de cuentas y necesita un proxy en ejecución. `chatgpt` y `openai` son alias de esa ruta.
 
 ```bash
@@ -460,6 +462,7 @@ están en la página [Catálogo de proveedores con clave API](/es/guides/api-key
 - [CodeBuddy Code CLI oficial (Global y CN)](/es/guides/api-key-catalog/#official-codebuddy-code-cli-global--cn)
 - [Oficial Qoder CLI (Global y CN)](/es/guides/api-key-catalog/#official-qoder-cli-global--cn)
 - [Claude Code CLI (suscripción)](/es/guides/api-key-catalog/#claude-code-cli-subscription)
+- [Antigravity CLI (ACP, local)](/es/guides/api-key-catalog/#antigravity-cli-acp-local)
 - [Cuota de crédito A6API](/es/guides/api-key-catalog/#a6api-credit-quota)
 - [Plan de codificación BigModel sobre Responses](/es/guides/api-key-catalog/#bigmodel-coding-plan-over-responses)
 - [Múltiples claves API](/es/guides/api-key-catalog/#multiple-api-keys)

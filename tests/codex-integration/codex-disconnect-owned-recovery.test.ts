@@ -1,11 +1,37 @@
 import { expect, test } from "bun:test";
+import { join } from "node:path";
 import { captureJournalConfigFields, restoreJournalConfigFields } from "../../src/codex/journal-config-restore";
+import { CODEX_HOME, DEFAULT_CATALOG_PATH, tomlString } from "../../src/codex/paths";
 
 const url = "http://127.0.0.1:10100/v1";
-const ownership = { injectedOpenaiBaseUrl: url, injectedRealtimeWsBaseUrl: url, injectedCatalogPath: "/fixture/catalog.json" };
+const ownership = { injectedOpenaiBaseUrl: url, injectedRealtimeWsBaseUrl: url, injectedCatalogBinding: "/fixture/catalog.json" };
 const original = 'model = "before"\nopenai_base_url = "https://native.example/v1"\n';
 const injected = `openai_base_url = "${url}"\nexperimental_realtime_ws_base_url = "${url}"\nmodel_catalog_json = "/fixture/catalog.json"\nmodel = "before"\n[model_providers.opencodex]\nname = "OCX"\nbase_url = "${url}"\n`;
 const journal = { ...ownership, injectedConfigFields: captureJournalConfigFields(injected, ownership) };
+
+test.each([true, false])("restore recognizes either catalog spelling with a field snapshot: %s", (snapshot) => {
+  const binding = (path: string) => `model_catalog_json = ${tomlString(path)}\n`;
+  const absolute = binding(DEFAULT_CATALOG_PATH);
+  const relative = binding("opencodex-catalog.json");
+  const retained = 'model = "user"\n';
+  const legacy = { injectedCatalogPath: DEFAULT_CATALOG_PATH };
+  const captured = captureJournalConfigFields(relative, legacy);
+  expect(captured.model_catalog_json).toBe(relative.trimEnd());
+
+  if (snapshot) {
+    const record = { ...legacy, injectedConfigFields: captured };
+    expect(restoreJournalConfigFields(absolute + retained, "", record)).toBe(retained);
+    expect(restoreJournalConfigFields(relative + retained, "", record)).toBe(retained);
+    const foreign = binding(join(CODEX_HOME, "other.json")) + retained;
+    const explicit = { ...record, injectedCatalogBinding: DEFAULT_CATALOG_PATH };
+    expect(restoreJournalConfigFields(foreign, "", explicit)).toBeNull();
+    expect(restoreJournalConfigFields(foreign, "", record, true)).toBe(foreign);
+    expect(restoreJournalConfigFields(relative + retained, absolute, record)).toBe(absolute + retained);
+  } else {
+    expect(restoreJournalConfigFields(relative + retained, "", legacy)).toBe(retained);
+    expect(restoreJournalConfigFields(absolute + retained, "", legacy)).toBe(retained);
+  }
+});
 
 test("explicit recovery restores only recorded routing fields and blocks, preserving unrelated bytes", () => {
   const edits = 'model = "user/model"\nweb_search = "live"\n';
@@ -14,6 +40,28 @@ test("explicit recovery restores only recorded routing fields and blocks, preser
     .replace('model = "before"\n', edits).replace('/fixture/catalog.json', '/user/catalog.json') + suffix;
   expect(restoreJournalConfigFields(current, original, journal)).toBeNull();
   expect(restoreJournalConfigFields(current, original, journal, true)).toBe('openai_base_url = "https://native.example/v1"\n' + edits + suffix);
+});
+
+test("restoring a journal keeps an operator binding even when injection selected its catalog file", () => {
+  const current = 'model_catalog_json = "catalogs/opencodex-catalog.json" # operator\n';
+  const ownership = {
+    injectedCatalogPath: join(CODEX_HOME, "catalogs", "opencodex-catalog.json"),
+    injectedCatalogBinding: null,
+  };
+  const injectedConfigFields = captureJournalConfigFields(current, ownership);
+  expect(injectedConfigFields.model_catalog_json).toBeUndefined();
+  expect(restoreJournalConfigFields(current, "", { ...ownership, injectedConfigFields }, true)).toBe(current);
+});
+
+test.each([false, true])("legacy field recovery preserves an operator catalog even with a recorded span: %s", (snapshot) => {
+  const catalog = 'model_catalog_json = "catalogs/opencodex-catalog.json" # operator\n';
+  const current = `openai_base_url = "${url}"\n${catalog}`;
+  const journal = {
+    injectedCatalogPath: "catalogs/opencodex-catalog.json",
+    injectedOpenaiBaseUrl: url,
+    ...(snapshot ? { injectedConfigFields: { model_catalog_json: catalog, openai_base_url: `openai_base_url = "${url}"` } } : {}),
+  };
+  expect(restoreJournalConfigFields(current, "", journal, true)).toBe(catalog);
 });
 
 test("one-operation force never claims an unrecorded routing key by URL resemblance", () => {

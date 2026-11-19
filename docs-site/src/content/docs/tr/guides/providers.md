@@ -342,11 +342,14 @@ olmayan bir makineden oturum açmak bundan etkilenmez.
 
 ## 3. API anahtarı kataloğu
 
-opencodex 108 yerleşik önayar ile birlikte gelir: 87 anahtar tabanlı, 17
+opencodex 110 yerleşik önayar ile birlikte gelir: 88 anahtar tabanlı, 18
 OAuth, üç yerel ve bir varsayılan ChatGPT iletme önayarı. Kontrol panelinin
 **Sağlayıcı ekle** seçicisi bir anahtar sağlayıcısının kontrol panelini açar,
 anahtarı doğrular ve saklar; doğrulama sağlayıcıya özgüdür. Dikkate değer
 girdiler:
+
+[**Antigravity CLI (ACP, yerel)**](/guides/api-key-catalog/#antigravity-cli-acp-local) resmi Antigravity CLI'nin
+proxy sunucusundaki oturumunu kullanır. Katalogda kurulum adımları ve yerel, etkileşimli kullanım sınırları açıklanır.
 
 **ClinePass**, [Cline'ın şartları](https://cline.bot/tos) altında Cline Bot Inc.
 tarafından işletilen [resmi abonelik

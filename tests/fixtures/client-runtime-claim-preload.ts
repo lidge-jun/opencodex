@@ -1,8 +1,8 @@
-// Preloaded into the `ocx start` child by tests/cli/cli-client-runtime-owner-e2e.test.ts.
+// Preloaded into the `ocx start` child by tests/cli/cli-client-start-owner-e2e.test.ts.
 //
 // handleStart loads src/client/runtime.ts with a dynamic import on the connected-client branch,
 // after the early owner check and the lease-held recovery fence and immediately before the
-// client-runtime fence. Committing the desktop claim while that module loads is therefore the
+// client-runtime fence. Publishing an owner while that module loads is therefore the
 // exact interleaving the fence exists for, without timing: nothing else imports that module.
 import { plugin } from "bun";
 import { swapServiceInstallState } from "../../src/service/state";
@@ -13,6 +13,12 @@ plugin({
   name: "commit-desktop-claim-at-client-runtime-load",
   setup(build) {
     build.onLoad({ filter: CLIENT_RUNTIME }, async args => {
+      const publishOwnerUrl = process.env.OCX_TEST_LATE_OWNER_URL;
+      if (publishOwnerUrl) {
+        const response = await fetch(publishOwnerUrl, { method: "POST" });
+        if (!response.ok) throw new Error("fixture failed to publish the late owner");
+        return { contents: await Bun.file(args.path).text(), loader: "ts" };
+      }
       const codexHome = process.env.CODEX_HOME ?? "";
       const opencodexHome = process.env.OPENCODEX_HOME ?? "";
       const state = swapServiceInstallState(current => ({

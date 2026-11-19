@@ -43,7 +43,13 @@ export function registerSseLane(lane: string) {
           expect(internal({ ...after.internal, settlements: [] }), key).toEqual(internal({ ...before.internal, settlements: [] }));
         } else expect(internal(after.internal), key).toEqual(internal(before.internal));
         const ordinary = input.kind === "non-error" || input.kind === "rename" || lane === "tap";
-        if (ordinary) {
+        if (input.id === "echo-renamed-ping" && (lane === "native" || lane === "builtin")) {
+          // The final event is ping. Preserve both event fields and every other baseline byte.
+          const baseBody = Bun.gunzipSync(Buffer.from(golden.dictionaries.bodies[values[10]], "base64"));
+          const expected = Buffer.from(new TextDecoder().decode(baseBody)
+            .replace(/^event: message_start\n/, "event: error\nevent: ping\n"));
+          expect(bytes, key).toEqual(expected);
+        } else if (ordinary) {
           expect(after.bodySha256, key).toBe(before.bodySha256);
           expect(after.bodyLength, key).toBe(before.bodyLength);
           if (input.kind === "non-error" || lane === "tap") {

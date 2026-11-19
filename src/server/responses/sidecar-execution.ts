@@ -56,6 +56,7 @@ import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { bindRouteReasoningReplayScope, adapterNeedsForcedContinuation, adapterNeedsToolCallContinuation } from "./core-replay";
 import { namespacedToolName, toolChoiceCandidates } from "../../types";
 import { providerFetch } from "./fetch-helpers";
+import { createAnthropicImageRecovery } from "./image-context-recovery";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { recordAdapterReasoning, recordAdapterTier } from "../request-log";
 import { assignNativeLogConversationId, normalizeLogConversationId } from "../request-log-conversation";
@@ -65,6 +66,7 @@ import { trackStreamLifetime } from "../lifecycle";
 import { isAntigravityRawValidationRefusal } from "./antigravity-validation-refusal";
 import { createSidecarSendBudget } from "./sidecar-send-budget";
 import { stripReplayedSearchPairs } from "../../web-search/sidecar-search-replay";
+import { providerConnectTimeoutMs, providerStallTimeoutSec } from "../../stall-timeout";
 import { settleAnthropicPerMessageEffort, shareAnthropicPerMessageEffortTurn } from "../../adapters/anthropic/per-message-effort";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
@@ -75,8 +77,10 @@ export async function executeResponsesSidecars(
     | "parsed"
     | "route"
     | "inboundWire"
+    | "subagentFallbackSelected"
     | "selectedForwardHeaders"
     | "translatorBudget"
+    | "completedToolBlocks"
     | "clientToolCatalogRestriction"
     | "toolBridgeMaps"
     | "rememberKiroDeliveredFinalAnswer"
@@ -102,6 +106,7 @@ export async function executeResponsesSidecars(
     | "resolveSelectionAdapter"
     | "resolveCopilotSelection"
     | "oauthDispatch"
+    | "pinAnthropicImageRecovery"
     | "noteRoutedAttemptSend"
     | "bindKeyUsageFromBridge"
     | "hostedAdvisorSpendGuard"
@@ -115,7 +120,7 @@ export async function executeResponsesSidecars(
     | "notifyResponseComplete"
     | "cancelResponseCompletion"
   >,
-  sendBudgetState: Pick<ResponsesSendBudget, "initialSendAllowance" | "sendBudgetExhausted" | "hasCapturedSpendCeiling" | "reserveCredentialHop" | "refundableAdapterDispatchBudget" | "adapterDispatchBudget" | "adapterSendBudget" | "noteInitialDispatch" | "noteAdapterPhysicalSend" | "noteAdapterRecoveryWithheld" | "pendingHopPermit" | "dispatchSidecarSend">,
+  sendBudgetState: Pick<ResponsesSendBudget, "initialSendAllowance" | "sendBudgetExhausted" | "hasCapturedSpendCeiling" | "reserveCredentialHop" | "refundableAdapterDispatchBudget" | "adapterDispatchBudget" | "adapterSendBudget" | "noteInitialDispatch" | "noteAdapterPhysicalSend" | "noteAdapterRecoveryWithheld" | "pendingHopPermit" | "dispatchSidecarSend" | "remainingTransientSendBudget" | "targetSendsUsed" | "imageRecoverySendReporter">,
 ) {
   const { config, options, logCtx } = requestContext;
   const antigravityPoolActivated = requestState.route.providerName === "google-antigravity"
@@ -287,6 +292,7 @@ export async function executeResponsesSidecars(
   const wsPlan = !routedCompaction
     ? planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar, {
       admission: options.admission, codexAuthPolicy: options.codexAuthPolicy, providerName: route.providerName,
+      routedTransport: transportState.adapter.runTurn ? "runTurn" : "http",
     })
     : undefined;
   const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
@@ -536,6 +542,13 @@ export async function executeResponsesSidecars(
     });
     return { adapter: rotatedAdapter, recoveryKind };
   };
+  const recoverImageContext = route.provider.anthropicImageContextRecovery === true && transportState.adapter.name === "anthropic"
+    ? createAnthropicImageRecovery(requestContext, requestState, transportState, sendBudgetState, providerConnectTimeoutMs(config, route.provider) ?? 200_000)
+    : undefined;
+  // Legacy sidecar sends under spend enforcement do not carry an authoritative physical receipt.
+  const imageRecovery: typeof recoverImageContext = recoverImageContext && ((response, ...args) =>
+    sendBudgetState.adapterDispatchBudget?.spendEnforced === true
+      ? Promise.resolve({ response }) : recoverImageContext(response, ...args));
   // One guard follows the active sidecar across all iterations. Enforced spend has no
   // authoritative receipt for earlier legacy sends, so recovery cannot claim headroom there.
   const thinkingRecovery = createAnthropicThinkingRecovery(parsed,
@@ -635,8 +648,12 @@ export async function executeResponsesSidecars(
       parsed, adapter: transportState.adapter,
       chatRawReasoningVisible: options.chatRawReasoningVisible,
       ...(transportState.adapter.name === "anthropic" ? { thinkingRecovery } : {}),
+      ...(imageRecovery ? { imageRecovery } : {}),
       clientToolCatalogRestriction: route.provider.authMode === "forward" ? undefined : requestState.clientToolCatalogRestriction,
-      incomingMeta: { headers: requestState.selectedForwardHeaders, providerName: route.providerName, abortSignal: options.abortSignal, translatorBudget, ...(options.comboInitialSend ? { providerFetch: imageProviderFetch } : {}), ...sidecarBudget.incomingMeta },
+      incomingMeta: { headers: requestState.selectedForwardHeaders, providerName: route.providerName, abortSignal: options.abortSignal, translatorBudget, ...(options.comboInitialSend ? { providerFetch: imageProviderFetch } : {}), ...sidecarBudget.incomingMeta,
+        // Policy facts ride every runTurn caller, independent of a combo send-budget receipt.
+        comboAttempt: options.comboAttempt === true, ...(requestState.subagentFallbackSelected ? { subagentFallback: true } : {}),
+        ...(options.internalDecisionCall ? { internalDecisionCall: true } : {}) },
       onProducerStart: sidecarBudget.takeProducerOwnership,
       onProducerEnd: sidecarBudget.release,
       onIterationEnd: sidecarBudget.releaseUnsentHop,
@@ -651,8 +668,8 @@ export async function executeResponsesSidecars(
         : imgPlan
           ? clampImageMaxRounds(config.images?.maxRounds)
           : clampImageMaxRounds(config.images?.videoMaxRounds ?? 2),
-      connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
-      stallTimeoutSec: config.stallTimeoutSec, proxyErrorContext: logCtx,
+      connectTimeoutMs: providerConnectTimeoutMs(config, route.provider) ?? 200_000,
+      stallTimeoutSec: providerStallTimeoutSec(config, route.provider), proxyErrorContext: logCtx,
       waitForRequestSlot: imageProviderFetch.waitForPacing,
       fetchImpl: imageProviderFetch.unpacedFetch ?? imageProviderFetch,
       fetchForRequest: (request, iterParsed, adapter, recovery) => {
@@ -766,6 +783,7 @@ export async function executeResponsesSidecars(
       ...(webSearchAdvisor ? { advisor: createAdvisorSidecarStep(webSearchAdvisor as Parameters<typeof createAdvisorSidecarStep>[0]) } : {}),
       chatRawReasoningVisible: options.chatRawReasoningVisible,
       ...(transportState.adapter.name === "anthropic" ? { thinkingRecovery } : {}),
+      ...(imageRecovery ? { imageRecovery } : {}),
       clientToolCatalogRestriction: route.provider.authMode === "forward" ? undefined : requestState.clientToolCatalogRestriction,
       onIterationEnd: sidecarBudget.releaseUnsentHop,
       fetchForRequest: (request, iterParsed, adapter, recovery) => providerFetch(route.provider, options.codexWsRuntimeIdentity, {
@@ -784,6 +802,9 @@ export async function executeResponsesSidecars(
           onPhysicalSend: (send: { ordinal: number; recovery?: AttemptRecoveryKind }) =>
             sendBudgetState.noteAdapterPhysicalSend(logCtx.usageLogInputTokens, send),
         } : sidecarBudget.incomingMeta),
+        comboAttempt: options.comboAttempt === true,
+        ...(requestState.subagentFallbackSelected ? { subagentFallback: true } : {}),
+        ...(options.internalDecisionCall ? { internalDecisionCall: true } : {}),
       },
       backend: wsPlan.backend,
       forwardProvider: wsPlan.forwardSidecar?.provider,
@@ -814,9 +835,10 @@ export async function executeResponsesSidecars(
       },
       recordSidecarOutcome: wsPlan.forwardSidecar?.recordOutcome,
       beforeSidecarDispatch: wsPlan.forwardSidecar?.beforeDispatch,
-      connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
+      connectTimeoutMs: providerConnectTimeoutMs(config, route.provider) ?? 200_000,
       routedModelStallTimeoutMs: wsPlan.routedModelStallTimeoutMs,
       stallTimeoutSec: wsPlan.stallTimeoutSec, proxyErrorContext: logCtx,
+      onLocalFailure: options.onWebSearchLocalFailure,
       streamRoutedModelOutput: wsPlan.streamRoutedModelOutput,
       on429: rotateSidecarProviderOn429,
       onRotatedUsage: billRotatedUsage,
@@ -839,6 +861,7 @@ export async function executeResponsesSidecars(
         notifyResponseComplete(response);
       },
     });
+    if (loopResponse.ok && parsed.stream) options.onHostedWebSearchStream?.();
     const wsScopeRefusal = sidecarScopeRefusal(loopResponse);
     if (wsScopeRefusal) return wsScopeRefusal;
     // A routed Anthropic model whose last pool account refused on spent quota fails the loop's
