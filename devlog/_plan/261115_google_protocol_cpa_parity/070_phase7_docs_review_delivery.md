@@ -92,4 +92,3 @@ Not changed, with replies on the PR: the dashboard badge for a suspended account
 badge (a localized GUI label is a follow-up; the CLI and API carry "Account suspended"); hosted Gemini tools
 on generateContent stay ignored (matrix IN-10, deferred); the gateway-client connector findings
 (`agy.ts`, `antigravity.ts`, `gui/tests/locale-parity.test.ts`) are #8742's own code for its review.
-

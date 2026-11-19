@@ -166,4 +166,3 @@ because `inbound-compat.md` is at its 600-line budget), which now also owns `src
 Red evidence: `.tmp/t030-red-all.log` (13 of 26 new or extended cases fail with the source changes set aside).
 Residual: a client that does not echo `extra_content` still relies on the server-side store, which the bridge and the
 direct lane both write; the Antigravity chat-ir inbound path is covered by the parity fixture.
-

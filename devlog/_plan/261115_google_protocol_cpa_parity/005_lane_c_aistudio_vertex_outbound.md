@@ -97,4 +97,3 @@ Scope note: CPA's `aistudio_executor.go` is a **websocket relay to the AI Studio
 4. V-43: does the router retry or fail over on the stream error "ended without a terminal signal — possible truncation"? If it does, a prompt block is resent to every credential. Not traced.
 5. V-38: was the candidates-only `outputTokens` deliberate, for example to match Google's billing display? The pinned tests carry no rationale. Confirm before changing.
 6. V-37: should #8742's codec carry `thoughtSignature` (and Gemini `functionCall.id`) through Chat `extra_content.google.thought_signature`, which opencodex Responses already understands (src/responses/provider-opaque-metadata.ts:17)?
-

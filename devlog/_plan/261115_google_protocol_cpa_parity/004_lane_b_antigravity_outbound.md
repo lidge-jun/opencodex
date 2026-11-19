@@ -96,4 +96,3 @@ PR #8742 does not touch the outbound Antigravity adapter: its diff adds Gemini i
 - loadCodeAssist host: CPA moved to daily; ocx calls prod (D1). Any account-tier difference between the two answers?
 
 NOT RUN: no tests, typecheck, or live Google requests; every claim is from source reading at the stated heads.
-

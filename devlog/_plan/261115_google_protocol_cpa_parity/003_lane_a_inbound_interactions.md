@@ -96,4 +96,3 @@ Baseline: **opencodex dev has no inbound Gemini or Interactions surface at all.*
 4. For Interactions, should `previous_interaction_id` be refused (400), resolved from a local bounded store (CPA keeps none except the antigravity tool-result suffix), or passed only to a native upstream? This is a product decision for the parent.
 5. Which `Api-Revision` would an opencodex Interactions surface claim? CPA pins `2026-05-20` (helps/gemini_interactions.go:19).
 6. CPA's Interactions usage uses `total_*` names in streams but `input_tokens`/`output_tokens` in non-stream bodies (I11). Which one does the real Google API use for the pinned revision? Check this against Google docs before copying.
-

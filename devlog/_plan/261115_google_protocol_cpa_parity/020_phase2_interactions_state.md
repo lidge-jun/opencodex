@@ -152,4 +152,3 @@ the manifest entry for the store file.
   store was requested and is listed in `Access-Control-Expose-Headers`.
 - The codec records `plan.inputSteps`; GET returns them before the output steps, with
   `previous_interaction_id` when chained. By-id routes use `resolveResponsesApiAuth`.
-

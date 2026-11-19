@@ -19,7 +19,6 @@ export interface GoogleErrorDetails {
 }
 
 const ERROR_INFO_TYPE = "type.googleapis.com/google.rpc.ErrorInfo";
-const RETRY_INFO_TYPE = "type.googleapis.com/google.rpc.RetryInfo";
 const MAX_DURATION_MS = 30 * 24 * 60 * 60 * 1_000;
 const UNIT_MS: Readonly<Record<string, number>> = { h: 3_600_000, m: 60_000, s: 1_000, ms: 1, us: 0.001, "µs": 0.001, ns: 0.000001 };
 
@@ -47,36 +46,44 @@ const isRecord = (value: unknown): value is Record<string, unknown> => !!value &
 export function googleErrorDetails(payloadText: string): GoogleErrorDetails {
   const parsed = parseUpstreamJsonPayload(payloadText);
   const root = Array.isArray(parsed) ? parsed[0] : parsed;
-  const error = isRecord(root) ? (isRecord(root.error) ? root.error : root) : undefined;
-  if (!error) return {};
+  if (!isRecord(root)) return {};
+  const wrapped = Array.isArray(root.error) ? root.error[0] : root.error;
+  const error = isRecord(wrapped) ? wrapped : root;
   const out: GoogleErrorDetails = {};
   // Only a positive delay says when to retry; a typed RetryInfo outranks ErrorInfo's quotaResetDelay,
   // which outranks an untyped detail, whatever order Google lists them in.
-  const positive = (ms: number | undefined) => (ms !== undefined && ms > 0 ? ms : undefined);
+  const positiveDelay = (value: unknown): number | undefined => {
+    if (typeof value !== "string") return undefined;
+    // Legacy Google responses also spell seconds with whitespace before the suffix.
+    const seconds = /^\s*(\d+(?:\.\d+)?)\s*s\s*$/i.exec(value);
+    const ms = parseGoogleDurationMs(seconds ? `${seconds[1]}s` : value);
+    return ms !== undefined && ms > 0 ? ms : undefined;
+  };
   let typedRetryDelay: number | undefined;
   let quotaResetDelay: number | undefined;
   let untypedRetryDelay: number | undefined;
   for (const detail of Array.isArray(error.details) ? error.details.slice(0, 32) : []) {
     if (!isRecord(detail)) continue;
     const type = detail["@type"];
-    if (type === ERROR_INFO_TYPE) {
+    const name = typeof type === "string" ? type.slice(type.lastIndexOf("/") + 1) : undefined;
+    if (name === "google.rpc.ErrorInfo") {
       if (typeof detail.reason === "string" && out.reason === undefined) out.reason = detail.reason;
       if (typeof detail.domain === "string" && out.domain === undefined) out.domain = detail.domain;
       const metadata = detail.metadata;
-      if (isRecord(metadata) && typeof metadata.quotaResetDelay === "string") quotaResetDelay ??= positive(parseGoogleDurationMs(metadata.quotaResetDelay));
-    } else if (type === RETRY_INFO_TYPE) {
-      if (typeof detail.retryDelay === "string") typedRetryDelay ??= positive(parseGoogleDurationMs(detail.retryDelay));
+      if (isRecord(metadata)) quotaResetDelay ??= positiveDelay(metadata.quotaResetDelay);
+    } else if (name === "google.rpc.RetryInfo") {
+      typedRetryDelay ??= positiveDelay(detail.retryDelay);
     } else if (type === undefined) {
       if (typeof detail.reason === "string" && out.reasonUntyped === undefined) out.reasonUntyped = detail.reason;
-      if (typeof detail.retryDelay === "string") untypedRetryDelay ??= positive(parseGoogleDurationMs(detail.retryDelay));
+      untypedRetryDelay ??= positiveDelay(detail.retryDelay);
       const metadata = detail.metadata;
-      if (isRecord(metadata) && typeof metadata.quotaResetDelay === "string") untypedRetryDelay ??= positive(parseGoogleDurationMs(metadata.quotaResetDelay));
+      if (isRecord(metadata)) untypedRetryDelay ??= positiveDelay(metadata.quotaResetDelay);
     }
   }
   const stated = typedRetryDelay ?? quotaResetDelay ?? untypedRetryDelay;
   if (stated !== undefined) out.retryDelayMs = stated;
   if (!out.retryDelayMs && typeof error.message === "string") {
-    const match = /\bafter\s+(\d[\w.µ]*?)[.,;]?(?:\s|$)/i.exec(error.message.slice(0, 2_000));
+    const match = /\b(?:retry|resets?)\s+after\s+(\d[\w.µ]*?)[.,;]?(?:\s|$)/i.exec(error.message.slice(0, 2_000));
     if (match) out.retryDelayMs = parseGoogleDurationMs(match[1]!);
   }
   if (!out.retryDelayMs) delete out.retryDelayMs;

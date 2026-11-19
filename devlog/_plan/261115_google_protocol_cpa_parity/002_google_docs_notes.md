@@ -69,4 +69,3 @@ Sources: <https://ai.google.dev/gemini-api/docs/live>, <https://ai.google.dev/ap
   `SetupComplete`, `ServerContent`, `ToolCall`, `ToolCallCancellation`, `GoAway`, `SessionResumptionUpdate`
   from the server.
 - CPA has no Live support (`rg -i bidigenerate` in the CPA tree finds nothing); see matrix row L-01.
-

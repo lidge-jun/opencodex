@@ -117,4 +117,3 @@ describe("a 429 on the last allowed attempt keeps its body-stated wait", () => {
     expect(res.headers.get("retry-after")).toBe("3723");
   });
 });
-

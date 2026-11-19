@@ -29,6 +29,12 @@ describe("Google error details", () => {
     ] } }]))).toEqual({ reason: "QUOTA_EXHAUSTED", retryDelayMs: 3_723_000 });
   });
 
+  test("a bare RetryInfo type and the legacy error-array envelope preserve the body wait", () => {
+    expect(googleErrorDetails(JSON.stringify({ error: [
+      { details: [{ "@type": "google.rpc.RetryInfo", retryDelay: "42.5 S" }] },
+    ] }))).toEqual({ retryDelayMs: 42_500 });
+  });
+
   test("an untyped reason is kept apart from the typed one", () => {
     expect(googleErrorDetails(JSON.stringify({ error: { details: [{ reason: "TOS_VIOLATION" }] } }))).toEqual({ reasonUntyped: "TOS_VIOLATION" });
   });
@@ -37,6 +43,7 @@ describe("Google error details", () => {
     expect(googleErrorDetails(JSON.stringify({ error: { message: "You have exhausted your capacity. Your quota will reset after 2m30s." } })))
       .toEqual({ retryDelayMs: 150_000 });
     expect(googleErrorDetails(JSON.stringify({ error: { message: "reset after never" } }))).toEqual({});
+    expect(googleErrorDetails(JSON.stringify({ error: { message: "Request refused after 10s." } }))).toEqual({});
   });
 
   test("unreadable bodies yield nothing", () => {

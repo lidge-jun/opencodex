@@ -427,7 +427,7 @@ API already knows the type of what it stores, and a wrong guess is worse than no
 
 `src/adapters/google-error-details.ts` reads the typed `google.rpc` details of a Google error body
 (bounded, never throwing): `ErrorInfo.reason`, `domain`, and a retry delay from `RetryInfo.retryDelay`, then
-`ErrorInfo.metadata.quotaResetDelay`, then an "after <duration>" phrase in the message, in protobuf or Go duration
+`ErrorInfo.metadata.quotaResetDelay`, then a retry or reset delay in the message, in protobuf or Go duration
 syntax (`30s`, `0.5s`, `1h2m3s`, at most 30 days; a zero delay does not block the fallbacks). An untyped detail's
 reason is kept apart and never used for account decisions.
 
@@ -440,7 +440,8 @@ ends with the 429 carrying it as `Retry-After`; AI Studio, which returns raw ups
 a copy of the raw 429 (also on quota exhaustion), with Google's body and status unchanged. A 403 whose body is an object with code 403, `PERMISSION_DENIED`
 and a typed `ErrorInfo` `TOS_VIOLATION` entry becomes the fixed message
 `Antigravity account suspended (TOS_VIOLATION): ...`, which never echoes Google's appeal text; dispatch trusts only
-that leading prefix (`classifyAntigravityRefusal`) and quarantines the account through the fenced path described in
+that leading prefix (`classifyAntigravityRefusal`) and quarantines only first-party Cloud Code Assist OAuth
+accounts when no upstream rewriter can have changed the destination. The account write uses the fenced path in
 [the transport inventory](../transports/inventory.md). Coverage: `tests/adapters/google/google-error-details.test.ts`,
 `google-errors.test.ts`, `google-retry-structured.test.ts`, `antigravity-refusal.test.ts`, and the TOS cases in
 `tests/server/server-google-antigravity-oauth-401-replay.test.ts`.

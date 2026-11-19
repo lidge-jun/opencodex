@@ -191,6 +191,7 @@ function installOAuthFetch(
     refreshedProjectId?: string | null;
     beforeFirstUnauthorized?: () => Promise<void>;
     beforeFirstForbidden?: () => Promise<void>;
+    inferenceOrigin?: string;
   } = {},
 ): { chatAuth: string[]; chatProjects: string[]; requestPaths: string[]; chatBodies: string[]; counts: { refresh: number } } {
   const chatAuth: string[] = [];
@@ -285,7 +286,7 @@ function installOAuthFetch(
     }
 
     // Google Antigravity Generate Content endpoint
-    if (parsedUrl.origin === DAILY_API_BASE
+    if (parsedUrl.origin === (options.inferenceOrigin ?? DAILY_API_BASE)
       && ["/v1internal:streamGenerateContent", "/v1internal:generateContent"].includes(parsedUrl.pathname)) {
       requestPaths.push(parsedUrl.pathname);
       const auth = new Headers(init?.headers).get("authorization") ?? "";
@@ -495,6 +496,23 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
       const rows = getAccountSet("google-antigravity")!.accounts;
       expect(rows.filter(row => row.needsReauth)).toHaveLength(1);
       expect(rows.find(row => row.needsReauth)).toMatchObject({ needsReauthReason: "verify_account", needsReauthCause: "tos_violation" });
+    } finally { await server.stop(true); }
+  });
+
+  test("a custom Antigravity upstream does not quarantine a Google OAuth account", async () => {
+    await seedOAuth();
+    const config = antigravityConfig();
+    const inferenceOrigin = "https://cca-relay.example";
+    config.providers["google-antigravity"]!.baseUrl = inferenceOrigin;
+    saveConfig(config);
+    const observed = installOAuthFetch([{ status: 403, typedReason: "TOS_VIOLATION", message: "disabled" }], { inferenceOrigin });
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(403);
+      await response.text();
+      expect(observed.requestPaths).toEqual(["/v1internal:generateContent"]);
+      expect(getAccountSet("google-antigravity")!.accounts.every(row => !row.needsReauth && !row.paused)).toBe(true);
     } finally { await server.stop(true); }
   });
 

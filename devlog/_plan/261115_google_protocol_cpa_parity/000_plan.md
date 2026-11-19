@@ -83,4 +83,3 @@ public-contract decision. BLOCKED: #8742 conflicts that cannot be resolved witho
 - 050 Google response fidelity: 3dccfa700f. 060 Google request fidelity: 430882ffa3 (6a, AG-M1, deferred).
 - 070 user docs (`reference/proxy-formats.md` Gemini section, `reference/adapters.md`, `reference/cli/providers-accounts.md`,
   English and Spanish), review and delivery: in progress. The unit moves to `devlog/_fin/` after the PR merges.
-

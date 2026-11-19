@@ -417,4 +417,3 @@ describe("Gemini Interactions state: ownership and chaining rules", () => {
     });
   });
 });
-
