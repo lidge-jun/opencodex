@@ -175,7 +175,10 @@ test("native selection shares key, origin, host, and model-scope refusals", asyn
     }
     expect(seen).toHaveLength(0);
     expect((await get(base, generation())).headers.get("allow")).toBe("POST");
-    expect((await get(base, "/v1beta/interactions")).status).toBe(404);
+    const interactions = await get(base, "/v1beta/interactions");
+    expect(interactions.status).toBe(405);
+    expect(interactions.headers.get("allow")).toBe("POST");
+    expect(await interactions.json()).toMatchObject({ error: { code: 405, status: "UNIMPLEMENTED" } });
   });
   await withServer({ ...config(true), hostname: "127.0.0.1" }, async base => {
     const headers = { ...key, host: "rebind.example" };
