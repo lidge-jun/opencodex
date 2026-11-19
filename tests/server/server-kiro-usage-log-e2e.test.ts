@@ -11,6 +11,7 @@ import * as resolver from "../../src/server/adapter-resolve";
 import { handleChatCompletions } from "../../src/server/chat-completions";
 import { handleResponses } from "../../src/server/responses/core";
 import { attachRequestSpendTracker } from "../../src/server/responses/request-spend";
+import * as upstreamRetry from "../../src/lib/upstream-retry";
 import {
   configureSharedSpendLedger, parseSpendJournalRecord, SPEND_LEDGER_JOURNAL_FILENAME, spendPolicyFromConfig,
 } from "../../src/lib/spend-reservation-ledger";
@@ -360,9 +361,21 @@ for (const ceiling of [false, true]) for (const [retry, row] of Object.entries(k
 // settle with the request's aggregate (estimated) usage, as a single send always did, instead of
 // staying unresolved at its full reservation: under a 3,000-token pool ceiling the leaked
 // reservation would refuse the next identical request.
-for (const ceiling of [false, true]) {
-  test(`an estimated Kiro response whose retry the budget refuses settles its estimate (pool ceiling: ${ceiling})`, async () => {
+// A retry whose attempt deadline expires before its dispatch receipt never leaves either: the
+// transport turns that TimeoutError into a synthetic 504, and the same single-send rule applies.
+const kiroUndispatchedRetryRows = {
+  budget: "an estimated Kiro response whose retry the budget refuses settles its estimate",
+  timeout: "an estimated Kiro response whose retry times out before dispatch settles its estimate",
+} as const;
+for (const ceiling of [false, true]) for (const [cause, title] of Object.entries(kiroUndispatchedRetryRows)) {
+  test(`${title} (pool ceiling: ${ceiling})`, async () => {
     const release = acquireOwnedSpendHome();
+    // Every Kiro request makes two deadline calls when its retry runs; the second is the retry's.
+    let deadlineCalls = 0;
+    const realDeadline = upstreamRetry.fetchWithAttemptDeadline;
+    const deadlineSpy = spyOn(upstreamRetry, "fetchWithAttemptDeadline").mockImplementation((url, init, timeoutMs, abortSignal, ...rest) =>
+      realDeadline(url, init, timeoutMs, cause === "timeout" && ++deadlineCalls % 2 === 0
+        ? AbortSignal.abort(new DOMException("Timeout elapsed", "TimeoutError")) : abortSignal, ...rest));
     try {
       if (ceiling) configureSharedSpendLedger(spendPolicyFromConfig({ pool: { maxTokens: 3_000 } }, undefined, ["fixture"]));
       let sends = 0;
@@ -388,7 +401,8 @@ for (const ceiling of [false, true]) {
           body: JSON.stringify({ model: "fixture/claude-sonnet-4.5", input: "Summarise the repository layout.", stream: true,
             tools: [{ type: "function", name: "bash", parameters: { type: "object" } }] }) });
         const log: Parameters<typeof handleResponses>[2] = { model: "", provider: "" };
-        const budget = createRequestExecutionBudget({ maxTotalModelSends: 1, baseSendAllowance: 1, finalRecoveryAllowance: 0,
+        const sendCap = cause === "budget" ? 1 : 4;
+        const budget = createRequestExecutionBudget({ maxTotalModelSends: sendCap, baseSendAllowance: sendCap, finalRecoveryAllowance: 0,
           maxAlternateTargetSends: 0, maxTargetTransitions: 0 }, undefined, attachRequestSpendTracker(request, log));
         const response = await handleResponses(request, config, log, { sendBudget: budget });
         statuses.push(response.status);
@@ -401,7 +415,9 @@ for (const ceiling of [false, true]) {
         }
       }
       expect(statuses).toEqual(ceiling ? [200, 200] : [200]);
+      if (cause === "timeout") expect(deadlineCalls).toBe(ceiling ? 4 : 2);
     } finally {
+      deadlineSpy.mockRestore();
       release();
     }
   });

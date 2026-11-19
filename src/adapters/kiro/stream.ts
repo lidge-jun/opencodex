@@ -1376,7 +1376,11 @@ export async function* parseKiroStream(
       };
       return;
     }
-    reportFirstReading();
+    // A transport timeout before the retry's dispatch receipt comes back as a synthetic 504 with
+    // no send behind it. Readings below are reported only for a retry that left, so the first
+    // response stays the one routed send and settles with the request total.
+    const retryDispatched = fallbackSends > 0;
+    if (retryDispatched) reportFirstReading();
     // The factory has retained its retry serialization. First-attempt progress remains charged
     // until the second attempt decides whether it is superseded or must be released.
     firstAssistantText = "";
@@ -1385,7 +1389,7 @@ export async function* parseKiroStream(
     fallback.releaseRequestBody?.();
     if (!fallback.response.ok) {
       // An HTTP failure body carries no usage: the retry stays unresolved at its reservation.
-      reportResponseSendReading(response, undefined);
+      if (retryDispatched) reportResponseSendReading(response, undefined);
       yield* firstResult.drainDeferred(dropHeldProse);
       const payload = await readDisplaySafeErrorPayloadText(fallback.response, fallback.abortSignal);
       const failure = classifyKiroHttpError(fallback.response.status, fallback.response.headers, payload);
