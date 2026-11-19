@@ -586,8 +586,11 @@ export async function fetchWithAttemptDeadline(
       signal: attemptTimeout.signal,
     });
   } catch (error) {
-    if (init.method?.toUpperCase() === "POST" && !abortSignal?.aborted
-      && attemptTimeout.didExpire() && error === attemptTimeout.signal.reason && options?.wasDispatched()) return replayRefusalResponse();
+    if (abortSignal?.aborted) throw abortError(abortSignal);
+    const reason = attemptTimeout.signal.reason;
+    if (init.method?.toUpperCase() === "POST" && attemptTimeout.didExpire()
+      && (error === reason || (error instanceof Error && error.cause === reason))
+      && options?.wasDispatched()) return replayRefusalResponse();
     throw error;
   } finally {
     // Only the header timer is cleared. The composed signal still contains the parent, so a

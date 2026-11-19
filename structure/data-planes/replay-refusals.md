@@ -11,7 +11,7 @@ defines the surrounding client envelope.
 
 `src/server/responses/fetch-helpers.ts`, the Google and Kiro attempt wrappers, image-model
 physical sends and native Anthropic Messages passthrough give caller cancellation precedence.
-Kiro and Google classify POST header deadlines using the attempt’s physical-send receipt. Before the receipt, Kiro returns HTTP 504 and Google retains its ordinary timeout handling.
+Kiro and Google classify POST header deadlines using the attempt’s physical-send receipt. The shared classifier accepts the owned deadline reason either as the executor rejection or as the direct cause of its Error. Caller cancellation takes precedence and propagates the caller reason. Before the receipt, Kiro returns HTTP 504 and Google retains its ordinary timeout handling.
 
 Image dispatch distinguishes a deadline before a physical send from one after that POST left;
 only the latter becomes a replay refusal. A Messages inference refusal uses HTTP 429 and the

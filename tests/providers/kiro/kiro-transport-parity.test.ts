@@ -265,17 +265,22 @@ test.each([false, true])("guarded POST header deadline with physical receipt = %
   expect(result.headers.get("x-should-retry")).toBe(dispatched ? "false" : null);
 });
 
-test("dispatched POST header deadline becomes a replay refusal without rotating; caller abort preserves its reason", async () => {
+test.each([false, true])("dispatched Kiro POST deadline and caller abort with signal cause = %s", async useSignalCause => {
   const urls: string[] = [];
   const executor = (async (input: RequestInfo | URL, init?: RequestInit) => {
     urls.push(String(input));
     return await new Promise<Response>((_resolve, reject) => {
       const signal = init?.signal;
-      if (signal?.aborted) reject(new TypeError("transport abort wrapper"));
-      else signal?.addEventListener("abort", () => reject(new TypeError("transport abort wrapper")), { once: true });
+      const rejectWrapped = () => reject(new Error("transport abort wrapper", {
+        cause: useSignalCause ? signal?.reason : new Error("unrelated transport failure"),
+      }));
+      if (signal?.aborted) rejectWrapped();
+      else signal?.addEventListener("abort", rejectWrapped, { once: true });
     });
   }) as typeof fetch;
-  const timed = await fetchKiroWithRetry(request, { executor, timeoutMs: 1 });
+  const sendBudget = createRequestExecutionBudget();
+  const timed = await fetchKiroWithRetry(request, { executor, timeoutMs: 1, sendBudget });
+  expect(sendBudget.used).toBe(1);
   expect(timed.status).toBe(429);
   expect(isReplayRefusalResponse(timed)).toBe(true);
   expect(timed.headers.get("x-should-retry")).toBe("false");

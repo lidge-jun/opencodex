@@ -51,6 +51,39 @@ test("Google retries a guarded header deadline before the physical receipt", asy
   expect(sendBudget.used).toBe(1);
 });
 
+test.each(["owned", "unrelated", "caller"] as const)("Google POST abort wrapper with %s cause", async kind => {
+  const caller = new AbortController();
+  const callerReason = new Error("caller closed");
+  const unrelatedReason = new Error("unrelated transport failure");
+  const sendBudget = budgetOf(2);
+  let sends = 0;
+  const executor = fakeFetch(async (_input, init) => {
+    if (++sends > 1) return new Response("ok");
+    const signal = init!.signal!;
+    return new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener("abort", () => {
+        reject(new Error("transport abort wrapper", { cause: kind === "unrelated" ? unrelatedReason : signal.reason }));
+      }, { once: true });
+      if (kind === "caller") caller.abort(callerReason);
+    });
+  });
+  const pending = fetchGoogleWithRetry("Antigravity", request(), {
+    executor, sendBudget, abortSignal: caller.signal, timeoutMs: 1,
+  });
+  if (kind === "caller") {
+    await expect(pending).rejects.toBe(callerReason);
+  } else {
+    const response = await pending;
+    expect({ status: response.status, sends, charges: sendBudget.used }).toEqual(
+      kind === "owned" ? { status: 429, sends: 1, charges: 1 } : { status: 200, sends: 2, charges: 2 },
+    );
+    expect(response.headers.get("x-should-retry")).toBe(kind === "owned" ? "false" : null);
+    expect(response.headers.get("retry-after")).toBeNull();
+  }
+  expect(sends).toBe(kind === "unrelated" ? 2 : 1);
+  expect(sendBudget.used).toBe(sends);
+});
+
 describe("Google retry ownership and repair counterexamples", () => {
   test("abort just after retry classification cleans up the still-owned response", () => withClock(async clock => {
     const first = finiteBody(503);
