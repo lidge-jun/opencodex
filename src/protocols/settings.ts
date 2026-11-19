@@ -65,6 +65,7 @@ export interface ProtocolRolloutSettings {
   managedMessagesNativeOAuth: boolean;
   directEncoders: boolean;
   antigravityDirect: boolean;
+  geminiNativeAntigravity: boolean;
   shadowPlan: boolean;
 }
 
@@ -108,6 +109,7 @@ export function resolveProtocolSettings(config: ProtocolConfig, providerName?: s
       antigravityDirect: validContainers && (Object.hasOwn(rollout, "antigravityDirect")
         ? rollout.antigravityDirect === true
         : true),
+      geminiNativeAntigravity: on("geminiNativeAntigravity"),
       shadowPlan: on("shadowPlan"),
     }),
   });
@@ -153,6 +155,7 @@ export function protocolPolicyRevision(config: ProtocolConfig & Pick<OcxConfig, 
       secondarySettings.rollout.managedMessagesNativeOAuth,
       settings.rollout.directEncoders,
       settings.rollout.antigravityDirect,
+      settings.rollout.geminiNativeAntigravity,
       settings.rollout.shadowPlan,
     ],
   });

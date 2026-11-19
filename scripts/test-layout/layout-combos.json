@@ -11,6 +11,9 @@
   "combo-cooldown-persistence.test.ts": "routing",
   "combo-unoffered-tool-refusal.test.ts": "routing",
   "server-combo-cooldown-recording.test.ts": "server",
+  "combo-capability-policy.test.ts": "codex-integration",
+  "combo-request-capability.test.ts": "codex-integration",
+  "combo-capability-policy-config.test.ts": "config",
   "combo-selection-keepalive.test.ts": "routing",
   "server-combo-selection-keepalive.test.ts": "server"
 }

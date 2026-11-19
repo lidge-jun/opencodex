@@ -381,6 +381,8 @@ The message says no additional provider request was sent when the current reques
 physical sends; an admission refusal before its first send retains the no-provider wording.
 Coverage: `tests/responses/chat-native-spend.test.ts` and `tests/responses/responses-spend-contract-c.test.ts`.
 
+For a named hosted Advisor, union capability admission counts only destinations that can forward the scoped declaration. An otherwise eligible text-only destination can still receive an image-omission fallback under `degrade`.
+
 ## Committed terminal cooldown and degenerate completion failover
 
 When a streaming combo child commits output to the client and then terminates `incomplete`,

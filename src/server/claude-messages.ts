@@ -1478,7 +1478,8 @@ async function handleClaudeMessagesWithBudget(
       && message === CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE;
     // The undeclared-tool guard's refusal is deterministic: the same request produces the
     // same verdict, so it must not arrive as a retryable overload like a transient 5xx.
-    const transient = !replayRefusal && !nativeMainFence && !contextError && !catalogRefusal
+    const localComboUnavailable = response.status === 503 && originalCode === "combo_unavailable" && isProxyError(response);
+    const transient = !localComboUnavailable && !replayRefusal && !nativeMainFence && !contextError && !catalogRefusal
       && isTransientUpstreamStatus(response.status);
     const outStatus = replayRefusal
       ? REPLAY_REFUSED_STATUS
@@ -1488,7 +1489,7 @@ async function handleClaudeMessagesWithBudget(
     if (clientRetryAfter) outHeaders.set("Retry-After", clientRetryAfter);
     else if (transient) outHeaders.set("Retry-After", "2");
     if (replayRefusal) applyReplayRefusalClientHeaders(outHeaders);
-    const decidedCode = replayRefusal ? isReplayRefusalCode(originalCode) ? originalCode : UPSTREAM_RESET_REPLAY_REFUSED_CODE : contextError ? "context_length_exceeded" : catalogRefusal ? UNDECLARED_TOOL_CALL_ERROR_CODE : undefined;
+    const decidedCode = replayRefusal ? isReplayRefusalCode(originalCode) ? originalCode : UPSTREAM_RESET_REPLAY_REFUSED_CODE : contextError ? "context_length_exceeded" : catalogRefusal ? UNDECLARED_TOOL_CALL_ERROR_CODE : localComboUnavailable ? originalCode : undefined;
     const legacy = anthropicErrorBody(outStatus, message, undefined, decidedCode);
     const legacyBody = JSON.stringify(legacy);
     const out = new Response(JSON.stringify(ownedAnthropicErrorPayload({

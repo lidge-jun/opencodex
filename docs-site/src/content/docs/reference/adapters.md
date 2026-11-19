@@ -497,6 +497,11 @@ MiMo model Command Code serves.
 
 ## `google`
 
+The Gemini-compatible `/v1beta` inbound can opt in to source-preserving generation over the
+canonical `google-antigravity` OAuth provider with `protocols.rollout.geminiNativeAntigravity: true`.
+The default is off. This applies to Gemini inbound requests after routing and admission. See
+[Native Gemini with Antigravity](/reference/proxy-formats/#native-gemini-with-antigravity).
+
 **Targets:** Google **Gemini**, **Vertex AI**, and Antigravity **Cloud Code Assist**. AI Studio uses
 `/v1beta/models/{model}:streamGenerateContent`; the other modes use their native Google endpoints.
 **Auth:** API key, Vertex ADC, or Google Antigravity OAuth, selected by `googleMode`.

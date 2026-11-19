@@ -586,6 +586,19 @@
       ]
     },
     {
+      "path": "data-planes/gemini-native.md",
+      "tier": 3,
+      "title": "Native Gemini Inbound",
+      "scope": "Opt-in source-preserving Gemini requests over Antigravity OAuth within the shared Gemini ingress.",
+      "documents": [
+        "src/server/gemini-native.ts",
+        "src/server/gemini-native-wire.ts",
+        "src/server/gemini-native-catalog.ts",
+        "src/server/gemini-native-log.ts",
+        "src/server/index/gemini-routes.ts"
+      ]
+    },
+    {
       "path": "data-planes/ollama-inbound.md",
       "tier": 3,
       "title": "Ollama-Compatible Inbound",
@@ -1544,6 +1557,7 @@
         "src/service/logging.ts",
         "src/combos/resolve.ts",
         "src/combos/request.ts",
+        "src/combos/request-capability.ts",
         "src/server/responses/core-combo.ts"
       ]
     },
