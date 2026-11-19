@@ -3,7 +3,8 @@
  * No agy settings file is changed. Idea follows Magpie (MIT, (c) yetone), internal/agent/agy.go.
  */
 import { existsSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
+import { redactUserPath } from "../../lib/redact";
 import {
   adminGatewayOverride, assertClientSize, checkedClientDestination, clientRefusal, dropStash, envGatewayOverride,
   inspectClientFile, inspectStashPresence, isRestoreFile, mkdirTracked, mutateClient, readClientFile, readStash,
@@ -126,9 +127,10 @@ function blockSpan(text: string): BlockSpan | "malformed" | null {
   return { start, end };
 }
 
-function markerRefusal(hasRecord: boolean): GatewayClientResult {
-  const message = "An agy profile has incomplete or ambiguous block markers.";
-  return clientRefusal(hasRecord ? message + " The restore record was kept." : message, "unsupported-file");
+function profileRestoreRefusal(ctx: GatewayClientContext, path: string): GatewayClientResult {
+  const profilePath = redactUserPath(`~/${relative(ctx.home, path).split(sep).join("/")}`);
+  const message = `OpenCodex could not verify the agy profile at ${profilePath}. Restore the complete marked agy block or the saved original profile, then retry.`;
+  return { ...clientRefusal(message, "agy-profile-restore-required"), profilePath };
 }
 
 type Encoding = "utf8" | "utf16le";
@@ -213,7 +215,8 @@ function connect(ctx: GatewayClientContext, target: GatewayTarget): GatewayClien
     if (!decoded) return clientRefusal(`${path} is not UTF-8 or BOM-prefixed UTF-16LE text.`, "unsupported-file");
     const span = blockSpan(decoded.text);
     if (span === "malformed" || (!span && prev && file && !matchesRestoredProfile(prev, file))) {
-      return markerRefusal(old !== null);
+      return prev ? profileRestoreRefusal(ctx, path)
+        : clientRefusal("An agy profile has incomplete or ambiguous block markers.", "unsupported-file");
     }
     if (selected.has(path)) checked.push({ path, kind, file, allowedPaths, ...decoded, span });
   }
@@ -297,7 +300,7 @@ function disconnect(ctx: GatewayClientContext): GatewayClientResult {
     const { text, encoding } = decoded;
     const span = blockSpan(text);
     if (!span || span === "malformed") {
-      if (entry && (span === "malformed" || !matchesRestoredProfile(entry, file))) return markerRefusal(true);
+      if (entry && (span === "malformed" || !matchesRestoredProfile(entry, file))) return profileRestoreRefusal(ctx, path);
       continue;
     }
     const bytes = encode(text.slice(0, span.start) + text.slice(span.end), encoding);

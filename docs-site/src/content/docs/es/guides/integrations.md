@@ -758,12 +758,12 @@ Conectar registra lo que reemplazó. Desconectar restaura los bytes originales c
 cambiado y, en caso contrario, revierte solo las entradas propias de OpenCodex y conserva tus otras
 ediciones. Antigravity puede restaurar la configuración aunque se reordenen las claves JSON y conserva
 el archivo y el registro de restauración si hay un conflicto con un ajuste gestionado.
-Si los marcadores de `agy` están incompletos o son ambiguos, la conexión deja los perfiles como están.
-Para un perfil registrado, la desconexión también se detiene y conserva el registro si no puede
-confirmar que se eliminó el bloque. Repón el valor gestionado o los marcadores y vuelve a intentar
-la desconexión. Un bloque completo de
-`agy` se elimina entero, incluidas las ediciones en su interior. Un enlace simbólico de un perfil de
-`agy` debe apuntar a otro perfil compatible
+Para resolver un conflicto de Antigravity, repón el valor que aplicó OpenCodex y vuelve a intentarlo.
+Si OpenCodex muestra `agy-profile-restore-required`, abre el perfil de shell indicado en el error.
+Recupera de una copia el bloque completo de `agy`, incluidas las dos líneas de marcador y la función
+entre ellas, y vuelve a intentar la desconexión o la desinstalación. OpenCodex elimina el bloque entero
+y conserva los cambios que quedan fuera. También puedes restaurar el perfil original guardado, lo que
+reemplaza las ediciones posteriores. Un enlace simbólico de un perfil de `agy` debe apuntar a otro perfil compatible
 de la misma familia de shells dentro de tu directorio personal. El archivo de configuración de
 Antigravity debe resolverse a la ruta exacta `~/.antigravity/settings.json`. Reinicia Antigravity, o
 abre una terminal nueva para `agy`, para aplicar un cambio. Al desconectar, `agy` omite los perfiles

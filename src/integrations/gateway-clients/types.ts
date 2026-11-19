@@ -57,11 +57,13 @@ export interface GatewayClientStatus {
   defaultModel?: string;
 }
 
-export type GatewayRefusalCode = "unsupported-file" | "io-error";
+export type GatewayRefusalCode = "unsupported-file" | "agy-profile-restore-required" | "io-error";
 
 export interface GatewayClientResult {
   ok: boolean;
   code?: GatewayRefusalCode;
+  /** Home-relative display path for an agy profile that needs repair. */
+  profilePath?: string;
   message: string;
   changed: boolean;
   changedFiles: string[];

@@ -51,8 +51,7 @@ test.each(markerDamage)("agy refuses to disconnect or reconnect a profile with %
   const saved = read(record("agy"));
 
   expect(agy.disconnect(ctx)).toMatchObject({
-    ok: false, code: "unsupported-file", changed: false, changedFiles: [],
-    message: "An agy profile has incomplete or ambiguous block markers. The restore record was kept.",
+    ok: false, code: "agy-profile-restore-required", profilePath: "~/.zshrc", changed: false, changedFiles: [],
   });
   expect(read(bash)).toBe(connectedBash);
   expect(read(zsh)).toBe(damaged);
@@ -60,7 +59,7 @@ test.each(markerDamage)("agy refuses to disconnect or reconnect a profile with %
   expect(agy.status(ctx, target).state).toBe("drifted");
 
   expect(agy.connect(ctx, { ...target, url: "http://127.0.0.1:10200" })).toMatchObject({
-    ok: false, code: "unsupported-file", changed: false, changedFiles: [],
+    ok: false, code: "agy-profile-restore-required", profilePath: "~/.zshrc", changed: false, changedFiles: [],
   });
   expect(read(bash)).toBe(connectedBash);
   expect(read(zsh)).toBe(damaged);

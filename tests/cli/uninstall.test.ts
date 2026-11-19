@@ -999,13 +999,13 @@ describe("uninstall restores recorded third-party integrations before deleting r
       const saved = readFileSync(record, "utf8");
       expect(damaged).not.toBe(connected);
       writeFileSync(profile, damaged);
-      expect(GATEWAY_CLIENTS.agy.disconnect(context)).toMatchObject({ ok: false, code: "unsupported-file" });
+      expect(GATEWAY_CLIENTS.agy.disconnect(context)).toMatchObject({ ok: false, code: "agy-profile-restore-required" });
       const reconnect = connectGatewayClient("agy", context, config, config.port + 1);
       f.deps.remove = () => removeGatewayFixtureConfig(f.configDir);
 
       await expect(removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
         .rejects.toThrow("Gateway client cleanup refused for agy");
-      expect(reconnect).toMatchObject({ ok: false, code: "unsupported-file", changed: false });
+      expect(reconnect).toMatchObject({ ok: false, code: "agy-profile-restore-required", changed: false });
       expect(readFileSync(profile, "utf8")).toBe(damaged);
       expect(readFileSync(record, "utf8")).toBe(saved);
 
@@ -1013,6 +1013,35 @@ describe("uninstall restores recorded third-party integrations before deleting r
       expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
         .toEqual({ status: "removed", residualPaths: [] });
       expect(readFileSync(profile, "utf8")).toBe(original);
+      expect(existsSync(record)).toBe(false);
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+
+  test("uninstall can retry after the whole agy block is restored beside an unrelated edit", async () => {
+    const f = await fixture({ gatewayOnly: true });
+    try {
+      const profile = join(f.home, ".bashrc");
+      const record = join(f.configDir, "gateway-clients", "agy.json");
+      const original = "# existing shell profile\n";
+      writeFileSync(profile, original);
+      expect(connectGatewayClient("agy", f.deps.gatewayContext(), config, config.port).ok).toBe(true);
+      const connected = readFileSync(profile, "utf8");
+      const completeBlock = connected.slice(connected.indexOf("# >>> opencodex agy >>>"));
+      expect(completeBlock).toContain("# <<< opencodex agy <<<");
+      const saved = readFileSync(record, "utf8");
+      const edited = original + "export USER_EDIT=1\n";
+      writeFileSync(profile, edited);
+      f.deps.remove = () => removeGatewayFixtureConfig(f.configDir);
+
+      await expect(removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .rejects.toThrow("OpenCodex could not verify the agy profile at ~/.bashrc. Restore the complete marked agy block or the saved original profile, then retry.");
+      expect(readFileSync(profile, "utf8")).toBe(edited);
+      expect(readFileSync(record, "utf8")).toBe(saved);
+
+      writeFileSync(profile, edited + completeBlock);
+      expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .toEqual({ status: "removed", residualPaths: [] });
+      expect(readFileSync(profile, "utf8")).toBe(edited);
       expect(existsSync(record)).toBe(false);
     } finally { rmSync(f.root, { recursive: true, force: true }); }
   });

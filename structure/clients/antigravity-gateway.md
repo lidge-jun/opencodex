@@ -65,9 +65,12 @@ the original and pending states after an interrupted write. A profile is read as
 bytes or as BOM-prefixed UTF-16LE (used by Windows PowerShell 5.1 redirection). It is written back
 in the same encoding. Connect refuses incomplete or ambiguous agy markers before staging any profile
 updates. During disconnect, an untracked profile that cannot be resolved or read is skipped.
-If a recorded profile cannot be decoded or has incomplete or ambiguous markers, disconnect refuses with
-`unsupported-file` and keeps the recovery record. When both markers are absent from a recorded profile,
-connect and disconnect require its bytes to match the saved original or a journaled path-wise restore.
+If a recorded profile cannot be decoded, disconnect refuses with `unsupported-file` and keeps the
+recovery record. Incomplete or ambiguous markers in a recorded profile yield
+`agy-profile-restore-required`. When both markers are absent, connect and disconnect require its
+bytes to match the saved original or a journaled path-wise restore, or return the same refusal.
+The refusal names the home-relative profile and asks the user to restore the complete marked block
+or the saved original profile before retrying. The CLI and uninstall surface the same repair message.
 Disconnect records the expected hash before a path-wise write so a retry can verify profiles whose
 restore already finished.
 Antigravity uses the same refusal for a managed settings conflict or a settings file it cannot parse.
@@ -95,8 +98,9 @@ credential. An override set only in the Antigravity process is invisible to Open
 `src/server/management-api.ts` does not name it. Every note and override in a status carries a stable
 `code` beside its English `text` or `detail` (`GATEWAY_NOTE_TEXT` in `types.ts` is the one English
 source); the CLI prints the English, the dashboard tab translates the code, and an action's outcome is
-rendered from `code`, `changed` and `restore` rather than from `message`. A refusal is HTTP 409 with `{ok, code, message}`, an
-unknown id is 404. The routes sit behind the ordinary management auth and origin checks, and a sibling
+rendered from `code`, `changed` and `restore`. A refusal is HTTP 409 with `{ok, code, message}`. The
+agy profile repair refusal also includes a display-only `profilePath` for the translated guidance.
+An unknown id is 404. The routes sit behind the ordinary management auth and origin checks, and a sibling
 instance refuses the mutations. `ocx connect|disconnect antigravity|agy` and
 `ocx connect antigravity|agy status` in `src/cli/gateway-client-command.ts` call those routes through the
 running proxy and run the same connectors in-process when the proxy is not running. The dispatch branch sits
