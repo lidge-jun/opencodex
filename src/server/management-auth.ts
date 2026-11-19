@@ -77,6 +77,9 @@ import { forgetGuiDevice, rememberGuiDevice, rememberedGuiSessionIsCurrent, resu
 import { hasLocalAccountSwitchCapability } from "./local-account-switch-auth";
 import { authorizationCredential } from "../lib/authorization-scheme";
 import { authorizeDesktopSession, desktopSessionAuthorized } from "./gui-desktop-authorization";
+import { HUB_RELAY_TOKEN_PREFIX } from "../remote/hub-management-relay";
+import { admitHubRelayRead } from "./hub-relay-auth";
+
 export type { GuiSessionBootstrap, GuiSessionRequestContext } from "./gui-session";
 
 const LOCAL_READ_REPLAY_LIMIT = 256;
@@ -357,6 +360,7 @@ export function createManagementSessionControl(state: ManagementAuthState): Mana
  */
 export type ManagementPrincipal =
   | "admin-token"
+  | "hub-relay-read"
   | "opencode-catalog-token"
   | "gui-session"
   | "gui-pair-capability"
@@ -583,6 +587,10 @@ function resolveManagementAdmission(
   config?: OcxConfig,
   local?: LocalManagementAuthContext,
 ): ManagementPrincipal | null {
+  const actual = requestManagementCredential(req);
+  if (actual?.startsWith(HUB_RELAY_TOKEN_PREFIX)) {
+    return state.available && config && admitHubRelayRead(state, req, config, actual) ? "hub-relay-read" : null;
+  }
   const cached = admittedManagementRequests.get(req);
   if (cached) return cached;
   let principal: ManagementPrincipal | null = null;
@@ -594,7 +602,6 @@ function resolveManagementAdmission(
   else if (hasLocalReadCapability(req, local)) principal = "local-read-capability";
   else if (hasGuiPairCapability(req, local)) principal = "gui-pair-capability";
   else if (state.available) {
-    const actual = requestManagementCredential(req);
     if (actual && equalSecret(actual, state.token)) principal = "admin-token";
     else if (actual && isOpencodeCatalogRequest(req) && equalSecret(actual, opencodeCatalogToken(state.token))) {
       principal = "opencode-catalog-token";

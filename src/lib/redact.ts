@@ -1,6 +1,7 @@
 import { foldForMatching } from "./redact-folding";
 
 export const REDACTED_SECRET = "[REDACTED]";
+const HUB_RELAY_TOKEN_PATTERN = /ocx_hub_relay_[A-Za-z0-9_-]{43}/g;
 
 // Minted management, dashboard, catalog-read, device/pairing, data-plane and Remote Workspace credential values.
 // Match inside quoted strings and identifiers as well as standalone tokens.
@@ -15,7 +16,7 @@ export function redactOpenCodexCredentials(value: string): string {
  * credentials over an unsafe channel (e.g. plaintext non-loopback HTTP) rather than
  * re-deriving a narrower local list.
  */
-export const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-cookie|set-cookie2|api[-_]?key|x-api-key|x-goog-api-key|x-amz-security-token|x-dsh-auth-token|x-openai-agent-assertion|copilot[-_]?session[-_]?token|session[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|client[-_]?secret|password|profile[-_]?arn|exa[-_]?api[-_]?key)$/i;
+export const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-cookie|set-cookie2|api[-_]?key|x-api-key|x-opencodex-api-key|x-goog-api-key|x-amz-security-token|x-dsh-auth-token|x-openai-agent-assertion|copilot[-_]?session[-_]?token|session[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|client[-_]?secret|password|profile[-_]?arn|exa[-_]?api[-_]?key)$/i;
 
 /**
  * Colon-labelled credential headers echoed back inside an error body
@@ -48,7 +49,7 @@ export const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cook
 // Every letter position also accepts \u0001, the placeholder the fold emits for
 // an unresolved HTML named reference: `author&ii;zation` is the label with one
 // character we cannot name, and that is still the label.
-const CREDENTIAL_HEADER_LABEL_RAW = "copilot[_-]?session[_-]?token|session[_-]?token|sessionToken|x-openai-agent-assertion|x-api-key|x-goog-api-key|x-amz-security-token|x-dsh-auth-token|api[_-]?key|apiKey|exa[_-]?api[_-]?key|exaApiKey|access[_-]?token|accessToken|refresh[_-]?token|refreshToken|id[_-]?token|client[_-]?secret|clientSecret|authorization|proxy-authorization|cookie|set-cookie|password|secret|token";
+const CREDENTIAL_HEADER_LABEL_RAW = "copilot[_-]?session[_-]?token|session[_-]?token|sessionToken|x-openai-agent-assertion|x-api-key|x-opencodex-api-key|x-goog-api-key|x-amz-security-token|x-dsh-auth-token|api[_-]?key|apiKey|exa[_-]?api[_-]?key|exaApiKey|access[_-]?token|accessToken|refresh[_-]?token|refreshToken|id[_-]?token|client[_-]?secret|clientSecret|authorization|proxy-authorization|cookie|set-cookie|password|secret|token";
 
 const CREDENTIAL_HEADER_LABEL = CREDENTIAL_HEADER_LABEL_RAW
   .replace(/(?<![\[\\])([A-Za-z])(?![\]\-])/g, "[$1\u0001]");
@@ -331,6 +332,7 @@ function maskCredentialHeadersOnce(value: string, decodeEscapes: boolean): strin
 }
 
 const SECRET_VALUE_PATTERNS: Array<[RegExp, string] | ((value: string) => string)> = [
+  [HUB_RELAY_TOKEN_PATTERN, REDACTED_SECRET],
   // A Bearer token outside a labelled header (prose, JSON fragments, logs).
   // Horizontal whitespace only: `\s+` crossed line boundaries and masked the
   // first word of the NEXT line when a header was quoted with a trailing break.
@@ -457,7 +459,7 @@ export function redactUrlForLog(url: string): string {
     parsed.password = "";
     parsed.search = "";
     parsed.hash = "";
-    return parsed.toString();
+    return parsed.toString().replace(HUB_RELAY_TOKEN_PATTERN, REDACTED_SECRET);
   } catch {
     return redactSecretString(url.split("?")[0] ?? url);
   }

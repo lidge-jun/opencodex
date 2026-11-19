@@ -29,6 +29,8 @@ import { clientInitiatedLinkReadiness, createHomeInitiatedLinkReadiness } from "
 import { createClientLinkSupervisor, type ClientLinkSupervisor } from "./link-tunnel";
 import { clientLinkStatePath, isChildInitiatedLink, recordChildInitiatedLink } from "./link-state";
 import { startMachineListener, type MachineListenerDeps } from "./machine-listener";
+import { startHubRelayLeaseRefresh } from "./hub-relay";
+import { currentHubRelayAdmission } from "./hub-session";
 import { isLinkConnection, readClientConnectionState, readClientConnectionStateWithEvidence } from "./state";
 import { withClientLifecycleSync } from "./lifecycle-lock";
 import { clientConnectionEnded, clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, LEGACY_FLAG_RESTART_OWNER, restartOwnerEvidence, type ClientRestartController, type RecordedRestartOwner, type RestartOwner } from "./runtime-restart";
@@ -45,6 +47,7 @@ let activeSupervisor: ClientLinkSupervisor | null = null;
 let activeReporter: LinkParityReporter | null = null;
 let activeRouteWatch: RouteIntentRuntimeWatch | null = null;
 let activeRouteSync: RouteIntentTick | null = null;
+let activeHubRelayRefresh: { stop(): void } | null = null;
 // The local-credential observer lives exactly while this process serves (status attestation).
 // Every path that stops serving stops it, including a recycle back to standalone.
 let activeCredentialObservation: { stop(): void } | null = null;
@@ -193,6 +196,7 @@ export async function recycleStandalone(
     ? withSiblingMarker(standaloneRecycleEnv(process.env, disconnectedTokenFingerprint), issueSiblingHandoff)
     : null;
   activeCredentialObservation?.stop(); activeCredentialObservation = null;
+  activeHubRelayRefresh?.stop(); activeHubRelayRefresh = null;
   activeReporter?.stop(); activeReporter = null;
   activeRouteWatch?.stop(); activeRouteWatch = null;
   activeRouteSync?.stop(); activeRouteSync = null;
@@ -403,6 +407,10 @@ export async function startClientRuntime(
       // A new generation per publication: syncs admitted before a failed restart refuse to commit
       // into the runtime that serves again, while syncs admitted from here on proceed.
       writeRuntimePort({ ...clientRuntimeRecord(process.pid, boundPort, attestationSecret), servingGeneration: randomUUID() });
+      if (!linkMode) {
+        activeHubRelayRefresh ??= startHubRelayLeaseRefresh(state.value.managementUrl,
+          (method, target) => currentHubRelayAdmission(state.value, method, target));
+      }
       if (linkMode && state.value.link && linkKey) {
         activeReporter = createLinkParityReporter({ connection: state.value, linkKey, runtimeStartedAt: CLIENT_RUNTIME_STARTED_AT });
         activeReporter.start();
@@ -438,6 +446,7 @@ export async function startClientRuntime(
   const stopServing = async (drainMs: number): Promise<void> => {
     activeCredentialObservation?.stop();
     activeCredentialObservation = null;
+    activeHubRelayRefresh?.stop(); activeHubRelayRefresh = null;
     activeReporter?.stop();
     activeReporter = null;
     activeRouteWatch?.stop(); activeRouteWatch = null;
@@ -531,6 +540,7 @@ export async function startClientRuntime(
       syncFenced = !linkMode || await markClientRuntimeStoppingWithRetry({ pid: process.pid, port: servedPort, attestationSecret });
       activeCredentialObservation?.stop();
       activeCredentialObservation = null;
+      activeHubRelayRefresh?.stop(); activeHubRelayRefresh = null;
       activeReporter?.stop();
       activeReporter = null;
       activeRouteWatch?.stop(); activeRouteWatch = null;
