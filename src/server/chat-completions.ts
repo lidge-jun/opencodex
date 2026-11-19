@@ -796,7 +796,7 @@ async function handleChatCompletionsWithBudget(
       });
     } catch (err) {
       if (isChatCompletionsStreamError(err)) {
-        return ownedChatErrorResponse(err.status, err.message, err.type, err.code, failureVerdictSink.contract, failureVerdictSink.proxyAuthored);
+        return ownedChatErrorResponse(err.status, err.message, err.type, err.code, failureVerdictSink.contract, failureVerdictSink.proxyAuthored, failureVerdictSink.replayVeto);
       }
       return ownedChatErrorResponse(
         502,

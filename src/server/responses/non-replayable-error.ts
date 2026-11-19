@@ -1,7 +1,7 @@
 import { carryProxyError, ownedChatErrorPayload } from "../../lib/client-error-body";
 import { httpStatusFromTerminalError, responsesCompletionError } from "../../lib/errors";
 import {
-  applyReplayRefusalClientHeaders, carryReplayRefusal, carryReplayRefusalToClient, hasClientReplayVeto, hasNoRetryDirective, hasUpstreamReplayRefusal, invitesResendAfterReplacement, isNonReplayableResponse,
+  applyReplayRefusalClientHeaders, withheldReplayDiagnostic, carryReplayRefusal, carryReplayRefusalToClient, hasClientReplayVeto, hasNoRetryDirective, hasUpstreamReplayRefusal, invitesResendAfterReplacement, isNonReplayableResponse,
   isNonReplayableUpstreamCode, isReplayRefusalCode, isReplayRefusalProjection, isReplayRefusalResponse, replayRefusalBodyCode,
   isTerminalResetReplacement, markResponseNonReplayable, observedReplayRefusalCode, projectReplayRefusal, UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../../lib/upstream-retry";
@@ -93,7 +93,7 @@ export async function sanitizeNonReplayableUpstreamError(
   }
   // Upstream text is not forwarded here: no bounded redaction can be proven complete against a client's decoders.
   const body = JSON.stringify({ error: { type, ...(code === undefined ? {} : { code }),
-    message: `Provider error ${response.status}: upstream diagnostic withheld for a non-replayable failure`,
+    message: withheldReplayDiagnostic(response.status),
   } });
   const headers = new Headers({ "content-type": "application/json" });
   if (hasClientReplayVeto(response) || hasNoRetryDirective(response)) applyReplayRefusalClientHeaders(headers);

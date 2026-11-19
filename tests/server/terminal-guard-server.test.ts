@@ -1,3 +1,4 @@
+import { getCachedProviderAccountQuota } from "../../src/providers/quota/account-cache";
 import { REPLAY_REFUSAL_MESSAGE } from "../../src/lib/upstream-retry";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
@@ -241,7 +242,7 @@ describe("server terminal guard integration", () => {
    * first leg reports usage unless `firstUsageless`; `credits` adds that credit reading to every
    * usage the parser reports, as a credit-billed provider would.
    */
-  async function oauthRotation(opts: { reported: boolean; firstUsageless?: boolean; credits?: number }) {
+  async function oauthRotation(opts: { reported: boolean; firstUsageless?: boolean; credits?: number; inconclusive?: boolean }) {
     const previousHome = process.env.OPENCODEX_HOME;
     const home = mkdtempSync(join(tmpdir(), "ocx-terminal-guard-oauth-usage-"));
     process.env.OPENCODEX_HOME = home;
@@ -275,8 +276,10 @@ describe("server terminal guard integration", () => {
         if (auth.length === 1) return Response.json({ type: "message", role: "assistant",
           content: [{ type: "text", text: "我接下来会修改相关文件。" }], stop_reason: "end_turn",
           ...(opts.firstUsageless ? {} : { usage: { input_tokens: 10, output_tokens: 2 } }) });
-        if (auth.length === 2) return Response.json({ type: "error", error: { type: "rate_limit_error", message: "rate limit exceeded" } },
-          { status: 429, headers: { "retry-after": "120" } });
+        if (auth.length === 2) return Response.json({
+          ...(opts.inconclusive ? { padding: "x".repeat(32_000) } : {}),
+          type: "error", error: { type: "rate_limit_error", message: "rate limit exceeded" },
+        }, { status: 429, headers: { "retry-after": "120", "anthropic-ratelimit-unified-5h-utilization": "0.91" } });
         return Response.json({ type: "message", role: "assistant", stop_reason: "tool_use",
           content: [{ type: "tool_use", id: "toolu_1", name: "exec_command", input: {} }],
           ...(opts.reported ? { usage: { input_tokens: 20, output_tokens: 3 } } : {}) });
@@ -298,7 +301,8 @@ describe("server terminal guard integration", () => {
       const ledger = records.flatMap(record => record?.kind === "settle" ? [{ send: dispatched.indexOf(record.send) + 1, tokens: record.tokens }]
         : record?.kind === "lost" ? [{ send: dispatched.indexOf(record.send) + 1, tokens: "lost" as const }] : [])
         .sort((a, b) => a.send - b.send);
-      return { status: response.status, body, auth, row, ledger, accounts: [firstAccount, replacementAccount] };
+      const quota = [firstAccount!, replacementAccount!].map(id => getCachedProviderAccountQuota("anthropic", id)?.fiveHourPercent);
+      return { status: response.status, body, auth, row, ledger, quota, accounts: [firstAccount, replacementAccount] };
     } finally {
       adapterSpy.mockRestore();
       releaseInheritedSpendHome?.();
@@ -327,6 +331,15 @@ describe("server terminal guard integration", () => {
     // #8902: account A's first send settles its own 12 tokens, the usage-less 429 stays
     // unresolved, and account B's send settles only what it reported.
     expect(ledger).toEqual([{ send: 1, tokens: 12 }, { send: 2, tokens: "lost" }, { send: 3, tokens: reported ? 23 : "lost" }]);
+  });
+
+  test("an inconclusive OAuth continuation preserves the issuing account's quota and send settlement", async () => {
+    const { body, auth, quota, ledger } = await oauthRotation({ reported: false, inconclusive: true });
+    expect(auth).toEqual(["Bearer fixture-access-a", "Bearer fixture-access-a"]);
+    expect(quota).toEqual([91, undefined]);
+    expect(ledger).toEqual([{ send: 1, tokens: 12 }, { send: 2, tokens: "lost" }]);
+    expect(body).toMatchObject({ status: "failed", retryable: false,
+      error: { message: "Provider error 429: upstream diagnostic withheld for a non-replayable failure" } });
   });
 
   // #8452 across a rotation: the rotation reuses the live attempt object for account B, so a
@@ -478,6 +491,67 @@ describe("server terminal guard integration", () => {
       expect(failed.response.error).toMatchObject({ code: veto, message: REPLAY_REFUSAL_MESSAGE });
     }
   });
+
+  for (const path of ["responses", "chat/completions"] as const) {
+    for (const stream of [true, false]) {
+      for (const directEncoders of path === "responses" ? [false] : [false, true]) {
+        const variants = path === "responses" ? ["inconclusive", "ordinary"]
+          : ["upstream_response_refused", "upstream_reset_replay_refused", "header", "inconclusive", "ordinary"];
+        test.each(variants)(`${path} stream=${stream} direct=${directEncoders} continuation %s`, async variant => {
+          takeInheritedSpendHome();
+          const chat = path === "chat/completions";
+          const coded = variant.startsWith("upstream_");
+          const veto = variant !== "ordinary";
+          globalThis.fetch = (async () => {
+            calls += 1;
+            if (calls === 1) return (stream || chat) ? anthropicSse(firstTurn) : Response.json({
+              id: "msg_fixture", type: "message", role: "assistant", model: "se-claude-opus-4.8",
+              content: [{ type: "text", text: "我接下来会修改相关文件。" }],
+              stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 2 },
+            });
+            return Response.json({
+              ...(variant === "inconclusive" ? { padding: "x".repeat(32_000) } : {}),
+              error: { ...(coded ? { code: variant } : {}), message: "fixture diagnostic" },
+            }, { status: 429, headers: veto ? {
+              "retry-after": "30", ...(variant === "header" ? { "x-should-retry": "false" } : {}),
+            } : {} });
+          }) as typeof fetch;
+          const tool = { name: "exec_command", description: "run a command", parameters: { type: "object" } };
+          const input = "请检查这个问题并修复代码";
+          const log: RequestLogContext = { model: "", provider: "" };
+          const response = await (chat ? handleChatCompletions : handleResponses)(
+            new Request(`http://localhost/v1/${path}`, {
+              method: "POST", headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                model: "se-claude-opus-4.8", stream,
+                ...(chat ? { messages: [{ role: "user", content: input }], tools: [{ type: "function", function: tool }],
+                  ...(stream ? { stream_options: { include_usage: true } } : {}) }
+                  : { input, tools: [{ type: "function", ...tool }] }),
+              }),
+            }), { ...config, protocols: { rollout: { directEncoders } } } as OcxConfig, log);
+          const body = await response.text();
+          const frames = stream ? body.split("\n").filter(line => line.startsWith("data: {"))
+            .map(line => JSON.parse(line.slice(6))) : [];
+          const terminal = stream ? chat ? frames.find(frame => frame.error)
+            : frames.find(frame => frame.type === "response.failed")?.response : JSON.parse(body);
+          expect(calls).toBe(2);
+          expect(log.usage).toMatchObject({ inputTokens: 10, outputTokens: 2 });
+          if (chat && stream) {
+            expect(frames.filter(frame => frame.usage).map(frame => frame.usage))
+              .toEqual([expect.objectContaining({ prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 })]);
+          }
+          expect(response.headers.get("retry-after")).toBeNull();
+          if (coded) expect(terminal?.error).toMatchObject({ code: variant, message: REPLAY_REFUSAL_MESSAGE });
+          else if (veto) expect(terminal?.error?.message).toBe("Provider error 429: upstream diagnostic withheld for a non-replayable failure");
+          else if (chat) expect(terminal?.error).toMatchObject({ code: "rate_limit_exceeded" });
+          else expect(terminal?.error?.message).toContain("fixture diagnostic");
+          if (!stream) expect(response.headers.get("x-should-retry")).toBe(veto ? "false" : null);
+          if (chat && !stream) expect(response.status).toBe(429);
+          if (!chat) expect(terminal?.retryable).toBe(veto ? false : undefined);
+        });
+      }
+    }
+  }
 
   test("terminal-guard continuation retry budget stays per request across key failover", async () => {
     const previousHome = process.env.OPENCODEX_HOME;

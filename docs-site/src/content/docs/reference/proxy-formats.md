@@ -578,6 +578,12 @@ When available, `input_tokens_details` can also include `cache_write_tokens`. Th
 detail objects are a compatibility guarantee for strict Responses clients; zero can mean "not
 reported," not necessarily "the provider performed no such work."
 
+If a terminal continuation returns a replay refusal, Chat Completions preserves the refusal code
+and fixed message. A continuation 429 with an explicit retry veto or an inconclusive replay probe
+uses a fixed error message that withholds the provider diagnostic. Responses failed terminals
+carry `retryable: false`. Buffered clients receive `x-should-retry: false` without `Retry-After`,
+and buffered Chat Completions returns HTTP 429.
+
 When the terminal continuation guard re-asks within a turn, a successful completion that reports
 usage shows the final leg's usage for that re-ask. In Chat Completions, this includes
 `prompt_tokens`, which reflects the context sent on the final leg. A hosted-search Chat re-ask

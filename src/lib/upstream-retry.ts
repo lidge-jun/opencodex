@@ -200,6 +200,10 @@ export const REPLAY_REFUSAL_CLIENT_HEADERS: Readonly<Record<string, string>> = O
  * are only correct together -- a surface that removed the wait but not the suppression still
  * hands a retrying client a turn it may already have run.
  */
+export function withheldReplayDiagnostic(status: number): string {
+  return `Provider error ${status}: upstream diagnostic withheld for a non-replayable failure`;
+}
+
 export function applyReplayRefusalClientHeaders(headers: Headers): void {
   headers.delete("retry-after");
   headers.set(REPLAY_REFUSAL_NO_RETRY_HEADER, REPLAY_REFUSAL_NO_RETRY_VALUE);

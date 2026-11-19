@@ -1,3 +1,4 @@
+import { applyReplayRefusalClientHeaders, isReplayRefusalCode, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE, withheldReplayDiagnostic } from "../lib/upstream-retry";
 import { boundedServiceTier } from "../lib/response-service-tier";
 import { isLikelyRealAnthropicThinkingSignature } from "../responses/reasoning-envelope";
 import { ownedChatErrorPayload, CLIENT_ERROR_CONTRACTS, hasProxyErrorMessage, hasProxyIncomplete, type ClientErrorContract } from "../lib/client-error-body";
@@ -166,6 +167,7 @@ export function appendedUtf8Bytes(previous: string, previousBytes: number, fragm
 export interface ChatCompletionsStreamFailure {
   contract?: ClientErrorContract;
   proxyAuthored?: boolean;
+  replayVeto?: boolean;
   code?: string | null;
   type?: string;
   status?: number;
@@ -222,6 +224,14 @@ function legacyChatCompletionsStreamErrorPayload(
 }
 
 export function chatCompletionsStreamErrorPayload(message: string, details?: ChatCompletionsStreamFailure) {
+  const refusalCode = isReplayRefusalCode(details?.code) ? details.code : undefined;
+  if (refusalCode || details?.replayVeto) {
+    const status = REPLAY_REFUSED_STATUS;
+    const verdict = { status, type: refusalCode ? "upstream_error" : "rate_limit_error",
+      code: refusalCode ?? "rate_limit_exceeded",
+      message: refusalCode ? REPLAY_REFUSAL_MESSAGE : withheldReplayDiagnostic(status) };
+    return { bounded: true, verdict, payload: chatCompletionsErrorBody(status, verdict.message, verdict.type, verdict.code) };
+  }
   const legacy = legacyChatCompletionsStreamErrorPayload(message, details);
   const verdict = legacyFailureVerdict(legacy.payload);
   const error = legacy.payload.error as { message: string; type: string; code: string | null };
@@ -231,7 +241,13 @@ export function chatCompletionsStreamErrorPayload(message: string, details?: Cha
   }) };
 }
 
-export function ownedChatErrorResponse(status: number, message: string, type?: string, code?: string | null, contract?: ClientErrorContract, proxyAuthored = false): Response {
+export function ownedChatErrorResponse(status: number, message: string, type?: string, code?: string | null, contract?: ClientErrorContract, proxyAuthored = false, replayVeto = false): Response {
+  if (isReplayRefusalCode(code) || replayVeto) {
+    const { verdict, payload } = chatCompletionsStreamErrorPayload(message, { code, status, replayVeto });
+    const response = Response.json(payload, { status: verdict.status });
+    applyReplayRefusalClientHeaders(response.headers);
+    return response;
+  }
   const legacyBody = chatCompletionsErrorBody(status, message, type, code);
   const legacy = legacyBody.error as { type: string; code: string | null };
   const finalStatus = legacy.code === CYBER_POLICY_ERROR_CODE ? 400 : status;
@@ -241,10 +257,13 @@ export function ownedChatErrorResponse(status: number, message: string, type?: s
 }
 
 /** How a Responses `response.failed` error object becomes a streamed Chat failure. */
-export function chatCompletionsFailedResponse(error: Rec): { message: string; details: ChatCompletionsStreamFailure } {
+export function chatCompletionsFailedResponse(error: Rec, retryable?: unknown): { message: string; details: ChatCompletionsStreamFailure } {
   const message = typeof error.message === "string" ? error.message : "upstream request failed";
   const code = typeof error.code === "string" ? error.code : null;
   const type = typeof error.type === "string" ? error.type : undefined;
+  if (retryable === false && message === withheldReplayDiagnostic(REPLAY_REFUSED_STATUS)) {
+    return { message, details: { code, status: REPLAY_REFUSED_STATUS, replayVeto: true } };
+  }
   return {
     message,
     details: {
@@ -662,7 +681,7 @@ export function responsesSseToChatCompletionsSse(
           // still fills the budget. They contain no provider text or IDs.
           if (bounded) controller.enqueue(frame);
           else enqueueLiveFrame(frame);
-          if (opts.failureVerdictSink) { opts.failureVerdictSink.verdict = verdict; opts.failureVerdictSink.contract = details?.contract; opts.failureVerdictSink.proxyAuthored = details?.proxyAuthored; }
+          if (opts.failureVerdictSink) { opts.failureVerdictSink.verdict = verdict; opts.failureVerdictSink.contract = details?.contract; opts.failureVerdictSink.proxyAuthored = details?.proxyAuthored; opts.failureVerdictSink.replayVeto = details?.replayVeto; }
           emittedFrames++;
         } catch {
           /* controller may already be closed */
@@ -829,7 +848,7 @@ export function responsesSseToChatCompletionsSse(
           }
           case "response.failed": {
             const response = isRec(data.response) ? data.response : {};
-            const failure = chatCompletionsFailedResponse(isRec(response.error) ? response.error : {});
+            const failure = chatCompletionsFailedResponse(isRec(response.error) ? response.error : {}, response.retryable);
             fail(failure.message, { ...failure.details, proxyAuthored: hasProxyErrorMessage(opts.proxyErrorContext, failure.message, failure.details) },
               response.usage);
             break;

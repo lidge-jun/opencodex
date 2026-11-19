@@ -170,7 +170,7 @@ function createChatCompletionWriter(sink: ClientFrameSink, model: string, failur
     try {
       if (bounded) sink.emitBounded(dataFrame(payload));
       else sink.emit(dataFrame(payload), { terminal: true });
-      if (failureVerdictSink) { failureVerdictSink.verdict = verdict; failureVerdictSink.contract = details?.contract; failureVerdictSink.proxyAuthored = details?.proxyAuthored; }
+      if (failureVerdictSink) { failureVerdictSink.verdict = verdict; failureVerdictSink.contract = details?.contract; failureVerdictSink.proxyAuthored = details?.proxyAuthored; failureVerdictSink.replayVeto = details?.replayVeto; }
     } catch {
       /* the converter drops an unadmittable error frame the same way */
     }
@@ -260,7 +260,7 @@ function createChatCompletionWriter(sink: ClientFrameSink, model: string, failur
         }
         return;
       }
-      const failure = chatCompletionsFailedResponse((terminal.error ?? {}) as unknown as Rec);
+      const failure = chatCompletionsFailedResponse((terminal.error ?? {}) as unknown as Rec, terminal.retryable);
       fail(failure.message, { ...failure.details, proxyAuthored: hasProxyErrorMessage(proxyErrorContext, failure.message, failure.details) },
         terminal.usageOnWire ? responsesUsage(terminal.usage) : null);
     },
@@ -303,7 +303,7 @@ export async function collectChatCompletionResponse(
     });
   } catch (err) {
     if (isChatCompletionsStreamError(err)) {
-      return ownedChatErrorResponse(err.status, err.message, err.type, err.code, failureVerdictSink?.contract, failureVerdictSink?.proxyAuthored);
+      return ownedChatErrorResponse(err.status, err.message, err.type, err.code, failureVerdictSink?.contract, failureVerdictSink?.proxyAuthored, failureVerdictSink?.replayVeto);
     }
     return ownedChatErrorResponse(502, err instanceof Error ? err.message : String(err), "server_error");
   }
