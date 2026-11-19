@@ -14,6 +14,12 @@ export interface TerminalSpendUsage {
 }
 
 type RecordSendUsage = (usage: TerminalSpendUsage) => void;
+/**
+ * Which routed send a reading covers: the send that was newest when the parse started (the one
+ * that produced the response being parsed), or the send that is newest now (a retry the parser
+ * dispatched itself, whose response it has just finished reading).
+ */
+export type RoutedSendReadingCover = "issuing" | "newest";
 const adapterResponseSpend = new WeakMap<Response, RecordSendUsage>();
 
 /** Bind an image-recovery response after its retry ladder has finished reporting sends. */
@@ -33,6 +39,16 @@ export function adapterResponseSpendObserver(response: Response): ((event: Adapt
 /** Settles one request's durable spend entries once its terminal usage is known. */
 export interface RequestSpendSettlement {
   settle(usage: TerminalSpendUsage | undefined): void;
+  /**
+   * Bind the usage a routed response reports to the routed send that is latest when its parse
+   * starts. Legs run in sequence, so that send is the one that produced the response (#8902).
+   * A parser that dispatches its own retry (Kiro's completion retry) reports one reading per
+   * physical response; each later reading covers the routed send that is newest when it arrives.
+   * A send keeps the first reading bound to it, and a send with none stays unresolved. A null
+   * reading marks the send unmetered: its response reported no usage of its own, so it stays
+   * unresolved even when it is the last routed send the aggregate fallback would settle.
+   */
+  captureRoutedSendUsage?(): ((usage: TerminalSpendUsage | null, cover?: RoutedSendReadingCover) => void) | undefined;
 }
 
 export interface SpendTargetIdentity extends SpendScopes {
@@ -76,6 +92,21 @@ export function captureRequestSpendPolicy(policy: SpendAdmissionPolicy = sharedS
 }
 
 /**
+ * The aggregate usage left for the last routed send once the other routed sends settled their own
+ * readings, so no token is booked twice. Undefined when those readings account for all of it: the
+ * last send then reported nothing of its own and stays unresolved.
+ */
+function netOfOtherSends(total: TerminalSpendUsage | undefined, others: readonly (TerminalSpendUsage | null | undefined)[]): TerminalSpendUsage | undefined {
+  const settled = others.filter((usage): usage is TerminalSpendUsage => usage !== undefined && usage !== null);
+  if (!total || settled.length === 0) return total;
+  const remaining = (key: keyof TerminalSpendUsage): number | undefined => typeof total[key] === "number"
+    ? Math.max(0, total[key] - settled.reduce((sum, usage) => sum + (usage[key] ?? 0), 0)) : undefined;
+  const inputTokens = remaining("inputTokens");
+  const outputTokens = remaining("outputTokens");
+  return inputTokens || outputTokens ? { inputTokens, outputTokens } : undefined;
+}
+
+/**
  * One request's entries in the durable spend ledger (#4707).
  *
  * The ledger has had the whole reserve/dispatch/settle vocabulary since #4546 and no production
@@ -88,9 +119,13 @@ export function captureRequestSpendPolicy(policy: SpendAdmissionPolicy = sharedS
  * so one entry per increment is one entry per send -- and a dispatch path added later cannot
  * forget to book, which is how the previous wiring attempt ended up with no caller at all.
  *
- * Image-recovery receipts carry their own usage, or null if usage is unknown. For an ordinary
- * request the last routed send keeps the aggregate terminal usage. Other unknown sends remain
- * unresolved at their reservation estimates.
+ * Image-recovery receipts carry their own usage, or null if usage is unknown. A request with one
+ * routed send settles it with the aggregate terminal usage. When a request makes several routed
+ * sends (a terminal-guard re-ask, an empty-completion retry, a hosted-search iteration), each send
+ * settles with the usage its own response reported (#8902). The last routed send falls back to the
+ * aggregate net of what the other sends reported, and is left unresolved if nothing remains or if
+ * its response was marked unmetered. Other unknown sends remain unresolved at their reservation
+ * estimates.
  */
 export function createRequestSpendTracker(
   logCtx: Pick<
@@ -130,7 +165,10 @@ export function createRequestSpendTracker(
   const resolvedSendIds = new Set<string>();
   const completedSeeds = new Set<SpendSeed>();
   const physical = new Map<number, { seed: SpendSeed; sendId?: string; reportPending?: boolean; reportComplete?: boolean;
-    estimate?: { inputTokens: number; outputCeilingTokens: number }; usage?: TerminalSpendUsage | null }>();
+    estimate?: { inputTokens: number; outputCeilingTokens: number }; usage?: TerminalSpendUsage | null; observed?: TerminalSpendUsage | null }>();
+  // Legacy (unseeded) sends keyed by send id: the usage each routed response reported, or null
+  // when the response was marked unmetered.
+  const observedLegacy = new Map<string, TerminalSpendUsage | null>();
   const selectedScopes = (target: SpendTargetIdentity = {}): SpendScopes => ({
     ...(rootId !== undefined ? { rootId } : {}),
     ...(target.identityId ?? logCtx.accountLogLabel ? { identityId: target.identityId ?? logCtx.accountLogLabel } : {}),
@@ -154,11 +192,20 @@ export function createRequestSpendTracker(
     // All starts are booked before producers close. Ordinal, never callback order, owns usage.
     const entries = [...physical.entries()].sort((a, b) => a[0] - b[0]);
     const terminal = entries.findLast(([, entry]) => entry.sendId && !nonTerminalSendIds.has(entry.sendId))?.[1].sendId;
+    const routed = entries.filter(([, entry]) => entry.sendId && !nonTerminalSendIds.has(entry.sendId)).map(([, entry]) => entry);
+    const perSend = routed.length > 1;
+    const terminalFallback = perSend
+      ? netOfOtherSends(finalUsage, routed.filter(entry => entry.sendId !== terminal && entry.usage === undefined).map(entry => entry.observed))
+      : finalUsage;
     const ids: string[] = [];
     for (const [, entry] of entries) {
       if (!entry.sendId) return false;
       // Recovery pins set null at dispatch to opt this receipt out of the aggregate fallback.
-      const usage = entry.usage === undefined && entry.sendId === terminal ? finalUsage : entry.usage;
+      // An unmetered response (observed null) opts out the same way.
+      const usage = entry.usage !== undefined ? entry.usage
+        : entry.observed === null ? null
+        : perSend && entry.observed ? entry.observed
+          : entry.sendId === terminal ? terminalFallback : undefined;
       const reported = typeof usage?.inputTokens === "number" || typeof usage?.outputTokens === "number";
       if (!resolvedSendIds.has(entry.sendId)) {
         const ok = reported ? ledger().settle(entry.sendId, { inputTokens: usage?.inputTokens ?? 0, outputTokens: usage?.outputTokens ?? 0 })
@@ -463,6 +510,27 @@ export function createRequestSpendTracker(
       if (!finalRequested) { finalRequested = true; finalUsage = usage; }
       finalizeSeeds();
     },
+    captureRoutedSendUsage() {
+      if (resolved) return undefined;
+      if (seededAccounting) {
+        const newestRouted = () => [...physical.entries()].filter(([, entry]) => seedState(entry.seed)?.auxiliary !== true)
+          .reduce<number | undefined>((latest, [order]) => latest === undefined || order > latest ? order : latest, undefined);
+        const issuing = newestRouted();
+        if (issuing === undefined) return undefined;
+        return (usage, cover = "issuing") => {
+          const ordinal = cover === "issuing" ? issuing : newestRouted();
+          const entry = ordinal === undefined ? undefined : physical.get(ordinal);
+          if (!resolved && entry && entry.observed === undefined) entry.observed = usage;
+        };
+      }
+      const newestRouted = () => live.findLast(id => !nonTerminalSendIds.has(id));
+      const issuing = newestRouted();
+      if (issuing === undefined) return undefined;
+      return (usage, cover = "issuing") => {
+        const sendId = cover === "issuing" ? issuing : newestRouted();
+        if (!resolved && sendId !== undefined && !observedLegacy.has(sendId)) observedLegacy.set(sendId, usage);
+      };
+    },
     charge(options?: Parameters<RequestSendObserver["charge"]>[0]): boolean {
       tracker.startRequest?.(options?.scopes);
       // A send that has already left is RECORDED, never refused: the tokens are spent, and a
@@ -579,6 +647,14 @@ export function createRequestSpendTracker(
         if (!terminalProcessed && live.length > 0) {
           const terminalIndex = live.findLastIndex(sendId => !nonTerminalSendIds.has(sendId));
           const terminal = live[terminalIndex];
+          const routed = live.filter(sendId => !nonTerminalSendIds.has(sendId));
+          const own = terminal === undefined ? undefined : observedLegacy.get(terminal);
+          // An unmetered terminal send reported nothing, whatever the aggregate says.
+          if (own === null) usage = undefined;
+          else if (routed.length > 1 && terminal !== undefined) {
+            usage = own
+              ?? netOfOtherSends(usage, routed.filter(sendId => sendId !== terminal).map(sendId => observedLegacy.get(sendId)));
+          }
           const reported = typeof usage?.inputTokens === "number" || typeof usage?.outputTokens === "number";
           if (terminal && reported) {
             ledger().settle(terminal, {
@@ -593,7 +669,11 @@ export function createRequestSpendTracker(
           terminalProcessed = true;
         }
         while (live.length > 0) {
-          ledger().markLost(live[live.length - 1] as string);
+          const sendId = live[live.length - 1] as string;
+          const observed = observedLegacy.get(sendId);
+          if (observed && !nonTerminalSendIds.has(sendId)) {
+            ledger().settle(sendId, { inputTokens: observed.inputTokens ?? 0, outputTokens: observed.outputTokens ?? 0 });
+          } else ledger().markLost(sendId);
           live.pop();
         }
         resolved = true;

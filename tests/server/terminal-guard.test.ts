@@ -266,6 +266,127 @@ describe("terminal guard", () => {
     expect(actual.at(-1)).toMatchObject({ usage: { inputTokens: 30, outputTokens: 5, totalTokens: 35, providerCredits: 0.05 } });
   });
 
+  // #8877: every leg re-sends the whole conversation, and clients size their context window from
+  // the terminal's usage, so a caller that meters the hidden legs gets them apart from it.
+  test("hands re-asked legs to onHiddenUsage and keeps only the final leg's usage on the terminal", async () => {
+    const hidden: unknown[] = [];
+    const actual: AdapterEvent[] = [];
+    for await (const event of guardTerminalEventStream({
+      parsed: parsed("请检查这个问题并修复代码"),
+      firstEvents: (async function* () {
+        yield { type: "text_delta", text: "我接下来会修改相关文件。" } as AdapterEvent;
+        yield { type: "done", usage: { inputTokens: 196_436, outputTokens: 12, cacheReadInputTokens: 196_236 } } as AdapterEvent;
+      })(),
+      continuation: () => (async function* () {
+        yield { type: "tool_call_start", id: "call_1", name: "exec_command" } as AdapterEvent;
+        yield { type: "tool_call_end" } as AdapterEvent;
+        yield { type: "done", usage: { inputTokens: 196_480, outputTokens: 20, cacheReadInputTokens: 196_280, rawUsage: { leg: 2 } } } as AdapterEvent;
+      })(),
+      adapterName: "anthropic",
+      onHiddenUsage: usage => hidden.push(usage),
+    })) actual.push(event);
+
+    expect(hidden).toEqual([{ inputTokens: 196_436, outputTokens: 12, cacheReadInputTokens: 196_236 }]);
+    expect(actual.at(-1)).toEqual({
+      type: "done",
+      usage: { inputTokens: 196_480, outputTokens: 20, cacheReadInputTokens: 196_280, rawUsage: { leg: 2 } },
+    });
+  });
+
+  // A final leg cut at max_tokens is rendered as an incomplete terminal, so the client sees the
+  // summed usage there, like an incomplete or error event, and nothing is hidden.
+  test("a final leg stopped at max_tokens keeps the summed usage and hides nothing", async () => {
+    const hidden: unknown[] = [];
+    const actual: AdapterEvent[] = [];
+    for await (const event of guardTerminalEventStream({
+      parsed: parsed("请检查这个问题并修复代码"),
+      firstEvents: (async function* () {
+        yield { type: "text_delta", text: "我接下来会修改相关文件。" } as AdapterEvent;
+        yield { type: "done", usage: { inputTokens: 10, outputTokens: 2 } } as AdapterEvent;
+      })(),
+      continuation: () => (async function* () {
+        yield { type: "text_delta", text: "partial" } as AdapterEvent;
+        yield { type: "done", stopReason: "max_tokens", usage: { inputTokens: 20, outputTokens: 3 } } as AdapterEvent;
+      })(),
+      adapterName: "anthropic",
+      onHiddenUsage: usage => hidden.push(usage),
+    })) actual.push(event);
+
+    expect(hidden).toEqual([]);
+    expect(actual.at(-1)).toMatchObject({ type: "done", stopReason: "max_tokens", usage: { inputTokens: 30, outputTokens: 5 } });
+  });
+
+  test("keeps the hidden legs on the terminal when the final leg reports no usage", async () => {
+    const hidden: unknown[] = [];
+    const actual: AdapterEvent[] = [];
+    for await (const event of guardTerminalEventStream({
+      parsed: parsed("请检查这个问题并修复代码"),
+      firstEvents: (async function* () {
+        yield { type: "text_delta", text: "我接下来会修改相关文件。" } as AdapterEvent;
+        yield { type: "done", usage: { inputTokens: 10, outputTokens: 2 } } as AdapterEvent;
+      })(),
+      continuation: () => (async function* () {
+        yield { type: "tool_call_start", id: "call_1", name: "exec_command" } as AdapterEvent;
+        yield { type: "tool_call_end" } as AdapterEvent;
+        yield { type: "done" } as AdapterEvent;
+      })(),
+      adapterName: "anthropic",
+      onHiddenUsage: usage => hidden.push(usage),
+    })) actual.push(event);
+
+    // Nothing else would meter the first leg, so it stays where the request log reads it.
+    expect(hidden).toEqual([]);
+    expect(actual.at(-1)).toMatchObject({ type: "done", usage: { inputTokens: 10, outputTokens: 2 } });
+  });
+
+  // #8452 credits split the same way as tokens: the caller meters the hidden leg's reading and the
+  // terminal keeps the final leg's, so neither side counts a reading twice.
+  test("onHiddenUsage takes the re-asked leg's credit reading apart from the final leg's", async () => {
+    const hidden: unknown[] = [];
+    const actual: AdapterEvent[] = [];
+    for await (const event of guardTerminalEventStream({
+      parsed: parsed("请检查这个问题并修复代码"),
+      firstEvents: (async function* () {
+        yield { type: "text_delta", text: "我接下来会修改相关文件。" } as AdapterEvent;
+        yield { type: "done", usage: { inputTokens: 10, outputTokens: 2, providerCredits: 0.04 } } as AdapterEvent;
+      })(),
+      continuation: () => (async function* () {
+        yield { type: "tool_call_start", id: "call_1", name: "exec_command" } as AdapterEvent;
+        yield { type: "tool_call_end" } as AdapterEvent;
+        yield { type: "done", usage: { inputTokens: 20, outputTokens: 3, providerCredits: 0.01 } } as AdapterEvent;
+      })(),
+      adapterName: "anthropic",
+      onHiddenUsage: usage => hidden.push(usage),
+    })) actual.push(event);
+
+    expect(hidden).toEqual([{ inputTokens: 10, outputTokens: 2, providerCredits: 0.04 }]);
+    expect(actual.at(-1)).toEqual({ type: "done", usage: { inputTokens: 20, outputTokens: 3, providerCredits: 0.01 } });
+  });
+
+  // #8841 refuses a second Chat work announcement. That terminal is an error, so it keeps the
+  // summed usage like any failed terminal and nothing is handed to onHiddenUsage.
+  test("a repeated Chat announcement fails with the summed usage and nothing hidden", async () => {
+    const hidden: unknown[] = [];
+    const actual: AdapterEvent[] = [];
+    for await (const event of guardTerminalEventStream({
+      parsed: parsed("Please fix the file and test it."),
+      firstEvents: (async function* () {
+        yield { type: "text_delta", text: "I'll inspect the file and apply the fix." } as AdapterEvent;
+        yield { type: "done", stopReason: "stop", usage: { inputTokens: 10, outputTokens: 2 } } as AdapterEvent;
+      })(),
+      continuation: () => (async function* () {
+        yield { type: "text_delta", text: "I'll inspect the file and apply the fix." } as AdapterEvent;
+        yield { type: "done", stopReason: "stop", usage: { inputTokens: 20, outputTokens: 3 } } as AdapterEvent;
+      })(),
+      adapterName: "openai-chat",
+      onHiddenUsage: usage => hidden.push(usage),
+    })) actual.push(event);
+
+    expect(hidden).toEqual([]);
+    expect(actual.at(-1)).toMatchObject({ type: "error", code: "terminal_continuation_failed",
+      usage: { inputTokens: 30, outputTokens: 5, totalTokens: 35 } });
+  });
+
 
   // A heartbeat is adapter liveness, not turn content. The openai-chat adapter emits one per
   // tool-call delta while it buffers, so retaining them here would let a single large argument
