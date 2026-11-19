@@ -164,7 +164,9 @@ describe("combo capabilityPolicy: effort clamp", () => {
 describe("combo capabilityPolicy: context window", () => {
   afterEach(() => clearComboSelectionState());
 
-  const small: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "http://127.0.0.1:9/v1", apiKey: "k", models: ["s"], liveModels: false, contextWindow: 1_000 };
+  // Combo admission keeps at least 1,024 tokens of output room when the caller declares none, so
+  // the small window must exceed that for a short turn to fit while the long body still overflows.
+  const small: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "http://127.0.0.1:9/v1", apiKey: "k", models: ["s"], liveModels: false, contextWindow: 2_000 };
   const large: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "http://127.0.0.1:9/v1", apiKey: "k", models: ["l"], liveModels: false, contextWindow: 100_000 };
   const longBody = { model: "combo/u", input: "word ".repeat(2_000) };
   const hugeBody = { model: "combo/u", input: "word ".repeat(200_000) };
