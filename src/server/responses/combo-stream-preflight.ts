@@ -803,6 +803,7 @@ export async function preflightComboStreamResponse(
         // of no effects, so a failed classification keeps this attempt and its original bytes.
         outputCommitted = true;
         retryableTerminalPayload = undefined;
+        degenerateTerminalPayload = undefined;
       }
     },
     onTerminal: status => { terminalStatus = status; },
@@ -873,13 +874,13 @@ export async function preflightComboStreamResponse(
         || hopEvidence?.type === "error" || degenerateTerminalPayload !== undefined)
         && !outputCommitted && hopEvidence !== undefined) {
         await reader.cancel("retrying zero-output combo stream terminal").catch(() => undefined);
-        const failed = failedTerminalResponse(response, hopEvidence!, logCtx, collectUsage);
+        const failed = failedTerminalResponse(response, hopEvidence, logCtx, collectUsage);
         // The rebuilt envelope keeps only the record. When either the whole frame or that slim
         // envelope reads as a moderation verdict, the combo loop must judge the whole frame: a
         // verdict needs the evidence the envelope dropped (a root code, an innererror), and a veto
         // the envelope dropped (a root verdict, a nested hard code) must not turn into a hop.
         if (failed.status === 400 || failed.status === 422) {
-          const whole = JSON.stringify(retryableTerminalPayload);
+          const whole = JSON.stringify(hopEvidence);
           if (isProviderModerationRefusal(failed.status, whole, undefined, true)
             || isProviderModerationRefusal(failed.status, await failed.clone().text(), undefined, true)) {
             attachComboFailureEvidence(failed, whole);

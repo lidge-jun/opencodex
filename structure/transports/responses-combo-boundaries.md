@@ -393,4 +393,3 @@ path and retains its dedicated error code. With prelude output, the limit commit
 Hold expiry commits the original stream. The next hop remains subject to eligibility and send budget.
 Coverage: `tests/routing/combo-committed-terminal-cooldown.test.ts`, `tests/routing/combo-stream-preflight.test.ts`,
 and `tests/routing/combo-stream-prelude-guards.test.ts`.
-
