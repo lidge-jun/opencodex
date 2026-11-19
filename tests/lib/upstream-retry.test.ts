@@ -13,6 +13,7 @@ import {
   releaseResponseBodyBestEffort,
   retryBackoffDelayMs,
   sleepWithHeartbeats,
+  observedReplayRefusalCode, refetchAfterProtocolSafeReset, settleOperatorReplacement,
 } from "../../src/lib/upstream-retry";
 
 function bunResetError(): Error {
@@ -363,12 +364,14 @@ describe("retryBackoffDelayMs", () => {
     }
   });
 
-  test("the overflow peek stops at the byte limit even for multibyte text", async () => {
+  test("a byte-limited multibyte peek cannot rule out a later refusal", async () => {
     silenceWarn();
     const body = "é".repeat(8_192) + " Your input exceeds the context window of this model";
-    const mock = mockDoFetch([new Response(body, { status: 500 }), new Response("ok")]);
-    expect((await fetchWithTransientRetry(mock.doFetch)).status).toBe(200);
-    expect(mock.calls).toHaveLength(2);
+    const upstream = new Response(body, { status: 500 });
+    const mock = mockDoFetch([upstream, new Response("duplicate")]);
+    expect(await fetchWithTransientRetry(mock.doFetch)).toBe(upstream);
+    expect(await upstream.text()).toBe(body);
+    expect(mock.calls).toHaveLength(1);
   });
 
   test("time spent inspecting a response body does not count as a slow upstream attempt", async () => {
@@ -413,12 +416,15 @@ describe("retryBackoffDelayMs", () => {
     expect(mock.calls).toHaveLength(1);
   });
 
-  test("a 5xx body that never ends does not stall the overflow check (#8127)", async () => {
+  test("a 5xx body that never ends returns intact without authorizing a resend", async () => {
     silenceWarn();
-    const mock = mockDoFetch([new Response(new ReadableStream(), { status: 503 }), new Response("ok")]);
+    const upstream = new Response(new ReadableStream(), { status: 503 });
+    const mock = mockDoFetch([upstream, new Response("duplicate")]);
     const response = await fetchWithTransientRetry(mock.doFetch);
-    expect(response.status).toBe(200);
-    expect(mock.calls).toHaveLength(2);
+    expect(response).toBe(upstream);
+    expect(isAutomaticReplayBlocked(response)).toBe(true);
+    expect(mock.calls).toHaveLength(1);
+    await response.body?.cancel();
   });
 
   test("a 5xx throttle worded as too many tokens is still retried (#8127)", async () => {
@@ -873,6 +879,81 @@ describe("operator-granted replacement of an ambiguous reset", () => {
 });
 
 describe("ambiguous reset safety through error formatting", () => {
+  test.each(["error", "root", "last_error"])("review: a body-only %s refusal retains replacement evidence", async carrier => {
+    const code = "upstream_response_refused";
+    const payload = carrier === "root" ? { code } : { [carrier]: { code } };
+    const upstream = Response.json(payload, { status: 503, headers: { "x-codex-primary-reset-at": "1900000000" } });
+    const response = await settleOperatorReplacement(upstream);
+    expect(response).toBe(upstream);
+    expect(response.status).toBe(503);
+    expect(response.headers.get("x-codex-primary-reset-at")).toBe("1900000000");
+    expect(observedReplayRefusalCode(response)).toBe(code);
+    expect(isAutomaticReplayBlocked(response)).toBe(true);
+    expect(isReplayRefusalResponse(response)).toBe(false);
+    expect(await response.json()).toEqual(payload);
+  });
+
+  test.each(["deadline", "truncated", "read-error"])("review: an inconclusive %s body check cannot authorize another send", async kind => {
+    silenceWarn();
+    const payload = JSON.stringify({ padding: kind === "truncated" ? "x".repeat(17_000) : "", error: { code: "upstream_response_refused" } });
+    const release = Promise.withResolvers<void>();
+    let read = false;
+    const body = kind === "truncated" ? payload : new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (kind === "deadline") { await release.promise; controller.enqueue(new TextEncoder().encode(payload)); controller.close(); }
+        else if (!read) { read = true; controller.enqueue(new TextEncoder().encode('{"error":')); }
+        else controller.error(new Error("fixture body failure"));
+      },
+    }, { highWaterMark: 0 });
+    const upstream = new Response(body, { status: 503, headers: { "content-type": "application/json" } });
+    const mock = mockDoFetch([upstream, new Response("duplicate")]);
+    try {
+      const response = await fetchWithTransientRetry(mock.doFetch);
+      expect(response).toBe(upstream);
+      expect(mock.calls).toHaveLength(1);
+      expect(isAutomaticReplayBlocked(response)).toBe(true);
+      expect(isReplayRefusalResponse(response)).toBe(false);
+      release.resolve();
+      if (kind === "read-error") await expect(response.text()).rejects.toThrow("fixture body failure");
+      else expect(await response.text()).toBe(payload);
+    } finally { release.resolve(); try { await upstream.body?.cancel(); } catch { /* already consumed */ } }
+  });
+
+  test("review: independently replay-safe operations may retry an inconclusive body", async () => {
+    silenceWarn();
+    const upstream = new Response(new ReadableStream(), { status: 503 });
+    const mock = mockDoFetch([upstream, new Response("safe answer")]);
+    const response = await fetchWithTransientRetry(mock.doFetch, { replaySafe: true });
+    expect(await response.text()).toBe("safe answer");
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  test.each([false, true])("review: an unread 429 suffix requires an independent replay-safe grant (%s)", async replaySafe => {
+    const payload = JSON.stringify({ padding: "x".repeat(17_000), error: { code: "upstream_response_refused" } });
+    const upstream = new Response(payload, { status: 429, headers: { "content-type": "application/json" } });
+    const mock = mockDoFetch([upstream]);
+    const response = await fetchWithTransientRetry(mock.doFetch, { attempts: 1, replaySafe });
+    expect(response).toBe(upstream);
+    expect(mock.calls).toHaveLength(1);
+    expect(isAutomaticReplayBlocked(response)).toBe(!replaySafe);
+    expect(isReplayRefusalResponse(response)).toBe(false);
+    expect(await response.text()).toBe(payload);
+  });
+
+  test("review: a rejected protocol replacement releases its live post-clone body", async () => {
+    silenceWarn();
+    let cancelled = false;
+    const replacement = new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode(" ".repeat(17_000))); },
+      cancel() { cancelled = true; },
+    }), { status: 503 });
+    expect(await refetchAfterProtocolSafeReset(async () => replacement, bunResetError(), {
+      authorize: () => true, acceptTerminalRefusal: true, acceptResponse: () => false,
+    })).toBeNull();
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(cancelled).toBe(true);
+  });
+
   test("the transient ladder returns the last coded 429 with its raw quota evidence", async () => {
     const body = { error: { code: "upstream_response_refused", message: "fixture quota" } };
     const wire = Response.json(body, { status: 429, headers: { "retry-after": "45" } });
@@ -912,29 +993,33 @@ describe("ambiguous reset safety through error formatting", () => {
 
   test.each([false, true])("a delayed HTTP no-retry body preserves delivery and client abort: %s", async abort => {
     const body = JSON.stringify({ error: { code: "upstream_response_refused" } });
-    let sends = 0, timer: ReturnType<typeof setTimeout> | undefined;
+    const releaseBody = Promise.withResolvers<void>();
+    let sends = 0, cancelled = false;
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
       sends += 1;
       return new Response(new ReadableStream({ start(controller) {
         controller.enqueue(new TextEncoder().encode(body.slice(0, -1)));
-        timer = setTimeout(() => { controller.enqueue(new TextEncoder().encode(body.slice(-1))); controller.close(); }, 2_500);
-      }, cancel() { clearTimeout(timer); } }), { status: 429, headers: { "content-type": "application/json", "x-should-retry": "false" } });
+        void releaseBody.promise.then(() => {
+          if (!cancelled) { controller.enqueue(new TextEncoder().encode(body.slice(-1))); controller.close(); }
+        });
+      }, cancel() { cancelled = true; } }), { status: 429, headers: { "content-type": "application/json", "x-should-retry": "false" } });
     } });
     const caller = new AbortController();
+    const watchdog = setTimeout(() => caller.abort(new Error("fixture header wait exceeded")), 5_000);
     try {
-      const started = performance.now();
       const response = await fetchWithTransientRetry(async () => fetch(server.url, { signal: caller.signal }), { attempts: 3, abortSignal: caller.signal });
-      expect(performance.now() - started).toBeLessThan(1_000);
+      // The body cannot finish until this assertion point: the helper returned on the directive.
+      expect(caller.signal.aborted).toBe(false);
       expect(isAutomaticReplayBlocked(response)).toBe(true);
       expect(isNonReplayableResponse(response)).toBe(false);
       expect(isReplayRefusalResponse(response)).toBe(false);
       if (abort) {
         caller.abort();
         await expect(response.text()).rejects.toMatchObject({ name: "AbortError" });
-      } else expect(await response.text()).toBe(body);
+      } else { releaseBody.resolve(); expect(await response.text()).toBe(body); }
       expect(sends).toBe(1);
-    } finally { clearTimeout(timer); await server.stop(true); }
-  });
+    } finally { clearTimeout(watchdog); caller.abort(); releaseBody.resolve(); await server.stop(true); }
+  }, 6_000);
 
   test("a relay response refusal keeps its client policy after JSON re-wrapping", async () => {
     const response = formatReplaySafetyError(502, "upstream_error", "relay refused the answer", {

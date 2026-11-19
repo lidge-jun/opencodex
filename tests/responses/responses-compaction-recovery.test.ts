@@ -9,7 +9,7 @@ import { COMPACTION_IMAGE_NOTE } from "../../src/responses/compaction-images";
 import * as visionModule from "../../src/vision";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
-import { isNonReplayableResponse } from "../../src/lib/upstream-retry";
+import { isNonReplayableResponse, projectReplayRefusal, REPLAY_REFUSAL_MESSAGE } from "../../src/lib/upstream-retry";
 import { jsonUtf8Bytes } from "../../src/lib/json-byte-size";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest } from "../../src/types";
 import type { RequestLogContext } from "../../src/server/request-log";
@@ -322,6 +322,36 @@ describe("routed compaction emergency integration", () => {
     // The fallback's own failed attempt stays recorded; its wire status was a failed 200 terminal.
     expect(log.attempts?.map(attempt => attempt.status)).toEqual([400, 200]);
   });
+
+  for (const code of ["upstream_response_refused", "upstream_reset_replay_refused", "server_is_overloaded"] as const) for (const fixedHttp of code === "server_is_overloaded" ? [false] : [false, true]) {
+    test(`replay boundary: compaction publishes a terminal fallback refusal (${code}, HTTP refusal=${fixedHttp})`, async () => {
+      const blocked = code !== "server_is_overloaded";
+      sourceEvents = [{ type: "error", status: 502, code: "server_error", message: "Source unavailable fixture" }];
+      fallbackEvents = [{ type: "error", status: blocked ? 429 : 503, code, message: "Emergency private diagnostic" }];
+      const log: RequestLogContext = { model: "", provider: "" };
+      const original = request(body(false));
+      const translatorBudget = createTranslatorBudget();
+      let response: Response;
+      try {
+        response = await runWithCompactionRecovery(original, settings(), log,
+          { translatorBudget, sendBudget: createRequestExecutionBudget() }, async (sent, config, ctx, options) => {
+            const result = await handleResponses(sent, config, ctx, { ...options, compactionRecoveryAttempted: true });
+            if (sent === original || !fixedHttp || code === "server_is_overloaded") return result;
+            await result.body?.cancel();
+            return projectReplayRefusal(code);
+          });
+      } finally { translatorBudget.dispose(); }
+      expect(calls.map(call => call.model)).toEqual(["swe-2", "rescue"]);
+      expect(response.status).toBe(blocked ? 429 : 502);
+      expect(response.headers.get("x-should-retry")).toBe(blocked ? "false" : null);
+      expect(response.headers.get("retry-after")).toBeNull();
+      const json = await response.json();
+      if (blocked) expect(json.error).toEqual({ type: "upstream_error", code, message: REPLAY_REFUSAL_MESSAGE });
+      expect(JSON.stringify(json)).not.toContain("Emergency private diagnostic");
+      expect(log.provider).toBe(blocked ? "emergency" : "source");
+      expect(log.model).toBe(blocked ? "rescue" : "swe-2");
+    });
+  }
 
   test("an existing unconditional override keeps its original logical model on recovery", async () => {
     const config = settings();

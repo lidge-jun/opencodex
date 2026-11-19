@@ -72,6 +72,7 @@ function xaiConfig(authMode: "oauth" | "key" = "oauth"): OcxConfig {
       xai: {
         adapter: "openai-chat",
         baseUrl: "https://api.x.ai/v1",
+        proxy: "direct",
         authMode,
         ...(authMode === "key" ? { apiKey: "xai-api-key" } : {}),
         ...(authMode === "oauth" ? { modelAdapters: { "grok-4.5": "openai-responses" } } : {}),
@@ -98,11 +99,11 @@ function successBody(text: string): string {
   });
 }
 
-async function post(server: ReturnType<typeof startServer>): Promise<Response> {
+async function post(server: ReturnType<typeof startServer>, model = "xai/grok-4.5"): Promise<Response> {
   return originalFetch(new URL("/v1/responses", server.url), {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: "xai/grok-4.5", input: "hello", stream: false }),
+    body: JSON.stringify({ model, input: "hello", stream: false }),
   });
 }
 
@@ -481,7 +482,7 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
     ["native Responses", "/v1/responses", "/v1/responses", true],
     ["translated Chat Completions", "/v1/chat/completions", "/v1/responses", true],
   ] as const;
-  test.each(inferenceRoutes.flatMap(([name, ...route]) => (["ordinary", "no-retry", "coded replay refusal"] as const)
+  test.each(inferenceRoutes.flatMap(([name, ...route]) => (["ordinary", "no-retry", "coded replay refusal", "code-only replay refusal"] as const)
     .map(verdict => [name, verdict, ...route] as const)))("%s returns fixed text for %s", async (_, verdict, downstream, upstream, nativeResponses) => {
     await saveCredential("xai", {
       access: "spare-access",
@@ -499,22 +500,30 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
     }
     provider.accountAutoPause = { enabled: true, consecutiveFailures: 1 };
     provider.oauthAccountFailover = { enabled: true };
+    const codeOnly = verdict === "code-only replay refusal";
+    if (codeOnly) {
+      config.providers.fixture = { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key", models: ["fallback"] };
+      config.combos = { "privacy-code": { strategy: "failover", targets: [
+        { provider: "xai", model: "grok-4.5", metered: false }, { provider: "fixture", model: "fallback", metered: false },
+      ] } };
+    }
+    const model = codeOnly ? "combo/privacy-code" : "xai/grok-4.5";
     saveConfig(config);
     const accountBefore = getAccountSet("xai");
     expect(accountBefore?.accounts).toHaveLength(2);
-    const codedRefusal = verdict === "coded replay refusal";
-    const headers = verdict === "ordinary" ? undefined : { "x-should-retry": "false", "Retry-After": "137" };
+    const codedRefusal = verdict === "coded replay refusal" || codeOnly;
+    const headers = verdict === "ordinary" || codeOnly ? undefined : { "x-should-retry": "false", "Retry-After": "137" };
     const sends = refuseAt(upstream, codedRefusal ? { message: privacyError, code: "upstream_response_refused" } : privacyError,
       undefined, undefined, headers);
     const server = startServer(0);
     try {
-      const result = downstream === "/v1/responses" ? await post(server) : await originalFetch(new URL(downstream, server.url), {
+      const result = downstream === "/v1/responses" ? await post(server, model) : await originalFetch(new URL(downstream, server.url), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: "xai/grok-4.5", messages: [{ role: "user", content: "hello" }], stream: false }),
+        body: JSON.stringify({ model, messages: [{ role: "user", content: "hello" }], stream: false }),
       });
       expect(result.status).toBe(codedRefusal ? 429 : 403);
-      expect(result.headers.get("x-should-retry")).toBe(headers ? "false" : null);
+      expect(result.headers.get("x-should-retry")).toBe(headers || codedRefusal ? "false" : null);
       expect(result.headers.get("retry-after")).toBeNull();
       const body = await result.text();
       expect(JSON.parse(body).error).toMatchObject(codedRefusal
@@ -659,7 +668,10 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
       const body = await result.text();
       const frames = body.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
       expect(sends).toEqual(["/v1/responses", "/v1/responses"]);
-      expect(frames.filter(frame => frame.type === "response.failed")).toMatchObject([{
+      const terminals = frames.filter(frame => ["response.failed", "response.completed", "response.incomplete", "response.cancelled"].includes(frame.type));
+      expect(terminals).toHaveLength(1);
+      expect(terminals).toMatchObject([{
+        type: "response.failed",
         response: {
           retryable: false,
           error: { message: code === undefined ? guidance : REPLAY_REFUSAL_MESSAGE, code: code ?? "permission_denied" },

@@ -39,7 +39,7 @@ import { startServer } from "../../src/server";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { chatErrorStream, chatStream, chatSuccess, chatTruncatedZeroOutputStream, responsesSuccess } from "../helpers/combo-failover-upstream";
+import { chatErrorStream, chatStream, chatSuccess, chatTruncatedZeroOutputStream, responsesSuccess, responsesFailedUsageResponse } from "../helpers/combo-failover-upstream";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { heldResponse } from "../helpers/held-response";
 import {
@@ -1779,35 +1779,21 @@ describe("server combo failover 030 activation matrix", () => {
       .toEqual({ inputTokens: 11, outputTokens: 2, totalTokens: 13 });
   });
 
-  test("captures passthrough failed usage from its original bounded body exactly once", async () => {
+  test.each([false, true])("captures passthrough failed usage once before projection (terminal replacement=%s)", async replacement => {
     let passthroughReads = 0;
     let passthroughResponses = 0;
     customTransientResponse = async () => {
       passthroughResponses += 1;
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-        controller.enqueue(new TextEncoder().encode(JSON.stringify({
-          error: { message: "passthrough failed" },
-          usage: { input_tokens: 17, output_tokens: 3, total_tokens: 20 },
-        })));
-        controller.close();
-        },
-      });
-      const response = new Response(body, { status: 503, headers: { "content-type": "application/json" } });
-      Object.defineProperty(response, "body", {
-        configurable: true,
-        get() {
-          passthroughReads += 1;
-          return body;
-        },
-      });
+      const response = responsesFailedUsageResponse(() => { passthroughReads += 1; }, replacement ? 429 : 503,
+        replacement ? { "x-should-retry": "false" } : {});
+      if (replacement) actualRetry.markTerminalResetReplacement(response);
       return response;
     };
     const passthroughConfig = comboConfig({
       a: provider("openai-responses", "https://passthrough.test/v1", "key-a"),
     });
     const passthrough = await postLogged(passthroughConfig);
-    expect(passthrough.status).toBe(503);
+    expect(passthrough.status).toBe(replacement ? 429 : 503);
     const passthroughBody = await passthrough.json() as Record<string, unknown>;
     expect(passthroughBody).not.toHaveProperty("usage");
     expect(passthroughResponses).toBe(1);

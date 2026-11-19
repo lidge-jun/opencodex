@@ -160,7 +160,7 @@ describe("early reset selection", () => {
       expect(frames).toMatchObject([{ type: "response.failed", response: {
         status: "failed", retryable: false, output: [],
         error: directive
-          ? { message: "Provider error 503: upstream diagnostic withheld for a non-replayable failure" }
+          ? { code: "upstream_reset_replay_refused", message: REPLAY_REFUSAL_MESSAGE }
           : { code, message: REPLAY_REFUSAL_MESSAGE },
       } }]);
       expect(body).not.toContain("provider-private-detail");

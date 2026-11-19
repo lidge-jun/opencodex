@@ -5,7 +5,7 @@ import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { carryProxyError, isProxyError } from "../../lib/client-error-body";
 import { checkOutboundBodySize } from "./outbound-body-guard";
 import { releaseTranslatedEvent, type TranslatorBudget } from "../../lib/translator-budget";
-import { hasUpstreamReplayRefusal, isAutomaticReplayBlocked, SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { carryReplayRefusal, hasUpstreamReplayRefusal, isAutomaticReplayBlocked, projectReplayRefusal, replayRefusalBodyCode, SendBudgetExhaustedError } from "../../lib/upstream-retry";
 import { COMPACT_PROMPT, SUMMARY_PREFIX } from "../../responses/compaction";
 import { sameProviderContinuationOwner } from "../../responses/provider-continuation";
 import { readDisplaySafeErrorText } from "./core-errors";
@@ -42,7 +42,7 @@ export async function retainAdapterFailureResponse(response: Response, signal: A
   headers.delete("content-length");
   headers.delete("content-encoding");
   const retained = new Response(text, { status: response.status, statusText: response.statusText, headers });
-  return { response: carryProxyError(response, retained), text };
+  return { response: carryReplayRefusal(response, carryProxyError(response, retained)), text };
 }
 
 export async function recoverAdapterImageContext(
@@ -78,7 +78,7 @@ export function createAnthropicImageRecovery(
 ): AnthropicImageRecovery {
   return async (response, parsed, adapter, signal) => {
     if (recoveryAttempted.has(translatorBudget) || adapter.name !== "anthropic" || parsed._compactionRequest
-      || response.status !== 413 || isProxyError(response) || isAutomaticReplayBlocked(response)) return { response };
+      || response.status !== 413 || isProxyError(response) || await hasUpstreamReplayRefusal(response, signal)) return { response };
     signal.throwIfAborted();
     const owner = parsed._providerContinuationOwner;
     const pin = transport.pinAnthropicImageRecovery(response);
@@ -88,9 +88,11 @@ export function createAnthropicImageRecovery(
 
     const total = transientRetryPolicyFor(route.provider)?.attempts;
     const remaining = () => budget.remainingTransientSendBudget(transientSendCapFor(total, budget.targetSendsUsed));
-    if (remaining() < 2 || await hasUpstreamReplayRefusal(response, signal)) return { response };
+    if (remaining() < 2) return { response };
     const { response: retained, text } = await retainAdapterFailureResponse(response, signal);
     signal.throwIfAborted();
+    const originalRefusalCode = replayRefusalBodyCode(text);
+    if (originalRefusalCode) return { response: carryReplayRefusal(retained, projectReplayRefusal(originalRefusalCode)) };
     // Require a provider size refusal and an actual image-bearing, compactable history.
     if (recoveryAttempted.has(translatorBudget)
       || !/request_too_large|payload_too_large|(?:request|payload|image|body)[^\n]{0,60}too large/i.test(text)) {
@@ -125,6 +127,7 @@ export function createAnthropicImageRecovery(
     };
     const fits = (wire: AdapterRequest) => Buffer.byteLength(wire.body, "utf8") < originalBytes
       && checkOutboundBodySize(wire.body, config.maxUpstreamBodyBytes).admitted;
+    let terminalSummary: Response | undefined;
     try {
       signal.throwIfAborted();
       if (!pin.isCurrent()) return { response: retained };
@@ -149,13 +152,18 @@ export function createAnthropicImageRecovery(
         summarySend = await send(summaryRequest, summaryInput, 2, outputLimit);
       } finally { summaryRequest.releaseBodyObservation?.(); }
       const { response: summaryResponse, recordUsage: recordSummaryUsage } = summarySend;
+      carryReplayRefusal(summaryResponse, retained);
       if (!summaryResponse.ok) {
         if (await hasUpstreamReplayRefusal(summaryResponse, signal)) return { response: summaryResponse };
-        void summaryResponse.body?.cancel().catch(() => {});
+        const summaryText = await readDisplaySafeErrorText(summaryResponse, signal, "");
+        const refusalCode = replayRefusalBodyCode(summaryText);
+        if (refusalCode) return { response: carryReplayRefusal(summaryResponse, projectReplayRefusal(refusalCode)) };
         return { response: retained };
       }
       const payload = await readBoundedResponseBody(summaryResponse, { signal });
       if (!payload.displaySafe) return { response: retained };
+      const refusalCode = replayRefusalBodyCode(payload.text);
+      if (refusalCode) terminalSummary = carryReplayRefusal(summaryResponse, projectReplayRefusal(refusalCode));
       const { content } = JSON.parse(payload.text) as { content?: Array<{ type?: unknown }> };
       const textOnly = Array.isArray(content)
         && content.every(block => ["text", "thinking", "redacted_thinking"].includes(String(block?.type)));
@@ -172,7 +180,8 @@ export function createAnthropicImageRecovery(
           || event.type === "error" || event.type === "incomplete") invalid = true;
         releaseTranslatedEvent(event, translatorBudget);
       }
-      if (!textOnly || invalid || !completed || !summary.trim()) return { response: retained };
+      if (terminalSummary) return { response: terminalSummary };
+      if (!textOnly || invalid || !completed || !summary.trim() || isAutomaticReplayBlocked(summaryResponse)) return { response: retained };
 
       const successor: OcxParsedRequest = { ...parsed, _anthropicImageOwner: owner,
         context: { ...parsed.context, messages: [
@@ -194,7 +203,7 @@ export function createAnthropicImageRecovery(
       } finally { request.releaseBodyObservation?.(); }
     } catch (error) {
       if (signal.aborted) throw error;
-      return { response: retained };
+      return { response: terminalSummary ?? retained };
     }
   };
 }

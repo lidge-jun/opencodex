@@ -19,14 +19,18 @@ import {
 import { DEFAULT_RETRYABLE_429_RETRY_AFTER_SEC } from "../../src/lib/retry-after";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS, removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
-import type { OcxConfig } from "../../src/types";
+import { OPENAI_PROVIDER_TIER_VERSION, type OcxConfig } from "../../src/types";
 import { HOME_INITIATED_LINK_TUNNEL, relayLinkDataRequest } from "../../src/client/link-relay";
 import { handleResponses } from "../../src/server/responses";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
-import { saveCredential } from "../../src/oauth/store";
+import { getAccountSet, saveCredential } from "../../src/oauth/store";
 import * as oauth from "../../src/oauth";
-import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
+import { saveCodexAccountCredential } from "../../src/codex/account-store";
+import { cachedDeniedCodexAccountIdsForModel, resetCodexModelEntitlementCacheForTests } from "../../src/codex/model-entitlements";
+import { clearAccountQuota, updateAccountQuota } from "../../src/codex/auth-api";
+import { clearCodexUpstreamHealth } from "../../src/codex/routing";
+import { clearGenericFailoverHealth, genericFailoverRetryAfterSeconds } from "../../src/oauth/generic-account-failover";
 
 /**
  * The acceptance unit for the ambiguous-resend refusal is not the shape of one response: it is
@@ -62,11 +66,13 @@ afterEach(async () => {
   clearComboSelectionState();
   clearComboTargetCooldowns();
   globalThis.fetch = originalFetch;
-  if (testDir) await removeTreeAfterBackgroundWork(testDir);
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  isolatedCodexHome?.restore();
-  isolatedCodexHome = null;
+  try {
+    if (testDir) await removeTreeAfterBackgroundWork(testDir);
+  } finally {
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    try { isolatedCodexHome?.restore(); } finally { isolatedCodexHome = null; }
+  }
 }, BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
 
 /**
@@ -136,12 +142,14 @@ function parityConfig(): OcxConfig {
   const provider = (apiKey: string, adapter: string) => ({
     adapter,
     baseUrl: `https://${UPSTREAM_HOST}/v1`,
+    proxy: "direct",
     authMode: "key",
     apiKey,
     models: ["model"],
   });
   return {
     port: 0,
+    openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     defaultProvider: "native",
     providers: {
       // Native Chat keeps the caller on the Chat wire; the bridged row translates through
@@ -172,22 +180,24 @@ for (const wire of ["responses", "messages"] as const) for (const replacement of
       return Response.json({ error: { type: "authentication_error", message: "Fixture authentication refusal" } },
         { status: 401, headers: !replacement || sends > 1 ? { "x-should-retry": "false" } : {} });
     } });
-    for (const provider of Object.values(config.providers)) {
-      provider.baseUrl = new URL("/v1", upstream.url).href;
-      provider.noProxy = "127.0.0.1";
-      provider.allowPrivateNetwork = true;
-    }
-    saveConfig(config);
-    const release = acquireOwnedSpendHome();
     try {
-      const request = new Request(`http://localhost/v1/${wire}`, { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: "native/model", stream: false, store: false, ...(wire === "messages" ? CLAUDE_TURN : RESPONSES_TURN) }) });
-      const response = await (wire === "messages" ? handleClaudeMessages : handleResponses)(request, config, { model: "", provider: "" });
-      const payload = await response.text();
-      expect({ sends, status: response.status, payload }).toMatchObject({ sends: replacement ? 2 : 1, status: 401 });
-      expect(response.status).toBe(401);
-      expect(response.headers.get("x-should-retry")).toBe("false");
-    } finally { release(); await upstream.stop(true); }
+      for (const provider of Object.values(config.providers)) {
+        provider.baseUrl = new URL("/v1", upstream.url).href;
+        provider.noProxy = "127.0.0.1";
+        provider.allowPrivateNetwork = true;
+      }
+      saveConfig(config);
+      const release = acquireOwnedSpendHome();
+      try {
+        const request = new Request(`http://localhost/v1/${wire}`, { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "native/model", stream: false, store: false, ...(wire === "messages" ? CLAUDE_TURN : RESPONSES_TURN) }) });
+        const response = await (wire === "messages" ? handleClaudeMessages : handleResponses)(request, config, { model: "", provider: "" });
+        const payload = await response.text();
+        expect({ sends, status: response.status, payload }).toMatchObject({ sends: replacement ? 2 : 1, status: 401 });
+        expect(response.status).toBe(401);
+        expect(response.headers.get("x-should-retry")).toBe("false");
+      } finally { release(); }
+    } finally { await upstream.stop(true); }
   });
 }
 
@@ -202,25 +212,27 @@ for (const envelope of [false, true]) for (const overflow of [false, true]) {
       return envelope ? Response.json({ id: "resp_review", object: "response", status: "failed", output: [], error })
         : Response.json({ error }, { status: 400 });
     } });
-    for (const provider of Object.values(config.providers)) {
-      provider.baseUrl = new URL("/v1", upstream.url).href;
-      provider.noProxy = "127.0.0.1";
-      provider.allowPrivateNetwork = true;
-    }
-    saveConfig(config);
-    const release = acquireOwnedSpendHome();
     try {
-      const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: "bridged/model", stream: false, ...CLAUDE_TURN }),
-      }), config, { model: "", provider: "" });
-      const json = await response.json();
-      expect({ sends, status: response.status, error: json.error }).toMatchObject({ sends: 1, status: 429 });
-      expect(response.status).toBe(429);
-      expect(response.headers.get("x-should-retry")).toBe("false");
-      expect(response.headers.get("retry-after")).toBeNull();
-      expect(json.error).toMatchObject({ code: error.code, message: CLIENT_ERROR_CONTRACTS.replay_refused });
-    } finally { release(); await upstream.stop(true); }
+      for (const provider of Object.values(config.providers)) {
+        provider.baseUrl = new URL("/v1", upstream.url).href;
+        provider.noProxy = "127.0.0.1";
+        provider.allowPrivateNetwork = true;
+      }
+      saveConfig(config);
+      const release = acquireOwnedSpendHome();
+      try {
+        const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "bridged/model", stream: false, ...CLAUDE_TURN }),
+        }), config, { model: "", provider: "" });
+        const json = await response.json();
+        expect({ sends, status: response.status, error: json.error }).toMatchObject({ sends: 1, status: 429 });
+        expect(response.status).toBe(429);
+        expect(response.headers.get("x-should-retry")).toBe("false");
+        expect(response.headers.get("retry-after")).toBeNull();
+        expect(json.error).toMatchObject({ code: error.code, message: CLIENT_ERROR_CONTRACTS.replay_refused });
+      } finally { release(); }
+    } finally { await upstream.stop(true); }
   });
 }
 
@@ -259,7 +271,7 @@ for (const replacement of [false, true]) {
   });
 }
 
-test("review: native Responses header-only no-retry 401 preserves the refusal without OAuth refresh", async () => {
+test.each(["header", "error", "root", "last_error"] as const)("native Responses %s no-retry 401 never refreshes OAuth", async carrier => {
   await saveCredential("cursor", { access: "fixture-access", refresh: "", expires: Date.now() + 3_600_000,
     accountId: "fixture-account" });
   let sends = 0;
@@ -267,8 +279,11 @@ test("review: native Responses header-only no-retry 401 preserves the refusal wi
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.hostname !== "api2.cursor.sh") throw new Error("Unexpected fixture destination");
     sends++;
-    return Response.json({ error: { message: "Fixture authentication refusal", type: "authentication_error" } },
-      { status: 401, headers: { "x-should-retry": "false" } });
+    const code = "upstream_response_refused";
+    return Response.json({ error: { message: "Fixture authentication refusal", type: "authentication_error",
+      ...(carrier === "error" ? { code } : {}) },
+      ...(carrier === "root" ? { code } : {}), ...(carrier === "last_error" ? { last_error: { code } } : {}),
+    }, { status: 401, headers: carrier === "header" ? { "x-should-retry": "false" } : undefined });
   }) as typeof fetch;
   const config = { port: 0, defaultProvider: "cursor", providers: { cursor: {
     adapter: "openai-responses", authMode: "oauth", baseUrl: "https://api2.cursor.sh",
@@ -277,17 +292,120 @@ test("review: native Responses header-only no-retry 401 preserves the refusal wi
   saveConfig(config);
   // A mistakenly entered refresh remains local and observable; no test contacts an auth server.
   const refresh = spyOn(oauth, "forceRefreshOAuthAccessSnapshot").mockImplementation(async snapshot => snapshot);
+  try {
+    const release = acquireOwnedSpendHome();
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "cursor/model", stream: false, store: false, ...RESPONSES_TURN }),
+      }), config, { model: "", provider: "" });
+      const payload = await response.text();
+      expect({ sends, status: response.status, payload }).toMatchObject({ sends: 1, status: carrier === "header" ? 401 : 429 });
+      if (carrier !== "header") expect(JSON.parse(payload).error.code).toBe("upstream_response_refused");
+      expect(response.headers.get("x-should-retry")).toBe("false");
+      expect(refresh).not.toHaveBeenCalled();
+    } finally { release(); }
+  } finally { refresh.mockRestore(); }
+});
+
+test.each([false, true])("passive evidence: native no-retry model refusal records denial without resend (marked %s)", async marked => {
+  resetCodexModelEntitlementCacheForTests();
+  clearAccountQuota(); clearCodexUpstreamHealth();
+  const model = "gpt-6-astra";
+  const accountId = "fixture-denied";
+  saveCodexAccountCredential(accountId, { accessToken: "fixture-access", refreshToken: "fixture-refresh",
+    expiresAt: Date.now() + 300_000, chatgptAccountId: "fixture-chatgpt" });
+  updateAccountQuota(accountId, 10);
+  const config = { port: 0, openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION, defaultProvider: "openai",
+    activeCodexAccountId: accountId, autoSwitchThreshold: 0, clientIntegrations: { codex: false },
+    codexAccounts: [{ id: accountId, isMain: false, email: "fixture@example.test", chatgptAccountId: "fixture-chatgpt" }],
+    providers: { openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "pool",
+      baseUrl: "https://chatgpt.com/backend-api/codex", proxy: "direct", upstreamWebsocket: false,
+      ...(marked ? { retryOnReset: {} } : {}) } },
+  } as OcxConfig;
+  let sends = 0;
+  globalThis.fetch = (async input => {
+    expect(String(input)).toBe("https://chatgpt.com/backend-api/codex/responses"); sends++;
+    if (marked && sends === 1) preHeaderReset();
+    const response = Response.json({ detail: `The '${model}' model is not supported when using Codex with a ChatGPT account.` },
+      { status: 400, headers: marked ? {} : { "x-should-retry": "false" } });
+    return response;
+  }) as typeof fetch;
+  saveConfig(config);
   const release = acquireOwnedSpendHome();
   try {
-    const response = await handleResponses(new Request("http://localhost/v1/responses", {
-      method: "POST", headers: { "content-type": "application/json" },
+    const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST",
+      body: JSON.stringify({ model: `openai/${model}`, stream: false, store: false, ...RESPONSES_TURN }),
+    }), config, { model: "", provider: "" });
+    expect({ sends, status: response.status }).toEqual({ sends: marked ? 2 : 1, status: 400 });
+    await response.text();
+    expect([...(cachedDeniedCodexAccountIdsForModel(model) ?? [])]).toEqual([accountId]);
+  } finally { release(); resetCodexModelEntitlementCacheForTests(); clearAccountQuota(); clearCodexUpstreamHealth(); }
+});
+
+test("passive evidence: native no-retry OAuth 429 cools the sender without selecting or sending a sibling", async () => {
+  clearGenericFailoverHealth();
+  for (let index = 0; index < 2; index++) await saveCredential("cursor", { access: `fixture-${index}`, refresh: "",
+    expires: Date.now() + 3_600_000, accountId: `fixture-${index}` }, { addAccount: true });
+  const before = getAccountSet("cursor");
+  let sends = 0;
+  globalThis.fetch = (async input => {
+    if (new URL(String(input)).hostname !== "api2.cursor.sh") throw new Error("Unexpected fixture destination");
+    sends++;
+    return Response.json({ error: { message: "Fixture rate limit" } },
+      { status: 429, headers: { "x-should-retry": "false", "retry-after": "120" } });
+  }) as typeof fetch;
+  const config = { port: 0, defaultProvider: "cursor", providers: { cursor: { adapter: "openai-responses",
+    authMode: "oauth", baseUrl: "https://api2.cursor.sh", proxy: "direct", models: ["model"],
+    modelAdapters: { model: "openai-responses" } } } } as OcxConfig;
+  saveConfig(config);
+  const release = acquireOwnedSpendHome();
+  try {
+    const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST",
       body: JSON.stringify({ model: "cursor/model", stream: false, store: false, ...RESPONSES_TURN }),
     }), config, { model: "", provider: "" });
-    const payload = await response.text();
-    expect({ sends, status: response.status, payload }).toMatchObject({ sends: 1, status: 401 });
+    expect({ sends, status: response.status }).toEqual({ sends: 1, status: 429 });
+    await response.text();
+    expect(genericFailoverRetryAfterSeconds("cursor")).toBeGreaterThan(110);
+    expect(getAccountSet("cursor")).toEqual(before);
+  } finally { release(); clearGenericFailoverHealth(); }
+});
+
+test.each(["header", "root"] as const)("passive evidence: a model ladder stops on its latest %s replay veto", async carrier => {
+  resetCodexModelEntitlementCacheForTests(); clearAccountQuota(); clearCodexUpstreamHealth();
+  const model = "gpt-daybreak-blue-latest", accountId = "fixture-ladder";
+  saveCodexAccountCredential(accountId, { accessToken: "fixture-access", refreshToken: "fixture-refresh",
+    expiresAt: Date.now() + 300_000, chatgptAccountId: "fixture-chatgpt" });
+  updateAccountQuota(accountId, 10);
+  const config = { port: 0, openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION, defaultProvider: "openai",
+    activeCodexAccountId: accountId, autoSwitchThreshold: 0, clientIntegrations: { codex: false },
+    codexAccounts: [{ id: accountId, isMain: false, email: "fixture@example.test", chatgptAccountId: "fixture-chatgpt" }],
+    providers: { openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "pool",
+      baseUrl: "https://chatgpt.com/backend-api/codex", proxy: "direct", upstreamWebsocket: false } },
+  } as OcxConfig;
+  let sends = 0;
+  globalThis.fetch = (async input => {
+    expect(String(input)).toBe("https://chatgpt.com/backend-api/codex/responses"); sends++;
+    if (sends > 2) return Response.json({ id: "unexpected-third-send", object: "response", status: "completed", output: [] });
+    return Response.json({ detail: `The '${model}' model is not supported when using Codex with a ChatGPT account.`,
+      ...(sends === 2 && carrier === "root" ? { code: "upstream_response_refused" } : {}),
+    }, { status: 400, headers: sends === 2 && carrier === "header" ? { "x-should-retry": "false" } : {} });
+  }) as typeof fetch;
+  saveConfig(config);
+  const release = acquireOwnedSpendHome();
+  try {
+    const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST",
+      body: JSON.stringify({ model: `openai/${model}`, stream: false, store: false, ...RESPONSES_TURN }),
+    }), config, { model: "", provider: "" }, { resolveCodexModelEntitlements: async () => ({
+      modelsByAccount: new Map([[accountId, new Set([model, "gpt-5.6-sol"])]]),
+      confirmedAccountIds: new Set([accountId]), credentialIdentities: new Map(),
+    }) });
+    expect(sends).toBe(2);
+    expect(response.status).toBe(carrier === "header" ? 400 : 429);
     expect(response.headers.get("x-should-retry")).toBe("false");
-    expect(refresh).not.toHaveBeenCalled();
-  } finally { release(); refresh.mockRestore(); }
+    const body = await response.json();
+    if (carrier === "root") expect(body.error.code).toBe("upstream_response_refused");
+  } finally { release(); resetCodexModelEntitlementCacheForTests(); clearAccountQuota(); clearCodexUpstreamHealth(); }
 });
 
 test("every HTTP surface answers an ambiguous reset with one send and no client resend", async () => {
@@ -387,6 +505,7 @@ function comboReplayConfig(): OcxConfig {
   const provider = (host: string, apiKey: string, extra: Record<string, unknown> = {}) => ({
     adapter: "openai-responses",
     baseUrl: `https://${host}/v1`,
+    proxy: "direct",
     authMode: "key",
     apiKey,
     models: ["model"],
@@ -394,6 +513,7 @@ function comboReplayConfig(): OcxConfig {
   });
   return {
     port: 0,
+    openaiProviderTierVersion: OPENAI_PROVIDER_TIER_VERSION,
     defaultProvider: "first",
     providers: {
       // The first target opts in to one ambiguous-reset replacement; the second never should be sent.
@@ -748,7 +868,7 @@ test.each([
 test.each([
   { provider: "bridged", lane: "native" },
   { provider: "native", lane: "translated" },
-])("round 5: $lane Responses withholds a header-only 503 diagnostic after a pre-header replacement", async ({ provider }) => {
+])("round 5: $lane Responses projects a header-only 503 after a spent pre-header replacement", async ({ provider }) => {
   const config = parityConfig();
   config.providers[provider]!.retryOnReset = {};
   let sends = 0;
@@ -764,12 +884,12 @@ test.each([
       method: "POST", body: JSON.stringify({ model: `${provider}/model`, stream: false, store: false, ...RESPONSES_TURN }),
     }), config, { model: "", provider: "" });
     expect(sends).toBe(2);
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(REPLAY_REFUSED_STATUS);
     expect(response.headers.get("x-should-retry")).toBe("false");
     expect(response.headers.get("retry-after")).toBeNull();
     expect(await response.json()).toEqual({ error: {
-      type: "upstream_error",
-      message: "Provider error 503: upstream diagnostic withheld for a non-replayable failure",
+      type: "upstream_error", code: UPSTREAM_RESET_REPLAY_REFUSED_CODE,
+      message: CLIENT_ERROR_CONTRACTS.replay_refused,
     } });
   } finally { release(); }
 });
@@ -879,28 +999,30 @@ test.each([
       status: 429, headers: { "retry-after": "45" },
     });
   } });
-  provider.baseUrl = new URL("/v1", upstream.url).href;
-  provider.noProxy = "127.0.0.1";
-  provider.allowPrivateNetwork = true;
-  const began = Date.now();
-  const release = acquireOwnedSpendHome();
   try {
-    saveConfig(config);
-    const request = new Request(`http://localhost/v1/${wire}`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: "native/model", stream: false, store: false, ...(wire === "messages" ? CLAUDE_TURN : RESPONSES_TURN) }),
-    });
-    const response = await (wire === "messages" ? handleClaudeMessages : handleResponses)(request, config, { model: "", provider: "" });
-    const payload = await response.json();
-    expect(paths).toEqual([`/v1/${wire}`]);
-    expect(response.status).toBe(429);
-    expect(response.headers.get("x-should-retry")).toBe("false");
-    expect(response.headers.get("retry-after")).toBeNull();
-    expect(payload.error).toMatchObject({ code: "upstream_response_refused", message: CLIENT_ERROR_CONTRACTS.replay_refused });
-    expect(isReplayRefusalResponse(response)).toBe(false);
-    expect(getKeyCooldownUntil("native", "primary")).toBeGreaterThanOrEqual(began + 45_000);
-    expect(getKeyCooldownUntil("native", "backup")).toBeNull();
-  } finally { release(); await upstream.stop(true); }
+    provider.baseUrl = new URL("/v1", upstream.url).href;
+    provider.noProxy = "127.0.0.1";
+    provider.allowPrivateNetwork = true;
+    const began = Date.now();
+    const release = acquireOwnedSpendHome();
+    try {
+      saveConfig(config);
+      const request = new Request(`http://localhost/v1/${wire}`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "native/model", stream: false, store: false, ...(wire === "messages" ? CLAUDE_TURN : RESPONSES_TURN) }),
+      });
+      const response = await (wire === "messages" ? handleClaudeMessages : handleResponses)(request, config, { model: "", provider: "" });
+      const payload = await response.json();
+      expect(paths).toEqual([`/v1/${wire}`]);
+      expect(response.status).toBe(429);
+      expect(response.headers.get("x-should-retry")).toBe("false");
+      expect(response.headers.get("retry-after")).toBeNull();
+      expect(payload.error).toMatchObject({ code: "upstream_response_refused", message: CLIENT_ERROR_CONTRACTS.replay_refused });
+      expect(isReplayRefusalResponse(response)).toBe(false);
+      expect(getKeyCooldownUntil("native", "primary")).toBeGreaterThanOrEqual(began + 45_000);
+      expect(getKeyCooldownUntil("native", "backup")).toBeNull();
+    } finally { release(); }
+  } finally { await upstream.stop(true); }
 });
 
 test("round 4: a failed native JSON replacement delivers the fixed refusal", async () => {

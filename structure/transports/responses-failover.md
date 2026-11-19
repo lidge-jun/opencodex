@@ -15,8 +15,8 @@ fetch sends without double charging external reservations; one prepaid emergency
 with adapter dispatch, and only additional retries draw from the remainder. The emergency target's configured initial allowance is intersected with that shared remainder plus its prepaid send; source-provider sends are not deducted from the emergency target's allowance a second time. Adapter observers retain partial-output and structured denial evidence
 before response projection. Native encrypted compaction, uploaded files, stored continuations,
 and policy/combo routes are excluded; native capability is checked independently for v1 endpoints and v2 triggers, including explicitly opted-in custom gateways. Emergency output must contain one readable portable
-compaction item; recent original user messages are retained verbatim, and recovery failure keeps
-the original failure. A source Kiro account lease is returned before the emergency child is
+compaction item; recent original user messages are retained verbatim. An ordinary recovery failure keeps
+the original failure, while a terminal replay refusal from the emergency attempt keeps that attempt's fixed 429, no-retry verdict and attribution so the source failure cannot invite another send. A source Kiro account lease is returned before the emergency child is
 admitted: the child shares its holder and may select the same account, so replacing that holder
 without returning the source lease would block cap-one fallback and leak capacity at higher caps.
 `tests/responses/responses-compaction-recovery-policy.test.ts`,
@@ -28,7 +28,7 @@ ambiguous-resend gate and replay boundary, combo quota fallback and commit bound
 routing overrides, and output headroom. The endpoint and dispatch rules they build on are in
 [Responses transport](responses.md). `src/lib/errors.ts` classifies an HTTP 400 input-token-count overflow as `context_length_exceeded`, including the counted-token variant; the wording is Google's, but the shared classifier matches it for any provider. Output-token limits and protected failures retain their existing categories. Classification does not itself shorten input or authorize replay.
 
-Policy-selected turns also retain their [original candidate authorization](policy-fallback.md) through fallback and subagent recovery. HTTP replay-refusal provenance and the independent header-only no-retry hold follow the [replay refusal contract](../data-planes/replay-refusals.md).
+Policy-selected turns also retain their [original candidate authorization](policy-fallback.md) through fallback and subagent recovery. HTTP replay-refusal provenance and the independent header-only no-retry hold follow the [replay refusal contract](../data-planes/replay-refusals.md); uncertain body classification never authorizes a resend.
 
 ## Chat-to-Responses message phase inference
 
@@ -359,7 +359,8 @@ the pre-header row in `fetchWithResetRetry` and the WebSocket row alike:
 | Replacement answer | Result |
 | --- | --- |
 | 2xx | Passed to delivery. A native failed JSON terminal with a recognized replay-refusal code uses the fixed client refusal. |
-| 307, 308, 401, 402, 408, 409, 413, 429, or any 5xx | Body released; settles as the refusal. |
+| Any non-2xx with a wire no-retry directive or a recognized body refusal code | Original response retained for passive usage, quota and credential evidence. A recognized code wins at client delivery; a directive-only status in the resend set below projects to the fixed 429 refusal after a replacement was spent. |
+| 307, 308, 401, 402, 408, 409, 413, 429, or any 5xx without that verdict | Body released; settles as the refusal. |
 | Responses HTTP 403 with the exact [xAI OAuth Legacy privacy marker](../providers/xai-grok.md#legacy-privacy-mode-403) | Fixed privacy guidance and policy-refusal attribution with the non-replayable marker retained. A recognized replay-refusal code takes precedence. |
 | Any other status | Real status and non-replayability kept; bounded client projection retains allowlisted error type and code and `x-should-retry: false` when present, withholds upstream body text and all other upstream headers, and emits a fixed generic message. |
 
@@ -370,13 +371,12 @@ and this proxy's credential and quota recovery (401 refresh or rotation, 402/429
 rotation). The gateway statuses in `isTransientUpstreamStatus` are only
 a subset; 429 and 529 escaped them before. An upstream gateway status carrying the exact
 `x-should-retry: false` verdict stops the transient retry ladder before its body is released and
-returns the original response unchanged; the retry layer does not inspect or rewrite its body.
+returns the original response unchanged; downstream bounded readers may still record its refusal code and passive evidence before client projection. A failed, timed-out, partial or SSE diagnostic probe cannot authorize a transient resend of a replay-unsafe operation. Only an explicit `replaySafe` policy may retry an inconclusive body; a recognized veto always wins.
 A kept status stays the upstream's evidence for the
 caller, and the marker stops every recovery loop that checks it, such as the opaque-blob rebuild
 of a 400 or the Codex pool's gated-model retry. A combo rebuilds a failed attempt as a new
 response, so `consumeComboFailure` records `nonReplayable` and the combo stops rather than hopping
-on, say, a context overflow. The cost is that a real 401, 402 or 429 on a replacement send is not
-recorded against its credential on that request.
+on, say, a context overflow. A retained real refusal can still update generation-fenced credential state, model-denial evidence, effort learning and quota cooldowns without dispatching a replacement. A locally synthesized refusal never supplies provider quota or credential evidence. Once client stream headers have been committed, external client retry behavior has the [documented limit](responses-combo-boundaries.md#combo-streaming-commit-boundary).
 
 A 2xx replacement carries no marker, and its stream can still fail before any output. A marker
 cannot carry that case, because the combo preflight rebuilds the failure as a fresh Response, so
@@ -384,7 +384,7 @@ the request execution budget's `ambiguousResendSpent` is what stops the combo, f
 replacement rows (pre-header, SSE and WebSocket): a status the client would resend becomes the
 refusal, and anything else keeps its status and the non-replayable marker. The direct path skips
 the streamed opaque-blob rebuild and settles the preflight's projected failure by the same rule.
-Policy fallback does not hop on a marked answer.
+Policy fallback does not hop on a marked answer. A late native SSE selection carries its veto to the held response before downstream completion inspection returns; the OpenGateway guard rechecks that response after reading an empty completion, so it cannot spend another send on a verdict that arrived during the read.
 A scope derived from a budget this factory did not build (the shape-tested bridge in
 `src/lib/request-execution-budget.ts`) remembers a grant it claimed through the bridge, keyed by
 the bridged parent, so every sibling scope reports it spent even when that parent predates the

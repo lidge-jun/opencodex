@@ -43,8 +43,10 @@ import {
   isReplayRefusalResponse,
   observedReplayRefusalCode,
   replayRefusalBodyCode,
+  projectReplayRefusal,
   prepareSameTarget429Wait,
   REPLAY_REFUSAL_CLIENT_HEADERS,
+  REPLAY_REFUSAL_MESSAGE,
   REPLAY_REFUSED_STATUS,
   SendBudgetExhaustedError, errorDestinationLabel,
   TRANSIENT_RETRY_MAX_ATTEMPTS,
@@ -844,6 +846,7 @@ export async function runNativeChatAttempt(
   if (contentType.includes("text/event-stream") && response.body) {
     if (requestedStream) transferTurnToStream();
     let terminalStatus: number | undefined;
+    const headerResponse = response;
     const resilientBody = wrapWithZeroOutputRefetch(
       response.body,
       // One physical send, not one more trip through a retry helper: the allowance below buys a
@@ -863,7 +866,8 @@ export async function runNativeChatAttempt(
         // The origin returned a head and may already be running the turn, so this is the
         // ambiguous row of the stage table. Only the operator allowance the Responses stream
         // also draws on can authorise it; without one the original failure stands.
-        authorize: () => authorizeResendForRecovery("headers-only", "connection-reset", ambiguousResend()).allowed,
+        authorize: () => !isAutomaticReplayBlocked(headerResponse)
+          && authorizeResendForRecovery("headers-only", "connection-reset", ambiguousResend()).allowed,
         // A replacement must satisfy the contract already promised to the client. A 200 that is
         // not an event stream would reach the SSE translator as a non-SSE body and surface as a
         // malformed-stream error instead of the reset that actually happened.
@@ -983,6 +987,11 @@ export async function runNativeChatAttempt(
       logCtx.usage = usage;
       attempt.usage = usage;
     }
+  }
+  const refusalCode = replayRefusalBodyCode(body.text);
+  if (refusalCode) {
+    finishLog(REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE);
+    return carryReplayRefusal(response, projectReplayRefusal(refusalCode));
   }
   if (isRec(parsedJson)) parsedJson = normalizeNativeChatContent(parsedJson, activeProvider);
   const error = structuredError(parsedJson);

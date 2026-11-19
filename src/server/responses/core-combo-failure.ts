@@ -34,7 +34,7 @@ import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { formatErrorResponse } from "../../bridge";
 import { upstreamCodeForComboFailure } from "../../bridge/errors";
 import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../adapters/ollama-native";
-import { carryReplayRefusal, hasNoRetryDirective, isAutomaticReplayBlocked, isReplayRefusalCode, isReplayRefusalResponse, markResponseNonReplayable, observedReplayRefusalCode, replayRefusalBodyCode, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../lib/upstream-retry";
+import { carryReplayRefusal, hasNoRetryDirective, isAutomaticReplayBlocked, isReplayRefusalCode, isReplayRefusalResponse, markResponseNonReplayable, observedReplayRefusalCode, projectReplayRefusal, replayRefusalBodyCode, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../lib/upstream-retry";
 import { MODEL_NOT_ALLOWED_FOR_KEY } from "../admission-model-scope";
 import { usageFromResponsesPayload } from "../request-log";
 import type { ResponsesTerminalStatus } from "../../bridge";
@@ -159,7 +159,10 @@ export async function consumeComboFailure(
     if (signal?.aborted) throw error;
     classificationText = fallback;
   }
-  const cyberFailure = isCyberPolicyCode(upstreamCode) || isCyberPolicyMessage(classificationText);
+  // A wire replay veto is the delivery/attempt identity, even when preserved
+  // legacy diagnostics also describe cyber policy. Both verdicts still stop.
+  const cyberFailure = wireRefusalCode === undefined
+    && (isCyberPolicyCode(upstreamCode) || isCyberPolicyMessage(classificationText));
   upstreamCode = wireRefusalCode ?? upstreamCode;
   replayRefusal ||= isReplayRefusalCode(upstreamCode);
   nonReplayable ||= replayRefusal;
@@ -193,7 +196,9 @@ export async function consumeComboFailure(
     now,
     includeDefault: false,
   });
-  const failureResponse = !replayRefusal && scopeRefusalBody !== undefined
+  const failureResponse = replayRefusal
+    ? projectReplayRefusal(isReplayRefusalCode(upstreamCode) ? upstreamCode : UPSTREAM_RESET_REPLAY_REFUSED_CODE)
+    : scopeRefusalBody !== undefined
     ? new Response(scopeRefusalBody, { status: 403, headers: { "Content-Type": "application/json" } })
     : formatErrorResponse(
     response.status,

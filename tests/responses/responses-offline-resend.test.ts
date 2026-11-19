@@ -4,7 +4,7 @@ import {
 } from "../../src/lib/offline-resend";
 import {
   applyUpstreamRecoveryInit, fetchWithResetRetry, fetchWithTransientRetry,
-  isReplayRefusalResponse, replayRefusalResponse, type UpstreamSendRecovery,
+  isReplayRefusalResponse, observedReplayRefusalCode, replayRefusalResponse, type UpstreamSendRecovery,
 } from "../../src/lib/upstream-retry";
 import { markEgressTransparentExecutor } from "../../src/lib/provider-egress";
 import { classifyTransportFailureKind } from "../../src/lib/upstream-reachability";
@@ -46,21 +46,22 @@ function probes(failures: number) {
   return { lookups, delays };
 }
 
-test.each(["header deadline", "wire relay refusal"])("offline wait cannot reopen a terminal %s", async kind => {
+test.each(["header deadline", "wire relay refusal", "code-only wire refusal"])("offline wait cannot reopen a terminal %s", async kind => {
   let sends = 0, waits = 0;
   const consumed: number[] = [];
   const refusal = kind === "header deadline" ? replayRefusalResponse() : Response.json({
     error: { code: "upstream_response_refused", message: "Fixture relay refusal" },
-  }, { status: 429, headers: { "x-should-retry": "false" } });
+  }, { status: 429, headers: kind === "code-only wire refusal" ? {} : { "x-should-retry": "false" } });
   const response = await fetchWithTransientRetry(async () => { sends++; return refusal; }, {
     attempts: 3, offlineWait: async () => { waits++; return true; },
     onSendsConsumed: count => consumed.push(count),
   });
   expect({ sends, waits, consumed }).toEqual({ sends: 1, waits: 0, consumed: [1] });
   expect(response.status).toBe(429);
-  expect(response.headers.get("x-should-retry")).toBe("false");
+  expect(response.headers.get("x-should-retry")).toBe(kind === "code-only wire refusal" ? null : "false");
   expect(response.headers.get("retry-after")).toBeNull();
   expect(isReplayRefusalResponse(response)).toBe(kind === "header deadline");
+  if (kind === "code-only wire refusal") expect(observedReplayRefusalCode(response)).toBe("upstream_response_refused");
   expect((await response.json()).error.code).toBe(kind === "header deadline"
     ? "upstream_reset_replay_refused" : "upstream_response_refused");
 });

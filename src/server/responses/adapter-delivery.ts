@@ -27,7 +27,7 @@ import { noteKiroServedSuccess } from "../../providers/kiro-usage";
 import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
 import { readDisplaySafeErrorText, normalizeUpstreamErrorText } from "./core-errors";
 import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
-import { isAutomaticReplayBlocked, isNonReplayableResponse } from "../../lib/upstream-retry";
+import { isAutomaticReplayBlocked, isNonReplayableResponse, observedReplayRefusalCode, replayRefusalBodyCode, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE } from "../../lib/upstream-retry";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { currentTurnToolBridgeMaps, guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
 import { guardCompactionSummary } from "../../responses/compaction-summary";
@@ -79,7 +79,7 @@ export async function deliverAdapterResponse(
     isContinuationBodyStall,
   } = continuationState;
   const preserveEmptyCompletionRetryError = (event: AdapterEvent) =>
-    (event.type === "error" && event.code === UNDECLARED_TOOL_CALL_ERROR_CODE) || isContinuationBodyStall(event);
+    (event.type === "error" && (event.retryable === false || event.code === UNDECLARED_TOOL_CALL_ERROR_CODE)) || isContinuationBodyStall(event);
   const { emptyCompletionGuardEnabled } = completionPolicy;
   const {
     cancelResponseCompletion,
@@ -104,6 +104,12 @@ export async function deliverAdapterResponse(
         const nonReplayable = isNonReplayableResponse(response);
         if (nonReplayable) response = await sanitizeNonReplayableUpstreamError(response, errorSignal);
         const body = await readDisplaySafeErrorText(response, errorSignal, "Upstream recovery failed");
+        const refusalCode = replayRefusalBodyCode(body) ?? observedReplayRefusalCode(response);
+        if (refusalCode) {
+          yield { type: "error", status: REPLAY_REFUSED_STATUS, errorType: "upstream_error", code: refusalCode,
+            message: REPLAY_REFUSAL_MESSAGE, retryable: false };
+          return;
+        }
         const error = normalizeUpstreamErrorText(body, "Upstream recovery failed");
         if (isProxyError(response)) rememberProxyErrorMessage(logCtx, error.message ?? error.safeText, { status: response.status, type: error.type ?? "upstream_error", code: error.code, presentation: proxyErrorPresentation(response) });
         yield { type: "error", status: response.status, message: error.message ?? error.safeText,
@@ -208,6 +214,7 @@ export async function deliverAdapterResponse(
           firstEvents: advisorStream,
           continuation: fetchGuardedEmptyCompletionRetry,
           preserveRetryError: preserveEmptyCompletionRetryError,
+          replayAllowed: !isAutomaticReplayBlocked(upstreamResponse),
         })
       : advisorStream;
     const catalogGuardedEventStream = guardEmptyToolCatalogStream(completionGuardedEventStream, clientToolCatalog, translatorBudget);
@@ -365,6 +372,7 @@ export async function deliverAdapterResponse(
           firstEvents: (async function* () { yield* guardedEvents; })(),
           continuation: fetchGuardedEmptyCompletionRetry,
           preserveRetryError: preserveEmptyCompletionRetryError,
+          replayAllowed: !isAutomaticReplayBlocked(upstreamResponse),
         })) events.push(event);
       } else {
         events = guardedEvents;

@@ -1,5 +1,5 @@
 import { guardResponseBodyInactivity } from "../../lib/response-body-inactivity";
-import { isAutomaticReplayBlocked } from "../../lib/upstream-retry";
+import { carryReplayRefusal, isAutomaticReplayBlocked } from "../../lib/upstream-retry";
 import { isPlainObject } from "../responses-snapshot-codec";
 import { BoundedSseFrameBuffer, joinSseFrameBytes } from "../sse-frame-buffer";
 import { sseDataPayload } from "../sse-payload-rewrite";
@@ -128,9 +128,9 @@ async function inspect(response: Response, options: OpenGatewayCompletionGuardOp
       },
       cancel(reason) { dropHeld(); cancelOwned(reason); },
     }, { highWaterMark: 0 });
-    return { kind: "pass", response: carryResponseToolOwnership(response, new Response(body, {
+    return { kind: "pass", response: carryReplayRefusal(response, carryResponseToolOwnership(response, new Response(body, {
       status: response.status, statusText: response.statusText, headers: response.headers,
-    })) };
+    }))) };
   };
   const terminal = (snapshot: unknown): Inspection => ({
     kind: wellFormedEmpty(snapshot) ? "empty" : "invalid",
@@ -206,9 +206,9 @@ function terminalResponse(source: Response, inspection: Exclude<Inspection, { ki
   const text = inspection.streaming
     ? `event: response.${snapshot.status}\ndata: ${JSON.stringify({ type: `response.${snapshot.status}`, response: snapshot })}\n\n`
     : JSON.stringify(snapshot);
-  return carryResponseToolOwnership(source, new Response(text, {
+  return carryReplayRefusal(source, carryResponseToolOwnership(source, new Response(text, {
     status: inspection.streaming || incomplete ? 200 : 502, headers,
-  }));
+  })));
 }
 
 export async function guardOpenGatewayCompletion(response: Response, options: OpenGatewayCompletionGuardOptions): Promise<Response> {
@@ -232,7 +232,7 @@ export async function guardOpenGatewayCompletion(response: Response, options: Op
       && isPlainObject(usage) && typeof usage.output_tokens === "number" && usage.output_tokens >= body.max_output_tokens) {
       return terminalResponse(selected, inspected, "max_output_tokens");
     }
-    if (attempt > 0 || !canReplay || options.signal.aborted) {
+    if (attempt > 0 || !canReplay || isAutomaticReplayBlocked(selected) || options.signal.aborted) {
       return terminalResponse(selected, inspected, attempt > 0
         ? "empty_completion_retry_failed" : "empty_completion");
     }

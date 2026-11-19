@@ -120,6 +120,7 @@ import {
   isNonReplayableResponse,
   isAutomaticReplayBlocked,
   hasUpstreamReplayRefusal,
+  observedReplayRefusalCode,
   isReplayRefusalResponse,
   carryReplayRefusal,
   projectReplayRefusal,
@@ -654,7 +655,7 @@ export async function bufferCompactResponse(
     const declaredLength = Number(upstream.headers.get("content-length"));
     if (Number.isFinite(declaredLength) && declaredLength > COMPACT_RESPONSE_MAX_BYTES) {
       void upstream.body.cancel("compact_response_too_large").catch(() => undefined);
-      return compactResponseTooLargeError();
+      return carryReplayRefusal(upstream, compactResponseTooLargeError());
     }
     // Header admission has finished; only non-empty body chunks re-arm this deadline.
     // The raw reader preserves bytes and cancels/releases without awaiting source cleanup.
@@ -666,18 +667,18 @@ export async function bufferCompactResponse(
       inactivityTimeoutMs: resolveStallTimeoutMs(stallTimeoutSec),
     });
     if (signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
-    if (result.oversized) return compactResponseTooLargeError();
+    if (result.oversized) return carryReplayRefusal(upstream, compactResponseTooLargeError());
     return carryReplayRefusal(upstream, new Response(result.bytes, { status: upstream.status, statusText: upstream.statusText, headers }));
   } catch (error) {
     if (signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
     if (error instanceof DOMException && error.name === "TimeoutError") {
-      return Response.json({ error: {
+      return carryReplayRefusal(upstream, Response.json({ error: {
         message: "Compact response body stalled",
         type: "upstream_stall_timeout",
         code: "upstream_stall_timeout",
-      } }, { status: 504 });
+      } }, { status: 504 }));
     }
-    return formatErrorResponse(502, "upstream_error", "Failed to read compact response");
+    return carryReplayRefusal(upstream, formatErrorResponse(502, "upstream_error", "Failed to read compact response"));
   }
 }
 
@@ -1733,7 +1734,7 @@ export async function handleResponsesCompact(
     // account's quota. Pool accounting keeps reading it as the transport failure it is,
     // which is also what it recorded before the status was corrected for the client.
     const replayRefused = isReplayRefusalResponse(upstream);
-    const refusalCode = replayRefusalBodyCode(bufferedErrorText);
+    const refusalCode = observedReplayRefusalCode(upstream) ?? replayRefusalBodyCode(bufferedErrorText);
     const explicitQuotaStatus = !replayRefused
       && (buffered.status === 429 || buffered.status === 402);
     const bodyInferredQuota = !replayRefused

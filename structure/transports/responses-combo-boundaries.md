@@ -242,13 +242,23 @@ in-flight replacement, and never awaits upstream cleanup.
   the client keeps the same reason and usage. Other explicit semantic or unknown reasons stay
   terminal;
 - a top-level `error` arrives before output, in which case unknown, rate-limit, and server failures
-  may advance while errors explicitly classified as non-retryable 4xx remain committed;
+  may advance unless `retryable: false` or a recognized no-replay transport code such as
+  `upstream_response_refused` settles the attempt; explicitly non-retryable 4xx errors also remain committed;
   a bare error with no status field of its own but an integral numeric `code` in 400..599 takes
   that code as its HTTP status (`bareErrorStatus`), so it gets the same decision and cooldown scope
   as the same HTTP response; non-integral, out-of-range and string codes keep the symbolic mapping; an untyped
   error envelope commits the target and the relay reports its eventual failure without replay;
 - another completed/incomplete terminal or the aggregate preflight byte or retained-chunk cap is reached,
   in which case the current target is committed conservatively.
+
+These commit rules stop OpenCodex's own automatic resend. Once HTTP 200 is committed, an
+external client's handling of the terminal SSE frame remains a separate boundary. In
+[Codex 0.156.0](https://github.com/openai/codex/blob/rust-v0.156.0/codex-rs/codex-api/src/sse/responses.rs),
+the `response.failed` parser does not read `retryable` and treats an unrecognized refusal code
+as retryable. Fixed no-replay codes and `response.retryable: false` therefore do not guarantee
+that this client will refrain from a new request after a committed head. Before the head is
+sent, the fixed HTTP 429 projection and no-retry header remain available; the proxy does not
+mislabel a post-head failure as quota exhaustion, a prompt error or a policy violation.
 
 The Codex WebSocket metadata channel writes `codex.rate_limits` and `codex.response.metadata` into
 the same body, usually before `response.created`. These frames are rebuilt from quota and header

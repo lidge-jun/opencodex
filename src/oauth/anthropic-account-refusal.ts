@@ -113,7 +113,7 @@ export async function rotateAnthropicAccountOnResponseForInstance(
   if (options.signal?.aborted
     || configuredAnthropicInstance(options.config, instance) !== instance) return null;
   const replayBlocked = isAutomaticReplayBlocked(response);
-  if (replayBlocked && (response.status !== 429 || isNonReplayableResponse(response))) return null;
+  if (replayBlocked && response.status !== 401 && (response.status !== 429 || isNonReplayableResponse(response))) return null;
   const sent = responseCredentials.get(response);
   if (!sent || sent.provider !== instance || sent.accountId !== options.accountId) return null;
   const routing = anthropicRoutingFor(instance);
@@ -152,7 +152,7 @@ export async function rotateAnthropicAccountOnResponseForInstance(
     if (!marked || configuredAnthropicInstance(options.config, instance) !== instance
       || !anthropicPhysicalSendOwnershipIsCurrent(sent)) return null;
     routing.clearAnthropicSessionAffinityForAccount(sent.accountId);
-    if (!options.canRetry || options.signal?.aborted) return null;
+    if (replayBlocked || !options.canRetry || options.signal?.aborted) return null;
     const decision = options.currentDecision ? options.currentDecision() : options.decision ?? null;
     return pickAlternateAnthropicAccount(options.config, sent.accountId, Date.now(), decision, options.model, options.excludedAccountIds);
   }

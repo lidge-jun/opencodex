@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import * as configModule from "../../src/config";
+import * as proxyEnv from "../../src/lib/proxy-env";
 import { forceRefreshOAuthAccessSnapshot, getValidAccessTokenSnapshot } from "../../src/oauth";
-import { credentialGeneration, getAccountSet, getAuthStorePath, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
+import { credentialGeneration, getAccountSet, getAuthStorePath, saveAccountCredential, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
 import { startServer } from "../../src/server";
 import { handleResponses } from "../../src/server/responses";
 import { isAntigravityFaultRotatable } from "../../src/server/responses/antigravity-fault-rotation";
@@ -30,6 +31,7 @@ import {
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const PROD_API_BASE = "https://cloudcode-pa.googleapis.com";
@@ -110,6 +112,44 @@ function antigravityConfig(): OcxConfig {
     },
   } as OcxConfig;
 }
+
+test.each([false, true])("replay veto: Antigravity verification quarantines only the sending generation (stale %s)", async stale => {
+  await seedOAuth();
+  const sender = getAccountSet("google-antigravity")!.activeAccountId;
+  const alternate = await seedSibling();
+  const config = antigravityConfig();
+  let sends = 0;
+  const transport = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    expect([PROD_API_BASE, DAILY_API_BASE]).toContain(new URL(input instanceof Request ? input.url : String(input)).origin);
+    expect(init?.method).toBe("POST");
+    sends++;
+    if (stale) await saveAccountCredential("google-antigravity", sender, {
+      ...getAccountSet("google-antigravity")!.accounts.find(account => account.id === sender)!.credential,
+      access: "fixture-new-generation",
+    });
+    return Response.json({ error: { code: 403, status: "PERMISSION_DENIED", message: "Please verify your account to continue." } },
+      { status: 403, headers: { "x-should-retry": "false" } });
+  }) as typeof fetch;
+  globalThis.fetch = transport;
+  Object.assign(config.providers["google-antigravity"]!, { fetch: transport });
+  const outbound = spyOn(proxyEnv, "configuredOutboundFetch").mockImplementation((input, init) => transport(input, init));
+  saveConfig(config);
+  const release = acquireOwnedSpendHome();
+  try {
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "google-antigravity/gemini-3.8-flash", input: "fixture", stream: false }),
+    }), config, { provider: "", model: "" });
+    const text = await response.text();
+    expect({ sends, status: response.status, text }).toMatchObject({ sends: 1, status: 403 });
+    expect(response.status).toBe(403);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    const rows = getAccountSet("google-antigravity")!.accounts;
+    expect(rows.find(account => account.id === sender)!.needsReauth === true).toBe(!stale);
+    expect(rows.find(account => account.id === alternate)!.needsReauth).toBeFalsy();
+    if (!stale) expect(rows.find(account => account.id === sender)!.needsReauthReason).toBe("verify_account");
+  } finally { outbound.mockRestore(); release(); }
+});
 
 function antigravityPassthroughConfig(): OcxConfig {
   return {

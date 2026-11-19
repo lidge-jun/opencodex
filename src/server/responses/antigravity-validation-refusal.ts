@@ -4,6 +4,22 @@ import {
 } from "../../adapters/google-errors";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { classifyAntigravityRefusal, hasAntigravityModelNotFoundProvenance } from "../../adapters/antigravity-refusal";
+import { markAccountNeedsReauthIfGeneration } from "../../oauth/store";
+
+/** Record a verification verdict against its sending generation without authorizing a resend. */
+export async function quarantineAntigravityVerificationRefusal<T extends { accountId: string; generation: string }>(
+  response: Response, providerName: string, accountId: string | null | undefined, sent: T | undefined, signal?: AbortSignal,
+): Promise<T | undefined> {
+  if (response.status !== 403 || providerName !== "google-antigravity" || !sent || sent.accountId !== accountId) return;
+  const body = await readBoundedResponseBody(response.clone(), { signal });
+  if (!body.displaySafe || body.truncated || classifyAntigravityRefusal(response.status, body.text).kind === "other") return;
+  // A late response cannot quarantine a refreshed or replaced credential. The caller owns
+  // its existing recovery policy and treats a failed persistence operation as terminal.
+  // The durable row appears as needs-reauth(verify) in account list and verify_account
+  // in the management API, and remains excluded from the pool until re-login.
+  await markAccountNeedsReauthIfGeneration(providerName, sent.accountId, sent.generation, undefined, "verify_account");
+  return sent;
+}
 
 /** Match only the normalized Antigravity validation-refusal marker. */
 export function hasAntigravityValidationRefusalMarker(text: string): boolean {

@@ -7,7 +7,7 @@ Claude passthrough and direct compact use this policy. `src/lib/abort.ts` keeps 
 linked after clearing or disabling the header timer; `src/server/claude-messages.ts` retains dev's
 `fetchWithHeaderDeadline` success/error cleanup and timeout provenance. Local pacing admission
 still pauses positive header clocks; `src/web-search/header-deadline.ts` distinguishes disabled
-budgets from exhausted positive budgets. Default image/search sidecar deadlines stay unchanged.
+budgets from exhausted positive budgets. Bounded error-body inspection after search headers also pauses this clock; a later key rotation resumes the remaining network budget. Image sends end their header timer before inspecting the body. Caller cancellation remains linked during both inspections. Default image/search sidecar deadlines stay unchanged.
 Native Chat/Messages, non-forward Responses (including adapter retries/continuations), and keyed
 compact start header clocks at the final send after pacing and credential/destination refresh.
 Header and subsequent body policy follow the serving URL across local/public transitions.
@@ -95,6 +95,8 @@ leg read catch in `src/web-search/passthrough-bridge.ts` report as `upstream_sta
 injection chains (`isNativeControlResponse`) stay unguarded: between responses they wait for the client's continuation,
 which a byte-silence clock cannot tell from upstream silence, and they keep their own timeliness checks. `tests/responses/responses-native-sse-stall.test.ts` covers explicit
 local and public expiry and the unset and `0` cases.
+
+The dispatched-POST refusal rule also applies to Kiro's owned attempt deadline and the image loop's physical-send deadline. Before dispatch, an image deadline remains an ordinary timeout; after dispatch, the exact owned deadline cause returns a fixed replay refusal. Caller cancellation wins in both cases. The HTTP response-header timer ends when headers arrive and never governs consumption of a healthy slow body. See the [wire error contract](../data-planes/error-detail.md#client-error-bodies-chat).
 
 ## Offline wait and resend
 

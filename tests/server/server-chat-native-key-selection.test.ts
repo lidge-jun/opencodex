@@ -66,10 +66,10 @@ async function queue(config: OcxConfig, id: string) {
     await Bun.sleep(5);
   }
 }
-function start(config: OcxConfig, abort: AbortController) {
+function start(config: OcxConfig, abort: AbortController, stream = false) {
   const logCtx: RequestLogContext = { model: "", provider: "" };
   const req = new Request("http://localhost/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" },
-    signal: AbortSignal.any([abort.signal, AbortSignal.timeout(5_000)]), body: JSON.stringify({ model: `${NAME}/test`, messages: [{ role: "user", content: "fixture question" }], stream: false }) });
+    signal: AbortSignal.any([abort.signal, AbortSignal.timeout(5_000)]), body: JSON.stringify({ model: `${NAME}/test`, messages: [{ role: "user", content: "fixture question" }], stream }) });
   const pending = handleChatCompletions(req, config, logCtx).then(async response => ({ response, text: await response.text(), logCtx }));
   void pending.catch(() => {});
   return pending;
@@ -259,6 +259,79 @@ test.each([
   });
   expect(getKeyCooldownUntil(NAME, "k1")).toBeGreaterThan(Date.now());
   for (const id of ["k2", "k3"]) expect(getKeyCooldownUntil(NAME, id)).toBeNull();
+  unchanged(config); noLeaks(config);
+});
+
+function boundaryFixture(): OcxConfig {
+  const config = fixture();
+  // Bind the physical executor as well as global fetch: no provider-specific transport may
+  // bypass this in-memory fixture through its own HTTP client.
+  Object.assign(config.providers[NAME]!, { fetch: ((input, init) => globalThis.fetch(input, init)) as typeof fetch });
+  return config;
+}
+
+for (const stream of [false, true]) for (const blocked of [false, true]) {
+  test(`replay boundary: native Chat reset respects the original head veto (stream=${stream}, blocked=${blocked})`, async () => {
+    const config = boundaryFixture();
+    config.providers[NAME]!.retryOnReset = {};
+    const reply = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      expect(init?.method).toBe("POST");
+      const first = seen.length === 0;
+      await (await reply(input, init)).body?.cancel();
+      if (first) return new Response(new ReadableStream<Uint8Array>({
+        pull(controller) { controller.error(Object.assign(new Error("fixture reset"), { code: "ECONNRESET" })); },
+      }, { highWaterMark: 0 }), {
+        headers: { "content-type": "text/event-stream", ...(blocked ? { "x-should-retry": "false" } : {}) },
+      });
+      const completion = { choices: [{ index: 0, delta: { role: "assistant", content: "fixture recovered" }, finish_reason: "stop" }] };
+      return new Response(`data: ${JSON.stringify(completion)}\n\ndata: [DONE]\n\n`, {
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as typeof fetch;
+    const result = await start(config, new AbortController(), stream);
+    expect(seen).toHaveLength(blocked ? 1 : 2);
+    expect(result.text.includes("fixture recovered")).toBe(!blocked);
+    if (!blocked) expect(result.response.status).toBe(200);
+    unchanged(config); noLeaks(config);
+  });
+}
+
+for (const code of ["upstream_response_refused", "upstream_reset_replay_refused"] as const) for (const rootCode of [false, true]) {
+  test(`replay boundary: buffered native Chat projects a coded HTTP 200 (${code}, root=${rootCode})`, async () => {
+    const config = boundaryFixture();
+    const reply = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      expect(init?.method).toBe("POST");
+      await (await reply(input, init)).body?.cancel();
+      const error = { message: "provider-private-detail" };
+      return Response.json(rootCode ? { code, error } : { error: { code, ...error } }, {
+        headers: { "retry-after": "30" },
+      });
+    }) as typeof fetch;
+    const { response, text, logCtx } = await start(config, new AbortController());
+    expect(seen).toHaveLength(1);
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(response.headers.get("retry-after")).toBeNull();
+    expect(JSON.parse(text).error).toEqual({ type: "upstream_error", code, message: CLIENT_ERROR_CONTRACTS.replay_refused });
+    expect(text).not.toContain("provider-private-detail");
+    expect(logCtx.attempts?.[0]?.sendCount).toBe(1);
+    unchanged(config); noLeaks(config);
+  });
+}
+
+test("replay boundary: ordinary buffered native Chat error retains its existing failure status", async () => {
+  const config = boundaryFixture();
+  const reply = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    await (await reply(input, init)).body?.cancel();
+    return Response.json({ error: { type: "upstream_error", code: "server_error", message: "provider-private-detail" } });
+  }) as typeof fetch;
+  const { response } = await start(config, new AbortController());
+  expect(seen).toHaveLength(1);
+  expect(response.status).toBe(502);
+  expect(response.headers.get("x-should-retry")).toBeNull();
   unchanged(config); noLeaks(config);
 });
 

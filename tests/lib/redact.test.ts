@@ -52,6 +52,21 @@ describe("redactSecretString", () => {
     expect(redactSecretString("status=429 model=gpt-5.5")).toBe("status=429 model=gpt-5.5");
   });
 
+  test("masks Hub relay leases even when a bare token ends in a dash", () => {
+    const token = "ocx_hub_relay_" + "A".repeat(42) + "-";
+    expect(redactSecretString(`lease ${token} expired`)).toBe(`lease ${REDACTED_SECRET} expired`);
+    expect(redactSecretString(`Bearer ${token}`)).toBe(`Bearer ${REDACTED_SECRET}`);
+    expect(redactUrlForLog(`https://hub.example.test/path/${token}`)).not.toContain(token);
+  });
+
+  test("masks the management credential header in strings, headers, and objects", () => {
+    const header = "x-opencodex-api-key";
+    const value = "opaque-fixture-credential";
+    expect(redactSecretString(`${header}: ${value}`)).toBe(`${header}: ${REDACTED_SECRET}`);
+    expect(redactHeaders(new Headers({ [header]: value }))).toEqual({ [header]: REDACTED_SECRET });
+    expect(redactSecrets({ [header]: value })).toEqual({ [header]: REDACTED_SECRET });
+  });
+
   test("masks colon-labelled credentials echoed back by an upstream error", () => {
     // #1020 review: upstream 4xx bodies quote the offending header at us. The
     // `=` rules never fire for `header: value`, so a custom credential used to

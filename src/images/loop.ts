@@ -28,7 +28,7 @@ import { bridgeToResponsesSSE } from "../bridge";
 import { isTruncatedStopReason } from "../responses/truncated-stop-reason";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { readBoundedResponseBody } from "../lib/bounded-body";
-import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isAutomaticReplayBlocked, isReplayRefusalCode, isSameTargetRetryHold, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE, SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isAutomaticReplayBlocked, isReplayRefusalCode, hasUpstreamReplayRefusal, observedReplayRefusalCode, replayRefusalBodyCode, isSameTargetRetryHold, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE, UPSTREAM_RESET_REPLAY_REFUSED_CODE, SendBudgetExhaustedError } from "../lib/upstream-retry";
 import { unwrapUpstreamRetryEvidenceError } from "../codex/auth-context";
 import { HostedAdvisorSpendRefusal } from "../server/responses/policy-request-scope";
 import { rateLimitRetryDelayMs } from "../providers/key-failover";
@@ -635,6 +635,13 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
     }
 
     let headerDeadline = clearableDeadline(connectTimeoutMs, signal);
+    let postDispatched = false;
+    const headerTimeout = () => postDispatched
+      ? new LoopError(REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE, {
+        type: "error", status: REPLAY_REFUSED_STATUS, errorType: "upstream_error",
+        code: UPSTREAM_RESET_REPLAY_REFUSED_CODE, message: REPLAY_REFUSAL_MESSAGE, retryable: false,
+      })
+      : new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during image-bridge`);
     const paceThenResetHeaderDeadline = async (): Promise<ProviderRequestSlot | undefined> => {
       headerDeadline.clear();
       const slot = (await deps.waitForRequestSlot?.(signal)) || undefined;
@@ -655,6 +662,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
        * header deadline. The caller owns same-target 429 replays and key rotation around it.
        */
       const fetchOnce = async (requestAdapter: ProviderAdapter, recovery?: AttemptRecoveryKind): Promise<IterationResponse> => {
+        postDispatched = false;
         let request: AdapterRequest;
         if (cachedRequest !== undefined && cachedAdapter === requestAdapter) {
           request = cachedRequest;
@@ -683,7 +691,10 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                 stream: true,
                 executor: requestFetch,
                 sendBudget: deps.incomingMeta.sendBudget,
-                onPhysicalSend: deps.incomingMeta.onPhysicalSend,
+                onPhysicalSend: send => {
+                  postDispatched ||= request.method.toUpperCase() === "POST";
+                  deps.incomingMeta.onPhysicalSend?.(send);
+                },
                 onRecoveryWithheld: deps.incomingMeta.onRecoveryWithheld,
               }));
             } finally {
@@ -703,13 +714,16 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                   // Same reset-recovery parity as the web-search loop: the replay needs
                   // `keepalive: false` to abandon the pooled socket, because Bun has ignored the
                   // hop-by-hop header alone (oven-sh/bun#20492).
-                  return await sendTrackingRequestSlot(slot, () => requestFetch(request.url, applyUpstreamRecoveryInit({
+                  return await sendTrackingRequestSlot(slot, () => {
+                    postDispatched ||= request.method.toUpperCase() === "POST";
+                    return requestFetch(request.url, applyUpstreamRecoveryInit({
                     method: request.method,
                     redirect: "manual",
                     headers: h,
                     body: request.body,
                     signal: headerDeadline.signal,
-                  }, retryRecovery)));
+                    }, retryRecovery));
+                  });
                 } finally {
                   releaseProviderRequestSlot(slot);
                 }
@@ -720,6 +734,10 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         } finally {
           request.releaseBodyObservation?.();
         }
+        headerDeadline.clear();
+        if (!response.ok) await hasUpstreamReplayRefusal(response, signal,
+          { requireCompleteBody: [400, 401, 403, 413, 429].includes(response.status) });
+        signal.throwIfAborted();
         bindAnthropicRejectionResponse(request, response);
         return { response, responseAdapter: requestAdapter, parsed: iterParsed };
       };
@@ -776,7 +794,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       }
 
       let imageReplacement: AdapterRequest | undefined;
-      if (deps.imageRecovery && prepared.response.status === 413 && !isAutomaticReplayBlocked(prepared.response)) {
+      if (!isAutomaticReplayBlocked(prepared.response) && deps.imageRecovery && prepared.response.status === 413) {
         headerDeadline.clear();
         const recovered = yield* withHeartbeats(deps.imageRecovery(prepared.response, iterParsed, prepared.responseAdapter, signal), signal);
         prepared.response = recovered.response;
@@ -787,8 +805,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           cachedRequest = imageReplacement;
         }
       }
-      if (!imageReplacement && !isAutomaticReplayBlocked(prepared.response)
-        && await deps.thinkingRecovery?.prepareHttp(prepared.response, prepared.responseAdapter.name, iterParsed)) {
+      if (!imageReplacement && !isAutomaticReplayBlocked(prepared.response) && await deps.thinkingRecovery?.prepareHttp(prepared.response, prepared.responseAdapter.name, iterParsed)) {
         try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* closed */ }
         cachedRequest = undefined;
         prepared = await fetchOnce(adapter, "opaque-blob-rejection");
@@ -800,34 +817,34 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           const event = await deps.thinkingRecovery.projectHttpFailure(prepared.response, signal);
           throw new LoopError(event.status ?? prepared.response.status, event.message, event);
         }
-        let body: Awaited<ReturnType<typeof readBoundedResponseBody>>;
+        let body: Awaited<ReturnType<typeof readBoundedResponseBody>> | undefined;
         try {
           body = await readBoundedResponseBody(prepared.response, { signal });
         } catch {
           if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
-          throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}`, undefined,
-            { nonReplayable: isAutomaticReplayBlocked(prepared.response) });
         }
         let formatted = "";
-        const upstreamCode = body.displaySafe && !body.truncated ? upstreamErrorCode(body.text) : undefined;
+        const safeText = body?.displaySafe && !body.truncated ? body.text : "";
+        const upstreamCode = replayRefusalBodyCode(safeText) ?? observedReplayRefusalCode(prepared.response)
+          ?? upstreamErrorCode(safeText);
         if (isReplayRefusalCode(upstreamCode)) {
           throw new LoopError(REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE, {
             type: "error", status: REPLAY_REFUSED_STATUS, errorType: "upstream_error", code: upstreamCode,
             message: REPLAY_REFUSAL_MESSAGE, retryable: false,
           });
         }
-        if (body.displaySafe && !body.truncated && body.text.trim() && prepared.responseAdapter.formatErrorBody) {
+        if (safeText.trim() && prepared.responseAdapter.formatErrorBody) {
           try {
             formatted = prepared.responseAdapter.formatErrorBody(
               prepared.response.status,
               prepared.response.headers,
-              body.text,
+              safeText,
             ).trim();
           } catch { /* formatter hooks are best-effort */ }
         }
         // A verified plan refusal keeps its fixed copy, code and provenance through this envelope, so a
         // combo or policy can still move past it; an unverified echo of the code stays an ordinary failure.
-        const planMessage = body.displaySafe && !body.truncated ? verifiedPlanRefusalMessage(prepared.response, body.text) : undefined;
+        const planMessage = safeText ? verifiedPlanRefusalMessage(prepared.response, safeText) : undefined;
         if (planMessage !== undefined) {
           throw new LoopError(400, `Provider error 400: ${planMessage}`,
             { type: "error", status: 400, message: planMessage, errorType: "invalid_request_error", code: MODEL_NOT_IN_PLAN_CODE },
@@ -843,8 +860,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         try { return await fetchOnce(adapter, "opaque-blob-rejection"); }
         catch (error) {
           if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
-          if (headerDeadline.didExpire()) throw new LoopError(504,
-            `Provider response-header timeout after ${connectTimeoutMs}ms during image-bridge`);
+          if (headerDeadline.didExpire()) throw headerTimeout();
           throw error;
         } finally { headerDeadline.clear(); deps.onIterationEnd?.(); }
       } };
@@ -852,10 +868,8 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       if (isTranslatorBudgetExceededError(error)) throw error;
       if (error instanceof SendBudgetExhaustedError) throw new LoopError(429, error.message,
         { type: "error", status: 429, errorType: "rate_limit_error", code: error.code, message: error.message, retryable: false });
-      if (headerDeadline.didExpire()) {
-        throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during image-bridge`);
-      }
       if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
+      if (headerDeadline.didExpire()) throw headerTimeout();
       const refusal = unwrapUpstreamRetryEvidenceError(error);
       if (refusal instanceof HostedAdvisorSpendRefusal) throw new LoopError(400, refusal.message, refusal.event());
       if (error instanceof LoopError || error instanceof RequestPacingQueueOverloadError) throw error;
@@ -888,7 +902,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           try {
             yield* parseStreamWithProgress(current.response, current.responseAdapter.parseStream.bind(current.responseAdapter), {
               signal, inactivityTimeoutMs: stallTimeoutMs, translatorBudget,
-              preserveAdapterError: deps.thinkingRecovery !== undefined,
+              preserveAdapterError: deps.thinkingRecovery !== undefined || isAutomaticReplayBlocked(current.response),
               onErrorUsage: usage => { hiddenUsage = addUsage(hiddenUsage, usage); },
             });
           } catch (error) {

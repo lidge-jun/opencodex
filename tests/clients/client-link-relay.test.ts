@@ -19,7 +19,7 @@ import {
   type LinkTunnelGate,
   type LinkAdmissionResult,
 } from "../../src/client/link-relay";
-import { LinkRelayAuthenticationError, LinkRelayAuthTimeoutError } from "../../src/client/link-relay-transport";
+import { LinkRelayAuthTimeoutError } from "../../src/client/link-relay-transport";
 import type { LinkDiagnosticRecord } from "../../src/link/diagnostics";
 import { LINK_RELAY_AUTH_PATH } from "../../src/link/relay-auth";
 import { HUB_RELAY_REQUEST_BODY_MAX_BYTES, HUB_RELAY_RESPONSE_BODY_MAX_BYTES } from "../../src/client/hub-relay";
@@ -987,21 +987,37 @@ test.each([false, true])("owner and auth deadlines share a single recovery budge
   expect(attempts).toBe(1);
 });
 
-test.each([
-  { failure: new LinkRelayAuthenticationError(), status: REPLAY_REFUSED_STATUS },
-  // An ambiguous post-dispatch failure may already run on Home: the refusal, not a hop.
-  { failure: new Error("socket reset after dispatch"), status: REPLAY_REFUSED_STATUS },
-])(
-  "never retries authentication refusal or ambiguous transport failure", async ({ failure, status }) => {
+test("never retries an ambiguous post-dispatch transport failure", async () => {
     const { gate, checks } = observedGate(["match"]);
     let attempts = 0;
     const response = await relayLinkDataRequestImpl(relayRequest({ method: "POST" }), target, {
-      tunnel: gate, fetchImpl: (async () => { attempts++; throw failure; }) as typeof fetch,
+      tunnel: gate, fetchImpl: (async () => { attempts++; throw new Error("socket reset after dispatch"); }) as typeof fetch,
     });
-    expect(response.status).toBe(status);
+    expect(response.status).toBe(REPLAY_REFUSED_STATUS);
     expect(checks()).toBe(1);
     expect(attempts).toBe(1);
-  });
+});
+
+test("a failed credential-free proof refuses authentication before data dispatch", async () => {
+  let challenges = 0, dispatches = 0;
+  const home = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    if (new URL(request.url).pathname === LINK_RELAY_AUTH_PATH) {
+      challenges++;
+      expect(request.headers.has("authorization")).toBe(false);
+      return new Response(null, { status: 204, headers: { "x-opencodex-link-proof": "0".repeat(64) } });
+    }
+    dispatches++;
+    return new Response("unexpected data request");
+  } });
+  servers.push(home);
+  const { gate, checks } = observedGate(["match"]);
+  const response = await relayLinkDataRequestImpl(relayRequest({ method: "POST", body: "must remain unsent" }), {
+    ...target, tunnelPort: home.port!, linkId: `lnk_${"a".repeat(16)}`, apiKeyId: "ocx_data_fixture",
+  }, { tunnel: gate });
+  expect(response.status).toBe(503);
+  expect((await response.json()).code).toBe("link_relay_auth_failed");
+  expect({ challenges, dispatches, checks: checks() }).toEqual({ challenges: 1, dispatches: 0, checks: 1 });
+});
 
 test("caller cancellation during an owner deadline prevents both recovery and dispatch", async () => {
   const abort = new AbortController();

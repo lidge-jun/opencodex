@@ -2,7 +2,7 @@
 // handleResponses with fetch replaced. Turn metadata is read in request preparation, the adapter
 // decides, and the delivery commits from the completed response and the raw usage.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { PER_MESSAGE_EFFORT_BETA, resetPerMessageEffortStoreForTests } from "../../src/adapters/anthropic/per-message-effort";
+import { PER_MESSAGE_EFFORT_BETA, perMessageEffortStoreForTests, resetPerMessageEffortStoreForTests } from "../../src/adapters/anthropic/per-message-effort";
 import { handleResponses } from "../../src/server/responses/core";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -71,6 +71,23 @@ describe("perMessageEffort through handleResponses", () => {
   const provider = (perMessageEffort: boolean): OcxProviderConfig & { fetch: typeof fetch } => ({
     adapter: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-test", defaultMaxOutputTokens: 64000, perMessageEffort,
     fetch: globalThis.fetch,
+  });
+
+  test.each([400, 503])("replay veto: rejected per-message effort clears pending state (%i)", async status => {
+    let sends = 0;
+    const configured = provider(true);
+    configured.fetch = (async () => {
+      sends++;
+      expect(perMessageEffortStoreForTests().pending.size).toBe(1);
+      return Response.json({ type: "error", error: { type: "invalid_request_error",
+        message: status === 400 ? "output_config.effort requires a model that supports per-turn effort; this model does not" : "fixture service failure",
+      } }, { status, headers: { "x-should-retry": "false" } });
+    }) as typeof fetch;
+    const config = { providers: { "anthropic-key": configured } } as unknown as OcxConfig;
+    await turn(config, [userMsg("fixture question")], "high", { "x-codex-turn-metadata": NEW_META });
+    expect(sends).toBe(1);
+    expect(perMessageEffortStoreForTests().pending.size).toBe(0);
+    expect(perMessageEffortStoreForTests().capability.size).toBe(status === 400 ? 1 : 0);
   });
 
   test("an effort change keeps the first turn's top-level effort and sends an effort message instead", async () => {

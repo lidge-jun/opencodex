@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, jest, test } from "bun:test";
 import { fetchWithHeaderTimeout } from "../../src/server/responses";
 import { isNonReplayableResponse, isReplayRefusalResponse } from "../../src/lib/upstream-retry";
-import { sendWithConnectionPolicy } from "../../src/server/responses/fetch-helpers";
+import { fetchVertexWithRetry } from "../../src/adapters/google-http";
 
 const servers: Array<ReturnType<typeof Bun.serve>> = [];
 
-test("physical headers end the deadline without reading the no-retry body", async () => {
+test("physical headers end the production adapter deadline without reading the no-retry body", async () => {
   jest.useFakeTimers();
   const caller = new AbortController();
   let controller!: ReadableStreamDefaultController<Uint8Array>;
@@ -19,12 +19,14 @@ test("physical headers end the deadline without reading the no-retry body", asyn
     headersArrived();
     return new Response(body, { status: 429, headers: { "content-type": "application/json", "x-should-retry": "false" } });
   }) as typeof fetch;
-  const executor = ((input, init) => sendWithConnectionPolicy(physical, input, init)) as typeof fetch;
   try {
-    const pending = fetchWithHeaderTimeout("https://fixture.example/v1/responses", { method: "POST", body: "{}" },
-      caller.signal, 100, false, executor);
+    let settled = false;
+    const pending = fetchVertexWithRetry({ url: "https://fixture.example/v1/responses", method: "POST", headers: {}, body: "{}" },
+      { abortSignal: caller.signal, timeoutMs: 100, returnRawErrors: true, executor: physical });
+    void pending.then(() => { settled = true; });
     await headers;
-    await Promise.resolve();
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+    expect(settled).toBe(true);
     jest.advanceTimersByTime(140);
     expect(physicalSignal.aborted).toBe(false);
     const raw = JSON.stringify({ error: { code: "upstream_response_refused", message: "Fixture refusal" } });
@@ -36,20 +38,27 @@ test("physical headers end the deadline without reading the no-retry body", asyn
 });
 
 test("a dispatched POST's own header deadline refuses replay without claiming quota", async () => {
+  jest.useFakeTimers();
   let received = 0;
+  const bodyReceived = Promise.withResolvers<void>();
+  const caller = new AbortController();
   let settle: ((response: Response) => void) | undefined;
   const server = Bun.serve({
     hostname: "127.0.0.1", port: 0,
     async fetch(request) {
       expect(await request.text()).toBe('{"fixture":true}');
       received++;
+      bodyReceived.resolve();
       return new Promise<Response>(resolve => { settle = resolve; });
     },
   });
   try {
-    const response = await fetchWithHeaderTimeout(server.url.toString(), {
+    const pending = fetchWithHeaderTimeout(server.url.toString(), {
       method: "POST", headers: { "content-type": "application/json" }, body: '{"fixture":true}',
-    }, new AbortController().signal, 300);
+    }, caller.signal, 300);
+    await Promise.race([bodyReceived.promise, pending.then(() => { throw new Error("response preceded the fixture body receipt"); })]);
+    jest.advanceTimersByTime(301);
+    const response = await pending;
     expect(received).toBe(1);
     expect(response.status).toBe(429);
     expect(response.headers.get("x-should-retry")).toBe("false");
@@ -60,8 +69,9 @@ test("a dispatched POST's own header deadline refuses replay without claiming qu
       code: "upstream_reset_replay_refused", message: expect.stringContaining("may already have been processed"),
     } });
   } finally {
+    caller.abort();
     settle?.(new Response(null, { status: 499 }));
-    await server.stop(true);
+    try { await server.stop(true); } finally { jest.useRealTimers(); }
   }
 });
 

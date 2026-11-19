@@ -764,6 +764,8 @@ export function httpStatusFromTerminalError(error: {
   if (!error) return 502;
   if (error.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE) return 503;
   if (error.code === "client_closed_request" || error.code === "client_cancelled") return 499;
+  // These fixed replay refusals retain their client HTTP policy across terminal-event decoding.
+  if (error.code === "upstream_response_refused" || error.code === "upstream_reset_replay_refused") return 429;
   if (isCyberPolicyCode(error.code) || (error.message ? isCyberPolicyMessage(error.message) : false)) {
     return 400;
   }

@@ -646,6 +646,18 @@ export async function deliverPassthroughResponse(
     const terminalReplacement = isTerminalResetReplacement(upstreamResponse);
     const grokOAuth = isXaiGrokOAuth(route.providerName, route.provider);
     if (terminalReplacement || (isNonReplayableResponse(upstreamResponse) && !isReplayRefusalResponse(upstreamResponse) && !wasPermanentAccountRefusal(upstreamResponse))) {
+      if (options.comboAttempt) {
+        // Consume the original body once for usage and passive evidence before
+        // sanitizing the client envelope; projected bodies carry no raw counters.
+        const comboCause: Pick<typeof logCtx, "causeHint"> = {};
+        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, undefined, comboCause, false, grokOAuth);
+        if (comboCause.causeHint) logCtx.causeHint = comboCause.causeHint;
+        const response = await sanitizeNonReplayableUpstreamError(failure.response, upstream.signal, {
+          terminalReplacement, grokOAuthLogCtx: grokOAuth ? logCtx : undefined,
+        });
+        options.onConsumedComboFailure?.({ ...failure, response });
+        return response;
+      }
       return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal, {
         terminalReplacement, grokOAuthLogCtx: grokOAuth ? logCtx : undefined,
       });

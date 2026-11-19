@@ -27,7 +27,7 @@ import { classifyPoolRecoveryDispatch } from "../../routing/probe-lease";
 import { formatErrorResponse } from "../../bridge";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { upstreamErrorMessageFromPayload, isRateLimitOrQuotaFailureMessage } from "../../lib/errors";
-import { isNonReplayableResponse, isTransientUpstreamStatus, SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { isNonReplayableResponse, isAutomaticReplayBlocked, hasUpstreamReplayRefusal, isReplayRefusalResponse, replayRefusalBodyCode, isTransientUpstreamStatus, SendBudgetExhaustedError } from "../../lib/upstream-retry";
 import { applyClaudeBridgePoolSession } from "../claude-bridge-pool-session";
 import {
   codexWsPreOutputRefusalHold,
@@ -358,14 +358,18 @@ export async function codexPoolAccountModel400Denial(
   signal?: AbortSignal,
   wireModelId?: string,
 ): Promise<string | undefined> {
-  if (response.status !== 400) return undefined;
-  // A response that must not be sent again cannot open an alternate-account retry either. The
-  // reset helper marks the answer to a spent operator replacement this way, and that turn may
-  // already have run on the first send. Same rule as the quota and transient ladders below.
-  if (isNonReplayableResponse(response)) return undefined;
+  if (isAutomaticReplayBlocked(response)) return undefined;
+  return observeCodexPoolAccountModel400Denial(response, modelId, signal, wireModelId);
+}
+
+/** Read authenticated model evidence without authorizing another physical send. */
+export async function observeCodexPoolAccountModel400Denial(
+  response: Response, modelId: string, signal?: AbortSignal, wireModelId?: string,
+): Promise<string | undefined> {
+  if (response.status !== 400 || isReplayRefusalResponse(response)) return undefined;
   try {
     const body = await readBoundedResponseBody(response.clone(), { signal });
-    if (!body.displaySafe || body.truncated) return undefined;
+    if (!body.displaySafe || body.truncated || replayRefusalBodyCode(body.text)) return undefined;
     return isAllowListedCodexAccountModel400(response.status, body.text, modelId, wireModelId)
       ? codexUnsupportedModelFromDetail(response.status, body.text)
       : undefined;
@@ -1124,7 +1128,8 @@ export async function retryCodexPoolOnAlternateAccount(
       // single-retry path -- every flagship model, which is the #4906 case -- records it too
       // rather than only the gated ladder below. Without this the pool learns nothing from a
       // refusal and the next request repeats the same selection.
-      const retryModelDenial = await codexPoolAccountModel400Denial(
+      await hasUpstreamReplayRefusal(upstreamResponse, upstream.signal);
+      const retryModelDenial = await observeCodexPoolAccountModel400Denial(
         upstreamResponse,
         route.modelId,
         options.abortSignal,
@@ -1137,7 +1142,7 @@ export async function retryCodexPoolOnAlternateAccount(
           retryAuthCtx.kind === "pool" ? retryAuthCtx.generation : undefined,
         );
       }
-      if (!retrySameConfirmedAccount || retrySendCount >= maxRetrySends) break;
+      if (isAutomaticReplayBlocked(upstreamResponse) || !retrySameConfirmedAccount || retrySendCount >= maxRetrySends) break;
       // Caller-owned main is an alternate-account replay and can never enter the bounded
       // same-stored-account 400 loop above. Keep that invariant explicit for the account-id reads.
       if (retryAuthCtx.kind === "main") break;

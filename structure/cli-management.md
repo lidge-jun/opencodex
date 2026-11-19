@@ -1,5 +1,7 @@
 # CLI management and discovery
 
+Connected Hub clients can use the local admin token for the [scoped passive management reads](remote-link.md#hub-transport-relay). Relay key rows retain active and paused status for account listing and use positional display IDs. The stored relay lease is provisioned during connect and replaced after a committed key rotation.
+
 `src/cli/` contains the terminal management interface. Process ownership, startup, stop and service contracts remain in [Runtime](runtime.md); this document owns command discovery, help, management-client presentation and the generated operating reference.
 
 `ocx v2 mode v2-plaintext` requires `--acknowledge-plaintext-agent-messages` when entering the mode, locally or with `--live`. Local selection admission re-reads the mode and rechecks entry consent before either native or proxy writes, so a mode changed during the wait cannot reuse earlier idempotent permission. Generic config set/import refuse a new plaintext-mode entry and direct the operator to that coordinated transition; already-active restoration and exits remain allowed. The live client sends a scoped acknowledgment and validates the returned mode, capability and plaintext state. Its global feature remains disabled; the [surface contract](subagent-capacity.md#multi-agent-surface-selection) defines task-text retention and unchanged transport authentication. Existing independent plaintext preferences are preserved when leaving the mode.

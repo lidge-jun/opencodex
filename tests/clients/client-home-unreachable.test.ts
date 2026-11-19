@@ -54,8 +54,8 @@ describe("home_unreachable answers", () => {
 
   test("a Hub client's relay keeps its 502 and adds the stable code when the Hub does not answer", async () => {
     const response = await relayHubManagementRequest(
-      new Request("http://127.0.0.1:10100/api/machine/hub-relay/api/fallback"),
-      "/api/fallback",
+      new Request("http://127.0.0.1:10100/api/machine/hub-relay/api/provider-quotas"),
+      "/api/provider-quotas",
       { managementUrl: "https://hub.example.test", browserOrigin: "http://127.0.0.1:10100" },
       { fetchImpl: (async () => { throw new TypeError("connect ECONNREFUSED"); }) as unknown as typeof fetch },
     );

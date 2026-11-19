@@ -78,6 +78,11 @@ Grok Build 通过 Responses API 与 opencodex 通信。当路由声明推理档�
 
 注入在 provider 条目上的 `api_key` 会在这些模型的 Grok 凭据链中排在首位，因此对接 opencodex 时不需要额外登录 Grok。原生 grok 模型以及任何会直接联系 xAI 的 harness 功能，仍然保留你正常的 `grok login` / `XAI_API_KEY` 配置。
 
+## xAI OAuth 在 Legacy 隐私模式下返回 403
+
+如果 `ocx provider test xai` 或 Grok 请求提示账号使用 **Legacy (no storage)**，请在 xAI/Grok 隐私设置中切换到 **Privacy Mode**，然后再次运行 `ocx provider test xai`。该设置也会阻止模型发现和配额检查，OpenCodex 服务日志会显示相同指引。你可以保留现有 OAuth 登录。
+如果 Grok Responses 流已经开始，而替代请求遇到此 403，流会以 `permission_denied` 和相同的 Privacy Mode 指引结束。如果 Grok 模型属于 Responses 组合，组合可以尝试其他符合条件的模型。如果所有候选模型均已用尽，已确认的上下文窗口错误或适用的配额响应会优先于 Privacy Mode 指引。
+
 ## 手动方案（不使用自动注册）
 
 如果你自己管理 `~/.grok/config.toml`——或者 opencodex 绑定在非 loopback 地址上——请在 `# >>> opencodex managed block` 标记之外，添加一个 `[model_providers.opencodex]` 区块以及引用它的逐模型表：

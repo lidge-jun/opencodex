@@ -20,6 +20,24 @@ const request: AdapterRequest = {
   body: "{}",
 };
 
+test("replay veto: Kiro's dispatched POST deadline ends after one send", async () => {
+  let sends = 0;
+  const response = await fetchKiroWithRetry(request, { timeoutMs: 10,
+    executor: (async (_input, init) => {
+      sends++;
+      const signal = init!.signal!;
+      if (signal.aborted) throw signal.reason;
+      return new Promise<Response>((_, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    }) as typeof fetch,
+  });
+  expect(sends).toBe(1);
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  expect(await response.json()).toMatchObject({ error: { code: "upstream_reset_replay_refused" } });
+});
+
 function mockFetch(responses: Array<Response | Error>): { calls: RequestInit[]; urls: string[] } {
   const calls: RequestInit[] = [];
   const urls: string[] = [];
@@ -72,8 +90,9 @@ describe("kiro retry fetch", () => {
     }) as typeof fetch;
 
     const response = await fetchKiroWithRetry(request, { timeoutMs: 1 });
-    expect(response.status).toBe(504);
-    expect(await response.text()).toBe("Kiro upstream gateway timeout");
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(await response.json()).toMatchObject({ error: { code: "upstream_reset_replay_refused" } });
     expect(calls).toBe(1);
     expect(timeoutReasons).toHaveLength(1);
     expect((timeoutReasons[0] as Error).name).toBe("TimeoutError");

@@ -15,7 +15,7 @@
  * MUST stay a leaf module: imports nothing from server.ts or adapters (kiro-retry imports
  * the shared abort helpers from here).
  */
-import { clearableDeadline } from "./abort";
+import { clearableDeadline, withPausedResponseHeaderDeadline } from "./abort";
 import { isDefiniteContextOverflow } from "./context-overflow-verdict";
 import { errorDestinationLabel, errorDestinationText, type ErrorDestinationLabel } from "./error-destination";
 export { errorDestinationLabel, providerErrorDestinationLabel, errorDestinationText } from "./error-destination";
@@ -147,11 +147,13 @@ export function replayRefusalBodyCode(body: string, requiredStatus?: "failed") {
   try {
     const parsed = JSON.parse(body) as Record<string, unknown>;
     if (requiredStatus !== undefined && parsed.status !== requiredStatus) return undefined;
-    const error = parsed.error && typeof parsed.error === "object" && !Array.isArray(parsed.error)
-      ? parsed.error as Record<string, unknown>
-      : undefined;
-    return isReplayRefusalCode(error?.code) ? error.code
-      : isReplayRefusalCode(parsed.code) ? parsed.code : undefined;
+    for (const carrier of [parsed.error, parsed.last_error, parsed]) {
+      if (carrier && typeof carrier === "object" && !Array.isArray(carrier)
+        && isReplayRefusalCode((carrier as Record<string, unknown>).code)) {
+        return (carrier as { code: ReplayRefusalCode }).code;
+      }
+    }
+    return undefined;
   } catch {
     return undefined;
   }
@@ -514,7 +516,7 @@ export function cancelResponseBodyBestEffort(res: Response): void {
  * {@link isTransientUpstreamStatus} is only the gateway subset of that set: 429 and 529 escaped
  * it. These statuses settle as the refusal instead.
  */
-function invitesResendAfterReplacement(status: number): boolean {
+export function invitesResendAfterReplacement(status: number): boolean {
   return status === 401 || status === 402 || status === 408 || status === 409 || status === 429
     || status === 307 || status === 308 || status === 413 || status >= 500;
 }
@@ -528,9 +530,9 @@ function invitesResendAfterReplacement(status: number): boolean {
  * opaque-blob rebuild of a 400 or a combo hop on a context overflow, because each of those checks
  * it before sending again.
  */
-export function settleOperatorReplacement(response: Response): Response {
+export async function settleOperatorReplacement(response: Response, signal?: AbortSignal): Promise<Response> {
   if (response.ok) return response;
-  if (hasNoRetryDirective(response)) {
+  if (await hasUpstreamReplayRefusal(response, signal)) {
     markTerminalResetReplacement(response);
     return response;
   }
@@ -766,7 +768,7 @@ export async function fetchWithResetRetry(
       try { const sendRecovery = recovery; const run = () => doFetch(sendRecovery);
         response = await (opts.onSendsConsumed?.execute ? opts.onSendsConsumed.execute(run) : run()); }
       finally { if (opts.onSendsConsumed?.beforeSend) opts.onSendsConsumed(1); }
-      return spentOperatorReplacement ? settleOperatorReplacement(response) : response;
+      return spentOperatorReplacement ? await settleOperatorReplacement(response, opts.abortSignal) : response;
     } catch (err) {
       if (opts.abortSignal?.aborted) throw err;
       if (!isConnectionResetError(err)) {
@@ -822,7 +824,7 @@ export async function fetchWithResetRetry(
 
 /** Bytes of a 5xx body read to look for a context-overflow verdict; the verdict caps its input too. */
 const CONTEXT_OVERFLOW_PEEK_BYTES = 16_384;
-/** A body that has not arrived by then is not evidence; the peek must never stall the retry. */
+/** A bounded peek may be inconclusive; absence before this deadline does not authorize a resend. */
 const CONTEXT_OVERFLOW_PEEK_MS = 250;
 // A hypothetical, negated, or configuration-failure mention does not justify suppressing a retry.
 // Inspect the unwrapped provider message, not its JSON spelling or unrelated envelope fields.
@@ -840,14 +842,15 @@ function retryContextOverflowMessage(message: string): boolean {
   });
 }
 
-/** Up to `maxBytes` of a clone of the body, or what arrived before the deadline. */
-async function peekBodyText(res: Response, maxBytes: number, deadlineMs: number, signal?: AbortSignal): Promise<string> {
+/** Up to `maxBytes` of a clone, distinguishing a complete body from a bounded prefix. */
+async function peekBodyText(res: Response, maxBytes: number, deadlineMs: number, signal?: AbortSignal): Promise<{ text: string; complete: boolean }> {
   const reader = res.clone().body?.getReader();
-  if (!reader) return "";
+  if (!reader) return { text: "", complete: true };
   const decoder = new TextDecoder();
   let text = "";
   let bytes = 0;
   let emptyChunks = 0;
+  let complete = false;
   const deadlineAt = performance.now() + deadlineMs;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stop = () => {};
@@ -861,7 +864,8 @@ async function peekBodyText(res: Response, maxBytes: number, deadlineMs: number,
     while (bytes < maxBytes) {
       if (signal?.aborted || performance.now() >= deadlineAt) break;
       const chunk = await Promise.race([reader.read(), timedOut]);
-      if (!chunk || chunk.done) break;
+      if (!chunk) break;
+      if (chunk.done) { complete = true; text += decoder.decode(); break; }
       if (chunk.value.byteLength === 0) {
         if (++emptyChunks % 64 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0));
         continue;
@@ -871,7 +875,7 @@ async function peekBodyText(res: Response, maxBytes: number, deadlineMs: number,
       bytes += bounded.byteLength;
       text += decoder.decode(bounded, { stream: true });
     }
-    return text;
+    return { text, complete };
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", stop);
@@ -885,24 +889,35 @@ async function peekBodyText(res: Response, maxBytes: number, deadlineMs: number,
  * "Too many tokens" alone is not enough here: a 5xx
  * "Too many tokens, please wait" is a throttle that the retry exists for.
  */
-async function transientBodyBlocksRetry(res: Response, signal?: AbortSignal, checkOverflow = true): Promise<boolean> {
-  if ((res.headers.get("content-type") ?? "").includes("text/event-stream")) return false;
+async function observeRetryBody(res: Response, signal?: AbortSignal, checkOverflow = true): Promise<"clear" | "refusal" | "overflow" | "inconclusive"> {
+  if ((res.headers.get("content-type") ?? "").includes("text/event-stream")) return "inconclusive";
   try {
-    const text = await peekBodyText(res, CONTEXT_OVERFLOW_PEEK_BYTES, CONTEXT_OVERFLOW_PEEK_MS, signal);
+    const { text, complete } = await withPausedResponseHeaderDeadline(signal,
+      () => peekBodyText(res, CONTEXT_OVERFLOW_PEEK_BYTES, CONTEXT_OVERFLOW_PEEK_MS, signal));
     const code = replayRefusalBodyCode(text);
     if (code !== undefined) {
       wireReplayRefusals.set(res, code);
-      return true;
+      return "refusal";
     }
-    return checkOverflow && text.length > 0 && isDefiniteContextOverflow(res.status, text, retryContextOverflowMessage);
+    if (checkOverflow && text.length > 0 && isDefiniteContextOverflow(res.status, text, retryContextOverflowMessage)) return "overflow";
+    return complete ? "clear" : "inconclusive";
   } catch {
-    return false;
+    return "inconclusive";
   }
 }
 
-/** Honor an early wire veto without consuming the upstream response or owning its status. */
-export async function hasUpstreamReplayRefusal(response: Response, signal?: AbortSignal): Promise<boolean> {
-  return isAutomaticReplayBlocked(response) || (!response.ok && await transientBodyBlocksRetry(response, signal, false));
+/** Honor wire vetoes; recovery callers can also require a conclusive body before authorizing a resend. */
+export async function hasUpstreamReplayRefusal(
+  response: Response, signal?: AbortSignal, options?: { requireCompleteBody?: boolean },
+): Promise<boolean> {
+  if (isAutomaticReplayBlocked(response)) return true;
+  if (response.ok) return false;
+  const verdict = await observeRetryBody(response, signal, false);
+  if (verdict === "inconclusive" && options?.requireCompleteBody === true) {
+    markResponseNonReplayable(response);
+    return true;
+  }
+  return verdict === "refusal";
 }
 
 export function observedReplayRefusalCode(response: Response) {
@@ -978,7 +993,7 @@ export async function fetchWithTransientRetry(
     // The 5xx ladder does not retry 429 itself, but outer same-key and pool recovery
     // still need the wire verdict, including on the last physical send in this ladder.
     if (res.status === 429) {
-      await hasUpstreamReplayRefusal(res, opts.abortSignal);
+      await hasUpstreamReplayRefusal(res, opts.abortSignal, { requireCompleteBody: opts.replaySafe !== true });
       return res;
     }
     // A non-replayable gateway status was settled after the request body had already left
@@ -987,7 +1002,14 @@ export async function fetchWithTransientRetry(
     // thing about its own failure, so the ladder stops and hands the response back untouched.
     if (sent >= budget || res.ok || !isTransientUpstreamStatus(res.status) || isAutomaticReplayBlocked(res)) return res;
     if (opts.abortSignal?.aborted || Date.now() - attemptStart > slowAttemptMs) return res;
-    if (await transientBodyBlocksRetry(res, opts.abortSignal)) return res;
+    const observation = await observeRetryBody(res, opts.abortSignal);
+    if (observation === "refusal" || observation === "overflow") return res;
+    if (observation === "inconclusive" && opts.replaySafe !== true) {
+      // An unread suffix can carry the refusal. Keep the real response for attribution and
+      // delivery, while preventing this or any outer recovery loop from resending the turn.
+      markResponseNonReplayable(res);
+      return res;
+    }
     // Checked before cancelResponseBodyBestEffort so an already-aborted caller never receives
     // a response whose body we just cancelled.
     if (opts.abortSignal?.aborted) return res;
@@ -1107,7 +1129,7 @@ export async function refetchAfterProtocolSafeReset(
   try { if (accepted && opts.acceptResponse) accepted = opts.acceptResponse(replacement); }
   catch { accepted = false; }
   if (!accepted || opts.abortSignal?.aborted || body?.locked) {
-    try { void body?.cancel().catch(() => {}); } catch { /* already locked or closed */ }
+    cancelResponseBodyBestEffort(replacement);
     console.warn("[upstream-retry] protocol-safe refetch rejected" + label + "; preserving original stream error");
     return null;
   }

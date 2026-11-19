@@ -8,7 +8,7 @@ import type { TranslatorBudget } from "../../lib/translator-budget";
 import { readBoundedResponseBytes } from "../../lib/bounded-body";
 import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import { isRequestExecutionBudget, type RequestExecutionBudget, type SingleUseDispatchPermit } from "../../lib/request-execution-budget";
-import { applyReplayRefusalClientHeaders, isAutomaticReplayBlocked, isNonReplayableResponse, isNonReplayableUpstreamCode, markResponseNonReplayable, TRANSIENT_RETRY_MAX_ATTEMPTS } from "../../lib/upstream-retry";
+import { applyReplayRefusalClientHeaders, carryReplayRefusal, isAutomaticReplayBlocked, isNonReplayableResponse, isNonReplayableUpstreamCode, isReplayRefusalCode, markResponseNonReplayable, projectReplayRefusal, TRANSIENT_RETRY_MAX_ATTEMPTS } from "../../lib/upstream-retry";
 import { isCyberPolicyCode, isTerminalRefusalCode } from "../../lib/errors";
 import { isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint, supportsNativeResponsesCompactionTrigger } from "../../providers/openai-tiers";
 import { bridgeToResponsesSSE, formatErrorResponse } from "../../bridge";
@@ -297,12 +297,31 @@ export async function runWithCompactionRecovery(
       return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
     }
     if (!fallback.ok) {
+      // A terminal replacement describes the last physical attempt. Publishing the earlier
+      // retryable source failure would lose its veto and invite another send of the turn.
+      if (isAutomaticReplayBlocked(fallback)) {
+        void response.body?.cancel().catch(() => undefined);
+        return fallback;
+      }
       void fallback.body?.cancel().catch(() => undefined);
       restoreSourceLog?.(fallback.status);
       return response;
     }
     const completed = await bufferedJson(fallback, signal);
     const json = completed.json;
+    if (json?.status === "failed") {
+      const refusalCode = [json.error, json.last_error, json]
+        .map(value => record(value) ? value.code : undefined).find(isReplayRefusalCode);
+      if (refusalCode || isAutomaticReplayBlocked(completed.response) || failedTerminalReplayVerdict(json)) {
+        void response.body?.cancel().catch(() => undefined);
+        if (refusalCode) {
+          void completed.response.body?.cancel().catch(() => undefined);
+          return carryResponseToolOwnership(completed.response, carryReplayRefusal(completed.response, projectReplayRefusal(refusalCode)));
+        }
+        applyReplayRefusalClientHeaders(completed.response.headers);
+        return completed.response;
+      }
+    }
     const items = json && Array.isArray(json.output) ? json.output : [];
     const compactions = items.filter(value => record(value) && value.type === "compaction");
     const permitted = items.every(value => record(value) && (value.type === "compaction" || value.type === "reasoning"));

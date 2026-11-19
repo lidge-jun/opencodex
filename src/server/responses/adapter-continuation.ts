@@ -35,7 +35,7 @@ import {
   fetchWithTransientRetry,
   fetchWithResetRetry,
   applyUpstreamRecoveryInit,
-  isAutomaticReplayBlocked, isReplayRefusalCode, isSameTargetRetryHold, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE,
+  isAutomaticReplayBlocked, isReplayRefusalCode, hasUpstreamReplayRefusal, observedReplayRefusalCode, replayRefusalBodyCode, isSameTargetRetryHold, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE,
   prepareSameTarget429Wait,
   SendBudgetExhaustedError, errorDestinationLabel,
 } from "../../lib/upstream-retry";
@@ -349,6 +349,7 @@ export function createAdapterContinuations(
         const recoveryKind = nextContinuationRecoveryKind;
         nextContinuationRecoveryKind = undefined;
         response = await fetchContinuation(recoveryKind);
+        if (!response.ok) await hasUpstreamReplayRefusal(response, upstream.signal);
         bindAnthropicRejectionResponse(transportState.sameTargetRequest, response);
         if (initialRecoveryKind === "empty-completion" && !isAutomaticReplayBlocked(response) && await adapterExchange.thinkingSignatureRecovery.prepareHttp(
           response, transportState.activeAdapter.name, nextParsed,
@@ -753,6 +754,12 @@ export function createAdapterContinuations(
     if (!response.ok) {
       if (route.providerName === "kiro") response = carryProxyError(response, await normalizeFinalKiroHttpError(response, upstream.signal));
       const errorText = await readDisplaySafeErrorText(response, upstream.signal, "unknown error");
+      const refusalCode = replayRefusalBodyCode(errorText) ?? observedReplayRefusalCode(response);
+      if (refusalCode) {
+        yield { type: "error", status: REPLAY_REFUSED_STATUS, errorType: "upstream_error", code: refusalCode,
+          message: REPLAY_REFUSAL_MESSAGE, retryable: false };
+        return;
+      }
       const normalized = normalizeUpstreamErrorText(errorText, "unknown error");
       if (isReplayRefusalCode(normalized.code)) {
         yield { type: "error", status: REPLAY_REFUSED_STATUS, errorType: "upstream_error", code: normalized.code,

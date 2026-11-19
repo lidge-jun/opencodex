@@ -21,6 +21,10 @@ import {
   TRANSIENT_RETRY_MAX_ATTEMPTS,
   isConnectionResetError,
   hasUpstreamReplayRefusal,
+  observedReplayRefusalCode,
+  replayRefusalBodyCode,
+  projectReplayRefusal,
+  carryReplayRefusal,
 } from "../lib/upstream-retry";
 
 const GOOGLE_RETRY_BASE_MS = 250;
@@ -105,7 +109,16 @@ export async function fetchGoogleWithRetry(
       retryDelayMs = 0;
       sendClass = "transient";
       recovery = undefined;
-      if (await hasUpstreamReplayRefusal(res, ctx.abortSignal)) return res;
+      if (await hasUpstreamReplayRefusal(res, ctx.abortSignal)) {
+        if (ctx.returnRawErrors) return res;
+        const code = observedReplayRefusalCode(res)
+          ?? replayRefusalBodyCode(await readDisplaySafeErrorPayloadText(res.clone(), ctx.abortSignal));
+        if (code) {
+          cancelResponseBodyBestEffort(res);
+          return carryReplayRefusal(res, projectReplayRefusal(code));
+        }
+        return carryReplayRefusal(res, await normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal));
+      }
       if (res.status === 400 && repairInvalid400 && !compatibilityReplayUsed) {
         let payloadText = "";
         try {

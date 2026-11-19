@@ -232,8 +232,8 @@ Explicit client contracts take precedence over diagnostic-sentence matching. See
 An upstream incomplete event cannot select structural diagnostic wording by copying a sentence; only
 producer provenance selects the legacy message path. Fixed contracts cover context overflow, cyber policy, terminal refusals, replay refusal, translation
 buffer limits, inconsistent refusal representations, undeclared tools, unsatisfied required tools,
-transport failure and incomplete streams. Context overflow uses the fixed context-window sentence;
-cyber policy uses `CYBER_POLICY_FALLBACK_MESSAGE`. No contract interpolates upstream fields.
+transport failure and incomplete streams. Context overflow uses the fixed context-window sentence; cyber policy uses `CYBER_POLICY_FALLBACK_MESSAGE`. No contract interpolates upstream fields.
+
 `src/lib/error-destination.ts` bounds any destination named by a local send-budget error. The
 constructor accepts an opaque branded label and revalidates it while building the message. URL
 labels contain only a parsed supported scheme, hostname and optional port; userinfo, path, query

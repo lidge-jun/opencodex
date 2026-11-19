@@ -58,3 +58,22 @@ export function responsesSuccess(text: string, model = "responses-model"): Recor
     usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 },
   };
 }
+
+/** Original failed native body with an observable single-consumption boundary. */
+export function responsesFailedUsageResponse(onBodyRead: () => void, status: number, headers: Record<string, string>): Response {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(JSON.stringify({
+        error: { message: "passthrough failed" },
+        usage: { input_tokens: 17, output_tokens: 3, total_tokens: 20 },
+      })));
+      controller.close();
+    },
+  });
+  const response = new Response(body, { status, headers: { "content-type": "application/json", ...headers } });
+  Object.defineProperty(response, "body", {
+    configurable: true,
+    get() { onBodyRead(); return body; },
+  });
+  return response;
+}

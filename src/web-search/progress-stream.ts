@@ -1,5 +1,6 @@
 import type { ProviderAdapter } from "../adapters/base";
 import type { AdapterEvent, OcxUsage } from "../types";
+import { isReplayRefusalCode } from "../lib/upstream-retry";
 import {
   isTranslatorBudgetExceededError,
   TRANSLATOR_MAX_TURN_BYTES,
@@ -395,7 +396,8 @@ export async function* parseStreamWithProgress(
           if (event.usage) options.onErrorUsage?.(event.usage);
           // An adapter's own overflow verdict keeps its typed event so the sidecar can end the
           // turn as context_length_exceeded (#7316); other errors keep the plain-message shape.
-          const preserve = options.preserveAdapterError || event.code === "context_length_exceeded";
+          const preserve = options.preserveAdapterError || event.retryable === false
+            || isReplayRefusalCode(event.code) || event.code === "context_length_exceeded";
           fail(event.code === "translation_buffer_limit"
             ? new TranslatorBudgetExceededError("live_transient", TRANSLATOR_MAX_TURN_BYTES)
             : preserve ? new WebSearchAdapterEventError(event, replaySafe) : new Error(event.message));

@@ -1445,6 +1445,11 @@ describe("request log metadata", () => {
     });
   });
 
+  test.each(["upstream_response_refused", "upstream_reset_replay_refused"])("httpStatusFromTerminalError retains replay-refusal status for %s", code => {
+    expect(httpStatusFromTerminalError({ type: "upstream_error", code })).toBe(429);
+    expect(httpStatusFromTerminalError({ type: "server_error", code, message: "cyber policy" })).toBe(429);
+  });
+
   test("httpStatusFromTerminalError maps Cursor tool catalog limits to 400", () => {
     expect(httpStatusFromTerminalError({
       type: "invalid_request_error",

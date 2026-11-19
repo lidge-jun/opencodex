@@ -1008,3 +1008,23 @@ test.each(["shared-quota", "transient-rate", "stale credential"] as const)("nati
   expect(getAnthropicAccountHealthSnapshot(alternate!)).toBeNull();
   expect(anthropicRatePauseUntil(alternate!)).toBeUndefined();
 });
+
+test.each([false, true])("replay veto: revoked native OAuth credential is quarantined without resending (stale %s)", async stale => {
+  const [sender, alternate] = await seed(2);
+  const config = fixtureConfig();
+  config.anthropicAccountPool = { enabled: true };
+  let sends = 0;
+  config.providers.anthropic!.fetch = (async () => {
+    sends++;
+    if (stale) await saveAccountCredential("anthropic", sender!, { ...credential(0), access: "fixture-new-generation" });
+    return Response.json({ type: "error", error: {
+      type: "authentication_error", message: "OAuth access token has been revoked.",
+    } }, { status: 401, headers: { "x-should-retry": "false" } });
+  }) as typeof fetch;
+  const { response } = await send(config, { ...BODY, stream: false });
+  expect(response.status).toBe(401);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  expect(sends).toBe(1);
+  expect(getAccountSet("anthropic")!.accounts.find(account => account.id === sender)!.needsReauth === true).toBe(!stale);
+  expect(getAccountSet("anthropic")!.accounts.find(account => account.id === alternate)!.needsReauth).toBeFalsy();
+});

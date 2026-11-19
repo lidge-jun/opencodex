@@ -6,7 +6,7 @@ import { passthroughBuildErrorResponse } from "./passthrough-build-error";
 import { recoverAutoPausedAccount, rotatePassthroughKeyOn429 } from "./passthrough-key-rotation";
 import { createAutoPauseRefreshErrorMapper } from "./account-auto-pause-recovery";
 import { physicalSendAccounting } from "./deferred-send-reporter";
-import { adoptCodexWsStage, capturePassthroughAffinity } from "./passthrough-observations";
+import { adoptCodexWsStage, capturePassthroughAffinity, observePassthroughCodexModelDenial } from "./passthrough-observations";
 import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
 import { requestPacingOverloadResponse } from "./pacing-overload";
 import { recordDistributedResponseFailure } from "../../providers/api-key-response-ownership";
@@ -108,17 +108,12 @@ import {
   upstreamHostCircuitOpenResponse,
   usesCodexForwardPoolAuth,
   codexWsQuotaObserver,
-  codexPoolAccountModel400Denial,
   shouldRetryCodexPoolAccountQuota,
   shouldRetryCodexPoolAccountTransient,
   retryCodexPoolOnAlternateAccount,
   PoolPreOutputRefusals,
   poolPreOutputRefusalHold,
 } from "./core-codex-account";
-import {
-  clearCodexModelDenialEvidence,
-  recordCodexModelDenialEvidence,
-} from "../../codex/model-entitlements";
 import { codexWsSocketDeathStage, isCodexWsUpstreamResponse } from "./codex-ws-wire";
 import { linkAbortSignal } from "./core-lifetime";
 import type { CodexAuthContext } from "../../codex/auth-context";
@@ -128,7 +123,7 @@ import {
   SendBudgetExhaustedError, errorDestinationLabel,
   fetchWithTransientRetry,
   applyUpstreamRecoveryInit,
-  isNonReplayableResponse, isAutomaticReplayBlocked,
+  isNonReplayableResponse, isAutomaticReplayBlocked, isReplayRefusalResponse, hasUpstreamReplayRefusal, replayRefusalBodyCode,
   isConnectionResetError,
   settleOperatorReplacement,
   refetchAfterProtocolSafeReset,
@@ -1200,6 +1195,11 @@ export async function preparePassthroughExchange(
 
     // Keep recovery kinds in sync with the generic `recovery:` loop below.
     passthroughRecovery: for (;;) {
+      // These statuses sit outside the transient retry ladder's body probe. Observe
+      // their veto before credential, request-shape or effort recovery can resend.
+      if ([400, 401, 402, 403, 413, 422].includes(upstreamResponse.status)) {
+        await hasUpstreamReplayRefusal(upstreamResponse, upstream.signal);
+      }
       if (!isAutomaticReplayBlocked(upstreamResponse) && wasAccountAutoPaused(upstreamResponse) && route.provider.authMode !== "forward") {
         const recovered = await recoverAutoPausedAccount({ requestKey: transportState, reserve: reserveCredentialHop,
           remaining: transientSendCapFor(transientRetryPolicyFor(route.provider)?.attempts, sendBudgetState.targetSendsUsed),
@@ -1464,6 +1464,14 @@ export async function preparePassthroughExchange(
       }
     }
 
+    if (upstreamResponse.status === 429 && !isReplayRefusalResponse(upstreamResponse)
+      && isAutomaticReplayBlocked(upstreamResponse) && transportState.genericFailoverAccountId) {
+      // The real refusal still informs later account selection. Record its cooldown
+      // without committing a rotation or reserving another physical send.
+      rotateGenericOAuthAccountOn429(config, route.providerName, transportState.genericFailoverAccountId,
+        upstreamResponse.headers.get("retry-after"), Date.now(), route.modelId, false);
+    }
+
     // Native Responses returns before the generic adapter's OAuth rotation loop. Keep
     // the same quorum, cooldown and request budget here, before any client bytes flow.
    if (
@@ -1624,41 +1632,13 @@ export async function preparePassthroughExchange(
     };
     recordDistributedResponseFailure(lastDistributedResponse ?? upstreamResponse, config, route.providerName, options.abortSignal);
     captureAffinityResponse(upstreamResponse);
-    if (!isAutomaticReplayBlocked(upstreamResponse) && usesCodexForwardPoolAuth(admissionState.authCtx, route.provider)) {
+    if (!isReplayRefusalResponse(upstreamResponse) && usesCodexForwardPoolAuth(admissionState.authCtx, route.provider)) {
       let poolRetryOutcome: number | undefined;
-      // A success is the freshest evidence there is about this pair, and it outranks any earlier
-      // refusal: whatever the entitlement was when upstream declined, it is not that now. Both
-      // ids are cleared because the wire model can differ from the routed one.
-      if (upstreamResponse.ok) {
-        clearCodexModelDenialEvidence(
-          admissionState.authCtx.accountId,
-          route.modelId,
-          admissionState.authCtx.kind === "pool" ? admissionState.authCtx.generation : undefined,
-        );
-        clearCodexModelDenialEvidence(
-          admissionState.authCtx.accountId,
-          parsed.modelId,
-          admissionState.authCtx.kind === "pool" ? admissionState.authCtx.generation : undefined,
-        );
-      }
-      const model400Denial = await codexPoolAccountModel400Denial(
-        upstreamResponse,
-        route.modelId,
-        options.abortSignal,
-        parsed.modelId,
-      );
+      const model400Denial = await observePassthroughCodexModelDenial(upstreamResponse,
+        admissionState.authCtx, route.modelId, parsed.modelId, options.abortSignal);
       if (wasAccountAutoPaused(upstreamResponse)) {
         poolRetryOutcome = upstreamResponse.status;
       } else if (model400Denial !== undefined) {
-        // Spend this refusal on more than one retry. It is the account's own authenticated
-        // answer about this model, and the roster cache that selection otherwise reads expires
-        // five minutes after a catalog sync fills it -- so without remembering this, the next
-        // request selects the same account on quota alone and takes the same 400 (#4906).
-        recordCodexModelDenialEvidence(
-          admissionState.authCtx.accountId,
-          model400Denial,
-          admissionState.authCtx.kind === "pool" ? admissionState.authCtx.generation : undefined,
-        );
         poolRetryOutcome = 400;
       } else if (!admissionState.authCtx.fixedAccount && await shouldRetryCodexPoolAccountQuota(
         upstreamResponse,
@@ -1674,7 +1654,7 @@ export async function preparePassthroughExchange(
         poolRetryOutcome = upstreamResponse.status;
       }
 
-      if (poolRetryOutcome !== undefined) {
+      if (poolRetryOutcome !== undefined && !isAutomaticReplayBlocked(upstreamResponse)) {
         // A stored Pool 401 spent this request's account budget on its own refresh and replay, so
         // nothing afterwards may be paid for out of a DIFFERENT account. One flag carries that,
         // rather than a status check here as well: a quota failure has no same-account move, so
@@ -1799,7 +1779,7 @@ export async function preparePassthroughExchange(
         logCtx.terminalErrorCode = preflightLog.terminalErrorCode;
         logCtx.terminalIncompleteReason = preflightLog.terminalIncompleteReason;
         // The projected failure must not invite another send after the replacement was spent.
-        if (sendBudgetState.ambiguousResendSpent) upstreamResponse = settleOperatorReplacement(upstreamResponse);
+        if (sendBudgetState.ambiguousResendSpent) upstreamResponse = await settleOperatorReplacement(upstreamResponse, upstream.signal);
       }
     }
     // Console Go (opencode-zen / opencode-go) intermittently rejects a body it accepts seconds
@@ -1813,6 +1793,7 @@ export async function preparePassthroughExchange(
         upstream.signal,
       );
       if (uploadRejectionBody !== undefined
+        && !replayRefusalBodyCode(uploadRejectionBody)
         && !configuredTransientSendBudgetExhausted()
         && isTransientConsoleGoUploadRejection({
           status: upstreamResponse.status,
@@ -1837,10 +1818,10 @@ export async function preparePassthroughExchange(
     // model's ladder, not this account's entitlement. Learn each refusal so later turns clamp
     // before dispatch. Direct requests repair once; combo candidates may retry the next lower
     // published rung until it works, the ladder ends, or the send budget is spent.
-    const downgrade = isAutomaticReplayBlocked(upstreamResponse) ? undefined
+    const downgrade = isReplayRefusalResponse(upstreamResponse) ? undefined
       : await refusedReasoningEffortDowngrade(upstreamResponse, upstream.signal, reasoningEffortDowngradeGuard,
         options.comboAttempt, { provider: route.provider, modelId: parsed.modelId, requested: parsed.options.reasoning });
-    if (downgrade && !configuredTransientSendBudgetExhausted()) {
+    if (downgrade && !isAutomaticReplayBlocked(upstreamResponse) && !configuredTransientSendBudgetExhausted()) {
       reasoningEffortDowngradeGuard.attempted = true;
       parsed.options.reasoning = downgrade.effort;
       parsed._rawBody = withRawBodyReasoningEffort(parsed._rawBody, downgrade.effort);
@@ -1894,7 +1875,7 @@ export async function preparePassthroughExchange(
       // the refusal rather than as a transport error the client would retry.
       if (unsafeReplacement) break passthroughRecovery;
       try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
-      upstreamResponse = replacement ? settleOperatorReplacement(replacement) : replayRefusalResponse();
+      upstreamResponse = replacement ? await settleOperatorReplacement(replacement, upstream.signal) : replayRefusalResponse();
       continue passthroughRecovery;
     }
 

@@ -17,7 +17,7 @@ Recovery records only digests of the opaque blocks actually serialized by the ad
 `src/adapters/anthropic-rejection-memo.ts`. The request-local policy removes those blocks and
 leaves plaintext history and newly issued thinking intact. If bounded collection is unavailable, recovery is withheld rather than risking a byte-identical resend.
 A replacement HTTP refusal retains its status, safe error message/type and code; its body is
-not parsed as SSE. A replacement constructed as a local auth/budget refusal retains process-local
+not parsed as SSE. A recognized replay-refusal code at the root or in the structured error, including one retained from an earlier bounded inspection, instead uses the fixed 429 refusal and `retryable: false`. That verdict takes precedence over context-overflow wording. Explicit terminal event verdicts and the response's no-retry directive prevent signature recovery and empty-completion resends in both streaming and buffered delivery. A replacement constructed as a local auth/budget refusal retains process-local
 ownership in its projected event for the [Chat error contract](../data-planes/error-detail.md#client-error-bodies-chat). Its status, retry decision and Responses representation remain unchanged. Cancellation, budget exhaustion and a second rejection cannot trigger another
 signature recovery. Empty-completion retries in `src/server/responses/adapter-continuation.ts` share this guard and
 rebuild through their existing pacing/send owner. Ordinary continuations after output cannot
@@ -52,7 +52,7 @@ that block, so a genuine empty thinking-block start remains a separate signed bl
 tool results, and history remain intact. Request caches are invalidated and the rejection policy
 persists into later iterations. HTTP 400 classification runs after existing 429/key recovery.
 `src/web-search/progress-stream.ts` has an opt-in typed adapter-error handoff before its normal
-exception conversion, with a per-send semantic/replay-unsafe fence and original-body cleanup.
+exception conversion, with a per-send semantic/replay-unsafe fence and original-body cleanup. Explicit `retryable: false` events and recognized replay-refusal codes retain that typed handoff even without a thinking-recovery policy. A response-level replay veto also keeps its terminal event intact. Each failed iteration observes bounded refusal evidence before any same-target retry, credential rotation or repair; empty and forced-answer retries honor the accepted response's veto.
 A streamed replacement gets a fresh header deadline; an HTTP refusal retains its current deadline.
 
 The Anthropic search HTTP receipt admits a repair against the shared dispatch budget and settles
@@ -116,6 +116,7 @@ in the request-local history, rather than waiting for the next serializer to rej
 only the current model send. Completed media calls and their tool results remain in loop history;
 recovery cannot repeat a media fulfillment. The loop keeps its pacing slot and fresh replacement
 header deadline. Replacement failures retain status/type/code and release unused permits.
+The physical-send hook distinguishes an image-model POST handed to the executor from a pre-dispatch timeout. An owned response-header deadline after dispatch uses the fixed no-replay refusal, including a thinking-recovery replacement; a deadline before dispatch remains an ordinary timeout, and caller cancellation retains its own outcome.
 As in search, enforced spend without authoritative earlier-send receipts withholds recovery.
 Send-budget refusals in later iterations retain the same non-retryable 429 identity as initial
 admission refusals, including after a completed media call.

@@ -7,7 +7,7 @@ import type { AdapterEvent, OcxParsedRequest } from "../../types";
 import { upstreamErrorMessageFromPayload } from "../../lib/errors";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import {
-  isAutomaticReplayBlocked, isNonReplayableResponse, isReplayRefusalCode, observedReplayRefusalCode,
+  isAutomaticReplayBlocked, isNonReplayableResponse, isReplayRefusalCode, hasUpstreamReplayRefusal, observedReplayRefusalCode,
   replayRefusalBodyCode, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE,
 } from "../../lib/upstream-retry";
 import { rememberReasoningReplayOpaqueBlobRejection } from "../../responses/reasoning-replay-cache";
@@ -74,6 +74,7 @@ export function createAnthropicThinkingRecovery(
     if (signal.aborted || !canRetry() || response.status !== 400 || isAutomaticReplayBlocked(response)
       || adapterName !== "anthropic" || guard.attempted
       || parsed._stripReasoningEncryptedContent === true || !carriesThinkingState(attempt)) return false;
+    if (await hasUpstreamReplayRefusal(response, signal)) return false;
     try {
       const body = await readBoundedResponseBody(response.clone(), { signal });
       if (!body.displaySafe || body.truncated) return false;
@@ -109,7 +110,8 @@ export function createAnthropicThinkingRecovery(
           const next = await iterator.next();
           if (next.done) return;
           const event = next.value;
-          if (replaySafe && event.type === "error" && prepare(event.message, adapterName(), attempt, response)) {
+          if (replaySafe && event.type === "error" && event.retryable !== false && !isReplayRefusalCode(event.code)
+            && prepare(event.message, adapterName(), attempt, response)) {
             // Close the rejected body before acquiring another dispatch/pacing slot.
             await iterator.return?.();
             source = retry();

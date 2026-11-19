@@ -13,6 +13,7 @@ import { MAX_CLIENT_SSE_FRAME_BYTES } from "../../src/server/sse-frame-buffer";
 import type { AdapterEvent } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { markPacedStream } from "../../src/lib/paced-stream";
+import { markNativePassthroughSseResponse } from "../../src/server/relay";
 
 const sse = (...payloads: unknown[]): Response => new Response(
   payloads.map(payload => `data: ${JSON.stringify(payload)}\n\n`).join(""),
@@ -56,6 +57,68 @@ const createdPrefix = new TextEncoder().encode(`data: ${JSON.stringify({
 })}
 
 `);
+
+describe("review: last_error refusal boundary", () => {
+  const refusal = { code: "upstream_response_refused", message: "fixture terminal refusal" };
+  const generic = { code: "upstream_server_error", message: "fixture generic failure" };
+  const usage = { input_tokens: 7, output_tokens: 0, total_tokens: 7 };
+  const failed = (carrier: "root" | "response", mixed: boolean) => ({
+    type: "response.failed",
+    ...(carrier === "root" ? { last_error: refusal } : {}),
+    response: { status: "failed", output: [], usage,
+      ...(mixed ? { error: generic } : {}),
+      ...(carrier === "response" ? { last_error: refusal } : {}),
+    },
+  });
+
+  for (const carrier of ["response", "root"] as const) for (const mixed of [false, true]) {
+    test.each([false, true])(`${carrier} last_error blocks replay beside generic error ${mixed} with custom classifier %s`, async custom => {
+      const payload = failed(carrier, mixed);
+      let classifications = 0;
+      const result = await preflightComboStreamResponse(sse(payload), { model: "m1", provider: "a" },
+        custom ? () => { classifications++; return true; } : undefined);
+      expect(result.kind).toBe("accepted");
+      expect(result.response.status).toBe(200);
+      expect(classifications).toBe(0);
+      expect(await result.response.text()).toBe(`data: ${JSON.stringify(payload)}\n\n`);
+    });
+  }
+
+  test.each(["wire", "native", "bridge", "estimated"] as const)("retains the terminal and respects %s usage ownership", async owner => {
+    const priorUsage = { inputTokens: 3, outputTokens: 1, totalTokens: 4 };
+    const logCtx: RequestLogContext = { model: "m1", provider: "a", usage: priorUsage,
+      ...(owner === "bridge" ? { usageFromBridge: true } : {}),
+      ...(owner === "estimated" ? { clientResponseUsage: "estimated" as const } : {}),
+    };
+    const payload = failed("response", true);
+    const response = sse(payload);
+    if (owner === "native") markNativePassthroughSseResponse(response);
+    const result = await preflightComboStreamResponse(response, logCtx);
+    expect(result.kind).toBe("accepted");
+    expect(await result.response.text()).toBe(`data: ${JSON.stringify(payload)}\n\n`);
+    if (owner === "wire") expect(logCtx.usage).toMatchObject({ inputTokens: 7, outputTokens: 0, totalTokens: 7 });
+    else expect(logCtx.usage).toBe(priorUsage);
+  });
+
+  test("caller cancellation remains authoritative before terminal inspection", async () => {
+    const caller = new AbortController();
+    const reason = new Error("fixture caller cancelled");
+    caller.abort(reason);
+    let classifications = 0;
+    await expect(preflightComboStreamResponse(sse(failed("response", true)), { model: "m1", provider: "a" },
+      () => { classifications++; return true; }, { signal: caller.signal })).rejects.toBe(reason);
+    expect(classifications).toBe(0);
+  });
+
+  test("ordinary last_error remains a retryable failure with its own error identity", async () => {
+    const result = await preflightComboStreamResponse(sse({ type: "response.failed", response: {
+      status: "failed", output: [], last_error: generic, usage,
+    } }), { model: "m1", provider: "a" });
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(502);
+    expect(await result.response.json()).toMatchObject({ error: generic, response: { error: generic, usage } });
+  });
+});
 
 describe("combo stream preflight", () => {
   test.each(["silence", "comment", "lifecycle"] as const)("buffered collector counts upstream activity, not timer heartbeats (%s)", async activity => {
@@ -460,6 +523,14 @@ describe("combo stream preflight", () => {
       ?? (event.type === "error" ? event.message : undefined);
     return message === DECRYPT_REJECTION;
   };
+
+  test("an explicit top-level no-retry flag commits a bare server error", async () => {
+    const payload = { type: "error", code: "server_error", message: "fixture failure", retryable: false };
+    const response = new Response(`data: ${JSON.stringify(payload)}\n\n`, { headers: { "content-type": "text/event-stream" } });
+    const result = await preflightComboStreamResponse(response, { model: "m1", provider: "a" });
+    expect(result.kind).toBe("accepted");
+    expect(await result.response.text()).toContain('"retryable":false');
+  });
 
   test("default preflight retries zero-output bare errors without structured status", async () => {
     expect(comboStreamPayloadCommitsOutput({ type: "error" })).toBe(true);

@@ -2,6 +2,7 @@ import { checkForUpdate, type UpdateCheckResult } from "./job";
 import { currentVersion, defaultUpdateTag, detectInstall, detectInstallOwnership, miseUpdateCommand, type Channel, type Installer } from "./index";
 import { isSourceBuildVersion, readVersionCache, REFRESH_INTERVAL_MS, writeFreshVersionCache } from "./notify";
 import { latestVersionAsync } from "./async-check";
+import { managedReleaseDirectory } from "./managed-release";
 
 export const STALENESS_TICK_MS = 60 * 60 * 1000;
 export const RETRY_BASE_MS = 60_000;
@@ -13,6 +14,7 @@ export interface RefreshDeps {
   current: () => string;
   install: () => Installer;
   ownership: typeof detectInstallOwnership;
+  managedReleaseDirectory: () => boolean;
   guidance: typeof miseUpdateCommand;
   read: typeof readVersionCache;
   write: typeof writeFreshVersionCache;
@@ -27,6 +29,7 @@ const defaults: RefreshDeps = {
   current: currentVersion,
   install: detectInstall,
   ownership: detectInstallOwnership,
+  managedReleaseDirectory,
   guidance: miseUpdateCommand,
   read: readVersionCache,
   write: writeFreshVersionCache,
@@ -66,7 +69,7 @@ export function createRefreshScheduler(deps: RefreshDeps = defaults) {
     timer = deps.setTimer(() => { timer = undefined; void tick(); }, delay);
     timer.unref?.();
   };
-  const lookup = (tag: Channel, automatic: boolean): Promise<string | null> => {
+  const lookup = (tag: Channel, installer: Installer, automatic: boolean): Promise<string | null> => {
     const existing = inFlight.get(tag);
     // An automatic tick joins only a flight of its own generation. A flight left over from a
     // stopped listener cannot write for the new one, so joining it would push the next check an
@@ -78,7 +81,7 @@ export function createRefreshScheduler(deps: RefreshDeps = defaults) {
     const epoch = generation;
     const seq = ++flightSeq;
     let explicitInterest = !automatic;
-    const task = Promise.resolve().then(() => deps.lookup(tag, deps.install())).then(latest => {
+    const task = Promise.resolve().then(() => deps.lookup(tag, installer)).then(latest => {
       if (latest && (explicitInterest || (automatic && running && epoch === generation))
         && seq > (lastWrittenFlight.get(tag) ?? 0)) {
         lastWrittenFlight.set(tag, seq);
@@ -102,7 +105,7 @@ export function createRefreshScheduler(deps: RefreshDeps = defaults) {
   const tick = async () => {
     if (!running || !eligible()) return;
     const tag = channel();
-    if (stale(tag) && deps.now() >= retryAt) await lookup(tag, true);
+    if (stale(tag) && deps.now() >= retryAt) await lookup(tag, deps.install(), true);
     schedule(retryAt > deps.now() ? Math.min(STALENESS_TICK_MS, retryAt - deps.now()) : STALENESS_TICK_MS);
   };
   return {
@@ -122,12 +125,19 @@ export function createRefreshScheduler(deps: RefreshDeps = defaults) {
       timer = undefined;
     },
     async check(tag: Channel): Promise<UpdateCheckResult> {
-      const installer = deps.install();
-      const latest = installer === "source" || installer === "standalone" || installer === "mise" ? null : await lookup(tag, false);
+      const ownership = deps.ownership();
+      const installer = ownership.installer;
+      const managedRelease = installer === "source" && deps.managedReleaseDirectory();
+      const latest = managedRelease
+        ? await lookup(tag, "npm", false)
+        : installer === "source" || installer === "standalone" || installer === "mise"
+          ? null
+          : await lookup(tag, installer, false);
       return checkForUpdate(tag, {
         currentVersion: deps.current,
-        detectInstall: deps.install,
-        detectInstallOwnership: deps.ownership,
+        detectInstall: () => installer,
+        detectInstallOwnership: () => ownership,
+        managedReleaseDirectory: () => managedRelease,
         miseUpdateCommand: deps.guidance,
         latestVersion: () => latest,
       });

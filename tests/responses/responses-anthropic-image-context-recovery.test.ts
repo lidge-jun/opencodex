@@ -433,3 +433,91 @@ test("image-context recovery is shared by attempts that inherit the ingress tran
     }
   } finally { translatorBudget.dispose(); }
 });
+
+for (const lane of ["direct", "search", "media"] as const) {
+  test(`replay integration: image 413 header veto prevents summary on ${lane}`, async () => {
+    const result = await fixture({ enabled: true, lane, handle: (_wire, index) => {
+      const response = index === 1 ? image413() : completion("Unexpected recovery", lane !== "direct");
+      if (index === 1) response.headers.set("x-should-retry", "false");
+      return response;
+    } });
+    expect(result.sent).toHaveLength(1);
+    expect(result.response.headers.get("x-should-retry") === "false" || result.text.includes('"retryable":false')).toBe(true);
+    expect(result.text).not.toContain("Unexpected recovery");
+  });
+
+  test(`replay integration: successful summary veto prevents image resend on ${lane}`, async () => {
+    const result = await fixture({ enabled: true, lane, handle: (_wire, index) => {
+      if (index === 1) return image413();
+      const response = completion(index === 2 ? "Private summary" : "Unexpected resend", index > 2 && lane !== "direct");
+      if (index === 2) response.headers.set("x-should-retry", "false");
+      return response;
+    } });
+    expect(result.sent).toHaveLength(2);
+    expect(result.response.headers.get("x-should-retry") === "false" || result.text.includes('"retryable":false')).toBe(true);
+    expect(result.text).not.toContain("Private summary");
+    expect(result.text).not.toContain("Unexpected resend");
+  });
+
+  for (const status of [200, 503]) test(`replay integration: failed summary code survives image recovery on ${lane} (${status})`, async () => {
+    const result = await fixture({ enabled: true, lane, handle: (_wire, index) => index === 1 ? image413()
+      : Response.json({ code: "upstream_response_refused", message: "synthetic summary refusal" }, { status }) });
+    expect(result.sent).toHaveLength(2);
+    expect(result.response.status).toBe(429);
+    expect(result.response.headers.get("x-should-retry") === "false" || result.text.includes('"retryable":false')).toBe(true);
+    expect(result.text).toContain("upstream_response_refused");
+  });
+}
+
+test("replay integration: stopped image resend still settles successful summary usage", async () => {
+  const result = await fixture({ enabled: true, maxOutputTokens: 256, spendCeiling: 100_000,
+    handle: (_wire, index) => {
+      if (index === 1) return Response.json({ type: "error", error: { type: "request_too_large" },
+        usage: { input_tokens: 0, output_tokens: 0 } }, { status: 413 });
+      const response = completion("Private metered summary", false, 20, 2);
+      response.headers.set("x-should-retry", "false");
+      return response;
+    } });
+  expect(result.sent).toHaveLength(2);
+  expect(result.spendDispatchCount).toBe(2);
+  const receipts = result.spendRecords!.filter(record => record?.kind === "settle" || record?.kind === "lost");
+  expect(receipts).toEqual([expect.objectContaining({ kind: "settle", tokens: 0 }),
+    expect.objectContaining({ kind: "settle", tokens: 22 })]);
+  expect(result.text).not.toContain("Private metered summary");
+});
+
+for (const lane of ["direct", "search", "media"] as const) {
+  test(`replay integration: complete image 413 body veto wins after bounded probe on ${lane}`, async () => {
+    const result = await fixture({ enabled: true, lane, handle: (_wire, index) => index === 1
+      ? Response.json({ error: { type: "request_too_large", detail: "x".repeat(20_000) }, code: "upstream_response_refused" }, { status: 413 })
+      : completion("Unexpected image resend", lane !== "direct") });
+    expect(result.sent).toHaveLength(1);
+    expect(result.response.status).toBe(429);
+    expect(result.text).toContain("upstream_response_refused");
+    expect(result.response.headers.get("x-should-retry")).toBe("false");
+  });
+}
+
+test("replay integration: body-coded summary refusal still settles observed usage", async () => {
+  const result = await fixture({ enabled: true, maxOutputTokens: 256, spendCeiling: 100_000,
+    handle: (_wire, index) => index === 1
+      ? Response.json({ type: "error", error: { type: "request_too_large" }, usage: { input_tokens: 0, output_tokens: 0 } }, { status: 413 })
+      : Response.json({ code: "upstream_response_refused", content: [{ type: "text", text: "Private coded summary" }],
+        stop_reason: "end_turn", usage: { input_tokens: 20, output_tokens: 2 } }) });
+  expect(result.sent).toHaveLength(2);
+  expect(result.response.status).toBe(429);
+  expect(result.text).toContain("upstream_response_refused");
+  const receipts = result.spendRecords!.filter(record => record?.kind === "settle" || record?.kind === "lost");
+  expect(receipts).toEqual([expect.objectContaining({ kind: "settle", tokens: 0 }),
+    expect.objectContaining({ kind: "settle", tokens: 22 })]);
+  expect(result.text).not.toContain("Private coded summary");
+});
+
+test("replay integration: complete failed summary body preserves a late refusal code", async () => {
+  const result = await fixture({ enabled: true, handle: (_wire, index) => index === 1 ? image413()
+    : Response.json({ detail: "x".repeat(20_000), code: "upstream_response_refused" }, { status: 503 }) });
+  expect(result.sent).toHaveLength(2);
+  expect(result.response.status).toBe(429);
+  expect(result.text).toContain("upstream_response_refused");
+  expect(result.response.headers.get("x-should-retry")).toBe("false");
+});

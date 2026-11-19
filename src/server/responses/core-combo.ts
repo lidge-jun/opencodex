@@ -1545,7 +1545,7 @@ export async function executeComboResponses(
     // client would resend becomes the refusal, and anything else reaches the client as it is.
     const spentReplacement = !failure.nonReplayable && comboSendScope?.ambiguousResendSpent === true;
     if (spentReplacement) {
-      const settled = settleOperatorReplacement(failure.response);
+      const settled = await settleOperatorReplacement(failure.response, req.signal);
       if (settled !== failure.response) {
         adoptFailedChildLog(childLog);
         return settled;

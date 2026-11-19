@@ -19,6 +19,7 @@ import { createTestTranslatorBudget } from "../helpers/translator-budget";
 function fixtureConfig(globals: Partial<OcxConfig>, overrides: Partial<OcxProviderConfig>): OcxConfig {
   return { port: 10100, defaultProvider: "fixture", ...globals, providers: { fixture: {
     adapter: "openai-chat", authMode: "key", apiKey: "fixture-key", baseUrl: "https://gateway.example/v1",
+    proxy: "direct", // Keep inherited SOCKS routing inside this file's in-memory fetch fixtures.
     models: ["fixture-model"], ...overrides,
   } } };
 }

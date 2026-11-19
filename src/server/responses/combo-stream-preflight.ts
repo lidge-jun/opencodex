@@ -23,7 +23,7 @@ import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 import { REQUIRED_TOOL_CONTRACT_CODE } from "../../lib/errors";
 import { attachComboFailureEvidence, isPausedTurn } from "../../lib/client-error-body";
 import { requiredToolReasoningPrelude } from "./combo-required-tool-stream";
-import { applyReplayRefusalClientHeaders, isNonReplayableUpstreamCode, markTerminalResetReplacement, ProtocolPreOutputEof } from "../../lib/upstream-retry";
+import { carryReplayRefusal, applyReplayRefusalClientHeaders, isNonReplayableUpstreamCode, markTerminalResetReplacement, ProtocolPreOutputEof } from "../../lib/upstream-retry";
 import { carryPacedStream, pacedQueuingStrategy } from "../../lib/paced-stream";
 import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 
@@ -315,6 +315,7 @@ function bareErrorIsRetryable(payload: unknown): boolean {
     return false;
   }
   const event = payload as Record<string, unknown>;
+  if (event.retryable === false) return false;
   // The record selection, the opaque verdict and the code conflict rule are shared with the HTTP
   // consumer; only the carrier (one parsed frame here, one body there) differs.
   const record = envelopeErrorRecord(event);
@@ -353,13 +354,18 @@ function heldOnlyOutput(...outputs: unknown[]): boolean {
     && !Array.isArray(item) && ["message", "reasoning"].includes((item as { type?: unknown }).type as string));
 }
 
+function terminalErrorRecords(payload: Record<string, unknown>): Record<string, unknown>[] {
+  const response = isRecord(payload.response) ? payload.response : undefined;
+  return [response?.error, payload.error, response?.last_error, payload.last_error].filter(isRecord);
+}
+
 export function failedTerminalReplayVerdict(payload: unknown): "blocked" | "policy" | undefined {
   if (!isRecord(payload) || (payload.type !== "response.failed" && payload.status !== "failed")) return;
   const response = isRecord(payload.response) ? payload.response : payload;
-  const error = isRecord(response.error) ? response.error : isRecord(payload.error) ? payload.error : undefined;
-  if (isNonReplayableUpstreamCode(error?.code)) return "blocked";
+  const errors = terminalErrorRecords(payload);
+  if (errors.some(error => isNonReplayableUpstreamCode(error.code))) return "blocked";
   if (payload.retryable === false || response.retryable === false) {
-    return typeof error?.code === "string" && isTerminalRefusalCode(error.code) ? "policy" : "blocked";
+    return errors.some(error => typeof error.code === "string" && isTerminalRefusalCode(error.code)) ? "policy" : "blocked";
   }
 }
 
@@ -388,8 +394,7 @@ function retryableZeroOutputTerminal(payload: unknown, context?: object): boolea
     && (!Array.isArray(target.output) || target.output.length === 0);
 
   if (event.type === "response.failed" || event.status === "failed") {
-    const error = (event.response as { error?: { code?: unknown; retryable?: unknown } } | undefined)?.error
-      ?? event.error;
+    const error = terminalErrorRecords(event)[0];
     const code = error?.code;
     // The required-tool guard synthesizes this terminal over output it held back from the client,
     // so held text and reasoning are not evidence of anything sent; it keeps the retryability it
@@ -549,13 +554,11 @@ function failedTerminalResponse(
   const terminalResponse = nested && typeof nested === "object" && !Array.isArray(nested)
     ? nested as Record<string, unknown>
     : terminalPayload;
-  const nestedError = (nested as Record<string, unknown> | undefined)?.error;
-  const topLevelError = terminalPayload.error;
-  const error = nestedError && typeof nestedError === "object" && !Array.isArray(nestedError)
-    ? nestedError as Record<string, unknown>
-    : topLevelError && typeof topLevelError === "object" && !Array.isArray(topLevelError)
-      ? topLevelError as Record<string, unknown>
-    : isOpenRouterOpaque400Record(terminalPayload)
+  const errors = terminalErrorRecords(terminalPayload);
+  const terminalPolicy = failedTerminalReplayVerdict(terminalPayload) === "policy";
+  const selectedError = (terminalPolicy
+    ? errors.find(error => typeof error.code === "string" && isTerminalRefusalCode(error.code)) : undefined) ?? errors[0];
+  const error = selectedError ?? (isOpenRouterOpaque400Record(terminalPayload)
       ? {
         message: terminalPayload.message,
         code: terminalPayload.code,
@@ -582,12 +585,11 @@ function failedTerminalResponse(
           && (terminalResponse.incomplete_details as { reason?: unknown } | undefined)?.reason === "max_output_tokens"
             ? "Provider reached its output token limit before producing output"
             : logCtx.upstreamError ?? "Provider stream failed before producing output"),
-    };
+    });
   const headers = new Headers(response.headers);
   headers.set("content-type", "application/json");
   headers.delete("content-length");
   headers.delete("content-encoding");
-  const terminalPolicy = failedTerminalReplayVerdict(terminalPayload) === "policy";
   if (terminalPolicy) applyReplayRefusalClientHeaders(headers);
   const usage = collectUsage && !logCtx.usageFromBridge && !logCtx.clientResponseUsage
     ? terminalResponse.usage : undefined;
@@ -996,7 +998,7 @@ function createResetSelection(
             const payload = { type: "response.failed", response: {
               status: "failed", output: [], retryable: false, error, last_error: error,
             } };
-            chosen = { response: new Response(`event: response.failed\ndata: ${JSON.stringify(payload)}\n\n`), owner: "replacement" };
+            chosen = { response: carryReplayRefusal(replacement, new Response(`event: response.failed\ndata: ${JSON.stringify(payload)}\n\n`)), owner: "replacement" };
           } else {
             chosen = { response: replacement, owner: "replacement" };
           }
@@ -1014,6 +1016,9 @@ function createResetSelection(
       cancelBody(chosen.response.body, "downstream cancelled before protocol preflight completed");
       return;
     }
+    // A late selection cannot rewrite a committed wire head, but its verdict still fences
+    // every later internal recovery that consumes the held body.
+    carryReplayRefusal(chosen.response, held);
     selection = chosen;
   };
   const start = (): Promise<void> => initialization ??= initialize().then(

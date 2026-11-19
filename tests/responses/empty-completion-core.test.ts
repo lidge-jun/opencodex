@@ -178,6 +178,19 @@ afterEach(() => {
 });
 
 describe("empty-completion core integration", () => {
+  test.each([false, true])("replay veto: HTTP empty completion ends without a second dispatch (stream %s)", async stream => {
+    attemptEvents = [[{ type: "done" }], [{ type: "text_delta", text: "unexpected resend" }, { type: "done" }]];
+    const cfg = config("test-http");
+    const provider = cfg.providers.fixture as OcxProviderConfig & { fetch: typeof fetch };
+    const original = provider.fetch;
+    provider.fetch = (async (...args) => { const response = await original(...args); response.headers.set("x-should-retry", "false"); return response; }) as typeof fetch;
+    takeSpendHome();
+    const response = await handleResponses(request(stream), cfg, { model: "", provider: "" });
+    const text = await response.text();
+    expect(httpCalls).toBe(1);
+    expect(text).toContain("empty_completion_retry_failed");
+    expect(text).not.toContain("unexpected resend");
+  });
   test("an unconfigured limit sends an oversized passthrough body upstream", async () => {
     // The regression guard for this whole feature. A default ceiling here would refuse turns
     // that succeed today: the one measured limit in this codebase is the WS create-frame size,

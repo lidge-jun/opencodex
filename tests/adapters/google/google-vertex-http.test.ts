@@ -273,7 +273,7 @@ describe("vertex retry fetch", () => {
     const body = { error: { code: "upstream_response_refused", message: "fixture diagnostic" } };
     const upstream = Response.json(body, { status: 503, headers: { "retry-after": "0" } });
     const mock = mockFetch([upstream, new Response("duplicate")]);
-    const response = await fetchVertexWithRetry(request, { timeoutMs: 5_000 });
+    const response = await fetchVertexWithRetry(request, { timeoutMs: 5_000, returnRawErrors: true });
     expect(mock.calls).toHaveLength(1);
     expect(response).toBe(upstream);
     expect(response.headers.get("retry-after")).toBe("0");
@@ -826,6 +826,7 @@ test.each([false, true])("Antigravity does not resend a terminal 429 (local mark
 test("Antigravity settles its own response-header deadline after one POST", async () => {
   let sends = 0;
   const executor = (async (_input, init) => {
+    expect(init?.method).toBe("POST");
     sends++;
     if (sends > 1) return new Response("unexpected resend");
     const signal = init!.signal!;
@@ -838,4 +839,35 @@ test("Antigravity settles its own response-header deadline after one POST", asyn
   expect(response.status).toBe(429);
   expect(response.headers.get("x-should-retry")).toBe("false");
   expect(retry.isReplayRefusalResponse(response)).toBe(true);
+});
+
+test.each([false, true])("replay veto: Google keeps raw evidence only when requested (%s)", async raw => {
+  let sends = 0;
+  const upstream = new Response("provider-private-detail", {
+    status: 503, headers: { "x-should-retry": "false", "retry-after": "7" },
+  });
+  const response = await fetchVertexWithRetry(request, { returnRawErrors: raw,
+    executor: (async () => { sends++; return upstream; }) as typeof fetch,
+  });
+  expect(sends).toBe(1);
+  expect(response.status).toBe(503);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  expect(response.headers.get("retry-after")).toBe(raw ? "7" : null);
+  expect(await response.text()).toBe(raw ? "provider-private-detail" : "Vertex AI server overloaded: provider-private-detail");
+});
+
+test.each(["root", "nested"])("replay veto: Google projects a %s refusal without exposing its diagnostic", async carrier => {
+  let sends = 0;
+  const code = "upstream_response_refused";
+  const response = await fetchVertexWithRetry(request, {
+    executor: (async () => { sends++; return Response.json(carrier === "root"
+      ? { code, error: { message: "private diagnostic" } }
+      : { error: { code, message: "private diagnostic" } }, { status: 503 }); }) as typeof fetch,
+  });
+  expect(sends).toBe(1);
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  const body = await response.json() as { error: { code: string; message: string } };
+  expect(body.error.code).toBe(code);
+  expect(body.error.message).not.toContain("private diagnostic");
 });

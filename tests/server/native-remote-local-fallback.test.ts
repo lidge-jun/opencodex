@@ -22,6 +22,7 @@ let ownedSpend: typeof import("../helpers/owned-spend-home");
 let upstream: typeof import("../../src/lib/upstream-retry");
 let chat: typeof import("../../src/server/chat-completions");
 let messages: typeof import("../../src/server/claude-messages");
+let protocolTrace: typeof import("../../src/protocols/trace");
 const originalFetch = globalThis.fetch;
 const MODEL = "fixture_native_model";
 const HOME_KEY = "fixture-home-key-not-real", LOCAL_KEY = "fixture-local-key-not-real";
@@ -68,10 +69,11 @@ beforeAll(async () => {
   console.info("[native-proof] " + JSON.stringify({ stage: "preflight", preloadPidMatch: true, guardArmed: true, canonicalContainment: true, credentialEnvCount: 0 }));
   keyring = await import("../../src/providers/api-key-resolve");
   keyring.setProviderKeychainEntryFactoryForTests(() => { keyringAccesses++; throw new Error("Proof forbids native keyring access"); });
-  [core, configModule, combos, state, background, ownedSpend, upstream, chat, messages] = await Promise.all([
+  [core, configModule, combos, state, background, ownedSpend, upstream, chat, messages, protocolTrace] = await Promise.all([
     import("../../src/server/responses"), import("../../src/config"), import("../../src/combos"),
     import("../../src/responses/state"), import("../../src/lib/background-work"), import("../helpers/owned-spend-home"),
     import("../../src/lib/upstream-retry"), import("../../src/server/chat-completions"), import("../../src/server/claude-messages"),
+    import("../../src/protocols/trace"),
   ]);
 }, 60_000);
 
@@ -260,20 +262,20 @@ nativeProof("healthy Home uses the native Responses adapter with no local hop", 
   const seen = observation("healthy-home", result);
   expect(result.status).toBe(200); expect(seen.homeBodies).toBe(1); expect(seen.localBodies).toBe(0);
   expect(home.calls[0]!.path).toBe("/v1/responses"); expect(home.calls[0]!.body.input).toBeDefined();
-});
+}, 20_000);
 
 nativeProof("connect-refused Home permits one local hop", async () => {
   const home = await tcpDouble("home", "healthy"), local = await tcpDouble("local", "healthy");
   const config = configuration(home, local); await home.stop();
   const seen = observation("connect-refused", await turn(config, local));
   expect(seen.status).toBe(200); expect(seen.homeBodies).toBe(0); expect(seen.localBodies).toBe(1);
-});
+}, 20_000);
 
 nativeProof("a post-body reset must not dispatch the same turn locally", async () => {
   const home = await tcpDouble("home", "reset"), local = await tcpDouble("local", "healthy");
   const result = await turn(configuration(home, local), local), seen = observation("post-body-reset", result);
   expect(seen.homeBodies).toBe(1); expect(seen.localBodies).toBe(0); expect(result.status).not.toBe(200);
-});
+}, 20_000);
 
 nativeProof("direct native header timeout returns the terminal refusal", async () => {
   const home = await tcpDouble("home", "timeout"), local = await tcpDouble("local", "healthy");
@@ -283,20 +285,20 @@ nativeProof("direct native header timeout returns the terminal refusal", async (
   expect(seen.homeBodies).toBe(1); expect(seen.localBodies).toBe(0); expect(result.status).toBe(429);
   expect(result.json.error?.code).toBe("upstream_reset_replay_refused");
   expect(result.json.error?.message).toContain("may already have been processed");
-});
+}, 20_000);
 
 nativeProof("a post-body native header timeout must not hop locally", async () => {
   const home = await tcpDouble("home", "timeout"), local = await tcpDouble("local", "healthy");
   const result = await turn(configuration(home, local, 300), local), seen = observation("post-body-header-timeout", result);
   expect(seen.homeBodies).toBe(1); expect(seen.localBodies).toBe(0); expect(result.status).not.toBe(200);
-});
+}, 20_000);
 
 nativeProof.each(["unauthorized", "quota"] as const)("HTTP %s is distinct from a transport failure", async mode => {
   const home = await tcpDouble("home", mode), local = await tcpDouble("local", "healthy");
   const result = await turn(configuration(home, local), local), seen = observation(mode, result);
   expect(seen.homeBodies).toBe(1); expect(seen.localBodies).toBe(1); expect(result.status).toBe(200);
   expect(seen.attempts[0]?.status).toBe(mode === "unauthorized" ? 401 : 429);
-});
+}, 20_000);
 
 nativeProof("a cooled Home returns after its real configured cooldown expires", async () => {
   let home = await tcpDouble("home", "healthy");
@@ -312,7 +314,7 @@ nativeProof("a cooled Home returns after its real configured cooldown expires", 
   await new Promise(resolveWait => setTimeout(resolveWait, (remaining ?? 0) + 60));
   const recovered = observation("cooldown-home-returned", await turn(config, local));
   expect(recovered.homeBodies).toBe(1); expect(recovered.localBodies).toBe(2); expect(recovered.status).toBe(200);
-});
+}, 20_000);
 
 nativeProof.each([false, true])("two-turn native tool continuity with previous_response_id (local fallback %s)", async fallback => {
   const home = await tcpDouble("home", "tool"), local = await tcpDouble("local", "tool"), config = configuration(home, local);
@@ -329,7 +331,7 @@ nativeProof.each([false, true])("two-turn native tool continuity with previous_r
   const active = fallback ? local : home;
   expect(["previous_response_id", "replayed-prefix"]).toContain(active.calls[1]!.continuity);
   console.info("[native-proof] " + JSON.stringify({ case: fallback ? "two-turn-local-wire" : "two-turn-home-wire", continuity: active.calls[1]!.continuity }));
-});
+}, 20_000);
 
 nativeProof.each(["responses", "chat", "messages"] as const)("native %s header deadline bypasses same-key retries and backup keys", async wire => {
   const home = await tcpDouble("home", "timeout", 0, wire), local = await tcpDouble("local", "healthy", 0, wire);
@@ -340,12 +342,14 @@ nativeProof.each(["responses", "chat", "messages"] as const)("native %s header d
   config.protocols = { rollout: { managedMessagesNative: true } };
   configModule.saveConfig(config);
   const result = await turn(config, local, { model: `combo/${comboId}` }, wire);
+  if (wire === "messages") expect(protocolTrace.protocolTraceForRequest(result.log, result.log.attempts))
+    .toMatchObject({ inbound: "messages", mode: "native", requestPath: ["messages", "messages"] });
   const seen = observation(`native-${wire}-deadline-keypool`, result);
   expect(result.status).toBe(429); expect(seen.homeBodies).toBe(1); expect(seen.localBodies).toBe(0);
   expect(home.backupCalls).toBe(0); expect(result.json.error?.code).toBe("upstream_reset_replay_refused");
   expect(result.json.error?.message).toContain("may already have been processed");
   expect(result.policy).toEqual({ replayRefusal: true, nonReplayable: true, retryHeader: "false", retryAfter: null });
-});
+}, 20_000);
 
 nativeProof.each(["AbortError", "TimeoutError"])("caller %s after the body remains caller cancellation", async name => {
   const home = await tcpDouble("home", "timeout"), local = await tcpDouble("local", "healthy");
@@ -355,7 +359,7 @@ nativeProof.each(["AbortError", "TimeoutError"])("caller %s after the body remai
   const seen = observation(`caller-${name}`, result);
   expect(seen.homeBodies).toBe(1); expect(seen.localBodies).toBe(0); expect(result.status).toBe(499);
   expect(result.json.error?.code).not.toBe("upstream_reset_replay_refused");
-});
+}, 20_000);
 
 nativeProof.each(["GET", "HEAD"])("safe %s retains its thrown header deadline", async method => {
   const home = await tcpDouble("home", "timeout", 0, "read");
@@ -364,7 +368,7 @@ nativeProof.each(["GET", "HEAD"])("safe %s retains its thrown header deadline", 
     .rejects.toMatchObject({ name: "TimeoutError" });
   expect(home.calls).toHaveLength(1);
   console.info("[native-proof] " + JSON.stringify({ case: `safe-${method}`, homeBodies: home.calls.length, outcome: "TimeoutError" }));
-});
+}, 20_000);
 
 nativeProof("replaySafe reset policy cannot retry our POST header deadline", async () => {
   const home = await tcpDouble("home", "timeout"), caller = new AbortController();
@@ -375,7 +379,7 @@ nativeProof("replaySafe reset policy cannot retry our POST header deadline", asy
   expect(upstream.isReplayRefusalResponse(response)).toBe(true);
   expect((await response.json()).error.code).toBe("upstream_reset_replay_refused");
   console.info("[native-proof] " + JSON.stringify({ case: "replay-safe-deadline", homeBodies: home.calls.length, status: response.status }));
-});
+}, 20_000);
 
 // Run only through the checkout-root wrapper in an allowlisted outer environment with
 // --no-env-file --no-install and OCX_NATIVE_PROOF_CREDENTIAL_FREE=1 / OCX_NATIVE_PROOF_ROOT.

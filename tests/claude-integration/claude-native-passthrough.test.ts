@@ -1209,17 +1209,24 @@ test("a credential in a local failure message is redacted for the client as well
 });
 
 test("an upstream that never sends headers logs the header timeout as the reason", async () => {
-  const silent = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() { /* accept, never answer */ } } });
+  const requests: Array<{ method: string; path: string }> = [];
+  const pending: Array<(response: Response) => void> = [];
+  const silent = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    requests.push({ method: request.method, path: new URL(request.url).pathname });
+    return new Promise<Response>(resolve => { pending.push(resolve); });
+  } });
   try {
     const { res, text, row } = await nativeFailureRow(`http://127.0.0.1:${silent.port}`, undefined, { connectTimeoutMs: 250 });
     expect(res.status).toBe(429);
     expect(res.headers.get("x-should-retry")).toBe("false");
     expect(res.headers.get("retry-after")).toBeNull();
     expect(JSON.parse(text).error.code).toBe("upstream_reset_replay_refused");
+    expect(requests).toEqual([{ method: "POST", path: "/v1/messages" }]);
     expect(row.status).toBe(429);
     expect(row.failureDetail).toEqual({ code: "header_timeout" });
   } finally {
-    silent.stop(true);
+    for (const settle of pending) settle(new Response(null, { status: 499 }));
+    await silent.stop(true);
   }
 });
 

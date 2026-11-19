@@ -45,7 +45,7 @@ test.each(["synthetic", "wire refusal code", "ordinary quota"])("passive quota r
       "https://api.groq.com/openai/v1/chat/completions", init);
     const limits = getPassiveKeyLimits(config, name, "model");
     if (source === "synthetic") expect(limits).toEqual([]);
-    else expect(limits.length).toBeGreaterThan(0);
+    else expect(limits).toEqual(expect.arrayContaining([expect.objectContaining({ dimension: "requests", limit: 100, remaining: 0 })]));
   } finally { observations.clearPassiveKeyLimits(name); }
 });
 

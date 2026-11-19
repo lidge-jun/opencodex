@@ -1,9 +1,9 @@
 import { carryProxyError, ownedChatErrorPayload } from "../../lib/client-error-body";
 import { httpStatusFromTerminalError } from "../../lib/errors";
 import {
-  applyReplayRefusalClientHeaders, carryReplayRefusal, hasNoRetryDirective, isNonReplayableResponse,
+  applyReplayRefusalClientHeaders, carryReplayRefusal, hasNoRetryDirective, invitesResendAfterReplacement, isNonReplayableResponse,
   isNonReplayableUpstreamCode, isReplayRefusalCode, isReplayRefusalProjection, isReplayRefusalResponse, replayRefusalBodyCode,
-  markResponseNonReplayable, observedReplayRefusalCode, projectReplayRefusal, UPSTREAM_RESET_REPLAY_REFUSED_CODE,
+  isTerminalResetReplacement, markResponseNonReplayable, observedReplayRefusalCode, projectReplayRefusal, UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../../lib/upstream-retry";
 import { isXaiLegacyPrivacyError, isXaiPrivacyModeRefusal, xaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
 import type { RequestFailureCause } from "../../usage/telemetry-contract";
@@ -41,13 +41,14 @@ export async function projectXaiResetRefusal(
   if (!signal.aborted) return projectResponsesUpstreamRefusal(response, text, logCtx);
 }
 
-/** Client projection never grants another send or turns a real upstream error into our refusal. */
+/** Client projection keeps observed evidence separate from the policy that forbids another send. */
 export async function sanitizeNonReplayableUpstreamError(
   response: Response,
   signal: AbortSignal,
   options?: { terminalReplacement?: boolean; grokOAuthLogCtx?: { causeHint?: RequestFailureCause } },
 ): Promise<Response> {
-  if (response.ok || (!options?.terminalReplacement && !isNonReplayableResponse(response))) return response;
+  const terminalReplacement = options?.terminalReplacement || isTerminalResetReplacement(response);
+  if (response.ok || (!terminalReplacement && !isNonReplayableResponse(response))) return response;
   if (isReplayRefusalProjection(response) && !signal.aborted && !response.bodyUsed && !response.body?.locked) {
     applyReplayRefusalClientHeaders(response.headers);
     return response;
@@ -66,6 +67,9 @@ export async function sanitizeNonReplayableUpstreamError(
   if (refusal) {
     markResponseNonReplayable(refusal);
     return refusal;
+  }
+  if (terminalReplacement && invitesResendAfterReplacement(response.status)) {
+    return carryReplayRefusal(response, projectReplayRefusal(UPSTREAM_RESET_REPLAY_REFUSED_CODE));
   }
   let type = "upstream_error";
   let code: string | undefined;
@@ -93,7 +97,6 @@ export async function sanitizeNonReplayableUpstreamError(
 
 /** Project recognized refusals on every native stream, plus other non-retryable combo failures. */
 export function rewriteNonRetryableFailurePayload(payload: string, comboAttempt: boolean): string {
-  if (!payload.includes('"response.failed"')) return payload;
   try {
     type ErrorRecord = { type?: unknown; code?: unknown };
     const event = JSON.parse(payload) as {
@@ -101,7 +104,8 @@ export function rewriteNonRetryableFailurePayload(payload: string, comboAttempt:
       response?: { retryable?: unknown; error?: ErrorRecord; last_error?: ErrorRecord };
     };
     if (event?.type !== "response.failed") return payload;
-    const upstream = event.response?.error ?? event.error ?? event.response?.last_error ?? event.last_error;
+    const candidates = [event.response?.error, event.error, event.response?.last_error, event.last_error];
+    const upstream = candidates.find(error => isReplayRefusalCode(error?.code)) ?? candidates.find(error => error != null);
     const nonRetryable = event.response?.retryable === false || event.retryable === false
       || isNonReplayableUpstreamCode(upstream?.code);
     if (!isReplayRefusalCode(upstream?.code) && !(comboAttempt && nonRetryable)) return payload;

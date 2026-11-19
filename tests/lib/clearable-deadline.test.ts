@@ -1,9 +1,52 @@
-import { describe, expect, test } from "bun:test";
-import { clearableDeadline } from "../../src/lib/abort";
+import { describe, expect, jest, test } from "bun:test";
+import { clearableDeadline, withPausedResponseHeaderDeadline } from "../../src/lib/abort";
 
 const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
 describe("clearableDeadline", () => {
+  test("nested body inspections preserve the remaining header budget", async () => {
+    jest.useFakeTimers();
+    const deadline = clearableDeadline(100);
+    try {
+      jest.advanceTimersByTime(40);
+      await withPausedResponseHeaderDeadline(deadline.signal, async () => {
+        await withPausedResponseHeaderDeadline(deadline.signal, async () => {
+          jest.advanceTimersByTime(500);
+          expect(deadline.signal.aborted).toBe(false);
+        });
+        jest.advanceTimersByTime(500);
+        expect(deadline.signal.aborted).toBe(false);
+      });
+      jest.advanceTimersByTime(59);
+      expect(deadline.signal.aborted).toBe(false);
+      jest.advanceTimersByTime(1);
+      expect(deadline.didExpire()).toBe(true);
+    } finally { deadline.clear(); jest.useRealTimers(); }
+  });
+
+  test.each(["clear", "parent-abort"] as const)("body inspection cannot revive a deadline after %s", async action => {
+    jest.useFakeTimers();
+    const parent = new AbortController();
+    const deadline = clearableDeadline(100, parent.signal);
+    const reason = new Error("fixture caller cancellation");
+    try {
+      jest.advanceTimersByTime(40);
+      await withPausedResponseHeaderDeadline(deadline.signal, async () => {
+        if (action === "clear") deadline.clear();
+        else parent.abort(reason);
+        jest.advanceTimersByTime(500);
+      });
+      jest.advanceTimersByTime(500);
+      expect(deadline.didExpire()).toBe(false);
+      expect(deadline.signal.aborted).toBe(action === "parent-abort");
+      if (action === "parent-abort") expect(deadline.signal.reason).toBe(reason);
+      else {
+        parent.abort(reason);
+        expect(deadline.signal.reason).toBe(reason);
+      }
+    } finally { deadline.clear(); jest.useRealTimers(); }
+  });
+
   test("clear stops the header timer but preserves the parent body-lifetime link", async () => {
     const parent = new AbortController();
     const deadline = clearableDeadline(10, parent.signal);

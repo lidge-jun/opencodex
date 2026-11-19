@@ -14,6 +14,7 @@ import {
   hasUpstreamReplayRefusal,
   isAutomaticReplayBlocked,
   isConnectionResetError,
+  isReplayRefusalProjection,
   observedReplayRefusalCode,
   projectReplayRefusal,
   retryBackoffDelayMs,
@@ -220,7 +221,7 @@ async function fetchWithResetRecovery(
             }
             throw error;
           }
-        }) as typeof globalThis.fetch));
+        }) as typeof globalThis.fetch, { refusePostDeadline: true }));
         await hasUpstreamReplayRefusal(response, ctx.abortSignal);
         return response;
       } catch (error) {
@@ -265,6 +266,7 @@ async function inspectEndpointHttpFailure(
 }
 
 export async function normalizeFinalKiroHttpError(res: Response, signal?: AbortSignal): Promise<Response> {
+  if (isReplayRefusalProjection(res)) return res;
   const refusalCode = observedReplayRefusalCode(res);
   if (refusalCode !== undefined) {
     cancelResponseBodyBestEffort(res);

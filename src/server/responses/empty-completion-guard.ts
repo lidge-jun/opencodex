@@ -206,6 +206,8 @@ export interface EmptyCompletionGuardOptions {
   continuation: () => AsyncIterable<AdapterEvent> | Promise<AsyncIterable<AdapterEvent>>;
   /** Preserve locally classified retry failures whose precise status must reach the caller. */
   preserveRetryError?: (event: AdapterEvent) => boolean;
+  /** An upstream transport veto overrides the configured retry allowance. */
+  replayAllowed?: boolean;
   /** How many times an empty completion is retried; default 1 (the router's single retry). */
   maxRetries?: number;
 }
@@ -226,7 +228,12 @@ export interface EmptyCompletionGuardOptions {
 export async function* guardEmptyCompletionEventStream(
   options: EmptyCompletionGuardOptions,
 ): AsyncGenerator<AdapterEvent> {
-  const maxRetries = Math.max(0, Math.floor(options.maxRetries ?? 1));
+  const replayAllowed = options.replayAllowed !== false;
+  const maxRetries = replayAllowed ? Math.max(0, Math.floor(options.maxRetries ?? 1)) : 0;
+  const failure = (usage?: OcxUsage, upstream = false) => replayAllowed
+    ? emptyCompletionRetryFailedEvent(usage, upstream)
+    : { ...emptyCompletionRetryFailedEvent(usage), retryable: false as const,
+      message: "The model returned an empty completion and automatic replay was refused." };
   let source = options.firstEvents;
   let held: AdapterEvent[] = [];
   let heldBytes = 0;
@@ -291,7 +298,7 @@ export async function* guardEmptyCompletionEventStream(
           try {
             source = await options.continuation();
           } catch {
-            yield emptyCompletionRetryFailedEvent(usage, true);
+            yield failure(usage, true);
             return;
           }
           terminalSeen = true;
@@ -299,7 +306,7 @@ export async function* guardEmptyCompletionEventStream(
         }
         // The retry was also empty: a stated failure, not a second silent
         // success.
-        yield emptyCompletionRetryFailedEvent(usage);
+        yield failure(usage);
         return;
       }
       if (event.type === "error") {
@@ -313,7 +320,7 @@ export async function* guardEmptyCompletionEventStream(
           try {
             source = await options.continuation();
           } catch {
-            yield emptyCompletionRetryFailedEvent(usage, true);
+            yield failure(usage, true);
             return;
           }
           terminalSeen = true;
@@ -326,11 +333,11 @@ export async function* guardEmptyCompletionEventStream(
           // the stream's own error framing — same move as the router's
           // empty_completion_retry_failed. Client cancels (499) pass through, and a
           // replay-safe failure that repeats keeps its own, more specific message.
-          yield emptyCompletionRetryFailedEvent(mergeUsage(usage, event.usage), true);
+          yield failure(mergeUsage(usage, event.usage), true);
           return;
         }
         yield* releaseHeld();
-        yield withUsage(event);
+        yield withUsage(replayAllowed ? event : { ...event, retryable: false });
         return;
       }
       if (event.type === "incomplete") {
@@ -366,13 +373,13 @@ export async function* guardEmptyCompletionEventStream(
         try {
           source = await options.continuation();
         } catch {
-          yield emptyCompletionRetryFailedEvent(usage, true);
+          yield failure(usage, true);
           return;
         }
         continue;
       }
-      if (!sawContent && retries > 0) {
-        yield emptyCompletionRetryFailedEvent(usage, true);
+      if (!sawContent && (retries > 0 || !replayAllowed)) {
+        yield failure(usage, true);
         return;
       }
       // Post-output EOF remains incomplete; replaying could duplicate text or
