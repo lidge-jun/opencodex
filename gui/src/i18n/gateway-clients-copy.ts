@@ -2,7 +2,7 @@
  * Copy for the Antigravity and agy connect tab. One row per key, columns in the order of
  * `locales`, kept apart from the per-locale files like remote-link-diagnostics-copy.ts. The
  * server sends a code for every note, override and refusal; this table is what the user reads.
- * Only file paths and the text of an I/O error are shown as sent.
+ * File paths and diagnostics without a specific translation can be shown as sent.
  */
 type Locale = "en" | "ko" | "de" | "fr" | "zh" | "zh-TW" | "ru" | "ja" | "tr" | "vi" | "pt";
 const locales: readonly Locale[] = ["en", "ko", "de", "fr", "zh", "zh-TW", "ru", "ja", "tr", "vi", "pt"];
@@ -47,6 +47,19 @@ const rows = {
   refusedIo: ["Could not write the client files:","클라이언트 파일을 쓰지 못했어요:","Die Clientdateien konnten nicht geschrieben werden:","Impossible d’écrire les fichiers du client :","无法写入客户端文件：","無法寫入用戶端檔案：","Не удалось записать файлы клиента:","クライアントのファイルを書き込めませんでした：","İstemci dosyaları yazılamadı:","Không ghi được các tệp của máy khách:","Não foi possível gravar os arquivos do cliente:"],
   refused: ["The proxy refused the change:","프록시가 변경을 거부했어요:","Der Proxy hat die Änderung abgelehnt:","Le proxy a refusé la modification :","代理拒绝了此更改：","代理拒絕了此變更：","Прокси отклонил изменение:","プロキシが変更を拒否しました：","Proxy değişikliği reddetti:","Proxy đã từ chối thay đổi:","O proxy recusou a alteração:"],
   actionFailed: ["Could not confirm whether the change was applied. Check the client status before trying again.","변경이 적용됐는지 확인하지 못했어요. 다시 시도하기 전에 클라이언트 상태를 확인하세요.","Es ließ sich nicht bestätigen, ob die Änderung übernommen wurde. Prüfen Sie den Client-Status, bevor Sie es erneut versuchen.","Impossible de confirmer si la modification a été appliquée. Vérifiez l’état du client avant de réessayer.","无法确认更改是否已生效。请先检查客户端状态再重试。","無法確認變更是否已生效。請先檢查用戶端狀態再重試。","Не удалось подтвердить, применено ли изменение. Проверьте состояние клиента, прежде чем повторять попытку.","変更が適用されたか確認できませんでした。再試行する前にクライアントの状態を確認してください。","Değişikliğin uygulanıp uygulanmadığı doğrulanamadı. Yeniden denemeden önce istemci durumunu kontrol edin.","Không xác nhận được thay đổi đã được áp dụng hay chưa. Hãy kiểm tra trạng thái client trước khi thử lại.","Não foi possível confirmar se a alteração foi aplicada. Verifique o status do cliente antes de tentar novamente."],
+  refusedAgyProfile: [
+    "OpenCodex could not verify the agy profile at {path}. Restore the complete marked agy block or the saved original profile, then retry.",
+    "OpenCodex가 {path}의 agy 프로필을 확인하지 못했어요. 마커가 포함된 agy 블록 전체나 저장된 원본 프로필을 복원한 뒤 다시 시도하세요.",
+    "OpenCodex konnte das agy-Profil unter {path} nicht überprüfen. Stellen Sie den vollständigen markierten agy-Block oder das gesicherte Originalprofil wieder her und versuchen Sie es erneut.",
+    "OpenCodex n’a pas pu vérifier le profil agy dans {path}. Rétablissez le bloc agy complet avec ses marqueurs ou le profil d’origine sauvegardé, puis réessayez.",
+    "OpenCodex 无法验证 {path} 中的 agy 配置文件。请恢复带标记的完整 agy 配置块或已保存的原始配置文件，然后重试。",
+    "OpenCodex 無法驗證 {path} 中的 agy 設定檔。請還原帶有標記的完整 agy 區塊或已儲存的原始設定檔，然後重試。",
+    "OpenCodex не удалось проверить профиль agy по пути {path}. Восстановите весь блок agy вместе с маркерами или сохранённый исходный профиль и повторите попытку.",
+    "OpenCodex は {path} の agy プロファイルを確認できませんでした。マーカーを含む agy ブロック全体か、保存された元のプロファイルを復元してから、もう一度お試しください。",
+    "OpenCodex, {path} konumundaki agy profilini doğrulayamadı. İşaretleyicileriyle birlikte agy bloğunun tamamını veya kaydedilmiş özgün profili geri yükleyip yeniden deneyin.",
+    "OpenCodex không xác minh được hồ sơ agy tại {path}. Hãy khôi phục toàn bộ khối agy cùng các dấu đánh dấu hoặc hồ sơ gốc đã lưu, rồi thử lại.",
+    "O OpenCodex não conseguiu verificar o perfil do agy em {path}. Restaure o bloco completo do agy com seus marcadores ou o perfil original salvo e tente novamente.",
+  ],
 } satisfies Record<string, Row>;
 
 export type GatewayClientsCopyKey = `gatewayClients.${keyof typeof rows}`;
