@@ -15,6 +15,9 @@ import {
   installShellHook as shellInstallHook,
 } from "../../src/server/system-env-shell";
 import { claudeKeychainReader } from "../../src/oauth/claude-keychain-read";
+import { buildClaudeEnv } from "../../src/cli/claude";
+import * as catalog from "../../src/codex/catalog";
+import * as claudeVersion from "../../src/claude/subagent-force-status";
 
 const originalFetch = globalThis.fetch;
 const originalPlatform = process.platform;
@@ -758,6 +761,50 @@ describe("systemEnv lever keys (devlog 136 B6)", () => {
       injectedKeys: ["ANTHROPIC_BASE_URL", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", ...keys],
     });
   }
+
+  test("system-env defers automatic Fable to the launching CLI and sweeps a previously generated slot", async () => {
+    const fableSlot = "ANTHROPIC_DEFAULT_FABLE_MODEL";
+    const fable52 = "claude-fable-5-2[1m]";
+    const fable51 = "claude-fable-5-1[1m]";
+    const rows = ["claude-fable-5-1", "claude-fable-5-2", "claude-opus-5-5"]
+      .map(id => ({ id, provider: "anthropic", contextWindow: 1_000_000 }));
+    const gather = spyOn(catalog, "gatherRoutedModels").mockResolvedValue(rows);
+    const probe = spyOn(claudeVersion, "probeInstalledClaudeCodeVersion").mockResolvedValue("2.1.290");
+    const writes = capturedWrites();
+    trackingFile = trackingWithLevers([fableSlot]);
+    launchctlBaseUrl = "http://127.0.0.1:4096";
+    launchctlEnvValues[fableSlot] = fable52;
+    const config = { ...baseConfig, claudeCode: { systemEnv: true, authMode: "subscription" } } satisfies OcxConfig;
+    const windows = Object.fromEntries(rows.map(row => [row.id, row.contextWindow]));
+    const deps = { claudeCodeVersion: "2.1.280" };
+    try {
+      expect(await injectSystemEnv(4096, config)).toEqual({ injected: true });
+      const commands = launchctlCommands();
+      const inherited = commands.includes(`launchctl unsetenv ${fableSlot}`) ? {} : { [fableSlot]: fable52 };
+      expect(buildClaudeEnv(config, 4096, inherited, windows, deps)[fableSlot]).toBe(fable51);
+      const shell = writes.find(w => w.path.includes("claude-env.sh"))!.data;
+      expect(shell).not.toContain(fableSlot);
+      expect(commands).not.toContain(`launchctl setenv ${fableSlot} ${fable52}`);
+      expect(commands).toContain("launchctl setenv ANTHROPIC_DEFAULT_OPUS_MODEL claude-opus-5-5[1m]");
+      expect(probe).not.toHaveBeenCalled();
+      expect(buildClaudeEnv(config, 4096, { [fableSlot]: fable52 }, windows, deps)[fableSlot]).toBe(fable52);
+    } finally {
+      probe.mockRestore();
+      gather.mockRestore();
+    }
+  });
+
+  test("system-env exports an explicitly configured Fable 5.2 slot", async () => {
+    const writes = capturedWrites();
+    const config = {
+      ...baseConfig,
+      claudeCode: { systemEnv: true, tierModels: { fable: "claude-fable-5-2[1m]" } },
+    } satisfies OcxConfig;
+    expect(await injectSystemEnv(4096, config)).toEqual({ injected: true });
+    expect(launchctlCommands()).toContain("launchctl setenv ANTHROPIC_DEFAULT_FABLE_MODEL claude-fable-5-2[1m]");
+    expect(writes.find(w => w.path.includes("claude-env.sh"))!.data)
+      .toContain('export ANTHROPIC_DEFAULT_FABLE_MODEL=\'claude-fable-5-2[1m]\'');
+  });
 
   test("re-inject refreshes a tracked slot whose configured value changed", async () => {
     const writes = capturedWrites();

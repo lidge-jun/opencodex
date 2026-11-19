@@ -176,18 +176,20 @@ function assertFastSend(send: CapturedSend): void {
   expect(Object.hasOwn(send.body, "service_tier")).toBe(false);
 }
 
-function assertFastReceipts(receiptModel = LOGICAL_MODEL): void {
+function assertFastReceipts(receiptModel = LOGICAL_MODEL, attemptCount = 1): void {
   const log = getRequestLogEntries().at(-1);
   const usage = readUsageEntries().at(-1);
   for (const receipt of [log, usage]) {
     expect(receipt?.model).toBe(receiptModel);
     expect(receipt?.wireModel).toBe(FAST_MODEL);
-    expect(receipt?.attempts).toHaveLength(1);
-    expect(receipt?.attempts?.[0]?.model).toBe(LOGICAL_MODEL);
-    expect(receipt?.attempts?.[0]?.tierOutcome).toMatchObject({
-      wireKind: "model-variant", wireValue: FAST_MODEL, fastOutcome: "applied",
-      confirmation: "assumed", responseTierAuthoritative: false,
-    });
+    expect(receipt?.attempts).toHaveLength(attemptCount);
+    for (const attempt of receipt?.attempts ?? []) {
+      expect(attempt.model).toBe(LOGICAL_MODEL);
+      expect(attempt.tierOutcome).toMatchObject({
+        wireKind: "model-variant", wireValue: FAST_MODEL, fastOutcome: "applied",
+        confirmation: "assumed", responseTierAuthoritative: false,
+      });
+    }
   }
 }
 
@@ -360,8 +362,9 @@ describe("Grok 4.7 Fast serialized upstream model", () => {
       "Bearer fake-xai-old-access", "Bearer fake-xai-new-access",
     ]);
     expect(fixture.counts.refresh).toBe(1);
-    assertFastReceipts();
-    expect(readUsageEntries().at(-1)?.attempts?.[0]?.sendCount).toBe(2);
+    assertFastReceipts(LOGICAL_MODEL, 2);
+    expect(readUsageEntries().at(-1)?.attempts?.map(attempt => ({ status: attempt.status, sendCount: attempt.sendCount })))
+      .toEqual([{ status: 401, sendCount: 1 }, { status: 200, sendCount: 1 }]);
   });
 
   test("WebSocket response.create sends build-fast without a tier and preserves logical receipts", async () => {

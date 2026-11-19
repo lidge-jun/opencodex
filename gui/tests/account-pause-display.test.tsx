@@ -54,6 +54,39 @@ test.each(["fr", "ko"] as const)("provider OAuth and key tooltips use the app lo
   }
 });
 
+const appealHref = "https://forms.gle/appeal-fixture";
+function renderAppeal(locale: Locale, appealText?: string, paused = true, appealUrl = appealHref) {
+  const item = { name: "google-antigravity", authMode: "oauth", adapter: "google" } as WorkspaceItem;
+  return render(<ProviderAuthPanel item={item} apiBase="" oauth={{ loggedIn: true }} authHandlers={handlers}
+    accounts={[{ id: "account-fixture", alias: "Appeal fixture", active: false, paused, pauseDetails: details,
+      pauseEvidence: { statusCode: 403, appealUrl, appealText } }]} />, locale);
+}
+
+test.each(LOCALES)("paused OAuth details show the translated appeal action in $code", ({ code }) => {
+  const win = renderAppeal(code, "<b>Invalid vendor label</b>");
+  try {
+    const link = win.document.querySelector(`.pwi-auth-acct a[href="${appealHref}"]`);
+    expect(link?.textContent).toBe(DICTS[code]["accountPause.submitAppeal"]);
+    expect(link?.textContent?.trim()).toBeTruthy();
+    expect(link?.getAttribute("target")).toBe("_blank");
+    expect(link?.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(link?.closest("button")).toBeNull();
+  } finally { void win.happyDOM.close(); }
+});
+
+test("paused OAuth details use a plain vendor label and omit links on resumed rows or unsafe URLs", () => {
+  for (const [paused, url, expected] of [
+    [true, appealHref, "Request a review"],
+    [false, appealHref, undefined],
+    [true, "javascript:void(0)", undefined],
+  ] as const) {
+    const win = renderAppeal("en", "Request a review", paused, url);
+    try {
+      expect(win.document.querySelector(".pwi-auth-acct a")?.textContent).toBe(expected);
+    } finally { void win.happyDOM.close(); }
+  }
+});
+
 test("API-key pool rows render dedicated Pause and Resume buttons when onPauseApiKey is supplied", () => {
   const locale = "en";
   const t = translator(locale);

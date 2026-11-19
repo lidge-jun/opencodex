@@ -922,8 +922,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       retainModels: p.retainModels,
       omitReasoningEffortWithToolsModels: p.omitReasoningEffortWithToolsModels,
       upstreamHttpVersion: p.upstreamHttpVersion,
-      // As configured: unset on canonical `openai` means upstream WebSocket, so never coerce to false.
-      upstreamWebsocket: p.upstreamWebsocket,
+      transientRetryOn5xx: p.transientRetryOn5xx,
+      upstreamWebsocket: p.upstreamWebsocket, // Unset keeps upstream WebSocket enabled for canonical OpenAI.
       authMode: p.authMode,
       apiKeyTransport: p.apiKeyTransport,
       disabled: p.disabled === true,
@@ -1672,6 +1672,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if ((prov.authMode === "oauth" || effectiveGoogleMode(name, prov) === "vertex") && !apiKey) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified (not logged in)" });
     }
+    if (prov.adapter === "m365-copilot") return (await import("./m365-copilot-provider-probe")).probeM365CopilotProvider(name, prov, snapshot, req.signal);
     if (prov.adapter === "zed") return (await import("./zed-provider-probe")).probeZedProvider(prov, apiKey, snapshot?.providerUserId);
     if (prov.adapter === "cursor") {
       const started = Date.now();
@@ -1990,8 +1991,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     return jsonResponse({ error: "provider string and enabled boolean are required" }, 400);
   }
 
-  // Complete GUI picker presets, derived from the canonical provider registry. The GUI is a
-  // standalone Vite package, so it consumes this runtime view instead of importing repo-root src.
+  // The standalone Vite GUI consumes these canonical registry presets through the API.
   if (url.pathname === "/api/provider-presets" && req.method === "GET") {
     return jsonResponse({ providers: deriveProviderPresets() });
   }

@@ -18,7 +18,7 @@ import { safeKiroHttpErrorMessage } from "../kiro-errors";
 import { calibrateKiroEstimate } from "../kiro-calibration";
 import { normalizeKiroImages } from "../kiro-images";
 import type { KiroCompletionMode } from "../kiro-constants";
-import { fetchKiroWithRetry } from "../kiro-retry";
+import { fetchKiroWithRetry, KIRO_FETCH_SEND_LIMIT } from "../kiro-retry";
 import { fingerprint, invocationId, osTag } from "../kiro-wire";
 import { hasTrailingDeliveredFinalAnswer } from "./conversation";
 import { buildKiroPayload } from "./payload";
@@ -279,6 +279,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
 
   return {
     name: "kiro",
+    hostedIterationSendLimit: 2 * KIRO_FETCH_SEND_LIMIT, // Initial fetch and one bounded completion retry.
     // A replayed history that already ENDS with a delivered final answer has nothing to ask Kiro.
     // Before this hook the adapter still appended a trailing user turn — a neutral acknowledgement,
     // but structurally still a prompt — and performed a real inference, so the model answered the

@@ -53,9 +53,17 @@ leaves. Errors are `{ "error": { "code", "message", "status" } }` with `status` 
 the message is fixed by code and upstream-authored text is never forwarded. Inner Chat runs with
 `suppressProtocolTrace`, so no Chat protocol identity is persisted for these rows.
 
+The shared bridge checks the source HTTP headers and parsed body for ACP unattended-turn labels.
+It passes the result through Chat to Responses preflight as an internal boolean. The native
+projection and request header allowlist keep those labels out of outbound requests. An ACP policy
+refusal returns the native 403 before any `agy` version probe or ACP process start.
+
 ## Coverage
 
 `tests/server/server-gemini-inbound.test.ts` (list and lookup, SSE and JSON-array streams, buffered
 answers on `/v1beta` and `/v1`, `x-goog-api-key` and `?key=` admission, tool calls, errors, 501 and
 405, `/v1/models` unchanged), `tests/responses/responses-gemini-codec.test.ts` (request and
 response mapping, streaming translation), plus the Ollama tests that pin the shared bridge.
+
+`tests/server/server-agy-acp.test.ts` exercises labeled and interactive turns on both generation
+methods using the fake `agy` fixture.

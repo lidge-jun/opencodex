@@ -1,3 +1,4 @@
+import { sealCredentialRefusal } from "./credential-recovery-attempt";
 import { MessagesSseFrameContext, messagesSseEchoRenamedError, messagesSseFrameHooks } from "../lib/messages-sse-error-presentation";
 import { createMessagesSseErrorFilter } from "./messages-sse-error-filter";
 import type { MessagesFailureVerdictSink } from "../claude/failure-verdict";
@@ -28,7 +29,7 @@ import { GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST } from "../oauth/generic-account
  * Loaded lazily by `claude-messages.ts` only when the switch is on and a route is eligible.
  */
 import { resolveAnthropicModelRouteForInstance } from "../oauth/anthropic-model-routes";
-import { bindAnthropicRefusalCredentialForSend, rotateAnthropicAccountOnResponseForInstance } from "../oauth/anthropic-account-refusal";
+import { anthropicRefusalCredentialChanged, bindAnthropicRefusalCredentialForSend, rotateAnthropicAccountOnResponseForInstance } from "../oauth/anthropic-account-refusal";
 import { captureAnthropicPhysicalSendOwnership, anthropicPhysicalSendOwnershipIsCurrent,
   type AnthropicPhysicalSendOwnership } from "../oauth/anthropic-send-ownership";
 import { anthropicModelQuotaFor } from "../oauth/anthropic-model-quota";
@@ -130,13 +131,12 @@ import {
 } from "./messages-native-oauth";
 import {
   noteProviderAttemptSend,
-  recordAttemptCredentialSource,
   recordAttemptRequestedEffort,
   recordFirstOutput,
-  recordKeyAttemptFailure,
   recordKeyWireAttemptUsage,
   type RequestLogContext,
 } from "./request-log";
+import { recordKeyAttemptFailure } from "./request-log-key-failure";
 import { fetchWithHeaderTimeout, physicalSendObserverInit, providerFetch, safeHostLabel, sendWithConnectionPolicy } from "./responses/fetch-helpers";
 import { isLocalUpstream } from "../lib/local-upstream";
 import { resolveConnectTimeoutMs, resolveJsonBodyReadTimeoutMs } from "../stall-timeout";
@@ -679,7 +679,6 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
   // for another credential domain decides opaque state from the full source again.
   const rejectUnrepresentable = resolveProtocolSettings(config).unrepresentable === "reject";
   const buildActiveRequest = () => {
-    recordAttemptCredentialSource(attempt, route.providerName, activeProvider, "anthropic");
     // Exact combo replay preserves TTL-less breakpoints; an explicit operator TTL still wins.
     const wireConfig = options.sendBudget && config.cacheRetention === undefined ? { ...config, cacheRetention: "short" as const } : config;
     const built = buildAnthropicMessagesPassthroughRequest(activeProvider, route.modelId, body, wireConfig, {
@@ -861,12 +860,10 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
               } else if (spendTracker) {
                 if (!physicalBudget.spendEnforced && !spendTracker.charge({ workflowAlreadyCounted: true })) throw new NativeMessagesSpendRefusal();
               }
-              noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
               // Last synchronous ownership reservation before the physical fetch. Retain this
               // exact incarnation across its await; a returned response can never reserve one.
               sendOwner = snapshot ? captureAnthropicPhysicalSendOwnership(snapshot) : null;
               if (snapshot && !sendOwner) throw new NativeOAuthSelectionChangedError();
-              physicalSendsUsed++;
               const physicalFetch = ((input, physicalInit) => sendWithConnectionPolicy(
                 passiveKeyPhysicalFetch(distributedKeyPhysicalFetch(
                   anthropicBillingPhysicalFetch((activeProvider as OcxProviderTransport).fetch ?? execute, route.providerName, activeProvider),
@@ -876,7 +873,12 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
               localUpstream = isLocalUpstream(wire.url);
               dispatched = await fetchWithHeaderTimeout(
                 wire.url,
-                applyUpstreamRecoveryInit({ ...init, method: "POST", headers, body: wire.body, ...physicalSendObserverInit(observeAutoPause, wire.url) }, transportRecovery),
+                applyUpstreamRecoveryInit({ ...init, method: "POST", headers, body: wire.body,
+                  ...physicalSendObserverInit(observeAutoPause, wire.url, () => {
+                    noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
+                    physicalSendsUsed++;
+                  }),
+                }, transportRecovery),
                 init.signal ?? upstream.signal,
                 resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream }),
                 requestedStream, physicalFetch,
@@ -945,6 +947,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
         const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...activeProvider, _apiKeyAttempt: undefined });
         const next = fresh && (selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh);
         if (!next) break;
+        sealCredentialRefusal(logCtx, response.status, "key-401");
         try { void response.body?.cancel().catch(() => {}); } catch { /* closed */ }
         rebuildFor(next);
         response = await send("key-401");
@@ -959,6 +962,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
         });
         pendingDistributedFailure = undefined; // Rotation already records this physical failure.
         if (!rotated) break;
+        sealCredentialRefusal(logCtx, response.status, "key-401");
         discard(response);
         rebuildFor(rotated);
         response = await send("key-401");
@@ -968,6 +972,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
         if (!rotated) break;
         billingRecoveryActive = true;
         if (!keySendAvailable()) break;
+        sealCredentialRefusal(logCtx, response.status, "key-401");
         discard(response);
         rebuildFor(rotated);
         response = await send("key-401");
@@ -1002,6 +1007,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
         if (!rotated) break;
         // Rotation already recorded the cooldown; keep the terminal 429 when no send remains.
         if (!keySendAvailable()) break;
+        sealCredentialRefusal(logCtx, response.status, "key-429");
         discard(response);
         rebuildFor(rotated);
         response = await send("key-429");
@@ -1045,10 +1051,12 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
         sessionKey: options.sessionKey, model: route.modelId, candidateAccountId: nextAccountId,
         expectedRecoverySelection, expectedRecoveryRouteDecision: sendingBinding.routeDecision,
       });
+      const changed = anthropicRefusalCredentialChanged(response, oauthBinding.snapshot);
+      if (changed) sealCredentialRefusal(logCtx, response.status, recovery);
       oauthFailovers++;
       rebuildFor(oauthProvider(oauthBinding));
       logCtx.provider = formatAnthropicProviderForLog(route.providerName, oauthBinding.snapshot.accountId, config);
-      response = await send(recovery);
+      response = await send(changed ? recovery : "rate-limit-429");
     }
   } catch (error) {
     releaseRetainedRequest();

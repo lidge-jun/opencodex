@@ -7,14 +7,14 @@ import { clearAccountNeedsReauth, clearAccountQuota, isAccountNeedsReauth, updat
 import { codexPoolAffinityKey } from "../../src/codex/auth-context";
 import * as authContextModule from "../../src/codex/auth-context";
 import * as coreAuthModule from "../../src/server/responses/core-auth";
-import * as proxyEnvModule from "../../src/lib/proxy-env";
 import { prepareResponsesRequest } from "../../src/server/responses/request-prepare";
 import { handleComboResponses } from "../../src/server/responses/core";
 import type { ResponsesAdmissionState } from "../../src/server/responses/core-options";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
-import { createBoundedSameTargetRecovery, createRequestExecutionBudget, deriveRequestExecutionBudget } from "../../src/lib/request-execution-budget";
+import { CODEX_TEXT_GUARDED_BUDGET_POLICY, createBoundedSameTargetRecovery, createRequestExecutionBudget, deriveRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY, type SpendJournal } from "../../src/lib/spend-reservation-ledger";
 import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
+import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning-replay-cache";
 import { admitWorkflowTurn, DEFAULT_WORKFLOW_BUDGET_POLICY, resetWorkflowBudgetsForTest, workflowBudgetSnapshot } from "../../src/lib/workflow-budget";
 import { bindWorkflowBudgetConfig } from "../../src/lib/workflow-budget-config";
 import {
@@ -59,8 +59,8 @@ import {
   FERNET_TASK,
   codexHeaders,
   encryptedInput,
-  recoverySse,
 } from "../helpers/agent-task-recovery";
+import { installHarness, restorePool401Fetch } from "../helpers/pool-401-fetch";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -76,12 +76,10 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const ACCOUNT_ID = "work";
 const OTHER_ACCOUNT_ID = "other";
-const originalFetch = globalThis.fetch;
 let home = "";
 let previousOcxHome: string | undefined;
 let previousCodexHome: string | undefined;
 let releaseSpendHome: (() => void) | undefined;
-let configuredFetchSpy: ReturnType<typeof spyOn> | undefined;
 
 function config(options: { secondAccount?: boolean } = {}): OcxConfig {
   return {
@@ -118,6 +116,7 @@ function request(
     headers?: HeadersInit;
     stream?: boolean;
     input?: unknown;
+    reasoning?: { effort: string };
   } = {},
 ): Request {
   const headers = new Headers(options.headers);
@@ -130,7 +129,7 @@ function request(
     headers,
     body: JSON.stringify(compact
       ? { model: options.model ?? "gpt-5.5", input }
-      : { model: options.model ?? "gpt-5.5", input, stream: options.stream ?? false }),
+      : { model: options.model ?? "gpt-5.5", input, stream: options.stream ?? false, reasoning: options.reasoning }),
   });
 }
 
@@ -171,84 +170,6 @@ function readStoredGeneration(): number {
   const raw = JSON.parse(readFileSync(join(home, "codex-accounts.json"), "utf8")) as
     Record<string, { generation: number }>;
   return raw[ACCOUNT_ID]!.generation;
-}
-
-type Harness = {
-  sends: string[];
-  refreshes: string[];
-  recoveryAuths: string[];
-  backupAuths: string[];
-  backupBodies: string[];
-  canonicalAliasSends: number;
-};
-
-/**
- * Upstream rejects the old bearer once, the token endpoint rotates, and the replay with the
- * new bearer succeeds — the reporter's deterministic harness.
- */
-function installHarness(options: {
-  refresh?: () => Response;
-  responseForSend?: (authorization: string, sendNumber: number, url: URL) => Response | undefined;
-  recovery?: (authorization: string, init?: RequestInit) => Response | Promise<Response>;
-} = {}): Harness {
-  const sends: string[] = [];
-  const refreshes: string[] = [];
-  const recoveryAuths: string[] = [];
-  const backupAuths: string[] = [];
-  const backupBodies: string[] = [];
-  let canonicalAliasSends = 0;
-  const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = new URL(input instanceof Request ? input.url : String(input));
-    const body = typeof init?.body === "string" ? init.body : "";
-    const authorization = new Headers(init?.headers).get("authorization") ?? "";
-    if (url.hostname === "auth.openai.com") {
-      refreshes.push((JSON.parse(String(init?.body)) as { refresh_token?: string }).refresh_token ?? "");
-      if (options.refresh) return options.refresh();
-      return Response.json({
-        access_token: "refreshed-access",
-        refresh_token: "rotated-refresh",
-        expires_in: 3600,
-      });
-    }
-    if (body.includes("capture_assignment")) {
-      recoveryAuths.push(authorization);
-      if (options.recovery) return await options.recovery(authorization, init);
-      return new Response(recoverySse("RECOVERED-POOL-PLAINTEXT-SENTINEL"), {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      });
-    }
-    if (!url.pathname.endsWith("/responses") && !url.pathname.endsWith("/responses/compact")) {
-      return Response.json({ rate_limit: { primary_window: { used_percent: 10 } } });
-    }
-    if (url.hostname === "backup.example" || url.hostname === "spare.example") {
-      backupAuths.push(authorization);
-      backupBodies.push(body);
-    }
-    if (
-      url.hostname === "chatgpt.com"
-      && authorization !== "Bearer rejected-access"
-      && authorization !== "Bearer refreshed-access"
-      && authorization !== "Bearer other-access"
-    ) {
-      canonicalAliasSends += 1;
-    }
-    sends.push(authorization);
-    const customResponse = options.responseForSend?.(authorization, sends.length, url);
-    if (customResponse) return customResponse;
-    if (authorization === "Bearer rejected-access") {
-      return Response.json({ error: { message: "expired bearer" } }, { status: 401 });
-    }
-    return Response.json({ id: "resp_replayed", object: "response", status: "completed", output: [] });
-  }) as typeof fetch;
-  globalThis.fetch = mockFetch;
-  // SOCKS routing can select its own transport before global fetch is reached. Intercept
-  // that boundary too so this memory fixture never opens a socket under inherited proxies.
-  configuredFetchSpy?.mockRestore();
-  configuredFetchSpy = spyOn(proxyEnvModule, "configuredOutboundFetch").mockImplementation(
-    (input: RequestInfo | URL, init?: RequestInit) => mockFetch(input, init),
-  );
-  return { sends, refreshes, recoveryAuths, backupAuths, backupBodies, get canonicalAliasSends() { return canonicalAliasSends; } };
 }
 
 function recoveryComboConfig(): OcxConfig {
@@ -363,9 +284,7 @@ afterEach(() => {
   // Release before home teardown to prevent Windows removal failures and a live unlinked database.
   releaseSpendHome?.();
   releaseSpendHome = undefined;
-  configuredFetchSpy?.mockRestore();
-  configuredFetchSpy = undefined;
-  globalThis.fetch = originalFetch;
+  restorePool401Fetch();
   clearCompactHandoffRoutesForTests();
   clearAccountNeedsReauth(ACCOUNT_ID);
   clearAccountNeedsReauth(OTHER_ACCOUNT_ID);
@@ -696,6 +615,38 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
     expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
   });
 
+  for (const path of ["/v1/responses", "/v1/responses/compact"] as const) {
+    test.each(["rotated", "temporary", "revoked"] as const)(
+      `one inference send still checks the Pool credential on ${path} (%s)`, async refresh => {
+        const cfg = config({ secondAccount: true });
+        cfg.accountPoolStrategy = "fill-first";
+        cfg.providers.openai!.transientRetryOn5xx = { attempts: 1 };
+        writeWorkAndOtherAccounts();
+        const req = request(path, { affined: true });
+        const key = codexPoolAffinityKey(req.headers)!;
+        expect(resolveCodexAccountForThreadDetailed(key, cfg, Date.now(), "shared"))
+          .toMatchObject({ status: "selected", accountId: ACCOUNT_ID });
+        const harness = installHarness({
+          refresh: refresh === "rotated" ? undefined : () => refresh === "temporary"
+            ? Response.json({ error: "server_error" }, { status: 503 })
+            : Response.json({ error: "invalid_grant", error_description: "refresh token revoked" }, { status: 400 }),
+        });
+        const handler = path === "/v1/responses" ? handleResponses : handleResponsesCompact;
+        const response = await handler(req, cfg, { model: "", provider: "" });
+        expect(response.status).toBe(401);
+        expect(await response.text()).toContain("expired bearer");
+        expect(harness.refreshes).toEqual(["refresh-grant"]);
+        expect(harness.sends).toEqual(["Bearer rejected-access"]);
+        expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(refresh === "revoked");
+        expect(readStoredGeneration()).toBe(refresh === "rotated" ? 4 : 3);
+        expect(resolveCodexAccountForThreadDetailed(key, cfg, Date.now(), "shared"))
+          .toMatchObject(refresh === "revoked"
+            ? { status: "selected", accountId: OTHER_ACCOUNT_ID }
+            : { status: "selected", accountId: ACCOUNT_ID, affinity: { move: "reused" } });
+      },
+    );
+  }
+
   test.each(["/v1/responses", "/v1/responses/compact"] as const)(
     "a credit hold landing during the forced refresh answers the credit policy, not a refresh failure (%s)",
     async path => {
@@ -870,6 +821,27 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
     expect(harness.sends).toEqual(["Bearer rejected-access"]);
     expect(harness.refreshes).toEqual([]);
     expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+  });
+
+  test("configured gated-model recovery respects a tighter caller-owned send budget", async () => {
+    const model = "gpt-daybreak-blue-latest";
+    const refusal = { detail: `The '${model}' model is not supported when using Codex with a ChatGPT account.` };
+    const harness = installHarness({ responseForSend: () => Response.json(refusal, { status: 400 }) });
+    const cfg = config();
+    cfg.providers.openai!.transientRetryOn5xx = { attempts: 5 };
+    const sendBudget = createRequestExecutionBudget({
+      ...CODEX_TEXT_GUARDED_BUDGET_POLICY, maxTotalModelSends: 2, baseSendAllowance: 2, finalRecoveryAllowance: 0,
+    });
+    const response = await handleResponses(request("/v1/responses", { model }), cfg, { model: "", provider: "" }, {
+      sendBudget,
+      resolveCodexModelEntitlements: async () => ({
+        modelsByAccount: new Map([[ACCOUNT_ID, new Set([model])]]),
+        confirmedAccountIds: new Set([ACCOUNT_ID]), credentialIdentities: new Map(),
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual(refusal);
+    expect(harness.sends).toEqual(Array(2).fill("Bearer rejected-access"));
   });
 
   test("Responses does not compose a stored-account replay 429 with another Pool account", async () => {
@@ -1622,8 +1594,8 @@ describe("Codex account retries share the workflow send ceiling", () => {
     }
   }
 
-  for (const [maxTokens, rootLimit] of [[500, 16], [1500, 16], [4000, 16], [4000, 2]] as const) {
-    test(`gated-model recovery reserves durable spend before each send (ceiling=${maxTokens}, root=${rootLimit})`, async () => {
+  for (const [maxTokens, rootLimit, attempts] of [[500, 16], [1000, 16], [1500, 16], [4000, 16], [4000, 2], [1000, 16, 4]] as const) {
+    test(`gated-model recovery reserves durable spend before each send (ceiling=${maxTokens}, root=${rootLimit}, attempts=${attempts})`, async () => {
       const rootSends = admitRoot(rootLimit);
       const lines: string[] = [];
       const journal: SpendJournal = {
@@ -1638,17 +1610,24 @@ describe("Codex account retries share the workflow send ceiling", () => {
       const tracker = createRequestSpendTracker(logCtx, rootId, ledger);
       const budget = createRequestExecutionBudget(undefined, undefined, tracker);
       const expectedSends = Math.min(maxTokens / 500, rootLimit);
+      const cfg = config();
+      if (attempts !== undefined) cfg.providers.openai!.transientRetryOn5xx = { attempts };
       const responseBody = (sendNumber: number) => ({
         detail: `The '${gatedModel}' model is not supported when using Codex with a ChatGPT account.`,
         send_number: sendNumber,
       });
       const harness = installHarness({
-        responseForSend: (_authorization, sendNumber) => Response.json(responseBody(sendNumber), { status: 400 }),
+        responseForSend: (_authorization, sendNumber) => {
+          if (attempts !== undefined && sendNumber <= expectedSends) {
+            expect(ledger.snapshot("root", rootId)?.reserved).toBe(sendNumber * 500);
+          }
+          return Response.json(responseBody(sendNumber), { status: 400 });
+        },
       });
       try {
         const response = await handleResponses(
           request("/v1/responses", { model: gatedModel, headers: { "x-codex-parent-thread-id": rootId } }),
-          config(), logCtx, {
+          cfg, logCtx, {
             sendBudget: budget,
             resolveCodexModelEntitlements: async () => ({
               modelsByAccount: new Map([[ACCOUNT_ID, new Set([gatedModel])]]),
@@ -1656,6 +1635,8 @@ describe("Codex account retries share the workflow send ceiling", () => {
             }),
           },
         );
+        expect({ sends: harness.sends.length, reserved: ledger.snapshot("root", rootId)?.reserved })
+          .toEqual({ sends: expectedSends, reserved: expectedSends * 500 });
         expect(response.status).toBe(400);
         expect(await response.json()).toEqual(responseBody(expectedSends));
         expect(harness.sends).toEqual(Array(expectedSends).fill("Bearer rejected-access"));
@@ -1692,41 +1673,83 @@ describe("Codex account retries share the workflow send ceiling", () => {
     });
   }
 
-  test("an ordinary reservation refund cannot enlarge the same-target recovery grant", () => {
-    const budget = createRequestExecutionBudget();
-    const ordinary = budget.reserveDispatch({ sendClass: "initial", targetKey: "openai|model" });
-    if (!ordinary.allowed) throw new Error("ordinary fixture reservation refused");
-    const recovery = createBoundedSameTargetRecovery(budget, "openai|model", 1);
-    ordinary.permit.release();
-    const retry = recovery.reserve();
-    if (!retry.allowed) throw new Error("recovery fixture reservation refused");
-    expect(retry.permit.use()).toBe(true);
-    expect(budget.used).toBe(1);
-    expect(recovery.reserve()).toEqual({ allowed: false, reason: "total-exhausted" });
+  test.each([
+    ["/v1/responses", 401, "refresh"], ["/v1/responses", 429, "quota"], ["/v1/responses", 503, "overload"],
+    ["/v1/responses/compact", 401, "refresh"], ["/v1/responses/compact", 429, "quota"], ["/v1/responses/compact", 503, "overload"],
+    ["/v1/responses/compact", 404, "routed handoff"],
+    ["/v1/responses", 400, "opaque"], ["/v1/responses", 400, "effort"],
+  ] as const)("configured recovery at %s retains the upstream %i when spend cannot fund it (%s)", async (path, status, repair) => {
+    if (repair === "opaque") clearReasoningReplayCacheForTests();
+    const rootSends = admitRoot(16);
+    const ledger = createSpendReservationLedger({
+      policy: { ...DEFAULT_SPEND_RESERVATION_POLICY, root: { maxTokens: 500 } },
+    });
+    const logCtx: RequestLogContext = { model: "", provider: "", spendPoolId: "openai",
+      spendInputEstimateTokens: 100, spendOutputCeilingTokens: 400 };
+    const tracker = createRequestSpendTracker(logCtx, rootId, ledger);
+    logCtx.spendTracker = tracker;
+    const sendBudget = createRequestExecutionBudget(undefined, undefined, tracker);
+    const cfg = config({ secondAccount: status === 429 || status === 503 });
+    cfg.accountPoolStrategy = "fill-first";
+    cfg.providers.openai!.transientRetryOn5xx = { attempts: 4 };
+    if (repair === "effort") cfg.providers.openai!.reasoningEfforts = ["medium", "high"];
+    if (cfg.codexAccounts?.length === 2) writeStoredAccount({
+      [OTHER_ACCOUNT_ID]: storedRecord({ accessToken: "other-access", refreshToken: "other-grant",
+        generation: 1, chatgptAccountId: "acc-other" }),
+    });
+    const body = repair === "opaque" ? { error: { code: "invalid_encrypted_content", type: "invalid_request_error" } }
+      : repair === "effort" ? { error: { type: "invalid_request_error", param: "reasoning_effort",
+        message: "reasoning_effort high is not supported for this model" } }
+      : { error: { message: "Original upstream refusal" } };
+    const harness = installHarness({ responseForSend: (_authorization, n) => n === 1
+      ? Response.json(body, { status, headers: { "retry-after": "600" } })
+      : Response.json({ unexpected: n }) });
+    const turn = request(path, { reasoning: repair === "effort" ? { effort: "high" } : undefined, input: repair === "opaque"
+      ? [{ type: "reasoning", encrypted_content: "stale-blob", summary: [] }]
+      : [{ role: "user", content: "compact this" }], headers: { "x-codex-parent-thread-id": rootId } });
+    try {
+      const response = path === "/v1/responses"
+        ? await handleResponses(turn, cfg, logCtx, { sendBudget })
+        : await handleResponsesCompact(turn, cfg, logCtx, undefined, undefined, { sendBudget });
+      expect(harness.sends).toEqual(["Bearer rejected-access"]);
+      expect(harness.refreshes).toEqual(status === 401 ? ["refresh-grant"] : []);
+      expect(response.status).toBe(status);
+      expect(await response.json()).toEqual(body);
+      expect(rootSends()).toBe(1);
+      expect(sendBudget.used).toBe(1);
+      expect(tracker.refusals).toBe(1);
+    } finally {
+      tracker.settle(undefined);
+    }
+    expect(ledger.snapshot("root", rootId)).toMatchObject({ reserved: 0, unresolved: 500 });
   });
 
-  for (const observed of [false, true]) {
-    test(`a foreign budget cannot mint a second recovery grant through a derived view (observed=${observed})`, () => {
-      const foreign = { ...createRequestExecutionBudget(), used: 1, workflowCountObserved: observed };
-      const first = createBoundedSameTargetRecovery(foreign, "openai|model", 1);
-      const derived = deriveRequestExecutionBudget(foreign, foreign.policy);
-      const again = createBoundedSameTargetRecovery(derived, "openai|model", 7);
-      if (observed) {
-        // The bridge cannot carry a foreign observer. It cannot turn that missing owner
-        // into permission to send without durable/root accounting.
-        expect(first.reserve()).toEqual({ allowed: false, reason: "spend-exhausted" });
-        expect(again.reserve()).toEqual({ allowed: false, reason: "spend-exhausted" });
-        expect(foreign.used).toBe(1);
-      } else {
-        expect(again).toBe(first);
-        const decision = first.reserve();
-        if (!decision.allowed) throw new Error("legacy recovery refused");
-        expect(decision.permit.use()).toBe(true);
-        expect(foreign.used).toBe(2);
-        expect(again.reserve()).toEqual({ allowed: false, reason: "total-exhausted" });
-      }
+  test("a configured Pool Combo target uses its prepaid first send and needs fresh spend for a retry", async () => {
+    const rootSends = admitRoot(16);
+    const ledger = createSpendReservationLedger({
+      policy: { ...DEFAULT_SPEND_RESERVATION_POLICY, root: { maxTokens: 500 } },
     });
-  }
+    const logCtx: RequestLogContext = { model: "", provider: "", spendInputEstimateTokens: 100, spendOutputCeilingTokens: 400 };
+    const tracker = createRequestSpendTracker(logCtx, rootId, ledger);
+    logCtx.spendTracker = tracker;
+    const sendBudget = createRequestExecutionBudget(undefined, undefined, tracker);
+    const cfg = recoveryComboConfig();
+    cfg.providers.openai!.transientRetryOn5xx = { attempts: 4 };
+    const body = { error: { type: "server_error", code: "server_is_overloaded", message: "First target overloaded" } };
+    const harness = installHarness({ responseForSend: () => Response.json(body, { status: 503, headers: { "retry-after": "0" } }) });
+    try {
+      const response = await handleResponses(request("/v1/responses", { model: "combo/recovery",
+        headers: { "x-codex-parent-thread-id": rootId } }), cfg, logCtx, { sendBudget });
+      expect(harness.sends).toEqual(["Bearer rejected-access"]);
+      expect(response.status).toBe(503);
+      expect(await response.text()).toContain(body.error.message);
+      expect(rootSends()).toBe(1);
+      expect(sendBudget.used).toBe(1);
+    } finally {
+      tracker.settle(undefined);
+    }
+    expect(ledger.snapshot("root", rootId)).toMatchObject({ reserved: 0, unresolved: 500 });
+  });
 
   test("a failed legacy account permit releases its request reservation without claiming a root send", async () => {
     const rootSends = admitRoot(2);

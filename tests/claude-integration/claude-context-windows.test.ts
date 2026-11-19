@@ -225,6 +225,22 @@ describe("native Claude tiers on the passthrough (#5755)", () => {
     });
   });
 
+  test.each([
+    ["2.1.280", "claude-fable-5-1[1m]"],
+    ["2.1.290", "claude-fable-5-2[1m]"],
+    ["2.1.323", "claude-fable-5-2[1m]"],
+    [null, "claude-fable-5-1[1m]"],
+  ])("Claude Code %s fills Fable with %s", (version, expected) => {
+    const windows = buildClaudeContextWindows([], [], undefined, passthrough);
+    expect(effectiveModelEnv(undefined, windows, undefined, version).ANTHROPIC_DEFAULT_FABLE_MODEL).toBe(expected);
+  });
+
+  test("the version gate only applies to an automatic Fable fill", () => {
+    const windows = buildClaudeContextWindows([], [], undefined, passthrough);
+    const config = { tierModels: { fable: "claude-fable-5-2" } };
+    expect(effectiveModelEnv(config, windows, undefined, "2.1.280").ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("claude-fable-5-2[1m]");
+  });
+
   test("another provider's row for the same id only counts when the router decides", () => {
     const kiro = [{ provider: "kiro", id: "claude-sonnet-5-5", contextWindow: 200_000 }];
     const native = buildClaudeContextWindows([], kiro, undefined, passthrough);

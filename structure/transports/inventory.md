@@ -521,7 +521,8 @@ the relay does not decode WebSocket payloads. After CONNECT the paused outer str
 before TLS-over-TLS negotiation. Test fixture CA trust is confined to child processes or
 injected test socket options, never the user's OS trust store.
 `tests/lib/optional-desktop-upstream.test.ts` exercises the production dialer; `tests/clients/desktop-compatibility-relay.test.ts`
-preserves the real relay’s fixed-target and opaque upgrade contracts.
+preserves the real relay’s fixed-target and opaque upgrade contracts. The managed PAC launch uses the
+[verified Windows package identity](../clients/codex-desktop.md#optional-compatibility-runtime).
 
 ## Single-route opaque proxy transport
 
@@ -555,3 +556,7 @@ timeout, cancellation and half-close; `tests/lib/optional-desktop-upstream.test.
 checks all four proxy schemes close cleanly when the production consumer sees EOF.
 
 Generic OAuth conversation ownership and request-local selection receipts follow [generic OAuth affinity](../providers/generic-account-pool.md#conversation-affinity).
+
+## Microsoft 365 Copilot
+
+`src/adapters/m365-copilot/transport.ts` connects to the fixed Microsoft ChatHub WebSocket endpoint using account-bound conversation IDs and temporary-chat memory settings. It participates in the existing physical-send and translator-budget boundaries. `src/server/responses/fetch-helpers.ts` binds native socket-route authority only to built-in request executors without custom fetch, TLS replacement or dispatch overrides; opaque incoming executors are refused before uploads or dialing under [the provider contract](../providers/m365-copilot.md). Browser capture is login-only; no standalone HTTP relay is involved.

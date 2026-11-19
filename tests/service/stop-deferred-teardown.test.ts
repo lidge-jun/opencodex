@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { stopProxyGracefully } from "../../src/lib/process-control";
+import { killProxy, stopProxyGracefully } from "../../src/lib/process-control";
 import { performStopTeardown } from "../../src/server/stop-teardown";
 import { markSiblingStart, resetSiblingStartForTests } from "../../src/codex/sibling-start";
 import type { CodexNativeRestoreResult } from "../../src/codex/inject";
@@ -12,6 +12,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { fixturePath, repoPath } from "../helpers/repo-root";
 import { createLocalAttestationProof, LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER } from "../../src/lib/local-management-attestation";
 import { LOCAL_MANAGEMENT_NONCE_HEADER } from "../../src/lib/local-management-capability";
+import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 
 /**
  * Behavioural cover for the deferred shared teardown (#3008).
@@ -52,29 +53,34 @@ function restoreResult(success: boolean): CodexNativeRestoreResult {
   } as unknown as CodexNativeRestoreResult;
 }
 
-function connectClient(transport: "hub" | "link") {
+function connectClient(transport: "hub" | "link", port?: number) {
+  const token = `ocx_data_${"c".repeat(40)}`;
+  writeFileSync(join(home, "service-api-token"), token);
   const serverUrl = transport === "link" ? "http://127.0.0.1:10200" : "https://hub.example.test";
-  writeFileSync(join(home, "config.json"), JSON.stringify({ runtimeRole: "client", providers: {}, defaultProvider: "openai", client: {
+  writeFileSync(join(home, "config.json"), JSON.stringify({ port, runtimeRole: "client", providers: {}, defaultProvider: "openai", client: {
     serverUrl, managementUrl: serverUrl, managementTransport: "direct", transport,
     ...(transport === "link" ? { link: { tunnelPort: 10200, linkId: "lnk_0123456789abcdef" } } : {}),
     selectedClients: ["codex"], tokenEnv: "OPENCODEX_API_AUTH_TOKEN", apiKeyId: "fixture-client",
-    tokenFingerprint: "a".repeat(64), protocolVersion: 1, connectedAt: "2026-10-01T00:00:00.000Z",
+    tokenFingerprint: serviceApiTokenFingerprint(token), protocolVersion: 1, connectedAt: "2026-10-01T00:00:00.000Z",
   } }));
 }
 
 async function runParentStop(options: {
   receipt: boolean; response: unknown; restore: CodexNativeRestoreResult; status?: number; clientTransport?: "hub" | "link";
+  siblingRecord?: "standalone" | "link";
   serverTeardown?: boolean; json?: boolean;
   clientServer?: "legacy" | "unknown" | "wrong-pid" | "malformed" | "oversized" | "unauthorized" | "redirect" | "body-timeout";
-  managerCascades?: boolean; guarded?: boolean; orphan?: boolean; exitCleanup?: boolean;
+  managerCascades?: boolean; managerBound?: boolean; discoveryMiss?: boolean; guarded?: boolean; orphan?: boolean; exitCleanup?: boolean;
+  standaloneRecord?: "legacy" | "current" | "stale" | "wrong-home" | "wrong-port" | "client-role";
   nativeSignal?: boolean; apiFailure?: boolean; stopBodyFailure?: boolean;
   alreadyStopped?: boolean; absence?: "dead" | "unknown" | "live"; managerState?: "inactive" | "active" | "unknown";
-  disconnectDuringProbe?: boolean; connectDuringDiscovery?: boolean; connectDuringPost?: boolean; lifecycleBusy?: boolean;
+  configuredPort?: number; staleRuntimeRecord?: boolean; noRuntimeRecord?: boolean; deadPidReadsNull?: boolean;
+  disconnectDuringProbe?: boolean; childExitsDuringProbe?: boolean; connectDuringDiscovery?: boolean; connectDuringPost?: boolean; lifecycleBusy?: boolean;
   connectAfterBoundary?: boolean; pendingAfterBoundary?: boolean; connectDuringRestore?: boolean;
   connectAfterExitInspection?: boolean; pendingAfterExitInspection?: boolean; pendingAfterGrok?: boolean; receiptClearBusy?: boolean;
   windowsStopWiring?: boolean;
 }) {
-  if (options.clientTransport) connectClient(options.clientTransport);
+  if (options.clientTransport) connectClient(options.clientTransport, options.configuredPort);
   const child = spawnSync(process.execPath, [fixturePath("parent-stop-runner.ts")], {
     cwd: repoPath(),
     env: { ...process.env, OPENCODEX_HOME: home },
@@ -88,22 +94,21 @@ async function runParentStop(options: {
   const reportPath = join(home, "parent-stop-result.json");
   expect(existsSync(reportPath), child.stderr).toBe(true);
   const report = JSON.parse(readFileSync(reportPath, "utf8")) as {
-    calls: { killed: number; native: number; grok: number; cleared: number; exited: number; service: number };
-    probes: string[];
+    calls: { killed: number; native: number; grok: number; cleared: number; exited: number; service: number; systemEnv: number };
+    probes: string[]; absenceProbes: number[]; signals: string[];
     urls: string[]; transports: string[]; nonce?: string; receiptExists: boolean; unexpectedIo: string[];
   };
   expect(report.unexpectedIo, child.stderr).toEqual([]);
-  // The Windows checked stop needs its receipt before it sends anything.
-  const refusedWithoutReceipt = options.windowsStopWiring === true && !options.receipt;
-  expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup || options.alreadyStopped || refusedWithoutReceipt ? 0 : 1);
+  const refusedWithoutReceipt = !options.receipt && (options.windowsStopWiring === true || options.clientTransport === "link");
+  const changedBeforeLinkFence = options.clientTransport === "link" && options.connectDuringDiscovery;
+  const stoppedByManager = options.managerCascades && options.deadPidReadsNull;
+  if (!options.standaloneRecord && !options.siblingRecord) expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup || options.alreadyStopped || options.noRuntimeRecord || options.childExitsDuringProbe || stoppedByManager || refusedWithoutReceipt || changedBeforeLinkFence ? 0 : 1);
   return { ...report, exitCode: child.status, stderr: child.stderr, stdout: child.stdout };
 }
 
 /**
- * Off Windows a stop whose teardown receipt cannot be claimed still runs, and the cases using this assert that
- * contract. On Windows the checked stop (#8573) needs the receipt first (windowsStopRequiresReceipt in
- * src/cli/index.ts) and refuses before any POST, so those cases run off Windows; "the Windows checked stop
- * refuses ..." below asserts that refusal for the same scenarios on every host.
+ * An ordinary POSIX stop can proceed without a receipt. Live Link stops and checked Windows
+ * stops require it. The checked Windows refusal is also exercised on other hosts.
  */
 const posixReceiptTest = test.skipIf(process.platform === "win32");
 
@@ -148,6 +153,149 @@ describe("API stop through process exit cleanup", () => {
 });
 
 describe("parent CLI shared teardown completion", () => {
+  test.each([
+    ["match", true], ["foreign-sid", false], ["wrong-argv", false], ["wrong-pid", false],
+    // CIM has no process environment. A matching SID and start argv still need the recorded port.
+    ["wrong-port", false],
+    ["wrong-bind", false], ["client-role", false], ["serving-generation", false],
+  ] as const)("legacy Windows foreground evidence (%s)", (legacyWindowsEvidence, proved) => {
+    const child = spawnSync(process.execPath, [fixturePath("parent-stop-runner.ts")], {
+      cwd: repoPath(), env: { ...process.env, OPENCODEX_HOME: home },
+      input: JSON.stringify({ legacyWindowsEvidence }), encoding: "utf8", timeout: 10_000,
+    });
+    expect(child.error, child.stderr).toBeUndefined();
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({ proved });
+  });
+
+  for (const homeEvidence of ["absolute", "relative-match", "relative-mismatch", "relative-alias", "retargeted-alias"] as const) test.skipIf(
+    !["linux", "darwin", "win32"].includes(process.platform) || (process.platform === "win32" && homeEvidence !== "absolute"),
+  )(
+    `legacy standalone proof checks a live foreground process and its recorded listener scope (${homeEvidence})`,
+    async () => {
+      const { proveStandaloneStopRecord } = await import("../../src/cli/stop-restore");
+      const hostname = process.platform === "win32" ? "127.0.0.1" : "0.0.0.0";
+      const configHome = realpathSync(home);
+      const usesAlias = homeEvidence === "relative-alias" || homeEvidence === "retargeted-alias";
+      const alias = join(configHome, "alias");
+      const otherHome = join(configHome, "other");
+      if (usesAlias) symlinkSync(configHome, alias);
+      process.env.OPENCODEX_HOME = usesAlias ? alias : configHome;
+      const cwd = homeEvidence === "relative-mismatch" ? otherHome : process.env.OPENCODEX_HOME;
+      mkdirSync(cwd, { recursive: true });
+      const scriptDir = join(home, "src", "cli");
+      mkdirSync(scriptDir, { recursive: true });
+      const script = join(scriptDir, "index.ts");
+      writeFileSync(script, `
+        const listener = Bun.listen({ hostname: ${JSON.stringify(hostname)}, port: 0, socket: { data() {} } });
+        console.log(listener.port);
+      `);
+      const targetHome = homeEvidence === "absolute" ? configHome : homeEvidence === "retargeted-alias" ? alias : ".";
+      const proxy = Bun.spawn([process.execPath, script, "start"], {
+        cwd,
+        env: { ...process.env, OPENCODEX_HOME: targetHome },
+        stdout: "pipe", stderr: "inherit", signal: AbortSignal.timeout(15_000),
+      });
+      try {
+        const { value } = await proxy.stdout.getReader().read();
+        const port = Number(new TextDecoder().decode(value).trim());
+        expect(port).toBeGreaterThan(0);
+        const record = { pid: proxy.pid, port, hostname };
+        writeFileSync(join(configHome, "runtime-port.json"), JSON.stringify(record));
+        const proof = await proveStandaloneStopRecord(record, proxy.pid, []);
+        if (homeEvidence === "relative-mismatch") {
+          expect(proof).toBeUndefined();
+          return;
+        }
+        if (!proof) throw new Error("Expected a standalone stop proof for the same home directory");
+        expect(proof).not.toThrow();
+        if (homeEvidence === "retargeted-alias") {
+          mkdirSync(otherHome);
+          writeFileSync(join(otherHome, "runtime-port.json"), JSON.stringify(record));
+          const replacement = join(configHome, "replacement-alias");
+          symlinkSync(otherHome, replacement);
+          renameSync(replacement, alias);
+          let signalAuthorized = false;
+          expect(() => killProxy(proxy.pid, () => {
+            proof();
+            signalAuthorized = true;
+            return true;
+          })).toThrow("could not verify");
+          expect(signalAuthorized).toBe(false);
+          expect(proxy.exitCode).toBeNull();
+          return;
+        }
+        const wrongBind = hostname === "0.0.0.0" ? "127.0.0.1" : "0.0.0.0";
+        expect(await proveStandaloneStopRecord({ ...record, hostname: wrongBind }, proxy.pid, [])).toBeUndefined();
+      } finally {
+        proxy.kill();
+        await proxy.exited;
+      }
+    }, 17_000,
+  );
+
+  test("an already-down standalone stop restores even when the user manager is unreadable", async () => {
+    const outcome = await runParentStop({ receipt: true, alreadyStopped: true, managerState: "unknown",
+      json: true, response: null, restore: restoreResult(true) });
+    expect(outcome.exitCode, outcome.stderr).toBe(0);
+    expect(outcome.calls).toMatchObject({ service: 1, killed: 0, native: 1, grok: 1 });
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ runtimeDown: true, sharedTeardown: "restored" });
+  });
+
+  test("a standalone service can stop through its manager without a runtime record", async () => {
+    const outcome = await runParentStop({ receipt: true, managerBound: true, managerCascades: true,
+      discoveryMiss: true, deadPidReadsNull: true, noRuntimeRecord: true,
+      json: true, response: null, restore: restoreResult(true) });
+    expect(outcome.exitCode, outcome.stderr).toBe(0);
+    expect(outcome.calls).toMatchObject({ service: 1, killed: 0, native: 1, grok: 1 });
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ runtimeDown: true, service: "stopped", sharedTeardown: "restored" });
+  });
+
+  test.each([
+    ["legacy", ["wrong-home", "wrong-port"]],
+    ["current", ["stale", "client-role"]],
+  ] as const)("only a matching %s standalone record permits the ordinary stop after a discovery miss", async (standaloneRecord, mismatches) => {
+    const outcome = await runParentStop({ receipt: true, standaloneRecord, discoveryMiss: true, deadPidReadsNull: true,
+      json: true, response: { success: true }, restore: restoreResult(true) });
+    expect(outcome.exitCode, outcome.stderr).toBe(0);
+    expect(outcome.calls).toMatchObject({ service: 1, native: 1, grok: 1 });
+    expect(outcome.urls).toHaveLength(1);
+    expect(outcome.signals).toEqual(standaloneRecord === "legacy" ? [] : [process.platform === "win32" ? "taskkill /F" : "SIGTERM"]);
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ runtimeDown: true, proxy: "stopped", sharedTeardown: "restored" });
+    for (const mismatch of mismatches) {
+      if (mismatch === "wrong-home" && process.platform === "win32") continue;
+      const refusal = await runParentStop({ receipt: true, standaloneRecord: mismatch, discoveryMiss: true, managerCascades: true,
+        json: true, response: null, restore: restoreResult(true) });
+      expect(refusal.exitCode, `${mismatch}: ${refusal.stderr}`).toBe(1);
+      expect(refusal.calls).toMatchObject({ service: 0, killed: 0, native: 0, grok: 0 });
+      expect(refusal.urls).toEqual([]);
+      expect(JSON.parse(refusal.stdout)).toMatchObject({ runtimeDown: false, proxy: "ownership-refused", sharedTeardown: "skipped" });
+    }
+  });
+
+  test.each([false, true])("a discovery miss refuses to stop an unclassified live ocx start PID (cascading manager=%s)", async managerCascades => {
+    const outcome = await runParentStop({ receipt: true, noRuntimeRecord: true, discoveryMiss: true, managerCascades,
+      deadPidReadsNull: true, json: true, response: null, restore: restoreResult(true) });
+    expect({ managerStops: outcome.calls.service, signals: outcome.signals }).toEqual({ managerStops: 0, signals: [] });
+    expect(outcome.calls).toMatchObject({ native: 0, grok: 0 });
+    expect(outcome.nonce).toBeUndefined();
+    expect(outcome.exitCode, outcome.stderr).toBe(1);
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ runtimeDown: false, proxy: "ownership-refused", sharedTeardown: "skipped" });
+    expect(outcome.stderr).toContain("could not verify that live OpenCodex PID 4242 is standalone");
+    expect(outcome.stderr).toContain("ocx service status");
+  });
+
+  for (const staleRuntimeRecord of [true, false]) {
+    test(`an ephemeral-port Link stop requires a concrete recorded endpoint (record=${staleRuntimeRecord})`, async () => {
+      const outcome = await runParentStop({ receipt: true, clientTransport: "link", alreadyStopped: true,
+        configuredPort: 0, staleRuntimeRecord, json: true, response: null, restore: restoreResult(true) });
+      expect(outcome.exitCode, outcome.stderr).toBe(staleRuntimeRecord ? 0 : 1);
+      expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: staleRuntimeRecord, runtimeDown: staleRuntimeRecord });
+      expect(outcome.calls).toMatchObject({ service: 0, killed: 0 });
+      expect(outcome.absenceProbes).toEqual(staleRuntimeRecord ? [ENDPOINT.port] : []);
+      expect(existsSync(join(home, "runtime-port.json"))).toBe(false);
+    });
+  }
   test("consecutive connected stops preserve configuration and the stopped managed client remains update-eligible", async () => {
     const first = await runParentStop({ receipt: true, clientTransport: "hub", serverTeardown: true, json: true,
       response: null, restore: restoreResult(true) });
@@ -263,6 +411,15 @@ describe("parent CLI shared teardown completion", () => {
       expect(outcome.exitCode).toBe(1);
     });
   }
+  test("a native Hub Child that exits during attestation never authorizes a manager stop", async () => {
+    const outcome = await runParentStop({ receipt: true, clientTransport: "hub", childExitsDuringProbe: true,
+      deadPidReadsNull: true, discoveryMiss: true, json: true, response: null, restore: restoreResult(true) });
+    expect(outcome.probes).toEqual(["http://127.0.0.1:10100/healthz"]);
+    expect(outcome.calls).toMatchObject({ service: 0, killed: 0, native: 0, grok: 0 });
+    expect(outcome.urls).toEqual([]);
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: false, runtimeDown: false, proxy: "ownership-refused" });
+    expect(outcome.exitCode).toBe(1);
+  });
   test("actual Link Child exit cleanup attempts native and Grok restoration", async () => {
     const outcome = await runParentStop({ receipt: true, clientTransport: "link", exitCleanup: true,
       response: null, restore: restoreResult(true) });
@@ -324,16 +481,22 @@ describe("parent CLI shared teardown completion", () => {
     expect(outcome.exitCode, outcome.stderr).toBe(0);
   });
 
-  posixReceiptTest("a Link Child not-owned answer without a receipt still gets the parent's restoration", async () => {
-    // An old build answers not-owned for ANY connected client before it ever checks the
-    // deferral query, and this stop has no receipt to send. That answer preserves the
-    // link route instead of tearing it down, so it cannot confirm the parent's teardown:
-    // the parent owns the restoration itself, exactly as for an unconfirmed stop.
+  test("a Link Child stop with an unwritable receipt never reaches the manager or POST", async () => {
     const outcome = await runParentStop({ receipt: false, clientTransport: "link", json: true,
       response: { success: true, sharedTeardown: "not-owned" }, restore: restoreResult(true) });
-    expect(outcome.urls).toEqual(["http://127.0.0.1:10100/api/stop"]);
+    expect(outcome.urls).toEqual([]);
     expect(outcome.nonce).toBeUndefined();
-    expect(outcome.calls).toMatchObject({ killed: 0, exited: 1, native: 1, grok: 1, cleared: 0 });
+    expect(outcome.calls).toMatchObject({ service: 0, killed: 0, exited: 0, native: 0, grok: 0, cleared: 0 });
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: false, runtimeDown: false, sharedTeardown: "skipped" });
+    expect(outcome.stderr).toContain("receipt storage unavailable");
+    expect(outcome.exitCode).toBe(1);
+  });
+
+  test("a receipt-backed Link stop still restores after an unconfirmed not-owned response", async () => {
+    const outcome = await runParentStop({ receipt: true, clientTransport: "link", json: true,
+      response: { success: true, sharedTeardown: "not-owned" }, restore: restoreResult(true) });
+    expect(outcome.urls).toEqual([`http://127.0.0.1:10100/api/stop?deferSharedTeardown=1&teardownNonce=${outcome.nonce}`]);
+    expect(outcome.calls).toMatchObject({ killed: 0, exited: 1, native: 1, grok: 1, cleared: 1 });
     expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, runtimeDown: true, sharedTeardown: "restored" });
     expect(outcome.exitCode, outcome.stderr).toBe(0);
   });
@@ -352,18 +515,22 @@ describe("parent CLI shared teardown completion", () => {
   for (const [label, transition] of [["during orphan discovery", { orphan: true, connectDuringDiscovery: true }],
     ["while the POST is in flight", { connectDuringPost: true }]] as const) {
     for (const receipt of [true, false]) {
-      (receipt ? test : posixReceiptTest)(`a Link stop never restores over a hub connected ${label} (receipt ${receipt ? "claimed" : "unavailable"})`, async () => {
+      test(`a Link stop never restores over a hub connected ${label} (receipt ${receipt ? "claimed" : "unavailable"})`, async () => {
         // #7736 r5: the late not-owned refusal must not let the parent restore over the hub that
         // now owns routing. Only the ownership read at the restore boundary decides.
         const outcome = await runParentStop({ receipt, clientTransport: "link", serverTeardown: true, json: true,
           response: null, restore: restoreResult(true), ...transition });
-        expect(outcome.calls, outcome.stderr).toMatchObject({ killed: 0, native: 0, grok: 0, cleared: receipt ? 1 : 0 });
+        if ("connectDuringDiscovery" in transition || !receipt) {
+          expect(outcome.calls).toMatchObject({ service: 0, killed: 0, native: 0, grok: 0, cleared: 0 });
+          expect(outcome.nonce).toBeUndefined();
+          expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: false, runtimeDown: false, sharedTeardown: "skipped" });
+          expect(outcome.exitCode).toBe(1);
+          return;
+        }
+        expect(outcome.calls, outcome.stderr).toMatchObject({ killed: 0, native: 0, grok: 0, cleared: 1 });
         expect(outcome.receiptExists).toBe(false);
-        // Seen before the POST without a nonce, the hub's not-owned answer already confirms the stop.
-        const settledAtPost = "connectDuringDiscovery" in transition && !receipt;
-        expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, runtimeDown: true,
-          sharedTeardown: settledAtPost ? "performed-by-proxy" : "skipped" });
-        if (!settledAtPost) expect(outcome.stdout + outcome.stderr).toContain("A hub connection was committed while this stop ran");
+        expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, runtimeDown: true, sharedTeardown: "skipped" });
+        expect(outcome.stdout + outcome.stderr).toContain("A hub connection was committed while this stop ran");
         expect(outcome.exitCode, outcome.stderr).toBe(0);
       });
     }
@@ -371,8 +538,8 @@ describe("parent CLI shared teardown completion", () => {
   for (const transition of ["connectAfterBoundary", "connectDuringRestore"] as const) {
     for (const receipt of [true, false]) {
       (receipt ? test : posixReceiptTest)(`R6 ${transition} preserves hub writes (receipt ${receipt})`, async () => {
-        const outcome = await runParentStop({ receipt, clientTransport: "link", json: true,
-          [transition]: true, response: { success: true, sharedTeardown: "not-owned" }, restore: restoreResult(true) });
+        const outcome = await runParentStop({ receipt, ...(receipt ? { clientTransport: "link" } as const : {}), json: true,
+          [transition]: true, response: { success: false, sharedTeardown: "performed" }, restore: restoreResult(true) });
         expect(outcome.calls, outcome.stderr).toMatchObject({ native: 0, grok: 0, cleared: receipt ? 1 : 0 });
         expect(outcome.receiptExists).toBe(false);
         expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, sharedTeardown: "skipped" });
@@ -503,9 +670,35 @@ describe("parent CLI shared teardown completion", () => {
     expect(outcome.exitCode).toBe(0);
   });
 
-  // The scenarios the posixReceiptTest cases run without a receipt. Through the Windows checked stop each one is
-  // refused before the POST: nothing is signalled, restored or cleared, and the stop fails.
+  // Checked Windows stop refuses all of these receipt failures before POST, including
+  // cases an ordinary POSIX stop can still complete.
   const notOwned = { success: true, sharedTeardown: "not-owned" } as const;
+  test("a standalone sibling stop with a saved Link skips the manager and shared teardown", async () => {
+    const outcome = await runParentStop({ receipt: true, clientTransport: "link", siblingRecord: "standalone", json: true,
+      response: notOwned, restore: restoreResult(true) });
+    expect(outcome.exitCode, outcome.stderr).toBe(0);
+    expect(outcome.urls).toEqual(["http://127.0.0.1:10100/api/stop"]);
+    expect(outcome.nonce).toBeUndefined();
+    expect(outcome.calls).toMatchObject({ service: 0, killed: 0, native: 0, grok: 0, systemEnv: 0 });
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ runtimeDown: true, service: "absent", sharedTeardown: "skipped" });
+    expect(existsSync(join(home, "runtime-port.json"))).toBe(false);
+  });
+
+  for (const conflict of ["Link", "guarded manager"] as const) {
+    test(`a sibling stop refuses conflicting ${conflict} ownership before mutation`, async () => {
+      const outcome = await runParentStop({ receipt: true, json: true, response: notOwned, restore: restoreResult(true),
+        ...(conflict === "Link" ? { clientTransport: "link", siblingRecord: "link" } : { siblingRecord: "standalone", guarded: true }) });
+      expect(outcome.nonce).toBeUndefined();
+      expect(outcome.urls).toEqual([]);
+      expect(outcome.calls).toMatchObject({ service: 0, killed: 0, native: 0, grok: 0, systemEnv: 0 });
+      expect(outcome.exitCode, outcome.stderr).toBe(1);
+      expect(JSON.parse(outcome.stdout)).toMatchObject({ runtimeDown: false, sharedTeardown: "skipped" });
+      const record = JSON.parse(readFileSync(join(home, "runtime-port.json"), "utf8"));
+      expect(record.siblingOfPort).toBe(10101);
+      expect(record.clientStopping).toBeUndefined();
+    });
+  }
+
   for (const [name, scenario] of [
     ["a Link Child not-owned answer", { clientTransport: "link", json: true, response: notOwned }],
     ["a connection committed during orphan discovery", { orphan: true, connectDuringDiscovery: true, serverTeardown: true, json: true, response: null }],
@@ -520,7 +713,8 @@ describe("parent CLI shared teardown completion", () => {
       const outcome = await runParentStop({ ...scenario, receipt: false, windowsStopWiring: true, restore: restoreResult(true) });
       expect(outcome.calls, outcome.stderr).toMatchObject({ killed: 0, native: 0, grok: 0, cleared: 0 });
       expect(outcome.nonce).toBeUndefined();
-      expect(outcome.stderr).toContain("receipt storage unavailable");
+      expect(outcome.stderr).toContain("clientTransport" in scenario && scenario.clientTransport === "link"
+        && "connectDuringDiscovery" in scenario ? "runtime sync fence could not be verified" : "receipt storage unavailable");
       expect(outcome.exitCode, outcome.stderr).toBe(1);
     });
   }

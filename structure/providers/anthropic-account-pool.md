@@ -439,10 +439,11 @@ rejection does not assert shared exhaustion. A transient Retry-After pauses acco
 without clearing affinity; a request gets one same-account wait up to one second and at most
 one eligible sibling detour. Timer rounding at the captured retry deadline permits that
 retry, while a concurrent admission-pause extension still blocks it. Headerless/invalid-hint
-refusals get at most one short same-account
-retry and never cool the roster or invent a client Retry-After. Main, pre-output continuation
-and sidecars share the request-local allowance and physical-send budget. Cancellation,
-ambiguous-send markers, replaced credentials and committed streaming output forbid replay.
+refusals get at most one short same-account retry and never cool the roster or invent a
+client Retry-After. Main, pre-output continuation and sidecars share the request-local
+allowance and physical-send budget. Cancellation, ambiguous-send markers, replaced credentials
+and committed streaming output forbid replay. Inline retries add a send to the current attempt.
+Native Messages, translated Responses, continuations and sidecars split the attempt on a credential change.
 Default single-account users acquire no new retry or admission pause.
 
 Regression coverage: `tests/adapters/anthropic/anthropic-429-policy.test.ts`.
@@ -585,10 +586,9 @@ Responses captures the routing-reset generation before credential resolution and
 While a live JEV combo enables quota signals, auth-store load/persist and accepted quota producer
 boundaries hand bounded secret-free rosters/windows to the core slot `src/lib/decision-quota-sink.ts`,
 which forwards them to the activation-owned snapshot; otherwise those calls are no-ops
-([activation](jev-decision.md#loaded-advisory-quota)). These owner-observed generations
-are separate from display caches and serving-account selection. Request decisions consume only
+([activation](jev-decision.md#loaded-advisory-quota)). These owner-observed generations are separate from display caches and serving-account selection. Request decisions consume only
 loaded evidence; cold or mismatched generations remain unknown. Usability, partial-window clocks
-and late-writer fences follow [loaded advisory quota](jev-decision.md#loaded-advisory-quota). Only the primary `anthropic` pool publishes; `anthropic2` is excluded and stays unknown.
+and late-writer fences follow [loaded advisory quota](jev-decision.md#loaded-advisory-quota). Only the primary `anthropic` pool publishes. The `anthropic2` pool stays unknown.
 
 ## Permanent refusal auto-pause
 

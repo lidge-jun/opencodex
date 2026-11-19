@@ -22,7 +22,7 @@ import type { OcxTool } from "../types";
 import { contentPartsToText, parseDataUrl } from "./image";
 import { bindVertexRequestAuthority, GCP_CREDENTIAL_MARKER_PREFIX, gcpCredentialMarkerAccount, getVertexAccessTokenWithAuthority } from "../lib/gcp-adc";
 import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../providers/api-key-pause";
-import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
+import { fetchAntigravityWithRetry, fetchVertexWithRetry, GOOGLE_HOSTED_ITERATION_SEND_LIMIT } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
 import { readDisplaySafeErrorPayloadText } from "./upstream-http-error";
 import { isVertexTruncatedTurn, vertexTruncationErrorEvent } from "./google-truncation";
@@ -989,6 +989,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
     // 429 rotation and raw error formatting.
     ...(provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist"
       ? {
+          hostedIterationSendLimit: GOOGLE_HOSTED_ITERATION_SEND_LIMIT,
           fetchResponse: async (request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response> => {
             const res = await (provider.googleMode === "cloud-code-assist" ? fetchAntigravityWithRetry : fetchVertexWithRetry)(
               request,

@@ -23,6 +23,7 @@ export type PassiveRouteLinker = (
   modelId: string,
   routed: OcxProviderConfig,
   inboundWire: InboundWire,
+  effectiveAdapter?: string,
 ) => string | null;
 
 let linker: PassiveRouteLinker | null = null;
@@ -46,10 +47,11 @@ export function resolvePassiveRouteSubjectId(
   modelId: string,
   routed: OcxProviderConfig,
   inboundWire: InboundWire,
+  effectiveAdapter?: string,
 ): string | null {
   if (!linker) return null;
   try {
-    return linker(config, providerName, modelId, routed, inboundWire);
+    return linker(config, providerName, modelId, routed, inboundWire, effectiveAdapter);
   } catch {
     return null;
   }

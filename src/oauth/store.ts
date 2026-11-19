@@ -28,6 +28,7 @@ import { anthropicOrganization, anthropicOrganizationsConflict, normalizeAnthrop
   mergeAnthropicIdentity } from "./anthropic-identity";
 import { findAnthropicImportSlot, findAnthropicLoginSlot, observeAnthropicLoginContinuity, observeAnthropicSlotOrganizations } from "./anthropic-login-slot";
 import { normalizeWorkBuddyMetadata } from "../providers/workbuddy";
+import { normalizeM365WebSession } from "../providers/m365-copilot-discovery";
 import { findKiroAccountForLogin, withRetainedKiroUser } from "./kiro-account-identity";
 import { isAnthropicInstanceId, type AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import { assertNoCrossAnthropicRegistration, assertAnthropicCredentialSource, assertAnthropicInstanceLoginConfig } from "./store-anthropic-instance";
@@ -362,7 +363,7 @@ export function clearOAuthRefreshIntent(provider: string, accountId: string, gen
   });
 }
 export function credentialGeneration(cred: OAuthCredentials): string {
-  return createHash("sha256").update(JSON.stringify([cred.refresh, cred.access, cred.expires, ...(cred.workbuddy ? [cred.workbuddy] : [])])).digest("hex");
+  return createHash("sha256").update(JSON.stringify([cred.refresh, cred.access, cred.expires, ...(cred.workbuddy ? [cred.workbuddy] : []), ...(cred.m365 ? [cred.m365] : [])])).digest("hex");
 }
 
 /** Load and normalize the OAuth auth store with hardened permissions, and hand the result to the opt-in decision-quota slot (a no-op unless JEV quota signals are active). */
@@ -576,6 +577,8 @@ function normalizeCredential(cred: unknown): OAuthCredentials | null {
   if (typeof candidate.accountId === "string" && candidate.accountId.length > 0) normalized.accountId = candidate.accountId;
   const workbuddy = normalizeWorkBuddyMetadata(candidate.workbuddy);
   if (workbuddy) normalized.workbuddy = workbuddy;
+  const m365 = normalizeM365WebSession(candidate.m365);
+  if (m365 && m365.accountId.toLowerCase() === normalized.accountId?.toLowerCase()) normalized.m365 = m365;
   const identity = normalizeAnthropicIdentity(candidate.anthropicIdentity, candidate.access);
   if (identity) normalized.anthropicIdentity = identity;
   const organizationScope = normalizeAnthropicOrganizationScope(candidate.anthropicOrganizationScope, candidate.access);
