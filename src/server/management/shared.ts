@@ -87,7 +87,7 @@ export type MetricUnavailableReason =
   | "usage_missing" | "usage_unsupported" | "output_missing" | "invalid_duration"
   | "price_unmatched" | "invalid_cache_breakdown"
   | "invalid_usage" | "combo_attempt_unavailable"
-  | "ttft_missing" | "decode_window_too_short"
+  | "ttft_missing" | "decode_window_missing" | "decode_window_too_short"
   // The row is credit-priced, but `providerCredits x creditPriceUsd` cannot be represented (an
   // out-of-bound price or credit count, or an overflowing product). It is deliberately not
   // `price_unmatched`-with-a-token-estimate: falling back would report a different amount than
@@ -114,7 +114,7 @@ export type CostResult =
   | { kind: "value"; estimate: NonNullable<ReturnType<typeof estimateRequestCost>>; estimateReasons: CostEstimateReason[] }
   | { kind: "unavailable"; reason: MetricUnavailableReason };
 
-export type MetricSource = Pick<RequestLogEntry, "provider" | "model" | "durationMs" | "firstOutputMs" | "genStartMs" | "lastOutputMs" | "usageStatus" | "usage" | "requestedServiceTier" | "configuredServiceTier" | "responseServiceTier" | "tierOutcome" | "routeDecision" | "cacheProvenance"> & {
+export type MetricSource = Pick<RequestLogEntry, "provider" | "model" | "durationMs" | "firstOutputMs" | "genStartMs" | "lastOutputMs" | "protocolTrace" | "usageStatus" | "usage" | "requestedServiceTier" | "configuredServiceTier" | "responseServiceTier" | "tierOutcome" | "routeDecision" | "cacheProvenance"> & {
   attempts?: readonly PersistedUsageAttempt[];
 };
 
@@ -162,7 +162,7 @@ export const MIN_DECODE_WINDOW_MS = 1_000;
  * generation window spans both and stops at the last delta rather than at stream close.
  */
 export function decodeTokPerSecondResult(
-  entry: Pick<MetricSource, "durationMs" | "firstOutputMs" | "genStartMs" | "lastOutputMs" | "usageStatus" | "usage">,
+  entry: Pick<MetricSource, "durationMs" | "firstOutputMs" | "genStartMs" | "lastOutputMs" | "protocolTrace" | "usageStatus" | "usage">,
 ): DecodeTokPerSecondResult {
   if (!entry.usage) return { kind: "unavailable", reason: "usage_missing" };
   if (entry.usageStatus === "unsupported") return { kind: "unavailable", reason: "usage_unsupported" };
@@ -176,6 +176,7 @@ export function decodeTokPerSecondResult(
     return value === null ? { kind: "unavailable", reason: "invalid_duration" }
       : { kind: "value", value, estimated: true, timingBasis: "generation-window" };
   }
+  if (entry.protocolTrace?.inbound === "gemini") return { kind: "unavailable", reason: "decode_window_missing" };
   // A row that predates TTFT capture, or a non-streaming turn that never recorded one, has no
   // window to measure. That is a different fact from a bad duration, so it gets its own reason.
   if (entry.firstOutputMs === undefined) return { kind: "unavailable", reason: "ttft_missing" };

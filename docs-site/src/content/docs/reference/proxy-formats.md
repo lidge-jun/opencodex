@@ -1134,7 +1134,8 @@ A repair must decode to a JSON object. Valid JSON values containing those tags a
 ## Native Gemini with Antigravity
 
 Enable the canonical `google-antigravity` provider, sign in with `ocx login google-antigravity`,
-and add this optional setting to OpenCodex's JSON config:
+then open the Google Antigravity **Accounts** tab and turn on **Native Gemini passthrough**.
+The dashboard and JSON config use the same setting:
 
 ```json
 {
@@ -1164,6 +1165,9 @@ dashboard's request logs. When a completed response reports token counts, the lo
 them and computes the end-to-end output rate. For models with a matched official rate, the
 `~$` column estimates the equivalent Gemini API cost from reported input, output and cache-hit
 tokens. The amount is an API price reference for Antigravity OAuth sessions.
+The log details show the named reasoning tier or explicit thinking control and the first
+visible output time for a stream. Decode throughput is estimated from the observed output
+window when it includes the reported reasoning output.
 
 If an upstream payload contains bound account credentials, the proxy returns a generic
 Gemini error. A valid upstream `[DONE]` or a Gemini error ends stream delivery.

@@ -127,7 +127,7 @@ async function handleGeminiRoute(route: GeminiNativeRoute, original: Request, ur
         logCtx.model = native.route.modelId;
         logCtx.provider = native.route.providerName;
         const delivery = route.method === "streamGenerateContent" ? (sse ? "sse" : "array") : undefined;
-        result = await handleGeminiNative(sessionReq, config, native.wireModel, delivery, turnAdmissionLease, undefined, logCtx);
+        result = await handleGeminiNative(sessionReq, config, native.wireModel, delivery, turnAdmissionLease, undefined, logCtx, start);
       }
       return withCors(logGeminiNativeDelivery(result, sessionReq, requestId, start, logCtx), original, policy);
     }

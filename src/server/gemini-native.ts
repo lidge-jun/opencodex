@@ -13,11 +13,12 @@ import { spendPolicyFromConfig } from "../lib/spend-reservation-ledger";
 import { carryWorkflowRefusal, workflowRefusalResponse } from "./workflow-refusal";
 import { geminiErrorBody } from "./gemini-inbound";
 import type { RequestLogContext } from "./request-log";
+import { recordGenerationOutput } from "./request-log-generation-window";
 import { DEFAULT_STALL_TIMEOUT_SEC, resolveStallTimeoutMs } from "../stall-timeout";
 import { isLocalUpstream } from "../lib/local-upstream";
 import { assertProviderDestinationAllowed } from "../lib/destination-policy";
 import { registerTurn, unregisterTurn, type ActiveTurnLease } from "./lifecycle";
-import { containsGeminiCredential, geminiSseTransform, readGeminiText, validateGeminiObject, GEMINI_NATIVE_MAX_BYTES, GEMINI_NATIVE_ERROR_CODE, unwrapGeminiResponse, wrapGeminiRequest } from "./gemini-native-wire";
+import { containsGeminiCredential, geminiNativeReasoningFields, geminiSseTransform, readGeminiText, validateGeminiObject, GEMINI_NATIVE_MAX_BYTES, GEMINI_NATIVE_ERROR_CODE, unwrapGeminiResponse, wrapGeminiRequest } from "./gemini-native-wire";
 
 export const GEMINI_NATIVE_PROVIDER = "google-antigravity";
 class NativeWorkflowSendDenied extends Error {}
@@ -45,7 +46,7 @@ const defaults: Omit<GeminiNativeDeps, "fetch"> = {
 /** Active-account native leg; no internal messages, tool-schema repair or model rewriting. */
 export async function handleGeminiNative(
   req: Request, config: OcxConfig, model: string, streamFormat: "sse" | "array" | undefined,
-  lease: ActiveTurnLease, deps: GeminiNativeDeps = { ...defaults, fetch: globalThis.fetch }, logCtx?: RequestLogContext,
+  lease: ActiveTurnLease, deps: GeminiNativeDeps = { ...defaults, fetch: globalThis.fetch }, logCtx?: RequestLogContext, start?: number,
 ): Promise<Response> {
   const rootId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
   // This source-preserving path does not yet book or settle token spend. Refuse applicable
@@ -91,7 +92,21 @@ export async function handleGeminiNative(
   const noteNativeError = () => {
     if (logCtx) { logCtx.errorCode = GEMINI_NATIVE_ERROR_CODE; logCtx.terminalSource = "upstream"; }
   };
-  const noteUsage = logCtx ? (usage: OcxUsage) => { logCtx.usage = usage; } : undefined;
+  let sawThoughtOutput = false;
+  const noteUsage = logCtx ? (usage: OcxUsage) => {
+    logCtx.usage = usage;
+    // Reported thought tokens count in the numerator. Their generation must also be observed.
+    if (usage.reasoningOutputTokens && !sawThoughtOutput) {
+      delete logCtx.generationStartedAt;
+      delete logCtx.lastOutputAt;
+    }
+  } : undefined;
+  const noteOutput = logCtx && start !== undefined ? (visible: boolean, thought: boolean) => {
+    const now = Date.now();
+    sawThoughtOutput ||= thought;
+    recordGenerationOutput(logCtx, now);
+    if (visible) logCtx.firstOutputMs ??= Math.max(0, now - start);
+  } : undefined;
   let upstream: Response | undefined;
   try {
     const maxBytes = Math.min(GEMINI_NATIVE_MAX_BYTES, config.maxInboundBodyBytes ?? GEMINI_NATIVE_MAX_BYTES);
@@ -113,8 +128,11 @@ export async function handleGeminiNative(
       finish(); return geminiNativeError(400, "Gemini request body must be readable UTF-8 JSON");
     } finally { clearTimeout(bodyReadTimer); bodyReadTimer = undefined; }
     if (raw === null) { finish(); return geminiNativeError(413, "Gemini native request exceeds the body limit"); }
-    try { validateGeminiObject(raw); }
-    catch { finish(); return geminiNativeError(400, "Expected a Gemini JSON object"); }
+    let reasoning: ReturnType<typeof geminiNativeReasoningFields> | undefined;
+    try {
+      const payload = validateGeminiObject(raw);
+      if (logCtx) reasoning = geminiNativeReasoningFields(payload, model);
+    } catch { finish(); return geminiNativeError(400, "Expected a Gemini JSON object"); }
     let access = await deps.access();
     const boundCredentials = new Set<string>();
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -143,7 +161,10 @@ export async function handleGeminiNative(
           if (value) boundCredentials.add(value);
         }
         const body = wrapGeminiRequest(raw, model, access.projectId!);
-        if (logCtx) markNativeGeminiProtocol(logCtx);
+        if (logCtx) {
+          Object.assign(logCtx, reasoning);
+          markNativeGeminiProtocol(logCtx);
+        }
         return fetchWithAttemptDeadline(`${baseUrl.replace(/\/$/, "")}/v1internal:${method}`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${access.accessToken}`, "User-Agent": antigravityUserAgentForWireModel(model) },
@@ -185,7 +206,7 @@ export async function handleGeminiNative(
     if (streamFormat) {
       const headers = { "Content-Type": streamFormat === "sse" ? "text/event-stream" : "application/json", "Cache-Control": "no-cache" };
       return new Response(body.pipeThrough(geminiSseTransform(
-        GEMINI_NATIVE_MAX_BYTES, { onNativeError: noteNativeError, onUsage: noteUsage }, streamFormat, credentials,
+        GEMINI_NATIVE_MAX_BYTES, { onNativeError: noteNativeError, onUsage: noteUsage, onOutput: noteOutput }, streamFormat, credentials,
       )), { headers });
     }
     const text = await readGeminiText(body, GEMINI_NATIVE_MAX_BYTES, ac.signal);

@@ -6,9 +6,41 @@ export const GEMINI_NATIVE_MAX_BYTES = 16 * 1024 * 1024;
 export const GEMINI_NATIVE_ERROR_CODE = "gemini_native_upstream_error";
 const SAFE_UPSTREAM_ERROR = '{"error":{"code":502,"message":"Antigravity upstream rejected the request","status":"INTERNAL"}}';
 
-export function validateGeminiObject(raw: string): void {
-  const value: unknown = JSON.parse(raw);
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("expected a JSON object");
+function jsonObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+export function validateGeminiObject(raw: string): Record<string, unknown> {
+  const object = jsonObject(JSON.parse(raw));
+  if (!object) throw new Error("expected a JSON object");
+  return object;
+}
+
+const GEMINI_THINKING_LEVEL = /^(minimal|low|medium|high|xhigh)$/i;
+const ANTIGRAVITY_WIRE_EFFORT = /-(low|medium|high|xhigh)$/;
+
+/** Capture only reasoning values sent on the wire, without rewriting the request. */
+export function geminiNativeReasoningFields(body: Record<string, unknown>, model: string) {
+  const wireEffort = ANTIGRAVITY_WIRE_EFFORT.exec(model)?.[1];
+  const generation = jsonObject(body.generationConfig ?? body.generation_config);
+  const thinking = jsonObject(generation?.thinkingConfig ?? generation?.thinking_config);
+  const level = thinking?.thinkingLevel ?? thinking?.thinking_level;
+  if (typeof level === "string" && GEMINI_THINKING_LEVEL.test(level)) {
+    const requestedEffort = level.toLowerCase();
+    return {
+      requestedEffort, effectiveEffort: wireEffort ?? requestedEffort,
+      reasoningWireField: "thinkingLevel", reasoningWireValue: level,
+    };
+  }
+  const budget = thinking?.thinkingBudget ?? thinking?.thinking_budget;
+  if (level === undefined && typeof budget === "number" && Number.isSafeInteger(budget) && budget >= -1) {
+    return {
+      requestedEffort: budget === -1 ? "auto" : budget === 0 ? "none" : String(budget),
+      effectiveEffort: wireEffort,
+      reasoningWireField: "thinkingBudget", reasoningWireValue: budget === -1 ? "-1" : budget,
+    };
+  }
+  return { effectiveEffort: wireEffort };
 }
 
 /** Find a top-level member's original value, including exact numeric/string spelling. */
@@ -80,6 +112,7 @@ export function wrapGeminiRequest(raw: string, model: string, project: string): 
 interface GeminiStreamObservers {
   onNativeError?: () => void;
   onUsage?: (usage: OcxUsage) => void;
+  onOutput?: (visible: boolean, thought: boolean) => void;
 }
 
 /** Decode bounded upstream SSE events and frame the unwrapped JSON for the client. */
@@ -105,7 +138,7 @@ export function geminiSseTransform(
   };
   function observe(raw: string) {
     const value = JSON.parse(raw) as {
-      candidates?: Array<{ index?: number; finishReason?: string }>;
+      candidates?: Array<{ index?: number; finishReason?: string; content?: { parts?: unknown } }>;
       promptFeedback?: { blockReason?: string };
       usageMetadata?: unknown;
     };
@@ -116,11 +149,23 @@ export function geminiSseTransform(
     }
     blocked ||= !!value.promptFeedback?.blockReason;
     if (value.candidates !== undefined && !Array.isArray(value.candidates)) throw new Error("invalid Gemini candidates");
+    let visible = false, thought = false;
     for (const [position, candidate] of (value.candidates ?? []).entries()) {
       if (!candidate || typeof candidate !== "object") throw new Error("invalid Gemini candidate");
       const index = candidate.index ?? position;
       if (!Number.isSafeInteger(index) || index < 0 || candidates.size >= 1024 && !candidates.has(index)) throw new Error("invalid Gemini candidate index");
       candidates.set(index, candidates.get(index) === true || typeof candidate.finishReason === "string" && candidate.finishReason.length > 0);
+      if (observers?.onOutput && Array.isArray(candidate.content?.parts)) {
+        for (const rawPart of candidate.content.parts) {
+          const part = jsonObject(rawPart);
+          if (!part || !(typeof part.text === "string" && part.text.length > 0) && !jsonObject(part.functionCall ?? part.function_call)) continue;
+          if (part.thought === true) thought = true;
+          else visible = true;
+        }
+      }
+    }
+    if (visible || thought) {
+      try { observers?.onOutput?.(visible, thought); } catch { /* Observational callbacks never change delivery. */ }
     }
     if (observers?.onUsage) usage = usageFromGemini(value.usageMetadata) ?? usage;
     return raw;

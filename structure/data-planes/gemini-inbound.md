@@ -34,7 +34,8 @@ The catalog starts with the same eligible route set as Ollama's `/api/tags` (`sr
 and the key's model scope): `models/<provider>/<model>` with `generateContent` and
 `streamGenerateContent`. Unknown or ineligible models are 404 `NOT_FOUND`; synthetic, shadow, combo
 and caller-credential selectors are refused as for Ollama. The [opt-in Antigravity catalog](gemini-native.md)
-also exposes visible cached Gemini models and their routable wire aliases.
+also exposes visible cached Gemini models and their routable wire aliases. Native generation
+feeds its observed reasoning and streaming timing into the same Logs details.
 
 `src/protocols/codecs/gemini.ts` maps `contents`, `systemInstruction`, base64 image `inlineData`,
 `functionDeclarations` and `toolConfig`, `functionCall` and `functionResponse` (matched by id, then by

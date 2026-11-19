@@ -76,7 +76,7 @@ type MetricUnavailableReason =
   | "usage_missing" | "usage_unsupported" | "output_missing" | "invalid_duration"
   | "price_unmatched" | "invalid_cache_breakdown"
   | "invalid_usage" | "combo_attempt_unavailable"
-  | "ttft_missing" | "decode_window_too_short"
+  | "ttft_missing" | "decode_window_missing" | "decode_window_too_short"
   | "credit_cost_unrepresentable";
 
 /** The proxy's reason vocabulary; the shared formatter owns the billing-basis filter. */
@@ -331,6 +331,7 @@ const METRIC_REASON_KEYS = {
   invalid_usage: "logs.detail.reason.invalid_usage",
   combo_attempt_unavailable: "logs.detail.reason.combo_attempt_unavailable",
   ttft_missing: "logs.detail.reason.ttft_missing",
+  decode_window_missing: "logs.detail.reason.decode_window_missing",
   decode_window_too_short: "logs.detail.reason.decode_window_too_short",
   credit_cost_unrepresentable: "logs.detail.reason.credit_cost_unrepresentable",
 } as const satisfies Record<MetricUnavailableReason, string>;

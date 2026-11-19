@@ -8,6 +8,7 @@ import { saveConfig } from "../../src/config";
 import { saveCredential } from "../../src/oauth/store";
 import { startServer } from "../../src/server";
 import { getRequestLogEntries } from "../../src/server/request-log";
+import { decodeTokPerSecondResult } from "../../src/server/management/shared";
 import { nativeGeminiDestination } from "../../src/server/gemini-native-catalog";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -134,7 +135,7 @@ test("opted-in Gemini routes preserve native JSON and replace every ingress cred
     expect(response.headers.has("set-cookie")).toBe(false);
     expect(await response.text()).toBe(PAYLOAD);
     const log = getRequestLogEntries().find(row => row.requestId === response.headers.get("x-opencodex-request-id"));
-    expect(log).toMatchObject({ usageStatus: "reported", usage: USAGE, totalTokens: 27 });
+    expect(log).toMatchObject({ usageStatus: "reported", usage: USAGE, totalTokens: 27, effectiveEffort: "medium" });
     expect(log?.protocolTrace).toMatchObject({
       inbound: "gemini",
       upstream: "gemini",
@@ -197,7 +198,12 @@ test("native streaming preserves records in both Gemini response formats", async
     expect(await json.text()).toBe(`[\n${PAYLOAD}\n]`);
     for (const res of [sse, discoverySse, json]) {
       const log = getRequestLogEntries().find(row => row.requestId === res.headers.get("x-opencodex-request-id"));
-      expect(log).toMatchObject({ usageStatus: "reported", usage: USAGE, totalTokens: 27 });
+      expect(log).toMatchObject({
+        usageStatus: "reported", usage: USAGE, totalTokens: 27,
+        effectiveEffort: "medium", firstOutputMs: expect.any(Number),
+      });
+      expect(log?.genStartMs).toBeUndefined();
+      expect(decodeTokPerSecondResult(log!)).toEqual({ kind: "unavailable", reason: "decode_window_missing" });
     }
     expect(seen.map(call => call.url.href)).toEqual(Array(3).fill(CCA + "/v1internal:streamGenerateContent?alt=sse"));
   });

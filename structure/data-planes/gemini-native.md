@@ -5,7 +5,8 @@ admission check. In `src/server/index/gemini-routes.ts`, the native leg is avail
 `/v1beta` generation with `protocols.rollout.geminiNativeAntigravity: true` and a concrete Gemini
 route to the enabled, canonical `google-antigravity` OAuth provider in Cloud Code Assist mode.
 Requests outside those conditions use the Chat bridge. Advisor and sidecar capability requests
-use the bridge for their inherited-policy checks.
+use the bridge for their inherited-policy checks. The Google Antigravity Accounts tab edits the
+existing rollout flag through the protocol settings PATCH.
 
 The native leg checks the captured admission model scope against the resolved destination.
 `src/server/gemini-native-catalog.ts` extends the configured Gemini catalog with visible Gemini
@@ -52,7 +53,10 @@ and complete streams supply normalized token counts through the shared Google us
 For a stream, only its last valid cumulative snapshot is recorded. The dashboard derives its
 end-to-end token rate from output tokens and request duration. When an API price matches,
 the cost estimate accounts for reported cache hits at the read rate. Gemini generation usage
-has no cache-write counter. Payloads and provider diagnostics are omitted from the log.
+has no cache-write counter. Reasoning diagnostics use an explicit Gemini thinking control or the
+selected wire model's effort suffix. Text and tool-call deltas supply the streaming output
+window and first visible output time. Reported thought tokens require a thought delta before
+estimating decode throughput. Payloads and provider diagnostics are omitted from the log.
 
 Coverage lives in `tests/server/gemini-native-routes.test.ts`,
 `tests/server/gemini-native-wire.test.ts` and `tests/server/gemini-native.test.ts`.
