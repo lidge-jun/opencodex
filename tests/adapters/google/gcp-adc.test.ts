@@ -782,7 +782,8 @@ describe("google adapter vertex mode", () => {
     setEnv("GOOGLE_CLOUD_API_KEY", "env-key");
     const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", googleMode: "vertex", project: "fixture-project", location: "eu" } as OcxProviderConfig;
     const req = await createGoogleAdapter(provider).buildRequest(parsed("gemini-4-argon"));
-    expect(req.url).toBe("https://eu-aiplatform.googleapis.com/v1/projects/fixture-project/locations/eu/publishers/google/models/gemini-4-argon:streamGenerateContent?alt=sse");
+    // The eu multi-region uses its regional-endpoint (rep) host.
+    expect(req.url).toBe("https://aiplatform.eu.rep.googleapis.com/v1/projects/fixture-project/locations/eu/publishers/google/models/gemini-4-argon:streamGenerateContent?alt=sse");
     expect(req.headers["x-goog-api-key"]).toBe("env-key");
     expect(oauthCalls).toBe(0);
   });

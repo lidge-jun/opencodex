@@ -3,6 +3,7 @@ import { modelSelectionGuidance } from "../cli/model-selection-guidance";
 import { initializeProviderModelSelection } from "../providers/initial-model-selection";
 import { openUrl } from "../lib/open-url";
 import { createBrowserLaunchReport } from "../lib/browser-launch-notice";
+import { isAgyAcpProvider } from "../config/schema/agy-acp-references";
 import { loadConfig, saveConfig } from "../config";
 import { findLiveProxy } from "../server/proxy-liveness";
 import {
@@ -146,6 +147,8 @@ export interface LoginCliOptions {
   acceptAntigravityRisk?: boolean;
 }
 
+const AGY_ACP_SIGN_IN = "Sign in on the proxy host with: agy acp --login";
+
 export async function handleLogin(provider?: string, deps: LoginCliDeps = {}, opts: LoginCliOptions = {}): Promise<void> {
   const name = (provider ?? "").trim().toLowerCase();
   if (opts.acceptAntigravityRisk && !requiresAntigravityRiskAcknowledgement(DEPRECATED_OAUTH_PROVIDER_ALIASES[name] ?? name)) {
@@ -165,6 +168,10 @@ export async function handleLogin(provider?: string, deps: LoginCliDeps = {}, op
   if (alias) {
     console.error(`${name} is deprecated; logging in as ${alias}`);
     return handleOAuthLogin(alias, deps, opts);
+  }
+  if (isAgyAcpProvider(name, undefined)) {
+    console.log(AGY_ACP_SIGN_IN);
+    return;
   }
   if (isPublicOAuthProvider(name)) return handleOAuthLogin(name, deps, opts);
   if (opts.codeMode) {
@@ -356,6 +363,10 @@ export async function handleKeyLogin(name: string, deps: LoginCliDeps = {}): Pro
   const def = KEY_LOGIN_PROVIDERS[name];
   const launch = deps.openUrl ?? openUrl;
   const preflightConfig = loadConfig();
+  if (isAgyAcpProvider(name, preflightConfig.providers[name]) || isAgyAcpProvider(name, def)) {
+    console.log(AGY_ACP_SIGN_IN);
+    return;
+  }
   const namespaceCollision = codexAccountNamespaceProviderCollisionError(preflightConfig.codexAccountNamespaces, name);
   if (namespaceCollision) {
     console.error(`Error: ${namespaceCollision}.`);

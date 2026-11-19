@@ -8,9 +8,9 @@ import { assertCodexHomeOwner, codexHomeIsAbsent, CODEX_HOME_JOURNAL_FILE, Codex
 import { hasInjectedCodexRouting } from "./injected-marker";
 import { ConfigWriteContentChanged, configWriteLockFailureMessage, withConfigWriteLockHeld } from "./config-write-lock";
 import type { LockHandle } from "./config-write-lock";
-import { CODEX_HOME, CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "./paths";
+import { CODEX_HOME, CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, resolveCodexCatalogPath } from "./paths";
 import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "./subagent-defaults";
-import { appendInjectedRootHistory, captureJournalConfigFields, parseInjectedRootHistory, restoreJournalConfigFields, snapshotDisconnectRecovery, type InjectedRootHistory, type InjectedRootKey, type JournalConfigFields } from "./journal-config-restore";
+import { appendInjectedRootHistory, captureJournalConfigFields, ownedJournalCatalogBinding, parseInjectedRootHistory, restoreJournalConfigFields, snapshotDisconnectRecovery, type InjectedRootHistory, type InjectedRootKey, type JournalConfigFields } from "./journal-config-restore";
 
 /**
  * Exported so that anything reasoning ABOUT the journal points at the journal.
@@ -71,7 +71,8 @@ interface Journal {
    */
   replacedRootWebSearch?: string | null;
   /**
-   * The catalog path this injection actually wrote to.
+   * The resolved catalog path this injection actually wrote to. Older journals may store a
+   * config-relative binding.
    *
    * #1798: restore re-resolves the catalog from the CURRENT config, so a Codex app rewrite
    * that dropped `model_catalog_json` sends restore to the default catalog while the
@@ -79,6 +80,8 @@ interface Journal {
    * file we actually touched.
    */
   injectedCatalogPath?: string | null;
+  /** The root binding we wrote. Null means config.toml retained user ownership or had no binding. */
+  injectedCatalogBinding?: string | null;
   /**
    * The marker-owned `[agents]` default values this injection wrote, keyed by TOML key.
    *
@@ -239,6 +242,7 @@ export interface InjectedJournalOwnership {
   injectedOpenaiBaseUrl: string | null;
   injectedRealtimeWsBaseUrl: string | null;
   injectedCatalogPath: string | null;
+  injectedCatalogBinding?: string | null;
   /** Omitted by callers that inject no `web_search` line, which is the value it then records. */
   injectedRootWebSearch?: string | null;
   /** Omitted by callers that removed no user `web_search` line. */
@@ -281,6 +285,7 @@ export function markJournalInjectedState(
   journal.replacedRootWebSearch = ownership.replacedRootWebSearch ?? null;
   journal.injectedSubagentDefaults = ownership.injectedSubagentDefaults ?? null;
   journal.injectedCatalogPath = ownership.injectedCatalogPath;
+  journal.injectedCatalogBinding = ownership.injectedCatalogBinding;
   journal.injectedRootHistory = appendInjectedRootHistory(journal.injectedRootHistory, {
     openai_base_url: ownership.injectedOpenaiBaseUrl,
     experimental_realtime_ws_base_url: ownership.injectedRealtimeWsBaseUrl,
@@ -327,7 +332,14 @@ export function journaledReplacedRootWebSearch(options: { readOnly?: boolean } =
 
 /** The catalog path the last injection wrote to, or null when none was recorded. */
 export function journaledInjectedCatalogPath(): string | null {
-  return readJournal()?.injectedCatalogPath ?? null;
+  const path = readJournal()?.injectedCatalogPath;
+  return typeof path === "string" && path ? resolveCodexCatalogPath(CODEX_CONFIG_PATH, path) : null;
+}
+
+/** Config ownership is distinct from the catalog file selected for an injection. */
+export function journaledOwnedCatalogBinding(options: { readOnly?: boolean } = {}): string | null {
+  const journal = readJournal(options.readOnly !== true);
+  return journal ? ownedJournalCatalogBinding(journal) : null;
 }
 
 /**

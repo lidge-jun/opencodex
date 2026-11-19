@@ -1,3 +1,4 @@
+import type { AnthropicImageRecovery } from "../server/responses/image-context-recovery";
 import type { createAnthropicThinkingRecovery } from "../server/responses/anthropic-thinking-recovery";
 import { markSidecarContextOverflow, sidecarLoopTerminalEvent, upstreamErrorCode, type SidecarLoopFailure } from "../server/responses/context-overflow";
 import { markVerifiedModelNotInPlanResponse, MODEL_NOT_IN_PLAN_CODE, verifiedPlanRefusalMessage } from "../lib/errors";
@@ -23,11 +24,14 @@ import { namespacedToolName, toolChoiceToolPredicate } from "../types";
 import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
 import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaque-metadata";
 import type { AttemptRecoveryKind } from "../usage/log";
+import { sumCreditReadings, withMissingCreditReading } from "../usage/credit-billing";
 import { bridgeToResponsesSSE } from "../bridge";
 import { isTruncatedStopReason } from "../responses/truncated-stop-reason";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { readBoundedResponseBody } from "../lib/bounded-body";
-import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, isSameTargetRetryHold, SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, isSameTargetRetryHold, RESET_RETRY_MAX_ATTEMPTS, SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { unwrapUpstreamRetryEvidenceError } from "../codex/auth-context";
+import { HostedAdvisorSpendRefusal } from "../server/responses/policy-request-scope";
 import { rateLimitRetryDelayMs } from "../providers/key-failover";
 import { releaseProviderRequestSlot, RequestPacingQueueOverloadError, sendTrackingRequestSlot, type ProviderRequestSlot } from "../providers/request-pacing";
 import {
@@ -37,7 +41,7 @@ import {
   TRANSLATOR_MAX_TURN_BYTES,
   TranslatorBudgetExceededError,
 } from "../lib/translator-budget";
-import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchConsumerInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "../web-search/progress-stream";
+import { parseStreamWithProgress, withHeartbeats, RoutedModelInactivityError, WebSearchConsumerInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "../web-search/progress-stream";
 import { fulfillImageCall } from "./fulfill";
 import { parseVideoCallArgs, pollVideoWithHeartbeats, buildVideoResult, createVideoBudget } from "./fulfill-video";
 import { submitVideoJob } from "./xai-video-client";
@@ -310,7 +314,9 @@ function loopFailure(e: LoopError): SidecarLoopFailure {
  * metadata, and the optional image/video bridge plans.
  */
 export interface ImageBridgeDeps {
+  configureModelSendAllowance?: (baseSends: number) => void;
   thinkingRecovery?: ReturnType<typeof createAnthropicThinkingRecovery>;
+  imageRecovery?: AnthropicImageRecovery;
   parsed: OcxParsedRequest;
   /** Chat delivery only; never copied into parsed generation options. */
   chatRawReasoningVisible?: boolean;
@@ -336,9 +342,9 @@ export interface ImageBridgeDeps {
   onIterationEnd?: () => void;
   /** Max image-generation rounds before forcing a final answer. Defaults to 3; clamped to [0, 10]. */
   maxRounds?: number;
-  /** Connect / response-header budget for non-runTurn iterations. */
+  /** Response-header budget for HTTP iterations. Zero disables the timer. */
   connectTimeoutMs?: number;
-  /** Stall budget (seconds) forwarded to bridgeToResponsesSSE; also bounds runTurn collect. */
+  /** Inactivity budget (seconds) for HTTP bodies, runTurn collection, and downstream SSE. Zero disables it. */
   stallTimeoutSec?: number;
   /** Provider-specific fetch (e.g. xAI transport wrapper). Falls back to global fetch. */
   fetchImpl?: typeof globalThis.fetch;
@@ -351,10 +357,11 @@ export interface ImageBridgeDeps {
   proxyErrorContext?: object;
   /**
    * After an `on429` rotation, offered the usage of the hidden iterations the left credential
-   * served. Returning true means it was billed to that credential's attempt, so `onUsage` will not
+   * served, including undefined when no usage arrived. Returning true hands off the old attempt,
+   * so `onUsage` will not
    * report it again; the client terminal still includes it.
    */
-  onRotatedUsage?: (usage: OcxUsage) => boolean;
+  onRotatedUsage?: (usage: OcxUsage | undefined) => boolean;
   /**
    * Optional 429 failover for the routed (non-xAI) model. Return a rebuilt adapter for the
    * rotated credential, or null when the pool is exhausted. Async hooks support OAuth refresh;
@@ -407,25 +414,28 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   let adapter = deps.adapter;
   const maxRounds = clampImageMaxRounds(deps.maxRounds ?? DEFAULT_MAX_ROUNDS);
   const HARD_CAP = maxRounds + 1;
-  const connectTimeoutMs = typeof deps.connectTimeoutMs === "number" && Number.isFinite(deps.connectTimeoutMs) && deps.connectTimeoutMs > 0
+  const connectTimeoutMs = typeof deps.connectTimeoutMs === "number" && Number.isFinite(deps.connectTimeoutMs) && deps.connectTimeoutMs >= 0
     ? Math.floor(deps.connectTimeoutMs)
     : CONNECT_TIMEOUT_MS;
-  const stallTimeoutMs = typeof deps.stallTimeoutSec === "number" && Number.isFinite(deps.stallTimeoutSec) && deps.stallTimeoutSec > 0
+  const stallTimeoutMs = typeof deps.stallTimeoutSec === "number" && Number.isFinite(deps.stallTimeoutSec) && deps.stallTimeoutSec >= 0
     ? Math.floor(deps.stallTimeoutSec * 1000)
     : STALL_TIMEOUT_MS;
   const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
   let paidImageCalls = 0;
   let paidVideoCalls = 0;
   let hiddenUsage: OcxUsage | undefined;
+  let hiddenLegs = 0;
+  let pendingLegs = 0;
   // Hidden usage already billed through onRotatedUsage: still on the client terminal, not in
   // ledgerUsage, which is what onUsage reports once a rotation has moved some.
   let rotatedUsage: OcxUsage | undefined;
+  let rotatedLegs = 0;
   let ledgerUsage: OcxUsage | undefined;
   let activeProducers = 0;
 
-  const addUsage = (a: OcxUsage | undefined, b: OcxUsage | undefined): OcxUsage | undefined => {
-    if (!a) return b;
-    if (!b) return a;
+  const addUsage = (a: OcxUsage | undefined, b: OcxUsage | undefined, bothDispatched: boolean): OcxUsage | undefined => {
+    if (!a || !b) return bothDispatched ? withMissingCreditReading(a ?? b) : a ?? b;
+    const providerCredits = sumCreditReadings([a.providerCredits, b.providerCredits]);
     return {
       inputTokens: a.inputTokens + b.inputTokens,
       outputTokens: a.outputTokens + b.outputTokens,
@@ -447,15 +457,18 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       ...(a.reasoningOutputTokens !== undefined || b.reasoningOutputTokens !== undefined
         ? { reasoningOutputTokens: (a.reasoningOutputTokens ?? 0) + (b.reasoningOutputTokens ?? 0) }
         : {}),
+      ...(providerCredits !== undefined ? { providerCredits } : {}),
       ...(a.estimated || b.estimated ? { estimated: true } : {}),
     };
   };
-  const takeUsageFrom = (events: AdapterEvent[]): void => {
-    for (const e of events) {
-      if ((e.type === "done" || e.type === "incomplete") && e.usage) {
-        hiddenUsage = addUsage(hiddenUsage, e.usage);
-      }
-    }
+  // A missing usage object still counts for a dispatched leg. A send replay without a
+  // terminal reading also counts, even if the replacement supplies its own reading.
+  const takeUsage = (usage: OcxUsage | undefined): void => {
+    if (pendingLegs === 0) return;
+    const reading = pendingLegs > 1 ? withMissingCreditReading(usage) : usage;
+    hiddenUsage = addUsage(hiddenUsage, reading, hiddenLegs > 0);
+    hiddenLegs += pendingLegs;
+    pendingLegs = 0;
   };
 
   const messages: OcxMessage[] = [...parsed.context.messages];
@@ -503,6 +516,8 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   // what earlier rounds left of `attempts`, so a bounded multi-round turn can never exceed the
   // configured replay count in total (a per-round reset would multiply it by maxRounds).
   const rateLimitRetryPolicy = deps.retryOn429Policy ?? null;
+  deps.configureModelSendAllowance?.((adapter.hostedIterationSendLimit ?? RESET_RETRY_MAX_ATTEMPTS)
+    * (HARD_CAP + (rateLimitRetryPolicy?.attempts ?? 0)));
   let rateLimitRetries = 0;
 
   // Acquire one iteration's final response headers. The first call is drained eagerly so an initial
@@ -569,6 +584,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       try {
         // Attempt telemetry must fire at dispatch time, not after collection.
         deps.onAttemptSend?.();
+        pendingLegs++;
         activeProducers++;
         let producer: Promise<void>;
         try {
@@ -618,7 +634,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       // runTurn adapters signal errors via {type:"error"} events, not HTTP status codes.
       const errorEvent = events.find(e => e.type === "error");
       if (errorEvent && errorEvent.type === "error") {
-        hiddenUsage = addUsage(hiddenUsage, errorEvent.usage);
+        takeUsage(errorEvent.usage);
         if (errorEvent.code === "translation_buffer_limit") {
           throw new TranslatorBudgetExceededError("retained_collectors", TRANSLATOR_MAX_TURN_BYTES);
         }
@@ -667,11 +683,11 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         }
         const requestFetch = deps.fetchForRequest?.(request, iterParsed, requestAdapter, recovery) ?? fetchImpl;
         let response: Response;
+        let awaitingHeaders = true;
         try {
           if (requestAdapter.fetchResponse) {
             const slot = await paceThenResetHeaderDeadline();
             try {
-              deps.onAttemptSend?.(recovery);
               response = await sendTrackingRequestSlot(slot, () => requestAdapter.fetchResponse!(request, {
                 abortSignal: headerDeadline.signal,
                 timeoutMs: connectTimeoutMs,
@@ -679,7 +695,15 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                 stream: true,
                 executor: requestFetch,
                 sendBudget: deps.incomingMeta.sendBudget,
-                onPhysicalSend: deps.incomingMeta.onPhysicalSend,
+                onPhysicalSend: send => {
+                  // Adapter-owned stream retries meter themselves. Only header-time sends
+                  // can leave a missing reading for this iteration's terminal.
+                  if (awaitingHeaders) {
+                    if (send.ordinal === 1) deps.onAttemptSend?.(recovery);
+                    pendingLegs++;
+                  }
+                  deps.incomingMeta.onPhysicalSend?.(send);
+                },
                 onRecoveryWithheld: deps.incomingMeta.onRecoveryWithheld,
               }));
             } finally {
@@ -694,6 +718,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                   // each connection-reset replay); preserve the caller's recovery kind
                   // (rate-limit-429 / key-429) when the retry layer supplies none.
                   deps.onAttemptSend?.(retryRecovery ?? recovery);
+                  pendingLegs++;
                   const h = new Headers(request.headers);
                   if (!h.has("accept-encoding")) h.set("accept-encoding", "identity");
                   // Same reset-recovery parity as the web-search loop: the replay needs
@@ -714,6 +739,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
             );
           }
         } finally {
+          awaitingHeaders = false;
           request.releaseBodyObservation?.();
         }
         bindAnthropicRejectionResponse(request, response);
@@ -739,7 +765,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
             body: prepared.response.body,
             signal,
             delayMs: rateLimitRetryDelayMs(rateLimitRetryPolicy, retryAfterHeader, Date.now()),
-            heartbeatIntervalMs: Math.min(10_000, Math.max(250, stallTimeoutMs / 2)),
+            heartbeatIntervalMs: stallTimeoutMs === 0 ? 10_000 : Math.min(10_000, Math.max(250, stallTimeoutMs / 2)),
           });
         } catch {
           throw new LoopError(499, "client closed request during image-bridge");
@@ -761,9 +787,12 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers,
           iterParsed, prepared.response);
         if (!rotated) break;
-        if (hiddenUsage && deps.onRotatedUsage?.(hiddenUsage)) {
-          rotatedUsage = addUsage(rotatedUsage, hiddenUsage);
+        takeUsage(undefined);
+        if (hiddenLegs > 0 && deps.onRotatedUsage?.(hiddenUsage)) {
+          rotatedUsage = addUsage(rotatedUsage, hiddenUsage, rotatedLegs > 0);
+          rotatedLegs += hiddenLegs;
           hiddenUsage = undefined;
+          hiddenLegs = 0;
         }
         try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
         adapter = rotated.adapter;
@@ -771,7 +800,19 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         prepared = await fetchOnce(adapter, rotated.recoveryKind);
       }
 
-      if (await deps.thinkingRecovery?.prepareHttp(prepared.response, prepared.responseAdapter.name, iterParsed)) {
+      let imageReplacement: AdapterRequest | undefined;
+      if (deps.imageRecovery && prepared.response.status === 413) {
+        headerDeadline.clear();
+        const recovered = yield* withHeartbeats(deps.imageRecovery(prepared.response, iterParsed, prepared.responseAdapter, signal), signal);
+        prepared.response = recovered.response;
+        imageReplacement = recovered.request;
+        if (recovered.response.ok && imageReplacement) {
+          messages.splice(0, messages.length, ...iterParsed.context.messages);
+          parsed._anthropicImageOwner = iterParsed._anthropicImageOwner;
+          cachedRequest = imageReplacement;
+        }
+      }
+      if (!imageReplacement && await deps.thinkingRecovery?.prepareHttp(prepared.response, prepared.responseAdapter.name, iterParsed)) {
         try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* closed */ }
         cachedRequest = undefined;
         prepared = await fetchOnce(adapter, "opaque-blob-rejection");
@@ -834,6 +875,8 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during image-bridge`);
       }
       if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
+      const refusal = unwrapUpstreamRetryEvidenceError(error);
+      if (refusal instanceof HostedAdvisorSpendRefusal) throw new LoopError(400, refusal.message, refusal.event());
       if (error instanceof LoopError || error instanceof RequestPacingQueueOverloadError) throw error;
       throw new LoopError(502, `Provider unreachable: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -865,7 +908,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
             yield* parseStreamWithProgress(current.response, current.responseAdapter.parseStream.bind(current.responseAdapter), {
               signal, inactivityTimeoutMs: stallTimeoutMs, translatorBudget,
               preserveAdapterError: deps.thinkingRecovery !== undefined,
-              onErrorUsage: usage => { hiddenUsage = addUsage(hiddenUsage, usage); },
+              onErrorUsage: takeUsage,
             });
           } catch (error) {
             if (!(error instanceof WebSearchAdapterEventError)) throw error;
@@ -987,23 +1030,18 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall && !split.hasIncompleteToolCall && !forceFinal
             && !split.passthrough.some(event => event.type === "incomplete" || event.type === "error"
               || (event.type === "done" && isTruncatedStopReason(event.stopReason)));
+          const terminalIndex = split.passthrough.findLastIndex(e => e.type === "done" || e.type === "incomplete");
+          const terminal = split.passthrough[terminalIndex];
+          if (terminal?.type === "done" || terminal?.type === "incomplete") takeUsage(terminal.usage);
           if (!shouldLoop) {
-            if (hiddenUsage || rotatedUsage) {
-              for (let i = split.passthrough.length - 1; i >= 0; i--) {
-                const e = split.passthrough[i];
-                if (e?.type === "done" || e?.type === "incomplete") {
-                  ledgerUsage = addUsage(hiddenUsage, e.usage);
-                  split.passthrough[i] = { ...e, usage: addUsage(rotatedUsage, ledgerUsage) };
-                  break;
-                }
-              }
+            ledgerUsage = hiddenUsage;
+            if (terminal?.type === "done" || terminal?.type === "incomplete") {
+              const usage = addUsage(rotatedUsage, ledgerUsage, rotatedLegs > 0 && hiddenLegs > 0);
+              split.passthrough[terminalIndex] = { ...terminal, usage };
             }
             yield* replay(split.passthrough);
             return;
           }
-
-          // Discarded iteration still contributed tokens — accumulate for the final onUsage.
-          takeUsageFrom(split.passthrough);
 
           for (const event of split.passthrough) {
             if (event.type === "text_delta" && event.anthropicThinkingSignature) yield event;
@@ -1184,8 +1222,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
             });
           }
         } catch (e) {
+          takeUsage(e instanceof LoopError ? e.event?.usage : undefined);
           ledgerUsage = hiddenUsage;
-          const usage = addUsage(rotatedUsage, hiddenUsage);
+          const usage = addUsage(rotatedUsage, hiddenUsage, rotatedLegs > 0 && hiddenLegs > 0);
           if (isTranslatorBudgetExceededError(e)) {
             yield {
               type: "error",
@@ -1231,12 +1270,13 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       chatRawReasoningVisible: deps.chatRawReasoningVisible,
       hideRawReasoning: parsed.options.hideRawReasoning,
+      rawReasoningAsSummary: parsed.options.rawReasoningAsSummary,
       stallTimeoutSec: deps.stallTimeoutSec,
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
       ...(deps.onUsage ? {
         // Terminal done/incomplete already includes hiddenUsage (merged above). Do not
         // add it again here or request logs double-count multi-iteration image turns.
-        onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(rotatedUsage ? ledgerUsage : usage),
+        onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(rotatedLegs > 0 ? ledgerUsage : usage),
       } : {}),
       ...(deps.onCompletedResponse ? { onCompletedResponse: deps.onCompletedResponse } : {}),
     },

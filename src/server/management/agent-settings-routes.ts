@@ -21,7 +21,9 @@ import { mergeModelPinnedEfforts, modelPinnedEffortsConfigError } from "../../co
 import { MULTI_AGENT_SURFACE_ADVISORY_VERSION, multiAgentSurfaceAdvisory, resolveMultiAgentMode } from "../../config/multi-agent-surface";
 import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { captureConfigTopLevelRollback, parsedConfigRebaseDeletionKeys, projectConfigRebaseProvenance } from "../../config/rebase-provenance";
+import { ConfigWritePublishedError } from "../../config/persist-unlocked";
 import { anthropicSidecarPatchError } from "../../config/schema/anthropic-account-pool";
+import { agyAcpUnattendedTargetIssues } from "../../config/schema/agy-acp-references";
 import { isAnthropicInstanceId } from "../../providers/anthropic-instance-id";
 import {
   adoptPersistedClaudeCode,
@@ -755,6 +757,11 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       }
       if (nextSyncCodexSubagentDefaults && nextEffort !== undefined && !isCodexReasoningEffort(nextEffort)) {
         return jsonResponse({ error: "syncCodexSubagentDefaults requires a supported Codex reasoning effort" }, 400);
+      }
+      if (nextSyncCodexSubagentDefaults) {
+        const issue = agyAcpUnattendedTargetIssues({ ...config, injectionModel: nextModel, syncCodexSubagentDefaults: true })
+          .find(({ path }) => path[0] === "injectionModel");
+        if (issue) return jsonResponse({ error: `injectionModel: ${issue.message}` }, 400);
       }
 
       config.multiAgentGuidanceEnabled = nextEnabled;
@@ -1532,7 +1539,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     const models = await fetchAllModels(config);
     const { listCatalogNativeSlugs } = await import("../../codex/catalog");
     const { claudeCodeAlias, claudeCodeNativeAlias } = await import("../../claude/alias");
-    const { buildClaudeContextWindows, effectiveModelEnv, nativeClaudePassthroughFor } = await import("../../claude/context-windows");
+    const { buildClaudeContextWindows, effectiveModelEnv, nativeClaudePassthroughFor, probeClaudeCodeVersionForTierFill } = await import("../../claude/context-windows");
     const { visibleNativeSlugs } = await import("../../codex/catalog");
     const disabled = new Set(config.disabledModels ?? []);
     const isDisabled = (provider: string, id: string) =>
@@ -1574,6 +1581,14 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       nativeContextLimits(config),
       nativeClaudePassthroughFor(config.claudeCode, resolvedAuthMode.markerMode),
     );
+    const launchState = {
+      enabled: config.claudeCode?.enabled !== false,
+      forceAvailable: [...visibleNativeSlugs(config), ...filterCatalogVisibleModels(models, config).map(catalogModelSlug)],
+      contextWindows,
+    };
+    // The launcher probes its own CLI. Only the dashboard snapshot needs the daemon's version.
+    if (url.searchParams.get("view") === "launch") return jsonResponse(launchState);
+    const claudeCodeVersion = await probeClaudeCodeVersionForTierFill(config.claudeCode, contextWindows);
     const webSearchOverride = config.claudeCode?.webSearchSidecar;
     const visionOverride = config.claudeCode?.visionSidecar;
     const helperParent = config.claudeCode?.model?.includes("/") ? config.claudeCode.model.split("/")[0] : undefined;
@@ -1590,7 +1605,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     const eligible = claudeInterceptEnabled(config);
     const sharedProxy = readFirstPartyProxyStatus(config, bound?.proxyPort ?? null);
     return jsonResponse({
-      enabled: config.claudeCode?.enabled !== false,
+      ...launchState,
       cliFirstParty: config.claudeCode?.cliFirstParty === true,
       cliFirstPartyApplied: config.claudeCode?.cliFirstParty === true && sharedProxy === "live",
       desktopFirstParty: desired.desktop,
@@ -1626,6 +1641,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       contextAccounting: config.claudeCode?.contextAccounting === "200k" ? "200k" : "1m",
       blockedSkills: config.claudeCode?.blockedSkills ?? null,
       injectAgents: config.claudeCode?.injectAgents !== false,
+      nativePassthrough: config.claudeCode?.nativePassthrough !== false,
       sidecarPools: {
         webSearchSidecar: sidecarAnthropicPoolOptions(config, { ...config.webSearchSidecar, ...webSearchOverride }, helperParent),
         visionSidecar: sidecarAnthropicPoolOptions(config, { ...helperVision, backend: helperVisionBackend }, helperParent),
@@ -1637,9 +1653,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
         ? { visionSidecar: { enabled: visionOverride.enabled, backend: visionOverride.backend, model: visionOverride.model, ...(visionOverride.anthropicInstance ? { anthropicInstance: visionOverride.anthropicInstance } : {}) } }
         : {}),
       fastMode: config.fastMode,
-      forceAvailable: [...visibleNativeSlugs(config), ...filterCatalogVisibleModels(models, config).map(catalogModelSlug)],
-      contextWindows,
-      effectiveModelEnv: effectiveModelEnv(config.claudeCode, contextWindows),
+      effectiveModelEnv: effectiveModelEnv(config.claudeCode, contextWindows, undefined, claudeCodeVersion),
       available,
       aliases,
       port: config.port,
@@ -1660,7 +1674,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       return prototype === Object.prototype || prototype === null;
     };
     if (!isPlainObject(parsedBody)) return jsonResponse({ error: "body must be an object" }, 400);
-    const body = parsedBody as { enabled?: unknown; cliFirstParty?: unknown; authMode?: unknown; model?: unknown; smallFastModel?: unknown; modelMap?: unknown; classifierModel?: unknown; classifierFallbacks?: unknown; systemEnv?: unknown; fastMode?: unknown; maxContextTokens?: unknown; alwaysEnableEffort?: unknown; tierModels?: unknown; autoContext?: unknown; autoCompactWindow?: unknown; contextAccounting?: unknown; blockedSkills?: unknown; injectAgents?: unknown; webSearchSidecar?: unknown; visionSidecar?: unknown };
+    const body = parsedBody as { enabled?: unknown; cliFirstParty?: unknown; authMode?: unknown; model?: unknown; smallFastModel?: unknown; modelMap?: unknown; classifierModel?: unknown; classifierFallbacks?: unknown; systemEnv?: unknown; fastMode?: unknown; maxContextTokens?: unknown; alwaysEnableEffort?: unknown; tierModels?: unknown; autoContext?: unknown; autoCompactWindow?: unknown; contextAccounting?: unknown; blockedSkills?: unknown; injectAgents?: unknown; nativePassthrough?: unknown; webSearchSidecar?: unknown; visionSidecar?: unknown };
     if (body.cliFirstParty !== undefined && typeof body.cliFirstParty !== "boolean")
       return jsonResponse({ error: "cliFirstParty must be a boolean" }, 400);
     if (body.cliFirstParty !== undefined && Object.keys(body).length !== 1)
@@ -1787,6 +1801,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
         && readFirstPartyProxyStatus(config, bound?.proxyPort ?? null) !== "none";
       await syncClaudeAgentDefsBestEffort();
       return jsonResponse({ ok: true, enabled: config.claudeCode?.enabled !== false,
+        nativePassthrough: config.claudeCode?.nativePassthrough !== false,
         cliFirstParty: body.cliFirstParty,
         warnings: [
           ...(committed.retainedAmbiguous ? ["shared_proxy_retained"] : []),
@@ -1803,7 +1818,6 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     const webEvidence = isPlainObject(webPatch) && (webPatch.model !== undefined || webPatch.backend !== undefined || webPatch.anthropicInstance !== undefined)
       ? await webSearchCandidateRows({ ...config, webSearchSidecar: { ...config.webSearchSidecar, ...sidecarSettingsAfterPatch(config.claudeCode?.webSearchSidecar, webPatch) } }) : undefined;
     const { commitClaudeCodeBlock } = await import("../../claude/claude-code-block");
-    const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     const refusal = await settleConfigRoot(configRoot(), () => {
       if ((visionEvidence || webEvidence) && JSON.stringify(config) !== evidenceState) return jsonResponse({ error: "Sidecar validation state changed during discovery", code: "config_changed" }, 409);
       const instanceError = anthropicSidecarPatchError(config, body, true);
@@ -1875,14 +1889,16 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       // refuse before anything changes when that cannot be saved.
       const captureRefused = body.enabled !== undefined ? captureHomeRouteDefaultsBeforeHomeSwitch() : null;
       if (captureRefused) return jsonResponse({ error: captureRefused.message, code: "route_intent_unavailable" }, captureRefused.retryable ? 409 : 500);
-      // Stamps the auth-mode migration sentinel on EVERY persist of this block. Without it,
-      // choosing Auto (which DELETES authMode) or merely toggling Claude on (App.tsx PUTs
-      // `{enabled}` alone and creates the block) would be converted into a sticky manual
-      // subscription by the next startServer, with no way back.
-
-      if (body.fastMode !== undefined) config.fastMode = nextFastMode;
-      commitClaudeCodeBlock(config, next);
-      save(config);
+      const rollback = captureConfigTopLevelRollback(config, body.fastMode === undefined
+        ? ["claudeCode"] : ["claudeCode", "fastMode"]);
+      try {
+        if (body.fastMode !== undefined) config.fastMode = nextFastMode;
+        commitClaudeCodeBlock(config, next);
+        saveConfigPreservingClaudeCode(config);
+      } catch (error) {
+        if (!(error instanceof ConfigWritePublishedError)) rollback();
+        throw error;
+      }
       return null;
     });
     if (refusal) return refusal;
@@ -1904,7 +1920,8 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     // Keep the file-backed live registry symmetric: OFF prunes immediately, while
     // ON and config changes restore definitions without requiring a restart.
     await syncClaudeAgentDefsBestEffort();
-    return jsonResponse({ ok: true, enabled: config.claudeCode?.enabled !== false, warnings });
+    return jsonResponse({ ok: true, enabled: config.claudeCode?.enabled !== false,
+      nativePassthrough: config.claudeCode?.nativePassthrough !== false, warnings });
   }
   return null;
 }

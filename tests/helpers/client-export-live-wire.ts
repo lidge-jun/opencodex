@@ -22,6 +22,7 @@ import { buildClientConfig } from "../../src/clients/config-export";
 import type { ExportModel } from "../../src/clients/config-export/contracts";
 import { exportModelLabel } from "../../src/clients/config-export/model-metadata";
 import { KILO_API_KEY_ENV, OPENCODE_API_KEY_ENV } from "../../src/clients/config-export/constants";
+import { removeTreeWithRetry } from "./remove-tree";
 
 /** Dummy value handed to the clients through the env refs the export emits. */
 export const LIVE_WIRE_KEY_VALUE = "ocx-live-wire-key";
@@ -264,7 +265,7 @@ export function buildIntendedOpenCodeDocument(baseUrl: string): unknown {
     $schema: "https://opencode.ai/config.json",
     provider: {
       opencodex: {
-        npm: "@ai-sdk/openai-compatible",
+        npm: "@ai-sdk/openai",
         name: "OpenCodex",
         options: { baseURL: baseUrl, apiKey },
         models: {
@@ -273,6 +274,7 @@ export function buildIntendedOpenCodeDocument(baseUrl: string): unknown {
             reasoning: true,
             options: { reasoningEffort: "low" },
             interleaved: { field: "reasoning_content" },
+            provider: { npm: "@ai-sdk/openai-compatible" },
             variants: {
               none: { reasoningEffort: "none" },
               low: { reasoningEffort: "low" },
@@ -288,6 +290,7 @@ export function buildIntendedOpenCodeDocument(baseUrl: string): unknown {
             name: modelName(1),
             reasoning: true,
             interleaved: { field: "reasoning_content" },
+            provider: { npm: "@ai-sdk/openai-compatible" },
             variants: KILO_SUPPRESS_VARIANTS,
             limit: { context: 128000, output: 16384 },
             attachment: false,
@@ -296,6 +299,7 @@ export function buildIntendedOpenCodeDocument(baseUrl: string): unknown {
           },
           [DELTA]: {
             name: modelName(2),
+            provider: { npm: "@ai-sdk/openai-compatible" },
             limit: { context: 64000, output: 8192 },
           },
         },
@@ -303,12 +307,13 @@ export function buildIntendedOpenCodeDocument(baseUrl: string): unknown {
     },
     providers: {
       opencodex: {
-        package: "@opencode/ai/providers/openai-compatible",
+        package: "@opencode/ai/providers/openai-compatible-responses",
         name: "OpenCodex",
         settings: { baseURL: baseUrl, apiKey },
         models: {
           [ALPHA]: {
             name: modelName(0),
+            package: "@opencode/ai/providers/openai-compatible",
             limit: { context: 200000, output: 32768, input: 100000 },
             capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
             compatibility: { reasoningField: "reasoning_content" },
@@ -322,6 +327,7 @@ export function buildIntendedOpenCodeDocument(baseUrl: string): unknown {
           },
           [BRAVO]: {
             name: modelName(1),
+            package: "@opencode/ai/providers/openai-compatible",
             limit: { context: 128000, output: 16384 },
             capabilities: { tools: true, input: ["text"], output: ["text"] },
             compatibility: { reasoningField: "reasoning_content" },
@@ -334,6 +340,7 @@ export function buildIntendedOpenCodeDocument(baseUrl: string): unknown {
           // verified live on @opencode/cli 2.0.21 by bisection.
           [DELTA]: {
             name: modelName(2),
+            package: "@opencode/ai/providers/openai-compatible",
             limit: { context: 64000, output: 8192 },
             variants: [],
           },
@@ -435,6 +442,7 @@ function clientEnv(home: string): Record<string, string> {
   return {
     PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
     HOME: home,
+    USERPROFILE: home,
     XDG_CONFIG_HOME: join(home, ".config"),
     XDG_DATA_HOME: join(home, ".local", "share"),
     XDG_CACHE_HOME: join(home, ".cache"),
@@ -443,6 +451,8 @@ function clientEnv(home: string): Record<string, string> {
     // dummy value for whichever client is running.
     OPENCODEX_OPENCODE_API_KEY: LIVE_WIRE_KEY_VALUE,
     OPENCODEX_KILO_API_KEY: LIVE_WIRE_KEY_VALUE,
+    OPENCODE_DISABLE_MODELS_FETCH: "true",
+    OPENCODE_DISABLE_AUTOUPDATE: "true",
     NO_COLOR: "1",
     CI: "1",
     TERM: "dumb",
@@ -516,7 +526,7 @@ export async function collectClientRun(proc: ClientProcess, timeoutMs: number, t
 }
 
 /** Run the supplied OpenCode binary against an isolated global config and projects. */
-export function openCodeHarness(bin: string, name: string): ClientHarness & { writeGlobalConfig(doc: unknown): void } {
+export function openCodeHarness(bin: string, name: string, logLevel = "error"): ClientHarness & { writeGlobalConfig(doc: unknown): void } {
   mkdirSync(SCRATCH_BASE, { recursive: true });
   const root = mkdtempSync(join(SCRATCH_BASE, `opencode-${name}-`));
   const { home } = makeTree(root);
@@ -539,10 +549,10 @@ export function openCodeHarness(bin: string, name: string): ClientHarness & { wr
     async run(args, opts = {}) {
       const project = opts.project ?? projects;
       mkdirSync(project, { recursive: true });
-      return spawnClient(bin, ["--log-level", "error", ...args], clientEnv(home), project, opts.timeoutMs ?? 150_000);
+      return spawnClient(bin, ["--log-level", logLevel, ...args], clientEnv(home), project, opts.timeoutMs ?? 150_000);
     },
     cleanup() {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     },
   };
 }
@@ -619,6 +629,10 @@ export function hasImagePart(body: any): boolean {
 
 /** The final upstream request of a turn — the one whose tools/history reflect the real conversation. */
 export function lastRealTurn(requests: CapturedChatRequest[]): CapturedChatRequest | undefined {
+  // New OpenCode versions can send a tool-free title request after the inference turn.
+  const withSession = requests.findLast(request => request.body?.tools?.length
+    || request.body?.messages?.some((message: { role?: string }) => message?.role === "tool"));
+  if (withSession) return withSession;
   for (let i = requests.length - 1; i >= 0; i--) {
     const body = requests[i]?.body;
     if (body && Array.isArray(body.messages) && body.messages.length > 0) return requests[i];
@@ -653,7 +667,12 @@ if (import.meta.main) {
 
   if (ocBin) {
     const client = openCodeHarness(ocBin, "standalone");
-    client.writeGlobalConfig(buildClientConfig("opencode", { baseUrl: upstream.url, models: liveWireExportModels() }));
+    client.writeGlobalConfig(buildClientConfig("opencode", {
+      baseUrl: upstream.url, models: liveWireExportModels(),
+      config: { port: 0, defaultProvider: "ocxmock", providers: {
+        ocxmock: { adapter: "openai-chat", baseUrl: upstream.url, allowPrivateNetwork: true },
+      } },
+    }));
     for (const [label, selector, want] of [
       ["default", `opencodex/${ALPHA}`, "low"],
       ["#none", `opencodex/${ALPHA}#none`, "none"],

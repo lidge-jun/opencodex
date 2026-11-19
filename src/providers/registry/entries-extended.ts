@@ -26,6 +26,7 @@ import {
 } from "../codebuddy-models";
 import { QODER_CN_MODELS, QODER_GLOBAL_MODELS, QODER_REASONING_EFFORTS } from "../qoder-models";
 import type { ProviderRegistryEntry } from "./types";
+import { AGY_ACP_DEFAULT_MODEL, AGY_ACP_SEED_MODELS } from "./agy-acp-models";
 import {
   ZAI_GLM_53_MODELS,
   ZAI_GLM_5X_MODELS,
@@ -125,6 +126,9 @@ import {
   MORPH_ULTRA_MODEL_INPUT_MODALITIES,
   MORPH_ULTRA_REASONING_EFFORTS,
   MORPH_ULTRA_REASONING_EFFORT_MAPS,
+  ABLITERATEDLLM_MODELS,
+  ABLITERATEDLLM_MODEL_CONTEXT_WINDOWS,
+  ABLITERATEDLLM_MODEL_INPUT_MODALITIES,
   ANTHROPIC_MODELS,
   ANTHROPIC_MODEL_CONTEXT_WINDOWS,
   ANTHROPIC_MODEL_INPUT_MODALITIES,
@@ -1423,6 +1427,38 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     modelReasoningEffortMap: { "deepseek-v4-1-flash": { ...deepseekReasoningMapFor("deepseek-v4-1-flash"), none: "none" } },
     note: "Pay-per-token API gateway for open-weight models (DeepSeek, GLM, Kimi) and Grok, billed from a prepaid USD balance. Create an API key at console.cheapaimodel.ai. Live discovery lists the models your key can call; deepseek-v4-1-flash is the default. Chat Completions only.",
   },
+  {
+    // AbliteratedLLM. Contract checked 2026-11-14: https://abliteratedllm.dev/docs/chat-completions
+    // and https://abliteratedllm.dev/docs/models. GET /v1/models is public and answers 200 for any
+    // Bearer value, so discovery needs no key but cannot verify one (GET /v1/balance is the
+    // key-gated route). Chat Completions serves every catalog model, so every inbound stays on Chat;
+    // the stateless Responses and the Anthropic Messages endpoints are not used. reasoning_effort is
+    // documented as low, medium or high for every model, so higher Codex levels clamp to high.
+    // glm-5.3-flash-abliterated lists 131,072 output tokens; every other row's output limit equals
+    // its window. The env reference derived from the id is ${ABLITERATEDLLM_API_KEY}.
+    // Routing checked 2026-11-15: GET /v1/models listed 15 models, glm-5.3-flash-abliterated
+    // (variant "abliterated") and 14 with provider_label "Stock model". None carried "Official
+    // DeepSeek API", the label https://abliteratedllm.dev/privacy uses for requests forwarded to
+    // DeepSeek's own API; the listed models, the DeepSeek ones included, run on Fireworks AI with
+    // zero data retention. The note states only that observation, not a retention promise for any
+    // model the service lists later.
+    id: "abliteratedllm",
+    label: "AbliteratedLLM",
+    adapter: "openai-chat",
+    baseUrl: "https://api.abliteratedllm.dev/v1",
+    authKind: "key",
+    dashboardUrl: "https://abliteratedllm.dev/dashboard/keys",
+    liveModels: false,
+    apiKeyValidation: "unknown",
+    preserveCustomDestination: true,
+    defaultModel: "glm-5.3-flash-abliterated",
+    models: ABLITERATEDLLM_MODELS,
+    modelContextWindows: ABLITERATEDLLM_MODEL_CONTEXT_WINDOWS,
+    modelMaxOutputTokens: { "glm-5.3-flash-abliterated": 131_072 },
+    modelInputModalities: ABLITERATEDLLM_MODEL_INPUT_MODALITIES,
+    reasoningEfforts: ["low", "medium", "high"],
+    note: "Pay-per-token API for abliterated (refusal-removed) and stock open-weight models, prepaid in USD by card or crypto. Create an API key at abliteratedllm.dev/dashboard/keys. glm-5.3-flash-abliterated is the default. On 2026-11-15 the public model list showed 15 models: glm-5.3-flash-abliterated, the only abliterated one, and 14 labelled Stock model, the vendors' original weights. None was labelled Official DeepSeek API, the privacy policy's label for requests forwarded to DeepSeek's own API; the listed models, the DeepSeek ones included, run on Fireworks AI with zero data retention. The preset uses this seeded model list: the public model list answers without a key and cannot validate one, so live discovery is off. The preset sends every client through Chat Completions.",
+  },
   // Xiaomi retires mimo-v2.5 and mimo-v2.5-pro on 2026-10-21 with no redirect
   // (https://mimo.mi.com/docs/en-US/updates/deprecate), so the first-party presets default to V2.6.
   // Saved defaults are not rewritten; V2.5 stays listed until it stops answering.
@@ -1751,5 +1787,29 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     note: "Runs Claude subscription traffic through Anthropic's own harness: the official Claude Code CLI headlessly (`claude -p`), one turn per request. OpenCodex stores no Claude token and injects none into CLI requests (quota admission only reads it in memory) — the CLI signs in and bills the account itself, which is why this row is keyless and an API key saved here never reaches the harness (use `anthropic-apikey` for key billing). The sign-in is the one of the user this proxy runs as, so every request served through this row — by any client of this proxy — spends that same account; OpenCodex neither pools nor multiplexes Claude sign-ins. Requires the CLI (`npm i -g @anthropic-ai/claude-code`) and a signed-in session (`claude` -> /login). v1 disables CLI tools (--tools \"\", --strict-mcp-config) so the client retains tool ownership; text, reasoning and native image input are supported. Subscription routing authorization flagged for maintainer review.",
+  },
+  {
+    // The official Antigravity CLI over the Agent Client Protocol (`agy acp`), the owner-approved
+    // alternative to credential replay (#8480, plan 080). Like claude-cli it is keyless rather than
+    // `local`: traffic still reaches Google, through the CLI's own sign-in. One account (the CLI's),
+    // no rotation, local requests only, Gemini only, interactive use only; config validation and
+    // the adapter's policy gate enforce those. The existing google-antigravity provider is unchanged.
+    id: "antigravity-acp",
+    label: "Antigravity CLI (ACP, local)",
+    adapter: "agy-acp",
+    // Identity only: the transport is stdio and this URL is never fetched.
+    baseUrl: "https://antigravity.google/docs/cli/acp",
+    authKind: "key",
+    keyOptional: true,
+    dashboardUrl: "https://antigravity.google/docs/cli/acp",
+    defaultModel: AGY_ACP_DEFAULT_MODEL,
+    // Static seed; the ACP model options the CLI advertises at turn time decide what is accepted.
+    models: [...AGY_ACP_SEED_MODELS],
+    liveModels: false,
+    modelContextWindows: { "gemini-3.8-flash": 1_048_576, "gemini-4-argon": 1_048_576, "gemini-3.7-flash": 1_048_576 },
+    // ACP prompts carry text only; client function tools are not offered to the model.
+    inputModalities: ["text"],
+    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    note: "Drives the official Antigravity CLI (`agy acp`, 1.5.3 or newer) as a local child process over the Agent Client Protocol. The CLI owns its Google sign-in (`agy acp --login`); OpenCodex never reads or stores it, so no key or account belongs on this row. Google permits this only for interactive, user-directed use: OpenCodex refuses subagent, spawned-thread and Codex memory turns, combo members and decision calls, subagent-fallback routing and requests classified as remote from the observed connection. An undeclared loopback relay that forwards no recognized forwarding headers can appear local. On the public listener, declare a reverse proxy in dashboardTrustedProxy or keep this port out of the relay. OpenCodex serves Gemini models only. Use a Gemini API key or Vertex AI for programmatic or shared workloads. Each turn runs in an empty private workspace with `--sandbox`, every permission request is refused, and client tools are not offered; allow rules in your own agy settings still apply.",
   },
 ];

@@ -47,7 +47,10 @@ async function turn(parsed: OcxParsedRequest, passes: AdapterEvent[][]) {
       events = passes[iteration++]!;
       return { url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" };
     },
-    fetchResponse: async () => new Response("wire"),
+    fetchResponse: async (_req, ctx) => {
+      ctx?.onPhysicalSend?.({ ordinal: 1 });
+      return new Response("wire");
+    },
     async *parseStream() { yield* events; },
   };
   const response = await runWithWebSearch({

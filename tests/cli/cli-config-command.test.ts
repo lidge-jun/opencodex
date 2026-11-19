@@ -135,6 +135,12 @@ describe("ocx config display redaction", () => {
       const ingress = runCli(["config", "set", "hub.managementIngress", '{"enabled":false}'], { OPENCODEX_HOME: dir });
       expect(ingress.status).toBe(0);
       expect(ingress.stdout).toContain("restart");
+      // #8082: the Codex login route reads the running config, so the login policy needs a restart too.
+      for (const args of [["set", "codexAuthMethod", '"device-only"'], ["unset", "codexAuthMethod"]]) {
+        const login = runCli(["config", ...args], { OPENCODEX_HOME: dir });
+        expect(login.status).toBe(0);
+        expect(login.stdout).toContain("restart");
+      }
 
       // The JSON payload keeps its shape; the note is for people reading the terminal.
       const json = runCli(["config", "set", "corsAllowOrigins", '["http://localhost:9999"]', "--json"], { OPENCODEX_HOME: dir });
@@ -211,6 +217,48 @@ test("config validate stdin exits 1 with a single JSON failure payload", () => {
   } finally { removeTreeWithRetry(dir); }
 });
 
+test("config validate warns when the installed Codex login policy falls back to auto", () => {
+  const dir = freshConfig();
+  try {
+    const path = join(dir, "config.json");
+    const config = JSON.parse(readFileSync(path, "utf8"));
+    writeFileSync(path, JSON.stringify({ ...config, codexAuthMethod: "DEVICE-ONLY" }));
+    const result = runCli(["config", "validate", "--json"], { OPENCODEX_HOME: dir });
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      warnings: [expect.stringContaining('codexAuthMethod ignored: using "auto"')],
+    });
+    expect(result.stdout + result.stderr).not.toContain("DEVICE-ONLY");
+  } finally {
+    removeTreeWithRetry(dir);
+  }
+});
+
+test.each(["auto", "DEVICE-ONLY"])("config validate only reports the fixed policy warning for %s", codexAuthMethod => {
+  const dir = freshConfig();
+  try {
+    const path = join(dir, "config.json");
+    const config = JSON.parse(readFileSync(path, "utf8"));
+    const fakeSecret = "fixture-secret-url-fragment";
+    config.providers.nocreds.baseUrl = `https://nocreds.example/{${fakeSecret}}`;
+    writeFileSync(path, JSON.stringify({ ...config, codexAuthMethod }));
+
+    const result = runCli(["config", "validate", "--json"], { OPENCODEX_HOME: dir });
+    expect(result.status).toBe(0);
+    expect(result.stdout + result.stderr).not.toContain(fakeSecret);
+    expect(JSON.parse(result.stdout)).toEqual({
+      ok: true,
+      source: path,
+      ...(codexAuthMethod === "auto" ? {} : {
+        warnings: ['codexAuthMethod ignored: using "auto" for Codex pool logins. Expected "auto", "device-only", or omission.'],
+      }),
+    });
+  } finally {
+    removeTreeWithRetry(dir);
+  }
+});
+
 test.each(["set", "normalized set", "import"])("config %s cannot enter plaintext mode without the dedicated transition", action => {
   const dir = freshConfig();
   const configPath = join(dir, "config.json");
@@ -243,4 +291,23 @@ test.each(["set", "normalized set", "import"])("config %s cannot enter plaintext
     expect(exited.plaintextV2AgentMessages).toBe(true);
     expect(runCli(["config", "set", "multiAgentMode", "v2", "--json"], { OPENCODEX_HOME: dir }).status).toBe(0);
   } finally { removeTreeWithRetry(dir); }
+});
+
+test("ocx config validates, stores and displays the subscription reserve policy", () => {
+  const dir = freshConfig();
+  try {
+    const env = { OPENCODEX_HOME: dir };
+    const policy = { enabled: true, soft: 0.55, hard: 0.85, targets: ["blsc/deepseek-v4-flash"] };
+    const set = runCli(["config", "set", "subscriptionReserve", JSON.stringify(policy), "--json"], env);
+    expect(set.status).toBe(0);
+    const get = runCli(["config", "get", "subscriptionReserve", "--json"], env);
+    expect(get.status).toBe(0);
+    expect(JSON.parse(get.stdout)).toEqual(policy);
+    const invalid = runCli(["config", "set", "subscriptionReserve.hard", "0.5", "--json"], env);
+    expect(invalid.status).not.toBe(0);
+    expect(invalid.stdout + invalid.stderr).toContain("subscriptionReserve.hard");
+    expect(JSON.parse(readFileSync(join(dir, "config.json"), "utf8")).subscriptionReserve).toEqual(policy);
+  } finally {
+    removeTreeWithRetry(dir);
+  }
 });

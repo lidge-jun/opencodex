@@ -31,6 +31,13 @@ Delivery intersects current names with the existing selection-filtered bridge na
 `tool_choice` cannot be widened by the snapshot. Ordinary Responses validation retains its
 delivery owner and diagnostics; the additional guard enforces explicit-empty catalogs and
 Responses replay boundaries. Initial hosted-sidecar deferred delivery retains its existing contract.
+A named [hosted Advisor selection](../advisor.md#execution-paths) uses the original Messages
+declaration, with availability checked separately on each fallback candidate before dispatch.
+When the serialized Anthropic request carries a hosted Advisor credential binding, initial,
+recovery, and continuation send reporters claim the workflow slot at the executor receipt after
+credential validation. A post-rewrite refusal consumes zero slots for that attempt, and an optional
+rebuild consumes one slot when its executor runs. A destination with Advisor forwarding disabled
+uses its ordinary reporter even when the inbound catalog declares Advisor.
 `tests/responses/explicit-empty-tool-catalog-history.test.ts` covers these continuation boundaries
 and normalization across adapter/run-turn JSON/SSE. The real direct Messages planner and delivery
 share one signed-history translation budget in `tests/responses/current-turn-tool-catalog-direct.test.ts`.
@@ -59,3 +66,7 @@ settlement or provider-opaque replay scope.
 The route-independent Claude bridge pool key agrees with final Codex selection; see [Claude affinity](../data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch).
 
 Right after continuation expansion, and only for a request that carries a Remote Link turn observer (a link WebSocket turn, or a relayed request with the link relay's internal token header), `request-prepare.ts` reports the expanded input to `src/server/link-turn.ts`; an expansion miss reports a failure. A request without an observer runs no code there, and the header is removed before anything is forwarded (`structure/remote-link.md`). The same seam receives the chain outcome (expanded, unexpanded or none) and, at the two refusals of an unexpanded continuation, marks the row's link continuation as a miss with reason missing.
+
+When the selected route targets canonical ChatGPT and its continuation cannot be expanded, request preparation logs the selected provider and model with `previous_response_not_found` and synthetic provenance. If preparation made no inference send, the row has `local-refusal` and no physical attempt. Opt-in encrypted-task recovery can send before a reroute to native fallback. In that case the row preserves the recovery attempts with their own model, status, and any reported usage. A client resend carrying the full history is a separate request.
+
+A strict replay miss ends preparation before recovery or upstream dispatch. For a direct canonical ChatGPT route, request preparation records the requested model and effort, provider, and route trace using request metadata and a route preview. `tests/codex-integration/issue-702-expired-replay-state.test.ts` covers the resulting zero-send log row.

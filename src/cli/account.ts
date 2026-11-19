@@ -60,7 +60,7 @@ const ACCOUNT_USAGE = `Usage:
   ocx account resume <provider> <account-id|alias|main> [--if-healthy] [--json]
   ocx account reset-affinity <anthropic|anthropic2> [--json]
   ocx account pause-exhausted <provider> [--json]
-  ocx account strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>] [--json]
+  ocx account strategy <provider> [<quota|round-robin|fill-first|reset-near-weighted|least-loaded|reset-first>] [--json]
   ocx account sticky <provider> [<1-100>] [--json]
   ocx account routes <anthropic|anthropic2> [--file <json-file>|--clear] [--json]
   ocx account remove <provider> <account-or-key-id|alias|main> --yes [--json]
@@ -123,7 +123,8 @@ function statusText(row: AccountRow): string {
   if (row.paused) parts.push(row.pauseDetails ? `paused(${row.pauseDetails.reason})` : "paused");
   if (row.active) parts.push(row.type === "codex" ? "selected" : "active");
   if (row.needsReauth && !(row.provider === "kiro" && row.skipReason === "needs_reauth")) {
-    parts.push(row.needsReauthReason === "verify_account" ? "needs-reauth(verify)" : "needs-reauth");
+    parts.push(row.needsReauthCause === "tos_violation" ? "needs-reauth(tos)"
+      : row.needsReauthReason === "verify_account" ? "needs-reauth(verify)" : "needs-reauth");
   }
   // A paused Kiro row already says "paused"; repeating it as a skip reason adds nothing.
   if (row.provider === "kiro" && row.autoSelectable === false && !(row.paused && row.skipReason === "paused"))

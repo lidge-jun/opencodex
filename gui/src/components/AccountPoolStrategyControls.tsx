@@ -11,6 +11,7 @@ import { useHelp } from "./v2-accounts/use-help";
 
 const STRATEGY_LABEL_KEYS = {
   "reset-first": "accountPool.strategyResetFirst",
+  "reset-near-weighted": "accountPool.strategyResetNearWeighted",
   quota: "accountPool.strategyQuota",
   "round-robin": "accountPool.strategyRoundRobin",
   "fill-first": "accountPool.strategyFillFirst",
@@ -18,6 +19,7 @@ const STRATEGY_LABEL_KEYS = {
 
 const STRATEGY_HINT_KEYS = {
   "reset-first": "accountPool.strategyHintResetFirst",
+  "reset-near-weighted": "accountPool.strategyHintResetNearWeighted",
   quota: "accountPool.strategyHintQuota",
   "round-robin": "accountPool.strategyHintRoundRobin",
   "fill-first": "accountPool.strategyHintFillFirst",
@@ -65,7 +67,7 @@ export default function AccountPoolStrategyControls({
   }));
 
   const thresholdSummary = (() => {
-    if (threshold === undefined) return null;
+    if (threshold === undefined || strategy === "reset-near-weighted") return null;
     if (strategy === "round-robin") {
       return t("accountPool.thresholdNotUsed");
     }
@@ -122,7 +124,7 @@ export default function AccountPoolStrategyControls({
           )}
         </div>
       </div>
-      {strategy === "round-robin" && (
+      {(strategy === "round-robin" || strategy === "reset-near-weighted") && (
         <div className="setting-row">
           <label className="setting-label" htmlFor={stickyInputId}>
             <span className="title">{t("accountPool.stickyLimit")}</span>

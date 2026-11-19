@@ -5,6 +5,7 @@ import {
   type TranslatorBudget,
 } from "../../lib/translator-budget";
 import type { AdapterEvent, OcxUsage } from "../../types";
+import { sumCreditReadings, withMissingCreditReading } from "../../usage/credit-billing";
 import { recordKiroCalibration, rekeyKiroCalibration } from "../kiro-calibration";
 import {
   KIRO_COMPLETION_TOOL_NAME,
@@ -158,6 +159,8 @@ export type KiroFallbackFactory = (
   assistantText: string,
   sawReasoning: boolean,
   budget: TranslatorBudget,
+  /** Invoked once for each physical send, including transport replays. */
+  onDispatch?: () => void,
 ) => Promise<KiroFallbackAttempt>;
 
 function mergeKiroUsage(
@@ -165,8 +168,11 @@ function mergeKiroUsage(
   second: OcxUsage | undefined,
   preserveFirstContextGrowth = false,
 ): OcxUsage | undefined {
-  if (!first) return second;
-  if (!second) return first;
+  const providerCredits = sumCreditReadings([first?.providerCredits, second?.providerCredits]);
+  if (!first || !second) {
+    const usage = first ?? second;
+    return usage && { ...usage, ...(providerCredits !== undefined ? { providerCredits } : {}) };
+  }
   const sumOptional = (key: keyof OcxUsage): number | undefined => {
     const a = first[key];
     const b = second[key];
@@ -198,7 +204,7 @@ function mergeKiroUsage(
     ...(sumOptional("cachedInputTokens") !== undefined ? { cachedInputTokens: sumOptional("cachedInputTokens") } : {}),
     ...(sumOptional("cacheReadInputTokens") !== undefined ? { cacheReadInputTokens: sumOptional("cacheReadInputTokens") } : {}),
     ...(sumOptional("cacheCreationInputTokens") !== undefined ? { cacheCreationInputTokens: sumOptional("cacheCreationInputTokens") } : {}),
-    ...(sumOptional("providerCredits") !== undefined ? { providerCredits: sumOptional("providerCredits") } : {}),
+    ...(providerCredits !== undefined ? { providerCredits } : {}),
     ...(sumOptional("reasoningOutputTokens") !== undefined ? { reasoningOutputTokens: sumOptional("reasoningOutputTokens") } : {}),
     ...(first.estimated || second.estimated ? { estimated: true } : {}),
     ...(first.upstreamReported && second.upstreamReported ? { upstreamReported: true as const } : {}),
@@ -1306,12 +1312,14 @@ export async function* parseKiroStream(
     let firstAssistantText = firstResult.assistantText;
     const firstHadAssistantText = firstAssistantText.length > 0;
     let fallback: KiroFallbackAttempt;
+    let fallbackSends = 0;
     try {
       fallback = await fallbackFactory(
         firstResult.providerState?.kiro.conversationId ?? conversationId,
         firstAssistantText,
         firstResult.sawReasoning,
         budget,
+        () => { fallbackSends++; },
       );
     } catch (err) {
       yield* firstResult.drainDeferred(dropHeldProse);
@@ -1325,7 +1333,7 @@ export async function* parseKiroStream(
           status: 502,
           errorType: "upstream_error",
           code: "translation_buffer_limit",
-          usage: firstResult.usage,
+          usage: fallbackSends > 0 ? mergeKiroUsage(firstResult.usage, undefined) : firstResult.usage,
         };
         return;
       }
@@ -1335,7 +1343,7 @@ export async function* parseKiroStream(
         status: err instanceof Error && err.name === "TimeoutError" ? 504 : 502,
         errorType: "upstream_error",
         retryable: !priorEmittedOutput,
-        usage: firstResult.usage,
+        usage: fallbackSends > 0 ? mergeKiroUsage(firstResult.usage, undefined) : firstResult.usage,
       };
       return;
     }
@@ -1356,11 +1364,16 @@ export async function* parseKiroStream(
         errorType: failure.errorType,
         code: failure.code,
         retryable: priorEmittedOutput ? false : failure.retryable,
-        usage: firstResult.usage,
+        usage: mergeKiroUsage(firstResult.usage, undefined),
       };
       return;
     }
 
+    // Only the final response can expose a metering snapshot. A reset/replay (or another
+    // send discarded inside the retry transport) leaves at least one reading unknown.
+    const mergeFallbackUsage = (usage: OcxUsage | undefined) => mergeKiroUsage(
+      firstResult.usage, fallbackSends > 1 ? withMissingCreditReading(usage) : usage, firstHadAssistantText,
+    );
     const secondResult = yield* parseKiroAttempt(
       fallback.response,
       budget,
@@ -1381,7 +1394,7 @@ export async function* parseKiroStream(
         yield retryableKiroIncomplete(
           "empty_kiro_fallback",
           "Kiro's bounded completion retry ended without a terminal result",
-          mergeKiroUsage(firstResult.usage, secondResult.usage, firstHadAssistantText)
+          mergeFallbackUsage(secondResult.usage)
             ?? { inputTokens, outputTokens: 0, estimated: true },
           secondResult.providerState ?? firstResult.providerState,
           !priorEmittedOutput,
@@ -1395,7 +1408,7 @@ export async function* parseKiroStream(
           ...(secondResult.terminal.type === "incomplete" && priorEmittedOutput
             ? { retryable: false as const }
             : {}),
-          usage: mergeKiroUsage(firstResult.usage, secondResult.terminal.usage, firstHadAssistantText),
+          usage: mergeFallbackUsage(secondResult.terminal.usage),
           providerState: secondResult.terminal.providerState ?? firstResult.providerState,
         };
         return;
@@ -1403,7 +1416,7 @@ export async function* parseKiroStream(
       yield {
         ...secondResult.terminal,
         ...(secondResult.terminal.type === "error"
-          ? { usage: mergeKiroUsage(firstResult.usage, secondResult.terminal.usage, firstHadAssistantText) }
+          ? { usage: mergeFallbackUsage(secondResult.terminal.usage) }
           : {}),
       };
     } finally {

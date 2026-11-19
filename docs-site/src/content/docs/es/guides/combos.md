@@ -222,7 +222,7 @@ ocx combo set jev-auto --session-pin 20m --json
 { "strategy": "jev", "sessionPin": { "ttlMs": 1200000 } }
 ```
 
-La primera solicitud se decide normalmente. Cuando el destino aplicado por JEV completa una respuesta, las solicitudes siguientes de la sesión reutilizan ese destino y esfuerzo sin otra llamada de decisión. `ttlMs`, entre un minuto y 24 horas, es un plazo de inactividad: cada turno completado en el destino fijado, incluidas las continuaciones de herramientas, lo reinicia. Si la sesión permanece inactiva más tiempo, se decide de nuevo.
+La primera solicitud se decide normalmente. Cuando el destino aplicado por JEV completa una respuesta, las solicitudes siguientes reutilizan ese destino y, por defecto, el mismo esfuerzo sin otra llamada de decisión. `ttlMs`, entre un minuto y 24 horas, es un plazo de inactividad: cada turno completado en el destino fijado, incluidas las continuaciones de herramientas, lo reinicia. Si la sesión permanece inactiva más tiempo, se decide de nuevo.
 
 La identidad combina el encabezado de sesión del cliente (`thread-id`, `session_id` o `session-id`, `x-codex-parent-thread-id`, o un `x-session-id` promovido), la clave API que admitió la solicitud y el combo. No se fijan solicitudes sin encabezado de sesión, `prompt_cache_key` nunca sirve como identidad de sesión y dos claves API nunca comparten una fijación.
 
@@ -234,9 +234,23 @@ JEV decide de nuevo y sustituye la fijación cuando:
 - Falla cualquier envío de la sesión fijada; esa solicitud conserva la recuperación habitual mediante otros destinos.
 - La configuración cambió después de guardar la fijación.
 
+#### Elección del esfuerzo en cada turno fijado
+
+`effort: "per-turn"` pide a JEV que vuelva a elegir el esfuerzo en cada turno fijado si el destino admite varios niveles.
+
+```bash
+ocx combo set jev-auto --session-pin 20m --session-pin-effort per-turn --json
+```
+
+```json
+{ "strategy": "jev", "sessionPin": { "ttlMs": 1200000, "effort": "per-turn" } }
+```
+
+Si la decisión falla, el turno usa el esfuerzo que leyó al inicio. Otro turno puede actualizar el esfuerzo guardado. Si el destino fijado deja de estar disponible durante la decisión, el combo recurre a un destino apto. Los registros de uso conservan la telemetría de la decisión de esfuerzo, incluidos los tokens que el modelo de decisión informa en una respuesta fallida o incompleta. El turno cuenta como una decisión normal. Con `jevEffortMode: "client"`, se omite la decisión y se aplica la política de esfuerzo del cliente. `--session-pin-effort pinned` restaura el valor predeterminado. Cambiar el plazo con `--session-pin` conserva el modo.
+
 Cancelar una solicitud conserva la fijación. Una decisión que usa la alternativa fail-open por tiempo agotado, clave ausente o respuesta inválida no crea una. Las fijaciones viven en memoria, con un máximo de 512 sesiones, y se pierden al reiniciar.
 
-Los registros de uso marcan los turnos reutilizados con `jevDecision.pinned: true` y `pinReason: "session"`. Una decisión que sustituye una fijación liberada registra el motivo en `pinReason`: `expired`, `config_changed`, `target_unavailable`, `effort_unavailable` o `quota_nearly_exhausted`. `ocx combo stats` cuenta las solicitudes fijadas aparte de las decisiones; siguen contando para solicitudes correctas, cambios de modelo por fallo y tokens por modelo.
+Los registros de uso marcan los turnos reutilizados con `jevDecision.pinned: true` y `pinReason: "session"`, o `pinReason: "session_effort"` si JEV intentó elegir el esfuerzo. Una decisión que sustituye una fijación liberada registra el motivo en `pinReason`: `expired`, `config_changed`, `target_unavailable`, `effort_unavailable` o `quota_nearly_exhausted`. `ocx combo stats` cuenta todos los turnos reutilizados como solicitudes fijadas y también los turnos `session_effort` como decisiones, incluidas las que fallan. Todos siguen contando para solicitudes correctas, cambios de modelo por fallo y tokens por modelo.
 
 La fijación permite reutilizar la caché, pero el acierto real depende del proveedor, la cuenta y un prefijo de instrucciones estable. `--session-pin -`, o `null` en la API, la desactiva. Cambiar a otra estrategia la elimina; guardar desde el editor del dashboard la conserva.
 
@@ -490,6 +504,29 @@ se aplica siempre que no se pueda utilizar de origen `Retry-After` o Codex seña
 
 Para un grupo OAuth o Codex Anthropic, un 429 vinculado a una cuenta que el grupo se ha enfriado no enfría todo el objetivo combinado. Otras cuentas detrás de ese objetivo siguen disponibles. Un 429 sin una cuenta de grupo refrigerada identificada aún enfría el objetivo, al igual que los fallos de todo el proveedor.
 
+Una vez que el combo se compromete a entregar la salida de un stream de Responses, un evento
+terminal incompleto puede poner ese destino en enfriamiento para la siguiente solicitud. El motivo
+puede aparecer en el evento terminal o en su instantánea `response`. Un rechazo en cualquiera
+de los dos tiene prioridad. `upstream_stall_timeout` aplica un enfriamiento de 60 segundos.
+`max_output_tokens` aplica uno de 10 minutos si el intento alcanza el límite de salida conocido
+del modelo y el turno termina sin pausa.
+El preajuste de Devin requiere que el límite de salida se configure explícitamente en el
+proveedor para aplicar este enfriamiento. Si ya hay un enfriamiento con un vencimiento
+posterior, ese vencimiento se conserva.
+
+Durante la comprobación previa de Responses, el combo puede probar el siguiente destino
+elegible si recibe un evento terminal que permite reintentar, contiene únicamente texto de
+razonamiento o comentarios y llega en el primer segundo a partir del primer evento
+almacenado en el búfer, incluido `response.created`. El contenido de rechazo o un error en el
+evento terminal o en su instantánea fija el destino del stream y conserva el veredicto del proveedor.
+Esto también se aplica si una respuesta nativa de Responses termina sin la llamada exigida por
+`tool_choice`.
+Un motivo de rechazo como `content_filter` en `incomplete_details.reason` también lo fija,
+tanto si aparece en el evento terminal como en su instantánea `response`. Cualquiera de los dos
+puede impedir el reintento con `end_turn: false` o `incomplete_details.retryable: false`. Estos vetos
+también se aplican si el stream termina sin la llamada exigida por `tool_choice`. Una
+respuesta final, una llamada a una herramienta o el vencimiento de la espera también fijan el destino.
+
 <a id="last-resort-targets"></a>
 
 ### Objetivos de último recurso
@@ -562,7 +599,7 @@ La escalera anunciada del objetivo sigue siendo autorizada. Se conserva un valor
 
 En modo estricto, los niveles de esfuerzo publicados por un combo son la intersección de los niveles de sus destinos. Si un destino indica explícitamente que **no** admite control de esfuerzo, su conjunto vacío participa en la intersección y la deja vacía para todo el combo, aunque los demás destinos permitan ajustar el esfuerzo.
 
-Configure `reasoningEffortMode: "adaptive"` para excluir esos conjuntos vacíos de la intersección publicada. El selector muestra los niveles comunes de los destinos restantes; el destino sin control de esfuerzo sigue siendo elegible para el enrutamiento. Los destinos cuyos niveles son simplemente *desconocidos* se tratan como comodines en ambos modos.
+Configure `reasoningEffortMode: "adaptive"` para excluir esos conjuntos vacíos de la intersección publicada. El selector muestra los niveles comunes de los destinos restantes; el destino sin control de esfuerzo sigue siendo elegible para el enrutamiento. Los destinos cuyos niveles son simplemente *desconocidos* se tratan como comodines en ambos modos. En un Combo JEV con `jevEffortMode: "decide"`, el selector de Codex oculta el control de esfuerzo incluso si se configura `reasoningEffortMode: "adaptive"`.
 
 ```json
 {
@@ -722,6 +759,16 @@ Compruebe primero la gramática del alias y los nombres reservados. Un alias dup
 
 ### Rechazos por ventana de contexto
 
+Antes de enviar una solicitud a un destino de un combo de Responses con ventana de contexto y
+límite de entrada conocidos, OpenCodex aplica un margen de 1,1× a la estimación de tokens de
+entrada y redondea hacia arriba. La entrada ajustada debe caber en el límite de entrada, y la suma
+de esa entrada y la reserva de salida debe caber en la ventana de contexto. La comprobación puede
+omitir un destino aunque la solicitud no indique `max_output_tokens`. En ese caso, reserva el 10 %
+de la ventana del destino, con un mínimo de 1024 tokens y un máximo de 32 768. Si se conoce el
+límite de salida del destino, este también limita la reserva, incluso cuando la solicitud indica
+una cantidad. Si se desconoce la ventana, se aplica la comprobación de entrada habitual
+(`checkInputAdmission`).
+
 La recuperación de combos utiliza el mismo detector acotado de desbordamiento de contexto que Responses. Lee el mensaje más interno del proveedor y reconoce `context_length_exceeded`, `prompt is too long`, `input is too long for requested model` y `Please reduce the length of the messages or completion`. Los tres últimos solo cuentan cuando el mensaje comienza con ellos; en el caso de Anthropic se incluyen sus recuentos de tokens. Un error de validación que cite esas frases como valor de un parámetro o una cadena de error de SDK que las envuelva no cumplen la condición. Tampoco la cumplen un código junto a un mensaje ajeno al contexto, JSON mal formado, un error de validación de parámetros o una instrucción genérica de acortar un parámetro.
 
 La salida ya confirmada nunca se reproduce. Se mantienen la política de fallback, el consentimiento de gasto y los presupuestos de envío; cada intento físico conserva su propio uso. Si se agotan los objetivos elegibles o el presupuesto, el primer rechazo HTTP 400 de contexto confirmado tiene prioridad sobre errores reintentables posteriores, incluidos los de cuota. Un rechazo fatal posterior detiene el proceso inmediatamente.
@@ -768,8 +815,18 @@ Un HTTP 400 puede ser incompatibilidad local del destino. El wrapper opaco OpenR
 
 Con `jevEffortMode: "decide"`, predeterminado, el esfuerzo elegido por JEV prevalece en el primer hijo Responses y en Chat nativo activado; elimina controles de pensamiento y service_tier incompatibles. Elegir sin esfuerzo también quita un predeterminado forzado. Con `"client"`, mantiene destino y deja esfuerzo al cliente, escala y defaultEffort; defaultEffortMode force sigue prevaleciendo. Fijaciones, límites y normalización del proveedor se aplican después.
 
+En modo `"decide"`, la fila del Combo en el catálogo no anuncia niveles de esfuerzo de razonamiento ni un esfuerzo predeterminado, por lo que el selector de modelos de Codex oculta el control de esfuerzo. En modo `"client"`, la fila conserva la intersección habitual de los niveles de esfuerzo de los destinos del Combo.
+
 El enfriamiento por combo es independiente del de cuenta y persiste con expiración absoluta en `combo-cooldowns.json`. Proxies del mismo directorio no lo acortan; guardar, renombrar o borrar el combo lo limpia.
 
 Los destinos RunTurn retienen razonamiento previo hasta un segundo: una finalización max_output_tokens sin salida dentro del plazo permite otro destino sin enfriar al sano. Al vencer o aparecer salida, se compromete y transmite lo retenido. También puede avanzar incomplete sin razón, adapter_eof, missing_terminal_event o upstream_stall_timeout antes de salida. `end_turn: false` o `incomplete_details.retryable` false conserva el destino. `pause_turn` Anthropic es pausa larga y sigue como `incomplete` con max_output_tokens, sin alternativa. Content_filter, razones semánticas explícitas, null explícito y límites tras salida son terminales. Si todos acaban así sin salida y sin exceso de contexto confirmado, se devuelve el último HTTP 200 incomplete con su uso, no 502. JSON nativo no streaming no se inspecciona. Los metadatos de tasa de Codex WebSocket no son salida; tras salida o límite de buffer nunca se reproduce en otro destino.
 
 Un rechazo estructurado de esfuerzo puede bajar una posición publicada cada vez en el mismo destino mientras quede presupuesto. Incluye `{"code":"invalid-argument","error":"Invalid reasoning effort."}` y las formas reconocidas de unsupported_value. Si ninguna sirve, solo formas de compatibilidad reconocidas avanzan sin enfriarlo; conserva el 400 si no quedan envíos. No convierte none ni generaliza a errores inválidos arbitrarios. Rechazos de política, cancelación o salida ya comprometida nunca se reproducen. Si un destino enfriado fija la recuperación más próxima, mensaje y Retry-After muestran el mismo plazo, por ejemplo `(retry in ~2m)`; Messages usa la misma espera.
+
+## Combos sugeridos
+
+Si los ajustes cambian antes de guardar una sugerencia, Combos actualiza las sugerencias y muestra un mensaje. Al guardar, se comprueban las exclusiones y el consentimiento de gasto vigentes. Al añadir sugerencias, el servidor aplica el nivel de mayor coste entre la configuración activa y la guardada. Trata los destinos existentes marcados explícitamente como medidos como destinos de pago por uso y conserva el orden relativo de los destinos existentes.
+
+El proxy aplica estas reglas en cada guardado. El panel puede mostrar brevemente una acción que el proxy rechaza, por ejemplo justo después de cambiar los ajustes en otra pestaña o con la CLI. En ese caso, el proxy responde con HTTP 409 y el espacio de trabajo vuelve a cargar los ajustes guardados y los combos para que las tarjetas coincidan con lo que permite el proxy.
+
+En el espacio de trabajo de combos, **Generar** abre un borrador de conmutación por error para un modelo disponible en varios proveedores. **Añadir al combo** ofrece destinos que faltan en un combo existente. Las tarjetas descartadas quedan ocultas en este navegador. Usa **Excluir un proveedor…** para filtrar ambos tipos de sugerencias. El proxy guarda la selección como `comboSuggestionExcludedProviders` en `config.json`. Los miembros existentes se conservan. Todos los destinos sugeridos pueden generar cargos, incluso los canales de suscripción, como Codex con créditos comprados, Grok con Extra Usage y Kimi Code con Extra Usage. Para guardar un borrador, marca **Permitir destinos de pago**. Para añadir destinos, habilita primero los destinos de pago en el combo existente. El proxy guarda todos los destinos sugeridos con `metered: true`. El control de exclusión sigue disponible tras descartar todas las tarjetas. Al cambiar una exclusión, las acciones de sugerencias quedan deshabilitadas hasta que el panel vuelva a cargar los ajustes guardados, aunque se pierda la respuesta del guardado. Si no se pueden cargar los ajustes de sugerencias, selecciona **Reintentar**. Si los ajustes guardados cambian antes de que guardes una sugerencia, el espacio de trabajo actualiza las tarjetas según las exclusiones y el permiso de pago vigentes. Si **Añadir al combo** está deshabilitado, ejecuta `ocx combo update <id> --allow-metered-targets on` y sustituye `<id>` por el identificador del combo guardado. La siguiente actualización del combo habilita la acción si hay destinos aptos para añadir.

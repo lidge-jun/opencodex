@@ -113,7 +113,7 @@ export async function handleComboStatsCommand(argv: string[], deps: RuntimeApiDe
       `Combo ${id} — JEV observations (${range})`,
       ...(summary.decisions === 0 ? ["No recorded JEV decisions in this window."] : []),
       `Decisions: ${summary.decisions}; applied: ${summary.appliedDecisions}; fail-open: ${summary.failOpenDecisions}`,
-      ...(summary.pinnedRequests > 0 ? [`Session-pinned requests (no decision call): ${summary.pinnedRequests}`] : []),
+      ...(summary.pinnedRequests > 0 ? [`Session-pinned requests: ${summary.pinnedRequests}`] : []),
       `Successful requests: ${summary.successfulRequests}; requests with model fallback: ${summary.requestsWithModelFallback}`,
       `Model tokens: ${summary.modelTotalTokens}; measured attempts: ${summary.measuredModelAttempts}/${summary.modelAttempts}`,
       `Decision tokens: ${summary.decisionTotalTokens}; decisions reporting usage: ${summary.decisionUsageReported}/${summary.decisions}`,

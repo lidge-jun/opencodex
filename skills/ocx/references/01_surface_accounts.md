@@ -248,7 +248,7 @@ State-changing: yes. JSON mode: `envelope`.
 
 ### `ocx account strategy`
 
-Usage: `ocx account strategy <provider> [quota|round-robin|fill-first|least-loaded|reset-first] [--json]`
+Usage: `ocx account strategy <provider> [quota|round-robin|fill-first|reset-near-weighted|least-loaded|reset-first] [--json]`
 
 Show or set how an account pool picks the next account.
 
@@ -833,7 +833,7 @@ State-changing: yes. JSON mode: `envelope`.
 |---|---|---|
 | `--enabled` | string | Stored pool preference; unsupported for Codex. Not equivalent to threshold0. |
 | `--threshold` | number | Auto-switch threshold0–100. |
-| `--strategy` | string | Use a strategy supported by this provider kind; reset-first is Codex or generic OAuth, least-loaded is Kiro. |
+| `--strategy` | string | Use a strategy supported by this provider kind; reset-first is Codex or generic OAuth, reset-near-weighted is Codex or Anthropic, and least-loaded is Kiro. |
 | `--sticky` | number | Sticky limit1–100. |
 | `--quota-window` | string | Anthropic only: five-hour, weekly or max-utilization. |
 | `--json` | boolean | Emit the validated task result as one JSON document. |

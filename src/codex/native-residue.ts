@@ -33,6 +33,7 @@ import {
   DEFAULT_CATALOG_PATH,
   getCodexHome,
   readRootTomlString,
+  resolveCodexCatalogPath,
   resolveCodexStateDbPath,
 } from "./paths";
 
@@ -242,7 +243,7 @@ function catalogPathKey(path: string): string {
 }
 
 function catalogTargets(
-  codexHome: string,
+  configPath: string,
   configuredPaths: readonly string[] = [],
 ): CatalogTarget[] {
   const targets = new Map<string, CatalogTarget>();
@@ -252,21 +253,21 @@ function catalogTargets(
     targets.set(key, { path: resolve(path), configured: configured || existing?.configured === true });
   };
   for (const configuredPath of configuredPaths) {
-    add(resolve(codexHome, configuredPath), true);
+    add(resolveCodexCatalogPath(configPath, configuredPath), true);
   }
-  add(join(codexHome, CATALOG_FILE_NAME), false);
+  add(join(dirname(configPath), CATALOG_FILE_NAME), false);
   return [...targets.values()];
 }
 
-function inspectConfig(codexHome: string, path: string): ConfigObservation {
+function inspectConfig(path: string): ConfigObservation {
   const read = readRegularFile(path);
   if (read.kind === "absent") {
-    return { classification: { kind: "clean" }, catalogTargets: catalogTargets(codexHome) };
+    return { classification: { kind: "clean" }, catalogTargets: catalogTargets(path) };
   }
   if (read.kind === "indeterminate") {
     return {
       classification: indeterminate("config", path, read.reason),
-      catalogTargets: catalogTargets(codexHome),
+      catalogTargets: catalogTargets(path),
     };
   }
 
@@ -280,35 +281,35 @@ function inspectConfig(codexHome: string, path: string): ConfigObservation {
   } catch (error) {
     return {
       classification: indeterminate("config", read.path, `malformed TOML: ${errorReason(error)}`),
-      catalogTargets: catalogTargets(codexHome, productionConfiguredPaths),
+      catalogTargets: catalogTargets(path, productionConfiguredPaths),
     };
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return {
       classification: indeterminate("config", read.path, "TOML root is not a table"),
-      catalogTargets: catalogTargets(codexHome, productionConfiguredPaths),
+      catalogTargets: catalogTargets(path, productionConfiguredPaths),
     };
   }
 
   const document = parsed as Record<string, unknown>;
   let targets: CatalogTarget[];
   if (!Object.hasOwn(document, "model_catalog_json")) {
-    targets = catalogTargets(codexHome, productionConfiguredPaths);
+    targets = catalogTargets(path, productionConfiguredPaths);
   } else if (typeof document.model_catalog_json !== "string" || !document.model_catalog_json.trim()) {
     return {
       classification: indeterminate("config", read.path, "model_catalog_json must be one non-empty string"),
-      catalogTargets: catalogTargets(codexHome, productionConfiguredPaths),
+      catalogTargets: catalogTargets(path, productionConfiguredPaths),
     };
   } else {
     try {
-      targets = catalogTargets(codexHome, [
+      targets = catalogTargets(path, [
         ...productionConfiguredPaths,
         document.model_catalog_json,
       ]);
     } catch (error) {
       return {
         classification: indeterminate("config", read.path, `model_catalog_json cannot be resolved: ${errorReason(error)}`),
-        catalogTargets: catalogTargets(codexHome, productionConfiguredPaths),
+        catalogTargets: catalogTargets(path, productionConfiguredPaths),
       };
     }
   }
@@ -681,7 +682,7 @@ export function classifyNativeRoutedResidue(): NativeRoutedResidueResult {
   const profilePath = join(codexHome, PROFILE_FILE_NAME);
   const modelsCachePath = join(codexHome, MODELS_CACHE_FILE_NAME);
   const journalPath = join(codexHome, JOURNAL_FILE_NAME);
-  const config = inspectConfig(codexHome, configPath);
+  const config = inspectConfig(configPath);
   const atomicWriteTargets = [
     configPath,
     profilePath,

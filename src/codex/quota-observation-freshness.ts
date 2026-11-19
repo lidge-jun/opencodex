@@ -24,6 +24,10 @@ export function stampCodexQuotaUsageObservation(
   return next;
 }
 
+export function codexQuotaUsageObservedAt(quota: StoredAccountQuota, window: Window): number | undefined {
+  return observed.get(quota)?.[window];
+}
+
 export function codexQuotaHasFreshUsage(quota: StoredAccountQuota, plan: unknown, now: number, maxAgeMs: number): boolean {
   const long: Window[] = isThirtyDayOnlyCodexPlan(plan) ? ["monthlyPercent"] : ["weeklyPercent", "monthlyPercent"];
   const relevant = long.filter(window => finite(quota[window]));

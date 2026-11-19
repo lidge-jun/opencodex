@@ -77,6 +77,32 @@ describe("injection defaults and sidecar parity fields", () => {
     expect(config).not.toHaveProperty("syncCodexSubagentDefaults");
     expect(JSON.parse(readFileSync(home.path("config.json"), "utf8"))).toMatchObject({ injectionModel: "fixture/model", injectionEffort: "high", injectionPrompt: "kept" });
   });
+  test.each([true, false])("injection settings refuse enabling or replacing an ACP-managed default (%s)", async currentlyEnabled => {
+    const model = "antigravity-acp/gemini-3.8-flash";
+    const config: OcxConfig = {
+      port: 15600, defaultProvider: "fixture",
+      providers: {
+        fixture: { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1" },
+        "antigravity-acp": { adapter: "agy-acp", baseUrl: "https://antigravity.google/docs/cli/acp" },
+      },
+      injectionModel: currentlyEnabled ? "fixture/model" : model,
+      syncCodexSubagentDefaults: currentlyEnabled,
+    };
+    const before = structuredClone(config);
+    const req = new Request("http://127.0.0.1:15600/api/injection-model", {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify(currentlyEnabled ? { model } : { syncCodexSubagentDefaults: true }),
+    });
+    const response = await handleAgentSettingsRoutes({
+      req, url: new URL(req.url), config, deps: {}, version: "fixture",
+      trustedLoopbackIngress: true, guiSessionIssuance: null,
+      convergeCodexCatalog: async () => { throw new Error("No catalog request expected"); },
+      syncClaudeAgentDefsBestEffort: async () => {},
+    });
+    expect(response?.status).toBe(400);
+    expect(await response?.json()).toMatchObject({ error: expect.stringContaining("injectionModel") });
+    expect(config).toEqual(before);
+  });
   test.each([true, false])("web stream-only edits do not reset siblings", async enabled => {
     const f = fixture(() => ({ ok: true, webSearch: { ...web, streamRoutedModelOutput: enabled, exaApiKey: "fixture-private-value" }, codexWebSearch: apply }));
     expect(await handleAgentCommand(["sidecar", "web", "--stream-routed-output", enabled ? "on" : "off", "--json"], f.deps)).toBe(0);

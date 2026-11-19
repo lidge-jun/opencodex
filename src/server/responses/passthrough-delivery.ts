@@ -34,7 +34,7 @@ import {
   relayWithAbort,
 } from "../relay";
 import { isUsageDebugEnabled } from "../../usage/debug";
-import { isNonReplayableResponse, isReplayRefusalResponse } from "../../lib/upstream-retry";
+import { isNonReplayableResponse, isReplayRefusalResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
 import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 import { sliceChunks, teeWithBoundedInspection } from "../inspection-tee";
 import { markPacedStream } from "../../lib/paced-stream";
@@ -117,6 +117,7 @@ import {
   createGrokResponsesTimestampBlockRewrite,
 } from "../grok-responses-control-frame";
 import { createGrokResponsesSparseTerminalBlockRewrite } from "../grok-responses-snapshot-repair";
+import { isXaiGrokOAuth, isXaiLegacyPrivacyError, xaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
 import { isXaiResponsesDestination } from "../../providers/xai-transport";
 import {
   createGrokUpstreamEnvelopeEchoBlockRewrite,
@@ -187,6 +188,7 @@ import {
   BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS,
   bufferedResponsesReadOptions,
   collectBufferedResponsesSse,
+  type BufferedFailedCompletion,
   type BufferedResponsesSseFailure,
   type BufferedResponsesSseResult,
 } from "./buffered-sse-json";
@@ -445,6 +447,7 @@ export async function deliverPassthroughResponse(
     | "noteInspectedPayload"
     | "normalizeFunctionCompletionJson"
     | "localUpstream"
+    | "pool401OutcomeSettled"
     | "terminalOutcomeRecorded"
   >,
   dispatchSidecarSend?: AuxiliaryModelSend,
@@ -581,7 +584,7 @@ export async function deliverPassthroughResponse(
           }
           options.onNativePassthroughTerminal?.(status);
         });
-      } else if (!shouldDeferCodexResetDerivedCooldown(
+      } else if (!nativeExchange.pool401OutcomeSettled && !shouldDeferCodexResetDerivedCooldown(
         upstreamResponse,
         options.deferCodexResetDerivedCooldown,
       ) && !isReplayRefusalResponse(upstreamResponse) && !wasPermanentAccountRefusal(upstreamResponse)) {
@@ -643,7 +646,8 @@ export async function deliverPassthroughResponse(
     // masquerade as a pre-connection failure after the credential was seen.
     // The numeric outcome above already classified it neutral — no streak.
     if (isNonReplayableResponse(upstreamResponse) && !isReplayRefusalResponse(upstreamResponse) && !wasPermanentAccountRefusal(upstreamResponse)) {
-      return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal);
+      return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal,
+        isXaiGrokOAuth(route.providerName, route.provider) ? logCtx : undefined);
     }
     if (upstreamResponse.status >= 300 && upstreamResponse.status < 400) {
       return new Response(upstreamResponse.body, {
@@ -653,6 +657,7 @@ export async function deliverPassthroughResponse(
       });
     }
     if (!upstreamResponse.ok) {
+      const grokOAuth = isXaiGrokOAuth(route.providerName, route.provider);
       if (options.comboAttempt) {
         // No pre-read guard here: `consumeComboFailure` -> `readBoundedResponseBody` reads
         // `response.body` itself and already threads the abort signal through its own read,
@@ -660,10 +665,10 @@ export async function deliverPassthroughResponse(
         // "captures passthrough failed usage from its original bounded body exactly once").
         // Attaching a guard would be a second `.body` access and break that contract for no
         // gain, since the bounded reader owns settlement on this path.
-        // Only the plan-refusal cause is carried to this leg's row (#8352); a throwaway holder
+        // Only the plan or account-policy refusal cause is carried to this leg's row (#8352); a throwaway holder
         // keeps the other diagnostics this path has never recorded off it.
         const comboCause: Pick<typeof logCtx, "causeHint"> = {};
-        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, undefined, comboCause);
+        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, undefined, comboCause, false, grokOAuth);
         if (comboCause.causeHint) logCtx.causeHint = comboCause.causeHint;
         options.onConsumedComboFailure?.(failure);
         return failure.response;
@@ -671,6 +676,7 @@ export async function deliverPassthroughResponse(
       // The bounded reader owns the original body, deadline, abort settlement, and lock.
       // Unsafe partial data falls back to #452's non-empty status-only JSON.
       const errorText = await readDisplaySafeErrorText(upstreamResponse, upstream.signal, "");
+      if (grokOAuth && isXaiLegacyPrivacyError(upstreamResponse.status, errorText)) return xaiPrivacyModeRefusal(logCtx);
       if (upstreamResponse.status === 413) {
         if (options.clientModelLabel) projectLocalModelRefusalLog(logCtx, options.clientModelLabel);
         return clientRequestedStream
@@ -1025,6 +1031,57 @@ export async function deliverPassthroughResponse(
           config.stallTimeoutSec,
           { localUpstream: nativeExchange.localUpstream },
         ), BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS, bufferedResetSelectionStartedAt(nativeExchange.upstreamResponse) ?? Date.now());
+        const cancelAfterValidation = (): Response => {
+          responseEffects.responseCompletionCancelled = true;
+          options.onNativePassthroughCancel?.();
+          return clientCancelledResponse();
+        };
+        const reportNativeTerminal = recordTerminalOutcomes
+          ? (status: ResponsesTerminalStatus, httpStatusOverride?: number) => {
+            if (signal.aborted) return;
+            terminalRecorder?.(status, httpStatusOverride);
+            if (status === "failed" || status === "incomplete") {
+              const quotaFailureMessage = [httpStatusOverride, logCtx.terminalHttpStatus]
+                .find(value => value === 429 || value === 402);
+              if (!isFixedCodexAccount(admissionState.authCtx) && quotaFailureMessage !== undefined) {
+                recordSubagentQuotaFailureForThreadSpawn(
+                  req.headers,
+                  subagentQuotaFailureModel,
+                  quotaFailureMessage,
+                  config,
+                  requestState.subagentFallbackAccountId,
+                );
+              }
+            }
+            options.onNativePassthroughTerminal?.(status);
+          }
+          : undefined;
+        const deliverFailedCompletion = ({ payload, error }: BufferedFailedCompletion): Response => {
+          if (signal.aborted) return cancelAfterValidation();
+          if (Date.now() >= bufferedRead.deadlineAt) {
+            return failBufferedTurn("buffered Responses turn exceeded the safe total deadline");
+          }
+          noteInspectedPayload(payload);
+          inspectResponseLogSsePayloadParsed(logCtx, JSON.stringify(payload), payload);
+          const status = logCtx.terminalHttpStatus ?? httpStatusFromTerminalError(error);
+          logCtx.transportPhase = "terminal_sse";
+          logCtx.terminalSource = "upstream";
+          reportNativeTerminal?.("failed", status);
+          const defaults = bufferedErrorDefaults(status);
+          const clientError = {
+            type: synthesizedCopyMask(error.type ?? defaults.type),
+            code: synthesizedCopyMask(logCtx.terminalErrorCode ?? error.code ?? defaults.code),
+            message: synthesizedCopyMask(error.message ?? "upstream reported a failed completion"),
+          };
+          const failureHeaders = sanitizePassthroughHeaders(headers, passthroughHeaderOptions);
+          failureHeaders.set("content-type", "application/json");
+          const response = markPreinspectedJsonResponse(formatPassthroughUpstreamError(
+            status, JSON.stringify({ error: clientError }), { headers: failureHeaders },
+          ));
+          // The provider already ended the turn before this JSON projection chose an HTTP status.
+          markResponseNonReplayable(response);
+          return response;
+        };
         const failBufferedTurn = (
           message: string,
           failure?: BufferedResponsesSseFailure,
@@ -1109,6 +1166,7 @@ export async function deliverPassthroughResponse(
                 : "upstream SSE response failed before a valid terminal response";
           return failBufferedTurn(message, raw);
         }
+        if (raw.terminal.failedCompletion) return deliverFailedCompletion(raw.terminal.failedCompletion);
         if (!raw.bytes) return failBufferedTurn("upstream SSE transcript was not retained for rewriting");
         let rawBytes: Uint8Array | undefined = raw.bytes;
         raw = undefined; // Release the raw reconstruction graph before building the client copy.
@@ -1142,15 +1200,11 @@ export async function deliverPassthroughResponse(
               : "rewritten SSE response did not contain one valid terminal response";
           return failBufferedTurn(message, client);
         }
+        if (client.terminal.failedCompletion) return deliverFailedCompletion(client.terminal.failedCompletion);
         if (Date.now() >= bufferedRead.deadlineAt) {
           return failBufferedTurn("buffered Responses turn exceeded the safe total deadline");
         }
 
-        const cancelAfterValidation = (): Response => {
-          responseEffects.responseCompletionCancelled = true;
-          options.onNativePassthroughCancel?.();
-          return clientCancelledResponse();
-        };
         if (signal.aborted) return cancelAfterValidation();
 
         const requiredFailure = await requiredToolFailure(JSON.stringify(client.terminal.response));
@@ -1179,26 +1233,6 @@ export async function deliverPassthroughResponse(
         // Effects intentionally run only after both bounded validations. They inspect the same
         // upstream-facing transcript as the streaming relay and fire once; continuation storage
         // receives the final client-visible response once after all restorations succeeded.
-        const reportNativeTerminal = recordTerminalOutcomes
-          ? (status: ResponsesTerminalStatus, httpStatusOverride?: number) => {
-            if (signal.aborted) return;
-            terminalRecorder?.(status, httpStatusOverride);
-            if (status === "failed" || status === "incomplete") {
-              const quotaFailureMessage = [httpStatusOverride, logCtx.terminalHttpStatus]
-                .find(value => value === 429 || value === 402);
-              if (!isFixedCodexAccount(admissionState.authCtx) && quotaFailureMessage !== undefined) {
-                recordSubagentQuotaFailureForThreadSpawn(
-                  req.headers,
-                  subagentQuotaFailureModel,
-                  quotaFailureMessage,
-                  config,
-                  requestState.subagentFallbackAccountId,
-                );
-              }
-            }
-            options.onNativePassthroughTerminal?.(status);
-          }
-          : undefined;
         const effectInspector = createSseInspector({
           onTerminal: reportNativeTerminal,
           logCtx,
@@ -1550,7 +1584,7 @@ export async function deliverPassthroughResponse(
           clientJson = estimated;
           headers.set(ESTIMATED_USAGE_HEADER, "true");
           // The request-log finalizer parses the delivered body again; keep the estimate out of it.
-          logCtx.usageEstimatedForClient = true;
+          logCtx.clientResponseUsage = "estimated";
         }
       }
       // #875: the transport-neutral reliability policy forced a bounded JSON
@@ -1594,7 +1628,7 @@ export async function deliverPassthroughResponse(
             }
             throw error;
           }
-          const sseHeaders = sanitizePassthroughHeaders(headers, passthroughHeaderOptions);
+          const sseHeaders = new Headers(headers);
           sseHeaders.set("content-type", "text/event-stream");
           sseHeaders.set("cache-control", "no-store");
           return new Response(stream, {

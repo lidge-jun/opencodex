@@ -73,6 +73,17 @@ No sustituyas `api_key` por `env_key` aquí. Si `env_key` no se resuelve, la sol
 
 El `api_key` insertado en la entrada del proveedor ocupa el primer lugar en la cadena de credenciales de Grok para estos modelos, por lo que las interacciones con opencodex no requieren otro inicio de sesión en Grok. Conserva tu configuración habitual de `grok login` / `XAI_API_KEY` para los modelos nativos de Grok y las funciones del entorno de ejecución que contacten directamente con xAI.
 
+## Error 403 de OAuth de xAI con el modo de privacidad Legacy
+
+Si `ocx provider test xai` o una solicitud a Grok indica que la cuenta usa **Legacy (no storage)**,
+abre los ajustes de privacidad de xAI/Grok y selecciona **Privacy Mode**. Después, vuelve a
+ejecutar `ocx provider test xai`. Este ajuste también bloquea la detección de modelos y las
+consultas de cuota. El registro del servicio OpenCodex muestra las mismas indicaciones. Puedes
+seguir usando la sesión OAuth actual.
+Si el modelo Grok forma parte de un combo de Responses, el combo puede probar otro modelo
+elegible. Si se agotan los modelos elegibles, un error confirmado de ventana de contexto o
+una respuesta de cuota aplicable tiene prioridad sobre la indicación de Privacy Mode.
+
 <a id="manual-recipe-without-auto-registration"></a>
 
 ## Receta manual (sin registro automático)

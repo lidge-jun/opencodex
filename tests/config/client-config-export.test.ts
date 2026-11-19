@@ -75,7 +75,7 @@ function cfg(extra?: Partial<OcxConfig>): OcxConfig {
  * dedupe+sort precondition, so it is compared entry-by-entry against the same truth.
  */
 const GOLDEN_OPENCODE_BLOCK = JSON.parse(
-  '{"npm":"@ai-sdk/openai-compatible","name":"OpenCodex","options":{"baseURL":"http://127.0.0.1:10100/v1","apiKey":"{env:OPENCODEX_OPENCODE_API_KEY}"},"models":{"gpt-5.6-luna":{"name":"gpt-5.6-luna (native)","limit":{"context":272000,"output":128000}},"anthropic/claude-opus-5":{"name":"Claude Opus 5 (anthropic)","limit":{"context":200000,"output":128000}},"custom/no-context":{"name":"no-context (custom)"},"tiny/small-ctx":{"name":"small-ctx (tiny)","limit":{"context":8000,"output":8000}}}}',
+  '{"npm":"@ai-sdk/openai","name":"OpenCodex","options":{"baseURL":"http://127.0.0.1:10100/v1","apiKey":"{env:OPENCODEX_OPENCODE_API_KEY}"},"models":{"gpt-5.6-luna":{"name":"gpt-5.6-luna (native)","limit":{"context":272000,"output":128000}},"anthropic/claude-opus-5":{"name":"Claude Opus 5 (anthropic)","limit":{"context":200000,"output":128000}},"custom/no-context":{"name":"no-context (custom)"},"tiny/small-ctx":{"name":"small-ctx (tiny)","limit":{"context":8000,"output":8000}}}}',
 ) as {
   npm: string;
   name: string;
@@ -86,6 +86,43 @@ const GOLDEN_OPENCODE_BLOCK = JSON.parse(
 function opencodeConfig(context: ExportContext = ctx()): OpencodeGeneratedConfig {
   return buildClientConfig("opencode", context) as OpencodeGeneratedConfig;
 }
+
+test("OpenCode selects the protocol for each concrete model in both config generations", () => {
+  const models: ExportModel[] = [
+    { namespaced: "mock/chat", provider: "mock", id: "chat", supportsReasoning: true, fastRowAvailable: true },
+    { namespaced: "mock/responses", provider: "mock", id: "responses", supportsReasoning: true },
+    { namespaced: "deepseek/deepseek-flash", provider: "deepseek", id: "deepseek-flash" },
+    { namespaced: "oauth/model", provider: "oauth", id: "model" },
+    { namespaced: "combo/dynamic", provider: "combo", id: "dynamic" },
+    { namespaced: "unknown/cold", provider: "unknown", id: "cold" },
+  ];
+  const doc = opencodeConfig(ctx({ models, config: cfg({
+    providers: {
+      mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1", allowPrivateNetwork: true,
+        modelAdapters: { responses: "openai-responses" } },
+      deepseek: { adapter: "openai-chat", baseUrl: "https://api.deepseek.com" },
+      oauth: { adapter: "openai-chat", baseUrl: "https://example.com/v1", authMode: "oauth" },
+    },
+  }) }));
+  const v1 = doc.provider.opencodex!;
+  const v2 = doc.providers.opencodex!;
+  expect(v1.npm).toBe("@ai-sdk/openai");
+  expect(v2.package).toBe("@opencode/ai/providers/openai-compatible-responses");
+  expect(v1.models["mock/chat"]).toMatchObject({
+    provider: { npm: "@ai-sdk/openai-compatible" }, interleaved: { field: "reasoning_content" },
+  });
+  expect(v2.models["mock/chat"]).toMatchObject({
+    package: "@opencode/ai/providers/openai-compatible", compatibility: { reasoningField: "reasoning_content" },
+  });
+  for (const key of ["mock/chat--fast", ...models.slice(1).map(model => model.namespaced)]) {
+    expect(v1.models[key]).not.toBeUndefined();
+    expect(v1.models[key]!.provider).toBeUndefined();
+    expect(v1.models[key]!.interleaved).toBeUndefined();
+    expect(v2.models[key]).not.toBeUndefined();
+    expect(v2.models[key]!.package).toBeUndefined();
+    expect(v2.models[key]!.compatibility).toBeUndefined();
+  }
+});
 
 function piConfig(context: ExportContext = ctx()): PiGeneratedConfig {
   return buildClientConfig("pi", context) as PiGeneratedConfig;
@@ -169,7 +206,7 @@ describe("relocated OpenCode serializer (accept criterion 1)", () => {
 
   test("a non-loopback bind moves admission to the header branch", () => {
     const block = opencodeConfig(ctx({ config: cfg({ hostname: "0.0.0.0" }) })).provider.opencodex!;
-    expect(block.options.apiKey).toBeUndefined();
+    expect(block.options.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
     expect(block.options.headers).toEqual({ "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF });
   });
 
@@ -281,7 +318,7 @@ describe("OpenCode V2 block (reasoning-effort variants)", () => {
     expect(v2.settings).toEqual(v1.options);
     // opencode V2 merges both blocks by provider and model id, so the same ids must not
     // produce duplicate picker entries.
-    expect(v2.package).toBe("@opencode/ai/providers/openai-compatible");
+    expect(v2.package).toBe("@opencode/ai/providers/openai-compatible-responses");
     for (const [key, entry] of Object.entries(v2.models)) {
       expect(entry.name).toBe(v1.models[key]!.name);
       expect(entry.limit).toEqual(v1.models[key]!.limit);
@@ -290,10 +327,11 @@ describe("OpenCode V2 block (reasoning-effort variants)", () => {
 
   test("a non-loopback bind moves admission to the header branch in both blocks", () => {
     const config = buildClientConfig("opencode", ladderCtx(cfg({ hostname: "0.0.0.0" }))) as OpencodeGeneratedConfig;
-    for (const block of [config.provider.opencodex!.options, config.providers.opencodex!.settings]) {
-      expect(block.headers).toEqual({ "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF });
-      expect(block.apiKey).toBeUndefined();
-    }
+    const { headers, ...settings } = config.provider.opencodex!.options;
+    expect(headers).toEqual({ "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF });
+    expect(settings.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
+    expect(config.providers.opencodex!.headers).toEqual(headers);
+    expect(config.providers.opencodex!.settings).toEqual(settings);
   });
 });
 
@@ -835,7 +873,7 @@ describe("hub-resolved Fast exports", () => {
     expect(expanded.v1.models["remote/model--fast"]).toEqual({
       name: "Remote Model Fast (remote)", limit: { context: 8192, output: 8192 },
       attachment: true, modalities: { input: ["text", "image"], output: ["text"] },
-      reasoning: true, interleaved: { field: "reasoning_content" },
+      reasoning: true,
       options: { reasoningEffort: "high" },
       tool_call: true,
       variants: { none: { reasoningEffort: "none" }, high: { reasoningEffort: "high" }, ultra: { reasoningEffort: "ultra" } },
@@ -843,7 +881,6 @@ describe("hub-resolved Fast exports", () => {
     expect(expanded.v2.models["remote/model--fast"]).toEqual({
       name: "Remote Model Fast (remote)", limit: { context: 8192, output: 8192 },
       capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
-      compatibility: { reasoningField: "reasoning_content" },
       settings: { reasoningEffort: "high" },
       variants: [
         { id: "none", settings: { reasoningEffort: "none" } },
@@ -854,8 +891,11 @@ describe("hub-resolved Fast exports", () => {
     expect(expanded.v1.options).toEqual({ baseURL: BASE_URL, apiKey: OPENCODE_API_KEY_ENV_REF });
     expect(expanded.v2.settings).toEqual({ baseURL: BASE_URL, apiKey: OPENCODE_API_KEY_ENV_REF });
     const remote = opencodeProviderBlocks(BASE_URL, [eligible], cfg({ hostname: "0.0.0.0" }));
-    expect(remote.v1.options).toEqual({ baseURL: BASE_URL, headers: { "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF } });
-    expect(remote.v2.settings).toEqual(remote.v1.options);
+    const { headers, ...settings } = remote.v1.options;
+    expect(headers).toEqual({ "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF });
+    expect(settings).toEqual({ baseURL: BASE_URL, apiKey: LOOPBACK_API_KEY_PLACEHOLDER });
+    expect(remote.v2.headers).toEqual(headers);
+    expect(remote.v2.settings).toEqual(settings);
   });
 
   test("opencodeClientExport timeouts are omitted by default and emitted into both blocks when set", () => {
@@ -980,7 +1020,7 @@ describe("EXPORT_CLIENTS registry", () => {
   "$schema": "https://opencode.ai/config.json",
   "provider": {
     "opencodex": {
-      "npm": "@ai-sdk/openai-compatible",
+      "npm": "@ai-sdk/openai",
       "name": "OpenCodex",
       "options": {
         "baseURL": "http://127.0.0.1:10100/v1",
@@ -1016,7 +1056,7 @@ describe("EXPORT_CLIENTS registry", () => {
   },
   "providers": {
     "opencodex": {
-      "package": "@opencode/ai/providers/openai-compatible",
+      "package": "@opencode/ai/providers/openai-compatible-responses",
       "name": "OpenCodex",
       "settings": {
         "baseURL": "http://127.0.0.1:10100/v1",

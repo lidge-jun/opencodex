@@ -47,7 +47,6 @@ import {
 } from "../ws-bridge";
 import { websocketsEnabled } from "../../config";
 import { metricsExportEnabled } from "../../config/feature-flags";
-import { grokDefaultReasoningEffort } from "../../grok/effort";
 import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { providerCodexAccountMode } from "../../providers/registry";
 import {
@@ -93,6 +92,7 @@ import {
   type RequestLogEntry,
 } from "../request-log";
 import { sessionLaneIdFromRequest } from "../request-log-conversation";
+import { mintConnectionReplayScope, releaseConnectionReplayScope } from "../../responses/state/connection-scope";
 import { responseWithDeferredRequestLog } from "../relay";
 import { createRequestMetricsOwner } from "../request-metrics";
 import { cachedKiroQuotaMetricRows } from "../../providers/kiro-quota-metrics";
@@ -110,6 +110,7 @@ import {
   resolveApiAuth,
   resolveResponsesApiAuth,
   resolveFilteredReplayPrincipal,
+  resolveContextPrincipal,
   type RequestPolicyView,
   withCors,
   withManagementCors,
@@ -175,6 +176,11 @@ import {
   requireManagementAuth,
 } from "../management-auth";
 import {
+  HUB_RELAY_CREDENTIAL_PATH, HUB_RELAY_ENROLLMENT_ID_HEADER, HUB_RELAY_READ_PREFIX, hubRelayReadTarget,
+} from "../../remote/hub-management-relay";
+import { issueHubRelayCredential, revokeHubRelayCredential } from "../hub-relay-auth";
+import { dispatchPassiveManagementRead } from "./passive-management-read";
+import {
   LOCAL_ATTESTATION_CHALLENGE_HEADER,
   LOCAL_ATTESTATION_PROOF_HEADER,
   createLocalAttestationProof,
@@ -208,16 +214,20 @@ import { classifyUsageClient } from "../../usage/client";
 import { isOllamaNativePath } from "../ollama-native-paths";
 import { ollamaError } from "../ollama-inbound";
 import { dispatchOllamaRoute } from "./ollama-routes";
+import { isGeminiNativePath } from "../gemini-native-paths";
+import { geminiError } from "../gemini-inbound";
+import { dispatchGeminiRoute } from "./gemini-routes";
 
 import { readyProtocolMetadata } from "../../remote/protocol";
 import { homeInstanceId, stampServedBy } from "../../remote/served-by";
-import { modelCapabilityFields } from "../models-capabilities";
+import { grokEffortFields, modelCapabilityFields } from "../models-capabilities";
 import { createWebsocketHandler } from "./websocket-handler";
 import { reasoningArchiveErrorResponse } from "../responses/reasoning-archive-error";
 import { withGrokSessionIdentity } from "../../grok/session-identity";
 import { withCallerSessionIdentity } from "../caller-session-identity";
 import { agentAssertionUnsupportedResponse, hasAgentAssertionAuthorization } from "../../lib/authorization-scheme";
 import { runTurnStateCallerScope } from "../turn-state-handles";
+import { classifyRequestPeer, runWithRequestPeer } from "../../lib/request-peer-scope";
 
 export {
   claudeInterceptRouteAllowed,
@@ -364,6 +374,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         || readyzPath !== undefined
         || url.pathname.startsWith("/v1/")
         || isOllamaNativePath(url.pathname)
+        || isGeminiNativePath(url.pathname)
       )) {
         const message = "OpenCodex package files changed while this proxy was running; it restarts on its own, or run 'ocx restart' ('ocx service restart' for a background service).";
         const fencedPort = ctx.boundPort ?? requestServer.port ?? listenPort;
@@ -389,7 +400,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             }, 503, req, policy)
           : isOllamaNativePath(url.pathname)
             ? withCors(ollamaError(503, message), req, policy)
-            : packageTreeChangedResponse(req, policy, message);
+            : isGeminiNativePath(url.pathname)
+              ? withCors(geminiError(503, message), req, policy)
+              : packageTreeChangedResponse(req, policy, message);
         const headers = new Headers(response.headers);
         headers.set("Retry-After", "5");
         const challenge = fencedHealth ? req.headers.get(LOCAL_ATTESTATION_CHALLENGE_HEADER) : null;
@@ -407,6 +420,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         // The exact Ollama-compatible paths are data-plane routes and take data-plane CORS.
         const managementPreflight = url.pathname.startsWith("/api/") && !isOllamaNativePath(url.pathname);
+        // Gemini routes are data-plane paths too (never under /api/), so they take the data-plane branch.
         const allowed = managementPreflight
           ? isAllowedManagementOrigin(req, config)
           : isAllowedRequestOrigin(req, policy);
@@ -571,19 +585,25 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (!websocketLease) return serverBusyResponse(req, "Codex WebSockets", policy);
         const forwardHeaders = selectForwardHeaders(req.headers);
         const replayPrincipal = resolveFilteredReplayPrincipal(req, config, admission, forwardHeaders);
+        // An unidentified loopback caller gets a server-minted replay scope bound to this
+        // socket and its handshake thread; a keyed caller keeps the durable principal path.
+        const replayScope = admission.kind === "loopback" && resolveContextPrincipal(req, config, admission) === undefined
+          ? mintConnectionReplayScope(req.headers.get("thread-id") ?? undefined)
+          : undefined;
         // Upgrade on the server that RECEIVED this request, not the captured `server`
         // binding. They are the same object for the public listener, but the
         // unauthenticated loopback listener (#1102) is a second Bun.serve, and handing its
         // request to the public server's upgrade would fail or cross sockets.
         if (requestServer.upgrade(req, {
-          data: buildResponsesWsData(
+          data: { ...buildResponsesWsData(
             forwardHeaders,
             admission,
             websocketLease,
             sessionLaneIdFromRequest(req.headers),
-            classifyUsageClient(req.headers), replayPrincipal,
-          ),
+            classifyUsageClient(req.headers), replayPrincipal, replayScope,
+          ), peerLocal: classifyRequestPeer(ingress, requestServer.requestIP?.(req)?.address, config.dashboardTrustedProxy, req.headers).local },
         })) return undefined as unknown as Response;
+        releaseConnectionReplayScope(replayScope);
         websocketLease.release();
         return withCors(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"), req, policy);
       }
@@ -656,8 +676,15 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const native = await dispatchOllamaRoute(req, url, { config, policy, requestServer, requestMetricsLogContext, drainingResponse, runAdmittedHttpTurn });
         if (native) return native;
       }
+      if (isGeminiNativePath(url.pathname)) {
+        const native = await dispatchGeminiRoute(req, url, { config, policy, requestServer, requestMetricsLogContext, drainingResponse, runAdmittedHttpTurn });
+        if (native) return native;
+      }
 
       if (url.pathname.startsWith("/api/")) {
+        if (url.pathname === HUB_RELAY_CREDENTIAL_PATH && req.method === "DELETE") {
+          return withManagementCors(revokeHubRelayCredential(managementAuth, req, config), req, config);
+        }
         const localManagementAuth = {
           attestationSecret: localAttestationSecret,
           pid: process.pid,
@@ -669,6 +696,27 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // gate used. Consent-bearing routes need this: request headers are forgeable
         // by anything holding the admin token, the credential is not.
         const principal = managementPrincipal(req, managementAuth, config, localManagementAuth) ?? undefined;
+        if (url.pathname === HUB_RELAY_CREDENTIAL_PATH) {
+          const response = principal === "admin-token"
+            || (principal === "gui-session" && managementSessionControl.isPaired(req, config))
+            ? issueHubRelayCredential(managementAuth, req, config)
+            : Response.json({ error: "hub relay enrollment authority required" }, { status: 403 });
+          return withManagementCors(response, req, config);
+        }
+        if (url.pathname.startsWith(HUB_RELAY_READ_PREFIX + "/")) {
+          const target = hubRelayReadTarget(req);
+          if (config.runtimeRole !== "hub" || !target
+            || (principal !== "hub-relay-read" && principal !== "gui-session" && principal !== "admin-token")) {
+            return withManagementCors(Response.json({ error: "hub relay read refused" }, { status: 404 }), req, config);
+          }
+          const keyId = principal === "hub-relay-read" ? req.headers.get(HUB_RELAY_ENROLLMENT_ID_HEADER) : null;
+          if (principal === "hub-relay-read" && !keyId) {
+            return withManagementCors(Response.json({ error: "hub relay enrollment required" }, { status: 401 }), req, config);
+          }
+          const enrollment = keyId ? { keyId, stillAdmitted: () => managementPrincipal(req, managementAuth, config) === "hub-relay-read" } : undefined;
+          const response = await dispatchPassiveManagementRead(req.method, target, config, requestManagementApiDeps, undefined, { enrollment });
+          return withManagementCors(response, req, config);
+        }
         if (url.pathname === GUI_PAIR_PATH || url.pathname === DESKTOP_GUI_PAIR_PATH) {
           if (url.pathname === DESKTOP_GUI_PAIR_PATH && (!trustedLoopbackForIngress(ingress, config.hostname ?? "127.0.0.1")
             || !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(requestServer.requestIP(req)?.address ?? "")
@@ -798,6 +846,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       if (url.pathname === "/v1/usage" && req.method === "GET") {
         const { handleHubUsage } = await import("../hub-usage");
         return handleHubUsage(req, config, policy);
+      }
+
+      if (url.pathname === "/v1/usage/windows" && req.method === "GET") {
+        const { handleHubUsageWindows } = await import("../hub-usage-windows");
+        return handleHubUsageWindows(req, config, policy);
       }
 
       if (url.pathname === "/v1/hub-state" && (req.method === "GET" || req.method === "HEAD")) {
@@ -1079,28 +1132,6 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         // OpenAI list shape: native gpt bare + routed models namespaced "<provider>/<id>"
         // (pure availability list — disabled natives are omitted entirely).
-        // Grok Build discovers models through this endpoint too, and its model picker only
-        // enables /effort for entries that advertise the reasoning ladder in the Grok model
-        // catalog shape (supports_reasoning_effort + reasoning_efforts[]). The Codex catalog
-        // branch above already carries the same ladders, so mirror them here — native rows
-        // from the upstream snapshot, routed rows from the configured provider tiers. The
-        // default uses the same canonical fallback as the Codex catalog resolver
-        // (configured default, then medium, then high, then the first tier). Extra fields
-        // are ignored by plain OpenAI clients.
-        const grokEffortOption = (value: string, isDefault: boolean) => ({
-          value,
-          label: `${value[0].toUpperCase()}${value.slice(1)} Effort`,
-          ...(isDefault ? { default: true } : {}),
-        });
-        const grokEffortFields = (efforts: string[], configuredDefault?: string) => {
-          const defaultEffort = grokDefaultReasoningEffort(efforts, configuredDefault);
-          if (defaultEffort === undefined) return {};
-          return {
-            supports_reasoning_effort: true,
-            reasoning_effort: defaultEffort,
-            reasoning_efforts: efforts.map(effort => grokEffortOption(effort, effort === defaultEffort)),
-          };
-        };
         // Cursor's local-agent runtime (Private Inference build) reads api_types + capabilities
         // to enable its effort control; every other consumer ignores them. See
         // src/server/models-capabilities.ts.
@@ -1852,11 +1883,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         return withCors(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"), req, policy);
       }
 
-      // Data-plane guard: unknown /v1/* paths must fail with JSON 404, never fall through to the
+      // Data-plane guard: unknown /v1/* and /v1beta/* paths must fail with JSON 404, never fall through to the
       // GUI static handler (extensionless paths would get index.html with HTTP 200 and codex-rs
       // endpoint clients — memories/*, realtime/* — would surface confusing
       // serde decode errors instead of a clean not-found).
-      if (url.pathname.startsWith("/v1/")) {
+      if (url.pathname.startsWith("/v1/") || url.pathname.startsWith("/v1beta/")) {
         return withCors(formatErrorResponse(404, "not_found", messagesUnknownEndpointMessage(req)), req, policy);
       }
 
@@ -1944,6 +1975,8 @@ export function createServeOptions(ctx: ServeOptionsContext) {
   const routeFetch = serveOptions.fetch;
   // x-opencodex-served-by on GET /v1/models, whichever branch answered (src/remote/served-by.ts).
   // Each request runs with its own caller slot, which admission fills for turn-state handle binding.
-  return { ...serveOptions, fetch: (req: Request, requestServer: Server<WsData>): Promise<Response> => runTurnStateCallerScope(async () =>
-    stampServedBy(req.method, codexCompatibleUrl(req.url).pathname, await routeFetch(req, requestServer))) } as const;
+  // Each request also carries its peer snapshot (listener + kernel-observed address), read by local-only providers.
+  return { ...serveOptions, fetch: (req: Request, requestServer: Server<WsData>): Promise<Response> => runWithRequestPeer(
+    classifyRequestPeer(ingressForServer(requestServer), requestServer.requestIP?.(req)?.address, config.dashboardTrustedProxy, req.headers), () => runTurnStateCallerScope(async () =>
+      stampServedBy(req.method, codexCompatibleUrl(req.url).pathname, await routeFetch(req, requestServer)))) } as const;
 }

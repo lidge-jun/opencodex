@@ -248,6 +248,8 @@ opencodex fails safely instead of forwarding an empty or unreadable task:
   Without successful recovery and an eligible target, unreadable ciphertext is never forwarded.
 - A readable plaintext task keeps the normal route and fallback behavior.
 
+With plaintext V2 enabled, a loopback Responses WebSocket without a local API key can continue its own responses on the same connection and thread. Its continuation state stays in bounded memory until the connection closes, reaches 24 hours from the handshake, or the cache evicts the entry. The proxy keeps this state out of response snapshots and spill files. Another socket, a reconnect or HTTP cannot reuse that state. In plaintext V2, a continuation ID missing from the local cache is refused with `previous_response_not_found`, including on custom Responses gateways and combos. Resend the full conversation without `previous_response_id`; this also applies to callers with a local API key, and a gateway account cannot supply the missing local ownership proof. A delegated child can start a fresh plaintext task on its own connection. Callers with a local API key keep their existing retention policy. Recovered bodies marked non-persistable remain unstored.
+
 Recovery options are to select a native ChatGPT child, explicitly trust a direct key-auth Responses
 relay that can consume the opaque payload, add a native ChatGPT target to the combo, use v1 for
 heterogeneous-provider delegation, or resend the task as plaintext v2 `agent_message` content when

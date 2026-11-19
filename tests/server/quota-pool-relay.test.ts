@@ -24,6 +24,7 @@ import { linkStorePath } from "../../src/link/paths";
 import { writeLinkStore } from "../../src/link/store";
 import { linkManagementReadAllowed } from "../../src/link/management-routes";
 import { relayHubManagementRequest } from "../../src/client/hub-relay";
+import { HUB_RELAY_CREDENTIAL_PATH, hubRelayEnrollmentProof } from "../../src/remote/hub-management-relay";
 import { readQuotaPoolIdentity } from "../../src/quota-pool/identity";
 import { getProviderQuotaReportCache, setProviderQuotaReportCache } from "../../src/providers/quota/report-cache";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -239,16 +240,37 @@ describe("GET /api/quota-pool", () => {
     expect(durableState()).toEqual(before);
   });
 
-  test("Hub client relay: /api/machine/hub-relay/api/quota-pool reaches the hub's read", async () => {
-    const relay = (headers: Record<string, string>) => relayHubManagementRequest(
-      new Request("http://127.0.0.1:1/api/machine/hub-relay/api/quota-pool?refresh=1", { headers }),
+  test("Hub client relay: both caller and scoped lease get the passive quota pool", async () => {
+    const hub = server!.url.origin;
+    const keyId = "linked-key";
+    const issuance = await fetch(hub + HUB_RELAY_CREDENTIAL_PATH, {
+      method: "POST",
+      headers: {
+        "x-opencodex-api-key": ADMIN_KEY,
+        "x-opencodex-hub-enrollment-id": keyId,
+        "x-opencodex-hub-enrollment-proof": hubRelayEnrollmentProof(LINKED_KEY, keyId, "issue"),
+      },
+    });
+    expect(issuance.status).toBe(201);
+    const { token } = await issuance.json() as { token: string };
+    const readCredential = (method: string, target: string) => {
+      const at = String(Date.now());
+      return { token, keyId, at, proof: hubRelayEnrollmentProof(LINKED_KEY, keyId, "read", token, { at, method, target }) };
+    };
+    const relay = (headers: Record<string, string>, scoped = false, method = "GET") => relayHubManagementRequest(
+      new Request("http://127.0.0.1:1/api/machine/hub-relay/api/quota-pool?refresh=1", { headers, method }),
       "/api/quota-pool?refresh=1",
-      { managementUrl: server!.url.origin, browserOrigin: "http://127.0.0.1:1" },
+      { managementUrl: hub, browserOrigin: "http://127.0.0.1:1" },
+      scoped ? { readCredential } : {},
     );
     await expectRefused(await relay({}));
     const before = durableState();
     effects = [];
     await expectPool(await relay({ "x-opencodex-api-key": ADMIN_KEY }));
+    await expectPool(await relay({}, true));
+    const head = await relay({}, true, "HEAD");
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
     await Bun.sleep(250);
     expect(effects).toEqual([]);
     expect(durableState()).toEqual(before);

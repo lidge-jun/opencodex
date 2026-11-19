@@ -37,6 +37,9 @@ Fetch-based Anthropic model iterations use the [thinking-signature recovery cont
 
 Fetch-based Anthropic image bridge account recovery follows [the revoked-token contract](../providers/anthropic-account-pool.md#revoked-oauth-access-token-recovery), including output commitment and send-budget gates.
 
+The [provider timeout policy](../transports/timeouts.md#provider-scoped-budgets) covers the
+routed model iterations. Image and video generation use separate tool deadlines.
+
 ## Video bridge destination
 
 `planVideoBridge` in `src/images/plan.ts` decides where `video_gen` submit and poll requests go and
@@ -216,6 +219,9 @@ injects summary generation into a request, and config validation rejects a deliv
 conflicts with `modelSupportsReasoningSummaries: false` for the same model.
 
 > Decision record: [ADR-0045](../decisions/ADR-0045-standalone-images.md)
+
+Media bridge worker legs follow the [credit accounting contract](../dashboard-and-usage.md#usage-accounting)
+when accumulating routed-model usage across iterations.
 
 Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../dashboard-and-usage.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 

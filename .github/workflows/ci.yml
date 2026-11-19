@@ -626,10 +626,14 @@ jobs:
     needs: changes
     if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.fast != 'true')
     runs-on: ${{ vars.LIDGE_RUNNERS == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)) && fromJSON('["self-hosted","linux","x64","lidge"]') || 'ubuntu-latest' }}
-    # A fifth of the suite. A shard that needs longer than this is wedged, not
-    # slow — the old 30-minute ceiling was margin for the Windows leg, which no
-    # longer runs here (see platform-windows).
-    timeout-minutes: 15
+    # A fifth of the suite. 20 rather than 15 is headroom for hosted runners:
+    # ubuntu-latest shards were cancelled at the 15-minute wall in their last
+    # batches with no failing tests (#8651 shard 1 at batch 62/65 and shard 5 at
+    # 66/66; also #8585, #8645, #8841, #8861, #8887), and a cancelled shard is
+    # neither a pass nor a fail. A shard far beyond 20 minutes is still wedged,
+    # not slow. The old 30-minute ceiling was margin for the Windows leg, which
+    # no longer runs here (see platform-windows).
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

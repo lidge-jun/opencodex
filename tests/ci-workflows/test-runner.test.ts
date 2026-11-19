@@ -20,7 +20,7 @@ import {
   changedSelectionFailure,
   captureTestOutput,
   createIsolatedTestEnvironment,
-  LIVE_INSTALL_CREDENTIAL_ENV,
+  LIVE_INSTALL_ENV,
   ensureGuiDependencies,
   inspectChangedRun,
   OCX_CHILD_CONFORMANCE_BUILD_MS,
@@ -29,6 +29,7 @@ import {
   resolveBunTestPlan,
   runTestLane,
   selectChangedComparisonRef,
+  serialFullSuiteBatchManifest,
   SERIAL_FULL_SUITE_FILES,
 } from "../../scripts/test";
 import {
@@ -337,16 +338,18 @@ describe("test runner isolation", () => {
     expect(existsSync(isolated.root)).toBe(false);
   });
 
-  test("drops the developer's live install credentials and keeps the rest of the environment", () => {
+  test("drops the developer's live install settings and keeps the rest of the environment", () => {
     const isolated = createIsolatedTestEnvironment({
       PATH: "/test/bin",
       FIXTURE: "unchanged",
       OPENCODEX_API_AUTH_TOKEN: "live-data-token",
       OPENCODEX_ADMIN_AUTH_TOKEN: "live-admin-token",
       OCX_API_TOKEN_FILE: "/real/home/.opencodex/service-api-token",
+      OCX_MANAGED_RELEASE: "1",
     });
     try {
-      for (const name of LIVE_INSTALL_CREDENTIAL_ENV) expect(name in isolated.env).toBe(false);
+      for (const name of LIVE_INSTALL_ENV) expect(name in isolated.env).toBe(false);
+      expect("OCX_MANAGED_RELEASE" in isolated.env).toBe(false);
       expect(isolated.env.FIXTURE).toBe("unchanged");
       expect(isolated.env.PATH).toBe("/test/bin");
     } finally {
@@ -723,6 +726,16 @@ describe("bun test argv", () => {
     // The conformance lane outlasts a build that uses its whole bound followed by the whole run bound.
     expect(plan.find(lane => lane.label === "link-ocx-child-conformance.test.ts")?.timeoutMs)
       .toBeGreaterThan(OCX_CHILD_CONFORMANCE_BUILD_MS + OCX_CHILD_CONFORMANCE_RUN_MS);
+  });
+
+  test("the hosted manifest carries explicit serial deadlines in seconds", () => {
+    const rows = serialFullSuiteBatchManifest().split("\n");
+    expect(rows.map(row => row.split("\t")[0])).toEqual([...SERIAL_FULL_SUITE_FILES]);
+    for (const file of ["client-link-stop", "client-link-stop-recovery", "client-link-stop-sibling"]) {
+      expect(rows).toContain(`clients/${file}.test.ts`);
+    }
+    expect(rows).toContain("clients/link-ocx-child-conformance.test.ts\t300");
+    expect(rows).toContain("codex-integration/codex-shim.test.ts");
   });
 
   test("a control budget is bounded and changes only the main lane", () => {

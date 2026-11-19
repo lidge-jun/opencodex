@@ -1,18 +1,20 @@
-import { boundDecisionWindows } from "../quota-decision-publication";
+import { boundDecisionWindows, publishAnthropicDecisionQuota } from "../quota-decision-publication";
 import { decisionQuotaSinkActive, publishDecisionAccountQuota } from "../../lib/decision-quota-sink";
 import { mergeAnthropicFamilyWindows, hasAnthropicFamilyEnumeration } from "./anthropic-family-headers";
-import { getCachedProviderAccountQuota, captureProviderAccountQuotaEpoch } from "./account-cache";
+import { getCachedProviderAccountQuota, captureProviderAccountQuotaEpoch, type AccountQuotaCacheEntry } from "./account-cache";
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
 import type { AnthropicInstanceId } from "../anthropic-instance-id";
 import type { GenerationContext } from "../../lib/state-store-sweeper";
-import { credentialGeneration, getAccountCredential, getAccountCredentialWithStatus, getAccountSet } from "../../oauth/store";
+import { anthropicCredentialEvidenceKey, credentialGeneration, getAccountCredentialWithStatus, getAccountSet } from "../../oauth/store";
 import type { ProviderQuota } from "../quota-types";
+import type { AnthropicUsageProbe } from "../claude-cli-usage";
 
 export class AnthropicQuotaProbeOwnershipError extends Error {}
 
 export type AnthropicCooldownRecoveryProbe = Readonly<{
   instance: AnthropicInstanceId;
   generation: string;
+  credentialKey: string;
   requiresFreshDispatch: boolean;
   isCurrentCredential(): boolean;
   isCurrentFamily(): boolean;
@@ -22,12 +24,22 @@ export type AnthropicCooldownRecoveryProbe = Readonly<{
 
 export type AnthropicQuotaRecoveryResult = Readonly<{
   instance: AnthropicInstanceId;
-  quota: ProviderQuota;
+  credentialKey: string;
+  /** Null only when the response retires the monthly fallback without supplying meters. */
+  quota: ProviderQuota | null;
+  /** Account cache diagnostics for a retirement-only response. */
+  failureFields?: Pick<AccountQuotaCacheEntry, "unavailable" | "quotaFailure" | "quotaFailureIsCurrent">;
+  dispatch?: number;
   /** Publishes secret-free advisory evidence for the primary pool only; a no-op for Pool 2. */
   publishDecisionQuota(): void;
   /** Must be checked synchronously at each publication boundary. */
   isCurrent(): boolean;
 }>;
+
+export type DispatchedAnthropicUsageProbe = AnthropicUsageProbe & {
+  dispatch: number;
+  isQuotaDispatchCurrent(accountId: string): boolean;
+};
 
 /** Create the cooldown-recovery probe owner for one Anthropic instance; its results are credential- and generation-bound before they may publish. */
 function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
@@ -69,7 +81,7 @@ function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
   /** Active usage readers bind this key after token refresh; renewal keeps the legacy flight valid. */
   function anthropicCredentialQuotaFlightKey(baseKey: string, accountId: string): string {
     const row = getAccountSet(instance)?.accounts.find(row => row.id === accountId);
-    return `${anthropicCooldownFlightKey(baseKey, accountId)}\0${row ? JSON.stringify([credentialGeneration(row.credential), row.loginId, row.addedAt]) : "missing"}`;
+    return `${anthropicCooldownFlightKey(baseKey, accountId)}\0${row ? anthropicCredentialEvidenceKey(row) : "missing"}`;
   }
 
   function reserveCooldownGeneration(accountId: string): number {
@@ -110,32 +122,29 @@ function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
     accountId: string,
     accessToken: string,
   ): Promise<AnthropicCooldownRecoveryProbe | null> {
-    const credential = getAccountCredential(instance, accountId);
-    if (!credential || credential.access !== accessToken) return null;
-    const generation = credentialGeneration(credential);
+    const initialRow = getAccountSet(instance)?.accounts.find(row => row.id === accountId);
+    if (!initialRow || initialRow.paused || initialRow.needsReauth || initialRow.credential.access !== accessToken) return null;
+    const generation = credentialGeneration(initialRow.credential);
+    const credentialKey = anthropicCredentialEvidenceKey(initialRow);
     const incarnation = reserveAnthropicAccountIncarnation(accountId);
     const quotaEpoch = captureProviderAccountQuotaEpoch(instance);
-    const initialRow = getAccountSet(instance)?.accounts.find(row => row.id === accountId);
-    if (!initialRow || initialRow.paused || initialRow.needsReauth || credentialGeneration(initialRow.credential) !== generation) return null;
+    const isCurrentCredential = () => {
+      const current = getAccountSet(instance)?.accounts.find(row => row.id === accountId);
+      return quotaEpoch === captureProviderAccountQuotaEpoch(instance)
+        && anthropicAccountIncarnation(accountId) === incarnation
+        && !!current && anthropicCredentialEvidenceKey(current) === credentialKey;
+    };
     // Lazy because anthropic-routing reads the quota cache on normal request routing.
     const { anthropicRoutingFor } = await import("../../oauth/anthropic-routing");
     const routing = anthropicRoutingFor(instance);
-    const live = getAccountCredential(instance, accountId);
-    if (!live || credentialGeneration(live) !== generation) return null;
+    if (!isCurrentCredential()) return null;
     const cooldownGeneration = reserveCooldownGeneration(accountId);
     const capturedFamilyGeneration = anthropicModelQuotaFor(instance).captureAnthropicFamilyQuotaGeneration(accountId);
     const claim = routing.captureAnthropicCooldownRecovery(accountId);
-    const isCurrentCredential = () => {
-      const currentRow = getAccountSet(instance)?.accounts.find(row => row.id === accountId);
-      const current = currentRow?.credential;
-      return quotaEpoch === captureProviderAccountQuotaEpoch(instance)
-        && anthropicAccountIncarnation(accountId) === incarnation
-        && currentRow?.loginId === initialRow?.loginId && currentRow?.addedAt === initialRow?.addedAt
-        && !!current && credentialGeneration(current) === generation;
-    };
     return {
       instance,
       generation,
+      credentialKey,
       requiresFreshDispatch: claim !== null,
       isCurrentCredential,
       isCurrentFamily: () => familyGeneration(accountId) === capturedFamilyGeneration,
@@ -150,22 +159,41 @@ function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
   async function probeAnthropicQuotaWithRecovery(
     accountId: string,
     accessToken: string,
-    read: (requireFreshDispatch: boolean) => Promise<ProviderQuota | null>,
+    read: (requireFreshDispatch: boolean) => Promise<DispatchedAnthropicUsageProbe | ProviderQuota | null>,
     mayPublish: () => boolean,
   ): Promise<AnthropicQuotaRecoveryResult | null> {
     const probe = await captureAnthropicCooldownRecoveryProbe(accountId, accessToken);
     if (!probe) throw new AnthropicQuotaProbeOwnershipError(`${instance} quota probe lost credential ownership`);
     if (!probe.isCurrent() || !mayPublish()) throw new AnthropicQuotaProbeOwnershipError(`${instance} quota probe lost dispatch ownership`);
-    let quota: ProviderQuota | null;
-    try { quota = await read(probe.requiresFreshDispatch); }
+    let readResult: DispatchedAnthropicUsageProbe | ProviderQuota | null;
+    try { readResult = await read(probe.requiresFreshDispatch); }
     catch (error) {
       if (!probe.isCurrent() || !mayPublish()) throw new AnthropicQuotaProbeOwnershipError(`${instance} quota probe failure is stale`);
       throw error;
     }
-    if (!probe.isCurrent() || !mayPublish()) {
+    const observation = readResult && "quota" in readResult ? readResult : undefined;
+    let quota = readResult && "quota" in readResult ? readResult.quota : readResult;
+    const monthlyFallback = quota?.monthlyPercent !== undefined;
+    const observationCurrent = () => mayPublish() && observation?.isQuotaDispatchCurrent(accountId) !== false;
+    if (!probe.isCurrent() || !observationCurrent()) {
       throw new AnthropicQuotaProbeOwnershipError(`${instance} quota probe result is stale`);
     }
-    if (!quota) return null;
+    if (!quota) {
+      if (!observation?.retireMonthlyFallback) return null;
+      const isCurrent = () => probe.isCurrent() && observationCurrent();
+      return {
+        instance, credentialKey: probe.credentialKey, quota: null, dispatch: observation.dispatch, isCurrent,
+        failureFields: {
+          unavailable: true,
+          ...(observation.failure ? { quotaFailure: observation.failure, quotaFailureIsCurrent: isCurrent } : {}),
+        },
+        publishDecisionQuota: () => {
+          if (instance === "anthropic" && decisionQuotaSinkActive() && isCurrent()) {
+            publishAnthropicDecisionQuota(accountId, probe.generation, null, true);
+          }
+        },
+      };
+    }
     const settlement = probe.settle(quota);
     if (settlement === "superseded") {
       throw new AnthropicQuotaProbeOwnershipError(`${instance} quota probe lost cooldown ownership`);
@@ -176,7 +204,7 @@ function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
     const ownsFamily = probe.isCurrentFamily();
     const authoritative = ownsFamily && hasAnthropicFamilyEnumeration(quota);
     if (ownsFamily) anthropicModelQuotaFor(instance).observeAnthropicFamilyQuota(accountId, quota.customWindows ?? [], quota.updatedAt, authoritative);
-    if (!authoritative) {
+    if (!authoritative && !monthlyFallback) {
       const cached = getCachedProviderAccountQuota(instance, accountId)?.customWindows;
       const windows = ownsFamily ? mergeAnthropicFamilyWindows(cached, quota.customWindows)
         : cached ?? [];
@@ -189,11 +217,13 @@ function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
     const isCurrent = () => probe.isCurrentCredential()
       && anthropicCooldownGeneration(accountId) === publicationGeneration
       && familyGeneration(accountId) === publicationFamilyGeneration
-      && mayPublish();
+      && observationCurrent();
     afterSettlementForTests?.();
     return {
       instance,
+      credentialKey: probe.credentialKey,
       quota,
+      dispatch: observation?.dispatch,
       isCurrent,
       publishDecisionQuota: () => {
         // Activation first: ownership validation reads the auth store and must not run for signals-off installs.

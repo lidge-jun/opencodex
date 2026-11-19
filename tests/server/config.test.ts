@@ -1773,11 +1773,20 @@ describe("opencodex config defaults", () => {
     }
   });
 
-  test("uses the default home when OPENCODEX_HOME is unset", () => {
-    delete process.env.OPENCODEX_HOME;
-
-    expect(getConfigPath()).toBe(join(homedir(), ".opencodex", "config.json"));
-    expect(getPidPath()).toBe(join(homedir(), ".opencodex", "ocx.pid"));
+  test("uses the default home outside the test guard when OPENCODEX_HOME is unset", () => {
+    const guard = process.env.OCX_TEST_HOME_GUARD;
+    const home = process.env.OPENCODEX_HOME;
+    try {
+      process.env.OCX_TEST_HOME_GUARD = "0";
+      delete process.env.OPENCODEX_HOME;
+      expect(getConfigPath()).toBe(join(homedir(), ".opencodex", "config.json"));
+      expect(getPidPath()).toBe(join(homedir(), ".opencodex", "ocx.pid"));
+    } finally {
+      if (guard === undefined) delete process.env.OCX_TEST_HOME_GUARD;
+      else process.env.OCX_TEST_HOME_GUARD = guard;
+      if (home === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = home;
+    }
   });
 
   test("loads UTF-8 BOM config files written by Windows tools", () => {

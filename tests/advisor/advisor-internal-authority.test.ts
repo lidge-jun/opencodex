@@ -20,6 +20,8 @@ import { executeResponsesSidecars } from "../../src/server/responses/sidecar-exe
 import { setAdvisorPlanFactory } from "../../src/server/responses/advisor-plan-slot";
 import { assertRouteAllowedByScope, resolveAdmissionModelScope } from "../../src/server/admission-model-scope";
 
+const workerProvider = { adapter: "openai-chat", baseUrl: "https://worker.invalid/v1", authMode: "key" } as const;
+
 afterEach(() => {
   setInternalCallCapabilityForTests(null);
 });
@@ -50,12 +52,12 @@ describe("internal-call capability — server-owned authority", () => {
       const requestContext = { config, options: { admission }, logCtx: {} } as Args[0];
       const requestState = {
         parsed: parseRequest({ model: "worker/cheap", input: [{ role: "user", content: "task" }] }),
-        route: { providerName: "worker", modelId: "cheap" }, admissionScope: captured,
+        route: { providerName: "worker", modelId: "cheap", provider: workerProvider }, admissionScope: captured,
       } as Args[1];
       // Controlled async boundary on a prepared-state fixture. Full request
       // preparation/transport is intentionally not invoked by this seam test.
       const pending = barrier.promise.then(() => executeResponsesSidecars(
-        requestContext, requestState, { adapter: {} } as Args[2],
+        requestContext, requestState, { adapter: {}, initialAdapterProvider: workerProvider } as Args[2],
         { routedCompaction: false } as Args[3], {} as Args[4], {} as Args[5],
       ));
       try {
@@ -104,10 +106,10 @@ describe("internal-call capability — server-owned authority", () => {
       const requestContext = { config, options, logCtx: {} } as Args[0];
       const requestState = {
         parsed: parseRequest({ model: "worker/cheap", input: [{ role: "user", content: "task" }] }),
-        route: { providerName: "worker", modelId: "cheap" }, admissionScope: captured,
+        route: { providerName: "worker", modelId: "cheap", provider: workerProvider }, admissionScope: captured,
       } as Args[1];
       const pending = barrier.promise.then(() => executeResponsesSidecars(
-        requestContext, requestState, { adapter: {} } as Args[2],
+        requestContext, requestState, { adapter: {}, initialAdapterProvider: workerProvider } as Args[2],
         { routedCompaction: false } as Args[3], {} as Args[4], {} as Args[5],
       ));
       try {

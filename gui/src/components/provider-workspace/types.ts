@@ -1,4 +1,5 @@
 import type { QuotaFailureCode, QuotaUnknownReason } from "../../../../src/providers/quota-types";
+import type { AccountPauseEvidence } from "../../../../src/types/account-auto-pause";
 /**
  * provider-workspace/types.ts — shared view-model types for the Providers
  * workspace shell/rail/detail (WP080a). Data shapes only; no React.
@@ -73,10 +74,13 @@ export type OAuthAccountRow = AccountQuotaReading & {
   skipReason?: "needs_reauth" | "paused" | "suspended" | "cooldown" | "quota_exhausted";
   paused?: boolean;
   pauseDetails?: { reason: string; pausedAt: number };
+  pauseEvidence?: AccountPauseEvidence;
   autoSwitchThresholdOverride?: number | null;
   autoSwitchThreshold?: number;
   effectiveAutoSwitchThreshold?: number;
   plan?: string | null;
+  /** Anthropic: display-only name of the organization the grant serves. */
+  organizationName?: string;
   health?: { status: OAuthAccountHealthStatus; reason?: string; until?: string };
   healthLabel?: string;
   healthSummary?: string;
@@ -146,6 +150,7 @@ export type ProviderUpdatePatch = {
   allowPrivateNetwork?: boolean;
   preserveResponsesReasoningContent?: boolean;
   liveModels?: boolean;
+  transientRetryOn5xx?: { enabled?: boolean; attempts?: number } | null;
   upstreamHttpVersion?: "auto" | "http1.1" | "h1" | "http2" | "h2" | null;
   requestPacing?: WorkspaceItem["requestPacing"] | null;
   /** Dedicated field: the API PATCHes it alone for the canonical `openai` provider. */

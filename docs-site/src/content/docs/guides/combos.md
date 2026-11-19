@@ -336,15 +336,42 @@ JEV decides again, and the new decision replaces the pin, when:
 - any send of a pinned session fails (that request still fails over as usual);
 - the configuration has changed since the pin was written.
 
+#### Deciding effort on every pinned turn
+
+A pin keeps the effort of the first decision by default. A session that starts with a planning
+request and continues with small edits then pays for that effort on every turn. Set
+`effort: "per-turn"` to keep the pinned target, and its prompt cache, while JEV chooses the effort
+again on every turn:
+
+```bash
+ocx combo set jev-auto --session-pin 20m --session-pin-effort per-turn --json
+```
+
+```json
+{ "strategy": "jev", "sessionPin": { "ttlMs": 1200000, "effort": "per-turn" } }
+```
+
+When the pinned target offers multiple efforts, a reused turn sends one decision request with
+only that target and its efforts. If JEV picks one of those efforts, the turn uses it and the pin
+keeps it. A failed or unusable decision uses the effort the turn read from the pin. A concurrent
+turn can still update the stored effort. If the pinned target becomes unavailable during the decision,
+the Combo falls back to an eligible target. Usage records retain the effort decision telemetry,
+including tokens the decision model reports when it ends with a failed or incomplete response.
+The turn counts as a regular decision. A single-effort target skips the decision.
+With `jevEffortMode: "client"`, reused turns follow the client effort policy
+and skip the decision. `--session-pin-effort pinned` restores the default. Changing the idle window
+with `--session-pin` keeps the mode.
+
 A cancelled request keeps the pin. A fail-open decision (timeout, missing key, invalid answer)
 never creates one. Pins live in the proxy's memory, at most 512 sessions, and do not survive a
 restart.
 
-Usage records mark a reused turn with `jevDecision.pinned: true` and `pinReason: "session"`. A
+Usage records mark a reused turn with `jevDecision.pinned: true` and `pinReason: "session"`, or
+`pinReason: "session_effort"` when JEV tried to decide its effort. A
 decision that replaced a released pin records why in `pinReason` (`expired`, `config_changed`,
 `target_unavailable`, `effort_unavailable` or `quota_nearly_exhausted`). `ocx combo stats`
-counts pinned requests apart from decisions; they still count toward successful requests, model
-fallbacks and per-model tokens.
+counts every reused turn as pinned. It also counts `session_effort` turns as decisions, including
+failed decisions. Reused turns still count toward successful requests, model fallbacks and per-model tokens.
 
 A pin makes provider cache reuse possible; whether the provider actually serves cached tokens still
 depends on the provider, the account and a stable prompt prefix. `--session-pin -` (API `null`)
@@ -692,6 +719,10 @@ precedence unless `defaultEffortMode` is `"force"`. Without one, the Combo's `de
 when set, and the provider default applies otherwise. A continuation of a turn that a fallback target
 answered follows the same policy.
 
+In `decide` mode, the Combo's catalog row advertises no reasoning effort levels, so the Codex
+model picker hides its effort control. In `client` mode, the row keeps the shared target ladder
+under ordinary Combo policy.
+
 After the Combo has served requests, open **Models → Combos → jev-auto → Stats** to inspect JEV's
 picks without replacing the normal model picker or Usage page. The tab separates backend-reported decision
 tokens from tokens reported by physical model sends, and shows decision gates, fail-open picks,
@@ -755,6 +786,25 @@ cooldown.
 For an Anthropic OAuth or Codex pool, a 429 tied to one account that the pool has cooled does
 not cool the whole combo target. Other accounts behind that target remain available. A 429 with
 no identified, cooled pool account still cools the target, as do provider-wide failures.
+
+After a Responses combo stream commits output, an incomplete terminal can cool that target for the
+next request. The reason can appear on the terminal event or its `response` snapshot. A refusal on
+either carrier takes precedence. `upstream_stall_timeout` cools for 60 seconds. `max_output_tokens`
+cools for 10 minutes when the serving attempt reaches the routed model's known output ceiling and
+the turn is unpaused.
+Devin's preset has no output ceiling, so this output-limit cooldown requires an explicit ceiling
+in the provider configuration. An existing longer cooldown keeps its expiry.
+
+During Responses preflight, the combo can try the next eligible target if a replayable terminal
+contains only reasoning or commentary text and arrives within 1 second of the first buffered
+event, including `response.created`. Refusal content or an error on either terminal carrier commits
+the stream to the selected target and preserves the upstream verdict. This also applies when a
+native Responses completion lacks the call required by `tool_choice`.
+A refusal reason such as `content_filter` in `incomplete_details.reason` also commits it, whether
+the reason appears on the terminal event or in its `response` snapshot. Either carrier can also
+veto replay with `end_turn: false` or `incomplete_details.retryable: false`. These replay vetoes also
+apply when a streamed response completes without the call required by `tool_choice`. A final answer, tool
+call, or expiry of the hold also commits the stream.
 
 ### Last-resort targets
 
@@ -1144,6 +1194,14 @@ validation message.
 
 ### Context-window refusals
 
+Before sending to a Responses combo target with a known context window and input limit,
+OpenCodex applies a 1.1× margin to the estimated input tokens and rounds up. The adjusted input
+must fit the input limit, and the adjusted input plus the output reserve must fit the context
+window. The gate can skip a target even when the caller omits `max_output_tokens`. In that case
+it reserves 10% of the target's window, clamped to 1,024–32,768 tokens. A known target output
+ceiling caps the reserve, including when the caller specifies an allowance. For targets with an
+unknown window, OpenCodex falls back to the standard input check (`checkInputAdmission`).
+
 Combo recovery reuses the bounded context-overflow detector used by Responses recovery. It reads the innermost provider message and recognizes explicit context-window/length overflow wording: a history, conversation, input, prompt, request, turn, or messages that have reached or passed a model's context limit; a prompt, input, request, or messages that are too long for the model's context window; a context window/length/limit that is full, exhausted, at its limit, or has been exceeded; and `context_length_exceeded`, `prompt is too long`, `input is too long for requested model`, and `Please reduce the length of the messages or completion`. The last three count only when the provider message starts with them (Anthropic's with its token counts), so a validation error that quotes one as a parameter value, or an SDK error string that wraps one, does not qualify. A negator that governs the overflow wording -- "does not exceed", "has not been exceeded", or "must not exceed" without a token count showing the limit was crossed -- keeps it out, while a negation in an earlier clause does not cancel a later overflow report. Capacity and availability prose about the service ("the context window is full, retry later", "shards exhausted", "KV cache for the context window is exhausted") describes back-pressure, not this turn's size, and keeps its cooldown. That wording is read in the clause that carries the verdict; a remedy that follows it ("Remove older messages before retrying", "enable prompt caching") does not turn an overflow into back-pressure. On a 5xx, "full", "exhausted" and "at its limit" never count as an overflow; they qualify only on a 4xx that speaks about the request. The detector can read the diagnostic from a string-valued JSON `error` field as well as a structured error message; a code beside an unrelated message, malformed JSON, a parameter validation error, or a generic instruction to shorten a parameter does not qualify. Already-committed output is never replayed. Fallback policy, spend consent and send budgets still apply; each physical attempt retains its own usage. When eligible targets or the send budget run out, the first confirmed HTTP 400 context refusal takes precedence over later retryable errors, including quota errors. A later fatal refusal still stops immediately.
 
 ### Why did failover stop after the first error?
@@ -1186,3 +1244,11 @@ waits and JEV selection. A target that becomes usable again during a wait can st
 be retried if its cooldown has not changed. A newer cooldown cancels that target's
 reservation. Success clears only the unchanged cooldown of the target that answered;
 untried targets and newer failures keep their cooldowns.
+
+## Suggested combos
+
+When settings change before a suggestion is saved, Combos refreshes the suggestions and displays a message. Saving checks the current exclusions and spend consent.
+
+The proxy enforces these rules on every save. The dashboard can briefly show an action that the proxy then refuses, for example right after settings change in another tab or through the CLI. The proxy answers with HTTP 409, and the workspace reloads the saved settings and combos so the cards match what the proxy allows.
+
+In the Combos workspace, **Generate** opens a failover draft for a model served by multiple providers. **Add to combo** offers missing targets for an existing combo. Dismissed cards stay hidden in this browser. Use **Exclude providers…** to filter both kinds of suggestions. The proxy stores your selection as `comboSuggestionExcludedProviders` in `config.json`. When appending suggestions, the server uses the more costly tier from the active and saved configurations. It treats existing targets explicitly marked as metered as pay-per-use and preserves the relative order of existing targets. Every suggested target can incur paid usage, including subscription channels such as Codex with purchased credits, Grok with Extra Usage, and Kimi Code with Extra Usage. To save a draft, check **Allow paid targets**. To append, first enable paid targets in the existing combo. The proxy saves every suggested target as `metered: true`. The exclusion control stays available after dismissing all cards. Changing an exclusion disables suggestion actions until the dashboard reloads the saved settings, even if the save response is lost. If suggestion settings fail to load, select **Retry**. If saved settings change before you save a suggestion, the workspace refreshes the cards using the current exclusions and paid-target consent. If **Add to combo** is disabled, run `ocx combo update <id> --allow-metered-targets on`, replacing `<id>` with the saved combo ID. The next combo refresh makes the action available when there are eligible targets to add.

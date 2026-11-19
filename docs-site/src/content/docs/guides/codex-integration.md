@@ -84,7 +84,7 @@ Codex's built-in `openai` provider id and points that provider at opencodex:
 
 ```toml
 # root keys, before the first table
-model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
+model_catalog_json = "opencodex-catalog.json"
 # Auto-injected by opencodex (undo: ocx restore)
 openai_base_url = "http://127.0.0.1:10100/v1"
 # Auto-injected by opencodex (undo: ocx restore)
@@ -401,7 +401,7 @@ uses a dedicated provider instead:
 ```toml
 # root keys
 model_provider = "opencodex"
-model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
+model_catalog_json = "opencodex-catalog.json"
 
 # appended at the end of the file
 # Auto-injected by opencodex (undo: ocx restore)
@@ -468,6 +468,16 @@ checks for a single Windows Codex Desktop home at `/mnt/c/Users/*/.codex/config.
 one candidate exists, it uses that directory so WSL app-server mode and Windows Codex Desktop share
 the same config and auth files. Set `CODEX_HOME` explicitly to override this detection. When Windows Codex Desktop runs its app-server inside WSL, it ships the Linux Codex binary under that home as `bin/wsl/<hash>/codex`; opencodex finds it there when the service PATH has no `codex`, after any explicitly configured runtime and PATH.
 
+When the catalog is beside `config.toml`, OpenCodex writes its filename as `model_catalog_json` so
+Windows Codex and the WSL app-server can both open it from the shared home. Run `ocx sync` on
+Windows to update an older OpenCodex binding that contains a Windows absolute path. This also
+applies to sync on a lightweight Link Child. The Child recognizes symlinked directories and, on
+macOS and Linux, `~/` paths that select its catalog. It refuses attach or sync while
+`config.toml` selects a different catalog or contains invalid TOML. Detach keeps the generated
+catalog if the restored config still points to it. The full OpenCodex install
+preserves custom catalog assignments. Its generated profile uses an absolute path for a catalog
+in another directory and resolves `~/` against your user home on macOS and Linux.
+
 If the Codex home exists but Codex has not written `config.toml` yet (for example a fresh Desktop install
 that was never signed in to OpenAI), opencodex creates an empty `config.toml` there and continues. If
 the home directory itself does not exist, start Codex once so it creates it, or set `CODEX_HOME`.
@@ -503,7 +513,7 @@ later requests using the existing continuation handling. This happens only under
 pressure, needs no setting, and does not change voice connections or upstream connection reuse.
 
 If a canonical ChatGPT forward continuation references expired or missing local replay state,
-opencodex returns `previous_response_not_found` before sending anything upstream. Codex's
+opencodex returns `previous_response_not_found` before forwarding the continuation. Codex's
 WebSocket client recognizes this error and can reconnect with its full retained context,
 including completed tool calls and their results, within its normal stream retry budget. An
 idle task therefore does not need a new task solely because the proxy's replay cache expired.
@@ -511,6 +521,14 @@ Replayed continuation state is retained for 24 hours and stays bounded by its ex
 disk, and entry ceilings; this does not recover history the client no longer has. HTTP clients
 must handle the error explicitly and resend their full context without `previous_response_id`.
 Retrying only the same ID cannot recover missing state.
+
+`usage.jsonl` records the selected ChatGPT provider and model with
+`errorCode: "previous_response_not_found"`. If preparation made no inference send, the row has
+`failureCause: "local-refusal"` and the request uses no model quota. Opt-in encrypted-task
+recovery can send an inference request before native fallback is selected. The Usage summary
+includes reported recovery tokens under the recovery model. If a recovery send loses its
+connection before headers, the request's full cost remains unknown even if a retry reports
+tokens. A client resend with the full context is logged separately and can use quota.
 
 The same refusal applies when the referenced state belongs to a different client task scope,
 including when the new request appears to carry complete input. The proxy cannot prove that input
@@ -1166,8 +1184,11 @@ local HTTP authorization; cleanup, renewal, stopping and turning off startup sti
 1. Inspect status, prepare the encrypted certificate and review its fingerprint before
    registering trust. Windows may ask for confirmation. Trust applies to the current Windows
    user and allows the local relay to handle `chatgpt.com` traffic.
-2. Start observation. Save drafts, close Codex, then use **Open Codex** in this panel to launch
-   the packaged app with the managed connection. The panel never forcibly closes an existing app.
+2. Start observation with an official Microsoft Store Codex package for the current Windows user.
+   Windows must verify the package contents, and the installed `ChatGPT.exe` must have a valid
+   OpenAI Authenticode signature. If either check fails or is unavailable, repair or reinstall Codex
+   from the Microsoft Store and try again. Save drafts, close Codex, then use **Open Codex** to
+   launch the verified build with the managed connection.
 3. Only after eligible exhaustion is observed, **Run 3-minute trial** offers a separate account-wide
    consent. It adjusts two UI flags across the signed-in account, not just the selected model.
    Actual usage, credits, spending restrictions and server limits remain unchanged. A produced
@@ -1203,8 +1224,10 @@ address. The first successful start owns `codex-desktop-compatibility/connection
 the OpenCodex home. Do not delete that file as a routine restart fix: a different address
 requires launching the app with a fresh managed connection.
 
-Current support is limited to the assessed Windows build `26.924.2738.0`, native file-based
-login. HTTP/HTTPS proxies and authenticated SOCKS5 proxies are supported through the shared
+Current support requires the official Windows package proof and native file-based
+login. The observed package version is admitted by that proof rather than an exact-version
+list; the natively assessed baseline remains `26.924.2738.0`.
+HTTP/HTTPS proxies and authenticated SOCKS5 proxies are supported through the shared
 outbound policy; NO_PROXY can explicitly select a direct route. Failed proxy connections do not
 fall back to direct egress. OpenCodex managed client mode is not yet supported by these controls.
 For this desktop relay, HTTP(S) `ALL_PROXY` also applies when `HTTPS_PROXY` is unset. An invalid
@@ -1241,24 +1264,40 @@ controls for immediate changes. If a save cannot be confirmed, refresh its statu
 A running service does not establish that Codex is connected through it. A normal app launch or
 an app updater can omit the managed connection argument. Save drafts, close Codex, then use
 **Open Codex** in this panel to restore that connection. This control never closes the app for you.
-After a Codex update, an unassessed app version refuses correction until its compatibility is
-reviewed; reinstalling the certificate does not make an unassessed build supported.
+After a Codex update, the runtime checks the changed package identity before emitting a
+correction, not before every usage response; a non-200 or otherwise correction-ineligible
+response can leave an active trial in place until a periodic check or an eligible usage
+response. The identity change clears both the prior exhaustion observation and trial consent.
+Even for a proof-verified newer build, wait for a new eligible original response that establishes
+exhaustion before giving fresh consent; Apply remains unavailable until that observation arrives.
+Reinstalling the certificate does not make an unverifiable package supported.
 
 The panel can also report the last completed build check as diagnostic metadata: the package
-version this build was assessed against, the package version observed at that check, whether
-they matched, and when the check finished. It is a past observation, not a live reading of the
+version serving as the natively assessed baseline, the package version observed at that check,
+and when the check finished; the proof verdict itself is reported by the runtime status API, not
+the panel. It is a past observation, not a live reading of the
 installed package. After the service stops, the app updates, or a check is still running or was
 interrupted, it can lag the actual installation; only a completed probe refreshes it, and a
 `verified` result describes the package observed at that check, not whatever is installed now.
 
 On Windows, an explicit OpenCodex full-app restart preserves an already active loopback
 compatibility PAC argument only when the current OpenCodex process owns the serving compatibility
-runtime. A stale or foreign endpoint is refused before stopping Codex; replacement of the runtime
-during restart also prevents managed relaunch. The app launches through Windows package activation. It checks the
-package identity and routing argument after launch; unreadable or conflicting main-app routing arguments cause
-a refusal before the restart. This does not enable a compatibility mode, install a certificate,
+runtime. A stale or foreign endpoint, mismatched install, or unreadable or conflicting main-app
+routing arguments cause a refusal before stopping Codex. After stopping, OpenCodex checks the
+captured runtime and build again. Windows package activation requires the verified package full
+name and executable SHA-256. OpenCodex checks that identity and the routing argument on the
+launched process before reporting success. This does not enable a compatibility mode, install a certificate,
 or watch and restart the app automatically. Normal launches without that routing argument keep
 their existing behavior.
+
+If package activation through **Open Codex** or a managed restart cannot be verified,
+OpenCodeX revokes the trial and starts cleaning up the compatibility service. Save drafts and
+close any Codex window left running. If runtime status reports `cleanup-required`, select
+**Stop observation** again and confirm that the runtime is `off`. Once cleanup succeeds,
+start observation and select **Open Codex** to restore the managed connection. Then wait for
+a fresh eligible exhaustion snapshot before confirming a new trial. Follow this sequence even
+if activation failed before a Codex window opened, or if the installed package changed while
+**Open Codex** was waiting; a launch never reports success for a package that changed meanwhile.
 
 ### Transport coverage and recovery evidence
 
@@ -1363,9 +1402,11 @@ If the new OAuth credential's authenticated usage lookup confirms an exhausted 5
 
 `ocx account refresh openai` and `ocx account list openai --quota --refresh` only read usage. Model validation spends quota and requires a human dashboard session: open `ocx gui` and click **Refresh quotas** after recovery. For a headless host, access its dashboard from your browser; an admin token alone does not authorize validation. Validation can complete while an account is paused without resuming or selecting it. Model authorization failures remain visible until successful validation or reauthentication clears them.
 
-In **Codex Set → Multi-auth**, enable the **Codex credits** switch in the **Codex Auth** header to display each main and pool account’s latest observed credits directly below Week. It is off by default and persists as `showCodexCredits`. The balance is a locale-formatted number, with Unlimited or an overage warning when reported; the bar indicates availability, not a percentage, because no total credit limit is supplied. Hiding credits changes display only, and a new login waits for its own observation.
+In **Codex Set → Multi-auth**, enable the **Codex credits** switch in the **Codex Auth** header to display each main and pool account’s latest observed credits. It is off by default and persists as `showCodexCredits`. The balance is a locale-formatted number, with Unlimited or an overage warning when reported. The bar indicates availability. Hiding credits changes display only, and a new login waits for its own observation.
 
-When an account reaches 100% on a usage window and still holds credits, upstream keeps serving it and draws the balance. OpenCodex does not let that happen by default: an account at 100% is switched out while its weekly or monthly window (only monthly on 30-day plans) or its 5-hour window is full, and used again once that window resets. The order of the other accounts does not change, and when no other account is available, selection finds none rather than spending credits. A request for the main account is refused like a hard-lock refusal until the reset. A full 5-hour window without a reset time holds an account only while that reading is fresh. Allowing the main account does not lift its hard lock (on by default at 98%), which still stops it first; turn the lock off if the main account should spend credits (a lock at 100% still stops it at 100%). To let accounts keep working from their credits, turn on **Use credits** next to the **Codex credits** switch in the Codex Auth header. The switch allows every account. To choose accounts one by one, open an account card's **⋯** menu and use **Use credits after limit** there; the header switch shows a middle position when only some accounts are on. An account allowed to spend carries a **Uses credits** badge on its card. New accounts start off. The choice is stored in `creditCodexAccountIds` and never redeems reset credits; the **Codex credits** display switch only shows balances and never changes routing.
+For Business and Enterprise workspaces reported as `business`, the usage service can return a group-based individual spending limit in place of ordinary rate-limit windows. OpenCodex uses that limit for the primary monthly quota. If the credit summary has no usable balance, the credits row uses a valid remaining amount from that individual limit. A reached limit with an omitted or null usage percentage shows 100%. An invalid percentage supplies no new monthly reading.
+
+When an account reaches 100% on a usage window and still holds credits, upstream keeps serving it and draws the balance. OpenCodex does not let that happen by default: an account at 100% is switched out while its primary weekly or monthly window or its 5-hour window is full, and used again once that window resets. The order of the other accounts does not change, and when no other account is available, selection finds none rather than spending credits. A request for the main account is refused like a hard-lock refusal until the reset. A full 5-hour window without a reset time holds an account only while that reading is fresh. Allowing the main account does not lift its hard lock (on by default at 98%), which still stops it first; turn the lock off if the main account should spend credits (a lock at 100% still stops it at 100%). To let accounts keep working from their credits, turn on **Use credits** next to the **Codex credits** switch in the Codex Auth header. The switch allows every account. To choose accounts one by one, open an account card's **⋯** menu and use **Use credits after limit** there; the header switch shows a middle position when only some accounts are on. An account allowed to spend carries a **Uses credits** badge on its card. New accounts start off. The choice is stored in `creditCodexAccountIds` and never redeems reset credits; the **Codex credits** display switch only shows balances and never changes routing.
 
 For an opted-in, unpaused main account with a full usage window, the background recovery cycle renews spendable credit observations from three minutes of age, even while the dashboard is closed. It prepares a valid token before the authenticated usage lookup so the balance can be observed again before its five-minute freshness limit. Missing, zero, restricted or retracted credits keep the account eligible for recovery lookups under the existing retry backoff. Requests remain refused until a fresh positive balance or unlimited credits are observed; `has_credits` alone or approximate message counts do not prove a spendable balance. With consent on, this credit-evidence refusal's `Retry-After` is at most five minutes, or a sooner included-quota reset; without consent it still follows the included-quota reset. A failed or incomplete lookup does not refresh old balance evidence. The separate main-account hard lock, needs-reauth quarantine and upstream retry delays still apply. This metadata lookup does not send a model validation request or set or clear the account's needs-reauth state.
 

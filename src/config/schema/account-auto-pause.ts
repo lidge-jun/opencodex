@@ -1,5 +1,6 @@
 import * as z from "zod/v4";
-import { ACCOUNT_PAUSE_REASONS } from "../../types/account-auto-pause";
+import { normalizeCloudCodeAppealText, normalizeCloudCodeAppealUrl } from "../../lib/cloud-code-appeal-link";
+import { ACCOUNT_PAUSE_REASONS, type AccountPauseEvidence } from "../../types/account-auto-pause";
 
 export const accountAutoPausePolicySchema = z.object({
   enabled: z.boolean().optional(),
@@ -9,6 +10,19 @@ export const accountPauseDetailsSchema = z.object({
   reason: z.enum(ACCOUNT_PAUSE_REASONS),
   pausedAt: z.number().int().nonnegative(),
 }).strict();
+// Not strict: unknown keys a later build adds are dropped instead of costing the known ones.
+// `accountPauseDetailsSchema` stays frozen; new pause facts go here (see AccountPauseEvidence).
+export const accountPauseEvidenceSchema = z.object({
+  statusCode: z.number().int().min(100).max(599),
+  message: z.string().max(300).optional(),
+  appealUrl: z.unknown().optional(),
+  appealText: z.unknown().optional(),
+}).transform(({ appealUrl: rawUrl, appealText: rawText, ...evidence }): AccountPauseEvidence => {
+  const appealUrl = normalizeCloudCodeAppealUrl(rawUrl);
+  if (!appealUrl) return evidence;
+  const appealText = normalizeCloudCodeAppealText(rawText);
+  return { ...evidence, appealUrl, ...(appealText ? { appealText } : {}) };
+});
 export const accountPauseStateSchema = z.record(z.string(), z.object({
   revision: z.string(), details: accountPauseDetailsSchema.optional(),
 }).strict());

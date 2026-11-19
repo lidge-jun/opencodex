@@ -13,6 +13,7 @@ import { desktopCompatibilitySchema } from "./desktop-compatibility";
 import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
 import { mainAccountHardLockFallbackSchema } from "./main-account-hard-lock-fallback";
 import { fallbackPolicySchema } from "./fallback-policy";
+import { subscriptionReserveSchema } from "./subscription-reserve";
 import {
   agentTaskRecoverySchema,
   catalogAutoRefreshSchema,
@@ -20,6 +21,7 @@ import {
   CODEX_ACCOUNT_PIN_PATTERN,
   codexAccountPrioritiesSchema,
   salvageCodexAccountAutoSwitchThresholds,
+  codexAuthMethodSchema,
   codexPoolSchema,
   codexQuotaAutoRefreshSchema,
   credentialGroupsSchema,
@@ -49,7 +51,9 @@ import {
   modelPreferHostedToolsConfigError,
   providerModelCostsConfigError,
   providerRelativeSendPathConfigError,
+  isValidCreditPriceUsd,
 } from "./leaf-validators";
+import { MAX_CREDIT_PRICE_USD } from "../../usage/credit-billing";
 import { isValidProviderName, hasOwnProvider } from "../provider-name";
 import {
   apiKeyTransportConfigError,
@@ -79,6 +83,7 @@ import { MIN_USAGE_LEDGER_MAX_BYTES } from "../../usage/retention-contract";
 // parser here would cycle back through config loading and run Cursor detection during validation.
 import { COMBO_NAMESPACE, comboConfigIssues, lexicalDecisionModelBase } from "../../combos/types";
 import { routingProfileIssues } from "../../routing/profile";
+import { agyAcpConfigIssues } from "./agy-acp-references";
 import { POLICY_NAMESPACE } from "../../routing/profile-namespace";
 import { providerDestinationConfigError } from "../../lib/destination-policy";
 import { providerTlsProfileConfigError } from "../../lib/provider-tls-profile";
@@ -108,6 +113,8 @@ export const protocolConfigSchema = z.object({
 }).strict();
 
 export const configSchema = z.object({
+  // Malformed hand edits disable only this opt-in. Candidate writes reject them.
+  subscriptionReserve: subscriptionReserveSchema.optional().catch(undefined),
   chatgptDesktop: chatgptDesktopSchema.optional().catch(undefined),
   codexNativeSteering: z.boolean().optional().catch(false),
   codexNativeInjection: z.boolean().optional().catch(false),
@@ -182,6 +189,7 @@ export const configSchema = z.object({
   // Opt-in outbound request compression (#7247). An unknown codec degrades to identity, matching
   // the guards above: a hand-edit typo must not change what the proxy sends or refuse traffic.
   upstreamRequestCompression: z.enum(["off", "gzip", "zstd"]).optional().catch(undefined),
+  upstreamHistorySlim: z.enum(["off", "codex"]).optional().catch(undefined),
   // Opt-in inbound body ceiling (#3573). An invalid hand edit degrades to the 256 MiB default
   // rather than failing the parse, matching the outbound guard above: a malformed number must
   // not change what the proxy admits. The hard ceiling is NOT enforced here — because of that
@@ -286,6 +294,9 @@ export const configSchema = z.object({
   // A malformed hand edit must not silently stop opening the browser: fall back
   // to undefined, which resolves to the historical auto-open behavior.
   oauthOpenBrowser: z.boolean().optional().catch(undefined),
+  // A malformed hand edit falls back to the historical behavior rather than
+  // discarding the config; diagnostics still report it as invalid.
+  codexAuthMethod: codexAuthMethodSchema.catch(undefined),
   showCodexCredits: z.boolean().optional().catch(false),
   openaiProviderTierVersion: z.union([z.literal(1), z.literal(2)]).optional(),
   // Invalid hand edits must not discard an otherwise usable config.
@@ -392,6 +403,7 @@ export const configSchema = z.object({
   codexFailureWindow: z.boolean().optional().catch(undefined),
   codexPinnedTransientPolicy: z.enum(["hold", "detour-new-threads"]).optional().catch("hold"),
   codexWsReuseAcrossTurns: z.boolean().optional().catch(false),
+  codexWsIncrementalUpload: z.boolean().optional().catch(false),
   activeCodexAccountPinned: z.string().regex(CODEX_ACCOUNT_PIN_PATTERN).optional().catch(undefined),
   // A malformed hand edit must degrade to false without discarding providers, accounts,
   // or the exact selector map. Live writes remain strict.
@@ -414,6 +426,9 @@ export const configSchema = z.object({
   }).optional().catch(undefined),
   // Model ids excluded from the Grok Build managed block (dashboard switches).
   grokExcludedModels: z.array(z.string()).optional(),
+  // Providers the dashboard's suggested combos leave out (Combos page).
+  comboSuggestionExcludedProviders: z.array(z.string().trim().min(1).max(256)).max(256)
+    .transform((names) => [...new Set(names)]).optional().catch(undefined),
   // Invalid values degrade to undefined ("auto") instead of failing the whole
   // parse: a hand-edited typo must never trip the backup-and-defaults repair
   // path below and wipe providers/pool accounts. Warning emitted in loadConfig.
@@ -817,6 +832,14 @@ export const configSchema = z.object({
         message: minMaxOutputError,
       });
     }
+    const creditPrice = (provider as { creditPriceUsd?: unknown }).creditPriceUsd;
+    if (creditPrice !== undefined && !isValidCreditPriceUsd(creditPrice)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "creditPriceUsd"],
+        message: `creditPriceUsd must be a finite number between 0 and ${MAX_CREDIT_PRICE_USD}`,
+      });
+    }
     const defaultMaxOutputError = positiveIntegerConfigError(
       (provider as { defaultMaxOutputTokens?: unknown }).defaultMaxOutputTokens,
       "defaultMaxOutputTokens",
@@ -938,6 +961,13 @@ export const configSchema = z.object({
         }
       }
     }
+  }
+  for (const issue of agyAcpConfigIssues(config as Parameters<typeof agyAcpConfigIssues>[0])) {
+    // Preserve non-provider identifiers for load-time salvage; diagnostics mask them at serialization.
+    const path = issue.path[0] === "providers"
+      ? issue.path.map(segment => typeof segment === "string" ? redactSecretString(segment) : segment)
+      : issue.path;
+    ctx.addIssue({ code: "custom", path, message: issue.message });
   }
   const routingProfiles = (config as { routingProfiles?: unknown }).routingProfiles;
   if (routingProfiles !== undefined) {

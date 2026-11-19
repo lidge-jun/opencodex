@@ -80,6 +80,7 @@ import {
   withCors,
   withManagementCors,
 } from "../auth-cors";
+import { connectionReplayScopeLive, releaseConnectionReplayScope } from "../../responses/state/connection-scope";
 import {
   disableResponsesRequestTimeout,
   handleResponses,
@@ -96,6 +97,9 @@ import type { RequestMetricsRecorder } from "../request-metrics";
 import { attachParsedRequestBody, resolveInboundBodyLimitBytes } from "../request-decompress";
 import { responseToolOwnership } from "../responses/response-tool-ownership";
 import { runTurnStateCallerScope } from "../turn-state-handles";
+import { runWithRequestPeer } from "../../lib/request-peer-scope";
+/** The socket recorded a local peer at its upgrade; any other socket has no local snapshot. */
+const LOCAL_PEER = Object.freeze({ local: true });
 import { admitHttpWorkflowTurn, workflowDecisionRefusalResponse } from "../workflow-refusal";
 
 /**
@@ -318,7 +322,7 @@ export function createWebsocketHandler(
         delete payload.type;
         turnAdmissionLease.bindAbortController(turnAbort);
         // The frame runs with its own caller slot, which admission fills for turn-state handle binding.
-        void runTurnStateCallerScope(async () => {
+        void runWithRequestPeer(ws.data.peerLocal === true ? LOCAL_PEER : undefined, () => runTurnStateCallerScope(async () => {
           const start = Date.now();
           const requestId = nextRequestLogId(start);
           // Resolved once at the handshake — a frame has no request headers left
@@ -374,12 +378,17 @@ export function createWebsocketHandler(
             const retainedPrincipal = ws.data.replayPrincipal;
             const replayPrincipal = retainedPrincipal && (isContextPrincipalCurrent(retainedPrincipal.clientPrincipalId, config)
               ? retainedPrincipal : { clientPrincipalId: undefined });
+            // The connection scope is a live-socket capability, not a retained credential:
+            // once closed or expired it stops backfilling the replay owner entirely.
+            const retainedScope = ws.data.replayScope;
+            const replayScope = retainedScope && connectionReplayScopeLive(retainedScope) ? retainedScope : undefined;
             const response = await handleResponses(req, config, logCtx, {
               advisorAdmissionPolicy,
               ...(wsAdmission ? { admission: wsAdmission } : {}),
               // Keep an empty holder after revocation: a different forwarded bearer
               // must not become this connection's retained replay owner.
               ...(replayPrincipal ? { replayPrincipal } : {}),
+              ...(replayScope ? { replayScope } : {}),
               forceEmptyResponseId: true,
               inboundTransport: "websocket",
               nativeControl,
@@ -469,7 +478,7 @@ export function createWebsocketHandler(
             ws.data.linkTurnEnded?.(turnId);
             if (ws.data.cancel === cancelTurn) ws.data.cancel = undefined;
           }
-        });
+        }));
       },
       close(ws: ServerWebSocket<WsData>, code: number, reason: string) {
         if (ws.data.kind === "remote-workspace-agent") {
@@ -486,6 +495,10 @@ export function createWebsocketHandler(
         unregisterCodexWebSocket(ws);
         ws.data.admissionLease?.release();
         ws.data.admissionLease = undefined;
+        // Close the connection scope before cancelling the turn so a late completion
+        // write is refused; then drop every entry this socket still owns.
+        releaseConnectionReplayScope(ws.data.replayScope);
+        ws.data.replayScope = undefined;
         ws.data.cancel?.(); // RC2: abort the upstream when the client disconnects
       },
   } as const;

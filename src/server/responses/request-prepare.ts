@@ -1,6 +1,7 @@
-import { responseReplayOwnerKey } from "../../responses/state/replay-owner";
+import { selectResponseReplayOwner } from "./replay-owner";
 import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { attributePhysicalAttempt } from "../request-log-failure-attribution";
 import { failLinkTurnExpansion, markLinkTurnMissing, observeLinkTurnExpansion } from "../link-turn";
 import { inputAdmissionRefusalMessage } from "./input-admission";
 import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
@@ -11,9 +12,9 @@ import type { PolicyRequestEvidence } from "../../routing/evaluator";
 import type { RequestLogContext } from "../request-log";
 import { addProtocolEntryReason, markProtocolEntry, protocolMarkFeatures } from "../../protocols/trace";
 import { nativeMessagesToolScopeDenial } from "../messages-native-scope";
-import { advisorServerToolDestination } from "../../adapters/anthropic/advisor-tool";
+import { ADVISOR_SERVER_TOOL_NAME, advisorServerToolDestination, planAnthropicServerTools } from "../../adapters/anthropic/advisor-tool";
 import { isAntigravityRoute } from "../antigravity-direct-eligibility";
-import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse, MandatoryToolChoiceUnavailableError, mandatoryToolChoiceUnavailableResponse } from "./policy-request-scope";
+import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse, markPolicyCandidateRefusal, MandatoryToolChoiceUnavailableError, mandatoryToolChoiceUnavailableResponse } from "./policy-request-scope";
 import {
   agentTaskRecoveryConfig,
   restoreCachedEncryptedAgentTasks,
@@ -90,10 +91,12 @@ import { anthropicSessionKeyFromParts } from "../../oauth/anthropic-routing";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { bindTurnTerminationScope, rememberDeliveredFinalAnswer } from "../../responses/turn-termination";
-import { noteCodexSelectionAffinity, observeCacheDiagnosticInbound, rebindCacheDiagnosticBody, requestLogSpeedLabel, readConfiguredCodexServiceTier } from "../request-log";
+import { beginRequestAttempt, finishRequestAttempt, markLocalRequestLogRefusal, noteAttemptSend, noteCodexSelectionAffinity, observeCacheDiagnosticInbound, rebindCacheDiagnosticBody, requestLogSpeedLabel, readConfiguredCodexServiceTier, usageFromResponsesPayload } from "../request-log";
+import type { PersistedUsageAttempt } from "../../usage/log";
 import type { RouteResult } from "../../router";
 import {
   captureRouteStaticPolicy,
+  previewRouteModel,
   routeConcreteModel,
   routeCompactionModel,
   routeModel,
@@ -101,6 +104,7 @@ import {
   AnthropicSecondaryInstanceUnavailableError,
 } from "../../router";
 import { evidenceFromBody } from "../../routing/request-evidence";
+import { resolvePolicyProfileId } from "../../routing/profile";
 import { OPENAI_CODEX_PROVIDER_ID, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { resolveNativeReasoningRetention } from "../../config/schema/native-reasoning-retention";
 import { isThreadSpawnRequest } from "../effort-policy";
@@ -444,7 +448,7 @@ export async function prepareResponsesRequest(
   const replayPrincipal = options.replayPrincipal
     ? options.replayPrincipal.clientPrincipalId : resolveContextPrincipal(req, config, options.admission);
   const strictReplay = options.plaintextV2Decision ?? isPlaintextV2AgentMessagesEnabled(config);
-  const replayOwnerKey = strictReplay ? responseReplayOwnerKey(replayPrincipal, inboundOwnThreadId) : undefined;
+  const { replayOwnerKey, replayConnectionScope } = selectResponseReplayOwner(strictReplay, replayPrincipal, inboundOwnThreadId, options);
   const replayThreadId = strictReplay ? inboundOwnThreadId : inboundClientThreadId;
   const cursorClientThreadId = codexPoolAffinityKey(req.headers);
   const originalBody = body;
@@ -460,9 +464,33 @@ export async function prepareResponsesRequest(
     // Local replay failures require full client replay.
     if (replayFailure) {
       failLinkTurnExpansion(options.linkTurn, req, logCtx, body, replayFailure.reason);
+      const { code } = replayFailure;
+      if (strictReplay) {
+        logCtx.errorCode = code;
+        if (logCtx.attempts?.some(attempt => attempt.sendCount > 0)) logCtx.terminalSource = "synthetic";
+        else markLocalRequestLogRefusal(logCtx, code);
+        // Attribute a direct native refusal using only request metadata and a route preview.
+        // A miss never enters auth, subagent fallback or encrypted-task recovery for logging.
+        const { model, reasoning } = body as { model?: unknown; reasoning?: unknown };
+        try {
+          const parsed = parseRequest({ model, reasoning });
+          logCtx.requestedModel ??= options.mainHardLockFallbackOverride?.sourceModel
+            ?? options.compactionRoutingOverride?.sourceModel ?? parsed.modelId;
+          logCtx.requestedEffort ??= parsed.options.reasoning;
+          if (!concreteSelection && !memoryModelApplies && !shadowCallMatches
+            && !resolveComboId(config, parsed.modelId) && !resolvePolicyProfileId(config, parsed.modelId)) {
+            const preview = previewRouteModel(config, parsed.modelId);
+            if (isCanonicalOpenAiForwardProvider(preview.provider)) {
+              logCtx.provider = preview.providerName;
+              logCtx.model = preview.modelId;
+              logCtx.routeDecision = preview.routeDecision;
+            }
+          }
+        } catch { /* Unavailable attribution does not change the replay refusal. */ }
+      }
       return markProxyError(formatErrorResponse(
         400,
-        "previous_response_not_found",
+        code,
         "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
       ));
     }
@@ -549,10 +577,18 @@ export async function prepareResponsesRequest(
       parsed._nativeReasoningReplay = options.nativeReasoningReplay;
       parsed._nativeReasoningMint = options.nativeReasoningMint;
       parsed._anthropicServerTools = options.anthropicServerTools;
+      // The lowered named choice serves the wire builder but grants no client or synthetic tool permission.
+      if (options.anthropicHostedAdvisorSelection) {
+        parsed.options.explicitRootFunctionChoices = [];
+        parsed.options.explicitClientToolChoices = [];
+      }
       parsed._anthropicServerReplay = options.anthropicServerReplay;
       parsed._anthropicSystemCachePrefix = options.anthropicSystemCachePrefix;
       parsed._anthropicInbound = true;
       if (parsed.options.textFormat?.type === "json_schema") parsed._structuredOutputConformance = true;
+    }
+    if (options.advisorInternal || options.internalSidecarCall || options.internalDecisionCall) {
+      parsed._proxyOwnedSystemPrompt = true;
     }
     // Codex's own "new" turn metadata, for the experimental Anthropic perMessageEffort option (#6895).
     parsed._codexNewHistory = codexTurnStartsNewHistory(body, req.headers, options.inboundTransport);
@@ -635,6 +671,7 @@ export async function prepareResponsesRequest(
   options.onRequestBodyRead?.();
   const responseStateOptions = (force = false) => ({
     replayOwnerKey,
+    ...(replayConnectionScope ? { connectionScope: replayConnectionScope } : {}),
     compiledPlaintext: parsed._plaintextV2EverPrepared === true,
     ...(force ? { force: true } : {}),
     ...((strictReplay ? inboundOwnThreadId : parsed._clientThreadId) ? { clientThreadId: strictReplay ? inboundOwnThreadId : parsed._clientThreadId } : {}),
@@ -1008,6 +1045,10 @@ export async function prepareResponsesRequest(
   };
   let selectedForwardHeaders = req.headers;
   let subagentFallbackAccountId = config.activeCodexAccountId ?? null;
+  // A typed fact for providers that refuse fallback-routed turns (the Antigravity ACP policy): set only
+  // where a fallback actually moves the route (a selection that keeps the requested model is not one),
+  // never inferred from headers, models or tools.
+  let subagentFallbackSelected = false;
   let subagentFallbackAccountPreview: SubagentPoolAccountPreview | undefined;
   let subagentFallbackModelEligibleAccountIdsForModel: SubagentModelEligibleAccountIds | undefined;
   let subagentQuotaFailureModel = parsed.modelId;
@@ -1104,6 +1145,7 @@ export async function prepareResponsesRequest(
     );
     if (fallback?.refusal) return fallback.refusal;
     if (fallback) {
+      if (fallback.to !== fallback.from) subagentFallbackSelected = true;
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo = fallback.to;
       if (isInjectionDebugEnabled()) {
@@ -1140,6 +1182,7 @@ export async function prepareResponsesRequest(
   }
 
   let recoveryFailureReason: AgentTaskRecoveryFailureReason | undefined;
+  let recoveryAttempts: PersistedUsageAttempt[] | undefined;
   // Native fallback and explicitly trusted direct Responses routes can consume ciphertext,
   // so recover only after final route selection.
   //
@@ -1172,7 +1215,24 @@ export async function prepareResponsesRequest(
         (body as { input?: unknown } | undefined)?.input,
         agentTaskRecovery,
         config,
-        { parentThreadId, abortSignal: options.abortSignal },
+        {
+          parentThreadId,
+          abortSignal: options.abortSignal,
+          onSend: hasUnexpandedPreviousResponse ? ({ model, status, durationMs, usage }) => {
+            const attempts = recoveryAttempts ??= [];
+            const ordinal = (logCtx.attempts?.length ?? 0) + attempts.length + 1;
+            const attempt = beginRequestAttempt(ordinal, OPENAI_CODEX_PROVIDER_ID, model, "openai-responses");
+            noteAttemptSend(attempt, undefined);
+            finishRequestAttempt(attempt, status ?? 502, durationMs, usageFromResponsesPayload(usage));
+            if (status === undefined) {
+              attempt.failureStage = "pre-header";
+              attempt.failureCause = "transport-ambiguous";
+            } else {
+              attributePhysicalAttempt(attempt);
+            }
+            attempts.push(attempt);
+          } : undefined,
+        },
       );
       recovered = result.recovered;
       recoveryFailureReason = result.recovered ? undefined : result.reason;
@@ -1203,6 +1263,7 @@ export async function prepareResponsesRequest(
             "_nativeReasoningRetention",
             "_cursorIsolateConversation",
             "_codexNewHistory",
+            "_proxyOwnedSystemPrompt",
           ];
           for (const key of kept) {
             if (parsed[key] !== undefined) {
@@ -1329,6 +1390,7 @@ export async function prepareResponsesRequest(
           })();
           if (fallback?.refusal) return fallback.refusal;
           if (fallback) {
+            if (fallback.to !== fallback.from) subagentFallbackSelected = true;
             (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
             (logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo = fallback.to;
             if (isInjectionDebugEnabled()) {
@@ -1441,8 +1503,8 @@ export async function prepareResponsesRequest(
   }
 
   // The canonical ChatGPT backend rejects previous_response_id, so a local replay miss leaves no
-  // safe way to recover the omitted history. Fail before auth, adapter construction, or upstream
-  // I/O instead of stripping the id and silently forwarding a context-free delta (#702).
+  // safe way to recover the omitted history. Fail before dispatching the continuation itself
+  // instead of stripping the id and silently forwarding a context-free delta (#702).
   // Codex recognizes previous_response_not_found on WebSocket errors and reconnects with its
   // full input. A generic invalid_request_error instead terminates the task after cache expiry.
   if (
@@ -1450,9 +1512,18 @@ export async function prepareResponsesRequest(
     && isCanonicalOpenAiForwardProvider(route.provider)
   ) {
     markLinkTurnMissing(logCtx);
+    const code = "previous_response_not_found";
+    logCtx.provider = route.providerName;
+    logCtx.model = route.modelId;
+    logCtx.errorCode = code;
+    // A recovery send already finished on its own model and status. Keep it off activeAttempt,
+    // which the log finalizer stamps with the continuation's terminal outcome.
+    if (recoveryAttempts) (logCtx.attempts ??= []).push(...recoveryAttempts);
+    if (logCtx.attempts?.some(attempt => attempt.sendCount > 0)) logCtx.terminalSource = "synthetic";
+    else markLocalRequestLogRefusal(logCtx, code);
     return markProxyError(formatErrorResponse(
       400,
-      "previous_response_not_found",
+      code,
       "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
     ));
   }
@@ -1507,7 +1578,7 @@ export async function prepareResponsesRequest(
   try {
     assertPolicyNormalizedRoute(policyScope, admittedPolicyRoute, route);
     const copilotNegotiationPending = route.providerName === "github-copilot" && route.provider.authMode !== "forward";
-    if (!copilotNegotiationPending && route.provider.adapter === "openai-chat"
+    if (!options.anthropicHostedAdvisorSelection && !copilotNegotiationPending && route.provider.adapter === "openai-chat"
       && !chatCanPreserveMandatoryToolChoice(parsed._rawBody, route.provider, route.modelId, parsed.context.tools ?? [])) {
       // Combo children carry the refusal's local identity too, so a compatible sibling target
       // can still be tried; a direct request keeps the client-facing 400 below.
@@ -1536,14 +1607,26 @@ export async function prepareResponsesRequest(
   if (!routeAllowedByScope(admissionScope, scopedDestination)) {
     return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(new AdmissionModelDeniedError(inboundSelector, scopedDestination), logCtx));
   }
-  // A typed Advisor runs its own model server-side on this provider (#8448). The native lane refuses
-  // a declaration outside the caller's scope; the Advisor is optional here, so it is not forwarded.
+  // A typed Advisor runs its own model server-side on this provider (#8448). An out-of-scope
+  // declaration is withheld. A named selection also needs that declaration on the final route.
   const serverTools = parsed._anthropicServerTools;
   const scopedServerTools = serverTools?.filter(tool =>
     !nativeMessagesToolScopeDenial(admissionScope, route.providerName, route.modelId, { tools: [tool] }));
   if (serverTools && scopedServerTools && scopedServerTools.length !== serverTools.length) {
     parsed._anthropicServerTools = scopedServerTools;
     if (advisorServerToolDestination(route.provider)) addProtocolEntryReason(logCtx, "advisor-tool-outside-model-scope");
+  }
+  if (options.anthropicHostedAdvisorSelection) {
+    if (options.anthropicHostedAdvisorSelection === "ambiguous") {
+      return markProxyError(formatErrorResponse(400, "invalid_request_error",
+        "The hosted Advisor tool_choice is ambiguous because multiple tools are named advisor."));
+    }
+    const admittedAdvisor = planAnthropicServerTools(route.provider, scopedServerTools, undefined,
+      new Set(parsed.context.tools?.map(tool => tool.name)), false).declared.some(tool => tool.name === ADVISOR_SERVER_TOOL_NAME);
+    if (!admittedAdvisor) {
+      return markPolicyCandidateRefusal(markProxyError(formatErrorResponse(400, "invalid_request_error",
+        "The selected hosted Advisor tool is unavailable for this route or model scope.")));
+    }
   }
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.
@@ -1734,6 +1817,7 @@ export async function prepareResponsesRequest(
       subagentFallbackAccountId = value;
     },
     subagentQuotaFailureModel,
+    subagentFallbackSelected,
     poolAffinityKey,
     clientRequestedStream,
     substituteMainCredential,
