@@ -75,7 +75,7 @@ export function parseCompatibilityRuntime(value: unknown): CompatibilityRuntime 
         || !(assessment.observedVersion === null || version(assessment.observedVersion))
         || typeof assessment.verified !== "boolean"
         || !Number.isSafeInteger(assessment.completedAt) || Number(assessment.completedAt) < 0 || Number(assessment.completedAt) > 8.64e15
-        || assessment.verified === true && assessment.observedVersion !== assessment.assessedVersion) throw new CompatibilityApiError("invalid_runtime_status");
+        || assessment.verified === true && assessment.observedVersion === null) throw new CompatibilityApiError("invalid_runtime_status");
       runtime.buildAssessment = { assessedVersion: assessment.assessedVersion as string,
         observedVersion: assessment.observedVersion === null ? null : assessment.observedVersion as string,
         verified: assessment.verified as boolean, completedAt: assessment.completedAt as number };

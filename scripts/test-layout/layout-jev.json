@@ -8,5 +8,6 @@
   "server-jev-refreshed-policy.test.ts": "server",
   "server-jev-session-pin.test.ts": "server",
   "cli-combo-session-pin.test.ts": "cli",
-  "cli-combo-set-targets.test.ts": "cli"
+  "cli-combo-set-targets.test.ts": "cli",
+  "codex-catalog-jev-effort.test.ts": "codex-integration"
 }

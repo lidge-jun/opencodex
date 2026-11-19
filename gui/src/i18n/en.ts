@@ -2877,6 +2877,7 @@ export const en = {
   "codexAuth.pauseFailed": "Could not pause {email}. Nothing was changed.",
   "codexAuth.resumeFailed": "Could not resume {email}. Nothing was changed.",
   "accountPause.tooltip": "{reason} · {date}",
+  "accountPause.submitAppeal": "Submit appeal",
   "accountPause.reason.organizationDisabled": "Organization disabled",
   "accountPause.reason.permissionDenied": "Account permission denied",
   "accountPause.reason.subscriptionInactive": "Subscription inactive",

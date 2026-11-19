@@ -2698,6 +2698,7 @@ export const ja: Record<TKey, string> = {
   "codexAuth.pauseFailed": "{email} を一時停止できませんでした。変更はありません。",
   "codexAuth.resumeFailed": "{email} を再開できませんでした。変更はありません。",
   "accountPause.tooltip": "{reason} · {date}",
+  "accountPause.submitAppeal": "異議申し立てを送信",
   "accountPause.reason.organizationDisabled": "組織が無効",
   "accountPause.reason.permissionDenied": "アカウントの権限が拒否されました",
   "accountPause.reason.subscriptionInactive": "サブスクリプションが無効",

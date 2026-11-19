@@ -1055,7 +1055,8 @@ Protocol v1 (newline-delimited JSON-RPC on stdio).
   `max_turn_requests`, an unrequested `cancelled` and an unknown stop reason fail the turn.
 - Refuses subagent, spawned-thread, Codex memory and automatic compaction turns, combo members and combo decision calls, and
   subagent-fallback routing. Chat Completions, Responses and Responses Compact return `403 agy_acp_interactive_only`
-  for labeled unattended turns. Responses WebSocket applies the automatic compaction check to each frame. Manual
+  for labeled unattended turns. Gemini and Ollama generation routes apply the same policy and
+  return HTTP 403 in their native error format. Responses WebSocket applies the automatic compaction check to each frame. Manual
   compaction remains available. OpenCodex determines locality from the observed connection and refuses requests carrying
   recognized forwarding headers. A loopback relay or SSH port forward that adds none can still appear local.
   On the public listener, declare the reverse proxy in `dashboardTrustedProxy` or keep this port out of the relay.
