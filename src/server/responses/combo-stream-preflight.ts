@@ -17,7 +17,7 @@ import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import type { RequestFailureStage } from "../../lib/request-failure-model";
 import type { RequestLogContext } from "../request-log";
 import { carryResponseToolOwnership } from "./response-tool-ownership";
-import { createSseInspector } from "../relay";
+import { createSseInspector, isNativePassthroughSseResponse } from "../relay";
 import { sseDataPayload } from "../sse-payload-rewrite";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 import { REQUIRED_TOOL_CONTRACT_CODE } from "../../lib/errors";
@@ -532,6 +532,7 @@ function failedTerminalResponse(
   response: Response,
   terminalPayload: Record<string, unknown>,
   logCtx: RequestLogContext,
+  collectUsage: boolean,
 ): Response {
   const nested = terminalPayload.response;
   const terminalResponse = nested && typeof nested === "object" && !Array.isArray(nested)
@@ -575,7 +576,8 @@ function failedTerminalResponse(
   headers.set("content-type", "application/json");
   headers.delete("content-length");
   headers.delete("content-encoding");
-  const usage = terminalResponse.usage;
+  const usage = collectUsage && !logCtx.usageFromBridge && !logCtx.clientResponseUsage
+    ? terminalResponse.usage : undefined;
   return new Response(JSON.stringify({
     error,
     ...(typeof terminalPayload.detail === "string" ? { detail: terminalPayload.detail } : {}),
@@ -656,8 +658,11 @@ export async function preflightComboStreamResponse(
   let retryableTerminalPayload: Record<string, unknown> | undefined;
   let holdTimer: ReturnType<typeof setTimeout> | undefined;
   let holdDeadline: Promise<"hold-expired"> | undefined;
+  // Native delivery already inspects raw usage; these bytes may contain display estimates.
+  const collectUsage = !isNativePassthroughSseResponse(response);
   const inspector = createSseInspector({
     logCtx,
+    collectUsage,
     onFrame: frame => {
       if (terminalStatus === undefined && !outputCommitted && !retryableTerminalPayload
         && ambiguousSseFrame(frame)) outputCommitted = true;
@@ -765,7 +770,7 @@ export async function preflightComboStreamResponse(
         || retryableTerminalPayload?.type === "error")
         && !outputCommitted && retryableTerminalPayload) {
         await reader.cancel("retrying zero-output combo stream terminal").catch(() => undefined);
-        const failed = failedTerminalResponse(response, retryableTerminalPayload, logCtx);
+        const failed = failedTerminalResponse(response, retryableTerminalPayload, logCtx, collectUsage);
         // The rebuilt envelope keeps only the record. When either the whole frame or that slim
         // envelope reads as a moderation verdict, the combo loop must judge the whole frame: a
         // verdict needs the evidence the envelope dropped (a root code, an innererror), and a veto
