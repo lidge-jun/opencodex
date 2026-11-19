@@ -32,19 +32,20 @@ import { speedLabel } from "./logs-speed-label";
 import { decodeRateLabelKeys } from "./logs-decode-rate";
 import { failureAttributionLabels, failureDetailLabel, failureSummary, upstreamConditionLabel } from "./logs-failure-summary";
 import "./logs-decode-rate.css";
-import { effectivePriorityLowerBound, estimateReasonsForBilling, formatCredits, formatEstimatedUsd, formatEstimatedUsdValue, formatUsdPrecise, summarizeEstimatedCosts, type CostBilling, type CostEstimateReason as BillingEstimateReason } from "./logs-cost-format";
+import { effectivePriorityLowerBound, estimateReasonsForBilling, formatCredits, formatEstimatedUsd, formatEstimatedUsdValue, formatUsdPrecise, summarizeEstimatedCosts, type CostBilling, type PartialCostResult, type CostEstimateReason as BillingEstimateReason } from "./logs-cost-format";
 import { cacheSplit, isCursorUsageProvider, tokensTitle } from "./logs-token-title";
 import {
   sanitizeLogEntryRouteDecision,
   validCachedRouteDecision,
 } from "./log-route-decision";
 import { mergeLogDelta, parseLogPollResponse } from "./log-poll";
-import type {
-  AttemptRecoveryKind,
-  RequestFailureCause,
-  RequestFailureStage,
-  RequestSpendTotals,
-  ResendPermission,
+import {
+  ACCOUNT_LOG_LABEL_RE,
+  type AttemptRecoveryKind,
+  type RequestFailureCause,
+  type RequestFailureStage,
+  type RequestSpendTotals,
+  type ResendPermission,
 } from "../../../src/usage/telemetry-contract";
 import {
   classifyRequestOutcome,
@@ -113,6 +114,7 @@ type CostResult =
     };
     estimateReasons: CostEstimateReason[];
   }
+  | PartialCostResult
   | { kind: "unavailable"; reason: MetricUnavailableReason };
 
 interface LogDisplayMetrics {
@@ -144,6 +146,7 @@ interface LogAttempt extends LogFailureAttribution {
   provider: string;
   model: string;
   adapter: string;
+  accountLogLabel?: string;
   status: number;
   durationMs: number;
   sendCount: number;
@@ -1014,7 +1017,12 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                   </td>
                   )}
                   {columns.cost && (
-                  <td className={cn("text-right tabular-nums", log.displayMetrics?.cost?.kind === "value" ? "font-mono" : "font-sans text-fg-subtle")}>
+                  <td
+                    className={cn("text-right tabular-nums", log.displayMetrics?.cost?.kind === "value" ? "font-mono" : "font-sans text-fg-subtle")}
+                    title={log.displayMetrics?.cost?.kind === "partial"
+                      ? t("logs.cost.partialMissing", { count: log.displayMetrics.cost.unpricedAttempts })
+                      : undefined}
+                  >
                     {formatEstimatedUsd(log.displayMetrics?.cost, t, localeTag)}
                   </td>
                   )}
@@ -1331,6 +1339,13 @@ function LogDetailDialog({
                 </ul>
               )}
             </>
+          ) : cost?.kind === "partial" ? (
+            <div className="log-detail-grid">
+              <span className="muted">{t("logs.detail.costSubtotal")}</span>
+              <span className="mono">{formatEstimatedUsdValue(cost.subtotalUsd, t, localeTag)}</span>
+              <span className="muted">{t("logs.detail.unavailableReason")}</span>
+              <span>{t("logs.cost.partialMissing", { count: cost.unpricedAttempts })}</span>
+            </div>
           ) : (
             <div className="log-detail-grid">
               <span className="muted">{t(unavailableCredit ? "logs.detail.section.costBilled" : "logs.detail.costTotal")}</span>
@@ -1381,6 +1396,11 @@ function LogDetailDialog({
                       <td>
                         <span>{formatProviderDisplayName(attempt.provider, t)}</span><br />
                         <span className="mono muted log-detail-break">{attempt.model}</span>
+                        {typeof attempt.accountLogLabel === "string" && ACCOUNT_LOG_LABEL_RE.test(attempt.accountLogLabel) && (
+                          <div className="muted text-caption log-detail-break">
+                            {t("logs.detail.attempt.account")} <span className="mono">{attempt.accountLogLabel}</span>
+                          </div>
+                        )}
                         {(attempt.requestedEffort || attempt.effectiveEffort) && (
                           <>
                             <br />

@@ -1169,8 +1169,10 @@ them and computes the end-to-end output rate. For models with a matched official
 `~$` column estimates the equivalent Gemini API cost from reported input, output and cache-hit
 tokens. The amount is an API price reference for Antigravity OAuth sessions.
 The log details show the selected provider and model and the router's selection reason.
-The upstream attempts table shows each send's status and recovery reason. If an upstream 401 triggers a successful
-credential refresh and replay, the refusal and replay appear as separate attempts.
+The upstream attempts table shows each send's status, opaque account label and recovery reason.
+If an upstream 401 triggers a successful credential refresh and replay, the refusal and replay appear
+as separate attempts. When only some attempts have an estimate, the log shows the known cost subtotal
+and the number of attempts that could not be priced.
 The log details also show the named reasoning tier or explicit thinking control and the first
 visible output time for a stream. Decode throughput is estimated from the observed output
 window when it includes the reported reasoning output.

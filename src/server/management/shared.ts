@@ -59,7 +59,7 @@ import type { OcxClaudeCodeConfig, OcxClaudeDesktopProfile, OcxConfig, OcxCustom
 import type { DesktopProfileModel } from "../../claude/desktop-profile";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
-import { creditChargeUnrepresentable, estimateComboCost, estimateRequestCost, serviceTierContext, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
+import { creditChargeUnrepresentable, estimateAttemptCost, estimateComboCost, estimateRequestCost, serviceTierContext, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import { costTokensWithinBound, isRepresentableCreditCount } from "../../usage/credit-billing";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { usageModelPriceOptions } from "../../usage/model-identity";
@@ -112,6 +112,7 @@ export type CostEstimateReason =
 
 export type CostResult =
   | { kind: "value"; estimate: NonNullable<ReturnType<typeof estimateRequestCost>>; estimateReasons: CostEstimateReason[] }
+  | { kind: "partial"; subtotalUsd: number; unpricedAttempts: number }
   | { kind: "unavailable"; reason: MetricUnavailableReason };
 
 export type MetricSource = Pick<RequestLogEntry, "provider" | "model" | "durationMs" | "firstOutputMs" | "genStartMs" | "lastOutputMs" | "protocolTrace" | "usageStatus" | "usage" | "requestedServiceTier" | "configuredServiceTier" | "responseServiceTier" | "tierOutcome" | "routeDecision" | "cacheProvenance"> & {
@@ -246,7 +247,20 @@ export function costResult(entry: MetricSource): CostResult {
   const estimate = attempts?.length
     ? estimateComboCost(attempts, undefined, tier)
     : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus, serviceTier: tier, ...usageModelPriceOptions(entry, entry) });
-  if (!estimate) return { kind: "unavailable", reason: unavailableCostReason(entry) };
+  if (!estimate) {
+    // Keep the shared request-total contract. Native Gemini credential replays can show a
+    // separate subtotal from the attempts for which we do have a price.
+    if (entry.protocolTrace?.inbound === "gemini" && entry.protocolTrace.mode === "native"
+      && attempts?.some(attempt => attempt.recoveryKinds.includes("oauth-401"))) {
+      const priced = attempts.flatMap(attempt => estimateAttemptCost(attempt, undefined, tier) ?? []);
+      const unpricedAttempts = attempts.length - priced.length;
+      const subtotalUsd = priced.reduce((sum, attempt) => sum + attempt.cost.total, 0);
+      if (priced.length && unpricedAttempts > 0 && Number.isFinite(subtotalUsd)) {
+        return { kind: "partial", subtotalUsd, unpricedAttempts };
+      }
+    }
+    return { kind: "unavailable", reason: unavailableCostReason(entry) };
+  }
   // Provenance follows the basis that produced the amount. A credit charge is
   // `providerCredits x creditPriceUsd`; the token rates were resolved only to decide whether the
   // row falls back to them, so anything derived from those rates — a cache-detail caveat, a price

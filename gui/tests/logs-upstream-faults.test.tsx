@@ -217,3 +217,27 @@ test("multiple attempts preserve their recovery reason without inventing retries
     expect(value("Retries")).toBeUndefined();
   } finally { await act(async () => { root.unmount(); }); }
 });
+
+test("native retry detail shows an opaque account label and a separately qualified subtotal", async () => {
+  const row = fixture(200, "credential-rejected", 2);
+  const attempt = (row.attempts as Record<string, unknown>[])[0]!;
+  row.displayMetrics = {
+    tokPerSecond: { kind: "unavailable", reason: "usage_missing" },
+    cost: { kind: "partial", subtotalUsd: 0.0123, unpricedAttempts: 1 },
+  };
+  row.attempts = [
+    { ...attempt, status: 401, sendCount: 1, accountLogLabel: "o123abc" },
+    { ...attempt, ordinal: 2, sendCount: 1, accountLogLabel: "raw-account-identifier", recoveryKinds: ["oauth-401"] },
+  ];
+  const { root, container } = await show(row);
+  try {
+    expect(container.querySelector("td[title='Attempts without a cost estimate (1)']")?.textContent).toBe("Known $0.0123");
+    const cost = document.getElementById("log-detail-cost")?.closest("section")?.textContent;
+    expect(cost).toContain("Known cost subtotal");
+    expect(cost).toContain("$0.0123");
+    expect(cost).toContain("Attempts without a cost estimate (1)");
+    const table = document.querySelector(".log-detail-attempts")?.textContent;
+    expect(table).toContain("Account o123abc");
+    expect(table).not.toContain("raw-account-identifier");
+  } finally { await act(async () => { root.unmount(); }); }
+});

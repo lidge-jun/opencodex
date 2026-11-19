@@ -672,9 +672,11 @@ El listado mediante `GET /v1beta/models` y la consulta de modelos conservan el c
 incluyen los alias nativos que se enrutan al modelo de Antigravity correspondiente.
 
 La columna `~$` muestra el coste estimado según el precio de la API de Gemini y el uso
-informado. La tabla de intentos muestra el estado y el motivo del reintento de cada envío.
-Si un 401 del proveedor da lugar a una actualización de las credenciales y a un nuevo envío,
-el rechazo y el reintento aparecen como intentos separados.
+informado. La tabla de intentos muestra el estado, la etiqueta opaca de la cuenta y el motivo
+del reintento de cada envío. Si un 401 del proveedor da lugar a una actualización de las
+credenciales y a un nuevo envío, el rechazo y el reintento aparecen como intentos separados.
+Si solo algunos intentos tienen un coste estimado, el registro muestra el subtotal conocido
+y cuántos intentos quedaron sin estimación.
 
 Si una respuesta del proveedor contiene credenciales de la cuenta vinculada, el proxy devuelve
 un error genérico de Gemini. Un `[DONE]` válido del proveedor o un error de Gemini pone fin a la transmisión.

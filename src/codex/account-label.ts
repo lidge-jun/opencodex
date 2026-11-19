@@ -23,7 +23,7 @@ export const CODEX_ACCOUNT_LOG_LABEL_RE = /^p[a-f0-9]{6}$/;
  */
 export const OAUTH_ACCOUNT_LOG_LABEL_RE = /^o[a-f0-9]{6}$/;
 export const KEY_ACCOUNT_LOG_LABEL_RE = /^k[a-f0-9]{32}$/;
-export const ACCOUNT_LOG_LABEL_RE = /^(?:main|[po][a-f0-9]{6}|k[a-f0-9]{32})$/;
+export { ACCOUNT_LOG_LABEL_RE } from "../usage/telemetry-contract";
 
 /** Digest the request-owned configured selection, never serialize its key/reference. */
 export function apiKeyAccountLogLabel(provider: string, selection: ProviderApiKeySelection | undefined): `k${string}` | undefined {
