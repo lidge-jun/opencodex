@@ -1,6 +1,6 @@
 import { accessSync, closeSync, constants, fstatSync, openSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, isAbsolute, join } from "node:path";
+import { delimiter, isAbsolute, join, resolve } from "node:path";
 
 export const CLAUDE_SHIM_MARKER = "# OpenCodex Claude command shim v1";
 
@@ -25,7 +25,7 @@ export function isNativePosixClaude(path: string): boolean {
 }
 
 export function findNativePosixClaude(path = process.env.PATH ?? "", home = homedir()): string | undefined {
-  return [...path.split(delimiter).filter(isAbsolute).map(dir => join(dir, "claude")), join(home, ".local", "bin", "claude")]
+  return [...path.split(delimiter).filter(Boolean).map(dir => resolve(dir, "claude")), join(home, ".local", "bin", "claude")]
     .find(isNativePosixClaude);
 }
 

@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, join, relative } from "node:path";
 import { findNativePosixClaude, supportsClaudeShim } from "../../src/claude/native-executable";
 import { repoPath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -73,6 +73,7 @@ test.skipIf(!supportsClaudeShim())("bare Claude uses the connected route without
     mkdirSync(alias);
     symlinkSync(join(shim, "claude"), join(alias, "claude"));
     expect(findNativePosixClaude(`${alias}:${active}`, home)).toBe(join(bin, "claude"));
+    expect(findNativePosixClaude(relative(process.cwd(), bin), home)).toBe(join(bin, "claude"));
     expect((await run(["claude", "--help"], active)).stdout).toContain('"args":["--help"]');
     const routed = await run(["claude", "-p", "--", "", "two words", "å\nnext"], active, "from stdin");
     expect(routed.status, routed.stderr).toBe(23);
@@ -84,7 +85,13 @@ test.skipIf(!supportsClaudeShim())("bare Claude uses the connected route without
     expect((await run(["ocx", "claude-shim", "uninstall"], active)).status).toBe(1);
     expect(readFileSync(wrapper, "utf8")).toContain("unexpected edit");
     writeFileSync(wrapper, original);
-    expect((await run(["ocx", "claude-shim", "uninstall"], active)).status).toBe(0);
+    const lease = `${shim}.lock`;
+    mkdirSync(lease, { mode: 0o700 });
+    writeFileSync(join(lease, "fixture.json"), JSON.stringify({ version: 1, token: "fixture", pid: 2147483647, createdAt: Date.now() - 120_000 }), { mode: 0o600 });
+    const expired = new Date(Date.now() - 120_000);
+    utimesSync(join(lease, "fixture.json"), expired, expired);
+    const uninstalled = await run(["ocx", "claude-shim", "uninstall"], active);
+    expect(uninstalled.status, uninstalled.stderr).toBe(0);
     expect(existsSync(shim)).toBe(false);
     expect(readFileSync(join(bin, "claude"), "utf8")).toBe(native);
   } finally {

@@ -849,7 +849,9 @@ export async function cmdClaude(args: string[], fromShim = false): Promise<numbe
   if (!executable) { console.error(CLAUDE_INSTALL_HINT); return 1; }
   if (fromShim && (args[0] === "-h" || args[0] === "--help" || args[0] === "--version" || args[0] === "-v"
     || ["auth", "update", "doctor", "config", "desktop", "intercept"].includes(args[0] ?? ""))) {
-    return spawnClaude(executable, args, process.env);
+    const env = { ...process.env };
+    deleteUntrustedAnthropicSlots(env, {});
+    return spawnClaude(executable, args, env);
   }
   const config = loadConfig();
   const clientState = readClientConnectionState();
@@ -957,7 +959,11 @@ function spawnClaude(executable: string, args: string[], env: ClaudeLaunchEnv): 
   return new Promise<number>(resolve => {
     const inv = commandInvocation(executable, args);
     const child = spawn(inv.file, inv.args, { stdio: "inherit", env: env as NodeJS.ProcessEnv, ...inv.options });
-    child.on("error", (err: NodeJS.ErrnoException) => {
+    // Direct-spawn parents may terminate only the launcher, not its process group.
+    const terminate = () => { child.kill("SIGTERM"); };
+    if (process.platform !== "win32") process.on("SIGTERM", terminate);
+    child.once("error", (err: NodeJS.ErrnoException) => {
+      process.off("SIGTERM", terminate);
       if (err.code === "ENOENT") {
         console.error(CLAUDE_INSTALL_HINT);
       } else {
@@ -965,7 +971,8 @@ function spawnClaude(executable: string, args: string[], env: ClaudeLaunchEnv): 
       }
       resolve(1);
     });
-    child.on("exit", (code, signal) => {
+    child.once("exit", (code, signal) => {
+      process.off("SIGTERM", terminate);
       const hint = claudeNotFoundHint(code, signal);
       if (hint) console.error(hint);
       resolve(signal ? 1 : code ?? 0);

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { getConfigDir } from "../config";
+import { tryAcquireShimRestoreLock } from "../codex/shim-restore-lock";
 import { findExecutableOnPath } from "../remote-control/workspace-executable";
 import { CLAUDE_SHIM_MARKER, findNativePosixClaude, supportsClaudeShim } from "./native-executable";
 
@@ -78,7 +79,8 @@ export function manageClaudeShim(args: readonly string[]): number {
       throw new Error("Claude shim requires a user-owned OpenCodex home that is not group/world writable.");
     }
     const lock = `${root}.lock`;
-    mkdirSync(lock, { mode: 0o700 });
+    const lease = tryAcquireShimRestoreLock(undefined, lock);
+    if (!lease) throw new Error(`Claude shim lock is busy or its owner cannot be verified: ${lock}. Retry after the owner exits. For an ownerless lock, verify that no shim operation is running before removing the empty lock directory.`);
     try {
       const installed = inspect(root);
       if (action === "install") {
@@ -101,12 +103,14 @@ export function manageClaudeShim(args: readonly string[]): number {
         // Quarantine before removing so PATH never sees a partly uninstalled wrapper.
         const stage = mkdtempSync(`${root}.remove-`);
         const owned = join(stage, "owned");
+        let deleted = false;
         try {
           renameSync(root, owned);
           if (!inspect(owned)) throw new Error("Claude shim changed during removal.");
-          for (const name of names) unlinkSync(join(owned, name));
+          for (const name of names) { unlinkSync(join(owned, name)); deleted = true; }
           rmdirSync(owned);
         } catch (error) {
+          if (deleted) throw new Error(`Claude shim removal interrupted; retained files at ${owned}`);
           if (readdirSync(stage).includes("owned")) {
             try { renameSync(owned, root); } catch { throw new Error(`Claude shim removal interrupted; retained files at ${owned}`); }
           }
@@ -117,7 +121,7 @@ export function manageClaudeShim(args: readonly string[]): number {
         console.log("Claude shim removed. Remove any activation line you added and refresh your shell command cache.");
       }
       return 0;
-    } finally { rmdirSync(lock); }
+    } finally { lease.release(); }
   } catch (error) {
     console.error(`Claude shim: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
