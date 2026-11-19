@@ -19,7 +19,7 @@ import { anthropicRefusalCredentialChanged, rotateAnthropicAccountOnResponseForI
 import { authorizeResendForRecovery } from "../../lib/request-resend-gate";
 import { ambiguousResendAllowanceFor, selfContainedResponsesBody } from "./reset-replay";
 import { transientSendCapFor, type ResponsesSendBudget } from "./request-send-budget";
-import { projectResponsesUpstreamRefusal, sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
+import { observeResponsesRecoveryResponse, projectResponsesUpstreamRefusal, sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 import { isLocalUpstream } from "../../lib/local-upstream";
 import { providerConnectTimeoutMs, providerStallTimeoutSec, resolveConnectTimeoutMs, resolveStallTimeoutMs } from "../../stall-timeout";
 import { responsesTimeoutProvider, type ResponsesRequestContext, type ResponsesAdmissionState } from "./core-options";
@@ -60,7 +60,6 @@ import {
   fetchWithTransientRetry,
   fetchWithResetRetry,
   carryReplayRefusal, isAutomaticReplayBlocked, isNonReplayableResponse, isReplayRefusalCode, isReplayRefusalResponse,
-  hasUpstreamReplayRefusal,
   isSameTargetRetryHold, isTerminalResetReplacement,
   applyUpstreamRecoveryInit,
   SendBudgetExhaustedError, errorDestinationLabel,
@@ -639,6 +638,7 @@ export async function prepareAdapterExchange(
     const anthropicFastDowngradeGuard: { attempted: boolean } = { attempted: false };
     const rebuildAndRefetch = async (
       recovery: AttemptRecoveryKind,
+      // A caller holding a reserved hop confirms it after the rebuilt send is admitted.
       onDispatch?: () => void,
       preserveFailureResponse?: Response,
       staged?: CredentialReplay,
@@ -752,10 +752,10 @@ export async function prepareAdapterExchange(
                 }),
               });
             });
-            await hasUpstreamReplayRefusal(response, upstream.signal, { requireCompleteBody: true });
-            return response;
+            return await observeResponsesRecoveryResponse(response, upstream.signal);
             } finally { producer?.close(); }
           }
+          // An opted-in 5xx ladder spends only the remainder of this request's budget.
           const refetchTransientPolicy = transientRetryPolicyFor(route.provider);
           const refetchWithPolicy = (route.provider.adapter === "google" || refetchTransientPolicy)
             ? fetchWithTransientRetry
@@ -830,8 +830,7 @@ export async function prepareAdapterExchange(
             if (parsed._anthropicImageOwner && sendBudgetState.adapterSendBudget?.spendEnforced) {
               bindAdapterResponseSpend(response, refetchReporter?.recordUsage);
             }
-            await hasUpstreamReplayRefusal(response, upstream.signal, { requireCompleteBody: true });
-            return response;
+            return await observeResponsesRecoveryResponse(response, upstream.signal);
           } finally {
             // Refund only a reservation whose send never reached its admission boundary.
             // A used or externally settled permit ignores this.
@@ -931,7 +930,7 @@ export async function prepareAdapterExchange(
     };
    // Keep recovery kinds in sync with the native Responses `passthroughRecovery:` loop above.
    recovery: for (;;) {
-      await hasUpstreamReplayRefusal(upstreamResponse, upstream.signal, { requireCompleteBody: true });
+      await observeResponsesRecoveryResponse(upstreamResponse, upstream.signal);
       await rejectAnthropicPerMessageEffort(parsed, upstreamResponse, upstream.signal);
       const modelRotation = isAutomaticReplayBlocked(upstreamResponse) ? undefined : await antigravityDenial.recover(upstreamResponse,
         transportState.replayOAuthCredentialSnapshot ?? transportState.sentOAuthSnapshot, {

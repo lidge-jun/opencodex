@@ -8,6 +8,7 @@ import { isComboTargetInCooldown } from "../../src/combos/failover";
 import { fetchProviderQuotaReports } from "../../src/providers/quota";
 import { saveConfig } from "../../src/config";
 import { isNonReplayableResponse, REPLAY_REFUSAL_MESSAGE } from "../../src/lib/upstream-retry";
+import * as proxyEnv from "../../src/lib/proxy-env";
 import { XAI_OAUTH_DISCOVERY_URL } from "../../src/oauth/xai";
 import { getAccountSet, saveCredential } from "../../src/oauth/store";
 import { clearModelCache, getProviderDiscoveryStatus, isModelsFetchCoolingDown, markModelsFetchFailure, MODELS_FETCH_FAILURE_COOLDOWN_MS } from "../../src/codex/model-cache";
@@ -47,6 +48,7 @@ let testDir = "";
 let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 let originalFetch: typeof fetch;
+let restoreOAuthBootstrapFetch: (() => void) | undefined;
 
 beforeEach(() => {
   originalFetch = globalThis.fetch;
@@ -57,6 +59,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  restoreOAuthBootstrapFetch?.();
+  restoreOAuthBootstrapFetch = undefined;
   globalThis.fetch = originalFetch;
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -120,8 +124,20 @@ async function post(server: ReturnType<typeof startServer>, model = "xai/grok-4.
   return originalFetch(new URL("/v1/responses", server.url), {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: model.includes("/") ? model : `xai/${model}`, input: "hello", stream: false }),
+    body: JSON.stringify({ model, input: "hello", stream: false }),
   });
+}
+
+function preserveOAuthBootstrapFetch(fixtureFetch: typeof fetch): void {
+  // Server startup can wrap fetch for an inherited SOCKS proxy. OAuth bootstrap has no
+  // provider proxy decision, so keep these two fixture endpoints on the memory transport.
+  const outbound = proxyEnv.configuredOutboundFetch;
+  const bootstrap = spyOn(proxyEnv, "configuredOutboundFetch").mockImplementation((input, init, fallback) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url === XAI_OAUTH_DISCOVERY_URL || url === TOKEN_ENDPOINT) return fixtureFetch(input, init);
+    return outbound(input, init, fallback);
+  });
+  restoreOAuthBootstrapFetch = () => bootstrap.mockRestore();
 }
 
 function installOAuthFetch(
@@ -130,7 +146,7 @@ function installOAuthFetch(
 ): { chatAuth: string[]; counts: { refresh: number } } {
   const chatAuth: string[] = [];
   const counts = { refresh: 0 };
-  globalThis.fetch = (async (input, init) => {
+  const fixtureFetch = (async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     if (url === XAI_OAUTH_DISCOVERY_URL) {
       return new Response(JSON.stringify({
@@ -180,8 +196,12 @@ function installOAuthFetch(
       if (options.omitSuccessUsage) delete success.usage;
       return Response.json(success);
     }
-    return originalFetch(input, init);
+    const parsed = new URL(url);
+    if (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") return originalFetch(input, init);
+    throw new Error("Unexpected external request in xAI OAuth replay fixture");
   }) as typeof fetch;
+  globalThis.fetch = fixtureFetch;
+  preserveOAuthBootstrapFetch(fixtureFetch);
   return { chatAuth, counts };
 }
 
@@ -267,7 +287,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
 
   test.each(["openai-responses", "openai-chat"] as const)("a refreshed OAuth %s request refused by pacing keeps only the upstream refusal", async adapter => {
     await seedOAuth();
-    const config = xaiConfig();
+    const config = directXaiConfig();
     const model = adapter === "openai-chat" ? "grok-3" : "grok-4.5";
     config.providers.xai!.models = [model];
     config.providers.xai!.modelAdapters = { [model]: adapter };
@@ -284,7 +304,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
       return wait(name, provider, ...rest);
     });
     try {
-      const response = await post(server, model);
+      const response = await post(server, `xai/${model}`);
       expect(response.status).toBe(429);
       await response.text();
       expect(refusals).toBe(1);
@@ -301,7 +321,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
 
   test.each(["openai-responses", "openai-chat"] as const)("a combo preserves the %s refusal when replacement pacing rejects", async adapter => {
     await seedOAuth();
-    const config = xaiConfig();
+    const config = directXaiConfig();
     const model = adapter === "openai-chat" ? "grok-3" : "grok-4.5";
     config.providers.xai!.models = [model];
     config.providers.xai!.modelAdapters = { [model]: adapter };
@@ -340,7 +360,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
 
   test("the production passive linker uses the refreshed routed base URL", async () => {
     await seedOAuth();
-    const config = xaiConfig();
+    const config = directXaiConfig();
     saveConfig(config);
     const observed = installOAuthFetch([401, 200]);
     readInstallationSalt(testDir);
@@ -379,7 +399,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
 
   test.each([false, true])("the successful OAuth replacement links the passive subject (route changed: %s)", async changed => {
     await seedOAuth();
-    saveConfig(xaiConfig());
+    saveConfig(directXaiConfig());
     installOAuthFetch([401, 200]);
     const server = startServer(0);
     const subjectId = "a".repeat(64);
@@ -414,7 +434,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
 
   test.each([13, undefined])("the discarded OAuth refusal is unreported and replacement input estimate is %s", async replacementEstimate => {
     await seedOAuth();
-    saveConfig(xaiConfig());
+    saveConfig(directXaiConfig());
     installOAuthFetch([401, 200], { includeRefusedUsage: true, omitSuccessUsage: true });
     const server = startServer(0);
     const create = ADAPTER_REGISTRY["openai-responses"].create;
@@ -446,7 +466,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
 
   test("the refreshed request tier does not overwrite the first OAuth send's tier", async () => {
     await seedOAuth();
-    saveConfig(xaiConfig());
+    saveConfig(directXaiConfig());
     const observed = installOAuthFetch([401, 200]);
     const server = startServer(0);
     const create = ADAPTER_REGISTRY["openai-responses"].create;
@@ -533,6 +553,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
         xai: {
           adapter: "openai-chat",
           baseUrl: "https://api.x.ai/v1",
+          proxy: "direct",
           authMode: "key",
           apiKey: firstKey,
           apiKeyPool: [
@@ -604,8 +625,11 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
           headers: { "content-type": "application/json" },
         });
       }
-      return originalFetch(input, init);
+      const parsed = new URL(url);
+      if (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") return originalFetch(input, init);
+      throw new Error("Unexpected external request in xAI API-key replay fixture");
     }) as typeof fetch;
+    preserveOAuthBootstrapFetch(globalThis.fetch);
     const server = startServer(0);
     try {
       const response = await post(server);
@@ -660,8 +684,11 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
         }
         return new Response(successBody("concurrent ok"), { headers: { "content-type": "application/json" } });
       }
-      return originalFetch(input, init);
+      const parsed = new URL(url);
+      if (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") return originalFetch(input, init);
+      throw new Error("Unexpected external request in concurrent xAI replay fixture");
     }) as typeof fetch;
+    preserveOAuthBootstrapFetch(globalThis.fetch);
 
     const server = startServer(0);
     try {
@@ -743,7 +770,7 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
     provider.oauthAccountFailover = { enabled: true };
     const codeOnly = verdict === "code-only replay refusal";
     if (codeOnly) {
-      config.providers.fixture = { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key", models: ["fallback"] };
+      config.providers.fixture = { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", proxy: "direct", apiKey: "fixture-key", models: ["fallback"] };
       config.combos = { "privacy-code": { strategy: "failover", targets: [
         { provider: "xai", model: "grok-4.5", metered: false }, { provider: "fixture", model: "fallback", metered: false },
       ] } };
@@ -799,7 +826,7 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
     provider.retryOnReset = { enabled: true };
     if (combo) {
       config.providers.fixture = {
-        adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key", models: ["fallback"],
+        adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", proxy: "direct", apiKey: "fixture-key", models: ["fallback"],
       };
       config.combos = { "privacy-reset": { strategy: "failover", targets: [
         { provider: "xai", model: "grok-4.5" }, { provider: "fixture", model: "fallback" },
@@ -933,7 +960,7 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
     await seedOAuth();
     const config = directXaiConfig();
     config.providers.fixture = {
-      adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key", models: ["primary"],
+      adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", proxy: "direct", apiKey: "fixture-key", models: ["primary"],
     };
     const comboId = `privacy-after-${status}`;
     config.combos = { [comboId]: { strategy: "failover", targets: [
@@ -966,7 +993,7 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
     await seedOAuth();
     const config = directXaiConfig();
     config.providers.fixture = {
-      adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key",
+      adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", proxy: "direct", apiKey: "fixture-key",
       models: ["fallback"], disabled: fallback === "disabled",
     };
     const primary = { provider: "xai", model: "grok-4.5" };

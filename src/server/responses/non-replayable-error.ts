@@ -1,7 +1,7 @@
 import { carryProxyError, ownedChatErrorPayload } from "../../lib/client-error-body";
 import { httpStatusFromTerminalError } from "../../lib/errors";
 import {
-  applyReplayRefusalClientHeaders, carryReplayRefusal, carryReplayRefusalToClient, hasClientReplayVeto, hasNoRetryDirective, invitesResendAfterReplacement, isNonReplayableResponse,
+  applyReplayRefusalClientHeaders, carryReplayRefusal, carryReplayRefusalToClient, hasClientReplayVeto, hasNoRetryDirective, hasUpstreamReplayRefusal, invitesResendAfterReplacement, isNonReplayableResponse,
   isNonReplayableUpstreamCode, isReplayRefusalCode, isReplayRefusalProjection, isReplayRefusalResponse, replayRefusalBodyCode,
   isTerminalResetReplacement, markResponseNonReplayable, observedReplayRefusalCode, projectReplayRefusal, UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../../lib/upstream-retry";
@@ -18,6 +18,12 @@ const UPSTREAM_ERROR_CODES = new Set([
   "model_not_found", "invalid_prompt", "content_policy_violation", "server_error",
   "unsupported_parameter", "invalid_value", "string_above_max_length",
 ]);
+
+/** A recovery boundary retains the response and requires complete evidence before another send. */
+export async function observeResponsesRecoveryResponse(response: Response, signal: AbortSignal): Promise<Response> {
+  await hasUpstreamReplayRefusal(response, signal, { requireCompleteBody: true });
+  return response;
+}
 
 /** A recognized replay code takes precedence over provider-specific guidance. */
 export function projectResponsesUpstreamRefusal(

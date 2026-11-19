@@ -9,7 +9,8 @@ import {
 } from "../../../src/providers/request-pacing";
 import type { OcxProviderConfig } from "../../../src/types";
 
-// Regression: release the previous response before waiting for another pacing lease.
+// Regression: finish bounded response inspection and release the previous lease
+// before backoff or waiting for another pacing lease.
 // Every executor is in memory; virtual time drives both pacing and Google backoff.
 async function reproduce(lanes: number) {
   let now = 0, nextId = 1, cancelled = 0, pulled = 0;
@@ -73,16 +74,16 @@ async function reproduce(lanes: number) {
     }
     await flush();
     expect(sends).toHaveLength(lanes);
-    expect(pulled).toBe(0);
+    expect(pulled).toBe(lanes);
     expect(providerRequestPacingStatus("google-antigravity", configured)).toMatchObject({ inFlight: 0, queued: 0 });
-    expect(cancelled).toBe(lanes);
+    expect(cancelled).toBe(0);
     await advanceTo(199);
     expect(sends).toHaveLength(lanes);
     await advanceTo(250);
     expect(sends.filter(send => send.ordinal === 2)).toHaveLength(lanes);
     expect(sends.filter(send => send.ordinal === 2).every(send => send.at === 200)).toBe(true);
     expect(await Promise.all(completions)).toEqual(Array(lanes).fill("ok"));
-    expect(cancelled).toBe(lanes); expect(pulled).toBe(0);
+    expect(cancelled).toBe(0); expect(pulled).toBe(lanes);
     expect(providerRequestPacingStatus("google-antigravity", configured)).toMatchObject({ inFlight: 0, queued: 0 });
     expect(timers.size).toBe(0);
   } finally {
@@ -93,8 +94,8 @@ async function reproduce(lanes: number) {
   }
 }
 
-test("five unread 503 bodies release all leases before retry backoff", () => reproduce(5));
-test("single retry also releases its lease before backoff", () => reproduce(1));
+test("five inspected finite 503 bodies release all leases before retry backoff", () => reproduce(5));
+test("single inspected finite 503 releases its lease before backoff", () => reproduce(1));
 
 test("real loopback HTTP: five saturated retries complete without 30-second lease reclamation", async () => {
   const counts = new Map<string, number>();

@@ -49,6 +49,7 @@ let testDir = "";
 let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 let originalFetch: typeof fetch;
+let restoreOAuthBootstrapFetch: (() => void) | undefined;
 
 beforeEach(() => {
   clearGenericFailoverHealth();
@@ -61,6 +62,8 @@ beforeEach(() => {
 
 afterEach(() => {
   clearGenericFailoverHealth();
+  restoreOAuthBootstrapFetch?.();
+  restoreOAuthBootstrapFetch = undefined;
   globalThis.fetch = originalFetch;
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -108,6 +111,7 @@ function antigravityConfig(): OcxConfig {
       "google-antigravity": {
         adapter: "google",
         baseUrl: DAILY_API_BASE,
+        proxy: "direct",
         authMode: "oauth",
         googleMode: "cloud-code-assist",
         project: "initial-project-id",
@@ -122,6 +126,8 @@ test.each([false, true])("replay veto: Antigravity verification quarantines only
   const sender = getAccountSet("google-antigravity")!.activeAccountId;
   const alternate = await seedSibling();
   const config = antigravityConfig();
+  // This case injects its physical executor; a provider proxy override is not valid with it.
+  delete config.providers["google-antigravity"]!.proxy;
   let sends = 0;
   const transport = (async (input: RequestInfo | URL, init?: RequestInit) => {
     expect([PROD_API_BASE, DAILY_API_BASE]).toContain(new URL(input instanceof Request ? input.url : String(input)).origin);
@@ -168,6 +174,7 @@ function antigravityPassthroughConfig(): OcxConfig {
         adapter: "google",
         modelAdapters: { "gemini-3.8-flash": "openai-responses" },
         baseUrl: DAILY_API_BASE,
+        proxy: "direct",
         authMode: "oauth",
         googleMode: "cloud-code-assist",
         project: "initial-project-id",
@@ -224,6 +231,19 @@ async function postChat(server: ReturnType<typeof startServer>): Promise<Respons
   });
 }
 
+function preserveOAuthBootstrapFetch(fixtureFetch: typeof fetch): void {
+  // Token/project discovery has no provider proxy decision. Preserve its memory fixture
+  // even when server startup installs an inherited SOCKS wrapper around global fetch.
+  const outbound = proxyEnv.configuredOutboundFetch;
+  const bootstrap = spyOn(proxyEnv, "configuredOutboundFetch").mockImplementation((input, init, fallback) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url === GOOGLE_TOKEN_ENDPOINT || url === `${PROD_API_BASE}/v1internal:loadCodeAssist`
+      || url === `${DAILY_API_BASE}/v1internal:onboardUser`) return fixtureFetch(input, init);
+    return outbound(input, init, fallback);
+  });
+  restoreOAuthBootstrapFetch = () => bootstrap.mockRestore();
+}
+
 function installOAuthFetch(
   apiStatuses: Array<number | { status: number; reason?: string; oversized?: boolean; message?: string; rawBody?: string }>,
   options: {
@@ -242,7 +262,7 @@ function installOAuthFetch(
   const counts = { refresh: 0 };
   let unauthorizedObserved = false;
   let forbiddenObserved = false;
-  globalThis.fetch = (async (input, init) => {
+  const fixtureFetch = (async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
 
     const parsedUrl = new URL(url);
@@ -384,6 +404,8 @@ function installOAuthFetch(
     if (parsedUrl.hostname === "127.0.0.1" || parsedUrl.hostname === "localhost") return originalFetch(input, init);
     throw new Error("Unexpected external request in Antigravity replay fixture");
   }) as typeof fetch;
+  globalThis.fetch = fixtureFetch;
+  preserveOAuthBootstrapFetch(fixtureFetch);
   return { chatAuth, chatProjects, requestPaths, counts, chatBodies };
 }
 
@@ -1545,6 +1567,7 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
       if (hostname === "127.0.0.1" || hostname === "localhost") return originalFetch(input, init);
       throw new Error("Unexpected external request in concurrent Antigravity replay fixture");
     }) as typeof fetch;
+    preserveOAuthBootstrapFetch(globalThis.fetch);
 
     const server = startServer(0);
     try {

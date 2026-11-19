@@ -20,7 +20,7 @@ import { isDefiniteContextOverflow } from "./context-overflow-verdict";
 import { errorDestinationLabel, errorDestinationText, type ErrorDestinationLabel } from "./error-destination";
 export { errorDestinationLabel, providerErrorDestinationLabel, errorDestinationText } from "./error-destination";
 import { redactSecretString } from "./redact";
-import { sseFieldValue } from "./sse-decoder";
+import { sseFieldValue } from "./sse-fields";
 
 /**
  * Responses the origin may already be executing. RFC 9110 §9.2.2 forbids an intermediary

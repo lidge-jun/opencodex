@@ -158,6 +158,8 @@ describe("terminal continuation provider-owner rotation", () => {
         owned: {
           adapter: "test-terminal-owned",
           baseUrl: "https://owned-terminal.test/v1",
+          // Keep this owned in-memory fetch fixture independent of inherited proxy settings.
+          proxy: "direct",
           authMode: "key",
           apiKey: keyA,
           apiKeyPool: [
@@ -293,6 +295,8 @@ describe("terminal continuation provider-owner rotation", () => {
         anthropic: {
           adapter: "test-terminal-owned",
           baseUrl: "https://owned-terminal.test/v1",
+          // Keep this owned in-memory fetch fixture independent of inherited proxy settings.
+          proxy: "direct",
           authMode: "oauth",
           models: ["model"],
         },
