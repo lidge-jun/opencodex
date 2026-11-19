@@ -527,6 +527,8 @@ limit are relayed unchanged, regardless of upstream chunk boundaries. The echo j
 data fields with LF before parsing JSON. It writes the rewritten payload to the first data
 field and leaves later data fields empty, preserving control lines and all line endings.
 Starts whose last event field is `error` retain their canonical form.
+The empty-tool guard relays a late LF as part of the preceding CR delimiter without buffering
+it as part of the next frame. Complete-frame origin tracking stays attached to that next frame.
 The native Messages tap
 refreshes its pending-read stall deadline on each nonempty raw chunk before frame buffering.
 The single pre-echo flag authorizes owned data under the
