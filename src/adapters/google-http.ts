@@ -9,13 +9,13 @@ import { repairGoogleInvalidRequestBodyWithReport } from "./google-wire-compiler
 import type { GoogleToolSchemaPolicy, GoogleToolSchemaProfile } from "./google-tool-schema";
 import { normalizeUpstreamHttpErrorResponse, readDisplaySafeErrorPayloadText } from "./upstream-http-error";
 import { readBoundedResponseBody } from "../lib/bounded-body";
+import { parseHttpDate } from "../lib/http-date";
 import { markAntigravityModelNotFound } from "./antigravity-refusal";
 import {
   abortError,
   cancelResponseBodyBestEffort,
   fetchWithAttemptDeadline,
   RETRY_AFTER_CEILING_MS,
-  retryAfterDelayMs,
   retryBackoffDelayMs,
   sleepWithAbort,
   SendBudgetExhaustedError,
@@ -25,6 +25,16 @@ import {
 
 const GOOGLE_RETRY_BASE_MS = 250;
 const GOOGLE_RETRY_MAX_MS = 2_000;
+
+// Google retries use RFC 9110 delta-seconds or HTTP-date from Fetch-normalized headers.
+function googleRetryAfterDelayMs(headers: Headers): number | undefined {
+  const raw = headers.get("retry-after");
+  if (!raw) return undefined;
+  if (!/\D/.test(raw)) return Math.min(Number(raw) * 1000, Number.MAX_SAFE_INTEGER);
+  const now = Date.now();
+  const dateMs = parseHttpDate(raw, now);
+  return dateMs === undefined ? undefined : Math.max(0, dateMs - now);
+}
 
 export interface GoogleRetryOptions {
   /** Repair-and-replay structurally invalid 400 bodies (Vertex/Antigravity behavior). */
@@ -140,7 +150,7 @@ export async function fetchGoogleWithRetry(
       }
       if (!retryableGoogleStatus(res.status)) return finalGoogleAnswer(label, res, activeRequest, ctx);
       const lastAttempt = attempt === TRANSIENT_RETRY_MAX_ATTEMPTS - 1;
-      let retryAfterMs = retryAfterDelayMs(res.headers);
+      let retryAfterMs = googleRetryAfterDelayMs(res.headers);
       if (res.status === 429) {
         // On the final attempt, read the body for retry advice only if the header cannot supply it.
         const peek = !lastAttempt || retryAfterMs === undefined

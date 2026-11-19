@@ -434,9 +434,10 @@ reason is kept apart and never used for account decisions.
 `src/adapters/google-errors.ts` lets structured reasons outrank prose: `QUOTA_EXHAUSTED` and
 `INSUFFICIENT_G1_CREDITS_BALANCE` are quota exhaustion on every Google label (not retried), and `RATE_LIMIT_EXCEEDED`
 is a transient rate limit on Antigravity even when the prose sounds like quota, as CPA reads it; on AI Studio and
-Vertex the daily-quota prose still decides. `src/adapters/google-http.ts` validates Retry-After once per retryable
-response. A valid delta-seconds value (including zero) or HTTP-date takes precedence. On a 429, an invalid or missing
-header falls back to the body delay. The effective delay supplies replay evidence and a floor for the next send.
+Vertex the daily-quota prose still decides. `src/adapters/google-http.ts` validates the Fetch-normalized Retry-After
+once per retryable response. RFC 9110 delta-seconds (including zero) and HTTP-date forms take precedence.
+On a 429, an invalid or missing header falls back to the body delay. The effective delay supplies replay evidence
+and a floor for the next send.
 If it exceeds the retry ceiling, the request ends with the 429 carrying that advice as Retry-After. AI Studio keeps
 Google's body and status on raw 429s, including quota exhaustion. A 403 whose body is an object with code 403, `PERMISSION_DENIED`
 and a typed `ErrorInfo` `TOS_VIOLATION` entry becomes the fixed message

@@ -20,7 +20,6 @@ import { isDefiniteContextOverflow } from "./context-overflow-verdict";
 import { errorDestinationLabel, errorDestinationText, type ErrorDestinationLabel } from "./error-destination";
 export { errorDestinationLabel, providerErrorDestinationLabel, errorDestinationText } from "./error-destination";
 import { redactSecretString } from "./redact";
-import { parseHttpDate } from "./http-date";
 
 /**
  * Responses the origin may already be executing. RFC 9110 §9.2.2 forbids an intermediary
@@ -412,12 +411,13 @@ export function isConnectionResetError(err: unknown): boolean {
 }
 
 export function retryAfterDelayMs(headers: Headers): number | undefined {
-  const raw = headers.get("retry-after");
+  const raw = headers.get("retry-after")?.trim();
   if (!raw) return undefined;
-  if (!/\D/.test(raw)) return Math.min(Number(raw) * 1000, Number.MAX_SAFE_INTEGER);
-  const now = Date.now();
-  const dateMs = parseHttpDate(raw, now);
-  return dateMs === undefined ? undefined : Math.max(0, dateMs - now);
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const dateMs = Date.parse(raw);
+  if (!Number.isFinite(dateMs)) return undefined;
+  return Math.max(0, dateMs - Date.now());
 }
 
 export function retryBackoffDelayMs(attempt: number, opts: RetryBackoffOptions): number {
@@ -952,7 +952,7 @@ export async function fetchWithTransientRetry(
     const delay = retryBackoffDelayMs(attempt, {
       baseDelayMs: TRANSIENT_RETRY_BASE_DELAY_MS,
       maxDelayMs: TRANSIENT_RETRY_MAX_DELAY_MS,
-      retryAfterMs: instructedDelay,
+      headers: res.headers,
       retryAfterIsLowerBound: true,
     });
     // Funded retries can lose spend admission during backoff. Keep the upstream refusal

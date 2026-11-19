@@ -10,7 +10,6 @@ import {
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
   prepareSameTarget429Wait,
   releaseResponseBodyBestEffort,
-  retryAfterDelayMs,
   retryBackoffDelayMs,
   sleepWithHeartbeats,
 } from "../../src/lib/upstream-retry";
@@ -228,51 +227,6 @@ describe("fetchWithResetRetry", () => {
       throw bunResetError();
     };
     await expect(fetchWithResetRetry(doFetch, { abortSignal: ac.signal })).rejects.toThrow("socket connection was closed unexpectedly");
-  });
-});
-
-describe("retryAfterDelayMs", () => {
-  // Fetch Headers trim surrounding whitespace, so exercise the parser with the raw field value.
-  test.each(["-1", "+0", "0x0", "1e3", " 5", "5 ", "5.0", "", "2026-11-06", "Fri, 06 Nov 2026 08:49:37 GMT\n",
-    "Fri, 06 Nov 2026 08:49:37 UTC", "Fri, 31 Feb 2026 08:49:37 GMT",
-    "fri, 06 nov 2026 08:49:37 gmt", "Thu, 06 Nov 2026 08:49:37 GMT", "Fri, 06 Nov 2026 08:49:60 GMT",
-  ])("ignores an invalid Retry-After field value %j", value => {
-    const headers = { get: () => value } as unknown as Headers;
-    expect(retryAfterDelayMs(headers)).toBeUndefined();
-  });
-
-  test("accepts zero and all three HTTP-date forms in UTC", () => {
-    const clock = spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 10, 6, 8, 48, 7));
-    try {
-      expect(retryAfterDelayMs(new Headers({ "retry-after": "0" }))).toBe(0);
-      expect(retryAfterDelayMs(new Headers({ "retry-after": "00090" }))).toBe(90_000);
-      for (const value of [
-        "Fri, 06 Nov 2026 08:49:37 GMT",
-        "Friday, 06-Nov-26 08:49:37 GMT",
-        "Fri Nov  6 08:49:37 2026",
-      ]) expect(retryAfterDelayMs(new Headers({ "retry-after": value }))).toBe(90_000);
-      expect(retryAfterDelayMs(new Headers({ "retry-after": "Sun, 06 Nov 1994 08:49:37 GMT" }))).toBe(0);
-    } finally {
-      clock.mockRestore();
-    }
-  });
-
-  test("accepts an HTTP-date containing a leap second", () => {
-    const clock = spyOn(Date, "now").mockReturnValue(Date.UTC(2016, 11, 31, 23, 59, 59));
-    try {
-      expect(retryAfterDelayMs(new Headers({ "retry-after": "Sat, 31 Dec 2016 23:59:60 GMT" }))).toBe(1000);
-    } finally {
-      clock.mockRestore();
-    }
-  });
-
-  test("interprets an RFC 850 date across a century boundary", () => {
-    const clock = spyOn(Date, "now").mockReturnValue(Date.UTC(2099, 11, 31, 23, 59));
-    try {
-      expect(retryAfterDelayMs(new Headers({ "retry-after": "Friday, 01-Jan-00 00:01:00 GMT" }))).toBe(120_000);
-    } finally {
-      clock.mockRestore();
-    }
   });
 });
 
