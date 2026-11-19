@@ -23,8 +23,10 @@ import { publishCredentialSync } from "../local-credentials/generation";
 import { notifyAuthStoreLoaded } from "../lib/decision-quota-sink";
 import { isPassiveRead } from "../lib/passive-read";
 import { accountPauseDetailsSchema, accountPauseEvidenceSchema } from "../config/schema/account-auto-pause";
-import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
-import { normalizeAnthropicIdentity, matchesAnthropicImport, mergeAnthropicIdentity } from "./anthropic-identity";
+import { mergeOAuthOrganizationName, normalizeOAuthOrganizationName, normalizeOAuthPlan, mergeOAuthPlan, withMergedOAuthLabels } from "./plan";
+import { anthropicOrganization, anthropicOrganizationsConflict, normalizeAnthropicIdentity, normalizeAnthropicOrganizationScope,
+  mergeAnthropicIdentity } from "./anthropic-identity";
+import { findAnthropicImportSlot, findAnthropicLoginSlot, observeAnthropicLoginContinuity, observeAnthropicSlotOrganizations } from "./anthropic-login-slot";
 import { normalizeWorkBuddyMetadata } from "../providers/workbuddy";
 import { normalizeM365WebSession } from "../providers/m365-copilot-discovery";
 import { findKiroAccountForLogin, withRetainedKiroUser } from "./kiro-account-identity";
@@ -579,7 +581,12 @@ function normalizeCredential(cred: unknown): OAuthCredentials | null {
   if (m365 && m365.accountId.toLowerCase() === normalized.accountId?.toLowerCase()) normalized.m365 = m365;
   const identity = normalizeAnthropicIdentity(candidate.anthropicIdentity, candidate.access);
   if (identity) normalized.anthropicIdentity = identity;
+  const organizationScope = normalizeAnthropicOrganizationScope(candidate.anthropicOrganizationScope, candidate.access);
+  if (organizationScope) normalized.anthropicOrganizationScope = organizationScope;
   if (candidate.plan !== undefined) normalized.plan = normalizeOAuthPlan(candidate.plan) ?? null;
+  if (candidate.organizationName !== undefined) {
+    normalized.organizationName = normalizeOAuthOrganizationName(candidate.organizationName) ?? null;
+  }
   if (isCredentialSource(candidate.source)) normalized.source = candidate.source;
   if (typeof candidate.projectId === "string" && candidate.projectId.length > 0) normalized.projectId = candidate.projectId;
   if (typeof candidate.apiBaseUrl === "string" && candidate.apiBaseUrl.length > 0) {
@@ -970,6 +977,19 @@ function registrationPersistGuard(provider: string, assertBeforePersist?: () => 
   };
 }
 
+/** Both credentials are store-normalized. A write of the same bearer can keep its exchange proof. */
+function retainAnthropicExchangeScope(fresh: OAuthCredentials, previous?: OAuthCredentials): OAuthCredentials {
+  const retained = previous?.access === fresh.access ? previous.anthropicOrganizationScope : undefined;
+  return retained && !fresh.anthropicOrganizationScope ? { ...fresh, anthropicOrganizationScope: retained } : fresh;
+}
+
+/** The caller holds the auth-store writer lock. Each slot refreshes its own grant. */
+function assertAnthropicRefreshTokenOwnership(accounts: readonly ProviderAccount[], accountId: string, refresh: string): void {
+  if (refresh && accounts.some(account => account.id !== accountId && account.credential.refresh === refresh)) {
+    throw new Error("This Anthropic refresh token already belongs to another slot. Try signing in again.");
+  }
+}
+
 export async function saveCredentialWithReceipt(
   provider: string,
   cred: OAuthCredentials,
@@ -979,6 +999,12 @@ export async function saveCredentialWithReceipt(
   if (isAnthropicInstanceId(provider)) assertAnthropicCredentialSource(provider, cred);
   const safe = normalizeCredential(cred);
   if (!safe) return null;
+  // Network reads stay outside the store lock; the answers are bound to bearers rechecked inside.
+  const anthropicAccounts = isAnthropicInstanceId(provider) ? getAccountSet(provider)?.accounts ?? [] : undefined;
+  const [anthropicOrganizations, anthropicContinuity] = anthropicAccounts ? await Promise.all([
+    observeAnthropicSlotOrganizations(anthropicAccounts, safe),
+    observeAnthropicLoginContinuity(anthropicAccounts, safe),
+  ]) : [];
   // A login that clears an automatic pause publishes it once the write commits (#8398).
   let pauseCleared = false;
   const receipt = await mutateStore(store => {
@@ -1000,10 +1026,11 @@ export async function saveCredentialWithReceipt(
       store[provider] = { activeAccountId: id, accounts: [{ id, credential: safe, addedAt: Date.now() }] };
       accountId = id;
     } else if (provider === "anthropic" && safe.source === "local-cli") {
-      const existing = set.accounts.find(a => matchesAnthropicImport(a.credential, safe));
+      const existing = findAnthropicImportSlot(set.accounts, safe, anthropicOrganizations, set.activeAccountId);
       if (existing) {
-        existing.credential = { ...safe, ...mergeAnthropicIdentity(safe, existing.credential),
-          plan: mergeOAuthPlan(safe, existing.credential),
+        const identity = mergeAnthropicIdentity(safe, existing.credential);
+        existing.credential = { ...safe, ...identity, plan: mergeOAuthPlan(safe, existing.credential),
+          organizationName: mergeOAuthOrganizationName({ ...safe, ...identity }, existing.credential),
           accountId: safe.accountId ?? existing.credential.accountId, email: safe.email ?? existing.credential.email };
         set.selectionRevision = previousSelectionRevision;
         delete existing.needsReauth;
@@ -1022,13 +1049,14 @@ export async function saveCredentialWithReceipt(
       // same-session whoami email (#6641); the helper never guesses between identified users.
       const existing = provider === "kiro"
         ? findKiroAccountForLogin(set.accounts, safe)
-        : set.accounts.find(a => (a.credential.accountId ?? a.credential.email) === identity);
+        : isAnthropicInstanceId(provider)
+          ? findAnthropicLoginSlot(set.accounts, safe, anthropicOrganizations, set.activeAccountId, anthropicContinuity)
+          : set.accounts.find(a => (a.credential.accountId ?? a.credential.email) === identity);
       if (existing) {
         const incoming = provider === "kiro" ? withRetainedKiroUser(safe, existing.credential) : safe;
         // Same identity: a login whose tier read failed keeps the stored label (plan absent),
         // while an observed unknown (plan null) still clears it.
-        const plan = mergeOAuthPlan(incoming, existing.credential);
-        existing.credential = plan === undefined ? incoming : { ...incoming, plan };
+        existing.credential = withMergedOAuthLabels(incoming, existing.credential);
         delete existing.needsReauth;
         delete existing.needsReauthReason;
         delete existing.refreshAttentionGeneration;
@@ -1036,15 +1064,17 @@ export async function saveCredentialWithReceipt(
         if (existing.paused !== true) set.activeAccountId = existing.id;
         accountId = existing.id;
       } else {
-        // Legacy migration: a pre-identity row (no accountId/email) for this provider is the
-        // SAME human re-logging in after the identity extraction shipped — upgrading the
-        // active identity-less row in place prevents a stale duplicate that stays selectable
-        // and would re-refresh into a second row with the same identity.
+        // Keep the historical upgrade of an active pre-identity row. Scoped Anthropic email
+        // logins require a matching slot, including when recovering an account UUID.
         const active = set.accounts.find(a => a.id === set.activeAccountId);
+        const scopedAnthropicEmail = isAnthropicInstanceId(provider) && Boolean(safe.email)
+          && anthropicOrganization(safe) !== undefined;
         // Kiro rows of one organization differ only by user: while another row shares the profile,
         // an unmatched Kiro login claims an identity-less slot only as the same CLI session (#6641).
         const legacyUpgrade = active !== undefined && active.credential.accountId === undefined
           && active.credential.email === undefined
+          && !scopedAnthropicEmail
+          && (!isAnthropicInstanceId(provider) || !anthropicOrganizationsConflict(active.credential, safe))
           && (provider !== "kiro" || (Boolean(safe.refresh) && active.credential.refresh === safe.refresh)
             || !set.accounts.some(a => safe.accountId !== undefined && a.credential.accountId === safe.accountId));
         if (!opts.preserveIdentityless && active && legacyUpgrade) {
@@ -1067,9 +1097,9 @@ export async function saveCredentialWithReceipt(
       set.activeAccountId = id;
       accountId = id;
     } else {
-      // No identity during a normal login: replace the active slot in place.
+      // Without account identity, reuse the active slot unless both grants prove different organizations.
       const active = set.accounts.find(a => a.id === set.activeAccountId);
-      if (active) {
+      if (active && (!isAnthropicInstanceId(provider) || !anthropicOrganizationsConflict(active.credential, safe))) {
         active.credential = safe;
         delete active.needsReauth;
         delete active.needsReauthReason;
@@ -1085,6 +1115,10 @@ export async function saveCredentialWithReceipt(
     }
     const updatedSet = store[provider];
     const savedAccount = updatedSet?.accounts.find(account => account.id === accountId);
+    if (savedAccount && isAnthropicInstanceId(provider)) {
+      assertAnthropicRefreshTokenOwnership(updatedSet.accounts, accountId, safe.refresh);
+      savedAccount.credential = retainAnthropicExchangeScope(savedAccount.credential, previousAccounts.get(accountId)?.credential);
+    }
     const activeAccount = updatedSet?.accounts.find(account => account.id === updatedSet.activeAccountId);
     // A login that cleared this account's automatic pause hands it a selection still parked on a
     // paused row (the local-cli import branch does not select on its own), as reauth does below.
@@ -1356,8 +1390,13 @@ export async function saveAccountCredential(
   /**
    * `clearAutomaticPause`: only an operator's explicit reauthentication of this account may clear a
    * pause auto-pause recorded (#8398); other writers (Kiro's pre-login identity binding) leave it.
+   * `assertAccounts`: re-checks a caller's decision against the rows this writer loaded, under the
+   * lock and before the row changes; throwing aborts the write.
    */
-  opts: { assertBeforePersist?: () => void; rotateLoginId?: boolean; clearAutomaticPause?: boolean } = {},
+  opts: {
+    assertBeforePersist?: () => void; rotateLoginId?: boolean; clearAutomaticPause?: boolean;
+    assertAccounts?: (accounts: readonly ProviderAccount[]) => void;
+  } = {},
 ): Promise<boolean> {
   provider = oauthCredentialSlot(provider);
   if (isAnthropicInstanceId(provider)) assertAnthropicCredentialSource(provider, cred);
@@ -1373,7 +1412,13 @@ export async function saveAccountCredential(
     const set = store[provider];
     const account = set?.accounts.find(a => a.id === accountId);
     if (!set || !account) return;
-    account.credential = safe;
+    opts.assertAccounts?.(set.accounts);
+    if (isAnthropicInstanceId(provider)) {
+      assertAnthropicRefreshTokenOwnership(set.accounts, accountId, safe.refresh);
+      account.credential = retainAnthropicExchangeScope(safe, account.credential);
+    } else {
+      account.credential = safe;
+    }
     written = true;
     if (opts.rotateLoginId) account.loginId = randomUUID();
     delete account.needsReauth;

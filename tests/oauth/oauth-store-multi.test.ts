@@ -490,7 +490,7 @@ describe("multi-account auth store", () => {
 
   test("new identity appends a second account and activates it", async () => {
     await saveCredential("anthropic", cred({ email: "a@example.com", accountId: "acct-a" }));
-    await saveCredential("anthropic", cred({ email: "b@example.com", accountId: "acct-b", access: "access-b" }));
+    await saveCredential("anthropic", cred({ email: "b@example.com", accountId: "acct-b", access: "access-b", refresh: "refresh-b" }));
     expect(listAccounts("anthropic").length).toBe(2);
     expect(getCredential("anthropic")?.email).toBe("b@example.com");
   });
@@ -624,7 +624,7 @@ describe("multi-account auth store", () => {
 
   test("setActiveAccount switches what getCredential returns", async () => {
     await saveCredential("anthropic", cred({ email: "a@example.com", accountId: "acct-a", access: "access-a" }));
-    await saveCredential("anthropic", cred({ email: "b@example.com", accountId: "acct-b", access: "access-b" }));
+    await saveCredential("anthropic", cred({ email: "b@example.com", accountId: "acct-b", access: "access-b", refresh: "refresh-b" }));
     const set = getAccountSet("anthropic")!;
     const idA = set.accounts.find(a => a.credential.email === "a@example.com")!.id;
     expect(await setActiveAccount("anthropic", idA)).toBe(true);
@@ -696,7 +696,7 @@ describe("multi-account auth store", () => {
 
   test("removeCredential removes only the active account", async () => {
     await saveCredential("anthropic", cred({ email: "a@example.com", accountId: "acct-a", access: "access-a" }));
-    await saveCredential("anthropic", cred({ email: "b@example.com", accountId: "acct-b", access: "access-b" }));
+    await saveCredential("anthropic", cred({ email: "b@example.com", accountId: "acct-b", access: "access-b", refresh: "refresh-b" }));
     await removeCredential("anthropic"); // active is b
     expect(listAccounts("anthropic").length).toBe(1);
     expect(getCredential("anthropic")?.access).toBe("access-a");

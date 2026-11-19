@@ -7,14 +7,14 @@ import { getDefaultConfig, initializePersistedConfigIfMissing, loadConfig, mutat
 import { resolveProviderApiKey } from "../providers/key-store";
 import { projectEmail } from "../lib/privacy";
 import { KiroTokenRefreshError, environmentKiroRoutingMetadata, loginKiro, refreshKiroToken, settleKiroLoginTransaction } from "./kiro";
-import { KiroUserIdentityUnavailableError, kiroReauthIdentityMatches } from "./kiro-account-identity";
+import { KiroUserIdentityUnavailableError } from "./kiro-account-identity";
+import { precheckOAuthReauthIdentity } from "./reauth-precheck";
 import {
   OAuthMutationBusyError,
   OAuthRefreshIntentIOError,
   clearOAuthRefreshIntent,
   createOAuthRefreshIntentLock,
   credentialGeneration,
-  getAccountCredential,
   getAccountCredentialWithStatus,
   getAccountSet,
   getCredential,
@@ -98,10 +98,11 @@ export {
 export { OAUTH_REFRESH_LOCK_WAIT_MS, peekAuthStore, peekOAuthRefreshIntent } from "./store";
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 import { REFRESH_SKEW_MS } from "./refresh-policy";
-import { newerClaudeCredentialForInstance, captureAnthropicCredentialOwnerForInstance, claudeCredentialGenerationCurrent } from "./anthropic-continuity";
+import { newerClaudeCredentialForInstance, captureAnthropicCredentialOwnerForInstance, claudeAdoptionSlotCurrent, claudeCredentialGenerationCurrent } from "./anthropic-continuity";
 import { anthropicSubscriptionLabel } from "../providers/anthropic-subscription";
-import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
+import { mergeOAuthOrganizationName, normalizeOAuthPlan, mergeOAuthPlan, oauthOrganizationNameSummary, withMergedOAuthLabels } from "./plan";
 import { mergeAnthropicIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
+import { anthropicReauthSlotGuard, observeAnthropicSlotOrganizations } from "./anthropic-login-slot";
 import { AnthropicCrossInstanceDuplicateError, AnthropicLocalCliImportError, assertAnthropicCredentialSource } from "./store-anthropic-instance";
 export interface OAuthAccessSnapshot {
   /** Private M365 discovery session; never projected into account summaries. */
@@ -809,10 +810,12 @@ function definitivelyAnswered(error: unknown): boolean {
 
 function authoritative(stored:OAuthCredentials,active:boolean,now:()=>number):OAuthCredentials{if(stored.source!=="local-cli")return stored;const disk=detectGrokCliToken();if(!disk)return stored;const allowed=isSameGrokIdentity(stored,disk)||(active&&!hasComparableGrokIdentity(stored,disk));return allowed&&shouldAdoptGrokGeneration(stored,disk,now(),REFRESH_SKEW_MS)?disk:stored;}
 function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCredentials {
+  const identity = mergeAnthropicIdentity(fresh, previous, { sameGrant: true });
   return {
     ...fresh,
-    ...mergeAnthropicIdentity(fresh, previous),
+    ...identity,
     plan: mergeOAuthPlan(fresh, previous),
+    organizationName: mergeOAuthOrganizationName({ ...fresh, ...identity }, previous),
     // Shared: a refresh function returns "local-cli" only when the credential it hands back
     // still is the local CLI's (Devin re-reading the CLI file, Meta Muse echoing its durable
     // CLI key). Relabelling that "oauth" would stop the next forced refresh from re-reading it.
@@ -890,11 +893,9 @@ export async function refreshAnthropicAccountWithLock(
     const owns = captureAnthropicCredentialOwnerForInstance(provider, accountSet, accountId);
     const generation = credentialGeneration(stored);
     let pendingIntent = readOAuthRefreshIntent(provider, accountId);
-    const observed = await newerClaudeCredentialForInstance(provider, stored, now(), deps.signal, deps.resolveIdentity);
-    // A write that depends on the CLI credential re-reads it: the non-adopting checks below run
-    // now, and adoption re-reads again inside the serialized writer (afterPrePersistRead), so a CLI
-    // rotation while the writer was queued is still caught. The read is async and never kills the
-    // Keychain child (#8161); the writer's predicate only consumes its result.
+    const observed = await newerClaudeCredentialForInstance(provider, stored, now(), deps.signal, deps.resolveIdentity,
+      { accountId, accounts: accountSet.accounts });
+    // Adoption defers its CLI re-read until it holds the writer lock, catching queued rotations.
     let diskVerified = observed.kind === "absent" || observed.kind === "adopt"
       ? undefined : await claudeCredentialGenerationCurrent(observed.diskGeneration, now);
     const assertOwner = (store: AuthStore, checkDisk = true) => {
@@ -913,7 +914,10 @@ export async function refreshAnthropicAccountWithLock(
           await deps.afterPrePersistRead?.();
           diskVerified = await claudeCredentialGenerationCurrent(diskGeneration, now);
         },
-        assertOwnership: assertOwner,
+        assertOwnership: store => {
+          assertOwner(store);
+          if (!claudeAdoptionSlotCurrent(store, provider, accountId, observed)) throw new OAuthTokenRefreshStaleError();
+        },
       });
       // A superseding write did not adopt our candidate. Its pending intent remains owned by it.
       if (outcome.superseded) throw new OAuthTokenRefreshStaleError();
@@ -1686,28 +1690,13 @@ export async function runLogin(
       upsertOAuthProvider(preCommitConfig, provider, row);
     }
     if (opts?.reauthAccountId) {
-      const existing = getAccountCredential(provider, opts.reauthAccountId);
-      if (!existing) throw new Error(`Unknown account for reauth: ${opts.reauthAccountId}`);
-      if (!existing.accountId && !existing.email) {
-        throw new OAuthReauthIdentityUnverifiedError();
-      }
-      // A Kiro organization profile ARN is shared by its users, so it alone is not the account.
-      const identityMatches = provider === "kiro"
-        ? kiroReauthIdentityMatches(existing, cred, getAccountSet("kiro")?.accounts
-          .filter(account => account.id !== opts.reauthAccountId).map(account => account.credential))
-        : existing.accountId && cred.accountId
-          ? existing.accountId === cred.accountId
-          : existing.email && cred.email
-            ? existing.email.trim().toLowerCase() === cred.email.trim().toLowerCase()
-            : false;
-      if (!identityMatches) {
-        throw new OAuthReauthIdentityMismatchError();
-      }
-      // Proven same account: a reauth whose tier read failed keeps the stored label.
-      const reauthPlan = mergeOAuthPlan(cred, existing);
-      const reauthCred = reauthPlan === undefined ? cred : { ...cred, plan: reauthPlan };
+      const existing = precheckOAuthReauthIdentity(provider, opts.reauthAccountId, cred);
+      const assertAccounts = isAnthropicOAuthInstance(provider) ? anthropicReauthSlotGuard(opts.reauthAccountId, cred,
+        await observeAnthropicSlotOrganizations(getAccountSet(provider)?.accounts ?? [], cred, opts.reauthAccountId)) : undefined;
+      const reauthCred = withMergedOAuthLabels(cred, existing);
       const written = await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, reauthCred, {
         assertBeforePersist: deps.assertCurrentOwner,
+        assertAccounts,
         rotateLoginId: true,
         clearAutomaticPause: true,
       });
@@ -1830,6 +1819,8 @@ export interface OAuthAccountSummary {
   plan: string | null;
   /** Anthropic display-only subscription name; absent when no tier was observed. */
   planLabel?: string;
+  /** Anthropic display-only organization name of the grant; absent when none was observed. */
+  organizationName?: string;
 }
 
 /**
@@ -1859,6 +1850,7 @@ export function getLoginStatus(provider: string, maskEmails = true, flowId?: str
     plan: normalizeOAuthPlan(a.credential.plan) ?? null,
     ...((provider === "anthropic" || provider === "anthropic2") && anthropicSubscriptionLabel(a.credential.plan)
       ? { planLabel: anthropicSubscriptionLabel(a.credential.plan) } : {}),
+    ...((provider === "anthropic" || provider === "anthropic2") ? oauthOrganizationNameSummary(a.credential) : {}),
   }));
 
   // Expired access tokens can still count as logged in with a usable refresh token.
