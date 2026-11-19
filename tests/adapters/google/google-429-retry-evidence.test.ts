@@ -76,9 +76,14 @@ test("Google 429 uses an explicit zero Retry-After as evidence and still applies
   expect(result.waits[0]).toBeGreaterThan(0);
 });
 
-test("Google 429 honors delta-seconds Retry-After even when the body exceeds the read limit", async () => {
-  const result = await send429("x".repeat(64 * 1024 + 1), "30");
+test("Google 429 honors delta-seconds Retry-After when the body is complete", async () => {
+  const result = await send429(neutralBody(), "30");
   expect(result).toEqual({ status: 200, sends: 2, waits: [30_000] });
+});
+
+test("Google 429 vetoes retry when the body exceeds the read limit despite Retry-After", async () => {
+  const result = await send429("x".repeat(64 * 1024 + 1), "30");
+  expect(result).toEqual({ status: 429, sends: 1, waits: [] });
 });
 
 test("Google 429 uses an HTTP-date Retry-After for both eligibility and scheduling", async () => {

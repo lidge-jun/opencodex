@@ -65,6 +65,8 @@ Kiro endpoint fallback and throttle recovery, sidecar recovery, Google HTTP retr
 the transient ladder's 429 handoff, and the reset-only 429 paths treat a size-limited, timed-out
 or failed body probe as insufficient evidence for another send. They preserve the original body
 and quota provenance while blocking recovery. Kiro's client formatter applies the retry veto.
+The bounded HTTP probe also treats SSE data fields as inconclusive when a gateway omits or
+mislabels the media type. CR, LF and CRLF delimit fields, including after comments and blank lines.
 An independently replay-safe transient operation
 keeps its explicit exception. In `src/web-search/header-deadline.ts`, local pacing and bounded
 post-header body inspection pause the iteration's cumulative response-header clock; caller

@@ -20,6 +20,7 @@ import { isDefiniteContextOverflow } from "./context-overflow-verdict";
 import { errorDestinationLabel, errorDestinationText, type ErrorDestinationLabel } from "./error-destination";
 export { errorDestinationLabel, providerErrorDestinationLabel, errorDestinationText } from "./error-destination";
 import { redactSecretString } from "./redact";
+import { sseFieldValue } from "./sse-decoder";
 
 /**
  * Responses the origin may already be executing. RFC 9110 §9.2.2 forbids an intermediary
@@ -942,8 +943,10 @@ async function observeRetryBody(res: Response, signal?: AbortSignal, checkOverfl
       wireReplayRefusals.set(res, code);
       return "refusal";
     }
-    // A gateway may omit or mislabel the media type on an HTTP SSE error.
-    if (!complete || /^(?:(?:event|id|retry)?:[^\n]*\n)*data:[ \t]*\{/.test(text.trimStart())) return "inconclusive";
+    if (!complete) return "inconclusive";
+    // A gateway may mislabel an SSE error. Match the decoder's CR, LF and CRLF line endings
+    // and look for a data field even after comments, blank lines or ignored fields.
+    if (text.trimStart().split(/\r\n|\r|\n/).some(line => sseFieldValue(line, "data") !== null)) return "inconclusive";
     if (checkOverflow && text.length > 0 && isDefiniteContextOverflow(res.status, text, retryContextOverflowMessage)) return "overflow";
     return "clear";
   } catch {

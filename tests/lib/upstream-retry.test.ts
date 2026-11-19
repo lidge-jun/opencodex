@@ -972,8 +972,15 @@ describe("ambiguous reset safety through error formatting", () => {
     expect((await response.json()).error.code).toBe("upstream_response_refused");
   });
 
-  test.each(["Text/Event-Stream", "text/plain"])("an HTTP SSE error labeled %s vetoes further recovery", async contentType => {
-    const wire = new Response('event: error\ndata: {"type":"error","retryable":false}\n\n', {
+  test.each([
+    { contentType: "Text/Event-Stream", framing: "LF", newline: "\n", prelude: "" },
+    { contentType: "text/plain", framing: "LF", newline: "\n", prelude: "" },
+    { contentType: "text/plain", framing: "CR", newline: "\r", prelude: "" },
+    { contentType: "text/plain", framing: "CRLF", newline: "\r\n", prelude: "" },
+    { contentType: "text/plain", framing: "comment then blank line", newline: "\n", prelude: ": heartbeat\n\n" },
+  ])("an HTTP SSE error labeled $contentType with $framing framing vetoes further recovery", async ({ contentType, newline, prelude }) => {
+    const body = prelude + ['event: error', 'data: {"type":"error","retryable":false}', "", ""].join(newline);
+    const wire = new Response(body, {
       status: 503, headers: { "content-type": contentType },
     });
     const mock = mockDoFetch([wire, new Response("unexpected retry")]);
@@ -981,6 +988,7 @@ describe("ambiguous reset safety through error formatting", () => {
     expect(response).toBe(wire);
     expect(mock.calls).toHaveLength(1);
     expect(hasClientReplayVeto(response)).toBe(true);
+    expect(await response.text()).toBe(body);
   });
 
   test("the transient ladder returns the last coded 429 with its raw quota evidence", async () => {
