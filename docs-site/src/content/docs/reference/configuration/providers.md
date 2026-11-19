@@ -491,9 +491,7 @@ For example, this applies a provider-wide concurrency cap and a stricter cap to 
 }
 ```
 
-The concurrency slot stays occupied until the upstream request finishes, including the final streamed response bytes. Requests above the applicable provider and model limits wait in the pacing queue; when a slot is released, the next eligible request is admitted. Queue waiting does not consume the upstream response-header timeout.
-
-If the spend budget blocks a paced native `/responses/compact` retry, the client receives the preceding refusal under compact's usual body limits. Responses above 32 MiB return HTTP 502 with `compact_response_too_large`. A stalled body returns HTTP 504 with `upstream_stall_timeout` when its inactivity deadline expires.
+The concurrency slot stays occupied until the upstream request finishes, including the final streamed response bytes. Requests above the applicable provider and model limits wait in the pacing queue; when a slot is released, the next eligible request is admitted. Queue waiting does not consume the upstream response-header timeout. If the spend budget blocks a paced native `/responses/compact` retry, the client receives the preceding refusal under compact's usual body limits. Responses above 32 MiB return HTTP 502 with `compact_response_too_large`. A stalled body returns HTTP 504 with `upstream_stall_timeout` when its inactivity deadline expires.
 
 For multiple API-key pool entries, opt into normal-request distribution separately from the existing failure-selection `apiKeyPoolStrategy`:
 
