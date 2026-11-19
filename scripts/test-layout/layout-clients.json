@@ -19,6 +19,7 @@
   "messages-native-clean-eof.test.ts": "claude-integration",
   "stop-restoration-preflight.test.ts": "service",
   "claude-intercept-acl-barrier.test.ts": "claude-integration",
+  "claude-picker-trust-linux.test.ts": "claude-integration",
   "claude-config-root-writer-barrier.test.ts": "claude-integration",
   "claude-config-root-late-admission.test.ts": "claude-integration",
   "claude-config-root-stale-updates.test.ts": "claude-integration",

@@ -15,6 +15,7 @@ import { selectValue } from "./helpers/custom-select";
 
 const PRESETS = [
   { id: "claude-cli", label: "Claude Code CLI (subscription)", adapter: "claude-cli", baseUrl: "https://api.anthropic.com", auth: "key", keyOptional: true, defaultModel: "claude-sonnet-5", note: "Runs Claude subscription traffic through the official CLI." },
+  { id: "antigravity-acp", label: "Antigravity CLI (ACP, local)", adapter: "agy-acp", baseUrl: "https://antigravity.google/docs/cli/acp", auth: "key", keyOptional: true, defaultModel: "gemini-3.8-flash", note: "Drives the official Antigravity CLI." },
   { id: "keyless", label: "Keyless Free", adapter: "openai-chat", baseUrl: "https://api.example.com/v1", auth: "key", keyOptional: true },
   { id: "google-vertex", label: "Google Vertex AI", adapter: "google", baseUrl: "https://aiplatform.googleapis.com", auth: "key", defaultModel: "gemini-3-pro" },
 ];
@@ -151,6 +152,28 @@ test("a keyless free row keeps the free-tier box and no subscription warning", a
   await act(async () => { row.click(); });
   expect(warning()).toBeNull();
   expect(win.document.body.textContent).toContain("Free tier");
+});
+
+test("the Antigravity ACP row is a subscription CLI with its own warning, never a free tier", async () => {
+  await mount("free");
+  expect(rowsText()).not.toContain("Antigravity CLI");
+  await mount("paid");
+  expect(rowsText()).toContain("Antigravity CLI (ACP, local)");
+  const row = [...win.document.querySelectorAll(".provider-catalog-row-wrap > button")]
+    .find(el => (el.textContent ?? "").includes("Antigravity CLI")) as unknown as HTMLButtonElement;
+  await act(async () => { row.click(); });
+  const note = warning();
+  expect(note?.textContent).toContain("Subscription CLI, not an API key");
+  expect(note?.textContent).toContain("agy acp");
+  // It names only the fallback the code refuses: subagent fallback, not every fallback route.
+  expect(note?.textContent).toContain("subagent fallback routing");
+  expect(note?.textContent).toContain("proxy host");
+  expect(note?.textContent).toContain("An undeclared loopback relay");
+  expect(note?.textContent).toContain("dashboardTrustedProxy");
+  expect(note?.textContent).toContain("google");
+  expect(note?.textContent).not.toContain("Claude");
+  expect(win.document.body.textContent).not.toContain("Free tier");
+  expect(win.document.querySelector('input[type="password"]')).toBeNull();
 });
 
 test("Vertex accepts ADC project and location without a dummy API key", async () => {

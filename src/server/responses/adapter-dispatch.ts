@@ -1,8 +1,10 @@
 import { projectLocalModelRefusalLog, recordUpstreamProviderErrorDetail } from "../request-log-failure-detail";
 import { providerAffinityGenerationIsCurrent } from "../../providers/api-key-selection";
 import { clientFacingModelText } from "../../lib/error-destination";
+import { createAnthropicImageRecovery, recoverAdapterImageContext, retainAdapterFailureResponse } from "./image-context-recovery";
 import { responsesSpendTarget } from "./request-spend-target";
-import { markProxyError, carryProxyError, isProxyError } from "../../lib/client-error-body";
+import { bindAdapterResponseSpend } from "./request-spend";
+import { markProxyError, isProxyError } from "../../lib/client-error-body";
 import { adapterBuildRefusal } from "./passthrough-build-error";
 import { createAutoPauseRefreshErrorMapper, recoverAutoPausedAccount } from "./account-auto-pause-recovery";
 import { wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
@@ -111,9 +113,7 @@ import { streamingContextOverflowResponse, jsonContextOverflowResponse, lateAttr
 import { OllamaLateAttributionBudgetError } from "../../adapters/ollama-native";
 import { isFixedCodexAccount } from "./core-codex-account";
 import { recordSubagentQuotaFailureForThreadSpawn } from "../../codex/subagent-model-fallback";
-import {
-  CYBER_POLICY_ERROR_CODE,
-} from "../../lib/errors";
+import { CYBER_POLICY_ERROR_CODE } from "../../lib/errors";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { cancelBodyOnAbort } from "../../lib/abort";
 import { createCodexAuthDispatchGuard, releaseCodexAuthContextProbeLease, unwrapUpstreamRetryEvidenceError } from "../../codex/auth-context";
@@ -147,6 +147,7 @@ export async function prepareAdapterExchange(
     ResponsesTransport,
     | "activeAdapter"
     | "adapter"
+    | "pinAnthropicImageRecovery"
     | "sameTargetRequest"
     | "sameTargetParsed"
     | "sameTargetToken"
@@ -183,6 +184,7 @@ export async function prepareAdapterExchange(
     | "adapterDispatchBudget"
     | "noteAdapterPhysicalSend"
     | "noteAdapterRecoveryWithheld"
+    | "imageRecoverySendReporter"
     | "remainingTransientSendBudget"
     | "transientSendReporter"
     | "recoverySendAllowance"
@@ -377,29 +379,16 @@ export async function prepareAdapterExchange(
   transportState.sameTargetRequest = builtInitialRequest;
   transportState.sameTargetParsed = parsed;
   transportState.sameTargetToken = transportState.transportToken;
-  /**
-   * Invalidate the same-target request cache. Every credential/adapter/parsed mutation MUST
-   * go through here: the cache keys on `parsed` REFERENCE identity, so an in-place mutation
-   * is invisible to it and a missed bump would replay a request built with a stale key.
-   */
 
   const initialRecovery = route.providerName === "github-copilot"
     ? sendBudgetState.pendingHopPermit?.sendClass === "auth-recovery" ? "oauth-account-429"
       : transportState.oauth401ReplayAttempted ? "oauth-401" : undefined
     : undefined;
   let upstreamResponse: Response;
-  // Preserve bounded terminal bytes without retaining the refused send's pacing lease.
-  // Reading the owned body to EOF (or cancelling on its bound) frees capacity BEFORE
-  // replacement admission; keeping that live body would wait on its own concurrency slot.
-  const retainFailureResponse = async (): Promise<Response> => {
-    const original = upstreamResponse;
-    const text = await readDisplaySafeErrorText(original, upstream.signal, "");
-    const headers = new Headers(original.headers);
-    headers.delete("content-length");
-    headers.delete("content-encoding");
-    upstreamResponse = carryProxyError(original, new Response(text, { status: original.status, statusText: original.statusText, headers }));
-    return upstreamResponse;
-  };
+  const retainFailureResponse = async () => upstreamResponse = (await retainAdapterFailureResponse(upstreamResponse, upstream.signal)).response;
+  const imageRecovery = route.provider.anthropicImageContextRecovery === true && transportState.activeAdapter.name === "anthropic"
+    ? createAnthropicImageRecovery(requestContext, requestState, transportState, sendBudgetState, connectMs)
+    : undefined;
   const autoPauseEnabled = effectiveAccountAutoPause(config.providers[route.providerName]) !== undefined;
   const billingPoolRequest = isAnthropicBillingKeyPool(route.provider);
   // Hosted Advisor revalidates the credential after the upstream rewrite, before the receipt.
@@ -409,7 +398,7 @@ export async function prepareAdapterExchange(
   let billingRecoveryActive = false;
   const genericRefetchCountsSends = () => !!sendBudgetState.workflowRootId || options.comboAttempt === true || sendBudgetState.adapterSendBudget?.spendEnforced === true
     || transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null
-    || !!anthropicInstance || billingPoolRequest || billingRecoveryActive || autoPauseEnabled;
+    || !!anthropicInstance || billingPoolRequest || billingRecoveryActive || autoPauseEnabled || imageRecovery !== undefined;
   let handoffPermit: ResponsesSendBudget["pendingHopPermit"];
   try {
     if (transportState.activeAdapter.fetchResponse) {
@@ -531,7 +520,7 @@ export async function prepareAdapterExchange(
           claimAmbiguousResend: claimPreHeaderResend,
           offlineWait: options.comboAttempt ? undefined : createProviderOfflineResendWait(route.providerName, route.provider, builtInitialRequest.url, config.offlineResendWaitSec),
           ...(sendBudgetState.workflowRootId || sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
-            || anthropicInstance || billingPoolRequest || autoPauseEnabled
+            || anthropicInstance || billingPoolRequest || autoPauseEnabled || imageRecovery
             ? {
               // A pending compaction permit already booked this leg's first physical send.
               ...(transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt || anthropicInstance || autoPauseEnabled
@@ -776,7 +765,7 @@ export async function prepareAdapterExchange(
           const deferredRefetch = refetchReporter && (shouldDeferGenericSend(retryRequest) || options.comboAttempt) ? deferPhysicalSendReporter(refetchReporter) : undefined;
           const pendingKeyMetadata = deferredRefetch && transportState.attemptSendDeferred();
           try {
-            return await refetchWithPolicy(
+            const response = await refetchWithPolicy(
               recoveryKind => {
                 sendBudgetState.adapterSendBudget?.startRequest?.(responsesSpendTarget(logCtx, route.providerName));
                 // Prepare key metadata before the guarded transport commits its attempt;
@@ -823,6 +812,10 @@ export async function prepareAdapterExchange(
                   : {}),
               },
             );
+            if (parsed._anthropicImageOwner && sendBudgetState.adapterSendBudget?.spendEnforced) {
+              bindAdapterResponseSpend(response, refetchReporter?.recordUsage);
+            }
+            return response;
           } finally {
             // Refund only a reservation whose send never reached its admission boundary.
             // A used or externally settled permit ignores this.
@@ -1798,8 +1791,12 @@ export async function prepareAdapterExchange(
         upstreamResponse = opaqueBlobRecovery.response;
         continue recovery;
       }
-      // Anthropic 413 request_too_large: rebuild once with every image one tier lower
-      // (spiral guard: single attempt). The biased response re-enters the 429 check above.
+      if (imageRecovery && upstreamResponse.status === 413) {
+        const recovered = await recoverAdapterImageContext(imageRecovery, upstreamResponse, parsed, transportState, upstream.signal, refreshRequestToolAliases);
+        if (!recovered) { cleanupUpstreamAbort(); return clientCancelledResponse(); }
+        upstreamResponse = recovered;
+        break recovery;
+      }
       if (shouldAttemptImageTierRetry({
         status: upstreamResponse.status,
         adapterName: transportState.activeAdapter.name,

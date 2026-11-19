@@ -1554,7 +1554,7 @@ export async function deliverPassthroughResponse(
           clientJson = estimated;
           headers.set(ESTIMATED_USAGE_HEADER, "true");
           // The request-log finalizer parses the delivered body again; keep the estimate out of it.
-          logCtx.usageEstimatedForClient = true;
+          logCtx.clientResponseUsage = "estimated";
         }
       }
       // #875: the transport-neutral reliability policy forced a bounded JSON
@@ -1598,7 +1598,7 @@ export async function deliverPassthroughResponse(
             }
             throw error;
           }
-          const sseHeaders = sanitizePassthroughHeaders(headers, passthroughHeaderOptions);
+          const sseHeaders = new Headers(headers);
           sseHeaders.set("content-type", "text/event-stream");
           sseHeaders.set("cache-control", "no-store");
           return new Response(stream, {

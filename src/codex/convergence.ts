@@ -419,7 +419,7 @@ function prepareCatalog(
       warningPolicy: "suppress",
     },
   });
-  applyNativeRosterMetadata(mergedModels, modelEntitlements, accountTargets, openaiContextCap);
+  applyNativeRosterMetadata(mergedModels, modelEntitlements, accountTargets, openaiContextCap, catalogModels);
   clampCatalogModelsToObservedCodexSupport(
     mergedModels,
     source.runtimeSupport.kind === "available"

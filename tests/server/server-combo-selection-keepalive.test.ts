@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { comboProviderFactory } from "../helpers/combo-provider";
@@ -19,6 +19,10 @@ import {
   type ComboSelectionKeepaliveClock,
 } from "../../src/server/responses/combo-selection-keepalive";
 import type { OcxConfig } from "../../src/types";
+import { saveConfig } from "../../src/config";
+import { configureSharedSpendLedger, sharedSpendLedger, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
+import { responseWithDeferredRequestLog } from "../../src/server/relay";
+import { setRelayPlatformForTests } from "../../src/server/responses/passthrough-delivery";
 
 /**
  * #8326 through the real Responses entry point: a combo whose selection outlasts the threshold
@@ -55,6 +59,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  setRelayPlatformForTests(undefined);
   releaseSpendHome?.();
   releaseSpendHome = undefined;
   try {
@@ -159,6 +164,96 @@ async function readRest(reader: ReadableStreamDefaultReader<Uint8Array>): Promis
 }
 
 describe("combo selection keepalive through handleResponses", () => {
+  for (const mode of ["legacy-tee", "eager-relay"] as const) {
+    for (const usage of ["missing", "terminal", "earlier"] as const) {
+      test(`${mode}: committed keepalive settles ${usage} provider usage without display estimates`, async () => {
+        setRelayPlatformForTests(mode === "eager-relay" ? "darwin" : "linux");
+        const arrived = gate();
+        const release = gate();
+        heldUpstreams.push(release.open);
+        let sends = 0;
+        const reported = { input_tokens: 900, output_tokens: 100, total_tokens: 1000 };
+        const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+          expect(req.method).toBe("POST");
+          sends++;
+          arrived.open();
+          await release.opened;
+          return sse(
+            ...(usage === "earlier" ? [{ type: "response.in_progress", response: {
+              id: "resp-usage", status: "in_progress", output: [], usage: reported,
+            } }] : []),
+            { type: "response.completed", response: {
+              id: "resp-usage", object: "response", status: "completed", model: "probe",
+              output: [{ id: "msg_usage", type: "message", role: "assistant", status: "completed",
+                content: [{ type: "output_text", text: "OK", annotations: [] }] }],
+              ...(usage === "terminal" ? { usage: reported } : {}),
+            } },
+          );
+        } });
+        servers.push(server);
+        const config: OcxConfig = {
+          port: 0, defaultProvider: "fixture", streamMode: mode,
+          clientIntegrations: { codex: false }, spend: { pool: { maxTokens: 1500 } },
+          providers: { fixture: provider("openai-responses", `${server.url}v1`, "fixture-key", {
+            models: ["probe"], estimateMissingUsage: true, upstreamWebsocket: false, proxy: "direct",
+          }) },
+          combos: { free: { strategy: "failover", waitForCooldownMs: 0,
+            targets: [{ provider: "fixture", model: "probe" }] } },
+        };
+        saveConfig(config);
+        configureSharedSpendLedger(spendPolicyFromConfig(config.spend));
+        const request = () => new Request("http://localhost/v1/responses", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "combo/free", input: "hello", max_output_tokens: 1000, stream: true, store: false }),
+        });
+        const clock = manualClock();
+        const logCtx: RequestLogContext = { model: "", provider: "" };
+        let nativeFinalizers = 0;
+        const entries: Array<{ terminalStatus?: string; usage?: unknown }> = [];
+        const start = Date.now();
+        const pending = handleResponses(request(), config, logCtx, {
+          comboSelectionKeepalive: { clock },
+          onNativePassthroughTerminal: () => { nativeFinalizers++; },
+        });
+        await arrived.opened;
+        clock.advance(COMBO_SELECTION_KEEPALIVE_THRESHOLD_MS);
+        const response = responseWithDeferredRequestLog(await pending, "keepalive-usage", start, logCtx,
+          entry => { entries.push(entry); });
+        expect(response.status).toBe(200);
+        const reader = response.body!.getReader();
+        expect(await readChunk(reader)).toBe(": keepalive\n\n");
+        release.open();
+        const text = await readRest(reader);
+        const terminal = JSON.parse(text.split("\n").find(line => line.startsWith("data:")
+          && line.includes('"type":"response.completed"'))!.slice(5)).response;
+        expect(typeof terminal.usage.total_tokens).toBe("number");
+        if (usage === "terminal") expect(terminal.usage.total_tokens).toBe(1000);
+        if (usage !== "terminal") expect(terminal.usage.total_tokens).toBeLessThan(1000);
+        expect(nativeFinalizers).toBe(0);
+        expect(entries).toHaveLength(1);
+        expect(entries[0]!.terminalStatus).toBe("completed");
+        const snapshot = sharedSpendLedger().snapshot("pool", "fixture")!;
+        const records = readFileSync(join(testDir, "spend-ledger.jsonl"), "utf8").trim().split("\n")
+          .map(line => JSON.parse(line) as { kind: string; tokens?: number });
+        expect(snapshot.reserved).toBe(0);
+        expect(snapshot.settled).toBe(usage === "missing" ? 0 : 1000);
+        if (usage !== "missing") expect(snapshot.unresolved).toBe(0);
+        if (usage === "missing") {
+          expect(snapshot.unresolved).toBeGreaterThanOrEqual(1000);
+          expect(entries[0]!.usage).toBeUndefined();
+          expect(records.some(record => record.kind === "settle")).toBe(false);
+        } else {
+          expect(entries[0]!.usage).toMatchObject({ inputTokens: 900, outputTokens: 100 });
+          expect(records.find(record => record.kind === "settle")?.tokens).toBe(1000);
+        }
+        const second = await handleResponses(request(), config, { model: "", provider: "" });
+        expect(second.status).toBe(429);
+        expect((await second.json() as { error: { code: string } }).error.code).toBe("request_send_budget_exhausted");
+        expect(sends).toBe(1);
+      });
+    }
+  }
+
   test("a fast all-targets failure keeps its HTTP status and body with the opt-in present", async () => {
     const baseline = slowCombo(() => failed("rb"));
     baseline.unhold();

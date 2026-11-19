@@ -8,7 +8,7 @@
  * its cooperating generation, and identities for catalog-owned targets.
  */
 import { createHmac, randomBytes } from "node:crypto";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import { observeConfigGeneration } from "../config";
 import type { OcxConfig } from "../types";
@@ -23,7 +23,7 @@ import {
   legacyCatalogBackupPath,
   samePath,
 } from "./catalog/parsing";
-import { readRootTomlString } from "./paths";
+import { readCodexCatalogBinding } from "./paths";
 import {
   acceptCatalogGatherSourcePath,
   captureAndSealCatalogHomeSelection,
@@ -170,11 +170,9 @@ export function captureCatalogAdmissionSnapshot(
   const configBytes = readCatalogGatherSource(evidenceSession, "catalog-target-selection");
   const configuredCatalogPath = configBytes === null
     ? null
-    : readRootTomlString(Buffer.from(configBytes).toString("utf8"), "model_catalog_json");
+    : readCodexCatalogBinding(configPath, Buffer.from(configBytes).toString("utf8"));
   const defaultCatalogPath = join(homeSelection.canonicalCodexHome, "opencodex-catalog.json");
-  const catalogPath = configuredCatalogPath
-    ? resolve(homeSelection.canonicalCodexHome, configuredCatalogPath)
-    : defaultCatalogPath;
+  const catalogPath = configuredCatalogPath ?? defaultCatalogPath;
   const backupPaths = [
     catalogBackupPathFor(catalogPath),
     ...(samePath(catalogPath, defaultCatalogPath) ? [legacyCatalogBackupPath()] : []),

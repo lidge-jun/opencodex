@@ -1,29 +1,13 @@
 import type { OcxProviderConfig } from "../types";
 import { openaiResponsesUrl } from "../adapters/openai-responses-url";
+import { isCanonicalOpenAiForwardProvider, normalizedBaseUrl } from "./openai-forward-destination";
+
+export { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "./openai-forward-destination";
 
 export const OPENAI_CODEX_PROVIDER_ID = "openai";
 export const LEGACY_OPENAI_MULTI_PROVIDER_ID = "openai-multi";
 export const OPENAI_API_PROVIDER_ID = "openai-apikey";
 export const LEGACY_CHATGPT_PROVIDER_ID = "chatgpt";
-
-export const CODEX_FORWARD_BASE_URL = "https://chatgpt.com/backend-api/codex";
-
-function normalizedBaseUrl(value: string): string | undefined {
-  try {
-    const url = new URL(value.trim());
-    if (url.username || url.password || url.search || url.hash) return undefined;
-    const path = url.pathname.replace(/\/+$/, "");
-    return `${url.origin}${path}`;
-  } catch {
-    return undefined;
-  }
-}
-
-export function isCanonicalOpenAiForwardProvider(provider: OcxProviderConfig): boolean {
-  return provider.adapter === "openai-responses"
-    && provider.authMode === "forward"
-    && normalizedBaseUrl(provider.baseUrl) === CODEX_FORWARD_BASE_URL;
-}
 
 /**
  * Response evidence is separate from Fast capability and request serialization. Preserve the

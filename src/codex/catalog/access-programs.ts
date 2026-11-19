@@ -13,6 +13,7 @@ import type { RawEntry } from "./parsing";
 
 function applyBuiltInCapabilities(
   entry: RawEntry, slug: string, roster: NativeRosterCapabilities | undefined, limits: NativeContextLimits,
+  incoming: RawEntry = entry,
 ): void {
   if (!BUILT_IN_NATIVE_OPENAI_MODELS.includes(slug)) return;
   for (const flag of ["supports_reasoning_effort_updates", "supports_experimental_context"] as const) {
@@ -29,7 +30,7 @@ function applyBuiltInCapabilities(
   if (defaultWindow === undefined || maximum === undefined) return;
   const configured = nativeOpenAiConfiguredContextLimit(slug, limits);
   const window = Math.min(narrowNativeOpenAiContextWindow(defaultWindow, slug, limits) ?? defaultWindow, maximum);
-  const retained = entry.context_window === window ? entry.auto_compact_token_limit : undefined;
+  const retained = incoming.context_window === window ? incoming.auto_compact_token_limit : undefined;
   const budget = clampAutoCompactTokenLimit(window, fallback?.maxInputTokens, limits.modelAutoCompactTokenLimits?.[slug]);
   entry.context_window = window;
   entry.max_context_window = Math.min(configured ?? maximum, maximum);
@@ -56,13 +57,19 @@ function nativeRosterTarget(
 export function applyNativeRosterCapabilities(
   entries: RawEntry[], snapshot: CodexModelEntitlementSnapshot, accountTargets: ReadonlyMap<string, string>,
   limits: NativeContextLimits = {},
+  incomingEntries: readonly RawEntry[] = entries,
 ): void {
+  // The merge may temporarily replace a persisted roster window with a shipped
+  // pin. Preserve lower policy only when the original and final windows match.
+  const incomingBySlug = new Map(incomingEntries
+    .filter(entry => !isNativeAliasCatalogEntry(entry) && entry.owned_by !== COMBO_NAMESPACE)
+    .map(entry => [entry.slug, entry]));
   for (const entry of entries) {
     if (isNativeAliasCatalogEntry(entry) || entry.owned_by === COMBO_NAMESPACE) continue;
     const target = nativeRosterTarget(entry, snapshot, accountTargets);
     if (!target) continue;
     const capabilities = target.confirmedAccount ? snapshot.capabilitiesByAccount?.get(target.confirmedAccount)?.get(target.slug) : undefined;
-    applyBuiltInCapabilities(entry, target.slug, capabilities, limits);
+    applyBuiltInCapabilities(entry, target.slug, capabilities, limits, incomingBySlug.get(entry.slug));
   }
 }
 
@@ -108,7 +115,8 @@ export function applyNativeAccessPrograms(
 
 export function applyNativeRosterMetadata(
   entries: RawEntry[], snapshot: CodexModelEntitlementSnapshot, accountTargets: ReadonlyMap<string, string>, limits: NativeContextLimits,
+  incomingEntries?: readonly RawEntry[],
 ): void {
-  applyNativeRosterCapabilities(entries, snapshot, accountTargets, limits);
+  applyNativeRosterCapabilities(entries, snapshot, accountTargets, limits, incomingEntries);
   applyNativeAccessPrograms(entries, snapshot, accountTargets);
 }

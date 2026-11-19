@@ -1,15 +1,18 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repoRoot } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
-function scenario(windows: boolean, conflict = false, hashless = false) {
+function scenario(windows: boolean, conflict = false, hashless = false, aliasCatalogParent = false) {
   const root = mkdtempSync(join(tmpdir(), "ocx-disconnect-edits-"));
   const ocx = join(root, "ocx"), codex = join(root, "codex");
   mkdirSync(ocx); mkdirSync(codex);
+  const catalogHome = aliasCatalogParent ? join(root, "alias") : codex;
+  if (aliasCatalogParent) symlinkSync(codex, catalogHome, process.platform === "win32" ? "junction" : "dir");
+  const catalogPath = join(catalogHome, "opencodex-catalog.json");
   const eol = windows ? "\r\n" : "\n";
   const edits = [
     'model = "user-provider/new-model"',
@@ -19,7 +22,7 @@ function scenario(windows: boolean, conflict = false, hashless = false) {
     windows ? "command = 'C:\\tools\\computer-use.exe'" : 'command = "/opt/tools/computer-use"',
   ].join(eol) + eol;
   const url = "http://127.0.0.1:10100/v1";
-  const injected = `openai_base_url = "${url}"${eol}experimental_realtime_ws_base_url = "${url}"${eol}model_catalog_json = ${JSON.stringify(join(codex, "opencodex-catalog.json"))}${eol}model = "old-model"${eol}`;
+  const injected = `openai_base_url = "${url}"${eol}experimental_realtime_ws_base_url = "${url}"${eol}model_catalog_json = ${JSON.stringify(catalogPath)}${eol}model = "old-model"${eol}`;
   writeFileSync(join(codex, "config.toml"), injected.replace('model = "old-model"' + eol, "") .replace(url, conflict ? "https://user.example/v1" : url) + edits);
   const script = `
     const { readFileSync, writeFileSync, existsSync } = require("node:fs");
@@ -41,7 +44,7 @@ function scenario(windows: boolean, conflict = false, hashless = false) {
     const journal = {version:1,originalConfig:Buffer.from('model = "old-model"\\n').toString("base64"),originalProfile:null,
       ${hashless ? "" : "injectedConfigHash:hash(" + JSON.stringify(injected) + "),injectedProfileHash:null,"}
       injectedOpenaiBaseUrl:${JSON.stringify(url)},injectedRealtimeWsBaseUrl:${JSON.stringify(url)},
-      injectedCatalogPath:${JSON.stringify(join(codex, "opencodex-catalog.json"))},owner:{kind:"client",apiKeyId:"client-1"},pid:999999,timestamp:"2026-11-07T00:00:00.000Z"};
+      injectedCatalogPath:${JSON.stringify(catalogPath)},owner:{kind:"client",apiKeyId:"client-1"},pid:999999,timestamp:"2026-11-07T00:00:00.000Z"};
     writeFileSync(c+"/opencodex-journal.json", JSON.stringify(journal));
     let result, error;
     try { result = await disconnectClient({}, {lifecycleLockDeps:{lockPath:h+"/lifecycle.sqlite"}}); }
@@ -76,6 +79,13 @@ test.each([false, true])("disconnect preserves post-injection edits and relink b
   expect(result.retained).toBe(false);
   expect(result.state).toBe("disconnected");
   expect(result.token).toBe(false);
+});
+
+test("disconnect recognizes a legacy default catalog recorded through a Codex home alias", () => {
+  const result = scenario(false, false, false, true);
+  expect(result.error).toBeUndefined();
+  expect(result.result.restored).toBe(true);
+  expect(result.after).toBe(result.edits);
 });
 
 test("a changed owned URL refuses without clearing the credential or journal", () => {

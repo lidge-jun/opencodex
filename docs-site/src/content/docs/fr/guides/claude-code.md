@@ -170,7 +170,7 @@ unknown signifie qu’opencodex ne peut pas déterminer si les réglages pointen
 
 ### Mode picker : modèles opencodex dans le sélecteur Code first-party
 
-Le mode picker fait partie du mode first-party. Sur macOS et Windows, il est activé par défaut lorsque first-party
+Le mode picker fait partie du mode first-party. Sur macOS, Windows et Linux, il est activé par défaut lorsque first-party
 est sélectionné, sauf si `claudeCode.intercept.picker: false` est défini. Il modifie le sélecteur de
 modèles de l'onglet Code de Desktop first-party pour y afficher les modèles opencodex disponibles par
 leur nom. Lors de la première activation, macOS peut demander l'autorisation d'une autorité de certification
@@ -187,9 +187,7 @@ Une migration unique depuis une ancienne identité peut demander votre consentem
 confiance. Si ce nettoyage échoue, le picker reste indisponible et le profil appliqué utilise un relais
 sans déchiffrement jusqu'à sa réussite. macOS peut aussi demander de déverrouiller le trousseau ou
 d'autoriser l'accès d'une application aux identifiants, y compris après un redémarrage ou une mise à jour. Sur Windows, `on` ou `trust` explicite peut afficher une confirmation d'ajout de la racine.
-Le picker reste non pris en charge sous Linux : aucun travail de CA, de magasin d'identifiants
-ou de proxy picker n'y démarre. L'interception Claude principale reste disponible ; ses fichiers CA locaux
-sont protégés par des vérifications du propriétaire, des liens symboliques, des permissions et des ACL Windows.
+Sous Linux, l'activation explicite du picker utilise `certutil` pour ajouter l'autorité de certification restreinte du picker aux autorités de confiance dans la base NSS de l'utilisateur.
 
 Lorsque le mode picker est actif, Claude Desktop accède au réseau par OpenCodex. Si OpenCodex s'arrête,
 Desktop reste hors ligne jusqu'à son redémarrage complet ou jusqu'à la désactivation du mode picker.

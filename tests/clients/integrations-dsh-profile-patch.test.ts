@@ -4,6 +4,7 @@ import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DSH_PROFILE_PROVIDER_PATH, type ExportModel } from "../../src/clients/config-export";
+import { refreshOwnedCatalogIntegrations } from "../../src/integrations/catalog-refresh";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { defaultIntegrationIO } from "../../src/integrations/config-io";
 import { previewIntegration } from "../../src/integrations/mutation-plan";
@@ -153,6 +154,26 @@ describe("DSH Desktop profile patch", () => {
     expect(text.endsWith("- id: ui-chat\n  config:\n    transcriptView: detailed\n")).toBe(true);
     const providers = readPath(parsedStore(), ["[id=llm-pi-ai]", "config", "providers"]) as Record<string, unknown>;
     expect(Object.keys(providers)).toEqual(["mine", "opencodex"]);
+  });
+
+  test("automatic catalog refresh updates the owned DSH Desktop profile", async () => {
+    installDesktop(LIVED_IN);
+    expect(applyIntegration(input()).ok).toBe(true);
+    expect(existsSync(settingsPath())).toBe(false);
+    const minePath = ["[id=llm-pi-ai]", "config", "providers", "mine"];
+    const userProvider = readPath(parsedStore(), minePath);
+    expect(userProvider).toEqual({
+      api: "openai-completions",
+      baseURL: "http://127.0.0.1:9999/v1",
+    });
+
+    const outcomes = await refreshOwnedCatalogIntegrations(input({ models: MORE_MODELS }));
+
+    const models = readPath(parsedStore(), [...DSH_PROFILE_PROVIDER_PATH, "models"]) as Array<{ id: string }>;
+    expect(models.map(model => model.id)).toEqual(MORE_MODELS.map(model => model.namespaced));
+    expect(outcomes).toEqual([{ client: "dsh", ok: true, changed: true }]);
+    expect(readPath(parsedStore(), minePath)).toEqual(userProvider);
+    expect(existsSync(settingsPath())).toBe(false);
   });
 
   test("a refresh rewrites only our provider, after DSH added a row of its own", () => {

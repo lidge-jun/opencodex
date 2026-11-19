@@ -558,7 +558,7 @@ function writeRetainedCatalogSync({
       warningPolicy: "emit",
     },
   });
-  applyNativeRosterMetadata(catalog.models, modelEntitlements, accountTargets, openaiContextCap);
+  applyNativeRosterMetadata(catalog.models, modelEntitlements, accountTargets, openaiContextCap, catalogModelsForMerge);
   clampCatalogModelsToCodexSupport(catalog.models, { observedCatalog: bundledCodexCatalogSnapshot() });
   finalizeAutoReviewModelOverride(catalog.models, catalogModelsForMerge, config);
   advanceNativeInheritanceTemplate(catalog, catalog.models, shouldUpgradeToUpstreamEntry);

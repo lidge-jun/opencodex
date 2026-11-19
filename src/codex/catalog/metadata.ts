@@ -358,11 +358,11 @@ function longWindowOptInCeiling(slug: string): number | undefined {
 export function narrowNativeOpenAiContextWindow(raw: number | undefined, slug: string, input: NativeContextLimitsInput): number | undefined {
   if (raw === undefined) return undefined;
   const limit = nativeOpenAiConfiguredContextLimit(slug, input);
+  // A confirmed default is already authoritative. The shipped opt-in ceiling
+  // constrains only a user-requested increase, never that default or a lower cap.
+  if (limit === undefined || limit <= raw) return limit ?? raw;
   const optInCeiling = longWindowOptInCeiling(slug);
-  if (optInCeiling !== undefined) {
-    return Math.min(limit ?? raw, optInCeiling);
-  }
-  return applyProviderContextCap(raw, limit);
+  return optInCeiling === undefined ? raw : Math.max(raw, Math.min(limit, optInCeiling));
 }
 
 export function nativeOpenAiContextWindow(slug: string, limits?: NativeContextLimitsInput): number | undefined {

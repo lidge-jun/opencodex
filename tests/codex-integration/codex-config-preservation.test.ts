@@ -13,7 +13,7 @@ import {
   stripInjectedRootWebSearch,
   removeProfileSection,
   ensureRootWebSearchDisabled, ensureFastModeFeature, stripOpencodexCatalogPath,
-  setRootModelCatalogPath,
+  updateRootModelCatalogPath,
   stripExistingModelProvider,
 } from "../../src/codex/inject/config-toml";
 import { stripOpencodexConfig } from "../../src/codex/inject/remove";
@@ -29,6 +29,23 @@ const userUrl = "https://fixture.invalid/v1";
 const parse = (text: string) => Bun.TOML.parse(text.replace(/^\uFEFF/, ""));
 
 describe("structural root ownership and multiline preservation", () => {
+  test("rewrites and strips the legacy Windows sibling across case and separator differences", () => {
+    const owner = { configPath: "C:/fixture/Codex/config.toml" };
+    const content = "model_catalog_json = 'c:\\fixture/CODEX\\OPENCODEX-CATALOG.JSON'\n";
+    expect(updateRootModelCatalogPath(content, "opencodex-catalog.json", owner).content)
+      .toBe('model_catalog_json = "opencodex-catalog.json"\n');
+    expect(stripOpencodexCatalogPath(content, owner)).toBe("");
+  });
+
+  test("preserves a foreign same-named catalog and strips only a journaled external path", () => {
+    const configPath = "C:/fixture/Codex/config.toml";
+    const content = 'model_catalog_json = "elsewhere/opencodex-catalog.json" # user setting\n';
+    expect(updateRootModelCatalogPath(content, "opencodex-catalog.json", { configPath }).content).toBe(content);
+    expect(stripOpencodexCatalogPath(content, { configPath })).toBe(content);
+    const owner = { configPath, journaledPath: "c:/fixture/codex/ELSEWHERE/opencodex-catalog.json" };
+    expect(stripOpencodexCatalogPath(content, owner)).toBe("");
+  });
+
   test.each(["openai_base_url", '"openai_base_url"', "'openai_base_url'", '"openai_base_\\u0075rl"'])("user marker quotations never own the root URL (%s)", key => {
     const content = `# user quote: ${OCX_ROUTING_MARKER_LINE}\n${key} = "${userUrl}"\nmodel = "user/model"\n`;
     expect(hasInjectedOpenaiBaseUrl(content)).toBe(false);
@@ -175,7 +192,7 @@ describe("structural root ownership and multiline preservation", () => {
 
   test.each([
     { name: "strip catalog", transform: stripOpencodexCatalogPath },
-    { name: "set catalog", transform: (content: string) => setRootModelCatalogPath(content, "fixture-catalog.json") },
+    { name: "set catalog", transform: (content: string) => updateRootModelCatalogPath(content, "fixture-catalog.json").content },
     { name: "feature toggle", transform: (content: string) => ensureFastModeFeature(content, true) },
     { name: "web-search toggle", transform: (content: string) => ensureRootWebSearchDisabled(content, true).content },
   ])("key-shaped string data remains opaque (%j)", ({ transform }) => {

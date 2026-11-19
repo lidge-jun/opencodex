@@ -9,7 +9,7 @@ import { configEnablesRoutedNamespace, ocxRoutedNamespaceCounts } from "./catalo
 import { inspectCodexHomeOwner } from "./codex-home-owner";
 import { shouldSyncCodexOnStart } from "./desired-state";
 import { JOURNAL_PATH, journalOwner } from "./journal";
-import { CODEX_HOME, DEFAULT_CATALOG_PATH, resolveCodexConfigPath } from "./paths";
+import { CODEX_CONFIG_PATH, CODEX_HOME, DEFAULT_CATALOG_PATH, resolveCodexCatalogPath } from "./paths";
 import { siblingOfLivePort } from "./sibling-start";
 
 export type { CatalogObservation } from "./catalog/heal-observation";
@@ -96,7 +96,9 @@ export function startCodexCatalogSelfHeal(options: { port?: number; deps?: Catal
   const deps = options.deps ?? {};
   const scheduleFn = deps.scheduleFn ?? defaultSchedule;
   const clock = deps.now ?? (() => performance.now());
-  const catalogPath = deps.catalogPath ?? (() => selectCatalogHealPath(JOURNAL_PATH, DEFAULT_CATALOG_PATH, resolveCodexConfigPath));
+  const catalogPath = deps.catalogPath ?? (() => selectCatalogHealPath(
+    JOURNAL_PATH, DEFAULT_CATALOG_PATH, path => resolveCodexCatalogPath(CODEX_CONFIG_PATH, path),
+  ));
   const observe = deps.observe ?? observeCatalogHealFile;
   const converge = deps.converge ?? convergeOwnCatalog;
   const gates: CatalogSelfHealGates = {

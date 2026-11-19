@@ -38,9 +38,9 @@ Google providers may persist `googleToolSchemaPolicy` as `compatible` or `reject
 ### OpenCodex home and live process state
 
 `initializePersistedConfigIfMissing` in `src/config.ts` is the create-only path consumed by
-`src/cli/init.ts`. It rechecks absence under the existing config-mutation lock and publishes through
-`src/config/initialize.ts`: a private descriptor is hardened before secret bytes are written, then
-linked without replacing an occupied destination. Existing invalid or unsafe entries are preserved.
+`src/cli/init.ts`. The wizard omits `apiKey` for Antigravity ACP, reports an invalid default model by field before publication, and accepts a key or an environment reference for LiteLLM.
+The initializer rechecks absence under the config-mutation lock and uses `src/config/initialize.ts` to harden a private
+descriptor before writing secret bytes, then links without replacing an occupied destination. Invalid or unsafe entries are preserved.
 The initializer never truncates a staged inode or rolls back by unlinking the destination; cleanup
 only removes its own temporary name. Unsupported/denied links and incomplete cleanup fail explicitly,
 and publication followed by a later failure can leave a complete config or private residue. Ordinary
@@ -88,7 +88,7 @@ object so the freshness the data write moved does not read as a replacement. A d
 
 `src/types.ts` is the shape; the load/validate pipeline lives in the split config leaves — schema in `src/config/schema/` (`config-schema.ts`, `leaf-validators.ts`) and replace-path persistence in `src/config/persist-unlocked.ts`, with `src/config.ts` as the compatibility facade — and is not reproduced here. What matters for maintainers is which groups exist and who resolves them:
 
-A schema-invalid top-level JSON value is repairable only when it is a non-array object.
+A schema-invalid top-level JSON value is repairable only when it is a non-array object. On disk reads, `src/config/load-degrade.ts` drops invalid ACP credential and account settings and non-Gemini model entries from the affected provider. It also drops memory phases and subagent fallback entries targeting Antigravity CLI (ACP) and disables a shadow call or managed subagent default sync targeting it. For ACP compaction overrides, load removes the automatic trigger and preserves manual compaction when enabled. It removes per-model chains emptied by this repair so valid sibling chains survive schema validation. Diagnostics report those repairs and leave the file as written. Candidate writes reject invalid ACP provider fields and those active selectors. `PUT /api/settings` checks memory and compaction targets and `PUT /api/injection-model` checks the managed subagent default against provider configuration before publishing changes. Repair warnings, schema diagnostics, and salvage logging redact credential-shaped path segments, including minted OpenCodex tokens, through `src/lib/redact.ts`.
 `loadConfig` backs up arrays, primitives, and null before using defaults, so the repair merge cannot turn them into a valid config while discarding the original bytes.
 
 `src/config/schema/config-schema.ts` accepts the opt-in `codexAccountPriorityFailback` preference and degrades a malformed value in a loaded file to false without discarding providers, while a write candidate carrying a non-boolean value is rejected. A malformed entry in `codexAccountAutoSwitchThresholds` is dropped on load with a warning and the valid entries are kept, so an unrelated save cannot erase them. Its [routing contract](providers/openai-accounts.md#ongoing-priority-failback) requires quota strategy and a positive threshold. The default-off `codexUseRemainingQuotaAccountIds` list degrades to absent when malformed; write candidates reject invalid account ids. Its [included-quota policy](providers/openai-accounts.md#main-account-policy-observations) preserves thresholds and credit-spending permission. It also keeps the Remote Link Home's `linkRequestCompression` boolean, reading any other value as unset, which is on ([`remote-link.md`](remote-link.md#per-body-request-compression)).
@@ -143,13 +143,13 @@ place. A user-owned root line is therefore replaced only while the switch is off
 the same name are invalid TOML — and is not lost while it is gone. `ocx restore` replays the journal
 snapshot on top of that.
 
-`src/codex/inject.ts` writes one of two forms. The choice is not cosmetic: it decides whether Codex
-keeps its native provider id, which decides whether existing thread history still resolves.
+`src/codex/inject.ts` writes one of two forms. The provider id determines whether existing thread history still resolves.
+Both forms write `model_catalog_json` as a filename for a sibling catalog so Windows and WSL can share it. Generated bindings for catalogs outside the config directory use absolute paths. `src/codex/paths.ts` reads TOML root string assignments, including quoted keys, and resolves paths against the config directory after expanding `~` and `~/` against the user home on POSIX. Injection and fallback removal match resolved paths against the default sibling and the journaled owned binding. Path comparison recognizes aliases of the containing directory and Windows comparisons ignore case and separator differences. The journal tracks ownership of the config binding separately from the catalog file and retains the original assignment's text for restore. A legacy journal's catalog path remains available for artifact recovery. Only a match to the resolved default sibling gives that legacy path authority over the binding.
 
 **Loopback (default).** A single marker-owned root override, no provider table:
 
 ```toml
-model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
+model_catalog_json = "opencodex-catalog.json"
 openai_base_url = "http://127.0.0.1:10100/v1"
 ```
 
@@ -172,7 +172,7 @@ This diagnostic distinction does not change URL ownership, journal entries, or s
 
 ```toml
 model_provider = "opencodex"
-model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
+model_catalog_json = "opencodex-catalog.json"
 
 [model_providers.opencodex]
 name = "OpenCodex Proxy"
@@ -554,7 +554,14 @@ Account quota surfaces use [safe probe diagnostics](transports/inventory.md#acco
 
 The OpenCode launcher resolves the existing local management origin from the live bind and configured hub ingress. Its admin credential comes from the existing admin environment/file policy; an absent credential fails without substituting a data key.
 
-The optional `autoReviewOverride` block stores a global approval reviewer selector and enabled flag. The Models settings route validates and normalizes writes, restores the live block when persistence fails before publication, and reports catalog convergence; the dashboard shows pending when the catalog did not commit. Malformed hand edits drop this block without discarding other configuration. Provider `autoReviewModel` and `autoReviewModelOverrides` accept validated final-catalog selectors. Per-model keys preserve case and accept the existing raw/encoded slash equivalence. File-load degradation removes malformed optional selectors only; management writes reject malformed shapes. Omitted provider saves preserve selectors, explicit clears remove them, and raw editor candidates adopt normalized values before persistence and live replacement. See [catalog ownership](catalog.md#provider-scoped-approval-reviewer).
+The optional `autoReviewOverride` block stores a global approval reviewer selector and enabled flag. The Models settings route validates and normalizes writes, restores the live block when persistence fails before publication, and reports catalog convergence; the dashboard shows pending when the catalog did not commit. Malformed hand edits drop this block without discarding other configuration. Provider `autoReviewModel` and `autoReviewModelOverrides` accept validated final-catalog selectors. Per-model keys preserve case and accept the existing raw/encoded slash equivalence. File-load degradation removes malformed optional selectors only; management writes reject malformed shapes. Omitted provider saves preserve selectors, explicit clears remove them, and raw editor candidates adopt normalized values before persistence and live replacement. See [catalog ownership](catalog.md#provider-scoped-approval-reviewer). The optional `comboSuggestionExcludedProviders` array is owned by `src/config/schema/config-schema.ts`. It accepts up to 256 trimmed, deduplicated provider names of at most 256 characters each. A malformed value is dropped during parsing. Removing the last exclusion removes the key. Each exclusion write changes one provider under the config mutation lock. The preference filters dashboard suggestions and leaves configured combo targets in place. `src/server/management/combo-suggestion-routes.ts` reads exclusions and stored combo consent from persisted configuration for the policy GET and rechecks both under the mutation lock when saving a suggestion. Every suggested target is metered because subscription channels can incur charges too. Create records explicit dashboard consent and append requires existing combo consent. The classifier in `src/combos/suggestion-channel.ts` ranks channels for placement. Each OAuth ranking entry requires the registered provider ID, adapter, auth mode, and exact normalized destination. See the [provider billing and account notes](../docs-site/src/content/docs/guides/providers.md).
+
+- Canonical ChatGPT Codex forward uses the Codex login account channel and the same destination predicate as Responses transport.
+- `xai` OAuth uses the Grok CLI subscription gateway. The public API-key lane is metered.
+- `kimi` OAuth uses Kimi Code Plan quota on the Chat wire.
+- `kimi-responses` OAuth uses the same Kimi Code Plan entitlement on the Responses wire.
+
+Other channels require metered-target consent. The registry audit leaves Devin and Kiro metered because of credit billing, OrcaRouter because OAuth issues an inference API key, and Nous because its catalog mixes paid and free models. Claude OAuth instances can draw from extra-usage credits, including for third-party apps. Google Antigravity, Cursor, Zed, Command Code, WorkBuddy AI, DeepSeek Harness, Meta Muse and GitHub Copilot remain metered because the account and catalog descriptions do not establish flat-rate coverage for all requests. Vertex retains its separate metered tier. Custom forward gateways and unknown OAuth channels default to metered.
 
 Display-name validation retains prototype-shaped model IDs as data; reviewer-target map validation remains separate and rejects its reserved keys.
 ## Explicit per-model capability declarations
@@ -565,16 +572,8 @@ Provider-wide `inputModalities` is an optional nonempty array of `text`, `image`
 
 The text-only consumer reads exact inputModalities declarations before legacy hints. CLI add/edit `--text-only` targets one model and preserves sibling declarations; `src/vision/eligibility.ts` routes declared text-only models into existing image-description or explicit-omission handling. Positive routed image declarations override stale candidate metadata, while native catalog authority retains its existing legacy policy. `PUT /api/combos` accepts a request-only `visionSidecarTargets` array of exact combo-member `{ provider, model }` pairs (validated against the submitted combo's normalized targets, deduplicated, rejected while `imageInput` is `"disabled"`). An entry whose provider is unconfigured, whose model already accepts image input through any source, or whose exact declaration, custom row, or provider `modelInputModalities` hint lacks `text` is rejected with 400 instead of being overwritten; an entry the sidecar already covers through any runtime source (exact declaration, custom row, `noVisionModels`, legacy record, registry enrichment) is skipped as a no-op. Accepted entries merge `inputModalities: ["text"]` through the same validation/merge helpers, and the combo write, reference migrations, disabled-selector rewrite and capability patches commit in one provider-patch transaction — a failed save restores all of them. The field never persists under `config.combos`, and removing a member from the combo leaves its provider declaration in place until cleared explicitly.
 
-An explicit custom row is the operator's own definition of one routed model, so its
-`customModels[].inputModalities` outranks the provider-level vision hints
-(`noVisionModels`, `modelInputModalities`) for that exact `provider`/`modelId` identity.
-`modelCapabilities` keeps the top slot as the dedicated capability axis, including for the
-`ocx provider edit --text-only` write. The catalog overlay in
-`src/codex/catalog/routed-gather.ts` copies that declaration onto the advertised row directly,
-and the request-path predicates in `src/vision/eligibility.ts` and `src/vision/plan.ts` read the
-same field through `customRowInputModalities`, so an advertised row and the dispatch decision can
-no longer disagree about one model. A custom row that declares no modalities stays silent rather
-than becoming a text-only claim.
+An explicit custom row is the operator's own definition of one routed model, so its `customModels[].inputModalities` outranks the provider-level vision hints (`noVisionModels`, `modelInputModalities`) for that exact `provider`/`modelId` identity. `modelCapabilities` keeps the top slot as the dedicated capability axis, including for the `ocx provider edit --text-only` write. The catalog overlay in `src/codex/catalog/routed-gather.ts` copies that declaration onto the advertised row directly, and the request-path predicates in `src/vision/eligibility.ts` and `src/vision/plan.ts` read the same field through `customRowInputModalities`, so an advertised row and the dispatch decision can
+no longer disagree about one model. A custom row that declares no modalities stays silent rather than becoming a text-only claim.
 
 Every consumer that answers "can this model take an image" applies one rule to the declaration:
 image is absent from the list. A row declaring only `audio` or `video` therefore counts as

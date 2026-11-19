@@ -421,8 +421,19 @@ MiMo model Command Code serves.
   mandatory tool choice, while the advertised catalog stays the same. A request that advertises a
   sidecar web-search tool (for example Exa) still changes its tool prefix on compaction.
   A summary that attempts a tool call fails without publishing a function call or replacing
-  history. A successful summary returns exactly one compaction item. Image normalization
-  and the existing one-shot tighter-image retry after HTTP 413 remain unchanged.
+  history. A successful summary returns exactly one compaction item. With image-context recovery off, requests
+  continue to use the existing image normalization and single tighter-image retry after HTTP 413.
+- `anthropicImageContextRecovery: true` enables one recovery after an upstream image-context HTTP 413.
+  The proxy summarizes an older complete part of the conversation with tools and reasoning disabled,
+  then makes one smaller resend that retains the newest image and the current turn. The billable
+  summary is limited to 1,024 output tokens or the original wire limit, whichever is lower.
+  Both sends use the original credential, Messages URL, send and spend budgets, and cancellation
+  signal. The proxy returns the refusal if the proposed cut covers a developer instruction,
+  a recovery leg cannot reserve spend under an enforced ceiling, or the account or endpoint changes. This option
+  defaults to off and applies to routed requests through this adapter, including search and media
+  bridges when their send accounting can admit recovery. Under an enforced spend ceiling, each
+  send in the recovery flow uses its own reported usage, including HTTP errors. When the provider
+  reports no usage, the send's reservation estimate continues to count toward the limit.
 - Translated Anthropic Messages reasoning replay shares the request translation budget, including
   encoding/decoding copy overhead. Requests exceeding it return HTTP 413 with
   `translation_buffer_limit`; signatures and opaque reasoning data are never truncated to fit.
@@ -1008,6 +1019,37 @@ appended to the id instead.
   the roster is not a model allowlist, so a caller-supplied model id is still forwarded.
 - Experimental, unofficial, and not endorsed by Zed. Using it may break Zed's terms of service
   and can get the Zed account limited or suspended; that risk is the user's to accept.
+
+## `agy-acp`
+
+**Targets:** the official Antigravity CLI (`agy acp`, 1.5.3 or newer) as a local child process over the Agent Client
+Protocol v1 (newline-delimited JSON-RPC on stdio).
+**Auth:** none in OpenCodex; the CLI owns its Google sign-in.
+
+- `runTurn` only: one ACP session per turn (`initialize`, `session/new`, `session/set_config_option`, `session/prompt`).
+  The model and thinking level are selected through the options the CLI advertises; the selected Gemini model must be
+  confirmed before the prompt and stay selected during it, or the turn fails closed.
+- The conversation is flattened into one text prompt; system text travels on `session/new` when the CLI advertises
+  system prompt support. The flattened prompt keeps the newest 200,000 characters and adds a `[truncated]` marker
+  when it cuts older text. When the CLI lacks separate system prompt support, the system block is prepended to the
+  flattened prompt and can be partly or wholly truncated.
+- Permission requests are answered `cancelled`, file system and terminal requests from the CLI are not executed, and
+  errors carry fixed text: the CLI's stderr and its error messages are never returned.
+- OpenCodex scans answer and reasoning text for supported credential patterns, including values split across ACP frames.
+  For quoted JSON OAuth fields, whitespace and line breaks around the colon can also span frames.
+- Each turn starts in a fresh, empty private workspace containing only its own empty temp directory.
+  On POSIX, cleanup confirms that the CLI's process group is gone before removing the workspace.
+  A descendant that deliberately leaves the group is outside that check. Removing the workspace exposes no
+  pre-existing user files.
+- `end_turn` completes; `max_tokens` truncates the answer. A `refusal` ends a Responses stream with `response.failed` and `invalid_prompt` so Codex stops retrying.
+  `max_turn_requests`, an unrequested `cancelled` and an unknown stop reason fail the turn.
+- Refuses subagent, spawned-thread, Codex memory and automatic compaction turns, combo members and combo decision calls, and
+  subagent-fallback routing. Chat Completions, Responses and Responses Compact return `403 agy_acp_interactive_only`
+  for labeled unattended turns. Responses WebSocket applies the automatic compaction check to each frame. Manual
+  compaction remains available. OpenCodex determines locality from the observed connection and refuses requests carrying
+  recognized forwarding headers. A loopback relay or SSH port forward that adds none can still appear local.
+  On the public listener, declare the reverse proxy in `dashboardTrustedProxy` or keep this port out of the relay.
+  See the [API-key catalog](/guides/api-key-catalog/#antigravity-cli-acp-local).
 
 ## `azure-openai` (alias: `azure`)
 

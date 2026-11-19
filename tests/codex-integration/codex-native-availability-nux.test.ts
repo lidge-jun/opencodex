@@ -139,6 +139,19 @@ test.each([
   if (slug === "gpt-5.5" && cap > 272_000) expect(row.auto_compact_token_limit).toBe(244_800);
 });
 
+test.each([
+  [undefined, 1_000_000], [950_000, 950_000], [1_100_000, 1_000_000],
+] as const)("confirmed default above the shipped opt-in ceiling respects cap %p", async (cap, expected) => {
+  const result = await snapshot([{
+    ...rosterRow(WRITER_MODEL), context_window: 1_000_000, max_context_window: 1_100_000,
+  }]);
+  const row: RawEntry = { slug: WRITER_MODEL, context_window: 272_000 };
+  applyNativeRosterMetadata([row], result, new Map(), { cap });
+  expect(row.context_window).toBe(expected);
+  expect(row.max_context_window).toBe(cap ?? 1_100_000);
+  expect(row.auto_compact_token_limit).toBe(Math.floor(expected * 0.9));
+});
+
 test("exact native capabilities respect configured limits and exclude routed and alias rows", async () => {
   const luna = "gpt-6-luna";
   const daybreak = "gpt-daybreak-blue-latest";
@@ -283,12 +296,24 @@ test.each(["retained", "convergence"] as const)("%s projects fresh per-account r
     for (const slug of [`desktop/${WRITER_MODEL}`, `team/${WRITER_MODEL}`]) {
       expect(rows.find(row => row.slug === slug)).not.toHaveProperty("availability_nux");
     }
+    // Compare the persisted window with the final roster projection, not the
+    // temporary pinned value used during the observed-state merge.
+    for (const slug of [WRITER_MODEL, `desktop/${WRITER_MODEL}`, `team/${WRITER_MODEL}`]) {
+      rows.find(row => row.slug === slug)!.auto_compact_token_limit = 100_000;
+    }
+    writeFileSync(join(home.codexHome, "opencodex-catalog.json"), JSON.stringify({ models: rows }));
+    for (let pass = 0; pass < 2; pass++) {
+      rows = await writeWith(writer, config);
+      for (const slug of [WRITER_MODEL, `desktop/${WRITER_MODEL}`, `team/${WRITER_MODEL}`]) {
+        expect(rows.find(row => row.slug === slug)?.auto_compact_token_limit).toBe(100_000);
+      }
+    }
     mainPrompt = undefined;
     mainCapabilities = { max_context_window: -1, supports_experimental_context: "true" };
     resetCodexModelEntitlementCacheForTests();
     rows = await writeWith(writer, config);
     const fallback = rows.find(row => row.slug === WRITER_MODEL);
-    expect(fallback).toMatchObject({ context_window: 272_000, max_context_window: 922_000 });
+    expect(fallback).toMatchObject({ context_window: 272_000, max_context_window: 922_000, auto_compact_token_limit: 244_800 });
     expect(fallback?.supports_experimental_context).not.toBe(true);
     expect(rows.find(row => row.slug === WRITER_MODEL)?.availability_nux).toBeNull();
     for (const slug of [`desktop/${WRITER_MODEL}`, `team/${WRITER_MODEL}`]) {
