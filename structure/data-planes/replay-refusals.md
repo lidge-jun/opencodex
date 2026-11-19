@@ -118,13 +118,15 @@ codes can survive projection.
 
 ## Terminal continuation delivery
 
-`src/server/responses/adapter-continuation.ts` projects recognized refusal codes and withholds
-diagnostics for a continuation 429 with an inconclusive probe or explicit retry veto after the
-physical send's quota observation. Responses carries the failed terminal's retry veto and buffered delivery sets
-`x-should-retry: false` for a vetoed 429. Both Chat encoders use `src/chat/outbound.ts` to deliver
-the fixed failure envelope. Buffered Chat replies use HTTP 429 and the same veto header for
-these failures. The original Retry-After is excluded from client delivery. Per-send settlement
-and the failed turn's reported usage still follow the continuation's usage accounting.
+`src/server/responses/adapter-continuation.ts` applies the same replay verdict to HTTP
+errors and parsed error events. A recognized code in an error envelope selects HTTP 429
+where the client uses an HTTP error status. An explicit header or body veto or an
+inconclusive bounded probe selects fixed text with the original error status. A parsed
+error without a status uses 502 for the uncoded veto. Responses keeps its failed terminal
+envelope, and buffered Responses adds the client veto header. Both Chat encoders and the
+translated Messages paths preserve the verdict in the terminal, and their buffered folds
+return the error status with `x-should-retry: false` and no Retry-After. Quota observation
+uses the physical send's response, and parsed usage is observed before fixed error projection.
 
 ## Anthropic image recovery
 

@@ -1,3 +1,4 @@
+import { hasNoRetryDirective, replayRefusalVerdict } from "../lib/upstream-retry";
 import { captureAnthropicRejectionPayloads, keepAnthropicReplayBlock } from "./anthropic-rejection-memo";
 import { anthropicDeclaredTools } from "./anthropic-tool-catalog";
 import { anthropicReplayContent, createAnthropicReplayCapture } from "./anthropic-replay";
@@ -1616,12 +1617,16 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 break;
               }
               case "error": {
-                const err = data.error as { message?: unknown; type?: unknown; code?: unknown; status?: unknown } | undefined;
+                const err = (data.error ?? data.last_error) as { message?: unknown; type?: unknown; code?: unknown; status?: unknown } | undefined;
+                const verdict = replayRefusalVerdict(data);
                 yield { type: "error", message: typeof err?.message === "string" ? err.message : "Anthropic error",
                   ...(typeof err?.type === "string" ? { errorType: err.type } : {}),
                   ...(typeof err?.code === "string" ? { code: err.code } : {}),
                   ...(typeof err?.status === "number" && Number.isInteger(err.status) && err.status >= 400 && err.status <= 599
                     ? { status: err.status } : {}),
+                  ...verdict,
+                  ...(verdict.retryable === false || hasNoRetryDirective(response)
+                    ? { usage: usageFromAnthropic(data.usage ?? pendingUsage) } : {}),
                 };
                 return;
               }
@@ -1731,6 +1736,12 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         retainTranslatedEventBatch(batch, budget);
         return batch;
       };
+      if (json.type === "error" || json.error != null || json.last_error != null) {
+        const verdict = replayRefusalVerdict(json);
+        if (verdict.retryable === false || hasNoRetryDirective(response)) return finishWithEvents([{
+          type: "error", message: "Anthropic error", ...verdict, usage: usageFromAnthropic(json.usage),
+        }]);
+      }
       const rawContent: unknown = json.content;
       // `content` is claimed model output inside a well-formed response, so it is governed by the
       // #1332 nested-shape rule (fail closed) rather than #1240's root-frame padding rule (skip).

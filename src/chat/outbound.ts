@@ -1,4 +1,4 @@
-import { applyReplayRefusalClientHeaders, isReplayRefusalCode, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE, withheldReplayDiagnostic } from "../lib/upstream-retry";
+import { applyReplayRefusalClientHeaders, isReplayRefusalCode, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE, withheldReplayDiagnostic, withheldReplayStatus } from "../lib/upstream-retry";
 import { boundedServiceTier } from "../lib/response-service-tier";
 import { isLikelyRealAnthropicThinkingSignature } from "../responses/reasoning-envelope";
 import { ownedChatErrorPayload, CLIENT_ERROR_CONTRACTS, hasProxyErrorMessage, hasProxyIncomplete, type ClientErrorContract } from "../lib/client-error-body";
@@ -223,14 +223,16 @@ function legacyChatCompletionsStreamErrorPayload(
   };
 }
 
-export function chatCompletionsStreamErrorPayload(message: string, details?: ChatCompletionsStreamFailure) {
+export function chatCompletionsStreamErrorPayload(message: string, details?: ChatCompletionsStreamFailure, streamed = true) {
   const refusalCode = isReplayRefusalCode(details?.code) ? details.code : undefined;
   if (refusalCode || details?.replayVeto) {
-    const status = REPLAY_REFUSED_STATUS;
-    const verdict = { status, type: refusalCode ? "upstream_error" : "rate_limit_error",
-      code: refusalCode ?? "rate_limit_exceeded",
+    const status = refusalCode ? REPLAY_REFUSED_STATUS : details?.status ?? REPLAY_REFUSED_STATUS;
+    const verdict = { status, type: status === 429 && !refusalCode ? "rate_limit_error" : "upstream_error",
+      code: refusalCode ?? (status === 429 ? "rate_limit_exceeded" : null),
       message: refusalCode ? REPLAY_REFUSAL_MESSAGE : withheldReplayDiagnostic(status) };
-    return { bounded: true, verdict, payload: chatCompletionsErrorBody(status, verdict.message, verdict.type, verdict.code) };
+    const payload = chatCompletionsErrorBody(status, verdict.message, verdict.type, verdict.code);
+    if (streamed) payload.retryable = false;
+    return { bounded: true, verdict, payload };
   }
   const legacy = legacyChatCompletionsStreamErrorPayload(message, details);
   const verdict = legacyFailureVerdict(legacy.payload);
@@ -243,7 +245,7 @@ export function chatCompletionsStreamErrorPayload(message: string, details?: Cha
 
 export function ownedChatErrorResponse(status: number, message: string, type?: string, code?: string | null, contract?: ClientErrorContract, proxyAuthored = false, replayVeto = false): Response {
   if (isReplayRefusalCode(code) || replayVeto) {
-    const { verdict, payload } = chatCompletionsStreamErrorPayload(message, { code, status, replayVeto });
+    const { verdict, payload } = chatCompletionsStreamErrorPayload(message, { code, status, replayVeto }, false);
     const response = Response.json(payload, { status: verdict.status });
     applyReplayRefusalClientHeaders(response.headers);
     return response;
@@ -261,8 +263,9 @@ export function chatCompletionsFailedResponse(error: Rec, retryable?: unknown): 
   const message = typeof error.message === "string" ? error.message : "upstream request failed";
   const code = typeof error.code === "string" ? error.code : null;
   const type = typeof error.type === "string" ? error.type : undefined;
-  if (retryable === false && message === withheldReplayDiagnostic(REPLAY_REFUSED_STATUS)) {
-    return { message, details: { code, status: REPLAY_REFUSED_STATUS, replayVeto: true } };
+  const status = withheldReplayStatus(message, retryable);
+  if (status !== undefined) {
+    return { message, details: { code, status, replayVeto: true } };
   }
   return {
     message,

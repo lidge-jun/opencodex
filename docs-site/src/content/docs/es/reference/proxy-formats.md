@@ -43,6 +43,13 @@ En Messages traducido con streaming, un evento `response.failed` con
 `response.retryable: false` y un código reconocido conserva el código y el mensaje fijo en
 el error SSE. El flujo conserva el estado HTTP ya enviado al cliente.
 
+Si el proxy vuelve a pedir al proveedor que termine un turno incompleto, un rechazo de
+reenvío en esa continuación también usa un mensaje fijo. Esto incluye los errores HTTP y
+los eventos de error dentro de una respuesta HTTP exitosa. Responses sin streaming informa
+del fallo e incluye `x-should-retry: false`. Chat Completions y Messages enrutado, sin streaming,
+devuelven HTTP 429 para los códigos de rechazo reconocidos y conservan el estado del error
+cuando el veto carece de código.
+
 Si ya se envió una solicitud de inferencia por la ruta nativa de Anthropic Messages y se agota
 el plazo para recibir los encabezados del proveedor, el proxy devuelve HTTP 429 con
 `error.code: "upstream_reset_replay_refused"` y `x-should-retry: false`. Es posible que el

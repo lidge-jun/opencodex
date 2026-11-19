@@ -27,7 +27,7 @@ import { noteKiroServedSuccess } from "../../providers/kiro-usage";
 import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
 import { readDisplaySafeErrorText, normalizeUpstreamErrorText } from "./core-errors";
 import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
-import { applyReplayRefusalClientHeaders, isAutomaticReplayBlocked, isNonReplayableResponse, observedReplayRefusalCode, replayRefusalBodyCode, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE } from "../../lib/upstream-retry";
+import { applyReplayRefusalClientHeaders, isAutomaticReplayBlocked, isReplayRefusalCode, withheldReplayStatus, isNonReplayableResponse, observedReplayRefusalCode, replayRefusalBodyCode, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE } from "../../lib/upstream-retry";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { currentTurnToolBridgeMaps, guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
 import { guardCompactionSummary } from "../../responses/compaction-summary";
@@ -453,7 +453,7 @@ export async function deliverAdapterResponse(
     const lastError = events.findLast(event => event.type === "error");
     const status = json.status === "failed" && lastError && isContinuationBodyStall(lastError) ? 504 : 200;
     const headers = new Headers({ "Content-Type": "application/json" });
-    if (json.status === "failed" && lastError?.retryable === false && lastError.status === REPLAY_REFUSED_STATUS) {
+    if (json.status === "failed" && lastError && (isReplayRefusalCode(lastError.code) || withheldReplayStatus(lastError.message, lastError.retryable) !== undefined)) {
       applyReplayRefusalClientHeaders(headers);
     }
     return new Response(JSON.stringify(json), { status, headers });

@@ -155,21 +155,33 @@ export function isReplayRefusalCode(code: unknown): code is ReplayRefusalCode {
   return code === UPSTREAM_RESET_REPLAY_REFUSED_CODE || code === UPSTREAM_RESPONSE_REFUSED_CODE;
 }
 
-/** A wire code selects fixed client text. Only the caller can supply transport provenance. */
-export function replayRefusalBodyCode(body: string, requiredStatus?: "failed") {
-  try {
-    const parsed = JSON.parse(body) as Record<string, unknown>;
-    if (requiredStatus !== undefined && parsed.status !== requiredStatus) return undefined;
-    for (const carrier of [parsed.error, parsed.last_error, parsed]) {
-      if (carrier && typeof carrier === "object" && !Array.isArray(carrier)
-        && isReplayRefusalCode((carrier as Record<string, unknown>).code)) {
-        return (carrier as { code: ReplayRefusalCode }).code;
-      }
-    }
-    return undefined;
-  } catch {
-    return undefined;
+/** Inspect an error envelope, including nested causes, without recursing on the JS stack. */
+export function replayRefusalVerdict(payload: unknown): { code?: ReplayRefusalCode; retryable?: false } {
+  let veto = false;
+  const pending = [payload];
+  while (pending.length > 0) {
+    const entry = pending.pop();
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    if (isReplayRefusalCode(record.code)) return { code: record.code, retryable: false };
+    veto ||= record.retryable === false;
+    for (const value of Object.values(record)) pending.push(value);
   }
+  return veto ? { retryable: false } : {};
+}
+
+function replayRefusalBodyVerdict(body: string, requiredStatus?: "failed") {
+  try {
+    const parsed = JSON.parse(body);
+    if (requiredStatus !== undefined && parsed?.status !== requiredStatus) return {};
+    return replayRefusalVerdict(parsed);
+  } catch {
+    return {};
+  }
+}
+
+export function replayRefusalBodyCode(body: string, requiredStatus?: "failed") {
+  return replayRefusalBodyVerdict(body, requiredStatus).code;
 }
 
 /** Client-facing status for {@link UPSTREAM_RESET_REPLAY_REFUSED_CODE}. */
@@ -202,6 +214,12 @@ export const REPLAY_REFUSAL_CLIENT_HEADERS: Readonly<Record<string, string>> = O
  */
 export function withheldReplayDiagnostic(status: number): string {
   return `Provider error ${status}: upstream diagnostic withheld for a non-replayable failure`;
+}
+
+export function withheldReplayStatus(message: string, retryable: unknown): number | undefined {
+  if (retryable !== false) return undefined;
+  const status = Number(/^Provider error ([45]\d{2}):/.exec(message)?.[1]);
+  return Number.isFinite(status) && message === withheldReplayDiagnostic(status) ? status : undefined;
 }
 
 export function applyReplayRefusalClientHeaders(headers: Headers): void {
@@ -976,9 +994,13 @@ async function observeRetryBody(res: Response, signal?: AbortSignal, checkOverfl
   try {
     const { text, complete } = await withPausedResponseHeaderDeadline(signal,
       () => peekBodyText(res, CONTEXT_OVERFLOW_PEEK_BYTES, CONTEXT_OVERFLOW_PEEK_MS, signal));
-    const code = replayRefusalBodyCode(text);
+    const { code, retryable } = replayRefusalBodyVerdict(text);
     if (code !== undefined) {
       wireReplayRefusals.set(res, code);
+      return "refusal";
+    }
+    if (retryable === false) {
+      requireClientReplayVeto(res);
       return "refusal";
     }
     if (!complete) return "inconclusive";

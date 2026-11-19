@@ -45,6 +45,12 @@ Responses, Compact, Chat Completions and routed Messages include `x-should-retry
 and omit `Retry-After` on those errors. The original upstream headers still inform quota
 and cooldown tracking.
 
+If the proxy re-asks a provider to finish an incomplete turn, a replay refusal on that
+continuation also uses fixed error text. This applies to HTTP errors and to error events
+inside successful HTTP responses. Buffered Responses reports the failed turn and includes
+`x-should-retry: false`. Buffered Chat Completions and routed Messages return HTTP 429 for
+recognized refusal codes and preserve the error status for an uncoded veto.
+
 Native Anthropic Messages passthrough preserves an explicit upstream `x-should-retry: false`
 when its body guard returns HTTP 504 for a stall or HTTP 502 for exceeding the byte limit.
 
@@ -578,11 +584,7 @@ When available, `input_tokens_details` can also include `cache_write_tokens`. Th
 detail objects are a compatibility guarantee for strict Responses clients; zero can mean "not
 reported," not necessarily "the provider performed no such work."
 
-If a terminal continuation returns a replay refusal, Chat Completions preserves the refusal code
-and fixed message. A continuation 429 with an explicit retry veto or an inconclusive replay probe
-uses a fixed error message that withholds the provider diagnostic. Responses failed terminals
-carry `retryable: false`. Buffered clients receive `x-should-retry: false` without `Retry-After`,
-and buffered Chat Completions returns HTTP 429.
+A failed continuation follows the [replay refusal policy](#replay-refusals).
 
 When the terminal continuation guard re-asks within a turn, a successful completion that reports
 usage shows the final leg's usage for that re-ask. In Chat Completions, this includes

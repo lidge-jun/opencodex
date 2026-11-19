@@ -790,7 +790,7 @@ export function createAdapterContinuations(
           message: REPLAY_REFUSAL_MESSAGE, retryable: false };
         return;
       }
-      if (response.status === REPLAY_REFUSED_STATUS && (hasClientReplayVeto(response) || hasNoRetryDirective(response))) {
+      if (hasClientReplayVeto(response) || hasNoRetryDirective(response)) {
         yield { type: "error", status: response.status, message: withheldReplayDiagnostic(response.status), retryable: false };
         return;
       }
@@ -815,6 +815,19 @@ export function createAdapterContinuations(
     }
 
     try {
+      const projectFailure = (event: AdapterEvent, current: Response): AdapterEvent => {
+        if (event.type !== "error") return event;
+        if (isReplayRefusalCode(event.code)) return {
+          ...event, status: REPLAY_REFUSED_STATUS, errorType: "upstream_error",
+          message: REPLAY_REFUSAL_MESSAGE, retryable: false,
+        };
+        if (hasClientReplayVeto(current) || hasNoRetryDirective(current) ||
+          (event.retryable === false && !isCyberPolicyCode(event.code))) {
+          const status = event.status !== undefined && Number.isInteger(event.status) && event.status >= 400 && event.status <= 599 ? event.status : 502;
+          return { type: "error", status, message: withheldReplayDiagnostic(status), retryable: false, usage: event.usage };
+        }
+        return event;
+      };
       // Each successful continuation owns a fresh pending-read deadline and an abort
       // listener that can cancel its reader even while the parser holds the body lock.
       // The shared signal is not aborted on timeout: this generator must still emit
@@ -822,7 +835,7 @@ export function createAdapterContinuations(
       const parse = async function* (current: Response): AsyncGenerator<AdapterEvent> {
         const bodyInactivityMs = resolveStallTimeoutMs(providerStallTimeoutSec(config, responsesTimeoutProvider(options, route.provider)), { localUpstream: isLocalUpstream(transportState.sameTargetRequest?.url ?? route.provider.baseUrl) });
         if (!current.ok) {
-          yield await adapterExchange.thinkingSignatureRecovery.projectHttpFailure(current, upstream.signal);
+          yield projectFailure(await adapterExchange.thinkingSignatureRecovery.projectHttpFailure(current, upstream.signal), current);
           return;
         }
         if (!nextParsed.stream && !transportState.activeAdapter.parseResponse) {
@@ -838,7 +851,7 @@ export function createAdapterContinuations(
             guarded => transportState.activeAdapter.parseResponse!(guarded, translatorBudget, logCtx.activeTierMetadata));
         for await (const event of events) {
           observeSpend?.(event);
-          yield event;
+          yield projectFailure(event, current);
         }
       };
       yield* adapterExchange.thinkingSignatureRecovery.wrap(parse(response), async function* () {

@@ -1545,6 +1545,12 @@ async function handleClaudeMessagesWithBudget(
     }
     const replayRefusalCode = failureVerdictSink.collectedReplayRefusalCode;
     if (replayRefusalCode) return translatedMessagesReplayRefusal(response, replayRefusalCode);
+    const vetoStatus = failureVerdictSink.collectedReplayVetoStatus;
+    if (vetoStatus !== undefined) {
+      const refusal = Response.json(message, { status: vetoStatus });
+      applyReplayRefusalClientHeaders(refusal.headers);
+      return refusal;
+    }
     const legacy = failureVerdictSink.collected ?? message;
     const isError = legacy.type === "error";
     const translatedError = isError && typeof legacy.error === "object"
