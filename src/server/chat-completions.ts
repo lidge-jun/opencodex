@@ -19,6 +19,7 @@ import {
   ChatCompletionsRequestError,
 } from "../chat/inbound";
 import { chatSettingsBody, chatToResponsesBody } from "../protocols/codecs/chat";
+import { getCombo } from "../combos/types";
 import { chatConversationToIr, chatIrRouteEvidence, withDirectChatConversation, type ChatIrConversation } from "../protocols/codecs/chat-ir";
 import { antigravityDirectDeclineReason } from "./antigravity-direct-eligibility";
 import { normalizeChatImageParts } from "../chat/image-parts";
@@ -425,6 +426,8 @@ async function handleChatCompletionsWithBudget(
       internalBody = chatSettingsBody(chatBody);
     } else {
       internalBody = chatToResponsesBody(chatBody, {
+        allowInlineAudio: settledRoute?.combo !== undefined
+          && getCombo(config, settledRoute.combo.comboId)?.capabilityPolicy === "union",
         // #7429: only a route that is and stays first-party Anthropic may receive signed thinking
         // a Chat client returns; a combo, policy or rewritten route resolves its target later.
         acceptAnthropicReasoningSignatures: settledRoute !== null && !routeMayChangeCredentialDomain
