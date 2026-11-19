@@ -14,6 +14,7 @@ import { TERMINAL_REFUSAL_FALLBACK_MESSAGE } from "../../src/lib/errors";
 import { TranslatorBudgetExceededError } from "../../src/lib/translator-budget";
 import { createOutboundCredentialMask, createTerminalErrorRedactionBlockRewrite } from "../../src/server/responses/terminal-error-redaction";
 import { pumpResponsesSseToWebSocket, type WsData } from "../../src/server/ws-bridge";
+import { CodexWsCorrelation } from "../../src/server/responses/codex-ws-correlation";
 import type { ServerWebSocket } from "bun";
 import { OutboundCredentialRegistry, setOutboundCredentialRegistryForTests } from "../../src/lib/outbound-credential-registry";
 
@@ -1761,9 +1762,45 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
     // The live WS log observes the client stream and hands the row status to the account recorder.
     await pumpResponsesSseToWebSocket(ws, relayed, { untilEof: true, rawUpstream,
       onSsePayload: payload => inspectResponseLogSsePayload(log, payload),
-      onTerminal: status => { terminals.push([status, log.terminalHttpStatus ?? 502]); } });
+      onTerminal: status => { terminals.push([status, httpStatusForRequestLogTerminal(status, log)]); } });
     return { frames: sent.map(frame => JSON.parse(frame) as { type?: string; response?: { error?: { code?: string } }; error?: { code?: string } }), terminals };
   };
+
+  test.each([
+    ["empty error object", { error: {} }],
+    ["empty last_error string", { last_error: "" }],
+    ["null error fields", { error: { type: null, code: null, message: null } }],
+  ] as const)("WS accepts a placeholder completion for reuse (%s)", async (_name, placeholder) => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    const event = { type: "response.completed", response: { id: "r1", status: "completed", output: [], ...placeholder } };
+    const correlation = new CodexWsCorrelation(true, () => false);
+    correlation.accept({ type: "response.created", response: { id: "r1" } });
+    correlation.accept(event);
+    const src = sourceStream([`event: response.completed\ndata: ${JSON.stringify(event)}\n\n`]);
+    const result = await wsPump(relaySseWithFailedTail(src, new AbortController()), log);
+    expect({ result, reusableId: correlation.completed(event), logged: log.observedTerminalStatus }).toEqual({
+      result: { frames: [event], terminals: [["completed", 200]] }, reusableId: "r1", logged: "completed",
+    });
+  });
+
+  test.each([
+    ["event error", { error: { code: "rate_limit_exceeded" } }, {}],
+    ["event last_error", { error: {}, last_error: { code: "rate_limit_exceeded" } }, {}],
+    ["response error", { error: {}, last_error: "" }, { error: { code: "rate_limit_exceeded" } }],
+    ["response last_error", { error: {}, last_error: "" },
+      { error: { type: null, code: null, message: null }, last_error: { code: "rate_limit_exceeded" } }],
+  ] as const)("WS forwards an error-bearing completion and reports quota failure (%s)", async (_carrier, outer, inner) => {
+    const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
+    const event = {
+      type: "response.completed",
+      ...outer,
+      response: { id: "r1", status: "completed", output: [], ...inner },
+    };
+    const src = sourceStream([`event: response.completed\ndata: ${JSON.stringify(event)}\n\n`]);
+    const result = await wsPump(relaySseWithFailedTail(src, new AbortController()), log);
+    expect(result).toEqual({ frames: [event], terminals: [["failed", 429]] });
+    expect(log.observedTerminalStatus).toBe("failed");
+  });
 
   test.each(["tee", "eager"] as const)("%s WS row keeps the bare verdict behind the relay's own tail", async mode => {
     for (const copy of ["unauthorized request", "rate limit hit, slow down"]) {

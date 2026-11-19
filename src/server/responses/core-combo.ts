@@ -3,10 +3,11 @@ import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surf
 import { comboLogLabel, comboTargetLogLabel } from "../../combos/resolve";
 import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
 import { carryLocalFailureState, projectLocalModelRefusalLog, upstreamErrorIsLocal } from "../request-log-failure-detail";
-import { carryProxyErrorContext, hasProxyErrorMessage, markProxyError } from "../../lib/client-error-body";
+import { carryProxyErrorContext, hasProxyErrorMessage, isPausedTurn, markProxyError, rememberPausedTurn } from "../../lib/client-error-body";
 import { isXaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
 import { classifyUpstreamCondition } from "../../lib/upstream-condition";
 import { effectiveAzureOutputBudget } from "../../adapters/azure";
+import { resolveOutputCeiling } from "./input-admission";
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
 import { isMetaAiResponsesDestination } from "../../responses/muse-tool-name-alias";
 import { chatCanPreserveMandatoryToolChoice, hasMandatoryToolChoice } from "./combo-required-tool-contract";
@@ -1155,9 +1156,17 @@ export async function executeComboResponses(
     const initialSend = hopDecision?.allowed ? { permit: hopDecision.permit, producerOwned: false } : undefined;
     try {
     comboTargetsDispatched += 1;
+    const targetOutputCeiling = resolveOutputCeiling(
+      targetRoute.provider,
+      targetRoute.providerName,
+      targetRoute.modelId,
+    );
     const childLog: RequestLogContext = {
       model: pick.target.model,
       provider: pick.target.provider,
+      comboTarget: pick.target,
+      comboWriterGeneration: pick.writerGeneration,
+      comboTargetOutputCeiling: targetOutputCeiling,
       ...(logCtx.conversationId ? { conversationId: logCtx.conversationId, conversationIdIsHermesFallback: logCtx.conversationIdIsHermesFallback } : {}),
       ...(logCtx.affinityLane ? { affinityLane: logCtx.affinityLane } : {}),
       ...(logCtx.surface ? { surface: logCtx.surface } : {}),
@@ -1261,13 +1270,17 @@ export async function executeComboResponses(
       if (!childCommitted || !childUsageBound) return;
       logCtx.usageFromBridge = true;
       if (childLog.usage) logCtx.usage = childLog.usage;
+      if (isPausedTurn(childLog)) rememberPausedTurn(logCtx);
     };
     const completedTarget = { provider: pick.target.provider, model: pick.target.model };
     const writerGeneration = pick.writerGeneration;
-    const completedPick = pick;
-    const settleSuccess = () => {
-      noteComboSuccess(comboId, combo, completedPick.target, writerGeneration);
-      settleComboReprobeSuccess(completedPick);
+    const servingPick = pick;
+    let comboSuccessSettled = false;
+    const settleServingSuccess = (): void => {
+      if (comboSuccessSettled) return;
+      comboSuccessSettled = true;
+      noteComboSuccess(comboId, combo, servingPick.target, writerGeneration);
+      settleComboReprobeSuccess(servingPick);
     };
     let hostedWebSearchStream = false;
     let consumedChildFailure: ConsumedComboFailure | undefined;
@@ -1275,7 +1288,8 @@ export async function executeComboResponses(
     const callbackGate = createChildPassthroughCallbackGate({
       ...options,
       onResponseComplete: model => {
-        if (hostedWebSearchStream) settleSuccess();
+        if (isPausedTurn(childLog)) rememberPausedTurn(logCtx);
+        if (hostedWebSearchStream) settleServingSuccess();
         // The live config can change while the child is streaming. Never retain credentials.
         const currentCombo = getCombo(config, comboId);
         const provider = config.providers[completedTarget.provider];
@@ -1299,15 +1313,19 @@ export async function executeComboResponses(
         // Undefined child fields must preserve metadata already inspected by WS.
         if (childLog.terminalHttpStatus !== undefined) logCtx.terminalHttpStatus = childLog.terminalHttpStatus;
         if (childLog.terminalIncompleteReason !== undefined) logCtx.terminalIncompleteReason = childLog.terminalIncompleteReason;
+        if (childLog.committedIncompleteReason !== undefined) logCtx.committedIncompleteReason = childLog.committedIncompleteReason;
         if (childLog.terminalErrorCode !== undefined) logCtx.terminalErrorCode = childLog.terminalErrorCode;
+        if (childLog.observedTerminalStatus !== undefined) logCtx.observedTerminalStatus = childLog.observedTerminalStatus;
         if (childLog.upstreamError !== undefined) logCtx.upstreamError = childLog.upstreamError;
         // Raw usage may arrive after the commit copy. Publish it before spend is finalized.
         if (childLog.usage !== undefined) {
           logCtx.usage = childLog.usage;
           logCtx.usageWireParsed = childLog.usageWireParsed;
         }
+        if (isPausedTurn(childLog)) rememberPausedTurn(logCtx);
         // A committed stream that ends failed is a target failure too; incomplete is an answer.
         if (status === "failed") jevPin?.forget();
+        else settleServingSuccess();
         options.onNativePassthroughTerminal?.(status);
       },
     });
@@ -1412,6 +1430,7 @@ export async function executeComboResponses(
         preflight = await preflightComboStreamResponse(response, childLog, undefined, {
           signal: options.abortSignal,
           requiredToolPrelude: childLog.providerAdapter === "openai-responses" && requiredToolContractOf(rawBody) !== undefined,
+          degeneratePrelude: true,
         });
       } catch (error) {
         callbackGate.discard();
@@ -1450,7 +1469,9 @@ export async function executeComboResponses(
         childLog.accountLogLabel,
       );
       attemptRetained = true;
-      if (!hostedWebSearchStream) settleSuccess();
+      // Native SSE can carry a failed verdict after HTTP acceptance, including after preflight.
+      // A hosted web-search stream settles only when the loop reports a completed response.
+      if (!isNativePassthroughSseResponse(response) && !hostedWebSearchStream) settleServingSuccess();
       carryProxyErrorContext(childLog, logCtx);
       Object.assign(logCtx, childLog, {
         client: logCtx.client,
@@ -1458,6 +1479,9 @@ export async function executeComboResponses(
         model: responseModel,
         provider: "combo",
         comboId,
+        comboTarget: pick.target,
+        comboWriterGeneration: pick.writerGeneration,
+        comboTargetOutputCeiling: targetOutputCeiling,
         routeDecision: logCtx.routeDecision,
         attempts: logCtx.attempts,
         activeAttempt: attempt,
@@ -1466,7 +1490,11 @@ export async function executeComboResponses(
       });
       carryLocalFailureState(childLog, logCtx);
       options.onCodexAuthContextResolved?.(resolvedAuth);
-      options.setTerminalOutcomeRecorder?.(terminalRecorder);
+      options.setTerminalOutcomeRecorder?.((status, httpStatusOverride) => {
+        if (isPausedTurn(childLog)) rememberPausedTurn(logCtx);
+        if (status !== "failed" && !hostedWebSearchStream) settleServingSuccess();
+        terminalRecorder?.(status, httpStatusOverride);
+      });
       callbackGate.commit();
       childCommitted = true;
       forwardChildUsage();
@@ -1553,8 +1581,8 @@ export async function executeComboResponses(
         return settled;
       }
     }
-    // A non-replayable failure (the answer to a spent ambiguous-reset replacement) may follow a
-    // send that already ran the turn, so no later target may receive it, whatever its status says.
+    // A non-replayable failure can come from a committed provider terminal or a send whose
+    // outcome is ambiguous. Neither permits another target, regardless of the HTTP status.
     const failureDecision = failure.nonReplayable || spentReplacement
       ? "stop"
       : localDeadline || isPolicyCandidateRefusal(failure.response) ? "hop"

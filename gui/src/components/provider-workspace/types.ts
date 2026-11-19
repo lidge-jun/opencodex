@@ -70,6 +70,8 @@ export type OAuthAccountRow = AccountQuotaReading & {
   active: boolean;
   expiresAt?: number;
   needsReauth?: boolean;
+  /** `verify_account`: upstream asked to verify the account rather than refusing the refresh token. */
+  needsReauthReason?: string;
   autoSelectable?: boolean;
   skipReason?: "needs_reauth" | "paused" | "suspended" | "cooldown" | "quota_exhausted";
   paused?: boolean;

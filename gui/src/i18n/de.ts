@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -135,6 +136,7 @@ export const de: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Workflow-Limits konnten nicht gespeichert werden.",
   "workflowBudget.saved": "Workflow-Limits gespeichert.",
   ...desktopCompatibilityCopy("de"),
+  ...accountProbeCopy("de"),
   ...shellV2Copy("de"),
   ...codexCliUpdateCopy("de"),
   ...remoteLinkDiagnosticsCopy("de"),
@@ -2349,7 +2351,9 @@ export const de: Record<TKey, string> = {
   "accountPool.strategy": "Rotationsstrategie",
   "accountPool.strategyDesc": "Wie OpenCodex einer neuen/ungebundenen Aufgabe ein Konto zuweist.",
   "accountPool.strategyResetFirst": "Nächste Rücksetzung zuerst",
+  "accountPool.strategyResetNearWeighted": "Gewichtet nach nächster Rücksetzung",
   "accountPool.strategyHintResetFirst": "Unterhalb der Nutzungsschwelle wird die nächste 5-Stunden- oder Wochenrücksetzung bevorzugt. Gebundene Aufgaben folgen der konfigurierten Affinitätsregel. Unabhängige Modellkontingente werden nach Nutzung geordnet.",
+  "accountPool.strategyHintResetNearWeighted": "Das geeignete Konto mit der nächsten wöchentlichen Rücksetzung erhält etwa die Hälfte der neuen Zuweisungen. Ist kein Konto geeignet, werden die Zuweisungen gleichmäßig verteilt.",
   "accountPool.strategyQuota": "Kontingent",
   "accountPool.strategyRoundRobin": "Round-Robin",
   "accountPool.strategyFillFirst": "Fill-first",

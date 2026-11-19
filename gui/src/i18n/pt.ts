@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -136,6 +137,7 @@ export const pt: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Não foi possível salvar os limites de fluxo de trabalho.",
   "workflowBudget.saved": "Limites de fluxo de trabalho salvos.",
   ...desktopCompatibilityCopy("pt"),
+  ...accountProbeCopy("pt"),
   ...shellV2Copy("pt"),
   ...codexCliUpdateCopy("pt"),
   ...remoteLinkDiagnosticsCopy("pt"),
@@ -2974,7 +2976,9 @@ export const pt: Record<TKey, string> = {
   "accountPool.strategy": "Estratégia de rotação",
   "accountPool.strategyDesc": "Como o OpenCodex atribui uma conta a uma tarefa nova/sem vínculo.",
   "accountPool.strategyResetFirst": "Reinício mais próximo primeiro",
+  "accountPool.strategyResetNearWeighted": "Ponderado pela renovação mais próxima",
   "accountPool.strategyHintResetFirst": "Prefere o reinício de 5 horas ou semanal futuro mais próximo entre as contas abaixo do limite de uso. As tarefas vinculadas seguem a política de afinidade configurada. Cotas independentes por modelo usam a ordenação por cota.",
+  "accountPool.strategyHintResetNearWeighted": "A conta que atende aos critérios e tem a renovação semanal mais próxima recebe cerca de metade das novas atribuições. Se nenhuma conta atender aos critérios, as atribuições são distribuídas por igual.",
   "accountPool.strategyQuota": "Cota",
   "accountPool.strategyRoundRobin": "Round-robin",
   "accountPool.strategyFillFirst": "Fill-first",

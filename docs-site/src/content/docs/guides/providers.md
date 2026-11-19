@@ -605,6 +605,8 @@ distinct one. Kiro accounts use the profile ARN together with the signed-in user
 pool accounts have a separate ledger.
 Tokens stay in `~/.opencodex/auth.json`; `/api/oauth/accounts` returns masked metadata only.
 
+New Codex and Anthropic OAuth pool sessions can use [`reset-near-weighted`](/reference/configuration/providers/#reset-near-weighted) to favor weekly quota that will reset soon. Existing session bindings are preserved.
+
 ### Cockpit Tools Antigravity import
 
 For v1, OpenCodex imports only a **Cockpit Tools Antigravity** JSON export for the `google-antigravity` provider. In the Providers dashboard, choose the local JSON file from that provider's Accounts tab. The dashboard does not show the file contents or credential values; it reports only imported, updated, failed, and unsupported counts. Other Cockpit providers are rejected in v1.

@@ -278,7 +278,9 @@ ocx account pool openai --json
 ocx account pool anthropic --json
 ```
 
-Estas son las lecturas de gestión en vivo. La respuesta incluye `provider`, `kind`, `supported`, la política almacenada nullable, `enabledEffective` y opcional `inert`. Sólo los campos nombrados por `supported` se pueden escribir; nulo no es falso, y una política inerte no es agrupación activa. Los umbrales cero y `enabled:false` son independientes. Utilice `--enabled on|off`, `--threshold 0..100`, `--strategy`, `--sticky 1..100` y `--quota-window` solo donde sea compatible. OpenAI no admite escrituras de agrupación/ventana habilitadas; `reset-first` es para OpenAI y grupos OAuth genéricos (nunca Anthropic), `least-loaded` solo para Kiro, y las ventanas de Anthropic son `five-hour`, `weekly`, `max-utilization`. Los campos omitidos permanecen sin cambios. Los campos de lectura DTO como rutas, concurrencia por cuenta o Anthropic `nativeMessages` no implican un setter en este comando; use solo las opciones CLI enumeradas. Un guardado que devuelve `warning: "config_bookkeeping_failed"` se persistió, pero necesita una lectura nueva para confirmar el estado en vivo.
+Estas son las lecturas de gestión en vivo. La respuesta incluye `provider`, `kind`, `supported`, la política almacenada nullable, `enabledEffective` y opcional `inert`. Sólo los campos nombrados por `supported` se pueden escribir; nulo no es falso, y una política inerte no es agrupación activa. Los umbrales cero y `enabled:false` son independientes. Utilice `--enabled on|off`, `--threshold 0..100`, `--strategy`, `--sticky 1..100` y `--quota-window` solo donde sea compatible. OpenAI no admite escrituras de agrupación/ventana habilitadas; `reset-first` es para OpenAI y grupos OAuth genéricos (nunca Anthropic), `reset-near-weighted` solo para los grupos de Codex y Anthropic, `least-loaded` solo para Kiro, y las ventanas de Anthropic son `five-hour`, `weekly`, `max-utilization`. Los campos omitidos permanecen sin cambios. Los campos de lectura DTO como rutas, concurrencia por cuenta o Anthropic `nativeMessages` no implican un setter en este comando; use solo las opciones CLI enumeradas. Un guardado que devuelve `warning: "config_bookkeeping_failed"` se persistió, pero necesita una lectura nueva para confirmar el estado en vivo.
+
+Para activar la [rotación ponderada por la próxima renovación](/es/reference/configuration/providers/#reset-near-weighted), ejecuta `ocx account pool openai --strategy reset-near-weighted` o `ocx account pool anthropic --strategy reset-near-weighted`.
 
 ```bash
 ocx account pool anthropic --threshold 80 --quota-window five-hour --json
@@ -385,7 +387,7 @@ resume <provider> <id|alias|main>  Return a paused account to automatic selectio
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
 reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged. Run on the Home; a Remote Link Child names the Home and sends no request.
-strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Pool placement strategy; least-loaded is Kiro-only.
+strategy <provider> [<quota|round-robin|fill-first|reset-near-weighted|least-loaded|reset-first>]  Pool placement strategy; least-loaded is Kiro-only.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
 remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.
@@ -547,6 +549,31 @@ El comando reporta el éxito incluso cuando no hay tiempo de reutilización acti
 Para el grupo Codex, use `ocx account refresh openai [--json]`. Se actualiza a la fuerza las cuotas de cuenta e imprime los porcentajes semanales / mensuales disponibles y los tiempos de reinicio; los datos de cuotas faltantes se informan como desconocidos, no como 0%. Su envolvente JSON es `{ accounts: AccountRow[] }`, con `quota` en cada fila Codex.
 
 Para proveedores OAuth y de clave API, esto fuerza la actualización del punto final de informes de cuota del proveedor; no es un nuevo inicio de sesión de token ni una simple relectura de la lista de cuentas. `--json` devuelve `{ provider, report: ProviderQuotaReport | null }`. Un proveedor sin un informe de cuota compatible imprime `no quota report available for <provider>` y sale con 0. Los proveedores desconocidos y los fallos de la API de gestión salen con 1; una sonda de cuota ascendente que falla o expira se degrada a un informe nulo o desactualizado (código de salida 0), lo que coincide con las barras de cuota del panel.
+
+### `ocx account probe google-antigravity [id|alias] [--json]`
+
+Comprueba cada cuenta de Google Antigravity en modo de solo lectura. Cada cuenta recibe una
+solicitud `retrieveUserQuotaSummary` con su propio token de acceso y la identidad de la CLI.
+El resultado es `ok`, `rate_limited`, `verification_required`, `suspended`, `permission_denied`
+o `error`, con el estado HTTP y un código de motivo reconocido. Los estados `paused`
+(cuenta en pausa) y `token_expired` (token caducado) se determinan localmente, sin enviar
+una solicitud. La comprobación conserva los tokens y el estado de la cuenta. Los botones
+**Probar** y **Probar todas** de la tabla de cuotas de Antigravity llaman al mismo endpoint,
+`POST /api/oauth/accounts/probe`. La tabla muestra el plan, las cuotas restantes por grupo,
+los plazos de restablecimiento y las acciones de cada cuenta. Si falla una actualización,
+la tabla conserva la cuota anterior e indica el error y las horas de lectura. Se ejecutan hasta cuatro
+comprobaciones a la vez. Espera a que termine la comprobación actual antes de iniciar otra.
+
+### `ocx models discover <provider> [--json]`
+
+Ejecuta ahora la detección de modelos del proveedor e indica cuántos modelos encontró y
+cuáles son nuevos. Es la misma acción que **Detectar ahora** en los ajustes del proveedor
+(`POST /api/model-discovery/refresh`). Si ya hay una detección en curso para ese proveedor, la
+acción devuelve HTTP 409 (`discovery_in_progress`) sin consultar al proveedor. Durante los 30
+segundos posteriores a un fallo, la acción muestra ese
+fallo y conserva la última lista válida sin volver a consultar al proveedor. La sincronización del
+catálogo de Codex puede incorporar después la lista actualizada. Los catálogos estáticos indican
+que la detección en directo está desactivada.
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 

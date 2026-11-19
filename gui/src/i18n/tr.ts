@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -135,6 +136,7 @@ export const tr: Record<TKey, string> = {
   "workflowBudget.saveFailed": "İş akışı sınırları kaydedilemedi.",
   "workflowBudget.saved": "İş akışı sınırları kaydedildi.",
   ...desktopCompatibilityCopy("tr"),
+  ...accountProbeCopy("tr"),
   ...shellV2Copy("tr"),
   ...codexCliUpdateCopy("tr"),
   ...remoteLinkDiagnosticsCopy("tr"),
@@ -2944,7 +2946,9 @@ export const tr: Record<TKey, string> = {
   "accountPool.strategy": "Rotasyon stratejisi",
   "accountPool.strategyDesc": "OpenCodex'in yeni bir göreve nasıl hesap atayacağı.",
   "accountPool.strategyResetFirst": "En yakın sıfırlama önce",
+  "accountPool.strategyResetNearWeighted": "En yakın sıfırlamaya göre ağırlıklı",
   "accountPool.strategyHintResetFirst": "Eşiğin altındaki hesaplar arasından sonraki 5 saatlik veya haftalık sıfırlaması en yakın olanı seçer. Bağlı görevler yapılandırılmış bağlılık politikasını izler. Bağımsız model kotaları kullanıma göre sıralanır.",
+  "accountPool.strategyHintResetNearWeighted": "Koşulları karşılayan hesaplardan haftalık kotası en yakında sıfırlanacak olan, yeni atamaların yaklaşık yarısını alır. Hiçbiri koşulları karşılamazsa atamalar eşit olarak sırayla dağıtılır.",
   "accountPool.strategyQuota": "Kota",
   "accountPool.strategyRoundRobin": "Round-robin",
   "accountPool.strategyFillFirst": "İlk doldurma",

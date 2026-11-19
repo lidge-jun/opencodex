@@ -183,6 +183,12 @@ export const PROVIDER_MODEL_CAPABILITIES: readonly Capability[] = [
     flags: [{ name: "--json", value: "boolean", summary: "Emit recentArrivals grouped by provider." }],
   },
   {
+    command: ["models", "discover"], summary: "Re-fetch one provider's live model list now and report new arrivals.",
+    usage: "ocx models discover <provider> [--json]", routes: [{ method: "POST", path: "/api/model-discovery/refresh" }], mutates: true, json: "payload",
+    flags: [{ name: "--json", value: "boolean", summary: "Emit discovery status, newArrivals and recentArrivals." }],
+    details: ["Refreshes one provider's model list. New models follow the configured new-model policy. If discovery is already running for that provider, the route returns HTTP 409 (`discovery_in_progress`). During cooldown it returns the recorded failure. Providers with liveModels off report applicable:false."],
+  },
+  {
     command: ["models", "context", "status"], summary: "Read routed-provider context caps.",
     usage: "ocx models context status [--json]", routes: [{ method: "GET", path: "/api/provider-context-caps" }], mutates: false, json: "payload",
     flags: [{ name: "--json", value: "boolean", summary: "Emit context settings." }],

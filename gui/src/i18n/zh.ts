@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -134,6 +135,7 @@ export const zh: Record<TKey, string> = {
   "workflowBudget.saveFailed": "无法保存工作流限制。",
   "workflowBudget.saved": "工作流限制已保存。",
   ...desktopCompatibilityCopy("zh"),
+  ...accountProbeCopy("zh"),
   ...shellV2Copy("zh"),
   ...codexCliUpdateCopy("zh"),
   ...remoteLinkDiagnosticsCopy("zh"),
@@ -2366,7 +2368,9 @@ export const zh: Record<TKey, string> = {
   "accountPool.strategy": "轮换策略",
   "accountPool.strategyDesc": "OpenCodex 如何为新建/未绑定任务分配账号。",
   "accountPool.strategyResetFirst": "额度即将刷新优先",
+  "accountPool.strategyResetNearWeighted": "按最近的额度重置加权",
   "accountPool.strategyHintResetFirst": "在低于用量阈值的账号中，优先选择下次5小时或周额度重置最早的账号。已绑定任务遵循配置的亲和策略。独立模型额度按用量排序。",
+  "accountPool.strategyHintResetNearWeighted": "将约一半的新分配交给符合条件且周额度最先重置的账户。没有符合条件的账户时，按顺序均匀分配。",
   "accountPool.strategyQuota": "配额",
   "accountPool.strategyRoundRobin": "轮询",
   "accountPool.strategyFillFirst": "填满优先",

@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -132,6 +133,7 @@ export const zhTW: Record<TKey, string> = {
   "workflowBudget.saveFailed": "無法儲存工作流程限制。",
   "workflowBudget.saved": "工作流程限制已儲存。",
   ...desktopCompatibilityCopy("zh-TW"),
+  ...accountProbeCopy("zh-TW"),
   ...shellV2Copy("zh-TW"),
   ...codexCliUpdateCopy("zh-TW"),
   ...remoteLinkDiagnosticsCopy("zh-TW"),
@@ -2234,7 +2236,9 @@ export const zhTW: Record<TKey, string> = {
   "accountPool.strategy": "輪換策略",
   "accountPool.strategyDesc": "新會話如何從帳號池中選擇帳號。",
   "accountPool.strategyResetFirst": "額度即將重設優先",
+  "accountPool.strategyResetNearWeighted": "依最近的額度重設加權",
   "accountPool.strategyHintResetFirst": "在低於用量門檻的帳號中，優先選擇下次5小時或週額度重設最早的帳號。已綁定任務遵循設定的親和策略。獨立模型額度按用量排序。",
+  "accountPool.strategyHintResetNearWeighted": "將約一半的新分配交給符合條件且每週額度最先重設的帳戶。沒有符合條件的帳戶時，依序平均分配。",
   "accountPool.strategyQuota": "配額",
   "accountPool.strategyRoundRobin": "輪詢",
   "accountPool.strategyFillFirst": "填滿優先",

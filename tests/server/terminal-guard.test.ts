@@ -618,7 +618,8 @@ describe("terminal guard bounded retention", () => {
         })) actual.push(event);
         expect(continuations).toBe(2);
         expect(actual.filter(event => event.type === "assistant_boundary")).toHaveLength(2);
-        expect(actual.filter(event => event.type === "done")).toHaveLength(1);
+        expect(actual.filter(event => event.type === "done")).toHaveLength(adapterName === "openai-chat" ? 0 : 1);
+        if (adapterName === "openai-chat") expect(actual.at(-1)).toMatchObject({ type: "error", code: "terminal_continuation_failed" });
         expect(actual.at(-1)).toMatchObject({ usage: { inputTokens: 30, outputTokens: 6, totalTokens: 36 } });
       });
 

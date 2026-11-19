@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -134,6 +135,7 @@ export const ru: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Не удалось сохранить лимиты рабочих процессов.",
   "workflowBudget.saved": "Лимиты рабочих процессов сохранены.",
   ...desktopCompatibilityCopy("ru"),
+  ...accountProbeCopy("ru"),
   ...shellV2Copy("ru"),
   ...codexCliUpdateCopy("ru"),
   ...remoteLinkDiagnosticsCopy("ru"),
@@ -2917,7 +2919,9 @@ export const ru: Record<TKey, string> = {
   "accountPool.strategy": "Стратегия ротации",
   "accountPool.strategyDesc": "Как OpenCodex назначает аккаунт новой/непривязанной задаче.",
   "accountPool.strategyResetFirst": "Ближайший сброс первым",
+  "accountPool.strategyResetNearWeighted": "Взвешивание по ближайшему сбросу",
   "accountPool.strategyHintResetFirst": "Среди аккаунтов ниже порога выбирается ближайший сброс 5-часовой или недельной квоты. Привязанные задачи следуют настроенной политике привязки. Независимые квоты моделей упорядочиваются по использованию.",
+  "accountPool.strategyHintResetNearWeighted": "Подходящий аккаунт с ближайшим еженедельным сбросом получает около половины новых назначений. Если подходящих аккаунтов нет, назначения распределяются поровну по очереди.",
   "accountPool.strategyQuota": "Квота",
   "accountPool.strategyRoundRobin": "Round-robin",
   "accountPool.strategyFillFirst": "Fill-first",

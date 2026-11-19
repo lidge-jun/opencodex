@@ -8,6 +8,7 @@ import {
   replayBufferedResponse,
 } from "../../src/server/responses/combo-stream-preflight";
 import { stageCommitment, type RequestFailureStage } from "../../src/lib/request-failure-model";
+import { rememberPausedTurn } from "../../src/lib/client-error-body";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../../src/server/sse-frame-buffer";
 import type { AdapterEvent } from "../../src/types";
@@ -1870,5 +1871,225 @@ describe("combo preflight replay under a stalled reader (#8601)", () => {
     await reader.read();
     await reader.cancel();
     expect(buffered.map(chunk => chunk.byteLength)).toEqual([0, 0, 0]);
+  });
+});
+
+describe("degenerate completion prelude", () => {
+  const logCtx: RequestLogContext = { model: "m1", provider: "a" };
+  const commentaryItem = { type: "message", id: "msg_c", phase: "commentary", role: "assistant", content: [] };
+  const finalItem = { type: "message", id: "msg_f", phase: "final_answer", role: "assistant", content: [] };
+  const toolItem = { type: "function_call", id: "fc_1", call_id: "c1", name: "shell", arguments: "{}" };
+
+  test("completed with only commentary and reasoning hops as degenerate", async () => {
+    const result = await preflightComboStreamResponse(sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { type: "response.output_item.added", item: { type: "reasoning", id: "rs_1" } },
+      { type: "response.output_item.added", item: commentaryItem },
+      { type: "response.output_text.delta", item_id: "msg_c", delta: "Now let me examine the skill" },
+      { type: "response.output_item.done", item: commentaryItem },
+      {
+        type: "response.completed",
+        response: { id: "r1", status: "completed", output: [
+          { type: "reasoning", id: "rs_1" }, commentaryItem,
+        ] },
+      },
+    ), logCtx, undefined, { degeneratePrelude: true });
+
+    expect(result.kind).toBe("failed");
+    if (result.kind === "failed") {
+      const body = await result.response.json();
+      expect(body.error.code).toBe("degenerate_completion");
+    }
+  });
+
+  test("completed with a final answer or tool call stays accepted", async () => {
+    for (const item of [finalItem, toolItem]) {
+      const result = await preflightComboStreamResponse(sse(
+        { type: "response.created", response: { id: "r1", status: "in_progress" } },
+        { type: "response.output_item.added", item },
+        { type: "response.output_item.done", item },
+        { type: "response.completed", response: { id: "r1", status: "completed", output: [item] } },
+      ), logCtx, undefined, { degeneratePrelude: true });
+      expect(result.kind).toBe("accepted");
+    }
+  });
+
+  test("commentary followed by a tool call still commits the tool call", async () => {
+    const result = await preflightComboStreamResponse(sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { type: "response.output_item.added", item: commentaryItem },
+      { type: "response.output_text.delta", item_id: "msg_c", delta: "checking" },
+      { type: "response.output_item.added", item: toolItem },
+      { type: "response.output_item.done", item: toolItem },
+      { type: "response.completed", response: { id: "r1", status: "completed", output: [commentaryItem, toolItem] } },
+    ), logCtx, undefined, { degeneratePrelude: true });
+    expect(result.kind).toBe("accepted");
+  });
+
+  test("incomplete with only commentary output hops as degenerate", async () => {
+    const result = await preflightComboStreamResponse(sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { type: "response.output_item.added", item: commentaryItem },
+      { type: "response.output_item.done", item: commentaryItem },
+      {
+        type: "response.incomplete",
+        response: {
+          id: "r1", status: "incomplete",
+          incomplete_details: { reason: "upstream_stall_timeout" },
+          output: [commentaryItem],
+        },
+      },
+    ), logCtx, undefined, { degeneratePrelude: true });
+    expect(result.kind).toBe("failed");
+  });
+
+  test("incomplete degenerate hop also works alongside requiredToolPrelude", async () => {
+    const result = await preflightComboStreamResponse(sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { type: "response.output_item.added", item: commentaryItem },
+      { type: "response.output_item.done", item: commentaryItem },
+      {
+        type: "response.incomplete",
+        response: {
+          id: "r1", status: "incomplete",
+          incomplete_details: { reason: "upstream_stall_timeout" },
+          output: [commentaryItem],
+        },
+      },
+    ), logCtx, undefined, { degeneratePrelude: true, requiredToolPrelude: true });
+    expect(result.kind).toBe("failed");
+  });
+
+  test("a tool call present only at event level blocks the degenerate hop", async () => {
+    const result = await preflightComboStreamResponse(sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      {
+        type: "response.incomplete",
+        output: [toolItem],
+        response: { id: "r1", status: "incomplete", output: [] },
+      },
+    ), logCtx, undefined, { degeneratePrelude: true });
+    expect(result.kind).toBe("accepted");
+  });
+
+  test("non-retryable and output-limit incompletes never hop as degenerate", async () => {
+    for (const terminal of [
+      { incomplete_details: { reason: "max_output_tokens" }, output: [commentaryItem] },
+      { incomplete_details: { reason: "upstream_stall_timeout", retryable: false }, output: [commentaryItem] },
+      { end_turn: false, incomplete_details: { reason: "upstream_stall_timeout" }, output: [commentaryItem] },
+      { incomplete_details: { reason: "content_filter" }, output: [commentaryItem] },
+    ]) {
+      const result = await preflightComboStreamResponse(sse(
+        { type: "response.created", response: { id: "r1", status: "in_progress" } },
+        { type: "response.output_item.added", item: commentaryItem },
+        { type: "response.output_item.done", item: commentaryItem },
+        { type: "response.incomplete", response: { id: "r1", status: "incomplete", ...terminal } },
+      ), logCtx, undefined, { degeneratePrelude: true });
+      expect(result.kind).toBe("accepted");
+    }
+  });
+
+  test("malformed reasons and non-retryable stall terminals stay accepted", async () => {
+    for (const terminal of [
+      { incomplete_details: { reason: { toString: null } }, output: [] },
+      { incomplete_details: { reason: "upstream_stall_timeout", retryable: false }, output: [] },
+      { end_turn: false, incomplete_details: { reason: "adapter_eof" }, output: [] },
+    ]) {
+      const result = await preflightComboStreamResponse(sse(
+        { type: "response.created", response: { id: "r1", status: "in_progress" } },
+        { type: "response.incomplete", response: { id: "r1", status: "incomplete", ...terminal } },
+      ), logCtx, undefined, { degeneratePrelude: true });
+      expect(result.kind).toBe("accepted");
+    }
+  });
+
+  test.each([
+    { incomplete_details: { retryable: false } },
+    { end_turn: false },
+  ])("a missing incomplete reason preserves explicit replay guards (%j)", async terminal => {
+    const result = await preflightComboStreamResponse(sse(
+      { type: "response.incomplete", response: { status: "incomplete", output: [], ...terminal } },
+    ), logCtx, undefined, { degeneratePrelude: true });
+    expect(result.kind).toBe("accepted");
+  });
+
+  test("a paused turn with no incomplete reason stays accepted", async () => {
+    const paused = { ...logCtx };
+    rememberPausedTurn(paused);
+    const result = await preflightComboStreamResponse(sse(
+      { type: "response.incomplete", response: { status: "incomplete", output: [] } },
+    ), paused, undefined, { degeneratePrelude: true });
+    expect(result.kind).toBe("accepted");
+  });
+
+  test("an event-level non-retryable verdict keeps a nested incomplete on its target", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "response.incomplete",
+      incomplete_details: { reason: "upstream_stall_timeout", retryable: false },
+      response: { status: "incomplete", output: [] },
+    }), logCtx, undefined, { degeneratePrelude: true });
+    expect(result.kind).toBe("accepted");
+  });
+
+  test.each([false, true])("unrecognized event types commit before a retryable terminal (required tool: %j)", async requiredToolPrelude => {
+    const response = sse(
+      { type: ["response.reasoning_text.delta"], delta: "opaque progress" },
+      { type: "response.incomplete", response: { status: "incomplete", output: [] } },
+    );
+    const expected = await response.clone().text();
+    const result = await preflightComboStreamResponse(response, logCtx, undefined, { degeneratePrelude: true, requiredToolPrelude });
+    expect(result.kind).toBe("accepted");
+    expect(await result.response.text()).toBe(expected);
+  });
+
+  test("without degeneratePrelude a commentary completion stays accepted", async () => {
+    const result = await preflightComboStreamResponse(sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { type: "response.output_item.added", item: commentaryItem },
+      { type: "response.output_item.done", item: commentaryItem },
+      { type: "response.completed", response: { id: "r1", status: "completed", output: [commentaryItem] } },
+    ), logCtx);
+    expect(result.kind).toBe("accepted");
+  });
+
+  test("degenerate prelude bounds reasoning hold to preserve time-to-first-byte", async () => {
+    jest.useFakeTimers();
+    const abort = new AbortController();
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    const reasoningChunk = new TextEncoder().encode(`data: ${JSON.stringify({ type: "response.reasoning_text.delta", delta: "pondering" })}\n\n`);
+    const response = new Response(new ReadableStream<Uint8Array>({
+      start(controller) { source = controller; controller.enqueue(reasoningChunk); },
+    }), { headers: { "content-type": "text/event-stream" } });
+
+    const pending = preflightComboStreamResponse(response, logCtx, undefined, {
+      degeneratePrelude: true,
+      signal: abort.signal,
+    });
+    let result: Awaited<typeof pending> | undefined;
+    void pending.then(value => { result = value; }, () => {});
+
+    try {
+      const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+      await flush();
+      expect(result).toBeUndefined();
+
+      // Advancing to 999ms should still be waiting
+      jest.advanceTimersByTime(999);
+      await flush();
+      expect(result).toBeUndefined();
+
+      // At 1000ms (COMBO_REQUIRED_TOOL_REASONING_HOLD_MS), deadline expires and stream is accepted
+      jest.advanceTimersByTime(1);
+      await flush();
+      expect(result?.kind).toBe("accepted");
+
+      const reader = result!.response.body!.getReader();
+      expect((await reader.read()).value).toEqual(reasoningChunk);
+      source.close();
+    } finally {
+      abort.abort();
+      await pending.catch(() => {});
+      jest.useRealTimers();
+    }
   });
 });

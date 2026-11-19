@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -134,6 +135,7 @@ export const fr: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Impossible d'enregistrer les limites de workflow.",
   "workflowBudget.saved": "Limites de workflow enregistrées.",
   ...desktopCompatibilityCopy("fr"),
+  ...accountProbeCopy("fr"),
   ...shellV2Copy("fr"),
   ...codexCliUpdateCopy("fr"),
   ...remoteLinkDiagnosticsCopy("fr"),
@@ -2929,7 +2931,9 @@ export const fr: Record<TKey, string> = {
   "accountPool.strategy": "Stratégie de rotation",
   "accountPool.strategyDesc": "Méthode utilisée par OpenCodex pour affecter un compte à une tâche nouvelle/non liée.",
   "accountPool.strategyResetFirst": "Réinitialisation la plus proche",
+  "accountPool.strategyResetNearWeighted": "Pondéré selon la réinitialisation la plus proche",
   "accountPool.strategyHintResetFirst": "Parmi les comptes sous le seuil, privilégier le prochain reset de 5 heures ou hebdomadaire. Les tâches liées suivent la politique d’affinité configurée. Les quotas de modèles indépendants suivent l’ordre de consommation.",
+  "accountPool.strategyHintResetNearWeighted": "Le compte admissible dont le quota hebdomadaire se réinitialise le plus tôt reçoit environ la moitié des nouvelles affectations. Sans compte admissible, les affectations sont réparties à tour de rôle.",
   "accountPool.strategyQuota": "Quota",
   "accountPool.strategyRoundRobin": "Rotation",
   "accountPool.strategyFillFirst": "Remplissage prioritaire",

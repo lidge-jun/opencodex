@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -136,6 +137,7 @@ export const vi: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Không thể lưu giới hạn quy trình.",
   "workflowBudget.saved": "Đã lưu giới hạn quy trình.",
   ...desktopCompatibilityCopy("vi"),
+  ...accountProbeCopy("vi"),
   ...shellV2Copy("vi"),
   ...codexCliUpdateCopy("vi"),
   ...remoteLinkDiagnosticsCopy("vi"),
@@ -2949,7 +2951,9 @@ export const vi: Record<TKey, string> = {
   "accountPool.strategy": "Chiến lược xoay vòng",
   "accountPool.strategyDesc": "Cách OpenCodex chỉ định tài khoản cho một task mới/chưa gắn kết.",
   "accountPool.strategyResetFirst": "Ưu tiên lần đặt lại sớm nhất",
+  "accountPool.strategyResetNearWeighted": "Ưu tiên có trọng số theo lần đặt lại gần nhất",
   "accountPool.strategyHintResetFirst": "Ưu tiên lần đặt lại 5 giờ hoặc hàng tuần gần nhất trong tương lai giữa các tài khoản dưới ngưỡng sử dụng. Tác vụ đã liên kết tuân theo chính sách affinity đã cấu hình. Hạn ngạch model độc lập dùng thứ tự hạn ngạch.",
+  "accountPool.strategyHintResetNearWeighted": "Tài khoản đáp ứng điều kiện và có hạn mức tuần sắp được đặt lại nhất nhận khoảng một nửa số lượt phân bổ mới. Nếu không có tài khoản nào đáp ứng, các lượt được chia đều theo vòng.",
   "accountPool.strategyQuota": "Quota",
   "accountPool.strategyRoundRobin": "Luân phiên",
   "accountPool.strategyFillFirst": "Làm đầy trước",

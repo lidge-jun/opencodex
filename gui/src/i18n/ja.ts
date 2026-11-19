@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -134,6 +135,7 @@ export const ja: Record<TKey, string> = {
   "workflowBudget.saveFailed": "ワークフロー上限を保存できませんでした。",
   "workflowBudget.saved": "ワークフロー上限を保存しました。",
   ...desktopCompatibilityCopy("ja"),
+  ...accountProbeCopy("ja"),
   ...shellV2Copy("ja"),
   ...codexCliUpdateCopy("ja"),
   ...remoteLinkDiagnosticsCopy("ja"),
@@ -2825,7 +2827,9 @@ export const ja: Record<TKey, string> = {
   "accountPool.strategy": "ローテーション戦略",
   "accountPool.strategyDesc": "OpenCodex が新規/未紐付けタスクへアカウントを割り当てる方法です。",
   "accountPool.strategyResetFirst": "リセットが近い順",
+  "accountPool.strategyResetNearWeighted": "最も近いリセットを重み付け",
   "accountPool.strategyHintResetFirst": "使用率のしきい値未満から、次の5時間枠または週次枠のリセットが最も近いアカウントを選びます。紐付け済みタスクは設定されたアフィニティ方針に従います。独立したモデル枠は使用率順です。",
+  "accountPool.strategyHintResetNearWeighted": "条件を満たすアカウントのうち、週次リセットが最も近いものに新規割り当ての約半分を振り分けます。条件を満たすアカウントがなければ、均等に割り当てます。",
   "accountPool.strategyQuota": "クォータ",
   "accountPool.strategyRoundRobin": "ラウンドロビン",
   "accountPool.strategyFillFirst": "フィルファースト",

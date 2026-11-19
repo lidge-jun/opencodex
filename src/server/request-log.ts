@@ -20,6 +20,7 @@ import {
   isClientClosedMessage,
   isCyberPolicyCode,
   isUpstreamResetReplayRefusedMessage,
+  responsesCompletionError,
   upstreamErrorMessageFromPayload,
 } from "../lib/errors";
 import { CODEX_CONFIG_PATH, readRootTomlString } from "../codex/paths";
@@ -35,6 +36,8 @@ import type { RequestSpendSettlement } from "./responses/request-spend";
 import type { AdapterTierMetadata } from "../providers/fastwire";
 import { UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../lib/upstream-retry";
 import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
+export { registerCommittedTerminalCooldownHandler } from "./request-log-committed-terminal";
+import { reportCommittedTerminalCooldown, type CommittedComboLogFields } from "./request-log-committed-terminal";
 import type { UpstreamCondition } from "../lib/upstream-condition";
 import { boundedServiceTier, errorDetailFor, projectErrorDetail } from "../usage/error-detail";
 import { incompleteReasonDetail, upstreamErrorIsLocal, type FailureDetail } from "./request-log-failure-detail";
@@ -124,7 +127,7 @@ export function cacheDiagnosticsObserving(): boolean {
   return cacheDiagnosticHooks()?.enabled() === true;
 }
 
-export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequestLogCarrier, RequestBodyLogContext {
+export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequestLogCarrier, RequestBodyLogContext, CommittedComboLogFields {
   model: string;
   provider: string;
   client?: UsageClient;
@@ -1032,7 +1035,7 @@ export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unk
       ? (response as { status?: unknown }).status
       : (payload as { status?: unknown }).status;
     if (eventType === "response.completed") {
-      logCtx.observedTerminalStatus = "completed";
+      logCtx.observedTerminalStatus = responsesCompletionError(payload) == null ? "completed" : "failed";
     } else if (eventType === "response.failed") {
       logCtx.observedTerminalStatus = "failed";
     } else if (eventType === "response.incomplete") {
@@ -1627,6 +1630,7 @@ function writeFinalRequestLog(
   // Keyed by the live attempt objects, not the detached copies above.
   const protocolTrace = protocolTraceForRequest(logCtx, logCtx.attempts);
   // Projected before any writer (an injected one too): the row keeps only proxy-owned error facts.
+  reportCommittedTerminalCooldown(logCtx, meta, attempts, effectiveStatus);
   addLog(projectErrorDetail({
     requestId,
     ...(isLogicalRequestId(logicalRequestId) ? { logicalRequestId } : {}),

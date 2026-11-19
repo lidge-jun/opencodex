@@ -378,8 +378,8 @@ startup registry initialization and server discovery. `src/server/index.ts` expo
 and sent with `Cache-Control: no-store`. `src/client/hub-client.ts` downloads it with the existing
 data credential; `src/cli/claude-desktop.ts` selects connected apply, and `src/claude/desktop-3p.ts`
 writes the resulting local Desktop configuration. No admin token, hub-profile upload or local
-alias regeneration is part of this flow. Unsupported old hubs, invalid snapshots and unavailable
-Desktop models fail apply without a local-catalog or loopback fallback.
+alias regeneration is part of this flow. A [retryable snapshot error](claude-desktop-model-visibility.md#where-it-applies),
+unsupported hub, invalid snapshot or unavailable model leaves the applied profile in place.
 
 Managed profile assignments persist `claude-opus-4-8-YYYYMMDD` slots across 2026-2035, not 2026
 alone. The original 2026-only design held 365 slots and failed with "all 365 encoded date slots are
