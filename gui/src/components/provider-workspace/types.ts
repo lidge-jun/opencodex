@@ -75,8 +75,7 @@ export type OAuthAccountRow = AccountQuotaReading & {
   autoSelectable?: boolean;
   skipReason?: "needs_reauth" | "paused" | "suspended" | "cooldown" | "quota_exhausted";
   paused?: boolean;
-  /** `message` (redacted upstream text) and `statusCode` are set only by auto-pause on an account refusal. */
-  pauseDetails?: { reason: string; pausedAt: number; message?: string; statusCode?: number };
+  pauseDetails?: { reason: string; pausedAt: number };
   pauseEvidence?: AccountPauseEvidence;
   autoSwitchThresholdOverride?: number | null;
   autoSwitchThreshold?: number;

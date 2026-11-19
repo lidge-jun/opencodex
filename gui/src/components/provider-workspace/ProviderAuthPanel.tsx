@@ -671,7 +671,9 @@ export default function ProviderAuthPanel({
                     active: account.active, paused: account.paused === true, needsReauth: accountShowsReauth(account),
                     verifyRequired: account.needsReauthReason === "verify_account",
                     ...(account.paused && account.pauseDetails?.reason === "account_permission_denied" ? { banned: {
-                      message: account.pauseDetails.message, pausedAt: account.pauseDetails.pausedAt, statusCode: account.pauseDetails.statusCode,
+                      message: account.pauseEvidence?.message,
+                      pausedAt: account.pauseDetails.pausedAt,
+                      statusCode: account.pauseEvidence?.statusCode,
                     } } : {}),
                     health: account.health, quota: accountQuotaFromReport({ quota: account.quota }), quotaUnavailable: account.quotaUnavailable,
                     ...(probe && "result" in probe ? { probe: { status: probe.result.status, latencyMs: probe.result.latencyMs } } : {}),

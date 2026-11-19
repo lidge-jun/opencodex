@@ -26,7 +26,8 @@ const handlers: ProviderAuthHandlers = {
   onAddApiKey: async () => true, onSwitchApiKey: () => {}, onRemoveApiKey: () => {}, onEditAlias: () => {},
 };
 const PAUSED_AT = Date.parse("2026-11-13T12:00:00Z");
-const bannedDetails = { reason: "account_permission_denied", pausedAt: PAUSED_AT, message: "This account was disabled upstream.", statusCode: 403 };
+const bannedDetails = { reason: "account_permission_denied", pausedAt: PAUSED_AT };
+const bannedEvidence = { message: "This account was disabled upstream.", statusCode: 403 };
 
 beforeEach(() => {
   previous = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previous;
@@ -78,7 +79,7 @@ function button(label: string): HTMLButtonElement | undefined {
 }
 
 const banned = (extra: Partial<OAuthAccount> = {}): OAuthAccount =>
-  ({ id: "a", active: false, paused: true, pauseDetails: bannedDetails, ...extra });
+  ({ id: "a", active: false, paused: true, pauseDetails: bannedDetails, pauseEvidence: bannedEvidence, ...extra });
 
 test("Test all stays disabled while an individual account check is running", async () => {
   const gate = Promise.withResolvers<void>();
