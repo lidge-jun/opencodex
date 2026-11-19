@@ -7,14 +7,14 @@ import { getDefaultConfig, initializePersistedConfigIfMissing, loadConfig, mutat
 import { resolveProviderApiKey } from "../providers/key-store";
 import { projectEmail } from "../lib/privacy";
 import { KiroTokenRefreshError, environmentKiroRoutingMetadata, loginKiro, refreshKiroToken, settleKiroLoginTransaction } from "./kiro";
-import { KiroUserIdentityUnavailableError, kiroReauthIdentityMatches } from "./kiro-account-identity";
+import { KiroUserIdentityUnavailableError } from "./kiro-account-identity";
+import { precheckOAuthReauthIdentity } from "./reauth-precheck";
 import {
   OAuthMutationBusyError,
   OAuthRefreshIntentIOError,
   clearOAuthRefreshIntent,
   createOAuthRefreshIntentLock,
   credentialGeneration,
-  getAccountCredential,
   getAccountCredentialWithStatus,
   getAccountSet,
   getCredential,
@@ -101,7 +101,7 @@ import { newerClaudeCredentialForInstance, captureAnthropicCredentialOwnerForIns
 import { anthropicSubscriptionLabel } from "../providers/anthropic-subscription";
 import { mergeOAuthOrganizationName, normalizeOAuthPlan, mergeOAuthPlan, oauthOrganizationNameSummary, withMergedOAuthLabels } from "./plan";
 import { mergeAnthropicIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
-import { anthropicReauthSlotGuard, anthropicSlotEmailsMatch, observeAnthropicSlotOrganizations } from "./anthropic-login-slot";
+import { anthropicReauthSlotGuard, observeAnthropicSlotOrganizations } from "./anthropic-login-slot";
 import { AnthropicCrossInstanceDuplicateError, AnthropicLocalCliImportError, assertAnthropicCredentialSource } from "./store-anthropic-instance";
 export interface OAuthAccessSnapshot {
   workbuddy?: import("./types").WorkBuddyOAuthMetadata;
@@ -1682,21 +1682,7 @@ export async function runLogin(
       upsertOAuthProvider(preCommitConfig, provider, row);
     }
     if (opts?.reauthAccountId) {
-      const existing = getAccountCredential(provider, opts.reauthAccountId);
-      if (!existing) throw new Error(`Unknown account for reauth: ${opts.reauthAccountId}`);
-      if (!existing.accountId && !existing.email) {
-        throw new OAuthReauthIdentityUnverifiedError();
-      }
-      // A Kiro organization profile ARN is shared by its users, so it alone is not the account.
-      const identityMatches = provider === "kiro"
-        ? kiroReauthIdentityMatches(existing, cred, getAccountSet("kiro")?.accounts
-          .filter(account => account.id !== opts.reauthAccountId).map(account => account.credential))
-        : existing.accountId && cred.accountId
-          ? existing.accountId === cred.accountId
-          : isAnthropicOAuthInstance(provider)
-            ? anthropicSlotEmailsMatch(existing.email, cred.email)
-            : Boolean(existing.email && cred.email && existing.email.trim().toLowerCase() === cred.email.trim().toLowerCase());
-      if (!identityMatches) throw new OAuthReauthIdentityMismatchError();
+      const existing = precheckOAuthReauthIdentity(provider, opts.reauthAccountId, cred);
       const assertAccounts = isAnthropicOAuthInstance(provider) ? anthropicReauthSlotGuard(opts.reauthAccountId, cred,
         await observeAnthropicSlotOrganizations(getAccountSet(provider)?.accounts ?? [], cred, opts.reauthAccountId)) : undefined;
       const reauthCred = withMergedOAuthLabels(cred, existing);
