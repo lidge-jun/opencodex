@@ -308,6 +308,24 @@ test.each(["retained", "convergence"] as const)("%s projects fresh per-account r
         expect(rows.find(row => row.slug === slug)?.auto_compact_token_limit).toBe(100_000);
       }
     }
+    // The first duplicate survives publication, whether its budget is lower or
+    // higher than the later row. Projection must use that same incoming row.
+    for (const [firstBudget, laterBudget] of [[100_000, 150_000], [150_000, 100_000]]) {
+      const duplicates = [WRITER_MODEL, `desktop/${WRITER_MODEL}`, `team/${WRITER_MODEL}`].map(slug => {
+        const first = rows.find(row => row.slug === slug)!;
+        first.auto_compact_token_limit = firstBudget;
+        return { ...first, auto_compact_token_limit: laterBudget };
+      });
+      writeFileSync(join(home.codexHome, "opencodex-catalog.json"), JSON.stringify({ models: [...rows, ...duplicates] }));
+      for (let pass = 0; pass < 2; pass++) {
+        rows = await writeWith(writer, config);
+        for (const duplicate of duplicates) {
+          const matching = rows.filter(row => row.slug === duplicate.slug);
+          expect(matching).toHaveLength(1);
+          expect(matching[0]?.auto_compact_token_limit).toBe(firstBudget);
+        }
+      }
+    }
     mainPrompt = undefined;
     mainCapabilities = { max_context_window: -1, supports_experimental_context: "true" };
     resetCodexModelEntitlementCacheForTests();

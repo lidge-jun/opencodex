@@ -61,11 +61,15 @@ export function applyNativeRosterCapabilities(
 ): void {
   // The merge may temporarily replace a persisted roster window with a shipped
   // pin. Preserve lower policy only when the original and final windows match.
-  const incomingBySlug = new Map(incomingEntries
-    .filter(entry => !isNativeAliasCatalogEntry(entry) && entry.owned_by !== COMBO_NAMESPACE)
-    .map(entry => [entry.slug, entry]));
+  const incomingBySlug = new Map<string, RawEntry>();
+  for (const entry of incomingEntries) {
+    if (typeof entry.slug !== "string" || isNativeAliasCatalogEntry(entry)
+      || entry.owned_by === COMBO_NAMESPACE || incomingBySlug.has(entry.slug)) continue;
+    // Match final slug deduplication: a later row cannot supply the retained budget.
+    incomingBySlug.set(entry.slug, entry);
+  }
   for (const entry of entries) {
-    if (isNativeAliasCatalogEntry(entry) || entry.owned_by === COMBO_NAMESPACE) continue;
+    if (typeof entry.slug !== "string" || isNativeAliasCatalogEntry(entry) || entry.owned_by === COMBO_NAMESPACE) continue;
     const target = nativeRosterTarget(entry, snapshot, accountTargets);
     if (!target) continue;
     const capabilities = target.confirmedAccount ? snapshot.capabilitiesByAccount?.get(target.confirmedAccount)?.get(target.slug) : undefined;

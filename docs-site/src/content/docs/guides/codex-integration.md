@@ -26,6 +26,8 @@ default and maximum context windows and support for reasoning-effort updates and
 context. Configured window limits and compaction budgets still apply. A confirmed default above
 the shipped opt-in ceiling is preserved unless a configured limit lowers it. Repeated catalog
 updates preserve a lower compaction budget when the final context window stays the same.
+If the saved catalog has duplicate rows for a native model, the first row supplies that
+retained budget; later duplicates are removed without replacing the first row's setting.
 An advertised capability
 requires its normal Codex client settings and backend support.
 
