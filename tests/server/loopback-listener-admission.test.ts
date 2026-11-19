@@ -118,6 +118,14 @@ describe("local client inference wires on the loopback listener (#4236)", () => 
     );
   });
 
+  test("the Gemini wire is admitted per path with its own HTTP method", () => {
+    // `ocx connect agy` writes the loopback port, so without this entry every agy call 404s on a
+    // hub whose public listener binds a tailnet address. The handlers resolve admission from the
+    // receiving listener's policy, so this adds a wire, not a trust level.
+    expect(source).toContain("const gemini = parseGeminiNativePath(path);");
+    expect(source).toContain("if (gemini) return req.method === gemini.httpMethod;");
+  });
+
   test("no /api route joins the allowlist", () => {
     // Management discovery is the other destination contract (authenticated ingress). A
     // reviewer condition on #4236: `/api/*` must never appear on this listener.

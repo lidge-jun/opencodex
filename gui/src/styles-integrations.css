@@ -217,3 +217,5 @@
   .aside-profile-toolbar > .btn { margin-left: 0; }
 }
 .aside-profile-failure { white-space: pre-line; overflow-wrap: anywhere; }
+
+.gateway-client-model { max-width: var(--prose-measure); }
