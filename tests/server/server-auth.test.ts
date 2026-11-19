@@ -2568,6 +2568,59 @@ describe("server local API auth", () => {
     }
   });
 
+  test("an explicit five-send cap includes the initial sends and gated-model recovery", async () => {
+    const model = "gpt-daybreak-blue-latest";
+    const body = unsupportedModelBody(model);
+    let sends = 0;
+    const harness = await startPoolRetryHarness(
+      () => ++sends <= 2
+        ? Response.json({ error: { code: "server_is_overloaded" } }, { status: 503, headers: { "Retry-After": "0" } })
+        : rejectionResponse(body),
+      {
+        secondAccount: false,
+        modelRosterByAccount: { "acct-pool-a": ["gpt-5.6-sol", model] },
+        transientRetryAttempts: 5,
+      },
+    );
+    try {
+      const response = await harness.request({ model });
+      expect(response.status).toBe(400);
+      expect(await response.text()).toBe(body);
+      expect(harness.dispatches).toEqual(Array(5).fill("acct-pool-a"));
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("an explicit one-send cap preserves a Pool quota refusal without rotating", async () => {
+    const refusal = { error: { code: "usage_limit_reached", message: "Usage limit reached" } };
+    const harness = await startPoolRetryHarness(account => account === "acct-pool-a"
+      ? Response.json(refusal, { status: 429, headers: { "Retry-After": "600" } })
+      : Response.json({ id: "alternate", status: "completed", output: [] }), { transientRetryAttempts: 1 });
+    try {
+      const response = await harness.request();
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+      expect(response.status).toBe(429);
+      expect(await response.json()).toEqual(refusal);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("an explicit one-send cap preserves a Pool 401 without replaying the request", async () => {
+    const refusal = { error: { code: "invalid_token", message: "Credential rejected" } };
+    const harness = await startPoolRetryHarness(() => Response.json(refusal, { status: 401 }),
+      { transientRetryAttempts: 1 });
+    try {
+      const response = await harness.request();
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual(refusal);
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
   test("#2097: an account-gated model with no confirmed grant fails before upstream dispatch", async () => {
     const model = "gpt-daybreak-blue-latest";
     const harness = await startPoolRetryHarness(

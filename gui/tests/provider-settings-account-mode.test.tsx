@@ -118,6 +118,22 @@ async function chooseMode(select: HTMLButtonElement, value: string, answer: "acc
   });
 }
 
+test("the ChatGPT settings picker saves the selected number of extra retries", async () => {
+  const { root, container, patches } = await mountSettings(openAiItem("direct"));
+  const select = container.querySelector<HTMLButtonElement>('[aria-label="Same-model retries before output"]')!;
+  expect(select.getAttribute("role")).toBe("combobox");
+  expect(select.textContent).toContain("Default (main retries off)");
+  await chooseOption(select, "5");
+  const saveButton = container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!;
+  await act(async () => {
+    saveButton.click();
+  });
+  expect(patches).toEqual([{ transientRetryOn5xx: { attempts: 6 } }]);
+  await act(async () => {
+    root.unmount();
+  });
+});
+
 test("a confirmed mode change sends the exact standalone codexAccountMode patch", async () => {
   const { root, container, patches } = await mountSettings(openAiItem("pool"));
   const select = modeSelect(container);

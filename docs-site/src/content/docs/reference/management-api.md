@@ -691,7 +691,7 @@ Labels are read on login/import or refresh, never inferred from quota percentage
 | `POST /api/oauth/login/cancel` | Cancel a public in-progress OAuth flow or dismiss its settled failure; an optional `flowId` names one flow (a flow of another provider is refused) | 400 unknown provider |
 | `GET /api/oauth/status` | Poll one provider's OAuth flow; for xAI, `flowId` selects the device attempt, while omitting it retains provider-wide polling. A failed flow reports a fixed public `error` and a machine-readable `errorCode` from the same vocabulary as the paste response, including `oauth_authentication_failed` for xAI denial or a refused redirect and `provider_unreachable` for an xAI server failure | 400 unknown provider |
 | `POST /api/oauth/logout` | Remove the selected provider credential | 400 unknown provider; `oauth_mutation_busy` |
-| `GET /api/oauth/accounts` | List masked accounts. Anthropic and generic OAuth rows include `paused`. Automatically paused rows can include `pauseDetails` (reason and timestamp) and a sibling `pauseEvidence` with `statusCode` and an optional redacted `message` of up to 300 characters. Resuming clears both fields. Kiro rows include `autoSelectable` and a closed `skipReason` when excluded from automatic selection; an active singleton may still send. Quota remains opt-in. | 400 invalid provider |
+| `GET /api/oauth/accounts` | List masked accounts. Anthropic and generic OAuth rows include `paused`. Automatically paused rows can include `pauseDetails` (reason and timestamp) and a sibling `pauseEvidence` with `statusCode` and an optional redacted `message` of up to 300 characters. A conclusive first-party Cloud Code Assist ban can also include a validated Google `appealUrl` and optional plain `appealText` inside `pauseEvidence`. Resuming clears both fields. Kiro rows include `autoSelectable` and a closed `skipReason` when excluded from automatic selection; an active singleton may still send. Quota remains opt-in. | 400 invalid provider |
 | `DELETE /api/oauth/accounts` | Remove one account | 400 invalid provider/id; 404 account missing; `oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` | Select the active OAuth account | 400 invalid provider/account; 404 account missing; 409 account paused; `oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `selectionCommitted: true`, `retryable: true`; account change saved; resend the same request even if already active) |
 | `PUT /api/oauth/accounts/pause` | Pause or resume one Anthropic or generic OAuth account. Body `{ provider, accountId, paused }`; pausing the active account selects the next usable account when available. Pause is durable and independent of pool enablement; resume preserves health and credentials. | 400 unsupported provider or invalid body; 404 account missing; `oauth_mutation_busy`; 503 `affinity_reset_not_persisted` (Anthropic: `pauseCommitted: true`, `retryable: true`; pause state saved; preserve the account and pause state, add `retryAffinityReset: true`, and retry to confirm the reset even after a server restart) |
@@ -1051,11 +1051,29 @@ create a general pairing session. Controls stay disabled until that scope is ver
 grant nor the exchange changes certificate trust, runtime state or the auto-start preference.
 
 Start requires an already prepared, trusted certificate, a freshly verified native file-based
-ChatGPT login and the assessed Codex Windows build `26.924.2738.0`. It begins in Observe mode.
+ChatGPT login and an official Microsoft Store Codex package for the current Windows user.
+Windows must verify the signed package contents and report a valid OpenAI Authenticode signature
+for the installed `ChatGPT.exe`. Failure or unavailable proof returns `build_unverified`.
+Observation starts in Observe mode.
 HTTP/HTTPS and authenticated SOCKS5 outbound proxies use the same explicit selection for HTTP,
 identity verification and upgraded sockets. NO_PROXY is honored; failures never retry directly.
 An invalid or unsupported setting returns `egress_proxy_invalid`. Start never registers a certificate or changes
-login. Launch preserves package identity and refuses an app that is already running.
+login. Launch refuses an app that is already running. It checks the verified full package name and
+executable SHA-256 before package activation, then checks the process image and routing argument
+before reporting success. Runtime-owned launch uses an asynchronous child, so PAC and relay
+requests remain serviceable while the full proof runs. Stop aborts and drains that child before
+another runtime can start. A refused or indeterminate package activation revokes the account-wide
+trial and initiates cleanup of the compatibility runtime and its managed connections. Closure
+is confirmed only after cleanup succeeds. This also applies to a managed Codex restart, and to an
+activation that fails after a proof refresh changed the verified build. A launch reports success
+only for the build revision it started with; a request that verified a different revision
+receives `build_unverified` instead.
+OpenCodeX leaves any PID returned by activation alone. Check `runtime.phase` in the response:
+if cleanup fails, HTTP 409 includes `cleanup-required`; retry Stop and confirm `off` before
+starting again. After successful cleanup, callers can start directly. For either activation
+failure path, save drafts, close any Codex window left running, start observation, and select
+**Open Codex** to restore the managed connection. Then wait for a fresh eligible exhaustion
+snapshot and explicitly consent to a new Apply request.
 PAC and CONNECT ports are persisted after successful first binding and reused on restart.
 `connection_unavailable` means binding failed; `connection_invalid` or `connection_changed`
 means stored endpoint identity could not be accepted. These failures never silently rotate
@@ -1065,15 +1083,16 @@ process's bound OpenCodex listener. Runtime status may expose `contextFailure` f
 or `build_unverified`. These states disable response correction without claiming an app repair.
 
 A status response can also carry `buildAssessment`, the public metadata of the last completed
-build check: `assessedVersion` (the exact package this runtime was assessed against),
+build check: `assessedVersion` (the baseline holding native acceptance evidence),
 `observedVersion`, `verified` and `completedAt`. It records a past observation, not a live
 install reading: a stopped runtime, an app update or a pending or interrupted check can leave it
 older than the installed package, and only a completed check replaces it. `observedVersion` is
-null unless discovery matched the assessed package family and entry point; an identified newer
-build keeps its own version with `verified` false, and `verified` always describes the package
-observed at `completedAt`, never whatever is installed later. The field is absent until the
-service creates its probe during start and `null` until that probe finishes a check; reading
-status never starts one.
+null unless discovery matched the assessed package family and entry point; an identified build
+keeps its own version, and `verified` reports whether the package passed its official package
+proof at `completedAt`, never whatever is installed later. The field is absent until the
+service creates its probe during start. It is `null` only when a probe exists and no completed
+assessment is available. A previous completed assessment remains visible while a replacement
+probe is pending, until a new check completes; reading status never starts a check.
 
 Apply requires a recently observed eligible exhaustion snapshot and lasts at most three minutes
 at the response layer. It changes two account-UI gate flags, not usage percentages, credits,

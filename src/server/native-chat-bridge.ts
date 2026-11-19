@@ -5,20 +5,32 @@
  * status, and the SSE-to-native stream pump with its settlement and cancellation rules. The
  * protocol-specific parts (frame shapes, error bodies) stay in each ingress.
  */
+import { isUnattendedAgyAcpHttpTurn } from "../adapters/agy-acp/policy";
 import { parseRetryAfterMs } from "../combos";
 import type { AdmissionLease } from "../lib/admission";
 import { WORKFLOW_LOCAL_REFUSAL_HEADER } from "../lib/workflow-budget";
+import type { OcxConfig } from "../types";
 import type { CapturedAdmissionPolicy } from "../types/admission-policy";
 import type { DataPlaneAdmission } from "./auth-cors";
+import { handleChatCompletions } from "./chat-completions";
 import type { NativeFinalLog } from "./native-final-log";
+import type { RequestLogContext } from "./request-log";
 import { linkRequestSessionLane } from "./request-log-conversation";
 
 // Session and workflow identity only: lineage, session lanes and the workflow root's spend
 // ceiling read these from the request Chat sees. Never authorization, cookies or admission keys.
 const IDENTITY_HEADERS = ["session_id", "session-id", "thread-id", "x-session-id", "x-codex-parent-thread-id"] as const;
 
-/** The synthesized Chat request: JSON content type, identity headers, the client signal and its session lane. */
-export function internalChatRequest(req: Request, chatJson: string): Request {
+/** Dispatch translated Chat while keeping the original turn label in process-local policy state. */
+export function handleNativeChat(
+  req: Request,
+  originalBody: unknown,
+  chatJson: string,
+  config: OcxConfig,
+  logCtx: RequestLogContext,
+  ids: NativeLogIds,
+): Promise<Response> {
+  const agyAcpUnattendedHttpTurn = isUnattendedAgyAcpHttpTurn(req.headers, originalBody);
   const headers = new Headers({ "content-type": "application/json" });
   for (const name of IDENTITY_HEADERS) {
     const value = req.headers.get(name);
@@ -26,7 +38,9 @@ export function internalChatRequest(req: Request, chatJson: string): Request {
   }
   const internal = new Request(new URL("/v1/chat/completions", req.url), { method: "POST", headers, body: chatJson, signal: req.signal });
   linkRequestSessionLane(req, internal);
-  return internal;
+  return handleChatCompletions(internal, config, logCtx, {
+    ...ids, suppressProtocolTrace: true, agyAcpUnattendedHttpTurn,
+  });
 }
 
 /** The request-log and admission identity a native handler passes to the inner Chat path. */

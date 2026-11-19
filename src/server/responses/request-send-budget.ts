@@ -13,6 +13,7 @@ import { poolContinuityRefusalReason, workflowRefusalResponse } from "../workflo
 import type { AttemptRecoveryKind, AttemptRecoveryWithheld } from "../../usage/log";
 import { noteAttemptRecoveryWithheld, noteAttemptSend, type RequestLogContext } from "../request-log";
 import { TRANSIENT_RETRY_MAX_ATTEMPTS, SendBudgetExhaustedError, type TransientSendBudget } from "../../lib/upstream-retry";
+import type { ErrorDestinationLabel } from "../../lib/error-destination";
 import type { SpendScopes } from "../../lib/spend-reservation-ledger";
 import { estimateTokens } from "../../lib/token-estimate";
 import type {
@@ -44,6 +45,38 @@ export function transientSendCapFor(
 ): number {
   if (configuredAttempts === undefined) return TRANSIENT_RETRY_MAX_ATTEMPTS;
   return Math.max(0, configuredAttempts - Math.max(0, sendsUsed));
+}
+
+/** A native compact credential recovery spends one send from the shared request budget. */
+export async function sendSingleCompactRecovery(
+  budget: RequestExecutionBudget,
+  target: () => SpendScopes,
+  targetKey: string,
+  destination: ErrorDestinationLabel,
+  dispatch: () => Promise<Response>,
+): Promise<Response> {
+  const freshRetrySpend = budget.explicitSendCeiling !== undefined;
+  const exhausted = () => new SendBudgetExhaustedError(destination);
+  if (budget.remainingBaseSends(TRANSIENT_RETRY_MAX_ATTEMPTS) > 0) {
+    const report = createPhysicalSendReporter(budget, target);
+    let started = false;
+    try {
+      if (report.beforeSend?.(freshRetrySpend) === false) throw exhausted();
+      started = true;
+      return await (report.execute ? report.execute(dispatch) : dispatch());
+    } finally {
+      try { if (started) report(1); }
+      finally { report.close?.(); }
+    }
+  }
+  const decision = budget.reserveDispatch({ sendClass: "auth-recovery", targetKey, freshRetrySpend });
+  if (!decision.allowed) throw exhausted();
+  const { permit } = decision;
+  const run = () => {
+    if (!permit.use()) { permit.release(); throw exhausted(); }
+    return dispatch();
+  };
+  return permit.execute ? permit.execute(run) : run();
 }
 
 /** Read the admitted target's ceilings without claiming a send or a prepaid proof. */
@@ -85,6 +118,8 @@ export function createResponsesSendBudget(
     ?? options.comboInitialSend?.permit;
   let pendingHopPermit: SingleUseDispatchPermit | undefined = options.compactionRecoveryPermit;
   let initialPermit = options.comboInitialSend?.permit;
+  const compactHandoffSendCeiling = options.compactionRecoveryKind === "compaction-v1"
+    && isRequestExecutionBudget(sendBudget) && sendBudget.used > 0 ? sendBudget.explicitSendCeiling : undefined;
   // Count this owner's physical sends, not later bookings made by other shared-ledger owners.
   // Direct callers retain sends reported before this owner was constructed.
   let targetSendsUsed = initialPermit ? 0 : Math.max(0,
@@ -115,14 +150,23 @@ export function createResponsesSendBudget(
       unreportedWorkflowStarts -= prepaid;
       if (!physicalWorkflowAccounting) chargeWorkflowSends(workflowRootId, charged - prepaid);
     }, { explicitContinuation });
+    if (compactHandoffSendCeiling !== undefined && !explicitContinuation && reporter.beforeSend) {
+      const beforeSend = reporter.beforeSend;
+      let prepaid = permit !== undefined;
+      reporter.beforeSend = freshRetry => {
+        if (!beforeSend(freshRetry || !prepaid)) return false;
+        prepaid = false;
+        return true;
+      };
+    }
     if (workflowRootId && !physicalWorkflowAccounting) {
       const beforeSend = reporter.beforeSend, close = reporter.close;
       let closed = false;
-      reporter.beforeSend = () => {
+      reporter.beforeSend = reserveRetrySpend => {
         const policy = currentWorkflowBudgetPolicy();
         // Check before a legacy permit's admission can spend it. No await separates this
         // read from the atomic claim, and the reporter owns the later accounting receipt.
-        if (closed || workflowSendCeilingReached(workflowRootId, policy) || beforeSend?.() === false
+        if (closed || workflowSendCeilingReached(workflowRootId, policy) || beforeSend?.(reserveRetrySpend) === false
           || !reserveWorkflowSend(workflowRootId, policy)) return false;
         unreportedWorkflowStarts++;
         return true;
@@ -447,6 +491,8 @@ export function createResponsesSendBudget(
     },
     /** Physical sends reported by this owner; unrelated shared reservations cannot consume it. */
     get targetSendsUsed(): number { return targetSendsUsed; },
+    /** Attribute sends charged by a separate recovery permit to this target. */
+    noteTargetSends,
     /**
      * Charged sends, including open prepaid reservations, across this logical request.
      *
@@ -455,6 +501,7 @@ export function createResponsesSendBudget(
      */
     get sendsUsed(): number { return sendBudget.used; },
     adapterSendBudget,
+    compactHandoffSendCeiling,
     hasCapturedSpendCeiling,
     dispatchSidecarSend,
     adapterDispatchBudget,

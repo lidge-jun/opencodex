@@ -18,6 +18,7 @@ import { hasUpstreamRewriters, upstreamRewriterEpoch } from "../plugins/upstream
 import { isCanonicalAntigravityUrl } from "../lib/provider-tls-profile";
 
 const streaks = new WeakMap<OcxConfig, AccountRefusalStreaks>();
+const appealNotices = new Set<string>();
 export { wasAccountAutoPaused, wasPermanentAccountRefusal } from "../lib/account-auto-pause-response";
 import { markAccountAutoPaused, markPermanentAccountRefusal } from "../lib/account-auto-pause-response";
 export interface AccountAutoPauseBinding {
@@ -54,6 +55,8 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
   };
   const configured = config.providers[name];
   if (!configured || configured.disabled) return;
+  const firstPartyCloudCodeProvider = provider.authMode === "oauth" && provider.adapter === "google"
+    && provider.googleMode === "cloud-code-assist" && isCanonicalAntigravityUrl(provider.baseUrl);
   const fence = captureAccountAutoPauseFence(config, name);
   if (!fence) return;
   const route = JSON.stringify([configured.baseUrl, configured.adapter, configured.authMode]);
@@ -148,6 +151,7 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
   // so no plugin could have rewritten the dial in between.
   const rewriterEpoch = hasUpstreamRewriters() ? undefined : upstreamRewriterEpoch();
   let wireOwned: boolean | undefined;
+  let firstPartyCloudCodeSend = false;
   const observer = (async (response: Response) => {
     if (observed.has(response) || isNonReplayableResponse(response)) return response;
     observed.add(response);
@@ -158,7 +162,7 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
     if (counted.has(key)) return response;
     countedResponses.set(response, counted.add(key));
     try {
-      const verdict = permanentAccountRefusalEvidence(response, undefined, conclusiveOnly).then(refusal => {
+      const verdict = permanentAccountRefusalEvidence(response, undefined, conclusiveOnly, firstPartyCloudCodeSend).then(refusal => {
         if (refusal) markPermanentAccountRefusal(response);
         return refusal;
       });
@@ -168,6 +172,13 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
         markAccountAutoPaused(response);
         // Fixed codes only. Never print the upstream body, provider label, or account identifier.
         console.warn(`[account-auto-pause] paused after ${threshold} consecutive permanent account refusals`);
+        if ((await verdict)?.appealUrl) {
+          const noticeKey = `${fence.configPath}\0${key}`;
+          if (!appealNotices.has(noticeKey)) {
+            appealNotices.add(noticeKey);
+            console.warn("[account-auto-pause] appeal link available");
+          }
+        }
       }
     } catch {
       // Optional persistence must preserve the original provider response.
@@ -177,6 +188,8 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
   }) as AccountAutoPauseObserver;
   observer.physical = (sameDestination, wire, destination) => {
     wireOwned = sameDestination && owns(wire) && (!conclusiveOnly || isCanonicalAntigravityUrl(destination));
+    firstPartyCloudCodeSend = wireOwned && firstPartyCloudCodeProvider && isCanonicalAntigravityUrl(destination)
+      && !wire.has("x-goog-api-key") && !wire.has("api-key");
   };
   return observer;
 }

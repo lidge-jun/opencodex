@@ -521,7 +521,8 @@ the relay does not decode WebSocket payloads. After CONNECT the paused outer str
 before TLS-over-TLS negotiation. Test fixture CA trust is confined to child processes or
 injected test socket options, never the user's OS trust store.
 `tests/lib/optional-desktop-upstream.test.ts` exercises the production dialer; `tests/clients/desktop-compatibility-relay.test.ts`
-preserves the real relay’s fixed-target and opaque upgrade contracts.
+preserves the real relay’s fixed-target and opaque upgrade contracts. The managed PAC launch uses the
+[verified Windows package identity](../clients/codex-desktop.md#optional-compatibility-runtime).
 
 ## Single-route opaque proxy transport
 

@@ -10,6 +10,7 @@ import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility"
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import { mainAccountHardLockFallbackError } from "./schema/main-account-hard-lock-fallback";
 import { fallbackPolicyError } from "./schema/fallback-policy";
+import { subscriptionReserveConfigError } from "./schema/subscription-reserve";
 import { anthropicSidecarConfigError } from "./schema/anthropic-account-pool";
 import { agyAcpProviderFieldIssues, agyAcpUnattendedTargetIssues } from "./schema/agy-acp-references";
 import {
@@ -155,6 +156,7 @@ export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxCon
   if (blockedModelRedirectsError(rawParsed)) console.warn("⚠️  invalid blockedModelRedirects ignored; provider routing remains available");
   if (mainAccountHardLockFallbackError(rawParsed)) console.warn("⚠️  invalid codexMainAccountHardLockFallback ignored; the main-account hard lock still refuses while blocked");
   if (fallbackPolicyError(rawParsed)) console.warn("⚠️  invalid fallback leaves ignored; those scopes keep today's fallback behavior");
+  if (subscriptionReserveConfigError(rawParsed)) console.warn("⚠️  invalid subscriptionReserve disabled; Claude subscription routing remains available");
   const chatgptDesktop = chatgptDesktopConfigIssue(rawParsed);
   if (chatgptDesktop) console.warn(`⚠️  config.json ${chatgptDesktop} — the whole chatgptDesktop block is ignored, so the ChatGPT desktop integration reads as off`);
   warnDegradedStreamMode(rawParsed, validated);

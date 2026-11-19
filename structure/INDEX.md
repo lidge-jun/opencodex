@@ -551,6 +551,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/responses/anthropic-thinking-recovery.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
 | `src/server/responses/codex-ws-pool.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/responses/codex-ws-request.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
+| `src/server/responses/compact-response-body.ts` | [`transports/timeouts.md`](transports/timeouts.md) |
 | `src/server/responses/compact.ts` | [`transports/responses-citations.md`](transports/responses-citations.md)<br>[`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/responses/core-combo.ts` | [`ops/service-logging.md`](ops/service-logging.md) |
 | `src/server/responses/image-context-recovery.ts` | [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |

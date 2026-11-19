@@ -70,7 +70,7 @@ import { oauthSessionKeyFromParts } from "../../oauth/session-affinity-key";
 import { resolveContextPrincipal } from "../auth-cors";
 import { tryKiroAlternateAfterTerminalRefresh } from "../../oauth/kiro-terminal-failover";
 import { classifyModelFamilyForQuota } from "../../oauth/account-quota-rank";
-import { expandInferenceOAuthSendBudget } from "../inference/context";
+import { expandInferenceOAuthSendBudget, fundChatGptRetryAttempts } from "../inference/context";
 import { stampOAuthAccountLabel, stampApiKeyAccountLabel, usesApiKeyAccount } from "../../providers/label";
 import { apiKeyAccountLogLabel, oauthAccountLogLabel } from "../../codex/account-label";
 import { bindResponsesHostedAdvisorSpendTarget, bindResponsesSpendTarget, responsesSpendTarget } from "./request-spend-target";
@@ -107,7 +107,7 @@ import { bindRouteReasoningReplayScope } from "./core-replay";
 import { affinityLaneFromRequest, assignNativeLogConversationId, normalizeLogConversationId, sessionIdHeaderFromRequest } from "../request-log-conversation";
 import { redactSecretString } from "../../lib/redact";
 import { captureAccountAutoPauseAttempt } from "../../oauth/account-auto-pause";
-import { selectProactiveApiKeyTransport } from "../../providers/key-failover";
+import { selectProactiveApiKeyTransport, transientRetryPolicyFor } from "../../providers/key-failover";
 import { distributedKeyPhysicalFetch, hasConflictingApiKeyHeaders } from "../../providers/api-key-response-ownership";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { providerConsumesCallerAuthorization } from "../../providers/caller-authorization";
@@ -1591,8 +1591,12 @@ export async function prepareResponsesTransport(
   ]).size : 0;
   const anthropicFundedAccounts = Math.min(anthropicRosterSize, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST);
   const anthropicFailoverLimit = Math.max(ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST, anthropicFundedAccounts - 1);
-  if (fundingAccountId || anthropicPoolAccountId)
+  if (fundingAccountId || anthropicPoolAccountId) {
     expandInferenceOAuthSendBudget(options.sendBudget, Math.max(fundedAccounts, anthropicFundedAccounts));
+  } else if (isPassthrough && !options.comboAttempt && isCanonicalOpenAiForwardProvider(route.provider)) {
+    const policy = transientRetryPolicyFor(route.provider);
+    if (policy) fundChatGptRetryAttempts(options.sendBudget, policy.attempts);
+  }
 
   return {
     genericFailoverLimit, anthropicFailoverLimit,
