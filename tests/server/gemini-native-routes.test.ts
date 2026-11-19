@@ -8,6 +8,8 @@ import { saveConfig } from "../../src/config";
 import { getAccountSet, removeAccount, saveCredential, setActiveAccount } from "../../src/oauth/store";
 import { oauthAccountLogLabel } from "../../src/codex/account-label";
 import { clearAntigravityAccountRosters, recordAntigravityAccountRoster } from "../../src/providers/antigravity-account-roster";
+import { sharedSpendLedger } from "../../src/lib/spend-reservation-ledger";
+import { estimateTokens } from "../../src/lib/token-estimate";
 import { startServer } from "../../src/server";
 import { getRequestLogEntries } from "../../src/server/request-log";
 import { decodeTokPerSecondResult } from "../../src/server/management/shared";
@@ -45,6 +47,7 @@ const previousEnv = {
 const seen: Array<{ url: URL; headers: Headers; body: string }> = [];
 let home: string;
 let discoveryWires: string[];
+let nativeResponse: (() => Response) | undefined;
 
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), "ocx-native-gemini-routes-"));
@@ -66,6 +69,7 @@ afterAll(() => {
 beforeEach(() => {
   seen.length = 0;
   discoveryWires = [];
+  nativeResponse = undefined;
   const fixtureFetch: typeof fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.hostname === "127.0.0.1" || url.hostname === "localhost") return originalFetch(input, init);
@@ -86,6 +90,7 @@ beforeEach(() => {
         choices: [{ index: 0, message: { role: "assistant", content: "translated" }, finish_reason: "stop" }],
       });
     }
+    if (nativeResponse) return nativeResponse();
     const envelope = `{"project":"fixture-private-project","response":${PAYLOAD}}`;
     if (url.pathname.endsWith(":streamGenerateContent")) {
       return new Response(`data: ${envelope}\n\n`, { headers: { "content-type": "text/event-stream" } });
@@ -156,6 +161,75 @@ test("opted-in Gemini routes preserve native JSON and replace every ingress cred
     expect(seen[0]!.headers.has("x-opencodex-api-key")).toBe(false);
     expect(seen[0]!.body).toContain(`"request":${RAW}`);
     expect(JSON.parse(seen[0]!.body)).toMatchObject({ model: WIRE_MODEL, project: "fixture-google-project" });
+  });
+});
+
+test.each(["root", "identity", "pool"] as const)("native Gemini settles the %s Token budget and refuses insufficient capacity", async scope => {
+  const cfg = config(true);
+  const limit = 10_000;
+  cfg.spend = { [scope]: { maxTokens: limit } };
+  const rootId = `native-budget-${scope}-${crypto.randomUUID()}`;
+  const accountId = getAccountSet(PROVIDER)!.activeAccountId;
+  const scopeId = { root: rootId, identity: oauthAccountLogLabel(accountId, PROVIDER), pool: PROVIDER }[scope];
+  const headers = { ...key, "content-type": "application/json", "x-codex-parent-thread-id": rootId, "thread-id": rootId };
+  await withServer(cfg, async base => {
+    const ledger = sharedSpendLedger();
+    const previous = ledger.snapshot(scope, scopeId)?.settled ?? 0;
+    const stream = scope === "root";
+    const path = stream ? generation(TARGET, "streamGenerateContent") + "?alt=sse" : generation();
+    const response = await post(base, path, headers);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe(stream ? `data: ${PAYLOAD}\n\n` : PAYLOAD);
+    expect(ledger.snapshot(scope, scopeId)).toMatchObject({ settled: previous + 27, reserved: 0, unresolved: 0 });
+
+    const refused = await originalFetch(new URL(generation(), base), {
+      method: "POST", headers,
+      body: JSON.stringify({ contents: [], generationConfig: { maxOutputTokens: Math.floor(limit / 2), candidateCount: 2 } }),
+    });
+    expect(refused.status).toBe(429);
+    expect(refused.headers.get("x-opencodex-local-refusal")).toBe("workflow_spend_exhausted");
+    expect(await refused.json()).toMatchObject({ error: { status: "RESOURCE_EXHAUSTED" } });
+    expect(seen).toHaveLength(1);
+    expect(ledger.snapshot(scope, scopeId)).toMatchObject({ settled: previous + 27, reserved: 0, unresolved: 0 });
+  });
+});
+
+test("native Gemini holds streaming spend until cancellation and keeps unknown usage unresolved", async () => {
+  const cfg = config(true);
+  const rootId = `native-budget-stream-${crypto.randomUUID()}`;
+  const headers = { ...key, "content-type": "application/json", "x-codex-parent-thread-id": rootId, "thread-id": rootId };
+  const raw = '{"contents":[],"generation_config":{"max_output_tokens":32}}';
+  const reservation = estimateTokens(raw, WIRE_MODEL) + 32;
+  cfg.spend = { root: { maxTokens: reservation } };
+  const cancelled = Promise.withResolvers<void>();
+  nativeResponse = () => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('data: {"response":{"candidates":[{"content":{"parts":[{"text":"partial"}]}}],"usageMetadata":{"promptTokenCount":1}}}\n\n'));
+    },
+    cancel() { cancelled.resolve(); },
+  }), { headers: { "content-type": "text/event-stream" } });
+
+  await withServer(cfg, async base => {
+    const ledger = sharedSpendLedger();
+    const url = new URL(generation(TARGET, "streamGenerateContent") + "?alt=sse", base);
+    const abort = new AbortController();
+    const response = await originalFetch(url, { method: "POST", headers, body: raw, signal: abort.signal });
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    try {
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain("partial");
+      expect(ledger.snapshot("root", rootId)).toMatchObject({ reserved: reservation, settled: 0 });
+      const refused = await originalFetch(url, { method: "POST", headers, body: raw });
+      expect(refused.status).toBe(429);
+      await refused.text();
+      expect(seen).toHaveLength(1);
+    } finally {
+      abort.abort();
+      await reader.cancel().catch(() => {});
+    }
+    await cancelled.promise;
+    for (let wait = 0; wait < 40 && ledger.snapshot("root", rootId)?.reserved; wait++) await Bun.sleep(10);
+    expect(ledger.snapshot("root", rootId)).toMatchObject({ reserved: 0, settled: 0, unresolved: reservation });
   });
 });
 

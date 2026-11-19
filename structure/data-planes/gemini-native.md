@@ -23,10 +23,13 @@ settings. An account with a known omission cannot receive the request. The selec
 token and project come from one snapshot, including after one 401-triggered refresh. Each
 physical send uses provider pacing, reserves one workflow send and rechecks the account's model
 support, pause, reauthentication and removal. The first send advances a configured round-robin
-cursor. Applicable root,
-identity, or pool token-spend ceilings refuse the request with 503 and
-`gemini_native_spend_limits_unsupported`. The native leg does not settle token spend. The
-destination policy checks the base URL and redirects remain manual. Only proxy-constructed
+cursor. The native leg uses the [shared spend tracker](../transports/responses-spend.md) for
+root, OAuth account and provider-pool token ceilings. It reserves an estimate of the original
+JSON input and the supplied output ceiling per candidate. A 401 replay needs fresh capacity.
+An applicable ceiling that cannot admit the reservation returns a Gemini-shaped 429 with
+`workflow_spend_exhausted`. The final request log settles reported input and output usage,
+including reasoning. Sends without final usage retain unresolved spend at the reservation size.
+The destination policy checks the base URL and redirects remain manual. Only proxy-constructed
 headers and the bound OAuth credential go upstream.
 
 `src/server/gemini-native-wire.ts` validates the JSON object and embeds the original request

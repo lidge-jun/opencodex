@@ -15,7 +15,11 @@ import { reserveWorkflowSend } from "../lib/workflow-budget";
 import { currentWorkflowBudgetPolicy } from "../lib/workflow-budget-config";
 import { spendPolicyFromConfig } from "../lib/spend-reservation-ledger";
 import { carryWorkflowRefusal, workflowRefusalResponse } from "./workflow-refusal";
-import { geminiErrorBody } from "./gemini-inbound";
+import { geminiErrorBody, toGeminiRefusal } from "./gemini-inbound";
+import { estimateTokens } from "../lib/token-estimate";
+import { createPhysicalSendReporter } from "../lib/request-execution-budget";
+import { createInferenceSendBudget } from "./inference/context";
+import { attachRequestSpendTracker } from "./responses/request-spend";
 import { markLocalRequestLogRefusal, type RequestLogContext } from "./request-log";
 import { recordGenerationOutput } from "./request-log-generation-window";
 import { noteCredentialAttemptSend, sealCredentialRefusal } from "./credential-recovery-attempt";
@@ -28,7 +32,6 @@ import { containsGeminiCredential, geminiNativeReasoningFields, geminiSseTransfo
 
 export const GEMINI_NATIVE_PROVIDER = "google-antigravity";
 class NativeWorkflowSendDenied extends Error {}
-class NativeSpendLimitsUnsupported extends Error {}
 class NativeRequestBodyTimeout extends Error {}
 class NativeConfigurationInvalid extends Error {}
 class NativeModelUnavailable extends Error {}
@@ -61,17 +64,13 @@ export async function handleGeminiNative(
   lease: ActiveTurnLease, deps: GeminiNativeDeps = { ...defaults, fetch: globalThis.fetch }, logCtx?: RequestLogContext, start?: number,
 ): Promise<Response> {
   const rootId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
-  // This source-preserving path does not yet book or settle token spend. Refuse applicable
-  // ceilings rather than allowing an unmeasured request to escape the common ledger.
-  const spendUnsupported = () => {
+  if (!logCtx) {
     const policy = spendPolicyFromConfig(config.spend);
-    return policy.identity.maxTokens !== undefined || policy.pool.maxTokens !== undefined
-      || rootId !== undefined && policy.root.maxTokens !== undefined;
-  };
-  const unsupportedSpend = () => geminiNativeError(503,
-    "Gemini native requests do not support configured token spend limits; use a translated OC route",
-    "gemini_native_spend_limits_unsupported");
-  if (spendUnsupported()) return unsupportedSpend();
+    if (policy.identity.maxTokens !== undefined || policy.pool.maxTokens !== undefined
+      || (rootId !== undefined && policy.root.maxTokens !== undefined)) {
+      return geminiNativeError(503, "Token budget accounting is unavailable for this request");
+    }
+  }
   const provider = config.providers[GEMINI_NATIVE_PROVIDER];
   if (!provider || provider.disabled === true) return geminiNativeError(503, "Enable google-antigravity and sign in before using Gemini native requests");
   if (provider.adapter !== "google" || (provider.authMode && provider.authMode !== "oauth") || (provider.googleMode && provider.googleMode !== "cloud-code-assist")) {
@@ -124,6 +123,8 @@ export async function handleGeminiNative(
     recordGenerationOutput(logCtx, now);
     if (visible) logCtx.firstOutputMs ??= Math.max(0, now - start);
   } : undefined;
+  const spendTracker = logCtx ? attachRequestSpendTracker(req, logCtx) : undefined;
+  const physicalBudget = logCtx ? createInferenceSendBudget(req, logCtx) : undefined;
   let upstream: Response | undefined;
   try {
     const maxBytes = Math.min(GEMINI_NATIVE_MAX_BYTES, config.maxInboundBodyBytes ?? GEMINI_NATIVE_MAX_BYTES);
@@ -148,7 +149,18 @@ export async function handleGeminiNative(
     let reasoning: ReturnType<typeof geminiNativeReasoningFields> | undefined;
     try {
       const payload = validateGeminiObject(raw);
-      if (logCtx) reasoning = geminiNativeReasoningFields(payload, model);
+      if (logCtx) {
+        reasoning = geminiNativeReasoningFields(payload, model);
+        const generation = (payload.generationConfig ?? payload.generation_config) as Record<string, unknown> | undefined;
+        const maxOutput = generation?.maxOutputTokens ?? generation?.max_output_tokens;
+        const candidates = generation?.candidateCount ?? generation?.candidate_count;
+        const candidateCount = typeof candidates === "number" && Number.isSafeInteger(candidates) && candidates > 0 ? candidates : 1;
+        // Measure the native JSON for reservation only. Usage comes from the upstream response.
+        logCtx.spendInputEstimateTokens = estimateTokens(raw, model);
+        if (typeof maxOutput === "number" && Number.isSafeInteger(maxOutput) && maxOutput > 0) {
+          logCtx.spendOutputCeilingTokens = Math.min(Number.MAX_SAFE_INTEGER, maxOutput * candidateCount);
+        }
+      }
     } catch { finish(); return geminiNativeError(400, "Expected a Gemini JSON object"); }
     ac.signal.throwIfAborted();
     const clientModel = clientFacingModelLabel(logCtx?.requestedModel ?? model);
@@ -164,7 +176,7 @@ export async function handleGeminiNative(
       } catch { throw new NativeConfigurationInvalid(); }
       const method = streamFormat ? "streamGenerateContent?alt=sse" : "generateContent";
       const slot = await waitForProviderRequestSlot(GEMINI_NATIVE_PROVIDER, provider, model, ac.signal);
-      upstream = await sendTrackingRequestSlot(slot, () => {
+      upstream = await sendTrackingRequestSlot(slot, async () => {
         ac.signal.throwIfAborted();
         // A pacing wait must not outlive an operator pause, reauth mark or account removal.
         const account = getAccountCredentialWithStatus(GEMINI_NATIVE_PROVIDER, access.accountId);
@@ -173,8 +185,6 @@ export async function handleGeminiNative(
         if (account.needsReauth) throw new OAuthLoginRequiredError(GEMINI_NATIVE_PROVIDER);
         const refusal = antigravityModelRefusal(accountConfig, GEMINI_NATIVE_PROVIDER, access.accountId, model, undefined, clientModel);
         if (refusal) throw new NativeModelUnavailable(refusal);
-        if (spendUnsupported()) throw new NativeSpendLimitsUnsupported();
-        if (!reserveWorkflowSend(rootId, currentWorkflowBudgetPolicy())) throw new NativeWorkflowSendDenied();
         const { credential } = account;
         // Keep both generations across a 401 recovery. The store can also rotate during pacing.
         for (const value of [access.accessToken, access.projectId, access.accountId, credential.access,
@@ -182,22 +192,35 @@ export async function handleGeminiNative(
           if (value) boundCredentials.add(value);
         }
         const body = wrapGeminiRequest(raw, model, access.projectId!);
-        if (attempt === 0 && isProactivePreferenceEnabled(accountConfig, GEMINI_NATIVE_PROVIDER, Date.now())) {
-          noteGenericPoolSelection(accountConfig, GEMINI_NATIVE_PROVIDER, access.accountId, model);
+        if (logCtx) stampOAuthAccountLabel(logCtx, GEMINI_NATIVE_PROVIDER, { authMode: "oauth" }, access.accountId);
+        const report = physicalBudget && createPhysicalSendReporter(physicalBudget, () => ({
+          poolId: GEMINI_NATIVE_PROVIDER, identityId: logCtx?.accountLogLabel,
+        }));
+        let dispatched = false;
+        try {
+          if (report ? !report.beforeSend?.(attempt > 0) : !reserveWorkflowSend(rootId, currentWorkflowBudgetPolicy())) {
+            throw new NativeWorkflowSendDenied();
+          }
+          if (attempt === 0 && isProactivePreferenceEnabled(accountConfig, GEMINI_NATIVE_PROVIDER, Date.now())) {
+            noteGenericPoolSelection(accountConfig, GEMINI_NATIVE_PROVIDER, access.accountId, model);
+          }
+          if (logCtx) {
+            Object.assign(logCtx, reasoning);
+            markNativeGeminiProtocol(logCtx);
+            noteCredentialAttemptSend(logCtx, { providerName: GEMINI_NATIVE_PROVIDER, modelId: model }, provider,
+              attempt === 0 ? undefined : "oauth-401");
+            Object.assign(logCtx.activeAttempt!, reasoning);
+          }
+          dispatched = true;
+          return await fetchWithAttemptDeadline(`${baseUrl.replace(/\/$/, "")}/v1internal:${method}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${access.accessToken}`, "User-Agent": antigravityUserAgentForWireModel(model) },
+            body,
+          }, config.connectTimeoutMs ?? 200_000, ac.signal, true, deps.fetch);
+        } finally {
+          try { if (dispatched) report?.(1); }
+          finally { report?.close?.(); }
         }
-        if (logCtx) {
-          Object.assign(logCtx, reasoning);
-          stampOAuthAccountLabel(logCtx, GEMINI_NATIVE_PROVIDER, { authMode: "oauth" }, access.accountId);
-          markNativeGeminiProtocol(logCtx);
-          noteCredentialAttemptSend(logCtx, { providerName: GEMINI_NATIVE_PROVIDER, modelId: model }, provider,
-            attempt === 0 ? undefined : "oauth-401");
-          Object.assign(logCtx.activeAttempt!, reasoning);
-        }
-        return fetchWithAttemptDeadline(`${baseUrl.replace(/\/$/, "")}/v1internal:${method}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${access.accessToken}`, "User-Agent": antigravityUserAgentForWireModel(model) },
-          body,
-        }, config.connectTimeoutMs ?? 200_000, ac.signal, true, deps.fetch);
       });
       if (upstream.status !== 401 || attempt === 1) break;
       if (logCtx) sealCredentialRefusal(logCtx, 401, "oauth-401");
@@ -276,8 +299,12 @@ export async function handleGeminiNative(
       }
       return geminiNativeError(403, error.message, "gemini_native_model_unlisted");
     }
-    if (error instanceof NativeSpendLimitsUnsupported) return unsupportedSpend();
     if (error instanceof NativeWorkflowSendDenied) {
+      const denial = spendTracker?.lastRefusal;
+      if (denial) {
+        const refusal = workflowRefusalResponse(denial.reason, logCtx, undefined, undefined, denial.spend);
+        return carryWorkflowRefusal(refusal, toGeminiRefusal(refusal));
+      }
       const refusal = workflowRefusalResponse("workflow-sends-exhausted", logCtx, undefined, rootId);
       return carryWorkflowRefusal(refusal, geminiNativeError(429, "OpenCodex workflow physical-send budget exhausted"));
     }

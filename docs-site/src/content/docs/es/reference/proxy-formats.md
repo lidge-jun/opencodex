@@ -685,7 +685,9 @@ Envía JSON con codificación `identity`. El cuerpo de la solicitud, la respuest
 en búfer y cada evento SSE tienen un límite de 16 MiB. Si `maxInboundBodyBytes` es menor,
 se aplica a la solicitud. La inactividad durante la carga tiene su propio tiempo de
 espera. El envío inicial y un reintento como máximo tras un 401 de la misma cuenta cuentan
-para el límite de envíos del flujo. Un límite de tokens aplicable al flujo raíz, a la
-identidad o al grupo devuelve 503 con `gemini_native_spend_limits_unsupported` porque el
-transporte nativo no contabiliza los tokens. Desactiva la opción para contabilizarlos en
-esta ruta de Gemini.
+para el límite de envíos del flujo. Para los presupuestos de tokens del flujo raíz, la
+identidad y el grupo, cada envío reserva una estimación de la entrada y el valor solicitado
+de `maxOutputTokens` por candidato. Un presupuesto insuficiente devuelve 429 con
+`workflow_spend_exhausted`. Las solicitudes completadas se contabilizan con los recuentos
+de entrada y salida que informa Gemini. Un envío sin datos de uso finales conserva el
+importe de la reserva como consumo sin resolver.

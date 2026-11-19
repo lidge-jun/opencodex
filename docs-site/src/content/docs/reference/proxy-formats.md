@@ -1183,6 +1183,8 @@ Gemini error. A valid upstream `[DONE]` or a Gemini error ends stream delivery.
 Send identity-encoded JSON. Request and buffered response bodies and SSE events have a
 16 MiB cap. A lower `maxInboundBodyBytes` also applies to requests. Upload inactivity has
 its own timeout. The first send and up to one 401 recovery on the same account count
-against workflow physical-send ceilings. Applicable root, identity, or pool token ceilings
-return 503 with `gemini_native_spend_limits_unsupported` because native token spend is
-unreported. Turn off the opt-in to use token-spend accounting on this Gemini route.
+against workflow physical-send ceilings. For root, identity, and pool token budgets, each
+send reserves estimated input and the requested `maxOutputTokens` for each candidate.
+An insufficient budget returns 429 with `workflow_spend_exhausted`. Completed requests
+settle against Gemini's reported input and output counts. A send without final usage retains
+its reservation amount as unresolved spend.
