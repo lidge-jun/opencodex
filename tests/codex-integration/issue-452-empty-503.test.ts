@@ -216,6 +216,8 @@ async function withPoolPassthrough(
       openai: {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
+        // This canonical URL is redirected to the owned loopback server by the fetch fixture.
+        proxy: "direct",
         authMode: "forward",
         codexAccountMode: "pool",
       },
@@ -264,15 +266,19 @@ describe("passthrough empty 503 (#452)", () => {
     );
   });
 
-  test("oversized passthrough errors become bounded status-only JSON", async () => {
+  test("oversized passthrough errors become bounded status-only JSON without inviting replay", async () => {
     const hostilePrefix = "do-not-relay-this-prefix";
     const body = hostilePrefix + "x".repeat(BOUNDED_BODY_MAX_BYTES + 1);
+    let upstreamSends = 0;
     await withPoolPassthrough(
-      () => new Response(body, {
-        status: 418,
-        statusText: "Upstream Teapot",
-        headers: { "content-type": "text/plain", "retry-after": "4" },
-      }),
+      () => {
+        upstreamSends++;
+        return new Response(body, {
+          status: 418,
+          statusText: "Upstream Teapot",
+          headers: { "content-type": "text/plain", "retry-after": "4" },
+        });
+      },
       async (serverUrl) => {
         const response = await originalGlobalFetch(new URL("/v1/responses", serverUrl), {
           method: "POST",
@@ -281,7 +287,8 @@ describe("passthrough empty 503 (#452)", () => {
         });
         expect(response.status).toBe(418);
         expect(response.headers.get("content-type")).toContain("application/json");
-        expect(response.headers.get("retry-after")).toBe("4");
+        expect(response.headers.get("retry-after")).toBeNull();
+        expect(response.headers.get("x-should-retry")).toBe("false");
         const text = await response.text();
         expect(text.length).toBeLessThan(1_024);
         expect(text).not.toContain(hostilePrefix);
@@ -289,6 +296,7 @@ describe("passthrough empty 503 (#452)", () => {
         expect(json.error?.message).toContain("418");
       },
     );
+    expect(upstreamSends).toBe(1);
   });
 
   test("direct /v1/responses preserves Retry-After on empty-body 429 and 503", async () => {

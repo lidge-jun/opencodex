@@ -45,8 +45,15 @@ auth row; Codex metadata/revision fences use `codexAccountPauseState`; key pools
 auto-pauses store a sibling `pauseEvidence` with the decisive refusal's HTTP `statusCode`
 and optional message. The message comes from `error.message`, with redaction applied before
 and after collapsing whitespace, followed by the 300-character cap. A Cloud Code Assist appeal sentence
-survives when the qualifying message contains it. Structured metadata such as `appeal_url`
-is outside the evidence contract. Older builds can still read the strict `pauseDetails`.
+survives when the qualifying message contains it. A confirmed first-party Cloud Code Assist OAuth
+send can also contribute `appealUrl` and optional `appealText` from the same conclusive ban's
+Google RPC ErrorInfo with reason `TOS_VIOLATION` and domain `cloudcode-pa.googleapis.com`.
+`src/lib/cloud-code-appeal-link.ts` caps the URL at 512 characters and permits HTTPS without userinfo
+or a port on `forms.gle`, `support.google.com`, and `docs.google.com` under `/forms/`.
+It strips fragments and preserves query parameters only on the two forms hosts.
+It bounds the plain-text label to 80 characters. The store reader and dashboard revalidate those fields.
+When the link is first persisted for an account, the process logs a fixed availability notice.
+Older builds can still read the strict `pauseDetails` and any evidence fields they recognize.
 Runtime counters are process-local. Manual resume clears the pause metadata and changes
 the revision (including an already enabled key), fencing already-sent refusals.
 
@@ -143,7 +150,9 @@ Regression coverage: `tests/oauth/oauth-account-auto-pause-revision.test.ts` and
 
 OAuth and Codex account-list DTOs project optional `pauseDetails` (fixed reason plus epoch
 ms timestamp) beside the existing pause flag. The OAuth account list API also returns
-the sibling `pauseEvidence` when present. The CLI preserves `pauseDetails` and includes the
+the sibling `pauseEvidence` when present. The dashboard shows a validated appeal link on the
+paused account row with a localized label when vendor text is absent or rejected.
+The CLI preserves `pauseDetails` and includes the
 reason in account listings. `tests/server/management-account-auto-pause.test.ts` covers the
 OAuth evidence projection and its removal after resume.
 `src/server/management/oauth-account-routes.ts` also serves

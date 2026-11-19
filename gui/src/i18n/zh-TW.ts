@@ -2174,6 +2174,7 @@ export const zhTW: Record<TKey, string> = {
   "codexAuth.pauseFailed": "無法暫停 {email}，未做任何變更。",
   "codexAuth.resumeFailed": "無法恢復 {email}，未做任何變更。",
   "accountPause.tooltip": "{reason} · {date}",
+  "accountPause.submitAppeal": "提交申訴",
   "accountPause.reason.organizationDisabled": "組織已停用",
   "accountPause.reason.permissionDenied": "帳戶權限遭拒",
   "accountPause.reason.subscriptionInactive": "訂閱未啟用",

@@ -12,14 +12,13 @@ import { createTranslatorBudget, isTranslatorBudgetExceededError } from "../lib/
 import type { OcxConfig } from "../types";
 import type { DataPlaneAdmission } from "./auth-cors";
 import { resolveAdmissionModelScope, routeAllowedByScope } from "./admission-model-scope";
-import { handleChatCompletions } from "./chat-completions";
 import { VERSION } from "./management-api";
 import {
   NATIVE_MAX_RETRY_AFTER_SECONDS,
   applyLocalRefusalCode,
   commitCancelled,
   drainedInnerErrorMessage,
-  internalChatRequest,
+  handleNativeChat,
   nativeInnerErrorMessage,
   nativeRefusalParts,
   nativeRetryAfter,
@@ -108,9 +107,11 @@ export async function handleOllamaGeneration(
 ): Promise<Response> {
   const limit = resolveInboundBodyLimitBytes(config.maxInboundBodyBytes);
   const budget = createTranslatorBudget();
+  let originalBody: unknown;
   let chat: Record<string, unknown>;
   try {
-    chat = ollamaToChat(kind, await readJsonRequestBody(req, budget, limit));
+    originalBody = await readJsonRequestBody(req, budget, limit);
+    chat = ollamaToChat(kind, originalBody);
   } catch (error) {
     if (req.signal.aborted) return failBeforeInner(ids, logCtx, 499, "request cancelled");
     if (error instanceof DecompressedBodyTooLargeError) return failBeforeInner(ids, logCtx, 413, "request body too large");
@@ -130,12 +131,11 @@ export async function handleOllamaGeneration(
   const stream = chat.stream === true;
   const chatJson = JSON.stringify(chat);
   if (Buffer.byteLength(chatJson) > limit) return failBeforeInner(ids, logCtx, 413, "request body too large");
-  const internal = internalChatRequest(req, chatJson);
   const finalLog = createNativeFinalLog(ids.requestId, ids.start, logCtx);
   const createdAt = new Date().toISOString();
   let inner: Response;
   try {
-    inner = await handleChatCompletions(internal, config, logCtx, { ...ids, suppressProtocolTrace: true });
+    inner = await handleNativeChat(req, originalBody, chatJson, config, logCtx, ids);
   } catch {
     await finalLog.waitForInner();
     if (req.signal.aborted) return cancelledNonStream(finalLog);

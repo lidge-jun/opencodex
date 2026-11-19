@@ -1,6 +1,7 @@
 import type { AccountPauseEvidence, AccountPauseReason } from "../types/account-auto-pause";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { sanitizeUpstreamErrorText } from "../adapters/upstream-http-error";
+import { normalizeCloudCodeAppealText, normalizeCloudCodeAppealUrl } from "../lib/cloud-code-appeal-link";
 
 /** Only whole, account-scoped messages are authority; model/resource policy errors are not. */
 export function classifyPermanentAccountRefusal(status: number, payload: unknown): AccountPauseReason | undefined {
@@ -58,7 +59,7 @@ export function pauseEvidenceMessage(raw: string): string {
 
 /** `conclusiveOnly` admits only {@link isConclusiveAccountBan}, the Cloud Code Assist default. */
 export async function permanentAccountRefusalEvidence(
-  response: Response, signal?: AbortSignal, conclusiveOnly = false,
+  response: Response, signal?: AbortSignal, conclusiveOnly = false, firstPartyCloudCodeSend = false,
 ): Promise<PermanentAccountRefusalEvidence | undefined> {
   if (response.status !== 401 && response.status !== 403) return;
   try {
@@ -66,14 +67,32 @@ export async function permanentAccountRefusalEvidence(
       maxBytes: 16_384, totalTimeoutMs: 250, inactivityTimeoutMs: 250 });
     if (!body.displaySafe || body.truncated) return;
     const payload: unknown = JSON.parse(body.text);
-    const reason = conclusiveOnly
-      ? isConclusiveAccountBan(response.status, payload) ? "account_permission_denied" : undefined
-      : classifyPermanentAccountRefusal(response.status, payload);
+    const conclusiveBan = (conclusiveOnly || firstPartyCloudCodeSend) && isConclusiveAccountBan(response.status, payload);
+    const reason = conclusiveBan ? "account_permission_denied"
+      : conclusiveOnly ? undefined : classifyPermanentAccountRefusal(response.status, payload);
     if (!reason) return;
-    const raw = (payload as { error?: { message?: unknown } }).error?.message;
+    const error = (payload as { error?: { message?: unknown; details?: unknown } }).error;
+    const raw = error?.message;
     const message = typeof raw === "string" ? pauseEvidenceMessage(raw) : "";
-    return { reason, statusCode: response.status, ...(message ? { message } : {}) };
+    const appeal = firstPartyCloudCodeSend && conclusiveBan ? cloudCodeAppealEvidence(error?.details) : undefined;
+    return { reason, statusCode: response.status, ...(message ? { message } : {}), ...appeal };
   } catch { return; }
+}
+
+function cloudCodeAppealEvidence(details: unknown): Pick<AccountPauseEvidence, "appealUrl" | "appealText"> | undefined {
+  if (!Array.isArray(details)) return;
+  for (const candidate of details as unknown[]) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+    const detail = candidate as Record<string, unknown>;
+    if (detail["@type"] !== "type.googleapis.com/google.rpc.ErrorInfo"
+      || detail.reason !== "TOS_VIOLATION" || detail.domain !== "cloudcode-pa.googleapis.com") continue;
+    if (!detail.metadata || typeof detail.metadata !== "object" || Array.isArray(detail.metadata)) continue;
+    const metadata = detail.metadata as Record<string, unknown>;
+    const appealUrl = normalizeCloudCodeAppealUrl(metadata.appeal_url);
+    if (!appealUrl) continue;
+    const appealText = normalizeCloudCodeAppealText(metadata.appeal_url_link_text);
+    return { appealUrl, ...(appealText ? { appealText } : {}) };
+  }
 }
 
 export async function permanentAccountRefusal(response: Response, signal?: AbortSignal, conclusiveOnly = false): Promise<AccountPauseReason | undefined> {

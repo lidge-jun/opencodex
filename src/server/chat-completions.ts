@@ -132,15 +132,22 @@ async function readChatBody(req: Request, budget: TranslatorBudget, maxBytes: nu
   }
 }
 
+interface ChatCompletionsRequestOptions {
+  requestId: string;
+  start: number;
+  turnAdmissionLease?: AdmissionLease;
+  admission?: DataPlaneAdmission;
+  advisorAdmissionPolicy?: CapturedAdmissionPolicy;
+  suppressProtocolTrace?: boolean;
+  /** Turn classification from the original native HTTP request before Chat translation. */
+  agyAcpUnattendedHttpTurn?: boolean;
+}
+
 export async function handleChatCompletions(
   req: Request,
   config: OcxConfig,
   logCtx: RequestLogContext,
-  logIds?: {
-    requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission;
-    advisorAdmissionPolicy?: CapturedAdmissionPolicy;
-    suppressProtocolTrace?: boolean;
-  },
+  logIds?: ChatCompletionsRequestOptions,
 ): Promise<Response> {
   if (logIds?.suppressProtocolTrace) suppressProtocolTrace(logCtx);
   // Set before routing so pre-dispatch refusals stay correlated. A Hermes-only id is marked as a
@@ -175,10 +182,7 @@ async function handleChatCompletionsWithBudget(
   config: OcxConfig,
   logCtx: RequestLogContext,
   translatorBudget: TranslatorBudget,
-  logIds?: {
-    requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission;
-    advisorAdmissionPolicy?: CapturedAdmissionPolicy;
-  },
+  logIds?: ChatCompletionsRequestOptions,
 ): Promise<Response> {
   const advisorInternal = isInternalCallCapability(req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER));
   const sidecarCapability = req.headers.get(SIDECAR_INTERNAL_CAPABILITY_HEADER);
@@ -502,7 +506,8 @@ async function handleChatCompletionsWithBudget(
   // Caller-owned only: stored-main enrichment below is sidecar authority, never Direct authority.
   const callerDirectAuth = captureCallerDirectAuth(req.headers, config);
   let openAiSidecarAuth = nativeCallerAuth;
-  const agyAcpUnattendedHttpTurn = isUnattendedAgyAcpHttpTurn(req.headers, chatBody);
+  const agyAcpUnattendedHttpTurn = logIds?.agyAcpUnattendedHttpTurn === true
+    || isUnattendedAgyAcpHttpTurn(req.headers, chatBody);
   const headers = new Headers({ "content-type": "application/json" });
   // Internal bridge metadata; the Go resolver scopes and hashes it before upstream use.
   const openCodeSession = req.headers.get("x-opencode-session");
