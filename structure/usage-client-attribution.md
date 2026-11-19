@@ -1,5 +1,7 @@
 # Usage client attribution
 
+The [scoped Hub management relay](remote-link.md#hub-transport-relay) uses the same enrolled-key usage projection as `GET /v1/usage`, including post-read authorization and omission of account breakdowns and ledger-wide window metadata.
+
 `src/usage/client.ts` defines the closed client-attribution roster and recognizes bounded
 request-header signatures without retaining the header values. HTTP request contexts in
 `src/server/index/` and the Responses WebSocket handshake carry that observational label through

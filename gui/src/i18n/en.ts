@@ -2,6 +2,7 @@ import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
+import { gatewayClientsCopy } from "./gateway-clients-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -138,6 +139,7 @@ export const en = {
   ...shellV2Copy("en"),
   ...codexCliUpdateCopy("en"),
   ...remoteLinkDiagnosticsCopy("en"),
+  ...gatewayClientsCopy("en"),
   ...modelsV2Copy("en"),
   ...accountsV2Copy("en"),
   ...subagentsV2Copy("en"),
@@ -778,11 +780,13 @@ export const en = {
   "dash.updateCurrent": "Up to date",
   "dash.updateCommand": "Command",
   "dash.updateSource": "This is a source checkout. Update it from the terminal with the shown command.",
+  "dash.updateManaged": "Updates are automatic. This release directory is updated by the host's scheduled updater; no action is needed here.",
   "dash.updateUnavailable": "Could not read the latest version from npm. Try again later.",
   "dash.updateRetry": "Retry",
   "dash.updateRecheck": "Re-check",
   "dash.updateCannotAuto": "One-click update is unavailable ({reason}).",
   "dash.updateReason.source_checkout": "source checkout",
+  "dash.updateReason.managed_release": "managed release directory",
   "dash.updateReason.latest_unavailable": "npm registry unreachable",
   "dash.updateReason.already_latest": "already on latest",
   "dash.updateReason.externally_managed": "managed externally by mise; run the shown command",

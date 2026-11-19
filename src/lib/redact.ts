@@ -1,6 +1,7 @@
 import { foldForMatching } from "./redact-folding";
 
 export const REDACTED_SECRET = "[REDACTED]";
+const HUB_RELAY_TOKEN_PATTERN = /ocx_hub_relay_[A-Za-z0-9_-]{43}/g;
 
 // Minted management, dashboard, catalog-read, device/pairing, data-plane and Remote Workspace credential values.
 // Match inside quoted strings and identifiers as well as standalone tokens.
@@ -15,7 +16,7 @@ export function redactOpenCodexCredentials(value: string): string {
  * credentials over an unsafe channel (e.g. plaintext non-loopback HTTP) rather than
  * re-deriving a narrower local list.
  */
-export const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-cookie|set-cookie2|api[-_]?key|x-api-key|x-goog-api-key|x-amz-security-token|x-dsh-auth-token|x-openai-agent-assertion|copilot[-_]?session[-_]?token|session[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|client[-_]?secret|password|profile[-_]?arn|exa[-_]?api[-_]?key)$/i;
+export const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-cookie|set-cookie2|api[-_]?key|x-api-key|x-opencodex-api-key|x-goog-api-key|x-amz-security-token|x-dsh-auth-token|x-openai-agent-assertion|copilot[-_]?session[-_]?token|session[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|client[-_]?secret|password|profile[-_]?arn|exa[-_]?api[-_]?key)$/i;
 
 /**
  * Colon-labelled credential headers echoed back inside an error body
@@ -48,7 +49,7 @@ export const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cook
 // Every letter position also accepts \u0001, the placeholder the fold emits for
 // an unresolved HTML named reference: `author&ii;zation` is the label with one
 // character we cannot name, and that is still the label.
-const CREDENTIAL_HEADER_LABEL_RAW = "copilot[_-]?session[_-]?token|session[_-]?token|sessionToken|x-openai-agent-assertion|x-api-key|x-goog-api-key|x-amz-security-token|x-dsh-auth-token|api[_-]?key|apiKey|exa[_-]?api[_-]?key|exaApiKey|access[_-]?token|accessToken|refresh[_-]?token|refreshToken|id[_-]?token|client[_-]?secret|clientSecret|authorization|proxy-authorization|cookie|set-cookie|password|secret|token";
+const CREDENTIAL_HEADER_LABEL_RAW = "copilot[_-]?session[_-]?token|session[_-]?token|sessionToken|x-openai-agent-assertion|x-api-key|x-opencodex-api-key|x-goog-api-key|x-amz-security-token|x-dsh-auth-token|api[_-]?key|apiKey|exa[_-]?api[_-]?key|exaApiKey|access[_-]?token|accessToken|refresh[_-]?token|refreshToken|id[_-]?token|client[_-]?secret|clientSecret|authorization|proxy-authorization|cookie|set-cookie|password|secret|token";
 
 const CREDENTIAL_HEADER_LABEL = CREDENTIAL_HEADER_LABEL_RAW
   .replace(/(?<![\[\\])([A-Za-z])(?![\]\-])/g, "[$1\u0001]");
@@ -169,7 +170,8 @@ function findXmlTagClose(text: string, from: number): number {
 
 /** Scan each tag once; a suffix-searching lookahead here makes unterminated tags quadratic. */
 function maskXmlIdentifyingAttribute(value: string, decodeEscapes: boolean): string {
-  const { folded, map } = foldForMatching(value, decodeEscapes);
+  const view = foldForMatching(value, decodeEscapes);
+  const { folded } = view;
   let searchFrom = 0;
   while (searchFrom < folded.length) {
     const relativeStart = folded.indexOf("<", searchFrom);
@@ -185,8 +187,8 @@ function maskXmlIdentifyingAttribute(value: string, decodeEscapes: boolean): str
     const tagEnd = close === -1 ? folded.length : close + 1;
     const attributes = folded.slice(tagStart + tagName[0].length, tagEnd);
     if (XML_CREDENTIAL_ATTRIBUTE.test(attributes)) {
-      const start = map[tagStart] ?? value.length;
-      const headEnd = map[tagStart + tagName[0].length] ?? value.length;
+      const start = view.map[tagStart] ?? value.length;
+      const headEnd = view.map[tagStart + tagName[0].length] ?? value.length;
       return value.slice(0, start) + value.slice(start, headEnd) + REDACTED_SECRET;
     }
     if (close === -1) return value;
@@ -202,23 +204,24 @@ function maskOtherFramingsOnce(value: string, decodeEscapes: boolean): string {
       current = maskMultipartOnce(current, decodeEscapes, pattern);
       continue;
     }
-    const { folded, map } = foldForMatching(current, decodeEscapes);
+    const view = foldForMatching(current, decodeEscapes);
+    const { folded } = view;
     pattern.lastIndex = 0;
     let out = "";
     let cursor = 0;
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(folded)) !== null) {
-      const start = map[match.index] ?? current.length;
-      const end = map[match.index + match[0].length] ?? current.length;
+      const start = view.map[match.index] ?? current.length;
+      const end = view.map[match.index + match[0].length] ?? current.length;
       if (start < cursor) continue;
       const head = (() => {
         if (kind === "=") {
           const eq = match[0].indexOf("=");
-          const headEnd = map[match.index + eq + 1] ?? end;
+          const headEnd = view.map[match.index + eq + 1] ?? end;
           return current.slice(start, headEnd);
         }
         const captured = match[1] ?? "";
-        const headEnd = map[match.index + captured.length] ?? end;
+        const headEnd = view.map[match.index + captured.length] ?? end;
         return current.slice(start, headEnd);
       })();
       const body = current.slice(start + head.length, end);
@@ -240,7 +243,8 @@ function maskOtherFramingsOnce(value: string, decodeEscapes: boolean): string {
  * so the search resumes past the line instead of rescanning it from each candidate.
  */
 function maskMultipartOnce(current: string, decodeEscapes: boolean, partHeader: RegExp): string {
-  const { folded, map } = foldForMatching(current, decodeEscapes);
+  const view = foldForMatching(current, decodeEscapes);
+  const { folded } = view;
   partHeader.lastIndex = 0;
   let lineEnd = -1;
   for (let match = partHeader.exec(folded); match !== null; match = partHeader.exec(folded)) {
@@ -257,9 +261,9 @@ function maskMultipartOnce(current: string, decodeEscapes: boolean, partHeader: 
     }
     const blank = folded[headEnd] === "\n" ? 1 : folded[headEnd] === "\r" && folded[headEnd + 1] === "\n" ? 2 : 0;
     if (headEnd + blank < folded.length) headEnd += blank;
-    const start = map[match.index] ?? current.length;
-    const end = map[folded.length] ?? current.length;
-    const head = current.slice(start, map[headEnd] ?? end);
+    const start = view.map[match.index] ?? current.length;
+    const end = view.map[folded.length] ?? current.length;
+    const head = current.slice(start, view.map[headEnd] ?? end);
     if (!current.slice(start + head.length, end).trim()) return current;
     return current.slice(0, start) + head + REDACTED_SECRET;
   }
@@ -282,14 +286,15 @@ function maskCredentialHeaders(value: string): string {
 }
 
 function maskCredentialHeadersOnce(value: string, decodeEscapes: boolean): string {
-  const { folded, map } = foldForMatching(value, decodeEscapes);
+  const view = foldForMatching(value, decodeEscapes);
+  const { folded } = view;
   COLON_LABELLED_CREDENTIAL.lastIndex = 0;
   let out = "";
   let cursor = 0;
   let match: RegExpExecArray | null;
   while ((match = COLON_LABELLED_CREDENTIAL.exec(folded)) !== null) {
-    const start = map[match.index] ?? value.length;
-    const afterLabel = map[match.index + match[0].length] ?? value.length;
+    const start = view.map[match.index] ?? value.length;
+    const afterLabel = view.map[match.index + match[0].length] ?? value.length;
     if (start < cursor) continue;
     const lineEnd = (() => {
       const nl = value.slice(afterLabel).search(/[\r\n]/);
@@ -331,6 +336,7 @@ function maskCredentialHeadersOnce(value: string, decodeEscapes: boolean): strin
 }
 
 const SECRET_VALUE_PATTERNS: Array<[RegExp, string] | ((value: string) => string)> = [
+  [HUB_RELAY_TOKEN_PATTERN, REDACTED_SECRET],
   // A Bearer token outside a labelled header (prose, JSON fragments, logs).
   // Horizontal whitespace only: `\s+` crossed line boundaries and masked the
   // first word of the NEXT line when a header was quoted with a trailing break.
@@ -405,7 +411,11 @@ function isSensitiveKey(key: string): boolean {
 }
 
 export function redactSecretString(value: string): string {
-  let redacted = redactOpenCodexCredentials(maskOtherFramings(maskCredentialHeaders(value)));
+  // Every labelled grammar needs ':', '=' or '<'. Only literal ASCII without escape introducers
+  // can rule those out before folding; encoded or Unicode aliases must keep both matching views.
+  // Minted OpenCodex credentials need no label, so their mask runs on both paths.
+  let redacted = redactOpenCodexCredentials(/[<:=\\%&]|[^\x00-\x7f]/.test(value)
+    ? maskOtherFramings(maskCredentialHeaders(value)) : value);
   for (const rule of SECRET_VALUE_PATTERNS) {
     redacted = typeof rule === "function" ? rule(redacted) : redacted.replace(rule[0], rule[1]);
   }
@@ -457,7 +467,7 @@ export function redactUrlForLog(url: string): string {
     parsed.password = "";
     parsed.search = "";
     parsed.hash = "";
-    return parsed.toString();
+    return parsed.toString().replace(HUB_RELAY_TOKEN_PATTERN, REDACTED_SECRET);
   } catch {
     return redactSecretString(url.split("?")[0] ?? url);
   }

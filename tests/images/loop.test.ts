@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -108,6 +108,38 @@ beforeEach(() => {
 });
 
 describe.each(["runTurn", "parseStream"] as const)("image-loop collection bounds — %s", mode => {
+  test("explicit zero media-bridge budgets arm no model deadlines", async () => {
+    useRealProgressStream = true;
+    const timer = spyOn(globalThis, "setTimeout");
+    const events: AdapterEvent[] = [{ type: "text_delta", text: "zero budget response" }, { type: "done" }];
+    let forwardedHeaderBudget: number | undefined;
+    const adapter: ProviderAdapter = {
+      ...mockAdapter,
+      ...(mode === "runTurn" ? {
+        runTurn: async (_parsed, _incoming, emit) => { for (const event of events) emit(event); },
+      } : {
+        fetchResponse: async (_request, options) => {
+          forwardedHeaderBudget = options?.timeoutMs;
+          return new Response("fixture body");
+        },
+        async *parseStream(response) {
+          await response.text();
+          yield* events;
+        },
+      }),
+    };
+    try {
+      const response = await runWithImageBridge({
+        parsed: makeParsed(), plan, adapter, connectTimeoutMs: 0, stallTimeoutSec: 0,
+      });
+      expect(await response.text()).toContain("zero budget response");
+      expect(timer.mock.calls.map(([, delay]) => delay).filter(delay => delay === 200_000)).toEqual([]);
+      if (mode === "parseStream") expect(forwardedHeaderBudget).toBe(0);
+    } finally {
+      timer.mockRestore();
+    }
+  });
+
   beforeEach(() => { useRealProgressStream = true; });
 
   function streamingAdapter(events: () => Generator<AdapterEvent>) {

@@ -129,6 +129,8 @@ döngüsünün bir parçası değildir.
 
 ## `anthropic`
 
+İsteğe bağlı OAuth uyumluluğu ve sistem talimatlarının önceliğini kaybetmesi için [İngilizce kaynak belgeye](/reference/adapters/#anthropic) bakın.
+
 **Hedefler:** Anthropic **Messages** (`/v1/messages`).
 **Kimlik Doğrulama:** `key` (varsayılan olarak `x-api-key` veya
 `apiKeyTransport: "bearer"` ile `Authorization: Bearer`) veya `oauth` (Claude

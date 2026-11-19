@@ -587,6 +587,9 @@ export async function prepareResponsesRequest(
       parsed._anthropicInbound = true;
       if (parsed.options.textFormat?.type === "json_schema") parsed._structuredOutputConformance = true;
     }
+    if (options.advisorInternal || options.internalSidecarCall || options.internalDecisionCall) {
+      parsed._proxyOwnedSystemPrompt = true;
+    }
     // Codex's own "new" turn metadata, for the experimental Anthropic perMessageEffort option (#6895).
     parsed._codexNewHistory = codexTurnStartsNewHistory(body, req.headers, options.inboundTransport);
     parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort;
@@ -1260,6 +1263,7 @@ export async function prepareResponsesRequest(
             "_nativeReasoningRetention",
             "_cursorIsolateConversation",
             "_codexNewHistory",
+            "_proxyOwnedSystemPrompt",
           ];
           for (const key of kept) {
             if (parsed[key] !== undefined) {

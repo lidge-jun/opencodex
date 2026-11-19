@@ -553,6 +553,17 @@ const canSymlink = (() => {
     expect(JSON.parse(probe.stdout.trim())).toEqual(["rejected", "rejected"]);
   });
 
+  test.each(["undefined", "./undefined"])("rejects an accidental literal config home (%s)", home => {
+    const priorHome = process.env.OPENCODEX_HOME;
+    try {
+      process.env.OPENCODEX_HOME = home;
+      expect(() => getConfigDir()).toThrow(/OPENCODEX_HOME/);
+    } finally {
+      if (priorHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = priorHome;
+    }
+  });
+
   test("the preload sandboxes this very process", () => {
     expect(isTestHomeGuardArmed()).toBe(true);
     expect(process.env.OCX_TEST_PRELOAD_PID).toBe(String(process.pid));

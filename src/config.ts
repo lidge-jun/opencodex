@@ -113,6 +113,7 @@ export {
 } from "./config/proxy-env";
 export {
   requestPacingConfigError,
+  providerTimeoutOverrideConfigError,
   providerWebSearchBridgeConfigError,
   providerModelCostsConfigError,
   sanitizeModelCostsForDisplay,

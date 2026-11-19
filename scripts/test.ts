@@ -26,15 +26,16 @@ export interface IsolatedTestEnvironment {
 }
 
 /**
- * Credentials of the developer's own OpenCodex install that the sandbox must not inherit. A
+ * Settings from the developer's own OpenCodex install that the sandbox must not inherit. A
  * Windows install stores its data-plane token as a user environment variable, so every shell on
  * that machine carries it; a test that then builds a service definition or starts a proxy reads
  * the live token instead of its fixture and fails only on a developer machine.
  */
-export const LIVE_INSTALL_CREDENTIAL_ENV = [
+export const LIVE_INSTALL_ENV = [
   "OPENCODEX_API_AUTH_TOKEN",
   "OPENCODEX_ADMIN_AUTH_TOKEN",
   "OCX_API_TOKEN_FILE",
+  "OCX_MANAGED_RELEASE",
 ] as const;
 
 export function createIsolatedTestEnvironment(
@@ -71,7 +72,7 @@ export function createIsolatedTestEnvironment(
   }
   writeTestTempOwner(root, baseEnv[TEST_RUN_ID_ENV]);
   const inherited = { ...baseEnv };
-  for (const name of LIVE_INSTALL_CREDENTIAL_ENV) delete inherited[name];
+  for (const name of LIVE_INSTALL_ENV) delete inherited[name];
   // A GIT_DIR/GIT_WORK_TREE inherited from a hook or wrapper re-points every git command the suite
   // spawns, and fixture helpers then init, configure and commit into that repository. Starting the
   // children without them also covers Bun.spawn calls that pass no env (scripts/git-repository-env.ts).
@@ -431,6 +432,11 @@ export const SERIAL_FULL_SUITE_FILES = [
   "cli/cli-update-restart-home.test.ts",
   "codex-integration/native-codex-toggle.test.ts",
   "codex-integration/native-grok-toggle.test.ts",
+  // Keep these subprocess-heavy Link stop groups in fresh processes. Separate duration
+  // rows let the hosted planner spread them across shards under the default batch deadline.
+  "clients/client-link-stop.test.ts",
+  "clients/client-link-stop-recovery.test.ts",
+  "clients/client-link-stop-sibling.test.ts",
   // Each compiles native/ocx-child (without, then with the link-ws-test-gate feature) and runs one Cargo
   // test set; a cold build can take a minute, so each runs alone rather than inside a 12-file batch.
   "clients/link-ocx-child-ws-gate.test.ts",
@@ -446,7 +452,7 @@ type SerialLaneBasename = (typeof SERIAL_FULL_SUITE_FILES)[number] extends infer
 /**
  * The ocx-child conformance case's two Cargo bounds (tests/clients/link-ocx-child-conformance.test.ts): a cold build of
  * the crate, then the conformance run. Its serial lane is derived from them, so a build that uses its whole bound still
- * leaves the run its own. The CI batch script's process deadline (300 s Linux, 480 s Windows) also covers the sum.
+ * leaves the run its own. The hosted batch runner also uses this override, keeping a longer platform default.
  */
 export const OCX_CHILD_CONFORMANCE_BUILD_MS = 180_000;
 export const OCX_CHILD_CONFORMANCE_RUN_MS = 90_000;
@@ -457,6 +463,18 @@ const SERIAL_LANE_TIMEOUT_MS: Partial<Record<SerialLaneBasename, number>> = {
   // Both Cargo bounds plus 30 s for Bun startup and the file's other cases.
   "link-ocx-child-conformance.test.ts": OCX_CHILD_CONFORMANCE_BUILD_MS + OCX_CHILD_CONFORMANCE_RUN_MS + 30_000,
 };
+
+function serialLaneTimeoutMs(file: (typeof SERIAL_FULL_SUITE_FILES)[number]): number | undefined {
+  return SERIAL_LANE_TIMEOUT_MS[basename(file) as SerialLaneBasename];
+}
+
+/** Hosted manifest rows carry an optional process deadline in seconds. */
+export function serialFullSuiteBatchManifest(): string {
+  return SERIAL_FULL_SUITE_FILES.map(file => {
+    const timeoutMs = serialLaneTimeoutMs(file);
+    return timeoutMs === undefined ? file : `${file}\t${Math.ceil(timeoutMs / 1000)}`;
+  }).join("\n");
+}
 
 export interface BunTestLane {
   label: string;
@@ -498,7 +516,7 @@ export function resolveBunTestPlan(
     ...SERIAL_FULL_SUITE_FILES.map(file => ({
       label: basename(file),
       args: resolveBunTestArgs(["--parallel=1", ...serialRequested, `./tests/${file}`]),
-      timeoutMs: SERIAL_LANE_TIMEOUT_MS[basename(file) as SerialLaneBasename] ?? 3 * 60 * 1000,
+      timeoutMs: serialLaneTimeoutMs(file) ?? 3 * 60 * 1000,
     })),
   ];
 }

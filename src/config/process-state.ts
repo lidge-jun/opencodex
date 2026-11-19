@@ -148,16 +148,27 @@ export function writePid(pid: number): void {
   atomicWriteFile(getPidPath(), String(pid));
 }
 
+export type ClientStopOwner = { nonce: string; pid: number; startTime: string };
+
 export type RuntimePortState = {
   pid: number;
   port: number;
   hostname?: string;
+  role?: string;
+  /** OS creation identity of a standalone owner, when available. */
+  startTime?: string;
   /** Absolute relaunch prefix written by runtimes that identify their serving install. */
   command?: string[];
   /** Per-process proof key; protected by the config directory and never served. */
   attestationSecret?: string;
   /** A Link runtime is draining; new and in-flight sync commits must stand down. */
   clientStopping?: true;
+  /** Parent stop: true while active, false after it finishes with this runtime still fenced. */
+  clientStopRequested?: boolean;
+  /** This stop's exact deferred-teardown nonce and OS process incarnation. */
+  clientStopOwner?: ClientStopOwner;
+  /** Stable serving Link fingerprint, or null for a native Hub client. */
+  clientLinkOwner?: string | null;
   /**
    * Fresh for every publication of a client runtime, including the rollback of a failed restart.
    * A sync compares the whole record before each commit, so one captured before a restart cannot
@@ -202,6 +213,7 @@ export function isValidRuntimePortState(value: unknown): value is RuntimePortSta
     && hostnameOk
     && attestationOk
     && (state.clientStopping === undefined || state.clientStopping === true)
+    && (state.clientStopRequested === undefined || (typeof state.clientStopRequested === "boolean" && state.clientStopping === true))
     && (state.servingGeneration === undefined || (typeof state.servingGeneration === "string" && state.servingGeneration.length <= 64))
     && (state.restartOwner === undefined || (typeof state.restartOwner === "string" && state.restartOwner.length <= 64))
     && siblingOk;

@@ -27,7 +27,8 @@ describe("chat-completions pool vs direct credential injection", () => {
   });
 
   afterEach(async () => {
-    process.env.OPENCODEX_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
     globalThis.fetch = originalFetch;
     if (isolatedCodexHome) {
       isolatedCodexHome.restore();
