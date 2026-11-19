@@ -54,7 +54,7 @@ arrive. Both signals preserve genuine upstream quota evidence.
 
 The shared envelope walker gates retries, credential recovery, same-request fallbacks and
 terminal delivery. It checks the root and response records, their error and last_error records,
-and response.incomplete_details. It follows cause records and details records or array entries
+and their incomplete_details records. It follows cause records and details records or array entries
 from those carriers, up to 12 edges from the root. HTTP and translated adapters also
 check the legacy error.last_error carrier through the same walker.
 Echoed request data has no authority over retry decisions. Kiro
@@ -163,7 +163,8 @@ Before a spend-guarded retry, paced responses release their body lease by retain
 The retained body carries read failures for the receiver's usual error policy, and retry accounting keeps the upstream status.
 
 Buffered Responses delivery treats an error-bearing `response.completed` as a failed turn.
-A recognized refusal code in any event or snapshot error record selects the fixed HTTP 429.
+A recognized refusal code on the event, snapshot, or one of their error carriers establishes failure on completion.
+Buffered coded completions and incomplete snapshots use HTTP 429 with the client veto header and omit Retry-After.
 Streamed `response.completed` and `response.incomplete` use the buffered completion's error
 classifier on both carriers. A nonblank string or a record with a nonblank type, code, or message
 is meaningful. A veto alone leaves an otherwise clean completion unchanged.

@@ -34,7 +34,7 @@ import {
   relayWithAbort,
 } from "../relay";
 import { isUsageDebugEnabled } from "../../usage/debug";
-import { applyReplayRefusalClientHeaders, carryReplayRefusal, replayRefusalVerdict, isNonReplayableResponse, isReplayRefusalResponse, isTerminalResetReplacement, markResponseNonReplayable, projectReplayRefusal, replayRefusalBodyCode } from "../../lib/upstream-retry";
+import { applyReplayRefusalClientHeaders, carryReplayRefusal, replayRefusalVerdict, isNonReplayableResponse, isReplayRefusalResponse, isTerminalResetReplacement, markResponseNonReplayable, projectReplayRefusal, REPLAY_REFUSED_STATUS, replayRefusalBodyCode } from "../../lib/upstream-retry";
 import { NON_REPLAYABLE_COMPLETION_MESSAGE, projectResponsesUpstreamRefusal, rewriteNonRetryableFailurePayload, sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 import { sliceChunks, teeWithBoundedInspection } from "../inspection-tee";
 import { markPacedStream } from "../../lib/paced-stream";
@@ -1285,11 +1285,15 @@ export async function deliverPassthroughResponse(
 
         const jsonHeaders = sanitizePassthroughHeaders(headers, passthroughHeaderOptions);
         jsonHeaders.set("content-type", "application/json");
-        return markPreinspectedJsonResponse(new Response(clientJson, {
-          status: upstreamResponse.status,
-          statusText: upstreamResponse.statusText,
+        const { refusalCode } = replayRefusalVerdict(client.terminal.response);
+        if (refusalCode !== undefined) applyReplayRefusalClientHeaders(jsonHeaders);
+        const snapshot = new Response(clientJson, {
+          status: refusalCode === undefined ? upstreamResponse.status : REPLAY_REFUSED_STATUS,
+          statusText: refusalCode === undefined ? upstreamResponse.statusText : undefined,
           headers: jsonHeaders,
-        }));
+        });
+        if (refusalCode !== undefined) markResponseNonReplayable(snapshot);
+        return markPreinspectedJsonResponse(snapshot);
       }
 
       const relayPlatform = relayPlatformForTests ?? process.platform;

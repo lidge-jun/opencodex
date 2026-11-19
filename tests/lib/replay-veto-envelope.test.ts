@@ -1,3 +1,4 @@
+import { responsesCompletionError } from "../../src/lib/errors";
 import { expect, test } from "bun:test";
 import { fetchWithTransientRetry, hasClientReplayVeto, observedReplayRefusalCode, replayRefusalVerdict, REPLAY_REFUSAL_MESSAGE } from "../../src/lib/upstream-retry";
 
@@ -12,6 +13,9 @@ const carriers: Record<string, (fields: Fields) => Fields> = {
   response: fields => ({ response: fields }),
   "response.error": fields => ({ response: { error: fields } }),
   "response.last_error": fields => ({ response: { last_error: fields } }),
+  incomplete_details: fields => ({ incomplete_details: fields }),
+  "incomplete_details.cause": fields => ({ incomplete_details: { cause: fields } }),
+  "incomplete_details.details[0]": fields => ({ incomplete_details: { details: [fields] } }),
   "response.incomplete_details": fields => ({ response: { incomplete_details: fields } }),
   "error.cause": fields => ({ error: { cause: fields } }),
   "error.cause.cause": fields => ({ error: { cause: { cause: fields } } }),
@@ -78,3 +82,25 @@ test("bounds cause traversal, including cyclic records", () => {
   expect(replayRefusalVerdict(cyclic)).toEqual({ explicitVeto: false });
   expect(replayRefusalVerdict(deep)).toEqual({ explicitVeto: false });
 });
+
+for (const type of ["response.completed", "response.incomplete"] as const) {
+  for (const wrap of [carriers.root!, carriers.response!]) {
+    for (const code of ["upstream_response_refused", "upstream_reset_replay_refused"]) {
+      test(`${type} recognizes standalone ${code} at ${wrap({ code }).code ? "root" : "snapshot"}`, () => {
+        const terminal = { type, ...wrap({ code, message: "fixture diagnostic" }) };
+        expect(responsesCompletionError(terminal, type)).toMatchObject({ code });
+        const rewritten = rewriteNonRetryableFailurePayload(JSON.stringify(terminal), false, value => value);
+        expect(JSON.parse(rewritten).response).toMatchObject({
+          retryable: false, error: { code, message: REPLAY_REFUSAL_MESSAGE },
+        });
+        expect(rewritten).not.toContain("fixture diagnostic");
+      });
+    }
+    test(`${type} keeps a clean boolean-only veto at ${wrap({ retryable: false }).response ? "snapshot" : "root"}`, () => {
+      const terminal = { type, ...wrap({ retryable: false }) };
+      expect(responsesCompletionError(terminal, type)).toBeUndefined();
+      const payload = JSON.stringify(terminal);
+      expect(rewriteNonRetryableFailurePayload(payload, false, value => value)).toBe(payload);
+    });
+  }
+}

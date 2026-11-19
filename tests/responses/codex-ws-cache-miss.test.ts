@@ -214,11 +214,13 @@ test('an oversized retained full create recovers over HTTP with its original com
   expect(Socket.all[0]!.readyState).toBe(3);
 });
 
-test.each([{ code: 'upstream_response_refused' }, { retryable: false }])(
-  'a cache miss with a nested replay veto stops after one charged send (%j)', async cause => {
+test.each([{ error: { ...missing.error, cause: { code: 'upstream_response_refused' } } },
+  { error: { ...missing.error, cause: { retryable: false } } },
+  { incomplete_details: { retryable: false } }])(
+  'a cache miss with a nested replay veto stops after one charged send (%j)', async carrier => {
     await seed();
     respond = (socket, frame) => frame.previous_response_id
-      ? socket.emit({ ...missing, status: 400, error: { ...missing.error, cause } }) : socket.complete();
+      ? socket.emit({ ...missing, status: 400, ...carrier }) : socket.complete();
     let sends = 0;
     const response = await run(follow, 'principal:alice', {}, () => sends++);
     const body = await response.text();

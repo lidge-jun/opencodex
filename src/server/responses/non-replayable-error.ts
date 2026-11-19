@@ -111,16 +111,16 @@ export function rewriteNonRetryableFailurePayload(payload: string, comboAttempt:
   try {
     const event = JSON.parse(payload) as {
       type?: unknown; error?: unknown; last_error?: unknown;
-      message?: unknown; cause?: unknown; details?: unknown;
+      incomplete_details?: unknown; message?: unknown; cause?: unknown; details?: unknown;
       response?: Record<string, unknown>;
     };
     const terminalType = event?.type;
     if (terminalType !== "response.failed" && terminalType !== "response.completed" && terminalType !== "response.incomplete") return payload;
     const failed = terminalType === "response.failed";
     const upstream = failed ? terminalErrorRecords(event)[0] : responsesCompletionError(event, terminalType);
-    if (!failed && !upstream) return payload;
     const { refusalCode, explicitVeto: veto } = replayRefusalVerdict(event);
     const refusal = refusalCode !== undefined;
+    if (!failed && !upstream && !refusal) return payload;
     if (!refusal && !(failed ? comboAttempt && (veto || isNonReplayableUpstreamCode(upstream?.code)) : veto)) return payload;
     const type = typeof upstream?.type === "string" ? upstream.type : undefined;
     const code = refusalCode ?? (typeof upstream?.code === "string" ? upstream.code : undefined);
@@ -131,11 +131,15 @@ export function rewriteNonRetryableFailurePayload(payload: string, comboAttempt:
     const error = !failed && !refusal
       ? { type: safeType, code: code === undefined ? safeCode : maskCode(code), message: NON_REPLAYABLE_COMPLETION_MESSAGE }
       : { type: safeType, code: safeCode, message };
-    const { error: _error, last_error: _lastError, message: _message, cause: _cause, details: _details, ...root } = event;
+    const { error: _error, last_error: _lastError, message: _message, cause: _cause, details: _details,
+      incomplete_details: rootIncompleteDetails, ...root } = event;
+    const rootReason = (rootIncompleteDetails as { reason?: unknown } | null | undefined)?.reason;
     const { message: _responseMessage, cause: _responseCause, details: _responseDetails,
       incomplete_details: incompleteDetails, ...response } = event.response ?? {};
     const reason = (incompleteDetails as { reason?: unknown } | null | undefined)?.reason;
-    return JSON.stringify({ ...root, response: { ...response,
+    return JSON.stringify({ ...root,
+      ...(typeof rootReason === "string" ? { incomplete_details: { reason: rootReason } } : {}),
+      response: { ...response,
       ...(typeof reason === "string" ? { incomplete_details: { reason } } : {}),
       retryable: false, error, last_error: error,
     } });

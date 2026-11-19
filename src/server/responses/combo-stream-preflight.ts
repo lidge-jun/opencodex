@@ -249,16 +249,8 @@ function comboStreamDegeneratePrelude(payload: unknown, commentaryItemIds: Set<s
   return requiredToolReasoningPrelude(payload);
 }
 
-function legacyIncompleteDetailsVeto(event: Record<string, unknown>): boolean {
-  // Some Responses terminals put incomplete_details beside the event type.
-  const { refusalCode, explicitVeto } = replayRefusalVerdict({
-    response: { incomplete_details: event.incomplete_details },
-  });
-  return explicitVeto || refusalCode !== undefined;
-}
-
 function incompleteCarriersVetoReplay(event: Record<string, unknown>, response: Record<string, unknown> | undefined): boolean {
-  return event.end_turn === false || response?.end_turn === false || legacyIncompleteDetailsVeto(event);
+  return event.end_turn === false || response?.end_turn === false;
 }
 
 function classifyIncompleteReplayReason(
@@ -472,7 +464,7 @@ export function failedTerminalReplayVerdict(payload: unknown): "blocked" | "poli
   if (explicitVeto && (payload.retryable === false || recordValue(payload.response)?.retryable === false)) {
     return !bare && failed && errors.some(error => typeof error.code === "string" && isTerminalRefusalCode(error.code)) ? "policy" : "blocked";
   }
-  if (explicitVeto || legacyIncompleteDetailsVeto(payload)) return "blocked";
+  if (explicitVeto) return "blocked";
 }
 
 function retryableZeroOutputTerminal(payload: unknown, context?: object): boolean {

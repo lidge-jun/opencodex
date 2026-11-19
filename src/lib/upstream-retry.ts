@@ -184,6 +184,7 @@ export function replayRefusalVerdict(payload: unknown): { refusalCode?: ReplayRe
   visit(root, 0);
   visit(root?.error, 1);
   visit(root?.last_error, 1);
+  visit(root?.incomplete_details, 1);
   visit(response, 1);
   visit(response?.error, 2);
   visit(response?.last_error, 2);

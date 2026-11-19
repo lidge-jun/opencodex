@@ -89,7 +89,7 @@ sends settle the initial booking through the physical receipt. The helper's live
 includes deferred reports and credits only its own unsettled prepaid booking.
 
 Before requesting a recovery slot or physical permit, the exchange checks the original
-cache-miss frame and prelude for a no-retry header and checks the frame with the same
+cache-miss frame and prelude for a no-retry header and checks the frame, including flat incomplete_details, with the same
 [bounded replay envelope walker](../data-planes/replay-refusals.md) as stream preflight. The
 exchange projects the fixed refusal and client retry veto directly, retaining a recognized
 code even when it appeared in a nested cause or details entry.

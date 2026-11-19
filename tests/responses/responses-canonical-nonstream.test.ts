@@ -240,23 +240,26 @@ describe("canonical ChatGPT transport for non-streaming Responses callers (#6162
     });
   }
 
-  test.each(["refusal-only", "last_error", "nested-last_error", "root-code", "cause-code", "cause-veto", "retryable-false", "ordinary"] as const)(
+  test.each(["refusal-only", "last_error", "nested-last_error", "root-code", "standalone-root-code", "standalone-snapshot-code", "incomplete-code", "cause-code", "cause-veto", "retryable-false", "ordinary"] as const)(
     "buffered completed error preserves the client retry contract (%s)", async variant => {
       const generic = { type: "server_error", code: "server_error", message: "fixture private diagnostic" };
       const refusal = { code: "upstream_response_refused", message: generic.message };
-      const response = { id: "resp_completion_veto", status: "completed", output: [],
-        error: variant === "refusal-only" ? refusal : { ...generic,
+      const incomplete = variant === "incomplete-code";
+      const standalone = variant.startsWith("standalone-");
+      const response = { id: "resp_completion_veto", status: incomplete ? "incomplete" : "completed", output: [],
+        ...(variant === "standalone-snapshot-code" ? refusal : {}),
+        error: standalone ? undefined : variant === "refusal-only" ? refusal : { ...generic,
           ...(variant === "cause-code" ? { cause: refusal } : {}),
           ...(variant === "cause-veto" ? { cause: { retryable: false } } : {}),
         },
-        ...(variant === "nested-last_error" ? { last_error: refusal } : {}),
+        ...(variant === "nested-last_error" || incomplete ? { last_error: refusal } : {}),
         ...(variant === "retryable-false" ? { retryable: false } : {}),
       };
       let sends = 0;
       globalThis.fetch = (async () => {
         sends++;
-        return new Response(sseEvent("response.completed", {
-          response, ...(variant === "root-code" ? { code: refusal.code } : {}), ...(variant === "last_error" ? { last_error: refusal } : {}),
+        return new Response(sseEvent(incomplete ? "response.incomplete" : "response.completed", {
+          response, ...(variant === "standalone-root-code" ? refusal : variant === "root-code" ? { code: refusal.code } : {}), ...(variant === "last_error" ? { last_error: refusal } : {}),
         }), { headers: { "content-type": "text/event-stream", "retry-after": "60" } });
       }) as typeof fetch;
       const result = await call(requestBody(false, true));
@@ -267,6 +270,7 @@ describe("canonical ChatGPT transport for non-streaming Responses callers (#6162
         code: variant.endsWith("error") || variant.endsWith("-code") || variant === "refusal-only" ? refusal.code : generic.code,
         retry: variant === "ordinary" ? null : "false", delay: variant === "ordinary" ? "60" : null });
       if (variant !== "ordinary") expect(body.error.message).not.toContain(generic.message);
+      if (incomplete) expect(body.retryable).toBe(false);
     },
   );
 

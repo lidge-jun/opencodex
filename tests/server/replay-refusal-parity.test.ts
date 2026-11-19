@@ -1413,6 +1413,9 @@ data: ${JSON.stringify(terminal)}
 });
 
 test.each([
+  { model: "bridged/model", event: "response.completed", scenario: "flat-incomplete-veto" },
+  { model: "bridged/model", event: "response.completed", scenario: "standalone-root-code" },
+  { model: "bridged/model", event: "response.completed", scenario: "standalone-snapshot-code" },
   { model: "bridged/model", event: "response.completed", scenario: "event-string-error" },
   { model: "bridged/model", event: "response.completed", scenario: "response-string-error" },
   { model: "bridged/model", event: "response.incomplete", scenario: "string-last-error" },
@@ -1434,6 +1437,8 @@ test.each([
   const refusalCode = "upstream_response_refused";
   const terminal = {
     type: event,
+    ...(scenario === "flat-incomplete-veto" ? { incomplete_details: { retryable: false, message: diagnostic } } : {}),
+    ...(scenario === "standalone-root-code" ? { code: refusalCode, message: diagnostic } : {}),
     ...(scenario === "root-code" ? { code: refusalCode } : {}),
     ...(scenario === "event-string-error" ? { retryable: false, error: diagnostic } : {}),
     response: {
@@ -1443,7 +1448,8 @@ test.each([
       ...(scenario === "empty-error" && { error: {}, retryable: false }),
       ...(scenario === "response-string-error" && { error: diagnostic, retryable: false }),
       ...(scenario === "string-last-error" && { last_error: diagnostic, retryable: false }),
-      ...(scenario === "veto" && { error: { code, message: diagnostic, retryable: false } }),
+      ...(scenario === "standalone-snapshot-code" && { code: refusalCode, message: diagnostic }),
+      ...(["veto", "flat-incomplete-veto"].includes(scenario) && { error: { code, message: diagnostic, retryable: scenario === "veto" ? false : undefined } }),
       ...(["root-code", "cause-code", "cause-veto"].includes(scenario) && {
         error: { code, message: diagnostic, cause: scenario === "cause-code" ? { code: refusalCode }
           : scenario === "cause-veto" ? { retryable: false } : undefined },
@@ -1476,7 +1482,7 @@ test.each([
     } else {
       const error = scenario === "refusal" || scenario.endsWith("-code")
         ? { code: refusalCode, message: CLIENT_ERROR_CONTRACTS.replay_refused }
-        : { ...(scenario === "veto" && { code }), message: "Upstream reported a non-replayable failed completion." };
+        : { ...(["veto", "flat-incomplete-veto"].includes(scenario) && { code }), message: "Upstream reported a non-replayable failed completion." };
       expect(terminals).toMatchObject([{
         response: { status: terminal.response.status, retryable: false, error, last_error: error },
       }]);
