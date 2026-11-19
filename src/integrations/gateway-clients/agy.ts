@@ -104,12 +104,16 @@ function assertSameTarget(entry: Entry | undefined, target: string | undefined):
 const recordedHash = (entry: Entry, current: string): boolean =>
   entry.writtenSha256 === current || entry.pendingSha256 === current;
 
-function blockSpan(text: string): { start: number; end: number } | null {
-  const start = text.indexOf(START);
-  if (start < 0) return null;
-  const endMark = text.indexOf(END, start);
-  if (endMark < 0) return null;
-  let end = endMark + END.length;
+const MARKER_LINE = new RegExp(`(?:^\uFEFF?|\n)(${START}|${END})(?=\r?\n|$)`, "g");
+
+function blockSpan(text: string): { start: number; end: number } | "malformed" | null {
+  const markers = text.matchAll(MARKER_LINE);
+  const first = markers.next().value;
+  if (!first) return null;
+  const last = markers.next().value;
+  if (first[1] !== START || last?.[1] !== END || !markers.next().done) return "malformed";
+  const start = first.index + first[0].length - START.length;
+  let end = last.index + last[0].length;
   if (text.startsWith("\r\n", end)) end += 2; else if (text[end] === "\n") end += 1;
   return { start, end };
 }
@@ -136,15 +140,17 @@ const withBlock = (text: string, block: string): string => {
   const eol = eolOf(text);
   const b = block.replace(/\n/g, eol) + eol;
   const span = blockSpan(text);
-  if (span) return text.slice(0, span.start) + b + text.slice(span.end);
+  if (span && span !== "malformed") return text.slice(0, span.start) + b + text.slice(span.end);
   if (text === "") return b;
   let head = text;
   if (!/\n$/.test(head)) head += eol;
   if (!/(\r?\n){2}$/.test(head)) head += eol;
   return head + b;
 };
-const withoutBlock = (text: string): string => { const s = blockSpan(text); return s ? text.slice(0, s.start) + text.slice(s.end) : text; };
-const blockIn = (text: string): string | null => { const s = blockSpan(text); return s ? text.slice(s.start, s.end).replace(/\r\n/g, "\n").replace(/\n$/, "") : null; };
+function blockIn(text: string): string | null {
+  const span = blockSpan(text);
+  return span && span !== "malformed" ? text.slice(span.start, span.end).replace(/\r\n/g, "\n").replace(/\n$/, "") : null;
+}
 
 function status(ctx: GatewayClientContext, target?: GatewayTarget): GatewayClientStatus {
   const hasRecord = inspectStashPresence(ctx, ID);
@@ -266,8 +272,19 @@ function disconnect(ctx: GatewayClientContext): GatewayClientResult {
     }
     const decoded = decode(file.bytes);
     if (!decoded && entry) return clientRefusal(`${path} uses an unsupported encoding. The restore record was kept.`, "unsupported-file");
-    if (!decoded || blockIn(decoded.text) === null) continue;
-    changes.push({ path, apply: () => writeClientFile(ctx, path, file, encode(withoutBlock(decoded.text), decoded.encoding), allowedPaths) });
+    if (!decoded) continue;
+    const { text, encoding } = decoded;
+    const span = blockSpan(text);
+    if (!span || span === "malformed") {
+      // With both markers gone, a remaining gateway wrapper still requires repair.
+      const hasWrapper = ["URL", "API_KEY", "WIRE_PROTOCOL"].every(key => text.includes(`AGY_LLM_GATEWAY_${key}`));
+      if (entry && (span === "malformed" || hasWrapper)) {
+        return clientRefusal("An agy profile has incomplete or ambiguous block markers. The restore record was kept.", "unsupported-file");
+      }
+      continue;
+    }
+    const bytes = encode(text.slice(0, span.start) + text.slice(span.end), encoding);
+    changes.push({ path, apply: () => writeClientFile(ctx, path, file, bytes, allowedPaths) });
     pathWise = true;
   }
 

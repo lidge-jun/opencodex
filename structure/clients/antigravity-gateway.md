@@ -50,8 +50,9 @@ Disconnect reports one of three outcomes.
   and the directories OpenCodex created are removed when it did not exist.
 - **path-wise.** The user edited the file since. Only OpenCodex's own entries are reverted: `gateway`,
   `models.defaultModelId` and `models.list` in the app settings, the marked block in a profile. Every edit
-  outside those is kept, and a settings entry the user changed after connecting is left as the user set it.
-  A profile block is removed whole, so an edit made inside its markers is not kept.
+  outside those is kept. Antigravity compares JSON values structurally and refuses the restore if a
+  managed entry differs from both its applied and prior values. An agy block is removed between its
+  two standalone marker lines, including edits inside the block.
 - **none.** There is no record, or the file is already gone; nothing is changed.
 
 Reconnect keeps the first record while the client is connected. If the file was edited in between,
@@ -63,9 +64,9 @@ Connect journals the replacement hash before editing the client file, so disconn
 the original and pending states after an interrupted write. A profile is read as UTF-8 without NUL
 bytes or as BOM-prefixed UTF-16LE (used by Windows PowerShell 5.1 redirection). It is written back
 in the same encoding. During disconnect, an untracked profile that cannot be resolved or read is skipped.
-Recorded profiles are checked strictly. If a recorded profile cannot be decoded, disconnect refuses with
-`unsupported-file` and keeps the recovery record. A settings file with comments, trailing commas
-or a non-object root is refused with `unsupported-file` and left untouched.
+Recorded profiles are checked strictly. If a recorded profile cannot be decoded or has incomplete or
+ambiguous block markers, disconnect refuses with `unsupported-file` and keeps the recovery record.
+Antigravity uses the same refusal for a managed settings conflict or a settings file it cannot parse.
 
 `src/cli/uninstall-client-state.ts` disconnects every gateway client with a restore record before
 removing config. The production dependency set supplies the current user and config directory.

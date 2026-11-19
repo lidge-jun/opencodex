@@ -756,8 +756,12 @@ Usa `--model` solo con `ocx connect antigravity` para fijar el modelo predetermi
 
 Conectar registra lo que reemplazó. Desconectar restaura los bytes originales cuando el archivo no ha
 cambiado y, en caso contrario, revierte solo las entradas propias de OpenCodex y conserva tus otras
-ediciones. El bloque marcado de `agy` en un perfil de shell se elimina entero, incluida cualquier edición
-hecha dentro de él. Un enlace simbólico de un perfil de `agy` debe apuntar a otro perfil compatible
+ediciones. Antigravity puede restaurar la configuración aunque se reordenen las claves JSON.
+Si un ajuste gestionado tiene un valor en conflicto o los marcadores de un bloque registrado de
+`agy` faltan o son ambiguos, la desconexión conserva el archivo y el registro de restauración.
+Repón el valor gestionado o el marcador y vuelve a intentar la desconexión. Un bloque completo de
+`agy` se elimina entero, incluidas las ediciones en su interior. Un enlace simbólico de un perfil de
+`agy` debe apuntar a otro perfil compatible
 de la misma familia de shells dentro de tu directorio personal. El archivo de configuración de
 Antigravity debe resolverse a la ruta exacta `~/.antigravity/settings.json`. Reinicia Antigravity, o
 abre una terminal nueva para `agy`, para aplicar un cambio. Al desconectar, `agy` omite los perfiles
