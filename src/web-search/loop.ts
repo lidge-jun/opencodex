@@ -26,6 +26,8 @@ import { pacingHeaderDeadline } from "./header-deadline";
 import { redactSecretString } from "../lib/redact";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, isSameTargetRetryHold, SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { unwrapUpstreamRetryEvidenceError } from "../codex/auth-context";
+import { HostedAdvisorSpendRefusal } from "../server/responses/policy-request-scope";
 import { rateLimitRetryDelayMs } from "../providers/key-failover";
 import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import {
@@ -748,6 +750,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
           if (headerDeadline.didExpire()) throw new LoopError(504,
             `Provider response-header timeout after ${connectTimeoutMs}ms during web-search`);
+          const refusal = unwrapUpstreamRetryEvidenceError(error);
+          if (refusal instanceof HostedAdvisorSpendRefusal) throw new LoopError(400, refusal.message, refusal.event());
           if (error instanceof LoopError || error instanceof SendBudgetExhaustedError || isTranslatorBudgetExceededError(error)) throw error;
           throw new LoopError(502, `Provider unreachable: ${error instanceof Error ? error.message : String(error)}`);
         } finally {
@@ -843,6 +847,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during web-search`);
       }
       if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
+      const refusal = unwrapUpstreamRetryEvidenceError(error);
+      if (refusal instanceof HostedAdvisorSpendRefusal) throw new LoopError(400, refusal.message, refusal.event());
       if (error instanceof LoopError || error instanceof RequestPacingQueueOverloadError) throw error;
       throw new LoopError(502, `Provider unreachable: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -1362,6 +1368,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       chatRawReasoningVisible: deps.chatRawReasoningVisible,
       hideRawReasoning: parsed.options.hideRawReasoning,
+      rawReasoningAsSummary: parsed.options.rawReasoningAsSummary,
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
       ...(deps.onUsage ? { onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(mergeUsage(countersOnly(hiddenUsage), usage)) } : {}),

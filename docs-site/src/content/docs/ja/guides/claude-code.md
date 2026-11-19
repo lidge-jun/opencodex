@@ -364,7 +364,15 @@ Claude Code は未知モデルのコンテキストを 200k トークンとし�
    `[1m]` 標識が付きます。ディスカバリーと Desktop のピッカー行はこのしきい値に従わず、固定の 829,800 トークン下限
    （Anthropic 経路の Claude モデルは実際の 1M）を使います。
 2. `CLAUDE_CODE_AUTO_COMPACT_WINDOW`(デフォルト `829800`、範囲 `100000`–`1000000`)を注入し、該当
-   地点で会話を自動要約します。
+   地点で会話を自動要約します。プロキシ経由の `ocx claude` では、カタログにより小さいウィンドウが
+   ある場合に `--settings` でモデル別のしきい値を設定できます。引数がランチャーの上限を超えると、
+   環境変数が使われます。
+
+生成された JSON は Claude Code のコマンドライン設定として適用されます。優先順位はローカル、プロジェクト、ユーザーの設定ファイルより上で、管理設定より下です。`--settings <file>` または `--autocompact` を指定すると、JSON の生成をスキップします。ランチャーは明示された `--settings` の引数をそのまま渡し、ファイルの処理は Claude Code に任せます。
+
+いずれかのオプションで JSON の生成をスキップしても、自動コンテキストが設定した `CLAUDE_CODE_AUTO_COMPACT_WINDOW` はそのまま引き継がれます。この変数を明示的にエクスポートした場合も、JSON は生成されず、その値が引き継がれます。Claude Code では、この変数の有効な値が `--autocompact` や保存済みの圧縮設定より優先されます。ファイルの圧縮設定を使うには、`claudeCode.autoContext` を `false` にして自動注入を止め、エクスポート済みの `CLAUDE_CODE_AUTO_COMPACT_WINDOW` を解除し、`--settings <file>` を指定します。[Claude Code の自動圧縮設定の優先順位](https://code.claude.com/docs/en/model-config#set-the-auto-compact-window)を参照してください。
+
+オプションの値や `--` より後の引数も含め、いずれかの引数が Remote Control のコマンドまたは別名（`remote-control`、`rc`、`bridge`、`remote`、`sync`）と完全に一致する場合、ランチャーは生成した設定を適用せず、元の引数と起動環境をそのまま渡します。
 
 設定状態は 3 つです。
 

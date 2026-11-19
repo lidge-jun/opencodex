@@ -12,6 +12,7 @@ import { attachLinkTrafficForState } from "../../src/server/management/link-traf
 import type { LinkRouteState } from "../../src/server/management/link-route-state";
 import type { LinkStatusDto } from "../../src/link/status-projection";
 import { validateStatus } from "../../src/cli/link";
+import { createLinkActivity } from "../../src/link/child-activity";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const HUB = "lnk_0123456789abcdef";
@@ -35,14 +36,19 @@ function link(id: string, overrides: Partial<LinkRecord> = {}): LinkRecord {
 }
 
 function harness(book = createLinkTrafficBook("content-length")) {
+  let now = Date.now();
+  let generation = "runtime:1";
+  const activity = createLinkActivity({ now: () => now });
   const current: LinkStore = { version: 1, listenerPort: 18181, links: [link(HUB), link(CLIENT, { direction: "client-initiated", hostKeyFingerprint: null })] };
   writeFileSync(join(temp, "ocx", "link", "links.json"), JSON.stringify(current));
   const supervisor: LinkSupervisor = { start() {}, ensureStarted: async () => {}, reload: async () => {}, stopLink: async () => {}, stop: async () => {},
+    reconnect: async () => true, connectionGeneration: () => generation,
     status: () => [{ linkId: HUB, direction: "hub-initiated", state: { kind: "connected", since: 1_762_000_000_000 }, pid: 1 }] };
   const listener = { ensureStarted: async () => {}, status: () => ({ state: "listening" as const, port: 18181, reason: null }), close: async () => {},
-    onAuthenticatedCatalog: () => () => {}, linkTraffic: (id: string) => book.snapshot(id) };
+    onAuthenticatedCatalog: () => () => {}, linkTraffic: (id: string) => book.snapshot(id),
+    linkActivity: (id: string, at: number) => activity.snapshot(id, at) };
   const config = { port: 10100, hostname: "127.0.0.1", runtimeRole: "hub", defaultProvider: "mock", providers: {}, apiKeys: [] } as OcxConfig;
-  const deps: ManagementApiDeps = { readLinkStore: () => current, writeLinkStore: () => {}, linkSupervisor: () => supervisor,
+  const deps: ManagementApiDeps = { readLinkStore: () => current, writeLinkStore: () => {}, linkSupervisor: () => supervisor, now: () => now,
     linkListener: () => listener, linkKnownHostsPath: () => join(temp, "known_hosts") };
   const callText = async (path: string) => {
     const url = new URL(`http://127.0.0.1${path}`);
@@ -58,8 +64,51 @@ function harness(book = createLinkTrafficBook("content-length")) {
     expect(response?.status).toBe(200);
     return await response!.json() as LinkStatusDto;
   };
-  return { call, callText, book };
+  return { call, callText, book, activity, time: (at: number) => { now = at; },
+    generation: (value: string) => { generation = value; } };
 }
+
+test("#8753 projects Home relay delivery separately from connected transport and inference readiness", async () => {
+  const h = harness();
+  const row = async () => (await h.call("/api/link/status?relayHealth=1")).links[0]!;
+  const now = Date.now();
+  expect(await row()).toMatchObject({
+    state: "connected", relayHealth: { delivery: "unknown", relayAuthentication: "unknown", inferenceReadiness: "unknown" },
+  });
+  h.time(now - 130_000);
+  h.activity.beginHttpDelivery(HUB, "runtime:1")("upstream_failure");
+  h.time(now);
+  h.activity.beginHttpDelivery(HUB, "runtime:1")("upstream_failure");
+  const end = h.activity.beginHttpDelivery(HUB, "runtime:1");
+  end("upstream_failure");
+  end("upstream_failure");
+  h.activity.beginHttpDelivery(HUB, "runtime:1")("observed");
+  expect(await row()).toMatchObject({
+    state: "connected", relayHealth: { delivery: "observed", relayAuthentication: "observed", inferenceReadiness: "unknown", recentInterruptions: 2 },
+  });
+  h.activity.beginHttpDelivery(HUB, "runtime:1")("upstream_failure");
+  const dto = await h.call("/api/link/status?relayHealth=1");
+  expect(validateStatus(dto).links[0]).toMatchObject({
+    state: "connected", relayHealth: { delivery: "degraded", relayAuthentication: "observed", inferenceReadiness: "unknown",
+      recentInterruptions: 3, guidance: expect.stringMatching(/ocx link check.*ocx link reconnect/) },
+  });
+  expect(dto.links[1]).not.toHaveProperty("relayHealth");
+  expect((await h.call("/api/link/status")).links[0]).not.toHaveProperty("relayHealth");
+  expect(() => validateStatus({ ...dto, links: [{ ...dto.links[0], relayHealth: { ...dto.links[0]!.relayHealth, guidance: "arbitrary instructions" } }] }))
+    .toThrow("link 0 relayHealth");
+  const old = h.activity.beginHttpDelivery(HUB, "runtime:1");
+  h.generation("runtime:2");
+  expect(await row()).toMatchObject({ relayHealth: { relayAuthentication: "unknown", delivery: "unknown", recentInterruptions: 0 } });
+  const fresh = h.activity.beginHttpDelivery(HUB, "runtime:2");
+  expect(await row()).toMatchObject({ relayHealth: { relayAuthentication: "observed", delivery: "unknown", recentInterruptions: 0 } });
+  fresh("observed");
+  old("upstream_failure");
+  expect(await row()).toMatchObject({
+    relayHealth: { delivery: "observed", recentInterruptions: 0 },
+  });
+  h.time(now + 120_000);
+  expect(await row()).toMatchObject({ relayHealth: { relayAuthentication: "unknown", delivery: "unknown", recentInterruptions: 0 } });
+});
 
 describe("GET /api/link/status?traffic=1 (#3023)", () => {
   test("without the query the document is unchanged; with it every existing field stays and a traffic block is added", async () => {

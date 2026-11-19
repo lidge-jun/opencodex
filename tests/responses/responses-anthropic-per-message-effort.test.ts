@@ -68,8 +68,9 @@ describe("perMessageEffort through handleResponses", () => {
     return await response.text();
   }
 
-  const provider = (perMessageEffort: boolean): OcxProviderConfig => ({
+  const provider = (perMessageEffort: boolean): OcxProviderConfig & { fetch: typeof fetch } => ({
     adapter: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-test", defaultMaxOutputTokens: 64000, perMessageEffort,
+    fetch: globalThis.fetch,
   });
 
   test("an effort change keeps the first turn's top-level effort and sends an effort message instead", async () => {

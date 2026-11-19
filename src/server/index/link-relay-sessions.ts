@@ -1,16 +1,42 @@
 import type { Server } from "bun";
 import { createHash } from "node:crypto";
 import {
-  LINK_RELAY_AUTH_PATH, LINK_RELAY_AUTH_TIMEOUT_MS, LINK_RELAY_AUTH_VERSION, LINK_RELAY_CONNECTION_HEADER,
+  LINK_RELAY_AUTH_FAILED_CODE, LINK_RELAY_AUTH_PATH, LINK_RELAY_AUTH_TIMEOUT_MS, LINK_RELAY_AUTH_VERSION, LINK_RELAY_CONNECTION_HEADER,
   LINK_RELAY_CONNECTION_PROOF_HEADER, LINK_RELAY_PROBE_HEADER, LINK_RELAY_SESSION_HEADER, linkConnectionProof,
   linkRelayProof, linkRelayProofMatches, LINK_RELAY_WS_STATE_HEADER, LINK_RELAY_WS_STATE_PROOF_HEADER, linkWebsocketStateProof,
 } from "../../link/relay-auth";
 import { parseLinkPeerReport, type LinkPeerObservations } from "../../link/peer-report";
-import { linkActivityCounts, type LinkActivity } from "../../link/child-activity";
+import { linkActivityCounts, type LinkActivity, type LinkHttpDeliveryOutcome } from "../../link/child-activity";
+import { HOME_UNREACHABLE_CODE } from "../../client/home-unreachable";
 import type { LinkSessionGrant, LinkUpgradeOutcome } from "./link-websocket";
 import type { LinkTrafficBook } from "../../link/traffic";
 import { LINK_HOME_FEATURES_HEADER } from "../../link/request-compression";
 import { linkRelayWaitObserver } from "./link-websocket-limits";
+
+const RELAY_ERROR_BODY_LIMIT = 4_096;
+
+/** Inspect small JSON 503s only as their bytes are relayed, without reading ahead or delaying headers. */
+function observeRelayError(response: Response) {
+  if (response.status !== 503 || !/^application\/json(?:\s*;|$)/i.test(response.headers.get("content-type") ?? "")) return;
+  let bytes: Uint8Array | undefined = new Uint8Array(RELAY_ERROR_BODY_LIMIT);
+  let length = 0;
+  return {
+    append(chunk: Uint8Array): void {
+      if (!bytes) return;
+      if (length + chunk.byteLength > bytes.byteLength) { bytes = undefined; return; }
+      bytes.set(chunk, length);
+      length += chunk.byteLength;
+    },
+    failed(): boolean {
+      if (!bytes) return false;
+      try {
+        const body: unknown = JSON.parse(new TextDecoder().decode(bytes.subarray(0, length)));
+        const code = body && typeof body === "object" && "code" in body ? body.code : undefined;
+        return code === HOME_UNREACHABLE_CODE || code === LINK_RELAY_AUTH_FAILED_CODE;
+      } catch { return false; }
+    },
+  };
+}
 
 /** A 200 `GET /v1/catalog` whose body the Child read to the end (wp2 catalog freshness). */
 export interface LinkCatalogServed { linkId: string | null; keyId: string | null; etag: string }
@@ -23,6 +49,7 @@ interface Session {
   expiresAt: number;
   timer: ReturnType<typeof setTimeout>;
   release: () => void;
+  generation: string | undefined;
 }
 
 export interface LinkRelaySessionOptions {
@@ -147,18 +174,20 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         if (req.headers.get(LINK_RELAY_PROBE_HEADER) === "1") return answer();
         const release = acquire();
         const timer = setTimeout(() => { consume(nonce)?.release(); }, reservationMs);
-        sessions.set(nonce, { peer, keyId, linkId, fingerprint, release, timer, expiresAt: Date.now() + reservationMs });
+        sessions.set(nonce, { peer, keyId, linkId, fingerprint, release, timer, expiresAt: Date.now() + reservationMs, generation });
         return answer();
       }
       const nonce = req.headers.get(LINK_RELAY_SESSION_HEADER);
       let release: () => void;
       let sessionLink: string | null = null;
+      let sessionGeneration: string | undefined;
       if (nonce !== null) {
         // A proof received on one HTTP socket never authorizes another socket, even on the same port.
         const session = consume(nonce);
         if (!session) return refuse();
         release = session.release;
         sessionLink = session.linkId;
+        sessionGeneration = session.generation;
         if (session.peer !== peerOf(req, server as Server<unknown>) || Date.now() >= session.expiresAt
           || !options.fingerprints(session.keyId, session.linkId).includes(session.fingerprint)) {
           release(); return refuse();
@@ -186,13 +215,28 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         release = () => { end(); lease(); };
       };
       if (countsActivity && sessionLink !== null) beginActivity();
+      let endDelivery: ((outcome: LinkHttpDeliveryOutcome) => void) | undefined;
+      if (countsActivity && sessionLink !== null && sessionGeneration !== undefined) {
+        // Attribution is display-only. A session reserved just before a reconnect cannot move
+        // the activity book back to a previous generation when its data request arrives later.
+        try {
+          if (sessionGeneration === options.connectionGeneration?.(sessionLink)) {
+            endDelivery = options.activity!.beginHttpDelivery(sessionLink, sessionGeneration);
+          }
+        } catch { /* the relay proceeds even if the observation is unavailable */ }
+      }
       let decideObservation: ((accepted: boolean) => void) | undefined;
       if (sessionLink !== null && req.method === "POST" && url.pathname === "/v1/responses") {
         try { decideObservation = options.observeResponsesRequest?.(sessionLink, req) ?? undefined; } catch { /* observation never blocks the request */ }
       }
       let flow: ReturnType<LinkTrafficBook["begin"]> | undefined;
-      // Accounting never keeps a lease: every path ends its flow through here and goes on to release.
-      const endFlow = (complete: boolean): void => { try { flow?.end(complete); } catch { /* the request's own outcome is the one reported */ } };
+      // Observations never keep a lease: every path ends its flow here and goes on to release.
+      const endFlow = (complete: boolean, delivery?: LinkHttpDeliveryOutcome): void => {
+        if (delivery) {
+          try { endDelivery?.(delivery); } catch { /* the request's own outcome is the one reported */ }
+        }
+        try { flow?.end(complete); } catch { /* the request's own outcome is the one reported */ }
+      };
       try {
         flow = sessionLink !== null ? options.traffic?.begin(sessionLink) : undefined;
         if (flow) {
@@ -209,7 +253,7 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
       // Socket cancellation before headers is terminal too; an upstream handler that is
       // settling its own cleanup cannot keep a dead transport's listener lease forever.
       // An abort before headers also decides a pending body observation (not accepted) and drops its unclaimed turn token.
-      const beforeHeadersAbort = () => { decideObservation?.(false); endFlow(false); release(); };
+      const beforeHeadersAbort = () => { decideObservation?.(false); endFlow(false, "client_cancelled"); release(); };
       req.signal.addEventListener("abort", beforeHeadersAbort, { once: true });
       if (req.signal.aborted) beforeHeadersAbort();
       try {
@@ -217,8 +261,9 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         decideObservation?.(response.status < 400 && !req.signal.aborted);
         req.signal.removeEventListener("abort", beforeHeadersAbort);
         if (countsActivity && sessionLink === null && response.status < 400 && !req.signal.aborted) beginActivity();
-        if (!response.body || req.method === "HEAD") { endFlow(true); release(); return response; }
+        if (!response.body || req.method === "HEAD") { endFlow(true, "observed"); release(); return response; }
         const reader = response.body.getReader();
+        const relayError = endDelivery ? observeRelayError(response) : undefined;
         const catalogHash = options.catalogServed && req.method === "GET" && url.pathname === "/v1/catalog" && url.search === ""
           && response.status === 200 ? createHash("sha256") : null;
         const catalogKeyId = sessionLink === null ? response.headers.get("x-opencodex-key-id") : null;
@@ -247,7 +292,7 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         };
         const cancel = async (reason?: unknown) => {
           cancelled = true;
-          endFlow(false);
+          endFlow(false, "client_cancelled");
           try { await reader.cancel(reason); } finally { finish(); }
         };
         const aborted = () => { void cancel(req.signal.reason).catch(() => {}); };
@@ -256,21 +301,34 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         const body = new ReadableStream<Uint8Array>({
           async pull(controller) {
             stopWaiting();
+            let next;
             try {
-              const next = await reader.read();
-              if (next.done) { endFlow(!cancelled); finish(); controller.close(); if (!cancelled) reportCatalog(); }
-              else {
+              next = await reader.read();
+            } catch (error) {
+              endFlow(false, cancelled || req.signal.aborted ? "client_cancelled" : "upstream_failure");
+              finish(); controller.error(error);
+              return;
+            }
+            try {
+              if (next.done) {
+                controller.close();
+                endFlow(!cancelled, cancelled ? "client_cancelled" : relayError?.failed() ? "upstream_failure" : "observed");
+                finish(); if (!cancelled) reportCatalog();
+              } else {
+                relayError?.append(next.value);
                 catalogHash?.update(next.value); flow?.fromHome(next.value.byteLength); controller.enqueue(next.value);
                 if (waitObserver && !ended) { waiting = true; tellWaiting(true); }
               }
-            } catch (error) { endFlow(false); finish(); controller.error(error); }
+            } catch (error) {
+              endFlow(false, "client_cancelled"); finish(); controller.error(error);
+            }
           },
           cancel,
         }, { highWaterMark: 0 });
         return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
       } catch (error) {
         decideObservation?.(false); req.signal.removeEventListener("abort", beforeHeadersAbort);
-        endFlow(false); release();
+        endFlow(false, req.signal.aborted ? "client_cancelled" : "upstream_failure"); release();
         throw error;
       }
     },

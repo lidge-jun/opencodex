@@ -48,11 +48,10 @@ function send(url: URL, path: string, method: "PATCH" | "POST", body: unknown): 
   });
 }
 
-function provider(hideRawReasoning?: boolean): OcxProviderConfig {
-  return { adapter: "openai-chat", baseUrl: BASE_URL, ...(hideRawReasoning === undefined ? {} : { hideRawReasoning }) };
-}
-
-describe("hideRawReasoning management saves", () => {
+describe.each(["hideRawReasoning", "rawReasoningAsSummary"] as const)("%s management saves", field => {
+  function provider(value?: boolean): OcxProviderConfig {
+    return { adapter: "openai-chat", baseUrl: BASE_URL, ...(value === undefined ? {} : { [field]: value }) };
+  }
   test("same-destination POST keeps an omitted true on disk", async () => {
     await withServer(provider(true), async url => {
       const response = await send(url, "/api/providers", "POST", {
@@ -60,7 +59,7 @@ describe("hideRawReasoning management saves", () => {
         provider: { adapter: "openai-chat", baseUrl: BASE_URL, defaultModel: "relay-thinker" },
       });
       expect(response.status).toBe(200);
-      expect(loadConfig().providers.relay).toMatchObject({ defaultModel: "relay-thinker", hideRawReasoning: true });
+      expect(loadConfig().providers.relay).toMatchObject({ defaultModel: "relay-thinker", [field]: true });
     });
   });
 
@@ -72,7 +71,7 @@ describe("hideRawReasoning management saves", () => {
         provider: { adapter: "openai-chat", baseUrl: movedUrl },
       });
       expect(response.status).toBe(200);
-      expect(loadConfig().providers.relay).toMatchObject({ baseUrl: movedUrl, hideRawReasoning: true });
+      expect(loadConfig().providers.relay).toMatchObject({ baseUrl: movedUrl, [field]: true });
     });
   });
 
@@ -80,10 +79,10 @@ describe("hideRawReasoning management saves", () => {
     await withServer(provider(true), async url => {
       const response = await send(url, "/api/providers", "POST", {
         name: "relay",
-        provider: { adapter: "openai-chat", baseUrl: BASE_URL, hideRawReasoning: false },
+        provider: { adapter: "openai-chat", baseUrl: BASE_URL, [field]: false },
       });
       expect(response.status).toBe(200);
-      expect(loadConfig().providers.relay?.hideRawReasoning).toBe(false);
+      expect(loadConfig().providers.relay?.[field]).toBe(false);
     });
   });
 
@@ -91,36 +90,36 @@ describe("hideRawReasoning management saves", () => {
     await withServer(provider(), async url => {
       const response = await send(url, "/api/providers", "POST", {
         name: "relay",
-        provider: { adapter: "openai-chat", baseUrl: BASE_URL, hideRawReasoning: "true" },
+        provider: { adapter: "openai-chat", baseUrl: BASE_URL, [field]: "true" },
       });
       expect(response.status).toBe(400);
-      expect(await response.json()).toMatchObject({ error: "hideRawReasoning must be a boolean" });
-      expect(loadConfig().providers.relay).not.toHaveProperty("hideRawReasoning");
+      expect(await response.json()).toMatchObject({ error: field + " must be a boolean" });
+      expect(loadConfig().providers.relay).not.toHaveProperty(field);
     });
   });
 
-  test("PATCH with only hideRawReasoning sets then clears it on disk", async () => {
+  test("PATCH with only the display field sets then clears it on disk", async () => {
     await withServer(provider(), async url => {
-      const set = await send(url, "/api/providers?name=relay", "PATCH", { hideRawReasoning: true });
+      const set = await send(url, "/api/providers?name=relay", "PATCH", { [field]: true });
       expect(set.status).toBe(200);
-      expect(loadConfig().providers.relay?.hideRawReasoning).toBe(true);
-      const clear = await send(url, "/api/providers?name=relay", "PATCH", { hideRawReasoning: null });
+      expect(loadConfig().providers.relay?.[field]).toBe(true);
+      const clear = await send(url, "/api/providers?name=relay", "PATCH", { [field]: null });
       expect(clear.status).toBe(200);
-      expect(loadConfig().providers.relay).not.toHaveProperty("hideRawReasoning");
+      expect(loadConfig().providers.relay).not.toHaveProperty(field);
     });
   });
 
   test("PATCH rejects a string value", async () => {
     await withServer(provider(true), async url => {
-      const response = await send(url, "/api/providers?name=relay", "PATCH", { hideRawReasoning: "yes" });
+      const response = await send(url, "/api/providers?name=relay", "PATCH", { [field]: "yes" });
       expect(response.status).toBe(400);
-      expect(await response.json()).toMatchObject({ error: "hideRawReasoning must be a boolean" });
-      expect(loadConfig().providers.relay?.hideRawReasoning).toBe(true);
+      expect(await response.json()).toMatchObject({ error: field + " must be a boolean" });
+      expect(loadConfig().providers.relay?.[field]).toBe(true);
     });
   });
 
   test("provider schema rejects a string instead of passing it through at config load", () => {
-    expect(providerConfigSchema.safeParse({ ...provider(), hideRawReasoning: "true" }).success).toBe(false);
+    expect(providerConfigSchema.safeParse({ ...provider(), [field]: "true" }).success).toBe(false);
     expect(providerConfigSchema.safeParse(provider(true)).success).toBe(true);
   });
 });

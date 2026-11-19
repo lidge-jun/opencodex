@@ -1,12 +1,13 @@
-import { boundDecisionWindows } from "../quota-decision-publication";
+import { boundDecisionWindows, publishAnthropicDecisionQuota } from "../quota-decision-publication";
 import { decisionQuotaSinkActive, publishDecisionAccountQuota } from "../../lib/decision-quota-sink";
 import { mergeAnthropicFamilyWindows, hasAnthropicFamilyEnumeration } from "./anthropic-family-headers";
-import { getCachedProviderAccountQuota, captureProviderAccountQuotaEpoch } from "./account-cache";
+import { getCachedProviderAccountQuota, captureProviderAccountQuotaEpoch, type AccountQuotaCacheEntry } from "./account-cache";
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
 import type { AnthropicInstanceId } from "../anthropic-instance-id";
 import type { GenerationContext } from "../../lib/state-store-sweeper";
 import { credentialGeneration, getAccountCredential, getAccountCredentialWithStatus, getAccountSet } from "../../oauth/store";
 import type { ProviderQuota } from "../quota-types";
+import type { AnthropicUsageProbe } from "../claude-cli-usage";
 
 export class AnthropicQuotaProbeOwnershipError extends Error {}
 
@@ -22,12 +23,21 @@ export type AnthropicCooldownRecoveryProbe = Readonly<{
 
 export type AnthropicQuotaRecoveryResult = Readonly<{
   instance: AnthropicInstanceId;
-  quota: ProviderQuota;
+  /** Null only when the response retires the monthly fallback without supplying meters. */
+  quota: ProviderQuota | null;
+  /** Account cache diagnostics for a retirement-only response. */
+  failureFields?: Pick<AccountQuotaCacheEntry, "unavailable" | "quotaFailure" | "quotaFailureIsCurrent">;
+  dispatch?: number;
   /** Publishes secret-free advisory evidence for the primary pool only; a no-op for Pool 2. */
   publishDecisionQuota(): void;
   /** Must be checked synchronously at each publication boundary. */
   isCurrent(): boolean;
 }>;
+
+export type DispatchedAnthropicUsageProbe = AnthropicUsageProbe & {
+  dispatch: number;
+  isQuotaDispatchCurrent(accountId: string): boolean;
+};
 
 /** Create the cooldown-recovery probe owner for one Anthropic instance; its results are credential- and generation-bound before they may publish. */
 function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
@@ -150,22 +160,41 @@ function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
   async function probeAnthropicQuotaWithRecovery(
     accountId: string,
     accessToken: string,
-    read: (requireFreshDispatch: boolean) => Promise<ProviderQuota | null>,
+    read: (requireFreshDispatch: boolean) => Promise<DispatchedAnthropicUsageProbe | ProviderQuota | null>,
     mayPublish: () => boolean,
   ): Promise<AnthropicQuotaRecoveryResult | null> {
     const probe = await captureAnthropicCooldownRecoveryProbe(accountId, accessToken);
     if (!probe) throw new AnthropicQuotaProbeOwnershipError(`${instance} quota probe lost credential ownership`);
     if (!probe.isCurrent() || !mayPublish()) throw new AnthropicQuotaProbeOwnershipError(`${instance} quota probe lost dispatch ownership`);
-    let quota: ProviderQuota | null;
-    try { quota = await read(probe.requiresFreshDispatch); }
+    let readResult: DispatchedAnthropicUsageProbe | ProviderQuota | null;
+    try { readResult = await read(probe.requiresFreshDispatch); }
     catch (error) {
       if (!probe.isCurrent() || !mayPublish()) throw new AnthropicQuotaProbeOwnershipError(`${instance} quota probe failure is stale`);
       throw error;
     }
-    if (!probe.isCurrent() || !mayPublish()) {
+    const observation = readResult && "quota" in readResult ? readResult : undefined;
+    let quota = readResult && "quota" in readResult ? readResult.quota : readResult;
+    const monthlyFallback = quota?.monthlyPercent !== undefined;
+    const observationCurrent = () => mayPublish() && observation?.isQuotaDispatchCurrent(accountId) !== false;
+    if (!probe.isCurrent() || !observationCurrent()) {
       throw new AnthropicQuotaProbeOwnershipError(`${instance} quota probe result is stale`);
     }
-    if (!quota) return null;
+    if (!quota) {
+      if (!observation?.retireMonthlyFallback) return null;
+      const isCurrent = () => probe.isCurrent() && observationCurrent();
+      return {
+        instance, quota: null, dispatch: observation.dispatch, isCurrent,
+        failureFields: {
+          unavailable: true,
+          ...(observation.failure ? { quotaFailure: observation.failure, quotaFailureIsCurrent: isCurrent } : {}),
+        },
+        publishDecisionQuota: () => {
+          if (instance === "anthropic" && decisionQuotaSinkActive() && isCurrent()) {
+            publishAnthropicDecisionQuota(accountId, probe.generation, null, true);
+          }
+        },
+      };
+    }
     const settlement = probe.settle(quota);
     if (settlement === "superseded") {
       throw new AnthropicQuotaProbeOwnershipError(`${instance} quota probe lost cooldown ownership`);
@@ -176,7 +205,7 @@ function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
     const ownsFamily = probe.isCurrentFamily();
     const authoritative = ownsFamily && hasAnthropicFamilyEnumeration(quota);
     if (ownsFamily) anthropicModelQuotaFor(instance).observeAnthropicFamilyQuota(accountId, quota.customWindows ?? [], quota.updatedAt, authoritative);
-    if (!authoritative) {
+    if (!authoritative && !monthlyFallback) {
       const cached = getCachedProviderAccountQuota(instance, accountId)?.customWindows;
       const windows = ownsFamily ? mergeAnthropicFamilyWindows(cached, quota.customWindows)
         : cached ?? [];
@@ -189,11 +218,12 @@ function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
     const isCurrent = () => probe.isCurrentCredential()
       && anthropicCooldownGeneration(accountId) === publicationGeneration
       && familyGeneration(accountId) === publicationFamilyGeneration
-      && mayPublish();
+      && observationCurrent();
     afterSettlementForTests?.();
     return {
       instance,
       quota,
+      dispatch: observation?.dispatch,
       isCurrent,
       publishDecisionQuota: () => {
         // Activation first: ownership validation reads the auth store and must not run for signals-off installs.

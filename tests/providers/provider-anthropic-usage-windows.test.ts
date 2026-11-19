@@ -348,3 +348,91 @@ test("a redirected reset-grant read or claim never reaches the redirect target",
     target.stop(true);
   }
 });
+// Live shapes (2026-11-18). Usage-based Enterprise reports only extra_usage; a Max plan with
+// extra usage switched off still carries a zeroed extra_usage block next to its real windows.
+const enterpriseUsage = {
+  five_hour: null, seven_day: null, seven_day_opus: null, seven_day_sonnet: null, limits: [],
+  extra_usage: { is_enabled: true, monthly_limit: 24300, used_credits: 1356, utilization: 5.580246913580247,
+    currency: "USD", decimal_places: 2, disabled_reason: null, user_disabled: false, spend_limit_reached: false },
+};
+
+test("usage-based Enterprise with no plan windows reports monthly usage from extra_usage", async () => {
+  const quota = await parse(enterpriseUsage);
+  expect(quota?.monthlyPercent).toBeCloseTo(5.58, 2);
+  expect(quota?.monthlyResetAt).toBeUndefined();
+  expect(quota?.fiveHourPercent).toBeUndefined();
+  expect(quota?.weeklyPercent).toBeUndefined();
+});
+
+test("monthly usage falls back to used_credits over monthly_limit, and clamps", async () => {
+  const base = enterpriseUsage.extra_usage;
+  expect((await parse({ ...enterpriseUsage, extra_usage: { ...base, utilization: null, used_credits: 12150 } }))?.monthlyPercent).toBe(50);
+  expect((await parse({ ...enterpriseUsage, extra_usage: { ...base, utilization: 140 } }))?.monthlyPercent).toBe(100);
+});
+
+test("monthly usage takes the higher reading when utilization and credit counters disagree", async () => {
+  const body = { ...enterpriseUsage, extra_usage: {
+    is_enabled: true, utilization: 10, used_credits: 100, monthly_limit: 100,
+  } };
+  expect((await parse(body))?.monthlyPercent).toBe(100);
+  expect(rawAnthropicUsageWindows(body, now)).toEqual([{ window: "monthly", percent: 100, observedAt: now }]);
+  const belowCap = { ...body, extra_usage: { ...body.extra_usage, used_credits: 45 } };
+  expect((await parse(belowCap))?.monthlyPercent).toBe(45);
+});
+
+test("a monthly value follows the credit balance on the next read, with no reset time", async () => {
+  expect((await parse(enterpriseUsage))?.monthlyPercent).toBeCloseTo(5.58, 2);
+  const reset = await parse({ ...enterpriseUsage, extra_usage: { ...enterpriseUsage.extra_usage, used_credits: 0, utilization: 0 } });
+  expect(reset?.monthlyPercent).toBe(0);
+});
+
+test("extra_usage that is not usable now yields no monthly usage", async () => {
+  for (const extra of [
+    { ...enterpriseUsage.extra_usage, is_enabled: false },
+    { ...enterpriseUsage.extra_usage, is_enabled: "true" },
+    { is_enabled: true },
+    { is_enabled: true, utilization: "n/a", monthly_limit: 0, used_credits: 5 },
+  ]) {
+    expect(await parse({ ...enterpriseUsage, extra_usage: extra })).toBeNull();
+  }
+  expect(await parse({ ...enterpriseUsage, extra_usage: undefined })).toBeNull();
+});
+
+test("extra_usage never adds a monthly bar next to real plan windows", async () => {
+  const subscription = { five_hour: null, seven_day: { utilization: 16, resets_at: weeklyReset },
+    limits: [{ kind: "weekly_all", percent: 16, is_active: false, resets_at: weeklyReset }],
+    extra_usage: { is_enabled: true, monthly_limit: 5000, used_credits: 1000, utilization: 20, disabled_reason: null } };
+  const quota = await parse(subscription);
+  expect(quota?.weeklyPercent).toBe(16);
+  expect(quota?.monthlyPercent).toBeUndefined();
+  expect(rawAnthropicUsageWindows(subscription, now).map(row => row.window)).toEqual(["weekly"]);
+  const off = await parse({ ...subscription, extra_usage: { ...subscription.extra_usage, is_enabled: false, utilization: 0 } });
+  expect(off?.monthlyPercent).toBeUndefined();
+});
+
+test("the advisory projection carries the same monthly window as the display, without a reset", () => {
+  expect(rawAnthropicUsageWindows(enterpriseUsage, now)).toEqual([
+    { window: "monthly", percent: 5.580246913580247, observedAt: now },
+  ]);
+  expect(rawAnthropicUsageWindows({ ...enterpriseUsage, extra_usage: { ...enterpriseUsage.extra_usage, is_enabled: false } }, now)).toEqual([]);
+});
+
+test("an inactive scoped row is a reported plan window, so extra_usage adds no monthly bar beside it", async () => {
+  const inactiveScoped = { five_hour: null, seven_day: null,
+    limits: [{ kind: "weekly_scoped", group: "weekly", percent: 27, is_active: false, resets_at: weeklyReset,
+      scope: { model: { id: null, display_name: "Fable" }, surface: null } }],
+    extra_usage: enterpriseUsage.extra_usage };
+  const quota = await parse(inactiveScoped);
+  expect(quota?.monthlyPercent).toBeUndefined();
+  expect(rawAnthropicUsageWindows(inactiveScoped, now).map(row => row.window)).not.toContain("monthly");
+  // The same body without the scoped row is a monthly-only seat, so the row is what suppresses it.
+  const withoutScoped = await parse({ ...inactiveScoped, limits: [] });
+  expect(withoutScoped?.monthlyPercent).toBeCloseTo(5.58, 2);
+});
+
+test("a recognized session skipped because legacy five_hour is null suppresses monthly usage", async () => {
+  const body = { ...enterpriseUsage, limits: [{ kind: "session", percent: 20, is_active: false }] };
+  expect(await parse(body)).toBeNull();
+  expect(await probeAnthropicUsageQuota("synthetic-usage-bearer")).toMatchObject({ quota: null, retireMonthlyFallback: true });
+  expect(rawAnthropicUsageWindows(body, now)).toEqual([]);
+});
