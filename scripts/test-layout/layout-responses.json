@@ -4,6 +4,7 @@
   "responses-anthropic-image-context-recovery.test.ts": "responses",
   "responses-anthropic-image-spend-parity.test.ts": "responses",
   "search-empty-completion.test.ts": "responses",
+  "search-terminal-continuation-budget.test.ts": "responses",
   "search-terminal-continuation.test.ts": "responses",
   "responses-estimated-usage.test.ts": "responses",
   "responses-combo-estimated-usage-spend.test.ts": "responses",

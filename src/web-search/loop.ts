@@ -576,8 +576,11 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   let rateLimitRetries = 0;
   // The 429 ladder and thinking-signature recovery are request-scoped. Each
   // model dispatch can use its transport's full retry ladder.
+  // An authorized Chat terminal re-ask is one more loop iteration (terminalContinuations in the
+  // loop bound), so the default allowance funds it; explicit and Combo caps never expand.
   deps.configureModelSendAllowance?.((deps.adapter.hostedIterationSendLimit ?? RESET_RETRY_MAX_ATTEMPTS) * (
     HARD_CAP + Number(Boolean(deps.emptyCompletionRetry))
+    + Number(deps.terminalContinuationGuard === true && deps.adapter.name === "openai-chat")
     + (rateLimitRetryPolicy?.attempts ?? 0) + Number(Boolean(deps.thinkingRecovery))
   ));
 

@@ -193,6 +193,15 @@ describe("Spanish documentation localization", () => {
   });
 
   test.each([
+    ["reference/configuration/providers.md", /charged against the request send budget and configured spend ceilings/, /refuses it before dispatch/],
+    ["es/reference/configuration/providers.md", /se carga al presupuesto de envíos de la solicitud y a los límites de gasto configurados/, /la rechaza antes del envío/],
+  ] as const)("charges terminal re-asks to the send budget in %s", (page, charged, refused) => {
+    const row = source(join(root, page)).split("\n").find(line => line.startsWith("| `terminalContinuationGuard?` |"));
+    expect(row).toMatch(charged);
+    expect(row).toMatch(refused);
+  });
+
+  test.each([
     ["en", /routing policy aliases.*combo aliases/],
     ["es", /alias de políticas de enrutamiento.*alias de combos/],
     ["fr", /alias de politique de routage.*alias de combos/],
