@@ -1051,11 +1051,29 @@ create a general pairing session. Controls stay disabled until that scope is ver
 grant nor the exchange changes certificate trust, runtime state or the auto-start preference.
 
 Start requires an already prepared, trusted certificate, a freshly verified native file-based
-ChatGPT login and the assessed Codex Windows build `26.924.2738.0`. It begins in Observe mode.
+ChatGPT login and an official Microsoft Store Codex package for the current Windows user.
+Windows must verify the signed package contents and report a valid OpenAI Authenticode signature
+for the installed `ChatGPT.exe`. Failure or unavailable proof returns `build_unverified`.
+Observation starts in Observe mode.
 HTTP/HTTPS and authenticated SOCKS5 outbound proxies use the same explicit selection for HTTP,
 identity verification and upgraded sockets. NO_PROXY is honored; failures never retry directly.
 An invalid or unsupported setting returns `egress_proxy_invalid`. Start never registers a certificate or changes
-login. Launch preserves package identity and refuses an app that is already running.
+login. Launch refuses an app that is already running. It checks the verified full package name and
+executable SHA-256 before package activation, then checks the process image and routing argument
+before reporting success. Runtime-owned launch uses an asynchronous child, so PAC and relay
+requests remain serviceable while the full proof runs. Stop aborts and drains that child before
+another runtime can start. A refused or indeterminate package activation revokes the account-wide
+trial and initiates cleanup of the compatibility runtime and its managed connections. Closure
+is confirmed only after cleanup succeeds. This also applies to a managed Codex restart, and to an
+activation that fails after a proof refresh changed the verified build. A launch reports success
+only for the build revision it started with; a request that verified a different revision
+receives `build_unverified` instead.
+OpenCodeX leaves any PID returned by activation alone. Check `runtime.phase` in the response:
+if cleanup fails, HTTP 409 includes `cleanup-required`; retry Stop and confirm `off` before
+starting again. After successful cleanup, callers can start directly. For either activation
+failure path, save drafts, close any Codex window left running, start observation, and select
+**Open Codex** to restore the managed connection. Then wait for a fresh eligible exhaustion
+snapshot and explicitly consent to a new Apply request.
 PAC and CONNECT ports are persisted after successful first binding and reused on restart.
 `connection_unavailable` means binding failed; `connection_invalid` or `connection_changed`
 means stored endpoint identity could not be accepted. These failures never silently rotate
@@ -1065,15 +1083,16 @@ process's bound OpenCodex listener. Runtime status may expose `contextFailure` f
 or `build_unverified`. These states disable response correction without claiming an app repair.
 
 A status response can also carry `buildAssessment`, the public metadata of the last completed
-build check: `assessedVersion` (the exact package this runtime was assessed against),
+build check: `assessedVersion` (the baseline holding native acceptance evidence),
 `observedVersion`, `verified` and `completedAt`. It records a past observation, not a live
 install reading: a stopped runtime, an app update or a pending or interrupted check can leave it
 older than the installed package, and only a completed check replaces it. `observedVersion` is
-null unless discovery matched the assessed package family and entry point; an identified newer
-build keeps its own version with `verified` false, and `verified` always describes the package
-observed at `completedAt`, never whatever is installed later. The field is absent until the
-service creates its probe during start and `null` until that probe finishes a check; reading
-status never starts one.
+null unless discovery matched the assessed package family and entry point; an identified build
+keeps its own version, and `verified` reports whether the package passed its official package
+proof at `completedAt`, never whatever is installed later. The field is absent until the
+service creates its probe during start. It is `null` only when a probe exists and no completed
+assessment is available. A previous completed assessment remains visible while a replacement
+probe is pending, until a new check completes; reading status never starts a check.
 
 Apply requires a recently observed eligible exhaustion snapshot and lasts at most three minutes
 at the response layer. It changes two account-UI gate flags, not usage percentages, credits,
