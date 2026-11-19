@@ -324,6 +324,33 @@ describe("collectOAuthHealthEntries", () => {
       .toMatchObject({ needsReauth: true, needsReauthReason: "verify_account" });
   });
 
+  test("a silent refresh preserves a tos_violation quarantine, and its action names the suspension", async () => {
+    await saveCredential("kimi", {
+      access: "kimi-access",
+      refresh: "kimi-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "kimi-acct-tos",
+    });
+    const accountId = getAccountSet("kimi")!.activeAccountId;
+    const generation = credentialGeneration(getAccountSet("kimi")!.accounts
+      .find(a => a.id === accountId)!.credential);
+    expect(await markAccountNeedsReauthIfGeneration("kimi", accountId, generation, undefined, "tos_violation"))
+      .toBe(true);
+    await mergeAccountCredential("kimi", accountId, {
+      access: "kimi-access-2",
+      refresh: "kimi-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "kimi-acct-tos",
+    });
+    // Stored as a verify hold plus its cause, so a build that does not know the cause keeps the hold.
+    expect(getAccountSet("kimi")!.accounts.find(a => a.id === accountId))
+      .toMatchObject({ needsReauth: true, needsReauthReason: "verify_account", needsReauthCause: "tos_violation" });
+    const entry = collectOAuthHealthEntries().find(e => e.provider === "kimi" && e.accountId === accountId);
+    expect(entry?.health).toEqual({ status: "reauth_required", reason: "tos_violation" });
+    expect(entry?.action).toContain("Terms of Service");
+    expect(entry?.action).toContain("ocx login kimi");
+  });
+
   test("Codex reauth action points at the dashboard pool, not ocx login codex", () => {
     markCodexAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
     const entries = collectOAuthHealthEntries();

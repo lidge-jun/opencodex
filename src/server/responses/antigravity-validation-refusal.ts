@@ -3,7 +3,31 @@ import {
   GOOGLE_PERMISSION_DENIED_SUFFIX, safeAntigravityHttpErrorMessage,
 } from "../../adapters/google-errors";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
-import { classifyAntigravityRefusal, hasAntigravityModelNotFoundProvenance } from "../../adapters/antigravity-refusal";
+import { classifyAntigravityRefusal, hasAntigravityModelNotFoundProvenance, type AntigravityRefusal } from "../../adapters/antigravity-refusal";
+import { isCanonicalAntigravityUrl } from "../../lib/provider-tls-profile";
+import { hasUpstreamRewriters, upstreamRewriterEpoch } from "../../plugins/upstream-hooks";
+import type { OcxProviderConfig } from "../../types";
+import { readDisplaySafeErrorText } from "./core-errors";
+
+export function captureAntigravityQuarantineTrust(providerName: string): number | undefined {
+  return providerName === "google-antigravity" && !hasUpstreamRewriters() ? upstreamRewriterEpoch() : undefined;
+}
+
+export async function classifyAntigravityQuarantine(
+  response: Response,
+  provider: Pick<OcxProviderConfig, "authMode" | "baseUrl">,
+  rewriterEpoch: number | undefined,
+  signal: AbortSignal,
+): Promise<AntigravityRefusal> {
+  const refusal = classifyAntigravityRefusal(response.status, await readDisplaySafeErrorText(response.clone(), signal, ""));
+  // Keep durable suspension holds within the first-party Cloud Code Assist trust boundary.
+  if (refusal.kind === "tos_violation" && (
+    provider.authMode !== "oauth"
+    || !isCanonicalAntigravityUrl(provider.baseUrl)
+    || rewriterEpoch !== upstreamRewriterEpoch()
+  )) return { kind: "other" };
+  return refusal;
+}
 
 /** Match only the normalized Antigravity validation-refusal marker. */
 export function hasAntigravityValidationRefusalMarker(text: string): boolean {

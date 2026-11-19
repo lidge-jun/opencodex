@@ -50,9 +50,10 @@ with the same item id. The batch/non-streaming bridge follows the same rule.
 (Cloudflare closes idle connections; Bun's fetch reuses the dead socket and rejects with
 `ECONNRESET` before any response bytes). `fetchWithResetRetry` never retries on its own
 account. A caller passing `replaySafe: true` permits up to 3 total attempts with jittered
-backoff, warn-logged. A separate `retryOnReset` operator grant can authorize an ambiguous
+backoff, warn-logged. A request-cap refusal at the guarded executor retains its 429 classification
+even if the previous connection attempt reset. A separate `retryOnReset` operator grant can authorize an ambiguous
 replacement within the existing send budget. Without either permission, the rejection becomes the terminal refusal described in
-[ambiguous connection-reset replay boundary](#ambiguous-connection-reset-replay-boundary).
+[ambiguous connection-reset replay boundary](#ambiguous-connection-reset-replay-boundary). Transient and nested reset retries intersect local attempts with the reporter's live shared allowance, including deferred reports and exact prepaid ownership. Incremental recovery uses one helper-local slot and one shared permit. A later retry must fit within both remaining allowances.
 Reusable request bytes were never the test: a string body makes a send mechanically
 repeatable, not idempotent, and a model POST is not idempotent. Timeouts, aborts,
 `ECONNREFUSED`, HTTP error statuses, and mid-stream SSE failures are never retried at all, except the opt-in [offline wait](timeouts.md#offline-wait-and-resend) for pre-connect failures.
@@ -169,6 +170,7 @@ Key identity is sealed at guarded physical dispatch after queued selections are 
 Before a turn-scoped retry readmits a refreshed selection, it rejects a binding already recorded as failed for this request and returns the last key failure. Eligible replacement keys still release the old lease and reacquire their own pacing capacity before invocation, rechecking after every admission. CLI-backed turns carry a synchronous selection fence through asynchronous tool setup to the physical spawn boundary. Raw adapter terminal usage is recorded before continuation, search, or image loops merge it;
 repeated parsing of one physical response does not count it twice. Key changes preserve the
 previous attempt while retaining the active attempt object shared by streaming/combo callbacks.
+Search and media settle accumulated hidden-round usage on the current row when staging a credential replacement, including a replacement with the same account label. The replacement opens its own attempt at physical dispatch. If search sibling preparation fails, the loop’s accumulated usage is bound before the sending attempt is sealed.
 Bounded failure-body observation retains reported usage and releases cloned readers on abort.
 Identity and consumer aggregation follow the [account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution).
 

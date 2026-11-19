@@ -40,12 +40,12 @@ for (const kind of ["search", "image", "video"] as const) {
       expect(getActiveTurnCount()).toBe(0);
     } finally { override.mockRestore(); }
   }));
-  test(`${kind} direct hosted inference preserves its existing non-Combo accounting contract`, async () => hostedSendFixture(kind, "failover", async f => {
+  test(`${kind} direct hosted inference settles one request send and one spend charge`, async () => hostedSendFixture(kind, "failover", async f => {
     const req = f.request(); const body = await req.json() as Record<string, unknown>; body.model = "a/m";
     const { handleResponses } = await import("../../src/server/responses/core");
     const response = await handleResponses(new Request(req.url, { method: "POST", headers: req.headers, body: JSON.stringify(body) }), f.config, f.log, { sendBudget: f.budget });
     expect(await response.text()).toContain("hosted route final answer"); expect(f.inference).toBe(1);
-    expect(f.budget.used).toBe(0); expect(f.charges).toBe(0); expect(f.refunds).toBe(0); expect(getActiveTurnCount()).toBe(0);
+    expect(f.budget.used).toBe(1); expect(f.charges).toBe(1); expect(f.refunds).toBe(0); expect(getActiveTurnCount()).toBe(0);
   }));
   for (const firstOwned of [false, true]) test(`${kind} rotated ${firstOwned ? "adapter-to-generic" : "generic-to-adapter"} dispatch uses its actual accounting owner`, async () => hostedSendFixture(kind, "failover", async f => {
     delete f.config.providers.a!.transientRetryOn5xx;

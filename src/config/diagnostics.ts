@@ -36,6 +36,7 @@ import {
   sanitizeRetryOn429ForLoad,
   sanitizeCapabilityDeclarationsForLoad,
   sanitizeModelCostsForLoad,
+  sanitizeCreditPriceForLoad,
   sanitizeAutoReviewForLoad,
   degradedListenerWarnings,
   degradedReasoningRetentionWarning,
@@ -295,6 +296,14 @@ function upstreamRequestCompressionError(value: unknown): string | null {
   const mode = raw.upstreamRequestCompression;
   if (mode === undefined || mode === "off" || mode === "gzip" || mode === "zstd") return null;
   return "schema_invalid: upstreamRequestCompression: must be \"off\", \"gzip\" or \"zstd\"";
+}
+
+function upstreamHistorySlimConfigError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "upstreamHistorySlim")) return null;
+  const mode = raw.upstreamHistorySlim;
+  if (mode === undefined || mode === "off" || mode === "codex") return null;
+  return "schema_invalid: upstreamHistorySlim: must be \"off\" or \"codex\"";
 }
 
 function plaintextV2AgentMessagesError(value: unknown): string | null {
@@ -803,6 +812,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? appOwnedMemoryBudgetError(value)
     ?? upstreamHostCircuitThresholdError(value)
     ?? upstreamRequestCompressionError(value)
+    ?? upstreamHistorySlimConfigError(value)
     ?? plaintextV2AgentMessagesError(value)
     ?? agentTaskRecoveryError(value)
     ?? quotaResetNotifyError(value)
@@ -867,6 +877,10 @@ function configDiagnosticsFromText(raw: string, file?: { path: string; bytes: Ui
     sanitizeRetryOn429ForLoad(parsed, warn);
     sanitizeAgyAcpForLoad(parsed, reportAgyRepair);
     sanitizeModelCostsForLoad(parsed, warn);
+    sanitizeCreditPriceForLoad(parsed, message => {
+      repairs.push(message);
+      (warn ?? console.warn)(message);
+    });
     sanitizeCapabilityDeclarationsForLoad(parsed, warn);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
@@ -904,7 +918,10 @@ function configDiagnosticsFromText(raw: string, file?: { path: string; bytes: Ui
       };
     }
 
-    return { config: getDefaultConfig(), source: "fallback", error: schemaDiagnosticsError(result.error) };
+    return {
+      config: getDefaultConfig(), source: "fallback", error: schemaDiagnosticsError(result.error),
+      ...(repairs.length > 0 ? { warnings: repairs } : {}),
+    };
   } catch {
     return { config: getDefaultConfig(), source: "fallback", error: "invalid_json" };
   }

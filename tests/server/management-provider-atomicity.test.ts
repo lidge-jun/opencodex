@@ -85,6 +85,30 @@ function harness(config = fixture(), save: (config: OcxConfig) => void = () => {
     post: (body: unknown) => request("POST", body), events, reconcile };
 }
 
+describe("full provider saves with a separately configured credit price", () => {
+  test.each([0.02, 0])("an ordinary form save carries the stored price %s", async price => {
+    const config = fixture();
+    config.providers.relay.creditPriceUsd = price;
+    const saved: OcxConfig[] = [];
+    const { post } = harness(config, next => { saved.push(structuredClone(next)); });
+    const response = await post({ name: "relay", provider: { adapter: "openai-chat",
+      baseUrl: "https://relay.example/v1", models: ["relay-model"], headers: { "X-Changed": "form" } } });
+    expect(response?.status).toBe(200);
+    expect(config.providers.relay.creditPriceUsd).toBe(price);
+    expect(saved[0]?.providers.relay).toMatchObject({ creditPriceUsd: price, headers: { "X-Changed": "form" } });
+  });
+
+  test("an explicit credit price in the POST replaces the stored price", async () => {
+    const config = fixture();
+    config.providers.relay.creditPriceUsd = 0.02;
+    const { post } = harness(config);
+    const response = await post({ name: "relay", provider: { adapter: "openai-chat",
+      baseUrl: "https://relay.example/v1", models: ["relay-model"], creditPriceUsd: 0 } });
+    expect(response?.status).toBe(200);
+    expect(config.providers.relay.creditPriceUsd).toBe(0);
+  });
+});
+
 describe("provider PATCH durable atomicity", () => {
   test.each([
     { disabled: true },

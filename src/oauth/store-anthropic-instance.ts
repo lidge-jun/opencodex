@@ -87,7 +87,9 @@ export function assertNoCrossAnthropicRegistration(store: AuthStore, instance: A
     const refresh = tokenFingerprint(row.credential.refresh);
     const existingIdentity = normalizeAnthropicIdentity(row.credential.anthropicIdentity, row.credential.access);
     if ((access !== undefined && tokens.has(access)) || (refresh !== undefined && tokens.has(refresh))
-      || (identity && existingIdentity && identity.accountUuid === existingIdentity.accountUuid)) {
+      || (identity && existingIdentity && identity.accountUuid === existingIdentity.accountUuid
+        && !(identity.organizationUuid && existingIdentity.organizationUuid
+          && identity.organizationUuid !== existingIdentity.organizationUuid))) {
       throw new AnthropicCrossInstanceDuplicateError();
     }
   }

@@ -48,14 +48,20 @@ test("429 rotation reports the rotator's recovery kind", async () => {
     const firstAdapter: ProviderAdapter = {
       name: "mock-429",
       buildRequest,
-      fetchResponse: async () => new Response("rate limited", { status: 429, headers: { "retry-after": "30" } }),
+      fetchResponse: async (_req, ctx) => {
+        ctx?.onPhysicalSend?.({ ordinal: 1 });
+        return new Response("rate limited", { status: 429, headers: { "retry-after": "30" } });
+      },
       async *parseStream() { /* unused */ },
       async parseResponse() { return [{ type: "done" }] as AdapterEvent[]; },
     };
     const rotatedAdapter: ProviderAdapter = {
       name: "mock-rotated",
       buildRequest,
-      fetchResponse: async () => new Response("{}", { status: 200 }),
+      fetchResponse: async (_req, ctx) => {
+        ctx?.onPhysicalSend?.({ ordinal: 1 });
+        return new Response("{}", { status: 200 });
+      },
       async *parseStream() {
         yield { type: "text_delta", text: "answer from rotated account" };
         yield { type: "done" };
@@ -100,7 +106,8 @@ test("web-search does not replay a verification refusal after routed output was 
   const adapter: ProviderAdapter = {
     name: "mock-antigravity",
     buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
-    fetchResponse: async () => {
+    fetchResponse: async (_req, ctx) => {
+      ctx?.onPhysicalSend?.({ ordinal: 1 });
       routedSends++;
       if (routedSends === 1) return new Response("ok", { status: 200 });
       return new Response(JSON.stringify({ error: {

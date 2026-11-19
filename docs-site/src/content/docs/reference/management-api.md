@@ -316,7 +316,33 @@ the full filtered window. A valid unchanged prefix returns only appended rows; `
 the client window after edits, eviction, query changes or restart. Invalid cursors return HTTP 400 with
 `error.code: "invalid_cursor"`. Authentication is unchanged. The dashboard falls back to full snapshots
 for older servers. This reduces response bytes for stable windows; server projection remains bounded
-by the current window size.
+by the current window size. Logs and request-history responses omit `usage.providerCredits` on
+requests and attempts with an invalid or incomplete credit reading. A measured zero is returned as `0`.
+
+A successful `/api/logs` (and request-history) `displayMetrics.cost.estimate` may carry an optional
+`billing` object naming how the row was charged, so a client never has to infer an allocation the
+proxy does not have:
+
+- `{ "source": "provider-credits", "providerCredits": <number>, "creditPriceUsd": <number> }` — the
+  total is `providerCredits x creditPriceUsd` and the four token component fields are placeholders,
+  not a split. Every attempt that shares one credit price reports this; an explicit zero credit
+  reading reports zero. Missing credits with no output leave the cost unavailable.
+- `{ "source": "mixed" }` — the attempts were not all billed the same way (a credit attempt beside a
+  token-priced one, or two credit prices), so only the per-attempt estimates have a split; the
+  parent total is still their sum.
+
+Absent `billing` on an available estimate indicates token pricing. A previously recorded row
+with a retained valid reading can get credit pricing at the current configured rate, regardless
+of when it was logged. Positive-output rows without a reading can fall back to tokens. Clients
+can show the token component breakdown when `billing` is absent. For a credit-priced estimate,
+`tokens` is `null` if the token breakdown could not be normalized.
+
+A missing credit reading with zero output, or a count or price that cannot yield a representable
+credit estimate, gives `{ "kind": "unavailable", "reason": "credit_cost_unrepresentable" }`.
+A Combo with an eligible attempt in that state reports the same reason on the parent. Otherwise,
+a Combo with an unpriced attempt reports `combo_attempt_unavailable` on the parent. A token-priced
+row or attempt whose token count exceeds the pricing bound reports `invalid_usage`. See
+[Kiro request credits](/guides/kiro-request-credits/#bounds-and-unrepresentable-values).
 
 Successful `/api/logs` `displayMetrics.decodeTokPerSecond` values carry
 `timingBasis: "generation-window" | "legacy-post-visible-output"` alongside `kind`, `value`
@@ -408,6 +434,10 @@ confidence/probability, and optional numeric decision usage. It never stores pro
 credentials, tool arguments, or raw TypeSafe responses. Oversized rows retain the same positive
 `usageIncomplete` diagnostic as the ordinary usage endpoint.
 
+For routed image and web-search turns, `sendCount` includes upstream adapter retries.
+Each model send for these turns uses the shared request send budget, including retries and later tool rounds. A send refused at the cap does not increment `sendCount`. For direct hosted web search, the default request budget covers the loop’s bounded model rounds, including the forced-answer retry and any enabled recovery, rate-limit, and connection-reset retries. For direct hosted media, the default budget covers the configured rounds, same-target 429 retries and the transport’s bounded send attempts. Explicit send caps still apply.
+A replacement stopped before upstream dispatch adds no send.
+
 New xAI attempts in `usage.jsonl` include a request-time `credentialSource`: `grok-oauth`
 for the resolved Grok CLI OAuth transport, or `xai-api-key` for the public xAI API key
 transport. This fixed label contains no credential or account identifier. It belongs to
@@ -433,8 +463,15 @@ the per-account usage summaries. A provider without that suffix, such as a pool-
 request, has no tag. Older rows and malformed values omit the field.
 
 Key selection is recorded after queued requests have been rebuilt for the current selection.
-When a retry changes keys, `attempts` retains a separate record for the preceding key, including
-reported usage from failed responses. Missing usage remains unreported. Routed adapter terminals
+When a retry changes keys, `attempts` retains a separate record for the preceding key. After an
+upstream attempt has been sent, credential recovery records a separate attempt when the proxy
+dispatches the replacement, even if both attempts use the same account label. If local pacing
+rejects the replacement, the request can have status 429 while its sole upstream attempt retains status 401. The same
+dispatch rule applies to combo members, runTurn adapters, and native Responses compaction.
+Each attempt retains the usage the proxy captures for it. The xAI Responses OAuth replay discards
+the refused 401 body, so usage in that body remains unreported. A replacement can carry estimated
+usage from its rebuilt request when provider totals are unavailable.
+`usageStatus` distinguishes reported, estimated, and unreported usage. Routed adapter terminals
 are observed before image/search loops or continuation guards combine their usage. Consumers
 sum the flat attempts by provider/account and do not add the parent combo total again. These
 records identify usage; provider quota percentages remain separate upstream observations.

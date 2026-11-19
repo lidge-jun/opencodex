@@ -684,7 +684,7 @@ export function trackProviderRequestSlotBody(
  * and a no-op for interval-only slots, so every boundary can call it unconditionally.
  */
 export function releaseProviderRequestSlot(slot: ProviderRequestSlot | undefined): void {
-  if (!slot || slot.bodyTracked) return;
+  if (!slot || slot.bodyTracked || slot.released) return;
   slot.release();
 }
 

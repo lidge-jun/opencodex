@@ -635,6 +635,8 @@ export default function ProviderAuthPanel({
                 {accounts.map(account => {
                   const label = oauthAccountDisplayLabel(accounts, account, t);
                   const planLabel = isAnthropicPool ? anthropicSubscriptionLabel(account.plan) : item.name === "google-antigravity" ? account.plan : undefined;
+                  // One Claude account can hold a row per organization; the name tells those rows apart.
+                  const organizationName = isAnthropicPool ? account.organizationName : undefined;
                   const switching = switchingAccountId === account.id;
                   const pausing = pausingAccountId === account.id;
                   const healthStatus = account.health?.status;
@@ -650,12 +652,13 @@ export default function ProviderAuthPanel({
                     <button type="button" className="pwi-auth-row-main"
                       onClick={() => { if (!account.active && !account.paused && !showReauth && !inCooldown && !switchingAccountId && !pausingAccountId) void authHandlers.onSwitchAccount(item.name, account); }}
                       aria-current={account.active ? "true" : undefined}
-                      aria-label={`${label}${planLabel ? ` — ${planLabel}` : ""}${account.active ? ` — ${t("pws.accountCurrent")}` : ""}`}
+                      aria-label={`${label}${organizationName ? ` — ${organizationName}` : ""}${planLabel ? ` — ${planLabel}` : ""}${account.active ? ` — ${t("pws.accountCurrent")}` : ""}`}
                       disabled={Boolean(account.paused || showReauth || inCooldown || switchingAccountId || pausingAccountId)}>
                       <span className={`pwi-auth-dot ${showReauth ? "pwi-auth-dot--warn" : account.active && !account.paused ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
                       <span className="pwi-auth-row-copy">
                         <span className="pwi-auth-row-heading"><span className="pwi-auth-row-label">{label}</span>{planLabel && <span className="badge badge-green">{planLabel}</span>}</span>
                         {!isAnthropicPool && <span className="pwi-auth-row-secondary">{`${t("prov.accountId")}: ${maskedId}`}</span>}
+                        {organizationName && <span className="pwi-auth-row-secondary">{organizationName}</span>}
                         {healthSummary && (
                           <span className="pwi-auth-row-secondary faint">{healthSummary}</span>
                         )}

@@ -88,11 +88,15 @@ write commits. An operator pause has no details and stays. Coverage:
 `src/server/responses/request-transport.ts` observes exact physical account outcomes before
 retry wrappers replace the response. Threshold-triggered OAuth/key pauses rebuild the
 request through `src/server/responses/account-auto-pause-recovery.ts` and the existing selection owner, with at most three account moves funded by the existing recovery owner. Before rebuilding, the transport binds replay and continuation ownership to the refreshed credential on both the retry request and the outer request used for persistence.
+The replacement becomes a usage attempt at physical dispatch under the
+[credential recovery accounting contract](usage-client-attribution.md#credential-recovery-attempts).
 `src/server/responses/passthrough-dispatch.ts` and
 `src/server/responses/core-codex-account.ts` admit a confirmed Codex auto-pause to the
 existing alternate-account ladder without reclassifying subscription refusal as a dead
-credential. `src/server/responses/compact.ts` observes the same pool contexts; custom gateway sends stay outside Codex pool outcome recording and recovery. Fixed
-account selectors and uploaded-file constraints continue to suppress alternate moves.
+credential. `src/server/responses/compact.ts` observes the same pool contexts. Keyed compaction
+receives final-wire ownership evidence alongside its dispatch accounting. Custom gateway sends
+stay outside Codex pool outcome recording and recovery. Fixed account selectors and
+uploaded-file constraints continue to suppress alternate moves.
 
 ## Permanent account refusal auto-pause
 

@@ -1,3 +1,4 @@
+import { responsesExtraContentFromProviderMetadata } from "../../responses/provider-opaque-metadata";
 import { isProxyError, hasProxyErrorMessage } from "../../lib/client-error-body";
 import type { FailureVerdictSink } from "../../chat/failure-verdict";
 import { ownedChatErrorResponse } from "../../chat/outbound";
@@ -109,7 +110,7 @@ function createChatCompletionWriter(sink: ClientFrameSink, model: string, failur
     frame.choices = [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }];
     emit(frame);
   };
-  const emitToolCall = (toolIndex: number, callId: string, name: string, args: string) => {
+  const emitToolCall = (toolIndex: number, callId: string, name: string, args: string, extra?: Record<string, unknown>) => {
     if (!callId || emittedToolIndexes.has(toolIndex)) return;
     emittedToolIndexes.add(toolIndex);
     ensureRole();
@@ -122,6 +123,7 @@ function createChatCompletionWriter(sink: ClientFrameSink, model: string, failur
           id: callId,
           type: "function",
           function: { name, arguments: args },
+          ...(extra ?? {}),
         }],
       },
       finish_reason: null,
@@ -228,7 +230,8 @@ function createChatCompletionWriter(sink: ClientFrameSink, model: string, failur
       toolIndexByItemId.set(call.itemId, toolIndex);
       if (call.name) toolNameByIndex.set(toolIndex, call.name);
       // The completed arguments are never empty ("{}" at least), so they win over the stream.
-      emitToolCall(toolIndex, call.callId, call.name || toolNameByIndex.get(toolIndex) || "", call.arguments);
+      emitToolCall(toolIndex, call.callId, call.name || toolNameByIndex.get(toolIndex) || "", call.arguments,
+        responsesExtraContentFromProviderMetadata(call.providerMetadata));
     },
     webSearchDone() { /* server-side search has no Chat representation */ },
     terminal(terminal) {

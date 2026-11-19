@@ -8,7 +8,9 @@ The opt-in key-auth Responses hosted-search bridge follows the
 for Combo child inference: generic HTTP/WS reports physical dispatch; fetchResponse receives the
 live adapter budget instead. Initial headers are acquired before Response return, so unsent failures
 remain with ingress cleanup. RunTurn search retains its ordinary producer owner; standalone search
-and direct callers keep their existing behavior.
+and direct callers keep their existing behavior. Direct Responses search, including Cursor runTurn, sizes its ingress allowance
+from the loop and transport bounds before dispatch. If sibling credential preparation fails,
+hidden-round usage is recorded on the sending attempt before the refusal is sealed.
 
 On Responses, RunTurn and passthrough-bridge requests, Anthropic helper queries also use the request's
 [auxiliary inference admission](../transports/responses-spend.md#auxiliary-search-inference).

@@ -148,3 +148,44 @@ describe("adapter physical inference admission", () => {
     expect(budget.used).toBe(4);
   });
 });
+
+test("retry preparation follows budget reservation and precedes pacing, legacy preparation remains after pacing", async () => {
+  const order: string[] = [];
+  const executor = Object.assign(async () => { order.push("fetch"); return new Response("ok"); }, {
+    waitForPacing: async () => { order.push("pacing"); },
+  }) as unknown as typeof fetch;
+  const send = createAdapterPhysicalSend({}, executor);
+  const response = await send({ url, beforePacing: () => { order.push("retry-preparation"); },
+    beforeDispatch: () => { order.push("legacy-preparation"); }, dispatch: run => run(url) });
+  expect(await response.text()).toBe("ok");
+  expect(order).toEqual(["retry-preparation", "pacing", "legacy-preparation", "fetch"]);
+});
+
+test("budget refusal does not release or otherwise prepare the previous response", async () => {
+  const { scope, dispose } = prepaid();
+  let preparations = 0;
+  const send = createAdapterPhysicalSend({ sendBudget: scope }, (async () => new Response("ok")) as typeof fetch);
+  try {
+    await (await send({ url, dispatch: run => run(url) })).text();
+    await expect(send({ url, beforePacing: () => { preparations++; }, dispatch: run => run(url) }))
+      .rejects.toBeInstanceOf(SendBudgetExhaustedError);
+    expect(preparations).toBe(0);
+  } finally { dispose(); }
+});
+
+test.each(["throw", "abort"] as const)("pre-pacing %s returns an unused reservation without acquiring a slot", async mode => {
+  const budget = createRequestExecutionBudget();
+  budget.used = 3;
+  const controller = new AbortController();
+  const failure = new Error("fixture preparation failure");
+  let pacing = 0, sends = 0;
+  const executor = Object.assign(async () => { sends++; return new Response("unexpected"); }, {
+    waitForPacing: async () => { pacing++; },
+  }) as unknown as typeof fetch;
+  const send = createAdapterPhysicalSend({ sendBudget: budget, abortSignal: controller.signal }, executor);
+  await expect(send({ url, sendClass: "repair", beforePacing: () => {
+    if (mode === "throw") throw failure;
+    controller.abort(failure);
+  }, dispatch: run => run(url) })).rejects.toBe(failure);
+  expect(pacing).toBe(0); expect(sends).toBe(0); expect(budget.used).toBe(3);
+});

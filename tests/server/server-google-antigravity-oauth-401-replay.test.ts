@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { OAUTH_ACCOUNT_LOG_LABEL_RE } from "../../src/codex/account-label";
 import * as configModule from "../../src/config";
 import { forceRefreshOAuthAccessSnapshot, getValidAccessTokenSnapshot } from "../../src/oauth";
 import { credentialGeneration, getAccountSet, getAuthStorePath, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
@@ -28,6 +29,9 @@ import {
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { registerLabPassiveRouteLinker } from "../../src/lib/lab-passive-linker-registration";
+import { readInstallationSalt } from "../../src/lab/subject/installation-salt";
+import { resetCompatibilityVersionCacheForTests, setCompatibilityVersionOverrideForTests } from "../../src/routing/compatibility/version";
 
 const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const PROD_API_BASE = "https://cloudcode-pa.googleapis.com";
@@ -179,7 +183,7 @@ async function postChat(server: ReturnType<typeof startServer>): Promise<Respons
 }
 
 function installOAuthFetch(
-  apiStatuses: Array<number | { status: number; reason?: string; oversized?: boolean; message?: string; rawBody?: string }>,
+  apiStatuses: Array<number | { status: number; reason?: string; typedReason?: string; oversized?: boolean; message?: string; rawBody?: string }>,
   options: {
     tokenErrorDescription?: string;
     tokenHttpStatus?: number;
@@ -187,6 +191,7 @@ function installOAuthFetch(
     refreshedProjectId?: string | null;
     beforeFirstUnauthorized?: () => Promise<void>;
     beforeFirstForbidden?: () => Promise<void>;
+    inferenceOrigin?: string;
   } = {},
 ): { chatAuth: string[]; chatProjects: string[]; requestPaths: string[]; chatBodies: string[]; counts: { refresh: number } } {
   const chatAuth: string[] = [];
@@ -281,7 +286,7 @@ function installOAuthFetch(
     }
 
     // Google Antigravity Generate Content endpoint
-    if (parsedUrl.origin === DAILY_API_BASE
+    if (parsedUrl.origin === (options.inferenceOrigin ?? DAILY_API_BASE)
       && ["/v1internal:streamGenerateContent", "/v1internal:generateContent"].includes(parsedUrl.pathname)) {
       requestPaths.push(parsedUrl.pathname);
       const auth = new Headers(init?.headers).get("authorization") ?? "";
@@ -316,6 +321,8 @@ function installOAuthFetch(
             ...(typeof status !== "number" ? {
               ...(status.oversized ? { filler: "x".repeat(4200) } : {}),
               ...(status.reason ? { details: [{ reason: status.reason }] } : {}),
+              ...(status.typedReason ? { details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: status.typedReason,
+                metadata: { appeal_url: "https://support.google.com/appeal-canary", appeal_url_link_text: "Open the private appeal form" } }] } : {}),
             } : {}),
           },
         }), {
@@ -474,6 +481,81 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
       expect(eligibleFailoverAccounts("google-antigravity")).toEqual([]);
     } finally { await server.stop(true); }
   });
+  test("a typed TOS_VIOLATION 403 quarantines the account as tos_violation and rotates to its sibling", async () => {
+    await seedOAuth();
+    await seedSibling();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([{ status: 403, typedReason: "TOS_VIOLATION", message: "This service has been disabled for violation of Terms of Service." }, 200]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      const body = await response.text();
+      expect(response.status).toBe(200);
+      expect(body).not.toContain("appeal-canary");
+      expect(observed.chatAuth).toHaveLength(2);
+      const rows = getAccountSet("google-antigravity")!.accounts;
+      expect(rows.filter(row => row.needsReauth)).toHaveLength(1);
+      expect(rows.find(row => row.needsReauth)).toMatchObject({ needsReauthReason: "verify_account", needsReauthCause: "tos_violation" });
+    } finally { await server.stop(true); }
+  });
+
+  test("a permanent TOS 403 with one account redacts upstream appeal and credential details", async () => {
+    await seedOAuth();
+    saveConfig(antigravityConfig());
+    const account = getAccountSet("google-antigravity")!.accounts[0]!;
+    const canaries = [
+      "https://support.google.com/appeal-canary", "Open the private appeal form",
+      account.credential.access, account.credential.refresh, account.credential.accountId!, account.id,
+    ];
+    const observed = installOAuthFetch([{
+      status: 403, typedReason: "TOS_VIOLATION", message: `Service disabled. ${canaries.join(" ")}`,
+    }]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(403);
+      expect(response.headers.get("retry-after")).toBeNull();
+      const body = await response.text();
+      expect(body).toContain("Antigravity account suspended");
+      for (const canary of canaries) expect(body).not.toContain(canary);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
+      expect(observed.counts.refresh).toBe(0);
+      expect(getAccountSet("google-antigravity")!.accounts).toMatchObject([
+        { id: account.id, needsReauth: true, needsReauthCause: "tos_violation" },
+      ]);
+    } finally { await server.stop(true); }
+  });
+
+  test("a custom Antigravity upstream does not quarantine a Google OAuth account", async () => {
+    await seedOAuth();
+    const config = antigravityConfig();
+    const inferenceOrigin = "https://cca-relay.example";
+    config.providers["google-antigravity"]!.baseUrl = inferenceOrigin;
+    saveConfig(config);
+    const observed = installOAuthFetch([{ status: 403, typedReason: "TOS_VIOLATION", message: "disabled" }], { inferenceOrigin });
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(403);
+      await response.text();
+      expect(observed.requestPaths).toEqual(["/v1internal:generateContent"]);
+      expect(getAccountSet("google-antigravity")!.accounts.every(row => !row.needsReauth && !row.paused)).toBe(true);
+    } finally { await server.stop(true); }
+  });
+
+  test("an untyped TOS_VIOLATION reason quarantines nothing", async () => {
+    await seedOAuth();
+    saveConfig(antigravityConfig());
+    installOAuthFetch([{ status: 403, reason: "TOS_VIOLATION", message: "disabled" }]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(403);
+      await response.text();
+      expect(getAccountSet("google-antigravity")!.accounts.every(row => !row.needsReauth)).toBe(true);
+    } finally { await server.stop(true); }
+  });
+
   test("structured validation 403 rotates once with the sibling's own project and recovery kind", async () => {
     await seedOAuth();
     await seedSibling();
@@ -858,6 +940,7 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
       await response.text();
       expect(observed.chatAuth).toHaveLength(6);
       expect(new Set(observed.chatAuth)).toEqual(new Set(["Bearer rejected-access", "Bearer access-b"]));
+      expect(readUsageEntries().at(-1)?.attempts?.map(attempt => attempt.status)).toEqual([503, 503]);
     } finally { await server.stop(true); }
   });
 
@@ -968,7 +1051,62 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
       expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer fresh-access"]);
       expect(observed.chatProjects).toEqual(["initial-project-id", "refreshed-project-id"]);
       expect(observed.counts.refresh).toBe(1);
+      const attempts = readUsageEntries().at(-1)?.attempts;
+      expect(attempts?.map(attempt => ({ status: attempt.status, sendCount: attempt.sendCount })))
+        .toEqual([{ status: 401, sendCount: 1 }, { status: 200, sendCount: 1 }]);
+      expect(attempts?.[0]?.accountLogLabel ?? "").toMatch(OAUTH_ACCOUNT_LOG_LABEL_RE);
+      expect(attempts?.[1]?.accountLogLabel).toBe(attempts?.[0]?.accountLogLabel);
+      expect(attempts?.[1].recoveryKinds).toContain("oauth-401");
     } finally { await server.stop(true); }
+  });
+
+  test("same-account refresh links the new project on an unchanged wire and URL", async () => {
+    await seedOAuth();
+    saveConfig(antigravityConfig());
+    installOAuthFetch([401, 200]);
+    readInstallationSalt(testDir);
+    const server = startServer(0);
+    setCompatibilityVersionOverrideForTests("b".repeat(64));
+    const detach = registerLabPassiveRouteLinker(testDir);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(200);
+      await response.text();
+      const ids = readUsageEntries().at(-1)?.attempts?.map(attempt => attempt.labRouteSubjectId);
+      expect(ids).toEqual([expect.stringMatching(/^[a-f0-9]{64}$/), expect.stringMatching(/^[a-f0-9]{64}$/)]);
+      expect(ids?.[0]).not.toBe(ids?.[1]);
+    } finally {
+      detach();
+      resetCompatibilityVersionCacheForTests();
+      await server.stop(true);
+    }
+  });
+
+  test("adapter-owned OAuth replay rejected by pacing leaves one physical 401", async () => {
+    await seedOAuth();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([401, 200]);
+    const server = startServer(0);
+    const withSlot = requestPacing.withProviderRequestSlot;
+    const pacing = spyOn(requestPacing, "withProviderRequestSlot").mockImplementation(async (name, provider, ...rest) => {
+      if (name === "google-antigravity" && provider.apiKey === "fresh-access") {
+        throw new requestPacing.RequestPacingQueueOverloadError(name, "queue_full", 1);
+      }
+      return withSlot(name, provider, ...rest);
+    });
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(429);
+      await response.text();
+      expect(observed.counts.refresh).toBe(1);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
+      const entry = readUsageEntries().at(-1);
+      expect(entry?.status).toBe(429);
+      expect(entry?.attempts?.map(attempt => [attempt.status, attempt.sendCount])).toEqual([[401, 1]]);
+    } finally {
+      pacing.mockRestore();
+      await server.stop(true);
+    }
   });
 
   test("replayed 401 sends once on the sibling with its paired project", async () => {

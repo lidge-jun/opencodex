@@ -382,6 +382,21 @@ describe("Remote Link management relay on the Home", () => {
     expect(passiveEffects).toEqual([]);
   });
 
+  test("the linked account list omits the Anthropic organization name", async () => {
+    writeFileSync(join(testHome, "auth.json"), JSON.stringify({ anthropic: {
+      activeAccountId: "fixture-row",
+      accounts: [{ id: "fixture-row", credential: {
+        access: "fixture-access", refresh: "fixture-refresh", expires: Date.now() + 3600_000,
+        organizationName: "Synthetic Workspace",
+      } }],
+    } }), { mode: 0o600 });
+    const response = await get(await linkBase(), "/v1/link-management/api/oauth/accounts?provider=anthropic", LINKED_KEY);
+    expect(response.status).toBe(200);
+    const body = await response.json() as { accounts: Array<{ id: string }> };
+    expect(body.accounts.map(account => account.id)).toEqual(["fixture-row"]);
+    expect(body.accounts[0]).not.toHaveProperty("organizationName");
+  });
+
   test("new source filters stay bound to the admitted link key for GET and HEAD", async () => {
     const base = await linkBase();
     const now = Date.now();

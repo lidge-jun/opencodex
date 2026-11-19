@@ -69,9 +69,9 @@ The wire surfaces a client actually talks to.
 | [`data-planes/inbound-compat.md`](data-planes/inbound-compat.md) | Chat Completions inbound, Anthropic-shaped clients, and JSON-upstream streaming clients. |
 | [`data-planes/claude-tool-loading.md`](data-planes/claude-tool-loading.md) | Physical-adapter tool-loading projections (Responses additional_tools and the Chat use_loaded_tool dispatcher with its response rewrite), preserved catalogs, fallback exclusions and opt-in prerequisites. |
 | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) | Ollama-shaped version/tags/show/chat/generate routes translated onto Chat Completions, their admission, native error shape and final request-log ownership. |
-| [`data-planes/gemini-inbound.md`](data-planes/gemini-inbound.md) | Gemini-shaped models/generateContent/streamGenerateContent routes translated onto Chat Completions, the x-goog-api-key and ?key= credential move, the native error shape, SSE and JSON-array streaming, and the Chat bridge shared with the Ollama inbound. |
+| [`data-planes/gemini-inbound.md`](data-planes/gemini-inbound.md) | Gemini-shaped models/generateContent/streamGenerateContent and Interactions API routes translated onto Chat Completions, the x-goog-api-key and ?key= credential move, the native error shape, SSE and JSON-array streaming, the Interactions SSE vocabulary, and the Chat bridge shared with the Ollama inbound. |
 | [`data-planes/error-detail.md`](data-planes/error-detail.md) | Closed error codes, upstream condition classification, numeric quota reset, closed failure detail, service tier and model identity bounds on request-log rows; response metadata header normalization and the client Retry-After format. Chat client error envelopes, literal tables, proxy-authored message provenance, collector verdicts and internal evidence channels; fixed undeclared-tool refusals, producer-owned incomplete-event origins and constructor-bounded destination labels, branded original client selectors, bounded combo exclusions and fixed retry-evidence diagnostics. Original model labels on synthetic terminal envelopes and compact/Messages ingress handoffs. Messages error envelopes, construction-registered fixed local-refusal guidance, sliced outcome comparisons and baseline client recovery outcomes across special codes and catch returns, non-2xx passthrough envelopes and unchanged 2xx passthrough bodies and original collector evidence and error-event identity, overflow/native-stream golden parity and normalized Anthropic response headers with full-fraction reset dates and success media types. |
-| [`data-planes/chat-reasoning-details.md`](data-planes/chat-reasoning-details.md) | The reasoning_details carrier that lets Chat Completions clients round-trip signed Anthropic thinking across tool steps (#7429). |
+| [`data-planes/chat-reasoning-details.md`](data-planes/chat-reasoning-details.md) | The reasoning_details carrier that lets Chat Completions clients round-trip signed Anthropic thinking across tool steps (#7429), and the extra_content carrier for Gemini thought signatures on tool calls, including the native Chat decline for non-Google destinations. |
 | [`data-planes/protocol-paths.md`](data-planes/protocol-paths.md) | Shared protocol vocabulary, declared feature dispositions, the ingress-by-upstream baseline, plan/trace shapes, and protocol settings. |
 | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) | Per-account Pool wire installation identity, private secret, existence gates and fail-closed delivery. |
 | [`providers/codex-request-owned-affinity.md`](providers/codex-request-owned-affinity.md) | Opt-in conversation affinity for a caller's own ChatGPT bearer in Pool mode, honest selection-time affinity labels, and the persistence exclusion contract. |
@@ -79,6 +79,7 @@ The wire surfaces a client actually talks to.
 | [`fallback-policy.md`](fallback-policy.md) | OCX-11 fallback off: what is a model or provider fallback (and what intra-pool rotation is not), scope precedence, the guarded hop sites, the fallback_refused and home_unreachable contracts, and the ocx.fallback/1 state. |
 | [`remote-workspace.md`](remote-workspace.md) | Opt-in workspace identity, executor grants, runtime adapters, management and dashboard integration. |
 | [`remote-link.md`](remote-link.md) | SSH machine linking, tunnel and link storage, pairing, and connected-client management relay. |
+| [`transports/upload-reduction.md`](transports/upload-reduction.md) | Opt-in lossy historical image/tool slimming and acknowledged native WS input-prefix deltas. |
 
 ### Tier 4 — Providers and adapters
 
@@ -116,7 +117,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 | [`providers/codex-round-robin-placement.md`](providers/codex-round-robin-placement.md) | Round-robin new-conversation placement preferring accounts under their effective auto-switch threshold, with all-over fallback and bound, failover and lineage boundaries. |
 | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) | Opt-in effective priority bands that spend other pool accounts before the signed-in identity, its identity observation and management API. |
 | [`providers/cursor.md`](providers/cursor.md) | Cursor native exec, parameterized models, checkpoints, and active-context usage. |
-| [`providers/google.md`](providers/google.md) | Gemini thought-text, response parts, thought-signature replay, and adjacency repair. |
+| [`providers/google.md`](providers/google.md) | Gemini thought-text, response parts, thought-signature replay, adjacency repair, and Google error classification. |
 | [`providers/kiro.md`](providers/kiro.md) | Kiro parallel-tool hints, Responses text controls, structured-output emulation, and reasoning round-trip. |
 | [`providers/xai-grok.md`](providers/xai-grok.md) | Grok Build contract parity and hardening. |
 | [`providers/lm-studio-chat.md`](providers/lm-studio-chat.md) | Preset-scoped single-leading-system normalization, configuration and editor policy. |
@@ -142,7 +143,7 @@ The dashboard, the management API, and third-party client config ownership.
 | [`dashboard-and-usage.md`](dashboard-and-usage.md) | Dashboard page contracts, usage accounting and request metrics, and per-surface management settings. |
 | [`usage-client-attribution.md`](usage-client-attribution.md) | Privacy-bounded client labels carried from request ingress into usage records. |
 | [`quota-pool.md`](quota-pool.md) | The passive GET /api/quota-pool read GOAT consumes (ocx.quota-pool/1): sources, window mapping, absent-not-zero, and the install identity behind homeId and accountRef. |
-| [`pricing.md`](pricing.md) | User price policies, prompt-length rate selection, persistence and estimate cache invalidation. |
+| [`pricing.md`](pricing.md) | User price policies, prompt-length rate selection, credit-billing bounds and provenance, persistence and estimate cache invalidation. |
 | [`clients/export-model-names.md`](clients/export-model-names.md) | Per-connection naming policy, router-proven aliases and passive export previews. |
 | [`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) | Opt-in Responses dialect for the managed Pi-based omo export and its refresh lifecycle. |
 | [`clients/integrations.md`](clients/integrations.md) | Third-party client config ownership, snapshots, refresh, disable, and restore. |
@@ -233,6 +234,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/adapters/anthropic.ts` | [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |
 | `src/adapters/base.ts` | [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md) |
 | `src/adapters/dsh-account.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
+| `src/adapters/google-error-details.ts` | [`providers/google.md`](providers/google.md) |
 | `src/adapters/kiro/` | [`providers/kiro.md`](providers/kiro.md) |
 | `src/adapters/m365-copilot.ts` | [`providers/m365-copilot.md`](providers/m365-copilot.md) |
 | `src/adapters/m365-copilot/` | [`providers/m365-copilot.md`](providers/m365-copilot.md) |
@@ -364,7 +366,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/companion/` | [`overview.md`](overview.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`companion.md`](companion.md) |
 | `src/compatibility/` | [`runtime.md`](runtime.md)<br>[`adapters/compatibility-contracts.md`](adapters/compatibility-contracts.md) |
 | `src/config.ts` | [`overview.md`](overview.md)<br>[`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`providers/openai-accounts.md`](providers/openai-accounts.md) |
-| `src/config/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`providers/lm-studio-chat.md`](providers/lm-studio-chat.md)<br>[`fallback-policy.md`](fallback-policy.md) |
+| `src/config/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`providers/lm-studio-chat.md`](providers/lm-studio-chat.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`transports/upload-reduction.md`](transports/upload-reduction.md) |
 | `src/config/account-auto-pause-revisions.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/config/live-reconcile.ts` | [`pricing.md`](pricing.md) |
 | `src/config/persisted-mutation.ts` | [`runtime.md`](runtime.md) |
@@ -404,6 +406,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/lib/messages-sse-error-presentation.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/lib/model-identity.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/lib/response-service-tier.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
+| `src/lib/state-store-registrations.ts` | [`transports/upload-reduction.md`](transports/upload-reduction.md) |
 | `src/lib/tool-argument-integers.ts` | [`providers-and-adapters.md`](providers-and-adapters.md) |
 | `src/lib/upstream-condition.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/lib/upstream-retry.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
@@ -429,6 +432,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/oauth/workbuddy.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/plugins/` | [`ops/plugins.md`](ops/plugins.md) |
 | `src/protocols/` | [`data-planes/protocol-paths.md`](data-planes/protocol-paths.md) |
+| `src/protocols/codecs/gemini-interactions.ts` | [`data-planes/gemini-inbound.md`](data-planes/gemini-inbound.md) |
 | `src/protocols/codecs/gemini.ts` | [`data-planes/gemini-inbound.md`](data-planes/gemini-inbound.md) |
 | `src/protocols/codecs/ollama.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
 | `src/protocols/encoders/adapter-events.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
@@ -485,9 +489,12 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/auth-cors.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`providers/lm-studio-chat.md`](providers/lm-studio-chat.md)<br>[`providers/hosted-tool-denials.md`](providers/hosted-tool-denials.md) |
 | `src/server/background-lifecycle.ts` | [`telemetry.md`](telemetry.md) |
 | `src/server/capture-admission-policy.ts` | [`advisor.md`](advisor.md) |
+| `src/server/chat-native-eligibility.ts` | [`data-planes/chat-reasoning-details.md`](data-planes/chat-reasoning-details.md) |
 | `src/server/claude-messages.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md)<br>[`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/context-history.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/gemini-inbound.ts` | [`data-planes/gemini-inbound.md`](data-planes/gemini-inbound.md) |
+| `src/server/gemini-interactions-inbound.ts` | [`data-planes/gemini-inbound.md`](data-planes/gemini-inbound.md) |
+| `src/server/gemini-interactions-store.ts` | [`data-planes/gemini-inbound.md`](data-planes/gemini-inbound.md) |
 | `src/server/gemini-native-paths.ts` | [`data-planes/gemini-inbound.md`](data-planes/gemini-inbound.md) |
 | `src/server/gui-pair-delivery.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/hub-relay-auth.ts` | [`remote-link.md`](remote-link.md) |
@@ -525,6 +532,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/management/provider-credential-release.ts` | [`providers/oauth-credential-siblings.md`](providers/oauth-credential-siblings.md) |
 | `src/server/management/provider-overwrite-carry.ts` | [`providers/hosted-tool-denials.md`](providers/hosted-tool-denials.md) |
 | `src/server/management/quota-pool-routes.ts` | [`quota-pool.md`](quota-pool.md) |
+| `src/server/management/system-routes.ts` | [`transports/upload-reduction.md`](transports/upload-reduction.md) |
 | `src/server/management/telemetry-routes.ts` | [`telemetry.md`](telemetry.md) |
 | `src/server/management/usage-aggregate-cache.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/server/messages-native-tool-guard.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
@@ -549,11 +557,16 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/responses/advisor-slot.ts` | [`advisor.md`](advisor.md) |
 | `src/server/responses/anthropic-image-context.ts` | [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |
 | `src/server/responses/anthropic-thinking-recovery.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
-| `src/server/responses/codex-ws-pool.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
-| `src/server/responses/codex-ws-request.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
+| `src/server/responses/codex-ws-exchange.ts` | [`transports/upload-reduction.md`](transports/upload-reduction.md) |
+| `src/server/responses/codex-ws-incremental.ts` | [`transports/upload-reduction.md`](transports/upload-reduction.md) |
+| `src/server/responses/codex-ws-pool.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md)<br>[`transports/upload-reduction.md`](transports/upload-reduction.md) |
+| `src/server/responses/codex-ws-request.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md)<br>[`transports/upload-reduction.md`](transports/upload-reduction.md) |
+| `src/server/responses/codex-ws-session.ts` | [`transports/upload-reduction.md`](transports/upload-reduction.md) |
 | `src/server/responses/compact-response-body.ts` | [`transports/timeouts.md`](transports/timeouts.md) |
 | `src/server/responses/compact.ts` | [`transports/responses-citations.md`](transports/responses-citations.md)<br>[`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/responses/core-combo.ts` | [`ops/service-logging.md`](ops/service-logging.md) |
+| `src/server/responses/fetch-helpers.ts` | [`transports/upload-reduction.md`](transports/upload-reduction.md) |
+| `src/server/responses/history-slim.ts` | [`transports/upload-reduction.md`](transports/upload-reduction.md) |
 | `src/server/responses/image-context-recovery.ts` | [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |
 | `src/server/responses/input-admission.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/server/responses/opengateway-completion-guard.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
@@ -564,6 +577,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/responses/request-transport.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md)<br>[`account-auto-pause.md`](account-auto-pause.md) |
 | `src/server/responses/run-turn-execution.ts` | [`transports/max-output-completion.md`](transports/max-output-completion.md) |
 | `src/server/responses/turn-membership.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
+| `src/server/responses/ws-upstream.ts` | [`transports/upload-reduction.md`](transports/upload-reduction.md) |
 | `src/server/safe-response-headers.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/server/search.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/sse-payload-rewrite.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
@@ -628,6 +642,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/usage/` | [`runtime.md`](runtime.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`companion.md`](companion.md) |
 | `src/usage/client.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
 | `src/usage/cost.ts` | [`pricing.md`](pricing.md) |
+| `src/usage/credit-billing.ts` | [`pricing.md`](pricing.md) |
 | `src/usage/error-detail.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/usage/link-log-fields.ts` | [`remote-link.md`](remote-link.md) |
 | `src/usage/source-filter.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |

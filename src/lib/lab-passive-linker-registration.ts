@@ -12,7 +12,7 @@ import { resolveProductionRouteSubject } from "../routing/compatibility/subject"
 
 /** Install the Lab linker. Returns a detach function. */
 export function registerLabPassiveRouteLinker(configDir?: string): () => void {
-  return setPassiveRouteLinker((config, providerName, modelId, routed, inboundWire) => {
+  return setPassiveRouteLinker((config, providerName, modelId, routed, inboundWire, effectiveAdapter) => {
     const subject = resolveProductionRouteSubject(
       config,
       providerName,
@@ -20,6 +20,7 @@ export function registerLabPassiveRouteLinker(configDir?: string): () => void {
       routed,
       inboundWire,
       configDir,
+      effectiveAdapter,
     );
     return subject ? subject.subjectId : null;
   });

@@ -6,6 +6,7 @@ import {
   emptyCompletionNotice,
   guardEmptyCompletionEventStream,
   isContentEvent,
+  mergeUsage,
   observeEmptyCompletion,
 } from "../../src/server/responses/empty-completion-guard";
 import { bridgeToResponsesSSE } from "../../src/bridge/sse";
@@ -139,6 +140,16 @@ describe("empty-completion guard retry", () => {
       .filter(event => event.type === "response.output_item.done" && event.item?.type === "reasoning")
       .map(event => event.item!.summary!.map(part => part.text).join(""));
     expect(reasoning).toEqual(["discarded", "retry"]);
+  });
+
+  test.each([[2, undefined], [undefined, 2]])("missing retry credit reading stays incomplete: %s %s", async (first, second) => {
+    const usage = (credits: number | undefined) => ({ inputTokens: 1, outputTokens: 1, ...(credits === undefined ? {} : { providerCredits: credits }) });
+    const events = await collect(guardEmptyCompletionEventStream({
+      firstEvents: eventsOf({ type: "done", usage: usage(first) }),
+      continuation: () => eventsOf({ type: "text_delta", text: "answer" }, { type: "done", usage: usage(second) }),
+    }));
+    const done = events.at(-1) as Extract<AdapterEvent, { type: "done" }>;
+    expect(done.usage?.providerCredits).toBe(-1);
   });
 
   test("usage is merged across attempts", async () => {
@@ -489,5 +500,70 @@ describe("#2472 an empty turn is observable even when the retry guard is off", (
     expect(emptyCompletionNotice("fixture", "gpt-5.4")).toContain("fixture/gpt-5.4");
     // An unusable label must not silently vanish into an empty slot in the sentence.
     expect(emptyCompletionNotice(undefined, "")).toContain("unknown/unknown");
+  });
+});
+
+
+test.each([[undefined, 3], [2, undefined]])("missing whole attempt usage marks credits incomplete: %s %s", async (first, second) => {
+  const usage = (credits: number | undefined) => credits === undefined ? undefined : { inputTokens: 1, outputTokens: 1, providerCredits: credits };
+  const events = await collect(guardEmptyCompletionEventStream({
+    firstEvents: eventsOf({ type: "done", usage: usage(first) }),
+    continuation: () => eventsOf({ type: "text_delta", text: "answer" }, { type: "done", usage: usage(second) }),
+  }));
+  expect((events.at(-1) as Extract<AdapterEvent, { type: "done" }>).usage?.providerCredits).toBe(-1);
+});
+
+test("single attempt retains its credit reading", async () => {
+  let retries = 0;
+  const events = await collect(guardEmptyCompletionEventStream({
+    firstEvents: eventsOf({ type: "text_delta", text: "answer" }, { type: "done", usage: { inputTokens: 1, outputTokens: 1, providerCredits: 3 } }),
+    continuation: () => { retries++; throw new Error("unexpected retry"); },
+  }));
+  expect(events.at(-1)).toMatchObject({ type: "done", usage: { providerCredits: 3 } });
+  expect(retries).toBe(0);
+});
+
+test("a dispatched retry ending at EOF makes the first credit reading incomplete", async () => {
+  const events = await collect(guardEmptyCompletionEventStream({
+    firstEvents: eventsOf({ type: "done", usage: { inputTokens: 1, outputTokens: 0, providerCredits: 2 } }),
+    continuation: () => eventsOf(),
+  }));
+  expect(events.at(-1)).toMatchObject({
+    type: "error", code: "empty_completion_retry_failed",
+    usage: { inputTokens: 1, outputTokens: 0, providerCredits: -1 },
+  });
+});
+
+test("an initial EOF makes a successful retry's credit reading incomplete", async () => {
+  const events = await collect(guardEmptyCompletionEventStream({
+    firstEvents: eventsOf(),
+    continuation: () => eventsOf({ type: "text_delta", text: "answer" },
+      { type: "done", usage: { inputTokens: 1, outputTokens: 1, providerCredits: 3 } }),
+  }));
+  expect(events.at(-1)).toMatchObject({ type: "done", usage: { providerCredits: -1 } });
+});
+
+test("a continuation rejected before dispatch leaves the first credit reading intact", async () => {
+  const events = await collect(guardEmptyCompletionEventStream({
+    firstEvents: eventsOf({ type: "done", usage: { inputTokens: 1, outputTokens: 0, providerCredits: 2 } }),
+    continuation: () => { throw new Error("pacing refused"); },
+  }));
+  expect(events.at(-1)).toMatchObject({
+    type: "error", code: "empty_completion_retry_failed", usage: { providerCredits: 2 },
+  });
+});
+
+test("an empty accumulator retains the first attempt credit reading", () => {
+  expect(mergeUsage(undefined, { inputTokens: 1, outputTokens: 1, providerCredits: 3 })?.providerCredits).toBe(3);
+});
+
+test("post-output EOF on a dispatched retry delivers incomplete credit usage", async () => {
+  const events = await collect(guardEmptyCompletionEventStream({
+    firstEvents: eventsOf({ type: "done", usage: { inputTokens: 1, outputTokens: 0, providerCredits: 2 } }),
+    continuation: async () => eventsOf({ type: "text_delta", text: "partial" }),
+  }));
+  expect(events.filter(event => event.type === "text_delta")).toEqual([{ type: "text_delta", text: "partial" }]);
+  expect(events.at(-1)).toMatchObject({
+    type: "incomplete", reason: "adapter_eof", usage: { providerCredits: -1 },
   });
 });

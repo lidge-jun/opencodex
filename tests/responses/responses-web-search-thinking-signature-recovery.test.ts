@@ -314,8 +314,8 @@ describe("hosted web search Anthropic thinking-signature recovery", () => {
   });
   for (const combo of [false, true]) for (const rawSse of [false, true]) {
     test(`shared budget denies recovery without another physical send (Combo=${combo}, SSE=${rawSse})`, async () => {
-      const budget = createRequestExecutionBudget({ maxTotalModelSends: combo ? 1 : 0,
-        baseSendAllowance: combo ? 1 : 0, finalRecoveryAllowance: 0,
+      const budget = createRequestExecutionBudget({ maxTotalModelSends: 1,
+        baseSendAllowance: 1, finalRecoveryAllowance: 0,
         maxAlternateTargetSends: 0, maxTargetTransitions: 0 }, "search-recovery-refused");
       const options: Parameters<typeof handleResponses>[3] = { sendBudget: budget };
       if (combo) {
