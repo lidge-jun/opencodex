@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { PassThrough, Readable, Writable } from "node:stream";
 import type { ChildProcess } from "node:child_process";
-import { buildQoderArgs, buildQoderChildEnv, createQoderAdapter } from "../../src/adapters/qoder/adapter";
+import { buildQoderArgs, buildQoderChildEnv, createQoderAdapter, suppressQoderErrorPreamble } from "../../src/adapters/qoder/adapter";
 import { buildConversationInput, mapStreamMessageToEvents, releaseOpenToolBlocks, type StreamParseState } from "../../src/adapters/coding-agent/protocol";
 import type { CodingAgentDeps } from "../../src/adapters/coding-agent/turn";
 import { buildCodingAgentToolCatalog, CODING_AGENT_TOOL_LIMITS } from "../../src/adapters/coding-agent/tool-catalog";
@@ -1374,13 +1374,29 @@ describe("qoder authoritative tool-turn completion", () => {
 describe("Qoder API-key recovery evidence", () => {
   test.each([
     [105, 401, "authentication_error", "invalid_api_key", true, undefined],
+    ["105", 401, "authentication_error", "invalid_api_key", true, undefined],
     [110, 429, "insufficient_quota", "insufficient_quota", true, undefined],
+    ["110", 429, "insufficient_quota", "insufficient_quota", true, undefined],
+    [110, 429, "insufficient_quota", "insufficient_quota", true, "You have reached the daily usage limit. Please try again later."],
+    ["110", 429, "insufficient_quota", "insufficient_quota", true, "You have reached the daily usage limit. Please try again later."],
+    [112, 502, "upstream_error", "upstream_error", false, undefined],
+    ["112", 502, "upstream_error", "upstream_error", false, undefined],
     [113, 429, "insufficient_quota", "insufficient_quota", false, undefined],
+    ["113", 429, "insufficient_quota", "insufficient_quota", false, undefined],
     [114, 403, "permission_error", "permission_denied", false, undefined],
-    ...[115, 116, 117, 119, 122].map(code => [code, 429, "insufficient_quota", "insufficient_quota", false, undefined] as const),
+    ["114", 403, "permission_error", "permission_denied", false, undefined],
+    ...[115, 116, 117, 119, 122].flatMap(code => [
+      [code, 429, "insufficient_quota", "insufficient_quota", false, undefined] as const,
+      [String(code), 429, "insufficient_quota", "insufficient_quota", false, undefined] as const,
+    ]),
     [118, 429, "insufficient_quota", "insufficient_quota", true, undefined],
+    ["118", 429, "insufficient_quota", "insufficient_quota", true, undefined],
+    [130, 502, "upstream_error", "upstream_error", false, undefined],
+    ["130", 502, "upstream_error", "upstream_error", false, undefined],
     [999, 502, "upstream_error", "upstream_error", false, undefined],
+    ["999", 502, "upstream_error", "upstream_error", false, undefined],
     [999, 401, "authentication_error", "invalid_api_key", false, "invalid personal access token"],
+    ["999", 401, "authentication_error", "invalid_api_key", false, "invalid personal access token"],
   ] as const)("result %s keeps numeric scope", async (vendorCode, status, errorType, code, allowed, resultText) => {
     const result = resultText ?? "You've reached your daily usage limit for Chat. Come back tomorrow...";
     const child = fakeChild([JSON.stringify({ type: "result", is_error: true, error_code: vendorCode,
@@ -1398,6 +1414,8 @@ describe("Qoder API-key recovery evidence", () => {
     ["You've reached your daily usage limit for Chat.", 429, "insufficient_quota", "insufficient_quota", true],
     ["You've reached your daily usage limit for Chat", 429, "insufficient_quota", "insufficient_quota", true],
     ["You've reached your daily usage limit for Chat. Come back tomorrow at 00:00 UTC.", 429, "insufficient_quota", "insufficient_quota", true],
+    ["You have reached the daily usage limit. Please try again later.", 429, "insufficient_quota", "insufficient_quota", true],
+    ["You have reached the daily usage limit for this team", 429, "insufficient_quota", "insufficient_quota", false],
     ["daily usage limit", 429, "insufficient_quota", "insufficient_quota", false],
     ["credit usage limit", 429, "insufficient_quota", "insufficient_quota", false],
     ["Team daily usage limit reached", 429, "insufficient_quota", "insufficient_quota", false],
@@ -1414,10 +1432,61 @@ describe("Qoder API-key recovery evidence", () => {
     ["Qoder authentication rejected", 401, "authentication_error", "invalid_api_key", true],
     ["Too many requests: rate limit reached", 429, "rate_limit_error", "rate_limit_exceeded", false],
     ["authentication service error", 502, "upstream_error", "upstream_error", false],
+    ['inference.remoteChat.stream failed (403): {"pricingUrl":"https://qoder.com.cn/pricing?client=qoder"}', 502, "upstream_error", "upstream_error", false],
+    ['inference.remoteChat.stream failed (403): {"message":"forbidden"}', 502, "upstream_error", "upstream_error", false],
+    ['inference.remoteChat.stream failed (403): {"pricingUrl":"https://example.com/pricing"}', 502, "upstream_error", "upstream_error", false],
+    ['inference.otherMethod failed (403): {"pricingUrl":"https://qoder.com.cn/pricing?client=qoder"}', 502, "upstream_error", "upstream_error", false],
   ] as const)("message %s", async (result, status, errorType, code, allowed) => {
     const events: AdapterEvent[] = [];
     await createQoderAdapter(provider(), { which: () => "/bin/qoder",
       spawn: () => fakeChild([JSON.stringify({ type: "result", is_error: true, result }) + "\n"]) })
+      .runTurn!(parsed(), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, e => events.push(e));
+    expect(events.at(-1)).toMatchObject({ type: "error", status, errorType, code });
+    expect((events.at(-1) as Extract<AdapterEvent, { type: "error" }>).apiKeyRecovery).toBe(allowed ? true : undefined);
+    expect(JSON.stringify(buildResponseJSON(events, "Qwen3.8-Max"))).not.toContain("apiKeyRecovery");
+  });
+
+  const cnPricingNotice = 'inference.remoteChat.stream failed (403): {"pricingUrl":"https://qoder.com.cn/pricing?client=qoder"}';
+  test.each([
+    ["https://qoder.cn", undefined, cnPricingNotice, 429, "insufficient_quota", "insufficient_quota", true],
+    ["https://qoder.cn", 403, cnPricingNotice, 429, "insufficient_quota", "insufficient_quota", true],
+    ["https://qoder.cn", "403", cnPricingNotice, 429, "insufficient_quota", "insufficient_quota", true],
+    ["https://qoder.com", undefined, cnPricingNotice, 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.com", "403", cnPricingNotice, 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", undefined, 'inference.remoteChat.stream failed (403): {"message":"forbidden"}', 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", "403", 'inference.remoteChat.stream failed (403): {"message":"forbidden"}', 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", "403", 'inference.remoteChat.stream failed (403): {"pricingUrl":"https://example.com/pricing"}', 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", "403", 'inference.otherMethod failed (403): {"pricingUrl":"https://qoder.com.cn/pricing?client=qoder"}', 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", "403", "You have reached the daily usage limit. Please try again later.", 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", 112, cnPricingNotice, 429, "insufficient_quota", "insufficient_quota", true],
+    ["https://qoder.cn", "112", cnPricingNotice, 429, "insufficient_quota", "insufficient_quota", true],
+    ["https://qoder.com", "112", cnPricingNotice, 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", "112", "You have reached the daily usage limit. Please try again later.", 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", 114, cnPricingNotice, 403, "permission_error", "permission_denied", false],
+    ["https://qoder.cn", "114", cnPricingNotice, 403, "permission_error", "permission_denied", false],
+    ["https://qoder.cn", 130, cnPricingNotice, 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", "130", cnPricingNotice, 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", "113", cnPricingNotice, 429, "insufficient_quota", "insufficient_quota", false],
+    ["https://qoder.cn", "999", cnPricingNotice, 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", "PERMISSION_DENIED", cnPricingNotice, 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", "PERMISSION_DENIED", "You have reached the daily usage limit. Please try again later.", 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", "9007199254740992", cnPricingNotice, 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.com", "9007199254740992", "You have reached the daily usage limit. Please try again later.", 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", 403, 'inference.remoteChat.stream failed (403): {"code":114,"pricingUrl":"https://qoder.com.cn/pricing?client=qoder"}', 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", undefined, 'inference.remoteChat.stream failed (403): {"code":"114","pricingUrl":"https://qoder.com.cn/pricing?client=qoder"}', 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", 403, 'inference.remoteChat.stream failed (403): {"error":{"code":114},"pricingUrl":"https://qoder.com.cn/pricing?client=qoder"}', 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", 403, 'inference.remoteChat.stream failed (403): {"pricingUrl":"https://qoder.com.cn/pricing-policy"}', 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", 403, 'inference.remoteChat.stream failed (403): {"pricingUrl":"https://qoder.com.cn/pricing/enterprise"}', 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", 403, 'inference.remoteChat.stream failed (403): {"message":"forbidden"} {"pricingUrl":"https://qoder.com.cn/pricing?client=qoder"}', 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", 403, 'inference.remoteChat.stream failed (403): {"pricingUrl":"https://qoder.com.cn/pricing"}', 429, "insufficient_quota", "insufficient_quota", true],
+  ] as const)("CN pricing-URL isolation and code precedence (%s, code=%s, %s)", async (baseUrl, vendorCode, result, status, errorType, code, allowed) => {
+    const events: AdapterEvent[] = [];
+    const frame = JSON.stringify({
+      type: "result", is_error: true,
+      ...(vendorCode === undefined ? {} : { error_code: vendorCode }),
+      result,
+    }) + "\n";
+    await createQoderAdapter(provider({ baseUrl }), { which: () => "/bin/qoder", spawn: () => fakeChild([frame]) })
       .runTurn!(parsed(), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, e => events.push(e));
     expect(events.at(-1)).toMatchObject({ type: "error", status, errorType, code });
     expect((events.at(-1) as Extract<AdapterEvent, { type: "error" }>).apiKeyRecovery).toBe(allowed ? true : undefined);
@@ -1451,5 +1520,84 @@ describe("Qoder API-key recovery evidence", () => {
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatchObject({ code: "insufficient_quota" });
     expect(errors[0]!.apiKeyRecovery).toBeUndefined();
+  });
+});
+
+describe("Qoder CLI error preamble", () => {
+  const dailyNotice = "You have reached the daily usage limit. Please try again later.";
+
+  test("uses the qodercn 1.1.91 assistant notice and errors[] result frames", async () => {
+    const notice = 'inference.remoteChat.stream failed (403): {"pricingUrl":"https://qoder.com.cn/pricing?client=qoder"}';
+    const frames = [
+      { type: "assistant", message: { model: "<synthetic>", content: [{ type: "text", text: notice }] } },
+      { type: "result", subtype: "error_during_execution", is_error: true, error_code: "112", errors: [notice] },
+    ].map(frame => JSON.stringify(frame) + "\n");
+    const events: AdapterEvent[] = [];
+    await createQoderAdapter(provider({ baseUrl: "https://qoder.cn" }), { which: () => "/bin/qodercn", spawn: () => fakeChild(frames) })
+      .runTurn!(parsed(), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, e => events.push(e));
+    expect(events.some(e => e.type === "text_delta")).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "error", status: 429, code: "insufficient_quota", apiKeyRecovery: true });
+  });
+
+  test.each([
+    ["daily_limit", "You have reached the daily usage limit.", " Please try again later."],
+    ["cn_pricing_url", 'inference.remoteChat.stream failed (403): {"pricingUrl":', '"https://qoder.com.cn/pricing?client=qoder"}'],
+  ] as const)("holds a split %s notice across heartbeats", (reason, first, rest) => {
+    const events: AdapterEvent[] = [];
+    const emit = suppressQoderErrorPreamble(e => events.push(e), () => reason);
+    emit({ type: "text_delta", text: first });
+    emit({ type: "heartbeat" });
+    emit({ type: "text_delta", text: rest });
+    emit({ type: "heartbeat" });
+    emit({ type: "error", message: first + rest, status: 429, apiKeyRecovery: true });
+    expect(events.map(e => e.type)).toEqual(["heartbeat", "heartbeat", "error"]);
+  });
+
+  test("releases a held notice when the turn continues with other text", () => {
+    const events: AdapterEvent[] = [];
+    const emit = suppressQoderErrorPreamble(e => events.push(e));
+    emit({ type: "text_delta", text: dailyNotice });
+    emit({ type: "text_delta", text: " More answer text." });
+    emit({ type: "done" });
+    expect(events.filter(e => e.type === "text_delta").map(e => e.text).join("")).toBe(dailyNotice + " More answer text.");
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
+  test("ordinary text that merely starts like a notice is forwarded", () => {
+    const events: AdapterEvent[] = [];
+    const emit = suppressQoderErrorPreamble(e => events.push(e));
+    const text = "You have reached the daily usage limit of your patience.";
+    emit({ type: "text_delta", text });
+    emit({ type: "done" });
+    expect(events.map(e => e.type)).toEqual(["text_delta", "done"]);
+    expect(events[0]).toMatchObject({ type: "text_delta", text });
+  });
+
+  test("a complete notice is released when the following error is not key-recoverable", () => {
+    const events: AdapterEvent[] = [];
+    const emit = suppressQoderErrorPreamble(e => events.push(e), () => "daily_limit");
+    emit({ type: "text_delta", text: dailyNotice });
+    emit({ type: "error", message: dailyNotice, status: 429 });
+    expect(events.map(e => e.type)).toEqual(["text_delta", "error"]);
+    expect(events[0]).toMatchObject({ type: "text_delta", text: dailyNotice });
+  });
+
+  test("an incomplete prefix is released even on a matching recoverable error", () => {
+    const events: AdapterEvent[] = [];
+    const emit = suppressQoderErrorPreamble(e => events.push(e), () => "daily_limit");
+    emit({ type: "text_delta", text: "You have reached" });
+    emit({ type: "error", message: dailyNotice, status: 429, apiKeyRecovery: true });
+    expect(events.map(e => e.type)).toEqual(["text_delta", "error"]);
+    expect(events[0]).toMatchObject({ type: "text_delta", text: "You have reached" });
+  });
+
+  test("real output disables notice holding for the rest of the turn", () => {
+    const events: AdapterEvent[] = [];
+    const emit = suppressQoderErrorPreamble(e => events.push(e), () => "daily_limit");
+    emit({ type: "text_delta", text: "Here is the answer. " });
+    emit({ type: "text_delta", text: dailyNotice });
+    emit({ type: "error", message: dailyNotice, status: 429, apiKeyRecovery: true });
+    expect(events.map(e => e.type)).toEqual(["text_delta", "text_delta", "error"]);
+    expect(events.filter(e => e.type === "text_delta").map(e => e.text).join("")).toBe("Here is the answer. " + dailyNotice);
   });
 });
