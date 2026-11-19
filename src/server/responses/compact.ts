@@ -203,16 +203,14 @@ import { WORKFLOW_LOCAL_REFUSAL_HEADER } from "../../lib/workflow-budget";
 import { upstreamErrorCode } from "./context-overflow";
 import { supportedLadderFor } from "../effort-policy";
 import {
-  beginRequestAttempt,
   catalogModelSupportsServiceTier,
   inspectResponseLogJson,
-  noteProviderAttemptSend,
   readConfiguredCodexServiceTier,
   requestLogSpeedLabel,
   usageFromResponsesPayload,
   type RequestLogContext,
 } from "../request-log";
-import { sealCredentialRefusal } from "../credential-recovery-attempt";
+import { noteCompactAttemptSend, sealCredentialRefusal } from "../credential-recovery-attempt";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import {
   consumeForInspection,
@@ -1229,18 +1227,6 @@ export async function handleResponsesCompact(
         }
         return replayBody;
       };
-      const noteCompactSend = (upstreamRecovery?: UpstreamSendRecovery) => {
-        if (!logCtx.activeAttempt) {
-          logCtx.activeAttempt = beginRequestAttempt((logCtx.attempts?.length ?? 0) + 1,
-            logCtx.provider, route.modelId, sendProvider.adapter);
-          logCtx.activeAttemptStartedAt = Date.now();
-          (logCtx.attempts ??= []).push(logCtx.activeAttempt);
-        }
-        noteProviderAttemptSend(logCtx, route.providerName, sendProvider, logCtx.usageLogInputTokens,
-          receipt?.recovery ?? upstreamRecovery, { model: route.modelId, adapter: sendProvider.adapter });
-        receipt?.onDispatch?.();
-      };
-      const keyedDispatch = sendProvider.authMode !== "forward" && !!sendProvider.apiKey;
       const doFetch = (upstreamRecovery?: UpstreamSendRecovery) => fetchWithHeaderTimeout(
         compactUrl,
         applyUpstreamRecoveryInit({
@@ -1251,7 +1237,7 @@ export async function handleResponsesCompact(
         req.signal,
         // Keyed sends can refresh their destination after pacing. Their physical send below
         // owns the header clock; the outer wrapper owns pacing and client cancellation only.
-        keyedDispatch ? 0 : connectMs(),
+        sendProvider.authMode !== "forward" && sendProvider.apiKey ? 0 : connectMs(),
         false,
         providerFetch(sendProvider, undefined, {
           providerName: route.providerName,
@@ -1259,7 +1245,7 @@ export async function handleResponsesCompact(
           accountAutoPause: (name, provider, headers) => captureAccountAutoPauseAttempt(name, provider, { config, codex: sendAuthCtx }, headers),
           beforeDispatch: isCanonicalOpenAiForwardProvider(sendProvider)
             ? createCodexAuthDispatchGuard(sendAuthCtx, config, selectedModelId, admission) : undefined,
-          dispatchOverride: keyedDispatch
+          dispatchOverride: sendProvider.authMode !== "forward" && sendProvider.apiKey
             ? async (_input, init, execute, reacquirePacing) => {
               for (let attempt = 0; !providerApiKeySelectionIsCurrent(config, route.providerName, sendProvider); attempt++) {
                 if (!providerAffinityGenerationIsCurrent(config, route.providerName, sendProvider)) throw new Error("Provider affinity selection is no longer available");
@@ -1301,11 +1287,10 @@ export async function handleResponsesCompact(
                 passiveKeyPhysicalFetch(distributedKeyPhysicalFetch((sendProvider as { fetch?: typeof fetch }).fetch ?? execute, route.providerName, sendProvider, compactUrl), config, route.providerName, sendProvider), String(input),
                 physicalInit, { providerName: route.providerName, provider: sendProvider })) as typeof fetch;
               return fetchWithHeaderTimeout(compactUrl,
-                { ...init, headers: sendHeaders, body: JSON.stringify({ ...buildCompactSendBody() as typeof compactBody, model: route.modelId }),
-                },
+                { ...init, headers: sendHeaders, body: JSON.stringify({ ...buildCompactSendBody() as typeof compactBody, model: route.modelId }) },
                 init.signal ?? req.signal, connectMs(), false, physicalFetch);
             } : undefined,
-          onPhysicalDispatch: () => noteCompactSend(upstreamRecovery),
+          onPhysicalDispatch: () => { noteCompactAttemptSend(logCtx, route, sendProvider, receipt?.recovery ?? upstreamRecovery); receipt?.onDispatch?.(); },
         }),
         // Every credential-bearing forward send gets manual redirects, not only
         // pool sends: direct mode carries the caller's credential too (#914).
@@ -1401,8 +1386,7 @@ export async function handleResponsesCompact(
       && !req.signal.aborted
     ) {
       const canReplay = !configuredSendBudgetExhausted();
-      // Seal only a refusal that has a replay plan; an unaffordable replay keeps the 401 final.
-      if (canReplay) sealCredentialRefusal(logCtx, upstream.status, "oauth-401");
+      if (canReplay) sealCredentialRefusal(logCtx, upstream.status, "oauth-401"); // An unaffordable replay keeps the 401 final.
       if (canReplay && !preserveConfiguredRefusal) await upstream.body?.cancel().catch(() => undefined);
       if (canReplay && preserveConfiguredRefusal) upstream = await retainCompactRetryResponse(upstream);
       const poolAuthCtx = authCtx.kind === "pool" ? authCtx : undefined;
@@ -1559,8 +1543,7 @@ export async function handleResponsesCompact(
       && route.codexAccountMode
       && !req.signal.aborted
     ) {
-      const recovery = upstream.status === 402 ? "oauth-account-402"
-        : upstream.status === 403 ? "oauth-account-403" : "oauth-account-429";
+      const recovery = upstream.status === 402 ? "oauth-account-402" : upstream.status === 403 ? "oauth-account-403" : "oauth-account-429";
       sealCredentialRefusal(logCtx, upstream.status, recovery);
       const firstRetryAfter = upstream.headers.get("retry-after");
       const firstResetAt = [

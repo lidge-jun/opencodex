@@ -1,4 +1,4 @@
-import { finishRequestAttempt, type RequestLogContext } from "./request-log";
+import { beginRequestAttempt, finishRequestAttempt, noteProviderAttemptSend, type RequestLogContext } from "./request-log";
 import { sealedCredentialRefusals } from "./request-log-attempt-recovery";
 import { attributeSealedAttempt } from "./request-log-failure-attribution";
 import type { AttemptRecoveryKind } from "../usage/log";
@@ -13,4 +13,20 @@ export function sealCredentialRefusal(logCtx: RequestLogContext, status: number,
   attributeSealedAttempt(attempt, recovery);
   if (attempt.tierOutcome) attempt.tierOutcome = { ...attempt.tierOutcome };
   sealedCredentialRefusals.add(attempt);
+}
+
+type AttemptSendProvider = Parameters<typeof noteProviderAttemptSend>[2];
+type AttemptSendRecovery = Parameters<typeof noteProviderAttemptSend>[4];
+
+/** Open a native compact attempt at its first physical send and count each send against it. */
+export function noteCompactAttemptSend(
+  logCtx: RequestLogContext, route: { providerName: string; modelId: string }, provider: AttemptSendProvider, recovery?: AttemptSendRecovery,
+): void {
+  const { providerName, modelId } = route;
+  if (!logCtx.activeAttempt) {
+    logCtx.activeAttempt = beginRequestAttempt((logCtx.attempts?.length ?? 0) + 1, logCtx.provider, modelId, provider.adapter);
+    logCtx.activeAttemptStartedAt = Date.now();
+    (logCtx.attempts ??= []).push(logCtx.activeAttempt);
+  }
+  noteProviderAttemptSend(logCtx, providerName, provider, logCtx.usageLogInputTokens, recovery, { model: modelId, adapter: provider.adapter });
 }
