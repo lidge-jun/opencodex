@@ -46,6 +46,10 @@ import {
 import { jsonUtf8Bytes } from "../lib/json-byte-size";
 import { newSidecarSearchCellId, rememberSidecarSearch, restoreSidecarSearchResults } from "./sidecar-search-replay";
 
+export function runTurnWebSearchIterationLimit(maxSearches: number): number {
+  return maxSearches + 3;
+}
+
 export interface RunTurnWebSearchDeps {
   parsed: OcxParsedRequest;
   plan: SidecarPlan;
@@ -209,7 +213,7 @@ export async function* runTurnWebSearchLoop(
   const failedQueries = new Set<string>();
   let searchesExecuted = 0;
   let executedSearchCount = 0;
-  const HARD_CAP = plan.maxSearches + 3;
+  const HARD_CAP = runTurnWebSearchIterationLimit(plan.maxSearches);
   let source = first;
   const loopT0 = Date.now();
 

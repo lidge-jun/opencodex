@@ -210,17 +210,14 @@ import { WORKFLOW_LOCAL_REFUSAL_HEADER } from "../../lib/workflow-budget";
 import { upstreamErrorCode } from "./context-overflow";
 import { supportedLadderFor } from "../effort-policy";
 import {
-  beginRequestAttempt,
   catalogModelSupportsServiceTier,
-  finishRequestAttempt,
   inspectResponseLogJson,
-  noteProviderAttemptSend,
   readConfiguredCodexServiceTier,
   requestLogSpeedLabel,
-  sealRequestAttemptIdentity,
   usageFromResponsesPayload,
   type RequestLogContext,
 } from "../request-log";
+import { noteCompactAttemptSend, sealCredentialRefusal } from "../credential-recovery-attempt";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import {
   consumeForInspection,
@@ -1112,7 +1109,7 @@ export async function handleResponsesCompact(
       sendHeaders: Headers,
       recovery: "normal" | "single",
       sendAuthCtx: CodexAuthContext,
-      onPhysicalDispatch?: () => void,
+      receipt?: { recovery?: AttemptRecoveryKind; onDispatch?: () => void },
     ): Promise<Response> => {
       // Only the captured custom-tool contract: native compact keeps the provider's own wire.
       sendProvider = projectCapturedCustomToolPolicy(sendProvider, route.staticPolicy);
@@ -1220,7 +1217,6 @@ export async function handleResponsesCompact(
               stampApiKeyAccountLabel(logCtx, route.providerName, sendProvider);
               if (!rebindPhysicalSend(sendBudget, { poolId: logCtx.spendPoolId ?? route.providerName,
                 identityId: logCtx.accountLogLabel })) throw new SendBudgetExhaustedError(errorDestinationLabel(compactUrl));
-              noteProviderAttemptSend(logCtx, route.providerName, sendProvider, logCtx.usageLogInputTokens, upstreamRecovery);
               const physicalFetch = ((input, physicalInit) => sendWithConnectionPolicy(
                 passiveKeyPhysicalFetch(distributedKeyPhysicalFetch((sendProvider as { fetch?: typeof fetch }).fetch ?? execute, route.providerName, sendProvider, compactUrl), config, route.providerName, sendProvider), String(input),
                 physicalInit, { providerName: route.providerName, provider: sendProvider })) as typeof fetch;
@@ -1228,7 +1224,7 @@ export async function handleResponsesCompact(
                 { ...init, headers: sendHeaders, body: JSON.stringify({ ...buildCompactSendBody() as typeof compactBody, model: route.modelId }) },
                 init.signal ?? req.signal, connectMs(), false, physicalFetch);
             } : undefined,
-          ...(onPhysicalDispatch ? { onPhysicalDispatch } : {}),
+          onPhysicalDispatch: () => { noteCompactAttemptSend(logCtx, route, sendProvider, receipt?.recovery ?? upstreamRecovery); receipt?.onDispatch?.(); },
         }),
         // Every credential-bearing forward send gets manual redirects, not only
         // pool sends: direct mode carries the caller's credential too (#914).
@@ -1325,6 +1321,7 @@ export async function handleResponsesCompact(
       && !req.signal.aborted
     ) {
       const canReplay = !configuredSendBudgetExhausted();
+      if (canReplay) sealCredentialRefusal(logCtx, upstream.status, "oauth-401"); // An unaffordable replay keeps the 401 final.
       if (canReplay && !preserveConfiguredRefusal) await upstream.body?.cancel().catch(() => undefined);
       if (canReplay && preserveConfiguredRefusal) upstream = await retainCompactRetryResponse(upstream);
       const poolAuthCtx = authCtx.kind === "pool" ? authCtx : undefined;
@@ -1389,7 +1386,7 @@ export async function handleResponsesCompact(
         if (replayBinding) applyAccountChangeConversationStateScrub({ body: compactBody, headers, bindingKey: replayBinding.bindingKey, servingAccountId: replayBinding.accountId, logCtx });
         logCtx.accountLogLabel = codexAuthContextLogLabel(replay.authCtx, config);
         try {
-          upstream = await sendCompactAttempt(compactProvider, headers, "single", authCtx);
+          upstream = await sendCompactAttempt(compactProvider, headers, "single", authCtx, { recovery: "oauth-401" });
           if (preserveConfiguredRefusal) await rejected.body?.cancel().catch(() => undefined);
         } catch (err) {
           if (req.signal.aborted) {
@@ -1478,6 +1475,8 @@ export async function handleResponsesCompact(
       && !await hasUpstreamReplayRefusal(upstream, req.signal, { requireCompleteBody: true })
       && !req.signal.aborted
     ) {
+      const recovery = upstream.status === 402 ? "oauth-account-402" : upstream.status === 403 ? "oauth-account-403" : "oauth-account-429";
+      sealCredentialRefusal(logCtx, upstream.status, recovery);
       const firstRetryAfter = upstream.headers.get("retry-after");
       const firstResetAt = [
         upstream.headers.get("x-codex-primary-reset-at"),
@@ -1566,7 +1565,7 @@ export async function handleResponsesCompact(
         logCtx.accountLogLabel = codexAuthContextLogLabel(alternate.authCtx, config);
         scrubCompactStateForAlternate(alternate.authCtx, alternate.headers);
         try {
-          upstream = await sendCompactAttempt(alternate.provider, alternate.headers, "single", alternate.authCtx);
+          upstream = await sendCompactAttempt(alternate.provider, alternate.headers, "single", alternate.authCtx, { recovery });
         } catch (err) {
           if (!preserveConfiguredRefusal || !(err instanceof SendBudgetExhaustedError) || req.signal.aborted) {
             if (preserveConfiguredRefusal) await recordMove();
@@ -1597,6 +1596,7 @@ export async function handleResponsesCompact(
       && !await shouldRetryCodexPoolAccountQuota(upstream, req.signal)
     ) {
       const firstStatus = upstream.status;
+      sealCredentialRefusal(logCtx, firstStatus);
       const firstRetryAfter = upstream.headers.get("retry-after");
       const firstResetAt = [
         upstream.headers.get("x-codex-primary-reset-at"),
@@ -1642,7 +1642,7 @@ export async function handleResponsesCompact(
         let alternateDispatched = false;
         try {
           alternateResponse = await sendCompactAttempt(alternate.provider, alternate.headers, "single", alternate.authCtx,
-            () => { alternateDispatched = true; });
+            { onDispatch: () => { alternateDispatched = true; } });
         } catch (err) {
           if (alternateDispatched) {
             recordFirstMove();

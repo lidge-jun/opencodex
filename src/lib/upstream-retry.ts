@@ -820,6 +820,7 @@ export async function fetchWithResetRetry(
         // may have run the turn. Settle it as the refusal instead of throwing into a caller
         // whose transport-failure path answers with a client-retryable 502.
         if (spentOperatorReplacement) return replayRefusalResponse();
+        if (err instanceof SendBudgetExhaustedError) throw err;
         // A reset that already reached the origin is credential-visible
         // evidence: keep it attached so the terminal rejection cannot be
         // downgraded to the pre-connection neutral class (#914 review).

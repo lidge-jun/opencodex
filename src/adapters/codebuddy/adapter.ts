@@ -99,6 +99,7 @@ export function buildArgs(
 export function createCodeBuddyAdapter(provider: OcxProviderConfig, deps: CodeBuddyAdapterDeps = {}): ProviderAdapter {
   return {
     name: "codebuddy",
+    reportsPhysicalSends: true,
 
     // runTurn owns the turn; buildRequest/parseStream are the disabled HTTP path (mirrors cursor).
     buildRequest(): AdapterRequest {

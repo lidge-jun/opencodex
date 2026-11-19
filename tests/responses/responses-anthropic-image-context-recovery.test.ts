@@ -521,3 +521,26 @@ test("replay integration: complete failed summary body preserves a late refusal 
   expect(result.text).toContain("upstream_response_refused");
   expect(result.response.headers.get("x-should-retry")).toBe("false");
 });
+
+for (const cap of [3, 2, 1]) {
+  test(`image-context recovery charges and records each physical send exactly once (send cap ${cap})`, async () => {
+    const budget = createRequestExecutionBudget({ maxTotalModelSends: cap, baseSendAllowance: cap,
+      finalRecoveryAllowance: 0, maxAlternateTargetSends: 0, maxTargetTransitions: 0 });
+    const result = await fixture({ enabled: true, requestOptions: { sendBudget: budget },
+      handle: (_wire, index) => index === 1 ? image413()
+        : completion(index === 2 ? "Old image summary" : "Recovered fixture response", false, 30, 3) });
+    const sends = cap === 3 ? 3 : 1;
+    expect(result.response.status).toBe(cap === 3 ? 200 : 413);
+    expect(result.sent).toHaveLength(sends);
+    expect(budget.used).toBe(sends);
+    const attempts = result.logCtx.attempts ?? [];
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]!.sendCount).toBe(sends);
+    if (cap === 3) {
+      expect(attempts[0]!.recoveryKinds).toContain("image-413");
+      expect(attempts[0]!.usage).toMatchObject({ inputTokens: 60, outputTokens: 6 });
+    } else {
+      expect(attempts[0]!.recoveryKinds).not.toContain("image-413");
+    }
+  });
+}

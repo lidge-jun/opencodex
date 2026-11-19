@@ -38,6 +38,13 @@ export function carryAnthropicRefusalCredential(source: Response, target: Respon
   if (sent) responseCredentials.set(target, sent);
 }
 
+/** Classify a replay by the credential that sent the refusal, even after store selection moves. */
+export function anthropicRefusalCredentialChanged(response: Response, replacement: OAuthAccessSnapshot): boolean {
+  const sent = responseCredentials.get(response);
+  return !sent || sent.provider !== replacement.provider || sent.accountId !== replacement.accountId
+    || sent.generation !== replacement.generation;
+}
+
 /** Recheck after body consumption: a late refusal cannot acquire a replacement login's authority. */
 export function anthropicRefusalCredentialIsCurrent(response: Response, instance: AnthropicInstanceId, accountId: string): boolean {
   const sent = responseCredentials.get(response);

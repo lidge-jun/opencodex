@@ -19,6 +19,9 @@ validated provider and closed effort/capability fields, with no model field. Ope
 selection and cooldown keys remain internal. `tests/responses/chat-error-body-normalization.test.ts`
 covers failure, wait, last-resort, reprobe and effort diagnostic output.
 
+The combo's request outcome and its child's [sealed upstream refusal](../usage-client-attribution.md#credential-recovery-attempts)
+can have different statuses. Child finalization preserves the refusal's physical attempt.
+
 When ladder exhaustion returns a child response, the combo's logical row takes diagnostics from that
 child. A synthetic exhaustion response can retain child diagnostics. For example, the quota-cooldown
 snapshot exit can adopt the last failed child's diagnostics before returning a synthetic 503 with

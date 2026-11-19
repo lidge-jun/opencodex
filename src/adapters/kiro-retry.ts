@@ -1,4 +1,5 @@
 import type { AdapterFetchContext, AdapterRequest } from "./base";
+import { fetchWithPhysicalSendReceipt } from "../lib/executor-physical-send-receipt";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { classifyKiroHttpError, safeKiroHttpErrorMessage } from "./kiro-errors";
 import { normalizeUpstreamHttpErrorResponse } from "./upstream-http-error";
@@ -29,6 +30,8 @@ const RESET_ATTEMPTS = 3;
 const RESET_RETRY_BASE_MS = 150;
 const RESET_RETRY_MAX_MS = 1_000;
 const THROTTLE_ATTEMPTS = 3;
+// A throttle round can try both the runtime and legacy endpoint.
+export const KIRO_FETCH_SEND_LIMIT = THROTTLE_ATTEMPTS * 2 * RESET_ATTEMPTS;
 const CANONICAL_RUNTIME_HOST = /^runtime\.([a-z]{2}(?:-[a-z]+)+-\d)\.kiro\.dev$/i;
 const ENDPOINT_ERROR_MARKERS = [
   "unknownoperation",
@@ -210,11 +213,10 @@ async function fetchWithResetRecovery(
           ...(recovered ? { keepalive: false } : {}),
         }, timeoutMs, ctx.abortSignal, ctx.stream, (async (input, init) => {
           try {
-            const run = async (): Promise<Response> => {
+            const run = () => fetchWithPhysicalSendReceipt(executor.unpacedFetch ?? executor, input, init, () => {
               if (permit && !permit.use()) throw new SendBudgetExhaustedError(errorDestinationLabel(destination));
               notePhysicalSend(attempt > 0);
-              return (executor.unpacedFetch ?? executor)(input, init);
-            };
+            });
             return await (permit?.execute ? permit.execute(run) : run());
           } catch (error) {
             if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);

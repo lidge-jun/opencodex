@@ -408,6 +408,10 @@ confidence/probability, and optional numeric decision usage. It never stores pro
 credentials, tool arguments, or raw TypeSafe responses. Oversized rows retain the same positive
 `usageIncomplete` diagnostic as the ordinary usage endpoint.
 
+For routed image and web-search turns, `sendCount` includes upstream adapter retries.
+Each model send for these turns uses the shared request send budget, including retries and later tool rounds. A send refused at the cap does not increment `sendCount`. For direct hosted web search, the default request budget covers the loop’s bounded model rounds, including the forced-answer retry and any enabled recovery, rate-limit, and connection-reset retries. For direct hosted media, the default budget covers the configured rounds, same-target 429 retries and the transport’s bounded send attempts. Explicit send caps still apply.
+A replacement stopped before upstream dispatch adds no send.
+
 New xAI attempts in `usage.jsonl` include a request-time `credentialSource`: `grok-oauth`
 for the resolved Grok CLI OAuth transport, or `xai-api-key` for the public xAI API key
 transport. This fixed label contains no credential or account identifier. It belongs to
@@ -433,8 +437,15 @@ the per-account usage summaries. A provider without that suffix, such as a pool-
 request, has no tag. Older rows and malformed values omit the field.
 
 Key selection is recorded after queued requests have been rebuilt for the current selection.
-When a retry changes keys, `attempts` retains a separate record for the preceding key, including
-reported usage from failed responses. Missing usage remains unreported. Routed adapter terminals
+When a retry changes keys, `attempts` retains a separate record for the preceding key. After an
+upstream attempt has been sent, credential recovery records a separate attempt when the proxy
+dispatches the replacement, even if both attempts use the same account label. If local pacing
+rejects the replacement, the request can have status 429 while its sole upstream attempt retains status 401. The same
+dispatch rule applies to combo members, runTurn adapters, and native Responses compaction.
+Each attempt retains the usage the proxy captures for it. The xAI Responses OAuth replay discards
+the refused 401 body, so usage in that body remains unreported. A replacement can carry estimated
+usage from its rebuilt request when provider totals are unavailable.
+`usageStatus` distinguishes reported, estimated, and unreported usage. Routed adapter terminals
 are observed before image/search loops or continuation guards combine their usage. Consumers
 sum the flat attempts by provider/account and do not add the parent combo total again. These
 records identify usage; provider quota percentages remain separate upstream observations.

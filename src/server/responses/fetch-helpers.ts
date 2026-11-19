@@ -37,6 +37,7 @@ import { outboundCredentials } from "../../lib/outbound-credential-registry";
 import { replayRefusalResponse } from "../../lib/upstream-retry";
 import { compressUpstreamRequestBody, isCanonicalCodexResponsesUrl } from "./request-compression";
 import { redeemOutboundTurnState, TURN_STATE_BINDING_INIT, turnStateBinding } from "../turn-state-handles";
+import { EXECUTOR_PHYSICAL_SEND_RECEIPT, inheritAdapterSupportExecutor, markPhysicalSendReceiptExecutor, registerAdapterSupportExecutor } from "../../lib/executor-physical-send-receipt";
 
 export { withUpstreamHttpVersion };
 
@@ -243,13 +244,7 @@ export function sendWithConnectionPolicy(
   const largeCodexBody = !compressed && typeof body === "string"
     && isCanonicalCodexResponsesUrl(target)
     && Buffer.byteLength(body, "utf8") >= 1024 * 1024;
-  (init as Record<symbol, ((destination: string, headers: Headers) => void) | undefined> | undefined)?.[PHYSICAL_SEND_GUARD]?.(target, headers);
-  (init as Record<symbol, ((body: BodyInit | null | undefined) => void) | undefined> | undefined)?.[PHYSICAL_DISPATCH]?.(body);
-  (init as Record<symbol, ((destination: string, headers: Headers) => void) | undefined> | undefined)?.[PHYSICAL_SEND_OBSERVER]?.(target, headers);
-  // Final headers, after plugin rewrites: an upstream can only echo what it received here, so the
-  // request log refuses any diagnostic that repeats one of these values (see request-log-terminal-status).
-  outboundCredentials().remember(headers);
-  return physicalFetch(input, {
+  const sendInit: RequestInit = {
     ...init,
     ...(compressed ? { body: compressed.body } : largeCodexBody ? { body: Buffer.from(body, "utf8") } : {}),
     headers,
@@ -258,7 +253,16 @@ export function sendWithConnectionPolicy(
     ...egressInit,
     ...(decide || redirectedToLoopback ? { [EGRESS_DECIDED]: true } : {}),
     ...{ [UPSTREAM_REWRITTEN]: true },
-  });
+  };
+  (init as Record<symbol, ((destination: string, headers: Headers) => void) | undefined> | undefined)?.[PHYSICAL_SEND_GUARD]?.(target, headers);
+  // Final headers, after plugin rewrites: an upstream can only echo what it received here, so the
+  // request log refuses any diagnostic that repeats one of these values (see request-log-terminal-status).
+  outboundCredentials().remember(headers);
+  const signal = sendInit.signal ?? (input instanceof Request ? input.signal : undefined);
+  if (signal?.aborted) return Promise.reject(signal.reason);
+  (init as Record<symbol, ((body: BodyInit | null | undefined) => void) | undefined> | undefined)?.[PHYSICAL_DISPATCH]?.(body);
+  (init as Record<symbol, ((destination: string, headers: Headers) => void) | undefined> | undefined)?.[PHYSICAL_SEND_OBSERVER]?.(target, headers);
+  return physicalFetch(input, sendInit);
 }
 
 interface CodexWsExecutor { provider: OcxProviderConfig; http: typeof globalThis.fetch }
@@ -383,11 +387,16 @@ export function providerFetch(
       // No proxy option is attached here: a `dispatchOverride` may rebuild this request against
       // a different destination, so the route is decided at the physical send instead.
       const sharedReceipt = (init as Record<symbol, ((body: BodyInit | null | undefined) => void) | undefined> | undefined)?.[WS_FALLBACK_RECEIPT];
+      const adapterReceipt = (init as Record<symbol, (() => void) | undefined> | undefined)?.[EXECUTOR_PHYSICAL_SEND_RECEIPT];
       let notified = false;
       const dispatchInit = { ...withUpstreamHttpVersion(input, init, provider), timeout: 0,
-        ...(options.onPhysicalDispatch ? { [PHYSICAL_DISPATCH]: (body: BodyInit | null | undefined) => {
+        ...(options.onPhysicalDispatch || adapterReceipt ? { [PHYSICAL_DISPATCH]: (body: BodyInit | null | undefined) => {
           if (sharedReceipt) sharedReceipt(body);
-          else if (!notified) { options.onPhysicalDispatch!(body); notified = true; }
+          else if (!notified) {
+            adapterReceipt?.();
+            options.onPhysicalDispatch?.(body);
+            notified = true;
+          }
         } } : {}),
       };
       return override
@@ -430,6 +439,7 @@ export function providerFetch(
       let notified = false;
       const notifyOnce = (body: BodyInit | null | undefined): void => {
         if (notified) return;
+        (init as Record<symbol, (() => void) | undefined>)[EXECUTOR_PHYSICAL_SEND_RECEIPT]?.();
         options.onPhysicalDispatch?.(body);
         notified = true;
       };
@@ -466,7 +476,7 @@ export function providerFetch(
       // Cursor RunSSE and BidiAppend can overlap. The runTurn owner releases this slot when
       // the whole turn finishes; transferring it to RunSSE's body would admit another turn
       // while a BidiAppend from this one is still active.
-      return options.turnScopedPacing ? undefined : options.pacingSlot;
+      if (!options.pacingSlot?.released) return options.turnScopedPacing ? undefined : options.pacingSlot;
     }
     if (options.providerName) {
       return waitForProviderRequestSlot(options.providerName, provider, options.modelId, signal,
@@ -506,11 +516,24 @@ export function providerFetch(
     preconnect,
     waitForPacing,
     fetchWithPacingSlot,
-    unpacedFetch: Object.assign(unpaced, { preconnect }),
+    unpacedFetch: markPhysicalSendReceiptExecutor(Object.assign(unpaced, { preconnect }) as typeof globalThis.fetch),
   });
   markEgressTransparentExecutor(paceAware as unknown as typeof globalThis.fetch);
   if (customExecutor === undefined && transport === base && !options.dispatchOverride) bindProviderSocketRoute(paceAware, providerName, provider);
-  return paceAware;
+  const { onPhysicalDispatch, dispatchOverride, beforeDispatch, accountAutoPause, ...supportOptions } = options;
+  if (onPhysicalDispatch || dispatchOverride || beforeDispatch || accountAutoPause) {
+    let support: ProviderFetch | undefined;
+    const getSupport = () => support ??= providerFetch(provider, runtime, {
+      ...supportOptions,
+      httpOnly: true,
+      // Preparation can borrow a live lease across several sends. Only inference can
+      // transfer the attempt's lease to a body; attempt cleanup owns unsent leases.
+      turnScopedPacing: options.turnScopedPacing || !!options.pacingSlot,
+    });
+    registerAdapterSupportExecutor(paceAware as ProviderFetch, getSupport);
+    registerAdapterSupportExecutor(paceAware.unpacedFetch, () => getSupport().unpacedFetch ?? getSupport());
+  }
+  return markPhysicalSendReceiptExecutor(paceAware as ProviderFetch);
 }
 
 
@@ -557,7 +580,8 @@ export function storedPoolReplayDispatchNotifier(
     }
     return sendTrackingRequestSlot(await executor.waitForPacing?.(init?.signal ?? undefined), () => unpaced!(input, init));
   };
-  return Object.assign(wrapped, {
+  if (unpaced) inheritAdapterSupportExecutor(unpaced, unpacedSource);
+  const notifying = Object.assign(wrapped, {
     preconnect: executor.preconnect,
     waitForPacing: executor.waitForPacing,
     unpacedFetch: unpaced,
@@ -566,6 +590,7 @@ export function storedPoolReplayDispatchNotifier(
       return executor.fetchWithPacingSlot!(slot, input, init);
     } } : {}),
   }) as ProviderFetch;
+  return inheritAdapterSupportExecutor(notifying, executor);
 }
 
 /**

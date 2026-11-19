@@ -1645,6 +1645,7 @@ describe("runTurn API-key recovery", () => {
       expect(result.body).toContain("healthy on A");
       expect(result.seen).toEqual(["synthetic-cli-a"]);
       expect(result.errors).toEqual([]);
+      expect(result.logCtx.attempts?.map(attempt => attempt.sendCount)).toEqual([1]);
       expect(result.budgetUsed).toBe(1);
       expect(result.aCooldown).toBeNull();
       expect(result.bCooldown).toBeNull();

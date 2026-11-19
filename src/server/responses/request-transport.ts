@@ -116,17 +116,31 @@ import {
   beginRequestAttempt,
   sealRequestAttemptIdentity,
   recordAttemptCredentialSource,
+  recordAdapterReasoning,
+  recordAdapterTier,
   recordAdapterTierMetadata,
+  recordAttemptRequestedEffort,
   noteProviderAttemptSend,
-  recordKeyAttemptFailure,
   recordKeyAttemptUsage,
   rebindCacheDiagnosticBody,
+  type RequestLogContext,
 } from "../request-log";
+import { recordKeyAttemptFailure } from "../request-log-key-failure";
+import { sealCredentialRefusal } from "../credential-recovery-attempt";
+import { sealedCredentialRefusals } from "../request-log-attempt-recovery";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { bindAttemptDeliveryRecorder } from "../../usage/attempt-delivery";
 import { resolvePassiveRouteSubjectId } from "../passive-route-linker";
 import { anthropicPoolCooldownResponse, clientCancelledResponse } from "./core-errors";
 import { acquireAccountLease, KIRO_ACCOUNT_WAIT_MS } from "../../oauth/kiro-account-load";
+
+type CopilotInferenceReceipt = {
+  attempt: NonNullable<RequestLogContext["activeAttempt"]>;
+  ordinal: number;
+  sendCount: number;
+};
+const copilotInferenceReceipts = new WeakMap<Response, CopilotInferenceReceipt>();
+registerProviderResponseProvenance(copilotInferenceReceipts);
 
 /** Return a renewed Chat wire to the native owner before sending inference. */
 export class CopilotAutoAdapterHandoff extends Error {
@@ -611,8 +625,7 @@ export async function prepareResponsesTransport(
     if (attemptSendDeferred()) pendingKeySend = { estimate, recovery };
     else noteProviderAttemptSend(logCtx, route.providerName, route.provider, estimate, recovery);
   };
-  const commitKeyAttemptSend = (): void => {
-    if (!attemptSendDeferred()) return;
+  const commitRoutedAttemptSend = (estimate: number | undefined, recovery?: AttemptRecoveryKind, resolved = copilotCandidate): void => {
     if (copilotCandidate) {
       logCtx.model = copilotCandidate.model;
       logCtx.providerAdapter = copilotCandidate.adapter;
@@ -623,12 +636,68 @@ export async function prepareResponsesTransport(
         sentOAuthSnapshot = servingOAuthSnapshot;
       }
     }
-    noteProviderAttemptSend(logCtx, route.providerName, route.provider,
-      pendingKeySend?.estimate ?? logCtx.usageLogInputTokens, pendingKeySend?.recovery, copilotCandidate);
+    noteProviderAttemptSend(logCtx, route.providerName, route.provider, estimate, recovery, resolved);
+  };
+  const commitKeyAttemptSend = (): void => {
+    if (!attemptSendDeferred()) return;
+    const pending = pendingKeySend;
     pendingKeySend = undefined;
+    commitRoutedAttemptSend(pending?.estimate ?? logCtx.usageLogInputTokens, pending?.recovery);
+  };
+  const bindPassiveSubject = (adapter: string, model: string): void => {
+    const attempt = logCtx.activeAttempt;
+    if (!attempt || sealedCredentialRefusals.has(attempt)) return;
+    const subject = resolvePassiveRouteSubjectId(config, route.providerName, model, route.provider, inboundWire, adapter);
+    if (subject) attempt.labRouteSubjectId = subject;
+    else delete attempt.labRouteSubjectId;
+  };
+  const commitRunTurnAttemptSend = (requestParsed: OcxParsedRequest, recovery?: AttemptRecoveryKind): void => {
+    const selected = runTurnAdapter;
+    pendingKeySend = undefined;
+    commitRoutedAttemptSend(logCtx.usageLogInputTokens, recovery, { model: route.modelId, adapter: selected.name });
+    logCtx.providerAdapter = selected.name;
+    bindPassiveSubject(selected.name, route.modelId);
+    recordAttemptRequestedEffort(logCtx);
+    recordAdapterTierMetadata(logCtx, selected.tierLogForRunTurn?.(requestParsed));
+  };
+  const commitAdapterAttemptSend = (request: AdapterRequest, adapter: string, recovery?: AttemptRecoveryKind): void => {
+    const estimate = request.usageLog?.inputTokens;
+    pendingKeySend = undefined;
+    const identity = copilotCandidate ?? { model: route.modelId, adapter };
+    commitRoutedAttemptSend(estimate, recovery, identity);
+    logCtx.providerAdapter = identity.adapter;
+    logCtx.usageLogInputTokens = estimate;
+    recordAdapterReasoning(logCtx, request);
+    recordAdapterTier(logCtx, request);
+  };
+  const createCredentialReplayAttempt = (status: number, recovery: AttemptRecoveryKind) => {
+    sealCredentialRefusal(logCtx, status, recovery);
+    let dispatched = false;
+    return (request: AdapterRequest, adapter: string, transportRecovery?: AttemptRecoveryKind): void => {
+      const estimate = request.usageLog?.inputTokens;
+      const identity = copilotCandidate ?? { model: route.modelId, adapter };
+      if (!dispatched) pendingKeySend = undefined;
+      commitRoutedAttemptSend(estimate, dispatched ? transportRecovery : recovery, identity);
+      if (dispatched) return;
+      logCtx.providerAdapter = identity.adapter;
+      logCtx.usageLogInputTokens = estimate;
+      bindPassiveSubject(identity.adapter, identity.model);
+      recordAdapterReasoning(logCtx, request);
+      recordAdapterTier(logCtx, request);
+      dispatched = true;
+    };
+  };
+  let credentialReplayHandoff: ReturnType<typeof createCredentialReplayAttempt> | undefined;
+  const isCurrentInferenceResponse = (response: Response): boolean => {
+    if (route.providerName !== "github-copilot" || route.provider.authMode === "forward") return true;
+    const receipt = copilotInferenceReceipts.get(response);
+    const attempt = logCtx.activeAttempt;
+    return receipt !== undefined && receipt.attempt === attempt
+      && receipt.ordinal === attempt.ordinal && receipt.sendCount === attempt.sendCount;
   };
   const bindKeyUsageFromBridge = (usage: OcxUsage | undefined): void => {
     logCtx.usageFromBridge = true;
+    if (logCtx.activeAttempt && sealedCredentialRefusals.has(logCtx.activeAttempt)) return;
     if (usesApiKeyAccount(route.provider)) {
       if (!logCtx.activeAttempt?.usage && usage) recordKeyAttemptUsage(logCtx, usage);
       logCtx.usage = logCtx.activeAttempt?.usage;
@@ -734,7 +803,10 @@ export async function prepareResponsesTransport(
     // transport relayed, and a difference between the two is the loss signal (#3983). Reading
     // the current attempt through logCtx rather than capturing one keeps the count with the
     // attempt that is live when the event arrives, across a mid-request attempt rotation.
-    const delivery = bindAttemptDeliveryRecorder(translatorBudget, () => logCtx.activeAttempt);
+    const delivery = bindAttemptDeliveryRecorder(translatorBudget, () => {
+      const attempt = logCtx.activeAttempt;
+      return attempt && !sealedCredentialRefusals.has(attempt) ? attempt : undefined;
+    });
     const observeEvent = (event: AdapterEvent, response: object): void => {
       delivery.noteAdapterEvent();
       observeUsage(event, response);
@@ -953,8 +1025,6 @@ export async function prepareResponsesTransport(
           }
           beforeCredentialSend();
           incoming.beforePhysicalSend?.();
-          commitKeyAttemptSend();
-          sent = true;
         };
         const fetch = providerFetch(route.provider, options.codexWsRuntimeIdentity, {
           providerName: route.providerName, modelId: route.modelId, pacingSlotAcquired: true,
@@ -962,8 +1032,15 @@ export async function prepareResponsesTransport(
           turnScopedPacing: true,
           accountAutoPause: (name, provider, headers) => captureAccountAutoPauseAttempt(name, provider, { config, oauth: binding?.kind === "oauth" ? binding.snapshot : undefined }, headers),
           beforeDispatch: beforePhysicalSend,
+          onPhysicalDispatch: () => {
+            sent = true;
+            if (incoming.onGuardedDispatch) incoming.onGuardedDispatch();
+            else if (!selectedAdapter.reportsPhysicalSends) commitKeyAttemptSend();
+          },
         });
-        await run(requestParsed, { ...incoming, pacingSlot: attemptSlot, providerFetch: fetch, beforePhysicalSend, beforeCredentialSend }, event => { if (!refused) emit(event); });
+        await run(requestParsed, { ...incoming, pacingSlot: attemptSlot, providerFetch: fetch, beforePhysicalSend, beforeCredentialSend,
+          onPhysicalSend: send => { sent = true; incoming.onPhysicalSend?.(send); },
+        }, event => { if (!refused) emit(event); });
       } catch (error) {
         if (!refused) throw error;
       } finally {
@@ -979,7 +1056,7 @@ export async function prepareResponsesTransport(
   };
   /** Fence the physical send, with bounded credential/session rebuilds and safe negotiated refusals. */
   const oauthDispatch = (wireRequest: AdapterRequest, requestParsed = parsed, owner: "adapter" | "passthrough" = "adapter",
-    imagePin?: ImageDispatchPin): ProviderFetchOptions["dispatchOverride"] => {
+    explicitAttemptCommit = false, imagePin?: ImageDispatchPin): ProviderFetchOptions["dispatchOverride"] => {
     const priorImageOwner = requestParsed._anthropicImageOwner;
     const pinned = imagePin ?? (priorImageOwner ? imageHistoryPins.get(priorImageOwner)?.(wireRequest) : undefined);
     if (priorImageOwner && (!pinned || route.provider.authMode === "forward")) {
@@ -1058,6 +1135,7 @@ export async function prepareResponsesTransport(
           const observeAutoPause = captureAccountAutoPauseAttempt(route.providerName, binding?.kind === "api-key" ? binding.provider : route.provider,
             { config, oauth: binding?.kind === "oauth" ? binding.snapshot : undefined }, new Headers(dispatchInit.headers));
           let response: Response | undefined;
+          let copilotReceipt: CopilotInferenceReceipt | undefined;
           let physicalOwner: AnthropicPhysicalSendOwnership | null = null;
           try {
             requireAnthropicAdmission();
@@ -1075,7 +1153,7 @@ export async function prepareResponsesTransport(
             // may still refuse at the HTTP executor. Its note follows that final admission.
             const deferredCopilotNote = route.providerName === "github-copilot" && route.provider.authMode !== "forward";
             const deferAttemptNote = deferredCopilotNote || advisorCredential !== undefined || pinned !== undefined;
-            if (!deferAttemptNote) commitKeyAttemptSend();
+            if (!explicitAttemptCommit && !deferAttemptNote) commitKeyAttemptSend();
             // The WS executor dials its own socket: HTTP connection policy and body coding do not apply.
             // WS eligibility (egress, pacing, URL) was checked for the provider it was built for; a
             // provider reselected above was not, so it takes the HTTP fallback under its own route.
@@ -1083,10 +1161,15 @@ export async function prepareResponsesTransport(
               passiveKeyPhysicalFetch(distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider), route.providerName, route.provider, target), config, route.providerName, route.provider),
               input,
               { ...physicalInit, redirect: "manual",
-                ...physicalSendObserverInit(observeAutoPause, target, deferAttemptNote ? () => {
-                  commitKeyAttemptSend();
+                ...physicalSendObserverInit(observeAutoPause, target, (!explicitAttemptCommit && deferAttemptNote) || pinned ? () => {
+                  // An explicit caller commit has already published this attempt at dispatch.
+                  if (!explicitAttemptCommit) commitKeyAttemptSend();
                   // A pinned receipt keeps its estimate until this send reports usage.
                   if (pinned) recordCurrentPhysicalSendUsage(null);
+                } : undefined,
+                deferredCopilotNote ? () => {
+                  const attempt = logCtx.activeAttempt;
+                  if (attempt?.sendCount) copilotReceipt = { attempt, ordinal: attempt.ordinal, sendCount: attempt.sendCount };
                 } : undefined),
                 ...(pinned || recoveryOwner || vertexAuthority || advisorCredential || stripAdvisorBeta ? physicalSendGuardInit((finalTarget, finalHeaders) => {
                     if (pinned && (!pinned.current() || !pinned.matches(finalTarget, finalHeaders))) {
@@ -1152,12 +1235,13 @@ export async function prepareResponsesTransport(
                 request: immutableRequest,
                 isCurrent: recoveryCurrent,
                 recordRefusalSpend: recordFailureSpend && (() => recordFailureSpend(failureUsage ?? null)),
-                dispatchOverride: (wire, input) => oauthDispatch(wire, input, "adapter", bindImageHistory(wire))!,
+                dispatchOverride: (wire, input) => oauthDispatch(wire, input, "adapter", false, bindImageHistory(wire))!,
               };
               imageHistoryPins.set(recoveryOwner, bindImageHistory);
               capturedImagePins.add(pin);
               imageRefusals.set(response, imageRefusals.has(response) ? null : pin);
             }
+            if (copilotReceipt) copilotInferenceReceipts.set(response, copilotReceipt);
             return response;
           }
         }
@@ -1556,8 +1640,9 @@ export async function prepareResponsesTransport(
       config,
       route.providerName,
       route.modelId,
-      route.provider,
+      adapterProvider,
       inboundWire,
+      adapter.name,
     );
     if (passiveSubjectId) logCtx.activeAttempt.labRouteSubjectId = passiveSubjectId;
   }
@@ -1705,6 +1790,7 @@ export async function prepareResponsesTransport(
     set hostedAdvisorSpendGuard(guard: typeof hostedAdvisorSpendGuard) { hostedAdvisorSpendGuard = guard; },
     resolveCopilotSelection,
     copilotRefusalResponse,
+    isCurrentInferenceResponse,
     refreshRunTurnAdapter,
     oauthDispatch,
     pinAnthropicImageRecovery: (response: Response): AnthropicImageRecoveryPin | undefined => {
@@ -1712,6 +1798,11 @@ export async function prepareResponsesTransport(
       return pin && capturedImagePins.has(pin) && pin.isCurrent() ? pin : undefined;
     },
     noteRoutedAttemptSend,
+    createCredentialReplayAttempt,
+    commitRunTurnAttemptSend,
+    commitAdapterAttemptSend,
+    get credentialReplayHandoff() { return credentialReplayHandoff; },
+    set credentialReplayHandoff(value: typeof credentialReplayHandoff) { credentialReplayHandoff = value; },
     attemptSendDeferred,
     deferPhysicalAttribution,
     commitKeyAttemptSend,

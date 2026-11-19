@@ -197,6 +197,40 @@ newly scoped by that rule. `src/server/hub-usage.ts` binds a client-filtered dat
 key and emits a safe scope echo; `src/remote/hub-usage.ts` projects it without key IDs, and
 `src/client/hub-client.ts` rejects a missing or mismatched echo.
 
+## Credential recovery attempts
+
+`noteProviderAttemptSend` in `src/server/request-log.ts` closes a sent attempt before a
+credential recovery even when the provider and opaque account label are unchanged, such as a
+same-account OAuth refresh after 401. `credentialRecoveryStatus` in
+`src/server/request-log-attempt-recovery.ts` maps the closed credential-recovery roster to its
+401, 402, 403 or 429 refusal status; an already recorded upstream status takes precedence.
+The existing in-place split preserves the active object, keeps the refused send's usage on its
+sealed row and records the replacement send on a fresh row. The sealed tier outcome is a snapshot;
+the replacement retains the live adapter observer's outcome so response-tier confirmation updates
+only the replacement. `src/server/credential-recovery-attempt.ts` seals the observed refusal
+before a credential replay. If pacing or final admission refuses the replacement, finalization
+keeps the physical status and separately records the logical request outcome. Responses
+recovery publishes the rebuilt tier, reasoning, account and input estimate at physical dispatch.
+A combo preserves a sealed child refusal through success, failure and cancellation finalization.
+`src/server/responses/run-turn-execution.ts` uses a guarded receipt from the provider executor,
+the Cursor transport or the CLI spawn to bind the replacement and count its dispatch.
+CodeBuddy, Claude CLI and Qoder report sends through the shared runner after the spawn
+permit is consumed. The import-free `src/lib/executor-physical-send-receipt.ts` shares the
+final-admission receipt between the HTTP executor and adapter dispatch. Copilot continuation
+recovery checks the attempt identity and send count on the inference response, and pacing
+preserves that receipt when it wraps the body.
+`src/server/responses/compact.ts` creates its native attempt on the first dispatch receipt and
+seals a 401 before starting credential refresh.
+A Responses-to-Chat handoff carries this pending replay into translated dispatch and hosted
+sidecars. At replacement dispatch, `src/server/passive-route-linker.ts` resolves the passive Lab
+subject from the routed provider configuration, inbound wire and effective adapter. Matching
+policy and production adapters retain the resolved service-tier flags. A change to the request URL
+alone can keep the same subject.
+A recovery before the first send creates no extra row. Same-account waits and transport resends remain on the existing attempt.
+`tests/usage/key-attribution.test.ts` covers the split and non-split kinds; the loopback server
+case in `tests/server/server-google-antigravity-oauth-401-replay.test.ts` records separate 401
+and 200 rows for a same-account refresh.
+
 ## Anthropic pool account tag
 
 Anthropic pool attempts carry no `accountLogLabel`; the pool folds the account into the logged
