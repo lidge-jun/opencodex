@@ -2,6 +2,10 @@ import type { OcxConfig, OcxUsage } from "../types";
 import { markNativeGeminiProtocol } from "../protocols/trace";
 import { getValidAccessSnapshotForAccount, forceRefreshOAuthAccessSnapshot, OAuthLoginRequiredError, OAuthAccountPausedError, OAuthTokenRefreshBusyError, OAuthTokenRefreshStaleError, type OAuthAccessSnapshot } from "../oauth";
 import { getAccountSet, getAccountCredentialWithStatus } from "../oauth/store";
+import {
+  antigravityModelRefusal, isProactivePreferenceEnabled, noteGenericPoolSelection, preferredInitialAccount, routeAntigravityModel,
+} from "../oauth/generic-account-failover";
+import { stampOAuthAccountLabel } from "../providers/label";
 import { getProviderRegistryEntry } from "../providers/registry";
 import { sendTrackingRequestSlot, waitForProviderRequestSlot, RequestPacingQueueOverloadError, RequestPacingProviderRemovedError } from "../providers/request-pacing";
 import { usageFromGemini } from "../adapters/google-usage";
@@ -12,11 +16,13 @@ import { currentWorkflowBudgetPolicy } from "../lib/workflow-budget-config";
 import { spendPolicyFromConfig } from "../lib/spend-reservation-ledger";
 import { carryWorkflowRefusal, workflowRefusalResponse } from "./workflow-refusal";
 import { geminiErrorBody } from "./gemini-inbound";
-import type { RequestLogContext } from "./request-log";
+import { markLocalRequestLogRefusal, type RequestLogContext } from "./request-log";
 import { recordGenerationOutput } from "./request-log-generation-window";
+import { noteCredentialAttemptSend, sealCredentialRefusal } from "./credential-recovery-attempt";
 import { DEFAULT_STALL_TIMEOUT_SEC, resolveStallTimeoutMs } from "../stall-timeout";
 import { isLocalUpstream } from "../lib/local-upstream";
 import { assertProviderDestinationAllowed } from "../lib/destination-policy";
+import { clientFacingModelLabel, type ClientFacingModelLabel } from "../lib/error-destination";
 import { registerTurn, unregisterTurn, type ActiveTurnLease } from "./lifecycle";
 import { containsGeminiCredential, geminiNativeReasoningFields, geminiSseTransform, readGeminiText, validateGeminiObject, GEMINI_NATIVE_MAX_BYTES, GEMINI_NATIVE_ERROR_CODE, unwrapGeminiResponse, wrapGeminiRequest } from "./gemini-native-wire";
 
@@ -25,25 +31,31 @@ class NativeWorkflowSendDenied extends Error {}
 class NativeSpendLimitsUnsupported extends Error {}
 class NativeRequestBodyTimeout extends Error {}
 class NativeConfigurationInvalid extends Error {}
+class NativeModelUnavailable extends Error {}
 export function geminiNativeError(status: number, message: string, reason?: string): Response {
   const { error } = geminiErrorBody(status, message);
   return Response.json({ error: { ...error, ...(reason ? { details: [{ reason }] } : {}) } }, { status });
 }
 
 export interface GeminiNativeDeps {
-  access: () => Promise<OAuthAccessSnapshot>;
+  access: (config: OcxConfig, model: string, clientModel: ClientFacingModelLabel) => Promise<OAuthAccessSnapshot>;
   refresh: (snapshot: OAuthAccessSnapshot) => Promise<OAuthAccessSnapshot>;
   fetch: typeof globalThis.fetch;
 }
 const defaults: Omit<GeminiNativeDeps, "fetch"> = {
-  access: async () => {
+  access: async (config, model, clientModel) => {
     const set = getAccountSet(GEMINI_NATIVE_PROVIDER);
     if (!set) throw new OAuthLoginRequiredError(GEMINI_NATIVE_PROVIDER);
-    return getValidAccessSnapshotForAccount(GEMINI_NATIVE_PROVIDER, set.activeAccountId, { requireUsableAccount: true });
+    const now = Date.now();
+    const planned = preferredInitialAccount(config, GEMINI_NATIVE_PROVIDER, now, model) ?? set.activeAccountId;
+    const route = routeAntigravityModel(config, GEMINI_NATIVE_PROVIDER, planned, model, now, clientModel);
+    if (route.kind === "refuse") throw new NativeModelUnavailable(route.message);
+    const accountId = route.kind === "reroute" ? route.accountId : planned;
+    return getValidAccessSnapshotForAccount(GEMINI_NATIVE_PROVIDER, accountId, { requireUsableAccount: true });
   }, refresh: forceRefreshOAuthAccessSnapshot,
 };
 
-/** Active-account native leg; no internal messages, tool-schema repair or model rewriting. */
+/** Native leg using an account-scoped Antigravity token and project. */
 export async function handleGeminiNative(
   req: Request, config: OcxConfig, model: string, streamFormat: "sse" | "array" | undefined,
   lease: ActiveTurnLease, deps: GeminiNativeDeps = { ...defaults, fetch: globalThis.fetch }, logCtx?: RequestLogContext, start?: number,
@@ -133,7 +145,9 @@ export async function handleGeminiNative(
       const payload = validateGeminiObject(raw);
       if (logCtx) reasoning = geminiNativeReasoningFields(payload, model);
     } catch { finish(); return geminiNativeError(400, "Expected a Gemini JSON object"); }
-    let access = await deps.access();
+    ac.signal.throwIfAborted();
+    const clientModel = clientFacingModelLabel(logCtx?.requestedModel ?? model);
+    let access = await deps.access(config, model, clientModel);
     const boundCredentials = new Set<string>();
     for (let attempt = 0; attempt < 2; attempt++) {
       ac.signal.throwIfAborted();
@@ -152,6 +166,8 @@ export async function handleGeminiNative(
         if (!account) throw new OAuthLoginRequiredError(GEMINI_NATIVE_PROVIDER);
         if (account.paused) throw new OAuthAccountPausedError();
         if (account.needsReauth) throw new OAuthLoginRequiredError(GEMINI_NATIVE_PROVIDER);
+        const refusal = antigravityModelRefusal(config, GEMINI_NATIVE_PROVIDER, access.accountId, model, undefined, clientModel);
+        if (refusal) throw new NativeModelUnavailable(refusal);
         if (spendUnsupported()) throw new NativeSpendLimitsUnsupported();
         if (!reserveWorkflowSend(rootId, currentWorkflowBudgetPolicy())) throw new NativeWorkflowSendDenied();
         const { credential } = account;
@@ -161,9 +177,16 @@ export async function handleGeminiNative(
           if (value) boundCredentials.add(value);
         }
         const body = wrapGeminiRequest(raw, model, access.projectId!);
+        if (attempt === 0 && isProactivePreferenceEnabled(config, GEMINI_NATIVE_PROVIDER, Date.now())) {
+          noteGenericPoolSelection(config, GEMINI_NATIVE_PROVIDER, access.accountId, model);
+        }
         if (logCtx) {
           Object.assign(logCtx, reasoning);
+          stampOAuthAccountLabel(logCtx, GEMINI_NATIVE_PROVIDER, { authMode: "oauth" }, access.accountId);
           markNativeGeminiProtocol(logCtx);
+          noteCredentialAttemptSend(logCtx, { providerName: GEMINI_NATIVE_PROVIDER, modelId: model }, provider,
+            attempt === 0 ? undefined : "oauth-401");
+          Object.assign(logCtx.activeAttempt!, reasoning);
         }
         return fetchWithAttemptDeadline(`${baseUrl.replace(/\/$/, "")}/v1internal:${method}`, {
           method: "POST",
@@ -172,12 +195,14 @@ export async function handleGeminiNative(
         }, config.connectTimeoutMs ?? 200_000, ac.signal, true, deps.fetch);
       });
       if (upstream.status !== 401 || attempt === 1) break;
+      if (logCtx) sealCredentialRefusal(logCtx, 401, "oauth-401");
       await releaseResponseBodyBestEffort(upstream.body, ac.signal);
       ac.signal.throwIfAborted();
       access = await deps.refresh(access);
     }
     if (!upstream) throw new Error("missing upstream response");
     if (!upstream.ok) {
+      if (logCtx) logCtx.terminalSource = "upstream";
       void upstream.body?.cancel().catch(() => {});
       finish();
       const response = geminiNativeError(upstream.status >= 400 ? upstream.status : 502, "Antigravity upstream rejected the request");
@@ -238,6 +263,13 @@ export async function handleGeminiNative(
     }
     if (error instanceof RequestPacingProviderRemovedError || error instanceof NativeConfigurationInvalid) {
       return geminiNativeError(503, "Antigravity provider configuration is unavailable or invalid; check its baseUrl and destination policy in OC settings");
+    }
+    if (error instanceof NativeModelUnavailable) {
+      if (logCtx) {
+        logCtx.errorCode = "gemini_native_model_unlisted";
+        markLocalRequestLogRefusal(logCtx, "gemini_native_model_unlisted");
+      }
+      return geminiNativeError(403, error.message, "gemini_native_model_unlisted");
     }
     if (error instanceof NativeSpendLimitsUnsupported) return unsupportedSpend();
     if (error instanceof NativeWorkflowSendDenied) {

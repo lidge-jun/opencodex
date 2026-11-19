@@ -1371,12 +1371,10 @@ function LogDetailDialog({
                   // WHY in a vocabulary an operator can act on. `errorCode` stays behind it
                   // rather than being dropped: it is the exact wire code, which is what a bug
                   // report needs.
-                  const reason = attemptFailure.cause
-                    ?? attempt.errorCode
-                    ?? (attempt.recoveryKinds.length
-                      ? attempt.recoveryKinds.map(kind => t(recoveryKindKey(kind))).join(", ")
-                      : undefined)
-                    ?? (attemptCost?.kind === "unavailable" ? t(metricReasonKey(attemptCost.reason)) : t("logs.detail.attempt.completed"));
+                  const recovery = attempt.recoveryKinds.map(kind => t(recoveryKindKey(kind))).join(", ");
+                  const reason = attemptFailure.cause ?? attempt.errorCode
+                    ?? (recovery || attemptCost?.kind !== "unavailable"
+                      ? t("logs.detail.attempt.completed") : t(metricReasonKey(attemptCost.reason)));
                   return (
                     <tr key={`${attempt.ordinal}-${attempt.provider}-${attempt.model}`}>
                       <td className="num mono">{attempt.ordinal}</td>
@@ -1424,7 +1422,11 @@ function LogDetailDialog({
                           </span>
                         )}
                       </td>
-                      <td className="log-detail-break">{reason}</td>
+                      <td className="log-detail-break">
+                        {attempt.status >= 100 && <><span className="mono">{attempt.status}</span>{" · "}</>}
+                        {reason}
+                        {recovery && <div className="muted text-caption">{recovery}</div>}
+                      </td>
                     </tr>
                   );
                 })}</tbody>

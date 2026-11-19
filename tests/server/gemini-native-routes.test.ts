@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { fetchProviderModels } from "../../src/codex/catalog/provider-models";
 import { clearModelCache } from "../../src/codex/model-cache";
 import { saveConfig } from "../../src/config";
-import { saveCredential } from "../../src/oauth/store";
+import { getAccountSet, removeAccount, saveCredential, setActiveAccount } from "../../src/oauth/store";
+import { oauthAccountLogLabel } from "../../src/codex/account-label";
+import { clearAntigravityAccountRosters, recordAntigravityAccountRoster } from "../../src/providers/antigravity-account-roster";
 import { startServer } from "../../src/server";
 import { getRequestLogEntries } from "../../src/server/request-log";
 import { decodeTokPerSecondResult } from "../../src/server/management/shared";
@@ -155,6 +157,69 @@ test("opted-in Gemini routes preserve native JSON and replace every ingress cred
     expect(seen[0]!.body).toContain(`"request":${RAW}`);
     expect(JSON.parse(seen[0]!.body)).toMatchObject({ model: WIRE_MODEL, project: "fixture-google-project" });
   });
+});
+
+test("native Gemini selects a listing sibling under the configured failover policy", async () => {
+  const active = getAccountSet(PROVIDER)!.activeAccountId;
+  const siblingToken = "fixture-sibling-gemini-access";
+  const siblingProject = "fixture-sibling-gemini-project";
+  const sibling = (await saveCredential(PROVIDER, {
+    access: siblingToken, refresh: "fixture-sibling-gemini-refresh", expires: Date.now() + 3_600_000,
+    accountId: "fixture-sibling-gemini-subject", projectId: siblingProject, source: "oauth",
+  }))!.accountId;
+  try {
+    expect(await setActiveAccount(PROVIDER, active)).toBe(true);
+    recordAntigravityAccountRoster(PROVIDER, active, [{ id: NEON, wireModelId: NEON }]);
+    recordAntigravityAccountRoster(PROVIDER, sibling, [{ id: MODEL, wireModelId: WIRE_MODEL }]);
+    const cfg = config(true);
+    for (const enabled of [false, true]) {
+      cfg.providers[PROVIDER]!.oauthAccountFailover = { enabled };
+      await withServer(cfg, async base => {
+        const response = await post(base, generation());
+        if (!enabled) {
+          expect(response.status).toBe(403);
+          expect(await response.json()).toMatchObject({ error: { details: [{ reason: "gemini_native_model_unlisted" }] } });
+          const log = getRequestLogEntries().find(row => row.requestId === response.headers.get("x-opencodex-request-id"));
+          expect(log).toMatchObject({ status: 403, terminalSource: "synthetic" });
+          expect(log?.attempts).toBeUndefined();
+          expect(log?.protocolTrace).toBeUndefined();
+          expect(seen).toHaveLength(0);
+          return;
+        }
+        expect(response.status).toBe(200);
+        expect(await response.text()).toBe(PAYLOAD);
+        expect(seen).toHaveLength(1);
+        expect(seen[0]!.headers.get("authorization")).toBe(`Bearer ${siblingToken}`);
+        expect(seen[0]!.body).toContain(`"request":${RAW}`);
+        expect(JSON.parse(seen[0]!.body)).toMatchObject({ project: siblingProject, model: WIRE_MODEL });
+        const recorded = getRequestLogEntries().find(row => row.requestId === response.headers.get("x-opencodex-request-id"));
+        expect(recorded?.attempts).toMatchObject([{
+          status: 200, sendCount: 1, model: WIRE_MODEL, accountLogLabel: oauthAccountLogLabel(sibling, PROVIDER),
+          usageStatus: "reported", usage: USAGE,
+        }]);
+        expect(recorded?.spend).toMatchObject({ sends: 1, settled: 1, unresolved: 0 });
+        expect(JSON.stringify(recorded)).not.toContain(siblingToken);
+        expect(JSON.stringify(recorded)).not.toContain(siblingProject);
+        expect(getAccountSet(PROVIDER)?.activeAccountId).toBe(active);
+      });
+    }
+    seen.length = 0;
+    recordAntigravityAccountRoster(PROVIDER, active, [{ id: MODEL, wireModelId: WIRE_MODEL }]);
+    cfg.pool = { kernel: true };
+    cfg.providers[PROVIDER]!.oauthAccountFailover = { enabled: true, strategy: "round-robin", stickyLimit: 1 };
+    await withServer(cfg, async base => {
+      for (let index = 0; index < 2; index++) {
+        const response = await post(base, generation());
+        expect(await response.text()).toBe(PAYLOAD);
+      }
+    });
+    expect(seen.map(send => send.headers.get("authorization")).sort())
+      .toEqual([`Bearer ${OAUTH_TOKEN}`, `Bearer ${siblingToken}`].sort());
+  } finally {
+    clearAntigravityAccountRosters(PROVIDER, active);
+    clearAntigravityAccountRosters(PROVIDER, sibling);
+    await removeAccount(PROVIDER, sibling);
+  }
 });
 
 test("flag off, v1, and a Gemini model on another provider use the Chat bridge", async () => {

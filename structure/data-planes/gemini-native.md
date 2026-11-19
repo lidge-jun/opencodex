@@ -17,10 +17,13 @@ destination. A key can allow a concrete tier without allowing its source family.
 the native leg and maps to that same wire ID. These reads reuse the cached roster and start no
 upstream discovery. Generation resolves the Antigravity wire model before accessing OAuth.
 
-`src/server/gemini-native.ts` uses the active, usable OAuth account. The token and project come
-from the same snapshot, including after one 401-triggered refresh. Each physical send uses
-provider pacing and reserves one workflow send, including recovery. At the point of dispatch
-both sends recheck the account for pause, reauthentication and removal. Applicable root,
+`src/server/gemini-native.ts` uses the shared Antigravity account preferences and per-account
+discovery roster for the resolved wire model. Proactive selection follows OAuth account failover
+settings. An account with a known omission cannot receive the request. The selected account's
+token and project come from one snapshot, including after one 401-triggered refresh. Each
+physical send uses provider pacing, reserves one workflow send and rechecks the account's model
+support, pause, reauthentication and removal. The first send advances a configured round-robin
+cursor. Applicable root,
 identity, or pool token-spend ceilings refuse the request with 503 and
 `gemini_native_spend_limits_unsupported`. The native leg does not settle token spend. The
 destination policy checks the base URL and redirects remain manual. Only proxy-constructed
@@ -49,7 +52,9 @@ shutdown, failure and EOF release the turn and transport. Native parsing owns no
 
 `src/server/gemini-native-log.ts` records final status, latency, client and admission identity.
 Native errors fail the request-log row. A physical send marks the [protocol trace](protocol-paths.md)
-as native Gemini, which the dashboard uses for its protocol badge. Successful buffered responses
+as native Gemini, which the dashboard uses for its protocol badge, and records the wire model and
+an opaque account label in the shared attempts. The log preserves the first 401 before refresh.
+Only a physical replay records a second attempt with the OAuth recovery reason. Successful buffered responses
 and complete streams supply normalized token counts through the shared Google usage parser.
 For a stream, only its last valid cumulative snapshot is recorded. The dashboard derives its
 end-to-end token rate from output tokens and request duration. When an API price matches,

@@ -203,11 +203,16 @@ test.each([
 test("multiple attempts preserve their recovery reason without inventing retries", async () => {
   const row = fixture(429, "rate-limit", 2);
   const attempt = (row.attempts as Record<string, unknown>[])[0]!;
-  row.attempts = [{ ...attempt, sendCount: 1, recoveryKinds: ["rate-limit-429"] },
-    { ...attempt, ordinal: 2, sendCount: 1 }];
+  row.attempts = [
+    { ...attempt, status: 401, sendCount: 1, failureCause: "credential-rejected" },
+    { ...attempt, ordinal: 2, sendCount: 1, failureCause: "rate-limit", recoveryKinds: ["oauth-401"] },
+  ];
   const { root } = await show(row);
   try {
-    expect(document.querySelector(".log-detail-attempts")?.textContent).toContain("Rate-limited (429)");
+    const attempts = [...document.querySelectorAll(".log-detail-attempts tbody tr")];
+    expect(attempts[0]?.textContent).toContain("401 · Credentials rejected");
+    expect(attempts[1]?.textContent).toContain("429 · Rate limited");
+    expect(attempts[1]?.textContent).toContain("OAuth re-authentication");
     expect(value("Upstream sends")).toBe("2");
     expect(value("Retries")).toBeUndefined();
   } finally { await act(async () => { root.unmount(); }); }

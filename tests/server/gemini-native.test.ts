@@ -4,7 +4,9 @@ import type { OcxConfig } from "../../src/types";
 import { handleGeminiNative, type GeminiNativeDeps } from "../../src/server/gemini-native";
 import { getActiveTurnCount, tryAdmitTurn } from "../../src/server/lifecycle";
 import { rawJsonMember } from "../../src/server/gemini-native-wire";
-import type { OAuthAccessSnapshot } from "../../src/oauth";
+import { OAuthLoginRequiredError, type OAuthAccessSnapshot } from "../../src/oauth";
+import { logGeminiNativeDelivery } from "../../src/server/gemini-native-log";
+import { getRequestLogEntries, nextRequestLogId } from "../../src/server/request-log";
 
 const config = { providers: { "google-antigravity": { adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authMode: "oauth" } } } as OcxConfig;
 const old: OAuthAccessSnapshot = { provider: "google-antigravity", accountId: "fixture-account", generation: "old", accessToken: "fixture-old-token", projectId: "fixture-project" };
@@ -149,6 +151,45 @@ test("401 refreshes the rejected snapshot once and cancels its response", async 
   });
   expect(response.status).toBe(200);
   expect(calls).toBe(2); expect(refreshes).toBe(1); expect(cancelled).toBe(true);
+});
+
+test("native logs distinguish a 401 replay from a refresh that never resends", async () => {
+  for (const refreshSucceeds of [true, false]) {
+    const req = request();
+    const lease = tryAdmitTurn(undefined, req.signal)!;
+    const context = { model: "gemini-test", provider: old.provider };
+    const start = Date.now(), id = nextRequestLogId(start);
+    let sends = 0;
+    try {
+      const response = await handleGeminiNative(req, config, "gemini-test", undefined, lease, {
+        access: async () => old,
+        refresh: async () => {
+          if (!refreshSucceeds) throw new OAuthLoginRequiredError(old.provider);
+          return fresh;
+        },
+        fetch: transport(() => ++sends === 1
+          ? new Response("private upstream rejection", { status: 401 })
+          : new Response('{"response":{"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":7}}}')),
+      }, context, start);
+      const delivery = logGeminiNativeDelivery(response, req, id, start, context);
+      expect(delivery.status).toBe(refreshSucceeds ? 200 : 503);
+      await delivery.text();
+      const row = getRequestLogEntries().find(entry => entry.requestId === id);
+      expect(sends).toBe(refreshSucceeds ? 2 : 1);
+      expect(row?.spend).toMatchObject({ sends, settled: sends, unresolved: 0 });
+      expect(row?.attempts?.map(attempt => [attempt.status, attempt.sendCount, attempt.recoveryKinds]))
+        .toEqual(refreshSucceeds ? [[401, 1, []], [200, 1, ["oauth-401"]]] : [[401, 1, []]]);
+      expect(row?.attempts?.[0]).toMatchObject({ failureCause: "credential-rejected", usageStatus: "unreported" });
+      if (refreshSucceeds) {
+        expect(row?.attempts?.[1]).toMatchObject({ usageStatus: "reported", totalTokens: 18,
+          accountLogLabel: row?.attempts?.[0]?.accountLogLabel });
+        expect(row?.totalTokens).toBe(18);
+      }
+      expect(JSON.stringify(row)).not.toContain("private upstream rejection");
+    } finally {
+      lease.release();
+    }
+  }
 });
 
 for (const [name, echoed] of [["previous", old.accessToken], ["refreshed", fresh.accessToken]] as const) {

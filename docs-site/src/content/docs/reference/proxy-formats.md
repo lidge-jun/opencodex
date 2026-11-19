@@ -1151,8 +1151,11 @@ The default is off. Use the usual Gemini-compatible API at `/v1beta` with
 `x-goog-api-key` or `?key=` for an OpenCodex admission key. An eligible selector such as
 `google-antigravity/gemini-3.8-flash` uses the native leg for `generateContent` and
 `streamGenerateContent`. The proxy chooses the Cloud Code Assist model from the resolved
-route and uses the active OAuth account's token and project. Other providers and `/v1`
-requests use the Chat bridge.
+route. With OAuth account failover enabled, it can choose another usable account according
+to that account's discovered models and the configured strategy. If the selected account
+is known to lack the model and no replacement is allowed, the proxy returns 403. The token
+and project always come from the same account. Other providers and `/v1` requests use the
+Chat bridge.
 
 The proxy preserves successful request and response JSON source, including unknown fields,
 large integers, function arguments, and thought signatures. Streaming uses SSE with
@@ -1166,7 +1169,9 @@ them and computes the end-to-end output rate. For models with a matched official
 `~$` column estimates the equivalent Gemini API cost from reported input, output and cache-hit
 tokens. The amount is an API price reference for Antigravity OAuth sessions.
 The log details show the selected provider and model and the router's selection reason.
-They also show the named reasoning tier or explicit thinking control and the first
+The upstream attempts table shows each send's status and recovery reason. If an upstream 401 triggers a successful
+credential refresh and replay, the refusal and replay appear as separate attempts.
+The log details also show the named reasoning tier or explicit thinking control and the first
 visible output time for a stream. Decode throughput is estimated from the observed output
 window when it includes the reported reasoning output.
 
