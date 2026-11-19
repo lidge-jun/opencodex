@@ -356,6 +356,7 @@ describe("Windows process evidence: live x64 primitive", () => {
         expect(native!.terminate(child.pid, identity!.ticks)).toEqual({ status: "terminated" });
         await child.exited;
         expect(watch.exited()).toBe(true);
+        expect(native!.sameUserIdentity(child.pid)).toBeNull();
       } finally {
         watch.close();
       }
@@ -366,7 +367,6 @@ describe("Windows process evidence: live x64 primitive", () => {
     // Exited: a zombie still held open reads as exited, a released PID fails to open
     // (ERROR_INVALID_PARAMETER), and a PID already reused by another process is refused.
     expect(["gone", "reused"]).toContain(windowsProcessNative()!.terminate(child.pid, created!).status);
-    expect(windowsProcessNative()!.sameUserIdentity(child.pid)).toBeNull();
   });
 
   test.skipIf(liveX64)("reads the Task Scheduler service PID from the SCM", () => {

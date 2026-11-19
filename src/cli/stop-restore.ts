@@ -339,8 +339,8 @@ export async function preflightConnectedClientStop(
       checkPinnedRecord(afterTerm);
       if (!sameStart()) throw unsupportedConnectedStop();
     };
-    // Attestation is read-only. Check the record now and the process again at the
-    // first write, manager stop or signal boundary that uses this proof.
+    // Attestation is read-only. Recheck the record now. The Link path must
+    // revalidate the incarnation when it binds the fence or terminates a sibling.
     checkPinnedRecord();
     if (!capability) throw unsupportedConnectedStop();
     if (standaloneSibling && !capability.nativeClient && !capability.linkStopFence) {
@@ -439,6 +439,9 @@ export async function preflightConnectedClientStop(
       throw unsupportedConnectedStop();
     } else {
       if (connection.kind === "disconnected" && clientRecord) throw unsupportedConnectedStop();
+      // This path has no fence write. Require a live incarnation before the
+      // manager can use the proof, even if the Child left its record behind.
+      checkPinnedTarget();
       onTarget?.({ target, verify: checkPinnedTarget });
     }
     return null;

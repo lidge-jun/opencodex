@@ -75,7 +75,7 @@ async function runParentStop(options: {
   nativeSignal?: boolean; apiFailure?: boolean; stopBodyFailure?: boolean;
   alreadyStopped?: boolean; absence?: "dead" | "unknown" | "live"; managerState?: "inactive" | "active" | "unknown";
   configuredPort?: number; staleRuntimeRecord?: boolean; noRuntimeRecord?: boolean; deadPidReadsNull?: boolean;
-  disconnectDuringProbe?: boolean; connectDuringDiscovery?: boolean; connectDuringPost?: boolean; lifecycleBusy?: boolean;
+  disconnectDuringProbe?: boolean; childExitsDuringProbe?: boolean; connectDuringDiscovery?: boolean; connectDuringPost?: boolean; lifecycleBusy?: boolean;
   connectAfterBoundary?: boolean; pendingAfterBoundary?: boolean; connectDuringRestore?: boolean;
   connectAfterExitInspection?: boolean; pendingAfterExitInspection?: boolean; pendingAfterGrok?: boolean; receiptClearBusy?: boolean;
   windowsStopWiring?: boolean;
@@ -102,7 +102,7 @@ async function runParentStop(options: {
   const refusedWithoutReceipt = !options.receipt && (options.windowsStopWiring === true || options.clientTransport === "link");
   const changedBeforeLinkFence = options.clientTransport === "link" && options.connectDuringDiscovery;
   const stoppedByManager = options.managerCascades && options.deadPidReadsNull;
-  if (!options.standaloneRecord && !options.siblingRecord) expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup || options.alreadyStopped || options.noRuntimeRecord || stoppedByManager || refusedWithoutReceipt || changedBeforeLinkFence ? 0 : 1);
+  if (!options.standaloneRecord && !options.siblingRecord) expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup || options.alreadyStopped || options.noRuntimeRecord || options.childExitsDuringProbe || stoppedByManager || refusedWithoutReceipt || changedBeforeLinkFence ? 0 : 1);
   return { ...report, exitCode: child.status, stderr: child.stderr, stdout: child.stdout };
 }
 
@@ -411,6 +411,15 @@ describe("parent CLI shared teardown completion", () => {
       expect(outcome.exitCode).toBe(1);
     });
   }
+  test("a native Hub Child that exits during attestation never authorizes a manager stop", async () => {
+    const outcome = await runParentStop({ receipt: true, clientTransport: "hub", childExitsDuringProbe: true,
+      deadPidReadsNull: true, discoveryMiss: true, json: true, response: null, restore: restoreResult(true) });
+    expect(outcome.probes).toEqual(["http://127.0.0.1:10100/healthz"]);
+    expect(outcome.calls).toMatchObject({ service: 0, killed: 0, native: 0, grok: 0 });
+    expect(outcome.urls).toEqual([]);
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: false, runtimeDown: false, proxy: "ownership-refused" });
+    expect(outcome.exitCode).toBe(1);
+  });
   test("actual Link Child exit cleanup attempts native and Grok restoration", async () => {
     const outcome = await runParentStop({ receipt: true, clientTransport: "link", exitCleanup: true,
       response: null, restore: restoreResult(true) });
