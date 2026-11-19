@@ -1539,7 +1539,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     const models = await fetchAllModels(config);
     const { listCatalogNativeSlugs } = await import("../../codex/catalog");
     const { claudeCodeAlias, claudeCodeNativeAlias } = await import("../../claude/alias");
-    const { buildClaudeContextWindows, effectiveModelEnv, nativeClaudePassthroughFor } = await import("../../claude/context-windows");
+    const { buildClaudeContextWindows, effectiveModelEnv, nativeClaudePassthroughFor, probeClaudeCodeVersionForTierFill } = await import("../../claude/context-windows");
     const { visibleNativeSlugs } = await import("../../codex/catalog");
     const disabled = new Set(config.disabledModels ?? []);
     const isDisabled = (provider: string, id: string) =>
@@ -1581,6 +1581,14 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       nativeContextLimits(config),
       nativeClaudePassthroughFor(config.claudeCode, resolvedAuthMode.markerMode),
     );
+    const launchState = {
+      enabled: config.claudeCode?.enabled !== false,
+      forceAvailable: [...visibleNativeSlugs(config), ...filterCatalogVisibleModels(models, config).map(catalogModelSlug)],
+      contextWindows,
+    };
+    // The launcher probes its own CLI. Only the dashboard snapshot needs the daemon's version.
+    if (url.searchParams.get("view") === "launch") return jsonResponse(launchState);
+    const claudeCodeVersion = await probeClaudeCodeVersionForTierFill(config.claudeCode, contextWindows);
     const webSearchOverride = config.claudeCode?.webSearchSidecar;
     const visionOverride = config.claudeCode?.visionSidecar;
     const helperParent = config.claudeCode?.model?.includes("/") ? config.claudeCode.model.split("/")[0] : undefined;
@@ -1597,7 +1605,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     const eligible = claudeInterceptEnabled(config);
     const sharedProxy = readFirstPartyProxyStatus(config, bound?.proxyPort ?? null);
     return jsonResponse({
-      enabled: config.claudeCode?.enabled !== false,
+      ...launchState,
       cliFirstParty: config.claudeCode?.cliFirstParty === true,
       cliFirstPartyApplied: config.claudeCode?.cliFirstParty === true && sharedProxy === "live",
       desktopFirstParty: desired.desktop,
@@ -1645,9 +1653,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
         ? { visionSidecar: { enabled: visionOverride.enabled, backend: visionOverride.backend, model: visionOverride.model, ...(visionOverride.anthropicInstance ? { anthropicInstance: visionOverride.anthropicInstance } : {}) } }
         : {}),
       fastMode: config.fastMode,
-      forceAvailable: [...visibleNativeSlugs(config), ...filterCatalogVisibleModels(models, config).map(catalogModelSlug)],
-      contextWindows,
-      effectiveModelEnv: effectiveModelEnv(config.claudeCode, contextWindows),
+      effectiveModelEnv: effectiveModelEnv(config.claudeCode, contextWindows, undefined, claudeCodeVersion),
       available,
       aliases,
       port: config.port,

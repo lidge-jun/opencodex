@@ -8,7 +8,7 @@ import { createRequestExecutionBudget, type RequestExecutionBudget } from "../..
 import {
   configureSharedSpendLedger, parseSpendJournalRecord, SPEND_LEDGER_JOURNAL_FILENAME, spendPolicyFromConfig,
 } from "../../src/lib/spend-reservation-ledger";
-import type { OcxConfig } from "../../src/types";
+import type { AdapterEvent, OcxConfig, OcxUsage } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -158,3 +158,56 @@ for (const stream of [true, false]) {
     expect(result.text).not.toContain("request_send_budget_exhausted");
   }, 20_000);
 }
+
+// #8452 credit accounting: the re-ask is a dispatched leg like any other hosted iteration, so its
+// credit reading joins the announcing pass's instead of marking the evidence incomplete (-1).
+test.each([
+  [["plan", "tool"], 5, "response.completed"],
+  [["plan", "plan"], 5, "terminal_continuation_failed"],
+] as const)("hosted re-ask credits reach the usage ledger once (%p)", async (frames, credits, terminal) => {
+  const { runWithWebSearch } = await import("../../src/web-search/loop");
+  const { buildWebSearchTool } = await import("../../src/web-search/synthetic-tool");
+  const { createTestTranslatorBudget } = await import("../helpers/translator-budget");
+  const previousFetch = globalThis.fetch;
+  const reported: (OcxUsage | undefined)[] = [];
+  let iteration = 0;
+  let events: AdapterEvent[] = [];
+  try {
+    globalThis.fetch = (async () => Response.json({ results: [] })) as unknown as typeof fetch;
+    const response = await runWithWebSearch({
+      terminalContinuationGuard: true,
+      parsed: { modelId: "m", stream: true, options: {}, context: {
+        messages: [{ role: "user", content: "Please fix the file and test it.", timestamp: 0 }],
+        tools: [{ name: "read_fixture", description: "", parameters: { type: "object", properties: {} } }, buildWebSearchTool()],
+      } },
+      adapter: {
+        name: "openai-chat",
+        buildRequest() {
+          const frame = frames[iteration];
+          const usage = { inputTokens: 10, outputTokens: 2, totalTokens: 12, providerCredits: iteration === 0 ? 2 : 3 };
+          iteration++;
+          events = frame === "tool"
+            ? [{ type: "tool_call_start", id: "call_fixture", name: "read_fixture" }, { type: "tool_call_delta", arguments: "{}" },
+              { type: "tool_call_end" }, { type: "done", stopReason: "tool_use", usage }]
+            : [{ type: "text_delta", text: "I'll inspect the file and apply the fix." }, { type: "done", stopReason: "stop", usage }];
+          return { url: "https://relay.example.com/v1/chat/completions", method: "POST", headers: {}, body: "{}" };
+        },
+        fetchResponse: async (_request, ctx) => {
+          ctx?.onPhysicalSend?.({ ordinal: 1 });
+          return new Response("wire");
+        },
+        async *parseStream() { yield* events; },
+      },
+      backend: "exa", exaApiKey: "synthetic-not-a-key", hostedTool: { type: "web_search" },
+      settings: { model: "m", reasoning: "low", timeoutMs: 1000 }, maxSearches: 1,
+      incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget() },
+      onUsage: usage => reported.push(usage),
+    });
+    const text = await response.text();
+    expect(iteration).toBe(2);
+    expect(text).toContain(terminal);
+    expect(reported).toEqual([expect.objectContaining({ inputTokens: 20, outputTokens: 4, providerCredits: credits })]);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});

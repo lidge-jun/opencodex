@@ -51,6 +51,23 @@ describe("key attempt accounting", () => {
     expect(await failed.json()).toEqual(payload);
   });
 
+  test("credit aggregation includes missing readings only for dispatched attempts", () => {
+    const metered = {
+      ...finishRequestAttempt(beginRequestAttempt(1, "kiro", "model", "kiro"), 200, 1),
+      sendCount: 1,
+      usageStatus: "reported" as const,
+      usage: { inputTokens: 10, outputTokens: 2, providerCredits: 3 },
+    };
+    const unmetered = finishRequestAttempt(beginRequestAttempt(2, "kiro", "model", "kiro"), 503, 1);
+    expect(aggregateAttemptUsage([metered, unmetered]).usage?.providerCredits).toBe(3);
+    expect(aggregateAttemptUsage([metered, { ...unmetered, sendCount: 1 }]).usage?.providerCredits).toBe(-1);
+    expect(aggregateAttemptUsage([metered, {
+      ...metered,
+      ordinal: 2,
+      usage: { inputTokens: 5, outputTokens: 1 },
+    }]).usage?.providerCredits).toBe(-1);
+  });
+
   test("a combo parent copied before streaming rotation cannot overwrite the final key's usage", () => {
     const active = beginRequestAttempt(1, "test", "model", "openai-chat");
     const child: RequestLogContext = { provider: "test", model: "model", comboId: "stream",

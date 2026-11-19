@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { buildClaudeEnv, buildNativeClaudeEnv } from "../../src/cli/claude";
 import { entryParts, resolveSubagentForceModel, withSubagentContextMarker } from "../../src/claude/subagent-model";
-import { inspectSubagentForceStatus, subagentForceSupport } from "../../src/claude/subagent-force-status";
+import { inspectSubagentForceStatus, probeInstalledClaudeCodeVersion, subagentForceSupport } from "../../src/claude/subagent-force-status";
 import { extractOcxRouteDirective } from "../../src/claude/inbound-model-options";
 import { configDiagnosticsFromRaw, validateConfigCandidate } from "../../src/config/diagnostics";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -89,6 +89,30 @@ test("version boundary and read-only settings key presence are bounded and priva
     expect(await inspectSubagentForceStatus(false, dir, async () => null)).toMatchObject({ targetValid: false, support: "unknown", settingsReadable: false });
   } finally { removeTreeWithRetry(dir); }
 });
+
+test.skipIf(process.platform === "win32")("a SIGTERM-resistant Claude CLI hits the Fable probe deadline and shares the cached fallback", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ocx-claude-version-"));
+  const cli = join(dir, "claude");
+  const previousPath = process.env.PATH;
+  writeFileSync(cli, '#!/bin/sh\ntrap "" TERM\nprintf "%s\\n" "$$" >> "$0.pids"\nexec /bin/sleep 4\n', { mode: 0o755 });
+  try {
+    process.env.PATH = [dir, previousPath].filter(Boolean).join(delimiter);
+    const started = performance.now();
+    const versions = await Promise.all([probeInstalledClaudeCodeVersion(), probeInstalledClaudeCodeVersion()]);
+    expect(Math.round(performance.now() - started)).toBeLessThan(1850);
+    expect(versions).toEqual([null, null]);
+    expect(await probeInstalledClaudeCodeVersion()).toBeNull();
+    const pids = readFileSync(`${cli}.pids`, "utf8").trim().split("\n");
+    expect(pids).toHaveLength(1);
+    // Allow the OS to reap the killed process after the promise settles.
+    await Bun.sleep(100);
+    expect(() => process.kill(Number(pids[0]), 0)).toThrow(/ESRCH/);
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    removeTreeWithRetry(dir);
+  }
+}, 10_000);
 
 
 test("wire selection survives exported overrides and saved force changed or cleared after launch", () => {

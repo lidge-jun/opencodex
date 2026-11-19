@@ -228,6 +228,13 @@ describe("Spanish documentation localization", () => {
     expect(passthrough).toMatch(/router.+provider-model alias/);
   });
 
+  test.each([
+    ["guides/kiro-request-credits.md", "The Combo attempt table shows the USD estimate for each attempt and the calculation for each credit-priced attempt."],
+    ["es/guides/kiro-request-credits.md", "La tabla del Combo muestra el costo estimado en USD de cada intento y el cálculo de los intentos con precio por crédito."],
+  ])("%s describes the USD estimate and credit calculation shown per Combo attempt", (path, description) => {
+    expect(source(join(root, path))).toContain(description);
+  });
+
   test("code spans keep a trailing backslash literal without swallowing later identifiers", () => {
     const english = "Paths `~\\` and `~/` keep `models` unchanged.";
     const spanish = "Las rutas `~\\` y `~/` conservan `models`.";
