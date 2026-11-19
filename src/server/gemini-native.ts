@@ -78,6 +78,11 @@ export async function handleGeminiNative(
     return geminiNativeError(503, "Gemini native requests require a Google Antigravity OAuth provider");
   }
   if (req.headers.get("content-encoding") && req.headers.get("content-encoding") !== "identity") return geminiNativeError(415, "Gemini native requests require identity content encoding");
+  // Native admission accepts the canonical provider's implicit OAuth mode. Account helpers
+  // require an explicit mode, so give them the same default without changing saved settings.
+  const accountConfig: OcxConfig = provider.authMode === undefined ? {
+    ...config, providers: { ...config.providers, [GEMINI_NATIVE_PROVIDER]: { ...provider, authMode: "oauth" } },
+  } : config;
   const ac = new AbortController();
   const onAbort = () => ac.abort(req.signal.reason);
   req.signal.addEventListener("abort", onAbort, { once: true });
@@ -147,7 +152,7 @@ export async function handleGeminiNative(
     } catch { finish(); return geminiNativeError(400, "Expected a Gemini JSON object"); }
     ac.signal.throwIfAborted();
     const clientModel = clientFacingModelLabel(logCtx?.requestedModel ?? model);
-    let access = await deps.access(config, model, clientModel);
+    let access = await deps.access(accountConfig, model, clientModel);
     const boundCredentials = new Set<string>();
     for (let attempt = 0; attempt < 2; attempt++) {
       ac.signal.throwIfAborted();
@@ -166,7 +171,7 @@ export async function handleGeminiNative(
         if (!account) throw new OAuthLoginRequiredError(GEMINI_NATIVE_PROVIDER);
         if (account.paused) throw new OAuthAccountPausedError();
         if (account.needsReauth) throw new OAuthLoginRequiredError(GEMINI_NATIVE_PROVIDER);
-        const refusal = antigravityModelRefusal(config, GEMINI_NATIVE_PROVIDER, access.accountId, model, undefined, clientModel);
+        const refusal = antigravityModelRefusal(accountConfig, GEMINI_NATIVE_PROVIDER, access.accountId, model, undefined, clientModel);
         if (refusal) throw new NativeModelUnavailable(refusal);
         if (spendUnsupported()) throw new NativeSpendLimitsUnsupported();
         if (!reserveWorkflowSend(rootId, currentWorkflowBudgetPolicy())) throw new NativeWorkflowSendDenied();
@@ -177,8 +182,8 @@ export async function handleGeminiNative(
           if (value) boundCredentials.add(value);
         }
         const body = wrapGeminiRequest(raw, model, access.projectId!);
-        if (attempt === 0 && isProactivePreferenceEnabled(config, GEMINI_NATIVE_PROVIDER, Date.now())) {
-          noteGenericPoolSelection(config, GEMINI_NATIVE_PROVIDER, access.accountId, model);
+        if (attempt === 0 && isProactivePreferenceEnabled(accountConfig, GEMINI_NATIVE_PROVIDER, Date.now())) {
+          noteGenericPoolSelection(accountConfig, GEMINI_NATIVE_PROVIDER, access.accountId, model);
         }
         if (logCtx) {
           Object.assign(logCtx, reasoning);

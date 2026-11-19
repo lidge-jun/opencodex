@@ -172,6 +172,7 @@ test("native Gemini selects a listing sibling under the configured failover poli
     recordAntigravityAccountRoster(PROVIDER, active, [{ id: NEON, wireModelId: NEON }]);
     recordAntigravityAccountRoster(PROVIDER, sibling, [{ id: MODEL, wireModelId: WIRE_MODEL }]);
     const cfg = config(true);
+    delete cfg.providers[PROVIDER]!.authMode;
     for (const enabled of [false, true]) {
       cfg.providers[PROVIDER]!.oauthAccountFailover = { enabled };
       await withServer(cfg, async base => {

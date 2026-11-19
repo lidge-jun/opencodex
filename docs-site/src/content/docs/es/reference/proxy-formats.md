@@ -659,14 +659,22 @@ La opción está desactivada por defecto. Usa la API compatible con Gemini en `/
 envía una clave de admisión de OpenCodex en `x-goog-api-key` o `?key=`. Un selector como
 `google-antigravity/gemini-3.8-flash` usa el transporte nativo para `generateContent` y
 `streamGenerateContent`. El proxy elige el modelo de Cloud Code Assist a partir de la ruta
-resuelta y usa el token y el proyecto de la cuenta OAuth activa. Las solicitudes de
-`/v1` y las de otros proveedores usan el puente de Chat.
+resuelta. Si está activada la conmutación de cuentas OAuth, puede elegir otra cuenta disponible
+según los modelos descubiertos para esa cuenta y la estrategia configurada. Si la cuenta
+seleccionada carece del modelo y no se permite usar otra cuenta, el proxy devuelve 403. El token
+y el proyecto siempre proceden de la misma cuenta. Las solicitudes de `/v1` y las de otros
+proveedores usan el puente de Chat.
 
 El proxy conserva el JSON de la solicitud y de las respuestas correctas, incluidos los
 campos desconocidos, los enteros grandes, los argumentos de funciones y las firmas de
 razonamiento. La transmisión usa SSE con `alt=sse` y una matriz JSON en los demás casos.
 El listado mediante `GET /v1beta/models` y la consulta de modelos conservan el catálogo permitido por la clave e
 incluyen los alias nativos que se enrutan al modelo de Antigravity correspondiente.
+
+La columna `~$` muestra el coste estimado según el precio de la API de Gemini y el uso
+informado. La tabla de intentos muestra el estado y el motivo del reintento de cada envío.
+Si un 401 del proveedor da lugar a una actualización de las credenciales y a un nuevo envío,
+el rechazo y el reintento aparecen como intentos separados.
 
 Si una respuesta del proveedor contiene credenciales de la cuenta vinculada, el proxy devuelve
 un error genérico de Gemini. Un `[DONE]` válido del proveedor o un error de Gemini pone fin a la transmisión.
