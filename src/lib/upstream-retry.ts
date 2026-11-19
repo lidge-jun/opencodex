@@ -236,6 +236,12 @@ export function carryReplayRefusal<T extends Response>(source: Response, rewrapp
   return rewrapped;
 }
 
+/** Project a local veto only when formatting the client response. */
+export function carryReplayRefusalToClient<T extends Response>(source: Response, client: T): T {
+  if (hasClientReplayVeto(source)) applyReplayRefusalClientHeaders(client.headers);
+  return carryReplayRefusal(source, client);
+}
+
 // 1 initial + 2 retries: the pool may hold more than one stale socket.
 export const RESET_RETRY_MAX_ATTEMPTS = 3;
 const RESET_RETRY_BASE_DELAY_MS = 150;
@@ -927,7 +933,7 @@ export async function hasUpstreamReplayRefusal(
   if (response.ok) return false;
   const verdict = await observeRetryBody(response, signal, false);
   if (verdict === "inconclusive" && options?.requireCompleteBody === true) {
-    markResponseNonReplayable(response);
+    requireClientReplayVeto(response);
     return true;
   }
   return verdict === "refusal";

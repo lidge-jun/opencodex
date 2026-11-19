@@ -1,7 +1,7 @@
 import { carryProxyError, ownedChatErrorPayload } from "../../lib/client-error-body";
 import { httpStatusFromTerminalError } from "../../lib/errors";
 import {
-  applyReplayRefusalClientHeaders, carryReplayRefusal, hasClientReplayVeto, hasNoRetryDirective, invitesResendAfterReplacement, isNonReplayableResponse,
+  applyReplayRefusalClientHeaders, carryReplayRefusal, carryReplayRefusalToClient, hasClientReplayVeto, hasNoRetryDirective, invitesResendAfterReplacement, isNonReplayableResponse,
   isNonReplayableUpstreamCode, isReplayRefusalCode, isReplayRefusalProjection, isReplayRefusalResponse, replayRefusalBodyCode,
   isTerminalResetReplacement, markResponseNonReplayable, observedReplayRefusalCode, projectReplayRefusal, UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../../lib/upstream-retry";
@@ -67,7 +67,7 @@ export async function sanitizeNonReplayableUpstreamError(
   const refusal = projectResponsesUpstreamRefusal(response, text, options?.grokOAuthLogCtx);
   if (refusal) {
     markResponseNonReplayable(refusal);
-    return refusal;
+    return carryReplayRefusalToClient(response, refusal);
   }
   if (terminalReplacement && invitesResendAfterReplacement(response.status)) {
     return carryReplayRefusal(response, projectReplayRefusal(UPSTREAM_RESET_REPLAY_REFUSED_CODE));

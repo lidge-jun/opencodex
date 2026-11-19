@@ -54,6 +54,7 @@ import { carriesMessageThread, messageThreadUnsupportedResponse } from "../claud
 import {
   applyReplayRefusalClientHeaders,
   carryReplayRefusal,
+  carryReplayRefusalToClient,
   isReplayRefusalResponse,
   isReplayRefusalCode,
   isTransientUpstreamStatus,
@@ -1458,7 +1459,7 @@ async function handleClaudeMessagesWithBudget(
       status: outStatus,
       headers: outHeaders,
     });
-    return attachComboFailureEvidence(carryProxyError(response, carryReplayRefusal(response, out)), legacyBody);
+    return attachComboFailureEvidence(carryProxyError(response, carryReplayRefusalToClient(response, out)), legacyBody);
   }
 
   const contentType = response.headers.get("content-type") ?? "";

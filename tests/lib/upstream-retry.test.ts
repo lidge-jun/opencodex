@@ -6,7 +6,7 @@ import {
   fetchWithTransientRetry,
   isConnectionResetError,
   isNonReplayableResponse,
-  carryReplayRefusal, isAutomaticReplayBlocked,
+  carryReplayRefusal, hasClientReplayVeto, isAutomaticReplayBlocked,
   isReplayRefusalResponse,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
   prepareSameTarget429Wait,
@@ -930,12 +930,17 @@ describe("ambiguous reset safety through error formatting", () => {
 
   test.each([false, true])("review: an unread 429 suffix requires an independent replay-safe grant (%s)", async replaySafe => {
     const payload = JSON.stringify({ padding: "x".repeat(17_000), error: { code: "upstream_response_refused" } });
-    const upstream = new Response(payload, { status: 429, headers: { "content-type": "application/json" } });
+    const upstream = new Response(payload, { status: 429, headers: { "content-type": "application/json", "retry-after": "23" } });
     const mock = mockDoFetch([upstream]);
     const response = await fetchWithTransientRetry(mock.doFetch, { attempts: 1, replaySafe });
     expect(response).toBe(upstream);
     expect(mock.calls).toHaveLength(1);
     expect(isAutomaticReplayBlocked(response)).toBe(!replaySafe);
+    expect(hasClientReplayVeto(response)).toBe(!replaySafe);
+    const observed = carryReplayRefusal(response, new Response(null, { status: 429, headers: response.headers }));
+    expect(hasClientReplayVeto(observed)).toBe(!replaySafe);
+    expect(observed.headers.get("retry-after")).toBe("23");
+    expect(observed.headers.get("x-should-retry")).toBeNull();
     expect(isReplayRefusalResponse(response)).toBe(false);
     expect(await response.text()).toBe(payload);
   });

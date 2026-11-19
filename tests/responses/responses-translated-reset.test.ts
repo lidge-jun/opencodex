@@ -518,6 +518,23 @@ describe("translated reset replay boundaries and accounting", () => {
     expect(raw.headers.get("x-provider-quota")).toBe("7");
   });
 
+  test("an inconclusive 429 body vetoes Responses client retries after one send", async () => {
+    const raw = Response.json({ padding: "x".repeat(17_000), error: { code: "rate_limit_exceeded" } }, {
+      status: 429, headers: { "retry-after": "23", "x-provider-quota": "7" },
+    });
+    const result = await probe({
+      provider: { transientRetryOn5xx: { attempts: 2 }, retryOn429: { attempts: 1, intervalMs: 1, respectRetryAfter: false } },
+      answer: ordinal => ordinal === 1 ? raw : chatSuccess(),
+    });
+    expect(result.bodies).toHaveLength(1);
+    expect(result.status).toBe(429);
+    expect(result.headers.get("x-should-retry")).toBe("false");
+    expect(result.headers.get("retry-after")).toBeNull();
+    expect(raw.headers.get("retry-after")).toBe("23");
+    expect(raw.headers.get("x-provider-quota")).toBe("7");
+    expect(raw.headers.get("x-should-retry")).toBeNull();
+  });
+
   test.each([false, true])("a prepaid compaction slot is counted once (exact policy %s)", async exact => {
     const result = await probe({ prepaid: true, resets: 0, used: 2,
       provider: exact ? { transientRetryOn5xx: { attempts: 3 } } : {}, answer: () => chatSuccess() });

@@ -270,6 +270,28 @@ function boundaryFixture(): OcxConfig {
   return config;
 }
 
+test("an inconclusive 503 body vetoes Native Chat client retries after one send", async () => {
+  const config = boundaryFixture();
+  config.providers[NAME]!.transientRetryOn5xx = { attempts: 2 };
+  const raw = Response.json({ padding: "x".repeat(17_000), error: { type: "server_error" } }, {
+    status: 503, headers: { "retry-after": "1" },
+  });
+  const reply = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const success = await reply(input, init);
+    if (seen.length !== 1) return success;
+    await success.body?.cancel();
+    return raw;
+  }) as typeof fetch;
+  const { response } = await start(config, new AbortController());
+  expect(seen).toHaveLength(1);
+  expect(response.status).toBe(503);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  expect(response.headers.get("retry-after")).toBeNull();
+  expect(raw.headers.get("retry-after")).toBe("1");
+  expect(raw.headers.get("x-should-retry")).toBeNull();
+});
+
 for (const stream of [false, true]) for (const blocked of [false, true]) {
   test(`replay boundary: native Chat reset respects the original head veto (stream=${stream}, blocked=${blocked})`, async () => {
     const config = boundaryFixture();

@@ -123,6 +123,7 @@ import {
   observedReplayRefusalCode,
   isReplayRefusalResponse,
   carryReplayRefusal,
+  carryReplayRefusalToClient,
   projectReplayRefusal,
   replayRefusalBodyCode,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
@@ -1807,7 +1808,7 @@ export async function handleResponsesCompact(
       void buffered.body?.cancel().catch(() => undefined);
       return carryReplayRefusal(upstream, projectReplayRefusal(refusalCode ?? UPSTREAM_RESET_REPLAY_REFUSED_CODE));
     }
-    if (buffered.status !== 404 || isAutomaticReplayBlocked(upstream)) return buffered;
+    if (buffered.status !== 404 || isAutomaticReplayBlocked(upstream)) return carryReplayRefusalToClient(upstream, buffered);
     } finally {
       releaseUpstreamHostAdmission(compactHostAdmissionLease);
       releaseCodexAuthContextProbeLease(authCtx);

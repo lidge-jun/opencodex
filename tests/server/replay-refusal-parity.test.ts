@@ -15,6 +15,7 @@ import {
   REPLAY_REFUSED_STATUS,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
   isReplayRefusalResponse,
+  requireClientReplayVeto,
 } from "../../src/lib/upstream-retry";
 import { DEFAULT_RETRYABLE_429_RETRY_AFTER_SEC } from "../../src/lib/retry-after";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -163,6 +164,63 @@ function parityConfig(): OcxConfig {
 const CHAT_TURN = { messages: [{ role: "user", content: "ping" }] };
 const CLAUDE_TURN = { max_tokens: 64, messages: [{ role: "user", content: "ping" }] };
 const RESPONSES_TURN = { input: [{ role: "user", content: [{ type: "input_text", text: "ping" }] }] };
+
+test.each([
+  { lane: "translated Chat", path: "/v1/chat/completions", turn: CHAT_TURN, adapter: "openai-responses", upstreamPath: "/v1/responses", status: 503, clientStatus: 503 },
+  { lane: "translated Messages", path: "/v1/messages", turn: CLAUDE_TURN, adapter: "openai-responses", upstreamPath: "/v1/responses", status: 503, clientStatus: 529 },
+  { lane: "native Responses", path: "/v1/responses", turn: RESPONSES_TURN, adapter: "openai-responses", upstreamPath: "/v1/responses", status: 429, clientStatus: 429 },
+] as const)("$lane vetoes client retries on an inconclusive upstream body", async fixture => {
+  const config = parityConfig();
+  config.protocols = { rollout: { managedMessagesNative: true } };
+  const paths: string[] = [];
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    paths.push(new URL(request.url).pathname);
+    return Response.json({ padding: "x".repeat(17_000), error: { message: "fixture diagnostic" } }, {
+      status: fixture.status, headers: { "retry-after": "1" },
+    });
+  } });
+  const provider = config.providers.native!;
+  Object.assign(provider, {
+    adapter: fixture.adapter, baseUrl: new URL("/v1", upstream.url).href, noProxy: "127.0.0.1",
+    allowPrivateNetwork: true, transientRetryOn5xx: { attempts: 2 },
+  });
+  try {
+    saveConfig(config);
+    const proxy = startServer(0);
+    try {
+      const { response, attempts } = await sendWithClientRetries(new URL(fixture.path, proxy.url), {
+        model: "native/model", stream: false, ...fixture.turn,
+      });
+      expect(response.status).toBe(fixture.clientStatus);
+      expect(response.headers.get("x-should-retry")).toBe("false");
+      expect(response.headers.get("retry-after")).toBeNull();
+      expect(attempts).toBe(1);
+      expect(paths).toEqual([fixture.upstreamPath]);
+    } finally { await proxy.stop(true); }
+  } finally { await upstream.stop(true); }
+});
+
+test("managed native Messages serializes a retained client replay veto", async () => {
+  const config = parityConfig();
+  config.protocols = { rollout: { managedMessagesNative: true } };
+  config.providers.messages = { ...config.providers.native!, adapter: "anthropic" };
+  saveConfig(config);
+  const raw = Response.json({ type: "error", error: { type: "api_error", message: "fixture diagnostic" } }, {
+    status: 503, headers: { "retry-after": "1" },
+  });
+  requireClientReplayVeto(raw);
+  const sends = countingUpstream(() => raw);
+  const proxy = startServer(0);
+  try {
+    const { response } = await sendWithClientRetries(new URL("/v1/messages", proxy.url),
+      { model: "messages/model", stream: false, ...CLAUDE_TURN }, 0);
+    expect(sends()).toBe(1);
+    expect(response.status).toBe(529);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(response.headers.get("retry-after")).toBeNull();
+    expect(raw.headers.get("retry-after")).toBe("1");
+  } finally { await proxy.stop(true); }
+});
 
 for (const wire of ["responses", "messages"] as const) for (const replacement of [false, true]) {
   test(`review: ${wire} key recovery stops on a header-only no-retry 401 (replacement ${replacement})`, async () => {

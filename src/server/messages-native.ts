@@ -63,7 +63,7 @@ import {
   fetchWithTransientRetry,
   hasUpstreamReplayRefusal,
   isNonReplayableResponse,
-  carryReplayRefusal, isAutomaticReplayBlocked,
+  carryReplayRefusalToClient, isAutomaticReplayBlocked,
   isReplayRefusalResponse,
   observedReplayRefusalCode,
   isTransientUpstreamStatus,
@@ -1423,7 +1423,7 @@ function nativeMessagesErrorResponse(response: Response, bodyText: string, finis
     ...(clientZenMessage === undefined ? {} : { localError: markProxyError({ message: clientZenMessage }) }),
   })), { status, headers });
   attachComboFailureEvidence(out, JSON.stringify(legacy));
-  return carryReplayRefusal(response, out);
+  return carryReplayRefusalToClient(response, out);
 }
 
 /**

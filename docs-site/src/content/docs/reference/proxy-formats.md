@@ -33,6 +33,12 @@ codes. The stream event carries `response.retryable: false`. Native Responses an
 honor recognized refusal codes in HTTP 429 bodies before retrying on the same key. Genuine upstream
 rate limits still inform account cooldowns.
 
+If the proxy cannot complete a retry-safety check on an upstream transient 5xx or 429
+body, it stops automatic retries for requests without an independent replay guarantee.
+Responses, Compact, Chat Completions and routed Messages include `x-should-retry: false`
+and omit `Retry-After` on those errors. The original upstream headers still inform quota
+and cooldown tracking.
+
 When a non-streaming Messages request folds a Responses stream with a recognized replay
 refusal, it returns the same code and fixed message in an HTTP 429 Messages error.
 The response includes `x-should-retry: false` and omits `Retry-After`.

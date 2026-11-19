@@ -59,9 +59,11 @@ keeps its explicit exception. In `src/web-search/header-deadline.ts`, local paci
 post-header body inspection pause the iteration's cumulative response-header clock; caller
 cancellation remains active. Uncertain body classification never authorizes a resend.
 
-For an inconclusive transient 5xx probe, the ladder records a client veto in process while keeping
-the original response available for quota observation. Responses projects the veto as
-`x-should-retry: false` with fixed error text and omits `Retry-After`.
+For an inconclusive transient 5xx or 429 probe on a replay-unsafe request, the ladder records a
+client veto in process and keeps the original status, body and headers available for quota
+observation. Responses and Compact, native and translated Chat, and managed native and translated
+Messages project the veto as `x-should-retry: false` and omit `Retry-After`. Responses withholds
+the upstream diagnostic text in its non-replayable error projection.
 
 Native Responses also records the sent generation's model denial and generic OAuth cooldown
 without selecting another credential. A no-retry verdict does not suppress fenced

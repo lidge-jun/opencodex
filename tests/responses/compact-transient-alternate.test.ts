@@ -172,6 +172,22 @@ test("round 4: pooled compact records a coded 429 without selecting an alternate
   expect(getCodexUpstreamHealth(OTHER)?.lastFailureStatus).toBeUndefined();
 });
 
+test("pooled compact keeps quota evidence when an inconclusive 429 vetoes client retries", async () => {
+  const raw = Response.json({ padding: "x".repeat(17_000), error: { code: "rate_limit_exceeded" } }, {
+    status: 429, headers: { "retry-after": "30" },
+  });
+  upstream(() => raw, compacted);
+  const { response } = await compact();
+  expect(sends).toEqual(["Bearer work-access"]);
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  expect(response.headers.get("retry-after")).toBeNull();
+  expect(raw.headers.get("retry-after")).toBe("30");
+  expect(getCodexUpstreamHealth(WORK)?.lastFailureStatus).toBe(429);
+  expect(getCodexUpstreamHealth(WORK)?.cooldownUntil).toBeGreaterThan(Date.now());
+  expect(getCodexUpstreamHealth(OTHER)?.lastFailureStatus).toBeUndefined();
+});
+
 test("malformed retained compact input does not poison pooled account health", async () => {
   const config = poolConfig();
   const healthBefore = [WORK, OTHER].map(id => getCodexUpstreamHealth(id));

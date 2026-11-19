@@ -39,7 +39,7 @@ import {
   applyUpstreamRecoveryInit,
   fetchWithResetRetry,
   fetchWithTransientRetry,
-  carryReplayRefusal, hasUpstreamReplayRefusal, isAutomaticReplayBlocked, isSameTargetRetryHold,
+  carryReplayRefusal, carryReplayRefusalToClient, hasUpstreamReplayRefusal, isAutomaticReplayBlocked, isSameTargetRetryHold,
   isReplayRefusalResponse,
   observedReplayRefusalCode,
   replayRefusalBodyCode,
@@ -770,7 +770,7 @@ export async function runNativeChatAttempt(
     if (!replayRefusal && isXaiGrokOAuth(route.providerName, route.provider) && isXaiLegacyPrivacyError(response.status, bodyText)) {
       const refusal = xaiPrivacyModeRefusal(logCtx);
       finishLog(refusal.status);
-      return carryReplayRefusal(response, refusal);
+      return carryReplayRefusalToClient(response, refusal);
     }
     const detail = activeAdapter.formatErrorBody?.(response.status, response.headers, bodyText) ?? "";
     let upstreamType: string | undefined;
@@ -838,7 +838,7 @@ export async function runNativeChatAttempt(
       },
     });
     attachComboFailureEvidence(rewritten, JSON.stringify(chatCompletionsErrorBody(status, classified.message, classified.type, classified.code)));
-    return carryReplayRefusal(response, rewritten);
+    return carryReplayRefusalToClient(response, rewritten);
   }
 
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";

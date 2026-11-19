@@ -44,6 +44,7 @@ import {
   applyReplayRefusalClientHeaders,
   isReplayRefusalCode,
   carryReplayRefusal,
+  carryReplayRefusalToClient,
   isReplayRefusalResponse,
   REPLAY_REFUSAL_CLIENT_HEADERS,
   REPLAY_REFUSED_STATUS,
@@ -742,7 +743,7 @@ async function handleChatCompletionsWithBudget(
         ...(replayRefusal ? REPLAY_REFUSAL_CLIENT_HEADERS : {}),
       },
     });
-    carryReplayRefusal(upstream, rewritten);
+    carryReplayRefusalToClient(upstream, rewritten);
     carryWorkflowRefusal(upstream, rewritten);
     return logIds
       // Deferred logging re-wraps this response and carries the verdict with it.

@@ -273,8 +273,8 @@ The shared builders live in `src/combos/resolve.ts`, `src/server/admission-model
 `src/lib/upstream-retry.ts` owns the retry constructors. For a transient 5xx, `fetchWithTransientRetry`
 does not resend a response whose bounded body prefix proves context overflow. It reads at most 16,384
 bytes from a clone within 250ms or until cancellation, leaving the returned body intact. A complete
-probe without a verdict retains the normal retry. For a replay-unsafe request, an inconclusive
-probe blocks another send and Responses delivery emits `x-should-retry: false`.
+probe without a verdict retains the normal retry. For a replay-unsafe request, an inconclusive transient
+5xx or 429 probe [blocks another send and removes client retry advice](replay-refusals.md#resend-and-quota-evidence).
 Hypothetical, negated, question-form and configuration-failure mentions are excluded per sentence
 so they cannot hide a definite overflow in another sentence. A throttle worded only as
 "too many tokens" is not a verdict. An explicit "prompt is too long" remains a verdict when no throughput signal is present.

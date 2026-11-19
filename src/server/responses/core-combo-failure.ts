@@ -34,7 +34,7 @@ import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { formatErrorResponse } from "../../bridge";
 import { upstreamCodeForComboFailure } from "../../bridge/errors";
 import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../adapters/ollama-native";
-import { carryReplayRefusal, hasNoRetryDirective, isAutomaticReplayBlocked, isReplayRefusalCode, isReplayRefusalResponse, markResponseNonReplayable, observedReplayRefusalCode, projectReplayRefusal, replayRefusalBodyCode, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../lib/upstream-retry";
+import { carryReplayRefusal, carryReplayRefusalToClient, hasClientReplayVeto, hasNoRetryDirective, isAutomaticReplayBlocked, isReplayRefusalCode, isReplayRefusalResponse, markResponseNonReplayable, observedReplayRefusalCode, projectReplayRefusal, replayRefusalBodyCode, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../lib/upstream-retry";
 import { MODEL_NOT_ALLOWED_FOR_KEY } from "../admission-model-scope";
 import { usageFromResponsesPayload } from "../request-log";
 import type { ResponsesTerminalStatus } from "../../bridge";
@@ -207,13 +207,13 @@ export async function consumeComboFailure(
     {
       ...(normalizedUpstreamCode !== undefined ? { code: normalizedUpstreamCode } : {}),
       ...(clientRetryAfter !== undefined ? { retryAfter: clientRetryAfter } : {}),
-      fixedMessage: hasNoRetryDirective(response),
+      fixedMessage: hasClientReplayVeto(response) || hasNoRetryDirective(response),
     },
   );
   if (nonReplayable) markResponseNonReplayable(failureResponse);
   carryProxyError(response, failureResponse);
   carryWorkflowRefusal(response, failureResponse);
-  carryReplayRefusal(response, failureResponse);
+  carryReplayRefusalToClient(response, failureResponse);
   carryProxyErrorPresentation(response, failureResponse);
   carryPolicyCandidateRefusal(response, failureResponse);
   if (verifiedPlanRefusal) markVerifiedModelNotInPlanResponse(failureResponse);
