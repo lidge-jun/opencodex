@@ -1064,22 +1064,7 @@ validation never applies the IPv6 accommodation.
 
 ## Codex account pool
 
-Use **Codex Auth** in the dashboard to add pool accounts and refresh quotas. `config.json` stores
-non-secret metadata; access and refresh tokens use the hardened credential store. Pool routing
-separates new/unbound assignment, usage-based proactive switching, and failure recovery. A bound task
-normally keeps affinity. By default (`pool.cacheAffinity`) `quota` does not rebind it merely because
-the usage threshold is crossed; that rebind waits until the bound account is exhausted or otherwise
-cannot serve, and then only onto an account with genuine quota headroom and strictly lower usage.
-Set `pool.cacheAffinity: false` to restore threshold rebinding of bound tasks, still only onto such
-a destination. Pause, cooldown, reauthentication, and quota refusals still release a live binding
-immediately. A transient-failure streak serves the request from another account while keeping the
-binding, and the task returns once that account serves again; after 10 minutes the binding is
-released normally. An unbound request has no live account binding. Bindings for requests with a session ID (including normal Codex CLI and App turns and subagents), or session-less requests anchored on their immediate parent, can survive a graceful proxy restart, for up to 24 hours idle, when the final affinity save at shutdown succeeds. Deeper session-less chains and bindings to the Codex App main login stay in memory only and are assigned again after restart; eviction, account removal, re-login, a crash, or an affinity reset can leave a task unbound. A pre-stream 429 or 402, or a 5xx response whose bounded
-body explicitly reports quota exhaustion, retries once on an eligible alternate account in the same
-request, even when usage-based proactive switching is off. The ordinary transient-5xx policy runs
-first, so a wrapped quota response may make up to three sends on the exhausted account before pool
-rotation. Account changes preserve and replay the conversation context, but provider-side
-prompt-cache reuse across accounts is not guaranteed and the cache may need to warm again.
+Use **Codex Auth** in the dashboard to add pool accounts and refresh quotas. `config.json` stores non-secret metadata; access and refresh tokens use the hardened credential store. Pool routing separates new/unbound assignment, usage-based proactive switching, and failure recovery. A bound task normally keeps affinity. By default (`pool.cacheAffinity`) `quota` does not rebind it merely because the usage threshold is crossed; that rebind waits until the bound account is exhausted or otherwise cannot serve, and then only onto an account with genuine quota headroom and strictly lower usage. Set `pool.cacheAffinity: false` to restore threshold rebinding of bound tasks, still only onto such a destination. Pause, cooldown, reauthentication, and quota refusals still release a live binding immediately. A transient-failure streak serves the request from another account while keeping the binding, and the task returns once that account serves again; after 10 minutes the binding is released normally. An unbound request has no live account binding. Bindings for requests with a session ID (including normal Codex CLI and App turns and subagents), or session-less requests anchored on their immediate parent, can survive a graceful proxy restart, for up to 24 hours idle, when the final affinity save at shutdown succeeds. Deeper session-less chains and bindings to the Codex App main login stay in memory only and are assigned again after restart; eviction, account removal, re-login, a crash, or an affinity reset can leave a task unbound. A pre-stream 429 or 402, or a 5xx response whose bounded body explicitly reports quota exhaustion, retries once on an eligible alternate account in the same request, even when usage-based proactive switching is off. The ordinary transient-5xx policy runs first, so a wrapped quota response may make up to three sends on the exhausted account before pool rotation. Account changes preserve and replay the conversation context, but provider-side prompt-cache reuse across accounts is not guaranteed and the cache may need to warm again.
 
 On a **401/403**, App login clears that account's process-local affinity and requires reauthentication.
 On a **429**, opencodex honors `Retry-After`, starts the account cooldown, clears affinity, and may
