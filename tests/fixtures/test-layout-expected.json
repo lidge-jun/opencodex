@@ -1806,5 +1806,6 @@
   "link-relay-wait-observer.test.ts": "clients",
   "responses-offline-resend.test.ts": "responses",
   "link-ws-autobahn.test.ts": "clients",
-  "routing-profile-types-reexport.test.ts": "config"
+  "routing-profile-types-reexport.test.ts": "config",
+  "provider-quota-probe-isolation.test.ts": "providers"
 }
