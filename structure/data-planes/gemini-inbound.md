@@ -82,8 +82,9 @@ HTTP mapping, including 405 as `UNIMPLEMENTED`. Coverage: `tests/server/server-g
 `POST /v1beta/interactions` and the stable `POST /v1/interactions` (the only `/v1/` paths outside
 `/v1/models/{model}:{method}` this surface claims; OpenCodex serves nothing else there) create an
 interaction the same way: `src/protocols/codecs/gemini-interactions.ts` maps the create body onto one
-Chat body and `src/server/gemini-interactions-inbound.ts` runs it through the Chat path with the
-generation admission, request-log ownership and fixed-text Google errors described above. The classifier
+Chat body and `src/server/gemini-interactions-inbound.ts` passes it through the shared Chat bridge
+with the original request and parsed body for ACP policy. Both aliases use the generation admission,
+request-log ownership and fixed-text Google errors described above. The classifier
 also claims `/v1beta|v1/interactions/{id}` (GET, DELETE) and `…/{id}/cancel` (POST) so those paths get
 Google-shaped answers and the same listener rules: an id is one segment of `[A-Za-z0-9_-]`, at most 128
 characters, and `geminiRouteAllows` gives the by-id route two methods for the 405 `Allow` header and the
@@ -156,4 +157,4 @@ isolation, TTL, caps, eviction, roster), `tests/server/gemini-native-paths.test.
 response mapping, streaming translation), plus the Ollama tests that pin the shared bridge.
 
 `tests/server/server-agy-acp.test.ts` exercises labeled and interactive turns on both generation
-methods using the fake `agy` fixture.
+methods and both Interactions aliases using the fake `agy` fixture.

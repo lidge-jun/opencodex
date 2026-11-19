@@ -28,9 +28,8 @@ import {
 } from "../protocols/codecs/gemini-interactions";
 import { createTranslatorBudget, isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import type { OcxConfig } from "../types";
-import { handleChatCompletions } from "./chat-completions";
 import { geminiError } from "./gemini-inbound";
-import { commitCancelled, drainedInnerErrorMessage, internalChatRequest, streamNativeFromChat, type NativeLogIds } from "./native-chat-bridge";
+import { commitCancelled, drainedInnerErrorMessage, handleNativeChat, streamNativeFromChat, type NativeLogIds } from "./native-chat-bridge";
 import { createNativeFinalLog, type NativeFinalLog } from "./native-final-log";
 import { forgetInteraction, interactionEntryBytes, MAX_INTERACTION_BYTES, recallInteraction, rememberInteraction } from "./gemini-interactions-store";
 import { resolveContextPrincipal, type DataPlaneAdmission } from "./auth-cors";
@@ -69,9 +68,11 @@ export async function handleGeminiInteraction(
 ): Promise<Response> {
   const limit = resolveInboundBodyLimitBytes(config.maxInboundBodyBytes);
   const budget = createTranslatorBudget();
+  let originalBody: unknown;
   let plan: InteractionsRequestPlan;
   try {
-    plan = interactionsToChat(await readJsonRequestBody(req, budget, limit));
+    originalBody = await readJsonRequestBody(req, budget, limit);
+    plan = interactionsToChat(originalBody);
   } catch (error) {
     if (req.signal.aborted) return failBeforeInner(ids, logCtx, 499, "request cancelled");
     if (error instanceof DecompressedBodyTooLargeError) return failBeforeInner(ids, logCtx, 413, "request body too large");
@@ -98,11 +99,10 @@ export async function handleGeminiInteraction(
   }
   const chatJson = JSON.stringify({ ...plan.chat, messages: [...plan.systemMessages, ...history, ...input] });
   if (Buffer.byteLength(chatJson) > limit) return failBeforeInner(ids, logCtx, 413, "request body too large");
-  const internal = internalChatRequest(req, chatJson);
   const finalLog = createNativeFinalLog(ids.requestId, ids.start, logCtx);
   let inner: Response;
   try {
-    inner = await handleChatCompletions(internal, config, logCtx, { ...ids, suppressProtocolTrace: true });
+    inner = await handleNativeChat(req, originalBody, chatJson, config, logCtx, ids);
   } catch {
     await finalLog.waitForInner();
     if (req.signal.aborted) return cancelledNonStream(finalLog);

@@ -15,7 +15,7 @@ const PROVIDER_KEY = "provider-fixture-key";
 const saved = { home: process.env.OPENCODEX_HOME, data: process.env.OPENCODEX_API_AUTH_TOKEN, admin: process.env.OPENCODEX_ADMIN_AUTH_TOKEN };
 let home = "";
 let mode: "text" | "tools" | "error400" | "reasoning" | "oversize" = "text";
-let seen: { auth: string | null; url: string; body: Record<string, unknown> }[] = [];
+let seen: { auth: string | null; url: string; headers: Headers; body: Record<string, unknown> }[] = [];
 let upstream: ReturnType<typeof Bun.serve>;
 
 const chunk = (choices: unknown[], extra: Record<string, unknown> = {}) =>
@@ -25,7 +25,7 @@ beforeAll(() => {
   upstream = Bun.serve({ port: 0, async fetch(req) {
     if (req.method === "GET") return Response.json({ object: "list", data: [{ id: "m1", object: "model" }] });
     const body = await req.json() as Record<string, unknown>;
-    seen.push({ auth: req.headers.get("authorization"), url: req.url, body });
+    seen.push({ auth: req.headers.get("authorization"), url: req.url, headers: req.headers, body });
     if (mode === "error400") return Response.json({ error: { message: "fixture upstream rejected the request", type: "invalid_request_error" } }, { status: 400 });
     const usage = { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 };
     const toolCall = { id: "call_fixture", type: "function", function: { name: "lookup", arguments: "{\"q\":\"x\"}" } };
@@ -102,6 +102,21 @@ const events = async (res: Response) => (await res.text()).split("\n\n").filter(
 });
 
 describe("Gemini Interactions inbound", () => {
+  test.each(["/v1beta/interactions", "/v1/interactions"])("%s keeps ACP turn labels out of provider requests", async path => {
+    const metadata = JSON.stringify({ request_kind: "memory" });
+    const labels = { "x-openai-memgen-request": "true", "x-codex-turn-metadata": metadata };
+    await withServer(async base => {
+      const response = await post(base, path, {
+        model: "fx/m1", input: "hi", client_metadata: { "x-codex-turn-metadata": metadata },
+      }, { ...googKey, ...labels });
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(seen).toHaveLength(1);
+      for (const name of Object.keys(labels)) expect(seen[0]!.headers.has(name)).toBe(false);
+      expect(seen[0]!.body).not.toHaveProperty("client_metadata");
+    });
+  });
+
   test("a buffered create on /v1beta and /v1 answers an Interaction and reaches the provider as Chat", async () => {
     await withServer(async base => {
       for (const path of ["/v1beta/interactions", "/v1/interactions"]) {
