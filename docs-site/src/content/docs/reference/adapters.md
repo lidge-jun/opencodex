@@ -434,6 +434,8 @@ MiMo model Command Code serves.
   bridges when their send accounting can admit recovery. Under an enforced spend ceiling, each
   send in the recovery flow uses its own reported usage, including HTTP errors. When the provider
   reports no usage, the send's reservation estimate continues to count toward the limit.
+  A recognized replay refusal from the summary ends recovery before the smaller resend and
+  returns `x-should-retry: false` to the client.
 - Translated Anthropic Messages reasoning replay shares the request translation budget, including
   encoding/decoding copy overhead. Requests exceeding it return HTTP 413 with
   `translation_buffer_limit`; signatures and opaque reasoning data are never truncated to fit.

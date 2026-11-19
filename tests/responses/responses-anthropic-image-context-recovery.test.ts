@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { registerUpstreamRewriter } from "../../src/plugins/upstream-hooks";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
@@ -53,6 +53,58 @@ for (const lane of ["direct", "search", "media"] as const) {
     expect(retry).not.toContain("Older screenshot");
     expect(retry.match(/"type":"image"/g)).toHaveLength(1);
   });
+}
+
+for (const lane of ["search", "media"] as const) {
+  for (const disconnect of [false, true]) {
+    test(`image-context recovery projects a top-level summary refusal on ${lane} (disconnect=${disconnect})`, async () => {
+      const diagnostic = "Fixture summary diagnostic: prompt is too long";
+      const headers = { "content-type": "application/json", "retry-after": "60" };
+      const body = { code: UPSTREAM_RESPONSE_REFUSED_CODE, error: { type: "api_error", message: diagnostic } };
+      const summaryRefusal = () => Response.json(body, { status: 503, headers });
+      const clone = Response.prototype.clone;
+      let probed = false;
+      let probedBeforeDisconnect = false;
+      let bodyReads = 0;
+      // Pacing wraps the upstream Response. Give its probe a complete clone, then fail the delivery read.
+      const probe = disconnect ? spyOn(Response.prototype, "clone").mockImplementation(function (this: Response) {
+        if (this.status !== 503) return clone.call(this);
+        probed = true;
+        return summaryRefusal();
+      }) : undefined;
+      try {
+        const result = await fixture({ enabled: true, lane, handle: (_wire, index) => {
+          if (index === 1) return image413();
+          if (index > 2) return completion("Unexpected recovery", true);
+          if (!disconnect) return summaryRefusal();
+          return new Response(new ReadableStream({
+            pull(controller) {
+              bodyReads++;
+              probedBeforeDisconnect = probed;
+              controller.error(new Error("Fixture summary body disconnected"));
+            },
+          }, { highWaterMark: 0 }), { status: 503, headers });
+        } });
+        expect(result.sent).toHaveLength(2);
+        if (disconnect) {
+          expect(probedBeforeDisconnect).toBe(true);
+          expect(bodyReads).toBe(1);
+        }
+        expect({
+          status: result.response.status,
+          shouldRetry: result.response.headers.get("x-should-retry"),
+          retryAfter: result.response.headers.get("retry-after"),
+          body: JSON.parse(result.text),
+        }).toEqual({
+          status: 429,
+          shouldRetry: "false",
+          retryAfter: null,
+          body: { error: { type: "upstream_error", code: UPSTREAM_RESPONSE_REFUSED_CODE,
+            message: REPLAY_REFUSAL_MESSAGE, retryable: false } },
+        });
+      } finally { probe?.mockRestore(); }
+    });
+  }
 }
 
 for (const field of ["apiKey", "baseUrl"] as const) for (const during of ["refusal", "summary"] as const) {

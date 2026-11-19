@@ -441,22 +441,22 @@ records, by the collector's recorded event identity rather than the payload shap
 and non-object payloads keep their original collector/status result as internal evidence; their
 client envelope is rebuilt too. A record's original client-visible message or serialized payload
 selects recovery wording even when its status is 200. Incomplete translated JSON uses its original
-formatter message
-before selecting the fixed incomplete or compaction sentence. Internal overflow decisions and HTTP
-status stay separate
-from this client-message check: a coded raw-collector throughput refusal still answers 400 without
+formatter message before selecting the fixed incomplete or compaction sentence. Internal overflow
+decisions and HTTP status stay separate from this client-message check. A coded raw-collector throughput refusal still answers 400 without
 selecting the compaction sentence. The shared `isContextOverflowError` adds `upstream_server_error`
 to the generic codes and ignores conditional context-window matches while still checking later matches;
 its remaining source and the #8128 suite stay byte-identical, enforced by
 `tests/claude-integration/messages-overflow-baseline-contract.test.ts`. The executable overflow golden compares actual client recovery-phrase recognition,
 HTTP status and the original internal decisions independently on every fixture/path row.
-The direct Messages writer also applies that shared verdict to the emitted code: a definite generic-coded overflow carries `context_length_exceeded`, the fixed compaction sentence and HTTP 400 on collection, even with `retryable: true`; original error evidence and proxy/transport metadata remain separate. `tests/helpers/messages-overflow-assertions.ts` records the affected fixture ids only on direct-stream/direct-fold as explicit expected changes to the immutable golden. Separate reviewed deltas cover generic 5xx/plain-text overflow and the three explicit replay-refusal fixtures on native-http, translated-http and translated-json; each verifies its original baseline before asserting the fixed current contract. Replay-refusal rows also require the terminal 429, fixed refusal sentence and no-retry policy. The head-only translated JSON observer records the terminal branch's actual `overflow: false` decision, while missing observations still fail. All remaining rows keep their baseline comparisons; the fixture data is not regenerated.
+The direct Messages writer applies the shared verdict to the emitted code. A definite generic-coded overflow carries `context_length_exceeded`, the fixed compaction sentence and HTTP 400 on collection even with `retryable: true`. Original error evidence and proxy/transport metadata remain separate.
+`tests/helpers/messages-overflow-assertions.ts` specifies the direct-stream and direct-fold changes in the immutable golden. Reviewed deltas also cover generic 5xx/plain-text overflow and the three explicit replay-refusal fixtures on passthrough, count_tokens, native-http, translated-http, translated-json and translated-fold (Responses SSE folded into Messages JSON).
+Each delta verifies the original baseline before asserting the current contract. Replay-refusal rows require terminal 429, the fixed sentence and the no-retry policy. For translated SSE folding, the head-only observer records the terminal branch's actual `overflow: false` decision. Missing observations fail. All remaining rows keep their baseline comparisons and the golden data stays intact.
 The translated non-2xx plain-text path classifies up to 16,384 characters before selecting the bounded
 400-character display text, so an overflow visible to the retry peek is not lost to display truncation.
 Adapter response-body inactivity emits the guard's bounded duration sentence and `upstream_stall_timeout` code for streamed initial, recovery and continuation errors. Terminal status classification records 504 for that code, while the duration sentence supplies the closed `body_stall` failure detail. A request-local continuation marker survives event spreads and empty-completion retry handling, and selects HTTP 504 for a buffered continuation stall; other buffered failures and provider-supplied codes retain their prior HTTP status. Initial buffered adapter timeouts also return 504 and the same detail sentence. `tests/server/terminal-guard-server.test.ts` covers stream, buffered continuation and marker isolation; `tests/server/error-fidelity.test.ts` distinguishes a stall from a 502.
 The direct encoder retains original adapter fields by terminal identity independently of shared
-classification. Buffered passthrough and count_tokens preserve the upstream status and closed
-type/code. The type chosen
+classification. Buffered passthrough and count_tokens preserve the upstream status and closed type/code, with an exception for recognized replay refusals.
+Those carry the exact refusal code, fixed wording and HTTP 429 with `x-should-retry: false` and no `Retry-After`. The type chosen
 by that writer survives collection independently of the final HTTP status: a converted rate-limit
 error can retain `rate_limit_error` inside a 502. `src/claude/failure-verdict.ts` carries delivered legacy
 records into the collector without serializing them; publication follows successful frame admission. The sink records error-event dispatch independently

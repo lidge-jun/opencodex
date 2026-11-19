@@ -6,7 +6,10 @@ import { isLikelyRealAnthropicThinkingSignature } from "../../adapters/anthropic
 import type { AdapterEvent, OcxParsedRequest } from "../../types";
 import { upstreamErrorMessageFromPayload } from "../../lib/errors";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
-import { isAutomaticReplayBlocked, isNonReplayableResponse, isReplayRefusalCode, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE } from "../../lib/upstream-retry";
+import {
+  isAutomaticReplayBlocked, isNonReplayableResponse, isReplayRefusalCode, observedReplayRefusalCode,
+  replayRefusalBodyCode, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE,
+} from "../../lib/upstream-retry";
 import { rememberReasoningReplayOpaqueBlobRejection } from "../../responses/reasoning-replay-cache";
 import { prepareOpaqueBlobRecovery, type OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
 
@@ -144,12 +147,16 @@ export function createAnthropicThinkingRecovery(
     for (const event of events) observe(event);
   };
   const projectHttpFailure = async (response: Response, abortSignal: AbortSignal): Promise<Extract<AdapterEvent, { type: "error" }>> => {
+    // A probe may already have established the refusal even if delivery cannot read the body.
+    const observedCode = observedReplayRefusalCode(response);
     const nonReplayable = isNonReplayableResponse(response);
     if (nonReplayable) response = await sanitizeNonReplayableUpstreamError(response, abortSignal);
     const text = await readDisplaySafeErrorText(response, abortSignal, `Provider error ${response.status}`);
+    const refusalCode = observedCode ?? replayRefusalBodyCode(text);
     const error = normalizeUpstreamErrorText(text, `Provider error ${response.status}`);
-    if (isReplayRefusalCode(error.code)) return {
-      type: "error", status: REPLAY_REFUSED_STATUS, errorType: "upstream_error", code: error.code,
+    const code = refusalCode ?? error.code;
+    if (isReplayRefusalCode(code)) return {
+      type: "error", status: REPLAY_REFUSED_STATUS, errorType: "upstream_error", code,
       message: REPLAY_REFUSAL_MESSAGE, retryable: false,
     };
     if (proxyErrorContext && isProxyError(response)) rememberProxyErrorMessage(proxyErrorContext, error.message ?? error.safeText, { status: response.status, type: error.type ?? "upstream_error", code: error.code, presentation: proxyErrorPresentation(response) });

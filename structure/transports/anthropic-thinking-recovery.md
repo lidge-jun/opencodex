@@ -64,9 +64,12 @@ ordinary search iteration limit/admission behavior is unchanged.
 
 Only a validated current model iteration contributes completion/output evidence; search cards
 cannot establish memo success. The final bridge completion still commits the memo, subject to
-cancellation and unchanged serving scope. Replacement HTTP errors keep status/type/code and
-non-replayable diagnostics remain withheld. A failed repair is terminal, including a replacement
-429; it does not start another credential/rate-limit ladder. The actual-adapter hosted-search contract lives in
+cancellation and unchanged serving scope. Ordinary replacement HTTP errors keep status/type/code.
+The formatter withholds non-replayable diagnostics. The shared Anthropic HTTP formatter for search and media
+applies the [fixed replay-refusal contract](../data-planes/replay-refusals.md#client-projection)
+when the bounded probe or delivery body identifies a recognized code. A probe's verdict survives
+a failed delivery-body read. A failed repair is terminal, including a replacement 429, and ends the
+credential/rate-limit ladder. The actual-adapter hosted-search contract lives in
 `tests/responses/responses-web-search-thinking-signature-recovery.test.ts`.
 
 ## Lossless in-memory search continuations
