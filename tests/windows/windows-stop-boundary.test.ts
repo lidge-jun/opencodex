@@ -113,12 +113,101 @@ test("a late Part A result preserves known mutation and termination evidence whi
   } finally { now.mockRestore(); }
 });
 
+test("the outer timer preserves completed stops while final verification is pending", async () => {
+  let release!: (state: "not-running") => void;
+  const fake = machine({ taskState: () => new Promise(resolve => { release = resolve; }) });
+  setWindowsServiceStopHooksForTests({ liveDeps: () => fake.deps });
+  const result = await runWindowsServiceStopPartA({ capMs: 100 });
+  release("not-running");
+  await Bun.sleep(0);
+  expect(result).toMatchObject({ outcome: "unknown", changed: true, terminated: [30, 20], registration: { scheduler: "present" } });
+  expect(result.bound.map(row => row.pid)).toEqual([30, 20]);
+});
+
+test("a returned cap snapshot cannot acquire termination evidence from a late dependency", async () => {
+  let release!: () => void;
+  const fake = machine({ terminate: pid => pid === 30 ? { status: "terminated", exited: true }
+    : new Promise(resolve => { release = () => resolve({ status: "terminated", exited: true }); }) });
+  setWindowsServiceStopHooksForTests({ liveDeps: () => fake.deps });
+  const result = await runWindowsServiceStopPartA({ capMs: 100 });
+  release();
+  await Bun.sleep(0);
+  expect(result).toMatchObject({ outcome: "unknown", changed: true, terminated: [30] });
+  expect(result.terminated).toEqual([30]);
+  expect(result.outcome).toBe("unknown");
+});
+
+for (const crossesOuterCap of [false, true]) {
+  test(`Scheduler post-proof refresh ${crossesOuterCap ? "cannot cross" : "can finish inside"} the outer budget`, async () => {
+    let elapsed = 0, commandBudget = 0, stopBudget = 0, stops = 0;
+    const now = spyOn(performance, "now").mockImplementation(() => elapsed);
+    setWindowsServiceStopHooksForTests({ liveDeps: options => {
+      const live = windowsCheckedStopLiveDeps({ ...options, run: async (_program, _args, timeoutMs, approve, control) => {
+        commandBudget = timeoutMs;
+        if (!await approve?.(proof(ownedXml))) return { status: 0, stdout: "failed", stderr: "", timedOut: false };
+        stopBudget = Math.min(timeoutMs, control?.remainingMs?.() ?? Infinity);
+        // The real helper checks its received budget after refreshing captured instances.
+        const refreshMs = crossesOuterCap ? 25 : 5;
+        elapsed += refreshMs;
+        if (refreshMs >= stopBudget) return { status: 0, stdout: "failed", stderr: "", timedOut: false };
+        stops++;
+        control?.onMutation?.();
+        return { status: 0, stdout: "stop-attempted\nended", stderr: "", timedOut: false };
+      } });
+      return machine({ enumerate: () => [], endTask: live.endTask }).deps;
+    } });
+    let approvals = 0;
+    try {
+      const result = await runWindowsServiceStopPartA({ capMs: 50, authorize: () => {
+        if (++approvals === 3) elapsed = 30;
+      } });
+      expect(commandBudget).toBe(50);
+      expect(stopBudget).toBe(20);
+      expect(stops).toBe(crossesOuterCap ? 0 : 1);
+      expect(result.changed).toBe(!crossesOuterCap);
+      expect(result.outcome).toBe(crossesOuterCap ? "unknown" : "stopped");
+    } finally { now.mockRestore(); }
+  });
+}
+
+test("the outer cap aborts a pending helper and retains dispatch or streamed mutation evidence", async () => {
+  for (const stage of ["unapproved", "dispatched", "attempted"] as const) {
+    let aborted = false, approved = false;
+    let reap: (() => void) | undefined;
+    setWindowsServiceStopHooksForTests({ liveDeps: options => {
+      const live = windowsCheckedStopLiveDeps({ ...options, run: async (_program, _args, _timeout, approve, control) => {
+        if (stage !== "unapproved") {
+          approved = await approve?.(proof(ownedXml)) === true;
+          control?.onDispatch?.();
+        }
+        if (stage === "attempted") control?.onMutation?.();
+        return new Promise(resolve => {
+          reap = () => resolve({ status: null, stdout: "", stderr: "", timedOut: true });
+          // Keep the helper pending through the outer return: no final result or marker may
+          // fill in evidence on behalf of the dispatched-but-unanswered case.
+          const abort = () => { aborted = true; };
+          if (control?.signal?.aborted) abort();
+          else control?.signal?.addEventListener("abort", abort, { once: true });
+        });
+      } });
+      return machine({ enumerate: () => [], endTask: live.endTask }).deps;
+    } });
+    const result = await runWindowsServiceStopPartA({ capMs: 100 });
+    reap?.();
+    await Bun.sleep(0);
+    expect(approved).toBe(stage !== "unapproved");
+    expect(aborted).toBe(true);
+    expect(result).toMatchObject({ outcome: "unknown", changed: stage !== "unapproved", terminated: [] });
+  }
+});
+
 for (const outcome of ["failed-before-dispatch", "unverified", "budget-before-stop", "partial-stop", "denied-after-stop", "lost-after-approval", "lost-successful-result"] as const) {
   test(`Scheduler mutation evidence survives ${outcome}`, async () => {
-    const live = windowsCheckedStopLiveDeps({ run: async (_program, _args, _timeout, authorizeProof) => {
+    const live = windowsCheckedStopLiveDeps({ run: async (_program, _args, _timeout, authorizeProof, control) => {
       if (outcome === "failed-before-dispatch") return { status: null, stdout: "", stderr: "PowerShell not found", timedOut: false };
       if (outcome === "unverified") return { status: 0, stdout: "unverified-registration", stderr: "", timedOut: false };
       expect(await authorizeProof?.(proof(ownedXml))).toBe(true);
+      control?.onDispatch?.();
       if (outcome === "budget-before-stop" || outcome === "lost-successful-result") return {
         status: 0, stdout: outcome === "budget-before-stop" ? "failed" : "", stderr: "", timedOut: false,
       };
@@ -137,6 +226,7 @@ for (const outcome of ["failed-before-dispatch", "unverified", "budget-before-st
 test("a complete process table survives interrupted owner enrichment with ownership left unknown", async () => {
   const rows = [{ ProcessId: 20, ParentProcessId: 4, Name: "cmd.exe", CommandLine: "cmd.exe", CreationDate: "2026-11-12T01:02:03Z", CurrentUserSid: SID }];
   const baseline = "OCX_PROCESS_SNAPSHOT " + JSON.stringify(rows) + "\n";
+  setWindowsProcessNativeForTests(null);
   const result = await windowsProcessSnapshot({ timeoutMs: 5_000, run: async command => {
     expect(command).toMatchObject({ allowPartialOutput: true });
     return baseline + "OCX_PROCESS_SNAPSHOT [{\"ProcessId\":";

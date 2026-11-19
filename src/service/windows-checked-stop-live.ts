@@ -49,12 +49,21 @@ export interface WindowsStopCommandResult {
   timedOut: boolean;
 }
 
+export interface WindowsStopCommandControl {
+  remainingMs?: () => number;
+  signal?: AbortSignal;
+  /** Approval was dispatched; a cap cannot assume no mutation before the helper answers. */
+  onDispatch?: () => void;
+  onMutation?: () => void;
+}
+
 /** One spawned helper; tests inject it, production runs execFile with a hard timeout. */
 export type WindowsStopCommandRunner = (
   program: "schtasks" | "sc" | "powershell",
   args: string[],
   timeoutMs: number,
   authorizeProof?: (line: string) => boolean | Promise<boolean>,
+  control?: WindowsStopCommandControl,
 ) => Promise<WindowsStopCommandResult>;
 
 function programPath(program: "schtasks" | "sc" | "powershell"): string {
@@ -65,12 +74,12 @@ function programPath(program: "schtasks" | "sc" | "powershell"): string {
   return file;
 }
 
-export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, args, timeoutMs, authorizeProof) => new Promise(resolve => {
+export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, args, timeoutMs, authorizeProof, control) => new Promise(resolve => {
   // execFile reads a 0 timeout as "no timeout": a deadline-derived fraction is floored, and a
   // timeout that floors to 0 spawns nothing.
-  const timeout = Math.floor(timeoutMs);
+  const timeout = Math.floor(Math.min(timeoutMs, control?.remainingMs?.() ?? Infinity));
   const deadline = performance.now() + timeout;
-  if (!(timeout > 0)) {
+  if (!(timeout > 0) || control?.signal?.aborted) {
     resolve({ status: null, stdout: "", stderr: "", timedOut: true });
     return;
   }
@@ -90,7 +99,12 @@ export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, 
     resolve({ status: null, stdout: "", stderr: error instanceof Error ? error.message : String(error), timedOut: false });
     return;
   }
-  const helper = execFile(file, args, { encoding: "buffer", timeout, windowsHide: true, maxBuffer: 1024 * 1024 },
+  const spawnTimeout = Math.floor(Math.min(deadline - performance.now(), control?.remainingMs?.() ?? Infinity));
+  if (!(spawnTimeout > 0) || control?.signal?.aborted) {
+    resolve({ status: null, stdout: "", stderr: "", timedOut: true });
+    return;
+  }
+  const helper = execFile(file, args, { encoding: "buffer", timeout: spawnTimeout, windowsHide: true, maxBuffer: 1024 * 1024, signal: control?.signal },
     (error, stdout, stderr) => {
       const text = (value: Buffer | string | undefined): string =>
         value === undefined ? "" : typeof value === "string" ? value : decodeWindowsTextBytes(value);
@@ -99,11 +113,20 @@ export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, 
         status: failure ? (typeof failure.code === "number" ? failure.code : null) : 0,
         stdout: text(stdout),
         stderr: text(stderr),
-        timedOut: !!failure?.killed && failure.signal !== null,
+        timedOut: control?.signal?.aborted === true || !!failure?.killed && failure.signal !== null,
       });
     });
   if (authorizeProof) {
-    let pending = "";
+    let pending = "", progressLine = "", authorized = false;
+    helper.stdout?.on("data", (chunk: Buffer) => {
+      progressLine += chunk.toString("latin1");
+      let end: number;
+      while ((end = progressLine.indexOf("\n")) >= 0) {
+        const line = progressLine.slice(0, end).replace(/\r$/, "");
+        progressLine = progressLine.slice(end + 1);
+        if (authorized && line === "stop-attempted") control?.onMutation?.();
+      }
+    });
     const onProof = async (chunk: Buffer): Promise<void> => {
       pending += chunk.toString("latin1");
       const end = pending.indexOf("\n");
@@ -113,8 +136,10 @@ export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, 
       try {
         approved = await authorizeProof(pending.slice(0, end).replace(/\r$/, ""));
       } catch { /* An authorizer failure leaves stdin unapproved. */ }
-      const remaining = Math.floor(deadline - performance.now());
-      helper.stdin?.end(approved && remaining > 0 ? `stop ${remaining}\n` : "\n");
+      const remaining = Math.floor(Math.min(deadline - performance.now(), control?.remainingMs?.() ?? Infinity));
+      authorized = approved && remaining > 0 && control?.signal?.aborted !== true;
+      if (authorized && helper.stdin && !helper.stdin.destroyed && !helper.stdin.writableEnded) control?.onDispatch?.();
+      helper.stdin?.end(authorized ? `stop ${remaining}\n` : "\n");
     };
     helper.stdin?.on("error", () => { /* execFile reports the helper's exit or timeout. */ });
     helper.stdout?.on("data", onProof);
@@ -227,6 +252,9 @@ export interface WindowsCheckedStopLiveOptions {
   scQcRun?: (timeoutMs: number) => Promise<WindowsStopCommandResult>;
   /** The outer cap, checked before a manager stop and again after Scheduler proof. */
   gate?: () => boolean;
+  /** Share the outer monotonic deadline and cancellation with manager helpers. */
+  remainingMs?: () => number;
+  signal?: AbortSignal;
   snapshot?: (timeoutMs: number) => Promise<readonly WindowsStopProcessEntry[] | null>;
 }
 
@@ -297,13 +325,14 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
       return whole === null ? null : readScheduleServicePid({ timeoutMs: whole });
     },
     async endTask(timeoutMs, authorize, mutation) {
-      const finish = (verdict: WindowsTaskEndResult, attempted: boolean) => { mutation?.(attempted); return verdict; };
-      if (!gate()) return finish("failed", false);
+      const finish = (verdict: WindowsTaskEndResult, attempted: boolean) => { mutation?.(attempted, false); return verdict; };
+      timeoutMs = Math.min(timeoutMs, options.remainingMs?.() ?? Infinity);
+      if (!gate() || !(timeoutMs >= 1) || options.signal?.aborted) return finish("failed", false);
       const deadline = performance.now() + Math.floor(timeoutMs);
       const withinDeadline = () => performance.now() < deadline && gate();
       const launcher = windowsLauncherVbsPath();
       const script = Buffer.from(WINDOWS_TASK_INSTANCE_STOP_SCRIPT, "utf16le").toString("base64");
-      let approved = false;
+      let approved = false, observedMutation = false;
       let refusal: { cause: unknown } | undefined;
       const ended = await run("powershell", ["-NoProfile", "-NoLogo", "-NonInteractive", "-EncodedCommand", script], timeoutMs,
         async line => {
@@ -316,10 +345,13 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
           }
           approved = withinDeadline();
           return approved;
-        });
+        }, { remainingMs: options.remainingMs, signal: options.signal, onDispatch: () => mutation?.(false, true), onMutation: () => {
+          observedMutation = true;
+          mutation?.(true, false);
+        } });
       if (refusal) throw refusal.cause;
       const lines = ended.stdout.trim().split(/\r?\n/);
-      const attempted = lines.includes("stop-attempted");
+      const attempted = observedMutation || lines.includes("stop-attempted");
       if (ended.timedOut || ended.status !== 0) return finish("failed", attempted || approved);
       const verdict = lines.at(-1);
       if (verdict === "unverified-registration" || verdict === "denied") return finish(verdict, attempted);
@@ -343,7 +375,8 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
     },
     async winswStop(timeoutMs) {
       if (!gate()) return "failed";
-      return classifyScStop(await run("sc", ["stop", WINSW_SERVICE_ID], timeoutMs));
+      return classifyScStop(await run("sc", ["stop", WINSW_SERVICE_ID], timeoutMs, undefined,
+        { remainingMs: options.remainingMs, signal: options.signal }));
     },
     winswState: scQuery,
     proxyAlive: () => {

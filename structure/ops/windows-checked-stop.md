@@ -89,9 +89,17 @@ variant `guardedStopWindowsServiceChecked` runs its authorizer at entry, before 
 reports a refusal as `WindowsCheckedStopRefusedError` with what had already happened. For Task
 Scheduler it reauthorizes after validating the helper proof, before sending `stop` on stdin. The
 helper and outer deadlines must still be open after authorization. The parent sends only the
-helper's remaining budget; it checks that budget before each captured instance's `Stop()`.
+smaller of the helper and outer remaining budgets; the helper checks that budget after
+post-approval refresh and before each captured instance's `Stop()`. The outer cap also aborts
+the owned helper, including while its registration or instance refresh is pending.
 Task-stop verdicts carry separate mutation evidence: a known failure before dispatch leaves
 `changed` false, an attempted stop keeps it true, and a lost answer after approval is conservative.
+Dispatching approval marks a pending possible mutation until a completed helper verdict proves
+otherwise; a timer between approval and the first stdout marker must not report `changed: false`.
+The helper's `stop-attempted` marker confirms mutation as it arrives. Part A publishes detached
+progress at these boundaries, so an outer timer can return pending dispatch and confirmed stop attempts,
+bound wrappers and terminations without awaiting unfinished verification. Returned arrays and
+records do not change when a late dependency completes.
 
 Each step that asks the machine runs under a cap that races a timer and rechecks the elapsed time
 on the injected clock. The Scheduler proof-time authorization shares the 2 s task-end cap.

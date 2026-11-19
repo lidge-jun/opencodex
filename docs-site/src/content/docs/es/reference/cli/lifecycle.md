@@ -112,7 +112,10 @@ OpenCodex no confirma la parada. Si la comprobación falla,
 revisa el lanzador, las cuentas de los desencadenadores y la cuenta de ejecución en el Programador
 de tareas. Finalizar sus instancias no repara el registro. Repara un registro que te pertenezca
 o contacta con su propietario o administrador. La parada rechaza nuevas acciones al vencer
-su límite de tiempo y conserva los cambios confirmados en el resultado.
+su límite de tiempo, cancela el proceso auxiliar de parada y conserva los cambios confirmados
+en el resultado, incluso si la verificación final sigue pendiente.
+Si ya se envió la autorización pero el auxiliar no ha respondido, el resultado indica de forma
+conservadora que pudo haber una parada; una respuesta ausente no prueba que nada cambió.
 
 OpenCodex solo finaliza directamente un envoltorio si comprueba que pertenece a tu cuenta.
 Ignora los envoltorios que pertenecen a otro usuario. Si no puede verificar el propietario
