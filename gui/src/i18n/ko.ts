@@ -2,6 +2,7 @@ import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
+import { gatewayClientsCopy } from "./gateway-clients-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -136,6 +137,7 @@ export const ko: Record<TKey, string> = {
   ...shellV2Copy("ko"),
   ...codexCliUpdateCopy("ko"),
   ...remoteLinkDiagnosticsCopy("ko"),
+  ...gatewayClientsCopy("ko"),
   ...modelsV2Copy("ko"),
   ...accountsV2Copy("ko"),
   ...subagentsV2Copy("ko"),
@@ -764,11 +766,13 @@ export const ko: Record<TKey, string> = {
   "dash.updateCurrent": "최신 상태",
   "dash.updateCommand": "명령",
   "dash.updateSource": "현재는 소스 체크아웃입니다. 표시된 명령을 터미널에서 실행해 업데이트하세요.",
+  "dash.updateManaged": "업데이트는 자동으로 진행됩니다. 호스트의 예약된 업데이트 작업이 이 릴리스 디렉터리를 관리하므로 여기서 할 일은 없습니다.",
   "dash.updateUnavailable": "npm에서 최신 버전을 읽지 못했습니다. 잠시 후 다시 시도하세요.",
   "dash.updateRetry": "재시도",
   "dash.updateRecheck": "다시 확인",
   "dash.updateCannotAuto": "원클릭 업데이트를 사용할 수 없습니다 ({reason}).",
   "dash.updateReason.source_checkout": "소스 체크아웃",
+  "dash.updateReason.managed_release": "관리형 릴리스 디렉터리",
   "dash.updateReason.latest_unavailable": "npm 레지스트리에 연결할 수 없음",
   "dash.updateReason.already_latest": "이미 최신 버전",
   "dash.updateReason.externally_managed": "mise에서 외부 관리 중입니다. 표시된 명령을 실행하세요",
@@ -3284,6 +3288,8 @@ export const ko: Record<TKey, string> = {
   "pws.xaiChatOptIn": "Grok 4.5와 4.6에 Chat Completions 사용",
   "pws.xaiChatOptInDesc": "끄면 Responses를 사용합니다. OAuth Responses 요청의 기본값입니다. 다른 Grok 모델과 티어 동작은 바뀌지 않습니다.",
   "pws.xaiChatOptInMixed": "한 모델만 Chat을 사용합니다.",
+  "pws.subscriptionRetries": "출력 전 같은 모델 재시도 횟수",
+  "pws.subscriptionRetriesDefault": "기본값 (메인 계정 재시도 끔)",
   "pws.cursorTransport": "Cursor 전송",
   "pws.cursorTransportHttp2": "HTTP/2 (기본값)",
   "pws.cursorTransportHttp1": "HTTP/1.1 (프록시 호환)",

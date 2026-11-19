@@ -4,6 +4,7 @@ import {
   createProviderDraftStore,
   draftRequestPacing,
   providerSettingsDraftFromItem,
+  providerSettingsDeltaPatch,
   providerSettingsDirty,
   providerSettingsFieldsDirty,
   providerSettingsPacingDirty,
@@ -23,6 +24,24 @@ function provider(overrides: Partial<WorkspaceItem> = {}): WorkspaceItem {
     ...overrides,
   } as WorkspaceItem;
 }
+
+test("ChatGPT settings display retries and save total sends including the first", () => {
+  const saved = provider({ name: "openai", transientRetryOn5xx: { attempts: 5 } });
+  const baseline = providerSettingsDraftFromItem(saved);
+  expect(baseline.subscriptionRetries).toBe("4");
+  for (const retries of ["0", "9", ""]) {
+    const draft = { ...baseline, subscriptionRetries: retries };
+    const { patch } = providerSettingsDeltaPatch(draft, baseline, saved, saved.baseUrl);
+    expect(patch).toEqual({ transientRetryOn5xx: retries === "" ? null : { attempts: Number(retries) + 1 } });
+  }
+});
+
+test("ChatGPT drafts display the default until an enabled send total is configured", () => {
+  for (const transientRetryOn5xx of [undefined, {}, { enabled: true }, { enabled: false, attempts: 4 }]) {
+    const saved = provider({ name: "openai", transientRetryOn5xx });
+    expect(providerSettingsDraftFromItem(saved).subscriptionRetries).toBe("");
+  }
+});
 
 test("the draft store isolates a same-name provider on two targets", () => {
   const store = createProviderDraftStore();

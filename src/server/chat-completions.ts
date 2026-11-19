@@ -34,7 +34,7 @@ import {
 } from "../chat/outbound";
 import { ADVISOR_INTERNAL_CAPABILITY_HEADER, isInternalCallCapability } from "../lib/local-internal-call-capability";
 import type { CapturedAdmissionPolicy } from "../types/admission-policy";
-import { ADVISOR_ADMISSION_SCOPE_HEADER, decodeAdvisorAdmissionScope, ADVISOR_ADMISSION_POLICY_HEADER, readAdvisorAdmissionPolicy, SIDECAR_ADMISSION_POLICY_HEADER, SIDECAR_INTERNAL_CAPABILITY_HEADER } from "./advisor-admission-scope";
+import { ADVISOR_ADMISSION_SCOPE_HEADER, decodeAdvisorAdmissionScope, ADVISOR_ADMISSION_POLICY_HEADER, readAdvisorAdmissionPolicy, readInternalCallRegistration, SIDECAR_ADMISSION_POLICY_HEADER, SIDECAR_INTERNAL_CAPABILITY_HEADER } from "./advisor-admission-scope";
 import {
   captureAdmissionPolicy, captureSelfFetchCredentialPolicy, inheritAdmissionPolicy, intersectAdmissionPolicies, selfFetchHostPolicy,
 } from "./capture-admission-policy";
@@ -181,18 +181,20 @@ async function handleChatCompletionsWithBudget(
   },
 ): Promise<Response> {
   const advisorInternal = isInternalCallCapability(req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER));
-  const sidecarInternal = isInternalCallCapability(req.headers.get(SIDECAR_INTERNAL_CAPABILITY_HEADER));
+  const sidecarCapability = req.headers.get(SIDECAR_INTERNAL_CAPABILITY_HEADER);
+  const sidecarInternal = isInternalCallCapability(sidecarCapability);
+  const sidecarRegistration = readInternalCallRegistration(req.headers.get(SIDECAR_ADMISSION_POLICY_HEADER), sidecarCapability);
   const callerPolicy = advisorInternal
     ? readAdvisorAdmissionPolicy(req.headers.get(ADVISOR_ADMISSION_POLICY_HEADER), req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER))
-    : readAdvisorAdmissionPolicy(req.headers.get(SIDECAR_ADMISSION_POLICY_HEADER), req.headers.get(SIDECAR_INTERNAL_CAPABILITY_HEADER));
+    : sidecarRegistration?.policy;
   const decodedScope = advisorInternal
     ? decodeAdvisorAdmissionScope(req.headers.get(ADVISOR_ADMISSION_SCOPE_HEADER))
     : undefined;
   // Only a validated internal hop gets its presented credential resolved; loopback admission for
   // every other caller is untouched. An unknown credential fails closed (#7894).
   const selfFetchPolicy = callerPolicy ? captureSelfFetchCredentialPolicy(req, config) : undefined;
-  if ((advisorInternal || sidecarInternal) && (!callerPolicy || selfFetchPolicy === null
-    || advisorInternal && req.headers.has(ADVISOR_ADMISSION_SCOPE_HEADER) && !decodedScope)) {
+  if (selfFetchPolicy === null || (sidecarInternal && !sidecarRegistration)
+    || (advisorInternal && (!callerPolicy || (req.headers.has(ADVISOR_ADMISSION_SCOPE_HEADER) && !decodedScope)))) {
     // Refused requests still own a final log row like every other early rejection.
     if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 403, { closeReason: "non_stream" });
     return chatCompletionsErrorResponse(403, "invalid inherited advisor admission scope", "permission_error", MODEL_NOT_ALLOWED_FOR_KEY);
@@ -607,6 +609,7 @@ async function handleChatCompletionsWithBudget(
     // header — so the fact is detected here and carried as an option flag.
     ...(visionDescribeTerminal ? { visionDescribeTerminal: true } : {}),
     ...(advisorInternal ? { advisorInternal: true } : {}),
+    ...(sidecarRegistration ? { internalSidecarCall: true } : {}),
     ...(inheritedAdmissionScope ? { admissionScope: inheritedAdmissionScope } : {}),
     translatorBudget,
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),

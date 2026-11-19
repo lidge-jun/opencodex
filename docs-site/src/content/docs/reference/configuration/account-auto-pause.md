@@ -51,7 +51,10 @@ A pause never cancels already dispatched work or changes credentials. It emits o
 log line without account identifiers or upstream error text.
 
 `ocx account list <provider>` shows the pause reason. The dashboard's Paused badge exposes
-the reason and time. Use `ocx account resume <provider> <account-id-or-alias>` to clear the
+the reason and time. For automatically paused OAuth accounts, the account list API can also
+return the refusal's HTTP status and redacted message in `pauseEvidence`. This includes the
+Cloud Code Assist appeal sentence when it appears in the refusal message.
+Use `ocx account resume <provider> <account-id-or-alias>` to clear the
 reason and allow selection again. On an API-key row, clicking Resume also activates the key.
 This policy never resumes an account automatically; an explicit login clears a pause it recorded, and
 [`resume --if-healthy`](/reference/cli/providers-accounts/#resume-if-healthy) resumes after a health read.

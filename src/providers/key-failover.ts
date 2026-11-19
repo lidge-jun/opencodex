@@ -17,6 +17,7 @@ export {
 import { affinitySelectionIsCurrent, commitProviderApiKeySelection, providerApiKeySelectionIsCurrent } from "./api-key-selection";
 import { currentCacheAffinityIdentity } from "./cache-affinity-identity";
 import { providerRequestPacingStatus, REQUEST_PACING_MAX_QUEUE_AGE_MS, RequestPacingQueueOverloadError } from "./request-pacing";
+import { isCanonicalOpenAiForwardProvider } from "./openai-tiers-destination";
 import { isCanonicalMistralChat } from "./mistral-transport";
 import type { ProviderApiKeySelection } from "../types/provider";
 import { routedProviderConfig } from "./routed-config";
@@ -749,30 +750,24 @@ export function rateLimitRetryPolicyFor(
   return null;
 }
 
-/**
- * Normalize a provider's `transientRetryOn5xx` policy, or return null when it is absent,
- * explicitly disabled, not key-auth, or not an adapter this policy governs.
- *
- * The adapter gate is part of the accepted scope, not incidental: it names the adapters whose
- * lanes actually read this policy, so no generic key-auth adapter can opt in by accident.
- * Auth mode follows the same fail-closed rule as `rateLimitRetryPolicyFor` —
- * explicit `key` or the documented omitted default, never OAuth, forward, local, or an
- * unknown value.
- */
-export function transientRetryPolicyFor(
-  provider: Pick<OcxProviderConfig, "transientRetryOn5xx" | "authMode" | "adapter">,
-): Required<TransientRetryPolicy> | null {
+/** Configured total sends for key-auth OpenAI adapters and explicitly opted-in ChatGPT subscriptions. */
+export function transientRetryPolicyFor(provider: OcxProviderConfig): Required<TransientRetryPolicy> | null {
   const policy = provider.transientRetryOn5xx;
-  if (!policy || policy.enabled === false) return null;
-  // Both adapters this policy governs. The first version covered chat only, which left a
-  // key-auth Responses provider unable to tune its ladder in either direction, because the
-  // Responses passthrough lane hard-coded TRANSIENT_RETRY_MAX_ATTEMPTS (#4893). Widening this
-  // gate is necessary and not sufficient: the lane also has to call this function, which it
-  // now does. Still an explicit list, so no generic key-auth adapter opts in by accident, and
-  // the auth check below keeps the ChatGPT forward pool out -- those providers are
-  // `authMode: "forward"` and keep the default ladder they have always had.
-  if (provider.adapter !== "openai-chat" && provider.adapter !== "openai-responses") return null;
-  if (provider.authMode !== undefined && provider.authMode !== "key") return null;
+  if (!policy || policy.enabled === false) {
+    return null;
+  }
+  // Keep the adapter allowlist aligned with the lanes that consume this policy.
+  // Responses passthrough and native compact read it alongside Chat Completions (#4893).
+  if (provider.adapter !== "openai-chat" && provider.adapter !== "openai-responses") {
+    return null;
+  }
+  // Like retryOn429, auth fails closed: explicit key or the documented omitted key default.
+  // The only exception is canonical ChatGPT forward auth with an explicit total. An empty
+  // block must not activate the hold or change the historical Pool allowance.
+  if (provider.authMode !== undefined && provider.authMode !== "key"
+    && (policy.attempts === undefined || !isCanonicalOpenAiForwardProvider(provider))) {
+    return null;
+  }
   return {
     enabled: policy.enabled ?? DEFAULT_TRANSIENT_RETRY.enabled,
     attempts: policy.attempts ?? DEFAULT_TRANSIENT_RETRY.attempts,

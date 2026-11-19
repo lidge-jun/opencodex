@@ -61,7 +61,12 @@ export interface WorkBuddyOAuthMetadata {
   refreshExpiresAt?: number;
 }
 
+/** Private web-session authority for the account-specific M365 chat model picker. */
+export interface M365CopilotWebSession { cookie: string; accountId: string }
+
 export type OAuthCredentials = {
+  /** Kept only in the protected credential store and private catalog auth captures. */
+  m365?: M365CopilotWebSession;
   /** Account-scoped WorkBuddy identity, kept inside the protected credential store. */
   workbuddy?: WorkBuddyOAuthMetadata;
   refresh: string;
@@ -106,6 +111,8 @@ export interface ProviderAccount {
   /** Operator exclusion from generic OAuth account selection until explicitly resumed. */
   paused?: boolean;
   pauseDetails?: import("../types/account-auto-pause").AccountPauseDetails;
+  /** What convicted an automatic pause; a sibling of `pauseDetails`, never present without it. */
+  pauseEvidence?: import("../types/account-auto-pause").AccountPauseEvidence;
   pauseRevision?: string;
   /** Anthropic-only usage-switch override; absent inherits its pool default, zero disables it. */
   autoSwitchThresholdOverride?: number;

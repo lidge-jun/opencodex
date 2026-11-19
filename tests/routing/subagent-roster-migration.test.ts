@@ -12,13 +12,16 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 // Moved from config.test.ts, which sits at its file-size cap.
 let testDir = "";
 
+const inheritedConfigHome = process.env.OPENCODEX_HOME;
+
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-subagent-roster-"));
   process.env.OPENCODEX_HOME = testDir;
 });
 
 afterEach(() => {
-  delete process.env.OPENCODEX_HOME;
+  if (inheritedConfigHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = inheritedConfigHome;
   if (testDir && existsSync(testDir)) removeTreeWithRetry(testDir);
   testDir = "";
 });

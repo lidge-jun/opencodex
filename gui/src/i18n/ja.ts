@@ -2,6 +2,7 @@ import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
+import { gatewayClientsCopy } from "./gateway-clients-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -136,6 +137,7 @@ export const ja: Record<TKey, string> = {
   ...shellV2Copy("ja"),
   ...codexCliUpdateCopy("ja"),
   ...remoteLinkDiagnosticsCopy("ja"),
+  ...gatewayClientsCopy("ja"),
   ...modelsV2Copy("ja"),
   ...accountsV2Copy("ja"),
   ...subagentsV2Copy("ja"),
@@ -766,11 +768,13 @@ export const ja: Record<TKey, string> = {
   "dash.updateCurrent": "最新です",
   "dash.updateCommand": "コマンド",
   "dash.updateSource": "これはソースチェックアウトです。表示されたコマンドでターミナルから更新してください。",
+  "dash.updateManaged": "更新は自動で行われます。ホストの定期更新処理がこのリリースディレクトリを管理するため、ここでの操作は不要です。",
   "dash.updateUnavailable": "npm から最新バージョンを読み取れませんでした。後でもう一度お試しください。",
   "dash.updateRetry": "再試行",
   "dash.updateRecheck": "再確認",
   "dash.updateCannotAuto": "ワンクリック更新は利用できません({reason})。",
   "dash.updateReason.source_checkout": "ソースチェックアウト",
+  "dash.updateReason.managed_release": "管理対象のリリースディレクトリ",
   "dash.updateReason.latest_unavailable": "npm レジストリに到達できません",
   "dash.updateReason.already_latest": "最新です",
   "dash.updateReason.externally_managed": "mise によって外部管理されています。表示されたコマンドを実行してください",
@@ -1940,6 +1944,8 @@ export const ja: Record<TKey, string> = {
   "pws.xaiChatOptIn": "Grok 4.5 と 4.6 で Chat Completions を使用",
   "pws.xaiChatOptInDesc": "オフにすると Responses を使用します。OAuth Responses リクエストの既定値です。他の Grok モデルと tier 動作は変わりません。",
   "pws.xaiChatOptInMixed": "片方のモデルのみ Chat を使用しています。",
+  "pws.subscriptionRetries": "出力前に同じモデルで再試行する回数",
+  "pws.subscriptionRetriesDefault": "既定（メインアカウントの再試行なし）",
   "pws.cursorTransport": "Cursor トランスポート",
   "pws.cursorTransportHttp2": "HTTP/2（デフォルト）",
   "pws.cursorTransportHttp1": "HTTP/1.1（プロキシ互換）",

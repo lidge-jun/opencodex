@@ -134,6 +134,7 @@ import type {
 } from "../convergence-types";
 import type { CapturedProviderGather, CatalogGatherProviderAuthOutcome, CatalogGatherProviderModelOutcome, ModelsAuthResolution, ModelsAuthResolver } from "./gather-capture";
 import { workBuddyCatalogIdentity } from "../../providers/workbuddy";
+import { fetchM365CopilotCatalog } from "./m365-copilot-models";
 import { QUIET_AUTHORITATIVE_CATALOG_PROVIDERS, applyConfigHintsToCachedModels, applyProviderConfigHints, boundedOwnedBy, catalogHintsFromModelsApiItem, catalogHintsFromProviderConfig, withVisionSidecarInput } from "./model-hints";
 import { mergeConfiguredModelsIntoLiveCatalog, shouldExposeProviderModel, warnDroppedConfiguredIdsOnce } from "./model-visibility";
 import { captureModelsRequest, captureProviderGather, materializeCapturedHeaders } from "./gather-capture";
@@ -182,6 +183,7 @@ export function observedModelsAuthResolver(
         oauthAccountId: observation.snapshot.accountId,
         oauthGeneration: observation.snapshot.generation,
         ...(observation.snapshot.workbuddy ? { workbuddy: observation.snapshot.workbuddy } : {}),
+        ...(observation.snapshot.m365 ? { m365: observation.snapshot.m365 } : {}),
         ...(observation.snapshot.providerUserId ? { oauthProviderUserId: observation.snapshot.providerUserId } : {}),
         ...(observation.snapshot.apiBaseUrl ? { oauthApiBaseUrl: observation.snapshot.apiBaseUrl } : {}),
         ...(observation.snapshot.projectId ? { oauthProjectId: observation.snapshot.projectId } : {}),
@@ -304,6 +306,7 @@ export async function fetchProviderModelsWithAuth(
           oauthAccountId: snapshot.accountId,
           oauthGeneration: snapshot.generation,
           ...(snapshot.workbuddy ? { workbuddy: snapshot.workbuddy } : {}),
+          ...(snapshot.m365 ? { m365: snapshot.m365 } : {}),
           ...(snapshot.providerUserId ? { oauthProviderUserId: snapshot.providerUserId } : {}),
           ...(snapshot.apiBaseUrl ? { oauthApiBaseUrl: snapshot.apiBaseUrl } : {}),
           ...(snapshot.projectId ? { oauthProjectId: snapshot.projectId } : {}),
@@ -317,6 +320,10 @@ export async function fetchProviderModelsWithAuth(
       }
     : resolveAuth.resolve(name, prov));
   const apiKey = auth.apiKey;
+  if (prov.adapter === "m365-copilot") {
+    const result = await fetchM365CopilotCatalog(captured, auth, ttlMs, contextCap, isCurrentCacheGeneration);
+    return observed(result.models, result.state);
+  }
   // A passive gather's Vertex credential (always an API key) arrives already bound to its authority.
   vertexAuth ??= auth.vertexAuth;
   const vertexSendGuard = vertexDeadline !== undefined && prov.authMode !== "oauth";

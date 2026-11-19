@@ -2,6 +2,7 @@ import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
+import { gatewayClientsCopy } from "./gateway-clients-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -138,6 +139,7 @@ export const vi: Record<TKey, string> = {
   ...shellV2Copy("vi"),
   ...codexCliUpdateCopy("vi"),
   ...remoteLinkDiagnosticsCopy("vi"),
+  ...gatewayClientsCopy("vi"),
   ...modelsV2Copy("vi"),
   ...accountsV2Copy("vi"),
   ...subagentsV2Copy("vi"),
@@ -768,11 +770,13 @@ export const vi: Record<TKey, string> = {
   "dash.updateCurrent": "Đã cập nhật mới nhất",
   "dash.updateCommand": "Lệnh",
   "dash.updateSource": "Đây là bản checkout nguồn (source checkout). Hãy cập nhật nó từ terminal bằng lệnh hiển thị.",
+  "dash.updateManaged": "Bản cập nhật được cài đặt tự động. Tác vụ cập nhật theo lịch trên máy chủ quản lý thư mục phát hành này. Bạn không cần thao tác tại đây.",
   "dash.updateUnavailable": "Không thể đọc phiên bản mới nhất từ npm. Hãy thử lại sau.",
   "dash.updateRetry": "Thử lại",
   "dash.updateRecheck": "Kiểm tra lại",
   "dash.updateCannotAuto": "Tính năng cập nhật bằng một cú nhấp chuột không khả dụng ({reason}).",
   "dash.updateReason.source_checkout": "checkout mã nguồn",
+  "dash.updateReason.managed_release": "thư mục phát hành được quản lý",
   "dash.updateReason.latest_unavailable": "không thể kết nối với registry npm",
   "dash.updateReason.already_latest": "đã ở phiên bản mới nhất",
   "dash.updateReason.externally_managed": "được mise quản lý bên ngoài; hãy chạy lệnh được hiển thị",
@@ -2043,6 +2047,8 @@ export const vi: Record<TKey, string> = {
   "pws.xaiChatOptIn": "Sử dụng Chat Completions cho Grok 4.5 và 4.6",
   "pws.xaiChatOptInDesc": "Tắt để chọn Responses. Các yêu cầu OAuth Responses sử dụng tuỳ chọn này theo mặc định. Các model Grok khác và hành vi của gói không bị ảnh hưởng.",
   "pws.xaiChatOptInMixed": "Chỉ có một model sử dụng Chat.",
+  "pws.subscriptionRetries": "Số lần thử lại cùng mô hình trước khi có đầu ra",
+  "pws.subscriptionRetriesDefault": "Mặc định (tài khoản chính không thử lại)",
   "pws.cursorTransport": "Cursor transport",
   "pws.cursorTransportHttp2": "HTTP/2 (mặc định)",
   "pws.cursorTransportHttp1": "HTTP/1.1 (tương thích với proxy)",

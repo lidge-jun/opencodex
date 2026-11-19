@@ -679,6 +679,13 @@ export interface OcxConfig extends OcxLinkHomeConfig, CodexAccountLoginConfig {
   googleAntigravityStaticCatalogVersion?: 1 | 2;
   /** Claude Code inbound + launcher settings. */
   claudeCode?: OcxClaudeCodeConfig;
+  /** Opt-in weekly reserve for explicitly marked caller-forward Claude subscription turns. */
+  subscriptionReserve?: {
+    enabled?: boolean;
+    soft?: number;
+    hard?: number;
+    targets?: string[];
+  };
   /**
    * Which public inference APIs this proxy serves. Read only through
    * `resolveApiSurfaceSettings` in `src/protocols/settings.ts`, which fails closed on a

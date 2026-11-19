@@ -2,6 +2,7 @@ import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
+import { gatewayClientsCopy } from "./gateway-clients-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -134,6 +135,7 @@ export const zhTW: Record<TKey, string> = {
   ...shellV2Copy("zh-TW"),
   ...codexCliUpdateCopy("zh-TW"),
   ...remoteLinkDiagnosticsCopy("zh-TW"),
+  ...gatewayClientsCopy("zh-TW"),
   ...modelsV2Copy("zh-TW"),
   ...accountsV2Copy("zh-TW"),
   ...subagentsV2Copy("zh-TW"),
@@ -637,11 +639,13 @@ export const zhTW: Record<TKey, string> = {
   "dash.updateCurrent": "已是最新",
   "dash.updateCommand": "命令",
   "dash.updateSource": "當前是原始碼檢出。請在終端執行顯示的命令進行更新。",
+  "dash.updateManaged": "更新為自動進行。此版本目錄由主機的排程更新器管理，這裡不需要任何操作。",
   "dash.updateUnavailable": "無法從 npm 讀取最新版本。請稍後重試。",
   "dash.updateRetry": "重試",
   "dash.updateRecheck": "重新檢查",
   "dash.updateCannotAuto": "無法一鍵更新（{reason}）。",
   "dash.updateReason.source_checkout": "原始碼檢出",
+  "dash.updateReason.managed_release": "受管版本目錄",
   "dash.updateReason.latest_unavailable": "無法連線 npm 登入檔",
   "dash.updateReason.already_latest": "已是最新版本",
   "dash.updateReason.externally_managed": "由 mise 外部管理；請執行顯示的命令",
@@ -1728,6 +1732,8 @@ export const zhTW: Record<TKey, string> = {
   "pws.xaiChatOptIn": "讓 Grok 4.5 與 4.6 使用 Chat Completions",
   "pws.xaiChatOptInDesc": "關閉時使用 Responses，即 OAuth Responses 請求的預設協定。其他 Grok 模型與服務層級行為不變。",
   "pws.xaiChatOptInMixed": "只有一個模型使用 Chat。",
+  "pws.subscriptionRetries": "輸出前使用相同模型重試的次數",
+  "pws.subscriptionRetriesDefault": "預設（主帳號不重試）",
   "pws.cursorTransport": "Cursor 傳輸協定",
   "pws.cursorTransportHttp2": "HTTP/2（預設）",
   "pws.cursorTransportHttp1": "HTTP/1.1（代理相容）",

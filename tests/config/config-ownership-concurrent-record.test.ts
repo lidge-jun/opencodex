@@ -633,11 +633,12 @@ describe("rerunning ocx uninstall through its cleanup flow (#8093)", () => {
         disconnect: async () => undefined,
         withLifecycle: work => withClientLifecycle(work, { lockPath }),
         cleanupIntegrations: async () => ({ attempted: 0, changed: 0 }),
+        gatewayContext: () => ({ home: dirname(dir), platform: process.platform, env: {}, stateDir: dir }),
         remove: () => removeOwnedConfigState(dir),
         aclReapPending: () => false,
         // Picker cleanup takes the config mutation lock, which records its database.
         removePickerArtifacts: async () => { withConfigMutationLockSync(() => undefined, dir); return { ok: true }; },
-      } as never,
+      },
     );
     expect(result).toEqual({ status: "removed", residualPaths: [] });
     expect(existsSync(dir)).toBe(false);
@@ -714,6 +715,7 @@ describe("rerun after the owner marker was already deleted (#8093)", () => {
         disconnect: async () => undefined,
         withLifecycle: work => withClientLifecycle(work, { lockPath }),
         cleanupIntegrations: async () => ({ attempted: 0, changed: 0 }),
+        gatewayContext: () => ({ home: dirname(dir), platform: process.platform, env: {}, stateDir: dir }),
         remove: () => removeOwnedConfigState(dir),
         aclReapPending: () => false,
         // Picker cleanup takes the config mutation lock, which recreates its listed database.
@@ -722,7 +724,7 @@ describe("rerun after the owner marker was already deleted (#8093)", () => {
           expect(existsSync(join(dir, "config-mutation.sqlite"))).toBe(true);
           return { ok: true };
         },
-      } as never,
+      },
     );
     expect(result).toEqual({ status: "removed", residualPaths: [] });
     expect(existsSync(dir)).toBe(false);

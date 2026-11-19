@@ -2,6 +2,7 @@ import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
+import { gatewayClientsCopy } from "./gateway-clients-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -138,6 +139,7 @@ export const pt: Record<TKey, string> = {
   ...shellV2Copy("pt"),
   ...codexCliUpdateCopy("pt"),
   ...remoteLinkDiagnosticsCopy("pt"),
+  ...gatewayClientsCopy("pt"),
   ...modelsV2Copy("pt"),
   ...accountsV2Copy("pt"),
   ...subagentsV2Copy("pt"),
@@ -782,11 +784,13 @@ export const pt: Record<TKey, string> = {
   "dash.updateCurrent": "Atualizado",
   "dash.updateCommand": "Comando",
   "dash.updateSource": "Esta é uma cópia do código-fonte. Atualize-a pelo terminal com o comando exibido.",
+  "dash.updateManaged": "As atualizações são automáticas. A tarefa de atualização agendada no host gerencia este diretório de versão. Nenhuma ação é necessária aqui.",
   "dash.updateUnavailable": "Não foi possível ler a versão mais recente no npm. Tente novamente mais tarde.",
   "dash.updateRetry": "Tentar novamente",
   "dash.updateRecheck": "Verificar de novo",
   "dash.updateCannotAuto": "A atualização com um clique não está disponível ({reason}).",
   "dash.updateReason.source_checkout": "cópia do código-fonte",
+  "dash.updateReason.managed_release": "diretório de versão gerenciado",
   "dash.updateReason.latest_unavailable": "registro do npm inacessível",
   "dash.updateReason.already_latest": "já está na versão mais recente",
   "dash.updateReason.externally_managed": "gerenciado externamente pelo mise; execute o comando exibido",
@@ -2057,6 +2061,8 @@ export const pt: Record<TKey, string> = {
   "pws.xaiChatOptIn": "Usar Chat Completions para Grok 4.5 e 4.6",
   "pws.xaiChatOptInDesc": "Desativado seleciona Responses. Requisições OAuth Responses o usam por padrão. Os demais modelos Grok e o comportamento por plano permanecem inalterados.",
   "pws.xaiChatOptInMixed": "Apenas um modelo usa Chat.",
+  "pws.subscriptionRetries": "Repetições com o mesmo modelo antes da saída",
+  "pws.subscriptionRetriesDefault": "Padrão (sem novas tentativas na conta principal)",
   "pws.cursorTransport": "Transporte do Cursor",
   "pws.cursorTransportHttp2": "HTTP/2 (padrão)",
   "pws.cursorTransportHttp1": "HTTP/1.1 (compatibilidade com proxy)",

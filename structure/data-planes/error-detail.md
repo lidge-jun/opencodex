@@ -279,8 +279,9 @@ mentions are excluded per sentence in the unwrapped provider message, so they ca
 overflow in another sentence. A throttle worded only as "too many tokens" is not a verdict, while an
 explicit "prompt is too long" remains a verdict when no throughput signal is present.
 Body inspection time does not count toward the upstream slow-attempt budget, and empty chunks cannot
-starve the deadline or cancellation. The retry and cancellation
-contracts are exercised in `tests/lib/upstream-retry.test.ts`.
+starve the deadline or cancellation. `tests/lib/upstream-retry.test.ts` covers retry and cancellation.
+Before a spend-guarded retry, paced responses release their body lease by retaining bounded raw bytes via an optional caller-supplied reader.
+The retained body carries read failures for the receiver's usual error policy, and retry accounting keeps the upstream status.
 `InvalidSendBudgetError` displays only a finite non-negative number or `invalid`.
 `UpstreamRetryEvidenceError` uses fixed retry-evidence wording and retains the original rejection
 only as `Error.cause`. Chat request-read failures keep typed local size/encoding messages; other

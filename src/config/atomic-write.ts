@@ -222,7 +222,7 @@ function carryHardenAcrossContentWrite(path: string): void {
  * worse than reporting it. The throw that matters is the temp's own `fsync`, which runs before
  * the rename and stops it.
  */
-function syncParentDirectory(target: string): void {
+export function syncParentDirectory(target: string): void {
   if (process.platform === "win32") return;
   let descriptor: number | undefined;
   try {
