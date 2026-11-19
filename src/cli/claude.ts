@@ -464,7 +464,7 @@ export async function fetchClaudeCodeState(config: OcxConfig, port: number, time
     const headers = new Headers();
     const token = configuredAdminToken();
     if (token) headers.set("x-opencodex-api-key", token);
-    const res = await fetch(`${localManagementOrigin(config, port)}/api/claude-code`, {
+    const res = await fetch(`${localManagementOrigin(config, port)}/api/claude-code?view=launch`, {
       headers,
       signal: AbortSignal.timeout(timeoutMs),
     });

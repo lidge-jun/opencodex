@@ -1034,7 +1034,7 @@ describe("ocx claude management discovery destination", () => {
       hub: { managementIngress: { enabled: true, port: 10102 } },
       unauthenticatedLoopbackListener: { enabled: true, port: 10104 },
     } as Partial<OcxConfig>));
-    expect(seen.url).toBe("http://127.0.0.1:10102/api/claude-code");
+    expect(seen.url).toBe("http://127.0.0.1:10102/api/claude-code?view=launch");
     // The listener's port must NOT be used: it serves no /api/* at all.
     expect(seen.url).not.toContain("10104");
     expect(seen.header).toBe(FAKE_ADMIN_TOKEN);
@@ -1046,7 +1046,7 @@ describe("ocx claude management discovery destination", () => {
       runtimeRole: "hub",
       unauthenticatedLoopbackListener: { enabled: true },
     } as Partial<OcxConfig>));
-    expect(seen.url).toBe("http://100.76.170.81:10100/api/claude-code");
+    expect(seen.url).toBe("http://100.76.170.81:10100/api/claude-code?view=launch");
     expect(seen.header).toBe(FAKE_ADMIN_TOKEN);
   });
 
@@ -1054,8 +1054,8 @@ describe("ocx claude management discovery destination", () => {
     for (const hostname of [undefined, "127.0.0.1", "localhost", "0.0.0.0"]) {
       const seen = await captureDiscovery(cfg(hostname === undefined ? {} : { hostname }));
       const expected = hostname === "localhost"
-        ? "http://localhost:10100/api/claude-code"
-        : "http://127.0.0.1:10100/api/claude-code";
+        ? "http://localhost:10100/api/claude-code?view=launch"
+        : "http://127.0.0.1:10100/api/claude-code?view=launch";
       expect({ hostname, url: seen.url }).toEqual({ hostname, url: expected });
     }
   });

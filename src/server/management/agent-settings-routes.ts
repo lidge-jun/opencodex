@@ -1575,6 +1575,13 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       nativeContextLimits(config),
       nativeClaudePassthroughFor(config.claudeCode, resolvedAuthMode.markerMode),
     );
+    const launchState = {
+      enabled: config.claudeCode?.enabled !== false,
+      forceAvailable: [...visibleNativeSlugs(config), ...filterCatalogVisibleModels(models, config).map(catalogModelSlug)],
+      contextWindows,
+    };
+    // The launcher probes its own CLI. Only the dashboard snapshot needs the daemon's version.
+    if (url.searchParams.get("view") === "launch") return jsonResponse(launchState);
     const claudeCodeVersion = await probeClaudeCodeVersionForTierFill(config.claudeCode, contextWindows);
     const webSearchOverride = config.claudeCode?.webSearchSidecar;
     const visionOverride = config.claudeCode?.visionSidecar;
@@ -1592,7 +1599,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     const eligible = claudeInterceptEnabled(config);
     const sharedProxy = readFirstPartyProxyStatus(config, bound?.proxyPort ?? null);
     return jsonResponse({
-      enabled: config.claudeCode?.enabled !== false,
+      ...launchState,
       cliFirstParty: config.claudeCode?.cliFirstParty === true,
       cliFirstPartyApplied: config.claudeCode?.cliFirstParty === true && sharedProxy === "live",
       desktopFirstParty: desired.desktop,
@@ -1640,8 +1647,6 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
         ? { visionSidecar: { enabled: visionOverride.enabled, backend: visionOverride.backend, model: visionOverride.model, ...(visionOverride.anthropicInstance ? { anthropicInstance: visionOverride.anthropicInstance } : {}) } }
         : {}),
       fastMode: config.fastMode,
-      forceAvailable: [...visibleNativeSlugs(config), ...filterCatalogVisibleModels(models, config).map(catalogModelSlug)],
-      contextWindows,
       effectiveModelEnv: effectiveModelEnv(config.claudeCode, contextWindows, undefined, claudeCodeVersion),
       available,
       aliases,
