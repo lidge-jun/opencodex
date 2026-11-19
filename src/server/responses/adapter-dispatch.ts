@@ -21,8 +21,8 @@ import { ambiguousResendAllowanceFor, selfContainedResponsesBody } from "./reset
 import { transientSendCapFor, type ResponsesSendBudget } from "./request-send-budget";
 import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 import { isLocalUpstream } from "../../lib/local-upstream";
-import { resolveConnectTimeoutMs, resolveStallTimeoutMs } from "../../stall-timeout";
-import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
+import { providerConnectTimeoutMs, providerStallTimeoutSec, resolveConnectTimeoutMs, resolveStallTimeoutMs } from "../../stall-timeout";
+import { responsesTimeoutProvider, type ResponsesRequestContext, type ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
 import type { ResponsesEffects } from "./response-effects";
@@ -263,12 +263,12 @@ export async function prepareAdapterExchange(
         ?? formatErrorResponse(502, "upstream_error", "GitHub Copilot Auto negotiation failed.");
     }
   };
-  // Where this exchange dials. Local upstreams (loopback / private / `.local` / `.lan`) are
-  // operator-trusted and often CPU-bound, so an unset stall budget resolves to disabled for them.
+  // Trusted local upstreams default to no stall timeout.
   const localUpstream = isLocalUpstream(route.provider.baseUrl);
   // Header arrival and body silence are separate clocks (structure/transports/timeouts.md).
-  const connectMs = resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream });
-  const sendConnectMs = () => route.provider.authMode === "forward" ? resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(route.provider.baseUrl) }) : 0;
+  const connectTimeoutMs = () => providerConnectTimeoutMs(config, responsesTimeoutProvider(options, route.provider));
+  const connectMs = resolveConnectTimeoutMs(connectTimeoutMs(), { localUpstream });
+  const sendConnectMs = () => route.provider.authMode === "forward" ? resolveConnectTimeoutMs(connectTimeoutMs(), { localUpstream: isLocalUpstream(route.provider.baseUrl) }) : 0;
   transportState.activeAdapter = transportState.adapter;
   const antigravityPoolActivated = route.providerName === "google-antigravity"
     && isGenericOAuthFailoverEnabled(config, route.providerName);
@@ -1977,8 +1977,8 @@ export async function prepareAdapterExchange(
   return {
     upstream,
     cleanupUpstreamAbort,
-    get connectMs() { return resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: this.localUpstream }); },
-    get stallTimeoutMs() { return resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream: this.localUpstream }); },
+    get connectMs() { return resolveConnectTimeoutMs(connectTimeoutMs(), { localUpstream: this.localUpstream }); },
+    get stallTimeoutMs() { return resolveStallTimeoutMs(providerStallTimeoutSec(config, responsesTimeoutProvider(options, route.provider)), { localUpstream: this.localUpstream }); },
     get localUpstream() { return isLocalUpstream(transportState.sameTargetRequest?.url ?? route.provider.baseUrl); },
     upstreamResponse,
     thinkingSignatureRecovery,

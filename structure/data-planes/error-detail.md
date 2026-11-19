@@ -305,7 +305,8 @@ decisions; upstream attempt codes are separate. Account auto-pause identity sele
 for an upstream refusal after a persisted pause decision; it does not make that response's text local.
 Native local validation and admission sites retain their own messages by call-site provenance.
 Synthetic incomplete events carry producer provenance: the direct adapter driver marks its watchdog
-and EOF terminal objects by identity. The Zed adapter marks only its generated EOF event. The
+and EOF terminal objects by identity. The watchdog resets on parsed adapter events. The Zed
+adapter marks only its generated EOF event. The
 Responses bridge and native terminal repair register their generated reasons in a request-scoped
 WeakMap, shared with the returned stream and the request context through owned wrappers and combo
 commitment. Sidecar loops carry that same context. The Chat converter accepts synthetic reasons only

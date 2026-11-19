@@ -18,7 +18,7 @@ import { anthropicApiKeyForRequest, resolveAnthropicMessagesUrl } from "../../ad
 import { hostedAdvisorCredentials, stripHostedAdvisorBeta } from "../../adapters/anthropic/advisor-tool";
 import { bindAnthropicRefusalCredentialForSend } from "../../oauth/anthropic-account-refusal";
 import { captureAnthropicPhysicalSendOwnership, anthropicPhysicalSendOwnershipIsCurrent, type AnthropicPhysicalSendOwnership } from "../../oauth/anthropic-send-ownership";
-import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
+import { responsesTimeoutProvider, type ResponsesRequestContext, type ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { OAuthAccessSnapshot } from "../../oauth";
 import {
@@ -95,7 +95,7 @@ import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../../provide
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
 import { applyReasoningDisplayPolicy } from "./core-normalize";
 import { codexWsExecutorBinding, fetchWithHeaderTimeout, physicalSendGuardInit, physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
-import { resolveConnectTimeoutMs } from "../../stall-timeout";
+import { providerConnectTimeoutMs, resolveConnectTimeoutMs } from "../../stall-timeout";
 import { isLocalUpstream } from "../../lib/local-upstream";
 import { deepSeekImageFileBody, needsDeepSeekImageFiles } from "./deepseek-image-files";
 import type { ProviderFetchOptions } from "./fetch-helpers";
@@ -1098,8 +1098,9 @@ export async function prepareResponsesTransport(
                   }) : {}) },
               { providerName: route.providerName, provider: route.provider },
             )) as typeof globalThis.fetch;
+            const connectTimeoutMs = providerConnectTimeoutMs(config, owner === "passthrough" ? undefined : responsesTimeoutProvider(options, route.provider));
             response = await fetchWithHeaderTimeout(target, dispatchInit, dispatchInit.signal ?? options.abortSignal ?? req.signal,
-              resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(target) }), requestParsed.stream, physicalFetch);
+              resolveConnectTimeoutMs(connectTimeoutMs, { localUpstream: isLocalUpstream(target) }), requestParsed.stream, physicalFetch);
           } catch (error) {
             if (pinned || !advisorRefusal || error !== advisorRefusal || !hostedAdvisor || advisorRebuilt) throw error;
             const signal = dispatchInit.signal ?? options.abortSignal ?? req.signal;
