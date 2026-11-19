@@ -1245,8 +1245,13 @@ ocx disconnect antigravity             # or: ocx disconnect agy
 Use `--model` only with `ocx connect antigravity` to set the desktop app's default model.
 
 Connect records what it replaced. Disconnect puts the original bytes back when the file is unchanged, and
-otherwise reverts only OpenCodex's own entries and keeps your other edits. The marked `agy` block in a
-shell profile is removed whole, including any edit made inside it. An `agy` profile symlink must resolve
+otherwise reverts only OpenCodex's own entries and keeps your other edits. Antigravity can restore
+settings after JSON keys are reordered and keeps the file and restore record when a managed setting conflicts.
+To resolve an Antigravity conflict, put the managed setting back to the value OpenCodex applied and
+retry. If OpenCodex reports `agy-profile-restore-required`, open the shell profile named in the error.
+Restore the complete `agy` block from a copy, including both marker lines and the function between
+them, then retry disconnect or uninstall. OpenCodex removes the whole block and keeps edits outside
+it. You can also restore the saved original profile, which replaces any later edits. An `agy` profile symlink must resolve
 to another supported profile for the same shell family under your home. Antigravity settings must resolve
 to the exact `~/.antigravity/settings.json` path. Restart Antigravity, or open a new terminal for `agy`,
 to apply a change. During disconnect, `agy` skips profiles without a restore record if they cannot be

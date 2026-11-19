@@ -316,7 +316,33 @@ the full filtered window. A valid unchanged prefix returns only appended rows; `
 the client window after edits, eviction, query changes or restart. Invalid cursors return HTTP 400 with
 `error.code: "invalid_cursor"`. Authentication is unchanged. The dashboard falls back to full snapshots
 for older servers. This reduces response bytes for stable windows; server projection remains bounded
-by the current window size.
+by the current window size. Logs and request-history responses omit `usage.providerCredits` on
+requests and attempts with an invalid or incomplete credit reading. A measured zero is returned as `0`.
+
+A successful `/api/logs` (and request-history) `displayMetrics.cost.estimate` may carry an optional
+`billing` object naming how the row was charged, so a client never has to infer an allocation the
+proxy does not have:
+
+- `{ "source": "provider-credits", "providerCredits": <number>, "creditPriceUsd": <number> }` — the
+  total is `providerCredits x creditPriceUsd` and the four token component fields are placeholders,
+  not a split. Every attempt that shares one credit price reports this; an explicit zero credit
+  reading reports zero. Missing credits with no output leave the cost unavailable.
+- `{ "source": "mixed" }` — the attempts were not all billed the same way (a credit attempt beside a
+  token-priced one, or two credit prices), so only the per-attempt estimates have a split; the
+  parent total is still their sum.
+
+Absent `billing` on an available estimate indicates token pricing. A previously recorded row
+with a retained valid reading can get credit pricing at the current configured rate, regardless
+of when it was logged. Positive-output rows without a reading can fall back to tokens. Clients
+can show the token component breakdown when `billing` is absent. For a credit-priced estimate,
+`tokens` is `null` if the token breakdown could not be normalized.
+
+A missing credit reading with zero output, or a count or price that cannot yield a representable
+credit estimate, gives `{ "kind": "unavailable", "reason": "credit_cost_unrepresentable" }`.
+A Combo with an eligible attempt in that state reports the same reason on the parent. Otherwise,
+a Combo with an unpriced attempt reports `combo_attempt_unavailable` on the parent. A token-priced
+row or attempt whose token count exceeds the pricing bound reports `invalid_usage`. See
+[Kiro request credits](/guides/kiro-request-credits/#bounds-and-unrepresentable-values).
 
 Successful `/api/logs` `displayMetrics.decodeTokPerSecond` values carry
 `timingBasis: "generation-window" | "legacy-post-visible-output"` alongside `kind`, `value`

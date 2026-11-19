@@ -390,13 +390,9 @@ Para el diagnóstico de compatibilidad de cuenta-interruptor, habilitar la depur
 
 <a id="kiro-request-credits"></a>
 
-### Créditos de solicitud Kiro
+### Créditos por solicitud de Kiro
 
-En los giros habilitados para herramientas, opencodex mantiene el texto ordinario de Kiro hasta que se valide la finalización. Si Kiro termina con texto sin formato en lugar de su herramienta privada de respuesta final, todavía se ejecuta un reintento limitado y solo se muestra la respuesta final resultante. El progreso que acompaña a una llamada de herramienta real sigue siendo visible. Una respuesta final privada normal no necesita reintento de finalización.
-
-Si el filtro de seguridad de Kiro detiene un turno (`CONTENT_FILTERED`, por ejemplo el clasificador `BIO` de Claude), la solicitud termina con un rechazo que los clientes no reintentan. Los clientes Claude reciben `stop_reason: "refusal"` y Codex recibe una respuesta fallida con la categoría y explicación de Kiro. Si el filtro detiene el único reintento acotado, no se muestra una respuesta final: el progreso retenido del primer intento y el texto parcial del reintento aparecen como comentarios antes del rechazo.
-
-Cuando Kiro emite la medición de crédito, los registros de solicitudes conservan el gasto reportado como `usage.providerCredits`, incluso en el libro mayor de uso persistente. Estos son Kiro créditos; los recuentos de tokens aún pueden estimarse y el valor del crédito no reemplaza las estimaciones de costos de USD. Las solicitudes de reserva de finalización agregan sus créditos reportados. Un valor ausente significa que Kiro no reportó el uso del crédito; un cero explícito significa que no reportó ningún gasto.
+La guía [Créditos por solicitud de Kiro](/es/guides/kiro-request-credits/) describe la validación de respuestas, los rechazos del filtro de seguridad, el registro de créditos y su valoración en USD.
 
 <a id="kiro-refresh-attention"></a>
 

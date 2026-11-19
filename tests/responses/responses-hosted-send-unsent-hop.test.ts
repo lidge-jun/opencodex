@@ -4,6 +4,8 @@ import { createAdapterPhysicalSend } from "../../src/adapters/physical-send";
 import { getActiveTurnCount } from "../../src/server/lifecycle";
 import * as transport from "../../src/server/responses/request-transport";
 import { sealedCredentialRefusals } from "../../src/server/request-log-attempt-recovery";
+import { aggregateAttemptUsage } from "../../src/server/request-log-attempt-usage";
+import { estimateRequestCost } from "../../src/usage/cost";
 import * as oauth from "../../src/oauth/generic-account-failover";
 import { providerRequestPacingStatus, resetProviderRequestPacingForTest } from "../../src/providers/request-pacing";
 import { hostedSendFixture } from "../helpers/hosted-send-fixture";
@@ -253,38 +255,82 @@ test("direct hosted search preserves one refusal and refunds a locally denied re
   });
 }));
 
-test("failed hosted OAuth sibling preparation retains metered hidden usage", async () => hostedSendFixture("search", "failover", async f => {
-  let sends = 0;
-  // Use the shared usage bridge without the key transport's independent wire accounting.
-  f.config.providers.a!.authMode = "forward";
-  expectedSearchCalls = 1;
-  const fetch = async (input: RequestInfo | URL) => {
-    if (String(input) === "https://api.exa.ai/search") {
-      return Response.json({ results: [{ title: "Fixture", url: "https://example.invalid/", text: "Result" }] });
-    }
-    if (++sends > 1) return Response.json({ error: { message: "quota refusal" } }, { status: 429 });
-    const chunk = {
-      choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "search-1", type: "function",
-        function: { name: "web_search", arguments: '{"query":"fixture"}' } }] }, finish_reason: "tool_calls" }],
-      usage: { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 },
+test.each(["admitted", "build-denied", "selection-denied"] as const)(
+  "hosted search keeps credits incomplete after an unmetered refusal (%s)",
+  async mode => hostedSendFixture("search", "failover", async f => {
+    let sends = 0;
+    // Use the shared usage bridge without the key transport's independent wire accounting.
+    f.config.providers.a!.authMode = "forward";
+    expectedSearchCalls = 1;
+    const fetch = async (input: RequestInfo | URL) => {
+      if (String(input) === "https://api.exa.ai/search") {
+        return Response.json({ results: [{ title: "Fixture", url: "https://example.invalid/", text: "Result" }] });
+      }
+      if (++sends === 2) return Response.json({ error: { message: "quota refusal" } }, { status: 429 });
+      const delta = sends === 1
+        ? { tool_calls: [{ index: 0, id: "search-1", type: "function",
+          function: { name: "web_search", arguments: '{"query":"fixture"}' } }] }
+        : { content: "replacement answer" };
+      const chunk = {
+        choices: [{ index: 0, delta, finish_reason: sends === 1 ? "tool_calls" : "stop" }],
+        usage: { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 },
+      };
+      return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+        headers: { "content-type": "text/event-stream" },
+      });
     };
-    return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
-      headers: { "content-type": "text/event-stream" },
+    forbiddenNetwork.mockImplementation(Object.assign(fetch, { preconnect() {} }));
+    f.config.providers.a!.fetch = fetch as typeof globalThis.fetch;
+    delete f.config.providers.a!.transientRetryOn5xx;
+    const create = ADAPTER_REGISTRY["openai-chat"].create;
+    await withSyntheticRotation(async rotated => {
+      const adapter = spyOn(ADAPTER_REGISTRY["openai-chat"], "create").mockImplementation((...args) => {
+        const original = create(...args);
+        return {
+          ...original,
+          buildRequest(...params) {
+            if (mode === "build-denied" && rotated()) throw new Error("synthetic replacement build denial");
+            return original.buildRequest(...params);
+          },
+          async *parseStream(...params) {
+            for await (const event of original.parseStream(...params)) {
+              yield event.type === "done" && event.usage
+                ? { ...event, usage: { ...event.usage, providerCredits: sends === 1 ? 2 : 3 } }
+                : event;
+            }
+          },
+        };
+      });
+      try {
+        const req = f.request();
+        const body = await req.json() as Record<string, unknown>;
+        const response = await handleResponses(new Request(req.url, {
+          method: "POST", headers: req.headers, body: JSON.stringify({ ...body, model: "a/m" }),
+        }), f.config, f.log);
+        const stream = await response.text();
+        const admitted = mode === "admitted";
+        expect(stream.includes("replacement answer")).toBe(admitted);
+        expect(rotated()).toBe(true);
+        expect(sends).toBe(admitted ? 3 : 2);
+        const attempts = f.log.attempts ?? [];
+        expect(attempts.map(attempt => attempt.sendCount)).toEqual(admitted ? [2, 1] : [2]);
+        if (!admitted) expect(sealedCredentialRefusals.has(attempts[0]!)).toBe(true);
+        if (admitted) expect(attempts[1]?.usage).toMatchObject({ inputTokens: 12, outputTokens: 3, providerCredits: 3 });
+        const aggregate = aggregateAttemptUsage(attempts);
+        expect(estimateRequestCost({
+          provider: "a", model: "gpt-4o", usage: aggregate.usage, usageStatus: aggregate.status,
+        }, undefined, undefined, new Map([["a", 0.04]]))).toBeNull();
+        expect(attempts[0]).toMatchObject({
+          status: 429, usage: { inputTokens: 12, outputTokens: 3, providerCredits: -1 },
+        });
+        expect(aggregate.usage).toMatchObject({
+          inputTokens: admitted ? 24 : 12, outputTokens: admitted ? 6 : 3, providerCredits: -1,
+        });
+      } finally {
+        adapter.mockRestore();
+      }
+    }, () => {
+      if (mode === "selection-denied") throw new Error("synthetic sibling preparation failure");
     });
-  };
-  forbiddenNetwork.mockImplementation(Object.assign(fetch, { preconnect() {} }));
-  f.config.providers.a!.fetch = fetch as typeof globalThis.fetch;
-  delete f.config.providers.a!.transientRetryOn5xx;
-  await withSyntheticRotation(async rotated => {
-    const req = f.request();
-    const body = await req.json() as Record<string, unknown>;
-    const response = await handleResponses(new Request(req.url, {
-      method: "POST", headers: req.headers, body: JSON.stringify({ ...body, model: "a/m" }),
-    }), f.config, f.log);
-    await response.text();
-    expect(rotated()).toBe(true);
-    expect(sends).toBe(2);
-    expect(sealedCredentialRefusals.has(f.log.activeAttempt!)).toBe(true);
-    expect(f.log.attempts).toMatchObject([{ status: 429, sendCount: 2, usage: { inputTokens: 12, outputTokens: 3 } }]);
-  }, () => { throw new Error("synthetic sibling preparation failure"); });
-}));
+  }),
+);

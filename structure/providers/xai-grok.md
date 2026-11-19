@@ -127,6 +127,13 @@ Other destinations retain their existing item-id behavior, including OpenAI `sto
 
 ## xAI Grok hardening (official Grok Build contract parity)
 
+`grokEffortFields` in `src/server/models-capabilities.ts` projects Grok Build reasoning fields
+for the raw `/v1/models` list. It preserves the supplied ladder and labels, selecting the
+configured default when present and otherwise medium, high, then the first tier. An empty ladder
+emits no Grok effort fields; native and routed rows use this same projection from
+`src/server/index/serve-options.ts`. `tests/providers/xai/grok-models-effort-list.test.ts`
+covers the HTTP discovery contract.
+
 Grok's Responses path shares `src/responses/apply-patch-envelope.ts` for freeform restoration.
 The declared `input` field remains authoritative; alternate-field and outer-fence recovery is
 limited to unambiguous bare or `default.`-prefixed `exec` and `apply_patch` calls and does not rewrite foreign grammars.

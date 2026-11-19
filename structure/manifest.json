@@ -1272,7 +1272,7 @@
       "path": "pricing.md",
       "tier": 5,
       "title": "Model Price Overrides",
-      "scope": "User price policies, prompt-length rate selection, persistence and estimate cache invalidation.",
+      "scope": "User price policies, prompt-length rate selection, credit-billing bounds and provenance, persistence and estimate cache invalidation.",
       "documents": [
         "src/config/live-reconcile.ts",
         "src/cli/models-runtime.ts",
@@ -1280,6 +1280,7 @@
         "src/config/schema/leaf-validators.ts",
         "src/server/management/model-routes.ts",
         "src/usage/cost.ts",
+        "src/usage/credit-billing.ts",
         "src/usage/user-cost-overlays.ts",
         "src/usage/user-cost-validation.ts",
         "gui/src/components/ModelPriceDialog.tsx"
@@ -1748,6 +1749,25 @@
         "gui/src/account-pause-display.ts",
         "src/oauth/account-resume-health.ts",
         "src/codex/account-resume-health.ts"
+      ]
+    },
+    {
+      "path": "transports/upload-reduction.md",
+      "tier": 3,
+      "title": "Optional Codex Upload Reduction",
+      "scope": "Opt-in lossy historical image/tool slimming and acknowledged native WS input-prefix deltas.",
+      "documents": [
+        "src/server/responses/history-slim.ts",
+        "src/server/responses/codex-ws-incremental.ts",
+        "src/server/responses/ws-upstream.ts",
+        "src/server/responses/codex-ws-exchange.ts",
+        "src/server/responses/codex-ws-pool.ts",
+        "src/server/responses/codex-ws-session.ts",
+        "src/server/responses/codex-ws-request.ts",
+        "src/server/responses/fetch-helpers.ts",
+        "src/config/",
+        "src/lib/state-store-registrations.ts",
+        "src/server/management/system-routes.ts"
       ]
     },
     {

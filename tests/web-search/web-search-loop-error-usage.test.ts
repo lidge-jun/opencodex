@@ -27,7 +27,10 @@ test("an errored iteration's usage reaches the request log beside the search pas
   const adapter: ProviderAdapter = {
     name: "errored-iteration",
     buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
-    fetchResponse: async () => new Response("wire"),
+    fetchResponse: async (_req, ctx) => {
+      ctx?.onPhysicalSend?.({ ordinal: 1 });
+      return new Response("wire");
+    },
     async *parseStream() { yield* passes.shift()!; },
   };
   const parsed: OcxParsedRequest = {
@@ -68,7 +71,10 @@ for (const [label, second] of [
     const adapter: ProviderAdapter = {
       name: "overflowing-iteration",
       buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
-      fetchResponse: async () => (sends++ === 0 ? new Response("wire") : second.response()),
+      fetchResponse: async (_req, ctx) => {
+        ctx?.onPhysicalSend?.({ ordinal: 1 });
+        return (sends++ === 0 ? new Response("wire") : second.response());
+      },
       async *parseStream() { yield* passes.shift()!; },
     };
     const parsed: OcxParsedRequest = {
@@ -102,7 +108,10 @@ function wordedFailureRun(respond: () => Response, sameTargetRetries = false) {
   const adapter: ProviderAdapter = {
     name: "worded-overflow",
     buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
-    fetchResponse: async () => (state.sends++ === 0 ? new Response("wire") : respond()),
+    fetchResponse: async (_req, ctx) => {
+      ctx?.onPhysicalSend?.({ ordinal: 1 });
+      return (state.sends++ === 0 ? new Response("wire") : respond());
+    },
     formatErrorBody: (_status, _headers, body) => body,
     async *parseStream() { yield* passes.shift()!; },
   };

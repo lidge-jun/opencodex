@@ -1,4 +1,5 @@
 import { contextTierRecordConfigError, modelCapabilitiesConfigError, mergeModelCapabilities } from "../../config/provider-validation";
+import { preserveOmittedLiveProviderFields } from "./provider-omitted-fields";
 import { DECLARABLE_HOSTED_TOOL_TYPES } from "../../responses/hosted-tool-policy";
 import { randomUUID } from "node:crypto";
 import { cleanupRemovedGcpCredentials, providerGcpCredentialMarkers, snapshotProviderGcpCredentialMarkers } from "../../providers/gcp-credential-cleanup";
@@ -1359,18 +1360,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       if (submittedModelContextTiers && liveTiers) candidate.modelContextTiers = Object.assign(Object.create(null), liveTiers, candidate.modelContextTiers ?? {});
       else if (!submittedModelContextTiers && liveTiers) candidate.modelContextTiers = { ...liveTiers };
       else if (!submittedModelContextTiers) delete candidate.modelContextTiers;
-      // Read omitted policy at publication time, after any concurrent operator edit.
-      if (!Object.hasOwn(rawProvider, "accountAutoPause")) {
-        const livePolicy = config.providers[name]?.accountAutoPause;
-        if (livePolicy === undefined) delete candidate.accountAutoPause;
-        else candidate.accountAutoPause = structuredClone(livePolicy);
-      }
-      // Full forms omit the opt-in; preserve the latest value, including a concurrent clear.
-      if (!Object.hasOwn(rawProvider, "inferContextWindow")) {
-        const liveInference = config.providers[name]?.inferContextWindow;
-        if (liveInference === undefined) delete candidate.inferContextWindow;
-        else candidate.inferContextWindow = liveInference;
-      }
+      preserveOmittedLiveProviderFields(candidate, rawProvider, config.providers[name]);
       const draft = { ...(registrationDraft ?? config), providers: { ...config.providers, [name]: candidate }, ...(body.setDefault === true ? { defaultProvider: name } : {}) };
       const validation = validateConfigCandidate(draft); if (!validation.ok) { validationError = validation.error; return; }
       try {

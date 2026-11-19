@@ -50,8 +50,9 @@ Disconnect reports one of three outcomes.
   and the directories OpenCodex created are removed when it did not exist.
 - **path-wise.** The user edited the file since. Only OpenCodex's own entries are reverted: `gateway`,
   `models.defaultModelId` and `models.list` in the app settings, the marked block in a profile. Every edit
-  outside those is kept, and a settings entry the user changed after connecting is left as the user set it.
-  A profile block is removed whole, so an edit made inside its markers is not kept.
+  outside those is kept. Antigravity compares JSON values structurally and refuses the restore if a
+  managed entry differs from both its applied and prior values. An agy block is removed between its
+  two standalone marker lines, including edits inside the block.
 - **none.** There is no record, or the file is already gone; nothing is changed.
 
 Reconnect keeps the first record while the client is connected. If the file was edited in between,
@@ -62,10 +63,17 @@ URL again and disconnect restores the original gateway block.
 Connect journals the replacement hash before editing the client file, so disconnect can recognise
 the original and pending states after an interrupted write. A profile is read as UTF-8 without NUL
 bytes or as BOM-prefixed UTF-16LE (used by Windows PowerShell 5.1 redirection). It is written back
-in the same encoding. During disconnect, an untracked profile that cannot be resolved or read is skipped.
-Recorded profiles are checked strictly. If a recorded profile cannot be decoded, disconnect refuses with
-`unsupported-file` and keeps the recovery record. A settings file with comments, trailing commas
-or a non-object root is refused with `unsupported-file` and left untouched.
+in the same encoding. Connect refuses incomplete or ambiguous agy markers before staging any profile
+updates. During disconnect, an untracked profile that cannot be resolved or read is skipped.
+If a recorded profile cannot be decoded, disconnect refuses with `unsupported-file` and keeps the
+recovery record. Incomplete or ambiguous markers in a recorded profile yield
+`agy-profile-restore-required`. When both markers are absent, connect and disconnect require its
+bytes to match the saved original or a journaled path-wise restore, or return the same refusal.
+The refusal names the home-relative profile and asks the user to restore the complete marked block
+or the saved original profile before retrying. The CLI and uninstall surface the same repair message.
+Disconnect records the expected hash before a path-wise write so a retry can verify profiles whose
+restore already finished.
+Antigravity uses the same refusal for a managed settings conflict or a settings file it cannot parse.
 
 `src/cli/uninstall-client-state.ts` disconnects every gateway client with a restore record before
 removing config. The production dependency set supplies the current user and config directory.
@@ -90,8 +98,9 @@ credential. An override set only in the Antigravity process is invisible to Open
 `src/server/management-api.ts` does not name it. Every note and override in a status carries a stable
 `code` beside its English `text` or `detail` (`GATEWAY_NOTE_TEXT` in `types.ts` is the one English
 source); the CLI prints the English, the dashboard tab translates the code, and an action's outcome is
-rendered from `code`, `changed` and `restore` rather than from `message`. A refusal is HTTP 409 with `{ok, code, message}`, an
-unknown id is 404. The routes sit behind the ordinary management auth and origin checks, and a sibling
+rendered from `code`, `changed` and `restore`. A refusal is HTTP 409 with `{ok, code, message}`. The
+agy profile repair refusal also includes a display-only `profilePath` for the translated guidance.
+An unknown id is 404. The routes sit behind the ordinary management auth and origin checks, and a sibling
 instance refuses the mutations. `ocx connect|disconnect antigravity|agy` and
 `ocx connect antigravity|agy status` in `src/cli/gateway-client-command.ts` call those routes through the
 running proxy and run the same connectors in-process when the proxy is not running. The dispatch branch sits

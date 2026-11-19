@@ -111,6 +111,35 @@ test("the wait ends at its limit and keeps the original failure", async () => {
   expect(delays).toEqual([1_000, 1_000, 500]);
 });
 
+for (const retry of [fetchWithResetRetry, fetchWithTransientRetry]) {
+  for (const exhaustedAt of ["send", "wait", "admission"] as const) {
+    test(`${retry.name}: offline resend keeps the original error when allowance ends at ${exhaustedAt}`, async () => {
+      const original = offline();
+      let remaining = 2;
+      let sends = 0;
+      let waits = 0;
+      let claims = 0;
+      await expect(retry(async () => {
+        sends++;
+        if (exhaustedAt === "send") remaining = 0;
+        throw original;
+      }, {
+        attempts: 2,
+        remainingSends: () => remaining,
+        onSendsConsumed: Object.assign(() => {}, { beforeSend: () => ++claims === 1 }),
+        offlineWait: async () => {
+          waits++;
+          if (exhaustedAt === "wait") remaining = 0;
+          return true;
+        },
+      })).rejects.toBe(original);
+      expect(sends).toBe(1);
+      expect(waits).toBe(exhaustedAt === "send" ? 0 : 1);
+      expect(claims).toBe(exhaustedAt === "admission" ? 2 : 1);
+    });
+  }
+}
+
 test("only one resend per request: a second offline failure is returned", async () => {
   probes(0);
   let sends = 0;

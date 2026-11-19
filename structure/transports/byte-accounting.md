@@ -97,6 +97,9 @@ returns a Buffer view of the coded output, without an explicit full-input UTF-8 
 Zstd still encodes a UTF-8 input buffer that briefly overlaps its coded output for that send.
 Neither codec retains these bytes beyond the send. Admission limits and every byte observation
 still measure the uncompressed body; native codec workspace is not a counted JavaScript copy.
+Optional [history slimming](upload-reduction.md#historical-image-and-tool-context) can shorten a
+native Responses create before this encoding step. Native `/responses/compact` is encoded from
+the complete context.
 
 ## Raised HTTP body admission
 
@@ -494,6 +497,25 @@ Native steering retains fixed phase deadlines and reconciled replay output; see 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
 
 ## Durable spill admission
+
+`src/responses/state/spill-codec.ts` encodes compressible 128 KiB–16 MiB spill payloads
+in self-contained JSON envelopes `{ "ocxSpillCodec": "zstd/1", "decodedBytes", "data" }`
+(zstd/base64). The marker is a dedicated key, never `version`: the payload owns `version`
+(`RESPONSE_SPILL_VERSION` in `src/responses/spill-store.ts`), so a plain record of any future
+payload version is never read as an envelope. The full envelope must save at least 12.5% over
+the original JSON; other payloads stay plain version-1 JSON.
+References, digests, prospective reservations and disk totals measure the physical
+envelope. The reader accepts both formats and enforces the decoded-record ceiling
+before bounded decompression, then validates the original response ID and payload.
+The resident-memory cap remains based on decoded content. Records have no parent-file
+dependencies, and existing files are not rewritten. Rolling back the writer must keep
+the envelope reader until these records expire. Downgrade: an older binary without the
+reader fails such a record as `spill_corrupt`, so a continuation that needed it answers
+`previous_response_not_found` and the client must resend its full history once; plain
+records stay readable both ways.
+`tests/responses/responses-spill-compression.test.ts` covers size savings, bounded
+decoding, legacy records, a payload carrying its own `version`, snapshot reload and
+thread-isolated replay.
 
 `enforceSpilledResponseBudget` in `src/responses/state.ts` owns the durable spill ceiling
 described in [Codex home](../codex-home.md). A queued publication, and the shutdown fallback, call it

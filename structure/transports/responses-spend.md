@@ -223,7 +223,7 @@ physical-dispatch receipt; when it is active the shared physical-send reporter k
 a send is never charged by both. Other callers keep early settlement only when enforcement is inactive;
 enforced permits stay refundable until execution.
 For a Codex WebSocket request, the receipt runs before the frame is sent and at most once across
-the WS attempt and its HTTP fallback. If WS send then fails and HTTP refuses before dispatch, that
+the WS attempt and its HTTP fallback. See [cache-miss spend admission](upload-reduction.md#cache-miss-spend-admission) for incremental resends. If WS send then fails and HTTP refuses before dispatch, that
 accepted booking remains charged even though no physical send occurred.
 The existing `refundableAdapterDispatchBudget` view stays available to direct Antigravity search;
 its legacy already-settled-hop replacement still requires a fresh admitted reservation.

@@ -66,6 +66,31 @@ describe("gateway client management routes", () => {
     expect(readFileSync(settings(), "utf8")).toBe('{\n  // note\n}\n');
   });
 
+  test("agy restore refusal returns the redacted profile and repair guidance", async () => {
+    const profile = join(gateway.home, ".bashrc");
+    const original = "# user profile\n";
+    writeFileSync(profile, original);
+    expect((await call("POST", "/api/gateway-clients/agy/connect", {})).status).toBe(200);
+    const edited = original + "export USER_EDIT=1\n";
+    writeFileSync(profile, edited);
+    const record = join(gateway.stateDir, "gateway-clients", "agy.json");
+    const saved = readFileSync(record, "utf8");
+
+    const refused = await call("POST", "/api/gateway-clients/agy/disconnect");
+    expect(refused).toEqual({
+      status: 409,
+      json: {
+        ok: false,
+        code: "agy-profile-restore-required",
+        profilePath: "~/.bashrc",
+        message: expect.stringContaining("Restore the complete marked agy block or the saved original profile, then retry."),
+      },
+    });
+    expect(JSON.stringify(refused.json)).not.toContain(gateway.home);
+    expect(readFileSync(profile, "utf8")).toBe(edited);
+    expect(readFileSync(record, "utf8")).toBe(saved);
+  });
+
   test("status stays available without parsing oversized client files", async () => {
     mkdirSync(join(gateway.home, ".antigravity"));
     const text = '{"models":{"defaultModelId":"too-large"}}';

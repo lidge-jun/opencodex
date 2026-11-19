@@ -53,7 +53,7 @@ account. A caller passing `replaySafe: true` permits up to 3 total attempts with
 backoff, warn-logged. A request-cap refusal at the guarded executor retains its 429 classification
 even if the previous connection attempt reset. A separate `retryOnReset` operator grant can authorize an ambiguous
 replacement within the existing send budget. Without either permission, the rejection becomes the terminal refusal described in
-[ambiguous connection-reset replay boundary](#ambiguous-connection-reset-replay-boundary).
+[ambiguous connection-reset replay boundary](#ambiguous-connection-reset-replay-boundary). Transient and nested reset retries intersect local attempts with the reporter's live shared allowance, including deferred reports and exact prepaid ownership. Incremental recovery uses one helper-local slot and one shared permit. A later retry must fit within both remaining allowances.
 Reusable request bytes were never the test: a string body makes a send mechanically
 repeatable, not idempotent, and a model POST is not idempotent. Timeouts, aborts,
 `ECONNREFUSED`, HTTP error statuses, and mid-stream SSE failures are never retried at all, except the opt-in [offline wait](timeouts.md#offline-wait-and-resend) for pre-connect failures.

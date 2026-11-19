@@ -25,7 +25,7 @@ export interface GatewayClientStatus {
 
 /**
  * `reached` is false when the request never produced a readable answer from the proxy. A refusal
- * carries `code` (and `message` for an I/O error, whose text is the operating system's);
+ * carries a `code`, with a home-relative `profilePath` for agy restore refusals;
  * a success carries what was done: `changed` and, for a disconnect, `restore`.
  */
 export interface GatewayClientActionOutcome {
@@ -33,6 +33,7 @@ export interface GatewayClientActionOutcome {
   ok: boolean;
   code: string | null;
   message: string | null;
+  profilePath: string | null;
   changed: boolean;
   restore: "exact" | "path-wise" | "none" | null;
 }
@@ -65,16 +66,17 @@ export async function runGatewayClientAction(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(model ? { model } : {}),
     });
-    const body = await response.json() as { ok?: unknown; code?: unknown; message?: unknown; changed?: unknown; restore?: unknown };
+    const body = await response.json() as { ok?: unknown; code?: unknown; message?: unknown; profilePath?: unknown; changed?: unknown; restore?: unknown };
     return {
       reached: true,
       ok: response.ok && body.ok === true,
       code: typeof body.code === "string" ? body.code : null,
       message: typeof body.message === "string" && body.message ? body.message : null,
+      profilePath: typeof body.profilePath === "string" && body.profilePath.startsWith("~/") ? body.profilePath : null,
       changed: body.changed === true,
       restore: typeof body.restore === "string" && RESTORES.has(body.restore) ? body.restore as GatewayClientActionOutcome["restore"] : null,
     };
   } catch {
-    return { reached: false, ok: false, code: null, message: null, changed: false, restore: null };
+    return { reached: false, ok: false, code: null, message: null, profilePath: null, changed: false, restore: null };
   }
 }

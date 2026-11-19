@@ -1,4 +1,5 @@
 import { assistantReplayContent } from "../../responses/assistant-replay";
+import { sumCreditReadings } from "../../usage/credit-billing";
 import type {
   AdapterEvent,
   OcxAssistantMessage,
@@ -187,9 +188,12 @@ export function isTerminalGuardPassthroughOnly(event: AdapterEvent): boolean {
 }
 
 /** Merge two reported usages (canonical Responses convention). Shared with the advisor guard. */
-export function mergeUsage(first: OcxUsage | undefined, second: OcxUsage | undefined): OcxUsage | undefined {
-  if (!first) return second;
-  if (!second) return first;
+export function mergeUsage(first: OcxUsage | undefined, second: OcxUsage | undefined, firstIsAttempt = false): OcxUsage | undefined {
+  if (!first || !second) {
+    const usage = first ?? second;
+    const providerCredits = firstIsAttempt ? sumCreditReadings([first?.providerCredits, second?.providerCredits]) : usage?.providerCredits;
+    return usage && { ...usage, ...(providerCredits !== undefined ? { providerCredits } : {}) };
+  }
   const sumOptional = (key: keyof OcxUsage): number | undefined => {
     const left = first[key];
     const right = second[key];
@@ -202,7 +206,7 @@ export function mergeUsage(first: OcxUsage | undefined, second: OcxUsage | undef
   const cacheCreationInputTokens = sumOptional("cacheCreationInputTokens");
   const cacheCreation1hInputTokens = sumOptional("cacheCreation1hInputTokens");
   const reasoningOutputTokens = sumOptional("reasoningOutputTokens");
-  const providerCredits = sumOptional("providerCredits");
+  const providerCredits = sumCreditReadings([first.providerCredits, second.providerCredits]);
   const inputTokens = first.inputTokens + second.inputTokens;
   const outputTokens = first.outputTokens + second.outputTokens;
   return {
@@ -259,7 +263,7 @@ export async function* guardTerminalEventStream(options: GuardedEventStreamOptio
           : { decision: "pass" as const };
         const normalStop = event.stopReason !== "max_tokens" && event.stopReason !== "content_filter";
         if (normalStop && analysis.decision === "continue" && continuations < maxContinuations) {
-          accumulatedUsage = mergeUsage(accumulatedUsage, event.usage);
+          accumulatedUsage = mergeUsage(accumulatedUsage, event.usage, continuations > 0);
           continuations += 1;
           parsed = buildContinuationRequest(parsed, seen);
           seen.length = 0;
@@ -277,13 +281,13 @@ export async function* guardTerminalEventStream(options: GuardedEventStreamOptio
           }
           break;
         }
-        const usage = mergeUsage(accumulatedUsage, event.usage);
+        const usage = mergeUsage(accumulatedUsage, event.usage, continuations > 0);
         yield usage ? { ...event, usage } : event;
         return;
       }
       if (event.type === "incomplete" || event.type === "error") {
         terminalSeen = true;
-        const usage = mergeUsage(accumulatedUsage, event.usage);
+        const usage = mergeUsage(accumulatedUsage, event.usage, continuations > 0);
         yield usage ? { ...event, usage } : event;
         return;
       }

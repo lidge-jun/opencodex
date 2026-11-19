@@ -1,6 +1,6 @@
 # Streaming Health And WebSocket
 
-Management provider-validation calls use the [initialization-independent relative send-path validation](../config.md#provider-relative-send-paths) before persistence.
+Optional upload reduction follows [its contract](upload-reduction.md). Management provider-validation calls use the [initialization-independent relative send-path validation](../config.md#provider-relative-send-paths) before persistence.
 
 Native and translated delivery now have separate owners in the
 [core module ownership](responses.md#core-module-ownership). This surface retains its existing behavior.
