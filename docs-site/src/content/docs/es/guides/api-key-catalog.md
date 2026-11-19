@@ -540,8 +540,8 @@ Introduce la clave directamente o como referencia `${AIMLAPI_API_KEY}`. El preaj
 y conserva los prefijos de proveedor de los modelos, como `openai/gpt-5.6-terra` (el predeterminado).
 La detección de modelos filtra el catálogo público de `GET /v1/models` para incluir las entradas de
 Chat Completions. El catálogo público no permite validar las claves de API.
-Las solicitudes al destino del preajuste incluyen las cabeceras de atribución `X-AIMLAPI-Source` y
-Estas cabeceras se eliminan si el preajuste se configura con otro origen.
+Las solicitudes al destino del preajuste incluyen la cabecera de atribución `X-AIMLAPI-Source`.
+Esa cabecera se elimina si el preajuste se configura con otro origen.
 
 **cheapaimodel** es una pasarela de pago por token para modelos abiertos DeepSeek, GLM y Kimi, y Grok, operada por LINKOVA PTE. LTD. Crea una [clave API](https://console.cheapaimodel.ai/keys) con saldo prepago USD y elige el preajuste en init/dashboard u `ocx provider add cheapaimodel`, con clave o `${CHEAPAIMODEL_API_KEY}`. Usa `https://api.cheapaimodel.ai/v1` y [Chat Completions](https://cheapaimodel.ai/docs/api/create-chat-completion) para todos los clientes, no sus rutas Responses/Messages. Descubre por [`GET /v1/models`](https://cheapaimodel.ai/docs/api/list-models), que devuelve 401 sin clave válida. Incluye `deepseek-v4-1-flash`, predeterminado, `glm-5.3`, `glm-5.3-flash`, `kimi-k3` y `grok-4.7`. GLM 5.3 es solo texto; sus imágenes van al sidecar. Kimi K3 usa muestreo propio y no recibe `temperature` ni `top_p`. Se aplican sus [términos](https://cheapaimodel.ai/terms) y [privacidad](https://cheapaimodel.ai/privacy).
 
