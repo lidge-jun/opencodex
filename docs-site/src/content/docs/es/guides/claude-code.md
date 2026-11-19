@@ -24,6 +24,24 @@ Los alias de enrutamiento seleccionados se emparejan con etiquetas `ANTHROPIC_DE
 
 Solo se aplican los ID de nivel explícitamente seleccionados. Un nivel no establecido deja intacto su ID de modelo existente y su etiqueta de visualización. Reemplazar un alias con un ID de origen u otro no alias también elimina su etiqueta generada coincidente. La vista previa muestra la eliminación de etiquetas como un reemplazo vacío; las etiquetas personalizadas y las configuraciones no relacionadas permanecen intactas. Los archivos que faltan son compatibles, pero los archivos vacíos o corruptos existentes son rechazados. Los cambios desde la vista previa requieren una nueva vista previa. Aplique brevemente mueve el documento actual a un directorio privado `model-default-backups/apply-*/settings.json` bajo el directorio de configuración Claude, valida el documento capturado y luego publica exclusivamente. Nunca reemplaza el nuevo archivo de un escritor concurrente, incluso durante la reversión. Evite editar o iniciar Claude mientras aplica: otro lector puede ver el breve intervalo de archivo faltante. El sistema de archivos debe admitir movimientos del mismo volumen y enlaces duros; las operaciones no compatibles fallan sin sobrescribirlas. Después de una aplicación interrumpida o una restauración automática fallida, inspeccione esta ubicación de copia de seguridad y reconcilie las ediciones más recientes antes de restaurar. El comportamiento del sistema de archivos Windows / Linux debe verificarse por separado; una prueba local no es una prueba multiplataforma. Verifique el proveedor/modelo resuelto en los registros de solicitudes: la selección de un nivel no es prueba del modelo real servido. Esto es especialmente útil para los clasificadores externos que solicitan Sonnet.
 
+<a id="weekly-subscription-reserve"></a>
+
+## Reserva semanal de la suscripción
+
+Para reservar cuota semanal de Claude para el trabajo interactivo, activa
+[`subscriptionReserve`](/es/reference/configuration/#claude-subscription-reserve) y configura un
+destino enrutado. Añade `x-ocx-priority: background` en tu cliente o script a cada solicitud
+`/v1/messages` que quieras desviar cuando la utilización sea alta. Las solicitudes sin esa marca se
+consideran interactivas, incluidas las de Haiku, las de subagentes y las breves sin herramientas.
+
+El proxy obtiene la utilización semanal de las respuestas de paso directo de la misma credencial
+de suscripción y del mismo servidor de origen. Solo desvía solicitudes que usarían ese paso directo.
+Las solicitudes con hilos de mensajes conservan su conexión con el servidor de origen.
+Las observaciones caducan a los 30 minutos o al reiniciarse la ventana semanal, lo que ocurra primero,
+y se borran al reiniciar el proxy. Las solicitudes que ya usan credenciales administradas por el proxy
+siguen su enrutamiento habitual. El proveedor alternativo recibe las solicitudes marcadas que se
+desvían y aplica sus condiciones habituales de enrutamiento y facturación.
+
 <a id="claude-oauth-account-pool-experimental"></a>
 
 ## Claude Grupo de cuentas OAuth (experimental)

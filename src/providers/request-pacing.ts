@@ -1,7 +1,9 @@
 import type { OcxProviderConfig, RequestPacingRule } from "../types";
 import { createHash } from "node:crypto";
 import type { GenerationContext } from "../lib/state-store-sweeper";
-import { carryReplayRefusal, isNonReplayableResponse, markResponseNonReplayable } from "../lib/upstream-retry";
+import { carryReplayRefusal, isNonReplayableResponse, markResponseNonReplayable, registerPacedRetryResponse } from "../lib/upstream-retry";
+import { clearableDeadline } from "../lib/abort";
+import { BOUNDED_BODY_MAX_BYTES, BOUNDED_BODY_TIMEOUT_MS, readBoundedResponseBytes } from "../lib/bounded-body";
 import { redactSecretString } from "../lib/redact";
 import { errorDestinationText, providerErrorDestinationLabel } from "../lib/error-destination";
 
@@ -507,6 +509,17 @@ export async function waitForProviderRequestSlot(
   });
 }
 
+async function readPacedRetryErrorBytes(response: Response, signal?: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
+  const deadline = clearableDeadline(BOUNDED_BODY_TIMEOUT_MS, signal);
+  try {
+    const result = await readBoundedResponseBytes(response, { signal: deadline.signal, maxBytes: BOUNDED_BODY_MAX_BYTES });
+    if (result.oversized) throw new DOMException("Response body size limit reached", "QuotaExceededError");
+    return result.bytes;
+  } finally {
+    deadline.clear();
+  }
+}
+
 /**
  * Tie a pacing slot lease to an upstream response body: the lease is released when the
  * body completes, errors, or is cancelled by the consumer. A null body (204/304/HEAD)
@@ -641,11 +654,28 @@ export function trackProviderRequestSlotBody(
   }
   // Retry helpers mark the response they return from, and recovery decisions key on these
   // identity markers; the rewrap must not make a non-replayable response look replayable.
-  if (isNonReplayableResponse(response)) markResponseNonReplayable(wrapped);
-  for (const markers of responseProvenance) {
-    if (markers.has(response)) markers.set(wrapped, markers.get(response));
-  }
-  return carryReplayRefusal(response, wrapped);
+  const carryMarkers = (source: Response, target: Response): Response => {
+    if (isNonReplayableResponse(source)) markResponseNonReplayable(target);
+    for (const markers of responseProvenance) {
+      if (markers.has(source)) markers.set(target, markers.get(source));
+    }
+    return carryReplayRefusal(source, target);
+  };
+  registerPacedRetryResponse(wrapped, async (signal, readBody = readPacedRetryErrorBytes) => {
+    let body: BodyInit;
+    try {
+      body = await readBody(wrapped, signal);
+    } catch (error) {
+      // The receiver applies its normal read-failure policy if the retry cannot send.
+      // Keep the upstream status and markers available to the recovery and accounting paths.
+      body = new ReadableStream<Uint8Array>({ start: controller => controller.error(error) });
+    }
+    const headers = new Headers(wrapped.headers);
+    headers.delete("content-length");
+    headers.delete("content-encoding");
+    return carryMarkers(wrapped, new Response(body, { status: wrapped.status, statusText: wrapped.statusText, headers }));
+  });
+  return carryMarkers(response, wrapped);
 }
 
 /**

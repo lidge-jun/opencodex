@@ -44,6 +44,7 @@ export interface WorkspaceProvider {
   /** Whether the proxy fetches the provider's live model catalog (default true). */
   liveModels?: boolean;
   /** Optional upstream HTTP version pin. Cursor defaults to HTTP/2 when omitted. */
+  transientRetryOn5xx?: { enabled?: boolean; attempts?: number };
   upstreamHttpVersion?: "auto" | "http1.1" | "h1" | "http2" | "h2";
   authMode?: "key" | "forward" | "oauth" | "local" | string;
   googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
