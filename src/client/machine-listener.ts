@@ -99,6 +99,8 @@ export interface MachineListenerDeps {
     attestationSecret: string;
     /** ISO start time of this runtime's process. */
     startedAt: string;
+    /** The owning runtime preserves explicit Link stop fences across restart rollback. */
+    linkStopFence?: true;
     request: () => Promise<ClientRestartAdmission>;
   };
   serve?: (options: Parameters<typeof Bun.serve>[0]) => Server<unknown>;
@@ -224,6 +226,7 @@ export function startMachineListener(
         const response = Response.json({
           service: "opencodex", version: VERSION, role: "client", uptime: process.uptime(), pid: process.pid, port: server.port,
           ...(restart ? { startedAt: restart.startedAt, restartCapability: SYSTEM_RESTART_CAPABILITY_VERSION, restartBudgetMs: CLIENT_RESTART_BUDGET_MS } : {}),
+          ...(restart?.linkStopFence ? { linkStopFence: true } : {}),
         });
         const challenge = restart ? req.headers.get(LOCAL_ATTESTATION_CHALLENGE_HEADER) : null;
         const proof = challenge && server.port
