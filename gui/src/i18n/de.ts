@@ -4380,7 +4380,7 @@ export const de: Record<TKey, string> = {
   "quotaSummary.remainingLimit": "Verbleibend / Limit",
   "quotaSummary.openAccounts": "Kontoverwaltung öffnen",
   "quotaLive.title": "Kontingente live aktualisieren",
-  "quotaLive.hint": "Liest regelmäßig die Kontingente neu, die der Proxy bereits kennt; Anbieter werden nicht häufiger abgefragt.",
+  "quotaLive.hint": "Liest regelmäßig die im Proxy zwischengespeicherten Kontingente neu. Ein Anbieter wird erst nach Ablauf dieses Caches erneut abgefragt, nicht bei jeder Aktualisierung.",
   "quotaLive.interval": "Alle",
   "quotaLive.intervalAria": "Intervall der Live-Kontingentaktualisierung in Sekunden ({min}–{max})",
   "quotaLive.intervalInc": "Intervall verlängern",

@@ -2,17 +2,19 @@
  * Whether this browser re-reads quota data on a timer ("Live quota updates"), and how often.
  *
  * Not to be confused with the Codex pool's `codexQuotaAutoRefresh`, a server setting that
- * activates quota windows upstream. This one never reaches the server: a live update is a plain
- * re-read of what the proxy already holds (its TTL cache plus what live response headers
- * report), never `refresh=1`, so it cannot make the proxy ask a provider more often.
+ * activates quota windows upstream. This one is never stored on the server: a live update is a
+ * plain re-read of what the proxy already holds (its TTL cache plus what live response headers
+ * report), never `refresh=1`. The interval therefore does not set how often a provider is asked:
+ * the proxy probes a credential again only once its cache entry has expired, so an open tab costs
+ * at most one probe per credential per cache window, however short the interval.
  *
- * That promise is why only the per-account reads tick (`/api/oauth/accounts?…&quota=1` and
+ * That bound is why only the per-account reads tick (`/api/oauth/accounts?…&quota=1` and
  * `/api/providers/keys?…&quota=1`, both served from per-credential TTL caches that also cache
  * failures). The summary strip's `/api/provider-quotas` and the Codex pool's
  * `/api/codex-auth/accounts` keep their fixed cadence: in some states a plain read of either
- * still reaches upstream — the provider report cache key moves with live Codex pool usage, and a
- * pool account answering 401/403 is neither cached nor backed off — so a faster timer there
- * would mean more provider traffic.
+ * reaches upstream without such a bound — the provider report cache key moves with live Codex
+ * pool usage, and a pool account answering 401/403 is neither cached nor backed off — so a
+ * faster timer there would mean provider traffic at the timer's rate.
  *
  * Client-side and remembered per browser, like the OAuth open-browser choice: how lively a
  * dashboard should be belongs to whoever is looking at it, not to the machine running the proxy.

@@ -4402,7 +4402,7 @@ export const ko: Record<TKey, string> = {
   "quotaSummary.remainingLimit": "남은 수 / 한도",
   "quotaSummary.openAccounts": "계정 관리 열기",
   "quotaLive.title": "할당량 실시간 업데이트",
-  "quotaLive.hint": "프록시가 이미 알고 있는 할당량을 주기적으로 다시 읽습니다. 프로바이더에 더 자주 조회하지 않습니다.",
+  "quotaLive.hint": "프록시에 캐시된 할당량을 주기적으로 다시 읽습니다. 프로바이더에는 캐시가 만료된 뒤에만 다시 조회하며, 업데이트마다 조회하지 않습니다.",
   "quotaLive.interval": "간격",
   "quotaLive.intervalAria": "할당량 실시간 업데이트 간격(초, {min}~{max})",
   "quotaLive.intervalInc": "간격 늘리기",

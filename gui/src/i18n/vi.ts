@@ -4372,7 +4372,7 @@ export const vi: Record<TKey, string> = {
   "quotaSummary.remainingLimit": "Còn lại / giới hạn",
   "quotaSummary.openAccounts": "Mở quản lý tài khoản",
   "quotaLive.title": "Cập nhật hạn mức trực tiếp",
-  "quotaLive.hint": "Định kỳ đọc lại hạn mức mà proxy đã biết; không truy vấn nhà cung cấp thường xuyên hơn.",
+  "quotaLive.hint": "Định kỳ đọc lại hạn mức mà proxy đã lưu đệm. Nhà cung cấp chỉ được truy vấn lại sau khi bộ đệm đó hết hạn, không phải ở mỗi lần cập nhật.",
   "quotaLive.interval": "Mỗi",
   "quotaLive.intervalAria": "Khoảng cập nhật hạn mức trực tiếp, tính bằng giây ({min}–{max})",
   "quotaLive.intervalInc": "Tăng khoảng cập nhật",

@@ -4414,7 +4414,7 @@ export const en = {
   "quotaSummary.remainingLimit": "Remaining / limit",
   "quotaSummary.openAccounts": "Open account management",
   "quotaLive.title": "Live quota updates",
-  "quotaLive.hint": "Re-reads the quota the proxy already knows on a timer; providers are not queried more often.",
+  "quotaLive.hint": "Re-reads the proxy's cached quota on a timer. A provider is asked again only after that cache expires, not on every update.",
   "quotaLive.interval": "Every",
   "quotaLive.intervalAria": "Live quota update interval in seconds ({min}–{max})",
   "quotaLive.intervalInc": "Increase interval",

@@ -1121,7 +1121,8 @@ export function useProviderAccountPools(deps: {
 
   /**
    * Live quota updates for the provider on screen: the plain `&quota=1` read, never `&refresh=1`,
-   * so the server answers from its TTL cache and the readings live response headers keep current.
+   * so the server answers from its TTL cache and the readings live response headers keep current,
+   * and probes a credential again only after that cache entry expires.
    * A tick waits out any read or mutation already in flight, sets no loading or pending state,
    * writes quota fields onto surviving rows only (membership and selection stay with their own
    * reads), and drops a failure, so a missed tick never replaces good bars with an error.

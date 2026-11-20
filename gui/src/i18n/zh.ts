@@ -4401,7 +4401,7 @@ export const zh: Record<TKey, string> = {
   "quotaSummary.remainingLimit": "剩余 / 限额",
   "quotaSummary.openAccounts": "打开账号管理",
   "quotaLive.title": "额度实时更新",
-  "quotaLive.hint": "定时重新读取代理已掌握的额度，不会更频繁地查询提供商。",
+  "quotaLive.hint": "定时重新读取代理缓存的额度。仅在缓存过期后才会再次查询提供商，而不是每次更新都查询。",
   "quotaLive.interval": "间隔",
   "quotaLive.intervalAria": "额度实时更新间隔（秒，{min}–{max}）",
   "quotaLive.intervalInc": "延长间隔",

@@ -4402,7 +4402,7 @@ export const ja: Record<TKey, string> = {
   "quotaSummary.remainingLimit": "残り / 上限",
   "quotaSummary.openAccounts": "アカウント管理を開く",
   "quotaLive.title": "クォータのライブ更新",
-  "quotaLive.hint": "プロキシが把握済みのクォータを定期的に読み直します。プロバイダーへの問い合わせは増えません。",
+  "quotaLive.hint": "プロキシにキャッシュされたクォータを定期的に読み直します。プロバイダーへの再問い合わせはキャッシュの期限切れ後のみで、更新のたびには行いません。",
   "quotaLive.interval": "間隔",
   "quotaLive.intervalAria": "クォータのライブ更新間隔（秒、{min}〜{max}）",
   "quotaLive.intervalInc": "間隔を長くする",

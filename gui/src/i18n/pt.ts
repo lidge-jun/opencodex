@@ -4375,7 +4375,7 @@ export const pt: Record<TKey, string> = {
   "quotaSummary.remainingLimit": "Restante / limite",
   "quotaSummary.openAccounts": "Abrir gerenciamento de contas",
   "quotaLive.title": "Atualização de cotas em tempo real",
-  "quotaLive.hint": "Relê periodicamente as cotas que o proxy já conhece; os provedores não são consultados com mais frequência.",
+  "quotaLive.hint": "Relê periodicamente as cotas em cache no proxy. Um provedor só é consultado de novo depois que esse cache expira, não a cada atualização.",
   "quotaLive.interval": "A cada",
   "quotaLive.intervalAria": "Intervalo da atualização de cotas em tempo real, em segundos ({min}–{max})",
   "quotaLive.intervalInc": "Aumentar intervalo",

@@ -4403,7 +4403,7 @@ export const tr: Record<TKey, string> = {
   "quotaSummary.remainingLimit": "Kalan / limit",
   "quotaSummary.openAccounts": "Hesap yönetimini aç",
   "quotaLive.title": "Canlı kota güncellemeleri",
-  "quotaLive.hint": "Proxy'nin zaten bildiği kotaları düzenli aralıklarla yeniden okur; sağlayıcılar daha sık sorgulanmaz.",
+  "quotaLive.hint": "Proxy'nin önbelleğindeki kotaları düzenli aralıklarla yeniden okur. Bir sağlayıcı her güncellemede değil, yalnızca bu önbelleğin süresi dolduktan sonra yeniden sorgulanır.",
   "quotaLive.interval": "Her",
   "quotaLive.intervalAria": "Canlı kota güncelleme aralığı, saniye cinsinden ({min}–{max})",
   "quotaLive.intervalInc": "Aralığı uzat",

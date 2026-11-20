@@ -60,7 +60,7 @@ async function press(key: string) {
 test("the row names itself, explains it adds no provider queries, and shows the defaults", () => {
   const text = win.document.body.textContent ?? "";
   expect(text).toContain("Live quota updates");
-  expect(text).toContain("providers are not queried more often");
+  expect(text).toContain("only after that cache expires");
   expect(toggle().getAttribute("aria-pressed")).toBe("true");
   expect(toggle().getAttribute("aria-label")).toBe("Live quota updates");
   expect(input().value).toBe("15");

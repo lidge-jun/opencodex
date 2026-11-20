@@ -4366,7 +4366,7 @@ export const zhTW: Record<TKey, string> = {
   "quotaSummary.remainingLimit": "剩餘 / 限額",
   "quotaSummary.openAccounts": "開啟帳號管理",
   "quotaLive.title": "額度即時更新",
-  "quotaLive.hint": "定時重新讀取代理已掌握的額度，不會更頻繁地查詢供應商。",
+  "quotaLive.hint": "定時重新讀取代理快取的額度。僅在快取過期後才會再次查詢供應商，而不是每次更新都查詢。",
   "quotaLive.interval": "間隔",
   "quotaLive.intervalAria": "額度即時更新間隔（秒，{min}–{max}）",
   "quotaLive.intervalInc": "延長間隔",

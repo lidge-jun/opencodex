@@ -4369,7 +4369,7 @@ export const fr: Record<TKey, string> = {
   "quotaSummary.remainingLimit": "Restant / limite",
   "quotaSummary.openAccounts": "Ouvrir la gestion des comptes",
   "quotaLive.title": "Mises à jour des quotas en direct",
-  "quotaLive.hint": "Relit à intervalle régulier les quotas que le proxy connaît déjà ; les fournisseurs ne sont pas interrogés plus souvent.",
+  "quotaLive.hint": "Relit à intervalle régulier les quotas mis en cache par le proxy. Un fournisseur n'est réinterrogé qu'après l'expiration de ce cache, pas à chaque mise à jour.",
   "quotaLive.interval": "Toutes les",
   "quotaLive.intervalAria": "Intervalle des mises à jour des quotas en direct, en secondes ({min}–{max})",
   "quotaLive.intervalInc": "Allonger l’intervalle",
