@@ -216,6 +216,7 @@ test("Delete and a switch never run together", async () => {
   // An open Delete dialog blocks the switches.
   await act(async () => { deleteButton().click(); });
   expect(actionDialogOpen(win.document as unknown as Document)).toBe(true);
+  expect(enabledSwitches()).toEqual([]);
   await act(async () => { switchFor("vendor/plain").click(); });
   expect(puts()).toHaveLength(1);
   await act(async () => { dismissActionDialog(win.document as unknown as Document); await Promise.resolve(); });

@@ -2638,7 +2638,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
             detailsLabel={t("errorBoundary.details")} reloadLabel={t("errorBoundary.reload")}>
             {/* Same rows, same visibility rule, same queue and switch gate as the catalog rows. */}
             <ModelsOverallPanel rows={groups.flatMap(group => group.rows)} failures={integrationFailures}
-              loading={catalogCold} error={catalogColdFailure} onRetry={() => catalogResource.refresh()}
+              loading={catalogCold} error={catalogColdFailure} stale={catalogState.showError} onRetry={() => catalogResource.refresh()}
               isOn={row => visibility.visible(row.provider, row.id, row.native === true, savedRowVisible(selectedModelMap, disabled, row))}
               switchDisabled={row => (busy && !visibility.pending) || row.initialSelectionPending === true}
               onToggle={(row, enable) => void applyVisibility("models", row.provider, [rowVisibilityTarget(row)], enable)} />

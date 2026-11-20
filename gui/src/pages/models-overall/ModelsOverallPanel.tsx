@@ -32,7 +32,7 @@ const FILTER_LABEL = { all: "modelsOverall.filter.all", on: "modelsOverall.filte
 /** Rows rendered before "Show more"; a 300-model router stays responsive. */
 const OVERALL_PAGE = 200;
 
-export function ModelsOverallPanel({ rows, isOn, switchDisabled, onToggle, failures, loading, error, onRetry }: {
+export function ModelsOverallPanel({ rows, isOn, switchDisabled, onToggle, failures, loading, error, stale, onRetry }: {
   rows: readonly ModelRow[];
   isOn: (row: ModelRow) => boolean;
   switchDisabled: (row: ModelRow) => boolean;
@@ -40,6 +40,8 @@ export function ModelsOverallPanel({ rows, isOn, switchDisabled, onToggle, failu
   failures: readonly ClientCatalogRefreshFailure[];
   loading: boolean;
   error: string | null;
+  /** A background refresh failed after a good load: the list shown may be out of date. */
+  stale: boolean;
   onRetry: () => void;
 }) {
   const t = useT();
@@ -50,7 +52,7 @@ export function ModelsOverallPanel({ rows, isOn, switchDisabled, onToggle, failu
   const searched = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return rows;
-    return rows.filter(row => [row.id, row.namespaced, row.provider, row.displayName ?? "", row.native ? modelLabel(row.id) : ""]
+    return rows.filter(row => [row.id, row.namespaced, row.provider, row.displayName ?? ""]
       .some(value => value.toLowerCase().includes(q)));
   }, [rows, query]);
   // State is read at render time, so a row switched under the On/Off filter leaves it at once.
@@ -69,6 +71,8 @@ export function ModelsOverallPanel({ rows, isOn, switchDisabled, onToggle, failu
 
   return (
     <div className="models-overall flex flex-col gap-4">
+      {/* Same notice the catalog tab shows: the last good list stays usable but is flagged. */}
+      {stale && <Notice tone="err">{t("models.loadFail")}</Notice>}
       <IntegrationRefreshWarning failures={failures} />
       <Frame
         title={t("modelsOverall.title")}

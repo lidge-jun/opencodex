@@ -23,6 +23,8 @@ let writes: Array<() => void>;
 let disabled: Set<string>;
 let selected: Record<string, string[]>;
 let integrationFailure: boolean;
+let modelsFail: boolean;
+let ticks: Array<() => void>;
 type Row = { provider: string; id: string; namespaced: string; native?: boolean; initialSelectionPending?: boolean };
 const catalog: Row[] = [
   { provider: "proxy", id: "alpha", namespaced: "proxy/alpha" },
@@ -46,9 +48,11 @@ beforeEach(() => {
     document: { configurable: true, value: win.document }, window: { configurable: true, value: win },
     navigator: { configurable: true, value: win.navigator }, localStorage: { configurable: true, value: win.localStorage },
     sessionStorage: { configurable: true, value: win.sessionStorage }, IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
-    setInterval: { configurable: true, value: () => 1 }, clearInterval: { configurable: true, value: () => {} },
+    // Poll ticks are recorded, never scheduled, so a case can run one on demand.
+    setInterval: { configurable: true, value: (tick: () => void) => { ticks.push(tick); return ticks.length; } },
+    clearInterval: { configurable: true, value: () => {} },
   });
-  puts = []; writes = []; disabled = new Set(["other/xray"]); selected = { other: ["xray"] };
+  puts = []; writes = []; disabled = new Set(["other/xray"]); selected = { other: ["xray"] }; ticks = []; modelsFail = false;
   extraRows = []; integrationFailure = false;
   win.localStorage.setItem("ocx-models-collapsed:v2", "[]");
   globalThis.fetch = (async (input, init) => {
@@ -66,7 +70,7 @@ beforeEach(() => {
         resolve(Response.json({ ok: true, clientIntegrations: integrationFailure ? [{ client: "opencode", ok: false, reason: "disk full" }] : [] }));
       }));
     }
-    if (path === "/api/models") return Response.json(rows());
+    if (path === "/api/models") return modelsFail ? Response.json({ error: "offline" }, { status: 503 }) : Response.json(rows());
     if (path === "/api/providers") return Response.json(providers);
     if (path === "/api/selected-models") return Response.json({ selected });
     if (path === "/api/provider-context-caps") return Response.json({ caps: {} });
@@ -193,5 +197,15 @@ test("rows still waiting on the first model selection cannot be switched", async
   await mount(); await settle(() => overallSwitches().length === 6);
   expect(overallSwitch("proxy/pending").disabled).toBe(true);
   expect(overallSwitch("proxy/alpha").disabled).toBe(false);
+});
+
+test("a failed background refresh is reported on the Overall tab instead of silently showing the last list", async () => {
+  await mount(); await settle(() => overallSwitches().length === 5);
+  expect(panel("overall").textContent).not.toContain("Failed to load models");
+  modelsFail = true;
+  await act(async () => { for (const tick of [...ticks]) tick(); });
+  await settle(() => panel("overall").textContent!.includes("Failed to load models"));
+  // The last good list stays usable; the notice says it may be out of date.
+  expect(overallSwitches()).toHaveLength(5);
 });
 

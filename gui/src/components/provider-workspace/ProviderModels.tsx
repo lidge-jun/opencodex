@@ -59,6 +59,8 @@ function ProviderModelInventory({ item, apiBase, availableModels, selectedModels
   const [ownership, setOwnership] = useState<{ key: string; rows: CustomModelRecord[] } | null>(null);
   const [ownershipError, setOwnershipError] = useState<string | null>(null);
   const [requestPending, setRequestPending] = useState(false);
+  // Delete's consent dialog is open: the flight is claimed, so switches render disabled too.
+  const [consenting, setConsenting] = useState(false);
   const [mutation, setMutation] = useState<Mutation | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const copyReset = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -165,7 +167,7 @@ function ProviderModelInventory({ item, apiBase, availableModels, selectedModels
     if (!ready || row.initialSelectionPending) return null;
     return row.custom && owns(row) ? "delete" : null;
   };
-  const switchBlocked = (row: ModelRow) => !modelVisibility || toggling || busy || !ready
+  const switchBlocked = (row: ModelRow) => !modelVisibility || toggling || busy || consenting || !ready
     || row.initialSelectionPending === true || staleOverride(row) || (row.custom === true && !owns(row));
   const toggleRow = (row: ModelRow, enable: boolean) => {
     // Synchronous gates: a Delete/Add claimed its flight before awaiting consent, and the
@@ -218,12 +220,14 @@ function ProviderModelInventory({ item, apiBase, availableModels, selectedModels
      * component's invariant.
      */
     flight.current = true;
+    setConsenting(true);
     const consented = await confirmAction({
       message: t("models.customDeleteConfirm", { name: row.namespaced }),
       confirmLabel: t("common.delete"),
       tone: "danger",
       ...(unmounted.current ? { signal: unmounted.current.signal } : {}),
     });
+    if (active.current) setConsenting(false);
     if (!consented) { flight.current = false; return; }
     setRequestPending(true);
     setMutation(null);
