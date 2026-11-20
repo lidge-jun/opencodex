@@ -1827,7 +1827,10 @@ export async function executeComboResponses(
     const failedTargetKey = targetKey(pick.target);
     let failedTargetCooldownRecorded = false;
     // The dispatch rewrote this to name the pool account that actually served the turn.
-    const poolAccountLabel = poolAccountProviderLabel(childLog.provider, pick.target.provider);
+    // The pool logs its main account under the bare provider name and carries "main" only as the
+    // account label, which is stamped for pool and main-pool contexts alone (#8880).
+    const poolAccountLabel = poolAccountProviderLabel(childLog.provider, pick.target.provider)
+      ?? (childLog.accountLogLabel === "main" ? `${pick.target.provider}-main` : undefined);
     const failedAccount = failure.response.status === 402
       ? creditRefusedAnthropicAccountLabel(
         config, pick.target.provider, pick.target.model, poolAccountLabel, failure.classificationText, failure.upstreamCode,
