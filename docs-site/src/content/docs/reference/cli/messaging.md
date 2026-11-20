@@ -190,8 +190,9 @@ the native output are omitted. `CLAUDE_CONFIG_DIR`, if set, selects the local
 Claude configuration. Names, paths, PIDs and history are omitted from the
 result. The command invokes the Claude CLI once with a five-second deadline,
 256 KiB output limit and 256-row limit. It respects
-`CLAUDE_CODE_DISABLE_AGENT_VIEW=1` and disables nonessential Claude CLI traffic
-for the lookup. On failure it returns a sanitized error and no partial list.
+the `CLAUDE_CODE_DISABLE_AGENT_VIEW` opt-out and disables nonessential Claude
+CLI traffic for the lookup. Claude Code can initialize its own configuration
+on first use. On failure the command returns a sanitized error and no partial list.
 
 A listed session is an observed local session. This command does not test
 inbox reachability, send messages, or use enrolled SSH peers.

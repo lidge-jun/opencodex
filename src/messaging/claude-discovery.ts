@@ -11,12 +11,12 @@ const invalidDirectory = () => new LocalMessagingError("invalid_claude_directory
 
 /** Use the documented agent directory. Its entries are metadata, not delivery routes. */
 export async function discoverClaudeSessions(claude: string, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<ClaudeSession[]> {
-  if (env.CLAUDE_CODE_DISABLE_AGENT_VIEW === "1") {
+  if (/^(?:1|true|yes|on)$/i.test(env.CLAUDE_CODE_DISABLE_AGENT_VIEW?.trim() ?? "")) {
     throw new LocalMessagingError("claude_agent_view_disabled", "Claude Code agent view is disabled.");
   }
   const deadline = AbortSignal.any([signal, AbortSignal.timeout(5000)]);
   const unavailable = () => new LocalMessagingError("claude_directory_unavailable", "Claude Code could not list local sessions. Check that the selected CLI supports agents --json.");
-  const childEnv = Object.fromEntries(["HOME", "PATH", "TMPDIR", "LANG", "LC_ALL", "CLAUDE_CONFIG_DIR"]
+  const childEnv = Object.fromEntries(["HOME", "PATH", "TMPDIR", "LANG", "LC_ALL", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_DISABLE_AGENT_VIEW"]
     .flatMap(key => env[key] === undefined ? [] : [[key, env[key]!] as const]));
   let child;
   try {

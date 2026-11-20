@@ -140,9 +140,11 @@ if [ -f "\${0%/*}/hang" ]; then exec /bin/sleep 30; fi
       ...records, { sessionId: LOCAL_TARGET, summary: "fixture-private-stopped" }, { pid: 987, status: "busy" },
     ]));
     const args = ["--claude", executable];
-    const disabled = await run([...args, "--json"], { CLAUDE_CODE_DISABLE_AGENT_VIEW: "1" });
-    expect(disabled.exitCode).toBe(1);
-    expect(JSON.parse(disabled.stdout).error.code).toBe("claude_agent_view_disabled");
+    for (const value of ["1", "true", " Yes ", "ON"]) {
+      const disabled = await run(["--claude", join(root, "missing executable"), "--json"], { CLAUDE_CODE_DISABLE_AGENT_VIEW: value });
+      expect(disabled.exitCode).toBe(1);
+      expect(JSON.parse(disabled.stdout).error.code).toBe("claude_agent_view_disabled");
+    }
     const json = await run([...args, "--json"]);
     expect(json.exitCode).toBe(0);
     expect(json.stderr).toBe("");
