@@ -3065,6 +3065,7 @@ export const vi: Record<TKey, string> = {
   "codexAuth.creditNextBadge": "NEXT",
   "codexAuth.creditGranted": "Được cấp vào {date}",
   "codexAuth.creditExpires": "Hết hạn vào {date} (còn lại {days} ngày)",
+  "codexAuth.creditNoExpiry": "Không có ngày hết hạn",
   "grokCoupon.badgeAria": "{count} phiếu đặt lại Grok",
   "grokCoupon.badgeErrorAria": "Không thể đọc phiếu đặt lại Grok",
   "grokCoupon.title": "Phiếu đặt lại Grok",

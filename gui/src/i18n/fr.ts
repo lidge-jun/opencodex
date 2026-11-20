@@ -3050,6 +3050,7 @@ export const fr: Record<TKey, string> = {
   "codexAuth.creditNextBadge": "PROCHAIN",
   "codexAuth.creditGranted": "Accordé le {date}",
   "codexAuth.creditExpires": "Expire le {date} ({days} j restants)",
+  "codexAuth.creditNoExpiry": "Sans expiration",
 
   // grok reset coupons (xAI account rows)
   "grokCoupon.badgeAria": "{count} coupon(s) de réinitialisation Grok",

@@ -2331,6 +2331,7 @@ export const zhTW: Record<TKey, string> = {
   "codexAuth.creditNextBadge": "NEXT",
   "codexAuth.creditGranted": "獲得 {date}",
   "codexAuth.creditExpires": "過期 {date}（剩餘 {days} 天）",
+  "codexAuth.creditNoExpiry": "無到期時間",
 
   // grok reset coupons (xAI account rows)
   "grokCoupon.badgeAria": "{count} 張 Grok 重設券",

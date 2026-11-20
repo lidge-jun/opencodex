@@ -2515,6 +2515,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.creditNextBadge": "NEXT",
   "codexAuth.creditGranted": "획득 {date}",
   "codexAuth.creditExpires": "만료 {date} ({days}일 남음)",
+  "codexAuth.creditNoExpiry": "만료 없음",
 
   // grok reset coupons (xAI account rows)
   "grokCoupon.badgeAria": "Grok 리셋 쿠폰 {count}개",

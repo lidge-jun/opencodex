@@ -2949,6 +2949,7 @@ export const ja: Record<TKey, string> = {
   "codexAuth.creditNextBadge": "次",
   "codexAuth.creditGranted": "付与 {date}",
   "codexAuth.creditExpires": "失効 {date} (残り {days}日)",
+  "codexAuth.creditNoExpiry": "期限なし",
 
   // grok reset coupons (xAI account rows)
   "grokCoupon.badgeAria": "{count} 個の Grok リセットクーポン",
