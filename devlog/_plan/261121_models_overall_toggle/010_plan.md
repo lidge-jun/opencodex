@@ -195,3 +195,26 @@ Three rounds narrowed to properties of the existing Delete/Add flow and of the e
   Test: first PUT held -> every switch disabled and a second click sends nothing; release -> after
   the re-read the switches enable again.
 
+
+## Outcome (B/C)
+
+Implemented on `codex/fb2100-models-toggle` (71fdcba6f, 5122863c1, fc714612d):
+
+- Shared rule `gui/src/model-visibility-rows.ts` and switch `gui/src/model-visibility-switch.tsx`, used by the
+  provider Models tab and the Models Overall tab (and the same rule the catalog uses).
+- Provider queue `gui/src/provider-workspace/use-provider-model-visibility.ts` owned by
+  ProviderWorkspaceShell; ProviderModels lists off rows with a switch, single-write, Delete consent
+  dialog withdrawn on unmount, switches disabled while it is open.
+- Overall tab `gui/src/pages/models-overall/ModelsOverallPanel.tsx`, hash `#models/overall`, catalog
+  resource gate `catalogDataActive`, shared action toast, stale-refresh notice, integration warning
+  extracted to `gui/src/components/integration-refresh-warning.tsx`.
+- Copy `gui/src/i18n/models-overall-copy.ts` (11 locales); docs in en/es/fr/ja/ko/ru/tr/zh-cn/zh-tw.
+
+Independent terra code review (gpt-6.1-terra, high): APPROVE-WITH-FIXES; both P2 findings fixed in
+5122863c1 with failing-first tests. Real-client check on an isolated OPENCODEX_HOME/CODEX_HOME: a
+switch on Providers turned `mistral/devstral-2` on (5/6 visible) and Overall showed it on; turning it
+off from Overall showed it off on Providers after a fresh read (4/6 visible).
+
+Did not improve / residuals: Residual A and B above remain (pre-existing dev contracts). The
+Providers page is deliberately single-write, so rapid multi-toggling there is slower than on Models.
+
