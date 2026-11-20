@@ -108,18 +108,20 @@ La herramienta `video_gen` acepta:
 
 | Parámetro | Tipo | Alcance | Descripción |
 |-----------|------|-------|-------------|
-| `prompt` | string | optional with an image | Text prompt |
+| `prompt` | string | opcional con una imagen o fotograma | Indicación de texto |
 | `duration` | entero | 1-15 | Duración del vídeo en segundos |
-| `resolution` | string | `480p`, `720p`, `1080p` | Model-dependent |
-| `aspect_ratio` | string | model-dependent | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2` |
-| `image` | string | first frame | HTTPS URL, data URL or remembered artifact |
-| `last_frame` | string | 1.5 only | Last frame |
-| `keyframes` | array | 1.5, max 4 | `{image, timestamp_s}`; timestamp must be inside the clip |
-| `reference_images` | array | 1.5: 14, classic: 7 | Image references; 1.5 limited to 720p |
+| `resolution` | string | `480p`, `720p`, `1080p` | Depende del modelo; máximo 720p con `last_frame`, `keyframes` o `reference_images` |
+| `aspect_ratio` | string | depende del modelo | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2`; se rechaza si solo se anima una `image`, que conserva su proporción |
+| `image` | string | primer fotograma | URL HTTPS, URL de datos o artefacto recordado |
+| `last_frame` | string | solo 1.5 | Último fotograma |
+| `keyframes` | array | 1.5, máximo 4 | `{image, timestamp_s}`; marca de tiempo estrictamente dentro del clip (8 s si se omite `duration`) |
+| `reference_images` | array | 1.5: 14, clásico: 7 | Referencias de imagen; el modelo clásico no puede combinarlas con `image` |
+
+Los ajustes que un modelo no puede respetar se rechazan antes de cualquier llamada de pago en lugar de descartarse.
 
 ### Modelos e imágenes de entrada
 
-| Model | Resolution | Inputs | por segundo (480p / 720p / 1080p) |
+| Modelo | Resolución | Entradas | por segundo (480p / 720p / 1080p) |
 |-------|------------|--------|------------------|
 | `grok-imagine-video-1.5` | 480p / 720p / 1080p nativo | primer/último fotograma, 4 fotogramas clave, 14 referencias (720p máximo) | $0.08 / $0.14 / $0.25 |
 | `grok-imagine-video-1.5-lite` (predeterminado) | 480p / 720p / 1080p reescalado | primer fotograma | $0.02 / $0.03 / $0.14 |

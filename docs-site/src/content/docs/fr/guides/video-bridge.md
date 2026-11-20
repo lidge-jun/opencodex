@@ -103,18 +103,20 @@ L'outil `video_gen` accepte les paramètres suivants :
 
 | Paramètre | Type | Plage | Description |
 |-----------|------|-------|-------------|
-| `prompt` | string | optional with an image | Text prompt |
+| `prompt` | string | facultatif avec une image ou une image clé | Invite textuelle |
 | `duration` | integer | 1-15 | Durée de la vidéo en secondes |
-| `resolution` | string | `480p`, `720p`, `1080p` | Model-dependent |
-| `aspect_ratio` | string | model-dependent | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2` |
-| `image` | string | first frame | HTTPS URL, data URL or remembered artifact |
-| `last_frame` | string | 1.5 only | Last frame |
-| `keyframes` | array | 1.5, max 4 | `{image, timestamp_s}`; timestamp must be inside the clip |
-| `reference_images` | array | 1.5: 14, classic: 7 | Image references; 1.5 limited to 720p |
+| `resolution` | string | `480p`, `720p`, `1080p` | Selon le modèle ; 720p au maximum avec `last_frame`, `keyframes` ou `reference_images` |
+| `aspect_ratio` | string | selon le modèle | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2`; refusé si seule une `image` est animée, car elle conserve son propre format |
+| `image` | string | première image | URL HTTPS, URL de données ou artefact mémorisé |
+| `last_frame` | string | 1.5 uniquement | Dernière image |
+| `keyframes` | array | 1.5, 4 au maximum | `{image, timestamp_s}`; horodatage strictement à l’intérieur du clip (8 s si `duration` est omis) |
+| `reference_images` | array | 1.5 : 14, classique : 7 | Images de référence ; le modèle classique ne peut pas les combiner avec `image` |
+
+Les réglages qu’un modèle ne peut pas respecter sont refusés avant tout appel payant au lieu d’être ignorés.
 
 ### Modèles et images en entrée
 
-| Model | Resolution | Inputs | par seconde (480p / 720p / 1080p) |
+| Modèle | Résolution | Entrées | par seconde (480p / 720p / 1080p) |
 |-------|------------|--------|------------------|
 | `grok-imagine-video-1.5` | 480p / 720p / 1080p natif | première/dernière image, 4 images clés, 14 références (720p maximum) | $0.08 / $0.14 / $0.25 |
 | `grok-imagine-video-1.5-lite` (par défaut) | 480p / 720p / 1080p agrandi | première image | $0.02 / $0.03 / $0.14 |

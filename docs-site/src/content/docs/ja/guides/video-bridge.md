@@ -99,18 +99,20 @@ Video Bridge を使用すると、opencodex によってルーティングされ
 
 |パラメータ |タイプ |範囲 |説明 |
 |-----------|------|-------|-------------|
-| `prompt` | string | optional with an image | Text prompt |
+| `prompt` | string | 画像またはフレームがあれば省略可能 | テキストプロンプト |
 | `duration` |整数 | 1-15 |動画の長さ (秒) |
-| `resolution` | string | `480p`, `720p`, `1080p` | Model-dependent |
-| `aspect_ratio` | string | model-dependent | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2` |
-| `image` | string | first frame | HTTPS URL, data URL or remembered artifact |
-| `last_frame` | string | 1.5 only | Last frame |
-| `keyframes` | array | 1.5, max 4 | `{image, timestamp_s}`; timestamp must be inside the clip |
-| `reference_images` | array | 1.5: 14, classic: 7 | Image references; 1.5 limited to 720p |
+| `resolution` | string | `480p`, `720p`, `1080p` | モデルによる。`last_frame`、`keyframes`、`reference_images` 使用時は最大 720p |
+| `aspect_ratio` | string | モデルによる | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2`; `image` のみをアニメーション化する場合は拒否され、元の比率が維持される |
+| `image` | string | 最初のフレーム | HTTPS URL、データ URL、または記憶された成果物 |
+| `last_frame` | string | 1.5 のみ | 最後のフレーム |
+| `keyframes` | array | 1.5、最大 4 | `{image, timestamp_s}`; タイムスタンプはクリップの内部に厳密に収める（`duration` 省略時は 8 s） |
+| `reference_images` | array | 1.5: 14、クラシック: 7 | 参照画像。クラシックモデルでは `image` と併用不可 |
+
+モデルが対応できない設定は黙って破棄されず、課金される呼び出しの前に拒否されます。
 
 ### モデルと画像入力
 
-| Model | Resolution | Inputs | 秒あたり (480p / 720p / 1080p) |
+| モデル | 解像度 | 入力 | 秒あたり (480p / 720p / 1080p) |
 |-------|------------|--------|------------------|
 | `grok-imagine-video-1.5` | 480p / 720p / 1080p ネイティブ | 最初と最後のフレーム, 4 キーフレーム, 14 参照画像 (720p 最大) | $0.08 / $0.14 / $0.25 |
 | `grok-imagine-video-1.5-lite` (デフォルト) | 480p / 720p / 1080p アップスケール | 最初のフレーム | $0.02 / $0.03 / $0.14 |

@@ -98,18 +98,20 @@ Video Bridge 允许你通过 opencodex 路由的任意非 OpenAI 模型使用 xA
 
 | 参数 | 类型 | 范围 | 说明 |
 |-----------|------|-------|-------------|
-| `prompt` | string | optional with an image | Text prompt |
+| `prompt` | string | 有图像或帧时可选 | 文本提示词 |
 | `duration` | integer | 1-15 | 视频时长，单位为秒 |
-| `resolution` | string | `480p`, `720p`, `1080p` | Model-dependent |
-| `aspect_ratio` | string | model-dependent | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2` |
-| `image` | string | first frame | HTTPS URL, data URL or remembered artifact |
-| `last_frame` | string | 1.5 only | Last frame |
-| `keyframes` | array | 1.5, max 4 | `{image, timestamp_s}`; timestamp must be inside the clip |
-| `reference_images` | array | 1.5: 14, classic: 7 | Image references; 1.5 limited to 720p |
+| `resolution` | string | `480p`, `720p`, `1080p` | 取决于模型；使用 `last_frame`、`keyframes` 或 `reference_images` 时最高为 720p |
+| `aspect_ratio` | string | 取决于模型 | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2`; 仅为 `image` 添加动画时会被拒绝，图像保留原有比例 |
+| `image` | string | 首帧 | HTTPS URL、数据 URL 或已记录的产物 |
+| `last_frame` | string | 仅限 1.5 | 末帧 |
+| `keyframes` | array | 1.5，最多 4 | `{image, timestamp_s}`; 时间戳必须严格位于片段内部（省略 `duration` 时为 8 s） |
+| `reference_images` | array | 1.5: 14，经典版: 7 | 参考图像；经典模型不能将其与 `image` 组合 |
+
+模型无法满足的设置会在任何付费调用前被拒绝，而不会被忽略。
 
 ### 模型和图像输入
 
-| Model | Resolution | Inputs | 每秒 (480p / 720p / 1080p) |
+| 模型 | 分辨率 | 输入 | 每秒 (480p / 720p / 1080p) |
 |-------|------------|--------|------------------|
 | `grok-imagine-video-1.5` | 480p / 720p / 1080p 原生 | 首帧/末帧, 4 关键帧, 14 参考图 (720p 最多) | $0.08 / $0.14 / $0.25 |
 | `grok-imagine-video-1.5-lite` (默认) | 480p / 720p / 1080p 放大 | 首帧 | $0.02 / $0.03 / $0.14 |

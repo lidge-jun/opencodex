@@ -99,18 +99,20 @@ Video Bridge는 opencodex가 라우팅한 OpenAI가 아닌 모델로 xAI의 Grok
 
 | 파라미터 | 타입 | 범위 | 설명 |
 |----------|------|------|------|
-| `prompt` | string | optional with an image | Text prompt |
+| `prompt` | string | 이미지나 프레임이 있으면 선택 사항 | 텍스트 프롬프트 |
 | `duration` | integer | 1-15 | 영상 길이(초) |
-| `resolution` | string | `480p`, `720p`, `1080p` | Model-dependent |
-| `aspect_ratio` | string | model-dependent | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2` |
-| `image` | string | first frame | HTTPS URL, data URL or remembered artifact |
-| `last_frame` | string | 1.5 only | Last frame |
-| `keyframes` | array | 1.5, max 4 | `{image, timestamp_s}`; timestamp must be inside the clip |
-| `reference_images` | array | 1.5: 14, classic: 7 | Image references; 1.5 limited to 720p |
+| `resolution` | string | `480p`, `720p`, `1080p` | 모델에 따라 다름; `last_frame`, `keyframes` 또는 `reference_images` 사용 시 최대 720p |
+| `aspect_ratio` | string | 모델에 따라 다름 | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2`; `image`만 애니메이션화할 때는 거부되며 원래 비율이 유지됨 |
+| `image` | string | 첫 프레임 | HTTPS URL, 데이터 URL 또는 기억된 아티팩트 |
+| `last_frame` | string | 1.5 전용 | 마지막 프레임 |
+| `keyframes` | array | 1.5, 최대 4 | `{image, timestamp_s}`; 타임스탬프는 클립 내부에만 허용 (`duration` 생략 시 8 s) |
+| `reference_images` | array | 1.5: 14, 클래식: 7 | 참조 이미지; 클래식 모델에서는 `image`와 함께 사용할 수 없음 |
+
+모델이 지원할 수 없는 설정은 무시되지 않고 유료 호출 전에 거부됩니다.
 
 ### 모델과 이미지 입력
 
-| Model | Resolution | Inputs | 초당 (480p / 720p / 1080p) |
+| 모델 | 해상도 | 입력 | 초당 (480p / 720p / 1080p) |
 |-------|------------|--------|------------------|
 | `grok-imagine-video-1.5` | 480p / 720p / 1080p 네이티브 | 첫/마지막 프레임, 4 키프레임, 14 참조 이미지 (720p 최대) | $0.08 / $0.14 / $0.25 |
 | `grok-imagine-video-1.5-lite` (기본값) | 480p / 720p / 1080p 업스케일 | 첫 프레임 | $0.02 / $0.03 / $0.14 |

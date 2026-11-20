@@ -104,18 +104,20 @@ Tool `video_gen` принимает:
 
 | Параметр | Тип | Диапазон | Описание |
 |-----------|------|-------|-------------|
-| `prompt` | string | optional with an image | Text prompt |
+| `prompt` | string | необязателен при наличии изображения или кадра | Текстовый запрос |
 | `duration` | integer | 1-15 | Длительность видео в секундах |
-| `resolution` | string | `480p`, `720p`, `1080p` | Model-dependent |
-| `aspect_ratio` | string | model-dependent | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2` |
-| `image` | string | first frame | HTTPS URL, data URL or remembered artifact |
-| `last_frame` | string | 1.5 only | Last frame |
-| `keyframes` | array | 1.5, max 4 | `{image, timestamp_s}`; timestamp must be inside the clip |
-| `reference_images` | array | 1.5: 14, classic: 7 | Image references; 1.5 limited to 720p |
+| `resolution` | string | `480p`, `720p`, `1080p` | Зависит от модели; не выше 720p с `last_frame`, `keyframes` или `reference_images` |
+| `aspect_ratio` | string | зависит от модели | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2`; отклоняется при анимации только `image`, которая сохраняет свои пропорции |
+| `image` | string | первый кадр | HTTPS URL, URL данных или сохранённый артефакт |
+| `last_frame` | string | только 1.5 | Последний кадр |
+| `keyframes` | array | 1.5, максимум 4 | `{image, timestamp_s}`; временная метка строго внутри клипа (8 s, если `duration` не указан) |
+| `reference_images` | array | 1.5: 14, классическая: 7 | Опорные изображения; классическая модель не может сочетать их с `image` |
+
+Настройки, которые модель не может выполнить, отклоняются до любого платного вызова, а не игнорируются.
 
 ### Модели и входные изображения
 
-| Model | Resolution | Inputs | за секунду (480p / 720p / 1080p) |
+| Модель | Разрешение | Входные данные | за секунду (480p / 720p / 1080p) |
 |-------|------------|--------|------------------|
 | `grok-imagine-video-1.5` | 480p / 720p / 1080p нативное | первый/последний кадр, 4 ключевых кадра, 14 референсов (720p максимум) | $0.08 / $0.14 / $0.25 |
 | `grok-imagine-video-1.5-lite` (по умолчанию) | 480p / 720p / 1080p увеличенное | первый кадр | $0.02 / $0.03 / $0.14 |

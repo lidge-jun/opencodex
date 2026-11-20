@@ -110,18 +110,20 @@ Köprü varsayılan olarak `video_gen` işlerini `xai` sağlayıcısının API a
 
 | Parametre | Tip | Aralık | Açıklama |
 |-----------|------|-------|-------------|
-| `prompt` | string | optional with an image | Text prompt |
+| `prompt` | string | görüntü veya kare varsa isteğe bağlı | Metin istemi |
 | `duration` | integer | 1-15 | Saniye cinsinden video uzunluğu |
-| `resolution` | string | `480p`, `720p`, `1080p` | Model-dependent |
-| `aspect_ratio` | string | model-dependent | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2` |
-| `image` | string | first frame | HTTPS URL, data URL or remembered artifact |
-| `last_frame` | string | 1.5 only | Last frame |
-| `keyframes` | array | 1.5, max 4 | `{image, timestamp_s}`; timestamp must be inside the clip |
-| `reference_images` | array | 1.5: 14, classic: 7 | Image references; 1.5 limited to 720p |
+| `resolution` | string | `480p`, `720p`, `1080p` | Modele bağlıdır; `last_frame`, `keyframes` veya `reference_images` ile en fazla 720p |
+| `aspect_ratio` | string | modele bağlı | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2`; yalnızca `image` canlandırılırken reddedilir; görüntü kendi oranını korur |
+| `image` | string | ilk kare | HTTPS URL’si, veri URL’si veya hatırlanan artifact |
+| `last_frame` | string | yalnızca 1.5 | Son kare |
+| `keyframes` | array | 1.5, en fazla 4 | `{image, timestamp_s}`; zaman damgası kesinlikle klibin içinde olmalıdır (`duration` atlanırsa 8 s) |
+| `reference_images` | array | 1.5: 14, klasik: 7 | Referans görüntüler; klasik model bunları `image` ile birleştiremez |
+
+Modelin karşılayamayacağı ayarlar yok sayılmak yerine ücretli çağrıdan önce reddedilir.
 
 ### Modeller ve görüntü girdileri
 
-| Model | Resolution | Inputs | saniye başına (480p / 720p / 1080p) |
+| Model | Çözünürlük | Girdiler | saniye başına (480p / 720p / 1080p) |
 |-------|------------|--------|------------------|
 | `grok-imagine-video-1.5` | 480p / 720p / 1080p doğal | ilk/son kare, 4 anahtar kare, 14 referans (720p en fazla) | $0.08 / $0.14 / $0.25 |
 | `grok-imagine-video-1.5-lite` (varsayılan) | 480p / 720p / 1080p büyütülmüş | ilk kare | $0.02 / $0.03 / $0.14 |
