@@ -52,15 +52,13 @@ function hasEmbeddedNon403ErrorCode(record: Record<string, unknown>): boolean {
   return false;
 }
 
-// A 403 body that names a non-quota cause (permission, ban, region) is not resource-pack
-// exhaustion even when it links the pricing page; rotating keys would only cool down healthy ones.
-const CN_NON_QUOTA_DENIAL_RE = /\b(?:permission|denied|forbidden|unauthori[sz]ed|not allowed|banned|blocked|suspended|disabled|region)\b/i;
+// Only the verified exhaustion shape is evidence: the pricing URL plus, at most, 403 codes. Any
+// explanatory text (a lock, a ban, a permission denial) is a different 403, and rotating keys for
+// it would only cool down healthy ones, so recovery is an allowlist, never a deny-word list.
+const CN_PRICING_ONLY_KEYS: ReadonlySet<string> = new Set(["pricingUrl", ...EMBEDDED_ERROR_CODE_KEYS]);
 
-function hasNonQuotaDenialText(record: Record<string, unknown>): boolean {
-  for (const [key, value] of Object.entries(record)) {
-    if (key !== "pricingUrl" && typeof value === "string" && CN_NON_QUOTA_DENIAL_RE.test(value)) return true;
-  }
-  return false;
+function isPricingOnlyRecord(record: Record<string, unknown>): boolean {
+  return Object.keys(record).every(key => CN_PRICING_ONLY_KEYS.has(key));
 }
 
 function isCnPricingUrl(value: unknown): boolean {
@@ -96,9 +94,7 @@ function isCnQuotaPricingFailure(message: string): boolean {
   if (hasEmbeddedNon403ErrorCode(payload)) return false;
   if (isPlainRecord(payload.error) && hasEmbeddedNon403ErrorCode(payload.error)) return false;
   if (isPlainRecord(payload.data) && hasEmbeddedNon403ErrorCode(payload.data)) return false;
-  if (hasNonQuotaDenialText(payload)) return false;
-  if (isPlainRecord(payload.error) && hasNonQuotaDenialText(payload.error)) return false;
-  if (isPlainRecord(payload.data) && hasNonQuotaDenialText(payload.data)) return false;
+  if (!isPricingOnlyRecord(payload)) return false;
   return isCnPricingUrl(payload.pricingUrl);
 }
 
