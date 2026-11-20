@@ -13,14 +13,24 @@ async function runRecovery(mode: string, scheduled = false, env = process.env, a
     env: { ...env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: join(root, "ocx"), CODEX_HOME: join(root, "codex"),
       OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(root, "claude-desktop"), OCX_SERVICE: "", OCX_SERVICE_MANAGED: "0" },
   });
-  const timeout = setTimeout(() => child.kill("SIGKILL"), 15_000);
+  let parentDeadlineReached = false;
+  const timeout = setTimeout(() => {
+    if (child.exitCode !== null) return;
+    parentDeadlineReached = true;
+    child.kill("SIGKILL");
+  }, 15_000);
   try {
     const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     if (exit === 75 && stderr.trim() === "fixture-port-collision") {
       if (attempt >= 2) throw new Error("recovery fixture port collided three times");
       return runRecovery(mode, scheduled, env, attempt + 1);
     }
-    expect(exit, stderr).toBe(0);
+    if (exit !== 0) {
+      const phases = stdout.split(/\r?\n/).filter(line => line.startsWith("recovery phase "));
+      const status = parentDeadlineReached ? "parent requested termination at its 15s deadline" : "child exited";
+      throw new Error([`Link recovery (${mode}): ${status}, exit ${exit}`,
+        ...(phases.length ? phases : ["no fixture phase reported"]), stderr.trimEnd()].filter(Boolean).join("\n"));
+    }
     expect(stderr).not.toContain("uncaughtException");
     const line = stdout.split("\n").find(line => line.startsWith("{"));
     expect(line, stdout + stderr).toBeDefined();

@@ -1,6 +1,6 @@
 /** Real file recovery and bound restart; only replacement process launch is a loopback fixture. */
 import { mock, spyOn } from "bun:test";
-import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { serviceApiTokenFingerprint, writeServiceApiTokenFile, readServiceApiTokenState } from "../../src/lib/service-secrets";
@@ -13,7 +13,13 @@ import { createSystemRestartCapability, SYSTEM_RESTART_CAPABILITY_HEADER, SYSTEM
   SYSTEM_RESTART_NONCE_HEADER, SYSTEM_RESTART_PATH } from "../../src/lib/system-restart-contract";
 
 const options = JSON.parse(readFileSync(0, "utf8")) as { mode: string; scheduled?: boolean };
-let phase = "fixture setup";
+let phase: string;
+function enterPhase(name: string): void {
+  phase = name;
+  // Flush before synchronous filesystem work so a parent timeout retains the last transition.
+  writeSync(1, `recovery phase ${Math.round(performance.now())}ms: ${name}\n`);
+}
+enterPhase("fixture setup");
 const home = process.env.OPENCODEX_HOME!;
 mkdirSync(home, { recursive: true });
 const lifecycle = await import("../../src/client/lifecycle-lock");
@@ -43,6 +49,7 @@ async function main() {
   const document = { version: 1 as const, home: { name: "fixture", version: "1" },
     clients: Object.fromEntries(ROUTE_CLIENT_IDS.map(id => [id, { enabled: id === "pi" }])),
     sources: Object.fromEntries(ROUTE_CLIENT_IDS.map(id => [id, "default"])) } as import("../../src/link/route-intent").HomeRouteIntentDocument;
+  enterPhase("applying the file route");
   const applied = await applyConnectedRouteIntent(expected, token, { document, stale: false, fetchedAt: "2026-11-16T00:00:00.000Z" },
     { onlyClients: ["pi"], lifecycleLockDeps }, { fetchImpl: (async () => Response.json({ data: [{ id: "fixture/home-model" }] })) as typeof fetch });
   if (applied?.outcomes.find(row => row.client === "pi")?.outcome !== "current") throw new Error("fixture apply failed");
@@ -73,6 +80,7 @@ async function main() {
   const replacement = await import("../../src/server/restart-replacement");
   mock.module("../../src/server/restart-replacement", () => ({ ...replacement, spawnReplacementStart: async (request: { port: number }) => {
     spawned++;
+    enterPhase("binding the replacement listener");
     // A successful bind proves the real Child listener released its port. No native coordinator,
     // provider request or external process participates in this replacement seam.
     const server = Bun.serve({ hostname: "127.0.0.1", port: request.port, fetch: () => Response.json({ role: "standalone" }) });
@@ -97,7 +105,7 @@ async function main() {
   const { startClientRuntime, scheduleStandaloneRecycle } = await import("../../src/client/runtime");
   const { startMachineListener } = await import("../../src/client/machine-listener");
   const { isAddrInUse } = await import("../../src/server/ports");
-  phase = "starting the Child listener";
+  enterPhase("starting the Child listener");
   // Keep the selected port reserved while preparing the fixture and loading the runtime.
   await probe.stop(true);
   try {
@@ -119,7 +127,7 @@ async function main() {
   }
   // The parent bounds setup; the existing phase watchdog starts only once the Child serves.
   setTimeout(() => {
-    console.error(`recovery fixture timed out (${options.mode}: ${phase})`);
+    console.error(`recovery fixture timed out 10s after listener startup (${options.mode}: ${phase})`);
     process.exit(1);
   }, 10_000).unref();
   const pendingRecycle = options.mode === "signal-pending-recycle";
@@ -141,10 +149,12 @@ async function main() {
       [SYSTEM_RESTART_EXPECTED_PID_HEADER]: String(process.pid), [SYSTEM_RESTART_NONCE_HEADER]: nonce,
       [SYSTEM_RESTART_CAPABILITY_HEADER]: createSystemRestartCapability(runtime.attestationSecret!, nonce, "POST", SYSTEM_RESTART_PATH, process.pid, config.port),
     } });
-    await response.arrayBuffer(); return response.status;
+    await response.arrayBuffer();
+    if (response.status === 202) enterPhase("restart request accepted");
+    return response.status;
   };
   let finishStop: () => Promise<void> = async () => {};
-  phase = "observing the refused stop";
+  enterPhase("observing the refused stop");
   if (options.mode.startsWith("signal")) {
     // Queue and signal in one turn so the first timer is still pending at shutdown.
     if (pendingRecycle) {
@@ -175,7 +185,7 @@ async function main() {
   }
   observations.beforeRecoveryAdmission = await restart();
   observations.finishedMarker = readRuntimePort(process.pid)?.clientStopRequested;
-  phase = "disconnecting the Child";
+  enterPhase("disconnecting the Child");
   const { disconnectClient } = await import("../../src/client/connect");
   await disconnectClient({ recoverConfig: true }, { lifecycleLockDeps });
   const receiptPath = storePaths().disconnect;
@@ -190,7 +200,7 @@ async function main() {
   if (options.mode === "missing-config") unlinkSync(join(home, "config.json"));
   if (options.mode === "new-connection") { config.client!.connectedAt = "2026-11-16T01:00:00.000Z"; saveConfig(config); }
   if (options.mode === "pending-connect") markClientConnectPending("b".repeat(64));
-  phase = "observing restart or recycle after disconnect";
+  enterPhase("observing restart or recycle after disconnect");
   if (pendingRecycle) {
     observations.recoveryRecycleTimers = scheduleAndCountTimers();
     if (observations.recoveryRecycleTimers === 0) {
