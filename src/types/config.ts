@@ -225,7 +225,7 @@ export interface OcxClaudeCodeConfig extends OcxClaudeCodeToolLoadingConfig {
   /** Optional roster-style model forced on subagents at the next routed Claude Code launch. */
   subagentModelForce?: string;
   /** Claude-originated web-search override. Unset fields inherit the global sidecar settings. */
-  webSearchSidecar?: { enabled?: boolean; backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa"; model?: string; anthropicInstance?: AnthropicInstanceId };
+  webSearchSidecar?: { enabled?: boolean; backend?: OcxWebSearchSidecarConfig["backend"]; model?: string; anthropicInstance?: AnthropicInstanceId };
   /** Claude-originated vision override. Unset fields inherit the global sidecar settings. */
   visionSidecar?: { enabled?: boolean; backend?: "openai" | "anthropic" | "routed"; model?: string; anthropicInstance?: AnthropicInstanceId };
   /** Persisted Claude Desktop four-family routing profile. */
@@ -1720,23 +1720,25 @@ export interface OcxAdvisorConfig {
   contextSharingConsent?: "v1";
 }
 
+export const WEB_SEARCH_BACKEND_IDS = ["openai", "anthropic", "xai", "gemini", "exa", "parallel"] as const;
+
 export interface OcxWebSearchSidecarConfig {
   /** Explicit Anthropic account pool; unset inherits the request's instance. */
   anthropicInstance?: AnthropicInstanceId;
-  /** Master switch. Default: enabled when a forward (ChatGPT) provider exists and the caller is logged in. */
+  /** Master switch. Defaults to enabled when the selected backend is available. */
   enabled?: boolean;
   /**
    * Which backend actually runs the server-side search. "openai" replays the hosted web_search via
    * the ChatGPT forward provider (gpt-mini sidecar); "anthropic" runs web_search_20250305 on a Claude
    * model authenticated by the STORED anthropic OAuth credential. "xai" runs Grok hosted web_search
    * and optional x_search through stored Grok OAuth. "gemini" (google_search grounding via the
-   * Antigravity CCA transport) and "exa" (non-LLM search JSON via an operator key) are explicit-only
-   * and stay inactive until their executors ship. Unset ALWAYS resolves to "openai"; no backend is ever
+   * Antigravity CCA transport), "exa" (search via an operator key), and "parallel" (anonymous MCP
+   * search) are explicit-only. Unset always resolves to "openai". No backend is
    * auto-selected from credential availability (that once sent incompatible models to the
    * Anthropic API — see resolveSidecarBackend).
    */
-  backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa";
-  /** Sidecar model that runs the real server-side web_search (must be a native ChatGPT model). */
+  backend?: typeof WEB_SEARCH_BACKEND_IDS[number];
+  /** Model for a model-backed search. Exa and Parallel ignore this setting. */
   model?: string;
   /**
    * Operator-supplied Exa API key for the "exa" backend. Management GET responses never echo it,

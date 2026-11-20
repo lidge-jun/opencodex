@@ -120,7 +120,7 @@ export function webSearchModelOptionsFrom(
     });
   }
   const persisted = config.webSearchSidecar?.model;
-  if (persisted && !byValue.has(persisted)) {
+  if (persisted && config.webSearchSidecar?.backend !== "parallel" && !byValue.has(persisted)) {
     byValue.set(persisted, {
       value: persisted,
       label: persisted,

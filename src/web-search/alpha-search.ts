@@ -22,6 +22,7 @@ import type { OcxConfig, OcxProviderConfig, OcxWebSearchSidecarConfig } from "..
 import { runAnthropicWebSearch } from "./anthropic-executor";
 import { resolveDevinWebSearchSnapshot, runDevinWebSearch } from "./devin-executor";
 import { runExaWebSearch } from "./exa-executor";
+import { runParallelWebSearch } from "./parallel-executor";
 import type { SidecarOutcome, SidecarSettings } from "./executor";
 import { runGeminiWebSearch } from "./gemini-executor";
 import {
@@ -58,6 +59,7 @@ const DEFAULT_BACKEND_MODELS = {
   gemini: "gemini-3.8-flash",
   // Exa ignores model; the placeholder only satisfies SidecarSettings.
   exa: "gpt-5.6-luna",
+  parallel: "parallel",
 } as const;
 
 export type AlphaSearchSidecarBackend = keyof typeof DEFAULT_BACKEND_MODELS;
@@ -66,7 +68,10 @@ type ResolvedAlphaSearchSidecar =
   | { backend: "anthropic"; providerName: string; provider: OcxProviderConfig; config: OcxConfig }
   | { backend: "xai"; providerName: string; provider: OcxProviderConfig }
   | { backend: "gemini"; providerName: string; provider: OcxProviderConfig }
-  | { backend: "exa"; apiKey: string };
+  | { backend: "exa"; apiKey: string }
+  | { backend: "parallel" };
+
+type CredentialedAlphaSearchBackend = Exclude<AlphaSearchSidecarBackend, "parallel">;
 
 /**
  * Why this path cannot serve the request, kept distinct from "nobody asked for it".
@@ -80,7 +85,7 @@ type ResolvedAlphaSearchSidecar =
 export type AlphaSearchSidecarResolution =
   | { status: "ready"; sidecar: ResolvedAlphaSearchSidecar }
   | { status: "unconfigured" }
-  | { status: "missing-credential"; backend: AlphaSearchSidecarBackend };
+  | { status: "missing-credential"; backend: CredentialedAlphaSearchBackend };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -124,6 +129,8 @@ export function resolveAlphaSearchSidecar(config: OcxConfig): AlphaSearchSidecar
         ? { status: "ready", sidecar: { backend, providerName: found.providerName, provider: found.provider } }
         : { status: "missing-credential", backend };
     }
+    case "parallel":
+      return { status: "ready", sidecar: { backend } };
     case "exa": {
       const apiKey = sidecar?.exaApiKey;
       return typeof apiKey === "string" && apiKey.length > 0
@@ -169,7 +176,7 @@ function modelForAlphaSearchBackend(
   sidecar: Pick<OcxWebSearchSidecarConfig, "backend" | "model"> | undefined,
 ): string {
   const backendDefault = DEFAULT_BACKEND_MODELS[backend];
-  if (resolveSidecarBackend(sidecar?.backend) !== backend) return backendDefault;
+  if (backend === "parallel" || resolveSidecarBackend(sidecar?.backend) !== backend) return backendDefault;
   return sidecar?.model ?? backendDefault;
 }
 
@@ -206,6 +213,8 @@ async function runAlphaSearchQuery(
       );
     case "gemini":
       return runGeminiWebSearch(query, resolved.providerName, resolved.provider, settings, signal);
+    case "parallel":
+      return runParallelWebSearch(query, settings.timeoutMs, signal);
     case "exa":
       return runExaWebSearch(query, resolved.apiKey, settings, signal);
   }
@@ -300,7 +309,7 @@ function formatAlphaSearchBody(text: string, sources: SidecarOutcome["sources"])
 const NO_FORWARD_PROVIDER_MESSAGE =
   "Built-in web search needs a ChatGPT forward provider, but none is configured in opencodex. "
   + "Routed and OpenAI API-key providers cannot serve /v1/alpha/search. "
-  + "Configure webSearchSidecar.backend (anthropic, xai, gemini, or exa) with that backend's credential instead.";
+  + "Configure webSearchSidecar.backend (anthropic, xai, gemini, or exa) with that backend's credential, or select parallel for anonymous search.";
 
 /**
  * What a named backend is missing, said in the operator's own terms.
@@ -309,8 +318,8 @@ const NO_FORWARD_PROVIDER_MESSAGE =
  * that answer is what the request asked this path to stop giving. They need to know which
  * credential the backend they named could not find.
  */
-function missingCredentialMessage(backend: AlphaSearchSidecarBackend): string {
-  const detail: Record<AlphaSearchSidecarBackend, string> = {
+function missingCredentialMessage(backend: CredentialedAlphaSearchBackend): string {
+  const detail: Record<CredentialedAlphaSearchBackend, string> = {
     anthropic: "no usable stored Anthropic OAuth account was found",
     xai: "no usable stored Grok OAuth account was found",
     gemini: "no usable stored Antigravity OAuth account with a discovered project was found",
@@ -346,11 +355,8 @@ export async function handleAlphaSearchSidecarFallback(
   const resolved = resolution.sidecar;
   if (logCtx) logCtx.provider = resolved.backend;
 
-  // This backend is a paid destination like any other, and the operator's
-  // configuration -- not the caller -- decides which one and which model. A key
-  // scoped away from it must not spend it by asking the search endpoint instead
-  // of the inference one. Exa has no configured provider entry, so its own
-  // backend name is the destination.
+  // Apply key scope to the configured search destination. Non-model search backends
+  // without a provider entry use their own backend name.
   const settings = sidecarSettingsForAlphaSearch(resolved.backend, config);
   const requestedModel = (body as { model?: unknown } | null)?.model;
   const denial = admissionScopeDenial(
@@ -358,7 +364,7 @@ export async function handleAlphaSearchSidecarFallback(
     admission,
     typeof requestedModel === "string" && requestedModel.trim() ? requestedModel : undefined,
     {
-      providerName: resolved.backend === "exa" ? resolved.backend : resolved.providerName,
+      providerName: "providerName" in resolved ? resolved.providerName : resolved.backend,
       modelId: settings.model,
     },
   );

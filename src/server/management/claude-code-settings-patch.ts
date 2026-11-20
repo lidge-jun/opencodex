@@ -1,4 +1,5 @@
 import type { OcxConfig, OcxClaudeCodeConfig } from "../../types";
+import { WEB_SEARCH_BACKEND_IDS } from "../../types/config";
 import { isAnthropicInstanceId, type AnthropicInstanceId } from "../../providers/anthropic-instance-id";
 import { jsonResponse } from "../auth-cors";
 
@@ -21,8 +22,8 @@ export function prepareClaudeCodePatch(config: OcxConfig, body: Record<string, u
     // proxy's own router), never exa: exa is not an LLM, and accepting an
     // unknown literal would persist a backend the vision resolver reads as
     // unset (review F1's failure mode).
-    const allowedBackends = field === "webSearchSidecar"
-      ? ["openai", "anthropic", "xai", "gemini", "exa"]
+    const allowedBackends: readonly string[] = field === "webSearchSidecar"
+      ? WEB_SEARCH_BACKEND_IDS
       : ["openai", "anthropic", "routed"];
     if (section.backend !== undefined && section.backend !== null
       && !allowedBackends.includes(section.backend as string)) {
@@ -43,7 +44,7 @@ export function prepareClaudeCodePatch(config: OcxConfig, body: Record<string, u
     }
     // The per-field validation above guarantees vision only ever carries the two-member
     // union; the cast is the loop's shared-shape compromise, not a wider write path.
-    const requested = section as { enabled?: boolean; backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa" | null; model?: string; anthropicInstance?: AnthropicInstanceId | null };
+    const requested = section as { enabled?: boolean; backend?: NonNullable<OcxClaudeCodeConfig[typeof field]>["backend"] | null; model?: string; anthropicInstance?: AnthropicInstanceId | null };
     const override = { ...next[field] } as NonNullable<OcxClaudeCodeConfig[typeof field]>;
     if (requested.enabled !== undefined) override.enabled = requested.enabled;
     if (requested.anthropicInstance === null) delete override.anthropicInstance;

@@ -35,6 +35,7 @@ import type { AuxiliaryModelSend } from "../lib/request-execution-budget";
 import { runXaiWebSearch } from "./xai-executor";
 import { runGeminiWebSearch } from "./gemini-executor";
 import { runExaWebSearch } from "./exa-executor";
+import { runParallelWebSearch } from "./parallel-executor";
 import { formatWebSearchResults } from "./format-result";
 import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaque-metadata";
 import { redactSecretString } from "../lib/redact";
@@ -285,6 +286,8 @@ export async function* runTurnWebSearchLoop(
           return plan.geminiSidecar
             ? await runGeminiWebSearch(query, plan.geminiSidecar.providerName, plan.geminiSidecar.provider, plan.settings, signal)
             : { text: "", sources: [], error: "gemini backend selected without a resolved Antigravity provider" };
+        case "parallel":
+          return runParallelWebSearch(query, plan.settings.timeoutMs, signal);
         case "exa":
           return deps.exaApiKey
             ? await runExaWebSearch(query, deps.exaApiKey, plan.settings, signal)

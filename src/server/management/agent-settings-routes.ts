@@ -1864,11 +1864,13 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
             : submittedBackend === null
               ? config.webSearchSidecar?.backend ?? "openai"
               : stored?.backend ?? config.webSearchSidecar?.backend ?? "openai";
-          const effectiveModel = section.model === ""
-            ? config.webSearchSidecar?.model
-            : typeof section.model === "string"
-              ? section.model
-              : stored?.model ?? config.webSearchSidecar?.model;
+          const effectiveModel = effectiveBackend === "parallel"
+            ? (typeof section.model === "string" ? section.model : undefined)
+            : section.model === ""
+              ? config.webSearchSidecar?.model
+              : typeof section.model === "string"
+                ? section.model
+                : stored?.model ?? config.webSearchSidecar?.model;
           const candidates = webEvidence!;
           if (effectiveModel && webSearchModelIsRejected(effectiveBackend, effectiveModel, candidates)) {
             return jsonResponse(webSearchModelRejection(

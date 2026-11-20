@@ -33,7 +33,7 @@ const USAGE = `Usage:
   ocx agent fallback <status|set|clear> [model,model...] [--poll-ms <5000-600000>] [--json]
   ocx agent roles [status|set <role> <model> [--effort <level>]|suggest [--model <id>] [--apply]] [--json]
   ocx agent sidecar <status|web|vision> [--list] [--model <id|->]
-      [--backend web:<openai|anthropic|xai|gemini|exa|-> vision:<openai|anthropic|routed|->]
+      [--backend web:<openai|anthropic|xai|gemini|exa|parallel|-> vision:<openai|anthropic|routed|->]
       [--reasoning <level>] [--max-descriptions <n> (vision)] [--enabled <on|off>]
       [--stream-routed-output <on|off> (web)] [--timeout-ms <1-2147483647> (vision)] [--json]
   ocx agent memory-models <show|set|clear> [options] [--json]

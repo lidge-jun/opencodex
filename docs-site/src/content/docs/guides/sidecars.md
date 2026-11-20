@@ -26,15 +26,33 @@ for absent sidecar sections are unchanged.
 
 ## Additional web-search backends (explicit-only)
 
-Three more web-search backends exist beyond the ChatGPT and Claude paths. Each is
-**explicit-only** — it never activates from credential presence — and **fails closed**:
-a missing credential produces no sidecar plan and the request takes the normal routed path.
+These backends require explicit selection. For backends that need credentials, a missing credential
+leaves the normal routed path in place.
 
 | Backend | Runs | Credential | Notes |
 | --- | --- | --- | --- |
 | `xai` | Grok hosted `web_search` (+ opt-in `x_search`) on `api.x.ai` Responses | Stored Grok OAuth (`ocx login xai`) | `webSearchSidecar.xSearch` enables X search with `allowedXHandles`/`excludedXHandles` (max 20, mutually exclusive) and ISO `fromDate`/`toDate`. Default model `grok-4.6`. |
 | `gemini` | `google_search` grounding on the Antigravity transport | Stored Antigravity OAuth with a discovered project (`ocx login google-antigravity`) | Default model `gemini-3.8-flash`; reasoning selects the matching tier. |
 | `exa` | Exa Search API (non-LLM result digest) | `webSearchSidecar.exaApiKey` | The key is write-only through the management API (never echoed, redacted from logs). No sidecar model applies. |
+| `parallel` | Parallel MCP `web_search` (ranked excerpts and source links) | None | No sidecar model applies. |
+
+### Use Parallel Search
+
+Set `webSearchSidecar.backend` to `"parallel"` in `config.json`, or run the following
+against your running gateway.
+
+```sh
+ocx agent sidecar web --backend parallel
+```
+
+The backend serves hosted search on routed models, including RunTurn adapters. It also serves
+`/v1/alpha/search` when neither the model's native search route nor the ChatGPT forward relay applies.
+The per-provider `webSearchBridge` uses its own backend setting.
+
+Each search sends its query to `https://mcp.parallel.ai/mcp` and returns excerpts with their original
+source links. OpenCodex sends its project User-Agent so Parallel can measure aggregate usage of its
+free MCP service. No Parallel account or API key is required. [Parallel terms](https://parallel.ai/customer-terms)
+and [privacy policy](https://parallel.ai/privacy-policy) apply.
 
 ## Web-search sidecar
 
