@@ -128,6 +128,22 @@ test("stops polling the web session when the login is aborted", async () => {
   await expect(readM365BrowserWebSession(browser, "context", ctrl.signal)).rejects.toThrow("fixture aborted");
   expect(fetches).toBe(1);
 });
+test("an abort during the HTML fallback never reads cookies even when the page returns a session", async () => {
+  const ctrl = new AbortController();
+  const methods: string[] = [];
+  const browser = { async command(method: string, params?: Record<string, unknown>) {
+    methods.push(method);
+    if (method === "Runtime.evaluate" && params?.awaitPromise) {
+      ctrl.abort(new Error("fixture aborted"));
+      return { result: { value: html() } };
+    }
+    if (method === "Runtime.evaluate") return { result: { value: "" } };
+    if (method === "Network.getCookies") return { cookies: [{ name: "OhpAuth", value: "fixture", domain: "copilot.cloud.microsoft", path: "/", secure: true }] };
+    return {};
+  } };
+  await expect(readM365BrowserWebSession(browser, "context", ctrl.signal)).rejects.toThrow("fixture aborted");
+  expect(methods).not.toContain("Network.getCookies");
+});
 
 test("dashboard connectivity probe uses live account metadata and never treats a stale catalog as connectivity", async () => {
   await saveCredential("m365-copilot", credential());

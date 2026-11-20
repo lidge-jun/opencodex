@@ -19,6 +19,8 @@ export async function readM365BrowserWebSession(browser: BrowserCommands, contex
     let accountId = result?.result?.value;
     if (typeof accountId !== "string" || !accountId) {
       const page = await browser.command("Runtime.evaluate", { expression: fetchChatHtml, awaitPromise: true, returnByValue: true }, context).catch(() => null);
+      // The fallback fetch can outlive a cancelled login; never read cookies after an abort.
+      signal.throwIfAborted();
       accountId = bootstrapAccountId(page?.result?.value);
     }
     if (accountId) {
