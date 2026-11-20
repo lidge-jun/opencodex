@@ -127,5 +127,6 @@ for stale defaults; `bun run structure:check` must pass.
 
 ## Verify
 
-`bun test tests/images tests/server/server-images.test.ts tests/server/server-images-xai-relay.test.ts`,
+`bun test tests/images` and, in a separate Bun process (a module mock in `tests/images/plan.test.ts`
+leaks into the server file when they share one), `bun test tests/server/server-images.test.ts tests/server/server-images-xai-relay.test.ts`;
 `bun test tests/ci-workflows/docs-spanish-localization.test.ts tests/ci-workflows/docs-link-targets.test.ts`, `bun run structure:check`, `bun run typecheck`, `bun run test:changed`.

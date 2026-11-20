@@ -127,14 +127,16 @@ The `video_gen` tool accepts:
 
 | Parameter | Type | Range | Description |
 |-----------|------|-------|-------------|
-| `prompt` | string | optional with an image | Text prompt |
+| `prompt` | string | optional with an image or frame | Text prompt |
 | `duration` | integer | 1-15 | Video length in seconds |
-| `resolution` | string | `480p`, `720p`, `1080p` | Model-dependent |
-| `aspect_ratio` | string | model-dependent | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2` |
+| `resolution` | string | `480p`, `720p`, `1080p` | Model-dependent; 720p at most with `last_frame`, `keyframes` or `reference_images` |
+| `aspect_ratio` | string | model-dependent | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2`; refused when only animating an `image`, which keeps its own ratio |
 | `image` | string | first frame | HTTPS URL, data URL or remembered artifact |
 | `last_frame` | string | 1.5 only | Last frame |
-| `keyframes` | array | 1.5, max 4 | `{image, timestamp_s}`; timestamp must be inside the clip |
-| `reference_images` | array | 1.5: 14, classic: 7 | Image references; 1.5 limited to 720p |
+| `keyframes` | array | 1.5, max 4 | `{image, timestamp_s}`; timestamp strictly inside the clip (8 s when `duration` is omitted) |
+| `reference_images` | array | 1.5: 14, classic: 7 | Image references; the classic model cannot combine them with `image` |
+
+Settings a model cannot honour are refused before any paid call instead of being dropped.
 
 ### Models and image inputs
 

@@ -147,6 +147,20 @@ test("appends safe validation detail on submit errors", async () => {
   await expect(submitVideoJob({ prompt: "p" }, auth, undefined, xai({ error: { message: "`last_frame` is not supported for this model." } }, 400))).rejects.toThrow("`last_frame` is not supported for this model.");
 });
 
+test("a stalled error body still yields the permanent HTTP status", async () => {
+  const stalled: VideoOutboundDependencies = {
+    ...xai({}, 401),
+    pinnedGet: async (_url, _pinned, signal) => new Response(new ReadableStream({
+      start(controller) { signal?.addEventListener("abort", () => controller.error(signal.reason), { once: true }); },
+    }), { status: 401, headers: { "Content-Type": "application/json" } }),
+  };
+  const controller = new AbortController();
+  const pending = pollVideoJob("r", auth, controller.signal, stalled).catch(e => e);
+  setTimeout(() => controller.abort(new DOMException("poll timeout", "TimeoutError")), 20);
+  const err = await pending;
+  expect(err.status).toBe(401);
+});
+
 test("poll errors carry only the validated detail as a separate field", async () => {
   await expect(pollVideoJob("r", auth, undefined, xai({ error: "1080p video resolution is not available for this model." }, 400)))
     .rejects.toMatchObject({ status: 400, detail: "1080p video resolution is not available for this model." });

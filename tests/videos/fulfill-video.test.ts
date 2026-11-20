@@ -151,14 +151,15 @@ describe("buildVideoResult", () => {
 
 test("model-specific frames, resolutions and limits are validated", () => {
   const parse = (v: object, model = "grok-imagine-video-1.5") => parseVideoCallArgs(JSON.stringify(v), model);
-  expect(parse({ image: "https://example.com/a", resolution: "1080p", aspect_ratio: "21:9" })).toMatchObject({ ok: true, resolution: "1080p", aspectRatio: "21:9" });
+  expect(parse({ prompt: "p", resolution: "1080p", aspect_ratio: "21:9" })).toMatchObject({ ok: true, resolution: "1080p", aspectRatio: "21:9" });
+  expect(parse({ image: "https://example.com/a", resolution: "1080p" })).toMatchObject({ ok: true, resolution: "1080p" });
   expect(parse({ prompt: "p", resolution: "1080p" }, "grok-imagine-video-1.5-lite")).toMatchObject({ ok: true, resolution: "1080p" });
   expect(parse({ prompt: "p", resolution: "1080p" }, "grok-imagine-video")).toEqual({ ok: false, error: "resolution 1080p is not supported by grok-imagine-video" });
   expect(parse({ prompt: "p", resolution: 1080 }, "grok-imagine-video")).toMatchObject({ ok: false });
   expect(parse({ prompt: "p", aspect_ratio: "21:9" }, "custom-video")).toMatchObject({ ok: false });
   expect(parse({ prompt: "p", last_frame: "https://example.com/a" }, "grok-imagine-video-1.5-lite")).toMatchObject({ ok: false });
   expect(parse({ prompt: "p", keyframes: Array(5).fill({ image: "https://example.com/a", timestamp_s: 1 }) })).toMatchObject({ ok: false });
-  expect(parse({ prompt: "p", reference_images: ["https://example.com/a"], resolution: "1080p" })).toMatchObject({ ok: false, error: "reference_images are limited to 720p" });
+  expect(parse({ prompt: "p", reference_images: ["https://example.com/a"], resolution: "1080p" })).toMatchObject({ ok: false, error: "reference_images, last_frame and keyframes are limited to 720p" });
 });
 
 test("failed polling reports safe code and detail", async () => {
@@ -172,6 +173,30 @@ test("an explicit duration outside 1-15 whole seconds is refused, never clamped 
   }
   expect(parseVideoCallArgs(JSON.stringify({ prompt: "p", duration: 15 }), "grok-imagine-video-1.5-lite")).toMatchObject({ ok: true, duration: 15 });
   expect(parseVideoCallArgs(JSON.stringify({ prompt: "p", duration: "8" }), "grok-imagine-video-1.5-lite")).toMatchObject({ ok: true, duration: 8 });
+});
+
+test("settings xAI cannot honour in the chosen mode are refused before a paid call", () => {
+  const full = (v: object) => parseVideoCallArgs(JSON.stringify({ prompt: "p", ...v }), "grok-imagine-video-1.5");
+  const img = "https://example.com/a.png";
+  // Image-to-video keeps the image's aspect ratio, so an explicit one cannot be honoured.
+  expect(full({ image: img, aspect_ratio: "16:9" })).toMatchObject({ ok: false });
+  expect(full({ aspect_ratio: "16:9" })).toMatchObject({ ok: true, aspectRatio: "16:9" });
+  expect(full({ image: img, reference_images: [img], aspect_ratio: "16:9" })).toMatchObject({ ok: true });
+  // A keyframe must sit inside the effective clip: xAI's 8 s default when duration is omitted.
+  expect(full({ keyframes: [{ image: img, timestamp_s: 7 }] })).toMatchObject({ ok: true });
+  expect(full({ keyframes: [{ image: img, timestamp_s: 8 }] })).toMatchObject({ ok: false });
+  expect(full({ keyframes: [{ image: img, timestamp_s: 9 }] })).toMatchObject({ ok: false });
+  expect(full({ duration: 10, keyframes: [{ image: img, timestamp_s: 9 }] })).toMatchObject({ ok: true });
+  // Pinned frames make it reference-to-video, which stops at 720p.
+  expect(full({ last_frame: img, resolution: "1080p" })).toMatchObject({ ok: false });
+  expect(full({ keyframes: [{ image: img, timestamp_s: 2 }], resolution: "1080p" })).toMatchObject({ ok: false });
+  expect(full({ image: img, resolution: "1080p" })).toMatchObject({ ok: true, resolution: "1080p" });
+  // The classic model takes a first frame or references, not both.
+  const classic = (v: object) => parseVideoCallArgs(JSON.stringify({ prompt: "p", ...v }), "grok-imagine-video");
+  expect(classic({ image: img })).toMatchObject({ ok: true });
+  expect(classic({ reference_images: [img] })).toMatchObject({ ok: true });
+  expect(classic({ image: img, reference_images: [img] })).toMatchObject({ ok: false });
+  expect(full({ image: img, reference_images: [img] })).toMatchObject({ ok: true });
 });
 
 test("a permanent poll error keeps only the validated detail", async () => {

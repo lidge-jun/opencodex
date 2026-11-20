@@ -6,6 +6,8 @@ export interface VideoModelCapabilities {
   maxKeyframes: number;
   maxReferenceImages: number;
   referenceMaxResolution?: string;
+  /** Whether a first frame may be combined with reference images (classic rejects the mix). */
+  firstFrameWithReferences: boolean;
 }
 
 export const DEFAULT_VIDEO_MODEL = "grok-imagine-video-1.5-lite";
@@ -24,5 +26,6 @@ export function videoModelCapabilities(model?: string): VideoModelCapabilities {
     maxKeyframes: full ? 4 : 0,
     maxReferenceImages: full ? 14 : classic ? 7 : 0,
     ...(full ? { referenceMaxResolution: "720p" } : {}),
+    firstFrameWithReferences: full,
   };
 }

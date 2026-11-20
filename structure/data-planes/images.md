@@ -59,7 +59,12 @@ The video bridge defaults to `grok-imagine-video-1.5-lite`. The 1.5 model suppor
 1080p, first and last frames, four keyframes and fourteen references capped at 720p;
 Lite supports 1080p and a first frame, while classic supports 720p, a first frame
 and seven references. Known models expose nine aspect ratios; unknown models retain
-the legacy seven ratios and no image inputs. Image inputs accept HTTPS and bounded
+the legacy seven ratios and no image inputs. `parseVideoCallArgs` refuses, before any paid
+call, every explicit setting the model cannot honour in the requested mode: an unsupported
+resolution, aspect ratio or duration; 1080p with `last_frame`, `keyframes` or references
+(reference-to-video stops at 720p); a keyframe outside the effective clip (8 s when no duration
+is given); classic `image` plus references; and an aspect ratio on plain image-to-video, which
+keeps the image's ratio. Image inputs accept HTTPS and bounded
 inline image data. A successful URL download records its original source URL in a
 256-entry, one-hour process-local map. Artifact references resolve by exact path or
 opaque ID without reading local files; they are forwarded only to the pinned xAI

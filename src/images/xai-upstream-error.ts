@@ -30,7 +30,15 @@ export function safeXaiErrorDetail(message: unknown): string | undefined {
 }
 
 export async function readSafeXaiErrorDetail(resp: Response, signal?: AbortSignal): Promise<string | undefined> {
-  const text = await readDisplaySafeErrorPayloadText(resp, signal);
+  // Best effort: the HTTP status is already known, so a stalled or aborted body read must not
+  // replace it with a status-less error. Callers check their own signal for cancellation.
+  let text: string;
+  try {
+    text = await readDisplaySafeErrorPayloadText(resp, signal);
+  } catch {
+    try { await resp.body?.cancel(); } catch { /* already errored or locked */ }
+    return undefined;
+  }
   try {
     const payload: unknown = JSON.parse(text);
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;

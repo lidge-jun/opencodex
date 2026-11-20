@@ -19,6 +19,8 @@ export interface ParsedVideoArgs {
 }
 
 const INITIAL_POLL_INTERVAL_MS = 5_000;
+/** xAI's clip length when a request names no duration. */
+const XAI_DEFAULT_VIDEO_SECONDS = 8;
 const MAX_POLL_INTERVAL_MS = 15_000;
 const POLL_BACKOFF = 1.5;
 const DEFAULT_VIDEO_TIMEOUT_MS = 300_000; // 5 min
@@ -95,14 +97,27 @@ export function parseVideoCallArgs(raw: string, model?: string):
     if (!Array.isArray(obj.keyframes) || obj.keyframes.length > caps.maxKeyframes) return { ok: false, error: "invalid keyframes" };
     result.keyframes = [];
     for (const frame of obj.keyframes) {
-      if (!frame || typeof frame !== "object" || typeof frame.image !== "string" || !frame.image || typeof frame.timestamp_s !== "number" || !Number.isFinite(frame.timestamp_s) || frame.timestamp_s <= 0 || (result.duration !== undefined && frame.timestamp_s >= result.duration)) return { ok: false, error: "invalid keyframe" };
+      // Strictly inside the clip that will be generated: xAI uses 8 s when duration is omitted.
+      const clip = result.duration ?? XAI_DEFAULT_VIDEO_SECONDS;
+      if (!frame || typeof frame !== "object" || typeof frame.image !== "string" || !frame.image || typeof frame.timestamp_s !== "number" || !Number.isFinite(frame.timestamp_s) || frame.timestamp_s <= 0 || frame.timestamp_s >= clip) return { ok: false, error: `invalid keyframe: timestamp_s must be inside the ${clip}s clip` };
       result.keyframes.push({ image: frame.image, timestampS: frame.timestamp_s });
     }
   }
   if (obj.reference_images !== undefined) {
     if (!Array.isArray(obj.reference_images) || obj.reference_images.length > caps.maxReferenceImages || obj.reference_images.some(value => typeof value !== "string" || !value)) return { ok: false, error: "invalid reference_images" };
     result.referenceImages = obj.reference_images;
-    if (result.referenceImages!.length && result.resolution === "1080p" && caps.referenceMaxResolution === "720p") return { ok: false, error: "reference_images are limited to 720p" };
+  }
+  const references = (result.referenceImages?.length ?? 0) > 0;
+  // Pinned last/key frames and references all make it reference-to-video, which stops at 720p.
+  if ((references || result.lastFrame || result.keyframes?.length) && result.resolution === "1080p" && caps.referenceMaxResolution === "720p") {
+    return { ok: false, error: "reference_images, last_frame and keyframes are limited to 720p" };
+  }
+  if (result.image && references && !caps.firstFrameWithReferences) {
+    return { ok: false, error: `image and reference_images cannot be combined on ${model ?? "unknown"}` };
+  }
+  // Image-to-video keeps the input image's aspect ratio; an explicit one would be ignored.
+  if (result.image && result.aspectRatio && !references && !result.lastFrame && !result.keyframes?.length) {
+    return { ok: false, error: "aspect_ratio is ignored when animating an image: the video keeps the image's aspect ratio" };
   }
   if (!prompt && !result.image && !result.lastFrame && !result.keyframes?.length && !result.referenceImages?.length) return { ok: false, error: "missing prompt" };
 
