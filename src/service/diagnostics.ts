@@ -287,6 +287,28 @@ export function diagnoseService(): ServiceDiagnostic {
   return { supported: false, installed: false, enabled: false, running: false, viable: false, startable: false, stale: false, conflict: false, backend: null, summary: `unsupported on ${process.platform}` };
 }
 
+/**
+ * What a FOREGROUND `ocx start` tells the operator when the managed service this home
+ * registered is installed but not serving. `ocx status` renders that state at length
+ * (`deriveLaunchdServiceDiagnostic` and the platform derive functions above it, and the
+ * tray/update paths act on it), but start historically said nothing before binding: the
+ * foreground proxy then ends with the terminal that launched it, nothing restarts it, and
+ * the outage outlives the person who typed the command. Pure so every verdict is testable
+ * without a live manager.
+ *
+ * Silent on purpose when nothing is wrong (running), when no service is installed, on
+ * unsupported platforms, and when another manager holds a conflict — the conflict's own
+ * summary already says who owns the port, and `repair` must not be aimed at a foreign
+ * registration.
+ */
+export function foregroundStartServiceAdvisoryLines(service: ServiceDiagnostic): readonly string[] {
+  if (!service.supported || !service.installed || service.running || service.conflict) return [];
+  return [
+    `⚠️  The managed background service is not serving (${service.summary}).`,
+    "   This foreground proxy ends with this terminal and nothing restarts it; consider 'ocx service repair' to restore the supervised service instead.",
+  ];
+}
+
 export interface SystemdServiceDiagnosticInputs {
   installed: boolean;
   enabled: boolean;

@@ -130,7 +130,7 @@ import { confirmGuardedFreed, inspectGuardedTarget, noServiceStop, observeGuarde
 import { runCli } from "./root";
 import { isProcessAlive, ProxyOwnershipRefusedError, refusalNextStep, stopProxy } from "../lib/process-control";
 import { startupDataPlaneToken } from "../lib/service-secrets";
-import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatePaths, serviceStatusSummary, uninstallServiceIfInstalled, uninstallServiceDetailed } from "../service";
+import { assertNotAdminToken, diagnoseService, foregroundStartServiceAdvisoryLines, isServiceOwnershipError, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatePaths, serviceStatusSummary, uninstallServiceIfInstalled, uninstallServiceDetailed } from "../service";
 import { completeWindowsServiceStopReceipt } from "../service/cli-windows-stop";
 import { acquireOwnershipMutationLease } from "../service/ownership-mutation-lease.mjs";
 import { formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
@@ -500,6 +500,16 @@ async function handleStart(options: { block?: boolean } = {}) {
       start: afterPublish => startClientRuntime({ port: requestedPort, block: options.block, afterPublish }),
     });
     return;
+  }
+
+  // A foreground start on this path binds and serves in this terminal. When the home's managed
+  // service is registered but not serving, say so before binding: the foreground proxy ends with
+  // the terminal that launched it and nothing restarts it, so the outage outlives the person who
+  // typed the command. `ocx status` renders the same state; start said nothing. Managed children
+  // stay out above, the client branch returned, and a restart handoff is machine-driven — none
+  // of them is an operator typing in a terminal this run answers to.
+  if (!owner.live && !supervisedServiceChild && restartParent.restartParentPid === null) {
+    for (const line of foregroundStartServiceAdvisoryLines(diagnoseService())) console.warn(line);
   }
 
   // Managed service children may defer before binding (serving-runtimes.ts).
