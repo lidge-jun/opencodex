@@ -94,9 +94,10 @@ spawned process arguments. No request-body logging is added.
 `src/cli/message-claude-command.ts` validates the explicit `claude-sessions`
 invocation before `src/messaging/claude-discovery.ts` spawns one user-selected
 absolute Claude executable with fixed `agents --json` arguments. The subprocess
-receives no stdin, uses only path, home and locale environment variables,
-and has a five-second deadline and 256 KiB output limit. Cancellation stops
-only the owned subprocess; raw CLI diagnostics are discarded.
+receives no stdin or inherited credentials, disables Claude's nonessential
+traffic, and has a five-second deadline and 256 KiB output limit. An explicit
+`CLAUDE_CODE_DISABLE_AGENT_VIEW=1` refuses before spawn. Cancellation stops
+only the directly owned executable; raw CLI diagnostics are discarded.
 
 The snapshot has at most 256 source rows. Entries without a full session ID or
 process ID are skipped. Invalid or duplicate participating rows fail the

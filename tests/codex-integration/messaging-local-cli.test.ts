@@ -108,9 +108,9 @@ test.skipIf(process.platform === "win32")("Claude discovery projects live sessio
     ANTHROPIC_API_KEY: "fixture-private-env",
   };
   const cli = [process.execPath, repoPath("src/cli/index.ts"), "message", "claude-sessions"];
-  const run = async (args: string[]) => {
+  const run = async (args: string[], extraEnv: Record<string, string> = {}) => {
     const child = Bun.spawn([...cli, ...args], {
-      env, stdin: new Blob(["fixture-private-stdin\n"]), stdout: "pipe", stderr: "pipe",
+      env: { ...env, ...extraEnv }, stdin: new Blob(["fixture-private-stdin\n"]), stdout: "pipe", stderr: "pipe",
     });
     const timer = setTimeout(() => child.kill(), 10_000);
     try {
@@ -125,6 +125,7 @@ test.skipIf(process.platform === "win32")("Claude discovery projects live sessio
 [ "$#" -eq 2 ] && [ "$1" = agents ] && [ "$2" = --json ] || exit 40
 if IFS= read -r line; then exit 41; fi
 [ -z "$ANTHROPIC_API_KEY" ] || exit 44
+[ "$CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" = 1 ] || exit 45
 printf '%s\\n' fixture-private-stderr >&2
 /bin/cat "\${0%/*}/response.json" || exit 42
 if [ -f "\${0%/*}/fail" ]; then exit 43; fi
@@ -139,6 +140,9 @@ if [ -f "\${0%/*}/hang" ]; then exec /bin/sleep 30; fi
       ...records, { sessionId: LOCAL_TARGET, summary: "fixture-private-stopped" }, { pid: 987, status: "busy" },
     ]));
     const args = ["--claude", executable];
+    const disabled = await run([...args, "--json"], { CLAUDE_CODE_DISABLE_AGENT_VIEW: "1" });
+    expect(disabled.exitCode).toBe(1);
+    expect(JSON.parse(disabled.stdout).error.code).toBe("claude_agent_view_disabled");
     const json = await run([...args, "--json"]);
     expect(json.exitCode).toBe(0);
     expect(json.stderr).toBe("");
