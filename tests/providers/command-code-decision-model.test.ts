@@ -54,26 +54,25 @@ describe("Command Code decision models are not chat models", () => {
   });
 
   test("the request guard matches native, encoded and case-varied decision ids only", () => {
-    for (const id of ["typesafe/jev", JEV, "TypeSafe/JEV-2", "typesafe-jev-1.14.0", " typesafe/jev ", "vendor/typesafe/jev"]) {
+    for (const id of ["typesafe/jev", JEV, "TypeSafe/JEV-2", "typesafe-jev-1.14.0", " typesafe/jev ", "vendor/typesafe/jev", "vendor-typesafe-jev"]) {
       expect(isCommandCodeDecisionModel(id), id).toBe(true);
     }
-    // The encoded form is prefix-anchored: the API-key preset pins claude-* ids to its Messages
-    // wire, and no claude-* id or unrelated vendor id may read as a decision model.
-    for (const id of [SERVED, "jev-1.13", "zai-org/GLM-5.3", "deepseek-v4-flash", "typesafe/other", "claude-typesafe-jev", "vendor-typesafe-jev"]) {
+    for (const id of [SERVED, "jev-1.13", "zai-org/GLM-5.3", "deepseek-v4-flash", "typesafe/other", "claude-sonnet-5-5", "typesafe/je-v"]) {
       expect(isCommandCodeDecisionModel(id), id).toBe(false);
     }
   });
 
-  test("request admission refuses exactly the native ids discovery hides", () => {
+  test("request admission refuses exactly the ids discovery hides, and every encoded slug of them", () => {
     const ids = ["typesafe/jev", JEV, "TypeSafe/JEV-2", "vendor/typesafe/jev", "typesafe/jevons", SERVED,
-      "typesafe/other", "claude-sonnet-5-5", "jev-1.13", "typesafe-jev-1.14.0"];
+      "typesafe/other", "claude-sonnet-5-5", "jev-1.13", "typesafe-jev-1.14.0", "vendor/typesafe-jev"];
     const discovery = resolveProviderModelDiscovery("command-code", { adapter: "command-code", baseUrl: "https://api.commandcode.ai", authMode: "oauth" });
     const result = extractProviderModelItems({ data: ids.map(id => ({ id, object: "model" })) }, discovery);
     expect(result.ok).toBe(true);
     const admitted = new Set(result.ok ? result.items.map(item => item.id) : []);
-    // Native (slash) ids: hidden by discovery if and only if refused at admission.
-    for (const id of ids.filter(candidate => candidate.includes("/"))) {
+    for (const id of ids) {
       expect(admitted.has(id), id).toBe(!isCommandCodeDecisionModel(id));
+      // The Codex-facing slug folds slashes to dashes; a hidden id's slug is refused too.
+      if (!admitted.has(id)) expect(isCommandCodeDecisionModel(id.replaceAll("/", "-")), id).toBe(true);
     }
   });
 
@@ -203,7 +202,8 @@ describe("a chat request that reaches a Command Code decision model fails fast",
   test("a stale encoded selection with an empty discovery cache is refused before any send", async () => {
     await login();
     const cfg = config([]);
-    for (const model of ["command-code/typesafe-jev-1.14.0", "commandcode/typesafe-jev-1.14.0", "command-code/TypeSafe/JEV"]) {
+    for (const model of ["command-code/typesafe-jev-1.14.0", "commandcode/typesafe-jev-1.14.0", "command-code/TypeSafe/JEV",
+      "command-code/vendor-typesafe-jev", "commandcode/vendor-typesafe-jev"]) {
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ model, input: "hello", stream: false }),

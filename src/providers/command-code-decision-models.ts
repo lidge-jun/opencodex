@@ -12,12 +12,17 @@
  */
 import type { ProviderModelDiscoveryFilter } from "./registry/types";
 
-/** The native id fragment every decision model carries; the discovery filter matches it as a substring. */
+/** The native id fragment every decision model carries. */
 export const COMMAND_CODE_DECISION_MODEL_ID_FRAGMENT = "typesafe/jev";
+/** The same fragment with the slash folded to a dash, as Codex-facing encoded slugs carry it. */
+const ENCODED_DECISION_MODEL_ID_FRAGMENT = "typesafe-jev";
 
-/** Discovery admission shared by both Command Code presets: decision rows are not chat rows. */
+/**
+ * Discovery admission shared by both Command Code presets: decision rows are not chat rows. Both
+ * spellings are matched so discovery hides exactly the ids request admission refuses.
+ */
 export const COMMAND_CODE_DECISION_MODEL_DISCOVERY_FILTER: ProviderModelDiscoveryFilter = {
-  noneOf: [{ path: ["id"], containsAny: [COMMAND_CODE_DECISION_MODEL_ID_FRAGMENT], caseInsensitive: true }],
+  noneOf: [{ path: ["id"], containsAny: [COMMAND_CODE_DECISION_MODEL_ID_FRAGMENT, ENCODED_DECISION_MODEL_ID_FRAGMENT], caseInsensitive: true }],
 };
 
 /** Where Command Code serves the decision models. */
@@ -27,16 +32,13 @@ export const COMMAND_CODE_SYSTEMONE_ENDPOINT = "https://api.commandcode.ai/provi
 export const COMMAND_CODE_API_HOST = "api.commandcode.ai";
 
 /**
- * True for a Command Code decision model id. Two forms:
- * - native ids, with exactly the discovery filter's semantics (case-insensitive substring
- *   `typesafe/jev`), so request admission refuses every id discovery hides;
- * - the Codex-facing encoded form (`typesafe-jev...`, slash folded to a dash) that a stale
- *   selection can still send after discovery stopped listing the row. Prefix-anchored, so an id
- *   such as `claude-typesafe-jev` that the API-key preset pins to its Messages wire never matches.
+ * True for a Command Code decision model id: the id, with every slash folded to a dash, contains
+ * `typesafe-jev` (case-insensitive). On native ids this is exactly the discovery filter (either
+ * spelling), and it also covers the Codex-facing encoded slug of every id discovery hides, which a
+ * stale selection can still send after discovery stopped listing the row.
  */
 export function isCommandCodeDecisionModel(modelId: string): boolean {
-  const id = modelId.trim().toLowerCase();
-  return id.includes(COMMAND_CODE_DECISION_MODEL_ID_FRAGMENT) || id.startsWith("typesafe-jev");
+  return modelId.toLowerCase().replaceAll("/", "-").includes(ENCODED_DECISION_MODEL_ID_FRAGMENT);
 }
 
 /** True when a provider's baseUrl points at Command Code, whatever the provider is named. */
