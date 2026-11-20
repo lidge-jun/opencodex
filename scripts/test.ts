@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { SUPERVISOR_MARKER_ENVS } from "../src/lib/supervisor-markers";
 import { gitRepositoryEnvNames, withoutGitRepositoryEnv } from "./git-repository-env";
 import { getTestRunnerBun } from "./lib/test-runner-bun";
 import {
@@ -26,7 +27,8 @@ export interface IsolatedTestEnvironment {
 }
 
 /**
- * Settings from the developer's own OpenCodex install that the sandbox must not inherit. A
+ * Live credentials, service identity, and settings from the developer's own OpenCodex install that
+ * the sandbox must not inherit. A
  * Windows install stores its data-plane token as a user environment variable, so every shell on
  * that machine carries it; a test that then builds a service definition or starts a proxy reads
  * the live token instead of its fixture and fails only on a developer machine.
@@ -36,7 +38,16 @@ export const LIVE_INSTALL_ENV = [
   "OPENCODEX_ADMIN_AUTH_TOKEN",
   "OCX_API_TOKEN_FILE",
   "OCX_MANAGED_RELEASE",
+  "OCX_SERVICE",
+  ...SUPERVISOR_MARKER_ENVS,
 ] as const;
+
+export function liveInstallEnvNames(env: NodeJS.ProcessEnv): string[] {
+  return Object.keys(env).filter(name => {
+    const match = process.platform === "win32" ? name.toUpperCase() : name;
+    return LIVE_INSTALL_ENV.some(liveName => liveName === match);
+  });
+}
 
 export function createIsolatedTestEnvironment(
   baseEnv: Record<string, string | undefined> = process.env,
@@ -72,7 +83,7 @@ export function createIsolatedTestEnvironment(
   }
   writeTestTempOwner(root, baseEnv[TEST_RUN_ID_ENV]);
   const inherited = { ...baseEnv };
-  for (const name of LIVE_INSTALL_ENV) delete inherited[name];
+  for (const name of liveInstallEnvNames(inherited)) delete inherited[name];
   // A GIT_DIR/GIT_WORK_TREE inherited from a hook or wrapper re-points every git command the suite
   // spawns, and fixture helpers then init, configure and commit into that repository. Starting the
   // children without them also covers Bun.spawn calls that pass no env (scripts/git-repository-env.ts).

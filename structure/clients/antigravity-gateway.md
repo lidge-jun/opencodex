@@ -105,3 +105,7 @@ instance refuses the mutations. `ocx connect|disconnect antigravity|agy` and
 `ocx connect antigravity|agy status` in `src/cli/gateway-client-command.ts` call those routes through the
 running proxy and run the same connectors in-process when the proxy is not running. The dispatch branch sits
 before the hub `connect` logic and the disconnect restart flow, which are about a remote hub and do not apply.
+
+The Gemini-compatible gateway surface uses the [Gemini inbound dispatcher](../data-planes/gemini-inbound.md).
+The optional [Antigravity OAuth native leg](../data-planes/gemini-native.md) is configured in
+OpenCodex and selected for an eligible route after admission.

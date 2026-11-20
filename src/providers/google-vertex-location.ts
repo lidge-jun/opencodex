@@ -1,5 +1,6 @@
 /**
- * Vertex regional hosts are formed as `<location>-aiplatform.googleapis.com`.
+ * Vertex regional hosts are formed as `<location>-aiplatform.googleapis.com`, and the `us`/`eu`
+ * multi-regions as `aiplatform.<location>.rep.googleapis.com` (vertexHostForLocation).
  * Restricting the location to one lowercase DNS label keeps user configuration
  * from changing the request authority while remaining forward-compatible with
  * new Google regions and multi-regions.

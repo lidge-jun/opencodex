@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -134,6 +135,7 @@ export const ja: Record<TKey, string> = {
   "workflowBudget.saveFailed": "ワークフロー上限を保存できませんでした。",
   "workflowBudget.saved": "ワークフロー上限を保存しました。",
   ...desktopCompatibilityCopy("ja"),
+  ...accountProbeCopy("ja"),
   ...shellV2Copy("ja"),
   ...codexCliUpdateCopy("ja"),
   ...remoteLinkDiagnosticsCopy("ja"),
@@ -1758,7 +1760,7 @@ export const ja: Record<TKey, string> = {
   "modal.invalidPreset": "この組み込みプロバイダープリセットは不完全です。プロキシを再起動してもう一度お試しください。",
   "modal.freeTierTitle": "無料枠",
   "modal.subscriptionCliTitle": "サブスクリプション CLI（API キーではありません）",
-  "modal.subscriptionCliWarning": "このプロバイダーは API キーを使用しません。このマシンでサインイン済みの公式 Claude Code CLI（{cmd}）を実行し、その Claude サブスクリプションアカウントに課金されます。OpenCodex はキーを保存せず、ここに入力したキーが使われることもありません。API キーで課金する場合は、代わりに {apiProvider} を追加してください。",
+  "modal.subscriptionCliWarning": "このプロバイダーは API キーを使用しません。このマシンでサインイン済みの公式 {cli}（{cmd}）を実行し、その {plan} サブスクリプションアカウントに課金されます。OpenCodex はキーを保存せず、ここに入力したキーが使われることもありません。API キーで課金する場合は、代わりに {apiProvider} を追加してください。",
   "modal.subscriptionCliWarningAgy": "このプロバイダーは、プロキシホストでサインイン済みの公式 Antigravity CLI（{cmd}）を使用します。利用料金はその Google Antigravity アカウントに請求されます。Google が認めるのは、ユーザーが指示する対話的な利用のみです。OpenCodex はサブエージェントのターン、コンボ、サブエージェントのフォールバックルーティングを拒否し、観測した接続からローカルかどうかを判定します。未登録のループバック中継が転送ヘッダーを一切渡さない場合、リモートのリクエストがローカルに見えることがあります。公開リスナーでは、リバースプロキシを dashboardTrustedProxy に登録するか、このポートを中継しないでください。API キーは不要で、保存もされません。プログラムによる利用や共有ワークロードには、代わりに {apiProvider} を追加してください。",
   "modal.freeTierDefault": "API キー不要です。そのまま利用できます。",
   "modal.tab.accounts": "アカウント",
@@ -1967,6 +1969,7 @@ export const ja: Record<TKey, string> = {
   "pws.doctorCopyUnavailable": "クリップボードを利用できません",
   "pws.healthLabel.rateLimited": "レート制限中",
   "pws.healthLabel.quotaLimited": "クォータ制限中",
+  "pws.healthLabel.accountSuspended": "アカウント停止",
   "pws.healthLabel.reauthRequired": "再認証が必要です",
   "pws.healthLabel.refreshFailed": "更新に失敗しました",
   "pws.healthLabel.metadataMismatch": "メタデータの不一致",
@@ -1975,6 +1978,7 @@ export const ja: Record<TKey, string> = {
   "pws.healthLabel.credentialConflict": "資格情報の競合",
   "pws.healthSummary.rateLimited": "{provider} {account}: {until} までレート制限中です。それまでこのアカウントのルーティングは停止します。",
   "pws.healthSummary.quotaLimited": "{provider} {account}: {until} までクォータ制限中です。それまでこのアカウントのルーティングは停止します。",
+  "pws.healthSummary.accountSuspended": "{provider} {account}：プロバイダーがこのアカウントを停止しました。再ログインする前に、プロバイダーに異議を申し立ててください。",
   "pws.healthSummary.reauthRequired": "{provider} {account}: 再認証が必要です。",
   "pws.healthSummary.credentialConflict": "{provider} {account}: 資格情報の競合があります。",
   "pws.healthSummary.metadataMismatch": "{provider} {account}: メタデータが一致しません。",
@@ -2823,7 +2827,9 @@ export const ja: Record<TKey, string> = {
   "accountPool.strategy": "ローテーション戦略",
   "accountPool.strategyDesc": "OpenCodex が新規/未紐付けタスクへアカウントを割り当てる方法です。",
   "accountPool.strategyResetFirst": "リセットが近い順",
+  "accountPool.strategyResetNearWeighted": "最も近いリセットを重み付け",
   "accountPool.strategyHintResetFirst": "使用率のしきい値未満から、次の5時間枠または週次枠のリセットが最も近いアカウントを選びます。紐付け済みタスクは設定されたアフィニティ方針に従います。独立したモデル枠は使用率順です。",
+  "accountPool.strategyHintResetNearWeighted": "条件を満たすアカウントのうち、週次リセットが最も近いものに新規割り当ての約半分を振り分けます。条件を満たすアカウントがなければ、均等に割り当てます。",
   "accountPool.strategyQuota": "クォータ",
   "accountPool.strategyRoundRobin": "ラウンドロビン",
   "accountPool.strategyFillFirst": "フィルファースト",

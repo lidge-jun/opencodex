@@ -297,6 +297,8 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
     const ingresses = [
       { path: `/v1beta/models/${model}:generateContent`, payload: geminiBody, refusal: geminiRefusal },
       { path: `/v1beta/models/${model}:streamGenerateContent?alt=sse`, payload: geminiBody, refusal: geminiRefusal },
+      { path: "/v1beta/interactions", payload: { model, input: "hello", stream: true }, refusal: geminiRefusal },
+      { path: "/v1/interactions", payload: { model, input: "hello", stream: true }, refusal: geminiRefusal },
       { path: "/api/chat", payload: { model, messages: [{ role: "user", content: "hello" }], stream: false }, refusal: ollamaRefusal },
       { path: "/api/generate", payload: { model, prompt: "hello", stream: true }, refusal: ollamaRefusal },
     ];
@@ -317,7 +319,7 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
     ];
 
     for (const { path, payload, refusal } of ingresses) {
-      const gemini = path.startsWith("/v1beta/");
+      const gemini = path.startsWith("/v1");
       const cases: Array<{ name: string; headers: Record<string, string>; body: unknown; status: number; refusal: unknown }> =
         headerCases.map(([name, headers]) => ({ name, headers, body: payload, status: 403, refusal }));
       // Gemini accepts extra top-level fields. Ollama rejects unknown request fields before routing.

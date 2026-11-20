@@ -50,6 +50,20 @@ export async function loadGatewayClients(apiBase: string, signal?: AbortSignal):
 
 const RESTORES = new Set(["exact", "path-wise", "none"]);
 
+type ActionBody = { ok?: unknown; code?: unknown; message?: unknown; profilePath?: unknown; changed?: unknown; restore?: unknown };
+
+function actionOutcome(statusOk: boolean, body: ActionBody): GatewayClientActionOutcome {
+  return {
+    reached: true,
+    ok: statusOk && body.ok === true,
+    code: typeof body.code === "string" ? body.code : null,
+    message: typeof body.message === "string" && body.message ? body.message : null,
+    profilePath: typeof body.profilePath === "string" && body.profilePath.startsWith("~/") ? body.profilePath : null,
+    changed: body.changed === true,
+    restore: typeof body.restore === "string" && RESTORES.has(body.restore) ? body.restore as GatewayClientActionOutcome["restore"] : null,
+  };
+}
+
 /** A refusal (409, 400, 404) carries its own code, so it is read rather than discarded. */
 export async function runGatewayClientAction(
   apiBase: string,
@@ -58,24 +72,19 @@ export async function runGatewayClientAction(
   model?: string,
 ): Promise<GatewayClientActionOutcome> {
   try {
-    // A refusal's JSON carries the code the page translates, so the body is read on every status;
-    // `ok` below still requires response.ok.
-    // react-doctor-disable-next-line react-doctor/no-fetch-response-used-without-status-check
     const response = await fetch(`${apiBase}/api/gateway-clients/${id}/${action}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(model ? { model } : {}),
     });
-    const body = await response.json() as { ok?: unknown; code?: unknown; message?: unknown; profilePath?: unknown; changed?: unknown; restore?: unknown };
-    return {
-      reached: true,
-      ok: response.ok && body.ok === true,
-      code: typeof body.code === "string" ? body.code : null,
-      message: typeof body.message === "string" && body.message ? body.message : null,
-      profilePath: typeof body.profilePath === "string" && body.profilePath.startsWith("~/") ? body.profilePath : null,
-      changed: body.changed === true,
-      restore: typeof body.restore === "string" && RESTORES.has(body.restore) ? body.restore as GatewayClientActionOutcome["restore"] : null,
-    };
+    if (!response.ok) {
+      // A 4xx refusal may carry an action code. Other failure statuses have no action body.
+      if (response.status < 400 || response.status >= 500) {
+        return { reached: true, ok: false, code: null, message: null, profilePath: null, changed: false, restore: null };
+      }
+      return actionOutcome(false, await response.json() as ActionBody);
+    }
+    return actionOutcome(true, await response.json() as ActionBody);
   } catch {
     return { reached: false, ok: false, code: null, message: null, profilePath: null, changed: false, restore: null };
   }

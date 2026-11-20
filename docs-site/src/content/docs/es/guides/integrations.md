@@ -778,3 +778,9 @@ variables `AGY_LLM_GATEWAY_*` y después la configuración del usuario. El estad
 configuración de la organización y las variables de entorno que puede ver. Solo consulta el entorno
 del proceso de OpenCodex. Si la variable se fija únicamente en el proceso de Antigravity, el estado
 no la detecta. En Windows `agy` no está probado, porque Google lo publica solo para macOS y Linux.
+
+Para conservar el JSON de Gemini, inicia sesión con `ocx login google-antigravity` y configura
+`protocols.rollout.geminiNativeAntigravity` como `true` en el JSON de OpenCodex. Esta opción se
+aplica a las solicitudes de generación Gemini de `/v1beta` que se enrutan al proveedor OAuth
+canónico `google-antigravity`. Las demás rutas usan el puente de Chat.
+Consulta [Gemini nativo con Antigravity](/es/reference/proxy-formats/#native-gemini-with-antigravity).

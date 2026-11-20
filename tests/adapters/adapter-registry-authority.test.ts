@@ -29,6 +29,7 @@ const EXPECTED_ADAPTER_NAMES = {
   qoder: "qoder",
   "agy-acp": "agy-acp",
   "claude-cli": "claude-cli",
+  "step-cli": "step-cli",
   "dsh-account": "dsh-account",
 } as const;
 

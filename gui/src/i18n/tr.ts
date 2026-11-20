@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -135,6 +136,7 @@ export const tr: Record<TKey, string> = {
   "workflowBudget.saveFailed": "İş akışı sınırları kaydedilemedi.",
   "workflowBudget.saved": "İş akışı sınırları kaydedildi.",
   ...desktopCompatibilityCopy("tr"),
+  ...accountProbeCopy("tr"),
   ...shellV2Copy("tr"),
   ...codexCliUpdateCopy("tr"),
   ...remoteLinkDiagnosticsCopy("tr"),
@@ -1861,7 +1863,7 @@ export const tr: Record<TKey, string> = {
   "modal.invalidPreset": "Bu yerleşik sağlayıcı ayarı eksik.",
   "modal.freeTierTitle": "Ücretsiz katman",
   "modal.subscriptionCliTitle": "Abonelik CLI'si, API anahtarı değil",
-  "modal.subscriptionCliWarning": "Bu sağlayıcı API anahtarı kullanmaz. Bu makinede oturum açılmış resmi Claude Code CLI'sini ({cmd}) çalıştırır ve ücreti o Claude abonelik hesabına yansıtır. OpenCodex bunun için anahtar saklamaz ve buraya girilen bir anahtar asla kullanılmaz. API anahtarıyla faturalandırma için bunun yerine {apiProvider} ekleyin.",
+  "modal.subscriptionCliWarning": "Bu sağlayıcı API anahtarı kullanmaz. Bu makinede oturum açılmış resmi {cli} aracını ({cmd}) çalıştırır ve ücreti o {plan} abonelik hesabına yansıtır. OpenCodex bunun için anahtar saklamaz ve buraya girilen bir anahtar asla kullanılmaz. API anahtarıyla faturalandırma için bunun yerine {apiProvider} ekleyin.",
   "modal.subscriptionCliWarningAgy": "Bu sağlayıcı, proxy sunucusunda oturum açılmış resmi Antigravity CLI’yi ({cmd}) kullanır. Kullanım ücreti bu Google Antigravity hesabına yansıtılır. Google yalnızca kullanıcının yönlendirdiği etkileşimli kullanıma izin verir. OpenCodex alt ajan turlarını, kombinasyonları ve alt ajan yedek yönlendirmesini reddeder ve isteğin yerel olup olmadığını gözlemlediği bağlantıdan belirler. Tanımlanmamış bir loopback aktarıcısı, yönlendirme başlıklarını iletmezse uzak istekler yerel görünebilir. Genel dinleyici için ters proxy’yi dashboardTrustedProxy içinde tanımlayın veya bu bağlantı noktasını aktarmayın. API anahtarı gerekmez ve saklanmaz. Program aracılığıyla yürütülen işler veya paylaşımlı kullanım için {apiProvider} ekleyin.",
   "modal.freeTierDefault": "API anahtarı gerekmez. Doğrudan çalışır.",
   "modal.tab.accounts": "Hesaplar",
@@ -2086,6 +2088,7 @@ export const tr: Record<TKey, string> = {
   "pws.healthCooldownHint": "Soğuma süresi bitene kadar bekleyin.",
   "pws.healthLabel.rateLimited": "Oran kısıtlandı",
   "pws.healthLabel.quotaLimited": "Kota kısıtlandı",
+  "pws.healthLabel.accountSuspended": "Hesap askıya alındı",
   "pws.healthLabel.reauthRequired": "Yeniden doğrulama gerekli",
   "pws.healthLabel.refreshFailed": "Yenileme başarısız oldu",
   "pws.healthLabel.metadataMismatch": "Meta veri uyuşmazlığı",
@@ -2094,6 +2097,7 @@ export const tr: Record<TKey, string> = {
   "pws.healthLabel.credentialConflict": "Kimlik bilgisi çakışması",
   "pws.healthSummary.rateLimited": "{provider} {account}: {until} tarihine kadar oran kısıtlandı.",
   "pws.healthSummary.quotaLimited": "{provider} {account}: {until} tarihine kadar kota kısıtlandı.",
+  "pws.healthSummary.accountSuspended": "{provider} {account}: sağlayıcı bu hesabı askıya aldı. Tekrar giriş yapmadan önce sağlayıcıya itiraz edin.",
   "pws.healthSummary.reauthRequired": "{provider} {account}: yeniden doğrulama gerekli.",
   "pws.healthSummary.credentialConflict": "{provider} {account}: kimlik bilgisi çakışması.",
   "pws.healthSummary.metadataMismatch": "{provider} {account}: meta veri uyuşmazlığı.",
@@ -2942,7 +2946,9 @@ export const tr: Record<TKey, string> = {
   "accountPool.strategy": "Rotasyon stratejisi",
   "accountPool.strategyDesc": "OpenCodex'in yeni bir göreve nasıl hesap atayacağı.",
   "accountPool.strategyResetFirst": "En yakın sıfırlama önce",
+  "accountPool.strategyResetNearWeighted": "En yakın sıfırlamaya göre ağırlıklı",
   "accountPool.strategyHintResetFirst": "Eşiğin altındaki hesaplar arasından sonraki 5 saatlik veya haftalık sıfırlaması en yakın olanı seçer. Bağlı görevler yapılandırılmış bağlılık politikasını izler. Bağımsız model kotaları kullanıma göre sıralanır.",
+  "accountPool.strategyHintResetNearWeighted": "Koşulları karşılayan hesaplardan haftalık kotası en yakında sıfırlanacak olan, yeni atamaların yaklaşık yarısını alır. Hiçbiri koşulları karşılamazsa atamalar eşit olarak sırayla dağıtılır.",
   "accountPool.strategyQuota": "Kota",
   "accountPool.strategyRoundRobin": "Round-robin",
   "accountPool.strategyFillFirst": "İlk doldurma",

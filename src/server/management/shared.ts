@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { captureInitialSelectionBaseline, finalizeInitialModelSelection } from "../../providers/initial-model-selection-runtime";
-import { captureModelDiscoveryBaseline, finalizeModelDiscovery } from "../../providers/new-model-policy-runtime";
+import { captureModelDiscoveryBaseline, finalizeModelDiscovery, projectSupersededModelDiscovery } from "../../providers/new-model-policy-runtime";
 import { CatalogGatherBusyError } from "../../codex/catalog/routed-gather";
+import { observeModelCacheRevision, readableSupersededModelDiscovery } from "../../codex/model-cache";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
 import { isPassiveRead } from "../../lib/passive-read";
 import { readFileSync } from "node:fs";
@@ -358,31 +359,48 @@ export function requestLogDto(
  */
 export async function fetchAllModels(
   config: OcxConfig,
-  /** Filled with each provider's content revision as of the moment its rows were chosen. */
-  providerContentRevisions?: Map<string, string>,
-  /** Management renders disabled rows using this detached state after inventory drift. */
-  publishProjection?: (projection: OcxConfig) => void,
+  options: {
+    /** Filled with each provider's content revision as of the moment its rows were chosen. */
+    providerContentRevisions?: Map<string, string>;
+    /** The response renders visibility from this detached state. */
+    publishProjection?: (projection: OcxConfig) => void;
+    allowSuperseded?: boolean;
+  } = {},
 ): Promise<CatalogModel[]> {
   // A Remote Link read: no upstream, no initial selection, no write (#6959).
   if (isPassiveRead()) return [];
   const { gatherRoutedModels } = await import("../../codex/catalog");
   const baseline = captureInitialSelectionBaseline(config);
   const discoveryBaseline = captureModelDiscoveryBaseline(config);
-  const revisions = providerContentRevisions ?? new Map<string, string>();
+  const revisions = options.providerContentRevisions ?? new Map<string, string>();
   const outcomes: Array<{ provider: string; state: "authoritative" | "degraded" }> = [];
   const models = await gatherRoutedModels(config, {
     providerModelOutcomes: outcomes,
     providerContentRevisions: revisions,
   });
-  finalizeInitialModelSelection(config, baseline, uniqueCatalogModelsForPublicList(models),
-    outcomes.filter(outcome => outcome.state === "authoritative").map(outcome => outcome.provider));
+  const authoritative = new Set(outcomes.filter(outcome => outcome.state === "authoritative").map(outcome => outcome.provider));
+  const superseded = [...revisions].filter(([provider, revision]) => observeModelCacheRevision(provider) !== revision);
+  if (superseded.length > 0) {
+    const { allowSuperseded, publishProjection } = options;
+    if (!allowSuperseded || !publishProjection) throw new CatalogGatherBusyError();
+    for (const [provider, revision] of superseded) {
+      const readable = readableSupersededModelDiscovery(provider, revision);
+      if (readable === null) throw new CatalogGatherBusyError();
+      if (readable === "caller-local") authoritative.add(provider);
+    }
+    const projection = projectSupersededModelDiscovery(config, discoveryBaseline, models,
+      [...authoritative]);
+    if (!projection) throw new CatalogGatherBusyError();
+    publishProjection(projection);
+    return models;
+  }
+  finalizeInitialModelSelection(config, baseline, uniqueCatalogModelsForPublicList(models), [...authoritative]);
   let publicationConfig = config;
-  if (!finalizeModelDiscovery(config, discoveryBaseline, models,
-    outcomes.filter(outcome => outcome.state === "authoritative").map(outcome => outcome.provider), revisions,
-    projection => { publicationConfig = projection; publishProjection?.(projection); })) {
+  if (!finalizeModelDiscovery(config, discoveryBaseline, models, [...authoritative], revisions,
+    projection => { publicationConfig = projection; options.publishProjection?.(projection); })) {
     throw new CatalogGatherBusyError();
   }
-  if (publicationConfig !== config && !publishProjection) {
+  if (publicationConfig !== config && !options.publishProjection) {
     // Other consumers keep their live config, so only return rows visible under the projection.
     const { filterCatalogVisibleModels } = await import("../../codex/catalog");
     return filterCatalogVisibleModels(models, publicationConfig);

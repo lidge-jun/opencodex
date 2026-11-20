@@ -38,7 +38,11 @@ type DiskFile = {
   /** provider\u0000accountId -> quota, the same key the in-memory cache uses. */
   rows: Record<string, ProviderQuota | KiroPersistedQuota>;
   kiroVerdicts?: Record<string, KiroPersistedVerdict>;
+  /** Private Anthropic ownership by row key. Older readers project the row itself into DTOs. */
+  anthropicCredentialKeys?: Record<string, string>;
 };
+
+type PersistedQuotaRow = [key: string, quota: ProviderQuota | KiroPersistedQuota, anthropicCredentialKey?: string];
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let persistStartedAt: number | null = null;
@@ -48,14 +52,17 @@ let persistWrite: Promise<void> = Promise.resolve();
 /** Test seam: wait for a fired persistence callback's admitted write (as settleQuotaPersistenceForTests). */
 export function settleAccountQuotaPersistForTests(): Promise<void> { return persistWrite; }
 
-/** Read the snapshot. Returns an empty map for a missing, corrupt or stale file. */
-export function readPersistedAccountQuotas(now = Date.now()): Map<string, ProviderQuota> {
+/** Read the snapshot. Missing, corrupt or stale files supply no quota rows. */
+export function readPersistedAccountQuotaSnapshot(now = Date.now()): {
+  rows: Map<string, ProviderQuota>;
+  anthropicCredentialKeys?: Record<string, unknown>;
+} {
   const rows = new Map<string, ProviderQuota>();
   try {
     const path = join(getConfigDir(), FILENAME);
-    if (!existsSync(path)) return rows;
+    if (!existsSync(path)) return { rows };
     const parsed = JSON.parse(readFileSync(path, "utf8")) as DiskFile;
-    if (!parsed || parsed.version !== 1 || !parsed.rows || typeof parsed.rows !== "object") return rows;
+    if (!parsed || parsed.version !== 1 || !parsed.rows || typeof parsed.rows !== "object") return { rows };
     for (const [key, quota] of Object.entries(parsed.rows)) {
       if (!quota || typeof quota !== "object" || typeof quota.updatedAt !== "number"
         || !Number.isFinite(quota.updatedAt)) continue;
@@ -65,10 +72,15 @@ export function readPersistedAccountQuotas(now = Date.now()): Map<string, Provid
         || !/^[a-f0-9]{64}$/.test((quota as KiroPersistedQuota).identity))) continue;
       rows.set(key, quota);
     }
+    return { rows, anthropicCredentialKeys: parsed.anthropicCredentialKeys };
   } catch {
     // A corrupt cache must never block routing or the dashboard.
   }
-  return rows;
+  return { rows };
+}
+
+export function readPersistedAccountQuotas(now = Date.now()): Map<string, ProviderQuota> {
+  return readPersistedAccountQuotaSnapshot(now).rows;
 }
 
 export function readPersistedKiroVerdicts(now = Date.now()): Map<string, KiroPersistedVerdict> {
@@ -97,7 +109,7 @@ export function readPersistedKiroVerdicts(now = Date.now()): Map<string, KiroPer
 
 /** Debounce snapshots without starving writes under load. Failures remain best-effort. */
 export function schedulePersistAccountQuotas(
-  rows: () => Iterable<[string, ProviderQuota | KiroPersistedQuota]>,
+  rows: () => Iterable<PersistedQuotaRow>,
   verdicts: () => Iterable<[string, KiroPersistedVerdict]> = () => [],
 ): void {
   const now = performance.now();
@@ -117,12 +129,18 @@ export function schedulePersistAccountQuotas(
     persistWrite = withConfigDirHardeningSettled(dir, () => {
       if (generation !== persistGeneration) return;
       const out: Record<string, ProviderQuota> = {};
-      for (const [key, quota] of rows()) out[key] = quota;
+      const anthropicCredentialKeys: Record<string, string> = {};
+      for (const [key, quota, anthropicCredentialKey] of rows()) {
+        out[key] = quota;
+        if (anthropicCredentialKey !== undefined) anthropicCredentialKeys[key] = anthropicCredentialKey;
+      }
       const kiroVerdicts: Record<string, KiroPersistedVerdict> = {};
       for (const [key, verdict] of verdicts()) {
         if (key.startsWith("kiro\0") && /^[a-f0-9]{64}$/.test(verdict.identity)) kiroVerdicts[key] = verdict;
       }
-      const body: DiskFile = { version: 1, rows: out, kiroVerdicts };
+      const body: DiskFile = { version: 1, rows: out, kiroVerdicts,
+        ...(Object.keys(anthropicCredentialKeys).length ? { anthropicCredentialKeys } : {}),
+      };
       atomicWriteFile(join(dir, FILENAME), `${JSON.stringify(body)}\n`);
     }).catch(() => {
       // Best-effort persistence only.

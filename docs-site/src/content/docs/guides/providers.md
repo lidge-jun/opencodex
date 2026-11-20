@@ -601,6 +601,8 @@ distinct one. Kiro accounts use the profile ARN together with the signed-in user
 pool accounts have a separate ledger.
 Tokens stay in `~/.opencodex/auth.json`; `/api/oauth/accounts` returns masked metadata only.
 
+New Codex and Anthropic OAuth pool sessions can use [`reset-near-weighted`](/reference/configuration/providers/#reset-near-weighted) to favor weekly quota that will reset soon. Existing session bindings are preserved.
+
 ### Cockpit Tools Antigravity import
 
 For v1, OpenCodex imports only a **Cockpit Tools Antigravity** JSON export for the `google-antigravity` provider. In the Providers dashboard, choose the local JSON file from that provider's Accounts tab. The dashboard does not show the file contents or credential values; it reports only imported, updated, failed, and unsupported counts. Other Cockpit providers are rejected in v1.
@@ -792,6 +794,7 @@ are on the [API-key catalog](/guides/api-key-catalog/) page. Its sections:
 - [Official CodeBuddy Code CLI (Global & CN)](/guides/api-key-catalog/#official-codebuddy-code-cli-global--cn)
 - [Official Qoder CLI (Global & CN)](/guides/api-key-catalog/#official-qoder-cli-global--cn)
 - [Claude Code CLI (subscription)](/guides/api-key-catalog/#claude-code-cli-subscription)
+- [StepCode CLI (subscription)](/guides/step-cli/)
 - [Antigravity CLI (ACP, local)](/guides/api-key-catalog/#antigravity-cli-acp-local)
 - [A6API credit quota](/guides/api-key-catalog/#a6api-credit-quota)
 - [BigModel Coding Plan over Responses](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses)

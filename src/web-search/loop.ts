@@ -14,6 +14,7 @@ import { isTruncatedStopReason } from "../responses/truncated-stop-reason";
 import { bridgeToResponsesSSE } from "../bridge";
 import { guardEmptyToolCatalogStream, type ClientToolCatalogRestriction } from "../lib/empty-tool-catalog";
 import { emptyCompletionRetryFailedEvent, mergeUsage } from "../server/responses/empty-completion-guard";
+import { analyzeTerminalTurn, buildContinuationRequest } from "../server/responses/terminal-guard";
 import { withMissingCreditReading } from "../usage/credit-billing";
 import { markSidecarContextOverflow, sidecarLoopTerminalEvent, upstreamErrorCode, type SidecarLoopFailure } from "../server/responses/context-overflow";
 import { markVerifiedModelNotInPlanResponse, MODEL_NOT_IN_PLAN_CODE, UNDECLARED_TOOL_CALL_ERROR_CODE, verifiedPlanRefusalMessage } from "../lib/errors";
@@ -371,6 +372,7 @@ export interface WebSearchLoopDeps {
   parsed: OcxParsedRequest;
   /** The global emptyCompletionRetry opt-in; the loop applies it only to final openai-chat iterations. */
   emptyCompletionRetry?: boolean;
+  terminalContinuationGuard?: boolean;
   advisor?: AdvisorSidecarStep;
   /** Chat delivery only; never copied into parsed generation options. */
   chatRawReasoningVisible?: boolean;
@@ -548,13 +550,14 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
 
   // Hard iteration bound (termination safety net); forceAnswer normally ends the loop sooner.
   // One iteration beyond the forced answer is reserved for its empty-answer recovery below.
-  // An authorized Chat empty-completion retry adds its own iteration (see completionRetries in the
-  // loop bound), so ordinary iterations, including repeat placeholders for a failed query that never
-  // advance searchesExecuted, cannot use up the slot the retry needs.
+  // Each authorized Chat recovery adds its own iteration. Ordinary iterations, including repeat
+  // placeholders for a failed query, cannot use up either recovery's slot.
   const forcedAnswerRetries = 1;
   const HARD_CAP = maxSearches + 2 + forcedAnswerRetries + (deps.advisor ? MAX_ADVISOR_CONTINUATIONS_PER_REQUEST : 0);
   let emptyAnswerRetries = 0;
   let completionRetries = 0;
+  let terminalContinuations = 0;
+  let pendingContinuationMessages: OcxMessage[] | undefined;
   // Every iteration re-sends the full context, but only the last one's terminal reaches the bridge.
   // Search-calling passes and the discarded empty forced answer are summed here and added to what
   // onUsage reports, so the request log meters what was actually sent. The client-facing terminal
@@ -575,11 +578,26 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     hiddenLegs += pendingLegs;
     pendingLegs = 0;
   };
+  // After a terminal re-ask an incomplete or failed terminal carries the summed usage, like the
+  // plain guard (#8877). Taking the final leg first leaves the bridge's onUsage one sum to report.
+  const withReaskSum = (events: AdapterEvent[]): AdapterEvent[] => {
+    if (terminalContinuations === 0) return events;
+    const index = events.findIndex(event => event.type === "incomplete" || event.type === "error"
+      || (event.type === "done" && isTruncatedStopReason(event.stopReason)));
+    const terminal = events[index];
+    if (terminal?.type !== "incomplete" && terminal?.type !== "error" && terminal?.type !== "done") return events;
+    takeUsage(terminal.usage);
+    if (!hiddenUsage) return events;
+    const summed = [...events];
+    summed[index] = { ...terminal, usage: withTerminalUsageMetadata(hiddenUsage, terminal.usage) };
+    return summed;
+  };
   let accountRefusalOutputStarted = false;
   const connectTimeoutMs = deps.connectTimeoutMs ?? 200_000;
   const routedModelStallTimeoutMs = deps.routedModelStallTimeoutMs ?? 200_000;
 
   interface IterationResponse {
+    parsed: OcxParsedRequest;
     response: Response;
     responseAdapter: ProviderAdapter;
     resolveAdvisorCall: ReturnType<typeof createAdvisorCallResolver>;
@@ -603,8 +621,11 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   let rateLimitRetries = 0;
   // The 429 ladder and thinking-signature recovery are request-scoped. Each
   // model dispatch can use its transport's full retry ladder.
+  // An authorized Chat terminal re-ask is one more loop iteration (terminalContinuations in the
+  // loop bound), so the default allowance funds it; explicit and Combo caps never expand.
   deps.configureModelSendAllowance?.((deps.adapter.hostedIterationSendLimit ?? RESET_RETRY_MAX_ATTEMPTS) * (
     HARD_CAP + Number(Boolean(deps.emptyCompletionRetry))
+    + Number(deps.terminalContinuationGuard === true && deps.adapter.name === "openai-chat")
     + (rateLimitRetryPolicy?.attempts ?? 0) + Number(Boolean(deps.thinkingRecovery))
   ));
 
@@ -680,6 +701,11 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     } else {
       if (forceAnswer && executedSearchCount > 0) iterMessages = [...messages, forcedAnswerNudge()];
       if (recoveringEmptyAnswer) iterMessages = [...iterMessages, forcedAnswerRetryNudge()];
+    }
+    if (pendingContinuationMessages) {
+      iterMessages = [...iterMessages, ...pendingContinuationMessages];
+      messages.push(...pendingContinuationMessages);
+      pendingContinuationMessages = undefined;
     }
     const iterParsed: OcxParsedRequest = {
       ...parsed, stream: true,
@@ -801,7 +827,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         const syntheticAdvisorAllowed = !!deps.advisor && !recoveringEmptyAnswer
           && (!!declaredAdvisor || deps.advisor.exhausted())
           && advisorToolAllowed(iterParsed, declaredAdvisor);
-        return { response, responseAdapter: requestAdapter,
+        return { parsed: iterParsed, response, responseAdapter: requestAdapter,
           resolveAdvisorCall: createAdvisorCallResolver(iterParsed, syntheticAdvisorAllowed, parsed.context.tools) };
       };
 
@@ -1270,7 +1296,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   async function* produce(): AsyncGenerator<AdapterEvent> {
     let prepared = firstPrepared;
     try {
-      for (let i = 0; i < HARD_CAP + completionRetries; i++) {
+      for (let i = 0; i < HARD_CAP + completionRetries + terminalContinuations; i++) {
         const forceAnswer = searchesExecuted >= maxSearches;
         try {
           // First loop turn reuses the eager HEADERS. Subsequent header acquisitions run here.
@@ -1307,6 +1333,27 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               if (completionRetries++ === 0) { yield { type: "heartbeat" }; continue; }
               throw new LoopError(502, "Provider completed without usable output after one retry", emptyCompletionRetryFailedEvent());
             }
+            // Use the existing action/plan classifier and keep all hosted tool results.
+            const currentParsed = prepared.parsed;
+            if (deps.terminalContinuationGuard && adapter.name === "openai-chat"
+              && final?.type === "done" && !isTruncatedStopReason(final.stopReason)
+              && !signal.aborted && !split.hasMalformedToolCall && split.calls.length === 0
+              && analyzeTerminalTurn(currentParsed, split.passthrough).decision === "continue") {
+              takeUsage(final.usage);
+              if (terminalContinuations > 0) {
+                throw new LoopError(502, "Provider announced work again without calling a tool", {
+                  type: "error", status: 502, code: "terminal_continuation_failed",
+                  message: "Provider announced work again without calling a tool", errorType: "server_error" });
+              }
+              terminalContinuations++;
+              // Save only the continuation's additions. Iteration-only nudges are rebuilt for the re-ask.
+              const continuation = buildContinuationRequest({
+                ...currentParsed, context: { ...currentParsed.context, messages },
+              }, split.passthrough);
+              pendingContinuationMessages = continuation.context.messages.slice(messages.length);
+              yield { type: "assistant_boundary" };
+              continue;
+            }
             // #1001: a forced-answer pass that ends `done` must have produced
             // usable output — never a malformed tool call, and never silence.
             if (forceAnswer) {
@@ -1317,7 +1364,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                 && isTruncatedStopReason(terminalEvent.stopReason)) {
                 // A provider refusal or truncation is authoritative, even without text.
                 // Preserve it once; neither an empty-answer retry nor a generic 502 applies.
-                yield* replay(split.passthrough.slice(split.streamedPassthroughCount));
+                yield* replay(withReaskSum(split.passthrough.slice(split.streamedPassthroughCount)));
                 return;
               }
               if (terminalEvent?.type === "done"
@@ -1355,7 +1402,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             }
             // Live-streamed leading events are exactly the first N passthrough entries — replay
             // only the buffered tail so nothing reaches the client twice.
-            yield* replay(split.passthrough.slice(split.streamedPassthroughCount));
+            yield* replay(withReaskSum(split.passthrough.slice(split.streamedPassthroughCount)));
             return;
           }
           takeUsage(terminalUsage(split.passthrough));
@@ -1427,7 +1474,13 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               : e instanceof LoopError && deps.thinkingRecovery
                 ? { type: "error", status: e.status, errorType: "upstream_error", message: e.message }
                 : { type: "error", message: e instanceof Error ? e.message : String(e) });
-          // The bridge reports an error only if it carries usage. Settle exactly once.
+          // The bridge reports an error only if it carries usage. Settle exactly once: after a
+          // terminal re-ask the failed terminal itself carries the sum (#8877), and the bridge
+          // reports it; otherwise the hidden legs are reported here.
+          if (!event.usage && hiddenUsage && terminalContinuations > 0 && event.type === "error") {
+            yield { ...event, usage: withTerminalUsageMetadata(hiddenUsage, errorUsage) };
+            return;
+          }
           if (!event.usage && hiddenUsage) deps.onUsage?.(withTerminalUsageMetadata(hiddenUsage, errorUsage));
           yield event;
           return;

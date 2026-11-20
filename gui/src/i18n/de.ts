@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -135,6 +136,7 @@ export const de: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Workflow-Limits konnten nicht gespeichert werden.",
   "workflowBudget.saved": "Workflow-Limits gespeichert.",
   ...desktopCompatibilityCopy("de"),
+  ...accountProbeCopy("de"),
   ...shellV2Copy("de"),
   ...codexCliUpdateCopy("de"),
   ...remoteLinkDiagnosticsCopy("de"),
@@ -2349,7 +2351,9 @@ export const de: Record<TKey, string> = {
   "accountPool.strategy": "Rotationsstrategie",
   "accountPool.strategyDesc": "Wie OpenCodex einer neuen/ungebundenen Aufgabe ein Konto zuweist.",
   "accountPool.strategyResetFirst": "Nächste Rücksetzung zuerst",
+  "accountPool.strategyResetNearWeighted": "Gewichtet nach nächster Rücksetzung",
   "accountPool.strategyHintResetFirst": "Unterhalb der Nutzungsschwelle wird die nächste 5-Stunden- oder Wochenrücksetzung bevorzugt. Gebundene Aufgaben folgen der konfigurierten Affinitätsregel. Unabhängige Modellkontingente werden nach Nutzung geordnet.",
+  "accountPool.strategyHintResetNearWeighted": "Das geeignete Konto mit der nächsten wöchentlichen Rücksetzung erhält etwa die Hälfte der neuen Zuweisungen. Ist kein Konto geeignet, werden die Zuweisungen gleichmäßig verteilt.",
   "accountPool.strategyQuota": "Kontingent",
   "accountPool.strategyRoundRobin": "Round-Robin",
   "accountPool.strategyFillFirst": "Fill-first",
@@ -3040,7 +3044,7 @@ export const de: Record<TKey, string> = {
   "modal.invalidPreset": "Diese integrierte Anbietervorlage ist unvollständig. Starten Sie den Proxy neu und versuchen Sie es erneut.",
   "modal.freeTierTitle": "Kostenloser Tarif",
   "modal.subscriptionCliTitle": "Abo-CLI, kein API-Schlüssel",
-  "modal.subscriptionCliWarning": "Dieser Anbieter verwendet keinen API-Schlüssel. Er steuert die offizielle, auf diesem Rechner angemeldete Claude Code CLI ({cmd}) und rechnet über dieses Claude-Abonnement ab. OpenCodex speichert dafür keinen Schlüssel, und ein hier eingegebener Schlüssel wird nie verwendet. Für die Abrechnung per API-Schlüssel füge stattdessen {apiProvider} hinzu.",
+  "modal.subscriptionCliWarning": "Dieser Anbieter verwendet keinen API-Schlüssel. Er steuert die offizielle, auf diesem Rechner angemeldete {cli} ({cmd}) und rechnet über dieses {plan}-Abonnement ab. OpenCodex speichert dafür keinen Schlüssel, und ein hier eingegebener Schlüssel wird nie verwendet. Für die Abrechnung per API-Schlüssel füge stattdessen {apiProvider} hinzu.",
   "modal.subscriptionCliWarningAgy": "Dieser Anbieter nutzt die offizielle Antigravity CLI, die auf dem Proxy-Host angemeldet ist ({cmd}). Die Nutzung wird über dieses Google-Antigravity-Konto abgerechnet. Google erlaubt nur interaktive, vom Nutzer gesteuerte Nutzung. OpenCodex lehnt Subagenten-Turns, Kombinationen und Subagenten-Fallback-Routing ab und prüft anhand der beobachteten Verbindung, ob Anfragen lokal sind. Eine nicht deklarierte Loopback-Weiterleitung kann entfernte Anfragen lokal erscheinen lassen, wenn sie keine Weiterleitungsheader übermittelt. Tragen Sie den Reverse-Proxy für den öffentlichen Listener in dashboardTrustedProxy ein oder leiten Sie diesen Port nicht weiter. Ein API-Schlüssel ist weder erforderlich noch wird einer gespeichert. Für programmatische oder geteilte Arbeitslasten fügen Sie stattdessen {apiProvider} hinzu.",
   "modal.freeTierDefault": "Kein API-Schlüssel nötig. Funktioniert sofort.",
   "modal.tab.accounts": "Konten",
@@ -3265,6 +3269,7 @@ export const de: Record<TKey, string> = {
   "pws.doctorCopyUnavailable": "Zwischenablage nicht verfügbar",
   "pws.healthLabel.rateLimited": "Ratelimit",
   "pws.healthLabel.quotaLimited": "Kontingent begrenzt",
+  "pws.healthLabel.accountSuspended": "Konto gesperrt",
   "pws.healthLabel.reauthRequired": "Erneute Anmeldung erforderlich",
   "pws.healthLabel.refreshFailed": "Aktualisierung fehlgeschlagen",
   "pws.healthLabel.metadataMismatch": "Metadaten stimmen nicht überein",
@@ -3273,6 +3278,7 @@ export const de: Record<TKey, string> = {
   "pws.healthLabel.credentialConflict": "Anmeldedaten-Konflikt",
   "pws.healthSummary.rateLimited": "{provider} {account}: ratelimited bis {until}. Routing für dieses Konto ist bis dahin pausiert.",
   "pws.healthSummary.quotaLimited": "{provider} {account}: Kontingent begrenzt bis {until}. Routing für dieses Konto ist bis dahin pausiert.",
+  "pws.healthSummary.accountSuspended": "{provider} {account}: Der Anbieter hat dieses Konto gesperrt. Lege beim Anbieter Einspruch ein, bevor du dich erneut anmeldest.",
   "pws.healthSummary.reauthRequired": "{provider} {account}: erneute Anmeldung erforderlich.",
   "pws.healthSummary.credentialConflict": "{provider} {account}: Anmeldedaten-Konflikt.",
   "pws.healthSummary.metadataMismatch": "{provider} {account}: Metadaten stimmen nicht überein.",

@@ -7,7 +7,9 @@ This page holds section 3 of the [Providers](/guides/providers/) guide: the buil
 and the provider-specific notes that go with them. Auth modes, account logins, and local providers
 stay on that page.
 
-opencodex ships 111 built-in presets: 89 key-based, 18 OAuth, three local, and one default
+For subscription account rotation, see [`reset-near-weighted`](/reference/configuration/providers/#reset-near-weighted) for the Codex and Anthropic OAuth pools. API-key pools use their own [key selection settings](/reference/configuration/providers/).
+
+opencodex ships 112 built-in presets: 90 key-based, 18 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key where the provider can check one, and stores it. Notable entries:
 
