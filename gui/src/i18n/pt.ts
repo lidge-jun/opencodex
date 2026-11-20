@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -136,6 +137,7 @@ export const pt: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Não foi possível salvar os limites de fluxo de trabalho.",
   "workflowBudget.saved": "Limites de fluxo de trabalho salvos.",
   ...desktopCompatibilityCopy("pt"),
+  ...accountProbeCopy("pt"),
   ...shellV2Copy("pt"),
   ...codexCliUpdateCopy("pt"),
   ...remoteLinkDiagnosticsCopy("pt"),
@@ -1859,7 +1861,7 @@ export const pt: Record<TKey, string> = {
   "modal.invalidPreset": "Este preset de provedor integrado está incompleto. Reinicie o proxy e tente novamente.",
   "modal.freeTierTitle": "Plano gratuito",
   "modal.subscriptionCliTitle": "CLI por assinatura, não chave de API",
-  "modal.subscriptionCliWarning": "Este provedor não usa chave de API. Ele aciona a CLI oficial do Claude Code autenticada nesta máquina ({cmd}) e cobra da conta de assinatura do Claude. O OpenCodex não armazena nenhuma chave para ele, e uma chave informada aqui nunca é usada. Para cobrança por chave de API, adicione {apiProvider}.",
+  "modal.subscriptionCliWarning": "Este provedor não usa chave de API. Ele aciona a {cli} oficial autenticada nesta máquina ({cmd}) e cobra da conta de assinatura {plan}. O OpenCodex não armazena nenhuma chave para ele, e uma chave informada aqui nunca é usada. Para cobrança por chave de API, adicione {apiProvider}.",
   "modal.subscriptionCliWarningAgy": "Este provedor usa a CLI oficial do Antigravity com sessão iniciada no host do proxy ({cmd}). O uso é cobrado dessa conta do Google Antigravity. O Google permite apenas o uso interativo conduzido pelo usuário. O OpenCodex recusa turnos de subagentes, combos e roteamento de fallback de subagentes e verifica se a solicitação é local pela conexão observada. Um intermediário de loopback não declarado pode fazer solicitações remotas parecerem locais se não repassar cabeçalhos de encaminhamento. Para o listener público, declare o proxy reverso em dashboardTrustedProxy ou não encaminhe essa porta. Nenhuma chave de API é necessária ou armazenada. Para tarefas executadas por programas ou uso compartilhado, adicione {apiProvider}.",
   "modal.freeTierDefault": "Não requer chave de API. Funciona de imediato.",
   "modal.tab.accounts": "Contas",
@@ -2974,7 +2976,9 @@ export const pt: Record<TKey, string> = {
   "accountPool.strategy": "Estratégia de rotação",
   "accountPool.strategyDesc": "Como o OpenCodex atribui uma conta a uma tarefa nova/sem vínculo.",
   "accountPool.strategyResetFirst": "Reinício mais próximo primeiro",
+  "accountPool.strategyResetNearWeighted": "Ponderado pela renovação mais próxima",
   "accountPool.strategyHintResetFirst": "Prefere o reinício de 5 horas ou semanal futuro mais próximo entre as contas abaixo do limite de uso. As tarefas vinculadas seguem a política de afinidade configurada. Cotas independentes por modelo usam a ordenação por cota.",
+  "accountPool.strategyHintResetNearWeighted": "A conta que atende aos critérios e tem a renovação semanal mais próxima recebe cerca de metade das novas atribuições. Se nenhuma conta atender aos critérios, as atribuições são distribuídas por igual.",
   "accountPool.strategyQuota": "Cota",
   "accountPool.strategyRoundRobin": "Round-robin",
   "accountPool.strategyFillFirst": "Fill-first",

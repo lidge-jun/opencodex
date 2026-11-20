@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 43.
+Declared capabilities: 44.
 
 ### `ocx account login`
 
@@ -248,7 +248,7 @@ State-changing: yes. JSON mode: `envelope`.
 
 ### `ocx account strategy`
 
-Usage: `ocx account strategy <provider> [quota|round-robin|fill-first|least-loaded|reset-first] [--json]`
+Usage: `ocx account strategy <provider> [quota|round-robin|fill-first|reset-near-weighted|least-loaded|reset-first] [--json]`
 
 Show or set how an account pool picks the next account.
 
@@ -559,6 +559,25 @@ State-changing: yes. JSON mode: `envelope`.
 
 - API-key providers only. Requires non-TTY stdin and reads one secret line; never put plaintext keys in command arguments or agent transcripts. This imports an upstream credential, not an OpenCodex access-key creation workflow.
 
+### `ocx account probe`
+
+Usage: `ocx account probe google-antigravity [<account-id|alias>] [--json]`
+
+Test stored accounts one by one with their own tokens, read-only.
+
+State-changing: no. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/oauth/accounts` |
+| POST | `/api/oauth/accounts/probe` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit per-account status, HTTP code, reason and quota windows. |
+
+- Statuses: ok, paused, token_expired, suspended, verification_required, rate_limited, permission_denied, error. Sends one retrieveUserQuotaSummary request per account with its stored token; paused accounts are skipped without a request, and expired tokens are reported, never refreshed. Only google-antigravity is supported.
+
 ### `ocx account import`
 
 Usage: `ocx account import google-antigravity --format cockpit-tools (--file <path>|--stdin) [--accept-antigravity-risk] [--json]`
@@ -833,7 +852,7 @@ State-changing: yes. JSON mode: `envelope`.
 |---|---|---|
 | `--enabled` | string | Stored pool preference; unsupported for Codex. Not equivalent to threshold0. |
 | `--threshold` | number | Auto-switch threshold0–100. |
-| `--strategy` | string | Use a strategy supported by this provider kind; reset-first is Codex or generic OAuth, least-loaded is Kiro. |
+| `--strategy` | string | Use a strategy supported by this provider kind; reset-first is Codex or generic OAuth, reset-near-weighted is Codex or Anthropic, and least-loaded is Kiro. |
 | `--sticky` | number | Sticky limit1–100. |
 | `--quota-window` | string | Anthropic only: five-hour, weekly or max-utilization. |
 | `--json` | boolean | Emit the validated task result as one JSON document. |

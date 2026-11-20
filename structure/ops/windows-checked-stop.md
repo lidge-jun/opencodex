@@ -37,7 +37,10 @@ It reads owner SIDs for command lines carrying this home's launcher or service s
 tokens first, then other wrapper images, unreadable images, and command lines containing the fixed
 `opencodex-service` basename prefix. Owner enrichment admits at most 32 candidates within
 1.5 s after enumeration and prioritization, with a 1 s operation timeout on each owner or refresh
-call. Every row is retained and skipped owners remain unknown. The refresh is skipped if
+call. No owner read starts later than the snapshot timeout minus 2 s, counted from the
+helper process's start, so a cold PowerShell start or slow first CIM query cannot push owner
+enrichment past the cap and lose the whole table. Every row is retained and skipped owners
+remain unknown. The refresh is skipped if
 the owner query spends the budget. Owner verification requires a successful `GetOwnerSid`,
 valid local/domain or Entra ID SIDs, and a fresh CIM read reporting the original creation time.
 Matching SIDs prove the current account. Different supported SIDs prove a foreign account.

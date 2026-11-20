@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -134,6 +135,7 @@ export const zh: Record<TKey, string> = {
   "workflowBudget.saveFailed": "无法保存工作流限制。",
   "workflowBudget.saved": "工作流限制已保存。",
   ...desktopCompatibilityCopy("zh"),
+  ...accountProbeCopy("zh"),
   ...shellV2Copy("zh"),
   ...codexCliUpdateCopy("zh"),
   ...remoteLinkDiagnosticsCopy("zh"),
@@ -2366,7 +2368,9 @@ export const zh: Record<TKey, string> = {
   "accountPool.strategy": "轮换策略",
   "accountPool.strategyDesc": "OpenCodex 如何为新建/未绑定任务分配账号。",
   "accountPool.strategyResetFirst": "额度即将刷新优先",
+  "accountPool.strategyResetNearWeighted": "按最近的额度重置加权",
   "accountPool.strategyHintResetFirst": "在低于用量阈值的账号中，优先选择下次5小时或周额度重置最早的账号。已绑定任务遵循配置的亲和策略。独立模型额度按用量排序。",
+  "accountPool.strategyHintResetNearWeighted": "将约一半的新分配交给符合条件且周额度最先重置的账户。没有符合条件的账户时，按顺序均匀分配。",
   "accountPool.strategyQuota": "配额",
   "accountPool.strategyRoundRobin": "轮询",
   "accountPool.strategyFillFirst": "填满优先",
@@ -3060,7 +3064,7 @@ export const zh: Record<TKey, string> = {
   "modal.invalidPreset": "此内置提供方预设不完整。请重启代理后重试。",
   "modal.freeTierTitle": "免费层级",
   "modal.subscriptionCliTitle": "订阅 CLI，而非 API 密钥",
-  "modal.subscriptionCliWarning": "此提供商不使用 API 密钥。它调用本机已登录的官方 Claude Code CLI（{cmd}），并向该 Claude 订阅账户计费。OpenCodex 不为其存储任何密钥，在此输入的密钥也永远不会被使用。如需按 API 密钥计费，请改为添加 {apiProvider}。",
+  "modal.subscriptionCliWarning": "此提供商不使用 API 密钥。它调用本机已登录的官方 {cli}（{cmd}），并向该 {plan} 订阅账户计费。OpenCodex 不为其存储任何密钥，在此输入的密钥也永远不会被使用。如需按 API 密钥计费，请改为添加 {apiProvider}。",
   "modal.subscriptionCliWarningAgy": "此提供商使用在代理主机上已登录的官方 Antigravity CLI（{cmd}）。使用费用计入对应的 Google Antigravity 账户。Google 仅允许由用户主导的交互式使用。OpenCodex 拒绝子代理轮次、组合和子代理回退路由，并根据观测到的连接判断请求是否来自本地。如果未声明的回环中继没有传递转发标头，远程请求可能看起来像本地请求。对于公开监听器，请在 dashboardTrustedProxy 中声明反向代理，或避免转发此端口。无需 API 密钥，也不会存储密钥。如需以编程方式执行任务或供多人使用，请添加 {apiProvider}。",
   "modal.freeTierDefault": "无需 API 密钥，开箱即用。",
   "modal.tab.accounts": "账户",

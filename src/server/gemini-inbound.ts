@@ -21,6 +21,7 @@ import { estimateInputTokens } from "./responses/input-admission";
 import type { DataPlaneAdmission } from "./auth-cors";
 import { resolveAdmissionModelScope, routeAllowedByScope } from "./admission-model-scope";
 import type { GeminiMethod } from "./gemini-native-paths";
+import { geminiNativeCatalogAliases, geminiNativeCatalogLookup } from "./gemini-native-catalog";
 import {
   applyLocalRefusalCode,
   commitCancelled,
@@ -95,14 +96,21 @@ const modelResource = (config: OcxConfig, row: { selector: string; route: RouteR
 });
 
 export function handleGeminiModels(config: OcxConfig, req: Request, admission: DataPlaneAdmission): Response {
-  return Response.json({ models: eligibleRoutes(config, req, admission).map(row => modelResource(config, row)) });
+  const rows = eligibleRoutes(config, req, admission);
+  const aliases = geminiNativeCatalogAliases(config, req, rows, resolveAdmissionModelScope(config, admission));
+  return Response.json({ models: [...rows, ...aliases].map(row => modelResource(config, row)) });
+}
+
+function findGeminiCatalogRow(config: OcxConfig, req: Request, admission: DataPlaneAdmission, model: string) {
+  const row = findOllamaRoute(config, model, req);
+  const scope = resolveAdmissionModelScope(config, admission);
+  if (row && routeAllowedByScope(scope, row.route)) return row;
+  return geminiNativeCatalogLookup(config, req, model, () => eligibleRoutes(config, req, admission), scope);
 }
 
 export function handleGeminiModel(config: OcxConfig, req: Request, admission: DataPlaneAdmission, model: string): Response {
-  const row = findOllamaRoute(config, model, req);
-  const scope = resolveAdmissionModelScope(config, admission);
-  if (!row || !routeAllowedByScope(scope, { providerName: row.route.providerName, modelId: row.route.modelId })) return geminiError(404, "model not found");
-  return Response.json(modelResource(config, row));
+  const row = findGeminiCatalogRow(config, req, admission, model);
+  return row ? Response.json(modelResource(config, row)) : geminiError(404, "model not found");
 }
 
 /**
@@ -110,9 +118,8 @@ export function handleGeminiModel(config: OcxConfig, req: Request, admission: Da
  * key may reach. No upstream call. Body: `{contents, systemInstruction, tools}` or `{generateContentRequest}`.
  */
 export async function handleGeminiCountTokens(config: OcxConfig, req: Request, admission: DataPlaneAdmission, model: string): Promise<Response> {
-  const row = findOllamaRoute(config, model, req);
-  const scope = resolveAdmissionModelScope(config, admission);
-  if (!row || !routeAllowedByScope(scope, { providerName: row.route.providerName, modelId: row.route.modelId })) return geminiError(404, "model not found");
+  const row = findGeminiCatalogRow(config, req, admission, model);
+  if (!row) return geminiError(404, "model not found");
   const limit = resolveInboundBodyLimitBytes(config.maxInboundBodyBytes);
   const budget = createTranslatorBudget();
   try {

@@ -205,6 +205,11 @@ const baseStaticImports: Readonly<Record<string, readonly string[]>> = {
     "import { spawnBindProbe, strictBindProbeScript } from \"./bind-probe\";",
     "import { withoutUpdateTeardownHandover, withUpdateTeardownHandover } from \"./teardown-handover\";"
   ],
+  // #8911: a read-only accessor of the launch context the Node launcher bound at startup;
+  // it opens no process, file or network capability and only selects update guidance.
+  "src/update/managed-release.ts": [
+    "import { trustedManagedReleaseOptIn } from \"../cli/launcher-context\";"
+  ],
   "src/update/mise-launcher-target.ts": [
     "import { realpathSync } from \"node:fs\";",
     "import { dirname, isAbsolute, join } from \"node:path\";",

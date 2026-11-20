@@ -1264,3 +1264,8 @@ an organization `admin_settings.json` first, then the `AGY_LLM_GATEWAY_*` variab
 status warns about organization settings and environment overrides it can see. It checks the
 OpenCodex process environment. An override set only in the Antigravity process will not appear.
 On Windows `agy` is untested because Google lists it for macOS and Linux only.
+
+To preserve Gemini JSON, sign in with `ocx login google-antigravity` and set
+`protocols.rollout.geminiNativeAntigravity` to `true` in OpenCodex's JSON config. This opt-in
+applies to `/v1beta` Gemini generation routed to the canonical `google-antigravity` OAuth
+provider. Other routes use the Chat bridge. See [Native Gemini with Antigravity](/reference/proxy-formats/#native-gemini-with-antigravity).

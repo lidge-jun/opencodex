@@ -6,14 +6,22 @@
  * `?key=` query parameter, so the request is cloned with that credential moved onto
  * `x-opencodex-api-key` and the query key dropped; the key is never logged or forwarded.
  */
+import { ADVISOR_INTERNAL_CAPABILITY_HEADER } from "../../lib/local-internal-call-capability";
+import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
 import { classifyUsageClient } from "../../usage/client";
-import { admissionFields, isAllowedRequestOrigin, resolveApiAuth, resolveResponsesApiAuth, withCors, type RequestPolicyView } from "../auth-cors";
+import { admissionFields, isAllowedRequestOrigin, resolveApiAuth, resolveResponsesApiAuth, withCors } from "../auth-cors";
+import { AdmissionModelDeniedError, projectAdmissionModelDeniedLog, routeAllowedByScope } from "../admission-model-scope";
+import { SIDECAR_INTERNAL_CAPABILITY_HEADER } from "../advisor-admission-scope";
 import { withCallerSessionIdentity } from "../caller-session-identity";
 import { captureAdmissionPolicy } from "../capture-admission-policy";
 import { isDraining } from "../lifecycle";
 import { geminiRouteAllowHeader, geminiRouteAllows, parseGeminiNativePath, type GeminiNativeRoute } from "../gemini-native-paths";
 import { geminiError, handleGeminiCountTokens, handleGeminiGeneration, handleGeminiModel, handleGeminiModels, toGeminiRefusal } from "../gemini-inbound";
 import { handleGeminiInteraction, handleGeminiInteractionResource } from "../gemini-interactions-inbound";
+import { nativeGeminiDestination } from "../gemini-native-catalog";
+import { handleGeminiNative } from "../gemini-native";
+import { logGeminiNativeDelivery } from "../gemini-native-log";
+import { nativeInnerErrorMessage } from "../native-chat-bridge";
 import { nextRequestLogId, type RequestLogContext } from "../request-log";
 import { runAdmittedBodyWork } from "../inbound-body-admission";
 import { disableResponsesRequestTimeout } from "../responses";
@@ -104,6 +112,25 @@ async function handleGeminiRoute(route: GeminiNativeRoute, original: Request, ur
   const advisorAdmissionPolicy = captureAdmissionPolicy(config, admission);
   const response = await deps.runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => {
     ownsRequestLog = true;
+    // Internal Advisor and sidecar hops keep the Chat bridge's capability and inherited-policy checks.
+    const native = route.kind === "method" && url.pathname.startsWith("/v1beta/") && !sessionReq.headers.has(ADVISOR_INTERNAL_CAPABILITY_HEADER)
+      && !sessionReq.headers.has(SIDECAR_INTERNAL_CAPABILITY_HEADER)
+      ? nativeGeminiDestination(config, sessionReq, route.model) : undefined;
+    if (native && route.kind === "method") {
+      const modelLabel = clientFacingModelLabel(route.model);
+      logCtx.requestedModel = clientFacingModelText(modelLabel);
+      let result: Response;
+      if (!routeAllowedByScope(advisorAdmissionPolicy.modelScope, native.route)) {
+        projectAdmissionModelDeniedLog(new AdmissionModelDeniedError(modelLabel, native.route), logCtx);
+        result = geminiError(403, nativeInnerErrorMessage(403));
+      } else {
+        logCtx.model = native.route.modelId;
+        logCtx.provider = native.route.providerName;
+        const delivery = route.method === "streamGenerateContent" ? (sse ? "sse" : "array") : undefined;
+        result = await handleGeminiNative(sessionReq, config, native.wireModel, delivery, turnAdmissionLease, undefined, logCtx);
+      }
+      return withCors(logGeminiNativeDelivery(result, sessionReq, requestId, start, logCtx), original, policy);
+    }
     const ids = { requestId, start, turnAdmissionLease, admission, advisorAdmissionPolicy };
     return withCors(
       route.kind === "method"

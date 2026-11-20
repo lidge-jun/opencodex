@@ -10,6 +10,13 @@ function isRecord(value: unknown): value is RecordValue {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Project the standard Chat user audio part into the inline Responses carrier. */
+export function chatAudioToResponsesPart(part: RecordValue): RecordValue | undefined {
+  if (part.type !== "input_audio" || !isRecord(part.input_audio)) return undefined;
+  const audio = audioContentFromRaw(part.input_audio.data, part.input_audio.format);
+  return audio ? { type: "input_audio", audio_url: `data:audio/${audio.format};base64,${audio.data}` } : undefined;
+}
+
 /**
  * Whether the position being scanned has a converter that builds a lossless media part.
  *
@@ -103,14 +110,19 @@ export function untranslatedResponsesInputMedia(
 }
 
 /** Used only when Chat is actually projected, not on the native Chat fast path. */
-export function untranslatedChatInputMedia(body: unknown): UntranslatedInputMedia | undefined {
+export function untranslatedChatInputMedia(body: unknown, allowInlineAudio = false): UntranslatedInputMedia | undefined {
   if (!isRecord(body) || !Array.isArray(body.messages)) return undefined;
   for (const message of body.messages) {
     if (!isRecord(message)) continue;
     // Only the `user` branch of the Chat projection builds content blocks. `system`,
     // `developer`, `assistant` and `tool` all reduce their content to a string.
-    const kind = contentMedia(message.content, message.role === "user" ? "user-content" : "flattened", false);
-    if (kind) return kind;
+    if (!Array.isArray(message.content)) continue;
+    const user = message.role === "user";
+    for (const part of message.content) {
+      if (user && allowInlineAudio && isRecord(part) && chatAudioToResponsesPart(part)) continue;
+      const kind = mediaKind(part, user ? "user-content" : "flattened", false);
+      if (kind) return kind;
+    }
   }
   return undefined;
 }

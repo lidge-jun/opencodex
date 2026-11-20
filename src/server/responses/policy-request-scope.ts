@@ -36,6 +36,8 @@ export class MandatoryToolChoiceUnavailableError extends PolicyCandidateUnavaila
   }
 }
 
+export class ComboVisionDescriptionUnavailableError extends PolicyCandidateUnavailableError {}
+
 export function mandatoryToolChoiceUnavailableResponse(): Response {
   return markProxyError(formatErrorResponse(400, "invalid_request_error",
     "This mandatory tool_choice cannot be preserved for a translated Chat destination."));
@@ -43,6 +45,7 @@ export function mandatoryToolChoiceUnavailableResponse(): Response {
 
 const localRefusals = new WeakSet<Response>();
 const mandatoryToolRefusals = new WeakSet<Response>();
+const visionDescriptionRefusals = new WeakSet<Response>();
 
 /** Attach candidate-local provenance without changing the HTTP envelope. */
 export function markPolicyCandidateRefusal(response: Response): Response {
@@ -73,6 +76,7 @@ export function policyCandidateRefusalResponse(error: unknown): Response | undef
   if (!(error instanceof PolicyCandidateUnavailableError)) return undefined;
   const response = formatErrorResponse(409, "policy_candidate_unavailable", error.message);
   if (error instanceof MandatoryToolChoiceUnavailableError) mandatoryToolRefusals.add(response);
+  if (error instanceof ComboVisionDescriptionUnavailableError) visionDescriptionRefusals.add(response);
   return markPolicyCandidateRefusal(response);
 }
 
@@ -85,10 +89,15 @@ export function isMandatoryToolChoiceRefusal(response: Response): boolean {
   return mandatoryToolRefusals.has(response);
 }
 
+export function isComboVisionDescriptionRefusal(response: Response): boolean {
+  return visionDescriptionRefusals.has(response);
+}
+
 /** Preserve local refusal authority when response lifetime owners wrap the body. */
 export function carryPolicyCandidateRefusal(source: Response, target: Response): Response {
   if (localRefusals.has(source)) localRefusals.add(target);
   if (mandatoryToolRefusals.has(source)) mandatoryToolRefusals.add(target);
+  if (visionDescriptionRefusals.has(source)) visionDescriptionRefusals.add(target);
   return target;
 }
 

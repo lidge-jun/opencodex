@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -136,6 +137,7 @@ export const vi: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Không thể lưu giới hạn quy trình.",
   "workflowBudget.saved": "Đã lưu giới hạn quy trình.",
   ...desktopCompatibilityCopy("vi"),
+  ...accountProbeCopy("vi"),
   ...shellV2Copy("vi"),
   ...codexCliUpdateCopy("vi"),
   ...remoteLinkDiagnosticsCopy("vi"),
@@ -1847,7 +1849,7 @@ export const vi: Record<TKey, string> = {
   "modal.invalidPreset": "Preset của provider tích hợp này bị thiếu. Hãy khởi động lại proxy và thử lại.",
   "modal.freeTierTitle": "Gói miễn phí",
   "modal.subscriptionCliTitle": "CLI theo gói đăng ký, không phải API key",
-  "modal.subscriptionCliWarning": "Nhà cung cấp này không dùng API key. Nó chạy Claude Code CLI chính thức đã đăng nhập trên máy này ({cmd}) và tính phí vào tài khoản gói đăng ký Claude đó. OpenCodex không lưu key nào cho nó, và key nhập ở đây sẽ không bao giờ được dùng. Để tính phí theo API key, hãy thêm {apiProvider} thay thế.",
+  "modal.subscriptionCliWarning": "Nhà cung cấp này không dùng API key. Nó chạy {cli} chính thức đã đăng nhập trên máy này ({cmd}) và tính phí vào tài khoản gói đăng ký {plan} đó. OpenCodex không lưu key nào cho nó, và key nhập ở đây sẽ không bao giờ được dùng. Để tính phí theo API key, hãy thêm {apiProvider} thay thế.",
   "modal.subscriptionCliWarningAgy": "Nhà cung cấp này dùng Antigravity CLI chính thức đã đăng nhập trên máy chủ proxy ({cmd}). Chi phí sử dụng được tính vào tài khoản Google Antigravity đó. Google chỉ cho phép sử dụng tương tác do người dùng trực tiếp điều khiển. OpenCodex từ chối lượt của tác tử con, combo và định tuyến dự phòng cho tác tử con, đồng thời xác định yêu cầu có phải cục bộ hay không dựa trên kết nối quan sát được. Một bộ chuyển tiếp qua loopback chưa được khai báo có thể khiến yêu cầu từ xa trông như yêu cầu cục bộ nếu không chuyển tiếp các tiêu đề chuyển tiếp. Với cổng lắng nghe công khai, hãy khai báo proxy ngược trong dashboardTrustedProxy hoặc không chuyển tiếp cổng này. Không cần và không lưu khóa API. Với các tác vụ được thực hiện bằng chương trình hoặc dùng chung, hãy thêm {apiProvider}.",
   "modal.freeTierDefault": "Không cần API key. Có thể sử dụng ngay.",
   "modal.tab.accounts": "Tài khoản",
@@ -2949,7 +2951,9 @@ export const vi: Record<TKey, string> = {
   "accountPool.strategy": "Chiến lược xoay vòng",
   "accountPool.strategyDesc": "Cách OpenCodex chỉ định tài khoản cho một task mới/chưa gắn kết.",
   "accountPool.strategyResetFirst": "Ưu tiên lần đặt lại sớm nhất",
+  "accountPool.strategyResetNearWeighted": "Ưu tiên có trọng số theo lần đặt lại gần nhất",
   "accountPool.strategyHintResetFirst": "Ưu tiên lần đặt lại 5 giờ hoặc hàng tuần gần nhất trong tương lai giữa các tài khoản dưới ngưỡng sử dụng. Tác vụ đã liên kết tuân theo chính sách affinity đã cấu hình. Hạn ngạch model độc lập dùng thứ tự hạn ngạch.",
+  "accountPool.strategyHintResetNearWeighted": "Tài khoản đáp ứng điều kiện và có hạn mức tuần sắp được đặt lại nhất nhận khoảng một nửa số lượt phân bổ mới. Nếu không có tài khoản nào đáp ứng, các lượt được chia đều theo vòng.",
   "accountPool.strategyQuota": "Quota",
   "accountPool.strategyRoundRobin": "Luân phiên",
   "accountPool.strategyFillFirst": "Làm đầy trước",

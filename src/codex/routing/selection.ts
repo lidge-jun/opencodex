@@ -33,6 +33,8 @@ import {
   type CodexQuotaScope,
 } from "./health-store";
 import { bindThreadAffinity, type CodexAffinityReason } from "./thread-affinity";
+import { resetNearWeightOf } from "../../routing/machine-weighted-routing";
+import { codexQuotaUsageObservedAt } from "../quota-observation-freshness";
 import {
   getEffectiveActiveCodexAccountId,
   manualPreferenceBlocks,
@@ -268,7 +270,24 @@ function listEligibleCodexAccountIds(
 /** Shared reset timestamps are not evidence for independent model-quota groups. */
 export function accountPoolStrategyForScope(config: OcxConfig, quotaScope?: CodexQuotaScope) {
   const strategy = normalizeCodexAccountPoolStrategy(config.accountPoolStrategy);
-  return strategy === "reset-first" && isIndependentCodexQuotaScope(quotaScope) ? "quota" : strategy;
+  if (!isIndependentCodexQuotaScope(quotaScope)) return strategy;
+  if (strategy === "reset-first") return "quota";
+  return strategy === "reset-near-weighted" ? "round-robin" : strategy;
+}
+
+function codexResetNearWeightOf(eligible: readonly string[], now: number) {
+  return resetNearWeightOf(eligible, id => {
+    const quota = getAccountQuota(id);
+    if (quota?.shortWindowSeconds !== 5 * 60 * 60) return null;
+    return {
+      weeklyPercent: quota.weeklyPercent,
+      weeklyResetAt: quota.weeklyResetAt,
+      weeklyObservedAt: codexQuotaUsageObservedAt(quota, "weeklyPercent"),
+      fiveHourPercent: quota.shortPercent,
+      fiveHourResetAt: quota.shortResetAt,
+      fiveHourObservedAt: codexQuotaUsageObservedAt(quota, "shortPercent"),
+    };
+  }, now);
 }
 
 function stickyLimitForConfig(config: OcxConfig): number {
@@ -507,7 +526,8 @@ export function pickUnboundStrategyAccount(
   const poolKey = codexPoolKeyForScope(quotaScope);
 
   let picked: string | null = null;
-  if (strategy === "round-robin") {
+  const resetNearWeighted = strategy === "reset-near-weighted";
+  if (strategy === "round-robin" || resetNearWeighted) {
     const eligible = roundRobinPlacementCandidates(
       config,
       listEligibleCodexAccountIds(config, now, quotaScope, selectionOptions),
@@ -515,11 +535,12 @@ export function pickUnboundStrategyAccount(
       quotaScope,
       selectionOptions,
     );
+    const weightOf = resetNearWeighted ? codexResetNearWeightOf(eligible, now) : undefined;
     const limit = stickyLimitForConfig(config);
     if (!commit) {
-      return peekRoundRobinAccount(poolKey, eligible, limit);
+      return peekRoundRobinAccount(poolKey, eligible, limit, weightOf);
     }
-    picked = pickRoundRobinAccount(poolKey, eligible, limit);
+    picked = pickRoundRobinAccount(poolKey, eligible, limit, weightOf);
     if (!picked) return null;
     if (commitSharedActive && sharesActiveSelection(picked, selectionOptions)) {
       if (!isIndependentCodexQuotaScope(quotaScope)
@@ -698,9 +719,10 @@ export function pickAlternateCodexAccount(
   // result: when the excluded account is the only healthy member of the top
   // tier, the tier walk must be free to descend instead of selecting that tier
   // and then handing back an empty list.
-  if (strategy === "round-robin") {
+  if (strategy === "round-robin" || strategy === "reset-near-weighted") {
     const eligible = getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions);
-    return pickRoundRobinAccount(codexPoolKeyForScope(quotaScope), eligible, stickyLimitForConfig(config));
+    const weightOf = strategy === "reset-near-weighted" ? codexResetNearWeightOf(eligible, now) : undefined;
+    return pickRoundRobinAccount(codexPoolKeyForScope(quotaScope), eligible, stickyLimitForConfig(config), weightOf);
   }
   if (strategy === "fill-first") {
     const eligible = getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions);
@@ -731,9 +753,11 @@ export function peekAlternateCodexAccount(
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
 ): string | null {
-  if (accountPoolStrategyForScope(config, quotaScope) === "round-robin") {
+  const strategy = accountPoolStrategyForScope(config, quotaScope);
+  if (strategy === "round-robin" || strategy === "reset-near-weighted") {
     const eligible = getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions);
-    return peekRoundRobinAccount(codexPoolKeyForScope(quotaScope), eligible, stickyLimitForConfig(config));
+    const weightOf = strategy === "reset-near-weighted" ? codexResetNearWeightOf(eligible, now) : undefined;
+    return peekRoundRobinAccount(codexPoolKeyForScope(quotaScope), eligible, stickyLimitForConfig(config), weightOf);
   }
   return pickAlternateCodexAccount(config, excludeId, now, quotaScope, selectionOptions);
 }

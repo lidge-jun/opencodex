@@ -53,6 +53,12 @@ export type WindowsStopProcessEntry = WindowsProcessEntry & { startTime: number 
 const SNAPSHOT_MAX_BUFFER = 16 * 1024 * 1024;
 const SMALL_MAX_BUFFER = 64 * 1024;
 const NATIVE_CIM_TOLERANCE_MS = 1;
+/**
+ * Owner reads stop being admitted this long before the snapshot's cap, counted from the
+ * helper's own process start. It covers one in-flight 1 s CIM call plus serialization and
+ * exit, so optional owner evidence cannot turn a readable table into a timed-out one.
+ */
+export const SNAPSHOT_OWNER_RESERVE_MS = 2_000;
 
 function trustedProgram(program: WindowsEvidenceCommand["program"]): string {
   if (program === "powershell") return resolveTrustedWindowsPowerShellExe();
@@ -93,11 +99,16 @@ function powershellArgs(script: string): string[] {
 /**
  * Owner enrichment admits at most 32 candidates within 1.5 s; individual CIM calls also
  * have a 1 s operation cap. Unqueried owners stay unknown and every process row survives.
+ * No owner read starts later than `timeoutMs - SNAPSHOT_OWNER_RESERVE_MS` after the helper
+ * process started: a cold PowerShell start and first CIM query can use most of the cap on
+ * a hosted runner, and the 1.5 s loop budget alone did not count that time.
  * Owner reads prioritize this home's complete launcher/script tokens before other possible
  * wrapper candidates. A fresh CIM read after GetOwnerSid binds that owner to the original
  * creation time; a reused PID cannot prove a foreign owner.
  */
-export function windowsProcessSnapshotScript(): string {
+export function windowsProcessSnapshotScript(timeoutMs: number): string {
+  // A cap that is not a finite number admits no owner read; it never reaches the script text.
+  const ownerCutoffMs = Number.isFinite(timeoutMs) ? Math.max(0, Math.floor(timeoutMs) - SNAPSHOT_OWNER_RESERVE_MS) : 0;
   // The helper's own command line must not contain either installation path as a token.
   const paths = [windowsLauncherVbsPath(), windowsServiceScriptPath()]
     .map(path => Buffer.from(path, "utf8").toString("base64"));
@@ -110,14 +121,16 @@ export function windowsProcessSnapshotScript(): string {
     "$priority = @($rows | Where-Object { $_.CommandLine -match $homePath });",
     "$fallback = @($rows | Where-Object { $_.CommandLine -notmatch $homePath -and",
     "  (($_.Name -match '^(wscript|cscript|cmd)\\.exe$') -or (-not $_.Name) -or ($_.CommandLine -like '*opencodex-service*')) });",
-    "$ownerBudget = @{ Remaining = 32; Clock = [Diagnostics.Stopwatch]::StartNew() };",
+    "$ownerBudget = @{ Remaining = 32; Clock = [Diagnostics.Stopwatch]::StartNew();",
+    "  Until = [Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime().AddMilliseconds(" + ownerCutoffMs + ") };",
     "$owners = @{};",
     "foreach ($process in ($priority + $fallback)) {",
-    "  if (!$currentSid -or $ownerBudget.Remaining -le 0 -or $ownerBudget.Clock.ElapsedMilliseconds -ge 1500) { break };",
+    "  if (!$currentSid -or $ownerBudget.Remaining -le 0 -or $ownerBudget.Clock.ElapsedMilliseconds -ge 1500",
+    "    -or [DateTime]::UtcNow -ge $ownerBudget.Until) { break };",
     "  $ownerBudget.Remaining--;",
     "  try {",
     "    $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -OperationTimeoutSec 1 -ErrorAction Stop;",
-    "    if ($ownerBudget.Clock.ElapsedMilliseconds -ge 1500) { break };",
+    "    if ($ownerBudget.Clock.ElapsedMilliseconds -ge 1500 -or [DateTime]::UtcNow -ge $ownerBudget.Until) { break };",
     "    $after = Get-CimInstance -InputObject $process -OperationTimeoutSec 1 -ErrorAction Stop;",
     "    $owners[$process.ProcessId] = @{ Sid = $owner.Sid; ReturnValue = $owner.ReturnValue;",
     "      CreationDate = if ($after.CreationDate) { $after.CreationDate.ToUniversalTime().ToString('o') } else { $null } };",
@@ -211,7 +224,7 @@ export async function windowsProcessSnapshot(options: WindowsEvidenceOptions): P
   try {
     entries = parseWindowsProcessSnapshot(await run({
       program: "powershell",
-      args: powershellArgs(windowsProcessSnapshotScript()),
+      args: powershellArgs(windowsProcessSnapshotScript(options.timeoutMs)),
       timeoutMs: options.timeoutMs,
       maxBufferBytes: SNAPSHOT_MAX_BUFFER,
     }));

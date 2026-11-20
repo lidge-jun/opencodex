@@ -128,7 +128,7 @@ direct Pool 2 account recovery never selects the primary pool.
 Translated Responses [hosted Advisor ceiling checks](../transports/responses-spend.md#prepaid-initial-sends) use the admitted credential snapshot's provider and account ID, independently of display tags and the ambient active account; equal account IDs in different instances retain separate identities. Every selected adapter builder checks the captured hosted-work policy again after an admitted account replacement, including sidecar request copies; an earlier withholding remains in force for the turn. This read-only binding does not change ordinary main-model accounting scopes.
 
 `src/oauth/anthropic-send-ownership.ts` captures the account incarnation and
-login identity before the physical fetch. Header publication and refusal binding
+credential revision before the physical fetch. Header publication and refusal binding
 retain that same owner after the await; response arrival cannot adopt a newly
 registered row with identical credentials. Ordinary cooldown observations do not
 invalidate the send incarnation. Numeric config generation remains a separate
@@ -230,18 +230,17 @@ quota, reset eligibility, billing credit or routing capacity.
 `src/providers/quota/anthropic-account-quota.ts` probes per-account usage for either
 instance. It refuses an unconfigured instance, resolves token renewal before keying its
 flight on the credential actually dispatched, and publishes only while the instance's
-quota epoch, configured row, account incarnation and login identity are unchanged.
+quota epoch, configured row, account incarnation and credential revision are unchanged. `src/oauth/store.ts` advances the persisted revision under the auth store lock when a login or credential replacement changes its owner. Alias edits preserve the revision.
 `captureProviderAccountQuotaEpoch(instance)` and the cache keys in
 `src/providers/quota/account-cache.ts` are per instance, so clearing Pool 2 quota never
-invalidates the primary pool. With the pool on and two or more accounts, `fetchAnthropicQuota` (`src/providers/quota/vendor-probes-oauth.ts`) reports a display-only estimate via `aggregateCodexPoolCapacity`: seats weigh 1, inactive seats use their last-good row (no extra probes), paused, reauth or stale seats count as incomplete coverage. Every Anthropic report is current only while the pool switch and each seat's id, paused and reauth state are unchanged; pool off or one account keeps the active report. Quota reset detection observes the active seat's own reading (`observedQuotaFor`), never the estimate, which has no reset times (`tests/providers/provider-anthropic-pool-capacity.test.ts`).
+invalidates the primary pool. With the pool on and two or more accounts, `fetchAnthropicQuota` (`src/providers/quota/vendor-probes-oauth.ts`) reports a display-only estimate via `aggregateCodexPoolCapacity`: seats weigh 1, inactive seats use their last-good row (no extra probes), paused, reauth or stale seats count as incomplete coverage. Report ownership includes the pool switch, each seat's credential revision and routing status, and the active selection. Quota reset detection observes the active seat's own reading (`observedQuotaFor`), never the estimate, which has no reset times (`tests/providers/provider-anthropic-pool-capacity.test.ts`).
 
-A failed probe names one closed `quotaFailure` code from
-`src/providers/quota/failure-codes.ts`: `account_unavailable` when no usable credential could
-be obtained (no request is sent), the HTTP status class (`access_denied`, `rate_limited`,
-`upstream_error`, `redirect_blocked`), `response_unusable` for a body with no usable quota,
-and `timeout` or `transport_error` for a thrown dispatch. Both probe writers cache `unavailable: true`
-and `quotaFailure: "response_unusable"` on retirement-only responses. Ownership and cooldown refusals
-set no code. The code requires a current flight, carries no upstream text and never changes account health or `needsReauth`.
+Each failed probe names one closed `quotaFailure` code from `src/providers/quota/failure-codes.ts`: `account_unavailable` if a credential is unusable (no request is sent), the HTTP status class (`access_denied`, `rate_limited`, `upstream_error`, `redirect_blocked`), `response_unusable` for a body without usable quota, or `timeout` or `transport_error` for a thrown dispatch.
+Both probe writers cache `unavailable: true` and `quotaFailure: "response_unusable"` on retirement-only responses.
+Ownership and cooldown refusals set no code. The code requires a current flight, carries no upstream text and never changes account health or `needsReauth`.
+Live bars kept after a failed or retirement-only probe retain their original credential fence. The disk cache drops owned rows whose opaque revision binding differs from the current auth store. Legacy display rows carry no weighted routing evidence.
+A retirement-only result preserves the original observation times of unchanged plan bars for
+[weighted routing](reset-near-weighted.md).
 
 `src/providers/anthropic-reset-grant-ledger.ts` names the journal by instance:
 `anthropic-reset-grant-ledger.json` keeps the primary pool's existing bytes and records,
@@ -368,7 +367,7 @@ The metadata probe (`probe()`, no `-w` or `-g`, output discarded) shares that sl
 
 ## Model routes
 
-For Anthropic OAuth, `src/oauth/anthropic-routing.ts` applies the first matching `anthropicAccountPool.routes` rule to every eligible pick. The declared account order is stable while its candidates remain eligible; active, manual, affinity, quota and strategy preferences only choose inside that set. A healthy session affinity outside a model route is ignored for that request and retained for later unrouted or differently routed models; the routed commit does not overwrite it. An explicit fallback widens an empty route to the ordinary pool, and fill-first then advances in ordinary pool order from the active account. A missing eligible route fails locally without that fallback. The rules are operator allowlists, not provider entitlement evidence. Request logs use `route:#<n>` for the 1-based rule position, not the operator name.
+For Anthropic OAuth, `src/oauth/anthropic-routing.ts` applies the first matching `anthropicAccountPool.routes` rule to every eligible pick. The declared account order is stable while its candidates remain eligible. Active, manual, affinity, quota and strategy preferences, including [reset-near-weighted](reset-near-weighted.md), choose inside that set. A healthy session affinity outside a model route is ignored for that request and retained for later unrouted or differently routed models; the routed commit does not overwrite it. An explicit fallback widens an empty route to the ordinary pool, and fill-first then advances in ordinary pool order from the active account. A missing eligible route fails locally without that fallback. The rules are operator allowlists, not provider entitlement evidence. Request logs use `route:#<n>` for the 1-based rule position, not the operator name.
 
 ## Quota labels
 
