@@ -404,6 +404,7 @@ function snapshotHasCredits(quota: Omit<StoredAccountQuota, "updatedAt">): boole
  * Publish parsed display quota and separately validated policy evidence after writer checks.
  * A null policy observation retains only the matching main identity's previous evidence;
  * transient replacement markers are consumed during merging and never enter stored snapshots.
+ * Returns whether a writer-validated WHAM topology contradiction was accepted, even without quota.
  */
 export function setAccountQuotaFromParsed(
   accountId: string,
@@ -421,18 +422,19 @@ export function setAccountQuotaFromParsed(
   decisionRaw: Omit<StoredAccountQuota, "updatedAt"> | null = null,
   // Topology can contradict short-only proof even when no percentage is readable.
   wham?: { data: WhamUsageResponse; poolWriter?: PoolQuotaWriter },
-): void {
+): boolean {
   const shortOnlyObservation = policyQuota && shortOnlyTopology.get(policyQuota);
-  if (!mayCommitAccountQuota(accountId, writerGeneration)) return;
+  if (!mayCommitAccountQuota(accountId, writerGeneration)) return false;
   const isMain = accountId === MAIN_CODEX_ACCOUNT_ID;
-  if (isMain && mainWriter && !isMainQuotaWriterLive(mainWriter)) return;
+  if (isMain && mainWriter && !isMainQuotaWriterLive(mainWriter)) return false;
   const topologyWriter = wham?.poolWriter ?? historyEvidence?.writer;
   const mayRevokeTopology = isMain ? mainWriter !== undefined
     : topologyWriter ? topologyWriter.accountId === accountId && isPoolQuotaWriterLive(topologyWriter) : !poolRequest;
-  if (wham && mayRevokeTopology && whamContradictsShortOnly(wham.data)) shortOnlyProofs.delete(accountId);
+  const acceptedTopology = !!wham && mayRevokeTopology && whamContradictsShortOnly(wham.data);
+  if (acceptedTopology) shortOnlyProofs.delete(accountId);
   quota = withoutRetiredCodexQuota(quota);
   policyQuota = withoutRetiredCodexQuota(policyQuota);
-  if (!quota || (!snapshotHasUsage(quota) && !snapshotHasCredits(quota))) return;
+  if (!quota || (!snapshotHasUsage(quota) && !snapshotHasCredits(quota))) return acceptedTopology;
   hydrateAccountQuotasFromDisk();
   const legacyExisting = accountQuota.get(accountId);
   const updatedAt = Date.now();
@@ -463,7 +465,7 @@ export function setAccountQuotaFromParsed(
   // Contradictory topology revokes proof even when long-window usage could not be parsed.
   const proof = shortOnlyProofs.get(accountId);
   if (snapshotHasWeekly(next) || snapshotHasMonthly(next) || snapshotHasCustom(next)
-    || shortOnlyObservation === false) {
+    || (shortOnlyObservation === false && (isMain || mayRevokeTopology))) {
     shortOnlyProofs.delete(accountId);
   } else if (mayRetireShort && shortOnlyObservation === true) {
     shortOnlyProofs.set(accountId, { observedAt: updatedAt,
@@ -511,6 +513,7 @@ export function setAccountQuotaFromParsed(
     if (!isMain && policyQuota && livePoolEvidence) observeCodexLowQuota(accountId, policyQuota);
     notifyCodexQuotaSnapshot(accountId, next);
   }
+  return acceptedTopology;
 }
 
 /**

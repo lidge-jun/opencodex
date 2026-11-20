@@ -310,8 +310,9 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
                   signal: AbortSignal.timeout(8000),
                 });
                 if (resp.ok) {
-                  const data = (await resp.json()) as WhamUsageResponse;
-                  wham = { data };
+                  const data = await resp.json();
+                  if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("Invalid WHAM response");
+                  wham = { data: data as WhamUsageResponse };
                   email = data.email?.trim() || email;
                   plan = nonEmptyPlan(data.plan_type) ?? plan;
                   quota = parseUsageQuota(data);
