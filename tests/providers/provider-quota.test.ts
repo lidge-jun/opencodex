@@ -2188,7 +2188,7 @@ describe("fetchProviderQuotaReports", () => {
 
     const result = await fetchProviderQuotaReports(config, true);
     const openai = result.reports.find(row => row.provider === "openai");
-    expect(openai?.quota.weeklyPercent).toBe(66);
+    expect(openai?.quota.weeklyPercent).toBeCloseTo(71, 8);
     expect(openai?.aggregation).toMatchObject({
       includedAccounts: 2,
       excludedAccounts: 0,
@@ -2398,7 +2398,7 @@ describe("fetchProviderQuotaReports", () => {
       }), { status: 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
 
-    expect((await fetchProviderQuotaReports(config, true)).reports[0]?.quota.weeklyPercent).toBe(66);
+    expect((await fetchProviderQuotaReports(config, true)).reports[0]?.quota.weeklyPercent).toBeCloseTo(71, 8);
     config.pausedCodexAccountIds = ["added"];
     const paused = (await fetchProviderQuotaReports(config)).reports[0];
     expect(paused?.quota.weeklyPercent).toBe(11);

@@ -1,3 +1,4 @@
+import { DEFAULT_VIDEO_MODEL } from "./video-capabilities";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { toolChoiceToolPredicate } from "../types";
 import type { ImageBridgePlan, VideoBridgePlan } from "./types";
@@ -10,7 +11,7 @@ import { providerDestinationConfigError } from "../lib/destination-policy";
 import { IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME, isVideoGenName } from "./synthetic-tool";
 import type { VideoProviderAuth } from "./xai-video-client";
 
-const DEFAULT_MODEL = "grok-imagine-image-quality";
+import { XAI_DEFAULT_IMAGE_MODEL } from "./xai-client";
 /** Absolute ceiling for `images.timeoutMs` (matches /v1/images relay budget). */
 export const MAX_IMAGE_TIMEOUT_MS = 300_000;
 
@@ -94,7 +95,7 @@ export async function planImageBridge(
   return {
     provider: found.provider,
     auth: { baseUrl: pinnedBaseUrl, token },
-    model: config.images?.bridgeModel ?? DEFAULT_MODEL,
+    model: config.images?.bridgeModel ?? XAI_DEFAULT_IMAGE_MODEL,
     toolNames,
     ...(hostedSize ? { defaultSize: hostedSize } : {}),
     ...(hostedQuality ? { defaultQuality: hostedQuality } : {}),
@@ -103,7 +104,6 @@ export async function planImageBridge(
   };
 }
 
-const DEFAULT_VIDEO_MODEL = "grok-imagine-video";
 const XAI_HOSTS = new Set(["api.x.ai", "cli-chat-proxy.grok.com"]);
 
 function pinnedXaiBaseUrl(): string {

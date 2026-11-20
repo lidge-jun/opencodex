@@ -30,7 +30,7 @@ Image Bridge 옵션은 `~/.opencodex/config.json`의 `images` 아래에 있습�
 {
   "images": {
     "bridgeEnabled": true,
-    "bridgeModel": "grok-imagine-image-quality",
+    "bridgeModel": "grok-imagine-image-2.0",
     "maxRounds": 3,
     "timeoutMs": 60000
   }
@@ -40,7 +40,7 @@ Image Bridge 옵션은 `~/.opencodex/config.json`의 `images` 아래에 있습�
 | 옵션 | 기본값 | 설명 |
 | --- | --- | --- |
 | `bridgeEnabled` | `false` | 마스터 스위치입니다. 브리지를 켜려면 `true`로 설정합니다. 예상치 못한 xAI 요금을 막기 위해 기본값은 꺼져 있습니다. |
-| `bridgeModel` | `grok-imagine-image-quality` | 프롬프트를 보낼 xAI 이미지 모델 ID입니다. |
+| `bridgeModel` | `grok-imagine-image-2.0` | 프롬프트를 보낼 xAI 이미지 모델 ID입니다. |
 | `maxRounds` | `3` | 턴당 이미지 생성 루프의 최대 반복 횟수입니다. 정수로 내림한 뒤 `[0, 10]` 범위로 제한합니다. 유한하지 않은 값은 `3`으로 돌아갑니다. |
 | `timeoutMs` | `60000` | 호출당 xAI 마감 시간(밀리초)입니다. 유한한 양수 값은 내림한 뒤 xAI 요청에 전달합니다. |
 | `artifactsKeepCount` | `200` | `artifacts/` 아래에 유지할 최대 파일 수입니다. 이를 넘으면 각 완료된 호출 뒤에 가장 오래된 파일부터 삭제합니다. `0` 이하로 설정하면 정리를 비활성화합니다. |
@@ -67,3 +67,5 @@ Image Bridge는 선택된 모델이 OpenAI가 아닌 상태에서, `/v1/response
 - 웹 검색 sidecar 루프를 지원하는 adapter에서는 웹 검색이 우선합니다. 같은 턴에서 웹 검색과 이미지 생성이 동시에 요청되면 웹 검색이 먼저 실행되고 이미지 생성은 건너뜁니다. 다만 현재 Cursor/`runTurn` adapter는 그 sidecar를 사용할 수 없어서, 이런 dual-tool 턴에서는 image bridge가 여전히 실행될 수 있습니다.
 - xAI 요금이 발생합니다. xAI를 통한 이미지 생성에는 활성 xAI 구독이나 API 크레딧이 필요합니다.
 - 스트리밍 전용입니다. 브리지는 SSE response stream을 가로채서 동작하므로 `stream: false` 요청은 400 오류로 거절됩니다.
+
+기본 모델은 `grok-imagine-image-2.0`입니다. `quality`는 `low`, `medium`, `auto`를 지원하며 OpenAI의 `high`와 `hd`는 `medium`으로 변환됩니다. 종료된 `grok-imagine-image-quality`와 2026-05-15부터 그 모델로 연결된 `grok-imagine-image-pro`는 2.0의 낮은 품질로 제공됩니다. 가격은 품질과 해상도에 따라 달라지며, 편집은 입력 이미지당 $0.01이 추가됩니다. `/v1/images/edits` 릴레이는 중복을 먼저 제거한 뒤 입력 이미지를 최대 5개까지 전달하고, `image_gen` 브리지 도구는 1개를 보냅니다.

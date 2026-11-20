@@ -3053,6 +3053,7 @@ export const ru: Record<TKey, string> = {
   "codexAuth.creditNextBadge": "СЛЕД.",
   "codexAuth.creditGranted": "Начислен {date}",
   "codexAuth.creditExpires": "Истекает {date} (осталось {days} дн.)",
+  "codexAuth.creditNoExpiry": "Без срока действия",
 
   // grok reset coupons (xAI account rows)
   "grokCoupon.badgeAria": "Купонов сброса Grok: {count}",
