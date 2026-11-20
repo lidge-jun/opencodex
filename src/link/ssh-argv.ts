@@ -21,6 +21,7 @@ import { isRouteClientId, type RouteClientId } from "./route-intent";
 
 import { isAbsolute } from "node:path";
 import { ExplicitRouteError, explicitRouteSshOptions, type ExplicitRoute } from "./explicit-route";
+import { REMOTE_SERVED_PATH_TRUST } from "./remote-runtime-trust";
 import { POWERSHELL_ENCODED_MAX, PowerShellCommandTooLongError, ROUTE_OVERWRITE_MIN_CHILD_VERSION, windowsGatedOcxArgv, windowsOcxArgv, windowsOverwriteSyncArgv } from "./remote-windows";
 
 export type TunnelDirection = "R" | "L";
@@ -207,7 +208,7 @@ export const REMOTE_PLATFORM_UNSUPPORTED = 125;
  * unreadable file or a missing awk fails without writing to stderr.
  * Shared by the ocx discovery, pinned sync and runtime inspection scripts.
  */
-export const REMOTE_SERVED_RUNTIME = `served_runtime() {
+export const REMOTE_SERVED_RUNTIME = `${REMOTE_SERVED_PATH_TRUST}served_runtime() {
   # The count below reports wc's status, never dd's: a missing dd or an unreadable file ends here,
   # and a dd that fails anyway counts zero bytes, which is refused like an oversized census.
   [ -f "$1" ] && [ -r "$1" ] && command -v dd >/dev/null 2>&1 || return 1
@@ -237,7 +238,7 @@ export const REMOTE_SERVED_RUNTIME = `served_runtime() {
 
 /**
  * Tries the served install with \`attempt\`, which must read \`$served_bin\` and honour \`$ocx_entry\`:
- * a compiled binary runs alone, and a package pair runs as \`bun <entry>\` only while the entry exists.
+ * a compiled binary runs alone, and both package paths must pass the same trust gate.
  * The unquoted \`OCX_SERVED\` heredoc is safe only because \`served_runtime\` prints paths without
  * quotes, backslashes or newlines; relaxing that character class would let a path expand or split.
  */
@@ -247,9 +248,12 @@ if served=$(served_runtime "\${OPENCODEX_HOME:-$HOME/.opencodex}/serving-runtime
   { IFS= read -r served_bin; IFS= read -r served_entry; } <<OCX_SERVED
 $served
 OCX_SERVED
-  if [ -z "$served_entry" ]; then
+  served_bin=$(trusted_served_path "$served_bin") || served_bin=
+  if [ -z "$served_bin" ]; then
+    :
+  elif [ -z "$served_entry" ]; then
     ${attempt}
-  elif [ -f "$served_entry" ]; then
+  elif served_entry=$(trusted_served_path "$served_entry"); then
     ocx_entry=$served_entry
     ${attempt}
     ocx_entry=
