@@ -39,14 +39,14 @@ import {
   validCachedRouteDecision,
 } from "./log-route-decision";
 import { mergeLogDelta, parseLogPollResponse } from "./log-poll";
-import {
-  ACCOUNT_LOG_LABEL_RE,
-  type AttemptRecoveryKind,
-  type RequestFailureCause,
-  type RequestFailureStage,
-  type RequestSpendTotals,
-  type ResendPermission,
+import type {
+  AttemptRecoveryKind,
+  RequestFailureCause,
+  RequestFailureStage,
+  RequestSpendTotals,
+  ResendPermission,
 } from "../../../src/usage/telemetry-contract";
+import { ACCOUNT_LOG_LABEL_RE } from "../../../src/usage/telemetry-contract";
 import {
   classifyRequestOutcome,
   type RequestOutcomeClass,
