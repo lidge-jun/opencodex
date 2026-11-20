@@ -96,10 +96,15 @@ export function parseVideoCallArgs(raw: string, model?: string):
   if (obj.keyframes !== undefined) {
     if (!Array.isArray(obj.keyframes) || obj.keyframes.length > caps.maxKeyframes) return { ok: false, error: "invalid keyframes" };
     result.keyframes = [];
+    // xAI snaps keyframes to a 1/3-second grid and rejects two in the same slot.
+    const slots = new Set<number>();
     for (const frame of obj.keyframes) {
       // Strictly inside the clip that will be generated: xAI uses 8 s when duration is omitted.
       const clip = result.duration ?? XAI_DEFAULT_VIDEO_SECONDS;
       if (!frame || typeof frame !== "object" || typeof frame.image !== "string" || !frame.image || typeof frame.timestamp_s !== "number" || !Number.isFinite(frame.timestamp_s) || frame.timestamp_s <= 0 || frame.timestamp_s >= clip) return { ok: false, error: `invalid keyframe: timestamp_s must be inside the ${clip}s clip` };
+      const slot = Math.round(frame.timestamp_s * 3);
+      if (slots.has(slot)) return { ok: false, error: "invalid keyframe: two keyframes snap to the same 1/3-second slot" };
+      slots.add(slot);
       result.keyframes.push({ image: frame.image, timestampS: frame.timestamp_s });
     }
   }
@@ -108,6 +113,9 @@ export function parseVideoCallArgs(raw: string, model?: string):
     result.referenceImages = obj.reference_images;
   }
   const references = (result.referenceImages?.length ?? 0) > 0;
+  if (references && result.duration !== undefined && result.duration > caps.referenceMaxSeconds) {
+    return { ok: false, error: `reference_images allow at most ${caps.referenceMaxSeconds}s on ${model ?? "unknown"}` };
+  }
   // Pinned last/key frames and references all make it reference-to-video, which stops at 720p.
   if ((references || result.lastFrame || result.keyframes?.length) && result.resolution === "1080p" && caps.referenceMaxResolution === "720p") {
     return { ok: false, error: "reference_images, last_frame and keyframes are limited to 720p" };

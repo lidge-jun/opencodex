@@ -134,7 +134,7 @@ The `video_gen` tool accepts:
 | `image` | string | first frame | HTTPS URL, data URL or remembered artifact |
 | `last_frame` | string | 1.5 only | Last frame |
 | `keyframes` | array | 1.5, max 4 | `{image, timestamp_s}`; timestamp strictly inside the clip (8 s when `duration` is omitted) |
-| `reference_images` | array | 1.5: 14, classic: 7 | Image references; the classic model cannot combine them with `image` |
+| `reference_images` | array | 1.5: 14, classic: 7 (≤ 10 s) | Image references; the classic model cannot combine them with `image` |
 
 Settings a model cannot honour are refused before any paid call instead of being dropped.
 

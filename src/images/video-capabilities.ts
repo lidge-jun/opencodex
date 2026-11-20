@@ -8,6 +8,8 @@ export interface VideoModelCapabilities {
   referenceMaxResolution?: string;
   /** Whether a first frame may be combined with reference images (classic rejects the mix). */
   firstFrameWithReferences: boolean;
+  /** Longest clip, in seconds, when reference images are supplied. */
+  referenceMaxSeconds: number;
 }
 
 export const DEFAULT_VIDEO_MODEL = "grok-imagine-video-1.5-lite";
@@ -27,5 +29,6 @@ export function videoModelCapabilities(model?: string): VideoModelCapabilities {
     maxReferenceImages: full ? 14 : classic ? 7 : 0,
     ...(full ? { referenceMaxResolution: "720p" } : {}),
     firstFrameWithReferences: full,
+    referenceMaxSeconds: classic ? 10 : 15,
   };
 }

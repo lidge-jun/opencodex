@@ -110,7 +110,7 @@ L'outil `video_gen` accepte les paramètres suivants :
 | `image` | string | première image | URL HTTPS, URL de données ou artefact mémorisé |
 | `last_frame` | string | 1.5 uniquement | Dernière image |
 | `keyframes` | array | 1.5, 4 au maximum | `{image, timestamp_s}`; horodatage strictement à l’intérieur du clip (8 s si `duration` est omis) |
-| `reference_images` | array | 1.5 : 14, classique : 7 | Images de référence ; le modèle classique ne peut pas les combiner avec `image` |
+| `reference_images` | array | 1.5 : 14, classique : 7 (≤ 10 s) | Images de référence ; le modèle classique ne peut pas les combiner avec `image` |
 
 Les réglages qu’un modèle ne peut pas respecter sont refusés avant tout appel payant au lieu d’être ignorés.
 

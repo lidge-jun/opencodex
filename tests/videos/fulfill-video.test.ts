@@ -199,6 +199,19 @@ test("settings xAI cannot honour in the chosen mode are refused before a paid ca
   expect(full({ image: img, reference_images: [img] })).toMatchObject({ ok: true });
 });
 
+test("keyframes may not share a 1/3-second slot, and classic references stop at 10 s", () => {
+  const img = "https://example.com/a.png";
+  const full = (v: object) => parseVideoCallArgs(JSON.stringify({ prompt: "p", ...v }), "grok-imagine-video-1.5");
+  expect(full({ keyframes: [{ image: img, timestamp_s: 2 }, { image: img, timestamp_s: 4 }] })).toMatchObject({ ok: true });
+  expect(full({ keyframes: [{ image: img, timestamp_s: 2 }, { image: img, timestamp_s: 2 }] })).toMatchObject({ ok: false });
+  expect(full({ keyframes: [{ image: img, timestamp_s: 2 }, { image: img, timestamp_s: 2.1 }] })).toMatchObject({ ok: false });
+  const classic = (v: object) => parseVideoCallArgs(JSON.stringify({ prompt: "p", ...v }), "grok-imagine-video");
+  expect(classic({ reference_images: [img], duration: 10 })).toMatchObject({ ok: true });
+  expect(classic({ reference_images: [img], duration: 11 })).toMatchObject({ ok: false });
+  expect(classic({ duration: 15 })).toMatchObject({ ok: true });
+  expect(full({ reference_images: [img], duration: 15 })).toMatchObject({ ok: true });
+});
+
 test("a permanent poll error keeps only the validated detail", async () => {
   const failWith = (detail?: string) => async () => { throw Object.assign(new Error("xAI videos poll API returned 400: secret prompt text"), { status: 400, ...(detail ? { detail } : {}) }); };
   const safe = pollVideoWithHeartbeats("r", auth, new AbortController().signal, 1000, noopSleep, failWith("1080p video resolution is not available for this model."));

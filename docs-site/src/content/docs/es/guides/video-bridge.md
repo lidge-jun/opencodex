@@ -115,7 +115,7 @@ La herramienta `video_gen` acepta:
 | `image` | string | primer fotograma | URL HTTPS, URL de datos o artefacto recordado |
 | `last_frame` | string | solo 1.5 | Último fotograma |
 | `keyframes` | array | 1.5, máximo 4 | `{image, timestamp_s}`; marca de tiempo estrictamente dentro del clip (8 s si se omite `duration`) |
-| `reference_images` | array | 1.5: 14, clásico: 7 | Referencias de imagen; el modelo clásico no puede combinarlas con `image` |
+| `reference_images` | array | 1.5: 14, clásico: 7 (≤ 10 s) | Referencias de imagen; el modelo clásico no puede combinarlas con `image` |
 
 Los ajustes que un modelo no puede respetar se rechazan antes de cualquier llamada de pago en lugar de descartarse.
 

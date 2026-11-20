@@ -105,7 +105,7 @@ Video Bridge 允许你通过 opencodex 路由的任意非 OpenAI 模型使用 xA
 | `image` | string | 首帧 | HTTPS URL、数据 URL 或已记录的产物 |
 | `last_frame` | string | 仅限 1.5 | 末帧 |
 | `keyframes` | array | 1.5，最多 4 | `{image, timestamp_s}`; 时间戳必须严格位于片段内部（省略 `duration` 时为 8 s） |
-| `reference_images` | array | 1.5: 14，经典版: 7 | 参考图像；经典模型不能将其与 `image` 组合 |
+| `reference_images` | array | 1.5: 14，经典版: 7 (≤ 10 s) | 参考图像；经典模型不能将其与 `image` 组合 |
 
 模型无法满足的设置会在任何付费调用前被拒绝，而不会被忽略。
 

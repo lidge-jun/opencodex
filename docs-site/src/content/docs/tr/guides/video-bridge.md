@@ -117,7 +117,7 @@ Köprü varsayılan olarak `video_gen` işlerini `xai` sağlayıcısının API a
 | `image` | string | ilk kare | HTTPS URL’si, veri URL’si veya hatırlanan artifact |
 | `last_frame` | string | yalnızca 1.5 | Son kare |
 | `keyframes` | array | 1.5, en fazla 4 | `{image, timestamp_s}`; zaman damgası kesinlikle klibin içinde olmalıdır (`duration` atlanırsa 8 s) |
-| `reference_images` | array | 1.5: 14, klasik: 7 | Referans görüntüler; klasik model bunları `image` ile birleştiremez |
+| `reference_images` | array | 1.5: 14, klasik: 7 (≤ 10 s) | Referans görüntüler; klasik model bunları `image` ile birleştiremez |
 
 Modelin karşılayamayacağı ayarlar yok sayılmak yerine ücretli çağrıdan önce reddedilir.
 

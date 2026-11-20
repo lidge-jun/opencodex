@@ -106,7 +106,7 @@ Video Bridge を使用すると、opencodex によってルーティングされ
 | `image` | string | 最初のフレーム | HTTPS URL、データ URL、または記憶された成果物 |
 | `last_frame` | string | 1.5 のみ | 最後のフレーム |
 | `keyframes` | array | 1.5、最大 4 | `{image, timestamp_s}`; タイムスタンプはクリップの内部に厳密に収める（`duration` 省略時は 8 s） |
-| `reference_images` | array | 1.5: 14、クラシック: 7 | 参照画像。クラシックモデルでは `image` と併用不可 |
+| `reference_images` | array | 1.5: 14、クラシック: 7 (≤ 10 s) | 参照画像。クラシックモデルでは `image` と併用不可 |
 
 モデルが対応できない設定は黙って破棄されず、課金される呼び出しの前に拒否されます。
 

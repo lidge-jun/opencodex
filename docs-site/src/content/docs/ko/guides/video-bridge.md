@@ -106,7 +106,7 @@ Video Bridge는 opencodex가 라우팅한 OpenAI가 아닌 모델로 xAI의 Grok
 | `image` | string | 첫 프레임 | HTTPS URL, 데이터 URL 또는 기억된 아티팩트 |
 | `last_frame` | string | 1.5 전용 | 마지막 프레임 |
 | `keyframes` | array | 1.5, 최대 4 | `{image, timestamp_s}`; 타임스탬프는 클립 내부에만 허용 (`duration` 생략 시 8 s) |
-| `reference_images` | array | 1.5: 14, 클래식: 7 | 참조 이미지; 클래식 모델에서는 `image`와 함께 사용할 수 없음 |
+| `reference_images` | array | 1.5: 14, 클래식: 7 (≤ 10 s) | 참조 이미지; 클래식 모델에서는 `image`와 함께 사용할 수 없음 |
 
 모델이 지원할 수 없는 설정은 무시되지 않고 유료 호출 전에 거부됩니다.
 

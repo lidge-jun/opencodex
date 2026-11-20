@@ -63,8 +63,9 @@ the legacy seven ratios and no image inputs. `parseVideoCallArgs` refuses, befor
 call, every explicit setting the model cannot honour in the requested mode: an unsupported
 resolution, aspect ratio or duration; 1080p with `last_frame`, `keyframes` or references
 (reference-to-video stops at 720p); a keyframe outside the effective clip (8 s when no duration
-is given); classic `image` plus references; and an aspect ratio on plain image-to-video, which
-keeps the image's ratio. Image inputs accept HTTPS and bounded
+is given) or two keyframes in the same 1/3-second slot; classic `image` plus references, and classic
+references beyond 10 s; and an aspect ratio on plain image-to-video, which keeps the image's ratio.
+Image inputs accept HTTPS and bounded
 inline image data. A successful URL download records its original source URL in a
 256-entry, one-hour process-local map. Artifact references resolve by exact path or
 opaque ID without reading local files; they are forwarded only to the pinned xAI
