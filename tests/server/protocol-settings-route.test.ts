@@ -93,6 +93,26 @@ describe("PATCH /api/protocols/settings", () => {
     expect(h.saves[0]!.apiSurfaces).toEqual({ messages: { enabled: true } });
   });
 
+  test("Gemini persists its own setting and keeps the planning surface shape compatible", async () => {
+    const h = harness({ apiSurfaces: { messages: { enabled: true } }, claudeCode: { enabled: true },
+      protocols: { rollout: { geminiNativeAntigravity: true } } });
+    const res = await patch(h, { geminiEnabled: false });
+    expect(res.status).toBe(200);
+    expect(h.saves[0]!.apiSurfaces).toEqual({ messages: { enabled: true }, gemini: { enabled: false } });
+    expect(h.saves[0]!.claudeCode).toEqual({ enabled: true });
+    expect(h.saves[0]!.protocols?.rollout?.geminiNativeAntigravity).toBe(true);
+    const body = await res.json();
+    expect(Object.keys(body.surfaces)).toEqual(["responses", "chat", "messages"]);
+    expect(body.geminiSurface).toEqual({ enabled: false, source: "api-surfaces" });
+    expect(h.syncs).toBe(0);
+  });
+
+  test("repairing malformed surface settings does not reopen the sibling", async () => {
+    const h = harness({ apiSurfaces: "off" });
+    expect((await patch(h, { geminiEnabled: true })).status).toBe(200);
+    expect(h.saves[0]!.apiSurfaces).toEqual({ messages: { enabled: false }, gemini: { enabled: true } });
+  });
+
   test("policy and rollout switches merge into protocols", async () => {
     const h = harness({ protocols: { rollout: { directEncoders: true } } });
     const res = await patch(h, { unrepresentable: "reject", rollout: { shadowPlan: true } });
@@ -147,6 +167,7 @@ describe("PATCH /api/protocols/settings", () => {
     ["a non-object body", [], "invalid_body"],
     ["an empty body", {}, "empty_body"],
     ["an unknown key", { messagesEnabled: true, claudeCode: { enabled: true } }, "unknown_field"],
+    ["a string geminiEnabled", { geminiEnabled: "false" }, "invalid_gemini_enabled"],
     ["a string messagesEnabled", { messagesEnabled: "false" }, "invalid_messages_enabled"],
     ["an unknown policy", { unrepresentable: "drop" }, "invalid_unrepresentable"],
     ["a non-object rollout", { rollout: true }, "invalid_rollout"],

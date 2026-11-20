@@ -835,6 +835,10 @@ Thinking replay and prompt-cache work remain separate in [#3719](https://github.
 
 ## Gemini API: `/v1beta/models` and `/v1beta/interactions`
 
+The **Gemini API** switch under the dashboard's **Gateway endpoints** controls access to these
+routes. While the API is open, **Usage examples** includes a copyable `generateContent` request.
+See [API surfaces](/reference/configuration/server/#api-surfaces-apisurfaces).
+
 Gemini clients, such as the google-genai SDK with a custom base URL, the `agy` CLI or a client reading
 `GOOGLE_GEMINI_BASE_URL`, can reach the configured provider routes in Google's REST shape. The proxy
 normally translates generation onto its Chat Completions path, so the route behind it can be any

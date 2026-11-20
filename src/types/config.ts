@@ -24,6 +24,8 @@ export interface OcxApiSurfacesConfig {
    * `claudeCode.enabled !== false`"; a present non-boolean value disables the surface.
    */
   messages?: { enabled?: boolean };
+  /** Gemini-compatible routes. The surface is open by default. */
+  gemini?: { enabled?: boolean };
 }
 
 /** Protocol delivery policy (devlog/_plan/260924_protocol_first_class). */

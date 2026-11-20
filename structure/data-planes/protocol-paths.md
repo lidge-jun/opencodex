@@ -542,8 +542,8 @@ lane, the decline trace, the beta allowlist, opaque state and OAuth.
 
 ## Settings
 
-`resolveApiSurfaceSettings` and `resolveProtocolSettings` in `src/protocols/settings.ts` are the
-only readers of the `apiSurfaces` and `protocols` config keys. Responses and Chat Completions are
+`src/protocols/settings.ts` resolves the `apiSurfaces` and `protocols` config keys through
+`resolveApiSurfaceSettings`, `resolveGeminiApiSurface` and `resolveProtocolSettings`. Responses and Chat Completions are
 always served. The Messages surface uses an explicit `apiSurfaces.messages.enabled` boolean when
 present, closes when that value is present but malformed, and otherwise inherits
 `claudeCode.enabled !== false`. The unrepresentable policy defaults to `legacy` and every
@@ -562,7 +562,7 @@ through `nativeMessagesDeclineReason` by the Messages ingress, `count_tokens` an
 closed surface answers 403 before the body is read. `buildApiAccessEndpoints`
 (`src/server/management/api-access.ts`) reports the resolved `surfaces` in the keys payload and
 keeps `claudeCodeEnabled` for older dashboards, set from the resolved Messages state rather than
-from `claudeCode.enabled`.
+from `claudeCode.enabled`. The [Gemini surface](gemini-inbound.md) defaults on and has its own setting.
 
 `PATCH /api/protocols/settings` is the one writer. `src/server/management/protocol-settings-patch.ts`
 validates the body strictly and applies it in memory; the route persists through

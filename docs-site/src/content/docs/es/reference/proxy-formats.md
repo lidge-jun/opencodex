@@ -469,6 +469,9 @@ La instantánea sigue siendo un contrato de lista de modelos de solo lectura; no
 
 ## API de Gemini: `/v1beta/models` y `/v1beta/interactions`
 
+El interruptor **API de Gemini** del panel controla el acceso a estas rutas. Mientras la API
+está habilitada, los ejemplos de uso muestran una solicitud `generateContent` que se puede copiar.
+
 Los clientes de Gemini, como el SDK google-genai con una URL base personalizada, la CLI `agy` o un cliente que lee `GOOGLE_GEMINI_BASE_URL`, pueden usar las rutas de proveedor configuradas con la forma REST de Google. El proxy normalmente traduce la generación a su ruta de Chat Completions, que admite cualquier proveedor. La generación elegible con Antigravity puede usar la [ruta nativa](#gemini-nativo-con-antigravity) si está habilitada. Autentíquese con una clave API del proxy en `x-goog-api-key` o en el parámetro de consulta `?key=`; la clave se quita de la URL y de las cabeceras antes de registrar o reenviar la solicitud. Los errores usan la forma de Google `{ "error": { "code", "message", "status" } }`.
 
 - `GET /v1beta/models` lista `models/<provider>/<model>` para las rutas que la clave puede usar, y `GET /v1beta/models/{model}` devuelve una. Un modelo incluye `inputTokenLimit` y `outputTokenLimit` cuando se conocen. Para `inputTokenLimit`, tienen prioridad los límites de entrada y de ventana de contexto configurados en el proveedor, seguidos de `customModels[].contextWindow` del modelo correspondiente y de los metadatos generados.

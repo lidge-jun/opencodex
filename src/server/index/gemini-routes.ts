@@ -15,6 +15,7 @@ import { SIDECAR_INTERNAL_CAPABILITY_HEADER } from "../advisor-admission-scope";
 import { withCallerSessionIdentity } from "../caller-session-identity";
 import { captureAdmissionPolicy } from "../capture-admission-policy";
 import { isDraining } from "../lifecycle";
+import { resolveGeminiApiSurface } from "../../protocols/settings";
 import { geminiRouteAllowHeader, geminiRouteAllows, parseGeminiNativePath, type GeminiNativeRoute } from "../gemini-native-paths";
 import { geminiError, handleGeminiCountTokens, handleGeminiGeneration, handleGeminiModel, handleGeminiModels, toGeminiRefusal } from "../gemini-inbound";
 import { handleGeminiInteraction, handleGeminiInteractionResource } from "../gemini-interactions-inbound";
@@ -61,6 +62,9 @@ async function handleGeminiRoute(route: GeminiNativeRoute, original: Request, ur
     const refused = geminiError(405, `method ${original.method} not allowed`);
     refused.headers.set("Allow", geminiRouteAllowHeader(route));
     return withCors(refused, original, policy);
+  }
+  if (!resolveGeminiApiSurface(config).enabled) {
+    return withCors(geminiError(403, "Gemini API is disabled"), original, policy);
   }
   const generation = route.kind === "interactions"
     || (route.kind === "method" && (route.method === "generateContent" || route.method === "streamGenerateContent"));
