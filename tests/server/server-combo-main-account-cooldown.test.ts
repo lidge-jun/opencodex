@@ -112,6 +112,8 @@ describe("end to end: a combo served by the Codex pool's main account", () => {
   let sent: string[] = [];
   let probes: string[] = [];
   let mainSpent = true;
+  // One main token per test: its exp claim is fixed here, so identifying it never depends on the clock.
+  let mainBearer = "";
 
   function bearerFor(subject: string): string {
     const claims = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600,
@@ -127,9 +129,10 @@ describe("end to end: a combo served by the Codex pool's main account", () => {
     clearComboTargetCooldowns();
     sent = [];
     mainSpent = true;
+    mainBearer = bearerFor(MAIN_TOKEN_SUBJECT);
     mkdirSync(temp.codexHome, { recursive: true });
     writeFileSync(join(temp.codexHome, "auth.json"), JSON.stringify({ tokens: {
-      access_token: bearerFor(MAIN_TOKEN_SUBJECT), refresh_token: "fixture-main-refresh", account_id: MAIN_TOKEN_SUBJECT,
+      access_token: mainBearer, refresh_token: "fixture-main-refresh", account_id: MAIN_TOKEN_SUBJECT,
     } }));
     reconcileMainCodexAccountRuntimeState();
     saveCodexAccountCredential(POOL_ACCOUNT, {
@@ -139,7 +142,7 @@ describe("end to end: a combo served by the Codex pool's main account", () => {
     fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input instanceof Request ? input.url : String(input);
       const auth = new Headers(init?.headers).get("authorization") ?? "";
-      const who = auth.includes(bearerFor(MAIN_TOKEN_SUBJECT).split(".")[1]!) ? "main" : "pool";
+      const who = auth === `Bearer ${mainBearer}` ? "main" : "pool";
       // Model turns only; quota and account-info reads are not sends this test counts.
       if (!new URL(url).pathname.endsWith("/responses")) { probes.push(`${who} ${new URL(url).pathname}`); return Response.json({}); }
       sent.push(who);
@@ -192,7 +195,7 @@ describe("end to end: a combo served by the Codex pool's main account", () => {
   test("direct mode (caller-owned main): the 429 still parks the target, so the next request sends nothing", async () => {
     const cfg = config("direct");
     // Direct mode serves the caller's own credential (kind "main", no pool account label).
-    const caller = { authorization: `Bearer ${bearerFor(MAIN_TOKEN_SUBJECT)}` };
+    const caller = { authorization: `Bearer ${mainBearer}` };
     const first = await post(cfg, caller);
     expect(first.status, first.body).toBe(429);
     expect(sent).toEqual(["main"]);
