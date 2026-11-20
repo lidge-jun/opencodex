@@ -3,8 +3,19 @@ import type { M365CopilotWebSession } from "./types";
 
 interface BrowserCommands { command(method: string, params?: Record<string, unknown>, sessionId?: string): Promise<any> }
 // The web app deletes its hydration global after startup, so the server HTML is the fallback source.
-const fetchChatHtml = "location.origin===" + JSON.stringify(new URL(M365_COPILOT_WEB_URL).origin)
-  + "?fetch(" + JSON.stringify(M365_COPILOT_WEB_URL) + ",{credentials:'include'}).then(r=>r.ok?r.text():''):''";
+// The page-side read is bounded like discovery (2 MiB) and in time, and it rejects a response whose
+// final URL left the Copilot origin, so a huge, stalled or redirected body never reaches the parser.
+const M365_CHAT_HTML_MAX_BYTES = 2 * 1024 * 1024;
+const M365_CHAT_HTML_TIMEOUT_MS = 10_000;
+const M365_WEB_ORIGIN = JSON.stringify(new URL(M365_COPILOT_WEB_URL).origin);
+const fetchChatHtml = "location.origin===" + M365_WEB_ORIGIN + "?(async()=>{"
+  + "const c=new AbortController(),t=setTimeout(()=>c.abort()," + M365_CHAT_HTML_TIMEOUT_MS + ");"
+  + "try{const r=await fetch(" + JSON.stringify(M365_COPILOT_WEB_URL) + ",{credentials:'include',signal:c.signal});"
+  + "if(!r.ok||!r.body||new URL(r.url).origin!==" + M365_WEB_ORIGIN + ")return'';"
+  + "const rd=r.body.getReader(),d=new TextDecoder();let s='',n=0;"
+  + "for(;;){const{done,value}=await rd.read();if(done)break;n+=value.byteLength;"
+  + "if(n>" + M365_CHAT_HTML_MAX_BYTES + "){c.abort();return''}s+=d.decode(value,{stream:true})}"
+  + "return s+d.decode()}catch{return''}finally{clearTimeout(t)}})():''";
 function bootstrapAccountId(html: unknown) {
   if (typeof html !== "string" || !html) return "";
   try { return parseM365ModelBootstrap(html).accountId; } catch { return ""; }

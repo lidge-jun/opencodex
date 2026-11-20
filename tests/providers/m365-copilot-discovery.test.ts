@@ -144,6 +144,43 @@ test("an abort during the HTML fallback never reads cookies even when the page r
   await expect(readM365BrowserWebSession(browser, "context", ctrl.signal)).rejects.toThrow("fixture aborted");
   expect(methods).not.toContain("Network.getCookies");
 });
+async function capturedFallbackExpression(): Promise<string> {
+  let expression = "";
+  const browser = { async command(method: string, params?: Record<string, unknown>) {
+    if (method === "Runtime.evaluate" && params?.awaitPromise) { expression = String(params.expression); return { result: { value: html() } }; }
+    if (method === "Runtime.evaluate") return { result: { value: "" } };
+    if (method === "Network.getCookies") return { cookies: [{ name: "OhpAuth", value: "fixture", domain: "copilot.cloud.microsoft", path: "/", secure: true }] };
+    return {};
+  } };
+  await readM365BrowserWebSession(browser, "context", new AbortController().signal);
+  return expression;
+}
+function runFallback(expression: string, response: (signal: AbortSignal) => Promise<Response>, timers?: { fire: boolean }) {
+  const origin = new URL(M365_COPILOT_WEB_URL).origin;
+  const fakeSetTimeout = (fn: () => void) => { if (timers?.fire) setTimeout(fn, 5); return 0; };
+  const fakeFetch = (_url: string, init: { signal: AbortSignal }) => response(init.signal);
+  return new Function("location", "fetch", "setTimeout", "clearTimeout", `return ${expression}`)(
+    { origin }, fakeFetch, fakeSetTimeout, () => {},
+  ) as Promise<string>;
+}
+test("the HTML fallback is bounded in size, time and origin", async () => {
+  const expression = await capturedFallbackExpression();
+  const okResponse = (body: BodyInit, url = M365_COPILOT_WEB_URL) => {
+    const response = new Response(body, { status: 200 });
+    Object.defineProperty(response, "url", { value: url });
+    return response;
+  };
+  expect(await runFallback(expression, async () => okResponse("<html>ok</html>"))).toBe("<html>ok</html>");
+  let pulls = 0;
+  const endless = new ReadableStream<Uint8Array>({ pull(controller) { pulls++; controller.enqueue(new Uint8Array(512 * 1024)); } });
+  expect(await runFallback(expression, async () => okResponse(endless))).toBe("");
+  expect(pulls).toBeLessThan(8);
+  expect(await runFallback(expression, async () => okResponse("<html>ok</html>", "https://login.example.invalid/chat/"))).toBe("");
+  // A body that never produces bytes ends only through the page-side deadline abort.
+  expect(await runFallback(expression, async signal => okResponse(new ReadableStream<Uint8Array>({
+    start(controller) { signal.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError")), { once: true }); },
+  })), { fire: true })).toBe("");
+});
 
 test("dashboard connectivity probe uses live account metadata and never treats a stale catalog as connectivity", async () => {
   await saveCredential("m365-copilot", credential());
