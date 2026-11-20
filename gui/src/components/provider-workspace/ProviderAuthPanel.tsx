@@ -29,6 +29,7 @@ import ProviderAccountQuota from "./ProviderAccountQuota";
 import { AccountProbeButton, AccountProbeResultLine } from "./AccountProbe";
 import { ACCOUNT_PROBE_PROVIDERS, useAccountProbe } from "../../hooks/useAccountProbe";
 import { AccountQuotaTable } from "./AccountQuotaTable";
+import QuotaLiveRefreshSetting from "../QuotaLiveRefreshSetting";
 import { accountQuotaFromReport } from "../../provider-workspace/report";
 import { uncoveredWindows } from "../../provider-workspace/account-quota-table";
 import { GrokCouponBadge, GrokResetCouponModal } from "./GrokResetCoupons";
@@ -499,6 +500,10 @@ export default function ProviderAuthPanel({
         )}
       </div>
       <div className="pwi-auth-body">
+        {/* Shown only where live updates act: the account and key rows that carry a quota reading. */}
+        {((isOauth && loggedIn) || isKeyAuth) && quotaRows.some(row => row.quotaMode === "probe" || row.quotaMode === "passive") && (
+          <QuotaLiveRefreshSetting />
+        )}
         {item.name === "xai" && (
           <XaiChatOptInControl
             initialState={item.xaiResponsesOptInState ?? true}
