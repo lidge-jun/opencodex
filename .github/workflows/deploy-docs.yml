@@ -75,7 +75,7 @@ jobs:
           path: ./docs-site
           node-version: 22
           # Must equal package.json dependencies.bun (asserted in ci-workflows.test.ts).
-          package-manager: bun@1.4.4
+          package-manager: bun@1.3.8
 
   deploy:
     needs: build
