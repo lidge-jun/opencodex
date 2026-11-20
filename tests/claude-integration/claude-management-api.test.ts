@@ -138,6 +138,26 @@ test("Claude launch and picker keep raw and encoded exclusions while retaining c
   }
 });
 
+test("the launcher view skips the dashboard alias previews (#8945)", async () => {
+  const aliasModule = await import("../../src/claude/alias");
+  const config = loadConfig();
+  config.providers.mock!.models = ["org/one", "org/two"];
+  saveConfig(config);
+  const server = startServer(0);
+  const routedAlias = spyOn(aliasModule, "claudeCodeAlias");
+  const nativeAlias = spyOn(aliasModule, "claudeCodeNativeAlias");
+  try {
+    const state = await fetchClaudeCodeState(config, server.port!);
+    expect(state.enabled).toBe(true);
+    expect(routedAlias).not.toHaveBeenCalled();
+    expect(nativeAlias).not.toHaveBeenCalled();
+  } finally {
+    routedAlias.mockRestore();
+    nativeAlias.mockRestore();
+    await server.stop(true);
+  }
+});
+
 test.each([
   ["2.1.280", "claude-fable-5-1[1m]"],
   ["2.1.290", "claude-fable-5-2[1m]"],
