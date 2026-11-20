@@ -127,9 +127,11 @@ function putDesktopSwitchInIsolatedHome(
     encoding: "utf8",
     timeout: ISOLATED_CHILD_TIMEOUT_MS,
   });
-  if (child.error) throw child.error;
-  if (child.status !== 0) {
-    throw new Error(`isolated settings route failed (status=${child.status} signal=${child.signal}): ${child.stderr || child.stdout}`);
+  if (child.error || child.status !== 0) {
+    const error = child.error ?? new Error("isolated settings route failed");
+    const output = [child.stderr, child.stdout].filter(Boolean).join("\n");
+    error.message += ` (status=${child.status} signal=${child.signal}): ${output}`;
+    throw error;
   }
   const line = child.stdout.trim().split("\n").filter(Boolean).at(-1);
   expect(line).toBeDefined();
