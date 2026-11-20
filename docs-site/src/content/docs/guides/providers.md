@@ -601,6 +601,8 @@ distinct one. Kiro accounts use the profile ARN together with the signed-in user
 pool accounts have a separate ledger.
 Tokens stay in `~/.opencodex/auth.json`; `/api/oauth/accounts` returns masked metadata only.
 
+New Codex and Anthropic OAuth pool sessions can use [`reset-near-weighted`](/reference/configuration/providers/#reset-near-weighted) to favor weekly quota that will reset soon. Existing session bindings are preserved.
+
 ### Cockpit Tools Antigravity import
 
 For v1, OpenCodex imports only a **Cockpit Tools Antigravity** JSON export for the `google-antigravity` provider. In the Providers dashboard, choose the local JSON file from that provider's Accounts tab. The dashboard does not show the file contents or credential values; it reports only imported, updated, failed, and unsupported counts. Other Cockpit providers are rejected in v1.
@@ -694,18 +696,9 @@ the dashboard Codex account pool also performs. See
 
 ### Kiro request credits
 
-On tool-enabled turns, opencodex holds Kiro's ordinary text until completion is validated.
-If Kiro ends with plain text instead of its private final-answer tool, one bounded retry
-still runs, and only the resulting final answer is displayed. Progress accompanying a real
-tool call remains visible. A normal private final answer needs no completion retry.
-
-When Kiro's safety filter stops a turn (`CONTENT_FILTERED`, for example the Claude `BIO` classifier), the request ends as a refusal that clients do not retry: Claude clients see `stop_reason: "refusal"` and Codex sees a failed response carrying Kiro's category and explanation. If the filter stops the bounded retry, no final answer is displayed; the progress held from the first attempt and any partial text from the retry are shown as commentary before the refusal.
-
-When Kiro emits credit metering, request logs preserve the reported spend as
-`usage.providerCredits`, including in the persisted usage ledger. These are Kiro credits;
-token counts may still be estimated, and the credit value does not replace USD cost estimates.
-Completion fallback requests add their reported credits. An absent value means Kiro did not
-report credit usage; an explicit zero means it reported no spend.
+Kiro's completion guardrails, its safety-filter refusals and the credit metering that lands in
+request logs are covered in [Kiro request credits](/guides/kiro-request-credits/), beside how to
+price those credits in USD.
 
 ### Kiro refresh attention
 
@@ -801,6 +794,7 @@ are on the [API-key catalog](/guides/api-key-catalog/) page. Its sections:
 - [Official CodeBuddy Code CLI (Global & CN)](/guides/api-key-catalog/#official-codebuddy-code-cli-global--cn)
 - [Official Qoder CLI (Global & CN)](/guides/api-key-catalog/#official-qoder-cli-global--cn)
 - [Claude Code CLI (subscription)](/guides/api-key-catalog/#claude-code-cli-subscription)
+- [StepCode CLI (subscription)](/guides/step-cli/)
 - [Antigravity CLI (ACP, local)](/guides/api-key-catalog/#antigravity-cli-acp-local)
 - [A6API credit quota](/guides/api-key-catalog/#a6api-credit-quota)
 - [BigModel Coding Plan over Responses](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses)

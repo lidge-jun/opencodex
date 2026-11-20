@@ -4,6 +4,7 @@ import {
   GCP_CREDENTIAL_MARKER_PREFIX,
   gcpCredentialMarkerAccount,
   getVertexAccessTokenWithAuthority,
+  observeVertexAdcGeneration,
   vertexRequestAuthorityIsCurrent,
 } from "../lib/gcp-adc";
 import type { OcxProviderConfig } from "../types";
@@ -148,6 +149,27 @@ export function selectVertexDiscoveryCredential(provider: OcxProviderConfig): Ve
   if (key) return { kind: "api-key", key };
   const ambientKey = process.env.GOOGLE_CLOUD_API_KEY;
   return ambientKey ? { kind: "api-key", key: ambientKey, ambient: true } : { kind: "adc" };
+}
+
+/** Capture the credential incarnation for aggregate gather admission without refreshing it. */
+export function captureVertexDiscoveryCredentialIdentity(provider: OcxProviderConfig, includeAdc: boolean) {
+  if (!vertexDiscoveryOrigin(provider.baseUrl) || isVertexApiKeyPoolPaused(provider)) return undefined;
+  const selection = selectVertexDiscoveryCredential(provider);
+  if (selection.kind === "api-key") {
+    return selection.ambient && selection.key ? captureVertexAmbientKey(selection.key) : selection.key;
+  }
+  if (!includeAdc) return undefined;
+  let markerAccount: string | undefined;
+  try {
+    markerAccount = gcpCredentialMarkerAccount(selection.marker);
+  } catch {
+    // A malformed marker degrades discovery without opening the host ADC scope.
+    return undefined;
+  }
+  return {
+    adcGeneration: observeVertexAdcGeneration(markerAccount),
+    ambientGeneration: selection.marker ? undefined : captureVertexAmbientKey("").generation,
+  };
 }
 
 /** Whether a Vertex provider row authenticates discovery with an API key rather than GCP ADC. */

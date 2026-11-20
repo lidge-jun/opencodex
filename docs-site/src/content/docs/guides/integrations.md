@@ -1245,8 +1245,13 @@ ocx disconnect antigravity             # or: ocx disconnect agy
 Use `--model` only with `ocx connect antigravity` to set the desktop app's default model.
 
 Connect records what it replaced. Disconnect puts the original bytes back when the file is unchanged, and
-otherwise reverts only OpenCodex's own entries and keeps your other edits. The marked `agy` block in a
-shell profile is removed whole, including any edit made inside it. An `agy` profile symlink must resolve
+otherwise reverts only OpenCodex's own entries and keeps your other edits. Antigravity can restore
+settings after JSON keys are reordered and keeps the file and restore record when a managed setting conflicts.
+To resolve an Antigravity conflict, put the managed setting back to the value OpenCodex applied and
+retry. If OpenCodex reports `agy-profile-restore-required`, open the shell profile named in the error.
+Restore the complete `agy` block from a copy, including both marker lines and the function between
+them, then retry disconnect or uninstall. OpenCodex removes the whole block and keeps edits outside
+it. You can also restore the saved original profile, which replaces any later edits. An `agy` profile symlink must resolve
 to another supported profile for the same shell family under your home. Antigravity settings must resolve
 to the exact `~/.antigravity/settings.json` path. Restart Antigravity, or open a new terminal for `agy`,
 to apply a change. During disconnect, `agy` skips profiles without a restore record if they cannot be
@@ -1259,3 +1264,8 @@ an organization `admin_settings.json` first, then the `AGY_LLM_GATEWAY_*` variab
 status warns about organization settings and environment overrides it can see. It checks the
 OpenCodex process environment. An override set only in the Antigravity process will not appear.
 On Windows `agy` is untested because Google lists it for macOS and Linux only.
+
+To preserve Gemini JSON, sign in with `ocx login google-antigravity` and set
+`protocols.rollout.geminiNativeAntigravity` to `true` in OpenCodex's JSON config. This opt-in
+applies to `/v1beta` Gemini generation routed to the canonical `google-antigravity` OAuth
+provider. Other routes use the Chat bridge. See [Native Gemini with Antigravity](/reference/proxy-formats/#native-gemini-with-antigravity).

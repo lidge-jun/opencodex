@@ -1,4 +1,5 @@
 import type { QuotaFailureCode, QuotaUnknownReason } from "../../../../src/providers/quota-types";
+import type { AccountPauseEvidence } from "../../../../src/types/account-auto-pause";
 /**
  * provider-workspace/types.ts — shared view-model types for the Providers
  * workspace shell/rail/detail (WP080a). Data shapes only; no React.
@@ -69,14 +70,19 @@ export type OAuthAccountRow = AccountQuotaReading & {
   active: boolean;
   expiresAt?: number;
   needsReauth?: boolean;
+  /** `verify_account`: upstream asked to verify the account rather than refusing the refresh token. */
+  needsReauthReason?: string;
   autoSelectable?: boolean;
   skipReason?: "needs_reauth" | "paused" | "suspended" | "cooldown" | "quota_exhausted";
   paused?: boolean;
   pauseDetails?: { reason: string; pausedAt: number };
+  pauseEvidence?: AccountPauseEvidence;
   autoSwitchThresholdOverride?: number | null;
   autoSwitchThreshold?: number;
   effectiveAutoSwitchThreshold?: number;
   plan?: string | null;
+  /** Anthropic: display-only name of the organization the grant serves. */
+  organizationName?: string;
   health?: { status: OAuthAccountHealthStatus; reason?: string; until?: string };
   healthLabel?: string;
   healthSummary?: string;

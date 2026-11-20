@@ -170,9 +170,9 @@ With `visionSidecar.enabled: false`, the model catalog does not add sidecar-back
 text-only models, including custom rows and combo members. Native image support and explicitly
 configured image modalities are preserved. Omitting `enabled` keeps sidecar advertisement on;
 catalog visibility does not establish that sidecar credentials or capacity are available.
-Combos advertise image input only when every member accepts images, either natively or through an enabled
-sidecar, and the combo's `imageInput` setting is not disabled, so clients such as the Codex app
-allow attachments instead of blocking them before the sidecar runs. When
+With `imageInput: "auto"`, intersection combos advertise image input when every member accepts it,
+and union combos advertise it when any member accepts it. Sidecar-backed image support counts toward
+both policies. Clients such as the Codex app use this catalog entry to enable attachments. When
 `visionSidecar.model` is absent or blank, the OpenAI execution path, Dashboard, and management API
 use the `gpt-5.6-luna` fallback. Startup still migrates an explicitly persisted legacy
 `gpt-5.4-mini` value to `gpt-5.6-luna`; that migration applies to a stored value, not to an absent
@@ -204,8 +204,8 @@ sidecar-backed by default; Zen routes are unchanged and were not probed in this 
   remote `https` images are fetched by the OpenAI backend, not by the proxy.
 - `noVisionModels` matching ignores an Ollama-style `:size` suffix, so a `gpt-oss` entry also covers
   `gpt-oss:120b`.
-- If description fails, the model receives a short processing-error marker. (Without an available
-  sidecar plan, no description is attempted — the raw image is stripped, as described above.)
+- Direct routes replace failed descriptions with a short processing-error marker.
+  [Union combos](/guides/combos/#union-capabilities-capabilitypolicy) try their remaining eligible image-serving targets before applying `onUnservable`.
 - `maxDescriptionsPerTurn` (default 8) limits new descriptions per main-model turn. Cache hits and
   same-turn duplicates do not consume it. Successful `data:` image descriptions are cached by
   backend, model, detail, image bytes, and message context — plus the reasoning effort on OpenAI
@@ -215,9 +215,9 @@ sidecar-backed by default; Zen routes are unchanged and were not probed in this 
 The management API and Dashboard picker list models that can accept image input. When the matching
 backend is available, `gpt-5.6-luna` (OpenAI) and `claude-haiku-4-5` (Anthropic) are always offered
 as baseline options. `PUT /api/sidecar-settings` may retain an unknown custom/ahead-of-catalog id.
-An explicitly configured routed Vision Sidecar is therefore usable unless capability evidence proves
-that model cannot accept images; this preserves operator-selected custom sidecars without allowing a
-known text-only sidecar to receive image bytes.
+A routed Vision Sidecar requires a resolvable model allowed by the caller and the proxy’s
+self-fetch credential. A custom model with unknown image capability can still be used when it
+meets those conditions.
 
 ```json
 {

@@ -291,6 +291,7 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
 export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapterDeps = {}): ProviderAdapter {
   return {
     name: "qoder",
+    reportsPhysicalSends: true,
     buildRequest(): AdapterRequest {
       return { url: provider.baseUrl, method: "POST", headers: {}, body: "" };
     },

@@ -5,7 +5,7 @@
  *
  * Leaf module: `config.ts` and `provider.ts` import these types, never the reverse.
  */
-export type OcxAccountPoolRotationStrategy = "quota" | "round-robin" | "fill-first";
+export type OcxAccountPoolRotationStrategy = "quota" | "round-robin" | "fill-first" | "reset-near-weighted";
 
 export type OcxAccountPoolQuotaWindow = "five-hour" | "weekly" | "max-utilization";
 

@@ -51,7 +51,6 @@ const NOTE_KEYS: Record<GatewayNoteCode, TKey | null> = {
 const REFUSAL_KEYS: Record<string, TKey> = {
   "requires-admission-token": "gatewayClients.refusedCredential",
   "invalid-model": "gatewayClients.refusedModel",
-  "unsupported-file": "gatewayClients.refusedFile",
 };
 
 const APPLY_HINT: Record<GatewayClientId, TKey> = {
@@ -59,11 +58,19 @@ const APPLY_HINT: Record<GatewayClientId, TKey> = {
   agy: "gatewayClients.hintAgy",
 };
 
-interface OutcomeView { tone: "ok" | "err"; keys: TKey[]; detail: string | null }
+interface OutcomeView { tone: "ok" | "err"; keys: TKey[]; detail: string | null; vars?: Record<string, string> }
 
 function describeOutcome(id: GatewayClientId, action: GatewayClientAction, outcome: GatewayClientActionOutcome): OutcomeView {
   if (!outcome.reached) return { tone: "err", keys: ["gatewayClients.actionFailed"], detail: null };
   if (!outcome.ok) {
+    if (outcome.code === "agy-profile-restore-required") {
+      return outcome.profilePath
+        ? { tone: "err", keys: ["gatewayClients.refusedAgyProfile"], detail: null, vars: { path: outcome.profilePath } }
+        : { tone: "err", keys: ["gatewayClients.actionFailed"], detail: null };
+    }
+    if (id === "antigravity" && outcome.code === "unsupported-file") {
+      return { tone: "err", keys: ["gatewayClients.refusedFile"], detail: null };
+    }
     const known = outcome.code ? REFUSAL_KEYS[outcome.code] : undefined;
     if (known) return { tone: "err", keys: [known], detail: null };
     // The text of an I/O error is the operating system's; any other unexpected refusal is shown as sent.
@@ -173,7 +180,7 @@ function GatewayClientCard({
 
       {result && (
         <Notice tone={result.tone}>
-          {result.keys.map(key => t(key)).join(" ")}
+          {result.keys.map(key => t(key, result.vars)).join(" ")}
           {result.detail && <> <code>{result.detail}</code></>}
         </Notice>
       )}

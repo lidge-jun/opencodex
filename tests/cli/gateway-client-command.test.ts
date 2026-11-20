@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dispatchCommand, type CliDispatchDeps } from "../../src/cli/dispatch";
@@ -58,6 +58,27 @@ describe("ocx connect|disconnect antigravity|agy", () => {
       expect(await runGatewayClientFromArgs("disconnect", ["antigravity"], offline())).toBe(0);
       expect(existsSync(join(ctx.home, ".antigravity"))).toBe(false);
       expect(io.out.join("\n")).toContain("restore: exact");
+    } finally { io.restore(); }
+  });
+
+  test("agy disconnect identifies the profile and repair after manual block removal", async () => {
+    const io = capture();
+    try {
+      const profile = join(ctx.home, ".bashrc");
+      writeFileSync(profile, "# user profile\n");
+      expect(await runGatewayClientCommand("connect", "agy", [], offline())).toBe(0);
+      writeFileSync(profile, "# user profile\nexport USER_EDIT=1\n");
+      io.out.length = 0;
+
+      expect(await runGatewayClientCommand("disconnect", "agy", [], offline())).toBe(5);
+      expect(io.err.join("\n")).toContain("~/.bashrc");
+      expect(io.err.join("\n")).toContain("Restore the complete marked agy block or the saved original profile, then retry.");
+      expect(io.err.join("\n")).not.toContain(ctx.home);
+
+      expect(await runGatewayClientCommand("disconnect", "agy", ["--json"], offline())).toBe(5);
+      expect(JSON.parse(io.out.join("\n"))).toMatchObject({
+        ok: false, code: "agy-profile-restore-required", profilePath: "~/.bashrc",
+      });
     } finally { io.restore(); }
   });
 

@@ -56,6 +56,10 @@ type Disposition = WarmupDisposition;
  * `tests/helpers/cold-spawn-warmup.ts`. `warmed: false` needs a reason that survives review.
  */
 const DISPOSITIONS: Readonly<Record<string, Disposition>> = {
+  "tests/adapters/step-cli-cleanup-ownership.test.ts": {
+    warmed: true,
+    why: "the isolated quarantine fixture loads the StepCode session registry and its runtime imports",
+  },
   "tests/ci-workflows/ci-gui-typecheck-gate.test.ts": {
     warmed: false,
     why:

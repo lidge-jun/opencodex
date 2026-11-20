@@ -495,6 +495,11 @@ MiMo model Command Code serves.
 
 ## `google`
 
+The Gemini-compatible `/v1beta` inbound can opt in to source-preserving generation over the
+canonical `google-antigravity` OAuth provider with `protocols.rollout.geminiNativeAntigravity: true`.
+The default is off. This applies to Gemini inbound requests after routing and admission. See
+[Native Gemini with Antigravity](/reference/proxy-formats/#native-gemini-with-antigravity).
+
 **Targets:** Google **Gemini**, **Vertex AI**, and Antigravity **Cloud Code Assist**. AI Studio uses
 `/v1beta/models/{model}:streamGenerateContent`; the other modes use their native Google endpoints.
 **Auth:** API key, Vertex ADC, or Google Antigravity OAuth, selected by `googleMode`.
@@ -522,7 +527,13 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
   upstream 400; message-only terminal paths infer 403 (permission class). The restriction itself
   is Google's — the proxy does not route around it.
 - System prompt → `systemInstruction`; messages → `contents[]` (assistant → `model`); tools →
-  `functionDeclarations`. Data-URL images → `inline_data`.
+  `functionDeclarations`. Data-URL images → `inline_data`. WAV and MP3 audio → `inline_data`
+  (`audio/wav`, `audio/mp3`), except for Claude models on Antigravity, which keep the text marker. A
+  tool result flagged as an error is sent as `functionResponse.response.error`, Google's documented key
+  for a failed call; other results use `response.result`.
+- Vertex project endpoints use `aiplatform.googleapis.com` for `global`,
+  `aiplatform.us.rep.googleapis.com` and `aiplatform.eu.rep.googleapis.com` for the `us` and `eu`
+  multi-regions, and `<location>-aiplatform.googleapis.com` for a region such as `us-central1`.
 - Vertex AI and Antigravity retry a `429` only when the response carries retry evidence, such as a
   valid `Retry-After` header, and surface hard quota exhaustion immediately.
 - The shared tool-catalog guidance uses wording verified with Antigravity Gemini 3.8 Flash to
@@ -547,6 +558,25 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
   frame, and a buffered response that carries no candidate at all returns
   `google response contained no candidates`. A root `data: null` keepalive frame is still skipped as
   padding.
+- **Rate limits and quota follow Google's typed error details.** A `429` whose `ErrorInfo.reason` is
+  `QUOTA_EXHAUSTED` or `INSUFFICIENT_G1_CREDITS_BALANCE` is quota exhaustion and is not retried; on
+  Antigravity `RATE_LIMIT_EXCEEDED` is a short rate limit even when the message sounds like quota. A
+  valid `Retry-After` header, including zero, takes precedence. If it is absent or invalid, a
+  delay stated in the body (`RetryInfo.retryDelay`, `quotaResetDelay`, or "after 1h2m3s" in the
+  message) sets the earliest next attempt. A delay longer than the retry ceiling returns the
+  `429` with the effective `Retry-After`.
+- **Usage and finish outcomes are the same on every Google mode.** Reported output tokens include
+  Gemini's thinking tokens (`candidatesTokenCount` plus `thoughtsTokenCount`), and input tokens include
+  `toolUsePromptTokenCount`, which Google reports for search grounding and URL context. A turn that ends
+  with `MALFORMED_FUNCTION_CALL`, or with `MAX_TOKENS` after a tool call started, fails with HTTP 502
+  `upstream_error`. So does a turn ending with `UNEXPECTED_TOOL_CALL` or `MALFORMED_RESPONSE` when no
+  text, image or tool call reached the client; thought text does not count. A stream that has already
+  sent output answered with HTTP 200, so there the same `upstream_error` arrives as the stream's error
+  event. When visible output did
+  arrive, `MALFORMED_RESPONSE` ends as a content filter, as `SAFETY`, `IMAGE_SAFETY` and the other block
+  reasons do, and `UNEXPECTED_TOOL_CALL` ends as a normal stop. A prompt Google refuses before generating
+  (`promptFeedback.blockReason`) returns HTTP 400 `invalid_prompt` naming only the reason, never Google's
+  message; Codex does not retry it and a combo does not fail over on it.
 - Tool-call batches are closed by one immediately adjacent user turn containing one ordered
   `functionResponse` per representable call. Interrupted histories receive an explicit missing-result marker;
   duplicate or standalone results are preserved as marked text (and image siblings) rather than
@@ -1055,7 +1085,8 @@ Protocol v1 (newline-delimited JSON-RPC on stdio).
   `max_turn_requests`, an unrequested `cancelled` and an unknown stop reason fail the turn.
 - Refuses subagent, spawned-thread, Codex memory and automatic compaction turns, combo members and combo decision calls, and
   subagent-fallback routing. Chat Completions, Responses and Responses Compact return `403 agy_acp_interactive_only`
-  for labeled unattended turns. Responses WebSocket applies the automatic compaction check to each frame. Manual
+  for labeled unattended turns. Gemini and Ollama generation routes apply the same policy and
+  return HTTP 403 in their native error format. Responses WebSocket applies the automatic compaction check to each frame. Manual
   compaction remains available. OpenCodex determines locality from the observed connection and refuses requests carrying
   recognized forwarding headers. A loopback relay or SSH port forward that adds none can still appear local.
   On the public listener, declare the reverse proxy in `dashboardTrustedProxy` or keep this port out of the relay.

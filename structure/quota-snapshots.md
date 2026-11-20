@@ -5,6 +5,8 @@ quotas for restart recovery. The Codex snapshot also carries bounded observation
 and separately identity-bound main-policy evidence; provider snapshots include Kiro's
 identity-bound exhaustion verdicts. Their existing hydration and expiry rules govern readers.
 Accepted Anthropic usage probes schedule a snapshot even when they only retire the monthly fallback.
+The v1 snapshot stores Anthropic credential ownership in `anthropicCredentialKeys`, alongside
+`rows`. Older readers can still project those quota rows into account responses.
 Hydration of an older Anthropic row with both plan and monthly meters drops the monthly fallback even if the plan meters have expired.
 When Business or Enterprise WHAM reports a group-based individual spending limit without
 ordinary rate-limit windows, a finite usage percentage from 0 to 100 supplies the monthly

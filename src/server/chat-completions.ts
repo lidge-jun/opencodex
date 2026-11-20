@@ -19,6 +19,7 @@ import {
   ChatCompletionsRequestError,
 } from "../chat/inbound";
 import { chatSettingsBody, chatToResponsesBody } from "../protocols/codecs/chat";
+import { getCombo } from "../combos/types";
 import { chatConversationToIr, chatIrRouteEvidence, withDirectChatConversation, type ChatIrConversation } from "../protocols/codecs/chat-ir";
 import { antigravityDirectDeclineReason } from "./antigravity-direct-eligibility";
 import { normalizeChatImageParts } from "../chat/image-parts";
@@ -132,15 +133,22 @@ async function readChatBody(req: Request, budget: TranslatorBudget, maxBytes: nu
   }
 }
 
+interface ChatCompletionsRequestOptions {
+  requestId: string;
+  start: number;
+  turnAdmissionLease?: AdmissionLease;
+  admission?: DataPlaneAdmission;
+  advisorAdmissionPolicy?: CapturedAdmissionPolicy;
+  suppressProtocolTrace?: boolean;
+  /** Turn classification from the original native HTTP request before Chat translation. */
+  agyAcpUnattendedHttpTurn?: boolean;
+}
+
 export async function handleChatCompletions(
   req: Request,
   config: OcxConfig,
   logCtx: RequestLogContext,
-  logIds?: {
-    requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission;
-    advisorAdmissionPolicy?: CapturedAdmissionPolicy;
-    suppressProtocolTrace?: boolean;
-  },
+  logIds?: ChatCompletionsRequestOptions,
 ): Promise<Response> {
   if (logIds?.suppressProtocolTrace) suppressProtocolTrace(logCtx);
   // Set before routing so pre-dispatch refusals stay correlated. A Hermes-only id is marked as a
@@ -175,10 +183,7 @@ async function handleChatCompletionsWithBudget(
   config: OcxConfig,
   logCtx: RequestLogContext,
   translatorBudget: TranslatorBudget,
-  logIds?: {
-    requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission;
-    advisorAdmissionPolicy?: CapturedAdmissionPolicy;
-  },
+  logIds?: ChatCompletionsRequestOptions,
 ): Promise<Response> {
   const advisorInternal = isInternalCallCapability(req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER));
   const sidecarCapability = req.headers.get(SIDECAR_INTERNAL_CAPABILITY_HEADER);
@@ -244,6 +249,9 @@ async function handleChatCompletionsWithBudget(
     chatBody.service_tier = "priority";
   }
   const stream = chatBody.stream === true;
+  const streamOptions = chatBody.stream_options;
+  const includeUsage = stream && typeof streamOptions === "object" && streamOptions !== null
+    && (streamOptions as Rec).include_usage === true;
   // Best-effort Grok attribution: the managed fence stamps this header on every model
   // it registers (extra_headers, sent verbatim by upstream Grok). Dashboard usage
   // bucketing only — never an auth or billing signal.
@@ -423,6 +431,8 @@ async function handleChatCompletionsWithBudget(
       internalBody = chatSettingsBody(chatBody);
     } else {
       internalBody = chatToResponsesBody(chatBody, {
+        allowInlineAudio: settledRoute?.combo !== undefined
+          && getCombo(config, settledRoute.combo.comboId)?.capabilityPolicy === "union",
         // #7429: only a route that is and stays first-party Anthropic may receive signed thinking
         // a Chat client returns; a combo, policy or rewritten route resolves its target later.
         acceptAnthropicReasoningSignatures: settledRoute !== null && !routeMayChangeCredentialDomain
@@ -503,7 +513,8 @@ async function handleChatCompletionsWithBudget(
   // Caller-owned only: stored-main enrichment below is sidecar authority, never Direct authority.
   const callerDirectAuth = captureCallerDirectAuth(req.headers, config);
   let openAiSidecarAuth = nativeCallerAuth;
-  const agyAcpUnattendedHttpTurn = isUnattendedAgyAcpHttpTurn(req.headers, chatBody);
+  const agyAcpUnattendedHttpTurn = logIds?.agyAcpUnattendedHttpTurn === true
+    || isUnattendedAgyAcpHttpTurn(req.headers, chatBody);
   const headers = new Headers({ "content-type": "application/json" });
   // Internal bridge metadata; the Go resolver scopes and hashes it before upstream use.
   const openCodeSession = req.headers.get("x-opencode-session");
@@ -618,7 +629,7 @@ async function handleChatCompletionsWithBudget(
     // point of the lane is that neither direction passes through the internal Responses body.
     ...(directRoute && directConversation
       ? {
-        clientEncoder: { protocol: "chat" as const, stream, model: requestedModel, requestLane: "direct" as const },
+        clientEncoder: { protocol: "chat" as const, stream, includeUsage, model: requestedModel, requestLane: "direct" as const },
         directRequest: {
           protocol: "chat" as const,
           providerName: directRoute.providerName,
@@ -636,7 +647,7 @@ async function handleChatCompletionsWithBudget(
         },
       }
       : directEncodersApply(config, settledRoute)
-        ? { clientEncoder: { protocol: "chat" as const, stream, model: requestedModel } }
+        ? { clientEncoder: { protocol: "chat" as const, stream, includeUsage, model: requestedModel } }
         : {}),
   });
   // Already in the Chat wire: no conversion. A direct-encoder body (PF-09) reports its own log
@@ -768,7 +779,7 @@ async function handleChatCompletionsWithBudget(
 
   if (contentType.includes("text/event-stream") && response.body) {
     const failureVerdictSink: FailureVerdictSink = {};
-    const chatSse = responsesSseToChatCompletionsSse(response.body, requestedModel, { translatorBudget, failureVerdictSink, proxyErrorContext: logCtx });
+    const chatSse = responsesSseToChatCompletionsSse(response.body, requestedModel, { translatorBudget, failureVerdictSink, proxyErrorContext: logCtx, includeUsage });
     if (stream) {
       // Stream failures surface as an error SSE frame then abort the body — never a
       // success completion that embeds `[error] ...` + clean [DONE].

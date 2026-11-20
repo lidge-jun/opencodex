@@ -129,6 +129,7 @@ export async function putPoolSettings(
   fields: PoolSettingsWrite,
   fetchImpl: PoolSettingsFetch = (input, init) => fetch(input, init),
   init?: RequestInit,
+  fallback: PoolSettingsWrite = fields,
 ): Promise<PoolSettings | null> {
   try {
     const response = await fetchImpl(`${apiBase}/api/pool/settings`, {
@@ -146,7 +147,7 @@ export async function putPoolSettings(
     }
     // A 2xx with no parseable body is still a successful write; the old per-route clients
     // only inspected response.ok and a management PUT may answer 204.
-    return toDto(await response.json().catch(() => ({})), provider, fields);
+    return toDto(await response.json().catch(() => ({})), provider, fallback);
   } catch (error) {
     if (error instanceof PoolSettingsSaveStateUnknownError) throw error;
     return null;
@@ -154,7 +155,7 @@ export async function putPoolSettings(
 }
 
 /**
- * Codex strategy/sticky write, kept as a named helper because three call sites use it.
+ * Codex strategy/sticky write. A partial update can preserve the other field on an empty reply.
  *
  * It lives HERE rather than in `account-pool-strategy.ts` for a structural reason: that module
  * owns the value normalizers this one imports, so putting the transport there too would make the
@@ -165,12 +166,13 @@ export async function putCodexPoolStrategy(
   apiBase: string,
   body: { strategy?: AccountPoolStrategy; stickyLimit?: number },
   fetchImpl: PoolSettingsFetch = (input, init) => fetch(input, init),
+  current?: { strategy: AccountPoolStrategy; stickyLimit: number },
 ): Promise<{ ok: true; strategy: AccountPoolStrategy; stickyLimit: number } | { ok: false }> {
   if (body.strategy === undefined && body.stickyLimit === undefined) return { ok: false };
-  const settings = await putPoolSettings(apiBase, CODEX_POOL_PROVIDER, {
-    strategy: body.strategy,
-    stickyLimit: body.stickyLimit,
-  }, fetchImpl);
+  const settings = await putPoolSettings(apiBase, CODEX_POOL_PROVIDER, body, fetchImpl, undefined, {
+    strategy: body.strategy ?? current?.strategy,
+    stickyLimit: body.stickyLimit ?? current?.stickyLimit,
+  });
   if (!settings) return { ok: false };
   return { ok: true, strategy: settings.strategy, stickyLimit: settings.stickyLimit };
 }

@@ -5,6 +5,8 @@ import {
   type TranslatorBudget,
 } from "../../lib/translator-budget";
 import type { AdapterEvent, OcxUsage } from "../../types";
+import { reportResponseSendReading } from "../../lib/response-send-readings";
+import { sumCreditReadings, withMissingCreditReading } from "../../usage/credit-billing";
 import { recordKiroCalibration, rekeyKiroCalibration } from "../kiro-calibration";
 import {
   KIRO_COMPLETION_TOOL_NAME,
@@ -55,6 +57,18 @@ interface KiroAttemptResult extends KiroAttemptParseResult {
   drainDeferred(supersededByCompletion?: boolean): AsyncGenerator<AdapterEvent>;
   releaseCollectors(): void;
   releaseRetained(): void;
+}
+
+/**
+ * The token usage Kiro reported for the one physical response an attempt parsed, if it reported
+ * any. A response without a tokenUsage frame (an empty body, a credit meter alone) still gets a
+ * local estimate for the client and the request log, but an estimate is not a reading and must
+ * not settle the send that produced it.
+ */
+function attemptReading(result: KiroAttemptParseResult): OcxUsage | undefined {
+  const terminal = result.terminal;
+  const usage = terminal && "usage" in terminal && terminal.usage ? terminal.usage : result.usage;
+  return usage?.upstreamReported === true && !usage.estimated ? usage : undefined;
 }
 
 interface KiroAttemptRetention {
@@ -158,6 +172,8 @@ export type KiroFallbackFactory = (
   assistantText: string,
   sawReasoning: boolean,
   budget: TranslatorBudget,
+  /** Invoked once for each physical send, including transport replays. */
+  onDispatch?: () => void,
 ) => Promise<KiroFallbackAttempt>;
 
 function mergeKiroUsage(
@@ -165,8 +181,11 @@ function mergeKiroUsage(
   second: OcxUsage | undefined,
   preserveFirstContextGrowth = false,
 ): OcxUsage | undefined {
-  if (!first) return second;
-  if (!second) return first;
+  const providerCredits = sumCreditReadings([first?.providerCredits, second?.providerCredits]);
+  if (!first || !second) {
+    const usage = first ?? second;
+    return usage && { ...usage, ...(providerCredits !== undefined ? { providerCredits } : {}) };
+  }
   const sumOptional = (key: keyof OcxUsage): number | undefined => {
     const a = first[key];
     const b = second[key];
@@ -198,7 +217,7 @@ function mergeKiroUsage(
     ...(sumOptional("cachedInputTokens") !== undefined ? { cachedInputTokens: sumOptional("cachedInputTokens") } : {}),
     ...(sumOptional("cacheReadInputTokens") !== undefined ? { cacheReadInputTokens: sumOptional("cacheReadInputTokens") } : {}),
     ...(sumOptional("cacheCreationInputTokens") !== undefined ? { cacheCreationInputTokens: sumOptional("cacheCreationInputTokens") } : {}),
-    ...(sumOptional("providerCredits") !== undefined ? { providerCredits: sumOptional("providerCredits") } : {}),
+    ...(providerCredits !== undefined ? { providerCredits } : {}),
     ...(sumOptional("reasoningOutputTokens") !== undefined ? { reasoningOutputTokens: sumOptional("reasoningOutputTokens") } : {}),
     ...(first.estimated || second.estimated ? { estimated: true } : {}),
     ...(first.upstreamReported && second.upstreamReported ? { upstreamReported: true as const } : {}),
@@ -1299,6 +1318,20 @@ export async function* parseKiroStream(
       return;
     }
 
+    // The retry below is a second physical send inside this parse, and the terminal will sum both
+    // readings. Report the first response's reading now so it settles the send that produced it;
+    // a retry that reports nothing then stays unresolved instead of absorbing this reading.
+    // A first response with no reading of its own is marked unmetered only once the retry has
+    // left: a retry refused before dispatch keeps it the request's one routed send, which settles
+    // with the request's aggregate usage like any other single send.
+    const firstReading = attemptReading(firstResult);
+    let firstReadingReported = false;
+    const reportFirstReading = (): void => {
+      if (firstReadingReported) return;
+      firstReadingReported = true;
+      reportResponseSendReading(response, firstReading);
+    };
+    if (firstReading) reportFirstReading();
     yield { type: "heartbeat" };
     // Failed validation releases held progress. Keep those failures non-retryable so a later
     // replay cannot duplicate it; successful validation instead discards the superseded text.
@@ -1306,14 +1339,18 @@ export async function* parseKiroStream(
     let firstAssistantText = firstResult.assistantText;
     const firstHadAssistantText = firstAssistantText.length > 0;
     let fallback: KiroFallbackAttempt;
+    let fallbackSends = 0;
     try {
       fallback = await fallbackFactory(
         firstResult.providerState?.kiro.conversationId ?? conversationId,
         firstAssistantText,
         firstResult.sawReasoning,
         budget,
+        () => { fallbackSends++; reportFirstReading(); },
       );
     } catch (err) {
+      // A retry the factory already sent read nothing back: mark it unmetered.
+      if (fallbackSends > 0) reportResponseSendReading(response, undefined);
       yield* firstResult.drainDeferred(dropHeldProse);
       firstAssistantText = "";
       firstResult.assistantText = "";
@@ -1325,7 +1362,7 @@ export async function* parseKiroStream(
           status: 502,
           errorType: "upstream_error",
           code: "translation_buffer_limit",
-          usage: firstResult.usage,
+          usage: fallbackSends > 0 ? mergeKiroUsage(firstResult.usage, undefined) : firstResult.usage,
         };
         return;
       }
@@ -1335,10 +1372,15 @@ export async function* parseKiroStream(
         status: err instanceof Error && err.name === "TimeoutError" ? 504 : 502,
         errorType: "upstream_error",
         retryable: !priorEmittedOutput,
-        usage: firstResult.usage,
+        usage: fallbackSends > 0 ? mergeKiroUsage(firstResult.usage, undefined) : firstResult.usage,
       };
       return;
     }
+    // A transport timeout before the retry's dispatch receipt comes back as a synthetic 504 with
+    // no send behind it. Readings below are reported only for a retry that left, so the first
+    // response stays the one routed send and settles with the request total.
+    const retryDispatched = fallbackSends > 0;
+    if (retryDispatched) reportFirstReading();
     // The factory has retained its retry serialization. First-attempt progress remains charged
     // until the second attempt decides whether it is superseded or must be released.
     firstAssistantText = "";
@@ -1346,6 +1388,8 @@ export async function* parseKiroStream(
     firstResult.releaseCollectors();
     fallback.releaseRequestBody?.();
     if (!fallback.response.ok) {
+      // An HTTP failure body carries no usage: the retry stays unresolved at its reservation.
+      if (retryDispatched) reportResponseSendReading(response, undefined);
       yield* firstResult.drainDeferred(dropHeldProse);
       const payload = await readDisplaySafeErrorPayloadText(fallback.response, fallback.abortSignal);
       const failure = classifyKiroHttpError(fallback.response.status, fallback.response.headers, payload);
@@ -1356,11 +1400,16 @@ export async function* parseKiroStream(
         errorType: failure.errorType,
         code: failure.code,
         retryable: priorEmittedOutput ? false : failure.retryable,
-        usage: firstResult.usage,
+        usage: mergeKiroUsage(firstResult.usage, undefined),
       };
       return;
     }
 
+    // Only the final response can expose a metering snapshot. A reset/replay (or another
+    // send discarded inside the retry transport) leaves at least one reading unknown.
+    const mergeFallbackUsage = (usage: OcxUsage | undefined) => mergeKiroUsage(
+      firstResult.usage, fallbackSends > 1 ? withMissingCreditReading(usage) : usage, firstHadAssistantText,
+    );
     const secondResult = yield* parseKiroAttempt(
       fallback.response,
       budget,
@@ -1376,12 +1425,13 @@ export async function* parseKiroStream(
       firstResult,
       structuredOutput,
     );
+    reportResponseSendReading(response, attemptReading(secondResult));
     try {
       if (!secondResult.terminal) {
         yield retryableKiroIncomplete(
           "empty_kiro_fallback",
           "Kiro's bounded completion retry ended without a terminal result",
-          mergeKiroUsage(firstResult.usage, secondResult.usage, firstHadAssistantText)
+          mergeFallbackUsage(secondResult.usage)
             ?? { inputTokens, outputTokens: 0, estimated: true },
           secondResult.providerState ?? firstResult.providerState,
           !priorEmittedOutput,
@@ -1395,7 +1445,7 @@ export async function* parseKiroStream(
           ...(secondResult.terminal.type === "incomplete" && priorEmittedOutput
             ? { retryable: false as const }
             : {}),
-          usage: mergeKiroUsage(firstResult.usage, secondResult.terminal.usage, firstHadAssistantText),
+          usage: mergeFallbackUsage(secondResult.terminal.usage),
           providerState: secondResult.terminal.providerState ?? firstResult.providerState,
         };
         return;
@@ -1403,7 +1453,7 @@ export async function* parseKiroStream(
       yield {
         ...secondResult.terminal,
         ...(secondResult.terminal.type === "error"
-          ? { usage: mergeKiroUsage(firstResult.usage, secondResult.terminal.usage, firstHadAssistantText) }
+          ? { usage: mergeFallbackUsage(secondResult.terminal.usage) }
           : {}),
       };
     } finally {

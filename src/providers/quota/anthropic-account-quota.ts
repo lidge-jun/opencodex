@@ -9,10 +9,10 @@ import { thrownQuotaFailure } from "./failure-codes";
 import type { QuotaFailureCode } from "../quota-types";
 import { AnthropicQuotaProbeOwnershipError, anthropicCooldownRecoveryFor, type AnthropicQuotaRecoveryResult } from "./anthropic-cooldown-recovery";
 import {
-  accountCacheKey, accountQuotaCache, accountQuotaInflight, captureProviderAccountQuotaEpoch,
-  commitAnthropicAccountQuota, getCachedProviderAccountQuota, getTokenForAccountQuotaProbe,
+  accountCacheKey, accountQuotaInflight, captureProviderAccountQuotaEpoch,
+  commitAnthropicAccountQuota, getCurrentAccountQuotaEntry, getTokenForAccountQuotaProbe,
   hydrateAccountQuotaCache, mayCommitAccountQuotaKey, normalizeAnthropicQuota,
-  persistAccountQuotaCache, withoutAnthropicMonthlyFallback, type AccountQuotaCacheEntry,
+  persistAccountQuotaCache, anthropicAccountProbeEvidence, type AccountQuotaCacheEntry,
 } from "./account-cache";
 
 /**
@@ -45,9 +45,8 @@ export async function fetchAnthropicAccountQuota(
   };
   hydrateAccountQuotaCache();
   const key = accountCacheKey(instance, accountId);
-  const candidate = accountQuotaCache.get(key);
-  const cached = candidate?.isCurrent?.() === false ? undefined : candidate;
-  if (!force && cached && Date.now() - cached.ts < ACCOUNT_QUOTA_TTL_MS) {
+  const cached = force ? undefined : getCurrentAccountQuotaEntry(instance, accountId);
+  if (cached && Date.now() - cached.ts < ACCOUNT_QUOTA_TTL_MS) {
     return { ...cached, quota: normalizeAnthropicQuota(cached.quota, Date.now()) };
   }
   let token: string;
@@ -70,16 +69,11 @@ export async function fetchAnthropicAccountQuota(
   // result also removes the monthly fallback while keeping plan observations. Cache and
   // decision writes both require current credential and generation ownership.
   const publish = (result: AnthropicQuotaRecoveryResult | null, failure?: QuotaFailureCode): AccountQuotaCacheEntry => {
-    const previous = accountQuotaCache.get(key);
-    const retained = previous?.isCurrent?.() === false ? undefined : previous;
     const isCurrent = result?.isCurrent ?? flightCurrent;
-    const retirementOnly = result?.quota === null;
-    const quota = retirementOnly ? withoutAnthropicMonthlyFallback(getCachedProviderAccountQuota(instance, accountId))
-      : result?.quota ?? retained?.quota;
+    const ts = Date.now();
+    const evidence = anthropicAccountProbeEvidence(instance, accountId, ts, result ?? undefined);
     const entry: AccountQuotaCacheEntry = {
-      ts: Date.now(), quota: normalizeAnthropicQuota(quota, Date.now()), isCurrent,
-      // A retirement-only response leaves the provenance of retained plan bars unchanged.
-      quotaOwnerIsCurrent: result?.quota ? result.isCurrent : retained?.quotaOwnerIsCurrent,
+      ts, ...evidence, isCurrent,
       ...result?.failureFields,
       ...(!result ? { unavailable: true as const } : {}),
       ...(!result && failure ? { quotaFailure: failure, quotaFailureIsCurrent: isCurrent } : {}),

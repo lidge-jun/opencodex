@@ -5,13 +5,13 @@ import { parseAnthropicFamilyHeaders, mergeAnthropicFamilyWindows } from "./anth
 import { anthropicModelQuotaFor, ANTHROPIC_PASSIVE_FAMILY_MAX_AGE_MS } from "../../oauth/anthropic-model-quota";
 import { createHash } from "node:crypto";
 import { getValidAccessTokenForAccount } from "../../oauth";
-import { credentialGeneration, getAccountCredential, getAccountCredentialWithStatus, getAccountSet } from "../../oauth/store";
+import { anthropicCredentialEvidenceKey, credentialGeneration, getAccountCredential, getAccountCredentialWithStatus, getAccountSet, loadAuthStore, type AuthStore } from "../../oauth/store";
 import { isAnthropicInstanceId, type AnthropicInstanceId } from "../anthropic-instance-id";
 import type { GenerationContext } from "../../lib/state-store-sweeper";
 import { ACCOUNT_QUOTA_TTL_MS, toFiniteNumber } from "../quota-wire";
 import { clearKiroAccountUsageState, hydrateKiroUsageVerdict, kiroPersistableVerdicts, reconcileKiroAccountUsageState } from "../kiro-usage";
 import { kiroEvidenceIdentity, sanitizeKiroQuota, type KiroPersistedQuota } from "../kiro-account-state-disk";
-import { cancelPendingAccountQuotaPersist, readPersistedAccountQuotas, readPersistedKiroVerdicts, schedulePersistAccountQuotas } from "../account-quota-disk";
+import { cancelPendingAccountQuotaPersist, readPersistedAccountQuotaSnapshot, readPersistedKiroVerdicts, schedulePersistAccountQuotas } from "../account-quota-disk";
 import type { ProviderAccount } from "../../oauth/types";
 import { replaceCachedProviderQuotas } from "../quota-routing-cache";
 import { getProviderRegistryEntry } from "../registry";
@@ -19,6 +19,7 @@ import { getProviderQuotaReportCache, hasQuotaRows, routingEvidence, setProvider
 import { isCanonicalCommandCodeBaseUrl, isCanonicalKimiCodeBaseUrl } from "./vendor-probes-key";
 import { isDisplayOnlyQuota, isWeeklyAllowancePercent, type AccountQuotaMode, type ProviderQuota, type ProviderQuotaWindow, type QuotaFailureCode } from "../quota-types";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
+import type { ResetNearQuota } from "../../routing/machine-weighted-routing";
 
 /** Match oauth/index REFRESH_SKEW_MS — use stored access without refresh when still fresh. */
 const ACCOUNT_TOKEN_SKEW_MS = 60_000;
@@ -40,12 +41,39 @@ export type AccountQuotaCacheEntry = {
   quotaFailureIsCurrent?: () => boolean;
   /** Private new-reader identity; never persisted or serialized. */
   identity?: string;
-  /** Private passive Anthropic ownership fence; not serialized with quota bars. */
-  anthropicCredentialGeneration?: string;
+  /** Private Anthropic ownership fence, kept outside quota DTOs. */
+  anthropicCredentialKey?: string;
   isCurrent?: () => boolean;
   /** Proof for the quota itself, which may have been retained from an earlier read. Memory only. */
   quotaOwnerIsCurrent?: () => boolean;
 };
+
+// Carried display bars keep their original clocks. Disk hydration has no live observation clocks.
+const anthropicUsageClocks = new WeakMap<ProviderQuota, Pick<ResetNearQuota, "fiveHourObservedAt" | "weeklyObservedAt">>();
+
+function stampAnthropicUsageObservation(
+  quota: ProviderQuota | null, incoming?: ProviderQuota | null, previous?: ProviderQuota | null,
+): ProviderQuota | null {
+  if (!quota) return quota;
+  const clocks = previous ? anthropicUsageClocks.get(previous) : undefined;
+  if (!incoming) {
+    if (previous && clocks && quota !== previous) {
+      anthropicUsageClocks.set(quota, {
+        fiveHourObservedAt: quota.fiveHourPercent !== undefined && quota.fiveHourPercent === previous.fiveHourPercent
+          && quota.fiveHourResetAt === previous.fiveHourResetAt ? clocks.fiveHourObservedAt : undefined,
+        weeklyObservedAt: quota.weeklyPercent !== undefined && quota.weeklyPercent === previous.weeklyPercent
+          && quota.weeklyResetAt === previous.weeklyResetAt ? clocks.weeklyObservedAt : undefined,
+      });
+    }
+    return quota;
+  }
+  anthropicUsageClocks.set(quota, {
+    fiveHourObservedAt: incoming.fiveHourPercent !== undefined ? incoming.updatedAt : clocks?.fiveHourObservedAt,
+    weeklyObservedAt: incoming.weeklyPercent === undefined && incoming.weeklyResetAt === undefined ? clocks?.weeklyObservedAt
+      : incoming.weeklyPercent !== undefined && incoming.weeklyResetAt !== undefined ? incoming.updatedAt : undefined,
+  });
+  return quota;
+}
 const validReset = (resetAt: unknown): resetAt is number => typeof resetAt === "number"
   && Number.isFinite(resetAt) && resetAt > 0 && Number.isFinite(new Date(resetAt).getTime());
 
@@ -187,9 +215,11 @@ export function hydrateAccountQuotaCache(): void {
   if (diskHydrated) return;
   diskHydrated = true;
   const now = Date.now();
-  const liveKiro = new Map<string, ProviderAccount>(getAccountSet("kiro")?.accounts.map(account =>
+  const store = loadAuthStore();
+  const liveKiro = new Map<string, ProviderAccount>(store.kiro?.accounts.map(account =>
     [accountCacheKey("kiro", account.id), account]) ?? []);
-  for (const [key, quota] of readPersistedAccountQuotas(now)) {
+  const { rows, anthropicCredentialKeys } = readPersistedAccountQuotaSnapshot(now);
+  for (const [key, quota] of rows) {
     if (key.startsWith("kiro\0")) {
       const account = liveKiro.get(key);
       if (!account || (quota as KiroPersistedQuota).identity !== kiroEvidenceIdentity(account)
@@ -203,10 +233,17 @@ export function hydrateAccountQuotaCache(): void {
     // Disk stores observation time, not the Anthropic usage probe's clock.
     if (!accountQuotaCache.has(key)) {
       const anthropic = isAnthropicAccountCacheKey(key);
+      // Also read and strip inline ownership from snapshots written by the earlier writer.
+      const { anthropicCredentialKey: inlineKey, ...anthropicQuota } = quota as ProviderQuota & { anthropicCredentialKey?: unknown };
+      const metadataKey = anthropicCredentialKeys?.[key];
+      const anthropicCredentialKey = metadataKey === undefined ? inlineKey : metadataKey;
+      if (anthropic && anthropicCredentialKey !== undefined
+        && (typeof anthropicCredentialKey !== "string" || !anthropicCacheKeyIsCurrent(key, anthropicCredentialKey, store))) continue;
       accountQuotaCache.set(key, {
         ts: anthropic ? 0 : quota.updatedAt,
-        quota: anthropic ? hydrateAnthropicQuota(quota, now)
+        quota: anthropic ? hydrateAnthropicQuota(anthropicQuota, now)
           : key.startsWith("kiro\0") ? sanitizeKiroQuota(quota) : quota,
+        ...(anthropic && typeof anthropicCredentialKey === "string" ? { anthropicCredentialKey } : {}),
         ...(key.startsWith("kiro\0") ? { identity: (quota as KiroPersistedQuota).identity } : {}),
       });
     }
@@ -220,7 +257,8 @@ export function hydrateAccountQuotaCache(): void {
 export function persistAccountQuotaCache(): void {
   schedulePersistAccountQuotas(function* () {
     const now = Date.now();
-    const liveKiro = new Map<string, ProviderAccount>(getAccountSet("kiro")?.accounts.map(account =>
+    const store = loadAuthStore();
+    const liveKiro = new Map<string, ProviderAccount>(store.kiro?.accounts.map(account =>
       [accountCacheKey("kiro", account.id), account]) ?? []);
     for (const [key, entry] of accountQuotaCache) {
       if (entry.quota && isDisplayOnlyQuota(entry.quota)) continue;
@@ -229,6 +267,10 @@ export function persistAccountQuotaCache(): void {
         const account = liveKiro.get(key);
         if (account && entry.identity === kiroEvidenceIdentity(account))
           yield [key, { ...sanitizeKiroQuota(quota), identity: entry.identity } as KiroPersistedQuota] as [string, KiroPersistedQuota];
+      } else if (quota && entry.anthropicCredentialKey !== undefined) {
+        if (anthropicCacheKeyIsCurrent(key, entry.anthropicCredentialKey, store)) {
+          yield [key, quota, entry.anthropicCredentialKey] as [string, ProviderQuota, string];
+        }
       } else if (quota) yield [key, quota] as [string, ProviderQuota];
     }
   }, () => kiroPersistableVerdicts());
@@ -275,22 +317,56 @@ export function accountCacheKey(provider: string, accountId: string): string {
   return `${provider}\u0000${accountId}`;
 }
 
+function anthropicCacheKeyIsCurrent(key: string, credentialKey: string, store: AuthStore = loadAuthStore()): boolean {
+  const separator = key.indexOf("\0");
+  const row = store[key.slice(0, separator)]?.accounts.find(account => account.id === key.slice(separator + 1));
+  return !!row && anthropicCredentialEvidenceKey(row) === credentialKey;
+}
+
 /**
  * Synchronous last-good per-account quota read for routing. Never probes the network.
  * Returns null when nothing is cached (or the cached row has no bars).
  */
-export function getCachedProviderAccountQuota(provider: string, accountId: string): ProviderQuota | null {
-  const entry = accountQuotaCache.get(accountCacheKey(provider, accountId));
+export function getCurrentAccountQuotaEntry(provider: string, accountId: string): AccountQuotaCacheEntry | undefined {
+  const key = accountCacheKey(provider, accountId);
+  const entry = accountQuotaCache.get(key);
+  if (entry?.isCurrent?.() === false) return undefined;
   if (provider === "kiro") {
     const account = getAccountSet("kiro")?.accounts.find(row => row.id === accountId);
-    if (!account || entry?.identity !== kiroEvidenceIdentity(account)) return null;
+    if (!account || entry?.identity !== kiroEvidenceIdentity(account)) return undefined;
   }
-  if (isAnthropicInstanceId(provider) && entry?.anthropicCredentialGeneration) {
-    const credential = getAccountCredential(provider, accountId);
-    if (!credential || credentialGeneration(credential) !== entry.anthropicCredentialGeneration) return null;
+  if (isAnthropicInstanceId(provider)) {
+    if (entry?.quotaOwnerIsCurrent !== entry?.isCurrent && entry?.quotaOwnerIsCurrent?.() === false) return undefined;
+    if (entry?.anthropicCredentialKey !== undefined && !anthropicCacheKeyIsCurrent(key, entry.anthropicCredentialKey)) return undefined;
   }
-  if (entry?.isCurrent && !entry.isCurrent()) return null;
+  return entry;
+}
+
+export function getCachedProviderAccountQuota(provider: string, accountId: string): ProviderQuota | null {
+  const entry = getCurrentAccountQuotaEntry(provider, accountId);
   return isAnthropicInstanceId(provider) ? normalizeAnthropicQuota(entry?.quota, Date.now()) : entry?.quota ?? null;
+}
+
+/** Both refresh entry points timestamp new meters and keep carried meters under their original owner. */
+export function anthropicAccountProbeEvidence(
+  instance: AnthropicInstanceId, accountId: string, now: number,
+  result?: { quota: ProviderQuota | null; credentialKey: string; isCurrent: () => boolean },
+): Pick<AccountQuotaCacheEntry, "quota" | "quotaOwnerIsCurrent" | "anthropicCredentialKey"> {
+  if (result?.quota) return {
+    quota: stampAnthropicUsageObservation(normalizeAnthropicQuota(result.quota, now), result.quota),
+    quotaOwnerIsCurrent: result.isCurrent,
+    anthropicCredentialKey: result.credentialKey,
+  };
+  const retained = getCurrentAccountQuotaEntry(instance, accountId);
+  const previous = retained?.quota ?? null;
+  const meters = result ? withoutAnthropicMonthlyFallback(previous) : previous;
+  const quota = stampAnthropicUsageObservation(normalizeAnthropicQuota(meters, now), undefined, previous);
+  if (!quota) return { quota: null };
+  return {
+    quota,
+    quotaOwnerIsCurrent: retained?.quotaOwnerIsCurrent,
+    anthropicCredentialKey: retained?.anthropicCredentialKey,
+  };
 }
 
 /** Client-facing reads require positive ownership. Kiro's persisted login identity is rechecked by the cache reader. */
@@ -301,6 +377,15 @@ export function getCredentialOwnedAccountQuota(provider: string, accountId: stri
   const quota = getCachedProviderAccountQuota(provider, accountId);
   if (provider === "kiro" && quota && Date.now() - quota.updatedAt >= ACCOUNT_QUOTA_TTL_MS) return null;
   return quota;
+}
+
+export function getAnthropicResetNearQuota(instance: AnthropicInstanceId, accountId: string, now: number): ResetNearQuota | null {
+  const entry = getCurrentAccountQuotaEntry(instance, accountId);
+  const stored = entry?.anthropicCredentialKey === undefined ? null : entry.quota;
+  const clocks = stored && anthropicUsageClocks.get(stored);
+  if (!clocks) return null;
+  const quota = normalizeAnthropicQuota(stored, now);
+  return quota ? { ...quota, ...clocks } : null;
 }
 
 /** Test-only: seed or clear the per-account quota cache without probing upstream. */
@@ -314,9 +399,12 @@ export function setCachedProviderAccountQuotaForTests(
     accountQuotaCache.delete(key);
     return;
   }
-  const account = provider === "kiro" ? getAccountSet("kiro")?.accounts.find(row => row.id === accountId) : undefined;
+  const anthropic = isAnthropicInstanceId(provider);
+  const account = provider === "kiro" || anthropic ? getAccountSet(provider)?.accounts.find(row => row.id === accountId) : undefined;
+  if (anthropic) stampAnthropicUsageObservation(quota, quota);
   accountQuotaCache.set(key, { ts: Date.now(), quota,
-    ...(account ? { identity: kiroEvidenceIdentity(account) } : {}) });
+    ...(account && (anthropic ? { anthropicCredentialKey: anthropicCredentialEvidenceKey(account) }
+      : { identity: kiroEvidenceIdentity(account) })) });
 }
 
 /** Unified headers report utilization fractions and epoch-second reset times. */
@@ -364,11 +452,15 @@ export function recordAnthropicAccountQuotaFromHeadersForInstance(
   status?: number,
   model?: string,
   decisionCredentialGeneration?: string,
+  sendCredentialKey?: string,
 ): void {
   if (!accountId) return;
   const key = accountCacheKey(instance, accountId);
   const { observeAnthropicFamilyQuota, clearAnthropicRequestedFamilyQuota } = anthropicModelQuotaFor(instance);
   if (!mayCommitAccountQuotaKey(key, writerGeneration)) return;
+  const account = getAccountSet(instance)?.accounts.find(row => row.id === accountId);
+  const credentialKey = account && anthropicCredentialEvidenceKey(account);
+  if (sendCredentialKey !== undefined && sendCredentialKey !== credentialKey) return;
   if (status !== undefined && status >= 200 && status < 300) clearAnthropicRequestedFamilyQuota(accountId, model);
   const observed = parseAnthropicRateLimitHeaders(headers, status);
   if (!observed) return;
@@ -378,10 +470,10 @@ export function recordAnthropicAccountQuotaFromHeadersForInstance(
   // every other provider's saved row.
   hydrateAccountQuotaCache();
   const candidate = accountQuotaCache.get(key);
-  const credential = getAccountCredential(instance, accountId);
-  const generation = credential && credentialGeneration(credential);
+  const generation = account && credentialGeneration(account.credential);
   const previous = candidate?.isCurrent?.() === false
-    || candidate?.anthropicCredentialGeneration && candidate.anthropicCredentialGeneration !== generation ? undefined : candidate;
+    || (candidate?.quotaOwnerIsCurrent !== candidate?.isCurrent && candidate?.quotaOwnerIsCurrent?.() === false)
+    || candidate?.anthropicCredentialKey !== undefined && candidate.anthropicCredentialKey !== credentialKey ? undefined : candidate;
   if (observed.customWindows) observeAnthropicFamilyQuota(accountId, observed.customWindows, observed.updatedAt);
   const quota = {
     ...normalizeAnthropicQuota(previous?.quota, observed.updatedAt), ...observed,
@@ -389,12 +481,14 @@ export function recordAnthropicAccountQuotaFromHeadersForInstance(
   };
   commitAnthropicAccountQuota(key, {
     ...previous,
-    ...(generation ? { anthropicCredentialGeneration: generation, isCurrent: undefined } : {}),
+    ...(credentialKey ? { anthropicCredentialKey: credentialKey, isCurrent: undefined } : {}),
     // This merged snapshot can include unbound headers or bars carried forward from disk.
     quotaOwnerIsCurrent: undefined,
     // Headers do not prove that the last usage probe succeeded.
     ts: previous?.ts ?? 0,
-    quota: normalizeAnthropicQuota(withoutAnthropicMonthlyFallback(quota), observed.updatedAt),
+    quota: stampAnthropicUsageObservation(
+      normalizeAnthropicQuota(withoutAnthropicMonthlyFallback(quota), observed.updatedAt), observed, previous?.quota,
+    ),
   }, true);
   // Advisory evidence is published for the primary pool only; Pool 2 stays unknown to decisions.
   if (instance === "anthropic" && generation && generation === decisionCredentialGeneration && decisionQuotaSinkActive()) {

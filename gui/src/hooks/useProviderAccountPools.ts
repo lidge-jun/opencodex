@@ -1,4 +1,5 @@
 import { parseQuotaFailureCode } from "../../../src/providers/quota-types";
+import type { AccountPauseEvidence } from "../../../src/types/account-auto-pause";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
 import type { AccountLoadState, AccountQuotaReading } from "../components/provider-workspace/types";
 import { createBoundedFetch } from "../bounded-fetch";
@@ -34,10 +35,13 @@ export interface OAuthAccount extends AccountQuotaReading {
   maskedLabel?: string;
   active: boolean;
   needsReauth?: boolean;
+  /** `verify_account`: upstream asked to verify the account rather than refusing the refresh token. */
+  needsReauthReason?: string;
   autoSelectable?: boolean;
   skipReason?: "needs_reauth" | "paused" | "suspended" | "cooldown" | "quota_exhausted";
   paused?: boolean;
   pauseDetails?: { reason: string; pausedAt: number };
+  pauseEvidence?: AccountPauseEvidence;
   autoSwitchThresholdOverride?: number | null;
   autoSwitchThreshold?: number;
   effectiveAutoSwitchThreshold?: number;
@@ -662,7 +666,9 @@ export function useProviderAccountPools(deps: {
       setAccountSets(current => {
         const existing = current[provider];
         if (!existing) return current;
-        const accounts = existing.accounts.map(row => row.id === account.id ? { ...row, paused } : row);
+        const accounts = existing.accounts.map(row => row.id === account.id
+          ? { ...row, paused, ...(paused ? {} : { pauseDetails: undefined, pauseEvidence: undefined }) }
+          : row);
         return { ...current, [provider]: { activeAccountId: selected, accounts: selectionRows(accounts, selected) } };
       });
       if (committedResetFailure) {

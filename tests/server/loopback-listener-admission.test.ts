@@ -130,7 +130,7 @@ describe("local client inference wires on the loopback listener (#4236)", () => 
     // hub whose public listener binds a tailnet address. The handlers resolve admission from the
     // receiving listener's policy, so this adds a wire, not a trust level.
     expect(source).toContain("const gemini = parseGeminiNativePath(path);");
-    expect(source).toContain("if (gemini) return req.method === gemini.httpMethod;");
+    expect(source).toContain("if (gemini) return geminiRouteAllows(gemini, req.method);");
   });
 
   test("no /api route joins the allowlist", () => {

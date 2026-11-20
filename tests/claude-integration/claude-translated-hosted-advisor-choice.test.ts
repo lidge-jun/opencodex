@@ -51,6 +51,7 @@ async function verifyHostedAdvisorChoice(scenario: string, route: "direct" | "co
   const hostedCall = { type: "server_tool_use", id: "srvtoolu_fixture", name: "advisor", input: {} };
   const hostedResult = { type: "advisor_tool_result", tool_use_id: hostedCall.id,
     content: { type: "advisor_result", text: "Hosted advice.", stop_reason: "end_turn" } };
+  const imagePolicy = scenario === "image degrade" ? "degrade" : scenario === "image reject" ? "reject" : undefined;
   const none = scenario === "direct encoder tool_choice none";
   const direct = scenario === "direct encoder refusal" || none;
   const scoped = scenario === "out of model scope";
@@ -65,7 +66,7 @@ async function verifyHostedAdvisorChoice(scenario: string, route: "direct" | "co
     const body = JSON.parse(String(init?.body)) as (typeof sends)[number]["body"];
     sends.push({ provider, body, beta: new Headers(init?.headers).get("anthropic-beta") });
     if (sends.length > 1) return workerStream([{ type: "text", text: "Done." }], "end_turn");
-    if ((scenario === "hosted exchange" || capped) && body.tools?.some(tool => tool.type === HOSTED_ADVISOR.type)) {
+    if ((scenario === "hosted exchange" || imagePolicy || capped) && body.tools?.some(tool => tool.type === HOSTED_ADVISOR.type)) {
       return workerStream([hostedCall, hostedResult, { type: "text", text: "Done." }], "end_turn");
     }
     return workerStream([{ type: "tool_use", id: "toolu_fixture", name: "advisor", input: { question: "fixture_private_question" } }], "tool_use");
@@ -84,11 +85,12 @@ async function verifyHostedAdvisorChoice(scenario: string, route: "direct" | "co
       createdAt: "2026-01-01T00:00:00.000Z", allowedModels: [MODEL] }] } : {}),
     webSearchSidecar: { enabled: false },
     providers: {
-      worker: { ...worker, ...(optedOut ? { forwardAdvisorTool: false } : {}),
+      worker: { ...worker, ...(optedOut ? { forwardAdvisorTool: false } : {}), ...(imagePolicy ? { inputModalities: ["text" as const] } : {}),
         ...(capped ? { authMode: "local" as const, forwardAdvisorTool: true } : {}) },
-      ...(route !== "direct" ? { blocked: { ...worker, apiKey: blockedApiKey, forwardAdvisorTool: capped, fetch: capture("blocked") } } : {}),
+      ...(route !== "direct" ? { blocked: { ...worker, apiKey: blockedApiKey, forwardAdvisorTool: capped,
+        ...(imagePolicy ? { inputModalities: ["text" as const, "image" as const] } : {}), fetch: capture("blocked") } } : {}),
     },
-    ...(route === "combo" ? { combos: { waterfall: { strategy: "failover", targets } } } : {}),
+    ...(route === "combo" ? { combos: { waterfall: { strategy: "failover", targets, ...(imagePolicy ? { capabilityPolicy: "union", onUnservable: imagePolicy } as const : {}) } } } : {}),
     ...(route === "policy" ? { routingProfiles: { waterfall: { candidates: targets } } } : {}),
   };
   let consultations = 0;
@@ -110,7 +112,7 @@ async function verifyHostedAdvisorChoice(scenario: string, route: "direct" | "co
     const logCtx: RequestLogContext = { model: "", provider: "" };
     const requestBody = { model: route === "direct" ? `worker/${MODEL}` : `${route}/waterfall`,
       max_tokens: 64, stream: direct, thinking: { type: "disabled" }, tools,
-      tool_choice: none ? { type: "none" } : CHOICE, messages: [{ role: "user", content: "Fixture." }] };
+      tool_choice: none ? { type: "none" } : CHOICE, messages: [{ role: "user", content: imagePolicy ? [{ type: "text", text: "Fixture." }, { type: "image", source: { type: "base64", media_type: "image/png", data: "AA==" } }] : "Fixture." }] };
     if (countPreparation || capped) {
       const preparations: string[] = [];
       const request = new Request("http://localhost/v1/responses", {
@@ -155,6 +157,15 @@ async function verifyHostedAdvisorChoice(scenario: string, route: "direct" | "co
     }), config, logCtx, scoped ? { requestId: crypto.randomUUID(), start: Date.now(),
       admission: { kind: "configured", keyId: "scoped", source: "bearer" } } : undefined);
     const body = await response.text();
+    if (imagePolicy) {
+      expect(response.status, body).toBe(imagePolicy === "degrade" ? 200 : 400);
+      expect(sends.map(send => send.provider)).toEqual(imagePolicy === "degrade" ? ["worker"] : []);
+      if (imagePolicy === "degrade") {
+        expect(sends[0]?.body).toMatchObject({ tools: [HOSTED_ADVISOR], tool_choice: CHOICE });
+        expect(JSON.stringify(sends[0]?.body)).not.toContain('"type":"image"');
+      } else expect(body).toContain("No target of this combo can accept image input");
+      return;
+    }
     if (route === "policy") expect(logCtx.routeDecision?.selected.provider).toBe("blocked");
     if (route === "combo") {
       expect(logCtx.attempts?.map(attempt => attempt.provider)).toEqual(
@@ -208,7 +219,7 @@ test.each([
     ["hosted exchange", "direct"], ["ordinary tool call", "direct"], ["direct encoder refusal", "direct"],
     ["direct encoder tool_choice none", "direct"], ["out of model scope", "direct"],
     ["forwarding disabled", "direct"], ["ambiguous catalog", "direct"],
-    ["hosted exchange", "combo"], ["forwarding disabled", "combo"], ["ambiguous catalog", "combo"],
+    ["image degrade", "combo"], ["image reject", "combo"], ["hosted exchange", "combo"], ["forwarding disabled", "combo"], ["ambiguous catalog", "combo"],
     ["hosted exchange", "policy"], ["forwarding disabled", "policy"], ["ambiguous catalog", "policy"],
   ] as const).map(([scenario, route]) => [scenario, route, "Messages"] as const),
   ["ambiguous catalog", "policy", "counted core"], ["hosted exchange", "policy", "counted core"],

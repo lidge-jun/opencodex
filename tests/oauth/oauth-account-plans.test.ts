@@ -158,7 +158,7 @@ test("a same-account login whose tier read failed keeps the stored plan", async 
 });
 test("an explicit account replacement cannot inherit previous plan", async () => {
   await saveCredential("anthropic", credential({ plan: "max_20x" }));
-  await saveCredential("anthropic", credential({ accountId: "synthetic-other" }));
+  await saveCredential("anthropic", credential({ accountId: "synthetic-other", refresh: "synthetic-other-refresh" }));
   expect(getLoginStatus("anthropic").accounts!.find(row => row.active)!.plan).toBeNull();
 });
 test("Antigravity prefers paidTier, falls back to currentTier, and keeps plan through onboarding", async () => {

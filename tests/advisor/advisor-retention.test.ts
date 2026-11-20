@@ -30,6 +30,17 @@ async function run(firstEvents: AsyncIterable<AdapterEvent>, budget?: Translator
   return { events, requests, questions };
 }
 
+test.each([[2, 3, 5], [undefined, 3, -1], [2, undefined, -1]])(
+  "advisor continuation credits account for both dispatched legs (%s, %s)", async (first, second, total) => {
+    const terminal = (credits: number | undefined): AdapterEvent => ({ type: "done",
+      usage: credits === undefined ? undefined : { inputTokens: 1, outputTokens: 1, providerCredits: credits } });
+    const result = await run(stream([...call("c", '{"question":"fixture"}'), terminal(first)]), undefined,
+      () => stream([{ type: "text_delta", text: "answer" }, terminal(second)]));
+    expect(result.requests).toHaveLength(1);
+    expect(result.events.at(-1)).toMatchObject({ type: "done", usage: { providerCredits: total } });
+  },
+);
+
 test("an explicitly unfinished advisor call cannot execute or trigger a continuation", async () => {
   const result = await run(stream([
     { type: "tool_call_start", id: "unfinished", name: "advisor" },

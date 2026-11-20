@@ -13,6 +13,8 @@ import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeCompactionFixture } from "../helpers/compaction-routing-fixtures";
+import { registerUpstreamRewriter } from "../../src/plugins/upstream-hooks";
+import { wasAccountAutoPaused } from "../../src/oauth/account-auto-pause";
 
 const NAME = "openai-apikey";
 const KEYS = ["fixture-key-alpha", "fixture-key-beta", "fixture-key-gamma"];
@@ -81,6 +83,24 @@ function unchanged(config: OcxConfig) {
   expect(saved.providers[NAME]!.apiKeySelectionRevision).toBe("saved-revision");
   expect(saved.providers[NAME]!._apiKeyAttempt).toBeUndefined();
 }
+
+test("keyed compact passes final-wire ownership through an identity rewriter", async () => {
+  const config = fixture();
+  config.providers[NAME]!.accountAutoPause = { enabled: true, consecutiveFailures: 1 };
+  saveConfig(config);
+  const refusal = Response.json({ error: { type: "permission_error", message: "Your subscription has expired." } }, { status: 403 });
+  const unregister = registerUpstreamRewriter("compact-wire-owner", () => {});
+  let sends = 0;
+  globalThis.fetch = (async () => {
+    sends++;
+    return sends === 1 ? refusal : Response.json({ output: [] });
+  }) as typeof fetch;
+  try {
+    const { logCtx } = await start(config, new AbortController());
+    expect(wasAccountAutoPaused(refusal)).toBe(true);
+    expect(logCtx.attempts?.[0]?.sendCount ?? logCtx.activeAttempt?.sendCount).toBe(1);
+  } finally { unregister(); }
+});
 function noLeaks(config: OcxConfig) {
   expect(status(config)).toMatchObject({ queued: 0, inFlight: 0 });
   for (const key of status(config).keys!) expect(key).toMatchObject({ queued: 0, inFlight: 0 });

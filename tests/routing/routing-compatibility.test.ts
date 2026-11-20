@@ -11,6 +11,7 @@ import { findVerdictForSuite, loadCompatibilityEvidenceSnapshot } from "../../sr
 import {
   resolvePolicyCompatibilitySubjects,
   resolvePolicyRouteSubject,
+  resolveProductionRouteSubject,
 } from "../../src/routing/compatibility/subject";
 import { subjectIdForSubject } from "../../src/lab/digest";
 import { buildProtocolSubjectV1 } from "../../src/lab/subject/protocol-subject";
@@ -85,6 +86,34 @@ function evidence(
 }
 
 const policy = getRoutingProfile(baseConfig(), "compat")!.compatibility!;
+
+test("a negotiated Chat subject ignores a static Responses override for Fast", () => {
+  const provider = { ...baseConfig().providers.a!, adapter: "openai-chat" as const };
+  const forWire = (modelAdapters?: Record<string, string>) => {
+    const configured = { ...provider, modelAdapters } as typeof provider;
+    const config = baseConfig({ providers: { a: configured } });
+    return resolveProductionRouteSubject(config, "a", "m1", configured, "responses", home, "openai-chat");
+  };
+  const plain = forWire();
+  const overridden = forWire({ m1: "openai-responses" });
+  expect(plain?.subjectId).toMatch(/^[a-f0-9]{64}$/);
+  expect(overridden?.routeContext.behaviorValues["responses.serviceTier"]).toEqual(
+    plain?.routeContext.behaviorValues["responses.serviceTier"]);
+  expect(overridden?.subjectId).toBe(plain?.subjectId);
+});
+
+test("matching xAI Responses adapter preserves policy service-tier behavior and subject", () => {
+  const model = "grok-4.20-multi-agent-0309";
+  const configured: OcxConfig["providers"][string] = {
+    adapter: "openai-chat", authMode: "oauth", baseUrl: "https://api.x.ai/v1", models: [model],
+  };
+  const config = baseConfig({ providers: { xai: configured } });
+  const policySubject = resolvePolicyRouteSubject(config, "xai", model, configured, home);
+  const production = resolveProductionRouteSubject(config, "xai", model, configured, "responses", home, "openai-responses");
+  expect(policySubject?.routeContext.behaviorValues["responses.serviceTier"]?.value).toBe(false);
+  expect(production?.routeContext.behaviorValues["responses.serviceTier"]?.value).toBe(false);
+  expect(production?.subjectId).toBe(policySubject?.subjectId);
+});
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "ocx-cl06-"));

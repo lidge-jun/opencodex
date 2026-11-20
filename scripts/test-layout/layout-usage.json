@@ -1,5 +1,7 @@
 {
   "usage-client-attribution.test.ts": "usage",
+  "usage-credit-ledger-regressions.test.ts": "usage",
+  "usage-provider-credit-price.test.ts": "usage",
   "usage-filter-index.test.ts": "usage",
   "usage-filter-paging.test.ts": "usage",
   "request-log.test.ts": "usage",
