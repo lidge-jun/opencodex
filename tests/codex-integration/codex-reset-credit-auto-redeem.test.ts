@@ -198,6 +198,13 @@ describe("reset-credit auto-redeemer runtime (#822)", () => {
     expect(h2.consumed).toEqual([]);
   });
 
+  test("two identical credits are a tie, not one credit: dispatch stands down", async () => {
+    const h = harness({ credits: () => [credit(30), credit(30)], journalFile: join(dir, "twins.json") });
+    h.setNow(T0 + 20 * MIN);
+    expect(await h.redeemer.tick()).toEqual({ kind: "skipped", reason: "order-not-guaranteed" });
+    expect(h.consumed).toEqual([]);
+  });
+
   test("a tied or unorderable grant time also blocks dispatch (fail closed)", async () => {
     for (const [i, other] of ([
       { granted_at: "2026-09-01T00:00:00Z", expires_at: null },

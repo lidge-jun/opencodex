@@ -83,8 +83,15 @@ export function olderCreditPrecedes(credits: readonly ResetCredit[], plan: Pick<
   if (!Number.isFinite(planned)) return true;
   // Fail closed: an equal grant time has no known tie-breaker, and a grant time that does not
   // parse cannot be ordered at all, so either blocks dispatch just like an older credit.
-  return credits.some(c => !(c.granted_at === plan.grantedAt && c.expires_at === plan.expiresAt)
-    && !(Date.parse(c.granted_at) > planned));
+  // Exactly one row is the planned credit; a second identical row is a distinct credit and a tie.
+  let plannedSeen = false;
+  return credits.some(c => {
+    if (!plannedSeen && c.granted_at === plan.grantedAt && c.expires_at === plan.expiresAt) {
+      plannedSeen = true;
+      return false;
+    }
+    return !(Date.parse(c.granted_at) > planned);
+  });
 }
 
 interface JournalEntry {

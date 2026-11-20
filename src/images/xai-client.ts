@@ -90,7 +90,8 @@ function mapQualityToResolution(quality?: string): string | undefined {
 }
 
 export function mapQualityToXaiQuality(model: string, quality?: string): "low" | "medium" | "auto" | undefined {
-  if (!quality || !/^grok-imagine-image-2(\.|-|$)/.test(model)) return undefined;
+  // xAI documents quality for grok-imagine-image-2.0 only (no aliases); a later model must opt in here.
+  if (!quality || model !== XAI_DEFAULT_IMAGE_MODEL) return undefined;
   const q = quality.toLowerCase();
   if (q === "low" || q === "standard") return "low";
   if (q === "medium" || q === "high" || q === "hd") return "medium";

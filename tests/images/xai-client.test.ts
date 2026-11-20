@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { callXaiImages, resolveXaiAspectRatioLiteral } from "../../src/images/xai-client";
+import { callXaiImages, mapQualityToXaiQuality, resolveXaiAspectRatioLiteral } from "../../src/images/xai-client";
 
 const PREV_HOME = process.env.OPENCODEX_HOME;
 beforeAll(() => { process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-test-" + randomUUID()); });
@@ -236,6 +236,13 @@ test("image 2.0 defaults, quality, ratios and multiple edit sources", async () =
   expect(body.images).toEqual([{url:"a",type:"image_url"},{url:"b",type:"image_url"}]);
   await expect(callXaiImages({prompt:"x", imageUrl:"1", imageUrls:["2","3","4","5","6"]}, AUTH)).rejects.toMatchObject({status:400});
   expect(calls).toHaveLength(1);
+});
+
+test("quality is sent to grok-imagine-image-2.0 only, not to other 2.x models", () => {
+  expect(mapQualityToXaiQuality("grok-imagine-image-2.0", "high")).toBe("medium");
+  for (const model of ["grok-imagine-image-2.1", "grok-imagine-image-2-beta", "grok-imagine-image-2", "grok-imagine-image"]) {
+    expect(mapQualityToXaiQuality(model, "high")).toBeUndefined();
+  }
 });
 
 test("upstream details are restricted to canonical messages", async () => {

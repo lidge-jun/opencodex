@@ -83,7 +83,7 @@ export function buildImageTool(): OcxTool {
         n: { type: "integer", minimum: 1, maximum: 4 },
         aspect_ratio: {
           type: "string",
-          enum: ["1:1", "16:9", "9:16", "4:3", "3:4", "2:3", "3:2", "21:9", "5:2", "auto"],
+          enum: ["1:1", "16:9", "9:16", "4:3", "3:4", "2:3", "3:2", "9:19.5", "19.5:9", "9:20", "20:9", "1:2", "2:1", "21:9", "5:2", "auto"],
           description: "Image aspect ratio. Default auto.",
         },
         quality: { type: "string", enum: ["low", "medium", "auto"] },
