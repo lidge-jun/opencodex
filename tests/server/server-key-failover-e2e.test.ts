@@ -1796,6 +1796,7 @@ describe("runTurn API-key recovery", () => {
     ["explicit permission code", { region: "cn" as const, vendorCode: "PERMISSION_DENIED", result: cnPricing }],
     ["embedded permission code", { region: "cn" as const, vendorCode: 403, result: 'inference.remoteChat.stream failed (403): {"code":114,"pricingUrl":"https://qoder.com.cn/pricing?client=qoder"}' }],
     ["different pricing path", { region: "cn" as const, vendorCode: 403, result: 'inference.remoteChat.stream failed (403): {"pricingUrl":"https://qoder.com.cn/pricing-policy"}' }],
+    ["permission denial beside the pricing URL", { region: "cn" as const, vendorCode: 403, result: 'inference.remoteChat.stream failed (403): {"message":"Permission denied","pricingUrl":"https://qoder.com.cn/pricing?client=qoder"}' }],
     ["Team daily usage limit reached", { result: "Team daily usage limit reached" }],
     ["This model's credit usage limit reached", { result: "This model's credit usage limit reached" }],
     ["Shared daily usage limit reached", { result: "Shared daily usage limit reached" }],

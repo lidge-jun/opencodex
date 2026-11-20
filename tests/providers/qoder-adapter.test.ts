@@ -1478,6 +1478,8 @@ describe("Qoder API-key recovery evidence", () => {
     ["https://qoder.cn", 403, 'inference.remoteChat.stream failed (403): {"pricingUrl":"https://qoder.com.cn/pricing-policy"}', 502, "upstream_error", "upstream_error", false],
     ["https://qoder.cn", 403, 'inference.remoteChat.stream failed (403): {"pricingUrl":"https://qoder.com.cn/pricing/enterprise"}', 502, "upstream_error", "upstream_error", false],
     ["https://qoder.cn", 403, 'inference.remoteChat.stream failed (403): {"message":"forbidden"} {"pricingUrl":"https://qoder.com.cn/pricing?client=qoder"}', 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", 403, 'inference.remoteChat.stream failed (403): {"message":"Permission denied","pricingUrl":"https://qoder.com.cn/pricing?client=qoder"}', 502, "upstream_error", "upstream_error", false],
+    ["https://qoder.cn", 403, 'inference.remoteChat.stream failed (403): {"error":{"message":"account banned"},"pricingUrl":"https://qoder.com.cn/pricing"}', 502, "upstream_error", "upstream_error", false],
     ["https://qoder.cn", 403, 'inference.remoteChat.stream failed (403): {"pricingUrl":"https://qoder.com.cn/pricing"}', 429, "insufficient_quota", "insufficient_quota", true],
   ] as const)("CN pricing-URL isolation and code precedence (%s, code=%s, %s)", async (baseUrl, vendorCode, result, status, errorType, code, allowed) => {
     const events: AdapterEvent[] = [];
