@@ -241,6 +241,26 @@ describe("preserve-long-quota", () => {
     await commit(live, readCodexAccountRecord("b")!.generation);
     expect(getAccountQuota("b")?.shortOnlyObservedAt).toBe(replacementProof);
   });
+  test("parsed contradictory pool policy needs writer authority to revoke proof", () => {
+    publishWham("b", shortOnlyWham());
+    const observed = getAccountQuota("b")?.shortOnlyObservedAt;
+    expect(observed).toBeNumber();
+    const data = shortOnlyWham();
+    data.additional_rate_limits = [{ limit_name: "unknown" }];
+    const parsed = parseUsageQuota(data);
+    const policy = poolWhamPolicyObservation(data, parsed);
+    setAccountQuotaFromParsed("b", parsed, undefined, undefined, policy, undefined, true, true, null, { data });
+    expect(getAccountQuota("b")?.shortOnlyObservedAt).toBe(observed);
+    setAccountQuotaFromParsed("b", parsed, undefined, undefined, policy, undefined, false, true, null, { data });
+    expect(getAccountQuota("b")?.shortOnlyObservedAt).toBeUndefined();
+  });
+  test("carried weekly quota remains conservative after a complete short-only observation", () => {
+    quota("a", { weeklyPercent: 20, weeklyResetAt: now + 24 * HOUR });
+    quota("b", { weeklyPercent: 10, weeklyResetAt: now + 120 * HOUR });
+    publishWham("b", shortOnlyWham());
+    expect(getAccountQuota("b")?.weeklyPercent).toBe(10);
+    expect(first()).toBe("a");
+  });
   test("null-quota topology cannot cross native-main writer fences or retire hard-lock evidence", async () => {
     const { getMainPolicyQuota } = await import("../../src/codex/quota");
     observeMainQuotaIdentity("fixture-retired-topology-owner");
