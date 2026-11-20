@@ -6,13 +6,18 @@ import { useSyncExternalStore } from "react";
  * own) rather than in proxy config. Hiding is reversible from the Set up hub.
  *
  * One snapshot serves every reader: a write notifies this window's subscribers directly
- * (the storage event only reaches other windows), and the storage event reconciles those.
- * When storage refuses a read or a write, the last choice still holds for this visit.
+ * (the storage event only reaches other windows), and a localStorage event reconciles those.
+ * When storage refuses a read or a write, the last choice made here still holds for this visit.
  */
 export const GETTING_STARTED_HIDDEN_KEY = "ocx-home-getting-started-hidden";
 
 const listeners = new Set<() => void>();
-let unsaved: { store: Storage | undefined; hidden: boolean } | undefined;
+/**
+ * The last choice made in this window, scoped to the storage it was made against so a fresh
+ * window starts from its own storage. `saved` is false when the write was refused, and then
+ * this value outranks whatever storage still holds.
+ */
+let local: { store: Storage | undefined; hidden: boolean; saved: boolean } | undefined;
 let watched: Window | undefined;
 
 function currentStorage(): Storage | undefined {
@@ -25,12 +30,14 @@ function currentStorage(): Storage | undefined {
 
 export function readGettingStartedHidden(): boolean {
   const store = currentStorage();
-  // Scoped to the storage it failed on, so a fresh window starts from its own storage.
-  if (unsaved && unsaved.store === store) return unsaved.hidden;
+  const mine = local && local.store === store ? local : undefined;
+  if (mine && !mine.saved) return mine.hidden;
   try {
-    return store?.getItem(GETTING_STARTED_HIDDEN_KEY) === "1";
+    if (!store) return mine?.hidden ?? false;
+    return store.getItem(GETTING_STARTED_HIDDEN_KEY) === "1";
   } catch {
-    return false;
+    // Writable but unreadable storage: keep showing what this window chose.
+    return mine?.hidden ?? false;
   }
 }
 
@@ -44,17 +51,19 @@ export function setGettingStartedHidden(hidden: boolean): void {
     if (!store) throw new Error("storage unavailable");
     if (hidden) store.setItem(GETTING_STARTED_HIDDEN_KEY, "1");
     else store.removeItem(GETTING_STARTED_HIDDEN_KEY);
-    unsaved = undefined;
+    local = { store, hidden, saved: true };
   } catch {
-    unsaved = { store, hidden };
+    local = { store, hidden, saved: false };
   }
   notify();
 }
 
 function onStorage(event: StorageEvent): void {
-  // A null key is clear(); anything else that is not ours leaves the card alone.
+  // Only this localStorage speaks for the card: a sessionStorage event, or another key, does not.
+  if (event.storageArea !== currentStorage()) return;
+  // A null key is clear().
   if (event.key !== null && event.key !== GETTING_STARTED_HIDDEN_KEY) return;
-  unsaved = undefined;
+  local = undefined;
   notify();
 }
 

@@ -59,3 +59,13 @@ tests/startup-checklist-desktop.test.tsx tests/home-errors.test.tsx tests/home-m
   Hide's accessible name is "Hide Getting started" (contains the visible "Hide").
 - P2 verification: review-ready adds the full GUI suite (`cd gui && bun run test`), and the existing
   browser-with-Desktop-health cases in `startup-checklist-desktop` and `startup-checklist-refresh` stay.
+
+## Code review fold (same reviewer, round 2, NEAR-PASS)
+
+- P1 readable-write, unreadable-read storage: the store keeps the last local choice per storage
+  object and answers with it when `getItem` throws, even after a successful write.
+- P2 the `storage` listener reconciles only events whose `storageArea` is this localStorage, so a
+  `sessionStorage.clear()` elsewhere cannot drop an unsaved choice.
+- The Set up hub test now asserts focus lands on the "back on Home" confirmation.
+- Implementation note: the Set up hub is the **Checklist** tab under **Route**, so the restore hint
+  names that path from the live navigation labels (`{place}`).

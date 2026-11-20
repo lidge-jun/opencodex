@@ -179,14 +179,14 @@ test("a change made in another window reaches an open Home without taking focus"
   other.focus();
   await act(async () => {
     win.localStorage.setItem("ocx-home-getting-started-hidden", "1");
-    win.dispatchEvent(new win.StorageEvent("storage", { key: "ocx-home-getting-started-hidden", newValue: "1" }));
+    win.dispatchEvent(new win.StorageEvent("storage", { key: "ocx-home-getting-started-hidden", newValue: "1", storageArea: win.localStorage }));
   });
   expect(headings(host)).not.toContain("Getting started");
   expect(host.textContent).not.toContain("Getting started is hidden.");
   expect(document.activeElement).toBe(other as unknown as Element);
   await act(async () => {
     win.localStorage.removeItem("ocx-home-getting-started-hidden");
-    win.dispatchEvent(new win.StorageEvent("storage", { key: "ocx-home-getting-started-hidden", newValue: null }));
+    win.dispatchEvent(new win.StorageEvent("storage", { key: "ocx-home-getting-started-hidden", newValue: null, storageArea: win.localStorage }));
   });
   expect(headings(host)).toContain("Getting started");
 });
@@ -201,6 +201,8 @@ test("the Set up hub shows Getting started on Home again", async () => {
   await click(button(hub, "Show on Home")!);
   expect(button(hub, "Show on Home")).toBeUndefined();
   expect(hub.textContent).toContain("Getting started is back on Home.");
+  // The clicked button is gone, so focus moves to the confirmation that replaced it.
+  expect(document.activeElement?.textContent).toBe("Getting started is back on Home.");
 
   const again = await home();
   expect(headings(again)).toContain("Getting started");
@@ -231,4 +233,25 @@ test("a browser that refuses to read storage shows the card", async () => {
   const host = await home();
   expect(headings(host)).toContain("Getting started");
   expect(headings(host)).toContain("Recent errors");
+});
+
+test("a browser that writes storage but refuses to read it still hides and restores the card", async () => {
+  Object.defineProperty(win.localStorage, "getItem", { configurable: true, value: () => { throw new Error("denied"); } });
+  const host = await home();
+  await click(button(host, "Hide Getting started")!);
+  expect(headings(host)).not.toContain("Getting started");
+  expect(button(host, "Undo")).toBeDefined();
+  const hub = await setupHub();
+  await click(button(hub, "Show on Home")!);
+  expect(headings(await home())).toContain("Getting started");
+});
+
+test("clearing session storage elsewhere keeps a choice that could not be saved", async () => {
+  Object.defineProperty(win.localStorage, "setItem", { configurable: true, value: () => { throw new Error("quota"); } });
+  const host = await home();
+  await click(button(host, "Hide Getting started")!);
+  await act(async () => {
+    win.dispatchEvent(new win.StorageEvent("storage", { key: null, storageArea: win.sessionStorage }));
+  });
+  expect(headings(host)).not.toContain("Getting started");
 });
