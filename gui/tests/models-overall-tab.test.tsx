@@ -199,6 +199,27 @@ test("rows still waiting on the first model selection cannot be switched", async
   expect(overallSwitch("proxy/alpha").disabled).toBe(false);
 });
 
+// The 10 s catalog poll can land while an Overall write is still in flight. The server has not
+// applied the write yet, so that read still says "off"; the switch must keep showing the
+// requested "on" until the write settles and the authoritative read confirms it.
+test("a poll read that lands during an Overall write does not revert the switch", async () => {
+  await mount(); await settle(() => overallSwitches().length === 5);
+  await act(async () => { overallSwitch("other/yankee").click(); });
+  expect(overallSwitch("other/yankee").getAttribute("aria-checked")).toBe("true");
+  expect(puts).toHaveLength(1);
+  // Write still held: run every poll tick; the server still reports yankee off.
+  await act(async () => { for (const tick of [...ticks]) tick(); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+  expect(overallSwitch("other/yankee").getAttribute("aria-checked")).toBe("true");
+  await act(async () => { writes.shift()!(); });
+  // Settled means the queue drained and its authoritative catalog read succeeded: only then does
+  // the hook publish "Saved" and drop the optimistic override, so "on" below is the saved state.
+  await settle(() => container.textContent!.includes("Saved. Codex shows the change"));
+  expect(overallSwitch("other/yankee").getAttribute("aria-checked")).toBe("true");
+  expect(overallSwitch("other/yankee").disabled).toBe(false);
+  expect(selected.other).toEqual(["xray", "yankee"]);
+});
+
 test("a failed background refresh is reported on the Overall tab instead of silently showing the last list", async () => {
   await mount(); await settle(() => overallSwitches().length === 5);
   expect(panel("overall").textContent).not.toContain("Failed to load models");
