@@ -55,14 +55,12 @@ describe("parseVideoCallArgs", () => {
 
   test("rejects invalid resolution", () => {
     const result = parseVideoCallArgs(JSON.stringify({ prompt: "test", resolution: "1080p" }));
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.resolution).toBeUndefined();
+    expect(result).toEqual({ ok: false, error: "resolution 1080p is not supported by unknown" });
   });
 
   test("rejects invalid aspect_ratio", () => {
     const result = parseVideoCallArgs(JSON.stringify({ prompt: "test", aspect_ratio: "5:4" }));
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.aspectRatio).toBeUndefined();
+    expect(result).toEqual({ ok: false, error: "aspect_ratio 5:4 is not supported by unknown" });
   });
 });
 
@@ -157,7 +155,9 @@ test("model-specific frames, resolutions and limits are validated", () => {
   const parse = (v: object, model = "grok-imagine-video-1.5") => parseVideoCallArgs(JSON.stringify(v), model);
   expect(parse({ image: "https://example.com/a", resolution: "1080p", aspect_ratio: "21:9" })).toMatchObject({ ok: true, resolution: "1080p", aspectRatio: "21:9" });
   expect(parse({ prompt: "p", resolution: "1080p" }, "grok-imagine-video-1.5-lite")).toMatchObject({ ok: true, resolution: "1080p" });
-  expect(parse({ prompt: "p", resolution: "1080p" }, "grok-imagine-video")).not.toHaveProperty("resolution");
+  expect(parse({ prompt: "p", resolution: "1080p" }, "grok-imagine-video")).toEqual({ ok: false, error: "resolution 1080p is not supported by grok-imagine-video" });
+  expect(parse({ prompt: "p", resolution: 1080 }, "grok-imagine-video")).toMatchObject({ ok: false });
+  expect(parse({ prompt: "p", aspect_ratio: "21:9" }, "custom-video")).toMatchObject({ ok: false });
   expect(parse({ prompt: "p", last_frame: "https://example.com/a" }, "grok-imagine-video-1.5-lite")).toMatchObject({ ok: false });
   expect(parse({ prompt: "p", keyframes: Array(5).fill({ image: "https://example.com/a", timestamp_s: 1 }) })).toMatchObject({ ok: false });
   expect(parse({ prompt: "p", reference_images: ["https://example.com/a"], resolution: "1080p" })).toMatchObject({ ok: false, error: "reference_images are limited to 720p" });
@@ -166,4 +166,12 @@ test("model-specific frames, resolutions and limits are validated", () => {
 test("failed polling reports safe code and detail", async () => {
   const generator = pollVideoWithHeartbeats("r", auth, new AbortController().signal, 1000, noopSleep, async () => ({ status: "failed", error: { code: "invalid_argument", message: "`last_frame` is not supported for this model." } }));
   expect((await generator.next()).value).toEqual({ ok: false, error: "video generation failed: invalid_argument: `last_frame` is not supported for this model." });
+});
+
+test("a permanent poll error keeps only the validated detail", async () => {
+  const failWith = (detail?: string) => async () => { throw Object.assign(new Error("xAI videos poll API returned 400: secret prompt text"), { status: 400, ...(detail ? { detail } : {}) }); };
+  const safe = pollVideoWithHeartbeats("r", auth, new AbortController().signal, 1000, noopSleep, failWith("1080p video resolution is not available for this model."));
+  expect((await safe.next()).value).toEqual({ ok: false, error: "video poll failed permanently: HTTP 400: 1080p video resolution is not available for this model." });
+  const bare = pollVideoWithHeartbeats("r", auth, new AbortController().signal, 1000, noopSleep, failWith());
+  expect((await bare.next()).value).toEqual({ ok: false, error: "video poll failed permanently: HTTP 400" });
 });

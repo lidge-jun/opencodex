@@ -61,8 +61,17 @@ export function parseVideoCallArgs(raw: string, model?: string):
   const prompt = typeof obj.prompt === "string" ? obj.prompt : typeof obj.input === "string" ? obj.input : "";
   const result: ParsedVideoArgs = { ok: true, prompt };
   if (typeof obj.duration === "number" && Number.isFinite(obj.duration)) result.duration = Math.max(1, Math.min(15, Math.floor(obj.duration)));
-  if (typeof obj.resolution === "string" && caps.resolutions.includes(obj.resolution)) result.resolution = obj.resolution;
-  if (typeof obj.aspect_ratio === "string" && caps.aspectRatios.includes(obj.aspect_ratio)) result.aspectRatio = obj.aspect_ratio;
+  // An explicit value the model cannot honour is refused: dropping it would buy a video at the
+  // upstream default instead of the one the caller asked for.
+  for (const [field, allowed] of [["resolution", caps.resolutions], ["aspect_ratio", caps.aspectRatios]] as const) {
+    const value = obj[field];
+    if (value === undefined) continue;
+    if (typeof value !== "string" || !allowed.includes(value)) {
+      return { ok: false, error: `${field} ${typeof value === "string" ? value.slice(0, 16) : typeof value} is not supported by ${model ?? "unknown"}` };
+    }
+    if (field === "resolution") result.resolution = value;
+    else result.aspectRatio = value;
+  }
   for (const [field, supported] of [["image", caps.firstFrame], ["last_frame", caps.lastFrame], ["keyframes", caps.maxKeyframes > 0], ["reference_images", caps.maxReferenceImages > 0]] as const) {
     if (obj[field] !== undefined && !supported) return { ok: false, error: `${field} is not supported by ${model ?? "unknown"}` };
   }
@@ -142,7 +151,9 @@ export async function* pollVideoWithHeartbeats(
       if (signal.aborted) return { ok: false, error: "client closed request during video generation" };
       const status = (e as Error & { status?: number }).status;
       if (status && status >= 400 && status < 500 && status !== 429) {
-        return { ok: false, error: `video poll failed permanently: HTTP ${status}` };
+        // Only the allowlisted detail the client attached; never the raw message.
+        const detail = (e as { detail?: unknown }).detail;
+        return { ok: false, error: `video poll failed permanently: HTTP ${status}${typeof detail === "string" && detail ? `: ${detail}` : ""}` };
       }
       console.warn(`[videos] poll error (will retry): ${status ? `HTTP ${status}` : "unknown status"}`);
     }

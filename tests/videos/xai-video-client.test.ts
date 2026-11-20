@@ -146,3 +146,12 @@ test("submits frames and references in xAI shape with the new default", async ()
 test("appends safe validation detail on submit errors", async () => {
   await expect(submitVideoJob({ prompt: "p" }, auth, undefined, xai({ error: { message: "`last_frame` is not supported for this model." } }, 400))).rejects.toThrow("`last_frame` is not supported for this model.");
 });
+
+test("poll errors carry only the validated detail as a separate field", async () => {
+  await expect(pollVideoJob("r", auth, undefined, xai({ error: "1080p video resolution is not available for this model." }, 400)))
+    .rejects.toMatchObject({ status: 400, detail: "1080p video resolution is not available for this model." });
+  const err = await pollVideoJob("r", auth, undefined, xai({ error: "your prompt: a secret" }, 400)).catch(e => e);
+  expect(err.status).toBe(400);
+  expect(err.detail).toBeUndefined();
+  expect(String(err.message)).not.toContain("secret");
+});

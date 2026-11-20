@@ -201,8 +201,9 @@ export async function pollVideoJob(
 
   if (!resp.ok) {
     const detail = await readSafeXaiErrorDetail(resp, linkedSignal);
-    const err = new Error("xAI videos poll API returned " + resp.status + (detail ? `: ${detail}` : "")) as Error & { status: number };
+    const err = new Error("xAI videos poll API returned " + resp.status + (detail ? `: ${detail}` : "")) as Error & { status: number; detail?: string };
     err.status = resp.status;
+    if (detail) err.detail = detail;
     throw err;
   }
 
