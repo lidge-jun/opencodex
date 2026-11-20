@@ -3,6 +3,8 @@ import type { OcxClientConnectionConfig } from "../types";
 export interface RouteIntentTickDeps {
   sync?: () => Promise<unknown>;
   onApplied?: () => void | Promise<void>;
+  /** True when this listener's stop fence already rules out a periodic apply. */
+  deferPeriodic?: () => boolean;
   setTimer?: (callback: () => void, ms: number) => unknown;
   clearTimer?: (timer: unknown) => void;
 }
@@ -32,6 +34,11 @@ export function startRouteIntentTick(connection: OcxClientConnectionConfig, deps
       do {
         queued = false;
         const batch = waiters.splice(0);
+        if (batch.length === 0 && deps.deferPeriodic) {
+          let deferred = false;
+          try { deferred = deps.deferPeriodic(); } catch { /* Let normal sync check uncertain state. */ }
+          if (deferred) { delay = 5_000; continue; }
+        }
         try {
           const result = await sync();
           await deps.onApplied?.();

@@ -13,7 +13,7 @@ test("runtime recycle cancels its watch and tick before replacement handoff", ()
     writeFileSync(fixture, `
       import { test, expect, spyOn } from 'bun:test';
       test('isolated recycle', async () => {
-        const { writeFileSync } = await import('node:fs');
+        const { readFileSync, writeFileSync, unlinkSync } = await import('node:fs');
         const { join } = await import('node:path');
         const configApi = await import(${JSON.stringify(repoPath("src/config.ts"))});
         const { serviceApiTokenFingerprint } = await import(${JSON.stringify(repoPath("src/lib/service-secrets.ts"))});
@@ -58,6 +58,25 @@ test("runtime recycle cancels its watch and tick before replacement handoff", ()
             }})});
           for(let i=0;i<100&&!active;i++)await Bun.sleep(5);
           expect(active).toBe(true);
+          const deferPeriodic = tick.mock.calls[0][1].deferPeriodic;
+          const file = join(process.env.OPENCODEX_HOME, 'runtime-port.json');
+          const original = readFileSync(file);
+          const published = JSON.parse(original.toString());
+          const stopping = { ...published, clientStopping: true };
+          try {
+            expect(deferPeriodic()).toBe(false);
+            writeFileSync(file, JSON.stringify(stopping));
+            expect(deferPeriodic()).toBe(true);
+            for (const change of [{ pid: published.pid + 1 }, { port: port === 1 ? 2 : 1 },
+              { attestationSecret: 'A'.repeat(43) }, { servingGeneration: 'other' }, { servingGeneration: undefined }]) {
+              writeFileSync(file, JSON.stringify({ ...stopping, ...change }));
+              expect(deferPeriodic()).toBe(false);
+            }
+            writeFileSync(file, '{');
+            expect(deferPeriodic).toThrow('client_runtime_unverified');
+            unlinkSync(file);
+            expect(deferPeriodic()).toBe(false);
+          } finally { writeFileSync(file, original); }
           expect(clearClientConnection(config.client)).toBe('committed');
           await runtime.recycleStandalone(serviceApiTokenFingerprint(token), {
             isDesktopSupervised:()=>false,

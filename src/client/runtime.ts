@@ -38,7 +38,7 @@ import { createLinkParityReporter, type LinkParityReporter } from "./link-parity
 import { restoreLinkClientRoutingBeforeExit } from "./stop-routing";
 import { observeClientStopOwner } from "./stop-teardown-owner";
 import { SUPERVISOR_MARKER_ENVS } from "../lib/supervisor-markers";
-import { markClientRuntimeStopping, markClientRuntimeStoppingWithRetry } from "./sync-runtime";
+import { isPublishedRuntimeStopping, markClientRuntimeStopping, markClientRuntimeStoppingWithRetry } from "./sync-runtime";
 import { startRouteIntentTick, type RouteIntentTick } from "../integrations/route-intent-tick";
 import { startRouteIntentWatch, type RouteIntentRuntimeWatch } from "./route-intent-watch";
 import { runClientRecycleWithAdmission } from "./runtime-recycle";
@@ -431,13 +431,14 @@ export async function startClientRuntime(
       ...(supervisor ? { linkConnectionGeneration: () => supervisor.connectionGeneration() }
         : homeInitiated && link ? { linkConnectionGeneration: () => verifiedHomeConnection(link.linkId) } : {}),
     }, rollback === undefined ? io : { ...io, portWaitMs: rollback.portWaitMs, bindDeadlineAt: Date.now() + rollback.portWaitMs });
+    const servingGeneration = randomUUID();
     const publishRecord = (): void => {
       // A parent stop can arrive after restart admission. Never clear its fence on rollback;
       // a fresh process has another attestation identity and cannot inherit this request.
       if (rollback) observeExplicitStop();
       writePid(process.pid);
       // A new generation refuses commits from syncs admitted before the failed restart.
-      writeRuntimePort({ ...clientRuntimeRecord(process.pid, boundPort, attestationSecret), servingGeneration: randomUUID(),
+      writeRuntimePort({ ...clientRuntimeRecord(process.pid, boundPort, attestationSecret), servingGeneration,
         clientLinkOwner });
     };
     const activate = (): void => {
@@ -455,7 +456,10 @@ export async function startClientRuntime(
       if (linkMode && state.value.link && linkKey) {
         activeReporter = createLinkParityReporter({ connection: state.value, linkKey, runtimeStartedAt: CLIENT_RUNTIME_STARTED_AT });
         activeReporter.start();
-        const scheduler = startRouteIntentTick(state.value, { onApplied: () => activeReporter?.requestReport() });
+        const scheduler = startRouteIntentTick(state.value, {
+          deferPeriodic: () => isPublishedRuntimeStopping({ pid: process.pid, port: boundPort, attestationSecret, servingGeneration }),
+          onApplied: () => activeReporter?.requestReport(),
+        });
         activeRouteSync = scheduler;
         activeRouteWatch = startRouteIntentWatch(state.value, linkKey, { requestSync: () => scheduler.requestSync() });
       }
