@@ -62,6 +62,7 @@ import {
   SUPPORTED_NATIVE_OPENAI_SLUGS,
   RETIRED_NATIVE_OPENAI_MODELS,
   configuredNativeOpenAiModels,
+  configuredNativeOpenAiDisplayName,
   discoveredNativeOpenAiModels,
   discoveredNativeOpenAiRow,
   hasNativeOpenAiCapabilityMetadata,
@@ -614,6 +615,13 @@ function upstreamNativeEntryForSlug(slug: string): RawEntry | undefined {
   if (!presentation) return undefined; // an alias with no product identity must not ship a wrong one
   alias.display_name = presentation.displayName;
   alias.description = presentation.description;
+  neutralizeBorrowedInstructions(alias);
+  delete alias.availability_nux;
+  return alias;
+}
+
+/** A borrowed row must not claim the source model's identity in its instructions. */
+function neutralizeBorrowedInstructions(alias: RawEntry): void {
   if (typeof alias.base_instructions === "string") {
     alias.base_instructions = neutralizeIdentity(alias.base_instructions);
   }
@@ -626,8 +634,6 @@ function upstreamNativeEntryForSlug(slug: string): RawEntry | undefined {
       };
     }
   }
-  delete alias.availability_nux;
-  return alias;
 }
 
 /** Account-specific grants and prompts are projected from entitlement evidence, never a shared row. */
@@ -731,10 +737,34 @@ export function shouldUpgradeToUpstreamEntry(entry: RawEntry): boolean {
   if (typeof entry.slug !== "string" || !UPSTREAM_NATIVE_ENTRIES.has(entry.slug)) return false;
   if (discoveredNativeOpenAiRow(entry.slug)) return true;
   if (entry.display_name === entry.slug) return true;
+  if (isUnchangedHistoricalConfiguredFallback(entry)) return true;
   // A row this project authored from a guess is not evidence of upstream truth, however genuine
   // its display name looks. Replace it once, from the pin.
   return SELF_AUTHORED_NATIVE_ROWS.has(entry.slug)
     && entry.display_name !== UPSTREAM_NATIVE_ENTRIES.get(entry.slug)?.display_name;
+}
+
+// Before a model had its own pinned row (GPT-6.2 until #8893), a providers.openai.models entry for
+// it borrowed an older Sol row. Promote that fallback to the model's own pin only while the
+// borrowed payload is byte-for-byte unchanged; user-edited instructions, tools or tiers survive.
+const HISTORICAL_CONFIGURED_TEMPLATES = [NATIVE_GPT61_SOL_MODEL, NATIVE_GPT6_SOL_MODEL] as const;
+const HISTORICAL_CONFIGURED_DESCRIPTION = /^OpenAI native model added through providers\.openai\.models; uses GPT-[0-9.]+-Sol capabilities\.$/;
+const BORROWED_FALLBACK_FIELDS = [
+  "base_instructions", "model_messages", "experimental_supported_tools",
+  "service_tiers", "additional_speed_tiers", "default_service_tier",
+] as const;
+
+function isUnchangedHistoricalConfiguredFallback(entry: RawEntry): boolean {
+  const slug = entry.slug as string;
+  if (entry.display_name !== configuredNativeOpenAiDisplayName(slug)) return false;
+  if (typeof entry.description !== "string" || !HISTORICAL_CONFIGURED_DESCRIPTION.test(entry.description)) return false;
+  return HISTORICAL_CONFIGURED_TEMPLATES.some(template => {
+    const source = PINNED_UPSTREAM_MODELS.get(template);
+    if (!source || template === slug) return false;
+    const borrowed = structuredClone(withDerivedBaseInstructions(source)) as RawEntry;
+    neutralizeBorrowedInstructions(borrowed);
+    return BORROWED_FALLBACK_FIELDS.every(field => Bun.deepEquals(entry[field], borrowed[field]));
+  });
 }
 
 export function nativeOpenAiSlugs(): string[] {
