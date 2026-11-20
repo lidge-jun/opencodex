@@ -136,9 +136,11 @@ const CCA_IMAGE_MODEL = "gemini-3.1-flash-image";
 function isXaiEditSourceUrl(value: string): boolean {
   const data = /^data:image\/(?:png|jpeg|jpg|webp);base64,(.*)$/is.exec(value);
   if (data) {
-    // Canonical base64 only: whole quads, padding at the end and nowhere else.
+    // Canonical base64 only: whole quads, padding at the end and nowhere else, and unused
+    // padding bits zero (decoding and re-encoding must give back the same text).
     const payload = data[1]!;
-    return payload.length > 0 && payload.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(payload);
+    return payload.length > 0 && payload.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(payload)
+      && Buffer.from(payload, "base64").toString("base64") === payload;
   }
   try {
     const url = new URL(value);

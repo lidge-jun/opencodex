@@ -38,6 +38,8 @@ test("relay refuses a request where any supplied edit source is unusable, before
     {prompt:"edit",images:[{url:null}]},
     {prompt:"edit",images:[{image_url:{url:null}}]},
     {prompt:"edit",images:["data:image/png;base64,===="]},
+    {prompt:"edit",images:["data:image/png;base64,AB=="]},
+    {prompt:"edit",images:["data:image/png;base64,aGl="]},
     {prompt:"edit",images:["data:image/png;base64,aG=k"]},
     {prompt:"edit",images:["data:image/png;base64,aGk"]},
     {prompt:"edit",images:["data:image/png;base64,"]},
