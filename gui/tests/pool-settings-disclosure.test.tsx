@@ -197,6 +197,25 @@ describe("Claude account pool card", () => {
     expect(testWindow.document.querySelector('[role="listbox"]')).toBeNull();
     expect(testWindow.document.activeElement).toBe(button as never);
   });
+
+  test("blocked storage (the localStorage getter throws) still renders the card closed and lets it toggle", async () => {
+    stubPool(true);
+    // Browsers throw a SecurityError from the getter itself when site storage is blocked.
+    // afterEach restores the saved localStorage descriptor.
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      get() { throw new DOMException("blocked", "SecurityError"); },
+    });
+    const host = await render(claudeCard());
+    const button = disclosure(host, en["anthropicPool.title"]);
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(body(host, button).hasAttribute("hidden")).toBe(true);
+    await act(async () => { button.click(); await flush(); });
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    expect(body(host, button).hasAttribute("hidden")).toBe(false);
+    await act(async () => { button.click(); await flush(); });
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+  });
 });
 
 describe("Codex usage-based switching card", () => {
