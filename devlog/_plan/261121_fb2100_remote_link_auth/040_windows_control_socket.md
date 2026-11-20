@@ -1,6 +1,6 @@
 # 040 #8998: `ocx link status` on a Windows hub with a non-loopback listener
 
-Branch `codex/fb2100-win-link-socket` from `origin/dev` 70c9e2134, second PR (roadmap unit 040).
+Branch `codex/fb2100-win-link-socket` from `origin/dev` a8f689f2c (after #9018 merged), second PR (roadmap unit 040).
 
 Problem: #8370 serves `GET /api/link/status` over a private AF_UNIX socket so the CLI's admin token has trusted
 ingress on a hub whose public listener is not loopback. `localControlSocketSupported()` is false on win32, so a
