@@ -176,6 +176,13 @@ test("the HTML fallback is bounded in size, time and origin", async () => {
   expect(await runFallback(expression, async () => okResponse(endless))).toBe("");
   expect(pulls).toBeLessThan(8);
   expect(await runFallback(expression, async () => okResponse("<html>ok</html>", "https://login.example.invalid/chat/"))).toBe("");
+  // A rejected response is cancelled instead of left streaming after the fallback returns.
+  const seen: AbortSignal[] = [];
+  for (const reject of [
+    (signal: AbortSignal) => { const res = new Response("<html>denied</html>", { status: 403 }); seen.push(signal); return res; },
+    (signal: AbortSignal) => { seen.push(signal); return okResponse("<html>ok</html>", "https://login.example.invalid/chat/"); },
+  ]) expect(await runFallback(expression, async signal => reject(signal))).toBe("");
+  expect(seen.map(signal => signal.aborted)).toEqual([true, true]);
   // A body that never produces bytes ends only through the page-side deadline abort.
   expect(await runFallback(expression, async signal => okResponse(new ReadableStream<Uint8Array>({
     start(controller) { signal.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError")), { once: true }); },

@@ -11,7 +11,7 @@ const M365_WEB_ORIGIN = JSON.stringify(new URL(M365_COPILOT_WEB_URL).origin);
 const fetchChatHtml = "location.origin===" + M365_WEB_ORIGIN + "?(async()=>{"
   + "const c=new AbortController(),t=setTimeout(()=>c.abort()," + M365_CHAT_HTML_TIMEOUT_MS + ");"
   + "try{const r=await fetch(" + JSON.stringify(M365_COPILOT_WEB_URL) + ",{credentials:'include',signal:c.signal});"
-  + "if(!r.ok||!r.body||new URL(r.url).origin!==" + M365_WEB_ORIGIN + ")return'';"
+  + "if(!r.ok||!r.body||new URL(r.url).origin!==" + M365_WEB_ORIGIN + "){c.abort();return''}"
   + "const rd=r.body.getReader(),d=new TextDecoder();let s='',n=0;"
   + "for(;;){const{done,value}=await rd.read();if(done)break;n+=value.byteLength;"
   + "if(n>" + M365_CHAT_HTML_MAX_BYTES + "){c.abort();return''}s+=d.decode(value,{stream:true})}"
