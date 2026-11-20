@@ -561,6 +561,8 @@ function classify(input: RequestInfo | URL): { plane: ApiPlane; bootstrap: boole
   if (targets.shared.transport === "relay" && targetMatchesUrl(targets.shared, url)) return { plane: "shared", bootstrap: false };
   const machinePath = relativeTargetPath(targets.machine, url);
   if (machinePath?.startsWith("/api/machine/") || machinePath?.startsWith("/api/codex/desktop-compatibility/")) return { plane: "machine", bootstrap: false };
+  // A Remote Link Child serves its own link status and diagnostics beside /api/machine (#8985).
+  if (targets.link && (machinePath === "/api/link/status" || machinePath === "/api/link/diagnostics")) return { plane: "machine", bootstrap: false };
   const sharedPath = relativeTargetPath(targets.shared, url);
   if (sharedPath?.startsWith("/api/")) return { plane: "shared", bootstrap: false };
   if (url.href === new URL(targets.machine.bootstrapPath, window.location.href).href) return { plane: "machine", bootstrap: true };
