@@ -560,6 +560,8 @@ Un resultado denegado por acceso no prueba por sí mismo un inicio de sesión ve
 
 Las solicitudes de chat compatibles con la traducción OpenAI reducen las imágenes en línea cuando sus datos base64 combinados superan los 3,5 MiB. Las imágenes más antiguas pierden detalle primero. Este es un presupuesto de imagen de mejor esfuerzo, por lo que el texto grande, los esquemas o las imágenes que no se pueden procesar aún pueden exceder un límite de solicitud ascendente. Las URL de imágenes remotas no se descargan y las imágenes que no se pueden reducir permanecen adjuntas. El passthrough de Native Chat mantiene sus bytes de imagen originales.
 
+Tras ajustar las imágenes al límite de tamaño, las solicitudes a Venice amplían las imágenes pequeñas en línea hasta que su lado más corto mida 64 píxeles, siempre que se puedan leer sus dimensiones y el códec confirme que la imagen de origen tiene como máximo 16 millones de píxeles. Si se omite la ampliación o falla, la solicitud conserva la imagen del paso anterior, que puede haberse vuelto a codificar. Venice aún puede rechazar una imagen que no alcance su tamaño mínimo.
+
 
 ### Cambios del catálogo y cuotas
 
