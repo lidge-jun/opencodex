@@ -227,12 +227,15 @@ test("an OAuth decision route is refused before any credential is resolved or re
       expires: Date.now() - 60_000, accountId: "fixture-expired", source: "oauth",
     }, { addAccount: true });
     await setActiveAccount("command-code", getAccountSet("command-code")!.accounts[0]!.id);
+    // Local renewal would rewrite the stored credential without any fetch, so assert it directly.
+    const storedBeforeRequest = structuredClone(getAccountSet("command-code")!.accounts[0]!.credential);
     const expired = await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: "command-code/" + JEV, input: "hello", stream: false }),
     }), config([JEV, SERVED]), { model: "", provider: "" });
     expectDecisionRefusal(expired.status, await expired.text());
     expect(sends).toEqual([]);
+    expect(getAccountSet("command-code")!.accounts[0]!.credential).toEqual(storedBeforeRequest);
   });
 
   test("a combo moves past an OAuth decision target without a credential verdict cooling its provider", async () => {
