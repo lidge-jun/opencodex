@@ -170,6 +170,20 @@ describe("reset-credit auto-redeemer runtime (#822)", () => {
     expect(resumed.consumed).toEqual([id]);
   });
 
+  test("an older non-expiring credit blocks dispatch, since consume cannot name the planned one", async () => {
+    const journalFile = join(dir, "j.json");
+    const older: ResetCredit = { granted_at: "2026-08-01T00:00:00Z", expires_at: null };
+    expect(planAutoRedeem(T0, [older], { enabled: true, leadTimeMinutes: 10 })).toBeNull();
+    const h = harness({ credits: () => [older, credit(30)], journalFile });
+    h.setNow(T0 + 20 * MIN);
+    expect(await h.redeemer.tick()).toEqual({ kind: "skipped", reason: "order-not-guaranteed" });
+    expect(h.consumed).toEqual([]);
+    // A younger non-expiring credit does not precede the planned one and changes nothing.
+    const h2 = harness({ credits: () => [{ granted_at: "2026-09-02T00:00:00Z", expires_at: null }, credit(30)], journalFile: join(dir, "j2.json") });
+    h2.setNow(T0 + 20 * MIN);
+    expect((await h2.redeemer.tick()).kind).toBe("dispatched");
+  });
+
   test("a manual redeem racing between the planning read and the pre-dispatch read is caught", async () => {
     const journalFile = join(dir, "j.json");
     let reads = 0;

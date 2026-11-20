@@ -91,4 +91,3 @@ results above. Corrections they carry: `-pro` was retired on 2026-05-15 (to `-qu
 caps at 720p, `last_frame` is in the guides but not the REST schema (live accepted it), Codex Pro plans
 have only a weekly window, Codex reset credits expire 30 days after grant, and plan types are
 `prolite`/`pro`/`promax` (Pro 100/200/500).
-

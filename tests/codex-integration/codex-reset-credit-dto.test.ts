@@ -55,8 +55,12 @@ describe("reset-credit safe DTO", () => {
       { granted_at: granted, expires_at: null },
     ] });
   });
-  test("auto-redeemer only inspects rows with string expiry", async () => {
+  test("auto-redeemer sees every row, non-expiring ones included, without display fields", async () => {
     const result = await createResetCreditWhamClient(config, "dto-pool").inspect();
-    expect(result.credits).toEqual([{ granted_at: granted, expires_at: expires }]);
+    expect(result.credits).toEqual([
+      { granted_at: granted, expires_at: null },
+      { granted_at: granted, expires_at: expires },
+      { granted_at: granted, expires_at: null },
+    ]);
   });
 });

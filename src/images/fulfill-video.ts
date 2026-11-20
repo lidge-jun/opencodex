@@ -60,7 +60,15 @@ export function parseVideoCallArgs(raw: string, model?: string):
   const caps = videoModelCapabilities(model);
   const prompt = typeof obj.prompt === "string" ? obj.prompt : typeof obj.input === "string" ? obj.input : "";
   const result: ParsedVideoArgs = { ok: true, prompt };
-  if (typeof obj.duration === "number" && Number.isFinite(obj.duration)) result.duration = Math.max(1, Math.min(15, Math.floor(obj.duration)));
+  if (obj.duration !== undefined) {
+    // xAI also accepts the seconds as a string ("8"). Anything else is refused rather than
+    // clamped or dropped, which would buy a clip of a length the caller did not ask for.
+    const seconds = typeof obj.duration === "string" && /^\d{1,2}$/.test(obj.duration) ? Number(obj.duration) : obj.duration;
+    if (typeof seconds !== "number" || !Number.isInteger(seconds) || seconds < 1 || seconds > 15) {
+      return { ok: false, error: "duration must be a whole number of seconds from 1 to 15" };
+    }
+    result.duration = seconds;
+  }
   // An explicit value the model cannot honour is refused: dropping it would buy a video at the
   // upstream default instead of the one the caller asked for.
   for (const [field, allowed] of [["resolution", caps.resolutions], ["aspect_ratio", caps.aspectRatios]] as const) {

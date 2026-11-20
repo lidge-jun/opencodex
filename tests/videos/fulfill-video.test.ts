@@ -41,16 +41,14 @@ describe("parseVideoCallArgs", () => {
     if (!result.ok) expect(result.error).toBe("invalid arguments JSON");
   });
 
-  test("clamps duration to 1-15", () => {
+  test("refuses a duration above 15 instead of clamping it", () => {
     const result = parseVideoCallArgs(JSON.stringify({ prompt: "test", duration: 100 }));
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.duration).toBe(15);
+    expect(result).toEqual({ ok: false, error: "duration must be a whole number of seconds from 1 to 15" });
   });
 
-  test("clamps duration minimum to 1", () => {
+  test("refuses a duration below 1 instead of clamping it", () => {
     const result = parseVideoCallArgs(JSON.stringify({ prompt: "test", duration: 0 }));
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.duration).toBe(1);
+    expect(result).toEqual({ ok: false, error: "duration must be a whole number of seconds from 1 to 15" });
   });
 
   test("rejects invalid resolution", () => {
@@ -166,6 +164,14 @@ test("model-specific frames, resolutions and limits are validated", () => {
 test("failed polling reports safe code and detail", async () => {
   const generator = pollVideoWithHeartbeats("r", auth, new AbortController().signal, 1000, noopSleep, async () => ({ status: "failed", error: { code: "invalid_argument", message: "`last_frame` is not supported for this model." } }));
   expect((await generator.next()).value).toEqual({ ok: false, error: "video generation failed: invalid_argument: `last_frame` is not supported for this model." });
+});
+
+test("an explicit duration outside 1-15 whole seconds is refused, never clamped or dropped", () => {
+  for (const duration of [0, 16, 30, 2.5, "fifteen", null, true]) {
+    expect(parseVideoCallArgs(JSON.stringify({ prompt: "p", duration }), "grok-imagine-video-1.5-lite")).toMatchObject({ ok: false });
+  }
+  expect(parseVideoCallArgs(JSON.stringify({ prompt: "p", duration: 15 }), "grok-imagine-video-1.5-lite")).toMatchObject({ ok: true, duration: 15 });
+  expect(parseVideoCallArgs(JSON.stringify({ prompt: "p", duration: "8" }), "grok-imagine-video-1.5-lite")).toMatchObject({ ok: true, duration: 8 });
 });
 
 test("a permanent poll error keeps only the validated detail", async () => {
