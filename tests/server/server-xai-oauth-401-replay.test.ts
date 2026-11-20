@@ -7,7 +7,8 @@ import { fetchProviderModels } from "../../src/codex/catalog/provider-models";
 import { isComboTargetInCooldown } from "../../src/combos/failover";
 import { fetchProviderQuotaReports } from "../../src/providers/quota";
 import { saveConfig } from "../../src/config";
-import { isNonReplayableResponse } from "../../src/lib/upstream-retry";
+import { isNonReplayableResponse, REPLAY_REFUSAL_MESSAGE } from "../../src/lib/upstream-retry";
+import * as proxyEnv from "../../src/lib/proxy-env";
 import { XAI_OAUTH_DISCOVERY_URL } from "../../src/oauth/xai";
 import { getAccountSet, saveCredential } from "../../src/oauth/store";
 import { clearModelCache, getProviderDiscoveryStatus, isModelsFetchCoolingDown, markModelsFetchFailure, MODELS_FETCH_FAILURE_COOLDOWN_MS } from "../../src/codex/model-cache";
@@ -47,6 +48,7 @@ let testDir = "";
 let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 let originalFetch: typeof fetch;
+let restoreOAuthBootstrapFetch: (() => void) | undefined;
 
 beforeEach(() => {
   originalFetch = globalThis.fetch;
@@ -57,6 +59,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  restoreOAuthBootstrapFetch?.();
+  restoreOAuthBootstrapFetch = undefined;
   globalThis.fetch = originalFetch;
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -93,6 +97,12 @@ function xaiConfig(authMode: "oauth" | "key" = "oauth"): OcxConfig {
   } as OcxConfig;
 }
 
+function directXaiConfig(authMode: "oauth" | "key" = "oauth"): OcxConfig {
+  const config = xaiConfig(authMode);
+  config.providers.xai!.proxy = "direct";
+  return config;
+}
+
 function successBody(text: string): string {
   return JSON.stringify({
     id: "resp-xai-401",
@@ -110,12 +120,24 @@ function successBody(text: string): string {
   });
 }
 
-async function post(server: ReturnType<typeof startServer>, model = "grok-4.5"): Promise<Response> {
+async function post(server: ReturnType<typeof startServer>, model = "xai/grok-4.5"): Promise<Response> {
   return originalFetch(new URL("/v1/responses", server.url), {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: `xai/${model}`, input: "hello", stream: false }),
+    body: JSON.stringify({ model, input: "hello", stream: false }),
   });
+}
+
+function preserveOAuthBootstrapFetch(fixtureFetch: typeof fetch): void {
+  // Server startup can wrap fetch for an inherited SOCKS proxy. OAuth bootstrap has no
+  // provider proxy decision, so keep these two fixture endpoints on the memory transport.
+  const outbound = proxyEnv.configuredOutboundFetch;
+  const bootstrap = spyOn(proxyEnv, "configuredOutboundFetch").mockImplementation((input, init, fallback) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url === XAI_OAUTH_DISCOVERY_URL || url === TOKEN_ENDPOINT) return fixtureFetch(input, init);
+    return outbound(input, init, fallback);
+  });
+  restoreOAuthBootstrapFetch = () => bootstrap.mockRestore();
 }
 
 function installOAuthFetch(
@@ -124,7 +146,7 @@ function installOAuthFetch(
 ): { chatAuth: string[]; counts: { refresh: number } } {
   const chatAuth: string[] = [];
   const counts = { refresh: 0 };
-  globalThis.fetch = (async (input, init) => {
+  const fixtureFetch = (async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     if (url === XAI_OAUTH_DISCOVERY_URL) {
       return new Response(JSON.stringify({
@@ -174,15 +196,19 @@ function installOAuthFetch(
       if (options.omitSuccessUsage) delete success.usage;
       return Response.json(success);
     }
-    return originalFetch(input, init);
+    const parsed = new URL(url);
+    if (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") return originalFetch(input, init);
+    throw new Error("Unexpected external request in xAI OAuth replay fixture");
   }) as typeof fetch;
+  globalThis.fetch = fixtureFetch;
+  preserveOAuthBootstrapFetch(fixtureFetch);
   return { chatAuth, counts };
 }
 
 describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
   test("initial OAuth refresh projects raw provider failures before responding", async () => {
     await seedOAuth(0);
-    saveConfig(xaiConfig());
+    saveConfig(directXaiConfig());
     const observed = installOAuthFetch([], {
       tokenErrorDescription: `EACCES writing ${WINDOWS_PATH_CANARY}, ${UNC_PATH_CANARY}, or ${POSIX_PATH_CANARY}`,
     });
@@ -208,7 +234,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
 
   test("OAuth 401 replay projects raw refresh failures before responding", async () => {
     await seedOAuth();
-    saveConfig(xaiConfig());
+    saveConfig(directXaiConfig());
     const observed = installOAuthFetch([401], {
       tokenErrorDescription: `EACCES writing ${WINDOWS_PATH_CANARY}, ${UNC_PATH_CANARY}, or ${POSIX_PATH_CANARY}`,
     });
@@ -234,7 +260,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
 
   test("401 then 200 performs one refresh and one replay", async () => {
     await seedOAuth();
-    saveConfig(xaiConfig());
+    saveConfig(directXaiConfig());
     const observed = installOAuthFetch([401, 200]);
     const server = startServer(0);
     try {
@@ -261,7 +287,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
 
   test.each(["openai-responses", "openai-chat"] as const)("a refreshed OAuth %s request refused by pacing keeps only the upstream refusal", async adapter => {
     await seedOAuth();
-    const config = xaiConfig();
+    const config = directXaiConfig();
     const model = adapter === "openai-chat" ? "grok-3" : "grok-4.5";
     config.providers.xai!.models = [model];
     config.providers.xai!.modelAdapters = { [model]: adapter };
@@ -278,7 +304,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
       return wait(name, provider, ...rest);
     });
     try {
-      const response = await post(server, model);
+      const response = await post(server, `xai/${model}`);
       expect(response.status).toBe(429);
       await response.text();
       expect(refusals).toBe(1);
@@ -295,7 +321,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
 
   test.each(["openai-responses", "openai-chat"] as const)("a combo preserves the %s refusal when replacement pacing rejects", async adapter => {
     await seedOAuth();
-    const config = xaiConfig();
+    const config = directXaiConfig();
     const model = adapter === "openai-chat" ? "grok-3" : "grok-4.5";
     config.providers.xai!.models = [model];
     config.providers.xai!.modelAdapters = { [model]: adapter };
@@ -334,7 +360,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
 
   test("the production passive linker uses the refreshed routed base URL", async () => {
     await seedOAuth();
-    const config = xaiConfig();
+    const config = directXaiConfig();
     saveConfig(config);
     const observed = installOAuthFetch([401, 200]);
     readInstallationSalt(testDir);
@@ -373,7 +399,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
 
   test.each([false, true])("the successful OAuth replacement links the passive subject (route changed: %s)", async changed => {
     await seedOAuth();
-    saveConfig(xaiConfig());
+    saveConfig(directXaiConfig());
     installOAuthFetch([401, 200]);
     const server = startServer(0);
     const subjectId = "a".repeat(64);
@@ -408,7 +434,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
 
   test.each([13, undefined])("the discarded OAuth refusal is unreported and replacement input estimate is %s", async replacementEstimate => {
     await seedOAuth();
-    saveConfig(xaiConfig());
+    saveConfig(directXaiConfig());
     installOAuthFetch([401, 200], { includeRefusedUsage: true, omitSuccessUsage: true });
     const server = startServer(0);
     const create = ADAPTER_REGISTRY["openai-responses"].create;
@@ -440,7 +466,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
 
   test("the refreshed request tier does not overwrite the first OAuth send's tier", async () => {
     await seedOAuth();
-    saveConfig(xaiConfig());
+    saveConfig(directXaiConfig());
     const observed = installOAuthFetch([401, 200]);
     const server = startServer(0);
     const create = ADAPTER_REGISTRY["openai-responses"].create;
@@ -473,7 +499,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
 
   test("401 then 401 replays once and propagates the second error", async () => {
     await seedOAuth();
-    saveConfig(xaiConfig());
+    saveConfig(directXaiConfig());
     const observed = installOAuthFetch([401, 401]);
     const server = startServer(0);
     try {
@@ -489,7 +515,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
   });
 
   test("native Chat records canonical API-key provenance", async () => {
-    saveConfig(xaiConfig("key"));
+    saveConfig(directXaiConfig("key"));
     globalThis.fetch = (async (input, init) => {
       const url = input instanceof Request ? input.url : String(input);
       expect(url).toBe("https://api.x.ai/v1/chat/completions");
@@ -522,11 +548,12 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
     const firstKey = "xai-pool-key-alpha-000111222333";
     const secondKey = "xai-pool-key-beta-444555666777";
     saveConfig({
-      ...xaiConfig("key"),
+      ...directXaiConfig("key"),
       providers: {
         xai: {
           adapter: "openai-chat",
           baseUrl: "https://api.x.ai/v1",
+          proxy: "direct",
           authMode: "key",
           apiKey: firstKey,
           apiKeyPool: [
@@ -581,7 +608,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
   });
 
   test("API-key xAI path never attempts OAuth refresh", async () => {
-    saveConfig(xaiConfig("key"));
+    saveConfig(directXaiConfig("key"));
     let refreshCalls = 0;
     let chatCalls = 0;
     globalThis.fetch = (async (input, init) => {
@@ -598,8 +625,11 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
           headers: { "content-type": "application/json" },
         });
       }
-      return originalFetch(input, init);
+      const parsed = new URL(url);
+      if (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") return originalFetch(input, init);
+      throw new Error("Unexpected external request in xAI API-key replay fixture");
     }) as typeof fetch;
+    preserveOAuthBootstrapFetch(globalThis.fetch);
     const server = startServer(0);
     try {
       const response = await post(server);
@@ -614,7 +644,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
 
   test("concurrent 401 responses join one IdP refresh", async () => {
     await seedOAuth();
-    saveConfig(xaiConfig());
+    saveConfig(directXaiConfig());
     let refreshCalls = 0;
     let signalRefreshStarted!: () => void;
     const refreshStarted = new Promise<void>(resolve => { signalRefreshStarted = resolve; });
@@ -654,8 +684,11 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
         }
         return new Response(successBody("concurrent ok"), { headers: { "content-type": "application/json" } });
       }
-      return originalFetch(input, init);
+      const parsed = new URL(url);
+      if (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") return originalFetch(input, init);
+      throw new Error("Unexpected external request in concurrent xAI replay fixture");
     }) as typeof fetch;
+    preserveOAuthBootstrapFetch(globalThis.fetch);
 
     const server = startServer(0);
     try {
@@ -681,8 +714,8 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
 
   const privacyError = `${privateDetail} ${marker}`;
 
-  function refuseAt(upstreamPath: string, error = privacyError, fallback?: (init?: RequestInit) => Response,
-    resetReplacement?: () => Response): string[] {
+  function refuseAt(upstreamPath: string, error: string | { message: string; code: string } = privacyError,
+    fallback?: (init?: RequestInit) => Response, resetReplacement?: () => Response, headers?: HeadersInit): string[] {
     const sends: string[] = [];
     globalThis.fetch = (async (input, init) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
@@ -697,7 +730,7 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
             }
             return resetReplacement();
           }
-          return Response.json({ error }, { status: 403 });
+          return Response.json({ error }, { status: 403, headers });
         }
         if (path === "/v1/models") return Response.json({ data: [{ id: "grok-4.5" }] });
       }
@@ -711,12 +744,14 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
     return sends;
   }
 
-  test.each([
+  const inferenceRoutes = [
     ["native Chat Completions", "/v1/chat/completions", "/v1/chat/completions", false],
     ["translated Responses", "/v1/responses", "/v1/chat/completions", false],
     ["native Responses", "/v1/responses", "/v1/responses", true],
     ["translated Chat Completions", "/v1/chat/completions", "/v1/responses", true],
-  ] as const)("%s reports fixed privacy guidance without changing account health", async (_, downstream, upstream, nativeResponses) => {
+  ] as const;
+  test.each(inferenceRoutes.flatMap(([name, ...route]) => (["ordinary", "no-retry", "coded replay refusal", "code-only replay refusal"] as const)
+    .map(verdict => [name, verdict, ...route] as const)))("%s returns fixed text for %s", async (_, verdict, downstream, upstream, nativeResponses) => {
     await saveCredential("xai", {
       access: "spare-access",
       refresh: "spare-refresh",
@@ -725,7 +760,7 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
       source: "oauth",
     });
     await seedOAuth();
-    const config = xaiConfig();
+    const config = directXaiConfig();
     const provider = config.providers.xai!;
     if (!nativeResponses) {
       provider.modelAdapters = { "grok-4.5": "openai-chat" };
@@ -733,39 +768,56 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
     }
     provider.accountAutoPause = { enabled: true, consecutiveFailures: 1 };
     provider.oauthAccountFailover = { enabled: true };
+    const codeOnly = verdict === "code-only replay refusal";
+    if (codeOnly) {
+      config.providers.fixture = { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", proxy: "direct", apiKey: "fixture-key", models: ["fallback"] };
+      config.combos = { "privacy-code": { strategy: "failover", targets: [
+        { provider: "xai", model: "grok-4.5", metered: false }, { provider: "fixture", model: "fallback", metered: false },
+      ] } };
+    }
+    const model = codeOnly ? "combo/privacy-code" : "xai/grok-4.5";
     saveConfig(config);
     const accountBefore = getAccountSet("xai");
     expect(accountBefore?.accounts).toHaveLength(2);
-    const sends = refuseAt(upstream);
+    const codedRefusal = verdict === "coded replay refusal" || codeOnly;
+    const headers = verdict === "ordinary" || codeOnly ? undefined : { "x-should-retry": "false", "Retry-After": "137" };
+    const sends = refuseAt(upstream, codedRefusal ? { message: privacyError, code: "upstream_response_refused" } : privacyError,
+      undefined, undefined, headers);
     const server = startServer(0);
     try {
-      const result = downstream === "/v1/responses" ? await post(server) : await originalFetch(new URL(downstream, server.url), {
+      const result = downstream === "/v1/responses" ? await post(server, model) : await originalFetch(new URL(downstream, server.url), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: "xai/grok-4.5", messages: [{ role: "user", content: "hello" }], stream: false }),
+        body: JSON.stringify({ model, messages: [{ role: "user", content: "hello" }], stream: false }),
       });
-      expect(result.status).toBe(403);
+      expect(result.status).toBe(codedRefusal ? 429 : 403);
+      expect(result.headers.get("x-should-retry")).toBe(headers || codedRefusal ? "false" : null);
+      expect(result.headers.get("retry-after")).toBeNull();
       const body = await result.text();
-      expect(JSON.parse(body).error).toMatchObject({ message: guidance, type: "permission_error", code: "permission_denied" });
+      expect(JSON.parse(body).error).toMatchObject(codedRefusal
+        ? { message: REPLAY_REFUSAL_MESSAGE, code: "upstream_response_refused" }
+        : { message: guidance, type: "permission_error", code: "permission_denied" });
       expect(body).not.toContain(privateDetail);
       expect(body).not.toContain(marker);
       expect(sends).toEqual([upstream]);
       expect(getAccountSet("xai")).toEqual(accountBefore);
-      expect(readUsageEntries().at(-1)?.failureCause).toBe("policy-refusal");
+      if (!codedRefusal) expect(readUsageEntries().at(-1)?.failureCause).toBe("policy-refusal");
     } finally {
       await server.stop(true);
     }
   });
 
   test.each([
-    ["translated Responses", "/v1/chat/completions", false, false, "false", "false"],
-    ["native Responses", "/v1/responses", true, false, "false", "false"],
-    ["translated Responses combo", "/v1/chat/completions", false, true, "false", "false"],
-    ["native Responses combo", "/v1/responses", true, true, "false", "false"],
-    ["native Responses combo with an unrecognized retry header", "/v1/responses", true, true, "False", null],
-  ] as const)("%s keeps exact no-retry guidance on a privacy reset replacement", async (_, upstream, nativeResponses, combo, header, expectedHeader) => {
+    ["translated Responses", "/v1/chat/completions", false, false, "false", "false", false],
+    ["native Responses", "/v1/responses", true, false, "false", "false", false],
+    ["translated Responses combo", "/v1/chat/completions", false, true, "false", "false", false],
+    ["native Responses combo", "/v1/responses", true, true, "false", "false", false],
+    ["native Responses combo with an unrecognized retry header", "/v1/responses", true, true, "False", null, false],
+    ["translated Responses combo with a replay refusal code", "/v1/chat/completions", false, true, "false", "false", true],
+    ["native Responses combo with a replay refusal code", "/v1/responses", true, true, "false", "false", true],
+  ] as const)("%s preserves the terminal verdict on a privacy reset replacement", async (_, upstream, nativeResponses, combo, header, expectedHeader, codedRefusal) => {
     await seedOAuth();
-    const config = xaiConfig();
+    const config = directXaiConfig();
     const provider = config.providers.xai!;
     if (!nativeResponses) {
       provider.modelAdapters = { "grok-4.5": "openai-chat" };
@@ -774,15 +826,16 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
     provider.retryOnReset = { enabled: true };
     if (combo) {
       config.providers.fixture = {
-        adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key", models: ["fallback"],
+        adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", proxy: "direct", apiKey: "fixture-key", models: ["fallback"],
       };
       config.combos = { "privacy-reset": { strategy: "failover", targets: [
         { provider: "xai", model: "grok-4.5" }, { provider: "fixture", model: "fallback" },
       ] } };
     }
     saveConfig(config);
+    const error = codedRefusal ? { message: privacyError, code: "upstream_response_refused" } : privacyError;
     const sends = refuseAt(upstream, privacyError, () => Response.json({}, { status: 500 }), () =>
-      Response.json({ error: privacyError }, { status: 403, headers: { "x-should-retry": header } }));
+      Response.json({ error }, { status: 403, headers: { "x-should-retry": header } }));
     const release = acquireOwnedSpendHome();
     try {
       const logCtx: RequestLogContext = { model: "", provider: "" };
@@ -792,13 +845,13 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
         body: JSON.stringify({ model: combo ? "combo/privacy-reset" : "xai/grok-4.5", input: "hello", store: false, stream: false }),
       }), config, logCtx);
       expect(sends).toEqual([upstream, upstream]);
-      expect(result.status).toBe(403);
+      expect(result.status).toBe(codedRefusal ? 429 : 403);
       expect(isNonReplayableResponse(result)).toBe(true);
       expect(result.headers.get("x-should-retry")).toBe(expectedHeader);
-      expect(await result.json()).toEqual({
-        error: { message: guidance, type: "permission_error", param: null, code: "permission_denied" },
-      });
-      expect(logCtx.causeHint).toBe("policy-refusal");
+      expect(await result.json()).toEqual({ error: codedRefusal
+        ? { message: REPLAY_REFUSAL_MESSAGE, type: "upstream_error", code: "upstream_response_refused" }
+        : { message: guidance, type: "permission_error", param: null, code: "permission_denied" } });
+      if (!codedRefusal) expect(logCtx.causeHint).toBe("policy-refusal");
     } finally {
       release();
     }
@@ -806,7 +859,7 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
 
   test("cancellation during a privacy reset replacement body returns a non-replayable 499", async () => {
     await seedOAuth();
-    const config = xaiConfig();
+    const config = directXaiConfig();
     config.providers.xai!.retryOnReset = { enabled: true };
     saveConfig(config);
     const reading = Promise.withResolvers<void>();
@@ -845,13 +898,69 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
   });
 
   test.each([
+    ["Legacy marker and x-should-retry", "present", undefined],
+    ["Legacy marker without x-should-retry", "absent", undefined],
+    ["Legacy marker and upstream_response_refused", "present", "upstream_response_refused"],
+  ] as const)("a committed Responses stream delivers a terminal refusal for %s", async (_name, directive, code) => {
+    await seedOAuth();
+    const config = directXaiConfig();
+    config.providers.xai!.retryOnReset = { enabled: true };
+    config.stallTimeoutSec = 10;
+    saveConfig(config);
+    const original = new TransformStream<Uint8Array, Uint8Array>();
+    const writer = original.writable.getWriter();
+    const detail = directive === "absent" ? `${" ".repeat(17 * 1024)}${privacyError}` : privacyError;
+    const replacementError = code === undefined ? detail : { message: detail, code };
+    const sends = refuseAt("/v1/responses", privacyError, undefined, () => Response.json({ error: replacementError }, {
+      status: 403, headers: directive === "present" ? { "x-should-retry": "false" } : undefined,
+    }));
+    const fetchReplacement = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (!sends.length && url.href === new URL("/v1/responses", XAI_GROK_CLI_BASE_URL).href) {
+        sends.push(url.pathname);
+        return new Response(original.readable, { headers: { "content-type": "text/event-stream" } });
+      }
+      return fetchReplacement(input, init);
+    }) as typeof fetch;
+    const release = acquireOwnedSpendHome();
+    try {
+      const result = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "xai/grok-4.5", input: "hello", store: false, stream: true }),
+      }), config, { model: "", provider: "" });
+      expect(result.status).toBe(200);
+      expect(sends).toEqual(["/v1/responses"]);
+      await writer.abort(Object.assign(new Error("synthetic post-header reset"), { code: "ECONNRESET" }));
+      const body = await result.text();
+      const frames = body.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+      expect(sends).toEqual(["/v1/responses", "/v1/responses"]);
+      const terminals = frames.filter(frame => ["response.failed", "response.completed", "response.incomplete", "response.cancelled"].includes(frame.type));
+      expect(terminals).toHaveLength(1);
+      expect(terminals).toMatchObject([{
+        type: "response.failed",
+        response: {
+          retryable: false,
+          error: { message: code === undefined ? guidance : REPLAY_REFUSAL_MESSAGE, code: code ?? "permission_denied" },
+        },
+      }]);
+      expect(body).not.toContain(privateDetail);
+      expect(body).not.toContain(marker);
+    } finally {
+      await writer.abort().catch(() => undefined);
+      release();
+    }
+  });
+
+  test.each([
     [400, "context_length_exceeded", "Please reduce the length of the messages or completion.", null],
     [429, "rate_limit_exceeded", "weekly usage limit reached", "137"],
   ] as const)("combo preserves primary HTTP %i recovery after an xAI privacy refusal", async (status, code, message, retryAfter) => {
     await seedOAuth();
-    const config = xaiConfig();
+    const config = directXaiConfig();
     config.providers.fixture = {
-      adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key", models: ["primary"],
+      adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", proxy: "direct", apiKey: "fixture-key", models: ["primary"],
     };
     const comboId = `privacy-after-${status}`;
     config.combos = { [comboId]: { strategy: "failover", targets: [
@@ -882,9 +991,9 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
 
   test.each(["healthy", "disabled", "denied"])("Grok privacy refusal uses combo eligibility with a %s fallback", async fallback => {
     await seedOAuth();
-    const config = xaiConfig();
+    const config = directXaiConfig();
     config.providers.fixture = {
-      adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key",
+      adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", proxy: "direct", apiKey: "fixture-key",
       models: ["fallback"], disabled: fallback === "disabled",
     };
     const primary = { provider: "xai", model: "grok-4.5" };
@@ -1034,7 +1143,7 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
 
   test("the xAI quota probe reports the settings refusal and skips the monthly fallback", async () => {
     await seedOAuth();
-    const config = xaiConfig();
+    const config = directXaiConfig();
     saveConfig(config);
     const sends = refuseAt("/v1/billing?format=credits");
     const warn = spyOn(console, "warn").mockImplementation(() => {});
@@ -1052,7 +1161,7 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
 
   test("native Responses replaces a 17 KiB Legacy privacy error with fixed guidance", async () => {
     await seedOAuth();
-    saveConfig(xaiConfig());
+    saveConfig(directXaiConfig());
     const sends = refuseAt("/v1/responses", `${privateDetail} ${"x".repeat(17 * 1024)} ${marker}`);
     const server = startServer(0);
     try {

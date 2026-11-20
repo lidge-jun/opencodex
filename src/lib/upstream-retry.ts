@@ -15,11 +15,12 @@
  * MUST stay a leaf module: imports nothing from server.ts or adapters (kiro-retry imports
  * the shared abort helpers from here).
  */
-import { clearableDeadline } from "./abort";
+import { clearableDeadline, withPausedResponseHeaderDeadline } from "./abort";
 import { isDefiniteContextOverflow } from "./context-overflow-verdict";
 import { errorDestinationLabel, errorDestinationText, type ErrorDestinationLabel } from "./error-destination";
 export { errorDestinationLabel, providerErrorDestinationLabel, errorDestinationText } from "./error-destination";
 import { redactSecretString } from "./redact";
+import { sseFieldValue } from "./sse-fields";
 
 /**
  * Responses the origin may already be executing. RFC 9110 §9.2.2 forbids an intermediary
@@ -55,6 +56,42 @@ export function isNonReplayableResponse(response: Response): boolean {
   return nonReplayableResponses.has(response);
 }
 
+// A local replay veto can require a client directive without rewriting the quota evidence.
+const clientReplayVetoes = new WeakSet<Response>();
+
+export function requireClientReplayVeto(response: Response): void {
+  markResponseNonReplayable(response);
+  clientReplayVetoes.add(response);
+}
+
+export function hasClientReplayVeto(response: Response): boolean {
+  return clientReplayVetoes.has(response);
+}
+
+/** A wire retry directive is independent of who produced the error or its quota provenance. */
+export function hasNoRetryDirective(response: Pick<Response, "headers">): boolean {
+  return response.headers.get(REPLAY_REFUSAL_NO_RETRY_HEADER) === REPLAY_REFUSAL_NO_RETRY_VALUE;
+}
+
+// Terminal replacement answers keep their upstream identity until client presentation.
+const terminalResetReplacements = new WeakSet<Response>();
+
+export function markTerminalResetReplacement(response: Response): void {
+  terminalResetReplacements.add(response);
+}
+
+export function isTerminalResetReplacement(response: Response): boolean {
+  return terminalResetReplacements.has(response);
+}
+
+/** A bounded body read can establish the wire verdict without marking the response synthetic. */
+const wireReplayRefusals = new WeakMap<Response, NonNullable<ReturnType<typeof replayRefusalBodyCode>>>();
+
+/** Send decisions honor either wire verdict; quota ownership still uses the narrower markers. */
+export function isAutomaticReplayBlocked(response: Response): boolean {
+  return isNonReplayableResponse(response) || hasNoRetryDirective(response) || wireReplayRefusals.has(response);
+}
+
 /**
  * The narrower marker: responses this proxy synthesized as a replay refusal.
  *
@@ -69,10 +106,6 @@ export function isNonReplayableResponse(response: Response): boolean {
  */
 const replayRefusalResponses = new WeakSet<Response>();
 
-export function markReplayRefusalResponse(response: Response): void {
-  replayRefusalResponses.add(response);
-}
-
 export function isReplayRefusalResponse(response: Response): boolean {
   return replayRefusalResponses.has(response);
 }
@@ -82,7 +115,14 @@ export const UPSTREAM_NO_RESPONSE_CODE = "upstream_no_response";
 /** Transport closed after the send, before any response event. */
 export const UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE = "upstream_closed_before_response";
 /**
- * This proxy refused to replay a pre-header fetch rejection.
+ * The upstream produced a response this proxy refused to carry (a relay limit rejected the
+ * answer itself). The request already ran upstream, so a resend would only duplicate the turn.
+ */
+export const UPSTREAM_RESPONSE_REFUSED_CODE = "upstream_response_refused";
+/**
+ * This proxy refused to replay an ambiguous pre-header exchange. The historical "reset" wire
+ * name also covers its own response-header deadline after a POST dispatch, before any response.
+ * A TimeoutError is still not a connection reset and never gains replay-safe reset retries.
  *
  * Distinct from {@link UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE}, which the Codex WebSocket
  * transport settles as a 502 after the create frame was already sent. Both are ambiguous,
@@ -97,19 +137,83 @@ const NON_REPLAYABLE_UPSTREAM_CODES: ReadonlySet<string> = new Set([
   UPSTREAM_NO_RESPONSE_CODE,
   UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
+  UPSTREAM_RESPONSE_REFUSED_CODE,
 ]);
 
 export function isNonReplayableUpstreamCode(code: unknown): boolean {
   return typeof code === "string" && NON_REPLAYABLE_UPSTREAM_CODES.has(code);
 }
 
+export type ReplayRefusalCode = typeof UPSTREAM_RESET_REPLAY_REFUSED_CODE | typeof UPSTREAM_RESPONSE_REFUSED_CODE;
+
 /**
- * True for the one non-replayable code this proxy owns end to end. The status it carries is
+ * True for the non-replayable codes this proxy owns end to end. The status they carry is
  * a local decision, so a re-wrapping formatter must restate it rather than inherit the
  * caller's upstream-shaped status.
  */
-export function isReplayRefusalCode(code: unknown): boolean {
-  return code === UPSTREAM_RESET_REPLAY_REFUSED_CODE;
+export function isReplayRefusalCode(code: unknown): code is ReplayRefusalCode {
+  return code === UPSTREAM_RESET_REPLAY_REFUSED_CODE || code === UPSTREAM_RESPONSE_REFUSED_CODE;
+}
+
+const MAX_REPLAY_ENVELOPE_DEPTH = 12;
+
+/** Reads only protocol error carriers and their cause/details branches. */
+export function replayRefusalVerdict(payload: unknown): { refusalCode?: ReplayRefusalCode; explicitVeto: boolean } {
+  const record = (value: unknown): Record<string, unknown> | undefined =>
+    value !== null && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown> : undefined;
+  const root = record(payload);
+  const response = record(root?.response);
+  let refusalCode: ReplayRefusalCode | undefined;
+  let explicitVeto = false;
+
+  function visit(value: unknown, depth: number, inDetails = false): void {
+    if (depth > MAX_REPLAY_ENVELOPE_DEPTH) return;
+    if (inDetails && Array.isArray(value)) {
+      for (const entry of value) visit(entry, depth + 1, true);
+      return;
+    }
+    const carrier = record(value);
+    if (!carrier) return;
+    if (refusalCode === undefined && isReplayRefusalCode(carrier.code)) refusalCode = carrier.code;
+    explicitVeto ||= carrier.retryable === false;
+    visit(carrier.cause, depth + 1);
+    visit(carrier.details, depth + 1, true);
+  }
+
+  visit(root, 0);
+  visit(root?.error, 1);
+  visit(root?.last_error, 1);
+  visit(root?.incomplete_details, 1);
+  visit(response, 1);
+  visit(response?.error, 2);
+  visit(response?.last_error, 2);
+  visit(response?.incomplete_details, 2);
+  return { ...(refusalCode === undefined ? {} : { refusalCode }), explicitVeto };
+}
+
+/** HTTP and translated adapters accept the legacy error.last_error envelope. */
+export function replayRefusalProviderErrorVerdict(payload: unknown): ReturnType<typeof replayRefusalVerdict> {
+  const verdict = replayRefusalVerdict(payload);
+  if (verdict.refusalCode !== undefined) return verdict;
+  const legacy = (payload as { error?: { last_error?: unknown } } | null)?.error?.last_error;
+  if (legacy === undefined) return verdict;
+  const nested = replayRefusalVerdict({ last_error: legacy });
+  return { ...nested, explicitVeto: verdict.explicitVeto || nested.explicitVeto };
+}
+
+export function replayRefusalBodyVerdict(body: string, requiredStatus?: "failed"): ReturnType<typeof replayRefusalVerdict> {
+  try {
+    const parsed = JSON.parse(body);
+    if (requiredStatus !== undefined && parsed?.status !== requiredStatus) return { explicitVeto: false };
+    return replayRefusalProviderErrorVerdict(parsed);
+  } catch {
+    return { explicitVeto: false };
+  }
+}
+
+export function replayRefusalBodyCode(body: string, requiredStatus?: "failed") {
+  return replayRefusalBodyVerdict(body, requiredStatus).refusalCode;
 }
 
 /** Client-facing status for {@link UPSTREAM_RESET_REPLAY_REFUSED_CODE}. */
@@ -140,6 +244,16 @@ export const REPLAY_REFUSAL_CLIENT_HEADERS: Readonly<Record<string, string>> = O
  * are only correct together -- a surface that removed the wait but not the suppression still
  * hands a retrying client a turn it may already have run.
  */
+export function withheldReplayDiagnostic(status: number): string {
+  return `Provider error ${status}: upstream diagnostic withheld for a non-replayable failure`;
+}
+
+export function withheldReplayStatus(message: string, retryable: unknown): number | undefined {
+  if (retryable !== false) return undefined;
+  const status = Number(/^Provider error ([45]\d{2}):/.exec(message)?.[1]);
+  return Number.isFinite(status) && message === withheldReplayDiagnostic(status) ? status : undefined;
+}
+
 export function applyReplayRefusalClientHeaders(headers: Headers): void {
   headers.delete("retry-after");
   headers.set(REPLAY_REFUSAL_NO_RETRY_HEADER, REPLAY_REFUSAL_NO_RETRY_VALUE);
@@ -155,14 +269,32 @@ export function applyReplayRefusalClientHeaders(headers: Headers): void {
  */
 export function retainReplayRefusal<T extends Response>(response: T): T {
   markResponseNonReplayable(response);
-  markReplayRefusalResponse(response);
+  replayRefusalResponses.add(response);
   return response;
+}
+
+/** Keep the bounded wire observation across wrappers that still need the raw upstream headers. */
+export function carryObservedReplayRefusal(source: Response, rewrapped: Response): void {
+  const wireCode = wireReplayRefusals.get(source);
+  if (wireCode !== undefined) wireReplayRefusals.set(rewrapped, wireCode);
 }
 
 /** Carry the verdict from a response onto the one that replaces it. */
 export function carryReplayRefusal<T extends Response>(source: Response, rewrapped: T): T {
+  if (isTerminalResetReplacement(source)) markTerminalResetReplacement(rewrapped);
   if (sameTargetRetryHolds.has(source)) sameTargetRetryHolds.add(rewrapped);
-  return isReplayRefusalResponse(source) ? retainReplayRefusal(rewrapped) : rewrapped;
+  if (hasClientReplayVeto(source)) clientReplayVetoes.add(rewrapped);
+  carryObservedReplayRefusal(source, rewrapped);
+  if (source !== rewrapped && hasNoRetryDirective(source)) applyReplayRefusalClientHeaders(rewrapped.headers);
+  if (isReplayRefusalResponse(source)) return retainReplayRefusal(rewrapped);
+  if (isNonReplayableResponse(source)) markResponseNonReplayable(rewrapped);
+  return rewrapped;
+}
+
+/** Project a local veto only when formatting the client response. */
+export function carryReplayRefusalToClient<T extends Response>(source: Response, client: T): T {
+  if (hasClientReplayVeto(source)) applyReplayRefusalClientHeaders(client.headers);
+  return carryReplayRefusal(source, client);
 }
 
 // 1 initial + 2 retries: the pool may hold more than one stale socket.
@@ -460,7 +592,7 @@ export function cancelResponseBodyBestEffort(res: Response): void {
  * {@link isTransientUpstreamStatus} is only the gateway subset of that set: 429 and 529 escaped
  * it. These statuses settle as the refusal instead.
  */
-function invitesResendAfterReplacement(status: number): boolean {
+export function invitesResendAfterReplacement(status: number): boolean {
   return status === 401 || status === 402 || status === 408 || status === 409 || status === 429
     || status === 307 || status === 308 || status === 413 || status >= 500;
 }
@@ -474,8 +606,12 @@ function invitesResendAfterReplacement(status: number): boolean {
  * opaque-blob rebuild of a 400 or a combo hop on a context overflow, because each of those checks
  * it before sending again.
  */
-export function settleOperatorReplacement(response: Response): Response {
+export async function settleOperatorReplacement(response: Response, signal?: AbortSignal): Promise<Response> {
   if (response.ok) return response;
+  if (await hasUpstreamReplayRefusal(response, signal)) {
+    markTerminalResetReplacement(response);
+    return response;
+  }
   if (invitesResendAfterReplacement(response.status)) {
     cancelResponseBodyBestEffort(response);
     return replayRefusalResponse();
@@ -491,6 +627,7 @@ export async function fetchWithAttemptDeadline(
   abortSignal?: AbortSignal,
   preferIdentityEncoding = false,
   executor: typeof globalThis.fetch = globalThis.fetch,
+  options?: { wasDispatched: () => boolean },
 ): Promise<Response> {
   const attemptTimeout = clearableDeadline(timeoutMs, abortSignal);
   const headers = new Headers(init.headers);
@@ -504,6 +641,13 @@ export async function fetchWithAttemptDeadline(
       redirect: "manual",
       signal: attemptTimeout.signal,
     });
+  } catch (error) {
+    if (abortSignal?.aborted) throw abortError(abortSignal);
+    const reason = attemptTimeout.signal.reason;
+    if (init.method?.toUpperCase() === "POST" && attemptTimeout.didExpire()
+      && (error === reason || (error instanceof Error && error.cause === reason))
+      && options?.wasDispatched()) return replayRefusalResponse();
+    throw error;
   } finally {
     // Only the header timer is cleared. The composed signal still contains the parent, so a
     // caller abort after headers continue to cancel consumption of the returned response body.
@@ -686,15 +830,26 @@ export function applyUpstreamRecoveryInit<T extends RequestInit>(
  * exception is never exposed: it can carry credentials or request data.
  */
 export function replayRefusalResponse(): Response {
-  const response = new Response(JSON.stringify({ error: {
-    type: "upstream_error",
-    code: UPSTREAM_RESET_REPLAY_REFUSED_CODE,
-    message: "The upstream exchange did not complete reliably. The request may already have been processed; automatic replay was stopped.",
-  } }), {
+  return retainReplayRefusal(projectReplayRefusal(UPSTREAM_RESET_REPLAY_REFUSED_CODE));
+}
+
+export const REPLAY_REFUSAL_MESSAGE = "The upstream exchange did not complete reliably. The request may already have been processed; automatic replay was stopped.";
+
+// Only the constructor below attests to the exact body. Carrying a replay marker does not.
+const replayRefusalProjections = new WeakSet<Response>();
+
+export function isReplayRefusalProjection(response: Response): boolean {
+  return replayRefusalProjections.has(response);
+}
+
+/** Fixed client envelope. A wire code can select this projection without granting provenance. */
+export function projectReplayRefusal(code: ReplayRefusalCode): Response {
+  const response = Response.json({ error: { type: "upstream_error", code, message: REPLAY_REFUSAL_MESSAGE } }, {
     status: REPLAY_REFUSED_STATUS,
-    headers: { "content-type": "application/json", ...REPLAY_REFUSAL_CLIENT_HEADERS },
+    headers: REPLAY_REFUSAL_CLIENT_HEADERS,
   });
-  return retainReplayRefusal(response);
+  replayRefusalProjections.add(response);
+  return response;
 }
 
 /**
@@ -741,7 +896,7 @@ export async function fetchWithResetRetry(
           ? opts.onSendsConsumed.execute(run, retryRecoveryAdmission(() => attempt + 1 < attempts, () => { attempt++; }))
           : run()); }
       finally { if (opts.onSendsConsumed?.beforeSend) opts.onSendsConsumed(1); }
-      return spentOperatorReplacement ? settleOperatorReplacement(response) : response;
+      return spentOperatorReplacement ? await settleOperatorReplacement(response, opts.abortSignal) : response;
     } catch (err) {
       if (offlineFailure && recovery === "offline-resend" && err instanceof SendBudgetExhaustedError) throw offlineFailure.error;
       if (opts.abortSignal?.aborted) throw err;
@@ -801,7 +956,7 @@ export async function fetchWithResetRetry(
 
 /** Bytes of a 5xx body read to look for a context-overflow verdict; the verdict caps its input too. */
 const CONTEXT_OVERFLOW_PEEK_BYTES = 16_384;
-/** A body that has not arrived by then is not evidence; the peek must never stall the retry. */
+/** A bounded peek may be inconclusive; absence before this deadline does not authorize a resend. */
 const CONTEXT_OVERFLOW_PEEK_MS = 250;
 // A hypothetical, negated, or configuration-failure mention does not justify suppressing a retry.
 // Inspect the unwrapped provider message, not its JSON spelling or unrelated envelope fields.
@@ -819,14 +974,15 @@ function retryContextOverflowMessage(message: string): boolean {
   });
 }
 
-/** Up to `maxBytes` of a clone of the body, or what arrived before the deadline. */
-async function peekBodyText(res: Response, maxBytes: number, deadlineMs: number, signal?: AbortSignal): Promise<string> {
+/** Up to `maxBytes` of a clone, distinguishing a complete body from a bounded prefix. */
+async function peekBodyText(res: Response, maxBytes: number, deadlineMs: number, signal?: AbortSignal): Promise<{ text: string; complete: boolean }> {
   const reader = res.clone().body?.getReader();
-  if (!reader) return "";
+  if (!reader) return { text: "", complete: true };
   const decoder = new TextDecoder();
   let text = "";
   let bytes = 0;
   let emptyChunks = 0;
+  let complete = false;
   const deadlineAt = performance.now() + deadlineMs;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stop = () => {};
@@ -840,7 +996,8 @@ async function peekBodyText(res: Response, maxBytes: number, deadlineMs: number,
     while (bytes < maxBytes) {
       if (signal?.aborted || performance.now() >= deadlineAt) break;
       const chunk = await Promise.race([reader.read(), timedOut]);
-      if (!chunk || chunk.done) break;
+      if (!chunk) break;
+      if (chunk.done) { complete = true; text += decoder.decode(); break; }
       if (chunk.value.byteLength === 0) {
         if (++emptyChunks % 64 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0));
         continue;
@@ -850,7 +1007,7 @@ async function peekBodyText(res: Response, maxBytes: number, deadlineMs: number,
       bytes += bounded.byteLength;
       text += decoder.decode(bounded, { stream: true });
     }
-    return text;
+    return { text, complete };
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", stop);
@@ -859,20 +1016,52 @@ async function peekBodyText(res: Response, maxBytes: number, deadlineMs: number,
 }
 
 /**
- * True when a transient-status response's body is a definite context-overflow verdict. Peeks a
- * clone within a byte and time bound, so the caller still receives the untouched body. A slow
- * or endless body keeps the normal retry unless its observed prefix already proves overflow.
+ * Checks the transient response body for a refusal code or definite context-overflow verdict.
+ * Peeks a clone within a byte and time bound, leaving the original for quota and error handling.
  * "Too many tokens" alone is not enough here: a 5xx
  * "Too many tokens, please wait" is a throttle that the retry exists for.
  */
-async function isContextOverflowResponse(res: Response, signal?: AbortSignal): Promise<boolean> {
-  if ((res.headers.get("content-type") ?? "").includes("text/event-stream")) return false;
+async function observeRetryBody(res: Response, signal?: AbortSignal, checkOverflow = true): Promise<"clear" | "refusal" | "overflow" | "inconclusive"> {
+  if ((res.headers.get("content-type") ?? "").toLowerCase().includes("text/event-stream")) return "inconclusive";
   try {
-    const text = await peekBodyText(res, CONTEXT_OVERFLOW_PEEK_BYTES, CONTEXT_OVERFLOW_PEEK_MS, signal);
-    return text.length > 0 && isDefiniteContextOverflow(res.status, text, retryContextOverflowMessage);
+    const { text, complete } = await withPausedResponseHeaderDeadline(signal,
+      () => peekBodyText(res, CONTEXT_OVERFLOW_PEEK_BYTES, CONTEXT_OVERFLOW_PEEK_MS, signal));
+    const { refusalCode, explicitVeto } = replayRefusalBodyVerdict(text);
+    if (refusalCode !== undefined) {
+      wireReplayRefusals.set(res, refusalCode);
+      return "refusal";
+    }
+    if (explicitVeto) {
+      requireClientReplayVeto(res);
+      return "refusal";
+    }
+    if (!complete) return "inconclusive";
+    // A gateway may mislabel an SSE error. Match the decoder's CR, LF and CRLF line endings
+    // and look for a data field even after comments, blank lines or ignored fields.
+    if (text.trimStart().split(/\r\n|\r|\n/).some(line => sseFieldValue(line, "data") !== null)) return "inconclusive";
+    if (checkOverflow && text.length > 0 && isDefiniteContextOverflow(res.status, text, retryContextOverflowMessage)) return "overflow";
+    return "clear";
   } catch {
-    return false;
+    return "inconclusive";
   }
+}
+
+/** Honor wire vetoes; recovery callers can also require a conclusive body before authorizing a resend. */
+export async function hasUpstreamReplayRefusal(
+  response: Response, signal?: AbortSignal, options?: { requireCompleteBody?: boolean },
+): Promise<boolean> {
+  if (isAutomaticReplayBlocked(response)) return true;
+  if (response.ok) return false;
+  const verdict = await observeRetryBody(response, signal, false);
+  if (verdict === "inconclusive" && options?.requireCompleteBody === true) {
+    requireClientReplayVeto(response);
+    return true;
+  }
+  return verdict === "refusal";
+}
+
+export function observedReplayRefusalCode(response: Response) {
+  return wireReplayRefusals.get(response);
 }
 
 /**
@@ -952,20 +1141,31 @@ export async function fetchWithTransientRetry(
       return resumed;
     } } : {}),
   }));
-  for (let attempt = 0; remaining() > 0; attempt++) {
+  for (let attempt = 0; ; attempt++) {
+    // The 5xx ladder does not retry 429 itself, but outer same-key and pool recovery
+    // still need the wire verdict, including on the last physical send in this ladder.
+    if (res.status === 429) {
+      await hasUpstreamReplayRefusal(res, opts.abortSignal, { requireCompleteBody: opts.replaySafe !== true });
+      return res;
+    }
     // A non-replayable gateway status was settled after the request body had already left
     // for the origin; retrying it here is the automatic resend the marker exists to forbid.
     // An upstream that answers with the exact `x-should-retry: false` verdict has said the same
     // thing about its own failure, so the ladder stops and hands the response back untouched.
-    if (res.ok || !isTransientUpstreamStatus(res.status) || isNonReplayableResponse(res)
-      || res.headers.get(REPLAY_REFUSAL_NO_RETRY_HEADER) === REPLAY_REFUSAL_NO_RETRY_VALUE) return res;
-    if (opts.abortSignal?.aborted || Date.now() - attemptStart > slowAttemptMs) return res;
-    // A 5xx that says the input does not fit is deterministic: resending the same body is
-    // refused the same way, so it goes back for the caller to classify (#8127).
-    if (await isContextOverflowResponse(res, opts.abortSignal)) return res;
+    if (!isTransientUpstreamStatus(res.status) || isAutomaticReplayBlocked(res) || opts.abortSignal?.aborted) return res;
+    // Later recovery owns its own budget. Give it the verdict even when this ladder has no send left.
+    const canRetry = remaining() > 0 && Date.now() - attemptStart <= slowAttemptMs;
+    const observation = await observeRetryBody(res, opts.abortSignal);
+    if (observation === "refusal" || observation === "overflow") return res;
+    if (observation === "inconclusive" && opts.replaySafe !== true) {
+      // An unread suffix can carry the refusal. Keep the real response for attribution and
+      // require the same no-replay verdict from recovery loops and client delivery.
+      requireClientReplayVeto(res);
+      return res;
+    }
     // Checked before cancelResponseBodyBestEffort so an already-aborted caller never receives
     // a response whose body we just cancelled.
-    if (opts.abortSignal?.aborted) return res;
+    if (!canRetry || opts.abortSignal?.aborted) return res;
     const instructedDelay = retryAfterDelayMs(res.headers);
     // The deadline is the CALLER'S, not this module's default. Reading the constant directly
     // broke it in both directions: a caller with a 30s budget slept the full 45s an upstream
@@ -1006,8 +1206,6 @@ export async function fetchWithTransientRetry(
       throw new UpstreamRetryEvidenceError(transientStatuses, err);
     }
   }
-  // Budget exhausted: the last response is returned with its body intact.
-  return res;
   } catch (err) {
     if (!(err instanceof SendBudgetExhaustedError) || !retainedResponse) throw err;
     const preceding = retainedResponse;
@@ -1032,6 +1230,10 @@ export class ProtocolPreOutputEof extends Error {
 export interface ProtocolSafeRefetchOptions extends ResetRetryOptions {
   /** The replacement must match the response contract already selected for the client. */
   acceptResponse?: (response: Response) => boolean;
+  /** The caller can publish a terminal HTTP refusal or convert it to its stream protocol. */
+  acceptTerminalRefusal?: boolean;
+  /** Project a provider-specific terminal refusal when the shared replay evidence is absent. */
+  projectTerminalRefusal?: (response: Response) => Promise<Response | undefined>;
   /**
    * Spend the logical request's allowance, immediately before the replacement send.
    *
@@ -1048,8 +1250,8 @@ export interface ProtocolSafeRefetchOptions extends ResetRetryOptions {
  * The caller owns the proof that nothing was observed -- it comes from protocol inspection,
  * not from this module -- and owns the physical-send budget. What lives here is the part that
  * is easy to get wrong: a replacement is only usable if it is a fresh, unlocked, unread body
- * that matches the contract already promised to the client, and anything else has to be
- * cancelled and the original failure preserved.
+ * that matches the contract already promised to the client. A caller that can encode a terminal
+ * refusal can also receive that HTTP response with its original evidence intact.
  */
 export async function refetchAfterProtocolSafeReset(
   doFetch: ProtocolSafeRefetch,
@@ -1074,12 +1276,21 @@ export async function refetchAfterProtocolSafeReset(
     return null;
   }
   const body = replacement.body;
+  const fresh = !replacement.bodyUsed && !body?.locked;
+  if (opts.acceptTerminalRefusal && replacement.status >= 400 && fresh && !opts.abortSignal?.aborted) {
+    const terminal = await hasUpstreamReplayRefusal(replacement, opts.abortSignal);
+    if (!opts.abortSignal?.aborted) {
+      if (terminal) return replacement;
+      const refusal = await opts.projectTerminalRefusal?.(replacement);
+      if (refusal && !opts.abortSignal?.aborted) return refusal;
+    }
+  }
   let accepted = !opts.abortSignal?.aborted && replacement.ok && body !== null
-    && !replacement.bodyUsed && !body.locked && !isNonReplayableResponse(replacement);
+    && fresh && !isNonReplayableResponse(replacement);
   try { if (accepted && opts.acceptResponse) accepted = opts.acceptResponse(replacement); }
   catch { accepted = false; }
   if (!accepted || opts.abortSignal?.aborted || body?.locked) {
-    try { void body?.cancel().catch(() => {}); } catch { /* already locked or closed */ }
+    cancelResponseBodyBestEffort(replacement);
     console.warn("[upstream-retry] protocol-safe refetch rejected" + label + "; preserving original stream error");
     return null;
   }

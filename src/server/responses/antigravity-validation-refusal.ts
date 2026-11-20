@@ -6,6 +6,7 @@ import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { classifyAntigravityRefusal, hasAntigravityModelNotFoundProvenance, type AntigravityRefusal } from "../../adapters/antigravity-refusal";
 import { isCanonicalAntigravityUrl } from "../../lib/provider-tls-profile";
 import { hasUpstreamRewriters, upstreamRewriterEpoch } from "../../plugins/upstream-hooks";
+import { markAccountNeedsReauthIfGeneration } from "../../oauth/store";
 import type { OcxProviderConfig } from "../../types";
 import { readDisplaySafeErrorText } from "./core-errors";
 
@@ -27,6 +28,18 @@ export async function classifyAntigravityQuarantine(
     || rewriterEpoch !== upstreamRewriterEpoch()
   )) return { kind: "other" };
   return refusal;
+}
+
+/** Record the refusal only against its issuing credential generation. */
+export async function quarantineAntigravityRefusal<T extends { accountId: string; generation: string }>(
+  response: Response, providerName: string, provider: Pick<OcxProviderConfig, "authMode" | "baseUrl">,
+  accountId: string | null | undefined, sent: T | undefined, trust: number | undefined, signal: AbortSignal,
+): Promise<T | undefined> {
+  if (response.status !== 403 || providerName !== "google-antigravity" || !sent || sent.accountId !== accountId) return;
+  const refusal = await classifyAntigravityQuarantine(response, provider, trust, signal);
+  if (refusal.kind === "other") return;
+  await markAccountNeedsReauthIfGeneration(providerName, sent.accountId, sent.generation, undefined, refusal.kind);
+  return sent;
 }
 
 /** Match only the normalized Antigravity validation-refusal marker. */

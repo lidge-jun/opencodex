@@ -1,4 +1,4 @@
-import { readResponsesCoreSource } from "../helpers/responses-core-source";
+import { readResponsesCoreModule, readResponsesCoreSource } from "../helpers/responses-core-source";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
@@ -559,11 +559,13 @@ describe("sidecar on429 wiring", () => {
     // The counts differ by rotator because the recovery sites differ, and each number is a
     // statement about which providers can recover where:
     //
-    //   generic  = 6: streaming loop, continuation loop, sidecar hook, runTurn preflight,
+    //   generic  = 8: streaming loop, continuation loop, sidecar hook, runTurn preflight,
     //                native Responses passthrough, plus the combo failure attribution in
     //                core-combo.ts, which sends nothing: it records the refused account the
     //                request budget left uncooled and spares the combo target only when the
-    //                rotator names a sibling. The Antigravity 403 verify-account
+    //                rotator names a sibling. Translated and native dispatch each passively
+    //                attribute a replay-blocked 429, with commitSelection=false and no send.
+    //                The Antigravity 403 verify-account
     //                arm deliberately does NOT use this rotator: a verification refusal
     //                must not record rate-limit cooldown semantics, so it moves via
     //                rotateAntigravityAccountOnAuthRefusal instead. The new default
@@ -585,7 +587,29 @@ describe("sidecar on429 wiring", () => {
     //
     // Adding a recovery site means deciding, deliberately, which rotators it needs and
     // updating the matching number. That decision is the thing this test exists to force.
-    expect(counts.generic).toBe(6);
+    const passiveSites = [
+      ["passthrough-dispatch.ts", "if (upstreamResponse.status === 429 && !isReplayRefusalResponse(upstreamResponse)", "// Native Responses returns"],
+      ["adapter-dispatch.ts", "if (upstreamResponse.status === 429 && isAutomaticReplayBlocked(upstreamResponse)", "if (isNonReplayableResponse(upstreamResponse))"],
+    ] as const;
+    let passiveCalls = 0;
+    for (const [file, start, end] of passiveSites) {
+      const source = readResponsesCoreModule(file);
+      const passiveStart = source.indexOf(start);
+      expect(passiveStart, file).toBeGreaterThan(-1);
+      const passiveEnd = source.indexOf(end, passiveStart);
+      expect(passiveEnd, file).toBeGreaterThan(passiveStart);
+      const passive = source.slice(passiveStart, passiveEnd);
+      expect(passive).toContain("isAutomaticReplayBlocked(upstreamResponse)");
+      expect(passive).toContain("!isReplayRefusalResponse(upstreamResponse)");
+      expect(passive).toMatch(/&& transportState\.genericFailoverAccountId\) \{/);
+      expect(passive).toMatch(/rotateGenericOAuthAccountOn429\(config, route\.providerName, transportState\.genericFailoverAccountId,\s*upstreamResponse\.headers\.get\("retry-after"\), Date\.now\(\), route\.modelId, false\)/);
+      const calls = passive.match(rotators.generic) ?? [];
+      expect(calls, file).toHaveLength(1);
+      expect(passive).not.toMatch(/reserveCredentialHop\(|rebuildAndRefetch\(|applyFailoverSnapshot\(|\b(?:fetch|refetch|send)\w*\(/i);
+      passiveCalls += calls.length;
+    }
+    expect(counts.generic).toBe(8);
+    expect(counts.generic! - passiveCalls).toBe(6);
     expect(counts.anthropic).toBe(3);
     expect(counts.key).toBe(8);
   });
@@ -603,8 +627,31 @@ describe("sidecar on429 wiring", () => {
     expect(arm).not.toContain("rotateGenericOAuthAccountOn429(");
     // Marking stays generation-fenced: no unfenced fallback may re-quarantine a
     // credential that rotated after the 403 was sent.
-    expect(arm).toContain("markAccountNeedsReauthIfGeneration(");
-    expect(arm).not.toMatch(/await markAccountNeedsReauth\(route\.providerName/);
+    expect(arm).toContain("sent = await quarantineAntigravityRefusal(upstreamResponse, route.providerName, route.provider,");
+    expect(arm).toContain("transportState.genericFailoverAccountId, transportState.sentOAuthSnapshot, antigravityQuarantineTrust, upstream.signal)");
+    expect(arm).toContain("if (!sent) break;");
+    expect(arm.indexOf("quarantineAntigravityRefusal(")).toBeLessThan(arm.indexOf("rotateAntigravityAccountOnAuthRefusal("));
+    const quarantineSource = readFileSync(repoPath("src/server/responses/antigravity-validation-refusal.ts"), "utf8");
+    const quarantineStart = quarantineSource.indexOf("export async function quarantineAntigravityRefusal");
+    expect(quarantineStart).toBeGreaterThan(-1);
+    const quarantineEnd = quarantineSource.indexOf("/** Match only", quarantineStart);
+    expect(quarantineEnd).toBeGreaterThan(quarantineStart);
+    const quarantine = quarantineSource.slice(quarantineStart, quarantineEnd);
+    expect(quarantine).toContain('if (response.status !== 403 || providerName !== "google-antigravity" || !sent || sent.accountId !== accountId) return;');
+    const vetoStart = coreSource.indexOf("if (isAutomaticReplayBlocked(upstreamResponse)) {");
+    expect(vetoStart).toBeGreaterThan(-1);
+    const vetoEnd = coreSource.indexOf("bindAnthropicRejectionResponse", vetoStart);
+    expect(vetoEnd).toBeGreaterThan(vetoStart);
+    const vetoArm = coreSource.slice(vetoStart, vetoEnd);
+    expect(vetoArm).toContain("await quarantineAntigravityRefusal(upstreamResponse, route.providerName, route.provider,");
+    expect(vetoArm).toContain("transportState.genericFailoverAccountId, transportState.sentOAuthSnapshot, antigravityQuarantineTrust, upstream.signal)");
+    expect(vetoArm).toContain("break recovery;");
+    expect(vetoArm).not.toContain("rotateAntigravityAccountOnAuthRefusal(");
+    expect(quarantine).toContain("const refusal = await classifyAntigravityQuarantine(response, provider, trust, signal);");
+    expect(quarantine).toContain('if (refusal.kind === "other") return;');
+    expect(quarantine).toContain("markAccountNeedsReauthIfGeneration(providerName, sent.accountId, sent.generation, undefined, refusal.kind)");
+    expect(quarantineSource).toContain('classifyAntigravityRefusal(response.status, await readDisplaySafeErrorText(response.clone(), signal, ""))');
+    expect(arm + vetoArm + quarantine).not.toMatch(/\bmarkAccountNeedsReauth\(/);
     // Cross-account thought signatures are not a source-text claim. The dispatch
     // test in server-google-antigravity-oauth-401-replay proves account A's
     // durable signature is absent from the sibling replay.

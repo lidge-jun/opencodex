@@ -1,5 +1,6 @@
 import { CYBER_POLICY_FALLBACK_MESSAGE, classifyError } from "./errors";
 import { classifyUpstreamCondition, upstreamConditionMessage, type UpstreamConditionEvidence } from "./upstream-condition";
+import { REPLAY_REFUSAL_MESSAGE } from "./upstream-retry";
 import { isDeveloperRoleRejection } from "./developer-role-rejection";
 
 const openaiTypes = ["invalid_request_error", "authentication_error", "permission_error", "not_found_error", "rate_limit_error", "server_error", "upstream_error", "insufficient_quota", "client_cancelled", "cyber_policy", "model_not_allowed_for_key", "api_error", "overloaded_error"] as const;
@@ -9,7 +10,7 @@ const openaiCodes = [
   "rate_limit_exceeded", "insufficient_quota", "request_send_budget_exhausted", "origin_rejected", "upstream_server_error",
   "invalid_api_key", "permission_denied", "location_not_supported", "subscription_required", "server_is_overloaded", "invalid_request_error",
   "usage_limit_reached", "slow_down", "misalignment_policy_violation", "invalid_prompt", "bio_policy", "model_not_in_plan",
-  "upstream_reset_replay_refused", "upstream_no_response", "upstream_closed_before_response", "claude_subscription_cooldown",
+  "upstream_reset_replay_refused", "upstream_response_refused", "upstream_no_response", "upstream_closed_before_response", "claude_subscription_cooldown",
   "model_not_found", "model_not_allowed_for_key", "undeclared_tool_call", "required_tool_contract_unsatisfied",
   "translation_buffer_limit", "invalid_refusal", "unsupported_feature", "agent_assertion_unsupported", "upstream_error",
   "upstream_sse_truncated", "upstream_sse_error", "upstream_sse_unterminated", "upstream_sse_invalid", "upstream_stream_incomplete", "upstream_stream_error", "upstream_stall_timeout",
@@ -34,7 +35,7 @@ export const CLIENT_ERROR_CONTRACTS = {
   misalignment_policy_violation: "The provider refused this request under its policy.",
   bio_policy: "The provider refused this request under its policy.",
   model_not_in_plan: "The selected model is not included in your provider plan (MODEL_NOT_IN_PLAN). Choose a model the plan includes or change the plan; retrying this request will not succeed.",
-  replay_refused: "The provider connection closed after the request was sent. This proxy refused to replay the request automatically.",
+  replay_refused: REPLAY_REFUSAL_MESSAGE,
   translation_buffer_limit: "upstream translation buffer exceeded the safe limit",
   invalid_refusal: "upstream refusal representations are inconsistent",
   undeclared_tool_call: "Upstream emitted a client tool call outside this request's declared tool catalog.",
@@ -82,6 +83,7 @@ const CODE_MESSAGES: ReadonlyMap<string, string> = new Map([
   ["upstream_incomplete", CLIENT_ERROR_CONTRACTS.stream_incomplete],
   ["upstream_stream_incomplete", CLIENT_ERROR_CONTRACTS.stream_incomplete],
   ["upstream_reset_replay_refused", CLIENT_ERROR_CONTRACTS.replay_refused],
+  ["upstream_response_refused", CLIENT_ERROR_CONTRACTS.replay_refused],
   ...["cyber_policy", "invalid_prompt", "misalignment_policy_violation", "bio_policy", "model_not_in_plan", "translation_buffer_limit", "invalid_refusal", "undeclared_tool_call", "required_tool_contract_unsatisfied"].map(code => [code, CLIENT_ERROR_CONTRACTS[code as ClientErrorContract]] as const),
 ]);
 export function clientErrorCodeMessage(code: string | undefined): string | undefined {

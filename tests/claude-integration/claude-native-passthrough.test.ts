@@ -1209,14 +1209,24 @@ test("a credential in a local failure message is redacted for the client as well
 });
 
 test("an upstream that never sends headers logs the header timeout as the reason", async () => {
-  const silent = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() { /* accept, never answer */ } } });
+  const requests: Array<{ method: string; path: string }> = [];
+  const pending: Array<(response: Response) => void> = [];
+  const silent = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    requests.push({ method: request.method, path: new URL(request.url).pathname });
+    return new Promise<Response>(resolve => { pending.push(resolve); });
+  } });
   try {
-    const { res, row } = await nativeFailureRow(`http://127.0.0.1:${silent.port}`, undefined, { connectTimeoutMs: 250 });
-    expect(res.status).toBe(504);
-    expect(row.status).toBe(504);
+    const { res, text, row } = await nativeFailureRow(`http://127.0.0.1:${silent.port}`, undefined, { connectTimeoutMs: 250 });
+    expect(res.status).toBe(429);
+    expect(res.headers.get("x-should-retry")).toBe("false");
+    expect(res.headers.get("retry-after")).toBeNull();
+    expect(JSON.parse(text).error.code).toBe("upstream_reset_replay_refused");
+    expect(requests).toEqual([{ method: "POST", path: "/v1/messages" }]);
+    expect(row.status).toBe(429);
     expect(row.failureDetail).toEqual({ code: "header_timeout" });
   } finally {
-    silent.stop(true);
+    for (const settle of pending) settle(new Response(null, { status: 499 }));
+    await silent.stop(true);
   }
 });
 
@@ -1298,6 +1308,27 @@ test("a non-stream body that stalls logs the stall as the reason", async () => {
   } finally {
     upstream.stop();
   }
+});
+
+test.each([
+  { guard: "body_overflow", status: 502 },
+  { guard: "body_stall", status: 504 },
+] as const)("native passthrough preserves an upstream retry veto on $guard", async ({ guard, status }) => {
+  let sends = 0;
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+    sends++;
+    const headers = { "content-type": "application/json", "x-should-retry": "false", "retry-after": "7" };
+    const body = guard === "body_stall" ? new ReadableStream<Uint8Array>({ start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"type":'));
+    } }) : JSON.stringify({ error: { type: "rate_limit_error", message: "x".repeat(200) } });
+    return new Response(body, { status: 429, headers });
+  } });
+  try {
+    const { res, row } = await nativeFailureRow(upstream.url.href, { bodyMaxBytes: 128, bodyStallSec: 1 });
+    expect({ sends, status: res.status, veto: res.headers.get("x-should-retry"), wait: res.headers.get("retry-after") })
+      .toEqual({ sends: 1, status, veto: "false", wait: null });
+    expect(row).toMatchObject({ status, closeReason: guard, failureDetail: { code: guard } });
+  } finally { await upstream.stop(true); }
 });
 
 test("a client that leaves while a non-stream body is pending logs the cancel as the reason", async () => {

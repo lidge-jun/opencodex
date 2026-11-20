@@ -13,7 +13,8 @@ import { resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/a
 import { clearAccountNeedsReauth } from "../../src/codex/account-runtime-state";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountQuota, getAccountQuota, getMainPolicyQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
-import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../../src/codex/routing";
+import { clearCodexUpstreamHealth, clearThreadAccountMap, getCodexUpstreamHealth } from "../../src/codex/routing";
+import { isReplayRefusalResponse, replayRefusalResponse } from "../../src/lib/upstream-retry";
 import { clearPoolRotationState } from "../../src/codex/pool-rotation";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
@@ -610,6 +611,44 @@ describe("credential-bound plain-main Responses quota", () => {
   const completedFrame = (id: string) => new TextEncoder().encode(`event: response.completed\ndata: ${JSON.stringify({
     type: "response.completed", response: { id, status: "completed", output: [] },
   })}\n\n`);
+
+  test.each(["synthetic", "genuine"] as const)("a post-header replacement records only a genuine 429 in the Codex pool (%s)", async kind => {
+    saveCodexAccountCredential(POOL, { accessToken: "fixture-pool-token", refreshToken: "fixture-pool-refresh",
+      chatgptAccountId: "fixture-pool-workspace", expiresAt: Date.now() + 3600_000 });
+    const poolConfig: OcxConfig = { ...resetQuotaConfig(), activeCodexAccountId: POOL, autoSwitchThreshold: 0,
+      codexAccounts: [{ id: POOL, isMain: false, email: "fixture@example.test", chatgptAccountId: "fixture-pool-workspace" }],
+      providers: { openai: { ...provider, codexAccountMode: "pool", upstreamWebsocket: false, retryOnReset: {} } },
+    };
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      if (++sends === 1) {
+        return new Response(new ReadableStream<Uint8Array>({
+          pull(controller) { controller.error(Object.assign(new Error("fixture pre-output reset"), { code: "ECONNRESET" })); },
+        }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } });
+      }
+      if (kind === "synthetic") return replayRefusalResponse();
+      return Response.json({ error: { type: "rate_limit_error", message: "fixture diagnostic" } }, {
+        status: 429, headers: { "x-should-retry": "false", "retry-after": "120" },
+      });
+    }) as typeof fetch;
+    const response = await handleResponses(resetQuotaRequest(), poolConfig, { model: "", provider: "" });
+    expect(sends).toBe(2);
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(response.headers.get("retry-after")).toBeNull();
+    const payload = await response.json();
+    const health = getCodexUpstreamHealth(POOL);
+    if (kind === "genuine") {
+      expect(health?.lastFailureStatus).toBe(429);
+      expect(health?.cooldownUntil).toBeGreaterThan(Date.now());
+      expect(payload.error.message).toBe("Provider error 429: upstream diagnostic withheld for a non-replayable failure");
+    } else {
+      expect(health?.lastFailureStatus).toBeUndefined();
+      expect(health?.cooldownUntil).toBeUndefined();
+      expect(payload.error.code).toBe("upstream_reset_replay_refused");
+      expect(isReplayRefusalResponse(response)).toBe(true);
+    }
+  });
 
   test("a head committed before the reset keeps the arrival head and its quota while publishing the replacement body", async () => {
     observe();

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { handleResponses } from '../../src/server/responses';
 import { capRequestExecutionBudgetSends, capturePhysicalSendRecovery, createPhysicalSendReporter, createRequestExecutionBudget, type SingleUseDispatchPermit } from '../../src/lib/request-execution-budget';
-import { fetchWithResetRetry, fetchWithTransientRetry } from '../../src/lib/upstream-retry';
+import { fetchWithResetRetry, fetchWithTransientRetry, REPLAY_REFUSAL_MESSAGE } from '../../src/lib/upstream-retry';
 import { acquireOwnedSpendHome } from '../helpers/owned-spend-home';
 import { codexWsPool } from '../../src/server/responses/codex-ws-pool';
 import { setCodexWsIncrementalUpload } from '../../src/server/responses/codex-ws-incremental';
@@ -32,6 +32,7 @@ let saved: Record<string, string | undefined>;
 let release: () => void;
 class Socket extends EventTarget {
   static all: Socket[] = [];
+  static miss: unknown;
   readyState = 0;
   frames: Record<string, any>[] = [];
   constructor(_url: string, options?: { headers?: Record<string, string> }) {
@@ -46,7 +47,7 @@ class Socket extends EventTarget {
   send(text: string) {
     const frame = JSON.parse(text); this.frames.push(frame);
     queueMicrotask(() => {
-      if (frame.previous_response_id) { this.emit(missing); return; }
+      if (frame.previous_response_id) { this.emit(Socket.miss); return; }
       const id = `fixture-response-${this.frames.length}`;
       this.emit({ type: 'response.created', response: { id } });
       this.emit({ type: 'response.completed', response: { id, status: 'completed', output: [answer] } });
@@ -60,6 +61,7 @@ beforeEach(() => {
   release = acquireOwnedSpendHome();
   saved = Object.fromEntries(proxyKeys.map(key => [key, process.env[key]]));
   for (const key of proxyKeys) delete process.env[key];
+  Socket.miss = missing;
   Socket.all = []; globalThis.WebSocket = Socket as unknown as typeof WebSocket;
   setCodexWsIncrementalUpload(true); setCodexWsReuseAcrossTurns(true);
 });
@@ -95,6 +97,41 @@ async function warmCombo() {
   expect(Socket.all).toHaveLength(1);
   return [...initial, answer, message('next')];
 }
+
+test.each([
+  ['ordinary miss', missing, undefined],
+  ['retryable false', { ...missing, response: { retryable: false } }, 'upstream_response_refused'],
+  ['error retryable false', { ...missing, error: { ...missing.error, retryable: false } }, 'upstream_response_refused'],
+  ['nested incomplete retryable false', { ...missing, response: { incomplete_details: { retryable: false } } }, 'upstream_response_refused'],
+  ['last_error retryable false', { ...missing, last_error: { retryable: false } }, 'upstream_response_refused'],
+  ['header veto', { ...missing, headers: { 'X-Should-Retry': 'false', 'Retry-After': '30' } }, 'upstream_response_refused'],
+  ['recognized refusal', { ...missing, last_error: { code: 'upstream_reset_replay_refused' } }, 'upstream_reset_replay_refused'],
+  ['root refusal code', { ...missing, code: 'upstream_response_refused' }, 'upstream_response_refused'],
+] as const)('cache-miss recovery honors %s before admission', async (_label, frame, code) => {
+  const input = await warmCombo();
+  Socket.miss = frame;
+  const shared = budget(3, true);
+  const log: RequestLogContext = { model: '', provider: '' };
+  const response = await run(input, shared, undefined, poolConfig, 'fixture', log);
+  const body = await response.text();
+  const frames = Socket.all.flatMap(socket => socket.frames).slice(1);
+  expect(frames[0]?.previous_response_id).toBe('fixture-response-1');
+  expect({ sends: frames.length, charged: shared.used, started: shared.physicalStarted,
+    recorded: log.activeAttempt?.sendCount, status: response.status }).toEqual(code
+    ? { sends: 1, charged: 1, started: 1, recorded: 1, status: 429 }
+    : { sends: 2, charged: 2, started: 2, recorded: 1, status: 200 });
+  if (code) {
+    expect(log.activeAttempt?.recoveryKinds).toEqual([]);
+    expect(log.activeAttempt?.recoveryWithheld ?? []).toEqual([]);
+    expect(log.attempts).toEqual([expect.objectContaining({ ordinal: 1, sendCount: 1, recoveryKinds: [] })]);
+    expect(response.headers.get('x-should-retry')).toBe('false');
+    expect(response.headers.get('retry-after')).toBeNull();
+    expect(JSON.parse(body).error).toMatchObject({ code, message: REPLAY_REFUSAL_MESSAGE });
+  } else {
+    expect(frames[1]?.previous_response_id).toBeUndefined();
+    expect(body).toContain('response.completed');
+  }
+});
 
 test.each([1, 2])('stored credential replay accounts for admitted cache recovery (replay slots=%s)', async replaySlots => {
   const prefix = [message('fixture prefix '.repeat(100))];

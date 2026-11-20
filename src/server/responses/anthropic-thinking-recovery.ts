@@ -6,7 +6,10 @@ import { isLikelyRealAnthropicThinkingSignature } from "../../adapters/anthropic
 import type { AdapterEvent, OcxParsedRequest } from "../../types";
 import { upstreamErrorMessageFromPayload } from "../../lib/errors";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
-import { isNonReplayableResponse } from "../../lib/upstream-retry";
+import {
+  isAutomaticReplayBlocked, isNonReplayableResponse, isReplayRefusalCode, hasUpstreamReplayRefusal, observedReplayRefusalCode,
+  replayRefusalBodyCode, REPLAY_REFUSED_STATUS, REPLAY_REFUSAL_MESSAGE,
+} from "../../lib/upstream-retry";
 import { rememberReasoningReplayOpaqueBlobRejection } from "../../responses/reasoning-replay-cache";
 import { prepareOpaqueBlobRecovery, type OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
 
@@ -68,9 +71,10 @@ export function createAnthropicThinkingRecovery(
   };
 
   const prepareHttp = async (response: Response, adapterName: string, attempt = parsed): Promise<boolean> => {
-    if (signal.aborted || !canRetry() || response.status !== 400 || isNonReplayableResponse(response)
+    if (signal.aborted || !canRetry() || response.status !== 400 || isAutomaticReplayBlocked(response)
       || adapterName !== "anthropic" || guard.attempted
       || parsed._stripReasoningEncryptedContent === true || !carriesThinkingState(attempt)) return false;
+    if (await hasUpstreamReplayRefusal(response, signal, { requireCompleteBody: true })) return false;
     try {
       const body = await readBoundedResponseBody(response.clone(), { signal });
       if (!body.displaySafe || body.truncated) return false;
@@ -106,7 +110,8 @@ export function createAnthropicThinkingRecovery(
           const next = await iterator.next();
           if (next.done) return;
           const event = next.value;
-          if (replaySafe && event.type === "error" && prepare(event.message, adapterName(), attempt, response)) {
+          if (replaySafe && event.type === "error" && event.retryable !== false && !isReplayRefusalCode(event.code)
+            && prepare(event.message, adapterName(), attempt, response)) {
             // Close the rejected body before acquiring another dispatch/pacing slot.
             await iterator.return?.();
             source = retry();
@@ -144,14 +149,22 @@ export function createAnthropicThinkingRecovery(
     for (const event of events) observe(event);
   };
   const projectHttpFailure = async (response: Response, abortSignal: AbortSignal): Promise<Extract<AdapterEvent, { type: "error" }>> => {
+    // A probe may already have established the refusal even if delivery cannot read the body.
+    const observedCode = observedReplayRefusalCode(response);
     const nonReplayable = isNonReplayableResponse(response);
     if (nonReplayable) response = await sanitizeNonReplayableUpstreamError(response, abortSignal);
     const text = await readDisplaySafeErrorText(response, abortSignal, `Provider error ${response.status}`);
+    const refusalCode = observedCode ?? replayRefusalBodyCode(text);
     const error = normalizeUpstreamErrorText(text, `Provider error ${response.status}`);
+    const code = refusalCode ?? error.code;
+    if (isReplayRefusalCode(code)) return {
+      type: "error", status: REPLAY_REFUSED_STATUS, errorType: "upstream_error", code,
+      message: REPLAY_REFUSAL_MESSAGE, retryable: false,
+    };
     if (proxyErrorContext && isProxyError(response)) rememberProxyErrorMessage(proxyErrorContext, error.message ?? error.safeText, { status: response.status, type: error.type ?? "upstream_error", code: error.code, presentation: proxyErrorPresentation(response) });
     return { type: "error", status: response.status, message: error.message ?? error.safeText,
       errorType: error.type ?? "upstream_error", ...(error.code ? { code: error.code } : {}),
-      ...(nonReplayable ? { retryable: false } : {}) };
+      ...(isAutomaticReplayBlocked(response) ? { retryable: false } : {}) };
   };
   return { prepareHttp, prepareEvent: prepare, observeIteration, projectHttpFailure, wrap, rememberSuccess };
 }

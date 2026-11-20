@@ -8,6 +8,8 @@ and tighter-image 413 retry. Ordinary Codex compaction follows the
 On the opt-in route, `src/server/responses/adapter-dispatch.ts`,
 `src/images/loop.ts`, and `src/web-search/loop.ts` may replace a physical
 upstream size refusal with a single image-context recovery.
+The shared replay veto prevents recovery from starting on a terminal refusal.
+A terminal refusal from the summary is delivered without sending the smaller request.
 `src/server/responses/anthropic-image-context.ts` finds an older image-bearing
 prefix on a complete user-turn boundary. Open tool calls stay with their results.
 The newest image remains in the retained context. A cut that covers developer
@@ -34,6 +36,6 @@ failures, under the [spend contract](../transports/responses-spend.md).
 A denied reservation
 returns the original 413. Sidecar recovery under enforced spend requires
 authoritative accounting for earlier sends. The proxy accepts only a bounded,
-completed text summary, and a second 413 ends recovery.
+completed text summary, and a second 413 ends recovery. Replay vetoes on the original response, summary, or resend remain terminal: a successful summary still settles observed usage but cannot authorize a resend, and a failed summary with a recognized replay-refusal code keeps that fixed refusal instead of reverting to the earlier 413. Internal summary text is not returned as the requested answer.
 Recovered history is scoped to the running request. The feature starts no
 background cache renewal and records no request-origin data.

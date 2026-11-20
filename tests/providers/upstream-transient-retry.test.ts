@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   fetchWithTransientRetry,
+  hasClientReplayVeto,
   isNonReplayableResponse,
   isNonReplayableUpstreamCode,
   isTransientUpstreamStatus,
@@ -12,13 +13,27 @@ import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 function bodyResponse(status: number, headers?: Record<string, string>): Response {
-  // ReadableStream body so cancel() is observable.
+  // Ordinary failures must finish so the bounded refusal probe can authorize a retry.
+  const res = new Response(status === 204 ? null : "upstream fixture", { status, headers });
   let cancelled = false;
-  const stream = new ReadableStream({
-    cancel() { cancelled = true; },
+  const observeCancellation = () => {
+    const body = res.body;
+    if (!body) return;
+    const cancel = body.cancel.bind(body);
+    body.cancel = reason => { cancelled = true; return cancel(reason); };
+  };
+  observeCancellation();
+  const clone = res.clone.bind(res);
+  return Object.assign(res, {
+    clone() {
+      const copy = clone();
+      // Real clone() can replace the original body with a tee branch. Observe that
+      // branch, not the probe reader's cancellation or a stream that is already closed.
+      observeCancellation();
+      return copy;
+    },
+    __wasCancelled: () => cancelled,
   });
-  const res = new Response(status === 204 ? null : stream, { status, headers });
-  return Object.assign(res, { __wasCancelled: () => cancelled });
 }
 
 describe("isTransientUpstreamStatus", () => {
@@ -106,10 +121,37 @@ describe("fetchWithTransientRetry", () => {
     expect(res.status).toBe(504);
   });
 
+  test("an inconclusive never-closing body forbids resend and requires the client veto", async () => {
+    let sends = 0;
+    const reported: number[] = [];
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const response = new Response(new ReadableStream<Uint8Array>({
+      start(value) { controller = value; },
+    }), { status: 503 });
+    try {
+      const result = await fetchWithTransientRetry(async () => {
+        sends += 1;
+        return response;
+      }, { attempts: 3, slowAttemptMs: 60_000, onSendsConsumed: count => reported.push(count) });
+      expect(sends).toBe(1);
+      expect(reported).toEqual([1]);
+      expect(result).toBe(response);
+      expect(result.status).toBe(503);
+      expect(isNonReplayableResponse(result)).toBe(true);
+      expect(hasClientReplayVeto(result)).toBe(true);
+      expect(result.bodyUsed).toBe(false);
+      expect(result.body?.locked).toBe(false);
+    } finally {
+      controller.close();
+      await response.body?.cancel();
+    }
+  });
+
   test("the structured codes name the post-send verdicts and the proxy's own refusal", () => {
     expect(isNonReplayableUpstreamCode("upstream_no_response")).toBe(true);
     expect(isNonReplayableUpstreamCode("upstream_closed_before_response")).toBe(true);
     expect(isNonReplayableUpstreamCode("upstream_reset_replay_refused")).toBe(true);
+    expect(isNonReplayableUpstreamCode("upstream_response_refused")).toBe(true);
     expect(isNonReplayableUpstreamCode("upstream_error")).toBe(false);
     expect(isNonReplayableUpstreamCode(undefined)).toBe(false);
   });
@@ -129,6 +171,7 @@ describe("fetchWithTransientRetry", () => {
     expect(res.status).toBe(503);
     // Exhaustion returns the last response with its body intact.
     expect((res as Response & { __wasCancelled: () => boolean }).__wasCancelled()).toBe(false);
+    expect(await res.text()).toBe("upstream fixture");
   });
 
   test("onSendsConsumed reports the real count so callers can share one budget", async () => {
@@ -214,6 +257,7 @@ describe("fetchWithTransientRetry", () => {
     expect(calls).toBe(2);
     expect(res.status).toBe(200);
     expect(first.__wasCancelled()).toBe(true);
+    expect(first.bodyUsed).toBe(true);
   });
 
   test("exhausts attempts on persistent 502 and returns the final 502 with body intact", async () => {
@@ -222,6 +266,7 @@ describe("fetchWithTransientRetry", () => {
     expect(calls).toBe(3);
     expect(res.status).toBe(502);
     expect(res.body).not.toBeNull();
+    expect(await res.text()).toBe("upstream fixture");
   });
 
   test("does not retry non-transient statuses", async () => {
@@ -291,6 +336,7 @@ describe("native Chat completions and the replay refusal", () => {
         "replay-refusal-fixture": {
           adapter: "openai-chat",
           baseUrl: "https://replay-refusal.example.test/v1",
+          proxy: "direct",
           authMode: "key",
           apiKey: "sk-replay-refusal",
         },

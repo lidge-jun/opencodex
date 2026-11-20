@@ -711,6 +711,26 @@ describe("opaque blob recovery through /v1/responses", () => {
     });
   });
 
+  test.each(["none", "root", "incomplete"] as const)("bare SSE decrypt recovery honors retry veto (%s)", async carrier => {
+    const veto = carrier !== "none";
+    const posts: Array<string | undefined> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      posts.push(init?.method);
+      if (posts.length > 1) return streamedSuccess("resp-unexpected-recovery");
+      const event = {
+        type: "error", ...(carrier === "root" ? { retryable: false } : {}),
+        ...(carrier === "incomplete" ? { incomplete_details: { retryable: false } } : {}),
+        error: { type: "server_error", code: "upstream_server_error", message: FUNCTION_OUTPUT_DECRYPT_MESSAGE },
+      };
+      return decryptStreamResponse(`event: error\ndata: ${JSON.stringify(event)}\n\n`, "text/event-stream");
+    }) as typeof fetch;
+
+    const response = await handleResponses(functionOutputRequest(true), config(), { model: "", provider: "" });
+    const body = await response.text();
+    expect(posts).toEqual(veto ? ["POST"] : ["POST", "POST"]);
+    expect(body.includes("resp-unexpected-recovery")).toBe(!veto);
+  });
+
   test("retries a ChatGPT function-output decrypt failure once with an omission marker", async () => {
     const outbound: Array<Record<string, unknown>> = [];
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {

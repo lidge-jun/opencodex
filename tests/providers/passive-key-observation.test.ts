@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import * as wireModel from "../../src/providers/quota/passive-wire-model";
 import { routedProviderConfig } from "../../src/providers/routed-config";
+import { retainReplayRefusal } from "../../src/lib/upstream-retry";
 import { markPassiveKeyTransparent } from "../../src/lib/passive-key-fetch-proof";
 import * as observations from "../../src/providers/passive-key-observation";
 const { getPassiveKeyLimits, listPassiveKeyLimits, passiveKeyPhysicalFetch } = observations;
@@ -30,6 +31,23 @@ function fixture(name: string): OcxConfig {
 const init = { method: "POST", headers: { authorization: "Bearer synthetic-key" }, body: JSON.stringify({ model: "model" }) };
 const response = () => new Response(null, { headers: { "x-ratelimit-limit-requests": "100", "x-ratelimit-remaining-requests": "5" } });
 const trusted = (fetcher: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) => markPassiveKeyTransparent(fetcher as typeof globalThis.fetch);
+
+test.each(["synthetic", "wire refusal code", "ordinary quota"])("passive quota respects source provenance: %s", async source => {
+  const name = `quota-provenance-${source}`, config = fixture(name), provider = config.providers[name]!;
+  const code = source === "ordinary quota" ? "rate_limit_exceeded" : "upstream_response_refused";
+  const base = trusted(async () => {
+    const response = Response.json({ error: { type: "upstream_error", code } }, { status: 429,
+      headers: { "x-should-retry": "false", "x-ratelimit-limit-requests": "100", "x-ratelimit-remaining-requests": "0" } });
+    return source === "synthetic" ? retainReplayRefusal(response) : response;
+  });
+  try {
+    await passiveKeyPhysicalFetch(base, config, name, routedProviderConfig(name, provider))(
+      "https://api.groq.com/openai/v1/chat/completions", init);
+    const limits = getPassiveKeyLimits(config, name, "model");
+    if (source === "synthetic") expect(limits).toEqual([]);
+    else expect(limits).toEqual(expect.arrayContaining([expect.objectContaining({ dimension: "requests", limit: 100, remaining: 0 })]));
+  } finally { observations.clearPassiveKeyLimits(name); }
+});
 
 test("Mistral pacing does not make an opaque executor trusted for passive limits", async () => {
   const name = "opaque-mistral", config = fixture(name), provider = config.providers[name]!;

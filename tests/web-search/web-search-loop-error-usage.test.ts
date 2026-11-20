@@ -1,5 +1,6 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, jest, spyOn, test } from "bun:test";
 import type { ProviderAdapter } from "../../src/adapters/base";
+import { fetchVertexWithRetry } from "../../src/adapters/google-http";
 import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
 import { runWithWebSearch } from "../../src/web-search/loop";
 import { buildWebSearchTool } from "../../src/web-search/synthetic-tool";
@@ -95,7 +96,7 @@ for (const [label, second] of [
 
 // A worded verdict keeps its status and provider wording in-stream: combo stream preflight reads
 // exactly those to decide whether a larger-context target may still serve the turn.
-function wordedFailureRun(respond: () => Response) {
+function wordedFailureRun(respond: () => Response, sameTargetRetries = false) {
   spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ results: [] }));
   const passes: AdapterEvent[][] = [[
     { type: "tool_call_start", id: "ws1", name: "web_search" },
@@ -119,6 +120,9 @@ function wordedFailureRun(respond: () => Response) {
     adapter, backend: "exa", exaApiKey: "fixture", hostedTool: { type: "web_search" },
     settings: { model: "fixture", reasoning: "low", timeoutMs: 1000 }, maxSearches: 1,
     incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget() },
+    ...(sameTargetRetries ? { retryOn429Policy: {
+      enabled: true, attempts: 1, intervalMs: 1, maxIntervalMs: 1, respectRetryAfter: false,
+    } } : {}),
   });
   return { state, text: response.then(r => r.text()) };
 }
@@ -149,4 +153,130 @@ test("a later iteration's rate_limit_exceeded 400 keeps its rate verdict", async
   const text = await run.text;
   expect(text).toContain('"code":"rate_limit_exceeded"');
   expect(text).not.toContain("context_length_exceeded");
+});
+
+test.each([false, true])("web-search does not resend a terminal 429 (local marker %s)", async marked => {
+  const run = wordedFailureRun(() => {
+    const response = new Response("fixture quota", {
+      status: 429, headers: marked ? {} : { "x-should-retry": "false" },
+    });
+    if (marked) markResponseNonReplayable(response);
+    return response;
+  }, true);
+  expect(await run.text).toContain("response.failed");
+  expect(run.state.sends).toBe(2);
+});
+
+test.each(["body-only", "directive", "event", "ordinary", "empty", "forced-empty"] as const)("replay veto: web-search stops before a %s retry and preserves its terminal verdict", async kind => {
+  let sends = 0, rotations = 0;
+  const blocked = kind !== "ordinary";
+  const adapter: ProviderAdapter = {
+    name: "openai-chat",
+    buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
+    async fetchResponse() {
+      sends++;
+      if (kind === "body-only") return Response.json({ error: { code: "upstream_reset_replay_refused" } }, { status: 429 });
+      return new Response("wire", { headers: ["directive", "empty", "forced-empty"].includes(kind) ? { "x-should-retry": "false" } : {} });
+    },
+    async *parseStream() {
+      if (kind.endsWith("empty")) { yield { type: "done" }; return; }
+      yield { type: "error", status: 503, message: "fixture stream failure", ...(kind === "event" ? { retryable: false } : {}) };
+    },
+  };
+  const response = await runWithWebSearch({
+    parsed: { modelId: "fixture", stream: true, options: {}, context: { messages: [], tools: [buildWebSearchTool()] } },
+    adapter, backend: "exa", exaApiKey: "fixture", hostedTool: { type: "web_search" },
+    settings: { model: "fixture", reasoning: "low", timeoutMs: 1000 }, maxSearches: kind === "forced-empty" ? 0 : 1,
+    incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, emptyCompletionRetry: true,
+    retryOn429Policy: { enabled: true, attempts: 1, intervalMs: 1, maxIntervalMs: 1, respectRetryAfter: false },
+    on429: async () => { rotations++; return rotations < 2 ? { adapter, recoveryKind: "key-429" } : null; },
+  });
+  const text = await response.text();
+  expect(sends).toBe(1);
+  expect(rotations).toBe(0);
+  if (kind === "body-only") {
+    expect(response.status).toBe(429);
+    expect(JSON.parse(text).error.code).toBe("upstream_reset_replay_refused");
+  } else {
+    expect(text).toContain("response.failed");
+    expect(text.includes('"retryable":false')).toBe(blocked);
+  }
+});
+
+test.each(["byte-limit", "header-clock", "adapter-header-clock", "caller-cancel"] as const)("review: sidecar refusal probe web-search %s", async kind => {
+  const timed = kind !== "byte-limit";
+  if (timed) jest.useFakeTimers();
+  const caller = new AbortController();
+  const probeStarted = Promise.withResolvers<void>();
+  const code = "upstream_response_refused";
+  const payload = JSON.stringify({ padding: timed ? "" : "x".repeat(17_000), error: { code } });
+  let sends = 0, rotations = 0, externalFetches = 0;
+  let physicalSignal: AbortSignal | undefined;
+  let source: ReadableStreamDefaultController<Uint8Array> | undefined;
+  let closed = false;
+  let detach = () => {};
+  const releaseBody = () => {
+    if (!source || closed) return;
+    closed = true;
+    source.enqueue(new TextEncoder().encode(payload));
+    source.close();
+  };
+  globalThis.fetch = (async () => { externalFetches++; throw new Error("fixture forbids external fetch"); }) as typeof fetch;
+  const adapter: ProviderAdapter = {
+    name: "mock-refusal-probe",
+    buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
+    async fetchResponse(request, ctx) {
+      const respond = (signal: AbortSignal) => {
+        sends++;
+        physicalSignal = signal;
+        if (!timed) return new Response(payload, { status: 429, headers: { "content-type": "application/json" } });
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) { source = controller; },
+          pull() { probeStarted.resolve(); },
+          cancel() { closed = true; },
+        }, { highWaterMark: 0 });
+        const onAbort = () => {
+          if (!closed) { closed = true; source!.error(signal.reason); }
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        detach = () => signal.removeEventListener("abort", onAbort);
+        return new Response(body, { status: 429, headers: { "content-type": "application/json" } });
+      };
+      return kind === "adapter-header-clock"
+        ? fetchVertexWithRetry(request, { ...ctx, executor: (async (_input, init) => respond(init!.signal!)) as typeof fetch })
+        : respond(ctx!.abortSignal!);
+    },
+    async *parseStream() { throw new Error("fixture must not parse an HTTP refusal"); },
+  };
+  const pending = runWithWebSearch({
+    parsed: { modelId: "fixture", stream: true, options: {}, context: { messages: [], tools: [buildWebSearchTool()] } },
+    adapter, backend: "exa", exaApiKey: "fixture", hostedTool: { type: "web_search" },
+    settings: { model: "fixture", reasoning: "low", timeoutMs: 1000 }, maxSearches: 1,
+    incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, abortSignal: caller.signal,
+    connectTimeoutMs: timed ? 50 : 2000,
+    ...(timed ? {} : { retryOn429Policy: { enabled: true, attempts: 1, intervalMs: 1, maxIntervalMs: 1, respectRetryAfter: false } }),
+    on429: async () => { rotations++; return null; },
+  });
+  try {
+    if (timed) {
+      await probeStarted.promise;
+      if (kind === "caller-cancel") caller.abort(new Error("fixture caller cancelled"));
+      else jest.advanceTimersByTime(60);
+      releaseBody();
+    }
+    const response = await pending;
+    const body = await response.json();
+    expect({ sends, rotations, externalFetches }).toEqual({ sends: 1, rotations: 0, externalFetches: 0 });
+    expect(response.status).toBe(kind === "caller-cancel" ? 499 : 429);
+    if (kind === "caller-cancel") expect(body.error.code).not.toBe("upstream_reset_replay_refused");
+    else {
+      expect(physicalSignal!.aborted).toBe(false);
+      expect(response.headers.get("x-should-retry")).toBe("false");
+      expect(body.error.code).toBe(code);
+    }
+  } finally {
+    caller.abort(); releaseBody(); detach();
+    await pending.catch(() => {});
+    if (timed) jest.useRealTimers();
+  }
 });

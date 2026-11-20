@@ -218,6 +218,11 @@ export function codexWsPreOutputRefusalHold(connectMs: number, now = Date.now())
   return { maxMs: Math.min(CODEX_WS_PRE_OUTPUT_REFUSAL_HOLD_MAX_MS, half), until: now + half };
 }
 
+export function terminalErrorRecords(payload: Record<string, unknown>): Record<string, unknown>[] {
+  const response = plainRecord(payload.response) ? payload.response : undefined;
+  return [response?.error, payload.error, response?.last_error, payload.last_error].filter(plainRecord);
+}
+
 /** Only an absent mark or boolean false permits replay, on both the event and its snapshot. */
 export function responsesFrameIsReplayUnsafe(payload: Record<string, unknown>): boolean {
   const marked = (frame: Record<string, unknown>) => Object.hasOwn(frame, "replayUnsafe") && frame.replayUnsafe !== false;

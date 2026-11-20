@@ -249,7 +249,7 @@ model listesi kanıtı bulunmayabilir.
   geçici Kiro 429'ları için sınırlı kurtarmaya sahiptir. Paylaşılan bir soğuma
   süresi ve soğuma sonrası tek bir araştırma, eşzamanlı isteklerin bağımsız
   yeniden deneme bütçelerini tüketmesini önler; kota tükenmesi aynı hesapta yeniden
-  denenmez ve diğer hizmet hataları yeniden oynatılmaz. Tüm Kiro gönderimleri yapılandırılmış sağlayıcı çıkışını kullanır; başlık zaman aşımı 504 döndürür, istemci iptali isteği durdurur ve son HTTP 5xx gövdeleri sabit genel metin kullanır.
+  denenmez ve diğer hizmet hataları yeniden oynatılmaz. Tüm Kiro gönderimleri yapılandırılmış sağlayıcı çıkışını kullanır; fiziksel gönderim öncesinde başlık zaman aşımı HTTP 504 döndürür. POST gönderildikten sonra başlık zaman aşımı `upstream_reset_replay_refused` ve `x-should-retry: false` ile HTTP 429 döndürür. İstemci iptali isteği durdurur ve son HTTP 5xx gövdeleri sabit genel metin kullanır.
 - İki hesap kayıtlıysa hız sınırı reddi ilgili hesabı kısa süreliğine bekletir. Doğrulanmış aylık kota reddi (HTTP 400 veya 429) hesabı gözlenen sıfırlamaya ya da kanıtın süresinin dolmasına kadar dışlar. Doğrulanmış askıya alma (HTTP 403) hesabı geçici olarak karantinaya alır; sıradan bir 403 hesap değişimine yol açmaz. Redden sonraki hesap değişimi proaktif tercih kapalıyken de çalışır. İlk gönderimden önce hesap değiştirmek proaktif tercih gerektirir ve sağlayıcı ayarı genel ayardan önceliklidir. Aynı hesapta tamamlanan tur eski tükenme kararını temizler.
 - Akışsız ayrıştırıcısı web arama döngüsü için aynı olay akışını boşaltır.
 

@@ -19,7 +19,7 @@ import { anthropicRefusalCredentialChanged, rotateAnthropicAccountOnResponseForI
 import { authorizeResendForRecovery } from "../../lib/request-resend-gate";
 import { ambiguousResendAllowanceFor, selfContainedResponsesBody } from "./reset-replay";
 import { transientSendCapFor, type ResponsesSendBudget } from "./request-send-budget";
-import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
+import { observeResponsesRecoveryResponse, projectResponsesUpstreamRefusal, sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 import { isLocalUpstream } from "../../lib/local-upstream";
 import { providerConnectTimeoutMs, providerStallTimeoutSec, resolveConnectTimeoutMs, resolveStallTimeoutMs } from "../../stall-timeout";
 import { responsesTimeoutProvider, type ResponsesRequestContext, type ResponsesAdmissionState } from "./core-options";
@@ -59,7 +59,8 @@ import {
 import {
   fetchWithTransientRetry,
   fetchWithResetRetry,
-  isNonReplayableResponse, isSameTargetRetryHold,
+  carryReplayRefusal, isAutomaticReplayBlocked, isNonReplayableResponse, isReplayRefusalCode, isReplayRefusalResponse,
+  isSameTargetRetryHold, isTerminalResetReplacement,
   applyUpstreamRecoveryInit,
   SendBudgetExhaustedError, errorDestinationLabel,
   UpstreamRetryEvidenceError,
@@ -72,13 +73,13 @@ import type { OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import type { OAuthAccessSnapshot } from "../../oauth";
 import { publicOAuthErrorPresentation, OAuthAccountPausedError, OAuthLoginRequiredError, OAuthTokenRefreshBusyError, publicOAuthAuthenticationErrorMessage } from "../../oauth";
-import { getAccountSet, markAccountNeedsReauthIfGeneration } from "../../oauth/store";
+import { getAccountSet } from "../../oauth/store";
 import { tryKiroAlternateAfterTerminalRefresh } from "../../oauth/kiro-terminal-failover";
 import { classifyKiroRefusal } from "../../adapters/kiro-refusal";
 import { normalizeFinalKiroHttpError } from "../../adapters/kiro-retry";
 import { noteKiroMonthlyRefusal } from "../../providers/kiro-usage";
 import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
-import { isXaiGrokOAuth, isXaiLegacyPrivacyError, xaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
+import { isXaiGrokOAuth } from "../../providers/xai-privacy-mode";
 import { isXaiResponsesDestination, resolveProviderTransport } from "../../providers/xai-transport";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
@@ -121,7 +122,7 @@ import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import { chargeWorkflowSends } from "../../lib/workflow-budget";
 import { hasWorkflowSendObserver } from "../../lib/request-execution-budget";
-import { captureAntigravityQuarantineTrust, classifyAntigravityQuarantine, isAntigravityAccessDeniedRefusal, isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
+import { captureAntigravityQuarantineTrust, quarantineAntigravityRefusal, isAntigravityAccessDeniedRefusal, isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
 import { createAntigravityModelDenialRecovery, recoverAntigravityAccount } from "./antigravity-model-denial-recovery";
 import { isAntigravityFaultRotatable } from "./antigravity-fault-rotation";
 import { adapterSendBudgetRefusal } from "../workflow-refusal";
@@ -725,7 +726,7 @@ export async function prepareAdapterExchange(
             };
             const producer = adapterDispatchBudget?.beginSpendProducer?.();
             try {
-            return await withProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal, pacingSlot => {
+            const response = await withProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal, pacingSlot => {
               return transportState.activeAdapter.fetchResponse!(retryRequest, {
                 kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
                 abortSignal: upstream.signal,
@@ -752,6 +753,7 @@ export async function prepareAdapterExchange(
                 }),
               });
             });
+            return await observeResponsesRecoveryResponse(response, upstream.signal);
             } finally { producer?.close(); }
           }
           // An opted-in 5xx ladder spends only the remainder of this request's budget.
@@ -829,7 +831,7 @@ export async function prepareAdapterExchange(
             if (parsed._anthropicImageOwner && sendBudgetState.adapterSendBudget?.spendEnforced) {
               bindAdapterResponseSpend(response, refetchReporter?.recordUsage);
             }
-            return response;
+            return await observeResponsesRecoveryResponse(response, upstream.signal);
           } finally {
             // Refund only a reservation whose send never reached its admission boundary.
             // A used or externally settled permit ignores this.
@@ -929,14 +931,16 @@ export async function prepareAdapterExchange(
     };
    // Keep recovery kinds in sync with the native Responses `passthroughRecovery:` loop above.
    recovery: for (;;) {
-      const modelRotation = await antigravityDenial.recover(upstreamResponse,
+      await observeResponsesRecoveryResponse(upstreamResponse, upstream.signal);
+      await rejectAnthropicPerMessageEffort(parsed, upstreamResponse, upstream.signal);
+      const modelRotation = isAutomaticReplayBlocked(upstreamResponse) ? undefined : await antigravityDenial.recover(upstreamResponse,
         transportState.replayOAuthCredentialSnapshot ?? transportState.sentOAuthSnapshot, {
           config, model: route.modelId, enabled: antigravityPoolActivated && transportState.activeAdapter.name === "google",
           remaining: transportState.genericFailovers < transportState.genericFailoverLimit, signal: options.abortSignal,
           rotate: id => rotateAntigravityAuth(upstreamResponse, "oauth-account-403", id),
         });
       if (modelRotation) { upstreamResponse = modelRotation; continue recovery; }
-      if (wasAccountAutoPaused(upstreamResponse) && route.provider.authMode !== "forward") {
+      if (!isAutomaticReplayBlocked(upstreamResponse) && wasAccountAutoPaused(upstreamResponse) && route.provider.authMode !== "forward") {
         const recovered = await recoverAutoPausedAccount({ requestKey: transportState, reserve: reserveCredentialHop,
           remaining: transientSendCapFor(transientRetryPolicyFor(route.provider)?.attempts, sendBudgetState.targetSendsUsed),
           mapRefreshError: createAutoPauseRefreshErrorMapper(upstreamResponse, upstream, cleanupUpstreamAbort, copilotRefusalResponse, () => (options.abortSignal ?? req.signal).aborted, clientCancelledResponse),
@@ -946,14 +950,23 @@ export async function prepareAdapterExchange(
         upstreamResponse = recovered; continue recovery;
       }
 
-      // Preserve the terminal verdict through adapter and combo error formatting.
-      // This also covers a reset reached by a 401/429/413 recovery refetch.
-      await rejectAnthropicPerMessageEffort(parsed, upstreamResponse, upstream.signal);
+      // A genuine 429 still informs the issuer's cooldown when recovery is vetoed.
+      if (upstreamResponse.status === 429 && isAutomaticReplayBlocked(upstreamResponse)
+        && !isReplayRefusalResponse(upstreamResponse) && transportState.genericFailoverAccountId) {
+        rotateGenericOAuthAccountOn429(config, route.providerName, transportState.genericFailoverAccountId,
+          upstreamResponse.headers.get("retry-after"), Date.now(), route.modelId, false);
+      }
       if (isNonReplayableResponse(upstreamResponse)) {
         try {
-          return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal,
-            isXaiGrokOAuth(route.providerName, route.provider) ? logCtx : undefined);
+          return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal, {
+            grokOAuthLogCtx: isXaiGrokOAuth(route.providerName, route.provider) ? logCtx : undefined });
         } finally { cleanupUpstreamAbort(); }
+      }
+      if (isAutomaticReplayBlocked(upstreamResponse)) {
+        try { await quarantineAntigravityRefusal(upstreamResponse, route.providerName, route.provider,
+          transportState.genericFailoverAccountId, transportState.sentOAuthSnapshot, antigravityQuarantineTrust, upstream.signal); }
+        catch { /* Preserve the veto even if the fenced quarantine write fails. */ }
+        break recovery;
       }
       bindAnthropicRejectionResponse(transportState.sameTargetRequest, upstreamResponse);
       if (await thinkingSignatureRecovery.prepareHttp(
@@ -1161,11 +1174,9 @@ export async function prepareAdapterExchange(
             try { void failedResponse.body?.cancel().catch(() => {}); } catch { /* closed */ }
           }
           upstreamResponse = result;
-          // A recovery refetch can itself die on an ambiguous pre-header reset, and the refusal
-          // that answers it is a 429. Every arm below keys on 429, so letting it fall through
-          // hands the marked refusal to the next waiting arm and replays the send it exists to
-          // stop. Re-enter the loop guard instead, which returns it unchanged.
-          if (isNonReplayableResponse(upstreamResponse)) continue recovery;
+          // A replacement can carry a refusal at either the same status or a different one.
+          // Re-enter the recovery guard before this loop or a later arm can send again.
+          if (isAutomaticReplayBlocked(upstreamResponse)) continue recovery;
         } finally {
           if (billingHop) { sendBudgetState.pendingHopPermit = undefined; billingHop.permit?.release(); }
         }
@@ -1249,7 +1260,7 @@ export async function prepareAdapterExchange(
 
       // Honor retryOn429 on the same key before rotating it (#487).
       while (
-        upstreamResponse.status === 429 && !isSameTargetRetryHold(upstreamResponse)
+        upstreamResponse.status === 429 && !isAutomaticReplayBlocked(upstreamResponse) && !isSameTargetRetryHold(upstreamResponse)
         && rateLimitPolicy !== null && providerAffinityGenerationIsCurrent(config, route.providerName, route.provider)
         && rateLimitRetries < rateLimitPolicy.attempts
         && !sendBudgetExhausted()
@@ -1282,7 +1293,7 @@ export async function prepareAdapterExchange(
        upstreamResponse = result;
         // The refusal is a 429 too: without this the while condition is still true and the
         // next configured attempt replays it on the same target.
-        if (isNonReplayableResponse(upstreamResponse)
+        if (isAutomaticReplayBlocked(upstreamResponse)
           || (isAnthropicBillingKeyPool(route.provider)
             && [400, 402].includes(upstreamResponse.status))) continue recovery;
      }
@@ -1290,7 +1301,7 @@ export async function prepareAdapterExchange(
       // Multi-key 429 failover: rotate to the next pool key (cooldown-aware) and retry the
       // SAME request once per remaining key. OAuth/forward providers and single-key pools
       // return null immediately, so this stays a no-op for them (src/providers/key-failover.ts).
-      while (upstreamResponse.status === 429 && hasKeyPoolFailover(route.provider)) {
+      while (upstreamResponse.status === 429 && !isAutomaticReplayBlocked(upstreamResponse) && hasKeyPoolFailover(route.provider)) {
         // A quota exhaustion is dated in the BODY, not in `Retry-After` — OpenRouter
         // sends no header for it (#4024). Read a bounded prefix before the socket is
         // released below; a failed or slow read just leaves the header path in charge.
@@ -1359,7 +1370,7 @@ export async function prepareAdapterExchange(
           upstreamResponse = result;
           // Rotating on the refusal would also write a cooldown against a key that rate-limited
           // nothing, which outlives the request.
-          if (isNonReplayableResponse(upstreamResponse)
+          if (isAutomaticReplayBlocked(upstreamResponse)
             || (billingRecoveryActive && upstreamResponse.status === 401)
             || (route.provider.adapter === "anthropic" && [400, 402].includes(upstreamResponse.status))) continue recovery;
         } finally {
@@ -1436,7 +1447,7 @@ export async function prepareAdapterExchange(
             return result.failed;
           }
           upstreamResponse = result;
-          if (isNonReplayableResponse(upstreamResponse)) continue recovery;
+          if (isAutomaticReplayBlocked(upstreamResponse)) continue recovery;
         } catch {
           // release() refunds a pre-send hop and is a no-op once the send settled it.
           hop.permit?.release();
@@ -1547,7 +1558,7 @@ export async function prepareAdapterExchange(
          upstreamResponse = result;
           // The hop's permit is already settled by the dispatch boundary above; continuing
           // only skips the remaining arms, it does not abandon a reservation.
-          if (isNonReplayableResponse(upstreamResponse)) continue recovery;
+          if (isAutomaticReplayBlocked(upstreamResponse)) continue recovery;
        } catch {
          // A throw before the send — snapshot fetch, credential application, adapter
           // resolution — must hand the reservation back. Without this the ladder charges the
@@ -1649,7 +1660,7 @@ export async function prepareAdapterExchange(
           // The hop's permit is already settled by the dispatch boundary above; continuing
           // only skips the remaining arms, it does not abandon a reservation. A replacement's
           // surviving 502/503/504 re-enters recovery so the one-hop fault rotation can run.
-          if (isNonReplayableResponse(upstreamResponse) || antigravityFaultRotatable(upstreamResponse)) continue recovery;
+          if (isAutomaticReplayBlocked(upstreamResponse) || antigravityFaultRotatable(upstreamResponse)) continue recovery;
        } catch (err) {
           // A local admission denial is terminal for the whole request: rotating to another
           // account cannot re-scope the key, so the refusal answers in place of the 429.
@@ -1672,30 +1683,23 @@ export async function prepareAdapterExchange(
       }
       // Antigravity verify-account quarantine: a 403 demanding account verification
       // is terminal for THAT account — its grant still refreshes, so only a manual
-      // verification followed by a re-login clears it. Mark it needsReauth (durable,
-      // shown as `needs-reauth(verify)` in `ocx account list` with a `verify_account`
-      // health reason in the management API, excluded from the pool until re-login)
-      // and replay the same request on the next eligible account so the pool keeps
+      // verification followed by a re-login clears it. Replay on the next eligible account so the pool keeps
       // serving.
       while (
         upstreamResponse.status === 403
         && route.providerName === "google-antigravity"
         && transportState.genericFailoverAccountId
       ) {
-        const refusal = await classifyAntigravityQuarantine(upstreamResponse, route.provider, antigravityQuarantineTrust, upstream.signal);
-        if (refusal.kind === "other") break;
-        const sent = transportState.sentOAuthSnapshot;
-        const failedAccountId = transportState.genericFailoverAccountId;
-        // Fenced write: a 403 arriving after the credential rotated (refresh or
-        // re-login) must not quarantine the new login. Without the matching sent
-        // snapshot there is no owner for this write, so skip marking.
-        if (!sent || sent.accountId !== failedAccountId) break;
+        let sent: typeof transportState.sentOAuthSnapshot;
         try {
-          await markAccountNeedsReauthIfGeneration(route.providerName, failedAccountId, sent.generation, undefined, refusal.kind);
+          sent = await quarantineAntigravityRefusal(upstreamResponse, route.providerName, route.provider,
+            transportState.genericFailoverAccountId, transportState.sentOAuthSnapshot, antigravityQuarantineTrust, upstream.signal);
         } catch {
           // A failed quarantine write must preserve the refusal, not authorize another send.
           break recovery;
         }
+        if (!sent) break;
+        const failedAccountId = sent.accountId;
         if (!antigravityPoolActivated || transportState.genericFailovers >= transportState.genericFailoverLimit) break;
         const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;
         const hop = reserveCredentialHop(
@@ -1759,7 +1763,7 @@ export async function prepareAdapterExchange(
           transportState.genericFailovers += 1;
           try { void failedResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
           upstreamResponse = result;
-          if (isNonReplayableResponse(upstreamResponse) || antigravityFaultRotatable(upstreamResponse)) continue recovery;
+          if (isAutomaticReplayBlocked(upstreamResponse) || antigravityFaultRotatable(upstreamResponse)) continue recovery;
         } catch {
           hop.permit?.release();
           break;
@@ -1869,14 +1873,15 @@ export async function prepareAdapterExchange(
         upstreamResponse = await normalizeFinalKiroHttpError(upstreamResponse, upstream.signal);
       const grokOAuth = isXaiGrokOAuth(route.providerName, route.provider);
       if (options.comboAttempt) {
-        // No pre-read guard: `consumeComboFailure` -> `readBoundedResponseBody` reads
-        // `response.body` itself with the abort signal threaded through, and the combo
-        // contract is that this body's getter is touched exactly once. A guard here would be
-        // a second `.body` access for no gain, since the bounded reader owns settlement.
+        // The combo's abort-aware bounded reader owns the single response.body access.
         const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, Date.now(), logCtx, !isProxyError(upstreamResponse), grokOAuth)
           .finally(cleanupUpstreamAbort);
         options.onConsumedComboFailure?.(failure);
         return failure.response;
+      }
+      if (isTerminalResetReplacement(upstreamResponse)) {
+        return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal, {
+          terminalReplacement: true, grokOAuthLogCtx: grokOAuth ? logCtx : undefined }).finally(cleanupUpstreamAbort);
       }
       let errorText: string;
       try {
@@ -1888,14 +1893,15 @@ export async function prepareAdapterExchange(
       } finally {
         cleanupUpstreamAbort();
       }
-      if (grokOAuth && isXaiLegacyPrivacyError(upstreamResponse.status, errorText)) return xaiPrivacyModeRefusal(logCtx);
+      const refusal = projectResponsesUpstreamRefusal(upstreamResponse, errorText, grokOAuth ? logCtx : undefined);
+      if (refusal) return refusal;
       // The provider's own body (not a proxy-normalized one) may name its closed error class (#8446).
       if (!isProxyError(upstreamResponse)) recordUpstreamProviderErrorDetail(logCtx, upstreamResponse.status, errorText, upstreamResponse);
       if (upstreamResponse.status === 413) {
         if (options.clientModelLabel) projectLocalModelRefusalLog(logCtx, options.clientModelLabel);
-        return clientRequestedStream
+        return carryReplayRefusal(upstreamResponse, clientRequestedStream
           ? streamingContextOverflowResponse(clientFacingModelText(options.clientModelLabel), translatorBudget)
-          : jsonContextOverflowResponse();
+          : jsonContextOverflowResponse());
       }
       const policyRefusal = rewriteUpstreamPolicyRefusal({
         status: upstreamResponse.status,
@@ -1926,7 +1932,8 @@ export async function prepareAdapterExchange(
       // The last pool account just refused on spent quota and recovery found no replacement:
       // answer the usage limit now (#6991), so Codex stops instead of retrying into the local
       // refusal that every later attempt meets until the first window reopens.
-      const poolUsageLimit = upstreamResponse.status === 429 && anthropicInstance && route.provider.authMode === "oauth"
+      const poolUsageLimit = upstreamResponse.status === 429 && !isAutomaticReplayBlocked(upstreamResponse)
+        && anthropicInstance && route.provider.authMode === "oauth"
         ? anthropicRoutingFor(anthropicInstance).anthropicPoolUsageLimitAfterRefusal(Date.now(), transportState.anthropicRouteDecision, route.modelId)
         : null;
       // Combo children returned above; the flag is passed anyway so this site states the same rule.
@@ -1955,15 +1962,15 @@ export async function prepareAdapterExchange(
           upstreamRetryAfter,
           includeDefault: !(transportState.anthropicPoolAccountId && classifyAnthropic429(upstreamResponse.headers) === "request-scoped-unknown"),
         });
-      return carryPolicyCandidateRefusal(upstreamResponse, formatUpstreamFailureResponse(upstreamResponse, normalized.code,
+      return carryPolicyCandidateRefusal(upstreamResponse, carryReplayRefusal(upstreamResponse, formatUpstreamFailureResponse(upstreamResponse, normalized.code,
         upstreamResponse.status,
         normalized.cyberPolicy ? (normalized.type ?? CYBER_POLICY_ERROR_CODE) : "upstream_error",
         message,
         {
-          ...(normalized.cyberPolicy ? { code: CYBER_POLICY_ERROR_CODE } : {}),
+          ...(normalized.cyberPolicy ? { code: CYBER_POLICY_ERROR_CODE } : isReplayRefusalCode(normalized.code) ? { code: normalized.code } : {}),
           ...(retryAfter !== undefined ? { retryAfter } : {}),
         },
-      ));
+      )));
     }
   }
 

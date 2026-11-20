@@ -1,5 +1,4 @@
 import { clientFacingModelLabel, type ClientFacingModelLabel } from "../../lib/error-destination";
-import { formatClientRetryAfter } from "../../lib/client-retry-after";
 import { conversationStateAccountId, releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/account-id";
@@ -118,6 +117,15 @@ import {
   fetchWithTransientRetry,
   applyUpstreamRecoveryInit,
   isNonReplayableResponse,
+  isAutomaticReplayBlocked,
+  hasUpstreamReplayRefusal,
+  observedReplayRefusalCode,
+  isReplayRefusalResponse,
+  carryReplayRefusal,
+  carryReplayRefusalToClient,
+  projectReplayRefusal,
+  replayRefusalBodyCode,
+  UPSTREAM_RESET_REPLAY_REFUSED_CODE,
   retainPacedRetryResponse,
   SendBudgetExhaustedError, errorDestinationLabel,
   type UpstreamSendRecovery,
@@ -188,14 +196,13 @@ import { passiveKeyPhysicalFetch } from "../../providers/passive-key-observation
 import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../../providers/api-key-pause";
 import { providerAffinityGenerationIsCurrent, providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../../providers/api-key-selection";
 import { stampApiKeyAccountLabel } from "../../providers/label";
-import { shouldAttemptImageTierRetry } from "../image-retry";
 import { resolveProviderTransport } from "../../providers/xai-transport";
 import type { WsData } from "../ws-bridge";
 import { codexAccountSelectionForTurn, registerTurn, trackStreamLifetime, unregisterTurn } from "../lifecycle";
 import type { AdmissionLease } from "../../lib/admission";
 import { redactSecretString } from "../../lib/redact";
 import { resolveConnectTimeoutMs } from "../../stall-timeout";
-import { CompactResponseTooLargeError, readCompactResponseBytes } from "./compact-response-body";
+import { bufferCompactResponse, readCompactResponseBytes } from "./compact-response-body";
 import { isLocalUpstream } from "../../lib/local-upstream";
 import { isRateLimitOrQuotaFailureMessage } from "../../lib/errors";
 import { isProxyError } from "../../lib/client-error-body";
@@ -245,7 +252,7 @@ import { recallComboForLane } from "./combo-session-recall";
 import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
 import { warnEagerCodexToolCatalog } from "./codex-tool-catalog";
 
-export { COMPACT_RESPONSE_MAX_BYTES } from "./compact-response-body";
+export { bufferCompactResponse, COMPACT_RESPONSE_MAX_BYTES, compactResponseTooLargeError } from "./compact-response-body";
 
 const COMPACT_HANDOFF_ROUTE_TTL_MS = 24 * 60 * 60_000;
 const COMPACT_HANDOFF_ROUTE_MAX_ENTRIES = 2_048;
@@ -348,16 +355,6 @@ export interface HandleResponsesCompactOptions {
    * child then started over, so one compact could reach ten.
    */
   sendBudget?: RequestExecutionBudget;
-}
-
-export function compactResponseTooLargeError(): Response {
-  return new Response(JSON.stringify({
-    error: {
-      message: "Compact response exceeded 32 MiB",
-      type: "compact_response_too_large",
-      code: "compact_response_too_large",
-    },
-  }), { status: 502, headers: { "Content-Type": "application/json" } });
 }
 
 async function refreshNativeMainCompactContext(args: {
@@ -600,69 +597,6 @@ async function resolveAlternateCompactContext(args: {
     return null;
   }
 }
-
-/**
- * Headers a client needs to back off correctly after a pool rejection. The buffered
- * response is rebuilt from scratch, so anything not listed here is dropped — which is
- * what silently discarded `Retry-After` and the reset hints from a 429 before.
- * Deliberately narrow: no hop-by-hop headers, no content-length (the buffered body sets
- * its own), no cookies.
- */
-const COMPACT_PASSTHROUGH_HEADERS = [
-  "retry-after",
-  "x-codex-primary-reset-at",
-  "x-codex-secondary-reset-at",
-  "x-codex-tertiary-reset-at",
-  // A relayed 3xx keeps its Location so the client can follow it (#914).
-  "location",
-];
-
-function compactResponseHeaders(upstream: Response): Headers {
-  const headers = new Headers({ "Content-Type": upstream.headers.get("content-type") ?? "application/json" });
-  for (const name of COMPACT_PASSTHROUGH_HEADERS) {
-    const value = upstream.headers.get(name);
-    if (value === null) continue;
-    if (name === "retry-after") {
-      // Retry advice leaves as an integer this proxy formats, never the upstream bytes.
-      const advice = formatClientRetryAfter(value);
-      if (advice !== undefined) headers.set(name, advice);
-    } else headers.set(name, value);
-  }
-  return headers;
-}
-
-export async function bufferCompactResponse(
-  upstream: Response,
-  signal: AbortSignal,
-  stallTimeoutSec?: number,
-  localUpstream?: boolean,
-): Promise<Response> {
-  const headers = compactResponseHeaders(upstream);
-  try {
-    if (signal.aborted) {
-      // No reader is attached yet. Cancellation must not wait for a broken source's cleanup.
-      void upstream.body?.cancel(signal.reason).catch(() => undefined);
-      return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
-    }
-    if (!upstream.body) return new Response(null, { status: upstream.status, statusText: upstream.statusText, headers });
-    const bytes = await readCompactResponseBytes(upstream, signal, stallTimeoutSec);
-    if (signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
-    return new Response(bytes, { status: upstream.status, statusText: upstream.statusText, headers });
-  } catch (error) {
-    if (signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
-    if (error instanceof CompactResponseTooLargeError) return compactResponseTooLargeError();
-    if (error instanceof DOMException && error.name === "TimeoutError") {
-      return Response.json({ error: {
-        message: "Compact response body stalled",
-        type: "upstream_stall_timeout",
-        code: "upstream_stall_timeout",
-      } }, { status: 504 });
-    }
-    return formatErrorResponse(502, "upstream_error", "Failed to read compact response");
-  }
-}
-
-
 
 /**
  * Route one `/v1/responses/compact` request: validate the body (rejecting malformed
@@ -1383,6 +1317,7 @@ export async function handleResponsesCompact(
       && (authCtx.kind === "main-pool" || authCtx.kind === "pool")
       && !gatewayTransport
       && usesCodexForwardPoolAuth(authCtx, compactProvider)
+      && !await hasUpstreamReplayRefusal(upstream, req.signal, { requireCompleteBody: true })
       && !req.signal.aborted
     ) {
       const canReplay = !configuredSendBudgetExhausted();
@@ -1532,15 +1467,12 @@ export async function handleResponsesCompact(
     if (
       (upstream.status === 429 || upstream.status === 402 || wasAccountAutoPaused(upstream))
       && !configuredSendBudgetExhausted()
-      // A replay refusal this proxy synthesized carries 429 for the client's benefit only.
-      // It is not pool quota evidence, and the alternate account below is another send of a
-      // compact turn that may already have been processed.
-      && !isNonReplayableResponse(upstream)
       && (!storedPool401ReplayAttempted || wasAccountAutoPaused(upstream))
       && !gatewayTransport
       && usesCodexForwardPoolAuth(authCtx, route.provider)
       && !authCtx.fixedAccount
       && route.codexAccountMode
+      && !await hasUpstreamReplayRefusal(upstream, req.signal, { requireCompleteBody: true })
       && !req.signal.aborted
     ) {
       const recovery = upstream.status === 402 ? "oauth-account-402" : upstream.status === 403 ? "oauth-account-403" : "oauth-account-429";
@@ -1660,6 +1592,7 @@ export async function handleResponsesCompact(
       && outcomeCtx === authCtx
       && !req.signal.aborted
       && !conversationCarriesUploadedFiles(raw)
+      && !await hasUpstreamReplayRefusal(upstream, req.signal, { requireCompleteBody: true })
       && !await shouldRetryCodexPoolAccountQuota(upstream, req.signal)
     ) {
       const firstStatus = upstream.status;
@@ -1737,6 +1670,8 @@ export async function handleResponsesCompact(
       upstream.headers.get("x-codex-secondary-reset-at"),
       upstream.headers.get("x-codex-tertiary-reset-at"),
     ].filter(Boolean);
+    // An alternate's failure can still reach the model handoff or native 404 fallback.
+    await hasUpstreamReplayRefusal(upstream, req.signal, { requireCompleteBody: true });
     const buffered = await bufferCompactResponse(upstream, req.signal, config.stallTimeoutSec, isLocalUpstream(compactUrl));
     const bufferedErrorText = buffered.ok
       ? ""
@@ -1744,7 +1679,8 @@ export async function handleResponsesCompact(
     // The client-facing 429 of a synthesized replay refusal says nothing about this
     // account's quota. Pool accounting keeps reading it as the transport failure it is,
     // which is also what it recorded before the status was corrected for the client.
-    const replayRefused = isNonReplayableResponse(upstream);
+    const replayRefused = isReplayRefusalResponse(upstream);
+    const refusalCode = observedReplayRefusalCode(upstream) ?? replayRefusalBodyCode(bufferedErrorText);
     const explicitQuotaStatus = !replayRefused
       && (buffered.status === 429 || buffered.status === 402);
     const bodyInferredQuota = !replayRefused
@@ -1783,7 +1719,8 @@ export async function handleResponsesCompact(
       inspectResponseLogJson(logCtx, compactText);
       if (!options.compactionRoutingOverride) forgetCompactHandoffRoute(req, admission);
       rememberServingConversationStateIssuer(outcomeCtx, codexPoolAffinityKey(req.headers));
-    } else if (!options.compactionRoutingOverride && quotaFailure && !configuredSendBudgetExhausted()
+    } else if (!refusalCode && !isAutomaticReplayBlocked(upstream)
+      && !options.compactionRoutingOverride && quotaFailure && !configuredSendBudgetExhausted()
       && (!storedPool401ReplayAttempted || wasAccountAutoPaused(upstream))) {
       const fallbackModel = compactHandoffRoute(req, admission, raw.model);
       if (fallbackModel && !req.signal.aborted) {
@@ -1803,7 +1740,10 @@ export async function handleResponsesCompact(
             admission,
             { ...options, sendBudget },
           );
-          if (fallback.ok || fallback.status === 499) return fallback;
+          if (fallback.ok || fallback.status === 499 || isAutomaticReplayBlocked(fallback)) {
+            void buffered.body?.cancel().catch(() => undefined);
+            return fallback;
+          }
           await fallback.body?.cancel().catch(() => undefined);
         } catch {
           // The previous-model rejection is the authoritative failure when the
@@ -1812,7 +1752,13 @@ export async function handleResponsesCompact(
       }
     }
     // A native compact 404 falls back to a regular Responses compaction turn.
-    if (buffered.status !== 404 || configuredSendBudgetExhausted()) return buffered;
+    if (buffered.status !== 499 && (refusalCode || replayRefused)) {
+      void buffered.body?.cancel().catch(() => undefined);
+      return carryReplayRefusal(upstream, projectReplayRefusal(refusalCode ?? UPSTREAM_RESET_REPLAY_REFUSED_CODE));
+    }
+    if (buffered.status !== 404 || isAutomaticReplayBlocked(upstream) || configuredSendBudgetExhausted()) {
+      return carryReplayRefusalToClient(upstream, buffered);
+    }
     if (preserveConfiguredRefusal) nativeNotFound = buffered;
     } finally {
       releaseUpstreamHostAdmission(compactHostAdmissionLease);

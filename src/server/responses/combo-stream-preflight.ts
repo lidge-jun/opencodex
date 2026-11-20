@@ -12,20 +12,21 @@ import {
 } from "../../combos/failover";
 import type { ResponsesTerminalStatus } from "../../bridge";
 import { comboFailureDecision } from "../../combos";
-import { httpStatusFromTerminalError } from "../../lib/errors";
+import { httpStatusFromTerminalError, isTerminalRefusalCode } from "../../lib/errors";
 import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import type { RequestFailureStage } from "../../lib/request-failure-model";
 import type { RequestLogContext } from "../request-log";
 import { carryResponseToolOwnership } from "./response-tool-ownership";
-import { responsesFrameIsReplayUnsafe } from "./codex-ws-wire";
+import { responsesFrameIsReplayUnsafe, terminalErrorRecords } from "./codex-ws-wire";
 import { createSseInspector, isNativePassthroughSseResponse } from "../relay";
 import { sseDataPayload } from "../sse-payload-rewrite";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 import { COMBO_DEGENERATE_COMPLETION_CODE, REQUIRED_TOOL_CONTRACT_CODE, responsesCompletionError } from "../../lib/errors";
 import { attachComboFailureEvidence, isPausedTurn } from "../../lib/client-error-body";
 import { requiredToolReasoningPrelude } from "./combo-required-tool-stream";
-import { ProtocolPreOutputEof } from "../../lib/upstream-retry";
+import { carryReplayRefusal, applyReplayRefusalClientHeaders, isAutomaticReplayBlocked, isNonReplayableUpstreamCode, markTerminalResetReplacement, ProtocolPreOutputEof, replayRefusalVerdict } from "../../lib/upstream-retry";
 import { carryPacedStream, pacedQueuingStrategy } from "../../lib/paced-stream";
+import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 
 const COMBO_STREAM_PREFLIGHT_MAX_BYTES = MAX_CLIENT_SSE_FRAME_BYTES;
 // Bound the prelude hold from its first client-visible event, even if upstream goes quiet.
@@ -248,9 +249,8 @@ function comboStreamDegeneratePrelude(payload: unknown, commentaryItemIds: Set<s
   return requiredToolReasoningPrelude(payload);
 }
 
-function incompleteCarriersVetoReplay(...carriers: Array<Record<string, unknown> | undefined>): boolean {
-  return carriers.some(carrier => carrier?.end_turn === false
-    || recordValue(carrier?.incomplete_details)?.retryable === false);
+function incompleteCarriersVetoReplay(event: Record<string, unknown>, response: Record<string, unknown> | undefined): boolean {
+  return event.end_turn === false || response?.end_turn === false;
 }
 
 function classifyIncompleteReplayReason(
@@ -452,6 +452,21 @@ function heldOnlyOutput(...outputs: unknown[]): boolean {
   });
 }
 
+export function failedTerminalReplayVerdict(payload: unknown): "blocked" | "policy" | undefined {
+  if (!isRecord(payload)) return;
+  const bare = payload.type === "error";
+  const failed = payload.type === "response.failed" || payload.status === "failed";
+  if (!bare && !failed && payload.type !== "response.incomplete" && payload.status !== "incomplete") return;
+  const errors = terminalErrorRecords(payload);
+  if (isNonReplayableUpstreamCode(payload.code) || errors.some(error => isNonReplayableUpstreamCode(error.code))) return "blocked";
+  const { refusalCode, explicitVeto } = replayRefusalVerdict(payload);
+  if (refusalCode !== undefined) return "blocked";
+  if (explicitVeto && (payload.retryable === false || recordValue(payload.response)?.retryable === false)) {
+    return !bare && failed && errors.some(error => typeof error.code === "string" && isTerminalRefusalCode(error.code)) ? "policy" : "blocked";
+  }
+  if (explicitVeto) return "blocked";
+}
+
 function retryableZeroOutputTerminal(payload: unknown, context?: object): boolean {
   const event = recordValue(payload);
   if (!event) return false;
@@ -462,7 +477,7 @@ function retryableZeroOutputTerminal(payload: unknown, context?: object): boolea
     && (!Array.isArray(target.output) || target.output.length === 0);
 
   if (event.type === "response.failed" || event.status === "failed") {
-    const error = recordValue(response?.error ?? event.error);
+    const error = terminalErrorRecords(event)[0];
     const code = error?.code;
     // The required-tool guard synthesizes this terminal over output it held back from the client,
     // so held text and reasoning are not evidence of anything sent; it keeps the retryability it
@@ -470,7 +485,7 @@ function retryableZeroOutputTerminal(payload: unknown, context?: object): boolea
     if (code === REQUIRED_TOOL_CONTRACT_CODE) {
       if (response?.error != null && event.error != null) return false;
       if (event.last_error != null || response?.last_error != null) return false;
-      return error?.retryable !== false && !incompleteCarriersVetoReplay(event, response)
+      return !incompleteCarriersVetoReplay(event, response)
         && classifyIncompleteReplayReason(event, response) !== "veto"
         && (emptyOutput || heldOnlyOutput(target.output, event.output));
     }
@@ -610,13 +625,11 @@ function failedTerminalResponse(
   const terminalResponse = nested ?? terminalPayload;
   const zeroOutputLimit = (terminalPayload.type === "response.incomplete" || terminalPayload.status === "incomplete")
     && classifyIncompleteReplayReason(terminalPayload, nested) === "output-limit";
-  const nestedError = nested?.error;
-  const topLevelError = terminalPayload.error;
-  const error = nestedError && typeof nestedError === "object" && !Array.isArray(nestedError)
-    ? nestedError as Record<string, unknown>
-    : topLevelError && typeof topLevelError === "object" && !Array.isArray(topLevelError)
-      ? topLevelError as Record<string, unknown>
-    : isOpenRouterOpaque400Record(terminalPayload)
+  const errors = terminalErrorRecords(terminalPayload);
+  const terminalPolicy = failedTerminalReplayVerdict(terminalPayload) === "policy";
+  const selectedError = (terminalPolicy
+    ? errors.find(error => typeof error.code === "string" && isTerminalRefusalCode(error.code)) : undefined) ?? errors[0];
+  const error = selectedError ?? (isOpenRouterOpaque400Record(terminalPayload)
       ? {
         message: terminalPayload.message,
         code: terminalPayload.code,
@@ -640,11 +653,12 @@ function failedTerminalResponse(
         : zeroOutputLimit
           ? "Provider reached its output token limit before producing output"
           : logCtx.upstreamError ?? "Provider stream failed before producing output",
-    };
+    });
   const headers = new Headers(response.headers);
   headers.set("content-type", "application/json");
   headers.delete("content-length");
   headers.delete("content-encoding");
+  if (terminalPolicy) applyReplayRefusalClientHeaders(headers);
   const usage = collectUsage && !logCtx.usageFromBridge && !logCtx.clientResponseUsage
     ? terminalResponse.usage : undefined;
   return new Response(JSON.stringify({
@@ -655,6 +669,7 @@ function failedTerminalResponse(
     // error envelope merely because they shared the terminal snapshot.
     response: {
       error,
+      ...(terminalPolicy ? { retryable: false } : {}),
       ...(usage && typeof usage === "object" && !Array.isArray(usage) ? { usage } : {}),
     },
   }), {
@@ -709,7 +724,7 @@ export async function preflightComboStreamResponse(
   const contentType = response.headers.get("content-type");
   const isEventStream = hasResponseMediaType(response.headers, "text/event-stream")
     || (!contentType && options?.allowMissingContentType === true);
-  if (!response.ok || !response.body) {
+  if (isAutomaticReplayBlocked(response) || !response.ok || !response.body) {
     return { kind: "accepted", response };
   }
   if (!isEventStream) {
@@ -757,9 +772,14 @@ export async function preflightComboStreamResponse(
           return;
         }
         if (event?.type === "response.created") responseCreated = true;
-        const retryable = retryableTerminalFor(payload);
-        const matchedBareError = retryable && payload !== null && typeof payload === "object"
-          && !Array.isArray(payload) && (payload as { type?: unknown }).type === "error";
+        const verdict = failedTerminalReplayVerdict(payload);
+        // The default combo classifier still projects a pre-output policy refusal to its
+        // HTTP 400 contract. A caller-provided recovery callback must never retry it.
+        const projectPolicy = verdict === "policy" && retryableTerminal === undefined;
+        const replay = replayRefusalVerdict(payload);
+        const retryable = (projectPolicy || (verdict === undefined && !replay.explicitVeto && !replay.refusalCode))
+          && retryableTerminalFor(payload);
+        const matchedBareError = retryable && event?.type === "error";
         // A zero-output bare error is terminal evidence. Explicit client errors stay
         // committed; unknown and retryable upstream failures may advance the combo.
         const heldReasoning = options?.degeneratePrelude === true
@@ -769,7 +789,8 @@ export async function preflightComboStreamResponse(
           holdTimer = setTimeout(() => resolve("hold-expired"), COMBO_STREAM_PRELUDE_HOLD_MS);
         });
         const degenerateTerminal = options?.degeneratePrelude === true
-          && isDegenerateStreamTerminal(payload, logCtx);
+          && verdict === undefined && event !== undefined && !replay.explicitVeto && !replay.refusalCode
+          && !isNonReplayableUpstreamCode(event.code) && isDegenerateStreamTerminal(event, logCtx);
         if (comboStreamPayloadCommitsOutput(payload) && !matchedBareError && !heldReasoning) outputCommitted = true;
         if (options?.requiredToolPrelude && payload && typeof payload === "object") {
           const event = payload as { type?: unknown; response?: { output?: unknown; error?: { code?: unknown; retryable?: unknown } } };
@@ -782,12 +803,12 @@ export async function preflightComboStreamResponse(
           // failure may discard a terminal-only text snapshot that was held in its entirety.
           if (output !== undefined && (!Array.isArray(output) || output.length > 0) && !contractFailure && !degenerateTerminal) outputCommitted = true;
         }
-        if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
-        if (retryable) retryableTerminalPayload = payload as Record<string, unknown>;
+        if (!event) return;
+        if (retryable) retryableTerminalPayload = event;
         if (degenerateTerminal && !degenerateTerminalPayload) {
-          const response = recordValue((payload as Record<string, unknown>).response);
+          const response = recordValue(event.response);
           degenerateTerminalPayload = {
-            ...(payload as Record<string, unknown>),
+            ...(event),
             response: {
               ...(response ?? {}),
               error: {
@@ -963,6 +984,7 @@ export interface DeferredResetRecoveryOptions {
    * consumer whose silence clock sees only delivered bytes; its owner still bounds real silence.
    */
   keepalive?: "periodic" | "upstream-activity" | "none";
+  grokOAuthLogCtx?: Pick<RequestLogContext, "causeHint">;
 }
 
 /** Which physical attempt produced the head a reset selection published. */
@@ -1069,7 +1091,23 @@ function createResetSelection(
       const replacement = await recover(preflight.error, preflight.stage, preflightAbort.signal, accepts);
       if (replacement) {
         // Checked again here: the head may have been committed while the replacement was in flight.
-        if (!closed && accepts(replacement)) {
+        if (!closed && !replacement.ok) {
+          // Recovery only admits an HTTP failure when it carries a terminal refusal.
+          cancelBody(chosen.response.body, "using terminal replacement refusal");
+          markTerminalResetReplacement(replacement);
+          if (headCommitted) {
+            const refusal = await sanitizeNonReplayableUpstreamError(replacement, preflightAbort.signal, {
+              terminalReplacement: true, grokOAuthLogCtx: options?.grokOAuthLogCtx,
+            });
+            const { error } = await refusal.json();
+            const payload = { type: "response.failed", response: {
+              status: "failed", output: [], retryable: false, error, last_error: error,
+            } };
+            chosen = { response: carryReplayRefusal(replacement, new Response(`event: response.failed\ndata: ${JSON.stringify(payload)}\n\n`)), owner: "replacement" };
+          } else {
+            chosen = { response: replacement, owner: "replacement" };
+          }
+        } else if (!closed && accepts(replacement)) {
           cancelBody(chosen.response.body, "using protocol-safe replacement stream");
           chosen = { response: replacement, owner: "replacement" };
           replacementHeadPending = headCommitted && keepalive === "upstream-activity";
@@ -1083,6 +1121,9 @@ function createResetSelection(
       cancelBody(chosen.response.body, "downstream cancelled before protocol preflight completed");
       return;
     }
+    // A late selection cannot rewrite a committed wire head, but its verdict still fences
+    // every later internal recovery that consumes the held body.
+    carryReplayRefusal(chosen.response, held);
     selection = chosen;
   };
   const start = (): Promise<void> => initialization ??= initialize().then(

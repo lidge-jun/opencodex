@@ -9,9 +9,10 @@
 import { describe, expect, test } from "bun:test";
 import { firstLoadTimePathTo } from "../helpers/import-graph";
 import { relayHubManagementRequest } from "../../src/client/hub-relay";
-import { LINK_RELAY_AUTH_FAILED_CODE, relayLinkDataRequest } from "../../src/client/link-relay";
+import { HOME_INITIATED_LINK_TUNNEL, LINK_RELAY_AUTH_FAILED_CODE, relayLinkDataRequest } from "../../src/client/link-relay";
 import { LinkRelayAuthenticationError } from "../../src/client/link-relay-transport";
 import { HOME_UNREACHABLE_CODE, HOME_UNREACHABLE_MESSAGE } from "../../src/client/home-unreachable";
+import { LINK_RELAY_AUTH_PATH } from "../../src/link/relay-auth";
 
 // The modules that turn a request into an upstream send: Responses dispatch, the router and
 // adapter construction. Config schemas, provider metadata and the combo catalog projection the
@@ -67,22 +68,58 @@ describe("home_unreachable answers", () => {
     expect(HOME_UNREACHABLE_MESSAGE).toContain("ocx fallback local on --device");
   });
 
-  test("a failed relay authentication is not home_unreachable, so it never reads as Home down", async () => {
-    for (const unrecognized of [false, true]) {
-      const response = await relayLinkDataRequest(new Request("http://127.0.0.1:10100/v1/responses", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: "m", input: "hello" }),
-      }), { tunnelPort: 41001, admissionKey: "fixture-link-key", linkId: "lnk_0123456789abcdef", apiKeyId: "key_link" }, {
-        tunnel: { connected: () => ({ kind: "match" }), pending: () => false, waitForConnected: async () => true },
-        fetchImpl: (async () => { throw new LinkRelayAuthenticationError(unrecognized); }) as unknown as typeof fetch,
+  const linkTarget = { tunnelPort: 41001, admissionKey: "fixture-link-key", linkId: "lnk_0123456789abcdef", apiKeyId: "key_link" };
+  const linkTurn = () => new Request("http://127.0.0.1:10100/v1/responses", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "m", input: "hello" }),
+  });
+
+  test.each([
+    { status: 204, error: "link relay authentication failed" },
+    { status: 404, error: "link relay authentication unavailable; upgrade the Home and Child or re-link" },
+  ])("a failed challenge with peer status $status answers with link_relay_auth_failed", async ({ status, error }) => {
+    const requests: Array<{ path: string; method: string; hasAuthorization: boolean; hasBody: boolean }> = [];
+    const peer = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch(request) {
+        requests.push({
+          path: new URL(request.url).pathname,
+          method: request.method,
+          hasAuthorization: request.headers.has("authorization"),
+          hasBody: request.body !== null,
+        });
+        return new Response(null, { status });
+      },
+    });
+    try {
+      const response = await relayLinkDataRequest(linkTurn(), { ...linkTarget, tunnelPort: peer.port! }, {
+        tunnel: HOME_INITIATED_LINK_TUNNEL,
       });
       expect(response.status).toBe(503);
+      expect(response.headers.get("retry-after")).not.toBeNull();
       const body = await response.json() as { error: string; code: string; message?: string };
       expect(body.code).toBe(LINK_RELAY_AUTH_FAILED_CODE);
       expect(body.code).not.toBe(HOME_UNREACHABLE_CODE);
       expect(body.message).toBeUndefined();
-      expect(body.error).toBe(new LinkRelayAuthenticationError(unrecognized).message);
+      expect(body.error).toBe(error);
+      expect(requests).toEqual([{ path: LINK_RELAY_AUTH_PATH, method: "GET", hasAuthorization: false, hasBody: false }]);
+    } finally {
+      await peer.stop(true);
     }
+  });
+
+  test("an authentication error after data dispatch answers with a terminal replay refusal", async () => {
+    const response = await relayLinkDataRequest(linkTurn(), linkTarget, {
+      tunnel: HOME_INITIATED_LINK_TUNNEL,
+      // The complete-send seam models an authentication error from the data phase.
+      fetchImpl: (async () => { throw new LinkRelayAuthenticationError(); }) as unknown as typeof fetch,
+    });
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(response.headers.get("retry-after")).toBeNull();
+    const body = await response.json() as { error: { code: string }; code?: string };
+    expect(body.error.code).toBe("upstream_reset_replay_refused");
+    expect(body.code).not.toBe(HOME_UNREACHABLE_CODE);
   });
 });

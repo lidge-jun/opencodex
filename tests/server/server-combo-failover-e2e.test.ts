@@ -39,7 +39,7 @@ import { startServer } from "../../src/server";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { chatErrorStream, chatStream, chatSuccess, chatTruncatedZeroOutputStream, responsesSuccess } from "../helpers/combo-failover-upstream";
+import { chatErrorStream, chatStream, chatSuccess, chatTruncatedZeroOutputStream, responsesSuccess, responsesFailedUsageResponse } from "../helpers/combo-failover-upstream";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { heldResponse } from "../helpers/held-response";
 import {
@@ -1779,35 +1779,21 @@ describe("server combo failover 030 activation matrix", () => {
       .toEqual({ inputTokens: 11, outputTokens: 2, totalTokens: 13 });
   });
 
-  test("captures passthrough failed usage from its original bounded body exactly once", async () => {
+  test.each([false, true])("captures passthrough failed usage once before projection (terminal replacement=%s)", async replacement => {
     let passthroughReads = 0;
     let passthroughResponses = 0;
     customTransientResponse = async () => {
       passthroughResponses += 1;
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-        controller.enqueue(new TextEncoder().encode(JSON.stringify({
-          error: { message: "passthrough failed" },
-          usage: { input_tokens: 17, output_tokens: 3, total_tokens: 20 },
-        })));
-        controller.close();
-        },
-      });
-      const response = new Response(body, { status: 503, headers: { "content-type": "application/json" } });
-      Object.defineProperty(response, "body", {
-        configurable: true,
-        get() {
-          passthroughReads += 1;
-          return body;
-        },
-      });
+      const response = responsesFailedUsageResponse(() => { passthroughReads += 1; }, replacement ? 429 : 503,
+        replacement ? { "x-should-retry": "false" } : {});
+      if (replacement) actualRetry.markTerminalResetReplacement(response);
       return response;
     };
     const passthroughConfig = comboConfig({
       a: provider("openai-responses", "https://passthrough.test/v1", "key-a"),
     });
     const passthrough = await postLogged(passthroughConfig);
-    expect(passthrough.status).toBe(503);
+    expect(passthrough.status).toBe(replacement ? 429 : 503);
     const passthroughBody = await passthrough.json() as Record<string, unknown>;
     expect(passthroughBody).not.toHaveProperty("usage");
     expect(passthroughResponses).toBe(1);
@@ -3598,13 +3584,17 @@ describe("server combo failover 030 activation matrix", () => {
     await expectCancelledAttemptReceipt(config, { provider: "a", model: "m1", adapter: "test-response" });
   });
 
-  test("oversized ordinary failure is canceled once, leaks no prefix, and advances", async () => {
+  test("oversized ordinary failure is canceled once and never advances to a backup", async () => {
     const hostile = `hostile-prefix-${"x".repeat(70_000)}`;
     let reads = 0;
     let cancels = 0;
+    let backupSends = 0;
     customFetchResponse = async request => {
       const model = (JSON.parse(String(request.body)) as { model?: string }).model;
-      if (model === "m2") return chatSuccess("safe backup", "m2");
+      if (model === "m2") {
+        backupSends++;
+        return chatSuccess("unexpected backup", "m2");
+      }
       return new Response(new ReadableStream<Uint8Array>({
         start(controller) {
           reads += 1;
@@ -3618,10 +3608,12 @@ describe("server combo failover 030 activation matrix", () => {
       b: provider("test-response", "https://test.invalid/v1", "key-b"),
     });
     const response = await postLogged(config);
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(response.headers.get("retry-after")).toBeNull();
     const text = await response.text();
-    expect(text).toContain("safe backup");
     expect(text).not.toContain("hostile-prefix");
+    expect(backupSends).toBe(0);
     expect(reads).toBe(1);
     expect(cancels).toBe(1);
     const attempt = (await latestAttemptReceipts(config)).usage.attempts?.[0];
@@ -3629,7 +3621,7 @@ describe("server combo failover 030 activation matrix", () => {
     expect(attempt).not.toHaveProperty("usage");
   });
 
-  test("stalled passthrough JSON is canceled at five seconds and advances once", async () => {
+  test("stalled passthrough JSON is canceled at five seconds without a backup send", async () => {
     let reads = 0;
     let cancels = 0;
     let bHits = 0;
@@ -3655,12 +3647,13 @@ describe("server combo failover 030 activation matrix", () => {
     const started = performance.now();
     const response = await postLogged(config);
     const elapsed = performance.now() - started;
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(response.headers.get("retry-after")).toBeNull();
     const text = await response.text();
-    expect(text).toContain("bounded backup");
     expect(text).not.toContain("hostile-stalled-prefix");
     await within(cancelled.promise);
-    expect([reads, cancels, bHits]).toEqual([1, 1, 1]);
+    expect([reads, cancels, bHits]).toEqual([1, 1, 0]);
     expect(elapsed).toBeGreaterThanOrEqual(4_500);
     const attempt = (await latestAttemptReceipts(config)).usage.attempts?.[0];
     expect(attempt).toMatchObject({ provider: "a", status: 429, usageStatus: "unreported" });

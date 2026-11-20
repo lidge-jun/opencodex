@@ -1,7 +1,7 @@
+import { isProjectedNativeTerminalResponse } from "./non-replayable-error";
 import { recordUpstreamProviderErrorDetail, recordUpstreamValidationDetail, type FailureDetail } from "../request-log-failure-detail";
-import { carryProxyErrorPresentation } from "../../lib/client-error-body";
 import { carryPolicyCandidateRefusal } from "./policy-request-scope";
-import { comboFailureEvidence, carryProxyError } from "../../lib/client-error-body";
+import { comboFailureEvidence, carryProxyError, carryProxyErrorPresentation, proxyErrorPresentation } from "../../lib/client-error-body";
 import { carryWorkflowRefusal } from "../workflow-refusal";
 import {
   codexAccountModelRefusal,
@@ -35,7 +35,7 @@ import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { formatErrorResponse } from "../../bridge";
 import { upstreamCodeForComboFailure } from "../../bridge/errors";
 import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../adapters/ollama-native";
-import { carryReplayRefusal, isNonReplayableResponse, isReplayRefusalResponse, markResponseNonReplayable, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../lib/upstream-retry";
+import { carryReplayRefusal, carryReplayRefusalToClient, hasClientReplayVeto, hasNoRetryDirective, isAutomaticReplayBlocked, isReplayRefusalCode, isReplayRefusalResponse, markResponseNonReplayable, observedReplayRefusalCode, projectReplayRefusal, replayRefusalBodyCode, requireClientReplayVeto, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../lib/upstream-retry";
 import { MODEL_NOT_ALLOWED_FOR_KEY } from "../admission-model-scope";
 import { usageFromResponsesPayload } from "../request-log";
 import type { ResponsesTerminalStatus } from "../../bridge";
@@ -63,8 +63,16 @@ export async function consumeComboFailure(
 ): Promise<ConsumedComboFailure> {
   // Read before the body: the marker lives on this Response object, and the failure below is
   // rebuilt as a new one that would otherwise lose it.
-  const nonReplayable = isNonReplayableResponse(response);
-  const replayRefusal = isReplayRefusalResponse(response);
+  const projectedTerminal = isProjectedNativeTerminalResponse(response);
+  let nonReplayable = isAutomaticReplayBlocked(response);
+  const vetoIncompleteBody = () => {
+    if (!rawUpstream || nonReplayable) return;
+    nonReplayable = true;
+    requireClientReplayVeto(response);
+  };
+  const syntheticRefusal = isReplayRefusalResponse(response);
+  let replayRefusal = syntheticRefusal;
+  let wireRefusalCode = observedReplayRefusalCode(response);
   const fallback = `Provider error ${response.status}`;
   let classificationText = fallback;
   let codexModelRefusal: CodexAccountModelRefusal | undefined;
@@ -90,7 +98,8 @@ export async function consumeComboFailure(
   try {
     const legacy = comboFailureEvidence(response);
     if (legacy !== undefined) void response.body?.cancel().catch(() => undefined);
-    const body = await readBoundedResponseBody(legacy === undefined ? response : new Response(legacy), { signal, reportUtf8Validity: serverError });
+    const body = await readBoundedResponseBody(legacy === undefined ? (projectedTerminal ? response.clone() : response) : new Response(legacy), { signal, reportUtf8Validity: serverError });
+    if (!body.displaySafe || body.truncated) vetoIncompleteBody();
     // A 5xx body counts as quota or classification evidence only when it decoded as valid
     // UTF-8, matching shouldRetryCodexPoolAccountQuota. A malformed byte keeps the status-only
     // fallback, with one exception: a cyber-policy refusal must still stop the combo, so the
@@ -103,9 +112,10 @@ export async function consumeComboFailure(
         && isRateLimitOrQuotaFailureMessage(quotaMessage);
     }
     if (body.displaySafe && !body.truncated) {
-      if (isXaiPrivacyModeRefusal(response) || (grokOAuth && isXaiLegacyPrivacyError(response.status, body.text))) {
-        const refusal = xaiPrivacyModeRefusal(logCtx);
-        if (response.headers.get("x-should-retry") === "false") refusal.headers.set("x-should-retry", "false");
+      wireRefusalCode ??= replayRefusalBodyCode(body.text);
+      if (!syntheticRefusal && !wireRefusalCode
+        && (isXaiPrivacyModeRefusal(response) || (grokOAuth && isXaiLegacyPrivacyError(response.status, body.text)))) {
+        const refusal = carryReplayRefusal(response, xaiPrivacyModeRefusal(logCtx));
         if (nonReplayable) markResponseNonReplayable(refusal);
         return {
           response: refusal,
@@ -149,17 +159,24 @@ export async function consumeComboFailure(
         upstreamMessage = normalized.message;
         upstreamType = normalized.type;
       }
-      if (nonReplayable && response.status === 403 && upstreamType === MODEL_NOT_ALLOWED_FOR_KEY) {
+      if (response.status === 403 && proxyErrorPresentation(response) === "scope" && upstreamType === MODEL_NOT_ALLOWED_FOR_KEY) {
         scopeRefusalBody = body.text;
       }
     }
   } catch (error) {
     if (signal?.aborted) throw error;
+    vetoIncompleteBody();
     classificationText = fallback;
   }
-  const cyberFailure = isCyberPolicyCode(upstreamCode) || isCyberPolicyMessage(classificationText);
+  // A wire replay veto is the delivery/attempt identity, even when preserved
+  // legacy diagnostics also describe cyber policy. Both verdicts still stop.
+  const cyberFailure = wireRefusalCode === undefined
+    && (isCyberPolicyCode(upstreamCode) || isCyberPolicyMessage(classificationText));
+  upstreamCode = wireRefusalCode ?? upstreamCode;
+  replayRefusal ||= isReplayRefusalCode(upstreamCode);
+  nonReplayable ||= replayRefusal;
   const normalizedUpstreamCode = cyberFailure ? CYBER_POLICY_ERROR_CODE
-    : replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : upstreamCode;
+    : replayRefusal && !isReplayRefusalCode(upstreamCode) ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : upstreamCode;
   const message = cyberFailure
     ? upstreamMessage
       ?? (isCyberPolicyCode(upstreamCode) ? CYBER_POLICY_FALLBACK_MESSAGE : classificationText)
@@ -181,14 +198,16 @@ export async function consumeComboFailure(
     upstreamRetryAfter: effectiveRetryAfter,
     now,
   });
-  const cooldownRetryAfter = replayRefusal ? undefined : resolveClientRetryAfter({
+  const cooldownRetryAfter = syntheticRefusal ? undefined : resolveClientRetryAfter({
     status: response.status,
     message,
     upstreamRetryAfter: effectiveRetryAfter,
     now,
     includeDefault: false,
   });
-  const failureResponse = scopeRefusalBody !== undefined
+  const failureResponse = projectedTerminal ? response : replayRefusal
+    ? projectReplayRefusal(isReplayRefusalCode(upstreamCode) ? upstreamCode : UPSTREAM_RESET_REPLAY_REFUSED_CODE)
+    : scopeRefusalBody !== undefined
     ? new Response(scopeRefusalBody, { status: 403, headers: { "Content-Type": "application/json" } })
     : formatErrorResponse(
     response.status,
@@ -197,12 +216,13 @@ export async function consumeComboFailure(
     {
       ...(normalizedUpstreamCode !== undefined ? { code: normalizedUpstreamCode } : {}),
       ...(clientRetryAfter !== undefined ? { retryAfter: clientRetryAfter } : {}),
+      fixedMessage: hasClientReplayVeto(response) || hasNoRetryDirective(response),
     },
   );
   if (nonReplayable) markResponseNonReplayable(failureResponse);
   carryProxyError(response, failureResponse);
   carryWorkflowRefusal(response, failureResponse);
-  carryReplayRefusal(response, failureResponse);
+  carryReplayRefusalToClient(response, failureResponse);
   carryProxyErrorPresentation(response, failureResponse);
   carryPolicyCandidateRefusal(response, failureResponse);
   if (verifiedPlanRefusal) markVerifiedModelNotInPlanResponse(failureResponse);

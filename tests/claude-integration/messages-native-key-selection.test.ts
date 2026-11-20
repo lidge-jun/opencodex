@@ -93,6 +93,23 @@ function start(config: OcxConfig, abort: AbortController) {
   void pending.catch(() => {});
   return pending;
 }
+
+test.each([400, 401, 402, 429])("replay veto: native Messages probes a body-only refusal before key recovery (%i)", async statusCode => {
+  const config = fixture();
+  let sends = 0;
+  (provider(config) as OcxProviderConfig & { fetch: typeof fetch }).fetch = (async () => {
+    sends++;
+    if (sends > 1) return Response.json(MESSAGE);
+    return Response.json({ type: "error", code: "upstream_response_refused", error: {
+      type: statusCode === 401 ? "authentication_error" : "billing_error", message: "Your credit balance is too low to access the Anthropic API.",
+    } }, { status: statusCode });
+  }) as typeof fetch;
+  const { response, text } = await start(config, new AbortController());
+  expect(sends).toBe(1);
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  expect(JSON.parse(text).error.code).toBe("upstream_response_refused");
+});
 function unchanged(config: OcxConfig) {
   expect(provider(config).apiKey).toBe(KEYS[0]);
   expect(provider(config).apiKeySelectionRevision).toBe("saved-revision");

@@ -9,7 +9,7 @@ import { COMPACTION_IMAGE_NOTE } from "../../src/responses/compaction-images";
 import * as visionModule from "../../src/vision";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
-import { isNonReplayableResponse } from "../../src/lib/upstream-retry";
+import { isNonReplayableResponse, projectReplayRefusal, REPLAY_REFUSAL_MESSAGE } from "../../src/lib/upstream-retry";
 import { jsonUtf8Bytes } from "../../src/lib/json-byte-size";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest } from "../../src/types";
 import type { RequestLogContext } from "../../src/server/request-log";
@@ -235,6 +235,56 @@ describe("routed compaction emergency integration", () => {
     expect(calls.map(call => call.model)).toEqual(["swe-2", "rescue"]);
   });
 
+  test("a zero-output JSON compaction failure with retryable false never sends a fallback", async () => {
+    const error = { type: "server_error", code: "server_error", message: "fixture upstream diagnostic" };
+    sourceEvents = [{ type: "error", status: 502, code: error.code, message: error.message, errorType: error.type }];
+    const original = request();
+    const translatorBudget = createTranslatorBudget();
+    const budget = createRequestExecutionBudget();
+    try {
+      const response = await runWithCompactionRecovery(
+        original, settings(), { model: "", provider: "" }, { translatorBudget, sendBudget: budget },
+        async (sent, config, log, options) => {
+          const result = await handleResponses(sent, config, log, { ...options, compactionRecoveryAttempted: true });
+          if (sent !== original) return result;
+          await result.body?.cancel();
+          return Response.json({ status: "failed", output: [], error, retryable: false });
+        },
+      );
+      expect(calls.map(call => call.model)).toEqual(["swe-2"]);
+      expect(budget.used).toBe(1);
+      expect(response.status).toBe(502);
+      expect(response.headers.get("x-should-retry")).toBe("false");
+      expect(response.headers.get("retry-after")).toBeNull();
+      expect(await response.json()).toMatchObject({ error: { message: "The provider failed to complete the request." } });
+    } finally { translatorBudget.dispose(); }
+  });
+
+  test("an adapter stream veto still stops compaction fallback after HTTP projection", async () => {
+    const error = { type: "server_error", code: "server_error", message: "fixture upstream diagnostic" };
+    sourceEvents = [{ type: "error", status: 502, code: error.code, message: error.message,
+      errorType: error.type, retryable: false }];
+    const original = request();
+    const translatorBudget = createTranslatorBudget();
+    const budget = createRequestExecutionBudget();
+    try {
+      const response = await runWithCompactionRecovery(
+        original, settings(), { model: "", provider: "" }, { translatorBudget, sendBudget: budget },
+        async (sent, config, log, options) => {
+          const result = await handleResponses(sent, config, log, { ...options, compactionRecoveryAttempted: true });
+          if (sent !== original) return result;
+          await result.text();
+          return Response.json({ error }, { status: 502 });
+        },
+      );
+      expect(calls.map(call => call.model)).toEqual(["swe-2"]);
+      expect(budget.used).toBe(1);
+      expect(response.status).toBe(502);
+      expect(response.headers.get("x-should-retry")).toBe("false");
+      await response.text();
+    } finally { translatorBudget.dispose(); }
+  });
+
   test("the actual fallback Request strips inbound auth and account headers", async () => {
     const original = request();
     let fallbackHeaders: Headers | undefined;
@@ -296,6 +346,72 @@ describe("routed compaction emergency integration", () => {
     expect(log.activeAttempt).toBeUndefined();
     // The fallback's own failed attempt stays recorded; its wire status was a failed 200 terminal.
     expect(log.attempts?.map(attempt => attempt.status)).toEqual([400, 200]);
+  });
+
+  for (const code of ["upstream_response_refused", "upstream_reset_replay_refused", "server_is_overloaded"] as const) for (const fixedHttp of code === "server_is_overloaded" ? [false] : [false, true]) {
+    test(`replay boundary: compaction publishes a terminal fallback refusal (${code}, HTTP refusal=${fixedHttp})`, async () => {
+      const blocked = code !== "server_is_overloaded";
+      sourceEvents = [{ type: "error", status: 502, code: "server_error", message: "Source unavailable fixture" }];
+      fallbackEvents = [{ type: "error", status: blocked ? 429 : 503, code, message: "Emergency private diagnostic" }];
+      const log: RequestLogContext = { model: "", provider: "" };
+      const original = request(body(false));
+      const translatorBudget = createTranslatorBudget();
+      let response: Response;
+      try {
+        response = await runWithCompactionRecovery(original, settings(), log,
+          { translatorBudget, sendBudget: createRequestExecutionBudget() }, async (sent, config, ctx, options) => {
+            const result = await handleResponses(sent, config, ctx, { ...options, compactionRecoveryAttempted: true });
+            if (sent === original || !fixedHttp || code === "server_is_overloaded") return result;
+            await result.body?.cancel();
+            return projectReplayRefusal(code);
+          });
+      } finally { translatorBudget.dispose(); }
+      expect(calls.map(call => call.model)).toEqual(["swe-2", "rescue"]);
+      expect(response.status).toBe(blocked ? 429 : 502);
+      expect(response.headers.get("x-should-retry")).toBe(blocked ? "false" : null);
+      expect(response.headers.get("retry-after")).toBeNull();
+      const json = await response.json();
+      if (blocked) expect(json.error).toEqual({ type: "upstream_error", code, message: REPLAY_REFUSAL_MESSAGE });
+      expect(JSON.stringify(json)).not.toContain("Emergency private diagnostic");
+      expect(log.provider).toBe(blocked ? "emergency" : "source");
+      expect(log.model).toBe(blocked ? "rescue" : "swe-2");
+    });
+  }
+
+  test.each([false, true])("projects a generic fallback replay veto (buffered=%s)", async buffered => {
+    sourceEvents = [{ type: "error", status: 502, code: "server_error", message: "Source unavailable fixture" }];
+    const original = request(body(false));
+    const translatorBudget = createTranslatorBudget();
+    const error = { type: "server_error", code: buffered ? "private_fixture_code" : "server_error",
+      message: "Emergency private diagnostic", detail: "private error detail" };
+    const headers = { "retry-after": "23", "x-provider-diagnostic": "private header" };
+    try {
+      const response = await runWithCompactionRecovery(original, settings(), { model: "", provider: "" },
+        { translatorBudget, sendBudget: createRequestExecutionBudget() }, async (sent, config, ctx, options) => {
+          const result = await handleResponses(sent, config, ctx, { ...options, compactionRecoveryAttempted: true });
+          if (sent === original) return result;
+          await result.body?.cancel();
+          return buffered
+            ? Response.json({ status: "failed", retryable: false, output: [], error, diagnostic: "private field" }, { headers })
+            : Response.json({ error, diagnostic: "private field" }, {
+              status: 503, headers: { ...headers, "x-should-retry": "false" },
+            });
+        });
+      expect(calls.map(call => call.model)).toEqual(["swe-2", "rescue"]);
+      expect(response.status).toBe(buffered ? 200 : 503);
+      expect(response.headers.get("x-should-retry")).toBe("false");
+      const payload = await response.json();
+      expect(JSON.stringify(payload)).not.toContain("Emergency private diagnostic");
+      expect(response.headers.get("retry-after")).toBeNull();
+      expect(response.headers.get("x-provider-diagnostic")).toBeNull();
+      if (buffered) {
+        const fixed = { type: "server_error", code: null, message: "The provider failed to complete the request." };
+        expect(payload).toEqual({ status: "failed", retryable: false, output: [], error: fixed, last_error: fixed });
+      } else {
+        expect(payload).toEqual({ error: { type: "server_error", code: "server_error",
+          message: "Provider error 503: upstream diagnostic withheld for a non-replayable failure" } });
+      }
+    } finally { translatorBudget.dispose(); }
   });
 
   test("an existing unconditional override keeps its original logical model on recovery", async () => {

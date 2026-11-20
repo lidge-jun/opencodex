@@ -1,3 +1,4 @@
+import { hasNoRetryDirective, replayRefusalProviderErrorVerdict } from "../lib/upstream-retry";
 import { captureAnthropicRejectionPayloads, keepAnthropicReplayBlock } from "./anthropic-rejection-memo";
 import { anthropicDeclaredTools } from "./anthropic-tool-catalog";
 import { anthropicReplayContent, createAnthropicReplayCapture } from "./anthropic-replay";
@@ -1616,12 +1617,18 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 break;
               }
               case "error": {
-                const err = data.error as { message?: unknown; type?: unknown; code?: unknown; status?: unknown } | undefined;
+                const err = (data.error ?? data.last_error) as { message?: unknown; type?: unknown; code?: unknown; status?: unknown } | undefined;
+                const { refusalCode, explicitVeto } = replayRefusalProviderErrorVerdict(data);
+                const veto = explicitVeto || refusalCode !== undefined;
                 yield { type: "error", message: typeof err?.message === "string" ? err.message : "Anthropic error",
                   ...(typeof err?.type === "string" ? { errorType: err.type } : {}),
                   ...(typeof err?.code === "string" ? { code: err.code } : {}),
                   ...(typeof err?.status === "number" && Number.isInteger(err.status) && err.status >= 400 && err.status <= 599
                     ? { status: err.status } : {}),
+                  ...(refusalCode === undefined ? {} : { code: refusalCode }),
+                  ...(veto ? { retryable: false } : {}),
+                  ...(veto || hasNoRetryDirective(response)
+                    ? { usage: usageFromAnthropic(data.usage ?? pendingUsage) } : {}),
                 };
                 return;
               }
@@ -1731,6 +1738,19 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         retainTranslatedEventBatch(batch, budget);
         return batch;
       };
+      if (json.type === "error" || json.error != null || json.last_error != null) {
+        const { refusalCode, explicitVeto } = replayRefusalProviderErrorVerdict(json);
+        if (explicitVeto || refusalCode !== undefined || hasNoRetryDirective(response)) {
+          const error = json.error ?? json.last_error;
+          const status = isAnthropicRecord(error) ? error.status : undefined;
+          return finishWithEvents([{
+            type: "error", message: "Anthropic error", usage: usageFromAnthropic(json.usage),
+            ...(refusalCode === undefined ? {} : { code: refusalCode }),
+            ...(explicitVeto || refusalCode !== undefined ? { retryable: false } : {}),
+            ...(typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599 ? { status } : {}),
+          }]);
+        }
+      }
       const rawContent: unknown = json.content;
       // `content` is claimed model output inside a well-formed response, so it is governed by the
       // #1332 nested-shape rule (fail closed) rather than #1240's root-frame padding rule (skip).

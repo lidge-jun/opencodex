@@ -3,6 +3,8 @@ import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { CLIENT_ERROR_CONTRACTS } from "../../src/lib/client-error-body";
+import { isAutomaticReplayBlocked, isNonReplayableResponse, isReplayRefusalResponse } from "../../src/lib/upstream-retry";
 import { deriveXaiConvId } from "../../src/providers/xai-transport";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
@@ -52,9 +54,10 @@ function config(connectTimeoutMs = 1_000): OcxConfig {
   } as OcxConfig;
 }
 
-function post(serverUrl: string): Promise<Response> {
+function post(serverUrl: string, signal?: AbortSignal): Promise<Response> {
   return originalFetch(new URL("/v1/responses", serverUrl), {
     method: "POST",
+    signal,
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       model: "xai/grok-test",
@@ -102,13 +105,19 @@ describe("xAI headers through /v1/responses", () => {
   });
 
   test("provider executor remains inside the header-timeout race", async () => {
-    let accepted = false;
+    let sends = 0, aborts = 0;
+    let deadlineReason: unknown;
+    const caller = new AbortController();
     globalThis.fetch = ((input, init) => {
       const url = input instanceof Request ? input.url : String(input);
       if (url === "https://api.x.ai/v1/chat/completions") {
-        accepted = true;
+        sends++;
         return new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+          init?.signal?.addEventListener("abort", () => {
+            aborts++;
+            deadlineReason = init.signal?.reason;
+            reject(deadlineReason);
+          }, { once: true });
         });
       }
       return originalFetch(input, init);
@@ -116,10 +125,21 @@ describe("xAI headers through /v1/responses", () => {
     saveConfig(config(25));
     const server = startServer(0);
     try {
-      const response = await post(String(server.url));
-      expect(accepted).toBe(true);
-      expect(response.status).toBe(502);
-      expect(await response.text()).toContain("Provider connect timeout after 25ms");
+      const response = await post(String(server.url), caller.signal);
+      expect(sends).toBe(1);
+      expect(aborts).toBe(1);
+      expect(caller.signal.aborted).toBe(false);
+      expect(deadlineReason).toMatchObject({ name: "TimeoutError", message: "Timeout elapsed" });
+      expect(response.status).toBe(429);
+      expect(response.headers.get("x-should-retry")).toBe("false");
+      expect(response.headers.has("retry-after")).toBe(false);
+      // The HTTP directive carries the veto across the connection.
+      expect(isAutomaticReplayBlocked(response)).toBe(true);
+      expect(isNonReplayableResponse(response)).toBe(false);
+      expect(isReplayRefusalResponse(response)).toBe(false);
+      expect(await response.json()).toMatchObject({ error: {
+        code: "upstream_reset_replay_refused", message: CLIENT_ERROR_CONTRACTS.replay_refused,
+      } });
     } finally {
       await server.stop(true);
     }

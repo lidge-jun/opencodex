@@ -14,6 +14,20 @@ export interface ClearableDeadline {
   clear: () => void;
 }
 
+const responseHeaderPauses = new WeakMap<AbortSignal, () => () => void>();
+
+/** Let a bounded post-header body probe suspend its caller's still-live header clock. */
+export function registerResponseHeaderPause(signal: AbortSignal, pause: () => () => void): () => void {
+  responseHeaderPauses.set(signal, pause);
+  return () => { if (responseHeaderPauses.get(signal) === pause) responseHeaderPauses.delete(signal); };
+}
+
+export async function withPausedResponseHeaderDeadline<T>(signal: AbortSignal | undefined, inspect: () => Promise<T>): Promise<T> {
+  const resume = signal ? responseHeaderPauses.get(signal)?.() : undefined;
+  try { return await inspect(); }
+  finally { resume?.(); }
+}
+
 export interface IdleDeadline {
   /** (Re-)arm the timer for one idle window. Call when a wait for progress BEGINS. No-op after fire/cancel. */
   reset: () => void;
@@ -83,19 +97,43 @@ export function clearableDeadline(timeoutMs: number, parent?: AbortSignal): Clea
   const timeoutReason = new DOMException("Timeout elapsed", "TimeoutError");
   // A non-positive budget disables the deadline: the caller asked for no header clock (e.g. a
   // local upstream whose prefill can stay silent for minutes). Only `parent` can then abort.
-  let timer: ReturnType<typeof setTimeout> | undefined = timeoutMs > 0
+  let remainingMs = timeoutMs;
+  let armedAt = performance.now();
+  let cleared = false;
+  let paused = 0;
+  const arm = () => remainingMs > 0
     ? setTimeout(() => {
         timer = undefined;
         if (!deadline.signal.aborted) deadline.abort(timeoutReason);
-      }, timeoutMs)
+      }, remainingMs)
     : undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined = arm();
   const signal = parent ? AbortSignal.any([parent, deadline.signal]) : deadline.signal;
+  const unregister = registerResponseHeaderPause(signal, () => {
+    if (timeoutMs <= 0 || cleared || signal.aborted) return () => {};
+    if (paused++ === 0) {
+      remainingMs = Math.max(0, remainingMs - (performance.now() - armedAt));
+      if (timer !== undefined) clearTimeout(timer);
+      timer = undefined;
+      if (remainingMs === 0) deadline.abort(timeoutReason);
+    }
+    let resumed = false;
+    return () => {
+      if (resumed) return;
+      resumed = true;
+      if (--paused > 0 || cleared || signal.aborted) return;
+      armedAt = performance.now();
+      timer = arm();
+    };
+  });
 
   return {
     signal,
     timeoutReason,
     didExpire: () => signal.aborted && signal.reason === timeoutReason,
     clear: () => {
+      cleared = true;
+      unregister();
       if (timer !== undefined) clearTimeout(timer);
       timer = undefined;
     },

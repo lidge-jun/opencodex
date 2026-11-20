@@ -10,8 +10,17 @@ import {
   SendBudgetExhaustedError, errorDestinationLabel,
   abortError,
   cancelResponseBodyBestEffort,
+  carryReplayRefusal,
+  carryReplayRefusalToClient,
   fetchWithAttemptDeadline,
+  hasNoRetryDirective,
+  hasUpstreamReplayRefusal,
+  isAutomaticReplayBlocked,
   isConnectionResetError,
+  isReplayRefusalProjection,
+  observedReplayRefusalCode,
+  projectReplayRefusal,
+  replayRefusalBodyCode,
   retryBackoffDelayMs,
   sleepWithAbort,
 } from "../lib/upstream-retry";
@@ -193,11 +202,12 @@ async function fetchWithResetRecovery(
       // admitted one is counted exactly once whichever way the fetch below settles.
       const permit = decision?.allowed ? decision.permit : undefined;
       const requestUrl = request.url;
+      let dispatched = false;
       try {
         const headers = new Headers(request.headers);
         const recovered = attempt > 0;
         if (recovered) headers.set("connection", "close");
-        return await sendTrackingRequestSlot(slot, () => fetchWithAttemptDeadline(destination, {
+        const response = await sendTrackingRequestSlot(slot, () => fetchWithAttemptDeadline(destination, {
           method: request.method,
           headers,
           body: request.body,
@@ -206,6 +216,7 @@ async function fetchWithResetRecovery(
           try {
             const run = () => fetchWithPhysicalSendReceipt(executor.unpacedFetch ?? executor, input, init, () => {
               if (permit && !permit.use()) throw new SendBudgetExhaustedError(errorDestinationLabel(destination));
+              dispatched = true;
               notePhysicalSend(attempt > 0);
             });
             return await (permit?.execute ? permit.execute(run) : run());
@@ -217,7 +228,10 @@ async function fetchWithResetRecovery(
             }
             throw error;
           }
-        }) as typeof globalThis.fetch));
+        }) as typeof globalThis.fetch, { wasDispatched: () => dispatched }));
+        await hasUpstreamReplayRefusal(response, ctx.abortSignal, { requireCompleteBody: true });
+        if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
+        return response;
       } catch (error) {
         if (ctx.abortSignal?.aborted || !isConnectionResetError(error) || attempt === RESET_ATTEMPTS - 1) throw error;
         lastError = error;
@@ -260,17 +274,33 @@ async function inspectEndpointHttpFailure(
 }
 
 export async function normalizeFinalKiroHttpError(res: Response, signal?: AbortSignal): Promise<Response> {
-  return normalizeUpstreamHttpErrorResponse(res, {
+  if (isReplayRefusalProjection(res)) return res;
+  let refusalCode = observedReplayRefusalCode(res);
+  if (refusalCode !== undefined) {
+    cancelResponseBodyBestEffort(res);
+    return carryReplayRefusal(res, projectReplayRefusal(refusalCode));
+  }
+  const normalized = await normalizeUpstreamHttpErrorResponse(res, {
     signal,
-    formatMessage: payloadText => safeKiroHttpErrorMessage(res.status, res.headers, payloadText),
+    formatMessage: payloadText => {
+      // The wire directive settled replay at headers. The bounded display read can still
+      // recover the exact public code from the final response.
+      if (hasNoRetryDirective(res)) refusalCode = replayRefusalBodyCode(payloadText);
+      return safeKiroHttpErrorMessage(res.status, res.headers, payloadText);
+    },
   });
+  if (refusalCode !== undefined) {
+    cancelResponseBodyBestEffort(normalized);
+    return carryReplayRefusal(res, projectReplayRefusal(refusalCode));
+  }
+  return carryReplayRefusalToClient(res, normalized);
 }
 
 async function inspectKiroThrottle(
   response: Response,
   signal?: AbortSignal,
 ): Promise<{ response: Response; transient: boolean; delayMs: number } | undefined> {
-  if (response.status !== 429) return undefined;
+  if (response.status !== 429 || isAutomaticReplayBlocked(response)) return undefined;
   const body = await readBoundedResponseBody(response, { signal });
   const headers = new Headers(response.headers);
   headers.delete("content-encoding");
@@ -313,6 +343,7 @@ async function fetchKiroAttempt(
     return fetchWithResetRecovery(request, currentLegacy, ctx, timeoutMs, notePhysicalSend);
   }
 
+  if (isAutomaticReplayBlocked(response)) return response;
   if (!response.ok && (response.status === 502 || response.status === 503 || response.status === 504)) {
     const baseUrl = response.url || request.url || plannedUrl;
     const alternate = ctx.allowGatewayRotation === false ? undefined : legacyUrl(baseUrl);

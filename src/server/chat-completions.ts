@@ -44,10 +44,11 @@ import { formatClientRetryAfter, resolveClientRetryAfter } from "../lib/retry-af
 import {
   applyReplayRefusalClientHeaders,
   isReplayRefusalCode,
+  carryReplayRefusal,
+  carryReplayRefusalToClient,
   isReplayRefusalResponse,
   REPLAY_REFUSAL_CLIENT_HEADERS,
   REPLAY_REFUSED_STATUS,
-  retainReplayRefusal,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
 import { estimateTokens } from "../lib/token-estimate";
@@ -703,14 +704,11 @@ async function handleChatCompletionsWithBudget(
     // Not the status -- a refusal and a real rate limit are both 429, which is the whole
     // reason this surface used to report one as the other.
     const replayRefusal = isReplayRefusalResponse(upstream) || isReplayRefusalCode(upstreamCode);
-    if (isCyberPolicyCode(upstreamCode) || classified.code === CYBER_POLICY_ERROR_CODE) {
+    if (replayRefusal) {
+      classified.code = isReplayRefusalCode(upstreamCode) ? upstreamCode : UPSTREAM_RESET_REPLAY_REFUSED_CODE;
+    } else if (isCyberPolicyCode(upstreamCode) || classified.code === CYBER_POLICY_ERROR_CODE) {
       classified.code = CYBER_POLICY_ERROR_CODE;
       classified.type = cyberPolicyErrorType(upstreamType);
-    } else if (replayRefusal) {
-      // 429 classifies as a rate limit, which already carries a code, so the empty-code branch
-      // below could never restore this one -- the translated client was told the provider
-      // throttled the turn, and handed a two-second wait to send it again.
-      classified.code = UPSTREAM_RESET_REPLAY_REFUSED_CODE;
     } else if (upstreamCode === "claude_subscription_cooldown") {
       classified.code = "claude_subscription_cooldown";
       classified.type = "rate_limit_error";
@@ -748,7 +746,7 @@ async function handleChatCompletionsWithBudget(
     });
     const localReason = logCtx.errorCode ?? (wasAccountAutoPaused(upstream) ? "credentials_paused" : undefined);
     const proxyAuthored = isProxyError(upstream) || LOCAL_CHAT_ERROR_MESSAGES.has(logCtx.errorCode ?? "");
-    const rewritten = new Response(proxyAuthored ? legacyEnvelope : JSON.stringify(ownedChatErrorPayload({ status, type: classified.type, code: classified.code,
+    const rewritten = new Response(proxyAuthored && !replayRefusal ? legacyEnvelope : JSON.stringify(ownedChatErrorPayload({ status, type: classified.type, code: classified.code,
       evidence: { status: upstream.status, type: upstreamType, code: upstreamCode ?? undefined, message },
       localReason,
     })), {
@@ -759,7 +757,7 @@ async function handleChatCompletionsWithBudget(
         ...(replayRefusal ? REPLAY_REFUSAL_CLIENT_HEADERS : {}),
       },
     });
-    if (replayRefusal) retainReplayRefusal(rewritten);
+    carryReplayRefusalToClient(upstream, rewritten);
     carryWorkflowRefusal(upstream, rewritten);
     return logIds
       // Deferred logging re-wraps this response and carries the verdict with it.
@@ -798,7 +796,7 @@ async function handleChatCompletionsWithBudget(
       });
     } catch (err) {
       if (isChatCompletionsStreamError(err)) {
-        return ownedChatErrorResponse(err.status, err.message, err.type, err.code, failureVerdictSink.contract, failureVerdictSink.proxyAuthored);
+        return ownedChatErrorResponse(err.status, err.message, err.type, err.code, failureVerdictSink.contract, failureVerdictSink.proxyAuthored, failureVerdictSink.replayVeto);
       }
       return ownedChatErrorResponse(
         502,
@@ -833,7 +831,7 @@ async function handleChatCompletionsWithBudget(
     } else if (isReplayRefusalCode(error?.code)) {
       // The refusal can also arrive as a failed Responses envelope rather than a non-2xx.
       // Reporting that as the 502 below would invite the four resends the refusal prevents.
-      classified.code = UPSTREAM_RESET_REPLAY_REFUSED_CODE;
+      classified.code = error!.code;
     } else if (error?.code === "model_not_found") {
       // Same deliberate preserve as the non-OK path: structured code beats generic classify.
       classified.code = "model_not_found";
@@ -845,7 +843,7 @@ async function handleChatCompletionsWithBudget(
       );
       const headers = new Headers(refusal.headers);
       applyReplayRefusalClientHeaders(headers);
-      return finishJson(retainReplayRefusal(
+      return finishJson(carryReplayRefusal(upstream,
         new Response(refusal.body, { status: refusal.status, headers }),
       ));
     }

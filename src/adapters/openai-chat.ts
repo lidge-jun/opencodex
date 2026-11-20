@@ -397,13 +397,14 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           tierMetadata?.observeResponseServiceTier(chunk.service_tier);
         }
 
-        if (chunk.error !== undefined && chunk.error !== null) {
-          const event = upstreamErrorEvent(chunk.error, pendingUsage);
+        if (chunk.usage) pendingUsage = usageFromOpenAIChat(chunk.usage as Record<string, unknown>);
+
+        const chunkError = chunk.error ?? chunk.last_error;
+        if (chunkError !== undefined && chunkError !== null) {
+          const event = upstreamErrorEvent(chunkError, pendingUsage, chunk);
           debugProviderDiagnostic("openai-chat", "stream-error", { message: event.message });
           return yield* terminateWithError(event);
         }
-
-        if (chunk.usage) pendingUsage = usageFromOpenAIChat(chunk.usage as Record<string, unknown>);
 
         const choices = chunk.choices;
         if (choices === undefined) return "continue";
@@ -419,7 +420,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           error?: unknown;
         };
         if (choice.finish_reason === "error") {
-          const event = upstreamErrorEvent(choice.error, pendingUsage);
+          const event = upstreamErrorEvent(choice.error, pendingUsage, { ...chunk, error: choice.error });
           debugProviderDiagnostic("openai-chat", "stream-error", { message: event.message });
           return yield* terminateWithError(event);
         }
@@ -709,14 +710,15 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       try {
         const payload = unwrapChatCompletionPayload(json);
         const usage = usageFromOpenAIChat(payload.usage as Record<string, unknown> | undefined);
-        if (json.success === false && payload.error === undefined) {
+        const error = payload.error ?? payload.last_error;
+        if (json.success === false && error === undefined) {
           return [{
             type: "error",
             message: "upstream reported failure without an error payload",
             ...(usage ? { usage } : {}),
           }];
         }
-        if (payload.error !== undefined && payload.error !== null) return [upstreamErrorEvent(payload.error, usage)];
+        if (error !== undefined && error !== null) return [upstreamErrorEvent(error, usage, payload)];
 
         const events: AdapterEvent[] = [];
         const choices = payload.choices as {
@@ -732,7 +734,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           return [invalidChoicesEvent(usage)];
         }
         const choice = rawChoice;
-        if (choice.finish_reason === "error") return [upstreamErrorEvent(choice.error, usage)];
+        if (choice.finish_reason === "error") return [upstreamErrorEvent(choice.error, usage, { ...payload, error: choice.error })];
         if (!choice.message) return [{ type: "error", message: "upstream response contained no choices", ...(usage ? { usage } : {}) }];
         // `!choice.message` splits this input class on TRUTHINESS, not on shape: `null` and `0` fail
         // closed here, while `"text"`, `true` and `[{...}]` pass and every property read below yields

@@ -15,6 +15,7 @@ import type { OcxMessage, OcxParsedRequest } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { mockWebSearchSidecarFetch } from "../helpers/web-search-sidecar-fetch";
 
 /** Run the web-search loop with a default test translator budget. */
 function runWithWebSearch(
@@ -2666,6 +2667,8 @@ describe("web-search sidecar live streaming (streamRoutedModelOutput)", () => {
     // frames alone.
     let releaseWebSearch!: () => void;
     const clientSawPreSearchText = new Promise<void>(resolve => { releaseWebSearch = resolve; });
+    let preSearchObserved = false;
+    let sidecarCalls = 0;
     let pass = 0;
     const adapter: ProviderAdapter = {
       name: "search-then-answer",
@@ -2691,27 +2694,42 @@ describe("web-search sidecar live streaming (streamRoutedModelOutput)", () => {
         throw new Error("parseResponse must be unreachable");
       },
     };
-    const response = await runWithWebSearch({
-      parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
-      adapter,
-      forwardProvider: { ...forwardProvider, baseUrl: "https://chatgpt.test/v1" },
-      hostedTool: { type: "web_search" },
-      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
-      settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
-      maxSearches: 1,
-      streamRoutedModelOutput: true,
-    });
-    const sse = frameReader(response.body!);
-    const preSearchDelta = await within(
-      sse.readUntil(f => f.data.type === "response.output_text.delta"),
-      "the live pre-search text delta",
-    );
-    expect(preSearchDelta?.data.delta).toBe("Let me check. ");
-    releaseWebSearch();
-    const frames = await sse.drain();
-    const text = outputTextOf(frames);
-    // Pre-search text is visible exactly once, then the post-search answer exactly once.
-    expect(text).toBe("Let me check. Final answer.");
-    expect(frames.some(f => f.event === "response.completed")).toBe(true);
+    // This case owns its sidecar transport; no earlier test's fetch mock or network is needed.
+    const sidecarFetch = mockWebSearchSidecarFetch((input, init) => {
+      expect(String(input)).toBe("https://chatgpt.test/v1/responses");
+      expect(init?.method).toBe("POST");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer token");
+      expect(JSON.parse(String(init?.body)).input[0].content[0].text).toBe("docs");
+      expect(preSearchObserved).toBe(true);
+      sidecarCalls++;
+    }, "Fixture docs.");
+    try {
+      const response = await runWithWebSearch({
+        parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
+        adapter,
+        forwardProvider: { ...forwardProvider, baseUrl: "https://chatgpt.test/v1" },
+        hostedTool: { type: "web_search" },
+        selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+        settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
+        maxSearches: 1,
+        streamRoutedModelOutput: true,
+      });
+      const sse = frameReader(response.body!);
+      const preSearchDelta = await within(
+        sse.readUntil(f => f.data.type === "response.output_text.delta"),
+        "the live pre-search text delta",
+      );
+      expect(preSearchDelta?.data.delta).toBe("Let me check. ");
+      preSearchObserved = true;
+      releaseWebSearch();
+      const frames = await sse.drain();
+      const text = outputTextOf(frames);
+      // Pre-search text is visible exactly once, then the post-search answer exactly once.
+      expect(text).toBe("Let me check. Final answer.");
+      expect(frames.some(f => f.event === "response.completed")).toBe(true);
+      expect(sidecarCalls).toBe(1);
+    } finally {
+      sidecarFetch.mockRestore();
+    }
   });
 });

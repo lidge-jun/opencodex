@@ -84,6 +84,32 @@ function configFor(name: string, oauth: boolean): OcxConfig {
   saveConfig(config);
   return config;
 }
+
+test("round 4: native chat pauses a permanently refused key without replaying a no-retry 403", async () => {
+  const config = configFor("fixture", false);
+  config.providers.fixture!.accountAutoPause = { enabled: true, consecutiveFailures: 1 };
+  saveConfig(config);
+  const sends: Array<string | null> = [];
+  globalThis.fetch = (async (_input, init) => {
+    sends.push(new Headers(init?.headers).get("authorization"));
+    if (sends.length > 1) return completion();
+    const refusal = orgRefusal();
+    refusal.headers.set("x-should-retry", "false");
+    return refusal;
+  }) as typeof fetch;
+  const { handleChatCompletions } = await import("../../src/server/chat-completions");
+  const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "fixture/fixture", messages: [{ role: "user", content: "synthetic" }], stream: false }),
+  }), config, { model: "fixture", provider: "fixture" });
+  const body = await response.text();
+  expect(sends).toEqual(["Bearer synthetic-A"]);
+  expect(response.status).toBe(403);
+  expect(response.headers.get("x-should-retry")).toBe("false");
+  expect(body).not.toContain("OAuth authentication is currently not allowed");
+  expect(config.providers.fixture!.apiKeyPool![0]).toMatchObject({ id: "A", disabled: true });
+});
+
 async function send(config: OcxConfig, name: string, sendBudget?: import("../../src/lib/request-execution-budget").RequestExecutionBudget, abortSignal?: AbortSignal, requestSignal?: AbortSignal) {
   const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: `${name}/fixture`, input: "synthetic", stream: false, store: false }), signal: requestSignal }), config, { model: "fixture", provider: name }, { sendBudget, abortSignal });
   const text = await response.text();

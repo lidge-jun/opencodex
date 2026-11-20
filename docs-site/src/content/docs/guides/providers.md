@@ -150,6 +150,10 @@ existing request-wide send allowance. Explicit `retryOn429` settings, including
 keys by default; `promptCacheKey: false` disables forwarding. Cache affinity improves the
 chance of reuse, but does not guarantee a cache hit or remove token-throughput limits.
 
+A no-retry directive or recognized replay-refusal code stops automatic recovery. The search and image sidecars also stop when a bounded error-body inspection cannot rule out a refusal; a large or slow ordinary error can therefore end that attempt without a same-key retry or account switch.
+
+On native Chat Completions and managed native Messages, an inconclusive upstream 429 body inspection stops same-key retry and credential rotation. The proxy returns HTTP 429 with `x-should-retry: false` and omits `Retry-After`.
+
 Mistral uses one API-key provider for both Studio and Vibe keys. Key types and plan allowances are
 described in [Mistral's API-key documentation](https://docs.mistral.ai/admin/identity-access/api-keys),
 and the proxy does not infer a subscription tier from the key. At `https://api.mistral.ai/v1`, the

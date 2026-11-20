@@ -1357,6 +1357,7 @@
   "remote-workspace-session-binding.test.ts": "clients", "remote-workspace-sessions.test.ts": "clients",
   "remote-workspace-tool-bridge.test.ts": "clients", "remote-workspace.test.ts": "clients",
   "remove-tree-helper.test.ts": "lib",
+  "native-remote-local-fallback.test.ts": "server",
   "fixture-teardown-helper.test.ts": "ci-workflows", "replay-refusal-parity.test.ts": "server",
   "fixture-windows-runtime-preload.test.ts": "ci-workflows",
   "repo-hygiene.test.ts": "ci-workflows", "request-decompress.test.ts": "usage",
@@ -1590,6 +1591,7 @@
   "upstream-connect-error.test.ts": "server", "upstream-error-message-fallback.test.ts": "lib",
   "upstream-http-error.test.ts": "adapters", "upstream-http-version.test.ts": "server",
   "upstream-reachability.test.ts": "codex-integration", "upstream-retry.test.ts": "lib",
+  "replay-veto-envelope.test.ts": "lib",
   "upstream-retry-zero-output.test.ts": "lib", "upstream-transient-retry.test.ts": "providers",
   "url-normalization.test.ts": "config", "usage-aggregate-cache.test.ts": "usage",
   "usage-anthropic-fast-pricing.test.ts": "usage", "usage-cursor-fast-pricing.test.ts": "usage",
@@ -1747,7 +1749,7 @@
   ,"local-credentials.test.ts": "cli", "local-credential-generation.test.ts": "config", "local-credential-fence.test.ts": "config", "link-connection-generation.test.ts": "clients"
   ,"request-log-error-detail.test.ts": "usage", "provider-failure-detail.test.ts": "usage", "upstream-condition.test.ts": "lib", "client-retry-after.test.ts": "lib", "client-retry-after-sites.test.ts": "server", "upstream-error-detail-boundaries.test.ts": "server", "request-log-identity-bounds.test.ts": "usage", "safe-response-headers.test.ts": "server", "turn-state-handles.test.ts": "server", "turn-state-handles-e2e.test.ts": "server", "client-error-body.test.ts": "lib", "chat-error-body-normalization.test.ts": "responses", "chat-error-collector-verdicts.test.ts": "responses", "server-chat-error-body-evidence.test.ts": "server"
 ,"messages-error-normalization.test.ts": "claude-integration", "messages-header-normalization.test.ts": "claude-integration", "messages-lane-errors.test.ts": "claude-integration"
-,"messages-error-contracts.test.ts": "claude-integration", "messages-overflow-verdicts.test.ts": "claude-integration", "messages-review-regressions.test.ts": "claude-integration", "messages-proxy-refusals.test.ts": "claude-integration", "messages-overflow-native.test.ts": "claude-integration", "messages-overflow-builtin.test.ts": "claude-integration", "messages-overflow-translated.test.ts": "claude-integration", "messages-overflow-stream.test.ts": "claude-integration", "messages-overflow-collectors.test.ts": "claude-integration", "messages-success-media-types.test.ts": "claude-integration", "messages-native-stream-parity.test.ts": "claude-integration", "messages-overflow-baseline-contract.test.ts": "claude-integration",
+,"messages-error-contracts.test.ts": "claude-integration", "messages-replay-refusal-fold.test.ts": "claude-integration", "messages-overflow-verdicts.test.ts": "claude-integration", "messages-review-regressions.test.ts": "claude-integration", "messages-proxy-refusals.test.ts": "claude-integration", "messages-overflow-native.test.ts": "claude-integration", "messages-overflow-builtin.test.ts": "claude-integration", "messages-overflow-translated.test.ts": "claude-integration", "messages-overflow-stream.test.ts": "claude-integration", "messages-overflow-collectors.test.ts": "claude-integration", "messages-success-media-types.test.ts": "claude-integration", "messages-native-stream-parity.test.ts": "claude-integration", "messages-overflow-baseline-contract.test.ts": "claude-integration",
   "messages-sse-builtin-errors.test.ts": "claude-integration",
   "messages-sse-count-tokens-errors.test.ts": "claude-integration",
   "messages-sse-fold-errors.test.ts": "claude-integration",

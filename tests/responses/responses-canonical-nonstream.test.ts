@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { getDefaultConfig } from "../../src/config";
+import { REPLAY_REFUSAL_MESSAGE } from "../../src/lib/upstream-retry";
 import { CODEX_FORWARD_BASE_URL } from "../../src/providers/openai-tiers";
 import { handleResponses } from "../../src/server/responses";
 import { addFinalRequestLog, httpStatusForRequestLogTerminal, type RequestLogContext } from "../../src/server/request-log";
@@ -238,6 +239,40 @@ describe("canonical ChatGPT transport for non-streaming Responses callers (#6162
       });
     });
   }
+
+  test.each(["refusal-only", "last_error", "nested-last_error", "root-code", "standalone-root-code", "standalone-snapshot-code", "incomplete-code", "cause-code", "cause-veto", "retryable-false", "ordinary"] as const)(
+    "buffered completed error preserves the client retry contract (%s)", async variant => {
+      const generic = { type: "server_error", code: "server_error", message: "fixture private diagnostic" };
+      const refusal = { code: "upstream_response_refused", message: generic.message };
+      const incomplete = variant === "incomplete-code";
+      const standalone = variant.startsWith("standalone-");
+      const response = { id: "resp_completion_veto", status: incomplete ? "incomplete" : "completed", output: [],
+        ...(variant === "standalone-snapshot-code" ? refusal : {}),
+        error: standalone ? undefined : variant === "refusal-only" ? refusal : { ...generic,
+          ...(variant === "cause-code" ? { cause: refusal } : {}),
+          ...(variant === "cause-veto" ? { cause: { retryable: false } } : {}),
+        },
+        ...(variant === "nested-last_error" || incomplete ? { last_error: refusal } : {}),
+        ...(variant === "retryable-false" ? { retryable: false } : {}),
+      };
+      let sends = 0;
+      globalThis.fetch = (async () => {
+        sends++;
+        return new Response(sseEvent(incomplete ? "response.incomplete" : "response.completed", {
+          response, ...(variant === "standalone-root-code" ? refusal : variant === "root-code" ? { code: refusal.code } : {}), ...(variant === "last_error" ? { last_error: refusal } : {}),
+        }), { headers: { "content-type": "text/event-stream", "retry-after": "60" } });
+      }) as typeof fetch;
+      const result = await call(requestBody(false, true));
+      const body = await result.json();
+      expect({ sends, status: result.status, code: body.error.code,
+        retry: result.headers.get("x-should-retry"), delay: result.headers.get("retry-after"),
+      }).toEqual({ sends: 1, status: variant.endsWith("error") || variant.endsWith("-code") || variant === "refusal-only" ? 429 : 502,
+        code: variant.endsWith("error") || variant.endsWith("-code") || variant === "refusal-only" ? refusal.code : generic.code,
+        retry: variant === "ordinary" ? null : "false", delay: variant === "ordinary" ? "60" : null });
+      if (variant !== "ordinary") expect(body.error.message).not.toContain(generic.message);
+      if (incomplete) expect(body.retryable).toBe(false);
+    },
+  );
 
   test.each([false, true])("buffered quota verdict on a completed frame settles usage without replay (pooled combo=%s)", async pooledCombo => {
     const log: RequestLogContext = { model: "", provider: "" };
@@ -739,6 +774,26 @@ describe("canonical ChatGPT transport for non-streaming Responses callers (#6162
     expect(response.status).not.toBe(503);
     expect(text).not.toContain("resp_replacement");
     expect(response.headers.get("x-ratelimit-remaining-requests")).not.toBe("6");
+  });
+
+  test.each([true, false])("hardening: a pre-head replacement refusal publishes a sanitized HTTP error (stream=%s)", async stream => {
+    let sends = 0;
+    const code = "upstream_response_refused";
+    globalThis.fetch = (async () => {
+      sends++;
+      if (sends === 1) return preludeThenEnd("eof", metadataHeaders("first", "first-id", "7"));
+      return Response.json({ error: { code, message: "provider-private-detail" } }, {
+        status: 503, headers: { "retry-after": "7", "x-ratelimit-remaining-requests": "0" },
+      });
+    }) as typeof fetch;
+    const response = await call(metadataBody(stream, false), {}, metadataConfig(false));
+    expect(sends).toBe(2); // The original and the single authorized replacement.
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(response.headers.get("retry-after")).toBeNull();
+    expect(await response.json()).toEqual({ error: {
+      type: "upstream_error", code, message: REPLAY_REFUSAL_MESSAGE,
+    } });
   });
 
   test("client abort ends pre-head selection although upstream cancellation never settles", async () => {

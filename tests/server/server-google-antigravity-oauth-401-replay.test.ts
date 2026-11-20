@@ -5,10 +5,13 @@ import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { OAUTH_ACCOUNT_LOG_LABEL_RE } from "../../src/codex/account-label";
 import * as configModule from "../../src/config";
+import * as proxyEnv from "../../src/lib/proxy-env";
 import { forceRefreshOAuthAccessSnapshot, getValidAccessTokenSnapshot } from "../../src/oauth";
-import { credentialGeneration, getAccountSet, getAuthStorePath, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
+import { credentialGeneration, getAccountSet, getAuthStorePath, saveAccountCredential, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
 import { startServer } from "../../src/server";
 import { handleResponses } from "../../src/server/responses";
+import { isAntigravityFaultRotatable } from "../../src/server/responses/antigravity-fault-rotation";
+import { isNonReplayableResponse } from "../../src/lib/upstream-retry";
 import type { ConsumedComboFailure } from "../../src/server/responses/core-options";
 import { ADAPTER_REGISTRY } from "../../src/adapters/registry";
 import * as requestPacing from "../../src/providers/request-pacing";
@@ -29,6 +32,7 @@ import {
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { registerLabPassiveRouteLinker } from "../../src/lib/lab-passive-linker-registration";
 import { readInstallationSalt } from "../../src/lab/subject/installation-salt";
 import { resetCompatibilityVersionCacheForTests, setCompatibilityVersionOverrideForTests } from "../../src/routing/compatibility/version";
@@ -45,6 +49,7 @@ let testDir = "";
 let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 let originalFetch: typeof fetch;
+let restoreOAuthBootstrapFetch: (() => void) | undefined;
 
 beforeEach(() => {
   clearGenericFailoverHealth();
@@ -57,6 +62,8 @@ beforeEach(() => {
 
 afterEach(() => {
   clearGenericFailoverHealth();
+  restoreOAuthBootstrapFetch?.();
+  restoreOAuthBootstrapFetch = undefined;
   globalThis.fetch = originalFetch;
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -104,6 +111,7 @@ function antigravityConfig(): OcxConfig {
       "google-antigravity": {
         adapter: "google",
         baseUrl: DAILY_API_BASE,
+        proxy: "direct",
         authMode: "oauth",
         googleMode: "cloud-code-assist",
         project: "initial-project-id",
@@ -112,6 +120,46 @@ function antigravityConfig(): OcxConfig {
     },
   } as OcxConfig;
 }
+
+test.each([false, true])("replay veto: Antigravity verification quarantines only the sending generation (stale %s)", async stale => {
+  await seedOAuth();
+  const sender = getAccountSet("google-antigravity")!.activeAccountId;
+  const alternate = await seedSibling();
+  const config = antigravityConfig();
+  // This case injects its physical executor; a provider proxy override is not valid with it.
+  delete config.providers["google-antigravity"]!.proxy;
+  let sends = 0;
+  const transport = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    expect([PROD_API_BASE, DAILY_API_BASE]).toContain(new URL(input instanceof Request ? input.url : String(input)).origin);
+    expect(init?.method).toBe("POST");
+    sends++;
+    if (stale) await saveAccountCredential("google-antigravity", sender, {
+      ...getAccountSet("google-antigravity")!.accounts.find(account => account.id === sender)!.credential,
+      access: "fixture-new-generation",
+    });
+    return Response.json({ error: { code: 403, status: "PERMISSION_DENIED", message: "Please verify your account to continue." } },
+      { status: 403, headers: { "x-should-retry": "false" } });
+  }) as typeof fetch;
+  globalThis.fetch = transport;
+  Object.assign(config.providers["google-antigravity"]!, { fetch: transport });
+  const outbound = spyOn(proxyEnv, "configuredOutboundFetch").mockImplementation((input, init) => transport(input, init));
+  saveConfig(config);
+  const release = acquireOwnedSpendHome();
+  try {
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "google-antigravity/gemini-3.8-flash", input: "fixture", stream: false }),
+    }), config, { provider: "", model: "" });
+    const text = await response.text();
+    expect({ sends, status: response.status, text }).toMatchObject({ sends: 1, status: 403 });
+    expect(response.status).toBe(403);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    const rows = getAccountSet("google-antigravity")!.accounts;
+    expect(rows.find(account => account.id === sender)!.needsReauth === true).toBe(!stale);
+    expect(rows.find(account => account.id === alternate)!.needsReauth).toBeFalsy();
+    if (!stale) expect(rows.find(account => account.id === sender)!.needsReauthReason).toBe("verify_account");
+  } finally { outbound.mockRestore(); release(); }
+});
 
 function antigravityPassthroughConfig(): OcxConfig {
   return {
@@ -126,6 +174,7 @@ function antigravityPassthroughConfig(): OcxConfig {
         adapter: "google",
         modelAdapters: { "gemini-3.8-flash": "openai-responses" },
         baseUrl: DAILY_API_BASE,
+        proxy: "direct",
         authMode: "oauth",
         googleMode: "cloud-code-assist",
         project: "initial-project-id",
@@ -182,6 +231,19 @@ async function postChat(server: ReturnType<typeof startServer>): Promise<Respons
   });
 }
 
+function preserveOAuthBootstrapFetch(fixtureFetch: typeof fetch): void {
+  // Token/project discovery has no provider proxy decision. Preserve its memory fixture
+  // even when server startup installs an inherited SOCKS wrapper around global fetch.
+  const outbound = proxyEnv.configuredOutboundFetch;
+  const bootstrap = spyOn(proxyEnv, "configuredOutboundFetch").mockImplementation((input, init, fallback) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url === GOOGLE_TOKEN_ENDPOINT || url === `${PROD_API_BASE}/v1internal:loadCodeAssist`
+      || url === `${DAILY_API_BASE}/v1internal:onboardUser`) return fixtureFetch(input, init);
+    return outbound(input, init, fallback);
+  });
+  restoreOAuthBootstrapFetch = () => bootstrap.mockRestore();
+}
+
 function installOAuthFetch(
   apiStatuses: Array<number | { status: number; reason?: string; typedReason?: string; oversized?: boolean; message?: string; rawBody?: string }>,
   options: {
@@ -201,7 +263,7 @@ function installOAuthFetch(
   const counts = { refresh: 0 };
   let unauthorizedObserved = false;
   let forbiddenObserved = false;
-  globalThis.fetch = (async (input, init) => {
+  const fixtureFetch = (async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
 
     const parsedUrl = new URL(url);
@@ -345,10 +407,19 @@ function installOAuthFetch(
     if (parsedUrl.hostname === "127.0.0.1" || parsedUrl.hostname === "localhost") return originalFetch(input, init);
     throw new Error("Unexpected external request in Antigravity replay fixture");
   }) as typeof fetch;
+  globalThis.fetch = fixtureFetch;
+  preserveOAuthBootstrapFetch(fixtureFetch);
   return { chatAuth, chatProjects, requestPaths, counts, chatBodies };
 }
 
 describe("Google Antigravity OAuth upstream 401 replay", () => {
+  test.each([502, 503, 504])("a header-only no-retry %i cannot authorize an Antigravity fault hop", status => {
+    const state = { activeAdapter: { name: "google" }, genericFailovers: 0, genericFailoverLimit: 2 };
+    const refused = new Response(null, { status, headers: { "x-should-retry": "false" } });
+    expect(isNonReplayableResponse(refused)).toBe(false);
+    expect(isAntigravityFaultRotatable("google-antigravity", refused, state, true, false)).toBe(false);
+    expect(isAntigravityFaultRotatable("google-antigravity", new Response(null, { status }), state, true, false)).toBe(true);
+  });
   for (const comboAttempt of [false, true]) {
     test.each(["build", "admission"])(`preserved verify 403 uses common delivery after %s failure (combo=${comboAttempt})`, async failurePoint => {
       await seedOAuth();
@@ -1574,6 +1645,7 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
       if (hostname === "127.0.0.1" || hostname === "localhost") return originalFetch(input, init);
       throw new Error("Unexpected external request in concurrent Antigravity replay fixture");
     }) as typeof fetch;
+    preserveOAuthBootstrapFetch(globalThis.fetch);
 
     const server = startServer(0);
     try {

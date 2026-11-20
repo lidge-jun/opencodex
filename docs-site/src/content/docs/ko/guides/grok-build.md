@@ -82,6 +82,11 @@ Grok Build는 루프백에서도 사용자 정의 모델에 비어 있지 않은
 
 provider 항목에 주입된 `api_key`는 이 모델들에 대한 Grok의 자격 증명 체인에서 가장 먼저 사용되므로, opencodex를 대상으로 하는 요청에는 추가 Grok 로그인이 필요하지 않습니다. xAI에 직접 접속하는 네이티브 grok 모델과 모든 하니스 기능에는 평소 쓰던 `grok login` / `XAI_API_KEY` 구성을 그대로 유지합니다.
 
+## Legacy 개인정보 모드에서 xAI OAuth가 403을 반환하는 경우
+
+`ocx provider test xai` 또는 Grok 요청에서 계정이 **Legacy (no storage)** 모드를 사용한다고 안내하면, xAI/Grok 개인정보 설정을 **Privacy Mode**로 바꾼 뒤 `ocx provider test xai`를 다시 실행하세요. 이 설정은 모델 목록 조회와 사용량 한도 확인도 차단하며, OpenCodex 서비스 로그에 같은 안내가 기록됩니다. 기존 OAuth 로그인은 유지할 수 있습니다.
+Grok Responses 스트림이 시작된 뒤 대체 요청에서 이 403이 발생하면 스트림은 `permission_denied`와 같은 Privacy Mode 안내로 종료됩니다. Grok 모델이 Responses 콤보에 포함되어 있으면 조건을 충족하는 다른 모델을 시도할 수 있습니다. 모든 후보를 사용한 경우에는 확인된 문맥 길이 오류나 해당 사용량 한도 응답이 Privacy Mode 안내보다 우선합니다.
+
 ## 수동 설정 (자동 등록 없음)
 
 직접 `~/.grok/config.toml`를 관리하거나 opencodex가 비루프백 호스트에 바인드되어 있다면, `# >>> opencodex managed block` 마커 바깥에 `[model_providers.opencodex]` 블록과 이를 참조하는 모델별 테이블을 추가합니다:

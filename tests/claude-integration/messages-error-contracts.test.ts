@@ -2,7 +2,7 @@ import { expect, test, spyOn } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { repoPath, repoRoot } from "../helpers/repo-root";
-import { OPENAI_ERROR_TYPES, OPENAI_ERROR_CODES, ANTHROPIC_ERROR_TYPES, ANTHROPIC_ERROR_CODES, comboFailureEvidence, markProxyError, isProxyError } from "../../src/lib/client-error-body";
+import { OPENAI_ERROR_TYPES, OPENAI_ERROR_CODES, ANTHROPIC_ERROR_TYPES, ANTHROPIC_ERROR_CODES, CLIENT_ERROR_CONTRACTS, comboFailureEvidence, markProxyError, isProxyError } from "../../src/lib/client-error-body";
 import { ownedAnthropicErrorPayload, ownedAnthropicErrorResponse, messagesUnknownEndpointMessage } from "../../src/lib/messages-error-body";
 import { collectAnthropicMessage, responsesSseToAnthropicSse } from "../../src/claude/outbound";
 import { collectAnthropicMessageResponse, encodeAnthropicMessageSse } from "../../src/protocols/encoders/messages";
@@ -32,8 +32,13 @@ test("only producer identity preserves a local sentence", () => {
 });
 test("literal vocabulary covers the writer families without accepting local bypass types", () => {
   expect(ANTHROPIC_ERROR_TYPES.size).toBe(12);
-  expect(ANTHROPIC_ERROR_CODES.size).toBe(80);
-  for (const code of ["translation_buffer_limit", "context_length_exceeded", "unsupported_feature", "send_budget_exhausted", "desktop_model_mapping_unavailable", "thread_unsupported_request", "upstream_reset_replay_refused", "undeclared_tool_call"]) expect(ANTHROPIC_ERROR_CODES.get(code)).toBe(code);
+  expect(ANTHROPIC_ERROR_CODES.size).toBe(81);
+  for (const code of ["translation_buffer_limit", "context_length_exceeded", "unsupported_feature", "send_budget_exhausted", "desktop_model_mapping_unavailable", "thread_unsupported_request", "upstream_reset_replay_refused", "upstream_response_refused", "undeclared_tool_call"]) expect(ANTHROPIC_ERROR_CODES.get(code)).toBe(code);
+  expect(OPENAI_ERROR_CODES.get("upstream_response_refused")).toBe("upstream_response_refused");
+  expect(ANTHROPIC_ERROR_CODES.has("upstream_response_refused_extra")).toBe(false);
+  expect(ownedAnthropicErrorPayload({ status: 429, code: "upstream_response_refused", evidence: { status: 429 } })).toMatchObject({
+    error: { code: "upstream_response_refused", message: CLIENT_ERROR_CONTRACTS.replay_refused },
+  });
   for (const type of ["server_error", "model_not_allowed_for_key", "not_found"]) expect(ANTHROPIC_ERROR_TYPES.has(type)).toBe(false);
   const sourceRows: [string, string[]][] = [
     ["src/server/messages-native.ts", ["send_budget_exhausted", "translation_buffer_limit", "unsupported_feature"]],

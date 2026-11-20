@@ -1,4 +1,6 @@
 {
+  "replay-veto-envelope.test.ts": "lib",
+  "native-remote-local-fallback.test.ts": "server",
   "compaction-portable-history.test.ts": "responses",
   "turn-membership.test.ts": "responses",
   "turn-membership-ingress.test.ts": "responses",

@@ -1,9 +1,9 @@
-import { clearableDeadline } from "../lib/abort";
+import { clearableDeadline, registerResponseHeaderPause } from "../lib/abort";
 import { inheritAdapterSupportExecutor } from "../lib/executor-physical-send-receipt";
 import { sendTrackingRequestSlot } from "../providers/request-pacing";
 import type { ProviderFetch } from "../server/responses/fetch-helpers";
 
-/** One iteration's cumulative header budget; only local pacing admission pauses its clock. */
+/** One iteration's cumulative header budget; pacing and bounded post-header body inspection pause its clock. */
 export function pacingHeaderDeadline(timeoutMs: number, parent: AbortSignal) {
   const disabled = timeoutMs <= 0;
   const controller = new AbortController();
@@ -33,12 +33,14 @@ export function pacingHeaderDeadline(timeoutMs: number, parent: AbortSignal) {
     current = clearableDeadline(remainingMs, parent);
     current.signal.addEventListener("abort", relayExpiry, { once: true });
   };
+  const unregister = registerResponseHeaderPause(signal, () => { pause(); return resume; });
 
   return {
     signal,
     didExpire: () => signal.aborted && signal.reason === timeoutReason,
     clear: () => {
       cleared = true;
+      unregister();
       current.clear();
       current.signal.removeEventListener("abort", relayExpiry);
     },

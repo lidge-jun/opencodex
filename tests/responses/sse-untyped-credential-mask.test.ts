@@ -404,6 +404,15 @@ describe("untyped error envelopes never carry a value this request sent", () => 
     expect([mask("rate_limit_exceeded"), mask("rate_limit_error"), mask("echo rate_limit_exceeded")]).toEqual(["rate_limit_exceeded", "rate_limit_error", "[REDACTED]"]);
   });
 
+  test.each(["upstream_response_refused", "upstream_reset_replay_refused"])(
+    "synthesized copy keeps the exact public replay refusal code %s",
+    (code) => {
+      const mask = createSynthesizedCopyMask({ "x-custom": code });
+      expect(mask(code)).toBe(code);
+      expect(mask(`echo ${code}`)).toBe("[REDACTED]");
+    },
+  );
+
   test.each(["tee", "eager"] as const)("%s classifies a refusal whose wording overlaps a sent value from the provider's own frame", async mode => {
     const headers = { "x-tenant": "safety systems" };
     await withRegistry(headers, async () => {

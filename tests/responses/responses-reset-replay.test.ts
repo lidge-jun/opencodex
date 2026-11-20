@@ -10,6 +10,8 @@ import { authorizeResendForRecovery } from "../../src/lib/request-resend-gate";
 import type { AdapterRequest } from "../../src/adapters/base";
 import { deferProtocolSafeResetRecovery, selectProtocolSafeResetResponse, type ResetSelectionOwner } from "../../src/server/responses/combo-stream-preflight";
 
+import { refetchAfterProtocolSafeReset, REPLAY_REFUSAL_MESSAGE } from "../../src/lib/upstream-retry";
+
 const prelude = 'event: response.created\ndata: {"type":"response.created","response":{"id":"first","output":[]}}\n\n';
 const completed = 'event: response.completed\ndata: {"type":"response.completed","response":{"id":"second","output":[]}}\n\n';
 const responseLog = { model: "test", provider: "test" };
@@ -122,6 +124,52 @@ describe("early reset selection", () => {
     expect(replacement.cancelled).toBe(false);
     expect(rest.text).toBe(completed);
     expect(rest.error).toBeUndefined();
+  });
+
+  test.each([
+    { committed: false, directive: false }, { committed: true, directive: false },
+    { committed: false, directive: true }, { committed: true, directive: true },
+  ])("hardening: an authorized replacement refusal wins (committed $committed, directive $directive)", async ({ committed, directive }) => {
+    useFakeTimers();
+    const gate = Promise.withResolvers<void>();
+    const waiting = Promise.withResolvers<void>();
+    const code = "upstream_response_refused";
+    let replacementSends = 0;
+    const selected = selectProtocolSafeResetResponse(
+      cleanEofOriginal(gate.promise, { waiting: waiting.resolve }), responseLog,
+      (error, _stage, signal, accepts) => refetchAfterProtocolSafeReset(async () => {
+        replacementSends++;
+        return Response.json({ error: { ...(directive ? {} : { code }), message: "provider-private-detail" } }, {
+          status: 503, headers: directive ? { "x-should-retry": "false" } : undefined,
+        });
+      }, error, {
+        abortSignal: signal, authorize: () => true, acceptTerminalRefusal: true,
+        acceptResponse: candidate => candidate.headers.get("content-type") === "text/event-stream" && accepts(candidate),
+      }),
+      { keepalive: "none", heartbeatIntervalMs: 15_000 },
+    );
+    await waiting.promise;
+    if (committed) jest.advanceTimersByTime(15_000);
+    gate.resolve();
+    const published = await selected;
+    const body = await published.text();
+    expect(replacementSends).toBe(1);
+    if (committed) {
+      expect(published.status).toBe(200);
+      const frames = body.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+      expect(frames).toMatchObject([{ type: "response.failed", response: {
+        status: "failed", retryable: false, output: [],
+        error: directive
+          ? { code: "upstream_reset_replay_refused", message: REPLAY_REFUSAL_MESSAGE }
+          : { code, message: REPLAY_REFUSAL_MESSAGE },
+      } }]);
+      expect(body).not.toContain("provider-private-detail");
+    } else {
+      expect(published.status).toBe(503);
+      // HTTP delivery still has the upstream evidence before client projection.
+      expect(published.headers.get("x-should-retry")).toBe(directive ? "false" : null);
+      expect(JSON.parse(body).error.code).toBe(directive ? undefined : code);
+    }
   });
 
   test("a matching replacement still continues behind a committed head", async () => {

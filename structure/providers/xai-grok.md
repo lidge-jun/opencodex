@@ -85,8 +85,12 @@ Privacy Mode.
 Chat and Responses preserve the 403 permission envelope and record an upstream account-policy
 refusal. The refusal leaves pause and reauthentication state intact. A 403 with the exact marker
 on an operator-granted reset replacement also returns the fixed guidance on both Responses paths
-and keeps the response non-replayable. An exact upstream `x-should-retry: false` survives the
-fixed response and combo reconstruction. Cancellation during the replacement body read returns
+and keeps the response non-replayable. Native reset selection accepts a confirmed Legacy 403
+with or without `x-should-retry: false`. After the stream commits its headers, the replacement
+delivers `permission_denied` and the fixed guidance in `response.failed` with
+`response.retryable: false`. An explicit replay-refusal code takes precedence over the privacy
+marker. An exact upstream `x-should-retry: false` survives HTTP projection and combo
+reconstruction. Cancellation during the replacement body read returns
 a non-replayable 499. Replayable Responses combo refusals use the existing HTTP 403 failover
 eligibility with no cooldown from the account's privacy setting. On exhaustion, confirmed
 context-window and applicable quota verdicts take precedence over the fixed guidance. Wrapped,

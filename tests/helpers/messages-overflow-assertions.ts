@@ -3,12 +3,12 @@ import { hostedWindowsQuarantine } from "./windows-ci-quarantine";
 import { expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ANTHROPIC_ERROR_TYPES, ANTHROPIC_ERROR_CODES } from "../../src/lib/client-error-body";
+import { ANTHROPIC_ERROR_TYPES, ANTHROPIC_ERROR_CODES, CLIENT_ERROR_CONTRACTS } from "../../src/lib/client-error-body";
 import { fixturePath, helperPath, repoRoot } from "./repo-root";
 import { collectOverflowChild, finishOverflowScratch, overflowScratchBase } from "./messages-overflow-child";
 import { applicableMessagesOverflowFixtures, messagesOverflowLanes, messagesOverflowCaseId, messagesOverflowCaseTableHash, type MessagesOverflowFixture } from "./messages-overflow-cases";
 
-type Observation = { status: number; bodySha256: string; bodyLength: number; clientError: boolean; envelopeType?: string; mediaType: string | null; type?: string; code?: string | null; text: string; clientRecognizes: boolean; compactionSentence: boolean; internalDecisions: Record<string, boolean> };
+type Observation = { status: number; bodySha256: string; bodyLength: number; clientError: boolean; envelopeType?: string; mediaType: string | null; type?: string; code?: string | null; text: string; clientRecognizes: boolean; compactionSentence: boolean; internalDecisions: Record<string, boolean>; replayPolicy?: Record<string, unknown> };
 type Row = { lane: typeof messagesOverflowLanes[number]; input: MessagesOverflowFixture; head: Observation };
 // Dictionary indexes retain every comparison without repeating input data or error bodies.
 type Outcome = [lane: number, status: number, clientRecognizes: boolean, decisions: number, classification: "error" | "success",
@@ -41,6 +41,15 @@ const DIRECT_OVERFLOW_BASELINE_RECOVERY = new Map<string, boolean>([
 const GENERIC_5XX_LANES = new Set(["converter", "direct-stream", "direct-fold", "translated-http", "translated-fold", "translated-json"]);
 const GENERIC_5XX_DIRECT_IDS = new Set(["shared-8128-12", "shared-8128-13"]);
 
+// Reviewed #8843 delta: upstream refusal codes select the fixed terminal response on HTTP
+// and JSON paths, including Responses SSE and direct adapter events folded into Messages JSON.
+const REPLAY_REFUSAL_LANES = new Set<Row["lane"]>(["passthrough", "count_tokens", "native-http", "translated-http", "translated-json"]);
+const REPLAY_REFUSAL_IDS = new Set([
+  "sweep-code-upstream_reset_replay_refused-phrase",
+  "sweep-code-upstream_reset_replay_refused-none",
+  "sweep-code-upstream_reset_replay_refused-other",
+]);
+
 function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
   const outcome = golden.outcomes[key(base)]!;
   expect(outcome).toBeDefined();
@@ -54,6 +63,39 @@ function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
   const genericCode = base.input.id === "sweep-code-upstream_server_error-phrase" && GENERIC_5XX_LANES.has(base.lane);
   const plainText = base.input.id === "shape-plain-text-400" && (base.lane === "translated-http" || base.lane === "translated-json");
   const correctedGeneric = directGeneric || genericCode || plainText;
+  const passthrough = base.lane === "passthrough" || base.lane === "count_tokens";
+  const correctedReplayRefusal = REPLAY_REFUSAL_LANES.has(base.lane) && REPLAY_REFUSAL_IDS.has(base.input.id);
+  const foldedReplayRefusal = base.lane === "translated-fold" && REPLAY_REFUSAL_IDS.has(base.input.id);
+  const directReplayRefusal = (base.lane === "direct-stream" || base.lane === "direct-fold") && REPLAY_REFUSAL_IDS.has(base.input.id);
+  if (correctedReplayRefusal) {
+    expect(before.status).toBe(base.lane === "translated-http" ? 429 : base.lane === "translated-json" ? 502 : 400);
+    expect(before.type).toBe(base.lane === "translated-http" ? "rate_limit_error" : base.lane === "translated-json" ? "api_error" : "invalid_request_error");
+    expect(before.code).toBe(passthrough || base.lane === "translated-http" ? "upstream_reset_replay_refused" : undefined);
+    expect(before.clientError).toBe(true);
+    expect(before.mediaType).toBe(passthrough ? "application/json;charset=utf-8" : "application/json");
+    expect(before.clientRecognizes).toBe(base.input.id.endsWith("-phrase") || (passthrough && base.input.id.endsWith("-other")));
+    expect(before.internalDecisions).toEqual(base.lane === "native-http"
+      ? { "native-http": base.input.id.endsWith("-phrase"), writer: false } : passthrough ? {} : { writer: false });
+  }
+  if (foldedReplayRefusal) {
+    expect(before.status).toBe(400);
+    expect(before.type).toBe("invalid_request_error");
+    expect(before.code).toBeUndefined();
+    expect(before.clientError).toBe(true);
+    expect(before.mediaType).toBe("application/json");
+    expect(before.clientRecognizes).toBe(base.input.id.endsWith("-phrase"));
+    expect(before.internalDecisions).toEqual({ status: false, writer: false });
+  }
+  if (directReplayRefusal) {
+    expect(before.status).toBe(base.lane === "direct-fold" ? 502 : 200);
+    expect(before.type).toBe("invalid_request_error");
+    expect(before.code).toBeUndefined();
+    expect(before.clientError).toBe(true);
+    expect(before.mediaType).toBe(base.lane === "direct-fold" ? "application/json" : null);
+    expect(before.clientRecognizes).toBe(base.input.id.endsWith("-phrase"));
+    expect(before.internalDecisions).toEqual(base.lane === "direct-fold"
+      ? { status: false, writer: false, "direct-collector": false } : { status: false, writer: false });
+  }
   if (correctedGeneric) {
     const wasFold = base.lane === "direct-fold";
     expect(before.status).toBe(wasFold || (genericCode && base.lane === "translated-json") ? 502 : ["translated-http", "translated-json", "translated-fold"].includes(base.lane) ? 400 : 200);
@@ -63,7 +105,19 @@ function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
     expect(before.internalDecisions).toEqual(base.lane === "translated-json" || base.lane === "translated-http" ? { writer: false }
       : wasFold ? { status: false, writer: false, "direct-collector": false } : { status: false, writer: false });
   }
-  const expected = correctedOverflow || correctedGeneric ? {
+  const expected = correctedReplayRefusal ? {
+    ...before, status: 429, code: "upstream_reset_replay_refused", clientRecognizes: false,
+    type: base.lane === "native-http" ? "invalid_request_error" : "rate_limit_error",
+    internalDecisions: base.lane === "native-http" ? { "native-http": false, writer: false } : passthrough ? {} : { writer: false },
+  } : foldedReplayRefusal ? {
+    ...before, status: 429, type: "rate_limit_error", code: "upstream_reset_replay_refused", clientRecognizes: false,
+    internalDecisions: { ...before.internalDecisions, "translated-refusal": false },
+  } : directReplayRefusal ? {
+    ...before, status: base.lane === "direct-fold" ? 429 : 200,
+    type: "rate_limit_error", code: "upstream_reset_replay_refused", clientRecognizes: false,
+    internalDecisions: base.lane === "direct-fold"
+      ? { status: false, writer: false, "direct-refusal": false } : { status: false, writer: false },
+  } : correctedOverflow || correctedGeneric ? {
     ...before,
     status: ["direct-fold", "translated-http", "translated-fold", "translated-json"].includes(base.lane) ? 400 : 200,
     clientRecognizes: true,
@@ -85,6 +139,22 @@ function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
   }
   expect(current.input).toEqual(base.input);
   const after = current.head;
+  if (correctedReplayRefusal || foldedReplayRefusal || directReplayRefusal) {
+    const streaming = base.lane === "direct-stream";
+    expect(after.clientError).toBe(true);
+    expect(after.mediaType).toBe(streaming ? null : "application/json");
+    expect(after.replayPolicy).toEqual(streaming ? {
+      retryHeader: null, retryAfter: null,
+      proxyOwned: false, nonReplayable: false, automaticReplayBlocked: false,
+    } : {
+      retryHeader: "false", retryAfter: null,
+      proxyOwned: false, nonReplayable: false, automaticReplayBlocked: true,
+    });
+    expect(JSON.parse(streaming ? after.text.split("data: ").at(-1)! : after.text)).toEqual({
+      type: "error",
+      error: { type: expected.type, code: expected.code, message: CLIENT_ERROR_CONTRACTS.replay_refused },
+    });
+  }
   expect(after.text.length).toBeGreaterThan(0);
   const fold502 = (base.lane === "native-fold" || base.lane === "native-fold-builtin") && messagesFold502Cases.has(base.input.id);
   if (fold502) {
@@ -100,10 +170,9 @@ function assertRow(base: Pick<Row, "lane" | "input">, current: Row) {
     if (!base.input.fault) expect(base.input.eventLanes).toContain(base.lane);
   }
   expect(before.clientRecognizes).toBe(base.input.recovery[base.lane]);
-  expect(after.clientRecognizes).toBe(correctedOverflow || correctedGeneric ? true : base.input.recovery[base.lane]);
+  expect(after.clientRecognizes).toBe(correctedReplayRefusal || foldedReplayRefusal || directReplayRefusal ? false : correctedOverflow || correctedGeneric ? true : base.input.recovery[base.lane]);
   expect(after.clientRecognizes).toBe(expected.clientRecognizes);
   expect(after.internalDecisions).toEqual(expected.internalDecisions);
-  const passthrough = base.lane === "passthrough" || base.lane === "count_tokens";
   if (classification === "success" || base.input.fixedLocal) {
     expect(before.bodySha256).toMatch(/^[a-f0-9]{64}$/);
     expect(after.bodySha256).toBe(before.bodySha256);
@@ -158,7 +227,18 @@ export function registerMessagesOverflowRows(lanes: readonly Row["lane"][]) {
           if (result.fixtureAsyncSpawnsDrained !== true) throw new Error("Head slice did not confirm fixture subprocess cleanup");
           safeToRemove = true;
           expect(result.rows).toHaveLength(selected.length);
-          for (const [index, row] of result.rows.entries()) { expect(key(row)).toBe(key(selected[index]!)); assertRow(selected[index]!, row); }
+          for (const [index, row] of result.rows.entries()) {
+            try { expect(key(row)).toBe(key(selected[index]!)); assertRow(selected[index]!, row); }
+            catch (error) {
+              throw new Error("Messages overflow row " + JSON.stringify({
+                lane, row: offset + index + 1, id: row.input.id, key: key(row),
+                input: { status: row.input.status, type: row.input.type, code: row.input.code, message: row.input.message },
+                baselineStatus: golden.outcomes[key(selected[index]!)]?.[1],
+                actual: { status: row.head.status, type: row.head.type, code: row.head.code,
+                  clientRecognizes: row.head.clientRecognizes, policy: row.head.replayPolicy, decisions: row.head.internalDecisions },
+              }), { cause: error });
+            }
+          }
           console.info(`MESSAGES_OVERFLOW_ROWS ${lane} ${offset} ${selected.length} ${Math.round(performance.now() - started)}ms`);
         } catch (error) { failure = { error }; }
         finally { finishOverflowScratch(scratch, safeToRemove, failure); }

@@ -13,7 +13,7 @@ import { handleResponses } from "../../src/server/responses";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
-import { isNonReplayableResponse, isReplayRefusalResponse, markResponseNonReplayable, replayRefusalResponse, retainReplayRefusal } from "../../src/lib/upstream-retry";
+import { carryReplayRefusal, isNonReplayableResponse, isReplayRefusalResponse, markResponseNonReplayable, REPLAY_REFUSAL_MESSAGE, replayRefusalResponse, retainReplayRefusal } from "../../src/lib/upstream-retry";
 import { requestLogDto } from "../../src/server/management/shared";
 import { responseWithDeferredRequestLog } from "../../src/server/relay";
 import { sanitizeNonReplayableUpstreamError } from "../../src/server/responses/non-replayable-error";
@@ -376,6 +376,21 @@ describe("reset replacement error confidentiality", () => {
     await refusal.text();
   });
 
+  test("carrying the replay marker still requires projecting the new body", async () => {
+    const refusal = replayRefusalResponse();
+    const rewrapped = carryReplayRefusal(refusal, Response.json({
+      error: { code: "upstream_response_refused", message: `fixture diagnostic: ${credential}` },
+    }, { status: 503 }));
+    await refusal.body?.cancel();
+    const safe = await sanitizeNonReplayableUpstreamError(rewrapped, new AbortController().signal);
+    expect(isReplayRefusalResponse(safe)).toBe(true);
+    expect(safe.status).toBe(429);
+    expect(safe.headers.get("x-should-retry")).toBe("false");
+    expect(await safe.json()).toEqual({ error: {
+      type: "upstream_error", code: "upstream_response_refused", message: REPLAY_REFUSAL_MESSAGE,
+    } });
+  });
+
   test("an ordinary error keeps its existing delivery owner", async () => {
     const upstream = Response.json({ error: { message: "ordinary error" } }, { status: 400 });
     expect(await sanitizeNonReplayableUpstreamError(upstream, new AbortController().signal)).toBe(upstream);
@@ -486,6 +501,38 @@ describe("translated reset replay boundaries and accounting", () => {
     expect(result.bodies).toHaveLength(1);
     expect(result.used).toBe(2);
     expect(result.grantSpent).toBe(false);
+  });
+
+  test("an inconclusive transient body suppresses client and upstream retries", async () => {
+    const raw = Response.json({ padding: "x".repeat(17_000), error: {
+      type: "server_error", code: "server_error", message: "private diagnostic",
+    } }, { status: 503, headers: { "retry-after": "23", "x-provider-quota": "7" } });
+    const result = await probe({ provider: { transientRetryOn5xx: { attempts: 2 } }, answer: () => raw });
+    expect(result.bodies).toHaveLength(1);
+    expect(result.status).toBe(503);
+    expect(JSON.parse(result.text)).toEqual({ error: { type: "server_error", code: "server_error",
+      message: "Provider error 503: upstream diagnostic withheld for a non-replayable failure" } });
+    expect(result.headers.get("x-should-retry")).toBe("false");
+    expect(result.headers.get("retry-after")).toBeNull();
+    expect(raw.headers.get("x-should-retry")).toBeNull();
+    expect(raw.headers.get("x-provider-quota")).toBe("7");
+  });
+
+  test("an inconclusive 429 body vetoes Responses client retries after one send", async () => {
+    const raw = Response.json({ padding: "x".repeat(17_000), error: { code: "rate_limit_exceeded" } }, {
+      status: 429, headers: { "retry-after": "23", "x-provider-quota": "7" },
+    });
+    const result = await probe({
+      provider: { transientRetryOn5xx: { attempts: 2 }, retryOn429: { attempts: 1, intervalMs: 1, respectRetryAfter: false } },
+      answer: ordinal => ordinal === 1 ? raw : chatSuccess(),
+    });
+    expect(result.bodies).toHaveLength(1);
+    expect(result.status).toBe(429);
+    expect(result.headers.get("x-should-retry")).toBe("false");
+    expect(result.headers.get("retry-after")).toBeNull();
+    expect(raw.headers.get("retry-after")).toBe("23");
+    expect(raw.headers.get("x-provider-quota")).toBe("7");
+    expect(raw.headers.get("x-should-retry")).toBeNull();
   });
 
   test.each([false, true])("a prepaid compaction slot is counted once (exact policy %s)", async exact => {

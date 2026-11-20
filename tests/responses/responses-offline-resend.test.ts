@@ -2,12 +2,13 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import {
   createOfflineResendWait, offlineResendProbeUrl, resolveOfflineResendWaitMs, setOfflineResendDependenciesForTests,
 } from "../../src/lib/offline-resend";
+import {
+  applyUpstreamRecoveryInit, fetchWithResetRetry, fetchWithTransientRetry,
+  isReplayRefusalResponse, observedReplayRefusalCode, replayRefusalResponse, type UpstreamSendRecovery,
+} from "../../src/lib/upstream-retry";
 import { markEgressTransparentExecutor } from "../../src/lib/provider-egress";
 import { classifyTransportFailureKind } from "../../src/lib/upstream-reachability";
 import { causeForRecoveryKind } from "../../src/lib/request-failure-model";
-import {
-  applyUpstreamRecoveryInit, fetchWithResetRetry, fetchWithTransientRetry, type UpstreamSendRecovery,
-} from "../../src/lib/upstream-retry";
 import { handleResponses } from "../../src/server/responses";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
@@ -44,6 +45,37 @@ function probes(failures: number) {
   });
   return { lookups, delays };
 }
+
+test.each(["header deadline", "wire relay refusal", "code-only wire refusal"])("offline wait cannot reopen a terminal %s", async kind => {
+  let sends = 0, waits = 0;
+  const consumed: number[] = [];
+  const refusal = kind === "header deadline" ? replayRefusalResponse() : Response.json({
+    error: { code: "upstream_response_refused", message: "Fixture relay refusal" },
+  }, { status: 429, headers: kind === "code-only wire refusal" ? {} : { "x-should-retry": "false" } });
+  const response = await fetchWithTransientRetry(async () => { sends++; return refusal; }, {
+    attempts: 3, offlineWait: async () => { waits++; return true; },
+    onSendsConsumed: count => consumed.push(count),
+  });
+  expect({ sends, waits, consumed }).toEqual({ sends: 1, waits: 0, consumed: [1] });
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-should-retry")).toBe(kind === "code-only wire refusal" ? null : "false");
+  expect(response.headers.get("retry-after")).toBeNull();
+  expect(isReplayRefusalResponse(response)).toBe(kind === "header deadline");
+  if (kind === "code-only wire refusal") expect(observedReplayRefusalCode(response)).toBe("upstream_response_refused");
+  expect((await response.json()).error.code).toBe(kind === "header deadline"
+    ? "upstream_reset_replay_refused" : "upstream_response_refused");
+});
+
+test("offline wait does not treat an independent TimeoutError as DNS recovery", async () => {
+  const { lookups } = probes(0);
+  let sends = 0;
+  const timeout = new DOMException("Fixture independent timeout", "TimeoutError");
+  await expect(fetchWithTransientRetry(async () => { sends++; throw timeout; }, {
+    attempts: 3, offlineWait: createOfflineResendWait("https://gateway.example/v1/responses", 30_000),
+  })).rejects.toBe(timeout);
+  expect(sends).toBe(1);
+  expect(lookups).toEqual([]);
+});
 
 test("the wait is off unless a positive number of seconds is configured, and is capped at 300 s", () => {
   for (const value of [undefined, 0, -1, Number.NaN, "30"]) expect(resolveOfflineResendWaitMs(value)).toBe(0);
