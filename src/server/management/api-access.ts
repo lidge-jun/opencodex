@@ -3,7 +3,7 @@ import { isWildcardHostname } from "../../codex/loopback-target";
 import { localCredentialDestinationHostname, localInferenceDestination } from "../../lib/local-destinations";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers-destination";
 import { LIVE_AUDIO_MODEL, TRANSCRIPTION_MODEL } from "../audio-upstream";
-import { resolveApiSurfaceSettings, type ApiSurfaceSettings } from "../../protocols/settings";
+import { resolveApiSurfaceSettings, resolveGeminiApiSurface, type ApiSurfaceSetting, type ApiSurfaceSettings } from "../../protocols/settings";
 
 export interface AudioApiAccess {
   transcriptionEndpoint: string;
@@ -24,8 +24,9 @@ export interface ApiAccessEndpoints {
   chatCompletionsEndpoint: string;
   messagesEndpoint: string;
   modelsEndpoint: string;
+  geminiModelsEndpoint: string;
   /** Which public APIs are served and who decided it, from `resolveApiSurfaceSettings`. */
-  surfaces: ApiSurfaceSettings;
+  surfaces: ApiSurfaceSettings & { gemini: ApiSurfaceSetting };
   /**
    * Back-compat for dashboards that predate `surfaces`: they hide the Messages endpoint when
    * this is false. It mirrors `surfaces.messages.enabled`, not `claudeCode.enabled`, so an
@@ -180,7 +181,8 @@ export function buildApiAccessEndpoints(
     chatCompletionsEndpoint: `${baseUrl}/chat/completions`,
     messagesEndpoint: `${baseUrl}/messages`,
     modelsEndpoint: `${baseUrl}/models`,
-    surfaces,
+    geminiModelsEndpoint: baseUrl.replace(/\/v1$/, "/v1beta/models"),
+    surfaces: { ...surfaces, gemini: resolveGeminiApiSurface(config) },
     claudeCodeEnabled: surfaces.messages.enabled,
     audio: {
       transcriptionEndpoint: `${baseUrl}/audio/transcriptions`,
