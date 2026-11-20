@@ -1,3 +1,5 @@
+import { readSafeXaiErrorDetail } from "./xai-upstream-error";
+
 /**
  * xAI image generation/editing client.
  *
@@ -10,13 +12,15 @@
 
 export interface XaiImageRequest {
   prompt: string;
-  model?: string; // default "grok-imagine-image-quality"
+  model?: string; // default "grok-imagine-image-2.0"
   n?: number; // 1-4
   size?: string;
   quality?: string;
   /** Literal xAI aspect_ratio. Wins over `size` when both are present. */
   aspectRatio?: string;
   imageUrl?: string; // if set → /images/edits
+  /** Additional edit sources, up to five total. */
+  imageUrls?: string[];
 }
 
 export interface XaiImageResult {
@@ -24,9 +28,10 @@ export interface XaiImageResult {
 }
 
 const XAI_IMAGES_TIMEOUT_MS = 60_000;
-const XAI_DEFAULT_MODEL = "grok-imagine-image-quality";
+export const XAI_MAX_EDIT_IMAGES = 5;
+export const XAI_DEFAULT_IMAGE_MODEL = "grok-imagine-image-2.0";
 
-// xAI only accepts aspect_ratio + resolution, not OpenAI's size/quality. Map
+// Translate OpenAI size and quality into xAI's aspect ratio and resolution. Map
 // OpenAI's "WxH" size to the closest standard ratio (log-space distance) and
 // OpenAI quality buckets onto xAI's 1k/2k resolution. Unknown values are
 // dropped rather than forwarded, to avoid sending parameters xAI rejects.
@@ -36,8 +41,10 @@ const XAI_ASPECT_RATIOS: ReadonlyArray<readonly [string, number]> = [
   ["4:3", 4 / 3],
   ["9:16", 0.5625],
   ["16:9", 16 / 9],
+  ["2:3", 2 / 3],
+  ["3:2", 3 / 2],
 ];
-const XAI_ASPECT_RATIO_LITERALS = new Set(XAI_ASPECT_RATIOS.map(([label]) => label));
+const XAI_ASPECT_RATIO_LITERALS = new Set([...XAI_ASPECT_RATIOS.map(([label]) => label), "9:19.5", "19.5:9", "9:20", "20:9", "1:2", "2:1", "21:9", "5:2"]);
 
 /** Accept a hosted/Codex `aspect_ratio` literal; `auto` and unknown values drop. */
 export function resolveXaiAspectRatioLiteral(value: unknown): string | undefined {
@@ -82,17 +89,32 @@ function mapQualityToResolution(quality?: string): string | undefined {
   return undefined;
 }
 
+export function mapQualityToXaiQuality(model: string, quality?: string): "low" | "medium" | "auto" | undefined {
+  if (!quality || !/^grok-imagine-image-2(\.|-|$)/.test(model)) return undefined;
+  const q = quality.toLowerCase();
+  if (q === "low" || q === "standard") return "low";
+  if (q === "medium" || q === "high" || q === "hd") return "medium";
+  if (q === "auto") return "auto";
+  return undefined;
+}
+
 export async function callXaiImages(
   req: XaiImageRequest,
   auth: { baseUrl: string; token: string },
   signal?: AbortSignal,
   timeoutMs: number = XAI_IMAGES_TIMEOUT_MS,
 ): Promise<XaiImageResult> {
-  const isEdit = typeof req.imageUrl === "string" && req.imageUrl.length > 0;
+  const sources = [...new Set([req.imageUrl, ...(req.imageUrls ?? [])].filter((url): url is string => typeof url === "string").map(url => url.trim()).filter(Boolean))];
+  if (sources.length > XAI_MAX_EDIT_IMAGES) {
+    const err = new Error("xAI image edits accept at most 5 images") as Error & { status: number };
+    err.status = 400;
+    throw err;
+  }
+  const isEdit = sources.length > 0;
   const endpoint = isEdit ? "/images/edits" : "/images/generations";
 
   const body: Record<string, unknown> = {
-    model: req.model ?? XAI_DEFAULT_MODEL,
+    model: req.model ?? XAI_DEFAULT_IMAGE_MODEL,
     prompt: req.prompt,
     n: req.n ?? 1,
   };
@@ -100,8 +122,12 @@ export async function callXaiImages(
   const resolution = mapQualityToResolution(req.quality);
   if (aspectRatio) body.aspect_ratio = aspectRatio;
   if (resolution) body.resolution = resolution;
+  const xq = mapQualityToXaiQuality(String(body.model), req.quality);
+  if (xq) body.quality = xq;
   if (isEdit) {
-    body.image = { url: req.imageUrl as string, type: "image_url" };
+    const images = sources.map(url => ({ url, type: "image_url" }));
+    if (images.length === 1) body.image = images[0];
+    else body.images = images;
   }
 
   const deadlineMs = Number.isFinite(timeoutMs) && timeoutMs > 0
@@ -134,8 +160,8 @@ export async function callXaiImages(
   }
 
   if (!resp.ok) {
-    try { await resp.body?.cancel(); } catch { /* ignore */ }
-    const err = new Error("xAI images API returned " + resp.status) as Error & { status: number };
+    const detail = await readSafeXaiErrorDetail(resp, linkedSignal);
+    const err = new Error("xAI images API returned " + resp.status + (detail ? `: ${detail}` : "")) as Error & { status: number };
     err.status = resp.status;
     throw err;
   }

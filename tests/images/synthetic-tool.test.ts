@@ -88,6 +88,12 @@ describe("buildImageTool", () => {
     const tool = buildImageTool();
     const aspect = (tool.parameters as { properties?: { aspect_ratio?: { enum?: string[] } } })
       .properties?.aspect_ratio;
-    expect(aspect?.enum).toEqual(["1:1", "16:9", "9:16", "4:3", "3:4", "auto"]);
+    expect(aspect?.enum).toEqual(["1:1", "16:9", "9:16", "4:3", "3:4", "2:3", "3:2", "21:9", "5:2", "auto"]);
+  });
+
+  test("offers the xAI 2.0 quality values", () => {
+    const tool = buildImageTool();
+    const quality = (tool.parameters as { properties?: { quality?: { enum?: string[] } } }).properties?.quality;
+    expect(quality?.enum).toEqual(["low", "medium", "auto"]);
   });
 });

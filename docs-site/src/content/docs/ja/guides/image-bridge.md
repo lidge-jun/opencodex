@@ -27,7 +27,7 @@ Image Bridge オプションは、`~/.opencodex/config.json` の `images` の下
 {
   "images": {
     "bridgeEnabled": true,
-    "bridgeModel": "grok-imagine-image-quality",
+    "bridgeModel": "grok-imagine-image-2.0",
     "maxRounds": 3,
     "timeoutMs": 60000
   }
@@ -37,7 +37,7 @@ Image Bridge オプションは、`~/.opencodex/config.json` の `images` の下
 |オプション |デフォルト |説明 |
 | --- | --- | --- |
 | `bridgeEnabled` | `false` |マスタースイッチ。 `true` を設定してブリッジを有効にします。予期せぬ xAI 請求を避けるため、デフォルトではオフになっています。 |
-| `bridgeModel` | `grok-imagine-image-quality` |プロンプトの送信先となる xAI イメージ モデル ID。 |
+| `bridgeModel` | `grok-imagine-image-2.0` |プロンプトの送信先となる xAI イメージ モデル ID。 |
 | `maxRounds` | `3` |ターンごとのイメージ生成ループの最大反復数。整数に下限され、`[0, 10]` に固定されます。非有限値は `3` にフォールバックします。 |
 | `timeoutMs` | `60000` |呼び出しごとの xAI 期限 (ミリ秒単位)。有限の正の値は下限処理され、xAI リクエストに渡されます。 |
 | `artifactsKeepCount` | `200` | `artifacts/` で保持されるファイルの最大数。これを超えると、呼び出しが完了するたびに最も古いファイルが削除されます。枝刈りを無効にするには、`0` または負の値に設定します。 |
@@ -70,3 +70,5 @@ Image Bridge は、**非 OpenAI** モデルが選択されているときに、`
 - **xAI の費用が適用されます。** xAI による画像生成には、有効な xAI サブスクリプションまたは API クレジットが必要です。
 - **ストリーミングのみ。** ブリッジは SSE 応答ストリームをインターセプトすることで機能します。とのリクエスト
 `stream: false` は 400 エラーで拒否されます。
+
+既定モデルは `grok-imagine-image-2.0` です。`quality` は `low`、`medium`、`auto` を受け付け、OpenAI の `high` と `hd` は `medium` に変換されます。廃止された `grok-imagine-image-quality`（2026-05-15 以降これに転送された `grok-imagine-image-pro` を含む）は、2.0 の低品質として提供されます。料金は品質と解像度で変わり、編集は最大5枚の入力画像を受け付け、1枚につき $0.01 が加算されます。

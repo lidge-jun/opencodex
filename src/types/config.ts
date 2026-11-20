@@ -1635,7 +1635,7 @@ export interface OcxImagesConfig {
   timeoutMs?: number;
   /** Master switch for the image bridge. Default false — set true to enable paid xAI Grok Imagine generation. */
   bridgeEnabled?: boolean;
-  /** xAI image model id. Default "grok-imagine-image-quality" (see DEFAULT_MODEL in images/plan.ts). */
+  /** xAI image model id. Default "grok-imagine-image-2.0". */
   bridgeModel?: string;
   /** Max image-generation loop iterations before forced-final. Default 3; clamped to [0, 10]. */
   maxRounds?: number;

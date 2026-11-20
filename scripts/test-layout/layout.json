@@ -1965,7 +1965,7 @@
     "codex-ws-handshake.test.ts": "responses", "codex-ws-handshake-validation.test.ts": "responses",
     "ws-upstream-socks5.test.ts": "responses",
     "ws-upstream.test.ts": "responses",
-    "xai-client.test.ts": "images",
+    "xai-client.test.ts": "images", "xai-upstream-error.test.ts": "images", "server-images-xai-relay.test.ts": "server",
     "xai-empty-catalog-tool-choice.test.ts": "providers/xai",
     "xai-no-stop.test.ts": "providers/xai",
     "xai-oauth-retry.test.ts": "providers/xai",

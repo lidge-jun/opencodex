@@ -45,7 +45,7 @@ görsel üretimini etkinleştirmek için `bridgeEnabled: true` ayarlamalısını
 {
   "images": {
     "bridgeEnabled": true,
-    "bridgeModel": "grok-imagine-image-quality",
+    "bridgeModel": "grok-imagine-image-2.0",
     "maxRounds": 3,
     "timeoutMs": 60000
   }
@@ -55,7 +55,7 @@ görsel üretimini etkinleştirmek için `bridgeEnabled: true` ayarlamalısını
 | Seçenek | Varsayılan | Açıklama |
 | --- | --- | --- |
 | `bridgeEnabled` | `false` | Ana anahtar. Köprüyü etkinleştirmek için `true` yapın. Beklenmeyen xAI maliyetlerini önlemek için varsayılan olarak kapalıdır. |
-| `bridgeModel` | `grok-imagine-image-quality` | İsteklerin gönderileceği xAI görsel model kimliği. |
+| `bridgeModel` | `grok-imagine-image-2.0` | İsteklerin gönderileceği xAI görsel model kimliği. |
 | `maxRounds` | `3` | Tur başına maksimum görsel üretim döngüsü sayısı. Tam sayıya yuvarlanır ve `[0, 10]` aralığına sınırlandırılır; geçersiz değerler `3`'e döner. |
 | `timeoutMs` | `60000` | Milisaniye cinsinden çağrı başına xAI zaman aşımı süresi. |
 | `artifactsKeepCount` | `200` | `artifacts/` dizininde saklanacak maksimum dosya sayısı. Aşıldığında, tamamlanan her çağrıdan sonra en eski dosyalar otomatik temizlenir. |
@@ -106,3 +106,5 @@ herhangi bir sağlayıcıyla sorunsuz çalışır.
   çalışır; `stream: false` olan istekler 400 hatasıyla reddedilir.
 
 
+
+Varsayılan model `grok-imagine-image-2.0` modelidir. `quality` için `low`, `medium`, `auto` desteklenir; OpenAI `high` ve `hd` değerleri `medium` olur. Kullanımdan kaldırılan `grok-imagine-image-quality` (ve 2026-05-15 tarihinden beri ona yönlendirilen `grok-imagine-image-pro`) düşük kalitede 2.0 olarak sunulur. Fiyat kaliteye ve çözünürlüğe bağlıdır; düzenleme en fazla beş girdi görseli kabul eder ve görsel başına $0.01 eklenir.

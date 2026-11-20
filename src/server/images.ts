@@ -55,7 +55,7 @@ import {
   type PinnedDownloadFn,
 } from "../images/artifacts";
 import { findXaiProvider, resolveXaiImageAuthToken } from "../images/plan";
-import { callXaiImages } from "../images/xai-client";
+import { callXaiImages, XAI_DEFAULT_IMAGE_MODEL, XAI_MAX_EDIT_IMAGES } from "../images/xai-client";
 import type { AdmissionLease } from "../lib/admission";
 import { codexAccountSelectionForTurn } from "./lifecycle";
 import { codexModelAvailabilityErrorResponse } from "./responses/codex-auth-error";
@@ -131,7 +131,6 @@ export async function readImageResponseBytes(
 }
 
 const CCA_IMAGE_MODEL = "gemini-3.1-flash-image";
-const XAI_IMAGE_BRIDGE_MODEL = "grok-imagine-image-quality";
 
 /**
  * The model this request names, or undefined when it names none.
@@ -492,7 +491,7 @@ async function tryXaiImageRelay(
   if (config.images?.bridgeEnabled !== true) return undefined;
   const found = findXaiProvider(config);
   if (!found) return undefined;
-  const bridgeModel = config.images?.bridgeModel ?? XAI_IMAGE_BRIDGE_MODEL;
+  const bridgeModel = config.images?.bridgeModel ?? XAI_DEFAULT_IMAGE_MODEL;
   // The bridge sends this request to the configured xAI provider and the bridge
   // model regardless of the selector in the body, so that is what the key is
   // checked against.
@@ -515,20 +514,24 @@ async function tryXaiImageRelay(
   const quality = typeof obj.quality === "string" ? obj.quality : undefined;
   const aspectRatio = typeof obj.aspect_ratio === "string" ? obj.aspect_ratio : undefined;
   let imageUrl: string | undefined;
+  let imageUrls: string[] | undefined;
   if (endpoint === "edits") {
-    const images = obj.images;
-    const first = Array.isArray(images) ? images[0] : undefined;
-    if (typeof obj.image === "string") imageUrl = obj.image;
-    else if (typeof obj.image_url === "string") imageUrl = obj.image_url;
-    else if (first && typeof first === "object" && first !== null) {
-      const rec = first as Record<string, unknown>;
-      if (typeof rec.image_url === "string") imageUrl = rec.image_url;
-      else if (typeof rec.url === "string") imageUrl = rec.url;
+    const sources: string[] = [];
+    const add = (value: unknown) => { if (typeof value === "string" && value.trim()) sources.push(value.trim()); };
+    add(obj.image);
+    add(obj.image_url);
+    if (Array.isArray(obj.images)) for (const entry of obj.images) {
+      if (typeof entry === "string") add(entry);
+      else if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+        const rec = entry as Record<string, unknown>;
+        if (typeof rec.image_url === "string") add(rec.image_url);
+        else if (rec.image_url && typeof rec.image_url === "object" && !Array.isArray(rec.image_url)) add((rec.image_url as Record<string, unknown>).url);
+        else add(rec.url);
+      }
     }
-    if (!imageUrl?.trim()) {
-      return formatErrorResponse(400, "invalid_request_error", "image edits require an image URL");
-    }
-    imageUrl = imageUrl.trim();
+    if (sources.length > XAI_MAX_EDIT_IMAGES) return formatErrorResponse(400, "invalid_request_error", "xAI image edits accept at most 5 images");
+    [imageUrl, ...imageUrls] = sources;
+    if (!imageUrl) return formatErrorResponse(400, "invalid_request_error", "image edits require an image URL");
   }
   const timeoutMs = config.images?.timeoutMs ?? IMAGES_UPSTREAM_TIMEOUT_MS;
   const linkedSignal = signalWithTimeout(timeoutMs, signal);
@@ -557,6 +560,7 @@ async function tryXaiImageRelay(
         quality,
         aspectRatio,
         imageUrl,
+        imageUrls,
       },
       { baseUrl: "https://api.x.ai/v1", token },
       linkedSignal.signal,

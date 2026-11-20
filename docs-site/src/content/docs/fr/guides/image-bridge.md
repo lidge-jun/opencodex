@@ -41,7 +41,7 @@ pour activer la génération payante avec xAI Grok Imagine :
 {
   "images": {
     "bridgeEnabled": true,
-    "bridgeModel": "grok-imagine-image-quality",
+    "bridgeModel": "grok-imagine-image-2.0",
     "maxRounds": 3,
     "timeoutMs": 60000
   }
@@ -51,7 +51,7 @@ pour activer la génération payante avec xAI Grok Imagine :
 | Option | Valeur par défaut | Description |
 | --- | --- | --- |
 | `bridgeEnabled` | `false` | Interrupteur principal. Définissez-le sur `true` pour activer le pont. Il est désactivé par défaut afin d'éviter des frais xAI inattendus. |
-| `bridgeModel` | `grok-imagine-image-quality` | Identifiant du modèle d'image xAI auquel envoyer les invites. |
+| `bridgeModel` | `grok-imagine-image-2.0` | Identifiant du modèle d'image xAI auquel envoyer les invites. |
 | `maxRounds` | `3` | Nombre maximal d'itérations de la boucle de génération d'images par tour. La valeur est ramenée à un entier et limitée à `[0, 10]` ; une valeur non finie est remplacée par `3`. |
 | `timeoutMs` | `60000` | Délai maximal par appel xAI, en millisecondes. Les valeurs positives et finies sont ramenées à un entier, puis transmises à la requête xAI. |
 | `artifactsKeepCount` | `200` | Nombre maximal de fichiers conservés sous `artifacts/`. Lorsque cette limite est dépassée, les fichiers les plus anciens sont supprimés après chaque appel mené à terme. Définissez la valeur sur `0` ou sur un nombre négatif pour désactiver l'élagage. |
@@ -93,3 +93,5 @@ silencieusement.
 - **La recherche web est prioritaire** sur les adaptateurs qui prennent en charge la boucle du service auxiliaire de recherche web. Si la recherche web et la génération d'images sont toutes deux demandées pendant le même tour, la recherche web est exécutée et la génération d'images est ignorée. Les adaptateurs Cursor/`runTurn` ne peuvent actuellement pas utiliser ce service auxiliaire ; le pont de génération d'images peut donc tout de même s'exécuter pendant ces tours qui demandent les deux outils.
 - **Les tarifs xAI s'appliquent.** La génération d'images par xAI exige un abonnement xAI actif ou des crédits API.
 - **Diffusion en continu uniquement.** Le pont intercepte le flux de réponse SSE ; les requêtes contenant `stream: false` sont rejetées avec une erreur 400.
+
+Le modèle par défaut est `grok-imagine-image-2.0`. `quality` accepte `low`, `medium` et `auto` ; `high` et `hd` OpenAI deviennent `medium`. Le modèle retiré `grok-imagine-image-quality` (et `grok-imagine-image-pro`, redirigé vers lui depuis le 2026-05-15) est servi en 2.0 basse qualité. Le prix dépend de la qualité et de la résolution ; les modifications acceptent cinq images au plus et ajoutent $0.01 par image en entrée.

@@ -30,7 +30,7 @@ Image Bridge 的选项位于 `~/.opencodex/config.json` 的 `images` 下。桥�
 {
   "images": {
     "bridgeEnabled": true,
-    "bridgeModel": "grok-imagine-image-quality",
+    "bridgeModel": "grok-imagine-image-2.0",
     "maxRounds": 3,
     "timeoutMs": 60000
   }
@@ -40,7 +40,7 @@ Image Bridge 的选项位于 `~/.opencodex/config.json` 的 `images` 下。桥�
 | 选项 | 默认值 | 说明 |
 | --- | --- | --- |
 | `bridgeEnabled` | `false` | 总开关。设为 `true` 以启用桥接。默认关闭，以避免意外产生 xAI 费用。 |
-| `bridgeModel` | `grok-imagine-image-quality` | 发送提示词到的 xAI 图像模型 ID。 |
+| `bridgeModel` | `grok-imagine-image-2.0` | 发送提示词到的 xAI 图像模型 ID。 |
 | `maxRounds` | `3` | 每个回合的最大图像生成循环迭代次数。会向下取整为整数，并限制在 `[0, 10]`；非有限值会回退到 `3`。 |
 | `timeoutMs` | `60000` | 每次调用的 xAI 截止时间，单位毫秒。有限且为正的值会向下取整后传入 xAI 请求。 |
 | `artifactsKeepCount` | `200` | 在 `artifacts/` 下保留的最大文件数。超过后，会在每次完成调用后删除最旧的文件。设为 `0` 或负值可禁用清理。 |
@@ -67,3 +67,5 @@ Image Bridge 只会在 **Responses** 回合中生效，且仅当 `/v1/responses`
 - **Web 搜索优先。** 在支持 web-search sidecar 循环的 adapter 上，如果同一回合同时请求了 web 搜索和图像生成，会先运行 web-search，图像生成会被跳过。Cursor/`runTurn` adapter 目前不能使用该 sidecar，因此这些双工具回合中图像桥接仍可能运行。
 - **会产生 xAI 成本。** 通过 xAI 进行图像生成需要有效的 xAI 订阅或 API credits。
 - **仅支持流式。** 桥接通过拦截 SSE 响应流实现；`stream: false` 的请求会以 400 错误被拒绝。
+
+默认模型为 `grok-imagine-image-2.0`。`quality` 支持 `low`、`medium`、`auto`；OpenAI 的 `high` 和 `hd` 映射为 `medium`。已停用的 `grok-imagine-image-quality`（以及自 2026-05-15 起重定向到它的 `grok-imagine-image-pro`）由 2.0 以低质量提供。价格取决于质量和分辨率；编辑最多接受五张输入图片，每张加收 $0.01。

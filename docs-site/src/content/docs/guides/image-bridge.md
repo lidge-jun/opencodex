@@ -50,7 +50,7 @@ Image Bridge options live under `images` in `~/.opencodex/config.json`. Bridging
 {
   "images": {
     "bridgeEnabled": true,
-    "bridgeModel": "grok-imagine-image-quality",
+    "bridgeModel": "grok-imagine-image-2.0",
     "maxRounds": 3,
     "timeoutMs": 60000
   }
@@ -60,7 +60,7 @@ Image Bridge options live under `images` in `~/.opencodex/config.json`. Bridging
 | Option | Default | Description |
 | --- | --- | --- |
 | `bridgeEnabled` | `false` | Master switch. Set `true` to enable bridging. Off by default to avoid unexpected xAI charges. |
-| `bridgeModel` | `grok-imagine-image-quality` | The xAI image model id to send prompts to. |
+| `bridgeModel` | `grok-imagine-image-2.0` | The xAI image model id to send prompts to. |
 | `maxRounds` | `3` | Maximum image-generation loop iterations per turn. Floored to an integer and clamped to `[0, 10]`; non-finite values fall back to `3`. |
 | `timeoutMs` | `60000` | Per-call xAI deadline in milliseconds. Finite positive values are floored and passed to the xAI request. |
 | `artifactsKeepCount` | `200` | Maximum number of files retained under `artifacts/`. When exceeded, the oldest files are deleted after each fulfilled call. Set to `0` or a negative value to disable pruning. |
@@ -101,3 +101,5 @@ perspective, image generation works with any routed provider instead of silently
 - **xAI costs apply.** Image generation via xAI requires an active xAI subscription or API credits.
 - **Streaming only.** The bridge works by intercepting the SSE response stream; requests with
   `stream: false` are rejected with a 400 error.
+
+The default is `grok-imagine-image-2.0`. Its `quality` accepts `low`, `medium`, and `auto`; OpenAI `high` and `hd` map to `medium`. The retired `grok-imagine-image-quality` model (and `grok-imagine-image-pro`, redirected to it since 2026-05-15) is served as 2.0 at low quality. Price depends on quality and resolution; edits add $0.01 per input image and accept up to five input images.
