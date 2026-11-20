@@ -212,8 +212,11 @@ test("a poll read that lands during an Overall write does not revert the switch"
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
   expect(overallSwitch("other/yankee").getAttribute("aria-checked")).toBe("true");
   await act(async () => { writes.shift()!(); });
-  await settle(() => !overallSwitch("other/yankee").disabled);
+  // Settled means the queue drained and its authoritative catalog read succeeded: only then does
+  // the hook publish "Saved" and drop the optimistic override, so "on" below is the saved state.
+  await settle(() => container.textContent!.includes("Saved. Codex shows the change"));
   expect(overallSwitch("other/yankee").getAttribute("aria-checked")).toBe("true");
+  expect(overallSwitch("other/yankee").disabled).toBe(false);
   expect(selected.other).toEqual(["xray", "yankee"]);
 });
 
