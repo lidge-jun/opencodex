@@ -61,6 +61,8 @@ describe("reset-credit safe DTO", () => {
       { granted_at: granted, expires_at: null },
       { granted_at: granted, expires_at: expires },
       { granted_at: granted, expires_at: null },
+      // No usable grant time: passed on as unorderable so the redeemer stands down.
+      { granted_at: "", expires_at: expires },
     ]);
   });
 });

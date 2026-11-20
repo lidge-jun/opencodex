@@ -156,9 +156,17 @@ export function createResetCreditWhamClient(config: OcxConfig, accountId: string
       if (!resp.ok) { await resp.body?.cancel().catch(() => {}); throw new Error(`upstream ${resp.status}`); }
       const parsed = await readResetCreditJson(resp, AbortSignal.timeout(8000));
       if (!parsed.ok) throw new Error("invalid upstream reset-credit response");
-      // Non-expiring rows are kept: the redeemer never plans them, but it must see them to know
-      // they could be consumed ahead of the credit it protects.
-      return { credits: safeResetCreditsDto(parsed.value).credits.map(({ granted_at, expires_at }) => ({ granted_at, expires_at })) };
+      // Every row reaches the redeemer, not just the display DTO's: it never plans a non-expiring
+      // or undated row, but must see each one to know it could be consumed ahead of the credit it
+      // protects. A row without a usable grant time is passed on as "" (unorderable).
+      const raw = (parsed.value as { credits?: unknown } | null)?.credits;
+      return { credits: (Array.isArray(raw) ? raw : []).map(row => {
+        const credit = typeof row === "object" && row !== null ? row as Record<string, unknown> : {};
+        return {
+          granted_at: typeof credit.granted_at === "string" ? credit.granted_at : "",
+          expires_at: typeof credit.expires_at === "string" ? credit.expires_at : null,
+        };
+      }) };
     }),
     consume: redeemRequestId => run(async auth => {
       const resp = await fetch("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume", {

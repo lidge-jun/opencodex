@@ -77,8 +77,10 @@ export function creditStillPresent(credits: readonly ResetCredit[], plan: Pick<A
  */
 export function olderCreditPrecedes(credits: readonly ResetCredit[], plan: Pick<AutoRedeemPlan, "grantedAt" | "expiresAt">): boolean {
   const planned = Date.parse(plan.grantedAt);
+  // Fail closed: an equal grant time has no known tie-breaker, and a grant time that does not
+  // parse cannot be ordered at all, so either blocks dispatch just like an older credit.
   return credits.some(c => !(c.granted_at === plan.grantedAt && c.expires_at === plan.expiresAt)
-    && (!Number.isFinite(planned) || !(Date.parse(c.granted_at) >= planned)));
+    && (!Number.isFinite(planned) || !(Date.parse(c.granted_at) > planned)));
 }
 
 interface JournalEntry {

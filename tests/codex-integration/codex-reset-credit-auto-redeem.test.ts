@@ -184,6 +184,20 @@ describe("reset-credit auto-redeemer runtime (#822)", () => {
     expect((await h2.redeemer.tick()).kind).toBe("dispatched");
   });
 
+  test("a tied or unorderable grant time also blocks dispatch (fail closed)", async () => {
+    for (const [i, other] of ([
+      { granted_at: "2026-09-01T00:00:00Z", expires_at: null },
+      { granted_at: "2026-09-01T00:00:00.000Z", expires_at: new Date(T0 + 90 * MIN).toISOString() },
+      { granted_at: "", expires_at: null },
+      { granted_at: "not a date", expires_at: null },
+    ] as ResetCredit[]).entries()) {
+      const h = harness({ credits: () => [other, credit(30)], journalFile: join(dir, `tie-${i}.json`) });
+      h.setNow(T0 + 20 * MIN);
+      expect(await h.redeemer.tick()).toEqual({ kind: "skipped", reason: "order-not-guaranteed" });
+      expect(h.consumed).toEqual([]);
+    }
+  });
+
   test("a manual redeem racing between the planning read and the pre-dispatch read is caught", async () => {
     const journalFile = join(dir, "j.json");
     let reads = 0;
