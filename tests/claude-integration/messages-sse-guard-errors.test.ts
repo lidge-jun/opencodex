@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { echoRequestedModel } from "../../src/server/messages-native";
 import { guardNativeMessagesEmptyToolCatalog } from "../../src/server/messages-native-tool-guard";
 import { tapAnthropicSseForLog } from "../../src/server/messages-shared";
 import { relaySseWithPayloadRewrite } from "../../src/server/sse-payload-rewrite";
@@ -50,6 +51,36 @@ for (const rewrite of [false, true]) test(`echo flag survives guard, tap and rew
     expect(text.startsWith('event: message_start\ndata: {"type":"error"')).toBe(true);
   } finally { budget.dispose(); }
 });
+test.each(["coalesced", "split CRLF", "standalone LF"] as const)("empty-tool guard settles a renamed start with %s", async framing => {
+  const comment = ": heartbeat\r\n\r";
+  const start = sseFrame("error", { type: "message_start", message: { model: "wire", usage: {} }, request_id: SSE_SENTINEL });
+  const stop = sseFrame("message_stop", { type: "message_stop" });
+  const chunks = framing === "coalesced" ? [comment + "\n" + start + stop]
+    : framing === "split CRLF" ? [comment, "\n" + start + stop] : [comment, "\n", start + stop];
+  const frames = new MessagesSseFrameContext();
+  const budget = createTranslatorBudget();
+  const settlements: unknown[] = [];
+  const source = new ReadableStream<Uint8Array>({ start(controller) {
+    for (const chunk of chunks) controller.enqueue(encode(chunk));
+    controller.close();
+  } });
+  try {
+    const echoed = echoRequestedModel(source, "requested", frames);
+    const guarded = guardNativeMessagesEmptyToolCatalog(echoed, budget, () => {
+      throw new Error("Unexpected tool refusal");
+    }, undefined, frames);
+    const tapped = tapAnthropicSseForLog(guarded, {}, (status, meta) => settlements.push({ status, ...meta }),
+      { stallMs: 0, maxBytes: 0 }, frames, createMessagesSseErrorFilter(frames));
+    const text = await new Response(tapped).text();
+    expect(settlements).toEqual([{ status: 200, closeReason: "terminal" }]);
+    expect(text.startsWith(comment + '\nevent: message_start\ndata: {"type":"error"')).toBe(true);
+    expect(text.endsWith(stop)).toBe(true);
+    expect(text).not.toContain(SSE_SENTINEL);
+  } finally {
+    budget.dispose();
+  }
+});
+
 test("guard replacement retires a colliding echo flag and preserves callback-before-output", async () => {
   const frames = new MessagesSseFrameContext(), budget = createTranslatorBudget(); const order: string[] = [];
   const bytes = encode(sseFrame("message_start", { type: "message_start", message: { content: [{ type: "tool_use", name: SSE_SENTINEL }] } }));

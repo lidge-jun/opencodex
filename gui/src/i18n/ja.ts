@@ -1765,7 +1765,7 @@ export const ja: Record<TKey, string> = {
   "modal.invalidPreset": "この組み込みプロバイダープリセットは不完全です。プロキシを再起動してもう一度お試しください。",
   "modal.freeTierTitle": "無料枠",
   "modal.subscriptionCliTitle": "サブスクリプション CLI（API キーではありません）",
-  "modal.subscriptionCliWarning": "このプロバイダーは API キーを使用しません。このマシンでサインイン済みの公式 Claude Code CLI（{cmd}）を実行し、その Claude サブスクリプションアカウントに課金されます。OpenCodex はキーを保存せず、ここに入力したキーが使われることもありません。API キーで課金する場合は、代わりに {apiProvider} を追加してください。",
+  "modal.subscriptionCliWarning": "このプロバイダーは API キーを使用しません。このマシンでサインイン済みの公式 {cli}（{cmd}）を実行し、その {plan} サブスクリプションアカウントに課金されます。OpenCodex はキーを保存せず、ここに入力したキーが使われることもありません。API キーで課金する場合は、代わりに {apiProvider} を追加してください。",
   "modal.subscriptionCliWarningAgy": "このプロバイダーは、プロキシホストでサインイン済みの公式 Antigravity CLI（{cmd}）を使用します。利用料金はその Google Antigravity アカウントに請求されます。Google が認めるのは、ユーザーが指示する対話的な利用のみです。OpenCodex はサブエージェントのターン、コンボ、サブエージェントのフォールバックルーティングを拒否し、観測した接続からローカルかどうかを判定します。未登録のループバック中継が転送ヘッダーを一切渡さない場合、リモートのリクエストがローカルに見えることがあります。公開リスナーでは、リバースプロキシを dashboardTrustedProxy に登録するか、このポートを中継しないでください。API キーは不要で、保存もされません。プログラムによる利用や共有ワークロードには、代わりに {apiProvider} を追加してください。",
   "modal.freeTierDefault": "API キー不要です。そのまま利用できます。",
   "modal.tab.accounts": "アカウント",

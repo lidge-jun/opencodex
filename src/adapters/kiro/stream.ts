@@ -5,6 +5,7 @@ import {
   type TranslatorBudget,
 } from "../../lib/translator-budget";
 import type { AdapterEvent, OcxUsage } from "../../types";
+import { reportResponseSendReading } from "../../lib/response-send-readings";
 import { sumCreditReadings, withMissingCreditReading } from "../../usage/credit-billing";
 import { recordKiroCalibration, rekeyKiroCalibration } from "../kiro-calibration";
 import {
@@ -56,6 +57,18 @@ interface KiroAttemptResult extends KiroAttemptParseResult {
   drainDeferred(supersededByCompletion?: boolean): AsyncGenerator<AdapterEvent>;
   releaseCollectors(): void;
   releaseRetained(): void;
+}
+
+/**
+ * The token usage Kiro reported for the one physical response an attempt parsed, if it reported
+ * any. A response without a tokenUsage frame (an empty body, a credit meter alone) still gets a
+ * local estimate for the client and the request log, but an estimate is not a reading and must
+ * not settle the send that produced it.
+ */
+function attemptReading(result: KiroAttemptParseResult): OcxUsage | undefined {
+  const terminal = result.terminal;
+  const usage = terminal && "usage" in terminal && terminal.usage ? terminal.usage : result.usage;
+  return usage?.upstreamReported === true && !usage.estimated ? usage : undefined;
 }
 
 interface KiroAttemptRetention {
@@ -1305,6 +1318,20 @@ export async function* parseKiroStream(
       return;
     }
 
+    // The retry below is a second physical send inside this parse, and the terminal will sum both
+    // readings. Report the first response's reading now so it settles the send that produced it;
+    // a retry that reports nothing then stays unresolved instead of absorbing this reading.
+    // A first response with no reading of its own is marked unmetered only once the retry has
+    // left: a retry refused before dispatch keeps it the request's one routed send, which settles
+    // with the request's aggregate usage like any other single send.
+    const firstReading = attemptReading(firstResult);
+    let firstReadingReported = false;
+    const reportFirstReading = (): void => {
+      if (firstReadingReported) return;
+      firstReadingReported = true;
+      reportResponseSendReading(response, firstReading);
+    };
+    if (firstReading) reportFirstReading();
     yield { type: "heartbeat" };
     // Failed validation releases held progress. Keep those failures non-retryable so a later
     // replay cannot duplicate it; successful validation instead discards the superseded text.
@@ -1319,9 +1346,11 @@ export async function* parseKiroStream(
         firstAssistantText,
         firstResult.sawReasoning,
         budget,
-        () => { fallbackSends++; },
+        () => { fallbackSends++; reportFirstReading(); },
       );
     } catch (err) {
+      // A retry the factory already sent read nothing back: mark it unmetered.
+      if (fallbackSends > 0) reportResponseSendReading(response, undefined);
       yield* firstResult.drainDeferred(dropHeldProse);
       firstAssistantText = "";
       firstResult.assistantText = "";
@@ -1347,6 +1376,11 @@ export async function* parseKiroStream(
       };
       return;
     }
+    // A transport timeout before the retry's dispatch receipt comes back as a synthetic 504 with
+    // no send behind it. Readings below are reported only for a retry that left, so the first
+    // response stays the one routed send and settles with the request total.
+    const retryDispatched = fallbackSends > 0;
+    if (retryDispatched) reportFirstReading();
     // The factory has retained its retry serialization. First-attempt progress remains charged
     // until the second attempt decides whether it is superseded or must be released.
     firstAssistantText = "";
@@ -1354,6 +1388,8 @@ export async function* parseKiroStream(
     firstResult.releaseCollectors();
     fallback.releaseRequestBody?.();
     if (!fallback.response.ok) {
+      // An HTTP failure body carries no usage: the retry stays unresolved at its reservation.
+      if (retryDispatched) reportResponseSendReading(response, undefined);
       yield* firstResult.drainDeferred(dropHeldProse);
       const payload = await readDisplaySafeErrorPayloadText(fallback.response, fallback.abortSignal);
       const failure = classifyKiroHttpError(fallback.response.status, fallback.response.headers, payload);
@@ -1389,6 +1425,7 @@ export async function* parseKiroStream(
       firstResult,
       structuredOutput,
     );
+    reportResponseSendReading(response, attemptReading(secondResult));
     try {
       if (!secondResult.terminal) {
         yield retryableKiroIncomplete(

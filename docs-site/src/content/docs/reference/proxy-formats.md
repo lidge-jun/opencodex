@@ -542,6 +542,25 @@ When available, `input_tokens_details` can also include `cache_write_tokens`. Th
 detail objects are a compatibility guarantee for strict Responses clients; zero can mean "not
 reported," not necessarily "the provider performed no such work."
 
+When the terminal continuation guard re-asks within a turn, a successful completion that reports
+usage shows the final leg's usage for that re-ask. In Chat Completions, this includes
+`prompt_tokens`, which reflects the context sent on the final leg. A hosted-search Chat re-ask
+follows the same rule. When an empty-completion retry re-asks, the reported usage also includes the
+discarded empty attempt. A response that ends incomplete or failed shows the usage summed across
+the legs, and so does a final leg that reports no usage of its own. An incomplete response includes
+one stopped at the output token limit. The request log includes reported usage from every leg once,
+and the send budget counts every leg. The spend ledger settles each leg's send with the usage that
+leg reported. A send that reported no usage stays unresolved at its reservation. If OAuth recovery
+switches accounts, each attempt records the usage reported by its own account. If a leg reports no
+usage, that attempt's provider credit total is marked incomplete. A provider retry sent while a
+response is still being read, such as Kiro's completion retry, settles with the usage its own
+response reported, and the first send keeps its own reading. A retry whose response reports no
+token usage of its own stays unresolved at its reservation, even when the client and the request
+log show a local estimate for it. A streamed Chat Completions turn that fails
+ends in an error frame instead of a finish chunk. If the client set
+`stream_options.include_usage`, a chunk with empty `choices` carrying the failed turn's usage comes
+right before that error frame. A non-streaming Chat error body has no usage field.
+
 For Anthropic upstreams, a reported `usage.output_tokens_details.thinking_tokens` is preserved as
 Responses `output_tokens_details.reasoning_tokens` and Chat `completion_tokens_details.reasoning_tokens`,
 for JSON and streaming replies. It is already included in the output-token total, not added again;

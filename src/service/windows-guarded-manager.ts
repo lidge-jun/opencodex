@@ -120,7 +120,7 @@ export function windowsProcessList(): WindowsProcessEntry[] | null {
   try {
     // Share owner evidence, but do not add creation-time/terminate authority to this
     // inspection-only table. Part A still requires windowsProcessSnapshot's native overlay.
-    return parseWindowsProcessSnapshot(runPowerShell(windowsProcessSnapshotScript()))
+    return parseWindowsProcessSnapshot(runPowerShell(windowsProcessSnapshotScript(POWERSHELL_TIMEOUT_MS)))
       ?.map(({ pid, parentPid, name, commandLine, foreignOwner }) => ({ pid, parentPid, name, commandLine, foreignOwner })) ?? null;
   } catch {
     return null;

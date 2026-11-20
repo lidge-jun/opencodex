@@ -294,9 +294,10 @@ describe("Vertex discovery rows", () => {
   test("advertised efforts are the registry ladder the adapter serializes", async () => {
     const ladders = getProviderRegistryEntry("google-vertex")?.modelReasoningEfforts ?? {};
     const result = extractGoogleNativeModelItems("google-vertex", vertex({ apiKey: "literal-key" }),
-      { publisherModels: publisher("gemini-4-hydrogen", "gemini-4-carbon", "gemini-3-pro") }, 100);
+      { publisherModels: publisher("gemini-4-neon", "gemini-4-hydrogen", "gemini-4-carbon", "gemini-3-pro") }, 100);
     const items = result?.ok ? result.items : [];
     const byId = new Map(items.map(item => [item.id, item]));
+    expect(byId.get("gemini-4-neon")?.reasoning_efforts).toEqual([...ladders["gemini-4-neon"]!]);
     expect(byId.get("gemini-4-hydrogen")?.reasoning_efforts).toEqual([...ladders["gemini-4-hydrogen"]!]);
     expect(byId.get("gemini-4-carbon")?.reasoning_efforts).toEqual([...ladders["gemini-4-carbon"]!]);
     expect(ladders["gemini-3-pro"]).toBeUndefined();
@@ -309,6 +310,7 @@ describe("Vertex discovery rows", () => {
     } as unknown as OcxParsedRequest);
     const thinking = async (modelId: string, effort: string) =>
       JSON.parse((await adapter.buildRequest(request(modelId, effort))).body).generationConfig?.thinkingConfig;
+    expect(await thinking("gemini-4-neon", "xhigh")).toEqual({ thinkingLevel: "xhigh" });
     expect(await thinking("gemini-4-hydrogen", "xhigh")).toEqual({ thinkingLevel: "xhigh" });
     expect(await thinking("gemini-3-pro", "high")).toBeUndefined();
   });
