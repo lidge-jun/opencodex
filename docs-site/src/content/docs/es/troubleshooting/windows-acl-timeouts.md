@@ -26,3 +26,13 @@ publicar el archivo. Los errores de permiso denegado siguen siendo fallos y no
 activan un reintento automático. Limpiar una escritura fallida no consume el intento
 de recuperación de la siguiente. Cada destino mantiene su propio seguimiento de
 tiempos de espera.
+
+Si `icacls` tarda en iniciarse, puedes establecer
+`OPENCODEX_ACL_BATCH_RESTRICTIONS=1` en el entorno del proceso que ejecuta
+opencodex. Esta opción experimental concede primero los permisos al propietario
+y luego elimina con un solo comando la herencia y los permisos explícitos de
+grupos amplios en archivos y directorios privados. Si el comando combinado
+falla, el intento de proteger el archivo o directorio también falla, incluso
+si no se puede identificar qué operación falló. Quita la variable para volver
+a la secuencia habitual de tres comandos. Los archivos preparados para procesos
+con privilegios elevados conservan su secuencia de permisos independiente.

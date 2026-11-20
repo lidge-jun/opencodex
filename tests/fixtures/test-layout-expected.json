@@ -1629,7 +1629,7 @@
   "web-search-timeout-plan.test.ts": "web-search", "web-search.test.ts": "web-search",
   "web-search-reset-recovery.test.ts": "web-search",
   "win-exec.test.ts": "windows", "win-paths.test.ts": "windows",
-  "windows-acl-start-cost.test.ts": "windows",
+  "windows-acl-batched-native.test.ts": "windows", "windows-acl-start-cost.test.ts": "windows",
   "windows-atomic-replace.test.ts": "windows",
   "windows-codex-cli-job-store.test.ts": "windows",
   "windows-deploy-close-regressions.test.ts": "windows",
