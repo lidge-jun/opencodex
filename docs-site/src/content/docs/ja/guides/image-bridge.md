@@ -71,4 +71,4 @@ Image Bridge は、**非 OpenAI** モデルが選択されているときに、`
 - **ストリーミングのみ。** ブリッジは SSE 応答ストリームをインターセプトすることで機能します。とのリクエスト
 `stream: false` は 400 エラーで拒否されます。
 
-既定モデルは `grok-imagine-image-2.0` です。`quality` は `low`、`medium`、`auto` を受け付け、OpenAI の `high` と `hd` は `medium` に変換されます。廃止された `grok-imagine-image-quality`（2026-05-15 以降これに転送された `grok-imagine-image-pro` を含む）は、2.0 の低品質として提供されます。料金は品質と解像度で変わり、編集は最大5枚の入力画像を受け付け、1枚につき $0.01 が加算されます。
+既定モデルは `grok-imagine-image-2.0` です。`quality` は `low`、`medium`、`auto` を受け付け、OpenAI の `high` と `hd` は `medium` に変換されます。廃止された `grok-imagine-image-quality`（2026-05-15 以降これに転送された `grok-imagine-image-pro` を含む）は、2.0 の低品質として提供されます。料金は品質と解像度で変わり、編集では入力画像1枚につき $0.01 が加算されます。`/v1/images/edits` リレーは重複を除いたうえで最大5枚の入力画像を転送し、`image_gen` ブリッジツールは1枚を送ります。

@@ -7,3 +7,10 @@ test("only closed xAI error vocabulary is returned", async () => {
   expect(safeVideoFailureCode("xai-secret")).toBeUndefined();
   expect(await readSafeXaiErrorDetail(Response.json({error:{message:"`image` is not supported for this model."}}))).toBe("`image` is not supported for this model.");
 });
+
+test("quality lists are bounded, unique and rebuilt in canonical order", () => {
+  expect(safeXaiErrorDetail("This model only supports the following quality value(s): auto, low.")).toBe("This model only supports the following quality value(s): low, auto.");
+  expect(safeXaiErrorDetail("This model only supports the following quality value(s): low, low.")).toBeUndefined();
+  expect(safeXaiErrorDetail("This model only supports the following quality value(s): " + Array(40).fill("low").join(", ") + ".")).toBeUndefined();
+  expect(safeXaiErrorDetail("This model only supports the following quality value(s): low, medium, high, auto, low.")).toBeUndefined();
+});

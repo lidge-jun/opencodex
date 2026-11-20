@@ -68,4 +68,4 @@ Image Bridge 只会在 **Responses** 回合中生效，且仅当 `/v1/responses`
 - **会产生 xAI 成本。** 通过 xAI 进行图像生成需要有效的 xAI 订阅或 API credits。
 - **仅支持流式。** 桥接通过拦截 SSE 响应流实现；`stream: false` 的请求会以 400 错误被拒绝。
 
-默认模型为 `grok-imagine-image-2.0`。`quality` 支持 `low`、`medium`、`auto`；OpenAI 的 `high` 和 `hd` 映射为 `medium`。已停用的 `grok-imagine-image-quality`（以及自 2026-05-15 起重定向到它的 `grok-imagine-image-pro`）由 2.0 以低质量提供。价格取决于质量和分辨率；编辑最多接受五张输入图片，每张加收 $0.01。
+默认模型为 `grok-imagine-image-2.0`。`quality` 支持 `low`、`medium`、`auto`；OpenAI 的 `high` 和 `hd` 映射为 `medium`。已停用的 `grok-imagine-image-quality`（以及自 2026-05-15 起重定向到它的 `grok-imagine-image-pro`）由 2.0 以低质量提供。价格取决于质量和分辨率；编辑每张输入图片加收 $0.01。`/v1/images/edits` 中继先去除重复项，最多转发五张输入图片；`image_gen` 桥接工具只发送一张。

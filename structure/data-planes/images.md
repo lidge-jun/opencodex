@@ -45,9 +45,10 @@ routed model iterations. Image and video generation use separate tool deadlines.
 The image bridge defaults to `grok-imagine-image-2.0`. For that model, OpenAI
 `low`/`standard` maps to xAI `low`, `medium`/`high`/`hd` to `medium`, and
 `auto` to `auto`; other models omit the quality field. Resolution mapping
-remains independent. Image edits accept up to five source URLs, in caller order; duplicate URLs
-are removed before the upstream call. The relay checks the source limit before resolving credentials or
-sending a request. Safe upstream validation details are reconstructed from a
+remains independent. Edits through `callXaiImages` and the `/v1/images/edits` relay accept up to five
+source URLs in caller order; both drop duplicate URLs first and then apply the limit, and the relay
+checks it before resolving credentials or sending a request. The `image_gen` bridge tool sends one
+source. Safe upstream validation details are reconstructed from a
 closed vocabulary of quality, field, resolution and bounded keyframe tokens;
 unknown bodies and arbitrary upstream text never reach the caller.
 

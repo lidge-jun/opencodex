@@ -107,4 +107,4 @@ herhangi bir sağlayıcıyla sorunsuz çalışır.
 
 
 
-Varsayılan model `grok-imagine-image-2.0` modelidir. `quality` için `low`, `medium`, `auto` desteklenir; OpenAI `high` ve `hd` değerleri `medium` olur. Kullanımdan kaldırılan `grok-imagine-image-quality` (ve 2026-05-15 tarihinden beri ona yönlendirilen `grok-imagine-image-pro`) düşük kalitede 2.0 olarak sunulur. Fiyat kaliteye ve çözünürlüğe bağlıdır; düzenleme en fazla beş girdi görseli kabul eder ve görsel başına $0.01 eklenir.
+Varsayılan model `grok-imagine-image-2.0` modelidir. `quality` için `low`, `medium`, `auto` desteklenir; OpenAI `high` ve `hd` değerleri `medium` olur. Kullanımdan kaldırılan `grok-imagine-image-quality` (ve 2026-05-15 tarihinden beri ona yönlendirilen `grok-imagine-image-pro`) düşük kalitede 2.0 olarak sunulur. Fiyat kaliteye ve çözünürlüğe bağlıdır; düzenlemede girdi görseli başına $0.01 eklenir. `/v1/images/edits` aktarımı tekrarları ayıkladıktan sonra en fazla beş girdi görseli iletir; `image_gen` köprü aracı bir görsel gönderir.

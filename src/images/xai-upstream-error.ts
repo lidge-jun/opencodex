@@ -9,8 +9,15 @@ const VIDEO_CODES = new Set(["invalid_argument", "permission_denied", "failed_pr
 export function safeXaiErrorDetail(message: unknown): string | undefined {
   if (typeof message !== "string") return undefined;
   const text = message.trim();
-  let m = /^This model only supports the following quality value\(s\): ([a-z]+(?:, [a-z]+)*)\.$/.exec(text);
-  if (m && m[1]!.split(", ").every(token => QUALITY.has(token))) return `This model only supports the following quality value(s): ${m[1]!.split(", ").join(", ")}.`;
+  let m = /^This model only supports the following quality value\(s\): ([a-z]+(?:, [a-z]+){0,3})\.$/.exec(text);
+  if (m) {
+    const tokens = m[1]!.split(", ");
+    // At most the four known values, each once; rebuilt in canonical order.
+    if (tokens.every(token => QUALITY.has(token)) && new Set(tokens).size === tokens.length) {
+      return `This model only supports the following quality value(s): ${[...QUALITY].filter(q => tokens.includes(q)).join(", ")}.`;
+    }
+    return undefined;
+  }
   m = /^`([a-z_]+)` is not supported for this model\.$/.exec(text);
   if (m && FIELD.has(m[1]!)) return `\`${m[1]}\` is not supported for this model.`;
   m = /^(\d{3,4}p) video resolution is not available for this model\.$/.exec(text);

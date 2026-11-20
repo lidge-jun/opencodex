@@ -529,8 +529,10 @@ async function tryXaiImageRelay(
         else add(rec.url);
       }
     }
-    if (sources.length > XAI_MAX_EDIT_IMAGES) return formatErrorResponse(400, "invalid_request_error", "xAI image edits accept at most 5 images");
-    [imageUrl, ...imageUrls] = sources;
+    // Same rule as callXaiImages: duplicates collapse first, then the five-source limit applies.
+    const unique = [...new Set(sources)];
+    if (unique.length > XAI_MAX_EDIT_IMAGES) return formatErrorResponse(400, "invalid_request_error", "xAI image edits accept at most 5 images");
+    [imageUrl, ...imageUrls] = unique;
     if (!imageUrl) return formatErrorResponse(400, "invalid_request_error", "image edits require an image URL");
   }
   const timeoutMs = config.images?.timeoutMs ?? IMAGES_UPSTREAM_TIMEOUT_MS;

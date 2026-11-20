@@ -68,4 +68,4 @@ Image Bridge는 선택된 모델이 OpenAI가 아닌 상태에서, `/v1/response
 - xAI 요금이 발생합니다. xAI를 통한 이미지 생성에는 활성 xAI 구독이나 API 크레딧이 필요합니다.
 - 스트리밍 전용입니다. 브리지는 SSE response stream을 가로채서 동작하므로 `stream: false` 요청은 400 오류로 거절됩니다.
 
-기본 모델은 `grok-imagine-image-2.0`입니다. `quality`는 `low`, `medium`, `auto`를 지원하며 OpenAI의 `high`와 `hd`는 `medium`으로 변환됩니다. 종료된 `grok-imagine-image-quality`와 2026-05-15부터 그 모델로 연결된 `grok-imagine-image-pro`는 2.0의 낮은 품질로 제공됩니다. 가격은 품질과 해상도에 따라 달라지며, 편집은 입력 이미지 최대 5개를 지원하고 이미지당 $0.01이 추가됩니다.
+기본 모델은 `grok-imagine-image-2.0`입니다. `quality`는 `low`, `medium`, `auto`를 지원하며 OpenAI의 `high`와 `hd`는 `medium`으로 변환됩니다. 종료된 `grok-imagine-image-quality`와 2026-05-15부터 그 모델로 연결된 `grok-imagine-image-pro`는 2.0의 낮은 품질로 제공됩니다. 가격은 품질과 해상도에 따라 달라지며, 편집은 입력 이미지당 $0.01이 추가됩니다. `/v1/images/edits` 릴레이는 중복을 먼저 제거한 뒤 입력 이미지를 최대 5개까지 전달하고, `image_gen` 브리지 도구는 1개를 보냅니다.

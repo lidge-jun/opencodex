@@ -102,4 +102,4 @@ perspective, image generation works with any routed provider instead of silently
 - **Streaming only.** The bridge works by intercepting the SSE response stream; requests with
   `stream: false` are rejected with a 400 error.
 
-The default is `grok-imagine-image-2.0`. Its `quality` accepts `low`, `medium`, and `auto`; OpenAI `high` and `hd` map to `medium`. The retired `grok-imagine-image-quality` model (and `grok-imagine-image-pro`, redirected to it since 2026-05-15) is served as 2.0 at low quality. Price depends on quality and resolution; edits add $0.01 per input image and accept up to five input images.
+The default is `grok-imagine-image-2.0`. Its `quality` accepts `low`, `medium`, and `auto`; OpenAI `high` and `hd` map to `medium`. The retired `grok-imagine-image-quality` model (and `grok-imagine-image-pro`, redirected to it since 2026-05-15) is served as 2.0 at low quality. Price depends on quality and resolution; edits add $0.01 per input image. The `/v1/images/edits` relay forwards up to five input images (duplicates are dropped first); the `image_gen` bridge tool sends one.
