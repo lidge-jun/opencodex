@@ -127,7 +127,11 @@ export function AccountQuotaTable({ accounts, strategy, renderRowContent }: Acco
                     : table.pools.map(pool => {
                       const cell = row.cells[pool.key];
                       return (
-                        <td key={pool.key} className="aqt-pool" data-label={poolLabel(pool.key)}>
+                        <td key={pool.key} className="aqt-pool">
+                          {/* The card layout hides the table header, so each pool names itself on its
+                              own line above its 5-hour and weekly bars, as v2.100.5 stacked them. The
+                              header still names the column for assistive technology. */}
+                          <span className="aqt-pool-label" aria-hidden="true">{poolLabel(pool.key)}</span>
                           {cell ? <>
                             {cell.fiveHour && <PoolBar label={t("acctTable.fiveHour")} cell={cell.fiveHour} now={now} />}
                             {cell.weekly && <PoolBar label={t("acctTable.weekly")} cell={cell.weekly} now={now} />}

@@ -3,6 +3,7 @@ import { useT } from "../i18n/shared";
 import { clampNumberDraft } from "../clamp-draft";
 import type { AccountPoolStrategy } from "../account-pool-strategy";
 import { NumberStepper } from "./NumberStepper";
+import PoolSettingsDisclosure from "./PoolSettingsDisclosure";
 
 export type AutoSwitchFeedback = { tone: "ok" | "err"; message: string } | null;
 
@@ -71,128 +72,130 @@ export function CodexAutoSwitchSetting({
   const describedBy = feedbackMessage
     ? "codex-auto-switch-desc codex-auto-switch-feedback"
     : "codex-auto-switch-desc";
+  // Leaving the card settles an edit, exactly as leaving the threshold field and switch did when
+  // they shared one container. The disclosure button now sits between them, so the boundary is
+  // the whole card: moving focus from the field to the switch or the title commits nothing.
+  const settleEdit = () => {
+    onEditingChange(false);
+    if (togglePointerIntentRef.current) {
+      togglePointerIntentRef.current = false;
+      return;
+    }
+    if (enabled && !controlsDisabled) void onCommit();
+  };
+  const description = (
+    <div id="codex-auto-switch-desc" className="card-sub" role={loadError ? "alert" : undefined}>
+      {loadError ? t("codexAuth.autoSwitchLoadFailed") : t(descriptionKey, { threshold })}
+    </div>
+  );
   return (
     <div
-      className="card card-row codex-auto-switch-card"
+      className="card codex-auto-switch-card"
       style={{ marginTop: 16 }}
       aria-busy={saving || (!hydrated && !loadError) || undefined}
+      onBlur={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        settleEdit();
+      }}
     >
-      <div className="codex-auto-switch-copy">
-        <strong>{t("codexAuth.autoSwitch")}</strong>
-        <div
-          id="codex-auto-switch-desc"
-          className="card-sub"
-          role={loadError ? "alert" : undefined}
-        >
-          {loadError
-            ? t("codexAuth.autoSwitchLoadFailed")
-            : t(descriptionKey, { threshold })}
-        </div>
-        <div className="card-sub">{t("codexAuth.failureRecoveryNote")}</div>
-        <div className="card-sub">{t("codexAuth.cacheWarning")}</div>
-      </div>
-      <div
-        className="codex-auto-switch-controls"
-        onBlur={(event) => {
-          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
-          onEditingChange(false);
-          if (togglePointerIntentRef.current) {
-            togglePointerIntentRef.current = false;
-            return;
-          }
-          if (enabled && !controlsDisabled) void onCommit();
-        }}
+      <PoolSettingsDisclosure
+        cardId="codex.autoSwitch"
+        title={t("codexAuth.autoSwitch")}
+        onCollapse={settleEdit}
+        // A load failure disables the switch, so it stays on screen with its retry.
+        notice={loadError && (
+          <div className="codex-auto-switch-alert">
+            {description}
+            <button type="button" className="btn btn-ghost btn-sm" onClick={onRetry}>
+              {t("pws.retryAccounts")}
+            </button>
+          </div>
+        )}
+        control={
+          <span className="codex-auto-switch-toggle-slot">
+            <button
+              type="button"
+              className={`toggle ${enabled ? "on" : ""}`}
+              onPointerDownCapture={() => {
+                togglePointerIntentRef.current = true;
+              }}
+              onPointerUp={() => {
+                togglePointerIntentRef.current = false;
+              }}
+              onPointerCancel={() => {
+                togglePointerIntentRef.current = false;
+              }}
+              onClick={() => {
+                togglePointerIntentRef.current = false;
+                void onToggle();
+              }}
+              disabled={controlsDisabled}
+              aria-pressed={enabled}
+              aria-label={t("codexAuth.autoSwitch")}
+              aria-describedby={describedBy}
+              title={t("codexAuth.autoSwitch")}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </span>
+        }
       >
-        {loadError && (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onRetry}>
-            {t("pws.retryAccounts")}
-          </button>
-        )}
-        {enabled && (
-          <label className="codex-auto-switch-threshold">
-            <span className="field-label">{t("codexAuth.autoSwitchThreshold")}</span>
-            <span className="codex-auto-switch-input-wrap">
-              <input
-                className="input mono codex-auto-switch-input"
-                type="number"
-                min={1}
-                max={100}
-                step={1}
-                inputMode="numeric"
-                value={draft}
-                readOnly={controlsDisabled}
-                aria-disabled={controlsDisabled}
-                aria-label={t("codexAuth.autoSwitchThresholdAria")}
-                aria-describedby={describedBy}
-                onChange={(event) => onDraftChange(event.target.value)}
-                onFocus={() => {
-                  if (!controlsDisabled) onEditingChange(true);
-                }}
-                onKeyDown={(event) => {
-                  if (event.nativeEvent.isComposing || controlsDisabled) return;
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    void onCommit();
-                  } else if (event.key === "Escape") {
-                    event.preventDefault();
-                    onCancel();
-                  }
-                }}
-              />
-              <span className="codex-auto-switch-unit" aria-hidden="true">%</span>
-              <NumberStepper
-                disabled={controlsDisabled}
-                incrementLabel={t("codexAuth.autoSwitchThresholdInc")}
-                decrementLabel={t("codexAuth.autoSwitchThresholdDec")}
-                onIncrement={() => {
-                  onEditingChange(true);
-                  onDraftChange(clampNumberDraft(draft, 1, 1, 100));
-                }}
-                onDecrement={() => {
-                  onEditingChange(true);
-                  onDraftChange(clampNumberDraft(draft, -1, 1, 100));
-                }}
-              />
-            </span>
-          </label>
-        )}
-        {/*
-          The toggle sits in a slot as tall as the threshold field so the two controls share a
-          center line. The row is bottom-aligned (a 20px toggle against a 32px number compound
-          offset their centers by 6px, which is what read as a height bug), and the slot fixes
-          that without flipping the container to center — the mobile breakpoint deliberately
-          keeps bottom alignment.
-
-          Rendered outside the `enabled` branch on purpose: if the slot came and went with the
-          threshold field, the toggle would shift every time auto-switch was turned off.
-        */}
-        <span className="codex-auto-switch-toggle-slot">
-          <button
-            type="button"
-            className={`toggle ${enabled ? "on" : ""}`}
-            onPointerDownCapture={() => {
-              togglePointerIntentRef.current = true;
-            }}
-            onPointerUp={() => {
-              togglePointerIntentRef.current = false;
-            }}
-            onPointerCancel={() => {
-              togglePointerIntentRef.current = false;
-            }}
-            onClick={() => {
-              togglePointerIntentRef.current = false;
-              void onToggle();
-            }}
-            disabled={controlsDisabled}
-            aria-pressed={enabled}
-            aria-label={t("codexAuth.autoSwitch")}
-            aria-describedby={describedBy}
-            title={t("codexAuth.autoSwitch")}
-          >
-            <span className="toggle-knob" />
-          </button>
-        </span>
-      </div>
+        <div className="codex-auto-switch-body">
+          <div className="codex-auto-switch-copy">
+            {!loadError && description}
+            <div className="card-sub">{t("codexAuth.failureRecoveryNote")}</div>
+            <div className="card-sub">{t("codexAuth.cacheWarning")}</div>
+          </div>
+          {enabled && (
+            <label className="codex-auto-switch-threshold">
+              <span className="field-label">{t("codexAuth.autoSwitchThreshold")}</span>
+              <span className="codex-auto-switch-input-wrap">
+                <input
+                  className="input mono codex-auto-switch-input"
+                  type="number"
+                  min={1}
+                  max={100}
+                  step={1}
+                  inputMode="numeric"
+                  value={draft}
+                  readOnly={controlsDisabled}
+                  aria-disabled={controlsDisabled}
+                  aria-label={t("codexAuth.autoSwitchThresholdAria")}
+                  aria-describedby={describedBy}
+                  onChange={(event) => onDraftChange(event.target.value)}
+                  onFocus={() => {
+                    if (!controlsDisabled) onEditingChange(true);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.nativeEvent.isComposing || controlsDisabled) return;
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void onCommit();
+                    } else if (event.key === "Escape") {
+                      event.preventDefault();
+                      onCancel();
+                    }
+                  }}
+                />
+                <span className="codex-auto-switch-unit" aria-hidden="true">%</span>
+                <NumberStepper
+                  disabled={controlsDisabled}
+                  incrementLabel={t("codexAuth.autoSwitchThresholdInc")}
+                  decrementLabel={t("codexAuth.autoSwitchThresholdDec")}
+                  onIncrement={() => {
+                    onEditingChange(true);
+                    onDraftChange(clampNumberDraft(draft, 1, 1, 100));
+                  }}
+                  onDecrement={() => {
+                    onEditingChange(true);
+                    onDraftChange(clampNumberDraft(draft, -1, 1, 100));
+                  }}
+                />
+              </span>
+            </label>
+          )}
+        </div>
+      </PoolSettingsDisclosure>
       {feedbackMessage && (
         <div
           id="codex-auto-switch-feedback"
