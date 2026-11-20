@@ -651,6 +651,30 @@ describe("combo failure hop/stop verdicts", () => {
     expect(comboFailureDecision(413, "request too large")).toBe("stop");
   });
 
+  test("a 413 carrying a structured per-minute token cap hops without cooling the target (#9017)", () => {
+    // Groq's tier refusal: HTTP 413 for a turn above this account's tokens-per-minute limit. The
+    // payload is unchanged, but a later target with a larger tier can still serve it.
+    const groq = JSON.stringify({ error: {
+      message: "Request too large for model `openai/gpt-oss-120b` in organization `org_x` service tier "
+        + "`on_demand` on tokens per minute (TPM): Limit 8000, Requested 9611, please reduce your message size and try again.",
+      type: "tokens",
+      code: "rate_limit_exceeded",
+    } });
+    expect(comboFailureDecision(413, groq, { code: "rate_limit_exceeded" })).toBe("hop");
+    expect(comboFailureDecision(413, "too large", { code: "Rate-Limit-Exceeded" })).toBe("hop");
+    expect(comboFailureCooldownScope(413, groq, { code: "rate_limit_exceeded" })).toBe("none");
+    // Structured code only: the same prose without the code, or the code quoted in prose, keeps
+    // the generic-413 invariant, and hard stops still outrank the cap.
+    expect(comboFailureDecision(413, groq)).toBe("stop");
+    expect(comboFailureDecision(413, "rate_limit_exceeded")).toBe("stop");
+    expect(comboFailureDecision(413, "too large", { code: "request_too_large" })).toBe("stop");
+    expect(comboFailureDecision(400, "too large", { code: "rate_limit_exceeded" })).toBe("stop");
+    expect(comboFailureDecision(499, "too large", { code: "rate_limit_exceeded" })).toBe("stop");
+    expect(comboFailureDecision(413, "origin_rejected", { code: "rate_limit_exceeded" })).toBe("stop");
+    expect(comboFailureDecision(413, "too large", { code: "rate_limit_exceeded", rootCode: "origin_rejected" }))
+      .toBe("stop");
+  });
+
   test("INVARIANT: a structured model lifecycle 410 still hops", () => {
     expect(comboFailureDecision(410, "model retired", { code: "model_end_of_life" })).toBe("hop");
   });

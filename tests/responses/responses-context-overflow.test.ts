@@ -352,6 +352,34 @@ describe("Responses provider input overflow", () => {
       await server.stop(true);
     }
   });
+
+  // #9017: Groq answers a turn above its tokens-per-minute tier with HTTP 413 and a structured
+  // `rate_limit_exceeded` code. That is this target's cap, so the combo must reach the next one.
+  test.each([true, false])("a 413 with a structured per-minute token cap advances the combo (stream=%s)", async stream => {
+    let firstHits = 0;
+    let secondHits = 0;
+    const tpmCap = { message: "Request too large for model `kimi-k3` on tokens per minute (TPM): Limit 8000, Requested 9611",
+      type: "tokens", code: "rate_limit_exceeded" };
+    const next = config({
+      first: provider("openai-chat", upstreamEnvelope(tpmCap, () => { firstHits += 1; })),
+      second: provider("openai-chat", upstream413(() => { secondHits += 1; })),
+    });
+    next.combos = { fallback: { strategy: "failover", targets: [
+      { provider: "first", model: "kimi-k3" }, { provider: "second", model: "kimi-k3" },
+    ] } };
+    saveConfig(next);
+    const server = startServer(0);
+    try {
+      const response = await request(String(server.url), "combo/fallback", stream);
+      const text = await response.text();
+      expect(text).not.toContain("should-not-reach-client");
+      expect(text).toContain("context_length_exceeded");
+      expect(firstHits).toBe(1);
+      expect(secondHits).toBe(1);
+    } finally {
+      await server.stop(true);
+    }
+  });
 });
 
 describe("combo handling of the Ollama late-attribution refusal", () => {

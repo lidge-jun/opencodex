@@ -1786,6 +1786,11 @@ function decideComboFailure(
   // `free_rate_limited` no longer routes through `isProviderScopedQuotaCap` (it is a
   // per-request cap, not provider-wide evidence), so keep its hop verdict explicit here.
   if (failureCode === "free_rate_limited") return "hop";
+  // The same per-request cap in a 413 (#9017): Groq refuses a turn above this account's
+  // tokens-per-minute tier with HTTP 413 and `rate_limit_exceeded`, and a later target with a
+  // larger tier can serve the unchanged payload. Structured code only, so a bare 413 -- one the
+  // next target would reject identically -- stays terminal, and cooldown scope stays "none".
+  if (status === 413 && normalizedFailureCode(rawCode) === "rate_limit_exceeded") return "hop";
   if (isRequestLocalTargetIncompatibility(status, message, rawCode)) return "hop";
   // Must precede the generic `invalid_request_error` stop below, which is where this refusal
   // ended the chain: the gateway reports `type: "invalid_request_error"`, so the classifier

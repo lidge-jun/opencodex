@@ -1257,6 +1257,8 @@ window or a credential/billing failure, otherwise 60 seconds). Explicit
 
 Validation errors (HTTP 400/422) that quote quota or free-tier cap text do not trigger fallback by that text alone. A structured `free_rate_limited` refusal still tries the next eligible target without cooling the healthy provider or target.
 
+An HTTP 413 that carries the structured code `rate_limit_exceeded` is the same kind of per-request cap: Groq, for example, refuses a turn above the account's tokens-per-minute tier this way. The combo tries the next eligible target and cools nothing. A 413 without that code still stops the combo.
+
 ### Why was my alias rejected?
 
 Check the alias grammar and reserved names first. A duplicate alias or invalid shape is rejected as
