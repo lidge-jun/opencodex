@@ -5,6 +5,7 @@ import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
 import { gatewayClientsCopy } from "./gateway-clients-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
+import { modelsOverallCopy } from "./models-overall-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
 import { usageV2Copy } from "./v2-pages/usage-copy";
@@ -141,6 +142,7 @@ export const ja: Record<TKey, string> = {
   ...remoteLinkDiagnosticsCopy("ja"),
   ...gatewayClientsCopy("ja"),
   ...modelsV2Copy("ja"),
+  ...modelsOverallCopy("ja"),
   ...accountsV2Copy("ja"),
   ...subagentsV2Copy("ja"),
   ...usageV2Copy("ja"),
