@@ -431,13 +431,14 @@ export async function startClientRuntime(
       ...(supervisor ? { linkConnectionGeneration: () => supervisor.connectionGeneration() }
         : homeInitiated && link ? { linkConnectionGeneration: () => verifiedHomeConnection(link.linkId) } : {}),
     }, rollback === undefined ? io : { ...io, portWaitMs: rollback.portWaitMs, bindDeadlineAt: Date.now() + rollback.portWaitMs });
-    const servingGeneration = randomUUID();
+    let servingGeneration: string;
     const publishRecord = (): void => {
       // A parent stop can arrive after restart admission. Never clear its fence on rollback;
       // a fresh process has another attestation identity and cannot inherit this request.
       if (rollback) observeExplicitStop();
       writePid(process.pid);
       // A new generation refuses commits from syncs admitted before the failed restart.
+      servingGeneration = randomUUID();
       writeRuntimePort({ ...clientRuntimeRecord(process.pid, boundPort, attestationSecret), servingGeneration,
         clientLinkOwner });
     };
