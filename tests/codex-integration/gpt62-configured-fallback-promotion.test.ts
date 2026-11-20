@@ -72,6 +72,8 @@ for (const slug of ["gpt-6.2-sol", "gpt-6.2-astra"]) {
         { input_modalities: ["text"] },
         { tool_mode: "user-custom" },
         { operator_note: "kept" },
+        { constructor: "operator" },
+        { toString: "operator" },
         { shell_type: "none" },
         { effective_context_window_percent: 12 },
       ]) {
