@@ -102,6 +102,92 @@ test("captures only allowlisted web discovery cookies through Chromium CDP", asy
   expect(await readM365BrowserWebSession(browser, "context", new AbortController().signal)).toEqual({ accountId, cookie: "OhpAuth=fixture" });
   expect(methods).toEqual(["Page.navigate", "Runtime.evaluate", "Network.getCookies"]);
 });
+test("falls back to the server HTML after the page drops its hydration global", async () => {
+  const pages = ["<html>sign in</html>", html()];
+  const evaluated: Record<string, unknown>[] = [];
+  const browser = { async command(method: string, params?: Record<string, unknown>) {
+    if (method === "Runtime.evaluate") {
+      evaluated.push(params!);
+      return { result: { value: params?.awaitPromise ? pages.shift() : "" } };
+    }
+    if (method === "Network.getCookies") return { cookies: [{ name: "OhpAuth", value: "fixture", domain: "copilot.cloud.microsoft", path: "/", secure: true }] };
+    return {};
+  } };
+  expect(await readM365BrowserWebSession(browser, "context", new AbortController().signal)).toEqual({ accountId, cookie: "OhpAuth=fixture" });
+  expect(pages).toHaveLength(0);
+  expect(evaluated.filter(p => p.awaitPromise)).toHaveLength(2);
+  expect(String(evaluated[1]?.expression)).toContain("credentials:'include'");
+});
+test("stops polling the web session when the login is aborted", async () => {
+  const ctrl = new AbortController();
+  let fetches = 0;
+  const browser = { async command(method: string, params?: Record<string, unknown>) {
+    if (method === "Runtime.evaluate" && params?.awaitPromise && ++fetches === 1) ctrl.abort(new Error("fixture aborted"));
+    return method === "Runtime.evaluate" ? { result: { value: "" } } : {};
+  } };
+  await expect(readM365BrowserWebSession(browser, "context", ctrl.signal)).rejects.toThrow("fixture aborted");
+  expect(fetches).toBe(1);
+});
+test("an abort during the HTML fallback never reads cookies even when the page returns a session", async () => {
+  const ctrl = new AbortController();
+  const methods: string[] = [];
+  const browser = { async command(method: string, params?: Record<string, unknown>) {
+    methods.push(method);
+    if (method === "Runtime.evaluate" && params?.awaitPromise) {
+      ctrl.abort(new Error("fixture aborted"));
+      return { result: { value: html() } };
+    }
+    if (method === "Runtime.evaluate") return { result: { value: "" } };
+    if (method === "Network.getCookies") return { cookies: [{ name: "OhpAuth", value: "fixture", domain: "copilot.cloud.microsoft", path: "/", secure: true }] };
+    return {};
+  } };
+  await expect(readM365BrowserWebSession(browser, "context", ctrl.signal)).rejects.toThrow("fixture aborted");
+  expect(methods).not.toContain("Network.getCookies");
+});
+async function capturedFallbackExpression(): Promise<string> {
+  let expression = "";
+  const browser = { async command(method: string, params?: Record<string, unknown>) {
+    if (method === "Runtime.evaluate" && params?.awaitPromise) { expression = String(params.expression); return { result: { value: html() } }; }
+    if (method === "Runtime.evaluate") return { result: { value: "" } };
+    if (method === "Network.getCookies") return { cookies: [{ name: "OhpAuth", value: "fixture", domain: "copilot.cloud.microsoft", path: "/", secure: true }] };
+    return {};
+  } };
+  await readM365BrowserWebSession(browser, "context", new AbortController().signal);
+  return expression;
+}
+function runFallback(expression: string, response: (signal: AbortSignal) => Promise<Response>, timers?: { fire: boolean }) {
+  const origin = new URL(M365_COPILOT_WEB_URL).origin;
+  const fakeSetTimeout = (fn: () => void) => { if (timers?.fire) setTimeout(fn, 5); return 0; };
+  const fakeFetch = (_url: string, init: { signal: AbortSignal }) => response(init.signal);
+  return new Function("location", "fetch", "setTimeout", "clearTimeout", `return ${expression}`)(
+    { origin }, fakeFetch, fakeSetTimeout, () => {},
+  ) as Promise<string>;
+}
+test("the HTML fallback is bounded in size, time and origin", async () => {
+  const expression = await capturedFallbackExpression();
+  const okResponse = (body: BodyInit, url = M365_COPILOT_WEB_URL) => {
+    const response = new Response(body, { status: 200 });
+    Object.defineProperty(response, "url", { value: url });
+    return response;
+  };
+  expect(await runFallback(expression, async () => okResponse("<html>ok</html>"))).toBe("<html>ok</html>");
+  let pulls = 0;
+  const endless = new ReadableStream<Uint8Array>({ pull(controller) { pulls++; controller.enqueue(new Uint8Array(512 * 1024)); } });
+  expect(await runFallback(expression, async () => okResponse(endless))).toBe("");
+  expect(pulls).toBeLessThan(8);
+  expect(await runFallback(expression, async () => okResponse("<html>ok</html>", "https://login.example.invalid/chat/"))).toBe("");
+  // A rejected response is cancelled instead of left streaming after the fallback returns.
+  const seen: AbortSignal[] = [];
+  for (const reject of [
+    (signal: AbortSignal) => { const res = new Response("<html>denied</html>", { status: 403 }); seen.push(signal); return res; },
+    (signal: AbortSignal) => { seen.push(signal); return okResponse("<html>ok</html>", "https://login.example.invalid/chat/"); },
+  ]) expect(await runFallback(expression, async signal => reject(signal))).toBe("");
+  expect(seen.map(signal => signal.aborted)).toEqual([true, true]);
+  // A body that never produces bytes ends only through the page-side deadline abort.
+  expect(await runFallback(expression, async signal => okResponse(new ReadableStream<Uint8Array>({
+    start(controller) { signal.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError")), { once: true }); },
+  })), { fire: true })).toBe("");
+});
 
 test("dashboard connectivity probe uses live account metadata and never treats a stale catalog as connectivity", async () => {
   await saveCredential("m365-copilot", credential());
