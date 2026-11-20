@@ -231,6 +231,10 @@ describe("GET /api/quota-pool", () => {
     const first = await expectPool(await fetch(`${base}/v1/link-management/api/quota-pool`, { headers: { authorization: `Bearer ${LINKED_KEY}` } }));
     const second = await expectPool(await fetch(`${base}/v1/link-management/api/quota-pool`, { headers: { authorization: `Bearer ${LINKED_KEY}` } }));
     expect(second.providers.flatMap(p => p.accounts.map(a => a.accountRef))).toEqual(first.providers.flatMap(p => p.accounts.map(a => a.accountRef)));
+    // HEAD is what a Child's admin token may also send (#8999); the Home answers it without a body.
+    const head = await fetch(`${base}/v1/link-management/api/quota-pool`, { method: "HEAD", headers: { authorization: `Bearer ${LINKED_KEY}` } });
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
     for (const method of ["POST", "PUT", "DELETE"]) {
       const refused = await fetch(`${base}/v1/link-management/api/quota-pool`, { method, headers: { authorization: `Bearer ${LINKED_KEY}` }, body: "{}" });
       expect({ method, status: refused.status }).toEqual({ method, status: 404 });
