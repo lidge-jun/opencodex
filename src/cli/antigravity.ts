@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { AGY_INSTALL_HINT, MAX_AGY_VERSION_OUTPUT_LENGTH, probeAgyVersion, resolveAgyBinary } from "../adapters/agy-acp/binary";
 import { parseConfigOptions, findSelector, isGeminiValue, proveModel } from "../adapters/agy-acp/options";
 import { baseScopedEnv } from "../adapters/coding-agent/turn";
-import { isAgentDriven } from "./agent-driven";
+import { agentDrivenMarkers } from "./agent-driven";
 import { permissionOutcome, rejectOnce, reviewPermission, terminalText, toolProgress, type PermissionRequest, type ToolUpdate } from "./antigravity-review";
 
 const SETUP_TIMEOUT_MS = 20_000;
@@ -33,9 +33,13 @@ export function antigravityRefusal(args: string[], tty: boolean, env: NodeJS.Pro
   if (args.length && !(args.length === 1 && (args[0] === "work" || args[0] === "native"))) {
     return "Usage: ocx antigravity [work|native] (enter prompts in the session).";
   }
-  if (!tty || isAgentDriven(env) || env.OCX_SERVICE || env.SSH_CONNECTION || env.SSH_TTY) {
-    return "Antigravity ACP requires a human at a local interactive terminal.";
-  }
+  const required = "Antigravity ACP requires a human at a local interactive terminal.";
+  if (!tty) return required + " Both stdin and stdout must be attached to the terminal.";
+  if (env.SSH_CONNECTION || env.SSH_TTY) return required + " An SSH session was detected.";
+  const markers = agentDrivenMarkers(env);
+  if (env.OCX_SERVICE) markers.push("OCX_SERVICE");
+  if (markers.length) return required + " Detected environment markers: " + markers.join(", ") +
+    ". Start a fresh terminal application directly from your desktop. New tabs in an app opened by an agent can inherit its environment.";
 }
 
 export async function runAntigravitySession(

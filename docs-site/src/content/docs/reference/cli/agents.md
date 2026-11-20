@@ -18,6 +18,11 @@ and permission rules. The terminal shows tool updates. When a tool asks for perm
 review the action and enter `y` to allow it once. Enter rejects it. Type `/exit` or
 press Ctrl+C to leave.
 
+If a terminal you opened from a coding agent reports environment markers, open a
+fresh terminal application directly from your desktop and run the command there.
+On macOS, finish any work in Terminal before quitting and reopening it from the Dock.
+New tabs in the same Terminal process can inherit the original markers.
+
 For a plan-mode session that declines all permission requests, run `ocx antigravity`.
 
 For Claude, GPT-OSS, and any other [models in your plan](https://antigravity.google/docs/models/),

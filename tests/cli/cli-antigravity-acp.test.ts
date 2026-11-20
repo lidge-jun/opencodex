@@ -134,6 +134,18 @@ describe("Antigravity ACP command", () => {
     expect(antigravityRefusal(["work"], true, {})).toBeUndefined();
   });
 
+  test("distinguishes a marked local TTY from a pipe or SSH without printing environment values", () => {
+    const message = antigravityRefusal(["work"], true, {
+      TERM_PROGRAM: "Apple_Terminal", CODEX_THREAD_ID: "private-thread-fixture", OCX_SERVICE: "private-service-fixture",
+    });
+    expect(message).toContain("CODEX_THREAD_ID, OCX_SERVICE");
+    expect(message).toContain("fresh terminal application");
+    expect(message).not.toContain("private-");
+    expect(antigravityRefusal(["work"], false, {})).toContain("stdin and stdout");
+    expect(antigravityRefusal(["work"], true, { SSH_TTY: "/dev/pts/0" })).toContain("SSH session");
+    expect(antigravityRefusal(["work"], true, { TERM_PROGRAM: "Apple_Terminal" })).toBeUndefined();
+  });
+
   test.each([
     { decision: "y", fileExists: true, status: "completed" },
     { decision: "y", fileExists: false, status: "failed" },
