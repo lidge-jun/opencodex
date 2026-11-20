@@ -102,6 +102,32 @@ test("captures only allowlisted web discovery cookies through Chromium CDP", asy
   expect(await readM365BrowserWebSession(browser, "context", new AbortController().signal)).toEqual({ accountId, cookie: "OhpAuth=fixture" });
   expect(methods).toEqual(["Page.navigate", "Runtime.evaluate", "Network.getCookies"]);
 });
+test("falls back to the server HTML after the page drops its hydration global", async () => {
+  const pages = ["<html>sign in</html>", html()];
+  const evaluated: Record<string, unknown>[] = [];
+  const browser = { async command(method: string, params?: Record<string, unknown>) {
+    if (method === "Runtime.evaluate") {
+      evaluated.push(params!);
+      return { result: { value: params?.awaitPromise ? pages.shift() : "" } };
+    }
+    if (method === "Network.getCookies") return { cookies: [{ name: "OhpAuth", value: "fixture", domain: "copilot.cloud.microsoft", path: "/", secure: true }] };
+    return {};
+  } };
+  expect(await readM365BrowserWebSession(browser, "context", new AbortController().signal)).toEqual({ accountId, cookie: "OhpAuth=fixture" });
+  expect(pages).toHaveLength(0);
+  expect(evaluated.filter(p => p.awaitPromise)).toHaveLength(2);
+  expect(String(evaluated[1]?.expression)).toContain("credentials:'include'");
+});
+test("stops polling the web session when the login is aborted", async () => {
+  const ctrl = new AbortController();
+  let fetches = 0;
+  const browser = { async command(method: string, params?: Record<string, unknown>) {
+    if (method === "Runtime.evaluate" && params?.awaitPromise && ++fetches === 1) ctrl.abort(new Error("fixture aborted"));
+    return method === "Runtime.evaluate" ? { result: { value: "" } } : {};
+  } };
+  await expect(readM365BrowserWebSession(browser, "context", ctrl.signal)).rejects.toThrow("fixture aborted");
+  expect(fetches).toBe(1);
+});
 
 test("dashboard connectivity probe uses live account metadata and never treats a stale catalog as connectivity", async () => {
   await saveCredential("m365-copilot", credential());
