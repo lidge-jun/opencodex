@@ -1843,7 +1843,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     defaultModel: AGY_ACP_DEFAULT_MODEL,
     // Static seed; the ACP model options the CLI advertises at turn time decide what is accepted.
     models: [...AGY_ACP_SEED_MODELS],
-    liveModels: false,
+    liveModels: true,
     modelContextWindows: { "gemini-3.8-flash": 1_048_576, "gemini-4-argon": 1_048_576, "gemini-3.7-flash": 1_048_576 },
     // ACP prompts carry text only; client function tools are not offered to the model.
     inputModalities: ["text"],

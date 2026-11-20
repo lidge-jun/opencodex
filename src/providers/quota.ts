@@ -19,9 +19,10 @@ import { mapQuotaRoster, readProviderApiKeyQuotas, type ProviderApiKeyQuota } fr
 import { mistralUnknownBudgetWindows } from "./quota-mistral-budget";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isPassiveRead, runPassiveReadSync } from "../lib/passive-read";
+import { markDisplayOnlyQuota } from "./quota-types";
 import type { ProviderQuota, QuotaFailureCode } from "./quota-types";
 import {
-  accountReportCurrent, observedQuotaFor, captureReportOwner, collectOwnedReport, providerQuotaBeforeObservationForTests, captureObservationAuthority,
+  report, accountReportCurrent, observedQuotaFor, captureReportOwner, collectOwnedReport, providerQuotaBeforeObservationForTests, captureObservationAuthority,
   AUTHORITATIVE_EMPTY_QUOTA,
   bumpProviderQuotaInvalidationEpoch,
   captureProviderReportEpochs, providerReportEpochChanged,
@@ -121,6 +122,11 @@ async function maybeFetchProviderQuota(
 ): Promise<ProviderQuotaProbeResult> {
   if (provider.disabled === true) return null;
   try {
+    if (provider.adapter === "agy-acp") {
+      const { agyQuotaWindows, readAgyMetadata } = await import("../adapters/agy-acp/metadata");
+      const customWindows = agyQuotaWindows(await readAgyMetadata("quota"));
+      return report(name, "agy:/usage", markDisplayOnlyQuota({ customWindows, updatedAt: Date.now() }));
+    }
     if (provider.adapter === "claude-cli") return await fetchClaudeCliObservedQuota(name, forceRefresh);
     if (isBuiltInChatGptForwardProvider(name, provider)) {
       return fetchChatGptForwardQuota(config, name, provider, forceRefresh, prefetchedCodexSnapshot);

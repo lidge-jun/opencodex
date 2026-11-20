@@ -906,7 +906,9 @@ once per turn and talks to it over the Agent Client Protocol on stdin and stdout
   An undeclared loopback relay or SSH port forward can appear local when it passes no recognized forwarding headers.
   Declare the reverse proxy for the public listener or keep this port out of the relay. Keep the other local listeners
   out of relays, since the declared-proxy setting applies only to the public listener.
-- **Gemini models only:** the static roster is `gemini-3.8-flash`, `gemini-4-argon` and `gemini-3.7-flash`. At each
+- **Model discovery:** OpenCodex reads the signed-in CLI's `agy models` list and groups Gemini effort variants under their base model. For a provider saved with discovery off, run `ocx provider edit antigravity-acp --live-models on`.
+- **Usage:** The provider usage tab shows account quota windows and reset times from the CLI's `/usage` command. The 30-day request history covers turns sent through this proxy.
+- **Gemini models only:** At each
   turn the model must also be a Gemini model the CLI offers, confirmed before the prompt is sent; anything else is
   refused. Codex reasoning effort selects the CLI's thinking level (`xhigh` selects Extra). OpenCodex masks
   recognized credentials in answer and reasoning text from the CLI.
