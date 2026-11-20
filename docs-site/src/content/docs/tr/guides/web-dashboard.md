@@ -173,8 +173,9 @@ Seçim rozetleri ve keşif bilgileri bu sayıdan ayrıdır.
 
 Bu sayı sağlayıcı listesinde görünür. Sağlayıcının **Modeller** sekmesinin başlığı ise toplam içinden
 kaç modelin açık olduğunu gösterir: toplam, kapalı modeller dahil listedeki her girdiyi sayar; bir model
-**Modeller** sayfasındakiyle aynı kurala göre açıktır: devre dışı değildir ve yerel bir modeldir,
-sağlayıcısının izin listesi yoktur ya da izin listesi onu içerir.
+**Modeller** sayfasındakiyle aynı kurala göre açıktır: devre dışı değildir ve ayrıca ya Codex'in
+yerleşik (native) GPT modelidir, ya sağlayıcısının izin listesi yoktur ya da izin listesi onu içerir.
+Ollama gibi yerel sunucu sağlayıcılarının modelleri bu istisnaya girmez.
 
 ## Yetkilendirme seçicisi ve spawn yönlendirmesi
 
