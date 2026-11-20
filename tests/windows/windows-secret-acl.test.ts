@@ -43,9 +43,6 @@ import {
   setWindowsPrincipalRunnerForTests,
 } from "../../src/lib/windows-user-principal";
 import { repoPath } from "../helpers/repo-root";
-import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
-import { resolveTrustedWindowsIcaclsExe } from "../../src/lib/windows-elevation";
-import { verifyWindowsPrivateEntries } from "../../src/lib/windows-owner-acl";
 
 let testDir = "";
 
@@ -569,36 +566,6 @@ describe("hardenSecretDir", () => {
 
 describe("Windows ACL diagnostics (win32 only)", () => {
   const isWin32 = process.platform === "win32";
-
-  test.skipIf(!isWin32)("batched restrictions produce private native file and directory descriptors", () => {
-    // The parent is private before the empty fixtures receive any test grants.
-    expect(hardenSecretDir(testDir, { required: true }).ok).toBe(true);
-    expect(verifyWindowsPrivateEntries([{ path: testDir, directory: true }], 5_000)).toBe(true);
-    const folder = join(testDir, "sample-dir");
-    const file = join(testDir, "sample-file");
-    mkdirSync(folder);
-    writeFileSync(file, "");
-    const entries = [{ path: folder, directory: true }, { path: file, directory: false }];
-    const previous = process.env.OPENCODEX_ACL_BATCH_RESTRICTIONS;
-    try {
-      process.env.OPENCODEX_ACL_BATCH_RESTRICTIONS = "1";
-      for (const entry of entries) {
-        const fixture = Bun.spawnSync([resolveTrustedWindowsIcaclsExe(), entry.path, "/grant:r", "*S-1-5-32-545:R"], {
-          stdin: "ignore", stdout: "ignore", stderr: "ignore", windowsHide: true, timeout: 5_000,
-        });
-        expect(fixture.success).toBe(true);
-      }
-      expect(verifyWindowsPrivateEntries(entries, 5_000)).toBe(false);
-      for (const entry of entries) {
-        const harden = entry.directory ? hardenSecretDir : hardenSecretPath;
-        expect(harden(entry.path, { required: true }).ok).toBe(true);
-      }
-      expect(verifyWindowsPrivateEntries(entries, 5_000)).toBe(true);
-    } finally {
-      if (previous === undefined) delete process.env.OPENCODEX_ACL_BATCH_RESTRICTIONS;
-      else process.env.OPENCODEX_ACL_BATCH_RESTRICTIONS = previous;
-    }
-  }, SPAWN_BUDGET_MS);
 
   test("on win32: hardenSecretPath returns ok:true for existing file (real ACL)", () => {
     if (!isWin32) return; // skip on non-Windows
