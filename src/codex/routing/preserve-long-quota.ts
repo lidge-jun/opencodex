@@ -26,6 +26,14 @@ function longestWindow(quota: StoredAccountQuota | null, now: number): { tier: n
   return { tier: 3, reset: Infinity };
 }
 
+/** Only a proven short-only account can use short usage as its governing threshold. */
+export function preserveLongQuotaShortUsage(quota: StoredAccountQuota | null, now: number): number | undefined {
+  if (longestWindow(quota, now).tier !== 0 || !quota || typeof quota.shortPercent !== "number"
+    || !Number.isFinite(quota.shortPercent) || quota.shortPercent < 0 || quota.shortPercent > 100
+    || !Number.isFinite(futureReset(quota.shortResetAt, now))) return undefined;
+  return quota.shortPercent;
+}
+
 /** Return a stable shortlist; leave the final usage tie-break to the shared picker. */
 export function preserveLongQuotaCandidates(
   ids: readonly string[], quotaFor: (id: string) => StoredAccountQuota | null, now: number,

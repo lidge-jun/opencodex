@@ -643,7 +643,7 @@ async function authorizeReserveCredential(
       observeOrdinaryQuota(data, capturedWriter) {
         const parsed = parseUsageQuota(data);
         setAccountQuotaFromParsed(MAIN_CODEX_ACCOUNT_ID, parsed, writerGeneration,
-          capturedWriter, parseMainPolicyUsageQuota(data), undefined, false, false, isValidWhamHistoryObservation(data) ? parsed : null);
+          capturedWriter, parseMainPolicyUsageQuota(data), undefined, false, false, isValidWhamHistoryObservation(data) ? parsed : null, { data });
       },
     });
   // The capability read also publishes ordinary quota. A new 99% reading or cooldown wins.

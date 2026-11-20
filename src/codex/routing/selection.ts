@@ -1,4 +1,7 @@
-import { preserveLongQuotaCandidates } from "./preserve-long-quota";
+import {
+  preserveLongQuotaCandidates,
+  preserveLongQuotaShortUsage,
+} from "./preserve-long-quota";
 import { getEffectiveCodexAutoSwitchThreshold } from "../account-auto-switch";
 import { codexAccountUsesCreditsAfterLimit, isCodexAccountHeldForCredits } from "../account-credit-use";
 import { isCodexAccountPaused } from "../account-pause";
@@ -264,7 +267,9 @@ export function getEligiblePoolAccounts(
   return selectPriorityTier(
     withoutModelDeniedAccounts(ids, selectionOptions?.deniedModelAccountIds, pinned),
     codexSelectionPriorityLookup(config),
-    id => hasCodexQuotaHeadroom(config, id, selectionOptions, now),
+    id => accountPoolStrategyForScope(config, quotaScope) === "preserve-long-quota"
+      ? hasPreserveLongQuotaHeadroom(config, id, selectionOptions, now)
+      : hasCodexQuotaHeadroom(config, id, selectionOptions, now),
     pinned,
   );
 }
@@ -331,6 +336,19 @@ export function hasCodexQuotaHeadroom(
   );
   if (isUnknownUsage(usage)) return true;
   return usage < threshold;
+}
+
+function hasPreserveLongQuotaHeadroom(
+  config: OcxConfig,
+  accountId: string,
+  selectionOptions: CodexAccountUsabilityOptions | undefined,
+  now: number,
+): boolean {
+  if (!hasCodexQuotaHeadroom(config, accountId, selectionOptions, now)) return false;
+  const threshold = getEffectiveCodexAutoSwitchThreshold(config, accountId);
+  if (threshold <= 0) return true;
+  const usage = preserveLongQuotaShortUsage(getAccountQuota(accountId), now);
+  return usage === undefined || usage < threshold;
 }
 
 /**
@@ -420,7 +438,7 @@ export function pickPreserveLongQuotaCodexAccount(
   config: OcxConfig, ids: readonly string[], now: number,
   selectionOptions?: CodexAccountUsabilityOptions,
 ): string | null {
-  const available = ids.filter(id => hasCodexQuotaHeadroom(config, id, selectionOptions, now));
+  const available = ids.filter(id => hasPreserveLongQuotaHeadroom(config, id, selectionOptions, now));
   if (available.length === 0) return pickLowestUsageAmong(config, ids, selectionOptions, now);
   return pickLowestUsageAmong(config, preserveLongQuotaCandidates(available, getAccountQuota, now), selectionOptions, now);
 }

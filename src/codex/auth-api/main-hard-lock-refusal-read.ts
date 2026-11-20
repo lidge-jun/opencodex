@@ -151,9 +151,9 @@ async function readCallerMainUsage(
     if (!isMainQuotaDispatchLive(dispatch) || !matchesMainQuotaCredential(caller.bearer, caller.accountId)
       || writerGeneration !== captureConfigGeneration() || !isQuotaDispatchCurrent(sequence)) return;
     const quota = parseUsageQuota(data);
-    if (!quota) return;
     setAccountQuotaFromParsed(MAIN_CODEX_ACCOUNT_ID, quota, writerGeneration, dispatch.writer, parseMainPolicyUsageQuota(data),
-      undefined, false, false, isValidWhamHistoryObservation(data) ? quota : null);
+      undefined, false, false, isValidWhamHistoryObservation(data) ? quota : null, { data });
+    if (!quota) return;
     publishQuotaDispatch(sequence);
     usable = true;
   } finally {

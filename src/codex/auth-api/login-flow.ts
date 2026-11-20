@@ -300,6 +300,7 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
               let plan = extractChatgptPlanType(undefined, cred.access);
               let quota: Omit<StoredAccountQuota, "updatedAt"> | null = null;
               let policyQuota: Omit<StoredAccountQuota, "updatedAt"> | null = null;
+              let wham: { data: WhamUsageResponse } | undefined;
               // The account's route; a new login has no row yet and takes the provider's.
               const accountTransport = codexAccountFetch(accountId, { newLogin: !reauth });
               try {
@@ -310,6 +311,7 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
                 });
                 if (resp.ok) {
                   const data = (await resp.json()) as WhamUsageResponse;
+                  wham = { data };
                   email = data.email?.trim() || email;
                   plan = nonEmptyPlan(data.plan_type) ?? plan;
                   quota = parseUsageQuota(data);
@@ -435,7 +437,7 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
                 clearCodexPoolRefreshFailure(accountId);
                 if (warmup.validatedAt !== undefined) markCodexAccountValidated(accountId, warmup.validatedAt, generation);
                 clearAccountNeedsReauth(accountId);
-                if (quota) setAccountQuotaFromParsed(accountId, quota, undefined, undefined, policyQuota);
+                setAccountQuotaFromParsed(accountId, quota, undefined, undefined, policyQuota, undefined, false, true, null, wham);
                 // Keep the pool id stable; refresh display metadata after a successful login/reauth.
                 accounts[existingIdx] = withCodexAccountLogLabel({
                   ...accounts[existingIdx],
@@ -469,8 +471,8 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
               }
               // A new quota row is generation-gated by live account ownership. Reconcile the
               // durable config owner first so a partial prior sweep cannot reject this write.
-              if (newAccountPersistence?.status === "committed" && quota) {
-                setAccountQuotaFromParsed(accountId, quota, undefined, undefined, policyQuota);
+              if (newAccountPersistence?.status === "committed") {
+                setAccountQuotaFromParsed(accountId, quota, undefined, undefined, policyQuota, undefined, false, true, null, wham);
               }
               const { catalogRefreshPending } = await convergeAccountNamespaceCatalog(
                 latestConfig,

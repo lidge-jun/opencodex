@@ -367,6 +367,13 @@ export async function commitPoolQuotaResponse(
   }
   const quota = parseUsageQuota(usage);
   const freshResetCredits = quota?.resetCredits;
+  if (!isCodexAccountGenerationLive(accountId, generation)) {
+    return { quota: null, needsReauth: false, credentialGeneration: generation };
+  }
+  const validPolicyObservation = isValidWhamHistoryObservation(usage);
+  setAccountQuotaFromParsed(accountId, quota, writerGeneration, undefined, poolWhamPolicyObservation(usage, quota),
+    ctx.poolWriter && validPolicyObservation && quota ? { writer: ctx.poolWriter, observedAt, source: "wham", raw: quota } : undefined,
+    true, true, null, { data: usage, poolWriter: ctx.poolWriter });
   if (!quota) {
     return {
       quota: isCodexAccountGenerationLive(accountId, generation) ? existing ?? null : getAccountQuota(accountId),
@@ -375,13 +382,6 @@ export async function commitPoolQuotaResponse(
       ...(freshPlan !== undefined ? { freshPlan, freshCredentialGeneration: generation } : {}),
     };
   }
-  if (!isCodexAccountGenerationLive(accountId, generation)) {
-    return { quota: null, needsReauth: false, credentialGeneration: generation };
-  }
-  const validPolicyObservation = isValidWhamHistoryObservation(usage);
-  setAccountQuotaFromParsed(accountId, quota, writerGeneration, undefined, poolWhamPolicyObservation(usage, quota),
-    ctx.poolWriter && validPolicyObservation ? { writer: ctx.poolWriter, observedAt, source: "wham", raw: quota } : undefined,
-    true);
   return {
     quota: getAccountQuota(accountId),
     needsReauth: false,

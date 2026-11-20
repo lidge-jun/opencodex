@@ -419,14 +419,20 @@ export function setAccountQuotaFromParsed(
   decisionObservationPartial = true,
   // Advisory publication is explicit opt-in evidence: display or policy data never becomes it by default.
   decisionRaw: Omit<StoredAccountQuota, "updatedAt"> | null = null,
+  // Topology can contradict short-only proof even when no percentage is readable.
+  wham?: { data: WhamUsageResponse; poolWriter?: PoolQuotaWriter },
 ): void {
   const shortOnlyObservation = policyQuota && shortOnlyTopology.get(policyQuota);
-  quota = withoutRetiredCodexQuota(quota);
-  policyQuota = withoutRetiredCodexQuota(policyQuota);
-  if (!quota || (!snapshotHasUsage(quota) && !snapshotHasCredits(quota))) return;
   if (!mayCommitAccountQuota(accountId, writerGeneration)) return;
   const isMain = accountId === MAIN_CODEX_ACCOUNT_ID;
   if (isMain && mainWriter && !isMainQuotaWriterLive(mainWriter)) return;
+  const topologyWriter = wham?.poolWriter ?? historyEvidence?.writer;
+  const mayRevokeTopology = isMain ? mainWriter !== undefined
+    : topologyWriter ? topologyWriter.accountId === accountId && isPoolQuotaWriterLive(topologyWriter) : !poolRequest;
+  if (wham && mayRevokeTopology && whamContradictsShortOnly(wham.data)) shortOnlyProofs.delete(accountId);
+  quota = withoutRetiredCodexQuota(quota);
+  policyQuota = withoutRetiredCodexQuota(policyQuota);
+  if (!quota || (!snapshotHasUsage(quota) && !snapshotHasCredits(quota))) return;
   hydrateAccountQuotasFromDisk();
   const legacyExisting = accountQuota.get(accountId);
   const updatedAt = Date.now();
@@ -461,7 +467,7 @@ export function setAccountQuotaFromParsed(
     shortOnlyProofs.delete(accountId);
   } else if (mayRetireShort && shortOnlyObservation === true) {
     shortOnlyProofs.set(accountId, { observedAt: updatedAt,
-      ...(isMain ? { mainWriter } : { poolIdentity: poolQuotaHistoryIdentity(accountId) }),
+      ...(isMain ? { mainWriter } : { poolIdentity: historyEvidence?.writer.historyIdentity ?? poolQuotaHistoryIdentity(accountId) }),
     });
   } else if (proof && !shortOnlyProofIsLive(accountId, proof)) shortOnlyProofs.delete(accountId);
   accountQuota.set(accountId, next);
@@ -1227,12 +1233,16 @@ function withWhamLongWindowAbsence(data: WhamUsageResponse, quota: MainPolicyQuo
     shortOnlyTopology.set(quota, true);
     return quota;
   }
-  if (rate?.allowed === false || isExplicitLongWindow(rate?.primary_window)
-    || rate?.secondary_window != null || rate?.tertiary_window != null
-    || (additional !== undefined && (!Array.isArray(additional) || additional.length > 0))) {
-    shortOnlyTopology.set(quota, false);
-  }
+  if (whamContradictsShortOnly(data)) shortOnlyTopology.set(quota, false);
   return quota;
+}
+
+function whamContradictsShortOnly(data: WhamUsageResponse): boolean {
+  const rate = data.rate_limit;
+  const additional = data.additional_rate_limits;
+  return rate?.allowed === false || isExplicitLongWindow(rate?.primary_window)
+    || rate?.secondary_window != null || rate?.tertiary_window != null
+    || (additional !== undefined && (!Array.isArray(additional) || additional.length > 0));
 }
 
 function isMeasuredLongWindow(window: WhamUsageWindow | null | undefined): boolean {
