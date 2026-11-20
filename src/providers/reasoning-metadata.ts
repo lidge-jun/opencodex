@@ -443,6 +443,12 @@ const REJECTION_LANGUAGE = /unsupported|not supported|does not support|invalid|n
  * every 400 that mentions effort as a refusal of it.
  */
 const REJECTION_WINDOW = 48;
+/**
+ * Optional effort repair only analyzes a complete, short diagnostic (UTF-16 code units).
+ * Longer input is conflicting evidence, never a prefix to retry or learn from. This bounds
+ * the remaining heuristic scans; it does not truncate the upstream response body.
+ */
+const MAX_REASONING_DIAGNOSTIC_CHARS = 1_024;
 
 /**
  * The `invalid_request_error` type tag rides along on essentially every 400 an OpenAI-shaped
@@ -951,7 +957,7 @@ function diagnosticTextNamesOtherParameter(text: string, authoritativeEffortSubj
   const s = text.replace(GENERIC_ERROR_TYPE, " ");
   if (authoritativeEffortSubject) return diagnosticTextNamesConcreteOtherField(s);
 
-  const paramPattern = /\b(?:parameter|param|argument|arg|field|property)\s*(?:[:=]\s*['"`]?|['"`]|\s+)['"`]?([a-zA-Z0-9_\-\.]+)['"`]?/gi;
+  const paramPattern = /\b(?:parameter|param|argument|arg|field|property)(?:\s*[:=]\s*['"`]?|\s*['"`]|\s+)['"`]?([a-zA-Z0-9_\-\.]+)['"`]?/gi;
   for (let m = paramPattern.exec(s); m; m = paramPattern.exec(s)) {
     const tokenIndex = tokenStartIndex(m, m[1], false);
     if (isCompetingParameterToken(s, tokenIndex, m[1])) return true;
@@ -960,6 +966,11 @@ function diagnosticTextNamesOtherParameter(text: string, authoritativeEffortSubj
   const prefixParamPattern = /\b['"`]?([a-zA-Z0-9_\-\.]+)['"`]?\s+(?:parameter|param|argument|arg|field|property)\b/gi;
   for (let m = prefixParamPattern.exec(s); m; m = prefixParamPattern.exec(s)) {
     const tokenIndex = tokenStartIndex(m, m[1], true);
+    const beforeToken = s.slice(0, tokenIndex);
+    // In "cannot use parameter 'x'", use introduces the label, not a field named use.
+    // Quoted field names and verbs outside that diagnostic phrase remain competing subjects.
+    if (!/['"`]$/.test(beforeToken) && (m[1].toLowerCase() === "missing"
+      || (/^(?:specify|use|set|pass|provide)$/i.test(m[1]) && /\bcannot\s+$/i.test(beforeToken)))) continue;
     if (isCompetingParameterToken(s, tokenIndex, m[1])) return true;
   }
 
@@ -984,7 +995,7 @@ function diagnosticTextNamesOtherParameter(text: string, authoritativeEffortSubj
   }
 
   const rejectionExtra =
-    /\b(?:unexpected|missing|cannot\s+(?:specify|use|set|pass|provide))\s+(?:field|param|parameter|argument|property)?\s*['"`]?([a-zA-Z0-9_\-\.]+)['"`]?/gi;
+    /\b(?:unexpected|missing|cannot\s+(?:specify|use|set|pass|provide))\s+(?:(?:field|param|parameter|argument|property)\b\s*)?['"`]?([a-zA-Z0-9_\-\.]+)['"`]?/gi;
   for (let m = rejectionExtra.exec(s); m; m = rejectionExtra.exec(s)) {
     const tokenIndex = tokenStartIndex(m, m[1], false);
     if (isCompetingParameterToken(s, tokenIndex, m[1])) return true;
@@ -1007,6 +1018,7 @@ function diagnosticTextNamesOtherParameter(text: string, authoritativeEffortSubj
 
 function isConflictingDiagnosticProse(str: string | undefined, authoritativeEffortSubject = false): boolean {
   if (!str) return false;
+  if (str.length > MAX_REASONING_DIAGNOSTIC_CHARS) return true;
   const s = str.trim();
   if (!s) return false;
   if (
@@ -1054,8 +1066,14 @@ function isHttpStatusNumber(value: unknown): boolean {
  * (e.g. reasoning_effort at root with an inner error identifying temperature) so they stay terminal
  * or proceed to combo failover without false reasoning-effort learning or same-target ladder retries (#8173).
  */
-export function hasConflictingReasoningEffortCode(text: string | undefined): boolean {
+export function hasConflictingReasoningEffortCode(
+  text: string | undefined,
+  maxEnvelopeChars: 1_024 | 16_384 = MAX_REASONING_DIAGNOSTIC_CHARS,
+): boolean {
   if (!text) return false;
+  // Exact-refusal failover may inspect a larger complete envelope; prose heuristics
+  // retain the short limit even when unrelated metadata makes that envelope larger.
+  if (text.length > maxEnvelopeChars) return true;
   if (isIncompleteStructuredWrapper(text)) return true;
   let unescaped = text.trim();
   for (let d = 0; d < 3; d += 1) {
@@ -1333,7 +1351,7 @@ function diagnosticRecordBlamesReasoningEffort(rec: Record<string, unknown>, dep
  * (such as temperature or max_tokens errors) as effort refusals (#8173).
  */
 export function isReasoningEffortRejection(text: string | undefined, depth = 0): boolean {
-  if (!text || depth > 4) return false;
+  if (!text || text.length > MAX_REASONING_DIAGNOSTIC_CHARS || depth > 4) return false;
   if (isHardPolicyOrOriginRefusal(text)) return false;
   if (hasConflictingReasoningEffortCode(text)) return false;
 
