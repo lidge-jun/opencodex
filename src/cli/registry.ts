@@ -420,6 +420,16 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "Alias of ocx models.",
   },
   {
+    name: "antigravity",
+    usage: "ocx antigravity [work|native]",
+    summary: "Open a local, interactive Gemini session through the official Antigravity CLI.",
+    details: [
+      "Requires agy on PATH and a personal Google sign-in in agy. This command does not expose a proxy model.",
+      "Run 'ocx antigravity work' in the project directory to see tool calls and review one-time permissions in your terminal.",
+      "Use 'ocx antigravity native' to open the official CLI directly for the models available in your plan, including Claude and GPT-OSS where offered.",
+    ],
+  },
+  {
     name: "advisor",
     usage: "ocx advisor <status|on|off|consent|set> ...",
     summary: "Inspect and configure the advisor sidecar (expert consultation for routed workers).",

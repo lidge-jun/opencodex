@@ -867,6 +867,12 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
 
 ## Antigravity CLI (ACP, local)
 
+To use your personal subscription for file and command work, run
+[`ocx antigravity work`](/reference/cli/agents/#interactive-antigravity) in the project.
+It opens a direct user-operated ACP session. For integration as a Codex model backend,
+Google directs users to AI Studio or Vertex AI in its
+[guidance on Codex delegation](https://discuss.ai.google.dev/t/tos-clarification-is-human-supervised-codex-to-antigravity-acp-delegation-permitted/200697/2).
+
 OpenCodex can use a Google Antigravity subscription through Google's own CLI instead of replaying an
 Antigravity credential. The `antigravity-acp` preset starts the official Antigravity CLI as `agy acp --sandbox`
 once per turn and talks to it over the Agent Client Protocol on stdin and stdout:

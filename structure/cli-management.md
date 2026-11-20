@@ -113,6 +113,15 @@ live and latest durable rows are captured under the same mutation lock as deleti
 
 ## Model and routing task commands
 
+`src/cli/antigravity.ts` is a local interactive client, exempt from proxy and
+shim preflight. It launches the official `agy acp --sandbox` over stdio, lets
+the binary own sign-in, and selects a Gemini model from the session's advertised catalog. The default
+command uses plan mode. The work subcommand selects the CLI's default review mode in the user's project. There is no prompt argv, MCP injection,
+provider, HTTP endpoint, account pooling, or token access. The client refuses
+non-TTY, SSH, service and detected agent/CI launches. Only a running work turn can
+ask for a one-time terminal decision for its session. Plan mode declines every request. `ocx antigravity native` hands the terminal directly to the official
+CLI for interactive access to other models offered by the account.
+
 `src/cli/models.ts` lists saved and router-known IDs locally, including guarded registry seeds, custom rows and its own process cache; `models live` reads the running catalog. Local listings use passive config reads, derive metadata from a detached effective policy and do not refresh reasoning metadata. For a destination with credential-scoped learned refusals, an OS-keychain reference leaves a nonempty reasoning ladder unknown without opening the keychain; explicit empty ladders remain empty. It keeps local custom-model authoring as default and selects explicit live operations before local state. `src/cli/models-custom-runtime.ts` resolves deletion against the complete target roster through the shared slug contract and addresses an exact stored id, refusing ambiguous or malformed identities. `src/cli/models-custom-input.ts` owns the shared pure reasoning grammar, re-exported from the original module. Local JSON writes report saved state and opportunistic sync: no proxy is pending success; attempted failure is nonzero. `src/cli/local-sync-result.ts` is the pure safe projection shared with provider writes; caller-specific required/opportunistic policies remain separate.
 
 `src/cli/models-order.ts` owns raw upstream display-name addressing and routed picker operations. Status preserves saved native identities, while manual/preset replacement requires explicit reset of native-inclusive order. Manual input is a full unique routed permutation with the observed featured prefix; settings/identity rereads reject observable drift without claiming CAS. `src/cli/model-picker-ordering.ts` mirrors the GUI's pure identity/sort projection without importing GUI code into the CLI. Independent ordering fixtures and test-only GUI conformance exercise the deliberate shared contract. Most-used consumes complete all/all requested-model usage, not representative resolved-model attribution. The registry declares the existing display-name PUT; its handler remains authoritative, including saved-but-failed HTTP503.

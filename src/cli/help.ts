@@ -102,6 +102,7 @@ Usage:
   ocx system <sub>            Runtime settings, startup, sync, OpenCodex updates, and Codex CLI inspection
   ocx config [sub]            Validated configuration show/get/set/import/export
   ocx advisor <status|on|off|set|consent>  Advisor sidecar settings and context-sharing consent
+  ocx antigravity [work|native]    Open a human-operated local Antigravity session
   ocx companion <show|set|reset>  Menu-bar and widget companion usage settings
   ocx telemetry <sub>         Anonymous usage telemetry status, preview, enable, and disable
   ocx lab <sub>               Inspect Lab evidence and control local automation

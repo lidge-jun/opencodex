@@ -25,6 +25,7 @@ export function skipsCodexShimAutoRestore(command: string | undefined, args: str
   if (command === "lab") return true;
   // Local messaging owns its helpers; even malformed usage must not repair/start anything.
   if (command === "message") return true;
+  if (command === "antigravity") return true;
   // `resolve` is read-only inspection for embedding shells: a lookup made to populate
   // a consent surface must not trigger a shim repair side effect first.
   if (command === "resolve") return true;

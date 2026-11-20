@@ -22,6 +22,11 @@ install or operations task authorizes, and an agent must never perform or
 auto-answer them — even when the surrounding task is approved, even when the
 credential is sitting right there.
 
+The `ocx antigravity`, `ocx antigravity work` and `ocx antigravity native` sessions
+are for the person at the terminal. Coding agents must not launch them, answer their prompts, or
+use the account's Antigravity allowance to delegate work. The ACP command refuses
+marked agent and CI environments and requires TTY input and output.
+
 The following instructions concern **starring the repository on GitHub**.
 
 ### Do not

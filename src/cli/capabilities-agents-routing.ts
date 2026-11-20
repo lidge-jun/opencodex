@@ -2,6 +2,24 @@ import type { Capability } from "./capability-types";
 
 export const AGENT_ROUTING_CAPABILITIES: readonly Capability[] = [
   {
+    command: ["antigravity"], usage: "ocx antigravity [work|native]",
+    summary: "Open a human-operated, local Antigravity ACP session in plan mode.",
+    routes: [], flags: [], mutates: true, json: "none",
+    details: ["Human terminal only; do not run on a user's behalf from a coding agent or automation.", "Requires the official agy CLI with personal Google sign-in. Only Gemini models are offered; no proxy or account import."],
+  },
+  {
+    command: ["antigravity", "work"], usage: "ocx antigravity work",
+    summary: "Work directly with Gemini in the current project through a local ACP terminal.",
+    routes: [], flags: [], mutates: true, json: "none",
+    details: ["The human enters each prompt and reviews one-time tool permissions. The official sandboxed CLI owns the tools and sign-in."],
+  },
+  {
+    command: ["antigravity", "native"], usage: "ocx antigravity native",
+    summary: "Open the official Antigravity CLI directly for all models offered by your plan.",
+    routes: [], flags: [], mutates: true, json: "none",
+    details: ["Hands the local human terminal to agy without forwarding prompts or using ACP. Do not launch this on the user's behalf."],
+  },
+  {
     command: ["message", "sessions"],
     summary: "Discover already-loaded Codex sessions locally or on an explicitly enrolled peer.",
     routes: [], flags: [{ name: "--json", value: "boolean", summary: "Emit a versioned session directory." }, { name: "--host", value: "string", summary: "Exact enrolled peer alias or machine UUID; requires a live foreground owner." }],

@@ -11,6 +11,7 @@
   "gateway-client-safety.test.ts": "clients",
   "gateway-clients.test.ts": "clients",
   "gateway-client-command.test.ts": "cli",
+  "cli-antigravity-acp.test.ts": "cli",
   "fix-jsonc-cr-comments.test.ts": "lib",
   "fix-jsonc-empty-comma.test.ts": "lib",
   "fix-plain-data-own-keys.test.ts": "lib",
