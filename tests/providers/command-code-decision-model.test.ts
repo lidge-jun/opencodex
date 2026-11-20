@@ -1,0 +1,193 @@
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { clearComboSelectionState, clearComboTargetCooldowns, isComboTargetInCooldown } from "../../src/combos";
+import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
+import { getAccountSet, saveCredential, setActiveAccount } from "../../src/oauth/store";
+import { extractProviderModelItems, resolveProviderModelDiscovery } from "../../src/providers/model-discovery";
+import { isCommandCodeDecisionModel } from "../../src/providers/command-code-decision-models";
+import { clearKeyCooldowns } from "../../src/providers/key-failover";
+import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
+import { handleChatCompletions } from "../../src/server/chat-completions";
+import { handleClaudeMessages } from "../../src/server/claude-messages";
+import { handleResponses } from "../../src/server/responses";
+import { clearComboRecallForTests } from "../../src/server/responses/combo-session-recall";
+import type { OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
+
+// #8997: Command Code lists its System One decision models (typesafe/jev*) in /provider/v1/models,
+// but serves them only at POST /provider/v1/systemone. A chat request must never reach them.
+setDefaultTimeout(30_000);
+
+const JEV = "typesafe/jev-1.14.0";
+const SERVED = "deepseek/deepseek-v4-flash";
+const COMPLETED = [
+  JSON.stringify({ type: "text-delta", text: "OK" }),
+  JSON.stringify({ type: "finish", finishReason: "stop" }),
+].join("\n") + "\n";
+
+describe("Command Code decision models are not chat models", () => {
+  test("live discovery drops the decision rows for both Command Code presets and keeps chat rows", () => {
+    const listing = { data: [
+      { id: SERVED, object: "model", owned_by: "command-code", supported_endpoints: ["/chat/completions"] },
+      { id: "typesafe/jev", object: "model", owned_by: "command-code" },
+      { id: JEV, object: "model", owned_by: "command-code" },
+      { id: "TypeSafe/JEV-2", object: "model", owned_by: "command-code" },
+      { id: "claude-sonnet-5-5", object: "model", owned_by: "command-code", supported_endpoints: ["/messages"] },
+    ] };
+    for (const [name, provider] of [
+      ["command-code", { adapter: "command-code", baseUrl: "https://api.commandcode.ai", authMode: "oauth" as const }],
+      ["commandcode", { adapter: "openai-chat", baseUrl: "https://api.commandcode.ai/provider/v1" }],
+    ] as const) {
+      const result = extractProviderModelItems(listing, resolveProviderModelDiscovery(name, provider));
+      expect(result.ok, name).toBe(true);
+      if (!result.ok) continue;
+      expect(result.items.map(item => item.id), name).toEqual([SERVED, "claude-sonnet-5-5"]);
+    }
+  });
+
+  test("the request guard matches native, encoded and case-varied decision ids only", () => {
+    for (const id of ["typesafe/jev", JEV, "TypeSafe/JEV-2", "typesafe-jev-1.14.0", " typesafe/jev "]) {
+      expect(isCommandCodeDecisionModel(id), id).toBe(true);
+    }
+    for (const id of [SERVED, "jev-1.13", "zai-org/GLM-5.3", "deepseek-v4-flash", "typesafe/other"]) {
+      expect(isCommandCodeDecisionModel(id), id).toBe(false);
+    }
+  });
+});
+
+describe("a chat request that reaches a Command Code decision model fails fast", () => {
+  const originalHome = process.env.OPENCODEX_HOME;
+  const originalFetch = globalThis.fetch;
+  let fixtureHome = "";
+  let releaseSpend: (() => void) | undefined;
+  let sends: string[] = [];
+
+  beforeEach(() => {
+    fixtureHome = mkdtempSync(join(tmpdir(), "ocx-command-code-decision-"));
+    process.env.OPENCODEX_HOME = fixtureHome;
+    releaseSpend = acquireOwnedSpendHome();
+    clearGenericFailoverHealth();
+    clearComboSelectionState();
+    clearComboRecallForTests();
+    clearComboTargetCooldowns();
+    clearKeyCooldowns();
+    sends = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      sends.push(url);
+      if (url === "https://api.commandcode.ai/alpha/generate") return new Response(COMPLETED);
+      if (url === "https://api.commandcode.ai/provider/v1/chat/completions") {
+        return Response.json({ id: "c1", object: "chat.completion", created: 1, model: SERVED,
+          choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }] });
+      }
+      throw new Error("Unexpected fixture request: " + url);
+    }) as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    releaseSpend?.();
+    releaseSpend = undefined;
+    closeRequestHistoryIndex();
+    clearGenericFailoverHealth();
+    clearComboSelectionState();
+    clearComboRecallForTests();
+    clearComboTargetCooldowns();
+    clearKeyCooldowns();
+    if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = originalHome;
+    removeTreeWithRetry(fixtureHome);
+  });
+
+  async function login(): Promise<void> {
+    await saveCredential("command-code", {
+      access: "synthetic-command-0", refresh: "synthetic-refresh-0",
+      expires: Date.now() + 3_600_000, accountId: "fixture-0", source: "oauth",
+    }, { addAccount: true });
+    await setActiveAccount("command-code", getAccountSet("command-code")!.accounts[0]!.id);
+  }
+
+  function config(models: string[], extra: Partial<OcxConfig> = {}): OcxConfig {
+    return {
+      defaultProvider: "command-code",
+      providers: {
+        "command-code": { adapter: "command-code", baseUrl: "https://api.commandcode.ai", authMode: "oauth", models },
+        commandcode: { adapter: "openai-chat", baseUrl: "https://api.commandcode.ai/provider/v1", apiKey: "synthetic-key", models },
+      },
+      ...extra,
+    } as OcxConfig;
+  }
+
+  function expectDecisionRefusal(status: number, body: string): void {
+    expect(status, body).toBe(400);
+    expect(body).toContain("/provider/v1/systemone");
+    expect(body).toContain("JEV combo");
+  }
+
+  test("Responses, Chat and Messages inbound answer 400 without an upstream send, on both presets", async () => {
+    await login();
+    const cfg = config([JEV, SERVED]);
+    for (const provider of ["command-code", "commandcode"]) {
+      const model = provider + "/" + JEV;
+      const responses = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model, input: "hello", stream: false }),
+      }), cfg, { model: "", provider: "" });
+      expectDecisionRefusal(responses.status, await responses.text());
+      const chat = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model, messages: [{ role: "user", content: "hello" }] }),
+      }), cfg, { model: "", provider: "" });
+      expectDecisionRefusal(chat.status, await chat.text());
+      const messages = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model, max_tokens: 64, messages: [{ role: "user", content: "hello" }] }),
+      }), cfg, { model: "", provider: "" });
+      expectDecisionRefusal(messages.status, await messages.text());
+    }
+    expect(sends).toEqual([]);
+
+    // The guard is scoped to decision ids: chat models on both presets still reach upstream.
+    for (const provider of ["command-code", "commandcode"]) {
+      const served = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: provider + "/" + SERVED, messages: [{ role: "user", content: "hello" }] }),
+      }), cfg, { model: "", provider: "" });
+      expect(served.status, await served.text()).toBe(200);
+    }
+    expect(sends).toEqual([
+      "https://api.commandcode.ai/alpha/generate",
+      "https://api.commandcode.ai/provider/v1/chat/completions",
+    ]);
+  });
+
+  test("a stale encoded selection with an empty discovery cache is refused before any send", async () => {
+    await login();
+    const cfg = config([]);
+    for (const model of ["command-code/typesafe-jev-1.14.0", "commandcode/typesafe-jev-1.14.0", "command-code/TypeSafe/JEV"]) {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model, input: "hello", stream: false }),
+      }), cfg, { model: "", provider: "" });
+      expectDecisionRefusal(response.status, await response.text());
+    }
+    expect(sends).toEqual([]);
+  });
+
+  test("a combo listing the decision model does not cool its chat sibling", async () => {
+    await login();
+    const jevTarget = { provider: "command-code", model: JEV };
+    const servedTarget = { provider: "command-code", model: SERVED };
+    const cfg = config([JEV, SERVED], { combos: { pair: { strategy: "failover", targets: [jevTarget, servedTarget] } } });
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/pair", input: "hello", stream: false }),
+    }), cfg, { model: "", provider: "" });
+    await response.text();
+    expect(isComboTargetInCooldown("pair", servedTarget)).toBe(false);
+    expect(sends.every(url => url === "https://api.commandcode.ai/alpha/generate")).toBe(true);
+  });
+});

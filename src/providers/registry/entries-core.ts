@@ -22,6 +22,7 @@ import {
 } from "../../adapters/cursor/discovery";
 import { cursorFastCapableBases } from "../../adapters/cursor/catalog";
 import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "../command-code-efforts";
+import { COMMAND_CODE_DECISION_MODEL_DISCOVERY_FILTER } from "../command-code-decision-models";
 import { isCanonicalOpenRouterTarget } from "../openrouter-routing";
 import type { ProviderRegistryEntry } from "./types";
 import { M365_COPILOT_BASE_URL } from "../m365-copilot-models";
@@ -535,6 +536,9 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
       url: "https://api.commandcode.ai/provider/v1/models",
       maxResponseBytes: 262_144,
       maxModels: 256,
+      // System One decision models (typesafe/jev*) are listed here but served only at
+      // /provider/v1/systemone (#8997).
+      filter: COMMAND_CODE_DECISION_MODEL_DISCOVERY_FILTER,
     },
     // These are capability facts from official Command Code model profiles, not seeded models.
     // Unknown/new live models deliberately do not advertise a reasoning picker.
