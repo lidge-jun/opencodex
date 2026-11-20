@@ -136,18 +136,28 @@ uniquement si la liste d'autorisation de son fournisseur l'inclut — ou si aucu
 s'il n'est pas désactivé. Activer un modèle réconcilie atomiquement les deux filtres ; **Tout activer** efface
 la liste d'autorisation du fournisseur afin que les modèles découverts ultérieurement soient eux aussi actifs.
 
+L’onglet **Tous** (`#models/overall`) affiche dans une seule liste tous les modèles de tous les
+fournisseurs, dans l’ordre du catalogue, avec un champ de recherche, un filtre **Tous** / **Activés** /
+**Désactivés** et le même commutateur. Les deux onglets lisent le même état et partagent une file
+d’enregistrement : un changement fait dans l’un apparaît aussitôt dans l’autre.
+
 ### Gérer les modèles dans l’espace fournisseur
 
-Dans l’onglet **Modèles** d’un fournisseur, **Supprimer** retire la définition personnalisée
-stockée. Le modèle natif ou découvert sous-jacent peut alors réapparaître ; le nombre de modèles
-peut donc rester identique. **Masquer** change uniquement la visibilité dans le catalogue, sans
-supprimer la définition ni modifier la politique de routage direct. **Gérer la visibilité dans
-Modèles** ouvre la page **Modèles** pour rétablir la visibilité, même si l’onglet du fournisseur
-ne contient plus aucune ligne.
+L’onglet **Modèles** d’un fournisseur liste tous ses modèles, y compris ceux qui sont désactivés,
+chacun avec le même commutateur que la page **Modèles** ; les deux pages lisent et écrivent le même
+état. Un commutateur enregistre immédiatement. Tant que cet enregistrement et le rechargement qui
+suit ne sont pas terminés, les autres commutateurs, **Ajouter** et **Supprimer** attendent : une
+seule modification est en cours à la fois, et choisir un autre fournisseur ne l’annule pas.
+Désactiver un modèle change uniquement la visibilité dans le catalogue, sans supprimer la définition
+ni modifier la politique de routage direct. **Gérer la visibilité dans Modèles** ouvre la page
+**Modèles**.
 
-**Ajouter** enregistre une définition personnalisée sans effacer un masquage existant ni les
-règles de sélection du fournisseur. Un modèle enregistré peut donc rester masqué. Si le modèle
-est déjà connu, gérez sa visibilité dans **Modèles**. Un enregistrement confirmé reste valable
+**Supprimer** retire la définition personnalisée stockée. Le modèle natif ou découvert sous-jacent
+peut alors réapparaître ; le nombre de modèles peut donc rester identique.
+
+**Ajouter** enregistre une définition personnalisée sans annuler une désactivation existante ni les
+règles de sélection du fournisseur. Un modèle enregistré peut donc rester désactivé ; activez-le avec
+son commutateur. Un enregistrement confirmé reste valable
 même si l’actualisation du catalogue échoue : suivez le message d’actualisation au lieu d’ajouter
 le modèle à nouveau. Si la modification n’est pas confirmée, actualisez l’état des modèles avant
 de réessayer.

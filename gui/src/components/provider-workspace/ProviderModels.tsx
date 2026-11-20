@@ -5,16 +5,18 @@ import { Switch } from "../../ui";
 import { confirmAction } from "../../action-dialogs";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { filterFreeModelRows, freeOnlyInForce, modelPricingKnown, type ModelRow } from "../../pages/models-shared";
-import { putModelVisibility } from "../../model-visibility";
 import { readJsonOrThrow } from "../../fetch-json";
 import { createBoundedFetch } from "../../bounded-fetch";
 import { catalogRefreshPending, parseCustomModelCreated, parseCustomModelInventory, type CustomModelRecord } from "../../provider-workspace/model-inventory";
 import { encodedModelIdCollides } from "../../../../src/providers/slug-codec";
+import type { ProviderModelVisibility } from "../../provider-workspace/use-provider-model-visibility";
+import { ModelVisibilitySwitch } from "../../model-visibility-switch";
+import { IntegrationRefreshWarning } from "../integration-refresh-warning";
 import ProviderModelChip from "./ProviderModelChip";
 
 type Mutation = {
   revision: string;
-  outcome: "saved" | "deleted" | "hidden" | "unconfirmed" | "rejected";
+  outcome: "saved" | "deleted" | "unconfirmed" | "rejected";
   refreshPending: boolean;
   created?: CustomModelRecord;
 };
@@ -35,6 +37,8 @@ type ProviderModelsProps = {
   onRetryModels?: () => void;
   onOpenAccounts?: () => void;
   onOpenModels: () => void;
+  /** Shell-owned model on/off. Without it the list shows enabled models only, read-only. */
+  modelVisibility?: ProviderModelVisibility;
 };
 
 export default function ProviderModels(props: ProviderModelsProps) {
@@ -43,7 +47,7 @@ export default function ProviderModels(props: ProviderModelsProps) {
 
 function ProviderModelInventory({ item, apiBase, availableModels, selectedModels,
   modelRows, modelRevision, modelRowsReady, modelsLoading = false, modelsLoadFailed = false,
-  needsReauth = false, onRetryModels, onOpenAccounts, onOpenModels,
+  needsReauth = false, onRetryModels, onOpenAccounts, onOpenModels, modelVisibility,
 }: ProviderModelsProps) {
   const t = useT();
   const [query, setQuery] = useState("");
@@ -60,6 +64,8 @@ function ProviderModelInventory({ item, apiBase, availableModels, selectedModels
   const copyReset = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flight = useRef(false);
   const active = useRef(true);
+  // Withdraws an open Delete consent when this inventory unmounts (tab or provider switch).
+  const unmounted = useRef<AbortController | null>(null);
   const currentRevision = useRef(modelRevision);
   const searchRef = useRef<HTMLInputElement>(null);
   const recoveryRef = useRef<HTMLButtonElement>(null);
@@ -70,14 +76,17 @@ function ProviderModelInventory({ item, apiBase, availableModels, selectedModels
   const busy = requestPending || (!!mutation && !reconciled);
   const rows = (modelRows ?? []).filter(row => row.provider === item.name);
   const pendingSelection = rows.some(row => row.initialSelectionPending);
-  const actionsBlocked = !ready || busy || pendingSelection;
+  const toggling = modelVisibility?.running === true;
+  const actionsBlocked = !ready || busy || pendingSelection || toggling;
   const customModels = ownership?.rows.filter(row => row.provider === item.name) ?? [];
   const selectedSet = new Set(selectedModels);
   // Full raw inputs retain duplicate/collision protection. Native-only DTO ids are not definitions.
   const known = [...availableModels, ...(item.models ?? []), ...customModels.map(row => row.modelId), ...(item.defaultModel ? [item.defaultModel] : [])];
   const modelId = draft.trim();
   const duplicate = !!modelId && (known.includes(modelId) || encodedModelIdCollides(modelId, known));
-  const visible = rows.filter(row => !row.disabled);
+  // With a switch on every row, off models stay listed so they can be turned back on here.
+  const visible = modelVisibility ? rows : rows.filter(row => !row.disabled);
+  const onCount = modelVisibility ? rows.filter(row => modelVisibility.isOn(row)).length : visible.length;
   // Offered only where discovery actually returned per-token prices; a provider that publishes
   // none would otherwise get a switch that can only empty its own inventory.
   const pricingKnown = modelPricingKnown(visible);
@@ -96,6 +105,8 @@ function ProviderModelInventory({ item, apiBase, availableModels, selectedModels
   useEffect(() => { currentRevision.current = modelRevision; }, [modelRevision]);
   useEffect(() => {
     active.current = true;
+    const withdraw = new AbortController();
+    unmounted.current = withdraw;
     const onFocus = (event: FocusEvent) => {
       if (focusIntent.current && event.target !== focusIntent.current.button && event.target !== document.body) {
         focusIntent.current.retained = false;
@@ -104,6 +115,7 @@ function ProviderModelInventory({ item, apiBase, availableModels, selectedModels
     document.addEventListener("focusin", onFocus);
     return () => {
       active.current = false;
+      withdraw.abort();
       document.removeEventListener("focusin", onFocus);
       if (copyReset.current !== null) clearTimeout(copyReset.current);
     };
@@ -147,12 +159,19 @@ function ProviderModelInventory({ item, apiBase, availableModels, selectedModels
   };
   const owns = (row: ModelRow) => row.custom === true && row.native !== true && customModels.some(custom =>
     custom.id === row.customId && custom.provider === row.provider && custom.modelId === row.id);
-  const actionFor = (row: ModelRow): "delete" | "hide" | null => {
+  // A new stored override with an old DTO is not authority to change the old representation.
+  const staleOverride = (row: ModelRow) => !row.custom && row.native !== true && customModels.some(custom => custom.modelId === row.id);
+  const actionFor = (row: ModelRow): "delete" | null => {
     if (!ready || row.initialSelectionPending) return null;
-    if (row.custom) return owns(row) ? "delete" : null;
-    // A new stored override with an old DTO is not authority to hide the old representation.
-    if (row.native !== true && customModels.some(custom => custom.modelId === row.id)) return null;
-    return "hide";
+    return row.custom && owns(row) ? "delete" : null;
+  };
+  const switchBlocked = (row: ModelRow) => !modelVisibility || toggling || busy || !ready
+    || row.initialSelectionPending === true || staleOverride(row) || (row.custom === true && !owns(row));
+  const toggleRow = (row: ModelRow, enable: boolean) => {
+    // Synchronous gates: a Delete/Add claimed its flight before awaiting consent, and the
+    // queue reports a running write before React re-renders the disabled state.
+    if (!modelVisibility || flight.current || modelVisibility.isRunning() || switchBlocked(row)) return;
+    modelVisibility.toggle(row, enable);
   };
   const finish = (result: Omit<Mutation, "revision">) => {
     // A completed write still invalidates the parent if its provider tab was closed meanwhile.
@@ -164,7 +183,7 @@ function ProviderModelInventory({ item, apiBase, availableModels, selectedModels
   };
 
   const addCustomModel = async () => {
-    if (actionsBlocked || flight.current || !modelId || duplicate) return;
+    if (actionsBlocked || flight.current || modelVisibility?.isRunning() || !modelId || duplicate) return;
     flight.current = true;
     setRequestPending(true);
     setMutation(null);
@@ -189,8 +208,7 @@ function ProviderModelInventory({ item, apiBase, availableModels, selectedModels
   };
 
   const removeModel = async (row: ModelRow, button: HTMLButtonElement) => {
-    const action = actionFor(row);
-    if (actionsBlocked || flight.current || !action) return;
+    if (actionsBlocked || flight.current || modelVisibility?.isRunning() || !actionFor(row) || !row.customId) return;
     /*
      * The single flight is claimed BEFORE consent is awaited. The gate used to be the
      * synchronous `window.confirm()`, which nothing could interleave with; an in-page dialog
@@ -201,9 +219,10 @@ function ProviderModelInventory({ item, apiBase, availableModels, selectedModels
      */
     flight.current = true;
     const consented = await confirmAction({
-      message: t(action === "delete" ? "models.customDeleteConfirm" : "models.hideConfirm", { name: row.namespaced }),
-      confirmLabel: t(action === "delete" ? "common.delete" : "common.ok"),
+      message: t("models.customDeleteConfirm", { name: row.namespaced }),
+      confirmLabel: t("common.delete"),
       tone: "danger",
+      ...(unmounted.current ? { signal: unmounted.current.signal } : {}),
     });
     if (!consented) { flight.current = false; return; }
     setRequestPending(true);
@@ -212,14 +231,11 @@ function ProviderModelInventory({ item, apiBase, availableModels, selectedModels
     const bounded = createBoundedFetch(60_000);
     let result: Omit<Mutation, "revision"> = { outcome: "unconfirmed", refreshPending: false };
     try {
-      const response = action === "delete"
-        ? await fetch(`${apiBase}/api/custom-models/${encodeURIComponent(row.customId!)}`, { method: "DELETE", signal: bounded.signal })
-        : await putModelVisibility(apiBase, "models", row.provider, [{ id: row.id, native: row.native === true }], false,
-          (input, init) => fetch(input, { ...init, signal: bounded.signal }));
+      const response = await fetch(`${apiBase}/api/custom-models/${encodeURIComponent(row.customId)}`, { method: "DELETE", signal: bounded.signal });
       if (response.ok) {
         const body = await readJsonOrThrow<unknown>(response);
         if (body && typeof body === "object" && !Array.isArray(body) && "ok" in body && body.ok === true) {
-          result = { outcome: action === "delete" ? "deleted" : "hidden", refreshPending: catalogRefreshPending(body) };
+          result = { outcome: "deleted", refreshPending: catalogRefreshPending(body) };
         }
       } else if (response.status >= 400 && response.status < 500) {
         result = { outcome: "rejected", refreshPending: false };
@@ -235,13 +251,15 @@ function ProviderModelInventory({ item, apiBase, availableModels, selectedModels
     : mutation.outcome === "rejected" ? t("models.customSaveFailed")
     : mutation.outcome === "saved" ? t(refreshFailed ? "pws.modelSavedRefreshPending" : savedHidden ? "pws.modelSavedHidden" : "pws.modelSaved")
     : refreshFailed ? t("pws.modelRemovedRefreshPending")
-    : t(mutation.outcome === "deleted" ? "pws.modelDefinitionDeleted" : "pws.modelHidden");
+    : t("pws.modelDefinitionDeleted");
 
   return (
     <div className="pws-section">
       <div className="pws-section-head">
         <h3 className="pws-section-title">{t("pws.tab.models")}</h3>
-        {modelRows !== null && <span className="muted">{t("pws.modelsAvailable", { count: visible.length })}</span>}
+        {modelRows !== null && <span className="muted">{modelVisibility
+          ? t("models.active", { active: onCount, total: rows.length })
+          : t("pws.modelsAvailable", { count: visible.length })}</span>}
       </div>
       <div className="row">
         <button ref={recoveryRef} type="button" className="btn btn-ghost btn-sm" onClick={onOpenModels}>{t("pws.manageModelVisibility")}</button>
@@ -266,6 +284,8 @@ function ProviderModelInventory({ item, apiBase, availableModels, selectedModels
         role={mutation?.outcome === "unconfirmed" || mutation?.outcome === "rejected" ? "alert" : "status"}>{feedback}</p>}
       {savedHidden && refreshFailed && <p className="muted text-label" role="status">{t("pws.modelSavedHidden")}</p>}
       {mutation?.refreshPending && <p className="muted text-label" role="status">{t("codexAuth.catalogRefreshPending")}</p>}
+      {modelVisibility?.error && <p className="pws-inline-error" role="alert">{t(modelVisibility.error)}</p>}
+      {modelVisibility && <IntegrationRefreshWarning failures={modelVisibility.failures} />}
       {(modelsLoadFailed || ownershipError === ownershipKey) ? <div className="pws-inline-error" role="alert">
         <span>{t(modelsLoadFailed ? "pws.modelsLoadFailed" : "pws.modelOwnershipFailed")}</span>
         <button type="button" className="btn btn-ghost btn-sm" onClick={retry} disabled={requestPending}>{t("common.retry")}</button>
@@ -285,6 +305,9 @@ function ProviderModelInventory({ item, apiBase, availableModels, selectedModels
         : <ul className="pws-model-list">{filtered.slice(0, CHIP_RENDER_CAP).map(row => <ProviderModelChip key={row.namespaced}
           row={row} disambiguate={(labels.get(row.id) ?? 0) > 1} copied={copiedId === row.namespaced}
           isDefault={row.id === item.defaultModel} selected={row.native !== true && selectedSet.has(row.id)}
+          off={modelVisibility ? !modelVisibility.isOn(row) : false}
+          visibilitySwitch={modelVisibility && <ModelVisibilitySwitch row={row} on={modelVisibility.isOn(row)}
+            disabled={switchBlocked(row)} onToggle={enable => toggleRow(row, enable)} />}
           action={actionFor(row)} disabled={actionsBlocked} onCopy={() => { void copyModel(row); }}
           onRemove={button => { void removeModel(row, button); }} />)}</ul>}
       {filtered.length > CHIP_RENDER_CAP && <p className="muted text-label" style={{ marginTop: 10 }}>

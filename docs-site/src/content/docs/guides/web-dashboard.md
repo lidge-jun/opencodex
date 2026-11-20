@@ -360,17 +360,27 @@ click order. Saved feedback appears after the queue finishes and the list is rec
 server. Failed saves restore the server's state when it can be read and show an error. Wait for that
 feedback before leaving Models or changing servers: unsent queued changes are discarded on departure.
 
+The **Overall** tab (`#models/overall`) lists every model from every provider in one list, in the
+catalog's order, with a search box, an **All** / **On** / **Off** filter, and the same switch. Both
+tabs read the same state and share one save queue, so a change made on one tab shows on the other at
+once.
+
 ### Managing models in a provider workspace
 
-In a provider’s **Models** tab, **Delete** removes the stored custom definition. An underlying
-native or live-discovered model may then appear again, so the model count can stay the same.
-**Hide** changes catalog visibility only: it does not delete the definition or change direct
-routing policy. Use **Manage visibility in Models** to open the **Models** page and restore
-visibility, even when the provider tab has no rows left.
+A provider’s **Models** tab lists every model of that provider, including models that are off,
+each with the same on/off switch as the **Models** page; the two pages read and write the same
+state. A switch saves at once. Until that save and the reload after it finish, the tab’s other
+switches, **Add**, and **Delete** wait, so one change is in flight at a time; selecting another
+provider does not cancel it. Turning a model off changes catalog visibility only: it does not
+delete the definition or change direct routing policy. **Manage visibility in Models** opens the
+**Models** page.
 
-**Add** saves a custom definition; it does not clear an existing hide or provider selection rule.
-A saved model can therefore remain hidden. If the model is already known, manage its visibility
-in **Models**. A confirmed save with a failed catalog refresh is still saved: follow the refresh
+**Delete** removes the stored custom definition. An underlying native or live-discovered model may
+then appear again, so the model count can stay the same.
+
+**Add** saves a custom definition; it does not clear an existing off state or provider selection
+rule. A saved model can therefore stay off; turn it on with its switch. A confirmed save with a
+failed catalog refresh is still saved: follow the refresh
 message instead of adding it again. If the change cannot be confirmed, refresh the model state
 before retrying.
 
