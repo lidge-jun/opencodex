@@ -141,6 +141,9 @@ fournisseurs, dans l’ordre du catalogue, avec un champ de recherche, un filtre
 **Désactivés** et le même commutateur. Les deux onglets lisent le même état et partagent une file
 d’enregistrement : un changement fait dans l’un apparaît aussitôt dans l’autre.
 
+Attendez la confirmation avant de quitter **Modèles** ou de changer de serveur : les modifications
+en file d’attente et non encore envoyées sont abandonnées au départ.
+
 ### Gérer les modèles dans l’espace fournisseur
 
 L’onglet **Modèles** d’un fournisseur liste tous ses modèles, y compris ceux qui sont désactivés,
@@ -166,6 +169,11 @@ Le compteur du fournisseur indique le nombre d’entrées uniques non désactiv�
 courant renvoyé par le serveur, avant recherche ou limitation de l’affichage. Il ne mesure ni la
 liste d’autorisation ni les résultats de découverte en direct et ne prouve pas l’origine d’une
 entrée. Les badges de sélection et les informations de découverte restent distincts.
+
+Ce compteur apparaît dans la liste des fournisseurs. L’en-tête de l’onglet **Modèles** du
+fournisseur indique plutôt combien de modèles sont activés sur le total : le total compte chaque
+entrée listée, y compris les modèles désactivés, et un modèle est activé selon la même règle que
+sur la page **Modèles** (la liste d’autorisation du fournisseur l’admet et il n’est pas désactivé).
 
 ## Sélecteur de délégation et routage des créations de sous-agents
 

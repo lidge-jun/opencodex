@@ -144,6 +144,9 @@ listesini temizler, böylece yeni keşfedilen modeller de açık olur.
 listede gösterir; arama kutusu, **Tümü** / **Açık** / **Kapalı** filtresi ve aynı anahtar vardır. İki
 sekme aynı durumu okur ve tek bir kayıt kuyruğunu paylaşır; birinde yapılan değişiklik diğerinde hemen görünür.
 
+**Modeller** sayfasından ayrılmadan veya sunucu değiştirmeden önce kayıt sonucunu bekleyin: ayrılırken
+kuyrukta bekleyen ve henüz gönderilmemiş değişiklikler atılır.
+
 ### Sağlayıcı çalışma alanında modelleri yönetme
 
 Sağlayıcının **Modeller** sekmesi, kapalı olanlar dahil sağlayıcının tüm modellerini listeler ve her
@@ -166,6 +169,11 @@ Sağlayıcının model sayısı, sunucunun döndürdüğü güncel model envante
 benzersiz girdileri, arama ve görüntüleme sınırı uygulanmadan önce sayar. Bu sayı izin listesinin
 boyutu veya canlı keşif sayısı değildir; girdinin sağlayıcıdan keşfedildiğini de kanıtlamaz.
 Seçim rozetleri ve keşif bilgileri bu sayıdan ayrıdır.
+
+Bu sayı sağlayıcı listesinde görünür. Sağlayıcının **Modeller** sekmesinin başlığı ise toplam içinden
+kaç modelin açık olduğunu gösterir: toplam, kapalı modeller dahil listedeki her girdiyi sayar; bir model
+**Modeller** sayfasındakiyle aynı kurala göre açıktır (sağlayıcı izin listesi onu kabul eder ve devre
+dışı değildir).
 
 ## Yetkilendirme seçicisi ve spawn yönlendirmesi
 

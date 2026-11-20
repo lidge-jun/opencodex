@@ -229,6 +229,8 @@ La pestaña **Modelos** de un proveedor muestra todos sus modelos, también los 
 
 El recuento de modelos del proveedor es el número de entradas únicas no desactivadas en el modelo actual. inventario devuelto por el servidor, antes de buscar o mostrar truncamiento. No es el proveedor tamaño de lista de permisos, un recuento de descubrimiento en vivo o prueba de que se descubrió una entrada de origen. Selección Las insignias y la información de descubrimiento permanecen separadas de esa cuenta.
 
+Ese recuento aparece en la lista de proveedores. El encabezado de la pestaña **Modelos** del proveedor muestra en cambio cuántos modelos están activados sobre el total: el total cuenta todas las entradas listadas, también las desactivadas, y un modelo está activado con la misma regla que en la página **Modelos** (la lista de permitidos del proveedor lo admite y no está desactivado).
+
 <a id="delegation-picker-vs-spawn-routing"></a>
 
 ## Selector de delegación vs enrutamiento de generación

@@ -389,6 +389,11 @@ inventory returned by the server, before search or display truncation. It is not
 allowlist size, a live-discovery count, or proof that an entry was discovered upstream. Selection
 badges and discovery information remain separate from that count.
 
+That count appears in the provider list. The provider's **Models** tab header instead shows how
+many models are on out of the total: the total counts every listed entry, including models that
+are off, and a model is on under the same rule as the **Models** page (the provider allowlist
+admits it and it is not disabled).
+
 ## Delegation picker vs spawn routing
 
 The Dashboard's **Sub-agent delegation** picker stores advisory `injectionModel` and optional `injectionEffort` preferences. **OpenCodex multi-agent guidance** independently controls whether they appear in delegation guidance on eligible v2 turns. The built-in text names preferences without ordering model overrides; it does not guarantee what Codex passes to `spawn_agent`. Clearing the model also clears the effort.
