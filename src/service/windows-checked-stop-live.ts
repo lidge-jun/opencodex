@@ -59,6 +59,8 @@ try {
 
 export interface WindowsStopCommandResult {
   status: number | null;
+  /** Captured from the spawned process handle. Bun's child exit status can contain only the low byte. */
+  windowsExitCode?: number;
   stdout: string;
   stderr: string;
   timedOut: boolean;
@@ -104,18 +106,23 @@ export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, 
     resolve({ status: null, stdout: "", stderr: error instanceof Error ? error.message : String(error), timedOut: false });
     return;
   }
+  const native = program === "schtasks" && args.includes("/hresult") ? windowsProcessNative() : null;
+  let readExitCode: (() => number | null) | null = null;
   const helper = execFile(file, args, { encoding: "buffer", timeout, windowsHide: true, maxBuffer: 1024 * 1024 },
     (error, stdout, stderr) => {
       const text = (value: Buffer | string | undefined): string =>
         value === undefined ? "" : typeof value === "string" ? value : decodeWindowsTextBytes(value);
       const failure = error as (NodeJS.ErrnoException & { killed?: boolean; signal?: string | null; code?: number | string }) | null;
+      const windowsExitCode = readExitCode?.();
       resolve({
         status: failure ? (typeof failure.code === "number" ? failure.code : null) : 0,
+        ...(windowsExitCode == null || failure?.killed ? {} : { windowsExitCode }),
         stdout: text(stdout),
         stderr: text(stderr),
         timedOut: !!failure?.killed && failure.signal !== null,
       });
     });
+  if (helper.pid !== undefined) readExitCode = native?.captureChildExitCode?.(helper.pid) ?? null;
   if (authorizeProof) {
     let pending = "";
     const onProof = async (chunk: Buffer): Promise<void> => {
@@ -284,9 +291,15 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
     async probeScheduler(timeoutMs) {
       const deadline = performance.now() + timeoutMs;
       const unknown = { status: "unknown", detail: "the Task Scheduler query did not answer" } as const;
-      const direct = await run("schtasks", ["/query", "/tn", TASK], timeoutMs);
+      const direct = await run("schtasks", ["/query", "/tn", `\\${TASK}`, "/fo", "CSV", "/nh", "/hresult"], timeoutMs);
       if (direct.timedOut || performance.now() >= deadline) return unknown;
-      if (direct.status === 0 && direct.stdout.includes(TASK)) return { status: "present" };
+      if (direct.status === 0 && (direct.windowsExitCode ?? 0) === 0
+        && direct.stdout.trimStart().toLowerCase().startsWith(`"\\${TASK}",`)) return { status: "present" };
+      if (direct.windowsExitCode !== undefined) {
+        const missing = 0x80070002; // HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)
+        const statusAgrees = direct.status === 2 || (direct.status !== null && (direct.status >>> 0) === missing);
+        return direct.windowsExitCode === missing && statusAgrees ? { status: "absent" } : unknown;
+      }
       const remaining = wholeTimeoutMs(deadline - performance.now());
       if (remaining === null) return unknown;
       const probe = await run("powershell", ["-NoProfile", "-NonInteractive", "-Command", TASK_REGISTRATION_SCRIPT], remaining);

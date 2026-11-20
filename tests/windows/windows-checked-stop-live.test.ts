@@ -23,7 +23,7 @@ import {
   winswStatusFromScState,
   windowsCheckedStopLiveDeps,
 } from "../../src/service/windows-checked-stop-live";
-import type { WindowsProcessNativeApi } from "../../src/service/windows-process-native";
+import { windowsProcessNative, type WindowsProcessNativeApi } from "../../src/service/windows-process-native";
 import { windowsLauncherVbsPath } from "../../src/service/state";
 import { WINDOWS_TASK_INSTANCE_STOP_SCRIPT } from "../../src/service/windows-task-instance-stop";
 import { buildWindowsTaskXml, windowsTaskRegistrationHealthy } from "../../src/service/windows-taskxml";
@@ -256,10 +256,17 @@ const portablePowerShell = Bun.which("pwsh");
 
 describe("the bounded Scheduler registration query", () => {
   test("a direct hit avoids PowerShell; only a completed, exact fallback answer is accepted", async () => {
-    const directHit = result(0, "opencodex-proxy");
+    const directHit = result(0, '"\\opencodex-proxy","N/A","Disabled"');
     const missing = result(1, "", "지정된 파일을 찾을 수 없습니다.");
     for (const [direct, fallback, expected] of [
       [directHit, null, "present"],
+      [{ ...result(2), windowsExitCode: 0x80070002 }, null, "absent"],
+      [{ ...result(-2147024894), windowsExitCode: 0x80070002 }, null, "absent"],
+      [{ ...result(1), windowsExitCode: 0x80070002 }, null, "unknown"],
+      [{ ...result(2), windowsExitCode: 0x80041302 }, null, "unknown"],
+      [{ ...result(5), windowsExitCode: 0x80070005 }, null, "unknown"],
+      [{ ...result(null), windowsExitCode: 0x80070002 }, null, "unknown"],
+      [result(2), result(0, "unknown"), "unknown"],
       [result(1, "", "", true), null, "unknown"],
       [missing, result(0, "absent\r\n"), "absent"],
       [missing, result(0, "present"), "present"],
@@ -272,7 +279,7 @@ describe("the bounded Scheduler registration query", () => {
       const deps = windowsCheckedStopLiveDeps({ run: async (program, args, timeout) => {
         calls.push(program);
         if (program === "schtasks") {
-          expect(args).toEqual(["/query", "/tn", "opencodex-proxy"]);
+          expect(args).toEqual(["/query", "/tn", "\\opencodex-proxy", "/fo", "CSV", "/nh", "/hresult"]);
           return direct;
         }
         expect(timeout).toBeGreaterThan(0);
@@ -283,6 +290,18 @@ describe("the bounded Scheduler registration query", () => {
       expect(calls).toEqual(fallback ? ["schtasks", "powershell"] : ["schtasks"]);
     }
   });
+
+  test.skipIf(process.platform !== "win32" || process.arch !== "x64")("the child handle preserves distinct HRESULTs with the same low byte", async () => {
+    const native = windowsProcessNative();
+    expect(native?.captureChildExitCode).toBeFunction();
+    for (const code of [0x80070002, 0x80041302]) {
+      const child = Bun.spawn([resolveTrustedWindowsPowerShellExe(), "-NoProfile", "-NonInteractive", "-Command",
+        `[Environment]::Exit(${code | 0})`], { stdout: "ignore", stderr: "ignore", windowsHide: true, timeout: SPAWN_BUDGET_MS });
+      const readExitCode = native!.captureChildExitCode!(child.pid);
+      await child.exited;
+      expect(readExitCode?.()).toBe(code);
+    }
+  }, 2 * SPAWN_BUDGET_MS + 1_000);
 
   test("the fallback uses only the remaining time and a late answer is unknown", async () => {
     let now = 100;
