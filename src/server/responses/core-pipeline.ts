@@ -29,7 +29,7 @@ import { InvalidRetainedCompactionSummary, prepareCompactionRetention } from "./
 import { responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
 import { markResponseNonReplayable } from "../../lib/upstream-retry";
 import { agyAcpPreflightResponse } from "./agy-acp-preflight";
-import { commandCodeDecisionRouteRefusal } from "../../adapters/command-code-decision-guard";
+import { commandCodeDecisionRouteRefusal } from "./command-code-decision-refusal";
 
 /** Compose request phases while retaining the original admission-finally ownership. */
 export async function handleResponsesInner(

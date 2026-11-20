@@ -13,6 +13,10 @@ import { handleChatCompletions } from "../../src/server/chat-completions";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { handleResponses } from "../../src/server/responses";
 import { clearComboRecallForTests } from "../../src/server/responses/combo-session-recall";
+import { nativeChatDeclineReason } from "../../src/server/chat-native-eligibility";
+import { nativeMessagesDeclineReason } from "../../src/server/messages-native-eligibility";
+import { clearFallbackEventsForTests, recentFallbackEvents } from "../../src/routing/fallback-policy";
+import type { RouteResult } from "../../src/router";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -23,6 +27,7 @@ setDefaultTimeout(30_000);
 
 const JEV = "typesafe/jev-1.14.0";
 const SERVED = "deepseek/deepseek-v4-flash";
+const FAILING = "deepseek/deepseek-v4-pro";
 const COMPLETED = [
   JSON.stringify({ type: "text-delta", text: "OK" }),
   JSON.stringify({ type: "finish", finishReason: "stop" }),
@@ -49,14 +54,38 @@ describe("Command Code decision models are not chat models", () => {
   });
 
   test("the request guard matches native, encoded and case-varied decision ids only", () => {
-    for (const id of ["typesafe/jev", JEV, "TypeSafe/JEV-2", "typesafe-jev-1.14.0", " typesafe/jev "]) {
+    for (const id of ["typesafe/jev", JEV, "TypeSafe/JEV-2", "typesafe-jev-1.14.0", " typesafe/jev ", "vendor/typesafe/jev"]) {
       expect(isCommandCodeDecisionModel(id), id).toBe(true);
     }
-    // Anchored: the API-key preset pins claude-* ids to its Messages wire, and no claude-* id or
-    // other vendor's id may ever read as a decision model.
-    for (const id of [SERVED, "jev-1.13", "zai-org/GLM-5.3", "deepseek-v4-flash", "typesafe/other", "claude-typesafe-jev", "vendor/typesafe/jev"]) {
+    // The encoded form is prefix-anchored: the API-key preset pins claude-* ids to its Messages
+    // wire, and no claude-* id or unrelated vendor id may read as a decision model.
+    for (const id of [SERVED, "jev-1.13", "zai-org/GLM-5.3", "deepseek-v4-flash", "typesafe/other", "claude-typesafe-jev", "vendor-typesafe-jev"]) {
       expect(isCommandCodeDecisionModel(id), id).toBe(false);
     }
+  });
+
+  test("request admission refuses exactly the native ids discovery hides", () => {
+    const ids = ["typesafe/jev", JEV, "TypeSafe/JEV-2", "vendor/typesafe/jev", "typesafe/jevons", SERVED,
+      "typesafe/other", "claude-sonnet-5-5", "jev-1.13", "typesafe-jev-1.14.0"];
+    const discovery = resolveProviderModelDiscovery("command-code", { adapter: "command-code", baseUrl: "https://api.commandcode.ai", authMode: "oauth" });
+    const result = extractProviderModelItems({ data: ids.map(id => ({ id, object: "model" })) }, discovery);
+    expect(result.ok).toBe(true);
+    const admitted = new Set(result.ok ? result.items.map(item => item.id) : []);
+    // Native (slash) ids: hidden by discovery if and only if refused at admission.
+    for (const id of ids.filter(candidate => candidate.includes("/"))) {
+      expect(admitted.has(id), id).toBe(!isCommandCodeDecisionModel(id));
+    }
+  });
+
+  test("the native Chat and Messages lanes decline a decision route so the refusal path owns it", () => {
+    const route = (adapter: string, modelId: string) => ({
+      providerName: "commandcode", modelId, provider: { adapter, baseUrl: "https://api.commandcode.ai/provider/v1", authMode: "key", apiKey: "synthetic-key" },
+    }) as unknown as RouteResult;
+    const config = { providers: {}, protocols: { rollout: { managedMessagesNative: true } } } as unknown as OcxConfig;
+    expect(nativeChatDeclineReason(route("openai-chat", JEV), { messages: [] })).toBe("compatibility-reject");
+    expect(nativeChatDeclineReason(route("openai-chat", SERVED), { messages: [] })).toBeUndefined();
+    expect(nativeMessagesDeclineReason(route("anthropic", "vendor/typesafe/jev"), {}, config)).toBe("compatibility-reject");
+    expect(nativeMessagesDeclineReason(route("anthropic", "claude-sonnet-5-5"), {}, config)).not.toBe("compatibility-reject");
   });
 });
 
@@ -77,11 +106,15 @@ describe("a chat request that reaches a Command Code decision model fails fast",
     clearComboTargetCooldowns();
     clearKeyCooldowns();
     sends = [];
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
+    clearFallbackEventsForTests();
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input instanceof Request ? input.url : String(input);
       sends.push(url);
       if (url === "https://api.commandcode.ai/alpha/generate") return new Response(COMPLETED);
       if (url === "https://api.commandcode.ai/provider/v1/chat/completions") {
+        if (String(init?.body ?? "").includes(FAILING)) {
+          return Response.json({ error: { message: "fixture outage", type: "server_error" } }, { status: 503 });
+        }
         return Response.json({ id: "c1", object: "chat.completion", created: 1, model: SERVED,
           choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }] });
       }
@@ -212,5 +245,30 @@ describe("a chat request that reaches a Command Code decision model fails fast",
     expect(body).toContain("OK");
     expect(sends).toEqual(["https://api.commandcode.ai/alpha/generate"]);
     expect(isComboTargetInCooldown("pair", servedTarget)).toBe(false);
+  });
+
+  test("a routing policy skips the decision candidate without making it the next hop's source", async () => {
+    await login();
+    const cfg = config([JEV, SERVED, FAILING], { routingProfiles: { wf: { candidates: [
+      { provider: "commandcode", model: FAILING },
+      { provider: "command-code", model: JEV },
+      { provider: "command-code", model: SERVED },
+    ] } } } as Partial<OcxConfig>);
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "policy/wf", input: "hello", stream: false }),
+    }), cfg, { model: "", provider: "" });
+    const body = await response.text();
+    expect(response.status, body).toBe(200);
+    expect(body).toContain("OK");
+    // A failed upstream, no send for the decision candidate, then the chat candidate.
+    expect(sends).toEqual([
+      "https://api.commandcode.ai/provider/v1/chat/completions",
+      "https://api.commandcode.ai/alpha/generate",
+    ]);
+    // Every taken hop starts from the candidate that actually sent; the decision candidate never is a source.
+    const taken = recentFallbackEvents().filter(event => event.outcome === "taken");
+    expect(taken.length).toBeGreaterThan(0);
+    expect(taken.some(event => event.from.includes("jev"))).toBe(false);
   });
 });

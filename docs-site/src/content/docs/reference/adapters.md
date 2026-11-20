@@ -413,7 +413,8 @@ Command Code also lists its System One decision models (`typesafe/jev`,
 `typesafe/jev-1.14.0`) in its model catalog, but serves them only at
 `POST https://api.commandcode.ai/provider/v1/systemone`. Neither Command Code preset offers them
 as chat models, and a chat request that still names one (for example a saved selection) is
-answered with a 400 that points at that endpoint, without reaching Command Code. To use JEV for
+answered with a 404 `model_not_found` that points at that endpoint, without reaching Command
+Code; a combo or routing policy that lists one moves on to its next target. To use JEV for
 routing decisions, add a `jev-decision` provider whose `baseUrl` is that endpoint and name it as
 a JEV combo's `decisionProvider` (see [Combos](/guides/combos/)).
 

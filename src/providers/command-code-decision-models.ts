@@ -27,14 +27,16 @@ export const COMMAND_CODE_SYSTEMONE_ENDPOINT = "https://api.commandcode.ai/provi
 export const COMMAND_CODE_API_HOST = "api.commandcode.ai";
 
 /**
- * True for a Command Code decision model id. Matches the native `typesafe/jev...` form the discovery
- * filter drops and the Codex-facing encoded `typesafe-jev...` form a stale selection can still send
- * after discovery stopped listing the row, so it is a superset of the filter on purpose.
- * Anchored at the start: a `claude-*` id (which the API-key preset pins to its Messages wire) or
- * any other vendor's id can never match.
+ * True for a Command Code decision model id. Two forms:
+ * - native ids, with exactly the discovery filter's semantics (case-insensitive substring
+ *   `typesafe/jev`), so request admission refuses every id discovery hides;
+ * - the Codex-facing encoded form (`typesafe-jev...`, slash folded to a dash) that a stale
+ *   selection can still send after discovery stopped listing the row. Prefix-anchored, so an id
+ *   such as `claude-typesafe-jev` that the API-key preset pins to its Messages wire never matches.
  */
 export function isCommandCodeDecisionModel(modelId: string): boolean {
-  return /^typesafe[/-]jev/i.test(modelId.trim());
+  const id = modelId.trim().toLowerCase();
+  return id.includes(COMMAND_CODE_DECISION_MODEL_ID_FRAGMENT) || id.startsWith("typesafe-jev");
 }
 
 /** True when a provider's baseUrl points at Command Code, whatever the provider is named. */
@@ -44,6 +46,11 @@ export function isCommandCodeHost(baseUrl: string | undefined): boolean {
   } catch {
     return false;
   }
+}
+
+/** True when this provider/model pair is a Command Code decision model, whatever the provider is named. */
+export function isCommandCodeDecisionRoute(provider: { baseUrl?: string }, modelId: string): boolean {
+  return isCommandCodeHost(provider.baseUrl) && isCommandCodeDecisionModel(modelId);
 }
 
 /**
