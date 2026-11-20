@@ -2439,7 +2439,7 @@ export const zhTW: Record<TKey, string> = {
   "api.responsesEndpoint": "Responses API",
   "api.chatCompletionsEndpoint": "Chat Completions API",
   "api.messagesEndpoint": "Messages API",
-  "api.geminiEndpoint": "Gemini API",
+  "api.geminiEndpoint": "Gemini API 端點",
   "api.modelsEndpoint": "Models API",
   "api.surface.on": "開啟",
   "api.surface.off": "關閉",
