@@ -37,6 +37,7 @@ export default function AddProviderModal({
   apiBase, targetKey, existingNames, onClose, onAdded, initialTier, initialCustom = false,
   accountRows, accountStatus, accountBusy, accountLoginHint = null,
   accountLoginCaptures, onAccountLogin, onAccountCancelLogin, onAccountLogout, onAccountManage, onOpen,
+  stackedOverlayOpen = false,
 }: {
   apiBase: string;
   targetKey?: string;
@@ -57,6 +58,11 @@ export default function AddProviderModal({
   onAccountLogout?: (provider: string) => void;
   onAccountManage?: (provider: string) => void;
   onOpen?: () => void;
+  /**
+   * A dialog the providers page owns is open above this modal: the OAuth risk warning of an
+   * Accounts-tab login, the Codex login, or a page confirmation (#8849). Escape belongs to it.
+   */
+  stackedOverlayOpen?: boolean;
 }) {
   const t = useT();
   const fallbackPresets = useMemo<Preset[]>(() => [
@@ -151,7 +157,8 @@ export default function AddProviderModal({
       // Kept as a `!oauthTosPending` expression on purpose: tests/gui/oauth-tos-warning.test.ts
       // source-scans this file for that exact substring, because the guard is the only thing
       // stopping Escape from closing the modal out from under a stacked overlay.
-      const noOverlayOpen = !oauthTosPending && !notePreset;
+      // Page-owned dialogs are named by `stackedOverlayOpen`: this modal cannot see their state.
+      const noOverlayOpen = !oauthTosPending && !notePreset && !stackedOverlayOpen;
       if (e.key !== "Escape" || !noOverlayOpen) return;
       // Escape unwinds one layer at a time: the note popup, then a live search, then the
       // dialog. Closing the modal on the keystroke that was meant to clear a query throws
@@ -161,7 +168,7 @@ export default function AddProviderModal({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, oauthTosPending, notePreset, catalogQuery]);
+  }, [onClose, oauthTosPending, notePreset, catalogQuery, stackedOverlayOpen]);
 
   const presetDescription = (candidate: Preset): string | undefined => {
     const key = codexPresetDescriptionKey(candidate);
