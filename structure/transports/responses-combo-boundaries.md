@@ -11,7 +11,7 @@ options. Service diagnostics follow the [producer bounds](../ops/service-logging
 ## Context-window refusals
 
 `isDefiniteContextOverflow` in `src/lib/context-overflow-verdict.ts` (re-exported by
-`src/combos/failover.ts`) reads bounded innermost provider messages.
+`src/combos/failover.ts`) reads bounded innermost provider messages. Negation-aside matching starts at words or commas; a separate pass consumes surrounding whitespace once within each 120-character lookbehind, preserving newline and clause-boundary behavior.
 OpenAI context-length wording keeps its substring match; Anthropic `prompt is too long: N tokens > M maximum`,
 Bedrock `input is too long for requested model`, provider messages confirming the conversation/input has reached or passed its model context limit, a prompt that is too long for the model's context window, a window/length/limit that is full, exhausted, at its limit or has been exceeded, and `Please reduce the length of the messages or completion`
 count only in the innermost provider message (the anchored verdicts need the provider message to start with them, while the explicit too-long/context-window wording may appear inside it), so a validation error or SDK wrapper that echoes them is not
