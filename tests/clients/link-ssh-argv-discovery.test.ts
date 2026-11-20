@@ -213,8 +213,14 @@ async function runWindowsFixture(home: string, argv: string[], input: string, de
   });
   // afterEach may run on a timeout. Keep the root until this child and both pipes settle.
   activeRoots.add(home);
-  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  activeRoots.delete(home);
+  const pending = [new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited] as const;
+  const [, , exited] = await Promise.allSettled(pending);
+  if (exited.status === "fulfilled") {
+    activeRoots.delete(home);
+    // If afterEach already drained roots, this child now owns the deferred cleanup.
+    if (!roots.includes(home)) removeTreeWithRetry(home);
+  }
+  const [stdout, stderr, code] = await Promise.all(pending);
   return { stdout, stderr, code };
 }
 
