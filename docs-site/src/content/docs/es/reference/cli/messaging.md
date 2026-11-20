@@ -74,6 +74,10 @@ En otro caso actualiza turno o repite posición hasta el límite, devolviendo `w
 
 <a id="discover-and-send"></a>
 
+Para consultar sesiones locales de Claude Code, usa
+[`ocx message claude-sessions`](/reference/cli/messaging/#list-local-claude-code-sessions).
+La lista no confirma que una sesión pueda recibir mensajes.
+
 ## Descubrir y enviar
 
 ```bash

@@ -28,6 +28,10 @@ yardımcı kapatma bunu geçersiz kılmaz, son tarihten sonra tamamlanan okumala
 kullanılmaz. Mesaj gönderme ve yanıt bekleme ayrı çağrılardır.
 [Ayrıntılar ve sınırlar](/reference/cli/messaging/#opt-in-stored-turn-replies).
 
+Yerel Claude Code oturumlarını listelemek için
+[`ocx message claude-sessions`](/reference/cli/messaging/#list-local-claude-code-sessions)
+komutunu kullanın. Liste, bir oturumun mesaj alabileceğini doğrulamaz.
+
 ## Keşfetme ve gönderme
 
 ```bash
