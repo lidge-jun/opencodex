@@ -4,20 +4,7 @@
  */
 import { useEffect, useRef, type RefObject } from "react";
 import { useT } from "../../i18n/shared";
-
-/** Every open overlay layer the dashboard renders: native modal dialogs, modal cards, confirmations. */
-const OVERLAY_LAYERS = "dialog[open], .modal-overlay, .dialog-backdrop";
-
-/**
- * Is this layer the one Escape belongs to? A native modal <dialog> sits in the browser's top layer
- * above any in-page overlay, so it wins; otherwise the last overlay in document order is on top.
- */
-function isTopmostLayer(layer: Element): boolean {
-  const open = [...document.querySelectorAll(OVERLAY_LAYERS)]
-    .filter(node => node.tagName !== "DIALOG" || (node as HTMLDialogElement).open);
-  const modals = open.filter(node => node.tagName === "DIALOG");
-  return (modals.length > 0 ? modals[modals.length - 1] : open[open.length - 1]) === layer;
-}
+import { isTopmostOverlayLayer } from "../overlay-layers";
 
 /**
  * Escape cancels a confirmation (#8849). These are plain alertdialogs, not native <dialog>s, so
@@ -31,7 +18,7 @@ function useEscapeToCancel(layer: RefObject<HTMLElement | null>, onCancel: () =>
     if (!enabled) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
-      if (!layer.current || !isTopmostLayer(layer.current)) return;
+      if (!isTopmostOverlayLayer(layer.current)) return;
       event.preventDefault();
       onCancel();
     };

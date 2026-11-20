@@ -236,3 +236,31 @@ test("with the OAuth warning on top of both, Escape unwinds warning, Add Provide
   await pressEscape();
   expect(events).toEqual(["cancelOauthTos", "closeAdd", "cancelSettingsLeave"]);
 });
+
+test("a confirmation stacked visually above Add Provider by z-index owns Escape", async () => {
+  await renderWorkspace(false);
+  // The real stylesheet puts .dialog-backdrop at z-index 900 and .modal-overlay at --z-modal (50);
+  // happy-dom loads no CSS, so mirror those values on the rendered layers.
+  await act(async () => {
+    (host.querySelector(".dialog-backdrop") as HTMLElement).style.zIndex = "900";
+    (host.querySelector("div.modal-overlay") as HTMLElement).style.zIndex = "50";
+  });
+  await pressEscape();
+  expect(events).toEqual(["cancelSettingsLeave"]);
+  await pressEscape();
+  expect(events).toEqual(["cancelSettingsLeave", "closeAdd"]);
+});
+
+test("an Escape another layer already took does not also close Add Provider", async () => {
+  // A layer whose own listener handled the key and prevented it, then left the DOM before Add
+  // Provider's listener ran (React can flush its removal first in a real browser).
+  const taker = (event: KeyboardEvent) => { if (event.key === "Escape") event.preventDefault(); };
+  win.addEventListener("keydown", taker as never);
+  try {
+    await render(null);
+    await pressEscape();
+    expect(events).toEqual([]);
+  } finally {
+    win.removeEventListener("keydown", taker as never);
+  }
+});

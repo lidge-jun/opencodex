@@ -14,6 +14,7 @@ import { oauthTosRisk } from "../oauth-tos-risk";
 import OAuthTosWarningModal from "./OAuthTosWarningModal";
 import ProviderCatalog from "./provider-catalog/ProviderCatalog";
 import ProviderNoteModal from "./provider-catalog/ProviderNoteModal";
+import { isTopmostOverlayLayer } from "./overlay-layers";
 import type { AccountLoginRow, AccountLoginStatus } from "./provider-catalog/ProviderCatalog";
 import type { CatalogPreset } from "./provider-catalog/provider-presets";
 import type { CatalogLoginHint } from "./provider-catalog/login-hint-visibility";
@@ -82,6 +83,7 @@ export default function AddProviderModal({
   const aliveRef = useRef(true);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
   // The full-note popup is owned here, not in the catalog: it has to render as a sibling
   // of this overlay, and its open state has to be visible to the Escape handler below.
   const [notePreset, setNotePreset] = useState<Preset | null>(null);
@@ -160,6 +162,13 @@ export default function AddProviderModal({
       // Page-owned dialogs are named by `stackedOverlayOpen`: this modal cannot see their state.
       const noOverlayOpen = !oauthTosPending && !notePreset && !stackedOverlayOpen;
       if (e.key !== "Escape" || !noOverlayOpen) return;
+      // Another layer already took this Escape (a confirmation above this modal cancels and
+      // prevents it). Its state update can remove that layer before this listener runs, so the
+      // topmost check below alone would see this modal on top and close it on the same keystroke.
+      if (e.defaultPrevented) return;
+      // A layer opened elsewhere on the page can sit visually above this modal (a Settings
+      // confirmation's backdrop has a higher z-index); Escape is that layer's, not ours.
+      if (overlayRef.current && !isTopmostOverlayLayer(overlayRef.current)) return;
       // Escape unwinds one layer at a time: the note popup, then a live search, then the
       // dialog. Closing the modal on the keystroke that was meant to clear a query throws
       // away everything the user typed into the form behind it.
@@ -312,7 +321,7 @@ export default function AddProviderModal({
         selection drag that is released outside the card — would wipe every
         field the user already filled in. Close only via the × button,
         Escape, or a successful add. */}
-    <div role="dialog" aria-modal="true" aria-label={t("modal.add")} className="modal-overlay">
+    <div ref={overlayRef} role="dialog" aria-modal="true" aria-label={t("modal.add")} className="modal-overlay">
       <div ref={dialogRef} className="modal-card">
         <div className="modal-head">
           <h3>{preset ? t("modal.addNamed", { label: preset.label }) : t("modal.add")}</h3>
