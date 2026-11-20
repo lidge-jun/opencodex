@@ -267,7 +267,7 @@ the original label in process-local options. Compact captures that label from th
 profile id to the message or request row. Command Code plan refusals use fixed wording because
 the adapter request contains the resolved wire model. Local model refusals project their request
 rows to client or catalog model identities and validated provider ids, omitting an untrusted routing decision. `projectAdmissionModelDeniedLog` in `src/server/admission-model-scope.ts` applies that bound before any Chat, Claude or native Messages final-log write, and before returning late guard, compact and sidecar refusals. The response builder only builds the owned envelope. The projected original selector (or fixed placeholder) is recorded explicitly even when compact routing has not initialized the context. Input-admission projection runs before either buffered or streaming delivery. Input-only ceilings are named as input limits; the actual shared context window remains separate in both direct refusals and combo-exhaustion wording. No provider diagnostic
-is interpolated into those local messages. No serialized flag, code or header mints identity.
+is interpolated into those local messages. No serialized flag, code or header mints identity. The combo ladder checks the resolved child route against both the ingress model scope and the current configured-key scope. A refused member is skipped for an eligible sibling first; when none remains, the local scope refusal uses the original client selector. Locally generated combo exhaustion returns HTTP 503 across all three wires. Chat Completions uses `server_error` with code `server_is_overloaded`. Messages uses `api_error` with code `combo_unavailable`, and Responses uses `server_error` with code `combo_unavailable`.
 The shared builders live in `src/combos/resolve.ts`, `src/server/admission-model-scope.ts`,
 `src/server/responses/input-admission.ts` and `src/oauth/generic-account-failover.ts`. See [combo output headroom](../transports/responses-failover.md#combo-output-headroom) for the strict pre-dispatch gate, including the input margin and reserve when `max_output_tokens` is omitted.
 `src/lib/upstream-retry.ts` accepts finite numeric Retry-After seconds, including fractions, or dates
@@ -279,8 +279,7 @@ and configuration-failure mentions are excluded per sentence in the unwrapped pr
 many tokens" is insufficient. An explicit "prompt is too long" suffices in the absence of a throughput signal.
 Body inspection time does not count toward the upstream slow-attempt budget, and empty chunks cannot
 starve the deadline or cancellation. `tests/lib/upstream-retry.test.ts` covers retry and cancellation.
-Before a spend-guarded retry, paced responses release their body lease by retaining bounded raw bytes via an optional caller-supplied reader.
-The retained body carries read failures for the receiver's usual error policy, and retry accounting keeps the upstream status.
+Before a spend-guarded retry, paced responses release their body lease by retaining bounded raw bytes via an optional caller-supplied reader. The retained body carries read failures for the receiver's usual error policy, and retry accounting keeps the upstream status.
 `InvalidSendBudgetError` displays only a finite non-negative number or `invalid`.
 `UpstreamRetryEvidenceError` uses fixed retry-evidence wording and retains the original rejection
 only as `Error.cause`. Chat request-read failures keep typed local size/encoding messages; other
@@ -528,6 +527,8 @@ limit are relayed unchanged, regardless of upstream chunk boundaries. The echo j
 data fields with LF before parsing JSON. It writes the rewritten payload to the first data
 field and leaves later data fields empty, preserving control lines and all line endings.
 Starts whose last event field is `error` retain their canonical form.
+The empty-tool guard relays a late LF as part of the preceding CR delimiter without buffering
+it as part of the next frame. Complete-frame origin tracking stays attached to that next frame.
 The native Messages tap
 refreshes its pending-read stall deadline on each nonempty raw chunk before frame buffering.
 The single pre-echo flag authorizes owned data under the

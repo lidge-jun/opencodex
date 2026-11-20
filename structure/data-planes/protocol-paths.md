@@ -554,8 +554,8 @@ the key-auth one. The Chat and Messages ingresses read the unrepresentable polic
 the Messages ingress and the planner; the Chat ingress reads `nativeChatCombos`
 for combo routes (above); `managedMessagesNative` and `managedMessagesNativeOAuth` are read
 through `nativeMessagesDeclineReason` by the Messages ingress, `count_tokens` and the planner
-(above); `shadowPlan` is read by `recordProtocolShadowPlan` ([Shadow plan](#shadow-plan)). Every
-rollout switch now has a reader.
+(above). `geminiNativeAntigravity` enables the [native Gemini leg](gemini-native.md) for eligible
+`/v1beta` requests. `recordProtocolShadowPlan` reads `shadowPlan` ([Shadow plan](#shadow-plan)).
 
 `claudeInboundDisabled` in `src/server/claude-messages.ts` is the Messages ingress reader: both
 `/v1/messages` and `/v1/messages/count_tokens` call it, so the two routes cannot disagree, and a

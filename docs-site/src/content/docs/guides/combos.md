@@ -24,6 +24,14 @@ Mark a pay-per-use combo target with `"metered": true` when it follows subscript
 
 Request headers cannot grant consent. Model/provider scopes still apply. This covers initial selection, failover and recovery across combo strategies, compaction, Messages, Chat Completions and WebSocket requests, and a subagent model fallback naming a combo alias. A collapsed fallback tries a usable unmetered target before refusing. Unmarked targets retain existing behavior; metering is declared by the operator rather than detected automatically.
 
+A request rechecks consent and its key's model scope immediately before each paid send: the JEV
+decision call and every target attempt, including failover, retries and pinned sends. Revoking
+consent or narrowing a key's scope therefore stops sends the request has not made yet. A target that
+no longer qualifies is skipped and another eligible target may serve the request; when none remains,
+the request ends with the usual `combo_unavailable` or scope refusal. Other combo edits, such as
+capabilities, the Vision Sidecar, protocol settings or the target list, apply from the next request.
+A request already in progress keeps the settings it started with.
+
 For example, a failover chain can target Anthropic OAuth, then Cursor, then `{ "provider": "anthropic-apikey", "model": "claude-opus-5-5", "metered": true }`. Without consent, exhaustion returns the last unmetered error, with exceptions for [confirmed context overflow](#context-window-refusals) and quota refusals: an earlier 429 or 402 quota refusal takes precedence over a later 400, 401 or 403. If the subscription target returns 429 and Cursor then refuses with 401 or 403, the caller receives the subscription's 429, because the spent subscription explains the failure and Cursor's credential refusal does not. Dashboard saves retain omitted target metering and combo consent; explicitly setting either to false clears it. These consent fields are configured through the config file or API; the combo flag is also available through the CLI, while the dashboard does not expose it.
 
 ## 60-second quickstart
@@ -948,14 +956,14 @@ The target's advertised ladder remains authoritative. An exact supported value i
 
 ### Mixed-capability groups (`reasoningEffortMode`)
 
-The effort levels a combo advertises are the intersection of what its targets advertise. A target
+In `"strict"` mode, a combo advertises the intersection of its known target ladders. A target
 that explicitly advertises **no** effort control takes part in that intersection, so a single
 no-effort backup empties the effort picker for the whole combo — including for the targets that do
 support tuning.
 
-Set `reasoningEffortMode: "adaptive"` to exclude those empty ladders from the published
-intersection instead. The picker then shows the levels the remaining targets share, and the
-no-effort target stays eligible for routing. Targets whose ladder is simply *unknown* are treated
+Set `reasoningEffortMode: "adaptive"` to exclude empty ladders from the published ladder. The
+picker shows the intersection of the remaining ladders with `capabilityPolicy: "intersection"`
+and their union with `"union"`. A target with no effort control stays eligible for routing. Targets whose ladder is simply *unknown* are treated
 as wildcards in both modes.
 
 ```json
@@ -983,10 +991,10 @@ combo's Capabilities section.
 ## Image / multimodal capability
 
 By default a combo publishes the **intersection** of its targets' input modalities (image is
-enabled only when every target advertises it). Set `imageInput: "disabled"` to force text-only
-even when every target supports images — the catalog drops `image` from `inputModalities`, and
-image-bearing requests are rejected with HTTP 400 before any target is called. `"auto"` (or
-omitting the field) keeps the automatic intersection.
+enabled when every target advertises it). A `capabilityPolicy: "union"` combo can advertise image
+input when any target supports it. `imageInput: "auto"` uses the selected capability policy.
+`imageInput: "disabled"` drops `image` from `inputModalities` and rejects image requests with HTTP 400
+before any target is called.
 
 In the dashboard, the **Image / multimodal** switch can be enabled whenever every target has
 known image or text input capabilities. Native image members stay unchanged; text-only members are
@@ -1006,6 +1014,64 @@ are declared without text are rejected with HTTP 400 rather than overwritten, en
 already covers are skipped, and a save refused before publication restores the combo and every declaration together.
 Removing a member from the combo does not remove its text-only declaration; clear it in the
 provider editor if you no longer want it.
+
+## Union capabilities (`capabilityPolicy`)
+
+The intersection rule exists because the picker sees one row while the combo used to route without
+looking at the request. Set `capabilityPolicy: "union"` to advertise what **any** target can serve
+and have the combo pick per request instead:
+
+- **Catalog.** `inputModalities` is the union of the targets' modalities, so one text-only backup no
+  longer hides image input. Union catalogs omit video because dispatch cannot verify that the selected wire preserves it. With `reasoningEffortMode: "adaptive"` the effort ladder is the union of
+  the non-empty target ladders, ordered by rank; `"strict"` keeps the intersection, because strict
+  promises every target serves the advertised rung as is. `"intersection"` publishes the smallest
+  target `contextWindow`, and `"union"` also publishes the smallest. Both policies use the minimum input and
+  auto-compaction limits, bounded by the published window and input limit where applicable. Both
+  policies publish the smallest `maxOutputTokens` when every target declares one and omit it otherwise. `imageInput: "disabled"` still
+  removes image.
+- **Images.** For an image-bearing request each target is native (accepts images), degraded
+  (proven text-only, and the [Vision Sidecar](/guides/sidecars/) has a dispatchable plan for the
+  request) or unable (proven text-only without such a plan). Native and degraded targets stay in
+  their configured order, so a degraded subscription target still serves before a later native
+  one; only unable targets are skipped. A target whose image capability is unknown counts as native,
+  the same pass-through the target applies on its own.
+- **Audio.** A target must declare audio input and use a wire that can carry it. Union Chat
+  requests can include inline WAV or MP3 audio. If none of the targets can take the audio, the
+  proxy returns HTTP 400 without dropping it.
+- **Context.** Before picking, the proxy applies the check each combo target's own admission makes
+  ([context-window refusals](#context-window-refusals)): the input estimate, with its 1.1× margin,
+  must fit the target's input limit, and that estimate plus the output reserve must fit its window.
+  A target that fails is skipped, even when its window could hold the input alone. A target with an
+  unknown window remains eligible on context. Compaction turns are exempt from the context check.
+  The proxy evaluates these limits after checking metered consent.
+- **Effort.** Under `"adaptive"`, a caller effort that a target's known ladder lacks maps to
+  that target's highest rung at or below it (`xhigh` on a low/medium/high target is sent as `high`).
+  A request below the entire ladder uses the lowest supported rung.
+- **Order of degradation.** Capability filtering considers only targets that meet metered consent, model scope, mandatory tool selection, and protocol requirements. If a required description fails, the combo skips that send and tries the remaining eligible image-serving targets. It applies `onUnservable` when those choices are exhausted. The proxy logs image omission as a warning and effort adjustments at debug level with the requested and sent rungs.
+- **Nothing can serve.** When no target can hold the input and its output reserve, `onUnservable: "degrade"` (the
+  default) sends it to the target with the largest window, under the same loose admission a direct
+  request gets, and logs a warning. When targets can hold it but every one is unable to take its
+  image, `"degrade"` dispatches anyway: the target replaces each image with an omission note and the
+  proxy logs a warning. `onUnservable: "reject"` answers HTTP 400 when the request cannot fit or the images cannot be served.
+
+```json
+{
+  "combos": {
+    "claude": {
+      "targets": [
+        { "provider": "anthropic", "model": "claude-opus-5-5" },
+        { "provider": "relay", "model": "deepseek-v4.1-flash" }
+      ],
+      "reasoningEffortMode": "adaptive",
+      "capabilityPolicy": "union"
+    }
+  }
+}
+```
+
+The default is `"intersection"`, which keeps the behavior described above. Both fields are stored
+only when they differ from their defaults, and a `PUT /api/combos` that omits them keeps the stored
+values.
 
 ## Encrypted v2 sub-agent tasks
 
@@ -1138,9 +1204,11 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 | `cooldownWaitPolicy` | No | unset | `"before-last-resort"` defers targets marked `lastResort`: they are used only when no normal target is available, for every strategy, and `waitForCooldownMs` only adds the wait for a cooling normal target, so at its `0` default nothing waits and the last resort is used as soon as no normal target is available. Only that exact string opts in. The deferral wait and the ordinary wait share one `waitForCooldownMs` budget per selection attempt. |
 | `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; resolved against each target's advertised ladder. |
 | `defaultEffortMode` | No | `"fallback"` | `"fallback"` preserves explicit caller effort. `"force"` overrides valid caller effort, requires a valid non-null default, and can increase cost and latency. |
-| `reasoningEffortMode` | No | `"strict"` | `"strict"` intersects every known target ladder, so one target advertising no effort control empties the combo's picker. `"adaptive"` excludes those empty ladders from the published intersection. At dispatch, explicit empty or adaptive unknown ladders remove unsupported effort/thinking controls while preserving supported non-effort reasoning fields such as `reasoning.summary`; known non-empty targets keep existing effort resolution. |
+| `reasoningEffortMode` | No | `"strict"` | `"strict"` intersects every known target ladder, so one target advertising no effort control empties the combo's picker. `"adaptive"` publishes the intersection of non-empty ladders under `"intersection"` and their union under `"union"`. At dispatch, explicit empty or adaptive unknown ladders remove unsupported effort/thinking controls while preserving supported non-effort reasoning fields such as `reasoning.summary`; known non-empty targets keep existing effort resolution. |
 | `jevEffortMode` | No | `"decide"` | JEV combos only. `"decide"` applies the decision effort and lets it override the caller. `"client"` keeps the decision target choice but leaves effort to the caller and the target ladder, so a provider that swaps its upstream model id per tier is not re-tiered by JEV. `defaultEffortMode: "force"` still overrides caller effort in client mode. Cache reuse still needs a stable caller effort, target and prompt prefix, and depends on the provider and account. |
-| `imageInput` | No | `"auto"` | `"auto"` or `"disabled"`. `"auto"` publishes image support only when every target supports images; `"disabled"` forces text-only (drops image from published modalities and rejects image-bearing requests before dispatch). |
+| `capabilityPolicy` | No | `"intersection"` | `"intersection"` advertises shared capabilities and the smallest context window. `"union"` advertises combined capabilities and the smallest context window, and filters targets by request compatibility. Both publish the smallest declared max output only if every target declares one. See [Union capabilities](#union-capabilities-capabilitypolicy). |
+| `onUnservable` | No | `"degrade"` | `"union"` combos only. When no target's window can hold the input, `"degrade"` sends to the largest window with a warning; when no enabled target can take the image, it dispatches and omits the images with a warning. `"reject"` answers HTTP 400 in both cases. |
+| `imageInput` | No | `"auto"` | `"auto"` or `"disabled"`. `"auto"` publishes image support when every target supports it under `"intersection"`, and when any target supports it under `"union"`. `"disabled"` drops image support and rejects image requests before dispatch. |
 | `alias` | No | none | Optional trimmed public model id; use the alias rules above. An empty value is stored as no alias. |
 | `nativeAlias` | No | `false` | Explicitly permit a currently supported bare native `alias` to take routing and catalog precedence. Never inferred from the alias. |
 | `displayName` | No | none | Bounded display-only catalog label. Required and non-empty when `nativeAlias` is true. |
@@ -1174,8 +1242,8 @@ cooldown set by a 401 or 403), `transient` (any other cooldown), `unsupported` (
 request, including a mandatory `tool_choice` no target preserves) and `unavailable` (provider missing or
 disabled). `targets` counts the configured targets, `attempted` the targets dispatched to a child attempt (a child may refuse before any upstream send), and `causes`
 how many targets fell in each class. The object never names the combo, a provider, a model or upstream text.
-The code stays `combo_unavailable`; the Claude Messages and Chat Completions listeners keep their own error
-shapes.
+Claude Messages also returns HTTP 503 with `combo_unavailable` in its own error shape. Chat Completions
+returns HTTP 503 with type `server_error` and code `server_is_overloaded`.
 For cooldowns, follow an observed `Retry-After` value first;
 Codex reset headers also take precedence over `cooldownMs`.
 If neither upstream signal is usable, the configured `cooldownMs` applies, or the upstream fallback applies

@@ -11,8 +11,8 @@ import type { HandleResponsesOptions, ResponsesRequestContext, ResponsesAdmissio
 import type { PolicyRequestEvidence } from "../../routing/evaluator";
 import type { RequestLogContext } from "../request-log";
 import { addProtocolEntryReason, markProtocolEntry, protocolMarkFeatures } from "../../protocols/trace";
-import { nativeMessagesToolScopeDenial } from "../messages-native-scope";
-import { ADVISOR_SERVER_TOOL_NAME, advisorServerToolDestination, planAnthropicServerTools } from "../../adapters/anthropic/advisor-tool";
+import { admitsHostedAdvisor, scopedAnthropicServerTools } from "../messages-native-scope";
+import { advisorServerToolDestination } from "../../adapters/anthropic/advisor-tool";
 import { isAntigravityRoute } from "../antigravity-direct-eligibility";
 import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse, markPolicyCandidateRefusal, MandatoryToolChoiceUnavailableError, mandatoryToolChoiceUnavailableResponse } from "./policy-request-scope";
 import {
@@ -1610,8 +1610,7 @@ export async function prepareResponsesRequest(
   // A typed Advisor runs its own model server-side on this provider (#8448). An out-of-scope
   // declaration is withheld. A named selection also needs that declaration on the final route.
   const serverTools = parsed._anthropicServerTools;
-  const scopedServerTools = serverTools?.filter(tool =>
-    !nativeMessagesToolScopeDenial(admissionScope, route.providerName, route.modelId, { tools: [tool] }));
+  const scopedServerTools = scopedAnthropicServerTools(admissionScope, route, serverTools);
   if (serverTools && scopedServerTools && scopedServerTools.length !== serverTools.length) {
     parsed._anthropicServerTools = scopedServerTools;
     if (advisorServerToolDestination(route.provider)) addProtocolEntryReason(logCtx, "advisor-tool-outside-model-scope");
@@ -1621,9 +1620,7 @@ export async function prepareResponsesRequest(
       return markProxyError(formatErrorResponse(400, "invalid_request_error",
         "The hosted Advisor tool_choice is ambiguous because multiple tools are named advisor."));
     }
-    const admittedAdvisor = planAnthropicServerTools(route.provider, scopedServerTools, undefined,
-      new Set(parsed.context.tools?.map(tool => tool.name)), false).declared.some(tool => tool.name === ADVISOR_SERVER_TOOL_NAME);
-    if (!admittedAdvisor) {
+    if (!admitsHostedAdvisor(route.provider, scopedServerTools, parsed.context.tools)) {
       return markPolicyCandidateRefusal(markProxyError(formatErrorResponse(400, "invalid_request_error",
         "The selected hosted Advisor tool is unavailable for this route or model scope.")));
     }
@@ -1672,7 +1669,7 @@ export async function prepareResponsesRequest(
     // A combo child is the one caller that can afford a strict gate: skipping a target it
     // cannot fit is safe before any upstream bytes are sent, and the ladder continues. A
     // direct request has nowhere to go, so it keeps the loose pathological-input gate.
-    const inputAdmission = options.comboAttempt
+    const inputAdmission = options.comboAttempt && options.comboContextDegraded !== true
       ? checkComboTargetInputAdmission(parsed, route.provider, route.providerName, parsed.modelId, nativeContextLimits(config))
       : checkInputAdmission(parsed, route.provider, route.providerName, parsed.modelId, nativeContextLimits(config));
     if (!inputAdmission.admitted) {

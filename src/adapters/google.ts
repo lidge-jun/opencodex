@@ -347,7 +347,7 @@ function geminiToolResultParts(
     id: wireCallId,
   };
   const images = toolResultImageParts(msg.content);
-  // Vertex Argon rejects image siblings beside a functionResponse as an unsupported model tail.
+  // Vertex Gemini 3+ models reject image siblings beside a functionResponse as an unsupported model tail (ADR-7279, ADR-8969).
   if (nestToolResultImages && images.length > 0) {
     functionResponse.parts = images;
     return [{ functionResponse }];
@@ -1085,11 +1085,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         identityModelId,
         stripRejectedClaudeSdkParagraph,
         isCloudCodeAssist,
-        provider.googleMode === "vertex" && (
-          parsed.modelId === "gemini-4-argon"
-          || parsed.modelId === "gemini-4-carbon"
-          || parsed.modelId === "gemini-4-hydrogen"
-        ),
+        provider.googleMode === "vertex" && /^gemini-(?:[3-9]|\d{2,})(?:[.-]|$)/i.test(parsed.modelId),
         isCloudCodeAssist && /^claude-/i.test(routedModelId),
       );
       lastInjectedCallIds = [...replayedCallIds];

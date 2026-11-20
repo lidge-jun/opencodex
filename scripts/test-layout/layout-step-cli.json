@@ -1,0 +1,13 @@
+{
+  "step-cli-cleanup-ownership.test.ts": "adapters",
+  "step-cli-ownership.test.ts": "adapters",
+  "step-cli-process-lifecycle.test.ts": "adapters",
+  "step-cli-query-race.test.ts": "adapters",
+  "step-cli-frames.test.ts": "adapters",
+  "step-cli-conversation.test.ts": "adapters",
+  "step-cli-run-turn.test.ts": "adapters",
+  "step-cli-session.test.ts": "adapters",
+  "step-cli-tool-bridge.test.ts": "adapters",
+  "step-cli-tool-result.test.ts": "adapters",
+  "step-cli-provider.test.ts": "providers"
+}

@@ -6,6 +6,7 @@ import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { redirectCanonicalCodexTo } from "../helpers/pool-retry-harness";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   anthropicErrorBody,
@@ -1821,6 +1822,7 @@ describe("Messages ingress context errors", () => {
   let previousHome: string | undefined;
   let isolated: IsolatedCodexHome;
   const originalFetch = globalThis.fetch;
+  const originalWebSocket = globalThis.WebSocket;
 
   beforeEach(() => {
     previousHome = process.env.OPENCODEX_HOME;
@@ -1830,6 +1832,7 @@ describe("Messages ingress context errors", () => {
   });
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    globalThis.WebSocket = originalWebSocket;
     isolated.restore();
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
@@ -1857,6 +1860,8 @@ describe("Messages ingress context errors", () => {
       } } as OcxConfig;
       if (canonical) {
         config.providers.native!.baseUrl = "https://chatgpt.com/backend-api/codex";
+        // This fixture owns HTTP/SSE only; keep native WSS off the real service.
+        redirectCanonicalCodexTo(upstream.url.toString());
         globalThis.fetch = ((input, init) => {
           const url = input instanceof Request ? input.url : String(input);
           if (url === "https://chatgpt.com/backend-api/codex/responses") {

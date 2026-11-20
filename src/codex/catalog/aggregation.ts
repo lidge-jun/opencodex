@@ -29,6 +29,7 @@ import {
   targetKey,
 } from "../../combos";
 import type { NormalizedComboConfig } from "../../combos/types";
+import { comboAdvertisesEffortUnion, unionEfforts, unionStrings } from "../../combos/capability-policy";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
@@ -113,11 +114,17 @@ export function comboCatalogOmissionReason(
     return "incomplete_metadata";
   }
 
-  const inputModalities = intersectStrings(
-    members.map(member => member.inputModalities ?? ["text"]),
-  );
+  const inputModalities = comboInputModalities(combo, members);
   if (inputModalities.length === 0) return "incompatible_modalities";
   return null;
+}
+
+/** Union dispatch cannot verify video support on the selected wire. */
+function comboInputModalities(combo: NormalizedComboConfig, members: readonly CatalogModel[]): string[] {
+  const lists = members.map(member => member.inputModalities ?? ["text"]);
+  return combo.capabilityPolicy === "union"
+    ? unionStrings(lists).filter(modality => modality !== "video")
+    : intersectStrings(lists);
 }
 
 export function deriveComboCatalogModel(
@@ -127,9 +134,7 @@ export function deriveComboCatalogModel(
 ): CatalogModel | null {
   if (comboCatalogOmissionReason(combo, members) !== null) return null;
 
-  const derivedInputModalities = intersectStrings(
-    members.map(member => member.inputModalities ?? ["text"]),
-  );
+  const derivedInputModalities = comboInputModalities(combo, members);
   const inputModalities = combo.imageInput === "disabled"
     ? derivedInputModalities.filter(modality => modality !== "image")
     : derivedInputModalities;
@@ -152,14 +157,17 @@ export function deriveComboCatalogModel(
   const decisionOwnsEffort = combo.strategy === "jev" && combo.jevEffortMode !== "client";
   const reasoningEfforts = decisionOwnsEffort || advertisedLadders.length === 0
     ? []
-    : intersectStrings(advertisedLadders);
+    : comboAdvertisesEffortUnion(combo.capabilityPolicy, combo.reasoningEffortMode)
+      ? unionEfforts(advertisedLadders)
+      : intersectStrings(advertisedLadders);
+  // Publish a window safe across all targets. Request admission can still use larger members.
   const contextWindow = Math.min(...members.map(member => member.contextWindow!));
   const limitingMembers = members.filter(member => member.contextWindow === contextWindow);
   const hasLimitingContextCapMetadata = limitingMembers.some(
     member => typeof member.contextCapped === "boolean",
   );
-  // A combo is cap-limited only when every member defining its effective minimum was
-  // itself reduced by a provider cap. An uncapped member at the same minimum means the
+  // A combo is cap-limited only when every member defining its effective window was
+  // itself reduced by a provider cap. An uncapped member at the same window means the
   // combo would have the same window even without the cap.
   const contextCapped = limitingMembers.every(member => member.contextCapped === true);
   const maxInputTokens = Math.min(
@@ -173,6 +181,7 @@ export function deriveComboCatalogModel(
     ? Math.min(...knownMaxOutputTokens)
     : undefined;
   const autoCompactTokenLimit = Math.min(
+    maxInputTokens,
     ...members.map(member => clampAutoCompactTokenLimit(
       member.contextWindow!,
       member.maxInputTokens,

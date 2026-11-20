@@ -318,6 +318,8 @@ Cada objeto de uso del terminal Responses incluye ambos objetos de detalle, incl
 
 Cuando esté disponible, `input_tokens_details` También puede incluir `cache_write_tokens`. El siempre presente Los objetos de detalle son una garantía de compatibilidad para clientes Responses estrictos; cero puede significar "no" No necesariamente "el proveedor no realizó tal trabajo".
 
+Cuando el guardián de continuación del terminal vuelve a preguntar dentro de un turno, una respuesta correcta que informa el uso muestra el uso del último tramo de esa nueva pregunta. En Chat Completions esto incluye `prompt_tokens`, que refleja el contexto enviado en el último tramo. Una nueva pregunta de Chat con búsqueda alojada sigue la misma regla. Cuando un reintento por respuesta vacía vuelve a preguntar, el uso informado también incluye el intento vacío descartado. Una respuesta que termina incompleta o fallida muestra el uso sumado de todos los tramos, al igual que un último tramo que no informa uso propio. Una respuesta incompleta incluye la que se detiene en el límite de tokens de salida. El registro de solicitudes incluye una sola vez el uso informado de cada tramo, y el presupuesto de envíos cuenta cada tramo. El libro de gasto liquida el envío de cada tramo con el uso que ese tramo informó. Un envío que no informó uso queda sin resolver con su reserva. Si la recuperación OAuth cambia de cuenta, cada intento registra el uso informado por su propia cuenta. Si un tramo no informa uso, el total de créditos del proveedor de ese intento se marca como incompleto. Un reintento del proveedor enviado mientras todavía se lee una respuesta, como el reintento de finalización de Kiro, se liquida con el uso que informó su propia respuesta, y el primer envío conserva su propia lectura. Un reintento cuya respuesta no informa uso de tokens propio queda sin resolver con su reserva, aunque el cliente y el registro de solicitudes muestren una estimación local para él. Un turno de Chat Completions en streaming que falla termina con un fragmento de error en lugar de un fragmento final. Si el cliente estableció `stream_options.include_usage`, justo antes de ese fragmento de error llega un fragmento con `choices` vacío que lleva el uso del turno fallido. El cuerpo de error de Chat sin streaming no tiene campo de uso.
+
 Para Anthropic aguas arriba, un `usage.output_tokens_details.thinking_tokens` reportado se conserva como Responses `output_tokens_details.reasoning_tokens` y Chat `completion_tokens_details.reasoning_tokens`, para JSON y respuestas de transmisión. Ya está incluido en el total del token de salida, no se agrega nuevamente; los detalles faltantes o no válidos no se estiman a partir del texto de pensamiento visible. Véase [Contrato de uso de Anthropic](https://platform.claude.com/docs/en/build-with-claude/thinking-steering-and-cost).
 
 <a id="correlating-a-response-with-its-request-log"></a>
@@ -469,7 +471,7 @@ La instantánea sigue siendo un contrato de lista de modelos de solo lectura; no
 
 ## API de Gemini: `/v1beta/models` y `/v1beta/interactions`
 
-Los clientes de Gemini, como el SDK google-genai con una URL base personalizada, la CLI `agy` o un cliente que lee `GOOGLE_GEMINI_BASE_URL`, pueden usar las rutas de proveedor configuradas con la forma REST de Google. El proxy traduce cada solicitud a su ruta de Chat Completions, así que detrás puede haber cualquier proveedor. Autentíquese con una clave API del proxy en `x-goog-api-key` o en el parámetro de consulta `?key=`; la clave se quita de la URL y de las cabeceras antes de registrar o reenviar la solicitud. Los errores usan la forma de Google `{ "error": { "code", "message", "status" } }`.
+Los clientes de Gemini, como el SDK google-genai con una URL base personalizada, la CLI `agy` o un cliente que lee `GOOGLE_GEMINI_BASE_URL`, pueden usar las rutas de proveedor configuradas con la forma REST de Google. El proxy normalmente traduce la generación a su ruta de Chat Completions, que admite cualquier proveedor. La generación elegible con Antigravity puede usar la [ruta nativa](#gemini-nativo-con-antigravity) si está habilitada. Autentíquese con una clave API del proxy en `x-goog-api-key` o en el parámetro de consulta `?key=`; la clave se quita de la URL y de las cabeceras antes de registrar o reenviar la solicitud. Los errores usan la forma de Google `{ "error": { "code", "message", "status" } }`.
 
 - `GET /v1beta/models` lista `models/<provider>/<model>` para las rutas que la clave puede usar, y `GET /v1beta/models/{model}` devuelve una. Un modelo incluye `inputTokenLimit` y `outputTokenLimit` cuando se conocen. Para `inputTokenLimit`, tienen prioridad los límites de entrada y de ventana de contexto configurados en el proveedor, seguidos de `customModels[].contextWindow` del modelo correspondiente y de los metadatos generados.
 - `:generateContent` y `:streamGenerateContent`, bajo `/v1beta/models/` o `/v1/models/`, traducen `contents`, `systemInstruction`, imágenes en línea, declaraciones y llamadas de funciones, y `generationConfig`. Las firmas de pensamiento de las partes `functionCall` viajan en ambos sentidos. Con `alt=sse` el flujo es SSE; sin él la respuesta es un único array JSON, como lo envía la API REST de Google. Las herramientas alojadas de Gemini se ignoran. Un `candidateCount` distinto de 1, datos en línea que no son imágenes y partes de archivo se rechazan con 400.
@@ -637,3 +639,45 @@ Las solicitudes enrutadas toleran los argumentos de función serializados mal fo
 Al traducir Chat Completions a Responses de OpenAI o al backend ChatGPT, las herramientas de función mantienen el valor no estricto de Chat: si se omite `strict`, se envía false; los booleanos explícitos se conservan. Las `functions` heredadas tampoco se vuelven estrictas. Los argumentos opcionales —incluidos los selectores alternativos de índice y coordenadas de `computer_use`— siguen siendo opcionales. No se reescribe el esquema ni cambian los predeterminados de Responses nativo, destinos Chat o proveedores Responses externos.
 
 Una entrada de compactación retenida de OpenCodex mal formada (`ocx2:`) devuelve HTTP 400 con `error.type: "invalid_request_error"` antes de enrutar, elegir cuenta, refrescar credenciales o enviar al proveedor. No provoca reintentos ni registra un fallo contra una cuenta Codex del pool.
+
+<a id="native-gemini-with-antigravity"></a>
+
+## Gemini nativo con Antigravity
+
+Habilita el proveedor canónico `google-antigravity`, inicia sesión con
+`ocx login google-antigravity` y añade esta opción a la configuración JSON de OpenCodex:
+
+```json
+{
+  "protocols": {
+    "rollout": {
+      "geminiNativeAntigravity": true
+    }
+  }
+}
+```
+
+La opción está desactivada por defecto. Usa la API compatible con Gemini en `/v1beta` y
+envía una clave de admisión de OpenCodex en `x-goog-api-key` o `?key=`. Un selector como
+`google-antigravity/gemini-3.8-flash` usa el transporte nativo para `generateContent` y
+`streamGenerateContent`. El proxy elige el modelo de Cloud Code Assist a partir de la ruta
+resuelta y usa el token y el proyecto de la cuenta OAuth activa. Las solicitudes de
+`/v1` y las de otros proveedores usan el puente de Chat.
+
+El proxy conserva el JSON de la solicitud y de las respuestas correctas, incluidos los
+campos desconocidos, los enteros grandes, los argumentos de funciones y las firmas de
+razonamiento. La transmisión usa SSE con `alt=sse` y una matriz JSON en los demás casos.
+El listado mediante `GET /v1beta/models` y la consulta de modelos conservan el catálogo permitido por la clave e
+incluyen los alias nativos que se enrutan al modelo de Antigravity correspondiente.
+
+Si una respuesta del proveedor contiene credenciales de la cuenta vinculada, el proxy devuelve
+un error genérico de Gemini. Un `[DONE]` válido del proveedor o un error de Gemini pone fin a la transmisión.
+
+Envía JSON con codificación `identity`. El cuerpo de la solicitud, la respuesta almacenada
+en búfer y cada evento SSE tienen un límite de 16 MiB. Si `maxInboundBodyBytes` es menor,
+se aplica a la solicitud. La inactividad durante la carga tiene su propio tiempo de
+espera. El envío inicial y un reintento como máximo tras un 401 de la misma cuenta cuentan
+para el límite de envíos del flujo. Un límite de tokens aplicable al flujo raíz, a la
+identidad o al grupo devuelve 503 con `gemini_native_spend_limits_unsupported` porque el
+transporte nativo no contabiliza los tokens. Desactiva la opción para contabilizarlos en
+esta ruta de Gemini.

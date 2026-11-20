@@ -2,7 +2,7 @@ import type { ClientFacingModelLabel } from "../../lib/error-destination";
 import type { HostedAdvisorSelection } from "../../claude/inbound-content-options";
 import type { CodexAccountModelRefusal } from "../../combos/failover";
 import type { NativeResponseControl } from "./native-response-control";
-import type { AdapterEvent, OcxUsage, OcxProviderContinuationState, OcxConfig, OcxProviderConfig } from "../../types";
+import type { AdapterEvent, OcxUsage, OcxProviderContinuationState, OcxConfig, OcxProviderConfig, OcxVisionSidecarConfig } from "../../types";
 import type { RouteResult } from "../../router";
 import type { SingleUseDispatchPermit } from "../../lib/request-execution-budget";
 import type { CodexAuthPolicyConfig, CodexAuthContext } from "../../codex/auth-context";
@@ -92,6 +92,8 @@ export interface ClientEncoderOption {
   stream: boolean;
   model: string;
   inputTokenFloor?: number;
+  /** Chat only: the client set `stream_options.include_usage`. */
+  includeUsage?: boolean;
   /**
    * `direct` when the request side also skipped the internal Responses body (the Antigravity
    * direct lane), so the attempt's request path is traced as `[inbound, ir, upstream]`.
@@ -276,6 +278,18 @@ export interface HandleResponsesOptions {
   callerDirectAuth?: CallerDirectAuth | null;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
+  /** `union` combo with no member whose window fits: the child keeps the loose direct admission. */
+  comboContextDegraded?: boolean;
+  /** A union combo admitted this image-bearing child through a dispatchable vision plan. */
+  comboRequiresVisionPlan?: boolean;
+  /** The union combo exhausted its image-serving targets and selected omission. */
+  comboOmitImages?: boolean;
+  /**
+   * The request-start Vision Sidecar settings the combo admitted this request under. Vision
+   * planning reads `settings` instead of the live `visionSidecar`, so an edit made while the
+   * request is in flight applies to the next request. Credentials still resolve from live config.
+   */
+  comboVisionSidecar?: { settings: OcxVisionSidecarConfig | undefined };
   /**
    * Set by the combo loop for each child. A child logs into its own context, which the combo
    * copies once when the child commits, and the bridge reports usage after that, at the terminal

@@ -9,6 +9,7 @@ import {
   isLabAutomationSchedulerRunning,
 } from "../../src/lab/automation/orchestrator";
 import {
+  registerAsyncOptionalShutdownHook,
   registerOptionalShutdownHook,
   runOptionalShutdownHooks,
   resetOptionalShutdownHooksForTests,
@@ -16,6 +17,37 @@ import {
 
 describe("optional shutdown hooks", () => {
   beforeEach(() => resetOptionalShutdownHooksForTests());
+
+  test("joins asynchronous siblings even when one reports failure", async () => {
+    const receipt = Promise.withResolvers<void>();
+    let joined = false;
+    registerAsyncOptionalShutdownHook("failure", async () => { throw new Error("synthetic cleanup failure"); });
+    registerAsyncOptionalShutdownHook("cleanup", () => receipt.promise);
+    const shutdown = runOptionalShutdownHooks().then(result => { joined = true; return result; });
+    await Promise.resolve();
+    expect(joined).toBe(false);
+    receipt.resolve();
+    expect(await shutdown).toBe(false);
+  });
+
+  test("reports timeout for an asynchronous hook with no cleanup receipt", async () => {
+    const receipt = Promise.withResolvers<void>();
+    const deadlineMs = Date.now() + 20;
+    const fallbacks: string[] = [];
+    let receivedDeadline: number | undefined;
+    registerAsyncOptionalShutdownHook("pending", deadline => {
+      receivedDeadline = deadline;
+      return receipt.promise;
+    }, () => { fallbacks.push("pending"); });
+    registerAsyncOptionalShutdownHook("complete", async () => {}, () => { fallbacks.push("complete"); });
+    try {
+      expect(await runOptionalShutdownHooks({ deadlineMs })).toBe(false);
+      expect(receivedDeadline).toBe(deadlineMs);
+      expect(fallbacks).toEqual(["pending"]);
+    } finally {
+      receipt.resolve();
+    }
+  });
 
   test("running with nothing registered is a no-op", () => {
     expect(() => runOptionalShutdownHooks()).not.toThrow();
