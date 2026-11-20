@@ -237,6 +237,9 @@ export function sendWithConnectionPolicy(
   // retry and HTTP fallback re-enters here with the caller's original string, so each send derives
   // its own coded bytes; `headers` is already this send's private copy.
   const target = input instanceof Request ? input.url : String(input);
+  const classicalTlsHosts = process.env.OCX_TLS_CLASSICAL_GROUPS_HOSTS;
+  const classicalTls = classicalTlsHosts && wantsFreshConnection(input, classicalTlsHosts)
+    && new URL(target).protocol === "https:";
   const body = init?.body;
   const compressed = compressUpstreamRequestBody(target, body, headers);
   if (compressed) {
@@ -252,6 +255,7 @@ export function sendWithConnectionPolicy(
     headers,
     redirect: "manual",
     ...(fresh ? { keepalive: false } : {}),
+    ...(classicalTls ? { tls: { ...(init as BunFetchRequestInit | undefined)?.tls, ecdhCurve: "X25519:P-256:P-384" } } : {}),
     ...egressInit,
     ...(decide || redirectedToLoopback ? { [EGRESS_DECIDED]: true } : {}),
     ...{ [UPSTREAM_REWRITTEN]: true },
