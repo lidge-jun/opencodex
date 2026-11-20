@@ -122,6 +122,10 @@ asynchronous `schtasks` and `sc.exe` calls through `execFile` (a deadline-derive
 floored to whole milliseconds and one that floors to 0 spawns nothing, because `execFile` reads 0
 as no timeout), the evidence snapshot `windowsProcessSnapshot` for every bind, the checked
 terminate, the exit watch, the Part B port sampler and the listener identity.
+For Scheduler registration, Part A queries the named task. If `schtasks /query /tn` cannot
+confirm it, the local Task Scheduler COM API reads that exact task in the root folder within
+the remaining 2 s budget. Only `GetTask` returning `ERROR_FILE_NOT_FOUND` proves absence.
+An inaccessible folder, denied task, or late answer leaves registration unknown.
 `src/service/windows-task-instance-stop.ts` keeps the root registration and its running instances
 in one Task Scheduler COM session. It passes the registered XML and the helper's current account as
 base64 UTF-8 to preserve Unicode through the console. The live adapter checks the recognized task

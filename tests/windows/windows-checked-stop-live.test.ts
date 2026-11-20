@@ -254,6 +254,84 @@ describe("capped command answers", () => {
 
 const portablePowerShell = Bun.which("pwsh");
 
+describe("the bounded Scheduler registration query", () => {
+  test("a direct hit avoids PowerShell; only a completed, exact fallback answer is accepted", async () => {
+    const directHit = result(0, "opencodex-proxy");
+    const missing = result(1, "", "지정된 파일을 찾을 수 없습니다.");
+    for (const [direct, fallback, expected] of [
+      [directHit, null, "present"],
+      [result(1, "", "", true), null, "unknown"],
+      [missing, result(0, "absent\r\n"), "absent"],
+      [missing, result(0, "present"), "present"],
+      [missing, result(0, "unknown"), "unknown"],
+      [missing, result(0, "noise\nabsent"), "unknown"],
+      [missing, result(1, "absent"), "unknown"],
+      [missing, result(null, "absent", "", true), "unknown"],
+    ] as const) {
+      const calls: string[] = [];
+      const deps = windowsCheckedStopLiveDeps({ run: async (program, args, timeout) => {
+        calls.push(program);
+        if (program === "schtasks") {
+          expect(args).toEqual(["/query", "/tn", "opencodex-proxy"]);
+          return direct;
+        }
+        expect(timeout).toBeGreaterThan(0);
+        expect(timeout).toBeLessThanOrEqual(2_000);
+        return fallback!;
+      } });
+      expect((await deps.probeScheduler(2_000)).status).toBe(expected);
+      expect(calls).toEqual(fallback ? ["schtasks", "powershell"] : ["schtasks"]);
+    }
+  });
+
+  test("the fallback uses only the remaining time and a late answer is unknown", async () => {
+    let now = 100;
+    const clock = spyOn(performance, "now").mockImplementation(() => now);
+    try {
+      const deps = windowsCheckedStopLiveDeps({ run: async (program, _args, timeout) => {
+        if (program === "schtasks") { now += 750; return result(1); }
+        expect(timeout).toBe(1_250);
+        now += timeout;
+        return result(0, "absent");
+      } });
+      expect((await deps.probeScheduler(2_000)).status).toBe("unknown");
+    } finally { clock.mockRestore(); }
+  });
+
+  test.skipIf(process.platform !== "win32" && !portablePowerShell)("only a missing task in an accessible root is absent", async () => {
+    let script = "";
+    await windowsCheckedStopLiveDeps({ run: async (program, args) => {
+      if (program === "schtasks") return result(1);
+      script = args.at(-1)!;
+      return result(0, "unknown");
+    } }).probeScheduler(2_000);
+    const activation = "[Activator]::CreateInstance([type]::GetTypeFromProgID('Schedule.Service', $true))";
+    expect(script).toContain(activation);
+    const fixture = String.raw`
+class SchedulerFixture {
+  [void] Connect() { if ($global:scenario -eq 'connect') { throw [IO.FileNotFoundException]::new() } }
+  [object] GetFolder([string] $path) {
+    if ($path -cne '\' -or $global:scenario -eq 'folder') { throw [IO.FileNotFoundException]::new() }
+    return $this
+  }
+  [object] GetTask([string] $name) {
+    if ($name -cne 'opencodex-proxy') { throw 'wrong name' }
+    if ($global:scenario -eq 'missing') { throw [Runtime.InteropServices.COMException]::new('missing', -2147024894) }
+    if ($global:scenario -eq 'denied') { throw [UnauthorizedAccessException]::new() }
+    if ($global:scenario -eq 'empty') { return $null }
+    return $this
+  }
+}`;
+    const command = fixture + "\nforeach ($global:scenario in 'found','missing','denied','connect','folder','empty') { & {\n"
+      + script.replace(activation, "[SchedulerFixture]::new()") + "\n} }";
+    const powershell = process.platform === "win32" ? resolveTrustedWindowsPowerShellExe() : portablePowerShell!;
+    const child = Bun.spawn([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand",
+      Buffer.from(command, "utf16le").toString("base64")], { stdout: "pipe", stderr: "pipe", windowsHide: true, timeout: SPAWN_BUDGET_MS });
+    const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect({ code, err, lines: out.trim().split(/\r?\n/) }).toEqual({ code: 0, err: "", lines: ["present", "absent", "unknown", "unknown", "unknown", "unknown"] });
+  }, SPAWN_BUDGET_MS + 1_000);
+});
+
 test.skipIf(process.platform !== "win32" && !portablePowerShell)("the PowerShell helper stops captured instances only after every proof succeeds", async () => {
   const powershell = process.platform === "win32" ? resolveTrustedWindowsPowerShellExe() : portablePowerShell!;
   const fixture = String.raw`

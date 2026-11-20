@@ -42,6 +42,21 @@ import type { WindowsListenerIdentity, WindowsPortSample, WindowsStopConfirmDeps
 import { windowsSchedulerCsvIncludesTask } from "./windows-scheduler";
 import { WINDOWS_TASK_INSTANCE_STOP_SCRIPT, verifyWindowsTaskStopProof } from "./windows-task-instance-stop";
 
+// Only a missing task after connecting to the local root folder establishes absence.
+const TASK_REGISTRATION_SCRIPT = String.raw`
+$ErrorActionPreference = 'Stop'
+try {
+  $service = [Activator]::CreateInstance([type]::GetTypeFromProgID('Schedule.Service', $true))
+  $service.Connect()
+  $folder = $service.GetFolder('\')
+} catch { 'unknown'; return }
+try {
+  $task = $folder.GetTask('${TASK}')
+  if ($null -ne $task) { 'present' } else { 'unknown' }
+} catch {
+  if ($_.Exception.GetBaseException().HResult -eq -2147024894) { 'absent' } else { 'unknown' }
+}`;
+
 export interface WindowsStopCommandResult {
   status: number | null;
   stdout: string;
@@ -267,12 +282,17 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
     canonicalPaths: windowsStopCanonicalPaths(),
     childPid: windowsStopChildPid(),
     async probeScheduler(timeoutMs) {
-      const started = Date.now();
+      const deadline = performance.now() + timeoutMs;
+      const unknown = { status: "unknown", detail: "the Task Scheduler query did not answer" } as const;
       const direct = await run("schtasks", ["/query", "/tn", TASK], timeoutMs);
+      if (direct.timedOut || performance.now() >= deadline) return unknown;
       if (direct.status === 0 && direct.stdout.includes(TASK)) return { status: "present" };
-      const listing = await run("schtasks", ["/query", "/fo", "CSV"], Math.max(1, timeoutMs - (Date.now() - started)));
-      if (listing.status !== 0 || listing.timedOut) return { status: "unknown", detail: "the Task Scheduler query did not answer" };
-      return windowsSchedulerCsvIncludesTask(listing.stdout, TASK) ? { status: "present" } : { status: "absent" };
+      const remaining = wholeTimeoutMs(deadline - performance.now());
+      if (remaining === null) return unknown;
+      const probe = await run("powershell", ["-NoProfile", "-NonInteractive", "-Command", TASK_REGISTRATION_SCRIPT], remaining);
+      if (probe.timedOut || probe.status !== 0 || performance.now() >= deadline) return unknown;
+      const status = probe.stdout.trim();
+      return status === "present" || status === "absent" ? { status } : unknown;
     },
     async probeWinsw(timeoutMs) {
       // One cap covers both reads: the ownership query gets only what the state query left.
