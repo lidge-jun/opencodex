@@ -31,6 +31,13 @@ export interface ProviderModelVisibility {
 
 type Waiter = { from: string; resolve: (ok: boolean) => void };
 
+/** Resolve and clear the pending revision waiter, if any. Module-level so callbacks close only over refs. */
+function settleWaiter(waiter: { current: Waiter | null }, ok: boolean): void {
+  const current = waiter.current;
+  waiter.current = null;
+  current?.resolve(ok);
+}
+
 export function useProviderModelVisibility(apiBase: string, source: {
   rows: ModelRow[] | null;
   selected: ProviderModelMap | null;
@@ -46,25 +53,20 @@ export function useProviderModelVisibility(apiBase: string, source: {
   const latest = useRef(source);
   useEffect(() => { latest.current = source; });
 
-  const settle = (ok: boolean) => {
-    const current = waiter.current;
-    waiter.current = null;
-    current?.resolve(ok);
-  };
   // A newer revision that became ready (or failed) is the authoritative read after the write.
   useEffect(() => {
     const current = waiter.current;
     if (!current || source.revision === current.from) return;
-    if (source.ready) settle(true);
-    else if (source.failed) settle(false);
+    if (source.ready) settleWaiter(waiter, true);
+    else if (source.failed) settleWaiter(waiter, false);
   }, [source.revision, source.ready, source.failed]);
-  useEffect(() => () => settle(false), []);
+  useEffect(() => () => settleWaiter(waiter, false), []);
 
   const refresh = useCallback((signal: AbortSignal) => new Promise<boolean>(resolve => {
-    settle(false);
+    settleWaiter(waiter, false);
     const entry: Waiter = { from: latest.current.revision, resolve };
     waiter.current = entry;
-    signal.addEventListener("abort", () => { if (waiter.current === entry) settle(false); }, { once: true });
+    signal.addEventListener("abort", () => { if (waiter.current === entry) settleWaiter(waiter, false); }, { once: true });
     latest.current.retry();
   }), []);
 
