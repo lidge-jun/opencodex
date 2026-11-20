@@ -150,7 +150,9 @@ L’onglet **Modèles** d’un fournisseur liste tous ses modèles, y compris ce
 chacun avec le même commutateur que la page **Modèles** ; les deux pages lisent et écrivent le même
 état. Un commutateur enregistre immédiatement. Tant que cet enregistrement et le rechargement qui
 suit ne sont pas terminés, les autres commutateurs, **Ajouter** et **Supprimer** attendent : une
-seule modification est en cours à la fois, et choisir un autre fournisseur ne l’annule pas.
+seule modification est en cours à la fois, et choisir un autre fournisseur ne l’annule pas. Quitter
+la page **Fournisseurs** avant la fin peut en revanche annuler la requête ; le chargement suivant
+indique si elle a été enregistrée.
 Désactiver un modèle change uniquement la visibilité dans le catalogue, sans supprimer la définition
 ni modifier la politique de routage direct. **Gérer la visibilité dans Modèles** ouvre la page
 **Modèles**.
@@ -173,7 +175,8 @@ entrée. Les badges de sélection et les informations de découverte restent dis
 Ce compteur apparaît dans la liste des fournisseurs. L’en-tête de l’onglet **Modèles** du
 fournisseur indique plutôt combien de modèles sont activés sur le total : le total compte chaque
 entrée listée, y compris les modèles désactivés, et un modèle est activé selon la même règle que
-sur la page **Modèles** (la liste d’autorisation du fournisseur l’admet et il n’est pas désactivé).
+sur la page **Modèles** : il n’est pas désactivé, et c’est un modèle natif, son fournisseur n’a pas
+de liste d’autorisation, ou cette liste l’inclut.
 
 ## Sélecteur de délégation et routage des créations de sous-agents
 

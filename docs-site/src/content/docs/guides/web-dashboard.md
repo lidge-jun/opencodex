@@ -371,7 +371,8 @@ A provider’s **Models** tab lists every model of that provider, including mode
 each with the same on/off switch as the **Models** page; the two pages read and write the same
 state. A switch saves at once. Until that save and the reload after it finish, the tab’s other
 switches, **Add**, and **Delete** wait, so one change is in flight at a time; selecting another
-provider does not cancel it. Turning a model off changes catalog visibility only: it does not
+provider does not cancel it, but leaving the **Providers** page before it finishes can cancel the
+request; the next load shows whether it was saved. Turning a model off changes catalog visibility only: it does not
 delete the definition or change direct routing policy. **Manage visibility in Models** opens the
 **Models** page.
 
@@ -391,8 +392,8 @@ badges and discovery information remain separate from that count.
 
 That count appears in the provider list. The provider's **Models** tab header instead shows how
 many models are on out of the total: the total counts every listed entry, including models that
-are off, and a model is on under the same rule as the **Models** page (the provider allowlist
-admits it and it is not disabled).
+are off, and a model is on under the same rule as the **Models** page: it is not disabled, and it
+is a native model, its provider has no allowlist, or the allowlist includes it.
 
 ## Delegation picker vs spawn routing
 

@@ -221,7 +221,7 @@ La pestaña **Todos** (`#models/overall`) muestra en una sola lista todos los mo
 
 ### Administrar modelos en un espacio de trabajo de proveedor
 
-La pestaña **Modelos** de un proveedor muestra todos sus modelos, también los desactivados, cada uno con el mismo interruptor que la página **Modelos**; ambas páginas leen y escriben el mismo estado. Un interruptor guarda al instante. Hasta que terminan ese guardado y la recarga posterior, los demás interruptores, **Añadir** y **Eliminar** esperan, de modo que solo hay un cambio en curso; elegir otro proveedor no lo cancela. Desactivar un modelo solo cambia la visibilidad del catálogo: no elimina la definición ni cambia la política de enrutamiento directo. **Gestionar la visibilidad en modelos** abre la página **Modelos**.
+La pestaña **Modelos** de un proveedor muestra todos sus modelos, también los desactivados, cada uno con el mismo interruptor que la página **Modelos**; ambas páginas leen y escriben el mismo estado. Un interruptor guarda al instante. Hasta que terminan ese guardado y la recarga posterior, los demás interruptores, **Añadir** y **Eliminar** esperan, de modo que solo hay un cambio en curso; elegir otro proveedor no lo cancela, pero salir de la página **Proveedores** antes de que termine puede cancelar la solicitud; la siguiente carga muestra si se guardó. Desactivar un modelo solo cambia la visibilidad del catálogo: no elimina la definición ni cambia la política de enrutamiento directo. **Gestionar la visibilidad en modelos** abre la página **Modelos**.
 
 **Eliminar** borra la definición personalizada almacenada. El modelo nativo o descubierto en vivo que había debajo puede volver a aparecer, por lo que el recuento de modelos puede quedar igual.
 
@@ -229,7 +229,7 @@ La pestaña **Modelos** de un proveedor muestra todos sus modelos, también los 
 
 El recuento de modelos del proveedor es el número de entradas únicas no desactivadas en el modelo actual. inventario devuelto por el servidor, antes de buscar o mostrar truncamiento. No es el proveedor tamaño de lista de permisos, un recuento de descubrimiento en vivo o prueba de que se descubrió una entrada de origen. Selección Las insignias y la información de descubrimiento permanecen separadas de esa cuenta.
 
-Ese recuento aparece en la lista de proveedores. El encabezado de la pestaña **Modelos** del proveedor muestra en cambio cuántos modelos están activados sobre el total: el total cuenta todas las entradas listadas, también las desactivadas, y un modelo está activado con la misma regla que en la página **Modelos** (la lista de permitidos del proveedor lo admite y no está desactivado).
+Ese recuento aparece en la lista de proveedores. El encabezado de la pestaña **Modelos** del proveedor muestra en cambio cuántos modelos están activados sobre el total: el total cuenta todas las entradas listadas, también las desactivadas, y un modelo está activado con la misma regla que en la página **Modelos**: no está desactivado y es un modelo nativo, su proveedor no tiene lista de permitidos o la lista lo incluye.
 
 <a id="delegation-picker-vs-spawn-routing"></a>
 

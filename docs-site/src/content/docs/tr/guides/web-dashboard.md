@@ -153,7 +153,8 @@ Sağlayıcının **Modeller** sekmesi, kapalı olanlar dahil sağlayıcının t�
 birinde **Modeller** sayfasındakiyle aynı açma/kapama anahtarı bulunur; iki sayfa aynı durumu okur ve
 yazar. Anahtar hemen kaydeder. Bu kayıt ve ardından gelen yeniden okuma bitene kadar diğer anahtarlar,
 **Ekle** ve **Sil** bekler; böylece aynı anda tek bir değişiklik sürer ve başka bir sağlayıcı seçmek onu
-iptal etmez. Bir modeli kapatmak yalnızca katalog görünürlüğünü değiştirir; tanımı silmez veya doğrudan
+iptal etmez; ancak bitmeden **Sağlayıcılar** sayfasından ayrılmak isteği iptal edebilir. Kaydedilip
+kaydedilmediğini bir sonraki yükleme gösterir. Bir modeli kapatmak yalnızca katalog görünürlüğünü değiştirir; tanımı silmez veya doğrudan
 yönlendirme ilkesini değiştirmez. **Modeller bölümünde görünürlüğü yönet**, **Modeller** sayfasını açar.
 
 **Sil**, kayıtlı özel tanımı kaldırır. Alttaki yerel veya canlı keşfedilmiş model yeniden görünebilir;
@@ -172,8 +173,8 @@ Seçim rozetleri ve keşif bilgileri bu sayıdan ayrıdır.
 
 Bu sayı sağlayıcı listesinde görünür. Sağlayıcının **Modeller** sekmesinin başlığı ise toplam içinden
 kaç modelin açık olduğunu gösterir: toplam, kapalı modeller dahil listedeki her girdiyi sayar; bir model
-**Modeller** sayfasındakiyle aynı kurala göre açıktır (sağlayıcı izin listesi onu kabul eder ve devre
-dışı değildir).
+**Modeller** sayfasındakiyle aynı kurala göre açıktır: devre dışı değildir ve yerel bir modeldir,
+sağlayıcısının izin listesi yoktur ya da izin listesi onu içerir.
 
 ## Yetkilendirme seçicisi ve spawn yönlendirmesi
 
