@@ -1645,7 +1645,7 @@ export interface OcxImagesConfig {
   videoBridgeEnabled?: boolean;
   /** Optional API-key provider that serves `video_gen` (its own baseUrl and key). Unset keeps xAI; an unusable value fails closed. */
   videoProvider?: string;
-  /** Model for xAI video generation. Default "grok-imagine-video". */
+  /** Model for xAI video generation. Default "grok-imagine-video-1.5-lite" (see src/images/video-capabilities.ts). */
   /** Defaults to grok-imagine-video-1.5-lite. */
   videoBridgeModel?: string;
   /** Max video-gen rounds before forced-final. Default 2 (video is slower than image). */

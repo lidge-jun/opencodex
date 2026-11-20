@@ -12,3 +12,5 @@
 | OpenAI image API (`gpt-image-2.6-*` defaults, SVG/GIF, `gpt-image-2` shutdown 2027-02-10) | No change: the OpenAI `/v1/images` relay forwards the body verbatim (`src/server/images.ts`), so new parameters and models pass through; OpenCodex hard-codes no OpenAI image model |
 | OpenAI transcription model (`gpt-4o-transcribe`) | Unchanged: the OpenAI report names no replacement |
 | GPT-6.2 Astra/Sol catalog | Out of scope here (LLM catalog; separate lane) |
+| Codex `applicable_available_count`, `rate_limit_upsell` CTAs (`buy_reset` → `https://chatgpt.com/codex/purchase/reset`), Luna Reserve (`x-openai-codex-luna-reserve`) | Unchanged: OpenCodex already reads `rate_limit_upsell.banner_type` and handles `gpt-reserve`; the applicability count has no official definition (030) |
+| Grok coupon RPC location (`grok_api_v2.GrokBuildBilling` vs `prod_mc_billing.ConsumerUiSvc`) | Unchanged: both answer live; redemption path not exercised (030) |
