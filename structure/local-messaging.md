@@ -72,7 +72,7 @@ no recipient, daemon or proxy is stopped.
 > Decision record: [ADR-6479](decisions/ADR-6479-local-messaging-command.md)
 
 `src/cli/dispatch.ts` dynamically imports the command runner for the message verb.
-`src/cli/message-args.ts` rejects malformed, duplicate and remote/Claude options
+`src/cli/message-args.ts` rejects malformed, duplicate and remote options on the Codex path
 before any command resource or home selection. `src/cli/codex-shim-autorestore.ts`
 skips repair for the whole namespace. Registry, capability and help declarations
 describe sessions/send; no management route is claimed. The separate pure remote
@@ -80,7 +80,7 @@ parser selects a dynamic remote-command import only for explicit remote operatio
 local operations do not read peer state or start an owner.
 
 `src/cli/message-runtime.ts` reuses effective Codex-home resolution without
-persistence. Messaging needs no selected CLI binary or version pin. The existing
+persistence. The local Codex path needs no selected CLI binary or version pin. The existing
 Codex daemon must support experimental `thread/queue/add`; there is no installation,
 repair, daemon start or runtime fallback when it rejects the method.
 
@@ -88,6 +88,22 @@ repair, daemon start or runtime fallback when it rejects the method.
 rejecting invalid bytes, empty text and NUL. The final envelope is bounded at
 32 KiB. Message text travels only in the existing Unix RPC connection, never in
 spawned process arguments. No request-body logging is added.
+
+## Local Claude Code session directory
+
+`src/cli/message-claude-command.ts` validates the explicit `claude-sessions`
+invocation before `src/messaging/claude-discovery.ts` spawns one user-selected
+absolute Claude executable with fixed `agents --json` arguments. The subprocess
+receives no stdin, uses only path, home and locale environment variables,
+and has a five-second deadline and 256 KiB output limit. Cancellation stops
+only the owned subprocess; raw CLI diagnostics are discarded.
+
+The snapshot has at most 256 source rows. Entries without a full session ID or
+process ID are skipped. Invalid or duplicate participating rows fail the
+snapshot. Results expose only UUID, session kind and activity status; they
+give no inbox address or permission to send and do not prove reachability.
+No history, working directory, session title or process ID is returned. Neither
+the Codex transport nor the remote-peer mode uses this directory.
 
 ## Envelope and receipt semantics
 
