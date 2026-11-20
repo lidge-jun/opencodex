@@ -2609,6 +2609,7 @@ export const en = {
   "integrations.action.settings": "Settings",
   "integrations.action.reapply": "Click to re-apply and bring this client up to date",
   "integrations.reapply.done": "{client} was re-applied.",
+  "integrations.reapply.incomplete": "{client} could not be re-applied: the change did not complete. It still needs an update.",
   "integrations.action.manageKeys": "Manage keys",
   "integrations.action.restore": "Restore…",
   "integrations.action.undo": "Undo",

@@ -62,6 +62,8 @@ let codexDesiredEnabled = true;
 /** Claude Desktop reports an applied gateway whose file drifted ("Update needed"); the PUT below clears it. */
 let desktopStale = false;
 let desktopApplied = false;
+/** Codex's enable PUT saves intent but its sync does not complete (`apply_incomplete`). */
+let codexApplyIncomplete = false;
 let deleteResponse: () => Response;
 let previewResponse: (body: Record<string, unknown>, signal?: AbortSignal | null) => Response | Promise<Response>;
 /**
@@ -138,6 +140,7 @@ beforeEach(() => {
   codexDesiredEnabled = true;
   desktopStale = false;
   desktopApplied = false;
+  codexApplyIncomplete = false;
   deleteResponse = () => json({ ok: true, clientId: "hermes", opId: "op-old", snapshotRemoved: true });
   previewResponse = body => {
     const clientId = body.clientId ?? "hermes";
@@ -185,6 +188,13 @@ beforeEach(() => {
     }
     if (method === "PUT" && url.endsWith("/api/native-integrations/codex")) {
       const body = init?.body ? JSON.parse(String(init.body)) as { enabled?: unknown } : {};
+      if (codexApplyIncomplete && body.enabled === true) {
+        return json({
+          ok: true, clientId: "codex", changed: false, state: "absent", desiredEnabled: true,
+          message: "Codex intent saved, but applying it did not complete: sync failed",
+          reason: "apply_incomplete",
+        });
+      }
       codexDesiredEnabled = body.enabled === true;
       codexRoutingResponse = () => json({
         routingInjected: codexDesiredEnabled,
@@ -1612,7 +1622,7 @@ test("the Update needed pill re-applies a drifted Claude Desktop in one click an
   // A plain, current card keeps its badge a label, not a control.
   expect(container.querySelector(".integration-card[data-client='codex'] button.integration-badge-action")).toBeNull();
 
-  await act(async () => { pill()!.click(); });
+  await act(async () => { pill()!.focus(); pill()!.click(); });
   await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 50)); });
 
   const put = requests.find(request => request.method === "PUT");
@@ -1622,6 +1632,27 @@ test("the Update needed pill re-applies a drifted Claude Desktop in one click an
   expect(card.textContent).toContain("was re-applied.");
   expect(card.querySelector(".badge")?.getAttribute("data-integration-state")).toBe("current");
   expect(pill()).toBeNull();
+  // The pill the keyboard user pressed is gone; focus lands on the card title, not <body>.
+  expect(testWindow.document.activeElement).toBe(card.querySelector(".integration-card-link") as never);
+});
+
+test("a re-apply whose Codex sync did not complete reports failure, not success", async () => {
+  // Routed but reporting an error is what the overview shows as "Update needed" for Codex.
+  codexRoutingResponse = () => json({ routingInjected: true, status: "error", recommendedCommand: null });
+  codexApplyIncomplete = true;
+  await mountOverview();
+  const card = () => container.querySelector(".integration-card[data-client='codex']")!;
+  const pill = () => card().querySelector<HTMLButtonElement>("button.integration-badge-action");
+  expect(pill()?.textContent?.trim()).toBe("Update needed");
+
+  await act(async () => { pill()!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 50)); });
+
+  const put = requests.find(request => request.method === "PUT");
+  expect(put?.url).toContain("/api/native-integrations/codex");
+  expect(card().textContent).toContain("could not be re-applied");
+  expect(card().textContent).not.toContain("was re-applied.");
+  expect(pill()).not.toBeNull();
 });
 
 test("a source that cannot be read is unknown, never 'not applied'", async () => {

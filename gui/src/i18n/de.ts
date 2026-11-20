@@ -1956,6 +1956,7 @@ export const de: Record<TKey, string> = {
   "integrations.action.settings": "Einstellungen",
   "integrations.action.reapply": "Klicken, um erneut anzuwenden und diesen Client zu aktualisieren",
   "integrations.reapply.done": "{client} wurde erneut angewendet.",
+  "integrations.reapply.incomplete": "{client} konnte nicht erneut angewendet werden: Die Änderung wurde nicht abgeschlossen. Ein Update ist weiterhin nötig.",
   "integrations.action.manageKeys": "Schlüssel verwalten",
   "integrations.action.restore": "Wiederherstellen…",
   "integrations.action.undo": "Rückgängig",

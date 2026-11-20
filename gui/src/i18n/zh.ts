@@ -1973,6 +1973,7 @@ export const zh: Record<TKey, string> = {
   "integrations.action.settings": "设置",
   "integrations.action.reapply": "点击重新应用，让这个客户端更新到最新配置",
   "integrations.reapply.done": "{client} 已重新应用。",
+  "integrations.reapply.incomplete": "{client} 未能重新应用：更改没有完成，仍需要更新。",
   "integrations.action.manageKeys": "管理密钥",
   "integrations.action.restore": "恢复…",
   "integrations.action.undo": "撤销",

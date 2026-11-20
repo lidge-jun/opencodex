@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useDataSurface } from "../../data-surface";
 import { DataSurfaceSkeleton } from "../../components/data-surface";
 import { navigateHash } from "../../hash-routing";
@@ -176,6 +176,24 @@ function OverviewCard({
       }), undefined, row.togglePath ?? undefined)
     : null;
   const toggleOn = row.toggleOn ?? row.applied;
+  /*
+   * A successful re-apply turns the pill back into a label, and removing the
+   * focused button would drop a keyboard user on <body>. Hand focus to the
+   * title (the card's stable control) — only if the pill was used and focus
+   * has not gone anywhere else since.
+   */
+  const titleRef = useRef<HTMLButtonElement>(null);
+  const reapplyActivated = useRef(false);
+  const canReapplyNow = onReapply !== null;
+  useLayoutEffect(() => {
+    if (canReapplyNow || !reapplyActivated.current) return;
+    reapplyActivated.current = false;
+    const active = document.activeElement;
+    if (!active || active === document.body) titleRef.current?.focus();
+  }, [canReapplyNow]);
+  const activateReapply = onReapply
+    ? () => { reapplyActivated.current = true; onReapply(); }
+    : undefined;
   const removableKiloIssue = row.status !== null && canDisableKiloWithCandidateIssue(row.status);
   // One of three readings a glance needs: connected, not yet, needs attention.
   const tone = !row.installed && row.state !== "unknown" ? "idle"
@@ -192,14 +210,14 @@ function OverviewCard({
         */}
         <ClientMark src={markFor(row.id)} label={t(row.labelKey)} size={20} />
         <h4>
-          <button type="button" className="integration-card-link" onClick={onOpen}>
+          <button type="button" ref={titleRef} className="integration-card-link" onClick={onOpen}>
             {t(row.labelKey)}
           </button>
         </h4>
         <IntegrationStateBadge
           state={row.state}
           installed={row.installed}
-          onActivate={onReapply ?? undefined}
+          onActivate={activateReapply}
           activateLabel={onReapply ? t("integrations.action.reapply") : undefined}
           busy={pending}
         />
@@ -695,6 +713,8 @@ export default function IntegrationsOverview({
           });
         } else if (result.reason === "non_loopback_superseded") {
           setCardResult(row.id, { tone: "ok", text: t("integrations.native.msg.nonLoopbackSuperseded") });
+        } else if (reapply && result.reason === "apply_incomplete") {
+          setCardResult(row.id, { tone: "err", text: t("integrations.reapply.incomplete", { client: t(row.labelKey) }) });
         } else if (reapply) {
           setCardResult(row.id, { tone: "ok", text: t("integrations.reapply.done", { client: t(row.labelKey) }) });
         }

@@ -2430,6 +2430,7 @@ export const ja: Record<TKey, string> = {
   "integrations.action.settings": "設定",
   "integrations.action.reapply": "クリックして再適用し、このクライアントを最新にします",
   "integrations.reapply.done": "{client} を再適用しました。",
+  "integrations.reapply.incomplete": "{client} を再適用できませんでした。変更が完了していません。引き続き更新が必要です。",
   "integrations.action.manageKeys": "キーを管理",
   "integrations.action.restore": "復元…",
   "integrations.action.undo": "元に戻す",

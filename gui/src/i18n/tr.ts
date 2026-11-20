@@ -2549,6 +2549,7 @@ export const tr: Record<TKey, string> = {
   "integrations.action.settings": "Ayarlar",
   "integrations.action.reapply": "Yeniden uygulamak ve bu istemciyi güncellemek için tıklayın",
   "integrations.reapply.done": "{client} yeniden uygulandı.",
+  "integrations.reapply.incomplete": "{client} yeniden uygulanamadı: değişiklik tamamlanmadı. Hâlâ güncelleme gerekiyor.",
   "integrations.action.manageKeys": "Anahtarları yönet",
   "integrations.action.restore": "Geri Yükle…",
   "integrations.action.undo": "Geri Al",

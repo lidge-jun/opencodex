@@ -2522,6 +2522,7 @@ export const ru: Record<TKey, string> = {
   "integrations.action.settings": "Настройки",
   "integrations.action.reapply": "Нажмите, чтобы применить заново и обновить этот клиент",
   "integrations.reapply.done": "{client}: применено заново.",
+  "integrations.reapply.incomplete": "{client}: не удалось применить заново — изменение не завершилось. Обновление всё ещё требуется.",
   "integrations.action.manageKeys": "Управлять ключами",
   "integrations.action.restore": "Восстановить…",
   "integrations.action.undo": "Отменить",
