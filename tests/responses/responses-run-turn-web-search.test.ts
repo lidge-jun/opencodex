@@ -8,6 +8,7 @@ import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig } fro
 import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
 import { saveCredential } from "../../src/oauth/store";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { PARALLEL_EXCERPT, PARALLEL_SOURCE, PARALLEL_USER_AGENT, startParallelSearchFixture } from "../helpers/parallel-search-fixture";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const resolver = await import("../../src/server/adapter-resolve");
@@ -108,10 +109,10 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = originalHome;
   removeTreeWithRetry(home);
 });
-async function run(stream: boolean, retry = false, media?: "image" | "video", search = true, comboAttempt = false) {
+async function run(stream: boolean, retry = false, media?: "image" | "video", search = true, comboAttempt = false, backend: "exa" | "parallel" = "exa") {
   const config = {
     port: 0, defaultProvider: "cursor", emptyCompletionRetry: retry,
-    webSearchSidecar: { backend: "exa", exaApiKey: "fixture-search-key" },
+    webSearchSidecar: { backend, ...(backend === "exa" ? { exaApiKey: "fixture-search-key" } : {}) },
     ...(media ? { images: { bridgeEnabled: media === "image", videoBridgeEnabled: media === "video" } } : {}),
     providers: {
       cursor: { adapter: "cursor", baseUrl: "https://api2.cursor.sh", authMode: "oauth", models: ["model"] },
@@ -393,4 +394,29 @@ test("direct Cursor hosted search funds four model iterations", async () => {
     expect(await run(true)).toContain("fourth iteration answer");
     expect(attempts).toHaveLength(4);
   } finally { globalThis.fetch = realFetch; }
+});
+
+test("Responses RunTurn uses Parallel for repeated hosted search calls", async () => {
+  const fixture = startParallelSearchFixture();
+  try {
+    events = [
+      ...["Bun serve", "Bun routes"].map((query, index): AdapterEvent[] => [
+        { type: "tool_call_start", id: `search-${index}`, name: "web_search" },
+        { type: "tool_call_delta", arguments: JSON.stringify({ query }) },
+        { type: "tool_call_end" },
+        { type: "done" },
+      ]),
+      [{ type: "text_delta", text: "answer after search" }, { type: "done" }],
+    ];
+    const output = await run(false, false, undefined, true, false, "parallel");
+    expect(output).toContain("answer after search");
+    expect(output).toContain(PARALLEL_SOURCE.url);
+    expect(JSON.stringify(attempts[2]?.context.messages)).toContain(PARALLEL_EXCERPT);
+    expect(fixture.requests.filter(row => row.rpc === "tools/call").map(row => row.params)).toEqual(
+      ["Bun serve", "Bun routes"].map(query => ({ name: "web_search", arguments: { objective: query, search_queries: [query] } })),
+    );
+    expect(fixture.requests.every(row => row.attribution === PARALLEL_USER_AGENT && !row.hasCredentials)).toBe(true);
+  } finally {
+    await fixture.stop();
+  }
 });

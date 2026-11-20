@@ -1,3 +1,4 @@
+import { WEB_SEARCH_BACKEND_IDS } from "../../types/config";
 import { readConfigForAdmittedMutation } from "../../config/persisted-mutation";
 import { getConfigDir as configRoot, withConfigDirHardeningSettled as settleConfigRoot } from "../../config/paths";
 import { WindowsSecretAclSettleTimeoutError } from "../../lib/windows-secret-acl";
@@ -1099,10 +1100,9 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
         timeoutMs?: unknown;
       };
     };
-    const WEB_SEARCH_BACKENDS_UNION = ["openai", "anthropic", "xai", "gemini", "exa"] as const;
     if (body.webSearch && body.webSearch.backend !== undefined && body.webSearch.backend !== null
-      && !WEB_SEARCH_BACKENDS_UNION.includes(body.webSearch.backend as never)) {
-      return jsonResponse({ error: "webSearch.backend must be openai, anthropic, xai, gemini, exa, or null" }, 400);
+      && !WEB_SEARCH_BACKEND_IDS.includes(body.webSearch.backend as never)) {
+      return jsonResponse({ error: "webSearch.backend must be openai, anthropic, xai, gemini, exa, parallel, or null" }, 400);
     }
     if (body.webSearch?.model !== undefined && typeof body.webSearch.model !== "string") {
       return jsonResponse({ error: "webSearch.model must be a string" }, 400);
@@ -1205,14 +1205,14 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
         // openai. null means "unset the backend", and unset resolves to openai.
         const submittedBackend = body.webSearch.backend;
         const effectiveBackend = typeof submittedBackend === "string"
-          && WEB_SEARCH_BACKENDS_UNION.includes(submittedBackend as never)
-          ? submittedBackend as typeof WEB_SEARCH_BACKENDS_UNION[number]
+          && WEB_SEARCH_BACKEND_IDS.includes(submittedBackend as never)
+          ? submittedBackend as typeof WEB_SEARCH_BACKEND_IDS[number]
           : submittedBackend === null
             ? "openai"
             : config.webSearchSidecar?.backend ?? "openai";
         const effectiveModel = typeof body.webSearch.model === "string"
           ? body.webSearch.model || undefined
-          : config.webSearchSidecar?.model;
+          : effectiveBackend === "parallel" ? undefined : config.webSearchSidecar?.model;
         if (pairTouched && effectiveModel) {
           const candidates = webEvidence!;
           if (webSearchModelIsRejected(effectiveBackend, effectiveModel, candidates)) {
@@ -1227,8 +1227,8 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
           else webSearchCandidate.model = body.webSearch.model;
         }
         if (body.webSearch.backend === null) delete webSearchCandidate.backend;
-        else if (WEB_SEARCH_BACKENDS_UNION.includes(body.webSearch.backend as never)) {
-          webSearchCandidate.backend = body.webSearch.backend as typeof WEB_SEARCH_BACKENDS_UNION[number];
+        else if (WEB_SEARCH_BACKEND_IDS.includes(body.webSearch.backend as never)) {
+          webSearchCandidate.backend = body.webSearch.backend as typeof WEB_SEARCH_BACKEND_IDS[number];
         }
         if (typeof body.webSearch.reasoning === "string") webSearchCandidate.reasoning = body.webSearch.reasoning;
         // Operator secret for the exa backend: string sets, empty string clears. The GET

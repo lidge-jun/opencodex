@@ -38,9 +38,8 @@ checked against that resolved provider/model before dispatch.
 
 Other requests relay verbatim through a configured ChatGPT forward provider. When no
 forward candidate exists, an explicitly configured `webSearchSidecar.backend` of `anthropic`,
-`xai`, `gemini`, or `exa` serves the request instead, spending only that backend's own
-credential: `src/web-search/alpha-search.ts` runs the query through that backend's executor and
-answers `{ encrypted_output: null, output, results }`. An unset or `openai` backend and a sidecar
+`xai`, `gemini`, `exa`, or `parallel` serves the request instead.
+`src/web-search/alpha-search.ts` runs the query through that backend's executor and answers `{ encrypted_output: null, output, results }`. An unset or `openai` backend and a sidecar
 disabled by `enabled: false` keep the ChatGPT-auth 400. A named backend whose credential is
 missing is refused as well, but the message names that backend and the credential it could not
 find instead of asking for ChatGPT auth, and the request reaches no other backend. A backend that
@@ -50,8 +49,14 @@ so the verbatim relay stays the path for a ChatGPT deployment.
 A configured key's scope covers both branches, each against what it actually reaches. An
 account-qualified selector is judged against its resolved route; an unqualified one against the
 account the upstream resolved and the model the body names; the fallback against the configured
-backend and the model that backend runs, with Exa named by its backend because it has no provider
-entry. `tests/server/api-key-scope-alpha-search.test.ts` covers the two unrouted branches.
+backend and the model that backend runs. Exa and Parallel use their backend names for the provider
+scope because they have no provider entry. Parallel also uses `parallel` for its model scope.
+`tests/server/api-key-scope-alpha-search.test.ts` covers the two unrouted branches.
+
+The HTTP and RunTurn search loops share the same Parallel executor with standalone search.
+It opens an anonymous Streamable HTTP session at the pinned Parallel MCP URL, sends one query
+per search, bounds the response, and closes the session. It passes only validated source URLs
+and bounded excerpts to the existing search-result formatters.
 
 ## Standalone Search and exact account selectors
 

@@ -171,6 +171,29 @@ export function planWebSearch(
   // Shared auth state (#2188): presence only — backend PREFERENCE stays with
   // resolveSidecarBackend's explicit-or-openai contract.
   const backend = resolveSidecarBackend(cfg.backend);
+  const maxSearches = cfg.maxSearchesPerTurn ?? DEFAULT_MAX_SEARCHES;
+  const stallTimeoutSec = webSearchStallTimeoutSec(
+    providerStallTimeoutSec(config, provider),
+    connectTimeoutMs,
+    routedModelStallTimeoutMs,
+    timeoutMs,
+  );
+  const describeImages = requiresVisionPreprocessing(config, provider, modelId, options.providerName);
+  const reasoning = cfg.reasoning ?? DEFAULT_SIDECAR_REASONING;
+  const streamRoutedModelOutput = cfg.streamRoutedModelOutput === true;
+
+  if (backend === "parallel") {
+    return {
+      backend,
+      hostedTool: parsed._webSearch,
+      settings: { model: "parallel", reasoning, timeoutMs, describeImages },
+      maxSearches,
+      routedModelStallTimeoutMs,
+      stallTimeoutSec,
+      streamRoutedModelOutput,
+    };
+  }
+
   // Only the anthropic backend can be refused; an unavailable selected pool means no plan, so the
   // main request takes the normal path instead of failing or borrowing another pool.
   const auth = withAnthropicHelperRefusal("web-search", () => resolveSidecarAuth(config, resolveAnthropicHelperInstance(config,
@@ -179,18 +202,6 @@ export function planWebSearch(
   const anthropicSidecar = auth.isAnthropicAuth && auth.anthropicProviderName && auth.anthropicProvider
     ? { providerName: auth.anthropicProviderName, provider: auth.anthropicProvider, config }
     : undefined;
-  const maxSearches = cfg.maxSearchesPerTurn ?? DEFAULT_MAX_SEARCHES;
-  const stallTimeoutSec = webSearchStallTimeoutSec(
-    providerStallTimeoutSec(config, provider),
-    connectTimeoutMs,
-    routedModelStallTimeoutMs,
-    timeoutMs,
-  );
-  // A target proven unable to accept image input receives verbalized image results instead of
-  // search-result images. A genuinely unknown custom target keeps the established pass-through.
-  const describeImages = requiresVisionPreprocessing(config, provider, modelId, options.providerName);
-  const reasoning = cfg.reasoning ?? DEFAULT_SIDECAR_REASONING;
-  const streamRoutedModelOutput = cfg.streamRoutedModelOutput === true;
 
   // Anthropic backend authenticates with the STORED credential — no forward provider or ChatGPT login gate.
   // resolveSidecarBackend only returns "anthropic" when it was explicitly configured OR a usable credential

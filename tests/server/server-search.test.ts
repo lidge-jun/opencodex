@@ -29,6 +29,9 @@ import { handleSearch, SEARCH_RESPONSE_MAX_BYTES } from "../../src/server/search
 import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
+import {
+  PARALLEL_EXCERPT, PARALLEL_SOURCE, PARALLEL_USER_AGENT, startParallelSearchFixture,
+} from "../helpers/parallel-search-fixture";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 
@@ -592,6 +595,130 @@ test("native search route preview does not claim a round-robin combo turn", asyn
     clearComboSelectionState();
   }
 }, 5_000);
+
+test("alpha search sends only the explicit Parallel query over anonymous MCP and retains source URLs", async () => {
+  saveConfig(routedConfig({ webSearchSidecar: { backend: "parallel" } }));
+  const fixture = startParallelSearchFixture("resume");
+  const server = startServer(0);
+  try {
+    const request = alphaSearchRequest({ commands: { search_query: [{ q: "Bun serve" }] }, model: "gpt-test" });
+    const response = await fetch(new URL("/v1/alpha/search", server.url), request);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({ encrypted_output: null, results: [PARALLEL_SOURCE] });
+    expect(body.output).toContain(PARALLEL_EXCERPT);
+    expect(body.output).not.toContain("unsafe link");
+    expect(fixture.requests.filter(row => row.rpc === "tools/call")).toEqual([
+      expect.objectContaining({
+        params: { name: "web_search", arguments: { objective: "Bun serve", search_queries: ["Bun serve"] } },
+        hasSession: true,
+      }),
+    ]);
+    expect(fixture.requests.some(row => row.method === "GET" && row.resumeFrom === "search-started")).toBe(true);
+    expect(fixture.requests.some(row => row.method === "DELETE")).toBe(true);
+    expect(fixture.requests.every(row => row.attribution === PARALLEL_USER_AGENT && !row.hasCredentials)).toBe(true);
+  } finally {
+    await server.stop(true);
+    await fixture.stop();
+  }
+});
+
+test.each(["responses", "chat/completions", "messages"])("routed %s gives the model Parallel excerpts", async endpoint => {
+  const fixture = startParallelSearchFixture();
+  const requests: Record<string, unknown>[] = [];
+  const model = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    async fetch(request) {
+      if (new URL(request.url).pathname !== "/v1/chat/completions") return new Response(null, { status: 404 });
+      requests.push(await request.json() as Record<string, unknown>);
+      const first = requests.length === 1;
+      const delta = first
+        ? { tool_calls: [{ index: 0, id: "search-1", type: "function", function: {
+          name: "web_search", arguments: '{"query":"Bun serve"}',
+        } }] }
+        : { content: "Answer based on the search result." };
+      const chunk = {
+        id: "fixture", object: "chat.completion.chunk", model: "fixture",
+        choices: [{ index: 0, delta, finish_reason: first ? "tool_calls" : "stop" }],
+      };
+      return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+        headers: { "content-type": "text/event-stream" },
+      });
+    },
+  });
+  saveConfig(routedConfig({
+    defaultProvider: "fixture",
+    providers: {
+      fixture: { adapter: "openai-chat", baseUrl: new URL("/v1", model.url).href, apiKey: "fixture",
+        allowPrivateNetwork: true, proxy: "direct", models: ["fixture"] },
+    },
+    // Exercise the Claude-only override independently of the global setting.
+    ...(endpoint === "messages"
+      ? { claudeCode: { webSearchSidecar: { backend: "parallel" } } }
+      : { webSearchSidecar: { backend: "parallel" } }),
+  }));
+  const server = startServer(0);
+  try {
+    const request = {
+      model: "fixture/fixture", stream: true,
+      ...(endpoint === "responses"
+        ? { input: "Search for Bun docs" }
+        : { messages: [{ role: "user", content: "Search for Bun docs" }] }),
+      ...(endpoint === "messages" ? { max_tokens: 1_024 } : {}),
+      tools: endpoint === "messages"
+        ? [{ type: "web_search_20250305", name: "web_search" }]
+        : [{ type: "web_search" }],
+    };
+    const response = await fetch(new URL(`/v1/${endpoint}`, server.url), {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request),
+    });
+    const data = await response.text();
+    expect(response.status).toBe(200);
+    expect(data).toContain("Answer based on the search result.");
+    expect(requests).toHaveLength(2);
+    expect(JSON.stringify(requests[1]?.messages)).toContain(PARALLEL_EXCERPT);
+    expect(JSON.stringify(requests[1]?.messages)).toContain(PARALLEL_SOURCE.url);
+    expect(fixture.requests.filter(row => row.rpc === "tools/call")).toHaveLength(1);
+    expect(fixture.requests.every(row => row.attribution === PARALLEL_USER_AGENT && !row.hasCredentials)).toBe(true);
+  } finally {
+    await server.stop(true);
+    await model.stop(true);
+    await fixture.stop();
+  }
+});
+
+test.each(["error", "redirect", "oversized"] as const)("Parallel %s fails at the selected backend", async mode => {
+  const fixture = startParallelSearchFixture(mode);
+  try {
+    const response = await handleSearch(
+      alphaSearchRequest({ query: "Bun serve" }),
+      routedConfig({ webSearchSidecar: { backend: "parallel" }, search: { timeoutMs: 2_000 } }),
+      { model: "", provider: "" },
+    );
+    expect(response.status).toBe(502);
+    const body = await response.json();
+    expect(body.error.message).toContain("parallel web search failed");
+    expect(body.error.message).not.toContain("untrusted upstream diagnostic");
+    expect(fixture.requests.filter(row => row.rpc === "tools/call")).toHaveLength(1);
+  } finally {
+    await fixture.stop();
+  }
+});
+
+test("disabled and unset backends never contact the Parallel sidecar", async () => {
+  const fixture = startParallelSearchFixture();
+  try {
+    for (const webSearchSidecar of [{ backend: "parallel" as const, enabled: false }, undefined]) {
+      const response = await handleSearch(
+        alphaSearchRequest({ query: "Bun serve" }), routedConfig({ webSearchSidecar }), { model: "", provider: "" },
+      );
+      expect(response.status).toBe(400);
+    }
+    expect(fixture.requests).toEqual([]);
+  } finally {
+    await fixture.stop();
+  }
+});
 
 test("falls back to a configured exa sidecar when no ChatGPT forward provider exists", async () => {
   const captured: CapturedExaRequest[] = [];
