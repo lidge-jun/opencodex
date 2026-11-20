@@ -93,21 +93,37 @@ async function withResetCreditAuth<T>(
   };
 }
 
-function safeResetCreditsDto(input: unknown): { credits: { granted_at: string; expires_at: string }[]; available_count?: number } {
+type ResetCreditRowDto = {
+  granted_at: string;
+  expires_at: string | null;
+  reset_type?: string;
+  status?: string;
+  title?: string;
+  description?: string;
+};
+
+function safeResetCreditsDto(input: unknown): { credits: ResetCreditRowDto[]; available_count?: number; total_earned_count?: number } {
   const obj = typeof input === "object" && input !== null ? input as Record<string, unknown> : {};
   const rawCredits = Array.isArray(obj.credits) ? obj.credits : [];
-  const credits = rawCredits.flatMap((raw): { granted_at: string; expires_at: string }[] => {
+  const credits = rawCredits.flatMap((raw): ResetCreditRowDto[] => {
     if (typeof raw !== "object" || raw === null) return [];
     const credit = raw as Record<string, unknown>;
-    return typeof credit.granted_at === "string" && typeof credit.expires_at === "string"
-      ? [{ granted_at: credit.granted_at, expires_at: credit.expires_at }]
-      : [];
+    if (typeof credit.granted_at !== "string") return [];
+    const row: ResetCreditRowDto = {
+      granted_at: credit.granted_at,
+      expires_at: typeof credit.expires_at === "string" ? credit.expires_at : null,
+    };
+    for (const field of ["reset_type", "status", "title", "description"] as const) {
+      if (typeof credit[field] === "string") row[field] = credit[field].slice(0, 200);
+    }
+    return [row];
   });
   const rawAvailable = (obj.rate_limit_reset_credits as { available_count?: unknown } | null | undefined)?.available_count
     ?? obj.available_count;
   return {
     credits,
     ...(typeof rawAvailable === "number" && Number.isFinite(rawAvailable) ? { available_count: rawAvailable } : {}),
+    ...(typeof obj.total_earned_count === "number" && Number.isFinite(obj.total_earned_count) ? { total_earned_count: obj.total_earned_count } : {}),
   };
 }
 
@@ -140,7 +156,9 @@ export function createResetCreditWhamClient(config: OcxConfig, accountId: string
       if (!resp.ok) { await resp.body?.cancel().catch(() => {}); throw new Error(`upstream ${resp.status}`); }
       const parsed = await readResetCreditJson(resp, AbortSignal.timeout(8000));
       if (!parsed.ok) throw new Error("invalid upstream reset-credit response");
-      return { credits: safeResetCreditsDto(parsed.value).credits };
+      return { credits: safeResetCreditsDto(parsed.value).credits.filter(
+        (credit): credit is ResetCreditRowDto & { expires_at: string } => typeof credit.expires_at === "string",
+      ) };
     }),
     consume: redeemRequestId => run(async auth => {
       const resp = await fetch("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume", {

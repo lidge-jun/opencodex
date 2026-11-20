@@ -577,7 +577,7 @@
     "codex-app-server-processes.test.ts": "codex-integration",
     "codex-proc-scan-errors.test.ts": "codex-integration",
     "codex-app-server-restart-service.test.ts": "codex-integration",
-    "codex-auth-api.test.ts": "codex-integration",
+    "codex-auth-api.test.ts": "codex-integration", "codex-reset-credit-dto.test.ts": "codex-integration",
     "codex-linked-account-pause.test.ts": "codex-integration", "codex-resume-if-healthy.test.ts": "codex-integration",
     "codex-auth-cancel-ownership.test.ts": "codex-integration",
     "codex-auth-collision.test.ts": "codex-integration",
