@@ -35,6 +35,7 @@ import { migrateStartupReserveCapability } from "./reserve-capability-startup";
 import { migrateStartupXaiResponses } from "./xai-responses-startup";
 import { migrateStartupZaiResponses } from "./zai-responses-startup";
 import { reconcileOAuthProviders } from "../oauth";
+import { coolComboTargetForCommittedTerminal } from "../combos";
 import { withCatalogWriteSerialization } from "../codex/catalog-write-serialization";
 import { invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
 import { currentServiceHomes, serviceStatePathsForOpenCodexHome } from "../service";
@@ -116,6 +117,7 @@ import {
   inspectResponseLogSsePayload,
   nextRequestLogId,
   recordFirstOutput,
+  registerCommittedTerminalCooldownHandler,
   type RequestLogContext,
   type RequestLogEntry,
 } from "./request-log";
@@ -233,6 +235,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   warnPlaintextV2AgentMessagesStartup(config);
   warnAgentTaskRecoveryStartup(config);
   setLiveStateStoreConfig(config);
+  registerCommittedTerminalCooldownHandler(coolComboTargetForCommittedTerminal);
   applyProxyEnv(config, true);
   assertServerAuthConfig(config);
   const managementAuth = deps.managementAuthState ?? initializeManagementAuthState(config);

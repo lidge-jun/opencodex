@@ -103,12 +103,12 @@ describe("subscription CLI warning copy", () => {
     }
   });
 
-  test("every warning keeps the CLI chip and names the API-key provider", () => {
+  test("every warning has placeholders for the CLI name, command chip, plan and API-key provider", () => {
     for (const [locale, dict] of Object.entries(DICTS)) {
       const warning = dict["modal.subscriptionCliWarning"];
-      expect(warning.split("{cmd}").length, locale).toBe(2);
-      expect(warning, locale).toContain("{apiProvider}");
-      expect(warning, locale).toContain("Claude Code");
+      expect(warning.match(/\{[^{}]+\}/g)?.sort(), locale).toEqual([
+        "{apiProvider}", "{cli}", "{cmd}", "{plan}",
+      ]);
     }
   });
 });

@@ -549,6 +549,19 @@
       "documents": ["src/claude/", "src/server/responses/", "src/types/claude-tool-loading.ts"]
     },
     {
+      "path": "data-planes/gemini-native.md",
+      "tier": 3,
+      "title": "Native Gemini Inbound",
+      "scope": "Opt-in source-preserving Gemini requests over Antigravity OAuth within the shared Gemini ingress.",
+      "documents": [
+        "src/server/gemini-native.ts",
+        "src/server/gemini-native-wire.ts",
+        "src/server/gemini-native-catalog.ts",
+        "src/server/gemini-native-log.ts",
+        "src/server/index/gemini-routes.ts"
+      ]
+    },
+    {
       "path": "data-planes/ollama-inbound.md",
       "tier": 3,
       "title": "Ollama-Compatible Inbound",
@@ -712,6 +725,15 @@
         "src/server/",
         "src/types/",
         "src/web-search/"
+      ]
+    },
+    {
+      "path": "providers/step-cli-transport.md",
+      "tier": 4,
+      "title": "StepCode CLI Transport",
+      "scope": "StepCode as a Step Plan transport: its own framed stdio wire, one process per conversation, inline SDK tools instead of an MCP catalog, and the bounded tool-result window.",
+      "documents": [
+        "src/adapters/step-cli/"
       ]
     },
     {
@@ -896,6 +918,13 @@
       "title": "Codex Round-Robin Placement",
       "scope": "Round-robin new-conversation placement preferring accounts under their effective auto-switch threshold, with all-over fallback and bound, failover and lineage boundaries.",
       "documents": ["src/codex/routing/selection.ts"]
+    },
+    {
+      "path": "providers/reset-near-weighted.md",
+      "tier": 4,
+      "title": "Reset-near-weighted Account Ordering",
+      "scope": "Opt-in Codex and Anthropic placement weights, observation freshness, eligibility and affinity.",
+      "documents": ["src/routing/machine-weighted-routing.ts", "src/codex/routing/selection.ts", "src/codex/quota-observation-freshness.ts", "src/oauth/anthropic-routing.ts", "src/oauth/pool-kernel.ts", "src/providers/quota/account-cache.ts"]
     },
     {
       "path": "providers/openai-signed-in-preservation.md",
@@ -1380,7 +1409,7 @@
       "tier": 6,
       "title": "Managed Service Logging",
       "scope": "Service-only console timestamps and bounded copy-truncate log retention. Producer bounds for combo positions, target providers and effort diagnostics.",
-      "documents": ["src/service/logging.ts", "src/combos/resolve.ts", "src/combos/request.ts", "src/server/responses/core-combo.ts"]
+      "documents": ["src/service/logging.ts", "src/combos/resolve.ts", "src/combos/request.ts", "src/combos/request-capability.ts", "src/server/responses/core-combo.ts"]
     },
     {
       "path": "ops/service-health-recovery.md",

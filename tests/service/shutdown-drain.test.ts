@@ -4,7 +4,12 @@ import { repoPath } from "../helpers/repo-root";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { create } from "@bufbuild/protobuf";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import {
+  registerAsyncOptionalShutdownHook,
+  registerDrainStartHook,
+  resetOptionalShutdownHooksForTests,
+} from "../../src/lib/optional-shutdown-hooks";
 import {
   drainAndShutdown,
   registerTurn,
@@ -83,6 +88,24 @@ function fakeServer(stopImpl?: (closeActiveConnections?: boolean) => void | Prom
 }
 
 describe("server listener shutdown", () => {
+  test.each([0, 5_000, 30_000])("does not give cleanup a fresh budget after the %ims drain and stop window", async timeoutMs => {
+    const fake = fakeServer();
+    const start = Date.now();
+    const clock = spyOn(Date, "now").mockReturnValue(start);
+    const exhaustStopWindow = registerDrainStartHook("exhaust-stop-window", () => {
+      clock.mockReturnValue(start + timeoutMs + 3_000);
+    });
+    registerAsyncOptionalShutdownHook("delayed-receipt", () => Bun.sleep(5));
+    try {
+      expect(await drainAndShutdown(fake.server, timeoutMs)).toBe(false);
+      expect(fake.stops()).toBe(1);
+    } finally {
+      clock.mockRestore();
+      exhaustStopWindow();
+      resetOptionalShutdownHooksForTests();
+    }
+  });
+
   test("single-flights stop(true) and keeps every waiter pending until close completes", async () => {
     let resolveStop!: () => void;
     const fake = fakeServer(() => new Promise<void>(resolve => { resolveStop = resolve; }));

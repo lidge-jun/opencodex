@@ -21,18 +21,21 @@ import { responseSpillDirectory } from "../../src/responses/spill-store";
 import { PLAINTEXT_V2_COLLABORATION_NAMESPACE } from "../../src/responses/plaintext-v2-agent-messages";
 import { startServer } from "../../src/server";
 import { aggregateTelemetryForDay } from "../../src/telemetry/aggregate";
+import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
 import type { OcxConfig } from "../../src/types";
 import { readRecentUsageEntries } from "../../src/usage/log";
 import { computeEntryCost, summarizeUsage } from "../../src/usage/summary";
 import { codexHeaders, encryptedInput } from "../helpers/agent-task-recovery";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
+import { redirectCanonicalCodexTo } from "../helpers/pool-retry-harness";
 import { INTERNAL_DEADLINE_MS, SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { rememberOwnedResponseState as rememberResponseState, responseReplayFixtureApiKeys,
   responseReplayFixtureHeaders } from "../helpers/response-replay-owner";
 
 const originalFetch = globalThis.fetch;
+const originalWebSocket = globalThis.WebSocket;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const REPLAY_TTL_MS = RESPONSE_TTL_MS;
@@ -214,7 +217,7 @@ async function runForwardScenario(
     }) as typeof fetch;
 
     saveConfig(forwardConfig());
-    server = startServer(0);
+    server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
     const token = fakeChatGptJwt({ chatgpt_account_id: "acct-issue-702" });
     const requestHeaders = {
       ...(mode === "ordinary" ? {} : responseReplayFixtureHeaders()),
@@ -286,6 +289,8 @@ async function runForwardScenario(
 }
 
 beforeEach(() => {
+  // Native WSS must fall back to each test's HTTP fetch stub, never the network.
+  redirectCanonicalCodexTo("http://127.0.0.1");
   testHome = mkdtempSync(join(tmpdir(), "ocx-issue-702-"));
   process.env.OPENCODEX_HOME = testHome;
   delete process.env.OPENCODEX_API_AUTH_TOKEN;
@@ -296,6 +301,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  globalThis.WebSocket = originalWebSocket;
   clearResponseStateForTests();
   setResponseStateByteCapForTests(null);
   resetSubagentModelFallbackStateForTests();
@@ -373,7 +379,7 @@ describe("routed replay recovery", () => {
           },
         },
       } as OcxConfig);
-      server = startServer(0);
+      server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
       const deltaRequest = {
         model: "routed-test/test-model", previous_response_id: FIRST_RESPONSE_ID,
         input: [toolResult], tools, store: false,
@@ -488,7 +494,7 @@ describe("routed replay recovery", () => {
           },
         },
       } as OcxConfig);
-      server = startServer(0);
+      server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
 
       const refused = await originalFetch(new URL("/v1/responses", server.url), {
         method: "POST",
@@ -568,7 +574,7 @@ describe("routed replay recovery", () => {
             },
           },
         } as OcxConfig);
-        server = startServer(0);
+        server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
         const response = await originalFetch(new URL("/v1/responses", server.url), {
           method: "POST",
           headers: { "content-type": "application/json", ...responseReplayFixtureHeaders() },
@@ -662,7 +668,7 @@ describe("Issue #702 expired forward replay state", () => {
     try {
       for (const routeClass of routeClasses) {
         saveConfig(routeClass.config);
-        const server = startServer(0);
+        const server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
         try {
           const response = await originalFetch(new URL("/v1/responses", server.url), {
             method: "POST",
@@ -746,7 +752,7 @@ describe("Issue #702 expired forward replay state", () => {
         return originalFetch(input, init);
       }) as typeof fetch;
       saveConfig({ ...forwardConfig(), websockets: true });
-      server = startServer(0);
+      server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
       const headers = {
         ...responseReplayFixtureHeaders(),
         authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "acct-issue-702" })}`,
@@ -1017,7 +1023,7 @@ describe("Issue #702 expired forward replay state", () => {
       throw new Error("upstream must not be called");
     }) as typeof fetch;
     saveConfig(forwardConfig());
-    const server = startServer(0);
+    const server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
     const token = fakeChatGptJwt({ chatgpt_account_id: "acct-issue-702" });
     const ask = async (previousResponseId: string, threadId: string): Promise<{ status: number; body: string }> => {
       const response = await originalFetch(new URL("/v1/responses", server.url), {
@@ -1089,7 +1095,7 @@ describe("Issue #702 expired forward replay state", () => {
           },
         },
       } as OcxConfig);
-      server = startServer(0);
+      server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
       socket = await openResponseSocket(server.url, responseReplayFixtureHeaders("task-b"));
       const refused = await sendSocketTurn(socket, {
         model: "routed-test/test-model", previous_response_id: FIRST_RESPONSE_ID,
@@ -1160,7 +1166,7 @@ describe("Issue #702 expired forward replay state", () => {
           },
         },
       } as OcxConfig);
-      server = startServer(0);
+      server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
       rememberResponseState(
         { input: [inputMessage(HISTORICAL_USER_SENTINEL)], store: false },
         { id: FIRST_RESPONSE_ID, status: "completed", output: [] },
@@ -1230,7 +1236,7 @@ describe("Issue #702 expired forward replay state", () => {
           },
         },
       } as OcxConfig);
-      server = startServer(0);
+      server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
 
       const response = await originalFetch(new URL("/v1/responses", server.url), {
         method: "POST",

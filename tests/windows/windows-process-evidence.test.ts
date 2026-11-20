@@ -17,6 +17,7 @@ import {
   type WindowsProcessNativeApi,
 } from "../../src/service/windows-process-native";
 import {
+  SNAPSHOT_OWNER_RESERVE_MS,
   windowsProcessSnapshotScript,
   openWindowsProcessWatch,
   overlayNativeCreationTimes,
@@ -201,7 +202,7 @@ describe("Windows process evidence: facades", () => {
     });
     expect(commands).toHaveLength(1);
     expect(commands[0]).toMatchObject({ program: "powershell", timeoutMs: 5_000 });
-    const script = windowsProcessSnapshotScript();
+    const script = windowsProcessSnapshotScript(5_000);
     expect(commands[0]!.args.at(-1)).toBe(script);
     // Owner queries only cover potential candidates, and re-read identity AFTER the SID.
     expect(script).toContain("-like '*opencodex-service*'");
@@ -239,20 +240,36 @@ const liveX64 = process.platform !== "win32" || process.arch !== "x64";
 
 const portablePowerShell = Bun.which("pwsh");
 
-// The three budgets run in one test that shares one 60 s window: a slow first PowerShell start may use
+const ownerBudgetCases = {
+  available: [32, 32],
+  expired: [0, 0],
+  "expires-during-enumeration": [0, 0],
+  "expires-during-owner": [1, 0],
+  "expires-during-refresh": [1, 1],
+  "cap-reached": [0, 0],
+  "cap-during-owner": [1, 0],
+  "cap-during-refresh": [1, 1],
+} as const;
+
+// The budgets run in one test that shares one 60 s window: a slow first PowerShell start may use
 // most of it, but a hang still fails inside the 120 s Linux batch deadline, naming the active budget.
+// "cap-reached" is the hosted-runner regression: the loop's own 1.5 s budget is fresh, but the
+// helper has already used the snapshot cap's owner window, so no owner read may start.
+// "cap-during-owner" passes the cap's owner cutoff while the first owner read is in flight, so its
+// refresh read must not start either.
 test.skipIf(process.platform !== "win32" && !portablePowerShell)("owner enrichment prioritizes this home and retains every row", async () => {
   const deadline = Date.now() + 60_000;
-  for (const budget of ["available", "expired", "expires-during-owner", "expires-during-refresh", "expires-during-enumeration"] as const) {
+  for (const budget of Object.keys(ownerBudgetCases) as (keyof typeof ownerBudgetCases)[]) {
     try { await ownerEnrichmentCase(budget, deadline); }
     catch (error) { throw new Error("budget=" + budget + ": " + (error instanceof Error ? error.message : String(error)), { cause: error }); }
   }
 }, 65_000);
 
-async function ownerEnrichmentCase(budget: "available" | "expired" | "expires-during-owner" | "expires-during-refresh" | "expires-during-enumeration", deadline: number): Promise<void> {
+async function ownerEnrichmentCase(budget: keyof typeof ownerBudgetCases, deadline: number): Promise<void> {
   const powershell = process.platform === "win32" ? resolveTrustedWindowsPowerShellExe() : portablePowerShell!;
   const launcher = Buffer.from(windowsLauncherVbsPath(), "utf8").toString("base64");
-  const script = windowsProcessSnapshotScript().replace(
+  // A cap equal to the reserve puts the owner cutoff at the helper's own start.
+  const script = windowsProcessSnapshotScript(budget === "cap-reached" ? SNAPSHOT_OWNER_RESERVE_MS : 60_000).replace(
     "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value", "'S-1-5-21-100-200-300-1001'",
   ).replace("[Diagnostics.Stopwatch]::StartNew()", "(New-FixtureClock)");
   const prelude = [
@@ -260,13 +277,15 @@ async function ownerEnrichmentCase(budget: "available" | "expired" | "expires-du
     "function New-FixtureClock { $script:elapsed = " + (budget === "expired" ? 1500 : 0) + "; $clock = [pscustomobject]@{};",
     "  $clock | Add-Member ScriptProperty ElapsedMilliseconds { $script:elapsed }; return $clock };",
     "function Get-CimInstance { param($ClassName, $InputObject, $ErrorAction, $OperationTimeoutSec)",
-    "  if ($InputObject) { $script:refreshReads++; " + (budget === "expires-during-refresh" ? "$script:elapsed = 1500; " : "") + "return $InputObject };",
+    "  if ($InputObject) { $script:refreshReads++; " + (budget === "expires-during-refresh" ? "$script:elapsed = 1500; " : "")
+      + (budget === "cap-during-refresh" ? "$ownerBudget.Until = [DateTime]::UtcNow.AddMinutes(-1); " : "") + "return $InputObject };",
     budget === "expires-during-enumeration" ? "$script:elapsed = 1500;" : "",
     "  1..40 | ForEach-Object { [pscustomobject]@{ ProcessId = $_; ParentProcessId = 900; Name = 'cmd.exe';",
     "    CommandLine = if ($_ -eq 40) { 'wscript.exe \"' + [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + launcher + "')) + '\"' } else { 'cmd.exe' };",
     "    CreationDate = [datetime]'2026-11-12T01:02:03Z' } } };",
     "function Invoke-CimMethod { param($InputObject, $MethodName, $ErrorAction, $OperationTimeoutSec)",
     "  $script:ownerReads++; " + (budget === "expires-during-owner" ? "$script:elapsed = 1500; " : "")
+      + (budget === "cap-during-owner" ? "$ownerBudget.Until = [DateTime]::UtcNow.AddMinutes(-1); " : "")
       + "@{ Sid = $currentSid; ReturnValue = 0 } };",
     "$rows = & { " + script + " };",
     "[pscustomobject]@{ Snapshot = $rows; OwnerReads = $script:ownerReads; RefreshReads = $script:refreshReads } | ConvertTo-Json -Compress",
@@ -285,9 +304,9 @@ async function ownerEnrichmentCase(budget: "available" | "expired" | "expires-du
   const rows = parseWindowsProcessSnapshot(Array.isArray(result.Snapshot) ? result.Snapshot.join("\n") : result.Snapshot)!;
   expect(rows).toHaveLength(40);
   expect(rows.map(row => row.pid)).toEqual(Array.from({ length: 40 }, (_, index) => index + 1));
-  expect(result.OwnerReads).toBe(budget === "available" ? 32 : ["expired", "expires-during-enumeration"].includes(budget) ? 0 : 1);
-  const refreshed = budget === "available" ? 32 : budget === "expires-during-refresh" ? 1 : 0;
-  expect(result.RefreshReads).toBe(refreshed);
+  const [ownerReads, refreshReads] = ownerBudgetCases[budget];
+  expect(result.OwnerReads).toBe(ownerReads);
+  expect(result.RefreshReads).toBe(refreshReads);
   expect(rows[39]!.foreignOwner).toBe(budget === "available" ? false : null);
   const ordinaryRefreshed = budget === "available" ? 31 : 0;
   expect(rows.slice(0, ordinaryRefreshed).every(row => row.foreignOwner === false)).toBe(true);

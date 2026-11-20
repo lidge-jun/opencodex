@@ -48,7 +48,7 @@ export interface LocalChatCompletionRequest {
 
 export type LocalChatCompletionOutcome = { text: string; error?: string };
 
-function destination(config: Pick<OcxConfig, "port" | "hostname" | "unauthenticatedLoopbackListener">) {
+export function localChatCompletionDestination(config: Pick<OcxConfig, "port" | "hostname" | "unauthenticatedLoopbackListener">) {
   // config.port can be 0 (ephemeral bind, tests) or stale after a live port override; the
   // server records its ACTUAL bound port via setCorsOrigin at startup, so prefer that when
   // config carries no positive port. configuredPort() is itself 0 when _corsOrigin has no
@@ -63,13 +63,13 @@ function destination(config: Pick<OcxConfig, "port" | "hostname" | "unauthentica
 export function localChatCompletionBaseUrl(
   config: Pick<OcxConfig, "port" | "hostname" | "unauthenticatedLoopbackListener">,
 ): string {
-  return destination(config).origin;
+  return localChatCompletionDestination(config).origin;
 }
 
 export async function postLocalChatCompletion(request: LocalChatCompletionRequest): Promise<LocalChatCompletionOutcome> {
   const { config, label, logTag } = request;
   const headers: Record<string, string> = { "Content-Type": "application/json", ...request.headers };
-  const target = destination(config);
+  const target = localChatCompletionDestination(config);
   const admission = selfFetchAdmissionToken(config, target);
   if (admission) headers["x-opencodex-api-key"] = admission;
   // A bind that demands admission with no resolvable credential would return 401 with a body

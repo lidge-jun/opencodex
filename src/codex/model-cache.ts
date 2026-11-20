@@ -21,6 +21,8 @@ interface CacheEntry {
   sizeBytes: number;
   /** Irreversible credential/account identity for entitlement-sensitive catalogs. */
   authorityIdentity?: string;
+  /** Set by {@link expireModelCache}: the rows stay as the fallback but no longer count as fresh. */
+  expired?: true;
 }
 
 export type ProviderModelDiscoveryFailureReason =
@@ -130,8 +132,8 @@ export function markModelsFetchFailure(
  * silently recording zero and misclassifying the provider as having no live catalog. */
 export function markProviderDiscoveryOk(provider: string, liveModelCount: number, observationOrder?: number): void {
   discoveryStatus.set(provider, { observation: { status: "ok" }, observationOrder });
-  // Ordered discovery can succeed after an earlier failure started a cooldown in flight.
-  if (observationOrder !== undefined) failureAt.delete(provider);
+  // A newer discovery can succeed after an earlier failure started a cooldown in flight.
+  failureAt.delete(provider);
   liveModelCounts.set(provider, Math.max(0, Math.floor(liveModelCount)));
 }
 
@@ -211,7 +213,7 @@ export function isModelsFetchCoolingDown(
 export function getFreshCached(provider: string, ttlMs: number, now = Date.now(), authorityIdentity?: string): CatalogModel[] | null {
   const entry = cache.get(provider);
   if (!entry) return null;
-  if (authorityIdentity !== undefined && entry.authorityIdentity !== authorityIdentity) return null;
+  if (entry.expired || (authorityIdentity !== undefined && entry.authorityIdentity !== authorityIdentity)) return null;
   return now - entry.fetchedAt < ttlMs ? entry.models : null;
 }
 
@@ -249,37 +251,62 @@ export function isModelCacheGenerationCurrent(provider: string, generation: stri
 }
 
 /**
- * How many times this provider's cached content has actually changed.
- *
- * Deliberately separate from the generation. A generation revokes an in-flight discovery's right
- * to publish, so it advances on an authority clear and must not be repurposed: moving it on a
- * successful publication would cancel writes that are still legitimate. This counts accepted
- * publications and removals instead, which is what a reader holding a derived roster needs to
- * know, and it advances on exactly the event a generation does not: a discovery that succeeded
- * and changed the rows.
- *
- * Reading is passive. An unseen provider reads as `0` rather than seeding an entry, so observing
- * one cannot alter what a later capture or publication sees.
+ * Track cached row changes independently from authority invalidation and discovery ordering.
+ * A reader holding a derived roster needs all three terms to revalidate publication.
+ * Reading a revision is passive and never creates a provider entry.
  */
 const providerCacheRevisions = new Map<string, number>();
 let globalContentRevision = 0;
 
+// The publication watermark survives row eviction while a delayed flight can still finish.
+const publishedDiscoveryGenerations = new Map<string, number>();
+let nextDiscoveryGeneration = 0;
+
+export function captureModelDiscoveryGeneration(): number {
+  return ++nextDiscoveryGeneration;
+}
+
+export function canPublishModelDiscovery(provider: string, generation: number): boolean {
+  return generation >= (publishedDiscoveryGenerations.get(provider) ?? 0);
+}
+
+/** Advance the shared watermark for either outcome, independently of cached rows. */
+export function claimModelDiscoveryPublication(provider: string, generation: number): boolean {
+  if (!canPublishModelDiscovery(provider, generation)) return false;
+  publishedDiscoveryGenerations.set(provider, generation);
+  return true;
+}
+
 function bumpProviderCacheRevision(provider: string): void {
   providerCacheRevisions.set(provider, (providerCacheRevisions.get(provider) ?? 0) + 1);
+}
+
+/** A successful roster available to its caller after a newer observation wins publication. */
+export function callerLocalModelDiscoveryRevision(cacheGeneration: string): string {
+  return `caller-local:${cacheGeneration}`;
 }
 
 export function observeModelCacheRevision(provider: string): string {
   // The global term covers a clear that empties the map wholesale, which per-provider counters
   // cannot express: without it, wiping every entry and republishing identical-looking rows would
   // read as unchanged. It also survives pruning, so a retired provider cannot come back with a
-  // counter that matches a roster built before it left.
-  return `${globalContentRevision}:${providerCacheRevisions.get(provider) ?? 0}`;
+  // counter that matches a roster built before it left. The publication watermark also
+  // retires older derived rosters on a newer failure, even when the rows stay unchanged.
+  return `${globalContentRevision}:${providerCacheRevisions.get(provider) ?? 0}`
+    + `:${providerCacheGenerations.get(provider) ?? 0}:${publishedDiscoveryGenerations.get(provider) ?? 0}`;
+}
+
+/** Recognize ordered supersession while the provider's cache authority still holds. */
+export function readableSupersededModelDiscovery(provider: string, revision: string): "caller-local" | "previously-current" | null {
+  const authority = providerCacheGenerations.get(provider) ?? 0;
+  if (revision === callerLocalModelDiscoveryRevision(`${globalCacheGeneration}:${authority}`)) return "caller-local";
+  const [epoch, , capturedAuthority, publication] = revision.split(":");
+  return epoch === String(globalContentRevision) && capturedAuthority === String(authority)
+    && Number(publication) < (publishedDiscoveryGenerations.get(provider) ?? 0) ? "previously-current" : null;
 }
 
 /**
- * Store a live result unless the cache was cleared while that asynchronous discovery was running.
- * The optional generation keeps existing direct cache writers unchanged while discovery callers can
- * prevent a previous OAuth account from repopulating the current account's cache.
+ * Store a live result if cache authority still holds and no newer discovery has published.
  */
 export function setCached(
   provider: string,
@@ -287,8 +314,10 @@ export function setCached(
   now = Date.now(),
   generation?: string,
   authorityIdentity?: string,
+  discoveryGeneration?: number,
 ): boolean {
   if (generation !== undefined && !isModelCacheGenerationCurrent(provider, generation)) return false;
+  if (discoveryGeneration !== undefined && !claimModelDiscoveryPublication(provider, discoveryGeneration)) return false;
   deleteCachedProvider(provider);
   const sizeBytes = modelCacheEncoder.encode(provider).byteLength
     + modelCacheEncoder.encode(JSON.stringify(models)).byteLength;
@@ -304,6 +333,18 @@ export function setCached(
   return true;
 }
 
+/**
+ * Expire freshness and require a new observation, keeping the last-known-good rows for fallback.
+ * During failure backoff, leave both the cache and its failure observation intact.
+ */
+export function expireModelCache(provider: string): boolean {
+  if (isModelsFetchCoolingDown(provider)) return false;
+  const entry = cache.get(provider);
+  if (entry) entry.expired = true;
+  discoveryStatus.delete(provider);
+  return true;
+}
+
 /** Drop one provider's cache (or all) so the next resolve forces a live re-fetch. */
 export function clearModelCache(
   provider?: string,
@@ -314,13 +355,17 @@ export function clearModelCache(
   if (provider) {
     if (revokesInFlightDiscovery) {
       providerCacheGenerations.set(provider, (providerCacheGenerations.get(provider) ?? 0) + 1);
+      publishedDiscoveryGenerations.delete(provider);
     }
     deleteCachedProvider(provider);
     failureAt.delete(provider);
     discoveryStatus.delete(provider);
     liveModelCounts.delete(provider);
   } else {
-    if (revokesInFlightDiscovery) globalCacheGeneration += 1;
+    if (revokesInFlightDiscovery) {
+      globalCacheGeneration += 1;
+      publishedDiscoveryGenerations.clear();
+    }
     cache.clear();
     // A wholesale clear changes every provider's content at once, and clearing the map means no
     // per-provider counter can record it. Advancing the global term retires every derived roster
@@ -345,6 +390,7 @@ export function reconcileModelCacheProviders(
   const trackedProviders = new Set([
     ...providerCacheGenerations.keys(),
     ...providerCacheRevisions.keys(),
+    ...publishedDiscoveryGenerations.keys(),
     ...failureAt.keys(),
     ...discoveryStatus.keys(),
     ...liveModelCounts.keys(),
@@ -372,6 +418,7 @@ export function reconcileModelCacheProviders(
     // longer has must not keep an entry alive for the life of the process merely because nothing
     // cleared the whole cache. The global epoch advanced above, so the removal is not an ABA.
     providerCacheRevisions.delete(provider);
+    publishedDiscoveryGenerations.delete(provider);
     removedProviders.add(provider);
   }
   lastReconciledGeneration = generation;

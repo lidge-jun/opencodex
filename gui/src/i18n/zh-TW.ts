@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -132,6 +133,7 @@ export const zhTW: Record<TKey, string> = {
   "workflowBudget.saveFailed": "無法儲存工作流程限制。",
   "workflowBudget.saved": "工作流程限制已儲存。",
   ...desktopCompatibilityCopy("zh-TW"),
+  ...accountProbeCopy("zh-TW"),
   ...shellV2Copy("zh-TW"),
   ...codexCliUpdateCopy("zh-TW"),
   ...remoteLinkDiagnosticsCopy("zh-TW"),
@@ -1537,7 +1539,7 @@ export const zhTW: Record<TKey, string> = {
   "modal.invalidPreset": "此內建供應商預設不完整。請重新啟動代理後重試。",
   "modal.freeTierTitle": "免費層級",
   "modal.subscriptionCliTitle": "訂閱 CLI，而非 API 金鑰",
-  "modal.subscriptionCliWarning": "此供應商不使用 API 金鑰。它會呼叫本機已登入的官方 Claude Code CLI（{cmd}），並向該 Claude 訂閱帳戶計費。OpenCodex 不會為其儲存任何金鑰，在此輸入的金鑰也永遠不會被使用。如需以 API 金鑰計費，請改為新增 {apiProvider}。",
+  "modal.subscriptionCliWarning": "此供應商不使用 API 金鑰。它會呼叫本機已登入的官方 {cli}（{cmd}），並向該 {plan} 訂閱帳戶計費。OpenCodex 不會為其儲存任何金鑰，在此輸入的金鑰也永遠不會被使用。如需以 API 金鑰計費，請改為新增 {apiProvider}。",
   "modal.subscriptionCliWarningAgy": "此供應商使用已在代理伺服器主機上登入的官方 Antigravity CLI（{cmd}）。使用費用計入該 Google Antigravity 帳戶。Google 僅允許由使用者主導的互動式使用。OpenCodex 拒絕子代理回合、組合及子代理備援路由，並根據觀察到的連線判斷請求是否來自本機。若未宣告的回環中繼未傳送轉送標頭，遠端請求可能看起來像本機請求。對於公開監聽器，請在 dashboardTrustedProxy 中宣告反向代理，或避免轉送此連接埠。無須 API 金鑰，也不會儲存金鑰。如需以程式執行工作或供多人使用，請新增 {apiProvider}。",
   "modal.freeTierDefault": "無需 API 金鑰，開箱即用。",
   "modal.tab.accounts": "帳號",
@@ -2234,7 +2236,9 @@ export const zhTW: Record<TKey, string> = {
   "accountPool.strategy": "輪換策略",
   "accountPool.strategyDesc": "新會話如何從帳號池中選擇帳號。",
   "accountPool.strategyResetFirst": "額度即將重設優先",
+  "accountPool.strategyResetNearWeighted": "依最近的額度重設加權",
   "accountPool.strategyHintResetFirst": "在低於用量門檻的帳號中，優先選擇下次5小時或週額度重設最早的帳號。已綁定任務遵循設定的親和策略。獨立模型額度按用量排序。",
+  "accountPool.strategyHintResetNearWeighted": "將約一半的新分配交給符合條件且每週額度最先重設的帳戶。沒有符合條件的帳戶時，依序平均分配。",
   "accountPool.strategyQuota": "配額",
   "accountPool.strategyRoundRobin": "輪詢",
   "accountPool.strategyFillFirst": "填滿優先",

@@ -25,20 +25,21 @@ import {
 } from "../../../src/oauth/anthropic-routing";
 import { captureOAuthAccountSelection, getAccountSet, markAccountNeedsReauth, saveCredential, saveAccountCredential, setActiveAccount } from "../../../src/oauth/store";
 import { subscribeAccountSelections } from "../../../src/lib/account-selection-events";
-import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../../src/providers/quota";
+import { clearAccountQuotaCache, recordAnthropicAccountQuotaFromHeaders, setCachedProviderAccountQuotaForTests } from "../../../src/providers/quota";
+import { captureConfigGeneration } from "../../../src/lib/state-store-sweeper";
 import type { OcxAccountPoolQuotaWindow, OcxAccountPoolRotationStrategy, OcxConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
 const originalHome = process.env.OPENCODEX_HOME;
 let home: string;
 
-async function admitAnthropic(sessionKey: string, config: OcxConfig) {
+async function admitAnthropic(sessionKey: string, config: OcxConfig, model?: string) {
   const expected = captureOAuthAccountSelection("anthropic");
-  const choice = resolveAnthropicAccountForSession(sessionKey, config);
+  const choice = resolveAnthropicAccountForSession(sessionKey, config, Date.now(), null, model);
   if (choice.accountId) {
     const snapshot = await getAnthropicPoolAccessSnapshot(choice.accountId);
     expect(await promoteAnthropicActiveAccount(choice.accountId, expected, {
-      config, sessionKey, reason: choice.reason, expectedCredentialGeneration: snapshot.generation,
+      config, sessionKey, model, reason: choice.reason, expectedCredentialGeneration: snapshot.generation,
     })).not.toBeNull();
   }
   return choice;
@@ -383,6 +384,43 @@ describe("anthropic account pool", () => {
     const picks = Array.from({ length: 6 }, () => resolveAnthropicAccountForSession(null, config).accountId);
     expect(picks.every(id => id === aId)).toBe(true);
     expect(resolveAnthropicAccountForSession("", config).reason).toBe("active");
+  });
+
+  test("reset-near-weighted favors new sessions and retains both keyed and keyless turns", async () => {
+    const { aId, bId, cId } = await seedThreeAccounts();
+    const now = Date.now();
+    setCachedProviderAccountQuotaForTests("anthropic", bId, {
+      fiveHourPercent: 20, weeklyPercent: 30, weeklyResetAt: now + 60_000, updatedAt: now,
+    });
+    const config = cfg(true, 80, { strategy: "reset-near-weighted" });
+    for (const key of [null, ""]) {
+      expect(resolveAnthropicAccountForSession(key, config)).toMatchObject({ accountId: aId, reason: "active" });
+    }
+    expect((await admitAnthropic("near", config)).accountId).toBe(bId);
+    expect((await admitAnthropic("other", config)).accountId).toBe(aId);
+    expect(resolveAnthropicAccountForSession("near", config)).toMatchObject({ accountId: bId, reason: "affinity" });
+    expect((await admitAnthropic("", config)).accountId).toBe(aId);
+    expect((await admitAnthropic("third", config)).accountId).toBe(cId);
+  });
+
+  test("a fresh Anthropic header cannot promote an account with an old weekly bar", async () => {
+    const { aId, bId } = await seedThreeAccounts();
+    const now = Date.now();
+    setCachedProviderAccountQuotaForTests("anthropic", bId, {
+      fiveHourPercent: 20, weeklyPercent: 30, weeklyResetAt: now + 60_000, updatedAt: now - 16 * 60_000,
+    });
+    recordAnthropicAccountQuotaFromHeaders(bId, new Headers({ "anthropic-ratelimit-unified-5h-utilization": "0.3" }), captureConfigGeneration());
+    expect(resolveAnthropicAccountForSession("fresh", cfg(true, 80, { strategy: "reset-near-weighted" })).accountId).toBe(aId);
+  });
+
+  test("plain round-robin preserves the commit cursor across a transient headroom filter", async () => {
+    const { aId, bId } = await seedThreeAccounts();
+    const config = cfg(true, 80, { strategy: "round-robin" });
+    const model = "claude-sonnet-4-5";
+    setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 100 });
+    expect((await admitAnthropic("while-exhausted", config, model)).accountId).toBe(bId);
+    setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 20 });
+    expect((await admitAnthropic("after-recovery", config, model)).accountId).toBe(aId);
   });
 
   test("affinity still wins over round-robin", async () => {

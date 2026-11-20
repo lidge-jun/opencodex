@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -134,6 +135,7 @@ export const ru: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Не удалось сохранить лимиты рабочих процессов.",
   "workflowBudget.saved": "Лимиты рабочих процессов сохранены.",
   ...desktopCompatibilityCopy("ru"),
+  ...accountProbeCopy("ru"),
   ...shellV2Copy("ru"),
   ...codexCliUpdateCopy("ru"),
   ...remoteLinkDiagnosticsCopy("ru"),
@@ -1834,7 +1836,7 @@ export const ru: Record<TKey, string> = {
   "modal.invalidPreset": "Этот встроенный пресет провайдера неполный. Перезапустите прокси и попробуйте ещё раз.",
   "modal.freeTierTitle": "Бесплатный тариф",
   "modal.subscriptionCliTitle": "CLI по подписке, а не API-ключ",
-  "modal.subscriptionCliWarning": "Этот провайдер не использует API-ключ. Он запускает официальный Claude Code CLI, в котором выполнен вход на этом компьютере ({cmd}), и списывает оплату с этой подписки Claude. OpenCodex не хранит для него ключ, а введённый здесь ключ никогда не используется. Для оплаты по API-ключу добавьте вместо него {apiProvider}.",
+  "modal.subscriptionCliWarning": "Этот провайдер не использует API-ключ. Он запускает официальный {cli}, в котором выполнен вход на этом компьютере ({cmd}), и списывает оплату с этой подписки {plan}. OpenCodex не хранит для него ключ, а введённый здесь ключ никогда не используется. Для оплаты по API-ключу добавьте вместо него {apiProvider}.",
   "modal.subscriptionCliWarningAgy": "Этот провайдер использует официальный Antigravity CLI, в котором выполнен вход на хосте прокси ({cmd}). Оплата за использование списывается с этого аккаунта Google Antigravity. Google разрешает только интерактивное использование под управлением пользователя. OpenCodex отклоняет ходы субагентов, комбо и резервную маршрутизацию субагентов и определяет локальность по наблюдаемому соединению. Если незаявленный ретранслятор на loopback не передаёт заголовки переадресации, удалённый запрос может выглядеть локальным. Для публичного слушателя укажите обратный прокси в dashboardTrustedProxy или не перенаправляйте этот порт. API-ключ не требуется и не хранится. Для задач, выполняемых программно, или общего доступа добавьте {apiProvider}.",
   "modal.freeTierDefault": "API-ключ не нужен. Работает из коробки.",
   "modal.tab.accounts": "Аккаунты",
@@ -2917,7 +2919,9 @@ export const ru: Record<TKey, string> = {
   "accountPool.strategy": "Стратегия ротации",
   "accountPool.strategyDesc": "Как OpenCodex назначает аккаунт новой/непривязанной задаче.",
   "accountPool.strategyResetFirst": "Ближайший сброс первым",
+  "accountPool.strategyResetNearWeighted": "Взвешивание по ближайшему сбросу",
   "accountPool.strategyHintResetFirst": "Среди аккаунтов ниже порога выбирается ближайший сброс 5-часовой или недельной квоты. Привязанные задачи следуют настроенной политике привязки. Независимые квоты моделей упорядочиваются по использованию.",
+  "accountPool.strategyHintResetNearWeighted": "Подходящий аккаунт с ближайшим еженедельным сбросом получает около половины новых назначений. Если подходящих аккаунтов нет, назначения распределяются поровну по очереди.",
   "accountPool.strategyQuota": "Квота",
   "accountPool.strategyRoundRobin": "Round-robin",
   "accountPool.strategyFillFirst": "Fill-first",

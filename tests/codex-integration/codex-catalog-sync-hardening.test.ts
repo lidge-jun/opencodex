@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -8,6 +8,10 @@ import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../src/codex/catalog/nati
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { withConfigMutationLockSync } from "../../src/config/mutation-lock";
 import { NEUTRAL_IDENTITY_LINE } from "../../src/adapters/identity";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
+
+// Catalog reconciliation is exercised through real child processes, including cold imports.
+setDefaultTimeout(SPAWN_BUDGET_MS);
 
 const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
 

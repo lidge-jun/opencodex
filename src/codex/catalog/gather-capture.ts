@@ -33,7 +33,7 @@ import {
 } from "../../oauth";
 import { getAccountSet } from "../../oauth/store";
 import { mayResolveModelsOAuth } from "../../oauth/model-discovery-auth";
-import { buildVertexProviderModelsRequest } from "../../providers/google-vertex-model-discovery";
+import { buildVertexProviderModelsRequest, captureVertexDiscoveryCredentialIdentity } from "../../providers/google-vertex-model-discovery";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
@@ -463,6 +463,7 @@ export function captureProviderGather(
 export function captureGatherFlight(
   config: OcxConfig,
   createAuthResolver: ModelsAuthResolverFactory,
+  onlyProvider?: string,
 ): GatherFlightCapture {
   const providerAuthOutcomes: CatalogGatherProviderAuthOutcome[] = [];
   const authResolver = createAuthResolver(providerAuthOutcomes);
@@ -470,7 +471,8 @@ export function captureGatherFlight(
   const providers = Object.entries(config.providers)
     // A decision service (canonical TypeSafe or a self-hosted `jev-decision` row) owns no model
     // transport: never probe its endpoint for /models and never publish its model id as routable.
-    .filter(([, provider]) => provider.disabled !== true && provider.adapter !== "jev-decision")
+    .filter(([name, provider]) => provider.disabled !== true && provider.adapter !== "jev-decision"
+      && (onlyProvider === undefined || name === onlyProvider))
     .map(([name, provider]) => captureProviderGather(
       name,
       provider,
@@ -491,6 +493,12 @@ export function captureGatherFlight(
       liveModels: provider.provider.liveModels ?? null,
       credential: provider.provider.apiKey ?? null,
       observedAuth: provider.observedAuth ?? null,
+      // Vertex credential incarnations can change with identical config and API-key bytes.
+      vertexCredentialIdentity: onlyProvider === undefined && provider.provider.authMode !== "forward"
+        && provider.provider.authMode !== "oauth" && provider.provider.liveModels !== false
+        && effectiveGoogleMode(provider.name, provider.provider) === "vertex"
+        ? captureVertexDiscoveryCredentialIdentity(provider.provider, authResolver.kind === "refreshing")
+        : undefined,
       oauthAccount: provider.refreshingOAuthAccountId ?? null,
       headers: provider.request.headersWithCredential,
       url: provider.request.url,

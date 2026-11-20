@@ -298,7 +298,11 @@ function refusalTranslationError(): ChatCompletionsStreamError {
 export function responsesSseToChatCompletionsSse(
   upstream: ReadableStream<Uint8Array>,
   model: string,
-  opts: { translatorBudget: TranslatorBudget; failureVerdictSink?: FailureVerdictSink; proxyErrorContext?: object },
+  opts: {
+    translatorBudget: TranslatorBudget; failureVerdictSink?: FailureVerdictSink; proxyErrorContext?: object;
+    /** The client set `stream_options.include_usage`: a failed terminal's usage precedes its error frame. */
+    includeUsage?: boolean;
+  },
 ): ReadableStream<Uint8Array> {
   const translatorBudget = opts.translatorBudget;
   const encoder = new TextEncoder();
@@ -629,8 +633,17 @@ export function responsesSseToChatCompletionsSse(
         terminated = true;
         releaseRefusals();
       };
-      const fail = (message: string, details?: ChatCompletionsStreamFailure) => {
+      const fail = (message: string, details?: ChatCompletionsStreamFailure, usage?: unknown) => {
         if (terminated) return;
+        // A failed turn ends in an {error} frame, never the finish chunk that carries usage, so an
+        // include_usage client gets the failed terminal's usage on its own chunk first.
+        if (opts.includeUsage && isRec(usage)) {
+          try {
+            const frame = chunkBase(id, model, created);
+            frame.usage = chatCompletionsUsage(usage);
+            emit(frame);
+          } catch { /* the error frame below still ends the stream */ }
+        }
         terminated = true;
         failed = true;
         releaseRefusals();
@@ -810,14 +823,15 @@ export function responsesSseToChatCompletionsSse(
               // failures, not early finishes: emit an error frame and close WITHOUT
               // [DONE] instead of a success-looking stop/tool_calls + [DONE].
               fail(outcome.originalFailMessage, { contract: "stream_incomplete",
-                proxyAuthored: hasProxyIncomplete(opts.proxyErrorContext ?? upstream, details.reason, details.message) });
+                proxyAuthored: hasProxyIncomplete(opts.proxyErrorContext ?? upstream, details.reason, details.message) }, response.usage);
             }
             break;
           }
           case "response.failed": {
             const response = isRec(data.response) ? data.response : {};
             const failure = chatCompletionsFailedResponse(isRec(response.error) ? response.error : {});
-            fail(failure.message, { ...failure.details, proxyAuthored: hasProxyErrorMessage(opts.proxyErrorContext, failure.message, failure.details) });
+            fail(failure.message, { ...failure.details, proxyAuthored: hasProxyErrorMessage(opts.proxyErrorContext, failure.message, failure.details) },
+              response.usage);
             break;
           }
           default:

@@ -1,3 +1,4 @@
+import { responsesCompletionError } from "../../lib/errors";
 import { RESPONSE_ID_MAX_BYTES as CODEX_WS_ID_MAX_BYTES } from "../../responses/id-limits";
 
 export { CODEX_WS_ID_MAX_BYTES };
@@ -60,7 +61,7 @@ export class CodexWsCorrelation {
   completed(event: Record<string, unknown>): string | null {
     const response = record(event.response) ? event.response : undefined;
     return this.reusable && event.type === "response.completed" && response?.status === "completed"
-      && response.id === this.responseId ? this.responseId : null;
+      && response.id === this.responseId && responsesCompletionError(event) == null ? this.responseId : null;
   }
 
   finish(): void { this.items.clear(); this.itemBytes = 0; }

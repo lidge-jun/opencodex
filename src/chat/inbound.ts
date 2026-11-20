@@ -8,7 +8,7 @@
 import { normalizedClientExtraContent } from "../responses/provider-opaque-metadata";
 import { chatImageUrlFromPart } from "./image-parts";
 import { signedReasoningInputItems } from "./reasoning-details";
-import { untranslatedChatInputMedia, untranslatedInputMediaMessage } from "../responses/input-media";
+import { chatAudioToResponsesPart, untranslatedChatInputMedia, untranslatedInputMediaMessage } from "../responses/input-media";
 
 export class ChatCompletionsRequestError extends Error {}
 
@@ -77,7 +77,7 @@ export function videoFromPart(part: Rec): { url: string; processing?: string } |
   return null;
 }
 
-function userContentToBlocks(content: unknown): Rec[] {
+function userContentToBlocks(content: unknown, allowInlineAudio?: boolean): Rec[] {
   if (typeof content === "string") {
     return content.length > 0 ? [{ type: "input_text", text: content }] : [];
   }
@@ -113,7 +113,8 @@ function userContentToBlocks(content: unknown): Rec[] {
       continue;
     }
     const file = fileFromPart(raw);
-    if (file) blocks.push(file);
+    const attachment = file ?? (allowInlineAudio ? chatAudioToResponsesPart(raw) : undefined);
+    if (attachment) blocks.push(attachment);
   }
   return blocks;
 }
@@ -462,13 +463,12 @@ export interface ChatResponsesProjectionOptions {
    * Every other route keeps the plaintext projection.
    */
   acceptAnthropicReasoningSignatures?: boolean;
+  allowInlineAudio?: boolean;
 }
 
 export function chatCompletionsToResponsesBody(raw: unknown, options: ChatResponsesProjectionOptions = {}): Rec {
   assertChatCompletionsRoutingBody(raw);
-  // Only the translated path reaches this function. Native Chat can retain its
-  // provider-specific file/audio blocks; projecting them here would discard them.
-  const unsupportedMedia = untranslatedChatInputMedia(raw);
+  const unsupportedMedia = untranslatedChatInputMedia(raw, options.allowInlineAudio);
   if (unsupportedMedia) {
     throw new ChatCompletionsRequestError(untranslatedInputMediaMessage(unsupportedMedia));
   }
@@ -524,7 +524,7 @@ export function chatCompletionsToResponsesBody(raw: unknown, options: ChatRespon
       }
       case "user": {
         beginConversationTurn();
-        const blocks = userContentToBlocks(msg.content);
+        const blocks = userContentToBlocks(msg.content, options.allowInlineAudio);
         if (blocks.length > 0) input.push({ type: "message", role: "user", content: blocks });
         break;
       }

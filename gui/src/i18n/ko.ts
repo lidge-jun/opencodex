@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -134,6 +135,7 @@ export const ko: Record<TKey, string> = {
   "workflowBudget.saveFailed": "워크플로 한도를 저장하지 못했습니다.",
   "workflowBudget.saved": "워크플로 한도를 저장했습니다.",
   ...desktopCompatibilityCopy("ko"),
+  ...accountProbeCopy("ko"),
   ...shellV2Copy("ko"),
   ...codexCliUpdateCopy("ko"),
   ...remoteLinkDiagnosticsCopy("ko"),
@@ -2393,7 +2395,9 @@ export const ko: Record<TKey, string> = {
   "accountPool.strategy": "로테이션 전략",
   "accountPool.strategyDesc": "OpenCodex가 새 작업/바인딩 없는 작업에 계정을 배정하는 방식입니다.",
   "accountPool.strategyResetFirst": "가장 가까운 초기화 우선",
+  "accountPool.strategyResetNearWeighted": "가장 가까운 초기화에 가중치",
   "accountPool.strategyHintResetFirst": "사용량 임계값 미만인 계정 중 다음 5시간·주간 초기화가 가장 가까운 계정을 고릅니다. 연결된 작업은 설정된 어피니티 정책을 따릅니다. 독립 모델 한도에는 사용량 순서를 적용합니다.",
+  "accountPool.strategyHintResetNearWeighted": "조건을 충족하는 계정 중 주간 한도가 가장 먼저 초기화되는 계정에 새 할당의 약 절반을 배정합니다. 해당 계정이 없으면 균등하게 순환 배정합니다.",
   "accountPool.strategyQuota": "할당량",
   "accountPool.strategyRoundRobin": "라운드로빈",
   "accountPool.strategyFillFirst": "필 퍼스트",
@@ -3087,7 +3091,7 @@ export const ko: Record<TKey, string> = {
   "modal.invalidPreset": "내장 프로바이더 설정이 완전하지 않습니다. 프록시를 다시 시작한 뒤 재시도하세요.",
   "modal.freeTierTitle": "무료 티어",
   "modal.subscriptionCliTitle": "API 키가 아닌 구독 CLI 방식",
-  "modal.subscriptionCliWarning": "이 프로바이더는 API 키를 쓰지 않습니다. 이 컴퓨터에 로그인된 공식 Claude Code CLI({cmd})를 실행하고, 요금은 그 Claude 구독 계정에 청구됩니다. OpenCodex는 이 프로바이더의 키를 저장하지 않으며, 여기에 입력한 키는 쓰이지 않습니다. API 키로 과금하려면 대신 {apiProvider}를 추가하세요.",
+  "modal.subscriptionCliWarning": "이 프로바이더는 API 키를 쓰지 않습니다. 이 컴퓨터에 로그인된 공식 {cli}({cmd})를 실행하고, 요금은 그 {plan} 구독 계정에 청구됩니다. OpenCodex는 이 프로바이더의 키를 저장하지 않으며, 여기에 입력한 키는 쓰이지 않습니다. API 키로 과금하려면 대신 {apiProvider}를 추가하세요.",
   "modal.subscriptionCliWarningAgy": "이 프로바이더는 프록시 호스트에 로그인된 공식 Antigravity CLI({cmd})를 사용합니다. 사용 요금은 해당 Google Antigravity 계정에 청구됩니다. Google은 사용자가 직접 지시하는 대화형 사용만 허용합니다. OpenCodex는 서브에이전트 턴, 콤보, 서브에이전트 폴백 라우팅을 거부하고, 실제 연결을 기준으로 로컬 요청인지 판단합니다. 등록되지 않은 루프백 중계가 전달 헤더를 보내지 않으면 원격 요청이 로컬로 보일 수 있습니다. 공개 리스너에서는 역방향 프록시를 dashboardTrustedProxy에 등록하거나 이 포트를 중계하지 마세요. API 키는 필요하지 않으며 저장되지 않습니다. 프로그램으로 실행하는 작업이나 공유 작업에는 대신 {apiProvider}를 추가하세요.",
   "modal.freeTierDefault": "API 키가 필요 없습니다. 바로 사용할 수 있습니다.",
   "modal.tab.accounts": "계정",

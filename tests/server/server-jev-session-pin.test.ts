@@ -3,120 +3,18 @@
  * provider prompt cache stays warm, while default-off Combos keep deciding on every request.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { clearComboSelectionState, clearComboTargetCooldowns, coolComboTarget } from "../../src/combos";
-import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import { coolComboTarget } from "../../src/combos";
 import { resolveProviderApiKey } from "../../src/providers/api-key-resolve";
 import { publishDecisionKeyQuota } from "../../src/providers/quota-decision-snapshot";
-import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import type { RequestLogContext } from "../../src/server/request-log";
-import { executeComboResponses } from "../../src/server/responses/core-combo";
-import type { ResponsesDispatchers } from "../../src/server/responses/core-options";
-import { clearComboRecallForTests } from "../../src/server/responses/combo-session-recall";
-import { clearJevSessionPinsForTests, JEV_SESSION_PIN_ROUTE_REASON } from "../../src/server/responses/jev-session-pin";
-import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { JEV_SESSION_PIN_ROUTE_REASON } from "../../src/server/responses/jev-session-pin";
 import { activateJevQuotaEvidence, deactivateJevQuotaEvidence } from "../helpers/jev-quota-activation";
 import { createTempHome } from "../helpers/temp-home";
 
-const JEV_URL = "https://api.typesafe.ai/v1/systemone";
-const SOL = { provider: "sol", model: "gpt-5.6-sol" } as const;
-const LUNA = { provider: "luna", model: "gpt-5.6-luna" } as const;
+import { LUNA, SOL, makeConfig, modelProvider, resetState, served, turn, perTurnConfig, offered, effortOf, type Child } from "../helpers/jev-session-pin";
 
-function resetState(): void {
-  clearComboSelectionState();
-  clearComboTargetCooldowns();
-  clearComboRecallForTests();
-  clearJevSessionPinsForTests();
-}
 beforeEach(resetState);
 afterEach(resetState);
-
-function modelProvider(model: string): OcxProviderConfig {
-  return {
-    adapter: "openai-chat",
-    baseUrl: `https://${model}.example.test/v1`,
-    authMode: "key",
-    apiKey: `key-${model}`,
-    liveModels: false,
-    models: [model],
-    modelReasoningEfforts: { [model]: ["low", "medium", "high"] },
-  };
-}
-
-/** A JEV Combo whose decision service records every call and always answers `choice`. */
-function makeConfig(choice: string, decisions: string[], sessionPin: boolean): OcxConfig {
-  const jevFetch = (async () => {
-    decisions.push(choice);
-    return Response.json({ answers: { route: { choice, confidence: 0.8 } } });
-  }) as typeof fetch;
-  return {
-    port: 0,
-    defaultProvider: "sol",
-    providers: {
-      jev: { adapter: "jev-decision", baseUrl: JEV_URL, authMode: "key", liveModels: false, apiKey: "typesafe-test-key", fetch: jevFetch },
-      sol: modelProvider(SOL.model),
-      luna: modelProvider(LUNA.model),
-    },
-    combos: {
-      auto: {
-        alias: "jev-auto",
-        strategy: "jev",
-        targets: [{ ...LUNA }, { ...SOL }],
-        ...(sessionPin ? { sessionPin: { ttlMs: 20 * 60_000 } } : {}),
-      },
-    },
-  };
-}
-
-type ChildOptions = Parameters<ResponsesDispatchers["handleResponses"]>[3];
-type Child = (body: Record<string, unknown>, complete: () => void, options: ChildOptions) => Response | Promise<Response>;
-
-/** Children complete like a real stream: the completion callback runs before the response returns. */
-function dispatchers(child: Child): ResponsesDispatchers {
-  return {
-    async handleResponses(request, _config, _logCtx, options) {
-      const body = await request.json() as Record<string, unknown>;
-      return child(body, () => options?.onResponseComplete?.(String(body.model)), options);
-    },
-    async handleComboResponses() {
-      throw new Error("nested combo dispatch is not expected");
-    },
-  };
-}
-
-const served: Child = (body, complete) => {
-  complete();
-  return Response.json({ id: `resp-${String(body.model)}`, object: "response", status: "completed", model: body.model, output: [] });
-};
-
-async function turn(config: OcxConfig, options: {
-  session?: string | null;
-  admission?: DataPlaneAdmission;
-  child?: Child;
-  signal?: AbortSignal;
-  log?: RequestLogContext;
-  models?: string[];
-  effort?: string;
-} = {}): Promise<Response> {
-  const body = { model: "jev-auto", input: "Implement the next step.", stream: false,
-    ...(options.effort ? { reasoning: { effort: options.effort } } : {}) };
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  if (options.session !== null) headers.session_id = options.session ?? "session-a";
-  const request = new Request("http://127.0.0.1/v1/responses", { method: "POST", headers, body: JSON.stringify(body) });
-  const budget = createTranslatorBudget();
-  const child = options.child ?? served;
-  try {
-    return await executeComboResponses(request, body, "auto", config, options.log ?? { model: "", provider: "" }, {
-      translatorBudget: budget,
-      ...(options.admission ? { admission: options.admission } : {}),
-      ...(options.signal ? { abortSignal: options.signal } : {}),
-    }, dispatchers((childBody, complete, childOptions) => {
-      options.models?.push(String(childBody.model));
-      return child(childBody, complete, childOptions);
-    }));
-  } finally {
-    budget.dispose();
-  }
-}
 
 describe("JEV session pin (#7525)", () => {
   test("default off: every turn of one session asks JEV again and records no pin", async () => {
@@ -268,6 +166,21 @@ describe("JEV session pin (#7525)", () => {
     expect(log.jevDecision).not.toHaveProperty("pinned");
   });
 
+  test("a context change between turns releases the pin", async () => {
+    const decisions: string[] = [];
+    const config = makeConfig("sol/gpt-5.6-sol:high", decisions, true);
+    config.combos!.auto!.capabilityPolicy = "union";
+    config.providers.sol!.contextWindow = 100_000;
+    expect((await turn(config)).status).toBe(200);
+
+    config.providers.sol!.contextWindow = 1;
+    const log: RequestLogContext = { model: "", provider: "" };
+    const models: string[] = [];
+    expect((await turn(config, { log, models })).status).toBe(200);
+    expect(models).toEqual(["luna/gpt-5.6-luna"]);
+    expect(log.jevDecision?.pinned).toBeUndefined();
+  });
+
   test("opted-in quota evidence reading nearly exhausted releases the pin", async () => {
     const home = createTempHome("ocx-jev-session-pin-quota-");
     try {
@@ -291,25 +204,6 @@ describe("JEV session pin (#7525)", () => {
 });
 
 describe("JEV session pin per-turn effort", () => {
-  /** A per-turn pinned Combo whose decision service answers `answers` in order and records each payload. */
-  function perTurnConfig(answers: string[], payloads: Array<Record<string, unknown>>): OcxConfig {
-    const config = makeConfig("unused", [], true);
-    config.combos!.auto!.sessionPin = { ttlMs: 20 * 60_000, effort: "per-turn" };
-    config.providers.jev!.fetch = (async (_input, init) => {
-      payloads.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-      const choice = answers.shift();
-      if (choice === undefined) throw new Error("decision service down");
-      return Response.json({ answers: { route: { choice, confidence: 0.7 } },
-        usage: { input_tokens: 8, output_tokens: 2 } });
-    }) as typeof fetch;
-    return config;
-  }
-  const offered = (payload: Record<string, unknown> | undefined) => {
-    const criteria = (payload?.questions as { route: { criteria: Record<string, { target: string }> } }).route.criteria;
-    return [...new Set(Object.values(criteria).map(option => option.target))];
-  };
-  const effortOf = (body: Record<string, unknown>) => (body.reasoning as { effort?: string } | undefined)?.effort;
-
   test("keeps the pinned target and asks JEV only for its effort on each pinned turn", async () => {
     const payloads: Array<Record<string, unknown>> = [];
     const config = perTurnConfig(["sol/gpt-5.6-sol:high", "sol/gpt-5.6-sol:low"], payloads);
@@ -331,18 +225,20 @@ describe("JEV session pin per-turn effort", () => {
     expect(log.routeDecision?.selected.reason).toBe(JEV_SESSION_PIN_ROUTE_REASON);
   });
 
-  test("client effort mode skips per-turn decisions and keeps the caller's effort", async () => {
+  test.each([["medium", "medium"], ["xhigh", "high"]])("client effort mode skips per-turn decisions and sends %s as %s", async (requested, sent) => {
     const payloads: Array<Record<string, unknown>> = [];
     const config = perTurnConfig(["sol/gpt-5.6-sol:high", "sol/gpt-5.6-sol:low"], payloads);
     config.combos!.auto!.jevEffortMode = "client";
+    config.combos!.auto!.capabilityPolicy = "union";
+    config.combos!.auto!.reasoningEffortMode = "adaptive";
     expect((await turn(config)).status).toBe(200);
     const log: RequestLogContext = { model: "", provider: "" };
     const child: Child = (body, complete) => {
       expect(body.model).toBe("sol/gpt-5.6-sol");
-      expect(effortOf(body)).toBe("medium");
+      expect(effortOf(body)).toBe(sent);
       return served(body, complete);
     };
-    expect((await turn(config, { child, log, effort: "medium" })).status).toBe(200);
+    expect((await turn(config, { child, log, effort: requested })).status).toBe(200);
     expect(payloads).toHaveLength(1);
     expect(log.jevDecision).toMatchObject({ pinned: true, pinReason: "session" });
   });

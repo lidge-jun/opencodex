@@ -11,6 +11,7 @@ import { buildResponsesTransport } from "../../adapters/openai-responses/transpo
 import { anthropicBillingPhysicalFetch } from "../../providers/anthropic-billing-ownership";
 import { passiveKeyPhysicalFetch } from "../../providers/passive-key-observation";
 import { captureCurrentPhysicalSendUsage, rebindPhysicalSend, recordCurrentPhysicalSendUsage } from "../../lib/request-execution-budget";
+import { withMissingCreditReading } from "../../usage/credit-billing";
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
 import { anthropicRatePolicyFor } from "../../oauth/anthropic-rate-limit-policy";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
@@ -130,6 +131,7 @@ import { sealCredentialRefusal } from "../credential-recovery-attempt";
 import { sealedCredentialRefusals } from "../request-log-attempt-recovery";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { bindAttemptDeliveryRecorder } from "../../usage/attempt-delivery";
+import { observeResponseSendReadings } from "../../lib/response-send-readings";
 import { resolvePassiveRouteSubjectId } from "../passive-route-linker";
 import { anthropicPoolCooldownResponse, clientCancelledResponse } from "./core-errors";
 import { acquireAccountLease, KIRO_ACCOUNT_WAIT_MS } from "../../oauth/kiro-account-load";
@@ -695,11 +697,27 @@ export async function prepareResponsesTransport(
     return receipt !== undefined && receipt.attempt === attempt
       && receipt.ordinal === attempt.ordinal && receipt.sendCount === attempt.sendCount;
   };
+  let guardedOAuthAttemptOrdinal: number | undefined;
+  const trackGuardedOAuthAttemptUsage = (): void => {
+    if (route.provider.authMode === "oauth") guardedOAuthAttemptOrdinal = logCtx.activeAttempt?.ordinal;
+  };
+  // Attempt ordinals that dispatched a parsed leg with no usage: their parser-built credit total
+  // is incomplete however many other legs reported one (#8452). Keyed by ordinal, never by the
+  // attempt object: a rotation reuses the live object for the next attempt.
+  const attemptsMissingCredit = new Set<number>();
+  const markMissingCredit = (attempt: typeof logCtx.activeAttempt): void => {
+    if (attempt?.usage && attemptsMissingCredit.has(attempt.ordinal)) attempt.usage = withMissingCreditReading(attempt.usage);
+  };
   const bindKeyUsageFromBridge = (usage: OcxUsage | undefined): void => {
     logCtx.usageFromBridge = true;
     if (logCtx.activeAttempt && sealedCredentialRefusals.has(logCtx.activeAttempt)) return;
     if (usesApiKeyAccount(route.provider)) {
       if (!logCtx.activeAttempt?.usage && usage) recordKeyAttemptUsage(logCtx, usage);
+      markMissingCredit(logCtx.activeAttempt);
+      logCtx.usage = logCtx.activeAttempt?.usage;
+    } else if (guardedOAuthAttemptOrdinal !== undefined && logCtx.activeAttempt?.ordinal !== guardedOAuthAttemptOrdinal) {
+      // The bridge can sum across accounts. The parser already bound each response before rotation.
+      markMissingCredit(logCtx.activeAttempt);
       logCtx.usage = logCtx.activeAttempt?.usage;
     } else if (usage) {
       logCtx.usage = usage;
@@ -792,11 +810,49 @@ export async function prepareResponsesTransport(
     // Observe terminals before search/image loops or continuation guards hide earlier rounds.
     // Each adapter parser is called once per physical response; bridge totals are client-only.
     const observedResponses = new WeakSet<object>();
+    const parserOwnsUsage = (): boolean => usesApiKeyAccount(provider) || guardedOAuthAttemptOrdinal !== undefined;
     const observeUsage = (event: AdapterEvent, response: object): void => {
-      if (usesApiKeyAccount(provider) && "usage" in event && event.usage && !observedResponses.has(response)) {
+      if (parserOwnsUsage() && "usage" in event && event.usage && !observedResponses.has(response)) {
         observedResponses.add(response);
         recordKeyAttemptUsage(logCtx, event.usage);
+        markMissingCredit(logCtx.activeAttempt);
       }
+    };
+    // One parse is one physical response. Its usage settles the send that produced it (#8902),
+    // and a response that reports none leaves its issuing attempt's credits incomplete (#8452).
+    // A parser that dispatches its own retry reports each response's reading instead, because its
+    // terminal sums the sends; those readings then settle the sends and the terminal settles none.
+    const observeLeg = (response: object) => {
+      const recordSpend = logCtx.spendTracker?.captureRoutedSendUsage?.();
+      const ordinal = logCtx.activeAttempt?.ordinal;
+      let reported = false;
+      let readings = 0;
+      const releaseReadings = observeResponseSendReadings(response, reading => {
+        // An absent reading marks its send unmetered, so no aggregate can settle it either.
+        recordSpend?.(reading ?? null, readings === 0 ? "issuing" : "newest");
+        readings++;
+      });
+      const end = (): void => {
+        releaseReadings();
+        if (reported || ordinal === undefined || !parserOwnsUsage()) return;
+        attemptsMissingCredit.add(ordinal);
+        // A rotation during this parse sealed the issuing attempt into its own row; a row with no
+        // usage already leaves the request-wide credit sum incomplete.
+        const live = logCtx.activeAttempt;
+        markMissingCredit(live?.ordinal === ordinal ? live
+          : logCtx.attempts?.find(attempt => attempt !== live && attempt.ordinal === ordinal));
+      };
+      return {
+        event(event: AdapterEvent): void {
+          if (!reported && "usage" in event && event.usage) {
+            reported = true;
+            if (readings === 0) recordSpend?.(event.usage);
+          }
+          // Before the consumer binds the terminal's usage, which can precede this parse's close.
+          if (event.type === "done" || event.type === "incomplete" || event.type === "error") end();
+        },
+        end,
+      };
     };
     // Counted at the one seam every adapter parse passes, and counted for EVERY event rather
     // than only usage-bearing ones: the number this pairs with is the frame count the client
@@ -814,13 +870,19 @@ export async function prepareResponsesTransport(
     };
     const parseStream = resolved.parseStream.bind(resolved);
     resolved.parseStream = async function* (...args) {
-      for await (const event of parseStream(...args)) { observeEvent(event, args[0]); yield event; }
+      const leg = observeLeg(args[0]);
+      // A guard stops reading at the terminal, which closes this generator early.
+      try {
+        for await (const event of parseStream(...args)) { observeEvent(event, args[0]); leg.event(event); yield event; }
+      } finally { leg.end(); }
     };
     if (resolved.parseResponse) {
       const parseResponse = resolved.parseResponse.bind(resolved);
       resolved.parseResponse = async (...args) => {
+        const leg = observeLeg(args[0]);
         const events = await parseResponse(...args);
-        events.forEach(event => observeEvent(event, args[0]));
+        events.forEach(event => { observeEvent(event, args[0]); leg.event(event); });
+        leg.end();
         return events;
       };
     }
@@ -1210,7 +1272,7 @@ export async function prepareResponsesTransport(
                 && current.credential.access === snapshot.accessToken
                 && credentialGeneration(current.credential) === snapshot.generation) {
                 bindAnthropicRefusalCredentialForSend(response, physicalOwner);
-                recordAnthropicAccountQuotaFromHeadersForInstance(anthropicInstance!, snapshot.accountId, response.headers, writerGeneration, response.status, route.modelId, snapshot.generation);
+                recordAnthropicAccountQuotaFromHeadersForInstance(anthropicInstance!, snapshot.accountId, response.headers, writerGeneration, response.status, route.modelId, snapshot.generation, physicalOwner.credentialKey);
               }
             } catch { /* best-effort observation cannot fail the response */ }
           }
@@ -1808,6 +1870,7 @@ export async function prepareResponsesTransport(
     commitKeyAttemptSend,
     recoverAutoPausedSelection,
     bindKeyUsageFromBridge,
+    trackGuardedOAuthAttemptUsage,
     anthropicSessionKey,
     isPassthrough,
   };

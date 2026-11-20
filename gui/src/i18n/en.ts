@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -136,6 +137,7 @@ export const en = {
   "workflowBudget.saveFailed": "Could not save workflow limits.",
   "workflowBudget.saved": "Workflow limits saved.",
   ...desktopCompatibilityCopy("en"),
+  ...accountProbeCopy("en"),
   ...shellV2Copy("en"),
   ...codexCliUpdateCopy("en"),
   ...remoteLinkDiagnosticsCopy("en"),
@@ -1875,7 +1877,7 @@ export const en = {
   "modal.invalidPreset": "This built-in provider preset is incomplete. Restart the proxy and try again.",
   "modal.freeTierTitle": "Free tier",
   "modal.subscriptionCliTitle": "Subscription CLI, not an API key",
-  "modal.subscriptionCliWarning": "This provider does not use an API key. It drives the official Claude Code CLI signed in on this machine ({cmd}) and bills that Claude subscription account. OpenCodex stores no key for it, and a key entered here is never used. For API-key billing, add {apiProvider} instead.",
+  "modal.subscriptionCliWarning": "This provider does not use an API key. It drives the official {cli} signed in on this machine ({cmd}) and bills that {plan} subscription account. OpenCodex stores no key for it, and a key entered here is never used. For API-key billing, add {apiProvider} instead.",
   "modal.subscriptionCliWarningAgy": "This provider uses the official Antigravity CLI signed in on the proxy host ({cmd}). Usage bills that Google Antigravity account. Google permits interactive, user-directed use only. OpenCodex refuses subagent turns, combos and subagent fallback routing, and checks locality from the connection it sees. An undeclared loopback relay can make remote requests appear local if it passes no forwarding headers. For the public listener, declare the reverse proxy in dashboardTrustedProxy or keep this port out of the relay. No API key is needed or stored. For programmatic or shared workloads, add {apiProvider} instead.",
   "modal.freeTierDefault": "No API key required. Works out of the box.",
   "modal.tab.accounts": "Accounts",
@@ -3004,7 +3006,9 @@ export const en = {
   "accountPool.strategy": "Rotation strategy",
   "accountPool.strategyDesc": "How OpenCodex assigns an account to a new/unbound task.",
   "accountPool.strategyResetFirst": "Soonest reset first",
+  "accountPool.strategyResetNearWeighted": "Weighted by nearest reset",
   "accountPool.strategyHintResetFirst": "Prefer the nearest future 5-hour or weekly reset among accounts below the usage threshold. Bound tasks follow the configured affinity policy. Independent model quotas use quota ordering.",
+  "accountPool.strategyHintResetNearWeighted": "Gives about half of new assignments to the qualifying account with the nearest weekly reset. Without a qualifying account, assignments rotate evenly.",
   "accountPool.strategyQuota": "Quota",
   "accountPool.strategyRoundRobin": "Round-robin",
   "accountPool.strategyFillFirst": "Fill-first",

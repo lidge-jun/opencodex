@@ -15,6 +15,9 @@ as a read fallback, so a conversation alternating Gemini and Claude keeps one ac
 `src/oauth/session-affinity-key.ts` supplies the existing client-thread/header/cache-key precedence
 for both generic and Anthropic callers; shared Desktop cache cohorts do not establish identity.
 
+`src/oauth/pool-settings-capability.ts` restricts [reset-near-weighted](reset-near-weighted.md) to Codex and built-in
+Anthropic pool settings. Generic pool writes using that value return HTTP 400.
+
 `src/server/responses/request-transport.ts` admits every automatic generic affinity-mode choice
 without persisting an active-account change, including new/unkeyed sessions and failovers. The
 operator's saved selection/revision fences queued sends independently of each conversation's serving

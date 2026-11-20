@@ -48,6 +48,8 @@ export interface OcxProtocolsConfig {
      * answered through the direct encoders, with no internal Responses body in either direction.
      */
     antigravityDirect?: boolean;
+    /** Preserve native Gemini payloads for concrete Antigravity OAuth routes on /v1beta. Default off. */
+    geminiNativeAntigravity?: boolean;
     /** Compare the dispatch plan with the observed path; never sends a second request. */
     shadowPlan?: boolean;
   };
@@ -1553,6 +1555,8 @@ export interface OcxComboConfig {
    */
   reasoningEffortMode?: OcxComboReasoningEffortMode;
   jevEffortMode?: import("./combo-jev-effort-mode").OcxComboJevEffortMode; // wire-effort owner on a `jev` combo; omitted = "decide"
+  capabilityPolicy?: import("./combo-capability-policy").OcxComboCapabilityPolicy; // omitted = "intersection"
+  onUnservable?: import("./combo-capability-policy").OcxComboOnUnservable; // `union` only; omitted = "degrade"
   /**
    * Disable image input even when every target supports it.
    * Omitted / `"auto"` keeps automatic capability derivation (default: enabled when
