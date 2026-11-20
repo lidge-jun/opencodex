@@ -19,10 +19,3 @@
   extension because `functionResponse.parts` is the documented multimodal function-response form
   for Gemini 3 and later, so the nested shape is valid input for them, and the PR author ran both
   models live on Vertex. Other routes are unchanged.
-- Amendment (2026-11-20): the same Vertex HTTP 400 (`Requests ending with a model turn are not
-  supported`) was reproduced live on Vertex AI with `gemini-4-neon` (2026-11-20, trailing
-  `custom_tool_call_output` with PNG/WebP `input_image` parts) and `gemini-3.8-flash`
-  (2026-10-22). The Vertex scope now matches Gemini 3 and later (`/^gemini-(?:[3-9]|\d{2,})(?:[.-]|$)/i`)
-  instead of a fixed model list so live-discovered Vertex Gemini 3+/4+ models receive the
-  documented nested `functionResponse.parts` layout automatically. AI Studio, Cloud Code Assist,
-  Vertex Gemini 2.x, and non-Gemini Vertex models retain their existing representation.

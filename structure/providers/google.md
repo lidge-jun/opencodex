@@ -251,6 +251,7 @@ orphans, standalone orphans and other routes retain their existing representatio
 > Decision record: [ADR-0058](../decisions/ADR-0058-google-tool-result-adjacency-repair.md)
 > Decision record: [ADR-7279](../decisions/ADR-7279-vertex-argon-tool-images.md)
 > Decision record: [ADR-7280](../decisions/ADR-7280-vertex-argon-orphan-images.md)
+> Decision record: [ADR-8969](../decisions/ADR-8969-vertex-gemini3plus-tool-images.md)
 
 ## Google opening functionCall repair
 
