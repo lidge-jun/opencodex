@@ -132,6 +132,17 @@ export async function readImageResponseBytes(
 
 const CCA_IMAGE_MODEL = "gemini-3.1-flash-image";
 
+/** An edit source xAI can fetch: an https URL without credentials, or a base64 image data URL. */
+function isXaiEditSourceUrl(value: string): boolean {
+  if (/^data:image\/(?:png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/i.test(value)) return true;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname !== "" && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The model this request names, or undefined when it names none.
  *
@@ -518,15 +529,17 @@ async function tryXaiImageRelay(
   if (endpoint === "edits") {
     const sources: string[] = [];
     // Every supplied source must be a usable URL: silently dropping one would buy an edit
-    // missing an image the caller sent.
+    // missing an image the caller sent. xAI takes a public https URL or a base64 image data URL;
+    // an explicit null counts as supplied.
     let unusable = false;
     const add = (value: unknown) => {
-      if (typeof value === "string" && value.trim()) sources.push(value.trim());
+      const url = typeof value === "string" ? value.trim() : "";
+      if (isXaiEditSourceUrl(url)) sources.push(url);
       else unusable = true;
     };
-    if (obj.image !== undefined && obj.image !== null) add(obj.image);
-    if (obj.image_url !== undefined && obj.image_url !== null) add(obj.image_url);
-    if (obj.images !== undefined && obj.images !== null) {
+    if (obj.image !== undefined) add(obj.image);
+    if (obj.image_url !== undefined) add(obj.image_url);
+    if (obj.images !== undefined) {
       if (!Array.isArray(obj.images)) unusable = true;
       else for (const entry of obj.images) {
         if (typeof entry === "string") add(entry);

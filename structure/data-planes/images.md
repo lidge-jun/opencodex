@@ -48,7 +48,8 @@ The image bridge defaults to `grok-imagine-image-2.0`. For that model, OpenAI
 remains independent. Edits through `callXaiImages` and the `/v1/images/edits` relay accept up to five
 source URLs in caller order; both drop duplicate URLs first and then apply the limit, and the relay
 checks it before resolving credentials or sending a request. The relay refuses the request when any
-supplied source is not a usable URL (for example a `file_id`) instead of dropping it. The `image_gen` bridge tool sends one
+supplied source, an explicit `null` included, is not an https URL or a base64 PNG/JPEG/WebP data URL
+(for example a `file_id` or plain text) instead of dropping it. The `image_gen` bridge tool sends one
 source. Safe upstream validation details are reconstructed from a
 closed vocabulary of quality, field, resolution and bounded keyframe tokens;
 unknown bodies and arbitrary upstream text never reach the caller.
