@@ -517,18 +517,28 @@ async function tryXaiImageRelay(
   let imageUrls: string[] | undefined;
   if (endpoint === "edits") {
     const sources: string[] = [];
-    const add = (value: unknown) => { if (typeof value === "string" && value.trim()) sources.push(value.trim()); };
-    add(obj.image);
-    add(obj.image_url);
-    if (Array.isArray(obj.images)) for (const entry of obj.images) {
-      if (typeof entry === "string") add(entry);
-      else if (entry && typeof entry === "object" && !Array.isArray(entry)) {
-        const rec = entry as Record<string, unknown>;
-        if (typeof rec.image_url === "string") add(rec.image_url);
-        else if (rec.image_url && typeof rec.image_url === "object" && !Array.isArray(rec.image_url)) add((rec.image_url as Record<string, unknown>).url);
-        else add(rec.url);
+    // Every supplied source must be a usable URL: silently dropping one would buy an edit
+    // missing an image the caller sent.
+    let unusable = false;
+    const add = (value: unknown) => {
+      if (typeof value === "string" && value.trim()) sources.push(value.trim());
+      else unusable = true;
+    };
+    if (obj.image !== undefined && obj.image !== null) add(obj.image);
+    if (obj.image_url !== undefined && obj.image_url !== null) add(obj.image_url);
+    if (obj.images !== undefined && obj.images !== null) {
+      if (!Array.isArray(obj.images)) unusable = true;
+      else for (const entry of obj.images) {
+        if (typeof entry === "string") add(entry);
+        else if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+          const rec = entry as Record<string, unknown>;
+          if (typeof rec.image_url === "string") add(rec.image_url);
+          else if (rec.image_url && typeof rec.image_url === "object" && !Array.isArray(rec.image_url)) add((rec.image_url as Record<string, unknown>).url);
+          else add(rec.url);
+        } else unusable = true;
       }
     }
+    if (unusable) return formatErrorResponse(400, "invalid_request_error", "xAI image edits need every image as a URL");
     // Same rule as callXaiImages: duplicates collapse first, then the five-source limit applies.
     const unique = [...new Set(sources)];
     if (unique.length > XAI_MAX_EDIT_IMAGES) return formatErrorResponse(400, "invalid_request_error", "xAI image edits accept at most 5 images");

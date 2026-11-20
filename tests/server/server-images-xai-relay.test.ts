@@ -21,6 +21,22 @@ test("relay collapses duplicate sources before the five-source limit, like the c
   expect(calls[0].image).toEqual({url:"a",type:"image_url"});
 });
 
+test("relay refuses a request where any supplied edit source is unusable, before any upstream call", async () => {
+  const calls: unknown[] = [];
+  globalThis.fetch = (async (_input, init) => { calls.push(init?.body); return Response.json({data:[]}); }) as typeof fetch;
+  for (const body of [
+    {prompt:"edit",images:["https://example.com/a.png",{image_url:{}}]},
+    {prompt:"edit",images:["https://example.com/a.png",{file_id:"file-1"}]},
+    {prompt:"edit",image:"https://example.com/a.png",image_url:""},
+    {prompt:"edit",image:"https://example.com/a.png",images:[42]},
+  ]) {
+    const res = await relay(body);
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("every image");
+  }
+  expect(calls).toHaveLength(0);
+});
+
 test("relay preserves canonical upstream validation detail", async () => {
   globalThis.fetch = (async () => Response.json({error:"`image` is not supported for this model."},{status:400})) as typeof fetch;
   const res = await relay({prompt:"edit",image:"a"});
