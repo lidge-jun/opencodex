@@ -526,7 +526,7 @@ Responses (`/v1/responses`) y Chat Completions (`/v1/chat/completions`) siempre 
 | `apiSurfaces.messages.enabled?` | `boolean` | herede | `true` sirve el Messages API, `false` rechaza ambas rutas con 403. Unset hereda `claudeCode.enabled`, por lo que una integración Claude que está desactivada también cierra Messages. |
 | `apiSurfaces.gemini.enabled?` | `boolean` | `true` | `false` devuelve 403 para el catálogo, las operaciones de modelos y las interacciones de Gemini, incluidas las rutas compatibles bajo `/v1beta` y `/v1`. |
 
-La tarjeta **API de Gemini** del panel controla este ajuste. El acceso nativo a Antigravity se configura por separado.
+La tarjeta **API de Gemini** del panel controla este ajuste y su interruptor guarda solo `apiSurfaces.gemini.enabled`. El acceso nativo a Antigravity se configura por separado.
 
 Un valor presente pero mal formado (un no objeto `apiSurfaces` o `messages`, o un no booleano `enabled`) cierra el Messages API en lugar de volver al valor heredado. Ambas rutas siempre están de acuerdo.
 
