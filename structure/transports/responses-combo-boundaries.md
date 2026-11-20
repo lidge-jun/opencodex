@@ -42,6 +42,21 @@ would leave a long envelope unparseable. Like the other pre-output 400 hops it a
 without cooling the target: the model hallucinated the call or control marker on this target, the
 request itself fit, and the refusal arrives before any output commits. Coverage: `tests/routing/combo-unoffered-tool-refusal.test.ts`.
 
+## Reasoning-effort diagnostics
+
+`src/providers/reasoning-metadata.ts` checks the complete diagnostic before it parses fields or
+scans prose. Both automatic effort repair and its default conflict check accept at most 1,024
+UTF-16 code units. Effort repair rejects longer diagnostics in full, without truncating them
+or using a prefix to downgrade the request or learn a rejected effort.
+
+Exact-refusal Combo and policy fallback allow up to 16,384 UTF-16 code units for the complete
+envelope, which can include unrelated metadata. Each diagnostic prose scan still has a
+1,024-unit limit. A conflicting diagnostic field anywhere in the accepted envelope vetoes fallback.
+
+Field-separator patterns avoid overlapping whitespace runs. Optional field labels match whole words.
+An unquoted verb phrase such as "cannot use parameter" stays prose. Quoted or separately named
+fields still participate in the conflict check. The input limit bounds the remaining heuristics.
+
 ## Buffered required-tool contract
 
 Before selection, `src/server/responses/core-combo.ts` excludes resolved Meta Responses destinations
