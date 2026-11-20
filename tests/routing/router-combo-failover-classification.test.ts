@@ -1266,6 +1266,17 @@ describe("provider moderation refusal", () => {
     },
   };
 
+  test.each([
+    "content refused. category: spam, and please",
+    "refused category: a, and and b",
+    "refused categories: a, AND b, and c. please revise your input.",
+    "refused category: spam, and retry later.",
+  ])("recognizes category-list boundaries in %s", message => {
+    const withCode = JSON.stringify({ error: { code: "moderation_refusal", message } });
+    expect(isProviderModerationRefusal(400, withCode)).toBe(true);
+    expect(isProviderModerationRefusal(400, JSON.stringify({ error: { message } }))).toBe(false);
+  });
+
   test("the observed gateway refusal hops only with a structured moderation code", () => {
     // Owner decision on #8428: prose alone never hops. The observed body carries no code, so it
     // keeps dev's stop; the same body with a structured moderation code hops without cooling.
