@@ -34,12 +34,27 @@ test("relay refuses a request where any supplied edit source is unusable, before
     {prompt:"edit",images:["https://example.com/a.png","not-a-url"]},
     {prompt:"edit",images:["http://example.com/a.png"]},
     {prompt:"edit",images:["data:text/plain;base64,aGk="]},
+    {prompt:"edit",images:[{image_url:null,url:"https://example.com/a.png"}]},
+    {prompt:"edit",images:[{url:null}]},
+    {prompt:"edit",images:[{image_url:{url:null}}]},
+    {prompt:"edit",images:["data:image/png;base64,===="]},
+    {prompt:"edit",images:["data:image/png;base64,aG=k"]},
+    {prompt:"edit",images:["data:image/png;base64,aGk"]},
+    {prompt:"edit",images:["data:image/png;base64,"]},
   ]) {
     const res = await relay(body);
     expect(res.status).toBe(400);
     expect(await res.text()).toContain("every image");
   }
   expect(calls).toHaveLength(0);
+});
+
+test("relay forwards every URL property of an images[] entry, not just one", async () => {
+  const calls: any[] = [];
+  globalThis.fetch = (async (_input, init) => { calls.push(JSON.parse(String(init?.body))); return Response.json({data:[]}); }) as typeof fetch;
+  await relay({prompt:"edit",images:[{image_url:"https://example.com/a.png",url:"https://example.com/b.png"}]});
+  expect(calls).toHaveLength(1);
+  expect(calls[0].images.map((x: any) => x.url)).toEqual(["https://example.com/a.png","https://example.com/b.png"]);
 });
 
 test("relay preserves canonical upstream validation detail", async () => {

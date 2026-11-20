@@ -134,7 +134,12 @@ const CCA_IMAGE_MODEL = "gemini-3.1-flash-image";
 
 /** An edit source xAI can fetch: an https URL without credentials, or a base64 image data URL. */
 function isXaiEditSourceUrl(value: string): boolean {
-  if (/^data:image\/(?:png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/i.test(value)) return true;
+  const data = /^data:image\/(?:png|jpeg|jpg|webp);base64,(.*)$/is.exec(value);
+  if (data) {
+    // Canonical base64 only: whole quads, padding at the end and nowhere else.
+    const payload = data[1]!;
+    return payload.length > 0 && payload.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(payload);
+  }
   try {
     const url = new URL(value);
     return url.protocol === "https:" && url.hostname !== "" && !url.username && !url.password;
@@ -542,13 +547,18 @@ async function tryXaiImageRelay(
     if (obj.images !== undefined) {
       if (!Array.isArray(obj.images)) unusable = true;
       else for (const entry of obj.images) {
-        if (typeof entry === "string") add(entry);
-        else if (entry && typeof entry === "object" && !Array.isArray(entry)) {
-          const rec = entry as Record<string, unknown>;
-          if (typeof rec.image_url === "string") add(rec.image_url);
-          else if (rec.image_url && typeof rec.image_url === "object" && !Array.isArray(rec.image_url)) add((rec.image_url as Record<string, unknown>).url);
-          else add(rec.url);
-        } else unusable = true;
+        if (typeof entry === "string") { add(entry); continue; }
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) { unusable = true; continue; }
+        // Every URL-bearing property of an entry is a supplied source; an entry with none
+        // (a file_id, say) cannot be represented.
+        const rec = entry as Record<string, unknown>;
+        if (rec.image_url === undefined && rec.url === undefined) { unusable = true; continue; }
+        if (rec.image_url !== undefined) {
+          const nested = rec.image_url;
+          if (nested && typeof nested === "object" && !Array.isArray(nested)) add((nested as Record<string, unknown>).url);
+          else add(nested);
+        }
+        if (rec.url !== undefined) add(rec.url);
       }
     }
     if (unusable) return formatErrorResponse(400, "invalid_request_error", "xAI image edits need every image as a URL");
