@@ -116,7 +116,8 @@ live and latest durable rows are captured under the same mutation lock as deleti
 `src/cli/antigravity.ts` is a local interactive client, exempt from proxy and
 shim preflight. It launches the official `agy acp --sandbox` over stdio, lets
 the binary own sign-in, and selects a Gemini model from the session's advertised catalog. The default
-command uses plan mode. The work subcommand selects the CLI's default review mode in the user's project. There is no prompt argv, MCP injection,
+command uses plan mode. The work subcommand selects the CLI's default review mode in the user's project.
+Each setter reply locks its selection before further notifications are read. Updates while the next setter is pending still have to preserve earlier acknowledged choices. There is no prompt argv, MCP injection,
 provider, HTTP endpoint, account pooling, or token access. The client refuses
 non-TTY, SSH, service and detected agent/CI launches. Only a running work turn can
 ask for a one-time terminal decision for its session. Plan mode declines every request. `ocx antigravity native` hands the terminal directly to the official

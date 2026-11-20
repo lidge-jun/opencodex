@@ -163,7 +163,7 @@ export async function runAntigravitySession(
     }
   });
 
-  function request<T>(method: string, params: object): Promise<T> {
+  function request<T>(method: string, params: object, onReply?: () => void): Promise<T> {
     stop.signal.throwIfAborted();
     return new Promise<T>((resolve, reject) => {
       const id = ++nextId;
@@ -174,7 +174,11 @@ export async function runAntigravitySession(
         clearTimeout(timer);
         pending = undefined;
         if (error) reject(error);
-        else resolve(result as T);
+        else {
+          // Apply an acknowledged selection before the next notification in the same stdout batch.
+          onReply?.();
+          resolve(result as T);
+        }
       } };
       send({ id, method, params });
     });
@@ -202,16 +206,14 @@ export async function runAntigravitySession(
     const selected = models[choice === "" ? defaultModel : /^[1-9][0-9]*$/.test(choice) ? Number(choice) - 1 : -1];
     if (!selected) throw new Error("Choose a number from the Gemini model list.");
 
-    async function setOption(configId: string, value: string): Promise<void> {
-      const result = await request<Pick<Session, "configOptions">>("session/set_config_option", { sessionId, configId, value });
+    async function setOption(configId: string, value: string, onReply: () => void): Promise<void> {
+      const result = await request<Pick<Session, "configOptions">>("session/set_config_option", { sessionId, configId, value }, onReply);
       if (!matchesSelection(result?.configOptions)) {
         throw new Error("The Antigravity CLI did not confirm the requested session option.");
       }
     }
-    expectedModeId = modeOption.id;
-    await setOption(modeOption.id, mode);
-    expectedModel = selected.value;
-    await setOption(model.selector.id, selected.value);
+    await setOption(modeOption.id, mode, () => { expectedModeId = modeOption.id; });
+    await setOption(model.selector.id, selected.value, () => { expectedModel = selected.value; });
     stop.signal.throwIfAborted();
     write("Antigravity ACP: " + terminalText(selected.name) + " · " + mode + " mode · " + terminalText(cwd) + "\nType /exit to quit.\n");
     for (;;) {

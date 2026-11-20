@@ -34,6 +34,18 @@ createInterface({ input: process.stdin }).on("line", line => {
     if (!Array.isArray(params.mcpServers) || params.mcpServers.length || params.cwd !== process.cwd()) return bad(id);
     reply(id, { sessionId, configOptions: configOptions() });
   } else if (method === "session/set_config_option") {
+    if (process.argv.includes("pending-snapshot")) {
+      write({ method: "session/update", params: { sessionId, update: {
+        sessionUpdate: "config_option_update", configOptions: configOptions(),
+      } } });
+    }
+    if (params.configId === "model" && process.argv.includes("pending-mode-drift")) {
+      mode = "auto";
+      write({ method: "session/update", params: { sessionId, update: {
+        sessionUpdate: "config_option_update", configOptions: configOptions(),
+      } } });
+      mode = "default";
+    }
     if (params.configId === "model" && params.value === "gemini-example") model = params.value;
     else if (params.configId === "mode" && params.value === (work ? "default" : "plan")) mode = params.value;
     else return bad(id);
@@ -216,6 +228,26 @@ describe("Antigravity ACP command", () => {
     } finally {
       clearTimeout(timer);
     }
+  });
+
+  test.each(["pending-snapshot", "pending-mode-drift"])("checks only acknowledged selections during setup (%s)", async scenario => {
+    const child = spawn(process.execPath, ["-e", fakeAgy, "--", "work", scenario], { windowsHide: true });
+    const stop = new AbortController();
+    const timer = setTimeout(() => stop.abort(new Error("Mock ACP timed out")), 4_000);
+    const questions: string[] = [];
+    try {
+      const session = runAntigravitySession(child, process.cwd(), async prompt => {
+        questions.push(prompt);
+        return prompt === "You> " ? "/exit" : "";
+      }, () => {}, stop, "default");
+      if (scenario === "pending-mode-drift") {
+        await expect(session).rejects.toThrow("Antigravity changed the session model or mode.");
+        expect(questions).not.toContain("You> ");
+      } else {
+        await session;
+        expect(questions).toContain("You> ");
+      }
+    } finally { clearTimeout(timer); }
   });
 
   test("rejects a setup-time model update before sending the first prompt", async () => {
