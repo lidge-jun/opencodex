@@ -220,7 +220,8 @@ test("an OAuth decision route is refused before any credential is resolved or re
       body: JSON.stringify({ model: "command-code/" + JEV, input: "hello", stream: false }),
     }), config([JEV, SERVED]), { model: "", provider: "" });
     expectDecisionRefusal(response.status, await response.text());
-    // An expired credential: transport preparation would send a refresh request first.
+    // An expired credential: transport preparation would resolve and renew it (locally, for this static
+    // Command Code credential) and persist the result before the refusal could run.
     await saveCredential("command-code", {
       access: "synthetic-expired", refresh: "synthetic-refresh-expired",
       expires: Date.now() - 60_000, accountId: "fixture-expired", source: "oauth",
