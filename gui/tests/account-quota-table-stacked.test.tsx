@@ -85,11 +85,13 @@ describe("account quota rows", () => {
   test("no card-layout rule lays a pool's name and bars out side by side", async () => {
     const css = (await Bun.file(new URL("../src/components/provider-workspace/account-quota-table.css", import.meta.url)).text())
       .replace(/\/\*[\s\S]*?\*\//g, "");
-    // Every pool cell rule, at every container width, keeps a single column.
+    // At every container width the cell keeps one column, and nothing inside it is placed on a grid
+    // track. (The cell's own placement in the account row, which spans it full width, is fine.)
     for (const match of css.matchAll(/([^{}]*\.aqt-pool[^{}]*)\{([^}]*)\}/g)) {
       const [, selector, body] = match;
       expect({ selector: selector!.trim(), columns: /grid-template-columns/.test(body!) }).toEqual({ selector: selector!.trim(), columns: false });
-      expect({ selector: selector!.trim(), placed: /grid-(row|column|area)/.test(body!) }).toEqual({ selector: selector!.trim(), placed: false });
+      const inside = /\.aqt-pool(\[[^\]]*\])?(\s*>\s*|\s+\S|::)/.test(selector!);
+      expect({ selector: selector!.trim(), placed: inside && /grid-(row|column|area)/.test(body!) }).toEqual({ selector: selector!.trim(), placed: false });
     }
     expect(css).not.toContain("attr(data-label)");
     // The pool name line exists only where the table header is hidden.
