@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { withClaudeContextSettings } from "../../src/cli/claude-context-settings";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import {
@@ -1206,6 +1206,22 @@ describe("ocx claude management discovery destination", () => {
       else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdminToken;
     }
   }
+
+  test.each([
+    ["TimeoutError", "Timed out after 3000 ms while loading model context information"],
+    ["TypeError", "Could not load model context information"],
+  ])("reports a %s without exposing raw error text", async (name, message) => {
+    const fetch = spyOn(globalThis, "fetch").mockRejectedValue(new DOMException("private diagnostic detail", name));
+    const warn = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await fetchClaudeCodeState(cfg({}), 10100)).toEqual({ contextWindows: {} });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(`⚠ ${message}. Automatic [1m] marking is skipped for this launch.`);
+    } finally {
+      fetch.mockRestore();
+      warn.mockRestore();
+    }
+  });
 
   test("a hub with a management ingress is asked on the ingress, not the proxy bind", async () => {
     const seen = await captureDiscovery(cfg({
