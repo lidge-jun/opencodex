@@ -213,6 +213,45 @@ describe("a chat request that reaches a Command Code decision model fails fast",
     expect(sends).toEqual([]);
   });
 
+test("an OAuth decision route is refused before any credential is resolved or refreshed", async () => {
+    // No login at all: transport preparation would answer 401 for the OAuth preset.
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "command-code/" + JEV, input: "hello", stream: false }),
+    }), config([JEV, SERVED]), { model: "", provider: "" });
+    expectDecisionRefusal(response.status, await response.text());
+    // An expired credential: transport preparation would send a refresh request first.
+    await saveCredential("command-code", {
+      access: "synthetic-expired", refresh: "synthetic-refresh-expired",
+      expires: Date.now() - 60_000, accountId: "fixture-expired", source: "oauth",
+    }, { addAccount: true });
+    await setActiveAccount("command-code", getAccountSet("command-code")!.accounts[0]!.id);
+    const expired = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "command-code/" + JEV, input: "hello", stream: false }),
+    }), config([JEV, SERVED]), { model: "", provider: "" });
+    expectDecisionRefusal(expired.status, await expired.text());
+    expect(sends).toEqual([]);
+  });
+
+  test("a combo moves past an OAuth decision target without a credential verdict cooling its provider", async () => {
+    const jevTarget = { provider: "command-code", model: JEV };
+    // A third target on the same OAuth provider: a 401 from transport preparation would read as a
+    // provider-wide credential failure and cool it too, although no credential was ever tried.
+    const sameProvider = { provider: "command-code", model: SERVED };
+    const cfg = config([JEV, SERVED], { combos: { pair: { strategy: "failover", targets: [
+      jevTarget, { provider: "commandcode", model: SERVED }, sameProvider,
+    ] } } });
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/pair", input: "hello", stream: false }),
+    }), cfg, { model: "", provider: "" });
+    const body = await response.text();
+    expect(response.status, body).toBe(200);
+    expect(sends).toEqual(["https://api.commandcode.ai/provider/v1/chat/completions"]);
+    expect(isComboTargetInCooldown("pair", sameProvider)).toBe(false);
+  });
+
   test("an image-bearing request is refused before the vision sidecar describes anything", async () => {
     await login();
     // A routed describer answers on the proxy's own loopback port; any describe call is a recorded send.

@@ -49,6 +49,11 @@ export async function handleResponsesInner(
   try {
     const requestState = await prepareResponsesRequest(requestContext, admissionState, requestDispatchers);
     if (requestState instanceof Response) return requestState;
+    // #8997: refuse a Command Code decision model before transport preparation (OAuth credential
+    // resolution or refresh), sidecar auth or sidecar work. Nothing is sent, so the candidate is not
+    // reported as a compaction-recovery source route either.
+    const decisionRefusal = commandCodeDecisionRouteRefusal(requestState.route.provider, requestState.parsed.modelId, logCtx);
+    if (decisionRefusal) return decisionRefusal;
     const transportState = await prepareResponsesTransport(requestContext, admissionState, requestState);
     if (transportState instanceof Response) return markProxyError(transportState);
     const agyAcpRefusal = agyAcpPreflightResponse({
@@ -79,9 +84,6 @@ export async function handleResponsesInner(
       }
     }
     options.onCompactionRecoveryRoute?.(requestState.route);
-    // #8997: refuse a Command Code decision model before sidecar auth or sidecar work.
-    const decisionRefusal = commandCodeDecisionRouteRefusal(requestState.route.provider, requestState.parsed.modelId, logCtx);
-    if (decisionRefusal) return decisionRefusal;
     if (requestState.parsed._compactionRequest && options.compactionRecoveryKind !== "compaction-v1"
       && (requestState.parsed._portableCompaction || !supportsNativeResponsesCompactionTrigger(requestState.route.provider))) {
       retention = prepareCompactionRetention(requestState.parsed, config,
