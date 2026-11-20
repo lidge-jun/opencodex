@@ -78,6 +78,7 @@ scrub-before-unlink failure path, and explicit residual-temp errors. No-follow w
 
 Owner-registry publication first refuses a directory symlink, applies POSIX mode `0700`, and requires `hardenSecretDir` for the locator directory. On Windows the default secret-directory ACL grants the current owner full control before removing inherited and broad-user access, without elevated-stage reader grants. A hardening failure skips this best-effort publication before any pointer is written.
 Under the armed test-home guard, `src/config/owner-registry.ts` uses the selected config home when its test override is absent and rejects protected-home destinations before reads, publication or retirement; production keeps the shared default-home registry. See [test state isolation](ops/test-sandbox-cleanup.md).
+The experimental [Windows ACL batching option](../docs-site/src/content/docs/troubleshooting/windows-acl-timeouts.md) preserves a separate successful owner grant before combining the two restrictions on a private entry. The default sequence and elevated staging keep their per-step failure handling.
 Windows hardening in the atomic writer is applied once per write, not once per harden call. Both calls stay
 `required: true` and still fail the write closed, but the pre-rename call resolves through the
 `src/lib/windows-secret-acl.ts` success memo: after the content write the writer re-asserts that the
