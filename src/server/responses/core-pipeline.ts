@@ -29,6 +29,7 @@ import { InvalidRetainedCompactionSummary, prepareCompactionRetention } from "./
 import { responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
 import { markResponseNonReplayable } from "../../lib/upstream-retry";
 import { agyAcpPreflightResponse } from "./agy-acp-preflight";
+import { commandCodeDecisionRouteRefusal } from "../../adapters/command-code-decision-guard";
 
 /** Compose request phases while retaining the original admission-finally ownership. */
 export async function handleResponsesInner(
@@ -78,6 +79,9 @@ export async function handleResponsesInner(
       }
     }
     options.onCompactionRecoveryRoute?.(requestState.route);
+    // #8997: refuse a Command Code decision model before sidecar auth or sidecar work.
+    const decisionRefusal = commandCodeDecisionRouteRefusal(requestState.route.provider, requestState.parsed.modelId, logCtx);
+    if (decisionRefusal) return decisionRefusal;
     if (requestState.parsed._compactionRequest && options.compactionRecoveryKind !== "compaction-v1"
       && (requestState.parsed._portableCompaction || !supportsNativeResponsesCompactionTrigger(requestState.route.provider))) {
       retention = prepareCompactionRetention(requestState.parsed, config,

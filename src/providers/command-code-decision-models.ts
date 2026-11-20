@@ -30,9 +30,11 @@ export const COMMAND_CODE_API_HOST = "api.commandcode.ai";
  * True for a Command Code decision model id. Matches the native `typesafe/jev...` form the discovery
  * filter drops and the Codex-facing encoded `typesafe-jev...` form a stale selection can still send
  * after discovery stopped listing the row, so it is a superset of the filter on purpose.
+ * Anchored at the start: a `claude-*` id (which the API-key preset pins to its Messages wire) or
+ * any other vendor's id can never match.
  */
 export function isCommandCodeDecisionModel(modelId: string): boolean {
-  return /typesafe[/-]jev/i.test(modelId);
+  return /^typesafe[/-]jev/i.test(modelId.trim());
 }
 
 /** True when a provider's baseUrl points at Command Code, whatever the provider is named. */

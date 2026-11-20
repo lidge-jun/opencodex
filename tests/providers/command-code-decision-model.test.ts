@@ -52,7 +52,9 @@ describe("Command Code decision models are not chat models", () => {
     for (const id of ["typesafe/jev", JEV, "TypeSafe/JEV-2", "typesafe-jev-1.14.0", " typesafe/jev "]) {
       expect(isCommandCodeDecisionModel(id), id).toBe(true);
     }
-    for (const id of [SERVED, "jev-1.13", "zai-org/GLM-5.3", "deepseek-v4-flash", "typesafe/other"]) {
+    // Anchored: the API-key preset pins claude-* ids to its Messages wire, and no claude-* id or
+    // other vendor's id may ever read as a decision model.
+    for (const id of [SERVED, "jev-1.13", "zai-org/GLM-5.3", "deepseek-v4-flash", "typesafe/other", "claude-typesafe-jev", "vendor/typesafe/jev"]) {
       expect(isCommandCodeDecisionModel(id), id).toBe(false);
     }
   });
@@ -122,12 +124,13 @@ describe("a chat request that reaches a Command Code decision model fails fast",
   }
 
   function expectDecisionRefusal(status: number, body: string): void {
-    expect(status, body).toBe(400);
+    // 404 model_not_found from the pipeline's early refusal (OpenAI's own shape for a non-chat model).
+    expect(status, body).toBe(404);
     expect(body).toContain("/provider/v1/systemone");
     expect(body).toContain("JEV combo");
   }
 
-  test("Responses, Chat and Messages inbound answer 400 without an upstream send, on both presets", async () => {
+  test("Responses, Chat and Messages inbound are refused without an upstream send, on both presets", async () => {
     await login();
     const cfg = config([JEV, SERVED]);
     for (const provider of ["command-code", "commandcode"]) {
@@ -177,6 +180,23 @@ describe("a chat request that reaches a Command Code decision model fails fast",
     expect(sends).toEqual([]);
   });
 
+  test("an image-bearing request is refused before the vision sidecar describes anything", async () => {
+    await login();
+    // A routed describer answers on the proxy's own loopback port; any describe call is a recorded send.
+    const cfg = config([JEV, SERVED], { port: 1234, visionSidecar: { enabled: true, backend: "routed", model: "command-code/" + SERVED } });
+    // Declared blind, so without the early refusal the sidecar would describe the image first.
+    cfg.providers["command-code"]!.noVisionModels = [JEV];
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "command-code/" + JEV, stream: false, input: [{ role: "user", content: [
+        { type: "input_text", text: "what is this" },
+        { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" },
+      ] }] }),
+    }), cfg, { model: "", provider: "" });
+    expectDecisionRefusal(response.status, await response.text());
+    expect(sends).toEqual([]);
+  });
+
   test("a combo listing the decision model does not cool its chat sibling", async () => {
     await login();
     const jevTarget = { provider: "command-code", model: JEV };
@@ -186,8 +206,11 @@ describe("a chat request that reaches a Command Code decision model fails fast",
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: "combo/pair", input: "hello", stream: false }),
     }), cfg, { model: "", provider: "" });
-    await response.text();
+    const body = await response.text();
+    // The decision target is refused locally; the combo moves on and the chat sibling serves.
+    expect(response.status, body).toBe(200);
+    expect(body).toContain("OK");
+    expect(sends).toEqual(["https://api.commandcode.ai/alpha/generate"]);
     expect(isComboTargetInCooldown("pair", servedTarget)).toBe(false);
-    expect(sends.every(url => url === "https://api.commandcode.ai/alpha/generate")).toBe(true);
   });
 });
