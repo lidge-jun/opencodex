@@ -184,6 +184,20 @@ describe("reset-credit auto-redeemer runtime (#822)", () => {
     expect((await h2.redeemer.tick()).kind).toBe("dispatched");
   });
 
+  test("a credit without a usable grant time is never the plan and is never consumed", async () => {
+    const undated: ResetCredit = { granted_at: "", expires_at: new Date(T0 + 30 * MIN).toISOString() };
+    expect(planAutoRedeem(T0 + 20 * MIN, [undated], { enabled: true, leadTimeMinutes: 10 })).toBeNull();
+    const h = harness({ credits: () => [undated], journalFile: join(dir, "undated.json") });
+    h.setNow(T0 + 20 * MIN);
+    expect(await h.redeemer.tick()).toEqual({ kind: "nothing-to-protect" });
+    expect(h.consumed).toEqual([]);
+    // Undated and expiring sooner than a dated credit: still blocks that credit's plan.
+    const h2 = harness({ credits: () => [{ granted_at: "x", expires_at: new Date(T0 + 25 * MIN).toISOString() }, credit(30, "2026-09-02T00:00:00Z")], journalFile: join(dir, "undated2.json") });
+    h2.setNow(T0 + 20 * MIN);
+    expect(await h2.redeemer.tick()).toEqual({ kind: "skipped", reason: "order-not-guaranteed" });
+    expect(h2.consumed).toEqual([]);
+  });
+
   test("a tied or unorderable grant time also blocks dispatch (fail closed)", async () => {
     for (const [i, other] of ([
       { granted_at: "2026-09-01T00:00:00Z", expires_at: null },

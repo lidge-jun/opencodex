@@ -57,6 +57,9 @@ export function planAutoRedeem(now: number, credits: readonly ResetCredit[], set
   let best: AutoRedeemPlan | null = null;
   for (const credit of credits) {
     if (credit.expires_at === null) continue;
+    // A credit without a usable grant time has no identity to protect: never plan it. It still
+    // blocks other plans through olderCreditPrecedes.
+    if (!Number.isFinite(Date.parse(credit.granted_at))) continue;
     const expires = Date.parse(credit.expires_at);
     if (!Number.isFinite(expires) || expires <= now) continue;
     const dueAt = expires - settings.leadTimeMinutes * 60_000;
@@ -77,10 +80,11 @@ export function creditStillPresent(credits: readonly ResetCredit[], plan: Pick<A
  */
 export function olderCreditPrecedes(credits: readonly ResetCredit[], plan: Pick<AutoRedeemPlan, "grantedAt" | "expiresAt">): boolean {
   const planned = Date.parse(plan.grantedAt);
+  if (!Number.isFinite(planned)) return true;
   // Fail closed: an equal grant time has no known tie-breaker, and a grant time that does not
   // parse cannot be ordered at all, so either blocks dispatch just like an older credit.
   return credits.some(c => !(c.granted_at === plan.grantedAt && c.expires_at === plan.expiresAt)
-    && (!Number.isFinite(planned) || !(Date.parse(c.granted_at) > planned)));
+    && !(Date.parse(c.granted_at) > planned));
 }
 
 interface JournalEntry {
