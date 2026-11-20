@@ -43,7 +43,7 @@ Ajoutez `videoBridgeEnabled: true` à votre configuration `images` :
   "images": {
     "bridgeEnabled": true,
     "videoBridgeEnabled": true,
-    "videoBridgeModel": "grok-imagine-video",
+    "videoBridgeModel": "grok-imagine-video-1.5-lite",
     "videoMaxRounds": 2,
     "videoTimeoutMs": 300000
   }
@@ -53,7 +53,7 @@ Ajoutez `videoBridgeEnabled: true` à votre configuration `images` :
 | Option | Valeur par défaut | Description |
 |--------|---------|-------------|
 | `videoBridgeEnabled` | `false` | Interrupteur principal. Doit être activé explicitement. |
-| `videoBridgeModel` | `"grok-imagine-video"` | Identifiant du modèle vidéo xAI. |
+| `videoBridgeModel` | `"grok-imagine-video-1.5-lite"` | Identifiant du modèle vidéo xAI. |
 | `videoMaxRounds` | `2` | Nombre maximal de tours de génération vidéo avant une réponse finale forcée. |
 | `videoTimeoutMs` | `300000` (5 min) | Délai maximal par vidéo, interrogation comprise. |
 | `videoProvider` | non défini (xAI) | Fournisseur facultatif à clé d'API qui traite `video_gen` avec ses propres `baseUrl` et clé. Voir [Choisir le fournisseur vidéo](#choisir-le-fournisseur-vidéo). |
@@ -76,7 +76,7 @@ Par défaut, le pont envoie les tâches `video_gen` à xAI avec la clé d'API du
   "images": {
     "videoBridgeEnabled": true,
     "videoProvider": "my-video-bridge",
-    "videoBridgeModel": "grok-imagine-video"
+    "videoBridgeModel": "grok-imagine-video-1.5-lite"
   }
 }
 ```
@@ -103,16 +103,30 @@ L'outil `video_gen` accepte les paramètres suivants :
 
 | Paramètre | Type | Plage | Description |
 |-----------|------|-------|-------------|
-| `prompt` | string | required | Invite détaillée de génération vidéo |
+| `prompt` | string | optional with an image | Text prompt |
 | `duration` | integer | 1-15 | Durée de la vidéo en secondes |
-| `resolution` | string | `"480p"`, `"720p"` | Résolution de la vidéo |
-| `aspect_ratio` | string | 7 ratios | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3` |
+| `resolution` | string | `480p`, `720p`, `1080p` | Model-dependent |
+| `aspect_ratio` | string | model-dependent | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2` |
+| `image` | string | first frame | HTTPS URL, data URL or remembered artifact |
+| `last_frame` | string | 1.5 only | Last frame |
+| `keyframes` | array | 1.5, max 4 | `{image, timestamp_s}`; timestamp must be inside the clip |
+| `reference_images` | array | 1.5: 14, classic: 7 | Image references; 1.5 limited to 720p |
+
+### Modèles et images en entrée
+
+| Model | Resolution | Inputs | par seconde (480p / 720p / 1080p) |
+|-------|------------|--------|------------------|
+| `grok-imagine-video-1.5` | 480p / 720p / 1080p natif | première/dernière image, 4 images clés, 14 références (720p maximum) | $0.08 / $0.14 / $0.25 |
+| `grok-imagine-video-1.5-lite` (par défaut) | 480p / 720p / 1080p agrandi | première image | $0.02 / $0.03 / $0.14 |
+| `grok-imagine-video` | 480p / 720p | première image, 7 références | $0.05 / $0.07 / — |
+
+Réglez `images.videoBridgeModel` sur `grok-imagine-video-1.5` pour utiliser les images clés ou références. Les modèles connus acceptent neuf formats ; les autres conservent sept formats, 480p/720p et aucune image. Les URL HTTPS et données PNG/JPEG/WebP jusqu’à 10 Mio décodés sont acceptées. Une image téléchargée par le pont peut être référencée par URL d’artefact, chemin absolu ou URL `file:` pendant une heure : son URL source est utilisée sans lire le fichier local. Cela exige la destination xAI fixe, pas un `images.videoProvider` personnalisé. Les résultats en ligne n’ont pas d’URL source et une URL temporaire peut expirer plus tôt.
+
 
 ## Limitations
 
 - **xAI par défaut** : sans `videoProvider`, la génération vidéo utilise l'API Grok Imagine Video de xAI ; un autre backend doit implémenter la même API asynchrone.
 - **Asynchrone** : la génération d'une vidéo prend de 30 à 120 secondes.
-- **Coût** : la génération vidéo est une fonctionnalité xAI payante (environ 0.05 $/s en 480p et 0.07 $/s en 720p).
 - **Une vidéo par appel** : chaque appel à `video_gen` produit une vidéo.
 - **Coexiste avec le pont de génération d'images** : les deux ponts peuvent être activés simultanément.
 - **Priorité à la recherche web** : lorsqu'un service auxiliaire de recherche web est actif pendant un tour (adaptateur autre que `runTurn`), le pont vidéo est ignoré ; les deux ne peuvent pas s'exécuter simultanément. Un `console.warn` est émis afin que vous puissiez le repérer dans les journaux.

@@ -1,3 +1,4 @@
+import { DEFAULT_VIDEO_MODEL } from "./video-capabilities";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { toolChoiceToolPredicate } from "../types";
 import type { ImageBridgePlan, VideoBridgePlan } from "./types";
@@ -103,7 +104,6 @@ export async function planImageBridge(
   };
 }
 
-const DEFAULT_VIDEO_MODEL = "grok-imagine-video";
 const XAI_HOSTS = new Set(["api.x.ai", "cli-chat-proxy.grok.com"]);
 
 function pinnedXaiBaseUrl(): string {

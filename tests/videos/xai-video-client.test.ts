@@ -135,3 +135,14 @@ describe("pollVideoJob", () => {
     expect(capturedUrl).not.toMatch(/\/videos\/req\/with/);
   });
 });
+
+
+test("submits frames and references in xAI shape with the new default", async () => {
+  const captured: Captured[] = [];
+  await submitVideoJob({ prompt: "p", image: "https://a.test/1", lastFrame: "https://a.test/2", keyframes: [{ image: "https://a.test/3", timestampS: 1 }], referenceImages: ["https://a.test/4"] }, auth, undefined, xai({ request_id: "r" }, 200, captured));
+  expect(JSON.parse(captured[0]!.body!)).toMatchObject({ model: "grok-imagine-video-1.5-lite", image: { url: "https://a.test/1" }, last_frame: { url: "https://a.test/2" }, keyframes: [{ image: { url: "https://a.test/3" }, timestamp_s: 1 }], reference_images: [{ url: "https://a.test/4" }] });
+});
+
+test("appends safe validation detail on submit errors", async () => {
+  await expect(submitVideoJob({ prompt: "p" }, auth, undefined, xai({ error: { message: "`last_frame` is not supported for this model." } }, 400))).rejects.toThrow("`last_frame` is not supported for this model.");
+});

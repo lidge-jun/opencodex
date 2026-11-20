@@ -38,7 +38,7 @@ Video Bridge 允许你通过 opencodex 路由的任意非 OpenAI 模型使用 xA
   "images": {
     "bridgeEnabled": true,
     "videoBridgeEnabled": true,
-    "videoBridgeModel": "grok-imagine-video",
+    "videoBridgeModel": "grok-imagine-video-1.5-lite",
     "videoMaxRounds": 2,
     "videoTimeoutMs": 300000
   }
@@ -48,7 +48,7 @@ Video Bridge 允许你通过 opencodex 路由的任意非 OpenAI 模型使用 xA
 | 选项 | 默认值 | 说明 |
 |--------|---------|-------------|
 | `videoBridgeEnabled` | `false` | 总开关，必须显式启用。 |
-| `videoBridgeModel` | `"grok-imagine-video"` | xAI 视频模型 id。 |
+| `videoBridgeModel` | `"grok-imagine-video-1.5-lite"` | xAI 视频模型 id。 |
 | `videoMaxRounds` | `2` | 在强制输出最终答案前允许的最大视频生成轮数。 |
 | `videoTimeoutMs` | `300000`（5 分钟） | 单个视频的超时时间，包括轮询在内。 |
 | `videoProvider` | 未设置（xAI） | 可选的 API 密钥提供方，使用其自身的 `baseUrl` 和密钥处理 `video_gen`。参见[选择视频提供方](#选择视频提供方)。 |
@@ -71,7 +71,7 @@ Video Bridge 允许你通过 opencodex 路由的任意非 OpenAI 模型使用 xA
   "images": {
     "videoBridgeEnabled": true,
     "videoProvider": "my-video-bridge",
-    "videoBridgeModel": "grok-imagine-video"
+    "videoBridgeModel": "grok-imagine-video-1.5-lite"
   }
 }
 ```
@@ -98,16 +98,30 @@ Video Bridge 允许你通过 opencodex 路由的任意非 OpenAI 模型使用 xA
 
 | 参数 | 类型 | 范围 | 说明 |
 |-----------|------|-------|-------------|
-| `prompt` | string | required | 详细的视频生成提示词 |
+| `prompt` | string | optional with an image | Text prompt |
 | `duration` | integer | 1-15 | 视频时长，单位为秒 |
-| `resolution` | string | `"480p"`, `"720p"` | 视频分辨率 |
-| `aspect_ratio` | string | 7 种比例 | `16:9`、`9:16`、`1:1`、`4:3`、`3:4`、`3:2`、`2:3` |
+| `resolution` | string | `480p`, `720p`, `1080p` | Model-dependent |
+| `aspect_ratio` | string | model-dependent | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2` |
+| `image` | string | first frame | HTTPS URL, data URL or remembered artifact |
+| `last_frame` | string | 1.5 only | Last frame |
+| `keyframes` | array | 1.5, max 4 | `{image, timestamp_s}`; timestamp must be inside the clip |
+| `reference_images` | array | 1.5: 14, classic: 7 | Image references; 1.5 limited to 720p |
+
+### 模型和图像输入
+
+| Model | Resolution | Inputs | 每秒 (480p / 720p / 1080p) |
+|-------|------------|--------|------------------|
+| `grok-imagine-video-1.5` | 480p / 720p / 1080p 原生 | 首帧/末帧, 4 关键帧, 14 参考图 (720p 最多) | $0.08 / $0.14 / $0.25 |
+| `grok-imagine-video-1.5-lite` (默认) | 480p / 720p / 1080p 放大 | 首帧 | $0.02 / $0.03 / $0.14 |
+| `grok-imagine-video` | 480p / 720p | 首帧, 7 参考图 | $0.05 / $0.07 / — |
+
+要固定帧或使用参考图，请将 `images.videoBridgeModel` 设置为 `grok-imagine-video-1.5`。已知模型支持九种宽高比；未知模型保留七种比例和 480p/720p，不支持图像输入。支持 HTTPS URL 和解码后不超过 10 MiB 的 PNG/JPEG/WebP 数据 URL。图像桥下载的图像可在一小时内通过产物 URL、绝对路径或 `file:` URL 引用；桥使用保存的源 URL，绝不读取本地文件。此引用仅适用于固定的 xAI 目标，不适用于自定义 `images.videoProvider`。内联结果没有源 URL，临时 URL 也可能提前过期。
+
 
 ## 限制
 
 - **默认使用 xAI**：未设置 `videoProvider` 时，视频生成使用 xAI 的 Grok Imagine Video API；其他后端必须实现相同的异步 API
 - **异步**：视频生成需要 30-120 秒
-- **费用**：视频生成是 xAI 的付费功能（约 `480p` 每秒 `$0.05`，`720p` 每秒 `$0.07`）
 - **每次调用只生成一个视频**：每次 `video_gen` 调用只会生成一个视频
 - **可与图片桥接共存**：两种桥接可以同时启用
 - **Web 搜索优先级**：当某一轮启用了 web search sidecar（非 `runTurn` adapter）时，视频桥接会被跳过，这两者不能并发运行。系统会发出 `console.warn`，方便你在日志中识别这一情况。

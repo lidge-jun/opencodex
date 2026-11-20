@@ -51,6 +51,16 @@ sending a request. Safe upstream validation details are reconstructed from a
 closed vocabulary of quality, field, resolution and bounded keyframe tokens;
 unknown bodies and arbitrary upstream text never reach the caller.
 
+The video bridge defaults to `grok-imagine-video-1.5-lite`. The 1.5 model supports
+1080p, first and last frames, four keyframes and fourteen references capped at 720p;
+Lite supports 1080p and a first frame, while classic supports 720p, a first frame
+and seven references. Known models expose nine aspect ratios; unknown models retain
+the legacy seven ratios and no image inputs. Image inputs accept HTTPS and bounded
+inline image data. A successful URL download records its original source URL in a
+256-entry, one-hour process-local map. Artifact references resolve by exact path or
+opaque ID without reading local files; they are forwarded only to the pinned xAI
+video destination. Inline image results have no source URL and cannot be referenced.
+
 ## Video bridge destination
 
 `planVideoBridge` in `src/images/plan.ts` decides where `video_gen` submit and poll requests go and

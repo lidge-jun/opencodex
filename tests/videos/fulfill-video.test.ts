@@ -151,3 +151,19 @@ describe("buildVideoResult", () => {
     expect(result.markdown).toContain("file://");
   });
 });
+
+
+test("model-specific frames, resolutions and limits are validated", () => {
+  const parse = (v: object, model = "grok-imagine-video-1.5") => parseVideoCallArgs(JSON.stringify(v), model);
+  expect(parse({ image: "https://example.com/a", resolution: "1080p", aspect_ratio: "21:9" })).toMatchObject({ ok: true, resolution: "1080p", aspectRatio: "21:9" });
+  expect(parse({ prompt: "p", resolution: "1080p" }, "grok-imagine-video-1.5-lite")).toMatchObject({ ok: true, resolution: "1080p" });
+  expect(parse({ prompt: "p", resolution: "1080p" }, "grok-imagine-video")).not.toHaveProperty("resolution");
+  expect(parse({ prompt: "p", last_frame: "https://example.com/a" }, "grok-imagine-video-1.5-lite")).toMatchObject({ ok: false });
+  expect(parse({ prompt: "p", keyframes: Array(5).fill({ image: "https://example.com/a", timestamp_s: 1 }) })).toMatchObject({ ok: false });
+  expect(parse({ prompt: "p", reference_images: ["https://example.com/a"], resolution: "1080p" })).toMatchObject({ ok: false, error: "reference_images are limited to 720p" });
+});
+
+test("failed polling reports safe code and detail", async () => {
+  const generator = pollVideoWithHeartbeats("r", auth, new AbortController().signal, 1000, noopSleep, async () => ({ status: "failed", error: { code: "invalid_argument", message: "`last_frame` is not supported for this model." } }));
+  expect((await generator.next()).value).toEqual({ ok: false, error: "video generation failed: invalid_argument: `last_frame` is not supported for this model." });
+});

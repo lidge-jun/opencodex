@@ -1,3 +1,5 @@
+import { videoModelCapabilities } from "./video-capabilities";
+import { safeVideoFailureCode, safeXaiErrorDetail } from "./xai-upstream-error";
 import { pathToFileURL } from "node:url";
 import type { VideoBridgePlan, VideoCallResult } from "./types";
 import { submitVideoJob, pollVideoJob, type VideoProviderAuth } from "./xai-video-client";
@@ -10,6 +12,10 @@ export interface ParsedVideoArgs {
   duration?: number;
   resolution?: string;
   aspectRatio?: string;
+  image?: string;
+  lastFrame?: string;
+  keyframes?: { image: string; timestampS: number }[];
+  referenceImages?: string[];
 }
 
 const INITIAL_POLL_INTERVAL_MS = 5_000;
@@ -37,7 +43,7 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  * Parse the JSON arguments string from a video_gen tool call. Mirrors fulfillImageCall's
  * defensive parsing: invalid JSON or missing prompt returns an error result.
  */
-export function parseVideoCallArgs(raw: string):
+export function parseVideoCallArgs(raw: string, model?: string):
   | ParsedVideoArgs
   | { ok: false; error: string } {
   let args: unknown;
@@ -51,26 +57,37 @@ export function parseVideoCallArgs(raw: string):
   }
   const obj = args as Record<string, unknown>;
 
-  const prompt =
-    typeof obj.prompt === "string" ? obj.prompt : typeof obj.input === "string" ? obj.input : "";
-  if (!prompt) {
-    return { ok: false, error: "missing prompt" };
-  }
-
+  const caps = videoModelCapabilities(model);
+  const prompt = typeof obj.prompt === "string" ? obj.prompt : typeof obj.input === "string" ? obj.input : "";
   const result: ParsedVideoArgs = { ok: true, prompt };
-
-  // duration: clamp to 1-15
-  if (typeof obj.duration === "number") {
-    result.duration = Math.max(1, Math.min(15, Math.floor(obj.duration)));
+  if (typeof obj.duration === "number" && Number.isFinite(obj.duration)) result.duration = Math.max(1, Math.min(15, Math.floor(obj.duration)));
+  if (typeof obj.resolution === "string" && caps.resolutions.includes(obj.resolution)) result.resolution = obj.resolution;
+  if (typeof obj.aspect_ratio === "string" && caps.aspectRatios.includes(obj.aspect_ratio)) result.aspectRatio = obj.aspect_ratio;
+  for (const [field, supported] of [["image", caps.firstFrame], ["last_frame", caps.lastFrame], ["keyframes", caps.maxKeyframes > 0], ["reference_images", caps.maxReferenceImages > 0]] as const) {
+    if (obj[field] !== undefined && !supported) return { ok: false, error: `${field} is not supported by ${model ?? "unknown"}` };
   }
-
-  if (typeof obj.resolution === "string" && (obj.resolution === "480p" || obj.resolution === "720p")) {
-    result.resolution = obj.resolution;
+  if (obj.image !== undefined) {
+    if (typeof obj.image !== "string" || !obj.image) return { ok: false, error: "invalid image" };
+    result.image = obj.image;
   }
-  if (typeof obj.aspect_ratio === "string") {
-    const VALID_RATIOS = ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"];
-    if (VALID_RATIOS.includes(obj.aspect_ratio)) result.aspectRatio = obj.aspect_ratio;
+  if (obj.last_frame !== undefined) {
+    if (typeof obj.last_frame !== "string" || !obj.last_frame) return { ok: false, error: "invalid last_frame" };
+    result.lastFrame = obj.last_frame;
   }
+  if (obj.keyframes !== undefined) {
+    if (!Array.isArray(obj.keyframes) || obj.keyframes.length > caps.maxKeyframes) return { ok: false, error: "invalid keyframes" };
+    result.keyframes = [];
+    for (const frame of obj.keyframes) {
+      if (!frame || typeof frame !== "object" || typeof frame.image !== "string" || !frame.image || typeof frame.timestamp_s !== "number" || !Number.isFinite(frame.timestamp_s) || frame.timestamp_s <= 0 || (result.duration !== undefined && frame.timestamp_s >= result.duration)) return { ok: false, error: "invalid keyframe" };
+      result.keyframes.push({ image: frame.image, timestampS: frame.timestamp_s });
+    }
+  }
+  if (obj.reference_images !== undefined) {
+    if (!Array.isArray(obj.reference_images) || obj.reference_images.length > caps.maxReferenceImages || obj.reference_images.some(value => typeof value !== "string" || !value)) return { ok: false, error: "invalid reference_images" };
+    result.referenceImages = obj.reference_images;
+    if (result.referenceImages!.length && result.resolution === "1080p" && caps.referenceMaxResolution === "720p") return { ok: false, error: "reference_images are limited to 720p" };
+  }
+  if (!prompt && !result.image && !result.lastFrame && !result.keyframes?.length && !result.referenceImages?.length) return { ok: false, error: "missing prompt" };
 
   return result;
 }
@@ -110,7 +127,8 @@ export async function* pollVideoWithHeartbeats(
         return { ok: false, error: "video generation completed but no video URL was returned" };
       }
       if (poll.status === "failed") {
-        return { ok: false, error: "video generation failed" };
+        const details = [safeVideoFailureCode(poll.error?.code), safeXaiErrorDetail(poll.error?.message)].filter(Boolean);
+        return { ok: false, error: ["video generation failed", ...details].join(": ") };
       }
       if (poll.status === "expired") {
         return { ok: false, error: "video generation expired" };
@@ -126,7 +144,7 @@ export async function* pollVideoWithHeartbeats(
       if (status && status >= 400 && status < 500 && status !== 429) {
         return { ok: false, error: `video poll failed permanently: HTTP ${status}` };
       }
-      console.warn(`[videos] poll error (will retry): ${e instanceof Error ? e.message : String(e)}`);
+      console.warn(`[videos] poll error (will retry): ${status ? `HTTP ${status}` : "unknown status"}`);
     }
 
     const elapsed = Math.floor((Date.now() - start) / 1000);

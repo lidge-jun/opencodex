@@ -44,7 +44,7 @@ Video Bridge позволяет использовать генерацию xAI 
   "images": {
     "bridgeEnabled": true,
     "videoBridgeEnabled": true,
-    "videoBridgeModel": "grok-imagine-video",
+    "videoBridgeModel": "grok-imagine-video-1.5-lite",
     "videoMaxRounds": 2,
     "videoTimeoutMs": 300000
   }
@@ -54,7 +54,7 @@ Video Bridge позволяет использовать генерацию xAI 
 | Параметр | По умолчанию | Описание |
 |--------|---------|-------------|
 | `videoBridgeEnabled` | `false` | Главный переключатель. Должен быть явно включён. |
-| `videoBridgeModel` | `"grok-imagine-video"` | Id видеомодели xAI. |
+| `videoBridgeModel` | `"grok-imagine-video-1.5-lite"` | Id видеомодели xAI. |
 | `videoMaxRounds` | `2` | Максимум раундов video-gen до принудительного финального ответа. |
 | `videoTimeoutMs` | `300000` (5 min) | Таймаут одного видео, включая polling. |
 | `videoProvider` | не задан (xAI) | Необязательный провайдер с API-ключом, который обслуживает `video_gen` через свой `baseUrl` и ключ. См. [Выбор видеопровайдера](#выбор-видеопровайдера). |
@@ -77,7 +77,7 @@ Video Bridge позволяет использовать генерацию xAI 
   "images": {
     "videoBridgeEnabled": true,
     "videoProvider": "my-video-bridge",
-    "videoBridgeModel": "grok-imagine-video"
+    "videoBridgeModel": "grok-imagine-video-1.5-lite"
   }
 }
 ```
@@ -104,16 +104,30 @@ Tool `video_gen` принимает:
 
 | Параметр | Тип | Диапазон | Описание |
 |-----------|------|-------|-------------|
-| `prompt` | string | required | Подробный prompt для генерации видео |
+| `prompt` | string | optional with an image | Text prompt |
 | `duration` | integer | 1-15 | Длительность видео в секундах |
-| `resolution` | string | `"480p"`, `"720p"` | Разрешение видео |
-| `aspect_ratio` | string | 7 ratios | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3` |
+| `resolution` | string | `480p`, `720p`, `1080p` | Model-dependent |
+| `aspect_ratio` | string | model-dependent | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `21:9`, `5:2` |
+| `image` | string | first frame | HTTPS URL, data URL or remembered artifact |
+| `last_frame` | string | 1.5 only | Last frame |
+| `keyframes` | array | 1.5, max 4 | `{image, timestamp_s}`; timestamp must be inside the clip |
+| `reference_images` | array | 1.5: 14, classic: 7 | Image references; 1.5 limited to 720p |
+
+### Модели и входные изображения
+
+| Model | Resolution | Inputs | за секунду (480p / 720p / 1080p) |
+|-------|------------|--------|------------------|
+| `grok-imagine-video-1.5` | 480p / 720p / 1080p нативное | первый/последний кадр, 4 ключевых кадра, 14 референсов (720p максимум) | $0.08 / $0.14 / $0.25 |
+| `grok-imagine-video-1.5-lite` (по умолчанию) | 480p / 720p / 1080p увеличенное | первый кадр | $0.02 / $0.03 / $0.14 |
+| `grok-imagine-video` | 480p / 720p | первый кадр, 7 референсов | $0.05 / $0.07 / — |
+
+Для ключевых кадров или референсов задайте `images.videoBridgeModel` равным `grok-imagine-video-1.5`. Известные модели поддерживают девять пропорций; неизвестные сохраняют семь, 480p/720p и не принимают изображения. Допускаются HTTPS URL и данные PNG/JPEG/WebP размером до 10 МиБ после декодирования. Изображение, скачанное мостом, можно в течение часа указать через URL артефакта, абсолютный путь или URL `file:`: используется сохранённый исходный URL без чтения локального файла. Это работает только с фиксированным адресом xAI, не с пользовательским `images.videoProvider`. У встроенных результатов исходного URL нет, а временный URL может истечь раньше.
+
 
 ## Ограничения
 
 - **По умолчанию xAI**: без `videoProvider` генерация видео использует API xAI Grok Imagine Video; другой бэкенд должен реализовать тот же асинхронный API
 - **Асинхронно**: генерация видео занимает 30-120 секунд
-- **Платно**: генерация видео — платная функция xAI (~$0.05/сек @480p, ~$0.07/сек @720p)
 - **Одно видео на один вызов**: каждый вызов `video_gen` создаёт одно видео
 - **Совместим с Image Bridge**: оба моста можно включать одновременно
 - **Приоритет web search**: если для хода активен web search sidecar (не-`runTurn` адаптер),

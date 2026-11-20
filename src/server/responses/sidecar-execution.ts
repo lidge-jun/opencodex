@@ -687,7 +687,7 @@ export async function executeResponsesSidecars(
     })];
     const existingNames = new Set(bridgeTools.map(t => t.name));
     if (imgPlan && !existingNames.has(IMAGE_GEN_TOOL_NAME)) bridgeTools.push(buildImageTool());
-    if (vidPlan && !existingNames.has(VIDEO_GEN_TOOL_NAME)) bridgeTools.push(buildVideoTool());
+    if (vidPlan && !existingNames.has(VIDEO_GEN_TOOL_NAME)) bridgeTools.push(buildVideoTool(vidPlan.model));
     parsed.context.tools = bridgeTools;
     // Hosted image_generation tool_choice / allowed_tools must target the synthetic function name.
     // Gate on imgPlan — in a video-only turn buildImageTool() was never injected, so rewriting
