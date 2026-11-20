@@ -4,6 +4,7 @@ import { act, useState } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import { ProvidersPageModals } from "../src/pages/providers-page-modals";
+import { UnsavedLeaveDialog } from "../src/components/provider-workspace/ProviderDialogs";
 
 /**
  * #8849: the Add Provider modal listens for Escape on window. Dialogs the providers page opens on top
@@ -160,4 +161,78 @@ test("with no page overlay, Escape closes Add Provider", async () => {
   await render(null);
   await pressEscape();
   expect(events).toEqual(["closeAdd"]);
+});
+
+/**
+ * Layers owned by different parts of the page at once: the workspace Settings tab's unsaved-changes
+ * confirmation (mounted in the page body, beneath the modals) stays open while Add Provider opens,
+ * optionally with the OAuth warning above it. Each Escape belongs to the topmost layer only.
+ */
+function Workspace({ warning }: { warning: boolean }) {
+  const [settingsLeave, setSettingsLeave] = useState(true);
+  const [adding, setAdding] = useState(true);
+  const [tos, setTos] = useState(warning);
+  return (
+    <LanguageProvider>
+      {settingsLeave && (
+        <UnsavedLeaveDialog
+          onSave={() => {}}
+          onDiscard={() => {}}
+          onCancel={() => { events.push("cancelSettingsLeave"); setSettingsLeave(false); }}
+        />
+      )}
+      <ProvidersPageModals
+        apiBase=""
+        config={{ providers: { existing: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } } } as never}
+        adding={adding}
+        addIntent={null}
+        busy={null}
+        addModalAccountRows={[]}
+        accountLoginStatus={{}}
+        removeConfirmName={null}
+        removeDefaultProvider={null}
+        codexLoginOpen={false}
+        oauthTosPending={tos ? { provider: "anthropic", addAccount: false } : null}
+        onCloseAdd={() => { events.push("closeAdd"); setAdding(false); }}
+        onAdded={() => {}}
+        onAccountLogin={() => {}}
+        onAccountCancelLogin={() => {}}
+        onAccountLogout={() => {}}
+        onOpenAdd={() => {}}
+        onCloseCodexLogin={() => {}}
+        onCodexAdded={() => {}}
+        onCancelRemove={() => {}}
+        onConfirmRemove={() => {}}
+        onCancelOauthTos={() => { events.push("cancelOauthTos"); setTos(false); }}
+        onContinueOauthTos={() => {}}
+      />
+    </LanguageProvider>
+  );
+}
+
+async function renderWorkspace(warning: boolean) {
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(<Workspace warning={warning} />);
+  });
+  await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
+}
+
+test("a Settings confirmation beneath Add Provider keeps its Escape until it is on top", async () => {
+  await renderWorkspace(false);
+  await pressEscape();
+  expect(events).toEqual(["closeAdd"]);
+  await pressEscape();
+  expect(events).toEqual(["closeAdd", "cancelSettingsLeave"]);
+});
+
+test("with the OAuth warning on top of both, Escape unwinds warning, Add Provider, then the confirmation", async () => {
+  await renderWorkspace(true);
+  await pressEscape();
+  expect(events).toEqual(["cancelOauthTos"]);
+  await pressEscape();
+  expect(events).toEqual(["cancelOauthTos", "closeAdd"]);
+  await pressEscape();
+  expect(events).toEqual(["cancelOauthTos", "closeAdd", "cancelSettingsLeave"]);
 });
